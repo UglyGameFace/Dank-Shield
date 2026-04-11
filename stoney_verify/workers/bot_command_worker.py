@@ -21,7 +21,10 @@ from ..tickets_new.transcript_service import delete_ticket_with_optional_transcr
 from ..tickets_new.sync_service import sync_active_ticket_channels_for_guild
 
 # Verify / role UI helpers
-from ..transcripts import ensure_verify_ui_present
+from ..transcripts import (
+    ensure_verify_ui_present,
+    post_or_replace_verification_staff_panel,
+)
 
 POLL_INTERVAL = 3
 COMMAND_STALE_PROCESSING_SECONDS = 300
@@ -886,7 +889,6 @@ async def execute_command(cmd: Dict[str, Any]):
 
         ticket_row = await get_ticket_by_channel_id(int(channel.id))
 
-        # Persist richer entry / join context if the migration exists and ticket row is present.
         if ticket_row:
             verification_ticket_id = (
                 _safe_str(payload.get("verification_ticket_id"))
@@ -1567,6 +1569,90 @@ async def execute_command(cmd: Dict[str, Any]):
             "user_id": str(member.id),
             "removed_role_ids": [str(x) for x in removed],
             "ticket_id": ticket_id or None,
+        }
+
+    # --------------------------------------------------
+    # POST VERIFICATION STAFF PANEL
+    # --------------------------------------------------
+
+    if action == "post_verification_staff_panel":
+        ticket_id = _safe_str(payload.get("ticket_id"))
+        channel_id = _safe_int(payload.get("channel_id"))
+        user_id = _safe_int(payload.get("user_id"))
+        username = _safe_str(payload.get("username")) or str(user_id or "Member")
+        reason = _safe_str(payload.get("reason")) or "Verification submission received from website."
+        submitted_from = _safe_str(payload.get("source")) or "website_submission"
+        staff_id = _safe_str(payload.get("staff_id"))
+        staff_name = _safe_str(payload.get("staff_name")) or "System"
+
+        if not channel_id:
+            return {
+                "posted": False,
+                "reason": "missing_channel_id",
+                "ticket_id": ticket_id or None,
+            }
+
+        channel = await safe_fetch_channel(guild, channel_id)
+        if channel is None or not isinstance(channel, discord.TextChannel):
+            return {
+                "posted": False,
+                "reason": "channel_missing",
+                "channel_id": str(channel_id),
+                "ticket_id": ticket_id or None,
+            }
+
+        member = guild.get_member(user_id) if user_id else None
+
+        result = ""
+        try:
+            result = await post_or_replace_verification_staff_panel(
+                channel,
+                member=member,
+                user_id=user_id if user_id else None,
+                username=username,
+                submitted_from=submitted_from,
+                reason=reason,
+            )
+        except Exception as e:
+            print("⚠️ post_or_replace_verification_staff_panel failed:", repr(e))
+            result = ""
+
+        if ticket_id:
+            await insert_ticket_note(
+                ticket_id=ticket_id,
+                staff_id=staff_id or None,
+                staff_name=staff_name or None,
+                content=(
+                    "Website verification submission received.\n"
+                    "Posted or updated staff review panel in the same verification ticket.\n"
+                    f"Result: {result or 'failed'}\n"
+                    f"Reason: {reason}"
+                ),
+            )
+
+        if member is not None:
+            await insert_member_event(
+                guild_id=guild_id,
+                user_id=str(member.id),
+                actor_id=staff_id or None,
+                actor_name=staff_name,
+                event_type="verification_submission_received",
+                title="Verification Submission Received",
+                reason=reason,
+                metadata={
+                    "ticket_id": ticket_id or None,
+                    "channel_id": str(channel_id),
+                    "source": submitted_from,
+                    "worker_action": "post_verification_staff_panel",
+                },
+            )
+
+        return {
+            "posted": bool(result),
+            "result": result or None,
+            "channel_id": str(channel_id),
+            "ticket_id": ticket_id or None,
+            "user_id": str(user_id) if user_id else None,
         }
 
     # --------------------------------------------------
