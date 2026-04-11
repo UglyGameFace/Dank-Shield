@@ -2850,30 +2850,39 @@ async def on_member_remove(member: discord.Member):
                 pass
             return
 
-        ban_logged = False
+        # Do NOT log bans here anymore.
+        # on_member_ban is the authoritative ban path.
+        # We only suppress a fake "left" log if a recent ban audit already exists
+        # or appears moments later.
+        suppress_leave_for_ban = False
         try:
-            ban_logged = await maybe_log_recent_ban(guild, member)
+            entry = await _audit_find_recent_ban(guild, int(member.id))
+            suppress_leave_for_ban = bool(entry)
         except Exception:
-            ban_logged = False
+            suppress_leave_for_ban = False
 
-        if ban_logged:
+        if not suppress_leave_for_ban:
             try:
-                RUNTIME_STATS["member_bans_detected"] += 1
+                await asyncio.sleep(1.5)
             except Exception:
                 pass
 
+            try:
+                entry = await _audit_find_recent_ban(guild, int(member.id))
+                suppress_leave_for_ban = bool(entry)
+            except Exception:
+                suppress_leave_for_ban = False
+
+        if suppress_leave_for_ban:
             try:
                 await _mark_member_left(member)
             except Exception:
                 pass
 
-            try:
-                await _auto_close_verification_ticket_for_departed_member(
-                    member,
-                    leave_reason="AUTO CLOSED: user was banned during verification",
-                )
-            except Exception:
-                pass
+            print(
+                f"ℹ️ Suppressed generic leave log for member={member.id} "
+                f"because a recent ban audit entry exists; on_member_ban will handle logging."
+            )
             return
 
         try:
@@ -2920,24 +2929,52 @@ async def on_member_ban(guild: discord.Guild, user: discord.User):
         except Exception:
             logged = False
 
-        if logged:
-            return
+        if not logged:
+            entry = await _audit_find_recent_ban(guild, int(user.id))
+            mod = entry.user if entry else None
+            reason = getattr(entry, "reason", None) if entry else None
 
-        entry = await _audit_find_recent_ban(guild, int(user.id))
-        mod = entry.user if entry else None
-        reason = getattr(entry, "reason", None) if entry else None
+            embed = discord.Embed(title="🔨 Ban Event", color=discord.Color.red())
+            embed.add_field(name="User", value=f"<@{user.id}> (`{user}` | `{user.id}`)", inline=False)
+            embed.add_field(
+                name="By",
+                value=f"{mod.mention if mod else 'Unknown'} (`{getattr(mod,'id',0)}`)",
+                inline=False,
+            )
+            embed.add_field(name="Reason", value=f"`{reason or '—'}`", inline=False)
+            await _post_modlog(guild, embed)
 
-        embed = discord.Embed(title="🔨 Ban Event", color=discord.Color.red())
-        embed.add_field(name="User", value=f"<@{user.id}> (`{user}` | `{user.id}`)", inline=False)
-        embed.add_field(
-            name="By",
-            value=f"{mod.mention if mod else 'Unknown'} (`{getattr(mod,'id',0)}`)",
-            inline=False,
-        )
-        embed.add_field(name="Reason", value=f"`{reason or '—'}`", inline=False)
-        await _post_modlog(guild, embed)
-    except Exception:
-        pass
+        # Keep guild_members / ticket cleanup in the authoritative ban path too.
+        try:
+            member_like = guild.get_member(int(user.id))
+            if member_like is None:
+                try:
+                    member_like = await guild.fetch_member(int(user.id))
+                except Exception:
+                    member_like = None
+
+            if isinstance(member_like, discord.Member):
+                try:
+                    await _mark_member_left(member_like)
+                except Exception:
+                    pass
+
+                try:
+                    await _auto_close_verification_ticket_for_departed_member(
+                        member_like,
+                        leave_reason="AUTO CLOSED: user was banned during verification",
+                    )
+                except Exception:
+                    pass
+        except Exception as e:
+            print(f"⚠️ on_member_ban post-ban cleanup error for user={getattr(user, 'id', 'unknown')}: {repr(e)}")
+
+    except Exception as e:
+        print("⚠️ on_member_ban error:", repr(e))
+        try:
+            traceback.print_exc()
+        except Exception:
+            pass
 
 
 @bot.event
