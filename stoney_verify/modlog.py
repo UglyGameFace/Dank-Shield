@@ -24,7 +24,7 @@ except Exception:
 
 
 # ==========================================================
-# ✅ Small local helpers
+# Small local helpers
 # ==========================================================
 
 def _now_utc() -> datetime:
@@ -509,7 +509,7 @@ def _interaction_has_manage_messages(interaction: discord.Interaction) -> bool:
 
 
 # ==========================================================
-# ✅ Compatibility helpers expected elsewhere
+# Compatibility helpers expected elsewhere
 # ==========================================================
 
 def _account_age_days(member_or_user: Optional[discord.abc.User]) -> int:
@@ -565,150 +565,6 @@ def _behavior_fingerprint(member: Optional[discord.abc.User]) -> str:
         return ""
 
 
-def _local_risk_profile(target: Optional[discord.abc.User]) -> Dict[str, Any]:
-    profile: Dict[str, Any] = {
-        "risk_score": 0,
-        "risk_level": "low",
-        "suspicion_flags": [],
-        "risk_reasons": [],
-        "same_fingerprint_count": 0,
-        "similar_name_count": 0,
-        "same_age_bucket_count": 0,
-        "burst_join_count": 0,
-        "alt_cluster_size": 0,
-        "alt_cluster_key": "",
-        "cluster_members": [],
-        "fingerprint": _behavior_fingerprint(target),
-        "account_age_days": _account_age_days(target),
-        "account_age_human": _account_age_human(target),
-        "age_bucket": _age_bucket(target),
-        "default_avatar": _has_default_avatar(target),
-        "suspicious_name_pattern": False,
-        "repeated_char_pattern": False,
-        "joined_after_creation_seconds": None,
-        "joined_after_creation_human": "",
-        "is_bot_account": bool(getattr(target, "bot", False)) if target else False,
-    }
-
-    if target is None:
-        return profile
-
-    score = 0
-    flags: List[str] = []
-    reasons: List[str] = []
-
-    age_days = _account_age_days(target)
-    age_human = _account_age_human(target)
-    profile["account_age_days"] = age_days
-    profile["account_age_human"] = age_human
-    profile["age_bucket"] = _age_bucket(age_days)
-
-    if getattr(target, "bot", False):
-        flags.append("bot_account")
-        reasons.append("Discord marks this account as a bot.")
-        score = max(score, 25)
-
-    if _has_default_avatar(target):
-        flags.append("default_avatar")
-        reasons.append("Account is using the default Discord avatar.")
-        score = max(score, 10)
-
-    username = _username_for_checks(target)
-    lowered = username.lower()
-    digit_ratio = _digit_ratio(username)
-    repeat_run = _max_repeat_run(username)
-    digit_run = _max_digit_run(username)
-
-    suspicious_name = False
-    repeated_chars = False
-
-    if digit_ratio >= 0.65 and len(username) >= 6:
-        suspicious_name = True
-        flags.append("high_digit_ratio")
-        reasons.append("Username has an extremely high digit ratio.")
-        score = max(score, 30)
-    elif digit_ratio >= 0.45 and len(username) >= 6:
-        suspicious_name = True
-        flags.append("elevated_digit_ratio")
-        reasons.append("Username has an elevated digit ratio.")
-        score = max(score, 22)
-
-    if digit_run >= 4:
-        suspicious_name = True
-        flags.append("long_digit_run")
-        reasons.append("Username contains a long run of digits.")
-        score = max(score, 24)
-
-    if repeat_run >= 4:
-        repeated_chars = True
-        flags.append("repeated_chars")
-        reasons.append("Username contains repeated characters.")
-        score = max(score, 18)
-
-    if len(username) >= 8 and re.fullmatch(r"[a-z0-9._-]+", lowered or "") and digit_ratio >= 0.35:
-        suspicious_name = True
-        flags.append("synthetic_style_name")
-        reasons.append("Username pattern looks synthetic.")
-        score = max(score, 20)
-
-    impersonation_terms = ("admin", "mod", "moderator", "staff", "support", "helper", "official", "security")
-    if age_days <= 30 and any(term in lowered for term in impersonation_terms):
-        suspicious_name = True
-        flags.append("staff_style_name")
-        reasons.append("New account uses staff-leaning wording in the username.")
-        score = max(score, 20)
-
-    profile["suspicious_name_pattern"] = suspicious_name
-    profile["repeated_char_pattern"] = repeated_chars
-
-    if age_days < 1:
-        reasons.append("Account is extremely new.")
-        score = max(score, 35)
-    elif age_days < 3:
-        reasons.append("Account is very new.")
-        score = max(score, 25)
-    elif age_days < 7:
-        reasons.append("Account is new.")
-        score = max(score, 15)
-
-    join_gap_seconds, join_gap_human = _join_after_creation_delta(target)
-    profile["joined_after_creation_seconds"] = join_gap_seconds
-    profile["joined_after_creation_human"] = join_gap_human
-
-    if join_gap_seconds is not None:
-        if join_gap_seconds <= 300:
-            flags.append("instant_join_after_creation")
-            reasons.append("Joined the server within minutes of account creation.")
-            score = max(score, 40)
-        elif join_gap_seconds <= 3600:
-            flags.append("fast_join_after_creation")
-            reasons.append("Joined the server very soon after account creation.")
-            score = max(score, 30)
-        elif join_gap_seconds <= 86400:
-            flags.append("same_day_join_after_creation")
-            reasons.append("Joined the server the same day the account was created.")
-            score = max(score, 20)
-
-    deduped_flags: List[str] = []
-    for item in flags:
-        if item not in deduped_flags:
-            deduped_flags.append(item)
-
-    deduped_reasons: List[str] = []
-    for item in reasons:
-        if item not in deduped_reasons:
-            deduped_reasons.append(item)
-
-    profile["suspicion_flags"] = deduped_flags[:12]
-    profile["risk_reasons"] = deduped_reasons[:8]
-    profile["risk_score"] = max(0, min(100, int(score)))
-    profile["score"] = profile["risk_score"]
-    profile["risk_level"] = _score_to_level(profile["risk_score"])
-    profile["level"] = profile["risk_level"]
-
-    return profile
-
-
 async def _maybe_trigger_raid(*args, **kwargs) -> bool:
     return False
 
@@ -722,7 +578,7 @@ async def _post_raidlog(guild: discord.Guild, embed: discord.Embed, view: Option
 
 
 # ==========================================================
-# ✅ Audit actor helpers
+# Audit actor helpers
 # ==========================================================
 
 def _format_actor_from_audit(entry: Optional[discord.AuditLogEntry]) -> Tuple[str, str]:
@@ -756,7 +612,7 @@ def _actor_id_from_audit(entry: Optional[discord.AuditLogEntry]) -> Optional[int
 
 
 # ==========================================================
-# ✅ Context / member intelligence helpers
+# Context / member intelligence helpers
 # ==========================================================
 
 async def _run_blocking_db(fn, *args, **kwargs):
@@ -1054,6 +910,150 @@ def _normalized_live_profile(target: Optional[discord.abc.User], raw_profile: Di
         profile["fingerprint"] = _behavior_fingerprint(target)
     if target is not None:
         profile.setdefault("default_avatar", _has_default_avatar(target))
+
+    return profile
+
+
+def _local_risk_profile(target: Optional[discord.abc.User]) -> Dict[str, Any]:
+    profile: Dict[str, Any] = {
+        "risk_score": 0,
+        "risk_level": "low",
+        "suspicion_flags": [],
+        "risk_reasons": [],
+        "same_fingerprint_count": 0,
+        "similar_name_count": 0,
+        "same_age_bucket_count": 0,
+        "burst_join_count": 0,
+        "alt_cluster_size": 0,
+        "alt_cluster_key": "",
+        "cluster_members": [],
+        "fingerprint": _behavior_fingerprint(target),
+        "account_age_days": _account_age_days(target),
+        "account_age_human": _account_age_human(target),
+        "age_bucket": _age_bucket(target),
+        "default_avatar": _has_default_avatar(target),
+        "suspicious_name_pattern": False,
+        "repeated_char_pattern": False,
+        "joined_after_creation_seconds": None,
+        "joined_after_creation_human": "",
+        "is_bot_account": bool(getattr(target, "bot", False)) if target else False,
+    }
+
+    if target is None:
+        return profile
+
+    score = 0
+    flags: List[str] = []
+    reasons: List[str] = []
+
+    age_days = _account_age_days(target)
+    age_human = _account_age_human(target)
+    profile["account_age_days"] = age_days
+    profile["account_age_human"] = age_human
+    profile["age_bucket"] = _age_bucket(age_days)
+
+    if getattr(target, "bot", False):
+        flags.append("bot_account")
+        reasons.append("Discord marks this account as a bot.")
+        score = max(score, 25)
+
+    if _has_default_avatar(target):
+        flags.append("default_avatar")
+        reasons.append("Account is using the default Discord avatar.")
+        score = max(score, 10)
+
+    username = _username_for_checks(target)
+    lowered = username.lower()
+    digit_ratio = _digit_ratio(username)
+    repeat_run = _max_repeat_run(username)
+    digit_run = _max_digit_run(username)
+
+    suspicious_name = False
+    repeated_chars = False
+
+    if digit_ratio >= 0.65 and len(username) >= 6:
+        suspicious_name = True
+        flags.append("high_digit_ratio")
+        reasons.append("Username has an extremely high digit ratio.")
+        score = max(score, 30)
+    elif digit_ratio >= 0.45 and len(username) >= 6:
+        suspicious_name = True
+        flags.append("elevated_digit_ratio")
+        reasons.append("Username has an elevated digit ratio.")
+        score = max(score, 22)
+
+    if digit_run >= 4:
+        suspicious_name = True
+        flags.append("long_digit_run")
+        reasons.append("Username contains a long run of digits.")
+        score = max(score, 24)
+
+    if repeat_run >= 4:
+        repeated_chars = True
+        flags.append("repeated_chars")
+        reasons.append("Username contains repeated characters.")
+        score = max(score, 18)
+
+    if len(username) >= 8 and re.fullmatch(r"[a-z0-9._-]+", lowered or "") and digit_ratio >= 0.35:
+        suspicious_name = True
+        flags.append("synthetic_style_name")
+        reasons.append("Username pattern looks synthetic.")
+        score = max(score, 20)
+
+    impersonation_terms = ("admin", "mod", "moderator", "staff", "support", "helper", "official", "security")
+    if age_days <= 30 and any(term in lowered for term in impersonation_terms):
+        suspicious_name = True
+        flags.append("staff_style_name")
+        reasons.append("New account uses staff-leaning wording in the username.")
+        score = max(score, 20)
+
+    profile["suspicious_name_pattern"] = suspicious_name
+    profile["repeated_char_pattern"] = repeated_chars
+
+    if age_days < 1:
+        reasons.append("Account is extremely new.")
+        score = max(score, 35)
+    elif age_days < 3:
+        reasons.append("Account is very new.")
+        score = max(score, 25)
+    elif age_days < 7:
+        reasons.append("Account is new.")
+        score = max(score, 15)
+
+    join_gap_seconds, join_gap_human = _join_after_creation_delta(target)
+    profile["joined_after_creation_seconds"] = join_gap_seconds
+    profile["joined_after_creation_human"] = join_gap_human
+
+    if join_gap_seconds is not None:
+        if join_gap_seconds <= 300:
+            flags.append("instant_join_after_creation")
+            reasons.append("Joined the server within minutes of account creation.")
+            score = max(score, 40)
+        elif join_gap_seconds <= 3600:
+            flags.append("fast_join_after_creation")
+            reasons.append("Joined the server very soon after account creation.")
+            score = max(score, 30)
+        elif join_gap_seconds <= 86400:
+            flags.append("same_day_join_after_creation")
+            reasons.append("Joined the server the same day the account was created.")
+            score = max(score, 20)
+
+    deduped_flags: List[str] = []
+    for item in flags:
+        if item not in deduped_flags:
+            deduped_flags.append(item)
+
+    deduped_reasons: List[str] = []
+    for item in reasons:
+        if item not in deduped_reasons:
+            deduped_reasons.append(item)
+
+    profile["suspicion_flags"] = deduped_flags[:12]
+    profile["risk_reasons"] = deduped_reasons[:8]
+    profile["risk_score"] = max(0, min(100, int(score)))
+    profile["score"] = profile["risk_score"]
+    profile["risk_level"] = _score_to_level(profile["risk_score"])
+    profile["level"] = profile["risk_level"]
 
     return profile
 
@@ -1565,7 +1565,7 @@ async def _post_modlog(
 
 
 # ==========================================================
-# ✅ Audit log lookups
+# Audit log helpers
 # ==========================================================
 
 def _audit_entry_is_recent(entry: discord.AuditLogEntry, lookback_seconds: int) -> bool:
@@ -1580,6 +1580,234 @@ def _audit_entry_is_recent(entry: discord.AuditLogEntry, lookback_seconds: int) 
         return False
 
 
+def _iter_audit_changes(entry: discord.AuditLogEntry) -> List[Any]:
+    try:
+        changes = getattr(entry, "changes", None)
+        if changes is None:
+            return []
+        try:
+            return list(changes)
+        except Exception:
+            return []
+    except Exception:
+        return []
+
+
+def _audit_change_value(change: Any, attr: str, default=None):
+    try:
+        return getattr(change, attr, default)
+    except Exception:
+        return default
+
+
+def _audit_change_key(change: Any) -> str:
+    try:
+        key = getattr(change, "key", None)
+        return str(key or "")
+    except Exception:
+        return ""
+
+
+def _role_name_list(items: Any) -> List[str]:
+    out: List[str] = []
+    try:
+        if not items:
+            return out
+        for item in items:
+            name = getattr(item, "name", None)
+            if name:
+                out.append(str(name))
+            elif isinstance(item, dict) and item.get("name"):
+                out.append(str(item.get("name")))
+            else:
+                out.append(str(item))
+    except Exception:
+        return out
+    return out
+
+
+def _role_id_name_set_from_audit_value(items: Any) -> set[tuple[int, str]]:
+    out: set[tuple[int, str]] = set()
+    try:
+        if not items:
+            return out
+        for item in items:
+            rid = _safe_int(getattr(item, "id", None), _safe_int(item.get("id") if isinstance(item, dict) else None, 0))
+            name = _safe_str(getattr(item, "name", None), _safe_str(item.get("name") if isinstance(item, dict) else None))
+            if rid > 0:
+                out.add((rid, name or str(rid)))
+            elif name:
+                out.add((0, name))
+    except Exception:
+        return out
+    return out
+
+
+def _extract_role_delta_from_entry(entry: discord.AuditLogEntry) -> Tuple[List[str], List[str]]:
+    added: List[str] = []
+    removed: List[str] = []
+
+    try:
+        for change in _iter_audit_changes(entry):
+            key = _audit_change_key(change).lower()
+            before = _audit_change_value(change, "before")
+            after = _audit_change_value(change, "after")
+
+            if key == "roles":
+                before_set = _role_id_name_set_from_audit_value(before)
+                after_set = _role_id_name_set_from_audit_value(after)
+                added.extend([name for _, name in sorted(after_set - before_set)])
+                removed.extend([name for _, name in sorted(before_set - after_set)])
+
+            elif key == "$add":
+                added.extend(_role_name_list(after or before))
+            elif key == "$remove":
+                removed.extend(_role_name_list(after or before))
+    except Exception:
+        pass
+
+    def _dedupe(seq: List[str]) -> List[str]:
+        seen = set()
+        out: List[str] = []
+        for item in seq:
+            if item in seen:
+                continue
+            seen.add(item)
+            out.append(item)
+        return out
+
+    return (_dedupe(added), _dedupe(removed))
+
+
+def _extract_timeout_from_entry(entry: discord.AuditLogEntry) -> Tuple[Optional[datetime], Optional[datetime]]:
+    before_timeout: Optional[datetime] = None
+    after_timeout: Optional[datetime] = None
+
+    try:
+        for change in _iter_audit_changes(entry):
+            key = _audit_change_key(change).lower()
+            if key not in {"communication_disabled_until", "timed_out_until"}:
+                continue
+
+            before_timeout = _safe_dt_utc(_audit_change_value(change, "before"))
+            after_timeout = _safe_dt_utc(_audit_change_value(change, "after"))
+            break
+    except Exception:
+        pass
+
+    return (before_timeout, after_timeout)
+
+
+def _extract_nick_from_entry(entry: discord.AuditLogEntry) -> Tuple[Optional[str], Optional[str]]:
+    try:
+        for change in _iter_audit_changes(entry):
+            key = _audit_change_key(change).lower()
+            if key == "nick":
+                return (
+                    _audit_change_value(change, "before"),
+                    _audit_change_value(change, "after"),
+                )
+    except Exception:
+        pass
+    return (None, None)
+
+
+def _audit_role_delta_match_score(entry: discord.AuditLogEntry, added_roles: List[str], removed_roles: List[str]) -> int:
+    try:
+        entry_added, entry_removed = _extract_role_delta_from_entry(entry)
+        score = 0
+
+        wanted_added = set(str(x).lower() for x in added_roles if str(x).strip())
+        wanted_removed = set(str(x).lower() for x in removed_roles if str(x).strip())
+        actual_added = set(str(x).lower() for x in entry_added if str(x).strip())
+        actual_removed = set(str(x).lower() for x in entry_removed if str(x).strip())
+
+        if wanted_added:
+            score += len(wanted_added & actual_added) * 10
+        else:
+            score += 3 if not actual_added else 0
+
+        if wanted_removed:
+            score += len(wanted_removed & actual_removed) * 10
+        else:
+            score += 3 if not actual_removed else 0
+
+        if wanted_added == actual_added and wanted_removed == actual_removed:
+            score += 20
+
+        return score
+    except Exception:
+        return 0
+
+
+def _audit_timeout_match_score(
+    entry: discord.AuditLogEntry,
+    before_timeout: Optional[datetime],
+    after_timeout: Optional[datetime],
+) -> int:
+    try:
+        e_before, e_after = _extract_timeout_from_entry(entry)
+        score = 0
+
+        if before_timeout is None and after_timeout is not None:
+            if e_after is not None:
+                score += 25
+                if e_before is None:
+                    score += 10
+        elif before_timeout is not None and after_timeout is None:
+            if e_before is not None and e_after is None:
+                score += 35
+        elif before_timeout != after_timeout:
+            if e_before == before_timeout:
+                score += 10
+            if e_after == after_timeout:
+                score += 10
+
+        if after_timeout and e_after:
+            diff = abs((after_timeout - e_after).total_seconds())
+            if diff <= 120:
+                score += 10
+        return score
+    except Exception:
+        return 0
+
+
+def _audit_nick_match_score(entry: discord.AuditLogEntry, before_nick: Optional[str], after_nick: Optional[str]) -> int:
+    try:
+        e_before, e_after = _extract_nick_from_entry(entry)
+        score = 0
+        if before_nick == e_before:
+            score += 10
+        if after_nick == e_after:
+            score += 10
+        if before_nick == e_before and after_nick == e_after:
+            score += 20
+        return score
+    except Exception:
+        return 0
+
+
+def _audit_recency_score(entry: discord.AuditLogEntry) -> int:
+    try:
+        created = _safe_dt_utc(getattr(entry, "created_at", None))
+        if not created:
+            return 0
+        delta = abs((_now_utc() - created).total_seconds())
+        if delta <= 5:
+            return 25
+        if delta <= 15:
+            return 18
+        if delta <= 30:
+            return 12
+        if delta <= 60:
+            return 8
+        if delta <= 90:
+            return 4
+        return 0
+    except Exception:
+        return 0
+
+
 async def _audit_find_recent_kick(guild: discord.Guild, target_id: int) -> Optional[discord.AuditLogEntry]:
     try:
         me = _bot_member_for_guild(guild)
@@ -1588,17 +1816,25 @@ async def _audit_find_recent_kick(guild: discord.Guild, target_id: int) -> Optio
 
         lookback = int(globals().get("MOD_ACTION_AUDIT_LOOKBACK_SECONDS", 90) or 90)
 
+        best: Optional[discord.AuditLogEntry] = None
+        best_score = -1
+
         async for entry in guild.audit_logs(limit=25, action=discord.AuditLogAction.kick):
             try:
                 if not entry or not getattr(entry, "target", None):
                     continue
                 if int(getattr(entry.target, "id", 0) or 0) != int(target_id):
                     continue
-                if _audit_entry_is_recent(entry, lookback):
-                    return entry
+                if not _audit_entry_is_recent(entry, lookback):
+                    continue
+
+                score = _audit_recency_score(entry)
+                if score > best_score:
+                    best = entry
+                    best_score = score
             except Exception:
                 continue
-        return None
+        return best
     except Exception:
         return None
 
@@ -1611,17 +1847,25 @@ async def _audit_find_recent_ban(guild: discord.Guild, target_id: int) -> Option
 
         lookback = int(globals().get("MOD_ACTION_AUDIT_LOOKBACK_SECONDS", 90) or 90)
 
+        best: Optional[discord.AuditLogEntry] = None
+        best_score = -1
+
         async for entry in guild.audit_logs(limit=25, action=discord.AuditLogAction.ban):
             try:
                 if not entry or not getattr(entry, "target", None):
                     continue
                 if int(getattr(entry.target, "id", 0) or 0) != int(target_id):
                     continue
-                if _audit_entry_is_recent(entry, lookback):
-                    return entry
+                if not _audit_entry_is_recent(entry, lookback):
+                    continue
+
+                score = _audit_recency_score(entry)
+                if score > best_score:
+                    best = entry
+                    best_score = score
             except Exception:
                 continue
-        return None
+        return best
     except Exception:
         return None
 
@@ -1632,7 +1876,10 @@ async def _audit_find_recent_member_update(guild: discord.Guild, target_id: int)
         if not me or not me.guild_permissions.view_audit_log:
             return None
 
-        now = _now_utc()
+        lookback = int(globals().get("MOD_ACTION_AUDIT_LOOKBACK_SECONDS", 90) or 90)
+        best: Optional[discord.AuditLogEntry] = None
+        best_score = -1
+
         actions: List[discord.AuditLogAction] = []
         try:
             actions.append(discord.AuditLogAction.member_role_update)
@@ -1643,9 +1890,6 @@ async def _audit_find_recent_member_update(guild: discord.Guild, target_id: int)
         except Exception:
             pass
 
-        lookback = int(globals().get("MOD_ACTION_AUDIT_LOOKBACK_SECONDS", 90) or 90)
-        best: Optional[discord.AuditLogEntry] = None
-
         for act in actions:
             async for entry in guild.audit_logs(limit=40, action=act):
                 try:
@@ -1653,31 +1897,82 @@ async def _audit_find_recent_member_update(guild: discord.Guild, target_id: int)
                     tid = int(getattr(tgt, "id", 0) or 0)
                     if tid != int(target_id):
                         continue
+                    if not _audit_entry_is_recent(entry, lookback):
+                        continue
 
-                    created = getattr(entry, "created_at", None)
-                    if created:
-                        created_utc = created.replace(tzinfo=timezone.utc) if created.tzinfo is None else created.astimezone(timezone.utc)
-                        if best is None:
-                            best = entry
-                        else:
-                            try:
-                                b_created = getattr(best, "created_at", None)
-                                if b_created:
-                                    b_utc = b_created.replace(tzinfo=timezone.utc) if b_created.tzinfo is None else b_created.astimezone(timezone.utc)
-                                    if created_utc > b_utc:
-                                        best = entry
-                            except Exception:
-                                pass
-                        if abs((now - created_utc).total_seconds()) > lookback:
-                            continue
-
-                    return entry
+                    score = _audit_recency_score(entry)
+                    if score > best_score:
+                        best = entry
+                        best_score = score
                 except Exception:
                     continue
 
-        if best:
-            return best
+        return best
+    except Exception:
         return None
+
+
+async def _audit_find_best_member_update_match(
+    guild: discord.Guild,
+    target_id: int,
+    *,
+    added_roles: Optional[List[str]] = None,
+    removed_roles: Optional[List[str]] = None,
+    before_timeout: Optional[datetime] = None,
+    after_timeout: Optional[datetime] = None,
+    before_nick: Optional[str] = None,
+    after_nick: Optional[str] = None,
+) -> Optional[discord.AuditLogEntry]:
+    try:
+        me = _bot_member_for_guild(guild)
+        if not me or not me.guild_permissions.view_audit_log:
+            return None
+
+        lookback = int(globals().get("MOD_ACTION_AUDIT_LOOKBACK_SECONDS", 90) or 90)
+        best: Optional[discord.AuditLogEntry] = None
+        best_score = -1
+
+        actions: List[discord.AuditLogAction] = []
+        try:
+            actions.append(discord.AuditLogAction.member_role_update)
+        except Exception:
+            pass
+        try:
+            actions.append(discord.AuditLogAction.member_update)
+        except Exception:
+            pass
+
+        wanted_added = added_roles or []
+        wanted_removed = removed_roles or []
+
+        for act in actions:
+            async for entry in guild.audit_logs(limit=50, action=act):
+                try:
+                    tgt = getattr(entry, "target", None)
+                    tid = int(getattr(tgt, "id", 0) or 0)
+                    if tid != int(target_id):
+                        continue
+                    if not _audit_entry_is_recent(entry, lookback):
+                        continue
+
+                    score = _audit_recency_score(entry)
+
+                    if wanted_added or wanted_removed:
+                        score += _audit_role_delta_match_score(entry, wanted_added, wanted_removed)
+
+                    if before_timeout != after_timeout:
+                        score += _audit_timeout_match_score(entry, before_timeout, after_timeout)
+
+                    if before_nick != after_nick:
+                        score += _audit_nick_match_score(entry, before_nick, after_nick)
+
+                    if score > best_score:
+                        best = entry
+                        best_score = score
+                except Exception:
+                    continue
+
+        return best
     except Exception:
         return None
 
@@ -1695,23 +1990,31 @@ async def _audit_find_recent_voice_target_entry(
 
         lookback = int(lookback_seconds or globals().get("MOD_ACTION_AUDIT_LOOKBACK_SECONDS", 90) or 90)
 
-        async for entry in guild.audit_logs(limit=40, action=discord.AuditLogAction.member_update):
+        best: Optional[discord.AuditLogEntry] = None
+        best_score = -1
+
+        async for entry in guild.audit_logs(limit=50, action=discord.AuditLogAction.member_update):
             try:
                 tgt = getattr(entry, "target", None)
                 tid = int(getattr(tgt, "id", 0) or 0)
                 if tid != int(target_id):
                     continue
-                if _audit_entry_is_recent(entry, lookback):
-                    return entry
+                if not _audit_entry_is_recent(entry, lookback):
+                    continue
+
+                score = _audit_recency_score(entry)
+                if score > best_score:
+                    best = entry
+                    best_score = score
             except Exception:
                 continue
-        return None
+        return best
     except Exception:
         return None
 
 
 # ==========================================================
-# ✅ Staff action ledger / abuse detection
+# Staff action ledger / abuse detection
 # ==========================================================
 
 def _sb_staff_actions():
@@ -1796,7 +2099,7 @@ def _quick_mod_lock(guild_id: int, target_id: int, action: str) -> asyncio.Lock:
 
 
 # ==========================================================
-# ✅ Embed helpers
+# Embed helpers
 # ==========================================================
 
 def _extract_reason_duration_from_reason(reason: str) -> Tuple[str, Optional[str]]:
@@ -1822,122 +2125,11 @@ def _extract_reason_duration_from_reason(reason: str) -> Tuple[str, Optional[str
         return (str(reason or "").strip(), None)
 
 
-def _iter_audit_changes(entry: discord.AuditLogEntry) -> List[Any]:
-    try:
-        changes = getattr(entry, "changes", None)
-        if changes is None:
-            return []
-        try:
-            return list(changes)
-        except Exception:
-            return []
-    except Exception:
-        return []
-
-
-def _audit_change_value(change: Any, attr: str, default=None):
-    try:
-        return getattr(change, attr, default)
-    except Exception:
-        return default
-
-
-def _audit_change_key(change: Any) -> str:
-    try:
-        key = getattr(change, "key", None)
-        return str(key or "")
-    except Exception:
-        return ""
-
-
-def _role_name_list(items: Any) -> List[str]:
-    out: List[str] = []
-    try:
-        if not items:
-            return out
-        for item in items:
-            name = getattr(item, "name", None)
-            if name:
-                out.append(str(name))
-            elif isinstance(item, dict) and item.get("name"):
-                out.append(str(item.get("name")))
-            else:
-                out.append(str(item))
-    except Exception:
-        return out
-    return out
-
-
-def _extract_role_delta_from_entry(entry: discord.AuditLogEntry) -> Tuple[List[str], List[str]]:
-    added: List[str] = []
-    removed: List[str] = []
-
-    try:
-        for change in _iter_audit_changes(entry):
-            key = _audit_change_key(change).lower()
-            before = _audit_change_value(change, "before")
-            after = _audit_change_value(change, "after")
-
-            if key in {"roles", "$add"}:
-                before_names = set(_role_name_list(before))
-                after_names = set(_role_name_list(after))
-                added.extend(sorted(list(after_names - before_names)))
-
-            if key in {"roles", "$remove"}:
-                before_names = set(_role_name_list(before))
-                after_names = set(_role_name_list(after))
-                removed.extend(sorted(list(before_names - after_names)))
-
-        if not added and not removed:
-            for change in _iter_audit_changes(entry):
-                key = _audit_change_key(change).lower()
-                if key == "$add":
-                    added.extend(_role_name_list(_audit_change_value(change, "after")))
-                    if not added:
-                        added.extend(_role_name_list(_audit_change_value(change, "before")))
-                elif key == "$remove":
-                    removed.extend(_role_name_list(_audit_change_value(change, "after")))
-                    if not removed:
-                        removed.extend(_role_name_list(_audit_change_value(change, "before")))
-    except Exception:
-        pass
-
-    def _dedupe(seq: List[str]) -> List[str]:
-        seen = set()
-        out: List[str] = []
-        for item in seq:
-            if item in seen:
-                continue
-            seen.add(item)
-            out.append(item)
-        return out
-
-    return (_dedupe(added), _dedupe(removed))
-
-
-def _extract_timeout_from_entry(entry: discord.AuditLogEntry) -> Tuple[Optional[datetime], Optional[datetime]]:
-    before_timeout: Optional[datetime] = None
-    after_timeout: Optional[datetime] = None
-
-    try:
-        for change in _iter_audit_changes(entry):
-            key = _audit_change_key(change).lower()
-            if key not in {"communication_disabled_until", "timed_out_until"}:
-                continue
-
-            before_timeout = _safe_dt_utc(_audit_change_value(change, "before"))
-            after_timeout = _safe_dt_utc(_audit_change_value(change, "after"))
-            break
-    except Exception:
-        pass
-
-    return (before_timeout, after_timeout)
-
-
 def _determine_member_update_action(entry: discord.AuditLogEntry) -> Tuple[str, Dict[str, Any]]:
     try:
         before_timeout, after_timeout = _extract_timeout_from_entry(entry)
         added_roles, removed_roles = _extract_role_delta_from_entry(entry)
+        before_nick, after_nick = _extract_nick_from_entry(entry)
 
         if after_timeout and (not before_timeout or after_timeout != before_timeout):
             return ("timeout", {"until": after_timeout, "added_roles": added_roles, "removed_roles": removed_roles})
@@ -1947,6 +2139,8 @@ def _determine_member_update_action(entry: discord.AuditLogEntry) -> Tuple[str, 
             return ("add_role", {"added_roles": added_roles, "removed_roles": removed_roles})
         if removed_roles and not added_roles:
             return ("remove_role", {"added_roles": added_roles, "removed_roles": removed_roles})
+        if before_nick != after_nick:
+            return ("nickname_change", {"before_nick": before_nick, "after_nick": after_nick})
         if added_roles or removed_roles:
             return ("member_update", {"added_roles": added_roles, "removed_roles": removed_roles})
     except Exception:
@@ -2415,7 +2609,7 @@ async def post_member_join_risk_log(
 
 
 # ==========================================================
-# ✅ Quick mod execution
+# Quick mod execution
 # ==========================================================
 
 async def _respond_interaction_ephemeral(
@@ -2732,7 +2926,7 @@ register_modlog_interaction_router()
 
 
 # ==========================================================
-# ✅ Event-facing member / voice comparison helpers
+# Event-facing member / voice comparison helpers
 # ==========================================================
 
 def _role_delta_from_members(before: discord.Member, after: discord.Member) -> Tuple[List[str], List[str]]:
@@ -2767,7 +2961,16 @@ async def maybe_log_member_update_diff(guild: discord.Guild, before: discord.Mem
         before_timeout, after_timeout = _timeout_delta_from_members(before, after)
         before_nick, after_nick = _nickname_delta_from_members(before, after)
 
-        entry = await _audit_find_recent_member_update(guild, int(after.id))
+        entry = await _audit_find_best_member_update_match(
+            guild,
+            int(after.id),
+            added_roles=added_roles,
+            removed_roles=removed_roles,
+            before_timeout=before_timeout,
+            after_timeout=after_timeout,
+            before_nick=before_nick,
+            after_nick=after_nick,
+        )
         actor_display, reason = _format_actor_from_audit(entry)
         actor_id = _actor_id_from_audit(entry)
 
@@ -2862,6 +3065,7 @@ async def maybe_log_voice_state_update(
 ) -> bool:
     try:
         did_log = False
+
         entry = await _audit_find_recent_voice_target_entry(guild, int(member.id))
         actor_display, reason = _format_actor_from_audit(entry)
         actor_id = _actor_id_from_audit(entry)
@@ -2944,7 +3148,7 @@ async def maybe_log_voice_state_update(
 
 
 # ==========================================================
-# ✅ Convenience wrappers
+# Convenience wrappers
 # ==========================================================
 
 async def maybe_log_recent_member_update(guild: discord.Guild, target: discord.Member) -> bool:
