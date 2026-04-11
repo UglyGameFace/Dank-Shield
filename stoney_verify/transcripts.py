@@ -116,9 +116,11 @@ _CLOSE_PROMPT_MARKER = "stoney_verify:close_prompt:v2"
 _STAFF_CLOSED_MARKER = "stoney_verify:staff_closed:v2"
 _TRANSCRIPT_MARKER_PREFIX = "stoney_verify:transcript_for:"
 _CLOSE_REOPENED_MARKER = "stoney_verify:ticket_reopened:v1"
+_STAFF_REVIEW_PANEL_MARKER = "stoney_verify:staff_review_panel:v1"
 
 _TRANSCRIPT_POST_LOCKS: Dict[int, asyncio.Lock] = {}
 _CLOSE_PROMPT_LOCKS: Dict[int, asyncio.Lock] = {}
+_STAFF_REVIEW_PANEL_LOCKS: Dict[int, asyncio.Lock] = {}
 
 
 def _lock_for(container: Dict[int, asyncio.Lock], channel_id: int) -> asyncio.Lock:
@@ -300,6 +302,301 @@ async def _post_staff_closed_message(channel: discord.TextChannel, closed_by: di
     embed.set_footer(text=_STAFF_CLOSED_MARKER)
 
     await channel.send(embed=embed, view=StaffClosedTicketView())
+
+
+# ============================================================
+# STAFF REVIEW PANEL FOR EXISTING VERIFICATION TICKET
+# ============================================================
+
+class VerificationStaffReviewView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=None)
+
+    async def _ensure_staff(self, interaction: discord.Interaction) -> bool:
+        if not isinstance(interaction.user, discord.Member) or not _is_staff_member(interaction.user):
+            await _reply_ephemeral(interaction, "❌ Staff only.")
+            return False
+        return True
+
+    async def _resolve_ticket_context(
+        self,
+        interaction: discord.Interaction,
+    ) -> tuple[Optional[str], Optional[int], Optional[str]]:
+        channel = interaction.channel
+        if not isinstance(channel, discord.TextChannel):
+            return (None, None, None)
+
+        ticket_id: Optional[str] = None
+        member_id: Optional[int] = None
+        member_name: Optional[str] = None
+
+        try:
+            svc = get_supabase()
+            if svc:
+                res = (
+                    svc.table("tickets")
+                    .select("*")
+                    .or_(f"channel_id.eq.{channel.id},discord_thread_id.eq.{channel.id}")
+                    .order("created_at", desc=False)
+                    .limit(1)
+                    .execute()
+                )
+                rows = getattr(res, "data", None) or []
+                if rows:
+                    row = rows[0]
+                    ticket_id = str(row.get("id") or "").strip() or None
+                    try:
+                        member_id = int(str(row.get("user_id") or "0").strip() or 0) or None
+                    except Exception:
+                        member_id = None
+                    member_name = str(row.get("username") or "").strip() or None
+        except Exception:
+            pass
+
+        if member_id is None:
+            try:
+                owner = await _resolve_ticket_owner(channel)
+                if owner:
+                    member_id = int(owner.id)
+                    member_name = member_name or str(owner)
+            except Exception:
+                pass
+
+        return (ticket_id, member_id, member_name)
+
+    async def _queue_worker_action(
+        self,
+        *,
+        interaction: discord.Interaction,
+        action: str,
+        reason: str,
+    ) -> bool:
+        if not await self._ensure_staff(interaction):
+            return False
+
+        channel = interaction.channel
+        if not isinstance(channel, discord.TextChannel):
+            await _reply_ephemeral(interaction, "❌ Invalid channel.")
+            return False
+
+        ticket_id, member_id, member_name = await self._resolve_ticket_context(interaction)
+        if member_id is None:
+            await _reply_ephemeral(interaction, "❌ Could not resolve the ticket member.")
+            return False
+
+        try:
+            guild_id = str(channel.guild.id)
+            staff_id = str(interaction.user.id)
+            staff_name = getattr(interaction.user, "display_name", None) or getattr(interaction.user, "name", None) or str(interaction.user)
+
+            payload = {
+                "ticket_id": ticket_id,
+                "channel_id": str(channel.id),
+                "user_id": str(member_id),
+                "username": member_name or str(member_id),
+                "staff_id": staff_id,
+                "staff_name": staff_name,
+                "reason": reason,
+                "verification_source": "discord_staff_panel",
+                "approval_reason": reason,
+            }
+
+            sb = get_supabase()
+            if sb is None:
+                await _reply_ephemeral(interaction, "❌ Database is unavailable.")
+                return False
+
+            sb.table("bot_commands").insert({
+                "guild_id": guild_id,
+                "action": action,
+                "status": "pending",
+                "requested_by": staff_id,
+                "payload": payload,
+                "created_at": now_utc().isoformat(),  # type: ignore[name-defined]
+            }).execute()
+
+            return True
+        except Exception as e:
+            print(f"⚠️ Failed queueing {action} from staff review panel:", repr(e))
+            await _reply_ephemeral(interaction, f"❌ Failed to queue action: {e}")
+            return False
+
+    @discord.ui.button(
+        label="Approve",
+        style=discord.ButtonStyle.success,
+        emoji="✅",
+        custom_id="sv:verify:staff:approve",
+        row=0,
+    )
+    async def approve(
+        self,
+        interaction: discord.Interaction,
+        button: discord.ui.Button,
+    ):
+        ok = await self._queue_worker_action(
+            interaction=interaction,
+            action="approve_verification",
+            reason="Approved from Discord staff review panel.",
+        )
+        if ok:
+            await _reply_ephemeral(interaction, "✅ Approval queued.")
+
+    @discord.ui.button(
+        label="Deny",
+        style=discord.ButtonStyle.danger,
+        emoji="❌",
+        custom_id="sv:verify:staff:deny",
+        row=0,
+    )
+    async def deny(
+        self,
+        interaction: discord.Interaction,
+        button: discord.ui.Button,
+    ):
+        ok = await self._queue_worker_action(
+            interaction=interaction,
+            action="deny_verification",
+            reason="Denied from Discord staff review panel.",
+        )
+        if ok:
+            await _reply_ephemeral(interaction, "❌ Denial queued.")
+
+    @discord.ui.button(
+        label="Remove Unverified",
+        style=discord.ButtonStyle.secondary,
+        emoji="🧹",
+        custom_id="sv:verify:staff:remove_unverified",
+        row=1,
+    )
+    async def remove_unverified(
+        self,
+        interaction: discord.Interaction,
+        button: discord.ui.Button,
+    ):
+        ok = await self._queue_worker_action(
+            interaction=interaction,
+            action="remove_unverified_role",
+            reason="Removed unverified role from Discord staff review panel.",
+        )
+        if ok:
+            await _reply_ephemeral(interaction, "🧹 Remove-unverified queued.")
+
+    @discord.ui.button(
+        label="Repost Member Verify UI",
+        style=discord.ButtonStyle.secondary,
+        emoji="🔁",
+        custom_id="sv:verify:staff:repost_user_ui",
+        row=1,
+    )
+    async def repost_user_ui(
+        self,
+        interaction: discord.Interaction,
+        button: discord.ui.Button,
+    ):
+        if not await self._ensure_staff(interaction):
+            return
+
+        channel = interaction.channel
+        if not isinstance(channel, discord.TextChannel):
+            return await _reply_ephemeral(interaction, "❌ Invalid channel.")
+
+        ok = await ensure_verify_ui_present(
+            channel,
+            reason=f"staff_panel_repost:{getattr(interaction.user, 'id', 'staff')}",
+        )
+        if ok:
+            return await _reply_ephemeral(interaction, "✅ Member verify UI reposted.")
+        return await _reply_ephemeral(interaction, "❌ Failed to repost member verify UI.")
+
+
+async def post_or_replace_verification_staff_panel(
+    channel: discord.TextChannel,
+    *,
+    member: Optional[discord.Member] = None,
+    user_id: Optional[int] = None,
+    username: str = "",
+    submitted_from: str = "website_submission",
+    reason: str = "",
+) -> str:
+    if not isinstance(channel, discord.TextChannel):
+        return ""
+
+    lock = _lock_for(_STAFF_REVIEW_PANEL_LOCKS, channel.id)
+    async with lock:
+        target_user_id = int(user_id or getattr(member, "id", 0) or 0)
+        target_name = (
+            username
+            or (str(member) if member else "")
+            or (f"User {target_user_id}" if target_user_id else "Unknown User")
+        )
+        target_mention = (
+            member.mention if member is not None
+            else (f"<@{target_user_id}>" if target_user_id else "Unknown")
+        )
+
+        embed = discord.Embed(
+            title="🛡️ Verification Staff Review",
+            description="A verification submission was received and is ready for staff review in this same ticket.",
+            color=discord.Color.blurple(),
+            timestamp=now_utc(),  # type: ignore[name-defined]
+        )
+
+        embed.add_field(
+            name="Member",
+            value=(
+                f"{target_mention}\n"
+                f"`{target_name}`"
+                + (f" • `{target_user_id}`" if target_user_id else "")
+            ),
+            inline=False,
+        )
+        embed.add_field(
+            name="Submission Source",
+            value=f"`{submitted_from}`",
+            inline=True,
+        )
+        embed.add_field(
+            name="Review Actions",
+            value=(
+                "Approve, deny, or remove the unverified role "
+                "from this same verification ticket flow."
+            ),
+            inline=False,
+        )
+
+        if reason:
+            embed.add_field(name="Reason", value=reason, inline=False)
+
+        embed.set_footer(text=_STAFF_REVIEW_PANEL_MARKER)
+
+        view = VerificationStaffReviewView()
+
+        try:
+            me_id = int(getattr(getattr(bot, "user", None), "id", 0) or 0)
+            async for msg in channel.history(limit=80):
+                if int(getattr(getattr(msg, "author", None), "id", 0) or 0) != me_id:
+                    continue
+                if not msg.embeds:
+                    continue
+
+                try:
+                    footer_text = str(
+                        getattr(getattr(msg.embeds[0], "footer", None), "text", "") or ""
+                    )
+                    if _STAFF_REVIEW_PANEL_MARKER in footer_text:
+                        await msg.edit(embed=embed, view=view)
+                        return "updated"
+                except Exception:
+                    continue
+        except Exception:
+            pass
+
+        try:
+            await channel.send(embed=embed, view=view)
+            return "posted"
+        except Exception as e:
+            print("⚠️ Failed posting verification staff review panel:", repr(e))
+            return ""
 
 
 # ============================================================
@@ -1055,7 +1352,7 @@ async def auto_close_after_decision(
 # UI HELPERS (kept for existing behavior)
 # ============================================================
 
-VERIFY_EMBED_TITLE = "Stoney Baloney Verification"
+VERIFY_EMBED_TITLE = "Stoney Balonney Verification"
 VERIFY_EMBED_DESC = "Token-scoped upload. Staff review happens inside your private Discord ticket."
 
 
@@ -1137,7 +1434,7 @@ async def find_last_verify_ui_message(channel: discord.TextChannel, limit: int =
                 for e in msg.embeds:
                     title = (e.title or "").strip()
                     footer_text = str(getattr(getattr(e, "footer", None), "text", "") or "")
-                    if title == VERIFY_EMBED_TITLE or title == "Stoney Baloney Verification" or "stoney_verify:verify_ui:" in footer_text:
+                    if title == VERIFY_EMBED_TITLE or title == "Stoney Balonney Verification" or "stoney_verify:verify_ui:" in footer_text:
                         return msg
             if msg.content and "🌿 **Verification Required**" in msg.content:
                 return msg
@@ -1333,3 +1630,8 @@ async def _register_transcript_views():
         bot.add_view(StaffClosedTicketView())
     except Exception as e:
         print("⚠️ Failed to register StaffClosedTicketView:", e)
+
+    try:
+        bot.add_view(VerificationStaffReviewView())
+    except Exception as e:
+        print("⚠️ Failed to register VerificationStaffReviewView:", e)
