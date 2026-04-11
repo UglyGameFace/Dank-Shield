@@ -81,6 +81,7 @@ _DID_KICK_TIMER_RESUME = False
 _DID_DEPARTED_RECONCILE = False
 _DID_TICKET_SYNC = False
 _DID_TICKET_EVENTS_SETUP = False
+_DID_PERMISSION_SELF_CHECK = False
 
 _STARTUP_BACKGROUND_TASK: asyncio.Task | None = None
 
@@ -172,6 +173,234 @@ async def _resolve_runtime_guild() -> discord.Guild | None:
     except Exception as e:
         print("⚠️ Could not resolve guild:", repr(e))
         return None
+
+
+def _role_check_line(
+    *,
+    role_obj: discord.Role | None,
+    bot_top_role: discord.Role | None,
+    label: str,
+) -> tuple[str, bool]:
+    try:
+        if role_obj is None:
+            return (f"{label}: MISSING", False)
+
+        if bot_top_role is None:
+            return (f"{label}: UNKNOWN (bot top role missing)", False)
+
+        ok = int(bot_top_role.position) > int(role_obj.position)
+        if ok:
+            return (f"{label}: OK ({role_obj.name})", True)
+
+        return (
+            f"{label}: FAIL ({role_obj.name} is at/above bot top role {bot_top_role.name})",
+            False,
+        )
+    except Exception as e:
+        return (f"{label}: ERROR ({repr(e)})", False)
+
+
+def _perm_check_line(
+    *,
+    perms: discord.Permissions,
+    perm_name: str,
+    label: str,
+) -> tuple[str, bool]:
+    try:
+        ok = bool(getattr(perms, perm_name, False))
+        return (f"{label}: {'OK' if ok else 'MISSING'}", ok)
+    except Exception as e:
+        return (f"{label}: ERROR ({repr(e)})", False)
+
+
+async def _run_permission_self_check_once() -> None:
+    global _DID_PERMISSION_SELF_CHECK
+
+    if _DID_PERMISSION_SELF_CHECK:
+        return
+
+    if not claim_startup_flag("permission_self_check"):
+        _DID_PERMISSION_SELF_CHECK = True
+        print("ℹ️ Startup permission self-check already claimed elsewhere; skipping here.")
+        return
+
+    _DID_PERMISSION_SELF_CHECK = True
+
+    guild = await _resolve_runtime_guild()
+    if guild is None:
+        print("⚠️ Permission self-check skipped: guild could not be resolved.")
+        return
+
+    try:
+        me = guild.me
+        if me is None and getattr(bot, "user", None):
+            try:
+                me = await guild.fetch_member(bot.user.id)  # type: ignore[arg-type]
+            except Exception:
+                me = None
+
+        if me is None:
+            print("⚠️ Permission self-check skipped: bot member could not be resolved.")
+            return
+
+        perms = me.guild_permissions
+        bot_top_role = getattr(me, "top_role", None)
+
+        try:
+            from .globals import (
+                UNVERIFIED_ROLE_ID,
+                VERIFIED_ROLE_ID,
+                RESIDENT_ROLE_ID,
+                STAFF_ROLE_ID,
+                MODLOG_CHANNEL_ID,
+            )
+        except Exception:
+            UNVERIFIED_ROLE_ID = 0  # type: ignore[assignment]
+            VERIFIED_ROLE_ID = 0  # type: ignore[assignment]
+            RESIDENT_ROLE_ID = 0  # type: ignore[assignment]
+            STAFF_ROLE_ID = 0  # type: ignore[assignment]
+            MODLOG_CHANNEL_ID = 0  # type: ignore[assignment]
+
+        required_perm_lines: list[tuple[str, bool]] = [
+            _perm_check_line(perms=perms, perm_name="view_audit_log", label="View Audit Log"),
+            _perm_check_line(perms=perms, perm_name="manage_roles", label="Manage Roles"),
+            _perm_check_line(perms=perms, perm_name="kick_members", label="Kick Members"),
+            _perm_check_line(perms=perms, perm_name="ban_members", label="Ban Members"),
+            _perm_check_line(perms=perms, perm_name="moderate_members", label="Moderate Members"),
+            _perm_check_line(perms=perms, perm_name="manage_channels", label="Manage Channels"),
+            _perm_check_line(perms=perms, perm_name="send_messages", label="Send Messages"),
+            _perm_check_line(perms=perms, perm_name="read_message_history", label="Read Message History"),
+            _perm_check_line(perms=perms, perm_name="attach_files", label="Attach Files"),
+        ]
+
+        hierarchy_lines: list[tuple[str, bool]] = [
+            _role_check_line(
+                role_obj=guild.get_role(int(UNVERIFIED_ROLE_ID or 0)) if int(UNVERIFIED_ROLE_ID or 0) > 0 else None,
+                bot_top_role=bot_top_role,
+                label="Hierarchy > Unverified",
+            ),
+            _role_check_line(
+                role_obj=guild.get_role(int(VERIFIED_ROLE_ID or 0)) if int(VERIFIED_ROLE_ID or 0) > 0 else None,
+                bot_top_role=bot_top_role,
+                label="Hierarchy > Verified",
+            ),
+            _role_check_line(
+                role_obj=guild.get_role(int(RESIDENT_ROLE_ID or 0)) if int(RESIDENT_ROLE_ID or 0) > 0 else None,
+                bot_top_role=bot_top_role,
+                label="Hierarchy > Resident",
+            ),
+            _role_check_line(
+                role_obj=guild.get_role(int(STAFF_ROLE_ID or 0)) if int(STAFF_ROLE_ID or 0) > 0 else None,
+                bot_top_role=bot_top_role,
+                label="Hierarchy > Staff",
+            ),
+        ]
+
+        modlog_channel_line = "Modlog Channel: UNKNOWN"
+        modlog_channel_ok = False
+        try:
+            modlog_channel = None
+            if int(MODLOG_CHANNEL_ID or 0) > 0:
+                modlog_channel = guild.get_channel(int(MODLOG_CHANNEL_ID))
+                if modlog_channel is None:
+                    try:
+                        modlog_channel = await guild.fetch_channel(int(MODLOG_CHANNEL_ID))
+                    except Exception:
+                        modlog_channel = None
+
+            if isinstance(modlog_channel, discord.TextChannel):
+                ch_perms = modlog_channel.permissions_for(me)
+                modlog_channel_ok = bool(
+                    ch_perms.view_channel
+                    and ch_perms.send_messages
+                    and ch_perms.embed_links
+                    and ch_perms.read_message_history
+                )
+                if modlog_channel_ok:
+                    modlog_channel_line = f"Modlog Channel: OK (#{modlog_channel.name})"
+                else:
+                    modlog_channel_line = (
+                        f"Modlog Channel: FAIL (#{modlog_channel.name} missing one of: "
+                        f"View Channel / Send Messages / Embed Links / Read Message History)"
+                    )
+            else:
+                modlog_channel_line = "Modlog Channel: MISSING OR NOT TEXT CHANNEL"
+        except Exception as e:
+            modlog_channel_line = f"Modlog Channel: ERROR ({repr(e)})"
+            modlog_channel_ok = False
+
+        all_lines = [line for line, _ in required_perm_lines] + [line for line, _ in hierarchy_lines] + [modlog_channel_line]
+        all_ok = all(ok for _, ok in required_perm_lines) and all(ok for _, ok in hierarchy_lines) and modlog_channel_ok
+
+        print("🔎 Startup permission self-check:")
+        for line in all_lines:
+            print(f"   - {line}")
+
+        embed = discord.Embed(
+            title="🩺 Bot Permission / Hierarchy Self-Check",
+            color=discord.Color.green() if all_ok else discord.Color.red(),
+            timestamp=discord.utils.utcnow(),
+            description=(
+                "Startup self-check for moderation attribution, role actions, and logging."
+                if all_ok
+                else "One or more startup checks failed. Staff action attribution or moderation flows may be unreliable."
+            ),
+        )
+
+        try:
+            embed.add_field(
+                name="Bot",
+                value=(
+                    f"{me.mention}\n"
+                    f"Top role: `{getattr(bot_top_role, 'name', 'Unknown')}` "
+                    f"(`{getattr(bot_top_role, 'id', '0')}`)"
+                ),
+                inline=False,
+            )
+        except Exception:
+            pass
+
+        embed.add_field(
+            name="Required Permissions",
+            value="\n".join([line for line, _ in required_perm_lines])[:1024],
+            inline=False,
+        )
+        embed.add_field(
+            name="Role Hierarchy",
+            value="\n".join([line for line, _ in hierarchy_lines])[:1024],
+            inline=False,
+        )
+        embed.add_field(
+            name="Logging Channel",
+            value=modlog_channel_line[:1024],
+            inline=False,
+        )
+
+        if not all_ok:
+            missing_items = [line for line, ok in required_perm_lines if not ok]
+            bad_hierarchy = [line for line, ok in hierarchy_lines if not ok]
+            notes = missing_items + bad_hierarchy
+            if not modlog_channel_ok:
+                notes.append(modlog_channel_line)
+            embed.add_field(
+                name="What Needs Fixing",
+                value="\n".join(notes)[:1024] if notes else "Unknown startup check failure.",
+                inline=False,
+            )
+
+        try:
+            ch = modlog._get_modlog_channel(guild)
+            if ch is not None:
+                await ch.send(embed=embed)
+        except Exception as e:
+            print("⚠️ Failed posting startup permission self-check to modlog:", repr(e))
+
+    except Exception as e:
+        print("⚠️ Permission self-check failed:", repr(e))
+        try:
+            traceback.print_exc()
+        except Exception:
+            pass
 
 
 async def _maybe_resume_kick_timers_once() -> None:
@@ -516,6 +745,7 @@ async def on_ready() -> None:
         await _start_legacy_actions_api_once()
         await _start_new_api_once()
         await _start_workers_once()
+        await _run_permission_self_check_once()
 
         # Heavy work belongs in the background so the gateway heartbeat stays healthy.
         _ensure_startup_background_runner()
