@@ -22,6 +22,12 @@ except Exception:
     def build_alt_detection_summary(member: discord.Member) -> str:
         return ""
 
+try:
+    from .identity_proof_service import get_identity_truth_context
+except Exception:
+    def get_identity_truth_context(*, guild_id: Any, user_id: Any) -> Dict[str, Any]:
+        return {}
+
 
 # ==========================================================
 # Small local helpers
@@ -765,6 +771,102 @@ def _pretty_cluster_reason(reason: Any) -> str:
     return raw.replace("_", " ").strip().capitalize()
 
 
+def _pretty_truth_link_type(link_type: Any) -> str:
+    raw = _safe_str(link_type).lower()
+    if raw == "confirmed_duplicate":
+        return "Confirmed duplicate"
+    if raw == "same_person_likely":
+        return "Likely same person"
+    if raw == "not_linked":
+        return "Not linked"
+    return raw.replace("_", " ").strip().capitalize() if raw else "Unknown"
+
+
+def _truth_context_other_id_label(guild: Optional[discord.Guild], row: Dict[str, Any]) -> str:
+    uid = _safe_int(row.get("other_user_id") or row.get("matched_user_id") or row.get("user_id"), 0)
+    if uid <= 0:
+        return "`unknown`"
+    try:
+        if guild is not None:
+            member = guild.get_member(uid)
+            if member is not None:
+                return f"{member.mention} (`{uid}`)"
+    except Exception:
+        pass
+    return f"`{uid}`"
+
+
+def _sb_get_identity_truth_context_sync(guild_id: int, user_id: int) -> Dict[str, Any]:
+    try:
+        row = get_identity_truth_context(guild_id=str(int(guild_id)), user_id=str(int(user_id)))
+        return dict(row) if isinstance(row, dict) else {}
+    except Exception:
+        return {}
+
+
+def _context_truth_value(
+    guild: Optional[discord.Guild],
+    truth_context: Dict[str, Any],
+    merged_risk: Optional[Dict[str, Any]] = None,
+) -> str:
+    truth = dict(truth_context or {})
+    merged = dict(merged_risk or {})
+
+    proof_matches = list(truth.get("proof_matches") or [])
+    manual_confirmed = list(truth.get("manual_confirmed") or [])
+    manual_likely = list(truth.get("manual_likely") or [])
+    manual_not_linked = list(truth.get("manual_not_linked") or [])
+
+    proof_count = max(len(proof_matches), _safe_int(merged.get("identity_proof_match_count"), 0))
+    confirmed_count = max(len(manual_confirmed), _safe_int(merged.get("manual_confirmed_match_count"), 0))
+    likely_count = max(len(manual_likely), _safe_int(merged.get("manual_likely_match_count"), 0))
+    not_linked_count = max(len(manual_not_linked), _safe_int(merged.get("manual_not_linked_count"), 0))
+
+    if proof_count <= 0 and confirmed_count <= 0 and likely_count <= 0 and not_linked_count <= 0:
+        return ""
+
+    lines: List[str] = []
+    header_parts: List[str] = []
+    if proof_count > 0:
+        header_parts.append(f"proof_matches={proof_count}")
+    if confirmed_count > 0:
+        header_parts.append(f"manual_confirmed={confirmed_count}")
+    if likely_count > 0:
+        header_parts.append(f"manual_likely={likely_count}")
+    if not_linked_count > 0:
+        header_parts.append(f"not_linked={not_linked_count}")
+    if header_parts:
+        lines.append(" • ".join(header_parts))
+
+    for row in proof_matches[:3]:
+        lines.append(
+            f"• {_truth_context_other_id_label(guild, row)} — verified identity fingerprint match"
+        )
+
+    for row in manual_confirmed[:2]:
+        reason = _safe_str(row.get("reason"))
+        line = f"• {_truth_context_other_id_label(guild, row)} — {_pretty_truth_link_type(row.get('link_type'))}"
+        if reason:
+            line += f" ({_truncate(reason, 80)})"
+        lines.append(line)
+
+    for row in manual_likely[:2]:
+        reason = _safe_str(row.get("reason"))
+        line = f"• {_truth_context_other_id_label(guild, row)} — {_pretty_truth_link_type(row.get('link_type'))}"
+        if reason:
+            line += f" ({_truncate(reason, 80)})"
+        lines.append(line)
+
+    for row in manual_not_linked[:2]:
+        reason = _safe_str(row.get("reason"))
+        line = f"• {_truth_context_other_id_label(guild, row)} — {_pretty_truth_link_type(row.get('link_type'))}"
+        if reason:
+            line += f" ({_truncate(reason, 80)})"
+        lines.append(line)
+
+    return _chunk_lines(lines, 1000)
+
+
 def _risk_summary_header(source: Dict[str, Any], warn_count: int = 0) -> str:
     if _safe_bool(source.get("is_bot_account"), False):
         return "BOT ACCOUNT • Excluded from alt-risk scoring"
@@ -1206,6 +1308,10 @@ def _build_merged_risk_source(
         "same_fingerprint_count",
         "similar_name_count",
         "same_age_bucket_count",
+        "identity_proof_match_count",
+        "manual_confirmed_match_count",
+        "manual_likely_match_count",
+        "manual_not_linked_count",
     ):
         merged[key] = _safe_int(
             _pick_first_meaningful(
@@ -1215,6 +1321,13 @@ def _build_merged_risk_source(
             ),
             0,
         )
+
+    merged["matched_identity_fingerprint"] = _safe_str(
+        _pick_first_meaningful(
+            authoritative.get("matched_identity_fingerprint"),
+            default="",
+        )
+    )
 
     merged["alt_cluster_key"] = _safe_str(
         _pick_first_meaningful(
@@ -1298,6 +1411,11 @@ def _build_merged_risk_source(
         merged["same_age_bucket_count"] = 0
         merged["alt_cluster_key"] = ""
         merged["cluster_members"] = []
+        merged["identity_proof_match_count"] = 0
+        merged["manual_confirmed_match_count"] = 0
+        merged["manual_likely_match_count"] = 0
+        merged["manual_not_linked_count"] = 0
+        merged["matched_identity_fingerprint"] = ""
         merged["risk_reasons"] = ["Discord marks this account as a bot; excluded from alt-risk scoring."]
         merged["suspicion_flags"] = ["bot_account"]
 
@@ -1337,7 +1455,20 @@ def _context_risk_value(
 
     lines: List[str] = [_risk_summary_header(source, warn_count=warn_count)]
 
+    identity_proof_matches = _safe_int(source.get("identity_proof_match_count"), 0)
+    manual_confirmed_matches = _safe_int(source.get("manual_confirmed_match_count"), 0)
+    manual_likely_matches = _safe_int(source.get("manual_likely_match_count"), 0)
+    manual_not_linked_count = _safe_int(source.get("manual_not_linked_count"), 0)
+
     signal_parts: List[str] = []
+    if identity_proof_matches > 0:
+        signal_parts.append(f"Verified identity matches: {identity_proof_matches}")
+    if manual_confirmed_matches > 0:
+        signal_parts.append(f"Manual confirmed links: {manual_confirmed_matches}")
+    if manual_likely_matches > 0:
+        signal_parts.append(f"Manual likely links: {manual_likely_matches}")
+    if manual_not_linked_count > 0:
+        signal_parts.append(f"Not-linked suppressions: {manual_not_linked_count}")
     if burst_join_count > 0:
         signal_parts.append(f"Join burst: {burst_join_count}")
     if same_fp > 0:
@@ -1362,7 +1493,10 @@ def _context_risk_value(
     if reasons:
         lines.append("Why flagged: " + " | ".join(reasons[:3]))
 
-    if same_fp > 0 and fingerprint:
+    matched_identity_fingerprint = _safe_str(source.get("matched_identity_fingerprint"))
+    if identity_proof_matches > 0 and matched_identity_fingerprint:
+        lines.append(f"Verified identity fingerprint: `{matched_identity_fingerprint}`")
+    elif same_fp > 0 and fingerprint:
         lines.append(f"Fingerprint group: `{fingerprint}`")
     if alt_cluster_size > 1 and alt_cluster_key:
         lines.append(f"Cluster reference: `{alt_cluster_key}`")
@@ -1423,17 +1557,20 @@ async def _fetch_member_context_snapshot(
         guild_member_task = _run_blocking_db(_sb_select_guild_member_sync, int(guild.id), target_id)
         latest_join_task = _run_blocking_db(_sb_select_latest_join_sync, int(guild.id), target_id)
         warn_count_task = _run_blocking_db(_sb_select_warn_count_sync, int(guild.id), target_id)
+        truth_context_task = _run_blocking_db(_sb_get_identity_truth_context_sync, int(guild.id), target_id)
 
-        guild_member_row, latest_join_row, warn_count = await asyncio.gather(
+        guild_member_row, latest_join_row, warn_count, truth_context_row = await asyncio.gather(
             guild_member_task,
             latest_join_task,
             warn_count_task,
+            truth_context_task,
             return_exceptions=True,
         )
 
         guild_member = guild_member_row if isinstance(guild_member_row, dict) else {}
         latest_join = latest_join_row if isinstance(latest_join_row, dict) else {}
         warns = int(warn_count or 0) if not isinstance(warn_count, Exception) else 0
+        truth_context = truth_context_row if isinstance(truth_context_row, dict) else {}
 
         live_profile: Dict[str, Any] = {}
         try:
@@ -1451,11 +1588,27 @@ async def _fetch_member_context_snapshot(
             warn_count=warns,
         )
 
+        proof_matches = list(truth_context.get("proof_matches") or []) if isinstance(truth_context, dict) else []
+        manual_confirmed = list(truth_context.get("manual_confirmed") or []) if isinstance(truth_context, dict) else []
+        manual_likely = list(truth_context.get("manual_likely") or []) if isinstance(truth_context, dict) else []
+        manual_not_linked = list(truth_context.get("manual_not_linked") or []) if isinstance(truth_context, dict) else []
+
+        merged_risk["identity_proof_match_count"] = max(_safe_int(merged_risk.get("identity_proof_match_count"), 0), len(proof_matches))
+        merged_risk["manual_confirmed_match_count"] = max(_safe_int(merged_risk.get("manual_confirmed_match_count"), 0), len(manual_confirmed))
+        merged_risk["manual_likely_match_count"] = max(_safe_int(merged_risk.get("manual_likely_match_count"), 0), len(manual_likely))
+        merged_risk["manual_not_linked_count"] = max(_safe_int(merged_risk.get("manual_not_linked_count"), 0), len(manual_not_linked))
+        if proof_matches and not _safe_str(merged_risk.get("matched_identity_fingerprint")):
+            try:
+                merged_risk["matched_identity_fingerprint"] = _safe_str(proof_matches[0].get("identity_fingerprint"))
+            except Exception:
+                pass
+
         return {
             "guild_member": guild_member,
             "latest_join": latest_join,
             "warn_count": warns,
             "live_profile": normalized_live,
+            "truth_context": truth_context,
             "merged_risk": merged_risk,
         }
     except Exception as e:
@@ -2341,6 +2494,7 @@ def build_modlog_embed(
     guild_member = context_snapshot.get("guild_member") if isinstance(context_snapshot.get("guild_member"), dict) else {}
     latest_join = context_snapshot.get("latest_join") if isinstance(context_snapshot.get("latest_join"), dict) else {}
     live_profile = context_snapshot.get("live_profile") if isinstance(context_snapshot.get("live_profile"), dict) else {}
+    truth_context = context_snapshot.get("truth_context") if isinstance(context_snapshot.get("truth_context"), dict) else {}
     merged_risk = context_snapshot.get("merged_risk") if isinstance(context_snapshot.get("merged_risk"), dict) else {}
     warn_count = _safe_int(context_snapshot.get("warn_count"), 0)
 
@@ -2355,6 +2509,10 @@ def build_modlog_embed(
     risk_value = _context_risk_value(guild_member, live_profile, warn_count=warn_count, merged_risk=merged_risk)
     if risk_value:
         embed.add_field(name="Risk Overview", value=risk_value, inline=False)
+
+    truth_value = _context_truth_value(guild, truth_context, merged_risk=merged_risk)
+    if truth_value:
+        embed.add_field(name="Identity Truth", value=truth_value, inline=False)
 
     linked_accounts_value = _context_linked_accounts_value(guild_member, live_profile, merged_risk=merged_risk)
     if linked_accounts_value:
@@ -2631,6 +2789,7 @@ async def post_dashboard_mod_action_log(
             "latest_join": context_snapshot.get("latest_join") or {},
             "warn_count": _safe_int(context_snapshot.get("warn_count"), 0),
             "live_profile": context_snapshot.get("live_profile") or {},
+            "truth_context": context_snapshot.get("truth_context") or {},
             "merged_risk": context_snapshot.get("merged_risk") or {},
         }
 
