@@ -12,10 +12,6 @@ import discord
 from .globals import *
 
 
-# ============================================================
-# ✅ Internal caches
-# ============================================================
-
 _RECENT_JOIN_PROFILES: Dict[int, Deque[Dict[str, Any]]] = defaultdict(deque)
 _LAST_RAID_ALERT_AT: Dict[int, datetime] = {}
 _LAST_CLUSTER_ALERT_AT: Dict[Tuple[int, str], datetime] = {}
@@ -27,10 +23,6 @@ _SUSPICIOUS_NAME_RE = re.compile(
     re.IGNORECASE,
 )
 
-
-# ============================================================
-# ✅ Time / config helpers
-# ============================================================
 
 def _utcnow() -> datetime:
     try:
@@ -95,10 +87,6 @@ def _suspicious_age_days() -> int:
     return max(_very_new_age_days(), _cfg_int("SUSPICIOUS_ACCOUNT_AGE_DAYS", 7))
 
 
-# ============================================================
-# ✅ Generic helpers
-# ============================================================
-
 def _normalize_text(value: Any) -> str:
     try:
         return str(value or "").strip()
@@ -109,11 +97,6 @@ def _normalize_text(value: Any) -> str:
 def _normalize_name(value: Any) -> str:
     text = _normalize_text(value).lower()
     return "".join(ch for ch in text if ch.isalnum())
-
-
-def _tokenize_name(value: Any) -> List[str]:
-    text = _normalize_text(value).lower()
-    return [m.group(0) for m in _USERNAME_TOKEN_RE.finditer(text)]
 
 
 def _default_avatar(member: discord.Member) -> bool:
@@ -188,16 +171,96 @@ def _safe_text_channel(guild: discord.Guild, channel_id: int) -> Optional[discor
     return None
 
 
-# ============================================================
-# ✅ Core signal helpers
-# ============================================================
+def _joined_after_creation_seconds(member: discord.Member) -> Optional[int]:
+    try:
+        created_at = getattr(member, "created_at", None)
+        joined_at = getattr(member, "joined_at", None)
+        if not created_at or not joined_at:
+            return None
+        if created_at.tzinfo is None:
+            created_at = created_at.replace(tzinfo=timezone.utc)
+        else:
+            created_at = created_at.astimezone(timezone.utc)
+        if joined_at.tzinfo is None:
+            joined_at = joined_at.replace(tzinfo=timezone.utc)
+        else:
+            joined_at = joined_at.astimezone(timezone.utc)
+        return max(0, int((joined_at - created_at).total_seconds()))
+    except Exception:
+        return None
+
+
+def _joined_after_creation_human(member: discord.Member) -> str:
+    seconds = _joined_after_creation_seconds(member)
+    if seconds is None:
+        return ""
+    if seconds < 60:
+        return "<1 minute"
+    if seconds < 3600:
+        return f"{seconds // 60} minute(s)"
+    if seconds < 86400:
+        hours = seconds // 3600
+        minutes = (seconds % 3600) // 60
+        if hours <= 6 and minutes > 0:
+            return f"{hours}h {minutes}m"
+        return f"{hours} hour(s)"
+    days = seconds // 86400
+    return f"{days} day(s)"
+
+
+def _tier_to_level(tier: str) -> str:
+    normalized = str(tier or "").strip().lower()
+    if normalized == "confirmed_duplicate":
+        return "critical"
+    if normalized == "strongly_linked":
+        return "high"
+    if normalized == "suspicious":
+        return "medium"
+    return "low"
+
+
+def _pretty_signal(code: str) -> str:
+    mapping = {
+        "bot_account": "Bot account",
+        "extremely_new_account": "Extremely new account",
+        "very_new_account": "Very new account",
+        "fresh_account": "Fresh account",
+        "default_avatar": "Default avatar",
+        "suspicious_name_pattern": "Suspicious name pattern",
+        "repeated_character_pattern": "Repeated character pattern",
+        "very_high_digit_ratio": "Very high digit ratio",
+        "elevated_digit_ratio": "Elevated digit ratio",
+        "high_underscore_ratio": "High underscore ratio",
+        "instant_join_after_creation": "Joined immediately after creation",
+        "fast_join_after_creation": "Joined soon after creation",
+        "same_day_join_after_creation": "Joined same day as creation",
+        "join_burst": "Join burst",
+        "shared_behavior_fingerprint": "Shared behavioral fingerprint",
+        "similar_recent_username": "Similar recent usernames",
+        "age_bucket_cluster": "Age bucket cluster",
+        "cluster_triad": "Multi-signal cluster match",
+        "burst_cluster_combo": "Burst + cluster combo",
+        "name_cluster_combo": "Name cluster combo",
+    }
+    return mapping.get(code, code.replace("_", " ").strip().capitalize())
+
+
+def _dedupe_list(values: List[str], max_items: int = 20) -> List[str]:
+    out: List[str] = []
+    for item in values:
+        text = str(item or "").strip()
+        if text and text not in out:
+            out.append(text)
+        if len(out) >= max_items:
+            break
+    return out[:max_items]
+
 
 def _account_age_days(member: discord.Member) -> int:
     try:
         created_at = getattr(member, "created_at", None)
         if not created_at:
             return 999999
-
         age = _utcnow() - created_at
         return max(0, int(age.total_seconds() // 86400))
     except Exception:
@@ -234,7 +297,6 @@ def _behavior_fingerprint(member: discord.Member) -> str:
             "medium" if len(username) <= 12 else
             "long"
         )
-
         return "|".join(
             [
                 age_bucket,
@@ -249,16 +311,11 @@ def _behavior_fingerprint(member: discord.Member) -> str:
         return "unknown"
 
 
-# ============================================================
-# ✅ Join profile / cluster engine
-# ============================================================
-
 def _prune_recent_join_profiles(guild_id: int) -> None:
     try:
         window = timedelta(minutes=_cluster_window_minutes())
         cutoff = _utcnow() - window
         dq = _RECENT_JOIN_PROFILES[guild_id]
-
         while dq and dq[0].get("seen_at") and dq[0]["seen_at"] < cutoff:
             dq.popleft()
     except Exception:
@@ -268,7 +325,10 @@ def _prune_recent_join_profiles(guild_id: int) -> None:
 def _recent_profiles(guild_id: int) -> List[Dict[str, Any]]:
     try:
         _prune_recent_join_profiles(guild_id)
-        return list(_RECENT_JOIN_PROFILES[guild_id])
+        return [
+            row for row in list(_RECENT_JOIN_PROFILES[guild_id])
+            if not bool(row.get("is_bot_account"))
+        ]
     except Exception:
         return []
 
@@ -279,17 +339,14 @@ def _recent_join_burst_count(guild_id: int) -> int:
         dq = container.get(guild_id) if isinstance(container, dict) else None
         if not dq:
             return 0
-
         cutoff = _utcnow() - timedelta(seconds=_raid_window_seconds())
         count = 0
-
         for ts in list(dq):
             try:
                 if ts >= cutoff:
                     count += 1
             except Exception:
                 continue
-
         return count
     except Exception:
         return 0
@@ -302,22 +359,21 @@ def _build_recent_cluster_matches(
     age_bucket: str,
 ) -> Dict[str, Any]:
     profiles = _recent_profiles(guild_id)
-
     similar_name_matches: List[Dict[str, Any]] = []
     same_fp_matches: List[Dict[str, Any]] = []
     same_age_bucket_matches: List[Dict[str, Any]] = []
-
     threshold = _cluster_similarity_threshold()
 
     for row in profiles:
         try:
+            if bool(row.get("is_bot_account")):
+                continue
             other_name = str(row.get("username_normalized") or "")
             other_fp = str(row.get("fingerprint") or "")
             other_bucket = str(row.get("age_bucket") or "")
 
             if other_fp and other_fp == fingerprint:
                 same_fp_matches.append(row)
-
             if other_bucket and other_bucket == age_bucket:
                 same_age_bucket_matches.append(row)
 
@@ -341,6 +397,8 @@ def _build_recent_cluster_matches(
 
 def _record_join_profile(member: discord.Member, profile: Dict[str, Any]) -> None:
     try:
+        if bool(getattr(member, "bot", False)) or bool(profile.get("is_bot_account")):
+            return
         gid = int(member.guild.id)
         _prune_recent_join_profiles(gid)
         _RECENT_JOIN_PROFILES[gid].append(profile)
@@ -348,138 +406,208 @@ def _record_join_profile(member: discord.Member, profile: Dict[str, Any]) -> Non
         pass
 
 
-# ============================================================
-# ✅ Risk scoring
-# ============================================================
-
 def build_member_risk_profile(member: discord.Member) -> Dict[str, Any]:
     guild_id = int(member.guild.id)
     username = _normalize_text(getattr(member, "name", "") or "")
     display_name = _normalize_text(getattr(member, "display_name", "") or "")
     username_normalized = _normalize_name(username)
     display_normalized = _normalize_name(display_name)
-
     age_days = _account_age_days(member)
     age_bucket = _age_bucket(age_days)
     fingerprint = _behavior_fingerprint(member)
+
+    if getattr(member, "bot", False):
+        return {
+            "guild_id": guild_id,
+            "user_id": int(member.id),
+            "username": username,
+            "display_name": display_name,
+            "username_normalized": username_normalized,
+            "display_name_normalized": display_normalized,
+            "avatar_url": _safe_avatar_url(member),
+            "default_avatar": False,
+            "account_age_days": age_days,
+            "age_bucket": age_bucket,
+            "fingerprint": fingerprint,
+            "digit_ratio": 0.0,
+            "underscore_ratio": 0.0,
+            "burst_count": 0,
+            "burst_join_count": 0,
+            "score": 0,
+            "risk_score": 0,
+            "level": "low",
+            "risk_level": "low",
+            "evidence_tier": "clear",
+            "evidence_confidence": "excluded",
+            "reasons": ["Discord marks this account as a bot; excluded from raid/alt scoring."],
+            "risk_reasons": ["Discord marks this account as a bot; excluded from raid/alt scoring."],
+            "account_age_human": _humanize_age_days(age_days),
+            "same_fingerprint_count": 0,
+            "similar_name_count": 0,
+            "same_age_bucket_count": 0,
+            "suspicious_name_pattern": False,
+            "repeated_char_pattern": False,
+            "suspicion_flags": ["bot_account"],
+            "weak_signals": [],
+            "strong_signals": [],
+            "hard_signals": [],
+            "alt_cluster_key": None,
+            "alt_cluster_size": 0,
+            "cluster_members": [],
+            "joined_after_creation_seconds": None,
+            "joined_after_creation_human": "",
+            "seen_at": _utcnow(),
+            "is_bot_account": True,
+        }
+
     default_avatar = _default_avatar(member)
     digit_ratio = _digit_ratio(username)
     underscore_ratio = _underscore_ratio(username)
     repeated_char_pattern = bool(_REPEAT_CHAR_RE.search(username))
     suspicious_name_pattern = bool(_SUSPICIOUS_NAME_RE.search(username))
-
     burst_count = _recent_join_burst_count(guild_id)
-    cluster = _build_recent_cluster_matches(guild_id, username_normalized, fingerprint, age_bucket)
+    joined_after_creation_seconds = _joined_after_creation_seconds(member)
+    joined_after_creation_human = _joined_after_creation_human(member)
 
+    cluster = _build_recent_cluster_matches(guild_id, username_normalized, fingerprint, age_bucket)
     similar_name_matches = cluster["similar_name_matches"]
     same_fp_matches = cluster["same_fp_matches"]
     same_age_bucket_matches = cluster["same_age_bucket_matches"]
 
-    score = 0
+    weak_signals: List[str] = []
+    strong_signals: List[str] = []
+    hard_signals: List[str] = []
     reasons: List[str] = []
+    weak_points = 0
 
     if age_days <= _critical_age_days():
-        score += 36
+        weak_signals.append("extremely_new_account")
         reasons.append(f"Account is extremely new ({age_days} day(s) old).")
+        weak_points += 18
     elif age_days <= _very_new_age_days():
-        score += 26
+        weak_signals.append("very_new_account")
         reasons.append(f"Account is very new ({age_days} day(s) old).")
+        weak_points += 12
     elif age_days <= _suspicious_age_days():
-        score += 14
+        weak_signals.append("fresh_account")
         reasons.append(f"Account is still fresh ({age_days} day(s) old).")
+        weak_points += 6
 
     if default_avatar:
-        score += 8
+        weak_signals.append("default_avatar")
         reasons.append("Using Discord default avatar.")
+        weak_points += 6
 
     if suspicious_name_pattern:
-        score += 12
+        weak_signals.append("suspicious_name_pattern")
         reasons.append("Username contains suspicious burner / impersonation keywords.")
+        weak_points += 8
 
     if repeated_char_pattern:
-        score += 8
+        weak_signals.append("repeated_character_pattern")
         reasons.append("Username contains heavy repeated-character pattern.")
+        weak_points += 5
 
     if digit_ratio >= 0.45:
-        score += 10
+        weak_signals.append("very_high_digit_ratio")
         reasons.append("Username has very high digit ratio.")
+        weak_points += 7
     elif digit_ratio >= 0.25:
-        score += 5
+        weak_signals.append("elevated_digit_ratio")
         reasons.append("Username has elevated digit ratio.")
+        weak_points += 4
 
     if underscore_ratio >= 0.18:
-        score += 4
+        weak_signals.append("high_underscore_ratio")
         reasons.append("Username has unusual underscore density.")
+        weak_points += 3
+
+    if joined_after_creation_seconds is not None:
+        if joined_after_creation_seconds <= 300:
+            weak_signals.append("instant_join_after_creation")
+            reasons.append("Joined the server within minutes of account creation.")
+            weak_points += 10
+        elif joined_after_creation_seconds <= 3600:
+            weak_signals.append("fast_join_after_creation")
+            reasons.append("Joined the server very soon after account creation.")
+            weak_points += 7
+        elif joined_after_creation_seconds <= 86400:
+            weak_signals.append("same_day_join_after_creation")
+            reasons.append("Joined the server the same day the account was created.")
+            weak_points += 4
 
     if burst_count >= _raid_join_threshold():
-        score += min(24, (burst_count - _raid_join_threshold() + 1) * 4)
+        weak_signals.append("join_burst")
         reasons.append(
             f"Join happened during burst activity ({burst_count} joins in ~{_raid_window_seconds()}s)."
         )
-
-    if len(same_fp_matches) >= 1:
-        score += min(22, len(same_fp_matches) * 8)
-        reasons.append(
-            f"Matched recent behavioral fingerprint with {len(same_fp_matches)} other recent join(s)."
-        )
-
-    if len(similar_name_matches) >= 1:
-        best_similarity = float(similar_name_matches[0].get("similarity") or 0.0)
-        score += min(18, len(similar_name_matches) * 6)
-        reasons.append(
-            f"Username closely matches {len(similar_name_matches)} recent join(s) "
-            f"(best similarity {best_similarity:.2f})."
-        )
+        weak_points += 8
 
     if len(same_age_bucket_matches) >= max(3, _raid_join_threshold() // 2):
-        score += 8
+        weak_signals.append("age_bucket_cluster")
         reasons.append(
             f"Joined inside an age-bucket cluster ({len(same_age_bucket_matches)} recent join(s) in bucket {age_bucket})."
         )
+        weak_points += 3
 
-    score = max(0, min(100, score))
+    if (
+        len(same_fp_matches) >= 1
+        and len(similar_name_matches) >= 1
+        and joined_after_creation_seconds is not None
+        and joined_after_creation_seconds <= 86400
+    ):
+        strong_signals.append("cluster_triad")
+        reasons.append(
+            "Matched a recent fingerprint cluster and a similar recent username, and joined soon after account creation."
+        )
 
-    if score >= 75:
-        level = "critical"
-    elif score >= 50:
-        level = "high"
-    elif score >= 25:
-        level = "medium"
+    if (
+        len(same_fp_matches) >= 1
+        and burst_count >= _raid_join_threshold()
+        and (age_days <= _suspicious_age_days() or default_avatar or suspicious_name_pattern)
+    ):
+        strong_signals.append("burst_cluster_combo")
+        reasons.append(
+            "Matched a recent fingerprint cluster during a burst join window while also carrying weak-risk join traits."
+        )
+
+    if (
+        len(similar_name_matches) >= 2
+        and age_days <= _very_new_age_days()
+        and burst_count >= _raid_join_threshold()
+    ):
+        strong_signals.append("name_cluster_combo")
+        reasons.append(
+            "Very new account closely matches multiple recent usernames during a burst join window."
+        )
+
+    if (
+        len(same_fp_matches) >= 2
+        and (age_days <= _suspicious_age_days() or (joined_after_creation_seconds is not None and joined_after_creation_seconds <= 86400))
+    ):
+        strong_signals.append("shared_behavior_fingerprint")
+        reasons.append(
+            f"Matched the same recent behavioral fingerprint as {len(same_fp_matches)} other recent join(s)."
+        )
+
+    weak_points = min(35, weak_points)
+
+    if hard_signals:
+        evidence_tier = "confirmed_duplicate"
+        score = 100
+    elif strong_signals:
+        evidence_tier = "strongly_linked"
+        score = max(65, min(90, weak_points + 35 + (len(strong_signals) - 1) * 6))
+    elif weak_points >= 10 or len(same_fp_matches) > 0 or len(similar_name_matches) > 0:
+        evidence_tier = "suspicious"
+        score = max(20, min(45, weak_points))
     else:
-        level = "low"
+        evidence_tier = "clear"
+        score = min(15, weak_points)
 
-    suspicion_flags: List[str] = []
-
-    if age_days <= _critical_age_days():
-        suspicion_flags.append("extremely_new_account")
-    elif age_days <= _very_new_age_days():
-        suspicion_flags.append("very_new_account")
-    elif age_days <= _suspicious_age_days():
-        suspicion_flags.append("fresh_account")
-
-    if default_avatar:
-        suspicion_flags.append("default_avatar")
-    if suspicious_name_pattern:
-        suspicion_flags.append("suspicious_name_pattern")
-    if repeated_char_pattern:
-        suspicion_flags.append("repeated_character_pattern")
-    if digit_ratio >= 0.45:
-        suspicion_flags.append("very_high_digit_ratio")
-    elif digit_ratio >= 0.25:
-        suspicion_flags.append("elevated_digit_ratio")
-    if underscore_ratio >= 0.18:
-        suspicion_flags.append("high_underscore_ratio")
-    if burst_count >= _raid_join_threshold():
-        suspicion_flags.append("join_burst")
-    if len(same_fp_matches) >= 1:
-        suspicion_flags.append("shared_behavior_fingerprint")
-    if len(similar_name_matches) >= 1:
-        suspicion_flags.append("similar_recent_username")
-    if len(same_age_bucket_matches) >= max(3, _raid_join_threshold() // 2):
-        suspicion_flags.append("age_bucket_cluster")
+    level = _tier_to_level(evidence_tier)
 
     cluster_members: List[Dict[str, Any]] = []
-
     for row in same_fp_matches[:4]:
         cluster_members.append(
             {
@@ -489,7 +617,6 @@ def build_member_risk_profile(member: discord.Member) -> Dict[str, Any]:
                 "reason": "same_fingerprint",
             }
         )
-
     for row in similar_name_matches[:4]:
         cluster_members.append(
             {
@@ -502,7 +629,6 @@ def build_member_risk_profile(member: discord.Member) -> Dict[str, Any]:
 
     alt_cluster_key: Optional[str] = None
     alt_cluster_size = 0
-
     if len(same_fp_matches) >= 1 and fingerprint:
         alt_cluster_key = f"fp:{fingerprint}"
         alt_cluster_size = 1 + len(same_fp_matches)
@@ -513,7 +639,9 @@ def build_member_risk_profile(member: discord.Member) -> Dict[str, Any]:
         alt_cluster_key = f"age:{age_bucket}"
         alt_cluster_size = 1 + len(same_age_bucket_matches)
 
-    profile = {
+    flags = _dedupe_list(hard_signals + strong_signals + weak_signals, max_items=20)
+
+    return {
         "guild_id": guild_id,
         "user_id": int(member.id),
         "username": username,
@@ -533,6 +661,13 @@ def build_member_risk_profile(member: discord.Member) -> Dict[str, Any]:
         "risk_score": score,
         "level": level,
         "risk_level": level,
+        "evidence_tier": evidence_tier,
+        "evidence_confidence": (
+            "hard" if hard_signals else
+            "strong" if strong_signals else
+            "weak" if evidence_tier == "suspicious" else
+            "none"
+        ),
         "reasons": reasons[:12],
         "risk_reasons": reasons[:12],
         "account_age_human": _humanize_age_days(age_days),
@@ -541,28 +676,39 @@ def build_member_risk_profile(member: discord.Member) -> Dict[str, Any]:
         "same_age_bucket_count": len(same_age_bucket_matches),
         "suspicious_name_pattern": suspicious_name_pattern,
         "repeated_char_pattern": repeated_char_pattern,
-        "suspicion_flags": suspicion_flags[:20],
+        "suspicion_flags": flags,
+        "weak_signals": weak_signals[:12],
+        "strong_signals": strong_signals[:12],
+        "hard_signals": hard_signals[:12],
         "alt_cluster_key": alt_cluster_key,
         "alt_cluster_size": alt_cluster_size,
         "cluster_members": cluster_members[:8],
+        "joined_after_creation_seconds": joined_after_creation_seconds,
+        "joined_after_creation_human": joined_after_creation_human,
         "seen_at": _utcnow(),
+        "is_bot_account": False,
     }
-
-    return profile
 
 
 def build_alt_detection_summary(member: discord.Member) -> str:
     profile = build_member_risk_profile(member)
 
+    if bool(profile.get("is_bot_account")):
+        return "BOT ACCOUNT • excluded from raid/alt scoring"
+
     score = int(profile.get("score") or 0)
     level = str(profile.get("level") or "low").upper()
+    tier = str(profile.get("evidence_tier") or "clear").replace("_", " ").upper()
     age_human = _humanize_age_days(int(profile.get("account_age_days") or 0))
     burst = int(profile.get("burst_count") or 0)
     fp_matches = int(profile.get("same_fingerprint_count") or 0)
     name_matches = int(profile.get("similar_name_count") or 0)
     cluster_size = int(profile.get("alt_cluster_size") or 0)
 
-    parts: List[str] = [f"{level} risk ({score}/100)", f"Account age: {age_human}"]
+    parts: List[str] = [
+        f"{tier} ({level} / {score}/100)",
+        f"Account age: {age_human}",
+    ]
 
     signal_parts: List[str] = []
     if cluster_size > 1:
@@ -579,14 +725,14 @@ def build_alt_detection_summary(member: discord.Member) -> str:
     if signal_parts:
         parts.append("Signals: " + " • ".join(signal_parts))
     else:
-        parts.append("Signals: no strong recent alt-cluster links detected")
+        parts.append("Signals: no strong recent link evidence")
+
+    flags = [_pretty_signal(x) for x in list(profile.get("suspicion_flags") or [])[:5]]
+    if flags:
+        parts.append("Flags: " + " • ".join(flags))
 
     return "\n".join(parts)
 
-
-# ============================================================
-# ✅ Raid / alert actions
-# ============================================================
 
 async def _post_raidlog(guild: discord.Guild, message: str) -> None:
     try:
@@ -665,27 +811,19 @@ async def _maybe_trigger_raid(guild: discord.Guild) -> Tuple[bool, str]:
 
         if recent_join_count >= _raid_join_threshold():
             should_alert = True
-            reasons.append(
-                f"{recent_join_count} joins in ~{_raid_window_seconds()}s"
-            )
+            reasons.append(f"{recent_join_count} joins in ~{_raid_window_seconds()}s")
 
         if len(recent_critical) >= 2:
             should_alert = True
-            reasons.append(
-                f"{len(recent_critical)} critical-risk recent joins"
-            )
+            reasons.append(f"{len(recent_critical)} confirmed / critical recent joins")
 
         if len(recent_high) >= max(3, _raid_join_threshold() - 1):
             should_alert = True
-            reasons.append(
-                f"{len(recent_high)} high/critical-risk recent joins"
-            )
+            reasons.append(f"{len(recent_high)} high/critical recent joins")
 
         if hottest_fp_size >= max(3, _raid_join_threshold() // 2):
             should_alert = True
-            reasons.append(
-                f"behavioral fingerprint cluster size {hottest_fp_size}"
-            )
+            reasons.append(f"behavioral fingerprint cluster size {hottest_fp_size}")
 
         if not should_alert:
             return False, ""
@@ -698,9 +836,11 @@ async def _maybe_trigger_raid(guild: discord.Guild) -> Tuple[bool, str]:
 
         sample_lines: List[str] = []
         for row in sorted(profiles, key=lambda x: int(x.get("score") or 0), reverse=True)[:6]:
+            tier = str(row.get("evidence_tier") or "clear")
             sample_lines.append(
                 f"`{row.get('username') or row.get('display_name') or row.get('user_id')}`"
-                f" risk={row.get('score')}/100"
+                f" score={row.get('score')}/100"
+                f" tier={tier}"
                 f" age={row.get('account_age_days')}d"
                 f" fp={row.get('same_fingerprint_count')}"
                 f" names={row.get('similar_name_count')}"
@@ -789,15 +929,15 @@ async def _mass_role_strip_if_needed(member: discord.Member) -> Optional[str]:
         if not removable:
             return (
                 f"🛡️ **High-risk join observed**: `{member}` (`{member.id}`) "
-                f"risk={profile['score']}/100 but no removable roles were present."
+                f"score={profile['score']}/100 tier={profile.get('evidence_tier')} but no removable roles were present."
             )
 
         try:
             await member.remove_roles(
                 *removable,
                 reason=(
-                    f"Raidguard protective strip: risk={profile['score']}/100 "
-                    f"level={profile['level']} burst={join_count}"
+                    f"Raidguard protective strip: score={profile['score']}/100 "
+                    f"tier={profile.get('evidence_tier')} burst={join_count}"
                 ),
             )
         except discord.Forbidden:
@@ -813,7 +953,7 @@ async def _mass_role_strip_if_needed(member: discord.Member) -> Optional[str]:
         removed_names = ", ".join(f"`{r.name}`" for r in removable[:8])
         return (
             f"🛡️ **Protective role strip applied** to `{member}` (`{member.id}`)\n"
-            f"Risk: `{profile['score']}/100` ({profile['level']}) • joins_in_window=`{join_count}`\n"
+            f"Score: `{profile['score']}/100` ({profile.get('evidence_tier')}) • joins_in_window=`{join_count}`\n"
             f"Removed: {removed_names if removed_names else '`none`'}"
         )
 
@@ -826,12 +966,12 @@ async def _mass_role_strip_if_needed(member: discord.Member) -> Optional[str]:
         return None
 
 
-# ============================================================
-# ✅ Public helper to be called by join event after logging
-# ============================================================
-
 def track_member_join_risk(member: discord.Member) -> Dict[str, Any]:
     profile = build_member_risk_profile(member)
+
+    if getattr(member, "bot", False):
+        return profile
+
     _record_join_profile(member, profile)
 
     try:
