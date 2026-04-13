@@ -2610,24 +2610,51 @@ async def on_member_join(member: discord.Member):
         _ensure_gid_dict_of_lists(ALT_JOIN_BUCKETS, gid)
         _ensure_gid_dict(ALT_JOIN_BUCKET_TS, gid)
 
-        JOIN_TIMES[gid].append(now_utc())
-        RAID_RECENT_JOINERS[gid][int(member.id)] = now_utc()
+        if not getattr(member, "bot", False):
+            JOIN_TIMES[gid].append(now_utc())
+            RAID_RECENT_JOINERS[gid][int(member.id)] = now_utc()
 
         age_days = _account_age_days(member)
         fp = _behavior_fingerprint(member)
 
         try:
-            risk_profile = track_member_join_risk(member)
+            if getattr(member, "bot", False):
+                risk_profile = {
+                    "score": 0,
+                    "risk_score": 0,
+                    "level": "low",
+                    "risk_level": "low",
+                    "evidence_tier": "clear",
+                    "reasons": ["Discord marks this account as a bot; excluded from raid/alt scoring."],
+                    "risk_reasons": ["Discord marks this account as a bot; excluded from raid/alt scoring."],
+                    "same_fingerprint_count": 0,
+                    "similar_name_count": 0,
+                    "same_age_bucket_count": 0,
+                    "burst_count": 0,
+                    "burst_join_count": 0,
+                    "fingerprint": fp,
+                    "suspicion_flags": ["bot_account"],
+                    "is_bot_account": True,
+                }
+            else:
+                risk_profile = track_member_join_risk(member)
         except Exception:
             risk_profile = {
                 "score": 0,
+                "risk_score": 0,
                 "level": "low",
+                "risk_level": "low",
+                "evidence_tier": "clear",
                 "reasons": [],
+                "risk_reasons": [],
                 "same_fingerprint_count": 0,
                 "similar_name_count": 0,
                 "same_age_bucket_count": 0,
                 "burst_count": 0,
+                "burst_join_count": 0,
                 "fingerprint": fp,
+                "suspicion_flags": ["bot_account"] if getattr(member, "bot", False) else [],
+                "is_bot_account": bool(getattr(member, "bot", False)),
             }
 
         embed = discord.Embed(
@@ -2650,7 +2677,7 @@ async def on_member_join(member: discord.Member):
             name="Alt Risk",
             value=(
                 f"`{risk_profile.get('score', 0)}/100` "
-                f"(`{risk_profile.get('level', 'low')}`)\n"
+                f"(`{risk_profile.get('evidence_tier', 'clear')}` / `{risk_profile.get('level', 'low')}`)\n"
                 f"fp matches: `{risk_profile.get('same_fingerprint_count', 0)}` • "
                 f"name matches: `{risk_profile.get('similar_name_count', 0)}` • "
                 f"age bucket matches: `{risk_profile.get('same_age_bucket_count', 0)}` • "
@@ -2658,7 +2685,7 @@ async def on_member_join(member: discord.Member):
             ),
             inline=False,
         )
-        reasons = list(risk_profile.get("reasons") or [])
+        reasons = list(risk_profile.get("reasons") or risk_profile.get("risk_reasons") or [])
         if reasons:
             embed.add_field(
                 name="Risk Reasons",
@@ -2678,18 +2705,19 @@ async def on_member_join(member: discord.Member):
         except Exception:
             pass
 
-        bucket = f"{_age_bucket(age_days)}"
-        _ensure_bucket_list(ALT_JOIN_BUCKETS, gid, bucket)
-        ALT_JOIN_BUCKETS[gid][bucket].append(int(member.id))
-        ALT_JOIN_BUCKET_TS[gid][bucket] = now_utc()
+        if not getattr(member, "bot", False):
+            bucket = f"{_age_bucket(age_days)}"
+            _ensure_bucket_list(ALT_JOIN_BUCKETS, gid, bucket)
+            ALT_JOIN_BUCKETS[gid][bucket].append(int(member.id))
+            ALT_JOIN_BUCKET_TS[gid][bucket] = now_utc()
 
-        triggered, msg = await _maybe_trigger_raid(guild)
-        if triggered:
-            await _post_raidlog(guild, msg)
+            triggered, msg = await _maybe_trigger_raid(guild)
+            if triggered:
+                await _post_raidlog(guild, msg)
 
-        strip_msg = await _mass_role_strip_if_needed(member)
-        if strip_msg:
-            await _post_raidlog(guild, strip_msg)
+            strip_msg = await _mass_role_strip_if_needed(member)
+            if strip_msg:
+                await _post_raidlog(guild, strip_msg)
 
         target_ch: Optional[discord.TextChannel] = None
         try:
@@ -2772,24 +2800,25 @@ async def on_member_join(member: discord.Member):
             )
             return
 
-        try:
-            cutoff = now_utc() - timedelta(minutes=max(5, int(ALT_CLUSTER_WINDOW_MINUTES)))
+        if not getattr(member, "bot", False):
+            try:
+                cutoff = now_utc() - timedelta(minutes=max(5, int(ALT_CLUSTER_WINDOW_MINUTES)))
 
-            for b, ts in list((ALT_JOIN_BUCKET_TS.get(gid) or {}).items()):
-                if ts < cutoff:
-                    ALT_JOIN_BUCKET_TS[gid].pop(b, None)
-                    ALT_JOIN_BUCKETS[gid].pop(b, None)
+                for b, ts in list((ALT_JOIN_BUCKET_TS.get(gid) or {}).items()):
+                    if ts < cutoff:
+                        ALT_JOIN_BUCKET_TS[gid].pop(b, None)
+                        ALT_JOIN_BUCKETS[gid].pop(b, None)
 
-            for b, ids in list((ALT_JOIN_BUCKETS.get(gid) or {}).items()):
-                if len(ids) >= int(ALT_CLUSTER_MIN_GROUP):
-                    await _post_raidlog(
-                        guild,
-                        f"🧩 **Alt/Cluster Flag**: `{len(ids)}` joins in `{b}` bucket within ~{ALT_CLUSTER_WINDOW_MINUTES}m. "
-                        + "IDs: "
-                        + ", ".join([f"`{x}`" for x in ids[-10:]]),
-                    )
-        except Exception:
-            pass
+                for b, ids in list((ALT_JOIN_BUCKETS.get(gid) or {}).items()):
+                    if len(ids) >= int(ALT_CLUSTER_MIN_GROUP):
+                        await _post_raidlog(
+                            guild,
+                            f"🧩 **Alt/Cluster Flag**: `{len(ids)}` joins in `{b}` bucket within ~{ALT_CLUSTER_WINDOW_MINUTES}m. "
+                            + "IDs: "
+                            + ", ".join([f"`{x}`" for x in ids[-10:]]),
+                        )
+            except Exception:
+                pass
 
     except Exception as e:
         print("⚠️ on_member_join error:", e)
