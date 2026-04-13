@@ -5,16 +5,23 @@ import traceback
 from collections import defaultdict, deque
 from datetime import datetime, timedelta, timezone
 from difflib import SequenceMatcher
-from typing import Any, Deque, Dict, List, Optional, Tuple
+from typing import Any, Deque, Dict, List, Optional, Set, Tuple
 
 import discord
 
 from .globals import *
 
 
+# ============================================================
+# Internal caches
+# ============================================================
+
 _RECENT_JOIN_PROFILES: Dict[int, Deque[Dict[str, Any]]] = defaultdict(deque)
 _LAST_RAID_ALERT_AT: Dict[int, datetime] = {}
 _LAST_CLUSTER_ALERT_AT: Dict[Tuple[int, str], datetime] = {}
+
+_HARD_PROOF_CACHE: Dict[Tuple[int, int], Tuple[datetime, Dict[str, Any]]] = {}
+_PROOF_CACHE_TTL_SECONDS = 60
 
 _USERNAME_TOKEN_RE = re.compile(r"[a-z0-9]+")
 _REPEAT_CHAR_RE = re.compile(r"(.)\1{3,}")
@@ -23,6 +30,10 @@ _SUSPICIOUS_NAME_RE = re.compile(
     re.IGNORECASE,
 )
 
+
+# ============================================================
+# Time / config helpers
+# ============================================================
 
 def _utcnow() -> datetime:
     try:
@@ -86,6 +97,10 @@ def _very_new_age_days() -> int:
 def _suspicious_age_days() -> int:
     return max(_very_new_age_days(), _cfg_int("SUSPICIOUS_ACCOUNT_AGE_DAYS", 7))
 
+
+# ============================================================
+# Generic helpers
+# ============================================================
 
 def _normalize_text(value: Any) -> str:
     try:
@@ -238,6 +253,9 @@ def _pretty_signal(code: str) -> str:
         "shared_behavior_fingerprint": "Shared behavioral fingerprint",
         "similar_recent_username": "Similar recent usernames",
         "age_bucket_cluster": "Age bucket cluster",
+        "identity_fingerprint_match": "Verified identity fingerprint match",
+        "manual_alt_link": "Manual confirmed duplicate link",
+        "manual_review_likely_link": "Manual likely-same-person link",
         "cluster_triad": "Multi-signal cluster match",
         "burst_cluster_combo": "Burst + cluster combo",
         "name_cluster_combo": "Name cluster combo",
@@ -255,6 +273,10 @@ def _dedupe_list(values: List[str], max_items: int = 20) -> List[str]:
             break
     return out[:max_items]
 
+
+# ============================================================
+# Core signal helpers
+# ============================================================
 
 def _account_age_days(member: discord.Member) -> int:
     try:
@@ -311,11 +333,247 @@ def _behavior_fingerprint(member: discord.Member) -> str:
         return "unknown"
 
 
+# ============================================================
+# Hard-proof helpers
+# ============================================================
+
+def _proof_cache_valid(ts: datetime) -> bool:
+    try:
+        return (_utcnow() - ts).total_seconds() <= max(5, int(_PROOF_CACHE_TTL_SECONDS))
+    except Exception:
+        return False
+
+
+def _query_identity_proof_matches_sync(guild_id: int, user_id: int) -> List[Dict[str, Any]]:
+    try:
+        sb = get_supabase()
+        if sb is None:
+            return []
+
+        res = (
+            sb.table("identity_proof_matches")
+            .select("*")
+            .eq("guild_id", str(int(guild_id)))
+            .eq("user_id", str(int(user_id)))
+            .limit(25)
+            .execute()
+        )
+        rows = getattr(res, "data", None) or []
+        return [dict(r) for r in rows if isinstance(r, dict)]
+    except Exception:
+        return []
+
+
+def _query_manual_alt_links_sync(guild_id: int, user_id: int) -> List[Dict[str, Any]]:
+    try:
+        sb = get_supabase()
+        if sb is None:
+            return []
+
+        rows: List[Dict[str, Any]] = []
+        seen_ids: Set[str] = set()
+
+        for field in ("user_a_id", "user_b_id"):
+            try:
+                res = (
+                    sb.table("manual_alt_links")
+                    .select("*")
+                    .eq("guild_id", str(int(guild_id)))
+                    .eq("status", "active")
+                    .eq(field, str(int(user_id)))
+                    .limit(25)
+                    .execute()
+                )
+                for row in (getattr(res, "data", None) or []):
+                    if not isinstance(row, dict):
+                        continue
+                    key = str(row.get("id") or repr(sorted(row.items())))
+                    if key in seen_ids:
+                        continue
+                    seen_ids.add(key)
+                    rows.append(dict(row))
+            except Exception:
+                continue
+
+        return rows
+    except Exception:
+        return []
+
+
+def _load_hard_identity_context(guild_id: int, user_id: int) -> Dict[str, Any]:
+    cache_key = (int(guild_id), int(user_id))
+    cached = _HARD_PROOF_CACHE.get(cache_key)
+    if cached and _proof_cache_valid(cached[0]):
+        return dict(cached[1])
+
+    proof_rows = _query_identity_proof_matches_sync(guild_id, user_id)
+    manual_rows = _query_manual_alt_links_sync(guild_id, user_id)
+
+    proof_matches: List[Dict[str, Any]] = []
+    proof_seen: Set[int] = set()
+    matched_fingerprints: List[str] = []
+
+    for row in proof_rows:
+        try:
+            matched_user_id = int(str(row.get("matched_user_id") or "0") or 0)
+            if matched_user_id <= 0 or matched_user_id == int(user_id):
+                continue
+            if matched_user_id in proof_seen:
+                continue
+
+            proof_seen.add(matched_user_id)
+            fingerprint = str(row.get("identity_fingerprint") or "").strip()
+            if fingerprint and fingerprint not in matched_fingerprints:
+                matched_fingerprints.append(fingerprint)
+
+            proof_matches.append(
+                {
+                    "user_id": matched_user_id,
+                    "identity_fingerprint": fingerprint or None,
+                    "fingerprint_version": str(row.get("fingerprint_version") or "").strip() or None,
+                    "match_confidence": int(row.get("match_confidence") or 100),
+                }
+            )
+        except Exception:
+            continue
+
+    manual_confirmed: List[Dict[str, Any]] = []
+    manual_likely: List[Dict[str, Any]] = []
+    manual_not_linked_ids: Set[int] = set()
+
+    for row in manual_rows:
+        try:
+            a_id = int(str(row.get("user_a_id") or "0") or 0)
+            b_id = int(str(row.get("user_b_id") or "0") or 0)
+            if a_id <= 0 or b_id <= 0:
+                continue
+
+            other_id = b_id if a_id == int(user_id) else a_id
+            if other_id <= 0 or other_id == int(user_id):
+                continue
+
+            link_type = str(row.get("link_type") or "").strip().lower()
+            record = {
+                "user_id": other_id,
+                "link_type": link_type,
+                "reason": str(row.get("reason") or "").strip() or None,
+                "created_by": str(row.get("created_by") or "").strip() or None,
+            }
+
+            if link_type == "confirmed_duplicate":
+                if all(existing.get("user_id") != other_id for existing in manual_confirmed):
+                    manual_confirmed.append(record)
+            elif link_type == "same_person_likely":
+                if all(existing.get("user_id") != other_id for existing in manual_likely):
+                    manual_likely.append(record)
+            elif link_type == "not_linked":
+                manual_not_linked_ids.add(other_id)
+        except Exception:
+            continue
+
+    context = {
+        "proof_matches": proof_matches[:12],
+        "matched_identity_fingerprints": matched_fingerprints[:6],
+        "manual_confirmed": manual_confirmed[:12],
+        "manual_likely": manual_likely[:12],
+        "manual_not_linked_ids": set(manual_not_linked_ids),
+    }
+
+    _HARD_PROOF_CACHE[cache_key] = (_utcnow(), dict(context))
+    return dict(context)
+
+
+def _filter_not_linked_matches(
+    rows: List[Dict[str, Any]],
+    suppressed_user_ids: Set[int],
+) -> List[Dict[str, Any]]:
+    if not suppressed_user_ids:
+        return list(rows)
+
+    out: List[Dict[str, Any]] = []
+    for row in rows:
+        try:
+            row_user_id = int(str(row.get("user_id") or "0") or 0)
+            if row_user_id in suppressed_user_ids:
+                continue
+        except Exception:
+            pass
+        out.append(row)
+    return out
+
+
+def _build_hard_cluster_members(
+    proof_matches: List[Dict[str, Any]],
+    manual_confirmed: List[Dict[str, Any]],
+    manual_likely: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    out: List[Dict[str, Any]] = []
+    seen: Set[int] = set()
+
+    for row in proof_matches[:8]:
+        try:
+            uid = int(row.get("user_id") or 0)
+            if uid <= 0 or uid in seen:
+                continue
+            seen.add(uid)
+            out.append(
+                {
+                    "user_id": uid,
+                    "username": None,
+                    "display_name": None,
+                    "reason": "identity_fingerprint_match",
+                }
+            )
+        except Exception:
+            continue
+
+    for row in manual_confirmed[:8]:
+        try:
+            uid = int(row.get("user_id") or 0)
+            if uid <= 0 or uid in seen:
+                continue
+            seen.add(uid)
+            out.append(
+                {
+                    "user_id": uid,
+                    "username": None,
+                    "display_name": None,
+                    "reason": "manual_alt_link",
+                }
+            )
+        except Exception:
+            continue
+
+    for row in manual_likely[:8]:
+        try:
+            uid = int(row.get("user_id") or 0)
+            if uid <= 0 or uid in seen:
+                continue
+            seen.add(uid)
+            out.append(
+                {
+                    "user_id": uid,
+                    "username": None,
+                    "display_name": None,
+                    "reason": "manual_review_likely_link",
+                }
+            )
+        except Exception:
+            continue
+
+    return out[:8]
+
+
+# ============================================================
+# Join profile / cluster engine
+# ============================================================
+
 def _prune_recent_join_profiles(guild_id: int) -> None:
     try:
         window = timedelta(minutes=_cluster_window_minutes())
         cutoff = _utcnow() - window
         dq = _RECENT_JOIN_PROFILES[guild_id]
+
         while dq and dq[0].get("seen_at") and dq[0]["seen_at"] < cutoff:
             dq.popleft()
     except Exception:
@@ -339,14 +597,17 @@ def _recent_join_burst_count(guild_id: int) -> int:
         dq = container.get(guild_id) if isinstance(container, dict) else None
         if not dq:
             return 0
+
         cutoff = _utcnow() - timedelta(seconds=_raid_window_seconds())
         count = 0
+
         for ts in list(dq):
             try:
                 if ts >= cutoff:
                     count += 1
             except Exception:
                 continue
+
         return count
     except Exception:
         return 0
@@ -359,21 +620,25 @@ def _build_recent_cluster_matches(
     age_bucket: str,
 ) -> Dict[str, Any]:
     profiles = _recent_profiles(guild_id)
+
     similar_name_matches: List[Dict[str, Any]] = []
     same_fp_matches: List[Dict[str, Any]] = []
     same_age_bucket_matches: List[Dict[str, Any]] = []
+
     threshold = _cluster_similarity_threshold()
 
     for row in profiles:
         try:
             if bool(row.get("is_bot_account")):
                 continue
+
             other_name = str(row.get("username_normalized") or "")
             other_fp = str(row.get("fingerprint") or "")
             other_bucket = str(row.get("age_bucket") or "")
 
             if other_fp and other_fp == fingerprint:
                 same_fp_matches.append(row)
+
             if other_bucket and other_bucket == age_bucket:
                 same_age_bucket_matches.append(row)
 
@@ -399,6 +664,7 @@ def _record_join_profile(member: discord.Member, profile: Dict[str, Any]) -> Non
     try:
         if bool(getattr(member, "bot", False)) or bool(profile.get("is_bot_account")):
             return
+
         gid = int(member.guild.id)
         _prune_recent_join_profiles(gid)
         _RECENT_JOIN_PROFILES[gid].append(profile)
@@ -406,8 +672,13 @@ def _record_join_profile(member: discord.Member, profile: Dict[str, Any]) -> Non
         pass
 
 
+# ============================================================
+# Evidence-driven scoring
+# ============================================================
+
 def build_member_risk_profile(member: discord.Member) -> Dict[str, Any]:
     guild_id = int(member.guild.id)
+    user_id = int(member.id)
     username = _normalize_text(getattr(member, "name", "") or "")
     display_name = _normalize_text(getattr(member, "display_name", "") or "")
     username_normalized = _normalize_name(username)
@@ -419,7 +690,7 @@ def build_member_risk_profile(member: discord.Member) -> Dict[str, Any]:
     if getattr(member, "bot", False):
         return {
             "guild_id": guild_id,
-            "user_id": int(member.id),
+            "user_id": user_id,
             "username": username,
             "display_name": display_name,
             "username_normalized": username_normalized,
@@ -445,6 +716,10 @@ def build_member_risk_profile(member: discord.Member) -> Dict[str, Any]:
             "same_fingerprint_count": 0,
             "similar_name_count": 0,
             "same_age_bucket_count": 0,
+            "identity_proof_match_count": 0,
+            "manual_confirmed_match_count": 0,
+            "manual_likely_match_count": 0,
+            "matched_identity_fingerprint": None,
             "suspicious_name_pattern": False,
             "repeated_char_pattern": False,
             "suspicion_flags": ["bot_account"],
@@ -469,10 +744,17 @@ def build_member_risk_profile(member: discord.Member) -> Dict[str, Any]:
     joined_after_creation_seconds = _joined_after_creation_seconds(member)
     joined_after_creation_human = _joined_after_creation_human(member)
 
+    hard_ctx = _load_hard_identity_context(guild_id, user_id)
+    proof_matches = list(hard_ctx.get("proof_matches") or [])
+    manual_confirmed = list(hard_ctx.get("manual_confirmed") or [])
+    manual_likely = list(hard_ctx.get("manual_likely") or [])
+    manual_not_linked_ids = set(hard_ctx.get("manual_not_linked_ids") or set())
+    matched_identity_fingerprints = list(hard_ctx.get("matched_identity_fingerprints") or [])
+
     cluster = _build_recent_cluster_matches(guild_id, username_normalized, fingerprint, age_bucket)
-    similar_name_matches = cluster["similar_name_matches"]
-    same_fp_matches = cluster["same_fp_matches"]
-    same_age_bucket_matches = cluster["same_age_bucket_matches"]
+    similar_name_matches = _filter_not_linked_matches(cluster["similar_name_matches"], manual_not_linked_ids)
+    same_fp_matches = _filter_not_linked_matches(cluster["same_fp_matches"], manual_not_linked_ids)
+    same_age_bucket_matches = _filter_not_linked_matches(cluster["same_age_bucket_matches"], manual_not_linked_ids)
 
     weak_signals: List[str] = []
     strong_signals: List[str] = []
@@ -480,6 +762,33 @@ def build_member_risk_profile(member: discord.Member) -> Dict[str, Any]:
     reasons: List[str] = []
     weak_points = 0
 
+    # --------------------------------------------------------
+    # Hard evidence: only real proof or explicit manual confirmation
+    # --------------------------------------------------------
+    if proof_matches:
+        hard_signals.append("identity_fingerprint_match")
+        reasons.append(
+            f"Matched an active verified identity fingerprint with {len(proof_matches)} other account(s)."
+        )
+
+    if manual_confirmed:
+        hard_signals.append("manual_alt_link")
+        reasons.append(
+            f"Staff manually confirmed duplicate identity linkage with {len(manual_confirmed)} account(s)."
+        )
+
+    # --------------------------------------------------------
+    # Strong linked evidence: admin-reviewed likely link or multi-signal combos
+    # --------------------------------------------------------
+    if manual_likely:
+        strong_signals.append("manual_review_likely_link")
+        reasons.append(
+            f"Staff manually marked this account as likely the same person as {len(manual_likely)} other account(s)."
+        )
+
+    # --------------------------------------------------------
+    # Weak signals: these can raise suspicion, but never prove identity
+    # --------------------------------------------------------
     if age_days <= _critical_age_days():
         weak_signals.append("extremely_new_account")
         reasons.append(f"Account is extremely new ({age_days} day(s) old).")
@@ -550,6 +859,10 @@ def build_member_risk_profile(member: discord.Member) -> Dict[str, Any]:
         )
         weak_points += 3
 
+    # --------------------------------------------------------
+    # Heuristic strong links: require combinations, not single hints
+    # Also suppress pairs staff explicitly marked as not linked.
+    # --------------------------------------------------------
     if (
         len(same_fp_matches) >= 1
         and len(similar_name_matches) >= 1
@@ -583,7 +896,10 @@ def build_member_risk_profile(member: discord.Member) -> Dict[str, Any]:
 
     if (
         len(same_fp_matches) >= 2
-        and (age_days <= _suspicious_age_days() or (joined_after_creation_seconds is not None and joined_after_creation_seconds <= 86400))
+        and (
+            age_days <= _suspicious_age_days()
+            or (joined_after_creation_seconds is not None and joined_after_creation_seconds <= 86400)
+        )
     ):
         strong_signals.append("shared_behavior_fingerprint")
         reasons.append(
@@ -608,28 +924,55 @@ def build_member_risk_profile(member: discord.Member) -> Dict[str, Any]:
     level = _tier_to_level(evidence_tier)
 
     cluster_members: List[Dict[str, Any]] = []
+    cluster_members.extend(_build_hard_cluster_members(proof_matches, manual_confirmed, manual_likely))
+
+    existing_member_ids = {int(row.get("user_id") or 0) for row in cluster_members if int(row.get("user_id") or 0) > 0}
+
     for row in same_fp_matches[:4]:
-        cluster_members.append(
-            {
-                "user_id": row.get("user_id"),
-                "username": row.get("username"),
-                "display_name": row.get("display_name"),
-                "reason": "same_fingerprint",
-            }
-        )
+        try:
+            uid = int(row.get("user_id") or 0)
+        except Exception:
+            uid = 0
+        if uid > 0 and uid not in existing_member_ids:
+            existing_member_ids.add(uid)
+            cluster_members.append(
+                {
+                    "user_id": row.get("user_id"),
+                    "username": row.get("username"),
+                    "display_name": row.get("display_name"),
+                    "reason": "same_fingerprint",
+                }
+            )
+
     for row in similar_name_matches[:4]:
-        cluster_members.append(
-            {
-                "user_id": row.get("user_id"),
-                "username": row.get("username"),
-                "display_name": row.get("display_name"),
-                "reason": f"name_similarity:{float(row.get('similarity') or 0.0):.2f}",
-            }
-        )
+        try:
+            uid = int(row.get("user_id") or 0)
+        except Exception:
+            uid = 0
+        if uid > 0 and uid not in existing_member_ids:
+            existing_member_ids.add(uid)
+            cluster_members.append(
+                {
+                    "user_id": row.get("user_id"),
+                    "username": row.get("username"),
+                    "display_name": row.get("display_name"),
+                    "reason": f"name_similarity:{float(row.get('similarity') or 0.0):.2f}",
+                }
+            )
 
     alt_cluster_key: Optional[str] = None
     alt_cluster_size = 0
-    if len(same_fp_matches) >= 1 and fingerprint:
+
+    if proof_matches and matched_identity_fingerprints:
+        alt_cluster_key = f"idproof:{matched_identity_fingerprints[0]}"
+        alt_cluster_size = 1 + len(proof_matches)
+    elif manual_confirmed:
+        alt_cluster_key = f"manual_confirmed:{guild_id}:{user_id}"
+        alt_cluster_size = 1 + len(manual_confirmed)
+    elif manual_likely:
+        alt_cluster_key = f"manual_likely:{guild_id}:{user_id}"
+        alt_cluster_size = 1 + len(manual_likely)
+    elif len(same_fp_matches) >= 1 and fingerprint:
         alt_cluster_key = f"fp:{fingerprint}"
         alt_cluster_size = 1 + len(same_fp_matches)
     elif len(similar_name_matches) >= 1 and username_normalized:
@@ -639,11 +982,14 @@ def build_member_risk_profile(member: discord.Member) -> Dict[str, Any]:
         alt_cluster_key = f"age:{age_bucket}"
         alt_cluster_size = 1 + len(same_age_bucket_matches)
 
-    flags = _dedupe_list(hard_signals + strong_signals + weak_signals, max_items=20)
+    flags = _dedupe_list(
+        hard_signals + strong_signals + weak_signals,
+        max_items=20,
+    )
 
     return {
         "guild_id": guild_id,
-        "user_id": int(member.id),
+        "user_id": user_id,
         "username": username,
         "display_name": display_name,
         "username_normalized": username_normalized,
@@ -674,6 +1020,10 @@ def build_member_risk_profile(member: discord.Member) -> Dict[str, Any]:
         "same_fingerprint_count": len(same_fp_matches),
         "similar_name_count": len(similar_name_matches),
         "same_age_bucket_count": len(same_age_bucket_matches),
+        "identity_proof_match_count": len(proof_matches),
+        "manual_confirmed_match_count": len(manual_confirmed),
+        "manual_likely_match_count": len(manual_likely),
+        "matched_identity_fingerprint": matched_identity_fingerprints[0] if matched_identity_fingerprints else None,
         "suspicious_name_pattern": suspicious_name_pattern,
         "repeated_char_pattern": repeated_char_pattern,
         "suspicion_flags": flags,
@@ -704,6 +1054,9 @@ def build_alt_detection_summary(member: discord.Member) -> str:
     fp_matches = int(profile.get("same_fingerprint_count") or 0)
     name_matches = int(profile.get("similar_name_count") or 0)
     cluster_size = int(profile.get("alt_cluster_size") or 0)
+    identity_matches = int(profile.get("identity_proof_match_count") or 0)
+    manual_confirmed = int(profile.get("manual_confirmed_match_count") or 0)
+    manual_likely = int(profile.get("manual_likely_match_count") or 0)
 
     parts: List[str] = [
         f"{tier} ({level} / {score}/100)",
@@ -711,6 +1064,12 @@ def build_alt_detection_summary(member: discord.Member) -> str:
     ]
 
     signal_parts: List[str] = []
+    if identity_matches > 0:
+        signal_parts.append(f"Verified identity matches: {identity_matches}")
+    if manual_confirmed > 0:
+        signal_parts.append(f"Manual confirmed links: {manual_confirmed}")
+    if manual_likely > 0:
+        signal_parts.append(f"Manual likely links: {manual_likely}")
     if cluster_size > 1:
         signal_parts.append(f"Linked cluster size: {cluster_size}")
     if fp_matches > 0:
@@ -733,6 +1092,10 @@ def build_alt_detection_summary(member: discord.Member) -> str:
 
     return "\n".join(parts)
 
+
+# ============================================================
+# Raid / alert actions
+# ============================================================
 
 async def _post_raidlog(guild: discord.Guild, message: str) -> None:
     try:
@@ -805,6 +1168,7 @@ async def _maybe_trigger_raid(guild: discord.Guild) -> Tuple[bool, str]:
                 same_fp_groups[fp] += 1
 
         hottest_fp_size = max(same_fp_groups.values()) if same_fp_groups else 0
+        recent_confirmed = [p for p in profiles if str(p.get("evidence_tier")) == "confirmed_duplicate"]
 
         should_alert = False
         reasons: List[str] = []
@@ -812,6 +1176,10 @@ async def _maybe_trigger_raid(guild: discord.Guild) -> Tuple[bool, str]:
         if recent_join_count >= _raid_join_threshold():
             should_alert = True
             reasons.append(f"{recent_join_count} joins in ~{_raid_window_seconds()}s")
+
+        if len(recent_confirmed) >= 1:
+            should_alert = True
+            reasons.append(f"{len(recent_confirmed)} hard-proof duplicate join(s) detected")
 
         if len(recent_critical) >= 2:
             should_alert = True
@@ -841,7 +1209,8 @@ async def _maybe_trigger_raid(guild: discord.Guild) -> Tuple[bool, str]:
                 f"`{row.get('username') or row.get('display_name') or row.get('user_id')}`"
                 f" score={row.get('score')}/100"
                 f" tier={tier}"
-                f" age={row.get('account_age_days')}d"
+                f" proof={row.get('identity_proof_match_count', 0)}"
+                f" manual={row.get('manual_confirmed_match_count', 0)}"
                 f" fp={row.get('same_fingerprint_count')}"
                 f" names={row.get('similar_name_count')}"
             )
@@ -965,6 +1334,10 @@ async def _mass_role_strip_if_needed(member: discord.Member) -> Optional[str]:
             pass
         return None
 
+
+# ============================================================
+# Public helper to be called by join event after logging
+# ============================================================
 
 def track_member_join_risk(member: discord.Member) -> Dict[str, Any]:
     profile = build_member_risk_profile(member)
