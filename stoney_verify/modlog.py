@@ -2383,6 +2383,14 @@ def _modlog_color_for_action(action: str) -> discord.Color:
         return discord.Color.dark_orange()
     if a in {"voice_move", "voice_disconnect"}:
         return discord.Color.teal()
+    if a in {"voice_join", "voice_leave"}:
+        return discord.Color.blue()
+    if a in {"self_mute", "self_unmute", "self_deafen", "self_undeafen"}:
+        return discord.Color.light_grey()
+    if a in {"stream_start", "stream_stop", "video_start", "video_stop"}:
+        return discord.Color.purple()
+    if a in {"voice_suppress", "voice_unsuppress"}:
+        return discord.Color.dark_teal()
     if a in {"nickname_change"}:
         return discord.Color.dark_teal()
     if a in {"member_join"}:
@@ -2410,8 +2418,20 @@ def _modlog_title_for_action(action: str) -> str:
         "server_unmute": "🔊 Server Mute Removed",
         "server_deafen": "🙉 Server Deafen Applied",
         "server_undeafen": "🙊 Server Deafen Removed",
+        "voice_join": "🎙️ Voice Joined",
+        "voice_leave": "🚪 Voice Left",
         "voice_move": "🔀 Voice Channel Move",
         "voice_disconnect": "📴 Voice Disconnect",
+        "self_mute": "🤫 Self Muted",
+        "self_unmute": "🗣️ Self Unmuted",
+        "self_deafen": "🙉 Self Deafened",
+        "self_undeafen": "🙊 Self Undeafened",
+        "stream_start": "📺 Stream Started",
+        "stream_stop": "🛑 Stream Stopped",
+        "video_start": "📹 Camera Started",
+        "video_stop": "📷 Camera Stopped",
+        "voice_suppress": "🔇 Stage Suppressed",
+        "voice_unsuppress": "🔊 Stage Unsuppressed",
         "nickname_change": "✏️ Nickname Changed",
         "abuse_alert": "🚨 Staff Action Alert",
         "quick_mod_failed": "❌ Quick Mod Failed",
@@ -3295,6 +3315,42 @@ async def maybe_log_member_update_diff(guild: discord.Guild, before: discord.Mem
         return False
 
 
+def _voice_channel_label(ch: Optional[discord.abc.GuildChannel]) -> str:
+    try:
+        if ch is None:
+            return "None"
+        name = str(getattr(ch, "name", "") or "").strip()
+        cid = int(getattr(ch, "id", 0) or 0)
+        if name and cid > 0:
+            return f"{name} (`{cid}`)"
+        if name:
+            return name
+        if cid > 0:
+            return f"`{cid}`"
+    except Exception:
+        pass
+    return "Unknown"
+
+
+def _voice_actor_from_audit_or_member(
+    member: discord.Member,
+    entry: Optional[discord.AuditLogEntry],
+) -> Tuple[str, Optional[int], str]:
+    try:
+        if entry is not None:
+            actor_display, reason = _format_actor_from_audit(entry)
+            actor_id = _actor_id_from_audit(entry)
+            if actor_display and actor_display != "Unknown":
+                return actor_display, actor_id, reason or ""
+    except Exception:
+        pass
+
+    try:
+        return _member_display(member), int(member.id), ""
+    except Exception:
+        return "Unknown", None, ""
+
+
 async def maybe_log_voice_state_update(
     guild: discord.Guild,
     member: discord.Member,
@@ -3305,79 +3361,186 @@ async def maybe_log_voice_state_update(
         did_log = False
 
         entry = await _audit_find_recent_voice_target_entry(guild, int(member.id))
-        actor_display, reason = _format_actor_from_audit(entry)
-        actor_id = _actor_id_from_audit(entry)
 
         before_channel = getattr(before, "channel", None)
         after_channel = getattr(after, "channel", None)
-        before_channel_name = getattr(before_channel, "name", None) if before_channel else None
-        after_channel_name = getattr(after_channel, "name", None) if after_channel else None
-
-        if getattr(before, "mute", None) != getattr(after, "mute", None):
-            action = "server_mute" if bool(getattr(after, "mute", False)) else "server_unmute"
-            await post_dashboard_mod_action_log(
-                guild,
-                target=member,
-                action=action,
-                actor_display=actor_display,
-                actor_id=actor_id,
-                reason=reason,
-                extra_fields=[
-                    ("Before", "Muted" if bool(getattr(before, "mute", False)) else "Unmuted", True),
-                    ("After", "Muted" if bool(getattr(after, "mute", False)) else "Unmuted", True),
-                ],
-                view=build_quick_mod_view(int(member.id)),
-            )
-            did_log = True
-
-        if getattr(before, "deaf", None) != getattr(after, "deaf", None):
-            action = "server_deafen" if bool(getattr(after, "deaf", False)) else "server_undeafen"
-            await post_dashboard_mod_action_log(
-                guild,
-                target=member,
-                action=action,
-                actor_display=actor_display,
-                actor_id=actor_id,
-                reason=reason,
-                extra_fields=[
-                    ("Before", "Deafened" if bool(getattr(before, "deaf", False)) else "Undeafened", True),
-                    ("After", "Deafened" if bool(getattr(after, "deaf", False)) else "Undeafened", True),
-                ],
-                view=build_quick_mod_view(int(member.id)),
-            )
-            did_log = True
 
         before_cid = int(getattr(before_channel, "id", 0) or 0)
         after_cid = int(getattr(after_channel, "id", 0) or 0)
 
+        before_label = _voice_channel_label(before_channel)
+        after_label = _voice_channel_label(after_channel)
+
+        if bool(getattr(before, "mute", False)) != bool(getattr(after, "mute", False)):
+            action = "server_mute" if bool(getattr(after, "mute", False)) else "server_unmute"
+            actor_display, actor_id, reason = _voice_actor_from_audit_or_member(member, entry)
+            await post_dashboard_mod_action_log(
+                guild,
+                target=member,
+                action=action,
+                actor_display=actor_display,
+                actor_id=actor_id,
+                reason=reason or "Updated server mute state.",
+                extra_fields=[
+                    ("Before", "Muted" if bool(getattr(before, "mute", False)) else "Unmuted", True),
+                    ("After", "Muted" if bool(getattr(after, "mute", False)) else "Unmuted", True),
+                    ("Channel", after_label if after_channel else before_label, False),
+                ],
+                view=build_quick_mod_view(int(member.id)),
+            )
+            did_log = True
+
+        if bool(getattr(before, "deaf", False)) != bool(getattr(after, "deaf", False)):
+            action = "server_deafen" if bool(getattr(after, "deaf", False)) else "server_undeafen"
+            actor_display, actor_id, reason = _voice_actor_from_audit_or_member(member, entry)
+            await post_dashboard_mod_action_log(
+                guild,
+                target=member,
+                action=action,
+                actor_display=actor_display,
+                actor_id=actor_id,
+                reason=reason or "Updated server deafen state.",
+                extra_fields=[
+                    ("Before", "Deafened" if bool(getattr(before, "deaf", False)) else "Undeafened", True),
+                    ("After", "Deafened" if bool(getattr(after, "deaf", False)) else "Undeafened", True),
+                    ("Channel", after_label if after_channel else before_label, False),
+                ],
+                view=build_quick_mod_view(int(member.id)),
+            )
+            did_log = True
+
         if before_cid != after_cid:
-            if before_channel and after_channel:
+            if before_channel is None and after_channel is not None:
+                await post_dashboard_mod_action_log(
+                    guild,
+                    target=member,
+                    action="voice_join",
+                    actor_display=_member_display(member),
+                    actor_id=int(member.id),
+                    reason="Joined a voice channel.",
+                    extra_fields=[
+                        ("Channel", after_label, False),
+                    ],
+                    view=build_quick_mod_view(int(member.id)),
+                )
+                did_log = True
+            elif before_channel is not None and after_channel is None:
+                actor_display, actor_id, reason = _voice_actor_from_audit_or_member(member, entry)
+                action = "voice_leave" if actor_id == int(member.id) else "voice_disconnect"
+                await post_dashboard_mod_action_log(
+                    guild,
+                    target=member,
+                    action=action,
+                    actor_display=actor_display,
+                    actor_id=actor_id,
+                    reason=reason or ("Left the voice channel." if action == "voice_leave" else "Disconnected from voice."),
+                    extra_fields=[
+                        ("From", before_label, False),
+                    ],
+                    view=build_quick_mod_view(int(member.id)),
+                )
+                did_log = True
+            elif before_channel is not None and after_channel is not None:
+                actor_display, actor_id, reason = _voice_actor_from_audit_or_member(member, entry)
                 await post_dashboard_mod_action_log(
                     guild,
                     target=member,
                     action="voice_move",
                     actor_display=actor_display,
                     actor_id=actor_id,
-                    reason=reason,
+                    reason=reason or "Moved voice channels.",
                     extra_fields=[
-                        ("From", before_channel_name or f"`{before_cid}`", True),
-                        ("To", after_channel_name or f"`{after_cid}`", True),
+                        ("From", before_label, True),
+                        ("To", after_label, True),
                     ],
                     view=build_quick_mod_view(int(member.id)),
                 )
                 did_log = True
-            elif before_channel and not after_channel:
-                await post_dashboard_mod_action_log(
-                    guild,
-                    target=member,
-                    action="voice_disconnect",
-                    actor_display=actor_display,
-                    actor_id=actor_id,
-                    reason=reason,
-                    extra_fields=[("Disconnected From", before_channel_name or f"`{before_cid}`", False)],
-                    view=build_quick_mod_view(int(member.id)),
-                )
-                did_log = True
+
+        if bool(getattr(before, "self_mute", False)) != bool(getattr(after, "self_mute", False)):
+            action = "self_mute" if bool(getattr(after, "self_mute", False)) else "self_unmute"
+            await post_dashboard_mod_action_log(
+                guild,
+                target=member,
+                action=action,
+                actor_display=_member_display(member),
+                actor_id=int(member.id),
+                reason="Updated self mute state.",
+                extra_fields=[
+                    ("Before", "Self-muted" if bool(getattr(before, "self_mute", False)) else "Not self-muted", True),
+                    ("After", "Self-muted" if bool(getattr(after, "self_mute", False)) else "Not self-muted", True),
+                    ("Channel", after_label if after_channel else before_label, False),
+                ],
+                view=build_quick_mod_view(int(member.id)),
+            )
+            did_log = True
+
+        if bool(getattr(before, "self_deaf", False)) != bool(getattr(after, "self_deaf", False)):
+            action = "self_deafen" if bool(getattr(after, "self_deaf", False)) else "self_undeafen"
+            await post_dashboard_mod_action_log(
+                guild,
+                target=member,
+                action=action,
+                actor_display=_member_display(member),
+                actor_id=int(member.id),
+                reason="Updated self deaf state.",
+                extra_fields=[
+                    ("Before", "Self-deafened" if bool(getattr(before, "self_deaf", False)) else "Not self-deafened", True),
+                    ("After", "Self-deafened" if bool(getattr(after, "self_deaf", False)) else "Not self-deafened", True),
+                    ("Channel", after_label if after_channel else before_label, False),
+                ],
+                view=build_quick_mod_view(int(member.id)),
+            )
+            did_log = True
+
+        if bool(getattr(before, "self_stream", False)) != bool(getattr(after, "self_stream", False)):
+            action = "stream_start" if bool(getattr(after, "self_stream", False)) else "stream_stop"
+            await post_dashboard_mod_action_log(
+                guild,
+                target=member,
+                action=action,
+                actor_display=_member_display(member),
+                actor_id=int(member.id),
+                reason="Updated stream state.",
+                extra_fields=[
+                    ("Channel", after_label if after_channel else before_label, False),
+                ],
+                view=build_quick_mod_view(int(member.id)),
+            )
+            did_log = True
+
+        if bool(getattr(before, "self_video", False)) != bool(getattr(after, "self_video", False)):
+            action = "video_start" if bool(getattr(after, "self_video", False)) else "video_stop"
+            await post_dashboard_mod_action_log(
+                guild,
+                target=member,
+                action=action,
+                actor_display=_member_display(member),
+                actor_id=int(member.id),
+                reason="Updated camera state.",
+                extra_fields=[
+                    ("Channel", after_label if after_channel else before_label, False),
+                ],
+                view=build_quick_mod_view(int(member.id)),
+            )
+            did_log = True
+
+        if bool(getattr(before, "suppress", False)) != bool(getattr(after, "suppress", False)):
+            actor_display, actor_id, reason = _voice_actor_from_audit_or_member(member, entry)
+            action = "voice_suppress" if bool(getattr(after, "suppress", False)) else "voice_unsuppress"
+            await post_dashboard_mod_action_log(
+                guild,
+                target=member,
+                action=action,
+                actor_display=actor_display,
+                actor_id=actor_id,
+                reason=reason or "Updated stage suppression state.",
+                extra_fields=[
+                    ("Channel", after_label if after_channel else before_label, False),
+                ],
+                view=build_quick_mod_view(int(member.id)),
+            )
+            did_log = True
 
         return did_log
     except Exception as e:
