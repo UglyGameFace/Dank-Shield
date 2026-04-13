@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import os
 import asyncio
+from datetime import datetime, timezone
 from typing import Any, Dict, Optional, Tuple
 
 from aiohttp import web
@@ -29,6 +30,34 @@ try:
     from .tickets_new.sync_service import sync_active_ticket_channels_for_guild
 except Exception:
     sync_active_ticket_channels_for_guild = None  # type: ignore
+
+# NEW: token-store helpers so submission data is written the same way
+try:
+    from .store import (
+        sb_get_token_info,
+        sb_store_submission_proof_candidate,
+        token_is_expired,
+    )
+except Exception:
+    def sb_get_token_info(token: str):  # type: ignore
+        return None
+
+    def sb_store_submission_proof_candidate(  # type: ignore
+        token: str,
+        *,
+        identity_fingerprint: Optional[str],
+        fingerprint_version: str = "v1",
+        identity_source: Optional[str] = None,
+        verification_source: Optional[str] = None,
+        submitted: bool = True,
+        submitted_at: Optional[datetime] = None,
+        proof_captured_at: Optional[datetime] = None,
+        submission_meta: Optional[Dict[str, Any]] = None,
+    ) -> bool:
+        return False
+
+    def token_is_expired(token_info: Optional[Dict[str, Any]]) -> bool:  # type: ignore
+        return True
 
 
 def _log(msg: str) -> None:
@@ -74,7 +103,61 @@ async def _read_json(request: web.Request) -> Dict[str, Any]:
         return {}
 
 
+def _safe_str(value: Any) -> str:
+    try:
+        return str(value or "").strip()
+    except Exception:
+        return ""
+
+
+def _safe_json(value: Any) -> Any:
+    if value is None:
+        return None
+    if isinstance(value, (str, int, float, bool)):
+        return value
+    if isinstance(value, dict):
+        return {str(k): _safe_json(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple, set)):
+        return [_safe_json(v) for v in value]
+    try:
+        return str(value)
+    except Exception:
+        return None
+
+
+def _parse_dt(value: Any) -> Optional[datetime]:
+    if value is None:
+        return None
+
+    if isinstance(value, datetime):
+        try:
+            if value.tzinfo is None:
+                return value.replace(tzinfo=timezone.utc)
+            return value.astimezone(timezone.utc)
+        except Exception:
+            return value
+
+    try:
+        s = str(value).strip()
+        if not s:
+            return None
+        dt = datetime.fromisoformat(s.replace("Z", "+00:00"))
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt.astimezone(timezone.utc)
+    except Exception:
+        return None
+
+
 async def _fetch_token_row(token: str) -> Optional[Dict[str, Any]]:
+    # Prefer store.py because it already normalizes token rows.
+    try:
+        row = sb_get_token_info(token)
+        if isinstance(row, dict):
+            return row
+    except Exception:
+        pass
+
     if not supabase:
         return None
 
@@ -105,9 +188,7 @@ async def _update_token_decision(
         return False
 
     try:
-        import datetime
-
-        decided_at = datetime.datetime.now(datetime.timezone.utc).isoformat()
+        decided_at = datetime.now(timezone.utc).isoformat()
 
         payload = {
             "decision": decision,
@@ -365,6 +446,94 @@ async def handle_decision(
     return {"ok": True, "results": results}
 
 
+# NEW: submission endpoint handler
+async def handle_submission(
+    bot: discord.Client,
+    token: str,
+    *,
+    identity_fingerprint: Optional[str],
+    fingerprint_version: str,
+    identity_source: Optional[str],
+    verification_source: Optional[str],
+    submitted_at: Optional[datetime],
+    proof_captured_at: Optional[datetime],
+    submission_meta: Optional[Dict[str, Any]],
+    staff_id: str = "system",
+) -> Dict[str, Any]:
+    token = _safe_str(token)
+    if not token:
+        return {"ok": False, "error": "missing_token"}
+
+    if not identity_fingerprint:
+        return {
+            "ok": False,
+            "error": "missing_identity_fingerprint",
+            "message": "Submission endpoint requires a real privacy-safe identity fingerprint.",
+        }
+
+    row = await _fetch_token_row(token)
+    if not row:
+        return {"ok": False, "error": "token_not_found"}
+
+    if token_is_expired(row):
+        return {"ok": False, "error": "token_expired"}
+
+    stored = bool(
+        sb_store_submission_proof_candidate(
+            token,
+            identity_fingerprint=_safe_str(identity_fingerprint),
+            fingerprint_version=_safe_str(fingerprint_version) or "v1",
+            identity_source=_safe_str(identity_source) or None,
+            verification_source=_safe_str(verification_source) or None,
+            submitted=True,
+            submitted_at=submitted_at,
+            proof_captured_at=proof_captured_at,
+            submission_meta=submission_meta or {},
+        )
+    )
+
+    refreshed = await _fetch_token_row(token)
+
+    await _insert_audit(
+        action="verification_submission_received",
+        token=token,
+        staff_id=staff_id or "system",
+        meta={
+            "guild_id": row.get("guild_id"),
+            "channel_id": row.get("channel_id"),
+            "requester_id": row.get("requester_id"),
+            "verification_source": verification_source,
+            "identity_source": identity_source,
+            "fingerprint_version": fingerprint_version,
+            "stored": stored,
+        },
+    )
+
+    # Optional courtesy message into the ticket channel if it exists
+    try:
+        guild = _resolve_guild_from_row(bot, row)
+        channel_id = str(row.get("channel_id") or "").strip()
+        if guild and channel_id.isdigit():
+            ch = guild.get_channel(int(channel_id))
+            if isinstance(ch, discord.TextChannel):
+                try:
+                    await ch.send("📥 Verification submission received and attached to this token for staff review.")
+                except Exception:
+                    pass
+    except Exception:
+        pass
+
+    return {
+        "ok": stored,
+        "token": token,
+        "stored": stored,
+        "submitted": bool((refreshed or {}).get("submitted", False)),
+        "has_identity_fingerprint": bool((refreshed or {}).get("identity_fingerprint")),
+        "verification_source": (refreshed or {}).get("verification_source"),
+        "identity_source": (refreshed or {}).get("identity_source"),
+    }
+
+
 async def _handle_sync_active_tickets(
     bot: discord.Client,
     body: Dict[str, Any],
@@ -460,6 +629,55 @@ def create_app(bot: discord.Client) -> web.Application:
                 status=500,
             )
 
+    # NEW: submission endpoint
+    async def submission(request: web.Request):
+        if not _auth_ok(request):
+            return web.json_response({"ok": False, "error": "unauthorized"}, status=401)
+
+        body = await _read_json(request)
+
+        token = _safe_str(body.get("token"))
+        identity_fingerprint = _safe_str(body.get("identity_fingerprint") or body.get("verification_fingerprint"))
+        fingerprint_version = _safe_str(body.get("fingerprint_version")) or "v1"
+        identity_source = _safe_str(body.get("identity_source")) or None
+        verification_source = _safe_str(body.get("verification_source") or body.get("source")) or "website_submission"
+        staff_id = _safe_str(body.get("staffId") or body.get("staff_id") or "system") or "system"
+
+        submitted_at = _parse_dt(body.get("submitted_at"))
+        proof_captured_at = _parse_dt(body.get("proof_captured_at"))
+        submission_meta = body.get("submission_meta") if isinstance(body.get("submission_meta"), dict) else {}
+
+        if not token or not identity_fingerprint:
+            return web.json_response(
+                {
+                    "ok": False,
+                    "error": "missing_fields",
+                    "need": ["token", "identity_fingerprint"],
+                },
+                status=400,
+            )
+
+        try:
+            out = await handle_submission(
+                bot,
+                token,
+                identity_fingerprint=identity_fingerprint,
+                fingerprint_version=fingerprint_version,
+                identity_source=identity_source,
+                verification_source=verification_source,
+                submitted_at=submitted_at,
+                proof_captured_at=proof_captured_at,
+                submission_meta=submission_meta,
+                staff_id=staff_id,
+            )
+            return web.json_response(out, status=200 if out.get("ok") else 400)
+        except Exception as e:
+            _log(f"❌ bot_actions_api submission exception: {e}")
+            return web.json_response(
+                {"ok": False, "error": f"exception: {e}"},
+                status=500,
+            )
+
     async def sync_active_tickets(request: web.Request):
         if not _auth_ok(request):
             return web.json_response({"ok": False, "error": "unauthorized"}, status=401)
@@ -474,6 +692,9 @@ def create_app(bot: discord.Client) -> web.Application:
 
     # Existing decision route
     app.router.add_post("/api/verify/decision", decision)
+
+    # NEW submission route
+    app.router.add_post("/api/verify/submission", submission)
 
     # Ticket sync on public 8080 app
     app.router.add_post("/tickets/sync-active", sync_active_tickets)
@@ -501,5 +722,6 @@ async def start_bot_actions_server(bot: discord.Client) -> None:
     await site.start()
 
     _log(f"🌐 Bot Actions API online at http://{host}:{port}/api/verify/decision")
+    _log(f"🌐 Bot Actions submission API online at http://{host}:{port}/api/verify/submission")
     _log(f"🌐 Bot Actions public health at http://{host}:{port}/health")
     _log(f"🌐 Bot Actions ticket sync at http://{host}:{port}/tickets/sync-active")
