@@ -53,6 +53,21 @@ def _to_str(x: Any) -> Optional[str]:
         return None
 
 
+def _to_jsonish(value: Any) -> Any:
+    if value is None:
+        return None
+    if isinstance(value, (str, int, float, bool)):
+        return value
+    if isinstance(value, dict):
+        return {str(k): _to_jsonish(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple, set)):
+        return [_to_jsonish(v) for v in value]
+    try:
+        return str(value)
+    except Exception:
+        return None
+
+
 def _parse_dt(value: Any) -> Optional[datetime]:
     """
     Accepts ISO strings or datetime. Returns aware UTC datetime where possible.
@@ -88,6 +103,18 @@ def _parse_dt(value: Any) -> Optional[datetime]:
         return dt.astimezone(timezone.utc)
     except Exception:
         return None
+
+
+def _is_missing_column_error(exc: Exception, column_name: str) -> bool:
+    try:
+        text = repr(exc)
+        return (
+            "PGRST204" in text
+            and "schema cache" in text
+            and f"'{column_name}' column" in text
+        )
+    except Exception:
+        return False
 
 
 # ============================================================
@@ -249,6 +276,7 @@ def _normalize_row(row: Dict[str, Any]) -> Dict[str, Any]:
     """
     Ensure the row has the fields your system expects and consistent types.
     Keeps extra fields (submitted_at / approved_user_id / ai_status) if present.
+    Also keeps proof-candidate fields when present.
     """
     token = _to_str(row.get("token")) or ""
     guild_id = _to_str(row.get("guild_id"))
@@ -265,12 +293,19 @@ def _normalize_row(row: Dict[str, Any]) -> Dict[str, Any]:
     decided_at_s = _normalize_iso_maybe(row.get("decided_at")) or _to_str(row.get("decided_at"))
     created_at_s = _normalize_iso_maybe(row.get("created_at")) or _to_str(row.get("created_at"))
     submitted_at_s = _normalize_iso_maybe(row.get("submitted_at")) or _to_str(row.get("submitted_at"))
+    proof_captured_at_s = _normalize_iso_maybe(row.get("proof_captured_at")) or _to_str(row.get("proof_captured_at"))
 
     # Keep stored webhook_url as-is if present; insert/update path handles non-empty coercion.
     webhook_url = _to_str(row.get("webhook_url")) or ""
 
     approved_user_id = _to_str(row.get("approved_user_id"))
     ai_status = _to_str(row.get("ai_status"))
+
+    identity_fingerprint = _to_str(row.get("identity_fingerprint"))
+    fingerprint_version = _to_str(row.get("fingerprint_version")) or "v1"
+    identity_source = _to_str(row.get("identity_source"))
+    verification_source = _to_str(row.get("verification_source"))
+    submission_meta = row.get("submission_meta") if isinstance(row.get("submission_meta"), dict) else {}
 
     return {
         "token": token,
@@ -288,6 +323,13 @@ def _normalize_row(row: Dict[str, Any]) -> Dict[str, Any]:
         "webhook_url": webhook_url,
         "approved_user_id": approved_user_id,
         "ai_status": ai_status,
+        # proof-candidate fields
+        "identity_fingerprint": identity_fingerprint,
+        "fingerprint_version": fingerprint_version,
+        "identity_source": identity_source,
+        "verification_source": verification_source,
+        "proof_captured_at": proof_captured_at_s,
+        "submission_meta": submission_meta or {},
     }
 
 
@@ -674,6 +716,167 @@ def sb_mark_decision(
         if not row:
             return False
         row.update(update)
+        _MEM_TOKENS[token] = _normalize_row(row)
+        return True
+
+
+# ============================================================
+# NEW: token-level proof candidate storage
+# ============================================================
+
+def sb_store_submission_proof_candidate(
+    token: str,
+    *,
+    identity_fingerprint: Optional[str],
+    fingerprint_version: str = "v1",
+    identity_source: Optional[str] = None,
+    verification_source: Optional[str] = None,
+    submitted: bool = True,
+    submitted_at: Optional[datetime] = None,
+    proof_captured_at: Optional[datetime] = None,
+    submission_meta: Optional[Dict[str, Any]] = None,
+) -> bool:
+    """
+    Store proof-candidate fields on the verification token row when the upload
+    / verification pipeline receives real evidence.
+
+    This does NOT create a hard proof yet.
+    It only stores candidate data on verification_tokens so staff approval can
+    later promote it to hard proof in interaction_handlers.py.
+    """
+    token = (token or "").strip()
+    if not token:
+        return False
+
+    sub_dt = _parse_dt(submitted_at) if submitted_at is not None else _utcnow()
+    if sub_dt and sub_dt.tzinfo is None:
+        sub_dt = sub_dt.replace(tzinfo=timezone.utc)
+    submitted_at_iso = sub_dt.isoformat() if sub_dt else _utcnow().isoformat()
+
+    captured_dt = _parse_dt(proof_captured_at) if proof_captured_at is not None else _utcnow()
+    if captured_dt and captured_dt.tzinfo is None:
+        captured_dt = captured_dt.replace(tzinfo=timezone.utc)
+    proof_captured_at_iso = captured_dt.isoformat() if captured_dt else _utcnow().isoformat()
+
+    full_payload: Dict[str, Any] = {
+        "submitted": bool(submitted),
+        "submitted_at": submitted_at_iso if submitted else None,
+        "identity_fingerprint": _to_str(identity_fingerprint),
+        "fingerprint_version": _to_str(fingerprint_version) or "v1",
+        "identity_source": _to_str(identity_source),
+        "verification_source": _to_str(verification_source),
+        "proof_captured_at": proof_captured_at_iso,
+        "submission_meta": _to_jsonish(submission_meta or {}),
+        "updated_at": _utcnow().isoformat(),
+    }
+
+    minimal_payload: Dict[str, Any] = {
+        "submitted": bool(submitted),
+        "submitted_at": submitted_at_iso if submitted else None,
+        "updated_at": _utcnow().isoformat(),
+    }
+
+    sb = _sb()
+    if sb is None:
+        row = _MEM_TOKENS.get(token)
+        if not row:
+            return False
+        row.update(full_payload)
+        _MEM_TOKENS[token] = _normalize_row(row)
+        return True
+
+    try:
+        table = _token_table_name()
+
+        try:
+            sb.table(table).update(full_payload).eq("token", token).execute()
+        except Exception as e:
+            if any(
+                _is_missing_column_error(e, col)
+                for col in (
+                    "identity_fingerprint",
+                    "fingerprint_version",
+                    "identity_source",
+                    "verification_source",
+                    "proof_captured_at",
+                    "submission_meta",
+                    "updated_at",
+                )
+            ):
+                sb.table(table).update(minimal_payload).eq("token", token).execute()
+            else:
+                raise
+
+        row = _MEM_TOKENS.get(token) or {"token": token}
+        row.update(full_payload)
+        _MEM_TOKENS[token] = _normalize_row(row)
+        return True
+    except Exception:
+        row = _MEM_TOKENS.get(token)
+        if not row:
+            return False
+        row.update(full_payload)
+        _MEM_TOKENS[token] = _normalize_row(row)
+        return True
+
+
+def sb_clear_submission_proof_candidate(token: str) -> bool:
+    """
+    Clear token-level proof-candidate fields without touching final hard-proof tables.
+    Useful when a token is reissued or a submission is invalidated.
+    """
+    token = (token or "").strip()
+    if not token:
+        return False
+
+    payload: Dict[str, Any] = {
+        "identity_fingerprint": None,
+        "fingerprint_version": None,
+        "identity_source": None,
+        "verification_source": None,
+        "proof_captured_at": None,
+        "submission_meta": {},
+        "updated_at": _utcnow().isoformat(),
+    }
+
+    sb = _sb()
+    if sb is None:
+        row = _MEM_TOKENS.get(token)
+        if not row:
+            return False
+        row.update(payload)
+        _MEM_TOKENS[token] = _normalize_row(row)
+        return True
+
+    try:
+        table = _token_table_name()
+
+        try:
+            sb.table(table).update(payload).eq("token", token).execute()
+        except Exception as e:
+            if not any(
+                _is_missing_column_error(e, col)
+                for col in (
+                    "identity_fingerprint",
+                    "fingerprint_version",
+                    "identity_source",
+                    "verification_source",
+                    "proof_captured_at",
+                    "submission_meta",
+                    "updated_at",
+                )
+            ):
+                raise
+
+        row = _MEM_TOKENS.get(token) or {"token": token}
+        row.update(payload)
+        _MEM_TOKENS[token] = _normalize_row(row)
+        return True
+    except Exception:
+        row = _MEM_TOKENS.get(token)
+        if not row:
+            return False
+        row.update(payload)
         _MEM_TOKENS[token] = _normalize_row(row)
         return True
 
