@@ -331,6 +331,25 @@ except Exception:
         return None
 
 
+# NEW: hard-proof / truth layer
+try:
+    from .identity_proof_service import record_verified_identity_for_user
+except Exception:
+    def record_verified_identity_for_user(  # type: ignore
+        *,
+        guild_id: Any,
+        user_id: Any,
+        identity_fingerprint: str,
+        source: str,
+        created_by: Optional[str] = None,
+        fingerprint_version: str = "v1",
+        confidence: int = 100,
+        notes: Optional[str] = None,
+        evidence: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        return {}
+
+
 _INTERACTION_HANDLERS_REGISTERED = False
 
 
@@ -342,6 +361,134 @@ def _role_by_id(guild: discord.Guild, role_id: int) -> Optional[discord.Role]:
         return role if isinstance(role, discord.Role) else None
     except Exception:
         return None
+
+
+def _safe_str(value: Any) -> str:
+    try:
+        return str(value or "").strip()
+    except Exception:
+        return ""
+
+
+def _extract_identity_fingerprint(token_info: Optional[Dict[str, Any]]) -> Optional[str]:
+    if not isinstance(token_info, dict):
+        return None
+
+    keys = (
+        "identity_fingerprint",
+        "verification_fingerprint",
+        "verified_identity_fingerprint",
+        "proof_fingerprint",
+        "document_fingerprint",
+        "face_fingerprint",
+        "person_fingerprint",
+        "id_hash",
+        "identity_hash",
+    )
+    for key in keys:
+        try:
+            value = _safe_str(token_info.get(key))
+            if value:
+                return value
+        except Exception:
+            continue
+    return None
+
+
+def _extract_identity_source(token_info: Optional[Dict[str, Any]], *, default: str) -> str:
+    if not isinstance(token_info, dict):
+        return default
+
+    candidates = (
+        _safe_str(token_info.get("identity_source")),
+        _safe_str(token_info.get("verification_source")),
+        _safe_str(token_info.get("proof_source")),
+        _safe_str(token_info.get("source")),
+        default,
+    )
+
+    allowed = {
+        "manual_review",
+        "id_verification",
+        "voice_verification",
+        "document_verification",
+        "selfie_match",
+        "external_account_link",
+        "trusted_admin_override",
+    }
+
+    for candidate in candidates:
+        text = candidate.lower().strip()
+        if text in allowed:
+            return text
+
+    # Map common internal wording into allowed values
+    text = _safe_str(token_info.get("verification_source") or token_info.get("source")).lower()
+    if "voice" in text or "vc" in text:
+        return "voice_verification"
+    if "document" in text or "id" in text:
+        return "document_verification"
+    if "selfie" in text or "face" in text:
+        return "selfie_match"
+    return default
+
+
+async def _persist_identity_proof_on_approval(
+    *,
+    guild: discord.Guild,
+    owner: Optional[discord.Member],
+    token: str,
+    token_info: Optional[Dict[str, Any]],
+    staff_member: discord.Member,
+    channel: discord.TextChannel,
+    approval_mode: str,
+) -> Tuple[bool, Optional[str]]:
+    """
+    Only writes hard proof when a real identity_fingerprint exists.
+    This avoids fake certainty and keeps approvals normal when no
+    proof fingerprint was captured.
+    """
+    try:
+        if not isinstance(owner, discord.Member):
+            return False, None
+
+        fingerprint = _extract_identity_fingerprint(token_info)
+        if not fingerprint:
+            return False, None
+
+        source = _extract_identity_source(
+            token_info,
+            default=("voice_verification" if approval_mode == "vc" else "manual_review"),
+        )
+
+        evidence = {
+            "token": token,
+            "channel_id": str(channel.id),
+            "guild_id": str(guild.id),
+            "approved_by": str(staff_member.id),
+            "approved_by_name": getattr(staff_member, "display_name", None) or getattr(staff_member, "name", None),
+            "approval_mode": approval_mode,
+            "decision": "APPROVED",
+            "token_info_keys": sorted([str(k) for k in token_info.keys()]) if isinstance(token_info, dict) else [],
+        }
+
+        row = record_verified_identity_for_user(
+            guild_id=str(guild.id),
+            user_id=str(owner.id),
+            identity_fingerprint=fingerprint,
+            source=source,
+            created_by=str(staff_member.id),
+            fingerprint_version=_safe_str((token_info or {}).get("fingerprint_version")) or "v1",
+            confidence=100,
+            notes=f"Verification approved via {approval_mode} by {staff_member} ({staff_member.id})",
+            evidence=evidence,
+        )
+
+        proof_id = _safe_str((row or {}).get("id")) or None
+        return True, proof_id
+    except Exception as e:
+        print("⚠️ Failed persisting identity proof on approval:", repr(e))
+        return False, str(e)
 
 
 async def _remove_unverified_role_if_present(
@@ -1321,7 +1468,7 @@ async def _handle_vc_staff_action(
 
                 oid = int(getattr(owner, "id", 0) or 0) if owner else 0
                 user_mention = owner.mention if owner else (f"<@{oid}>" if oid else "Unknown user")
-                content = (
+                content_msg = (
                     f"✅ **VC Verify accepted** by {interaction.user.mention}\n\n"
                     f"{user_mention} tap below to join <#{vc_ch.id}> now.\n"
                     f"⏳ Temporary access expires in ~{access_min} minutes."
@@ -1340,14 +1487,14 @@ async def _handle_vc_staff_action(
                             or "Staff has been notified" in t
                             or "VC Verify accepted" in t
                         ):
-                            await msg.edit(content=content, view=view)
+                            await msg.edit(content=content_msg, view=view)
                             edited = True
                             break
                 except Exception:
                     edited = False
 
                 if not edited:
-                    await ticket_channel.send(content, view=view)
+                    await ticket_channel.send(content_msg, view=view)
         except Exception:
             pass
 
@@ -1469,6 +1616,17 @@ async def _handle_vc_staff_action(
             await interaction.followup.send(f"❌ Unexpected error: {e}", ephemeral=True)
             return True
 
+        # NEW: only persist hard proof when a real fingerprint exists
+        proof_saved, proof_meta = await _persist_identity_proof_on_approval(
+            guild=guild,
+            owner=owner,
+            token=token,
+            token_info=token_info,
+            staff_member=interaction.user,
+            channel=channel,
+            approval_mode="vc",
+        )
+
         sb_mark_decision(token, "APPROVED (VC)", int(interaction.user.id), approved_user_id=int(owner.id))
         try:
             sb_set_used(token, True)
@@ -1476,10 +1634,13 @@ async def _handle_vc_staff_action(
             pass
         RUNTIME_STATS["vc_approved"] += 1
 
-        await interaction.followup.send(
-            f"✅ **Approved (VC)!** Granted {', '.join([r.mention for r in roles_to_assign])} to {owner.mention}.",
-            ephemeral=True,
-        )
+        msg = f"✅ **Approved (VC)!** Granted {', '.join([r.mention for r in roles_to_assign])} to {owner.mention}."
+        if proof_saved and proof_meta:
+            msg += f"\n🧬 Stored hard identity proof (`{proof_meta}`) for future confirmed-duplicate checks."
+        elif proof_saved:
+            msg += "\n🧬 Stored hard identity proof for future confirmed-duplicate checks."
+
+        await interaction.followup.send(msg, ephemeral=True)
         try:
             await _vc_unlock_channel_for_next_session(guild, token)
         except Exception:
@@ -1671,6 +1832,17 @@ async def _handle_standard_staff_decision(
             await interaction.followup.send(f"❌ Unexpected error: {e}", ephemeral=True)
             return True
 
+        # NEW: only persist hard proof when a real fingerprint exists
+        proof_saved, proof_meta = await _persist_identity_proof_on_approval(
+            guild=guild,
+            owner=owner,
+            token=token,
+            token_info=token_info,
+            staff_member=interaction.user,
+            channel=channel,
+            approval_mode="standard",
+        )
+
         sb_mark_decision(token, "APPROVED", int(interaction.user.id), approved_user_id=int(owner.id))
         try:
             sb_set_used(token, True)
@@ -1678,10 +1850,13 @@ async def _handle_standard_staff_decision(
             pass
         RUNTIME_STATS["approved"] += 1
 
-        await interaction.followup.send(
-            f"✅ **Approved!** Granted {', '.join([r.mention for r in roles_to_assign])} to {owner.mention}.",
-            ephemeral=True,
-        )
+        msg = f"✅ **Approved!** Granted {', '.join([r.mention for r in roles_to_assign])} to {owner.mention}."
+        if proof_saved and proof_meta:
+            msg += f"\n🧬 Stored hard identity proof (`{proof_meta}`) for future confirmed-duplicate checks."
+        elif proof_saved:
+            msg += "\n🧬 Stored hard identity proof for future confirmed-duplicate checks."
+
+        await interaction.followup.send(msg, ephemeral=True)
         await auto_close_after_decision(channel, closer=interaction.user, decision="APPROVED")
         return True
 
