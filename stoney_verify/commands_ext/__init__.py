@@ -112,6 +112,23 @@ def register_all_commands(bot: Any, tree: Any) -> None:
             pass
 
     # ------------------------------------------------------------
+    # Identity truth admin
+    # ------------------------------------------------------------
+    try:
+        from .identity_admin import register_identity_admin_commands
+        register_identity_admin_commands(bot, tree)
+        try:
+            print("✅ commands_ext: registered identity truth admin commands")
+        except Exception:
+            pass
+    except Exception as e:
+        errors.append(f"identity_admin: {repr(e)}")
+        try:
+            print(f"⚠️ commands_ext: failed registering identity truth admin commands: {repr(e)}")
+        except Exception:
+            pass
+
+    # ------------------------------------------------------------
     # Channel cleanup admin
     # ------------------------------------------------------------
     try:
