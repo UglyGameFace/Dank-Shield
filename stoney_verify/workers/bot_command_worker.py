@@ -231,22 +231,35 @@ async def claim_command(cmd_id: str) -> Tuple[bool, Optional[Dict[str, Any]]]:
     Returns:
         (claimed, row)
     """
+    claim_ts = now_iso()
+
     def _write():
         sb = get_supabase()
         if sb is None:
             return None
 
-        res = (
+        # Step 1: update state
+        (
             sb.table("bot_commands")
             .update(
                 {
                     "status": "processing",
-                    "picked_up_at": now_iso(),
+                    "picked_up_at": claim_ts,
                 }
             )
             .eq("id", cmd_id)
             .eq("status", "pending")
+            .execute()
+        )
+
+        # Step 2: re-read only the row we just claimed
+        res = (
+            sb.table("bot_commands")
             .select("*")
+            .eq("id", cmd_id)
+            .eq("status", "processing")
+            .eq("picked_up_at", claim_ts)
+            .limit(1)
             .execute()
         )
 
@@ -362,11 +375,18 @@ async def update_ticket_by_channel_id(
         if sb is None:
             return None
 
-        res = (
+        (
             sb.table("tickets")
             .update(clean_patch)
             .or_(f"channel_id.eq.{channel_text},discord_thread_id.eq.{channel_text}")
+            .execute()
+        )
+
+        res = (
+            sb.table("tickets")
             .select("*")
+            .or_(f"channel_id.eq.{channel_text},discord_thread_id.eq.{channel_text}")
+            .limit(1)
             .execute()
         )
 
@@ -394,11 +414,18 @@ async def update_ticket_by_id(
         if sb is None:
             return None
 
-        res = (
+        (
             sb.table("tickets")
             .update(clean_patch)
             .eq("id", str(ticket_id))
+            .execute()
+        )
+
+        res = (
+            sb.table("tickets")
             .select("*")
+            .eq("id", str(ticket_id))
+            .limit(1)
             .execute()
         )
 
@@ -826,10 +853,6 @@ async def execute_command(cmd: Dict[str, Any]):
 
     print(f"⚙️ Executing bot command: {action}")
 
-    # --------------------------------------------------
-    # CREATE TICKET
-    # --------------------------------------------------
-
     if action == "create_ticket":
         user_id = _safe_int(payload.get("user_id"))
         member = guild.get_member(user_id)
@@ -947,10 +970,6 @@ async def execute_command(cmd: Dict[str, Any]):
             "channel_name": getattr(channel, "name", None),
         }
 
-    # --------------------------------------------------
-    # CLOSE TICKET
-    # --------------------------------------------------
-
     if action == "close_ticket":
         channel_id = _safe_int(payload.get("channel_id"))
         reason = _safe_str(payload.get("reason")) or "Resolved"
@@ -1004,10 +1023,6 @@ async def execute_command(cmd: Dict[str, Any]):
             "closed_reason": reason,
             "closed_by": _best_staff_text(staff_member, staff_id),
         }
-
-    # --------------------------------------------------
-    # DELETE TICKET
-    # --------------------------------------------------
 
     if action == "delete_ticket":
         channel_id = _safe_int(payload.get("channel_id"))
@@ -1098,10 +1113,6 @@ async def execute_command(cmd: Dict[str, Any]):
 
         return result
 
-    # --------------------------------------------------
-    # REOPEN TICKET
-    # --------------------------------------------------
-
     if action == "reopen_ticket":
         channel_id = _safe_int(payload.get("channel_id"))
         channel = await safe_fetch_channel(guild, channel_id)
@@ -1136,10 +1147,6 @@ async def execute_command(cmd: Dict[str, Any]):
             "reopened": True,
             "channel_id": str(channel_id),
         }
-
-    # --------------------------------------------------
-    # ASSIGN TICKET
-    # --------------------------------------------------
 
     if action == "assign_ticket":
         staff_id = _safe_str(payload.get("staff_id"))
@@ -1188,10 +1195,6 @@ async def execute_command(cmd: Dict[str, Any]):
             "channel_id": str(channel_id),
         }
 
-    # --------------------------------------------------
-    # SYNC ACTIVE TICKETS
-    # --------------------------------------------------
-
     if action == "sync_active_tickets":
         include_closed_visible_channels = _safe_bool(
             payload.get("include_closed_visible_channels"),
@@ -1210,10 +1213,6 @@ async def execute_command(cmd: Dict[str, Any]):
             "synced": True,
             "summary": summary,
         }
-
-    # --------------------------------------------------
-    # MEMBER PORTAL TICKET REPLY
-    # --------------------------------------------------
 
     if action == "portal_ticket_reply":
         channel_id = _safe_int(payload.get("channel_id"))
@@ -1289,10 +1288,6 @@ async def execute_command(cmd: Dict[str, Any]):
                 "ticket_id": ticket_id or None,
                 "channel_id": str(channel_id),
             }
-
-    # --------------------------------------------------
-    # APPROVE VERIFICATION
-    # --------------------------------------------------
 
     if action == "approve_verification":
         ticket_id = _safe_str(payload.get("ticket_id"))
@@ -1426,10 +1421,6 @@ async def execute_command(cmd: Dict[str, Any]):
             "ticket_id": ticket_id or None,
         }
 
-    # --------------------------------------------------
-    # DENY VERIFICATION
-    # --------------------------------------------------
-
     if action == "deny_verification":
         ticket_id = _safe_str(payload.get("ticket_id"))
         channel_id = _safe_int(payload.get("channel_id"))
@@ -1514,10 +1505,6 @@ async def execute_command(cmd: Dict[str, Any]):
             "reason_text": reason,
         }
 
-    # --------------------------------------------------
-    # REMOVE UNVERIFIED ROLE
-    # --------------------------------------------------
-
     if action == "remove_unverified_role":
         ticket_id = _safe_str(payload.get("ticket_id"))
         user_id = _safe_int(payload.get("user_id"))
@@ -1570,10 +1557,6 @@ async def execute_command(cmd: Dict[str, Any]):
             "removed_role_ids": [str(x) for x in removed],
             "ticket_id": ticket_id or None,
         }
-
-    # --------------------------------------------------
-    # POST VERIFICATION STAFF PANEL
-    # --------------------------------------------------
 
     if action == "post_verification_staff_panel":
         ticket_id = _safe_str(payload.get("ticket_id"))
@@ -1655,10 +1638,6 @@ async def execute_command(cmd: Dict[str, Any]):
             "user_id": str(user_id) if user_id else None,
         }
 
-    # --------------------------------------------------
-    # REPOST VERIFY UI
-    # --------------------------------------------------
-
     if action == "repost_verify_ui":
         ticket_id = _safe_str(payload.get("ticket_id"))
         channel_id = _safe_int(payload.get("channel_id"))
@@ -1696,25 +1675,13 @@ async def execute_command(cmd: Dict[str, Any]):
             "ticket_id": ticket_id or None,
         }
 
-    # --------------------------------------------------
-    # MEMBER SYNC
-    # --------------------------------------------------
-
     if action == "sync_members":
         summary = await sync_all_members(guild)
         return summary
 
-    # --------------------------------------------------
-    # DEPARTED RECONCILE
-    # --------------------------------------------------
-
     if action == "reconcile_departed_members":
         summary = await reconcile_departed_members(guild)
         return summary
-
-    # --------------------------------------------------
-    # ROLE MEMBER SYNC
-    # --------------------------------------------------
 
     if action == "sync_role_members":
         role_id = _safe_int(payload.get("role_id"))
