@@ -109,6 +109,17 @@ def _safe_string_list(value: Any, max_items: int = 20) -> List[str]:
     return out[:max_items]
 
 
+def _dedupe_list(values: List[str], max_items: int = 20) -> List[str]:
+    out: List[str] = []
+    for item in values:
+        text = str(item or "").strip()
+        if text and text not in out:
+            out.append(text)
+        if len(out) >= max_items:
+            break
+    return out[:max_items]
+
+
 def _truncate(text: Any, max_len: int = 1024) -> str:
     try:
         s = str(text or "")
@@ -728,6 +739,9 @@ def _pretty_flag_label(flag: Any) -> str:
         "fast_join_after_creation": "Joined soon after creation",
         "same_day_join_after_creation": "Joined same day as creation",
         "bot_account": "Bot account",
+        "cluster_triad": "Multi-signal cluster match",
+        "burst_cluster_combo": "Burst + cluster combo",
+        "name_cluster_combo": "Name cluster combo",
     }
     if raw in mapping:
         return mapping[raw]
@@ -752,6 +766,10 @@ def _pretty_cluster_reason(reason: Any) -> str:
 
 
 def _risk_summary_header(source: Dict[str, Any], warn_count: int = 0) -> str:
+    if _safe_bool(source.get("is_bot_account"), False):
+        return "BOT ACCOUNT • Excluded from alt-risk scoring"
+
+    tier = _safe_str(source.get("evidence_tier"), "clear").replace("_", " ").upper()
     score = _safe_int(source.get("risk_score"), _safe_int(source.get("score"), 0))
     level = _safe_str(source.get("risk_level") or source.get("level"), "low").upper()
     age_human = _safe_str(source.get("account_age_human"))
@@ -759,7 +777,7 @@ def _risk_summary_header(source: Dict[str, Any], warn_count: int = 0) -> str:
     if not age_human:
         age_human = f"{age_days} day(s)"
 
-    parts = [f"{level} risk", f"Score: {score}/100", f"Account age: {age_human}"]
+    parts = [f"{tier}", f"{level} / {score}/100", f"Account age: {age_human}"]
     if warn_count > 0:
         parts.append(f"Warns: {warn_count}")
     return " • ".join(parts)
@@ -915,11 +933,150 @@ def _normalized_live_profile(target: Optional[discord.abc.User], raw_profile: Di
 
 
 def _local_risk_profile(target: Optional[discord.abc.User]) -> Dict[str, Any]:
-    profile: Dict[str, Any] = {
-        "risk_score": 0,
-        "risk_level": "low",
-        "suspicion_flags": [],
-        "risk_reasons": [],
+    if target is None:
+        return {
+            "risk_score": 0,
+            "score": 0,
+            "risk_level": "low",
+            "level": "low",
+            "evidence_tier": "clear",
+            "suspicion_flags": [],
+            "risk_reasons": [],
+            "same_fingerprint_count": 0,
+            "similar_name_count": 0,
+            "same_age_bucket_count": 0,
+            "burst_join_count": 0,
+            "alt_cluster_size": 0,
+            "alt_cluster_key": "",
+            "cluster_members": [],
+            "fingerprint": "",
+            "account_age_days": 0,
+            "account_age_human": "unknown",
+            "age_bucket": "unknown",
+            "default_avatar": False,
+            "suspicious_name_pattern": False,
+            "repeated_char_pattern": False,
+            "joined_after_creation_seconds": None,
+            "joined_after_creation_human": "",
+            "is_bot_account": False,
+        }
+
+    if isinstance(target, discord.Member):
+        try:
+            profile = build_member_risk_profile(target) or {}
+            if profile:
+                return dict(profile)
+        except Exception:
+            pass
+
+    age_days = _account_age_days(target)
+    default_avatar = _has_default_avatar(target)
+    username = _username_for_checks(target)
+    lowered = username.lower()
+    digit_ratio = _digit_ratio(username)
+    repeat_run = _max_repeat_run(username)
+    digit_run = _max_digit_run(username)
+
+    if bool(getattr(target, "bot", False)):
+        return {
+            "risk_score": 0,
+            "score": 0,
+            "risk_level": "low",
+            "level": "low",
+            "evidence_tier": "clear",
+            "suspicion_flags": ["bot_account"],
+            "risk_reasons": ["Discord marks this account as a bot; excluded from alt-risk heuristics."],
+            "same_fingerprint_count": 0,
+            "similar_name_count": 0,
+            "same_age_bucket_count": 0,
+            "burst_join_count": 0,
+            "alt_cluster_size": 0,
+            "alt_cluster_key": "",
+            "cluster_members": [],
+            "fingerprint": _behavior_fingerprint(target),
+            "account_age_days": age_days,
+            "account_age_human": _account_age_human(target),
+            "age_bucket": _age_bucket(age_days),
+            "default_avatar": False,
+            "suspicious_name_pattern": False,
+            "repeated_char_pattern": False,
+            "joined_after_creation_seconds": None,
+            "joined_after_creation_human": "",
+            "is_bot_account": True,
+        }
+
+    weak_points = 0
+    flags: List[str] = []
+    reasons: List[str] = []
+    suspicious_name = False
+    repeated_chars = False
+
+    if age_days < 1:
+        weak_points += 18
+        flags.append("extremely_new_account")
+        reasons.append("Account is extremely new.")
+    elif age_days < 3:
+        weak_points += 12
+        flags.append("very_new_account")
+        reasons.append("Account is very new.")
+    elif age_days < 7:
+        weak_points += 6
+        flags.append("fresh_account")
+        reasons.append("Account is new.")
+
+    if default_avatar:
+        weak_points += 6
+        flags.append("default_avatar")
+        reasons.append("Account is using the default Discord avatar.")
+
+    if digit_ratio >= 0.65 and len(username) >= 6:
+        suspicious_name = True
+        weak_points += 7
+        flags.append("very_high_digit_ratio")
+        reasons.append("Username has an extremely high digit ratio.")
+    elif digit_ratio >= 0.45 and len(username) >= 6:
+        suspicious_name = True
+        weak_points += 4
+        flags.append("elevated_digit_ratio")
+        reasons.append("Username has an elevated digit ratio.")
+
+    if digit_run >= 4:
+        suspicious_name = True
+        weak_points += 4
+        flags.append("long_digit_run")
+        reasons.append("Username contains a long run of digits.")
+
+    if repeat_run >= 4:
+        repeated_chars = True
+        weak_points += 5
+        flags.append("repeated_chars")
+        reasons.append("Username contains repeated characters.")
+
+    if len(username) >= 8 and re.fullmatch(r"[a-z0-9._-]+", lowered or "") and digit_ratio >= 0.35:
+        suspicious_name = True
+        weak_points += 5
+        flags.append("synthetic_style_name")
+        reasons.append("Username pattern looks synthetic.")
+
+    impersonation_terms = ("admin", "mod", "moderator", "staff", "support", "helper", "official", "security")
+    if age_days <= 30 and any(term in lowered for term in impersonation_terms):
+        suspicious_name = True
+        weak_points += 6
+        flags.append("staff_style_name")
+        reasons.append("New account uses staff-leaning wording in the username.")
+
+    weak_points = min(35, weak_points)
+    evidence_tier = "suspicious" if weak_points >= 10 else "clear"
+    score = max(20, min(45, weak_points)) if evidence_tier == "suspicious" else min(15, weak_points)
+
+    return {
+        "risk_score": score,
+        "score": score,
+        "risk_level": _score_to_level(score),
+        "level": _score_to_level(score),
+        "evidence_tier": evidence_tier,
+        "suspicion_flags": _dedupe_list(flags, max_items=12),
+        "risk_reasons": _dedupe_list(reasons, max_items=8),
         "same_fingerprint_count": 0,
         "similar_name_count": 0,
         "same_age_bucket_count": 0,
@@ -928,134 +1085,16 @@ def _local_risk_profile(target: Optional[discord.abc.User]) -> Dict[str, Any]:
         "alt_cluster_key": "",
         "cluster_members": [],
         "fingerprint": _behavior_fingerprint(target),
-        "account_age_days": _account_age_days(target),
+        "account_age_days": age_days,
         "account_age_human": _account_age_human(target),
-        "age_bucket": _age_bucket(target),
-        "default_avatar": _has_default_avatar(target),
-        "suspicious_name_pattern": False,
-        "repeated_char_pattern": False,
+        "age_bucket": _age_bucket(age_days),
+        "default_avatar": default_avatar,
+        "suspicious_name_pattern": suspicious_name,
+        "repeated_char_pattern": repeated_chars,
         "joined_after_creation_seconds": None,
         "joined_after_creation_human": "",
-        "is_bot_account": bool(getattr(target, "bot", False)) if target else False,
+        "is_bot_account": False,
     }
-
-    if target is None:
-        return profile
-
-    score = 0
-    flags: List[str] = []
-    reasons: List[str] = []
-
-    age_days = _account_age_days(target)
-    age_human = _account_age_human(target)
-    profile["account_age_days"] = age_days
-    profile["account_age_human"] = age_human
-    profile["age_bucket"] = _age_bucket(age_days)
-
-    if getattr(target, "bot", False):
-        flags.append("bot_account")
-        reasons.append("Discord marks this account as a bot.")
-        score = max(score, 25)
-
-    if _has_default_avatar(target):
-        flags.append("default_avatar")
-        reasons.append("Account is using the default Discord avatar.")
-        score = max(score, 10)
-
-    username = _username_for_checks(target)
-    lowered = username.lower()
-    digit_ratio = _digit_ratio(username)
-    repeat_run = _max_repeat_run(username)
-    digit_run = _max_digit_run(username)
-
-    suspicious_name = False
-    repeated_chars = False
-
-    if digit_ratio >= 0.65 and len(username) >= 6:
-        suspicious_name = True
-        flags.append("high_digit_ratio")
-        reasons.append("Username has an extremely high digit ratio.")
-        score = max(score, 30)
-    elif digit_ratio >= 0.45 and len(username) >= 6:
-        suspicious_name = True
-        flags.append("elevated_digit_ratio")
-        reasons.append("Username has an elevated digit ratio.")
-        score = max(score, 22)
-
-    if digit_run >= 4:
-        suspicious_name = True
-        flags.append("long_digit_run")
-        reasons.append("Username contains a long run of digits.")
-        score = max(score, 24)
-
-    if repeat_run >= 4:
-        repeated_chars = True
-        flags.append("repeated_chars")
-        reasons.append("Username contains repeated characters.")
-        score = max(score, 18)
-
-    if len(username) >= 8 and re.fullmatch(r"[a-z0-9._-]+", lowered or "") and digit_ratio >= 0.35:
-        suspicious_name = True
-        flags.append("synthetic_style_name")
-        reasons.append("Username pattern looks synthetic.")
-        score = max(score, 20)
-
-    impersonation_terms = ("admin", "mod", "moderator", "staff", "support", "helper", "official", "security")
-    if age_days <= 30 and any(term in lowered for term in impersonation_terms):
-        suspicious_name = True
-        flags.append("staff_style_name")
-        reasons.append("New account uses staff-leaning wording in the username.")
-        score = max(score, 20)
-
-    profile["suspicious_name_pattern"] = suspicious_name
-    profile["repeated_char_pattern"] = repeated_chars
-
-    if age_days < 1:
-        reasons.append("Account is extremely new.")
-        score = max(score, 35)
-    elif age_days < 3:
-        reasons.append("Account is very new.")
-        score = max(score, 25)
-    elif age_days < 7:
-        reasons.append("Account is new.")
-        score = max(score, 15)
-
-    join_gap_seconds, join_gap_human = _join_after_creation_delta(target)
-    profile["joined_after_creation_seconds"] = join_gap_seconds
-    profile["joined_after_creation_human"] = join_gap_human
-
-    if join_gap_seconds is not None:
-        if join_gap_seconds <= 300:
-            flags.append("instant_join_after_creation")
-            reasons.append("Joined the server within minutes of account creation.")
-            score = max(score, 40)
-        elif join_gap_seconds <= 3600:
-            flags.append("fast_join_after_creation")
-            reasons.append("Joined the server very soon after account creation.")
-            score = max(score, 30)
-        elif join_gap_seconds <= 86400:
-            flags.append("same_day_join_after_creation")
-            reasons.append("Joined the server the same day the account was created.")
-            score = max(score, 20)
-
-    deduped_flags: List[str] = []
-    for item in flags:
-        if item not in deduped_flags:
-            deduped_flags.append(item)
-
-    deduped_reasons: List[str] = []
-    for item in reasons:
-        if item not in deduped_reasons:
-            deduped_reasons.append(item)
-
-    profile["suspicion_flags"] = deduped_flags[:12]
-    profile["risk_reasons"] = deduped_reasons[:8]
-    profile["risk_score"] = max(0, min(100, int(score)))
-    profile["score"] = profile["risk_score"]
-    profile["risk_level"] = _score_to_level(profile["risk_score"])
-    profile["level"] = profile["risk_level"]
-
-    return profile
 
 
 def _build_merged_risk_source(
@@ -1071,66 +1110,80 @@ def _build_merged_risk_source(
     live = _normalized_live_profile(target, live_profile or {})
     local = _local_risk_profile(target)
 
-    computed_age_days = _account_age_days(target)
-    merged: Dict[str, Any] = {}
+    def _has_risk_payload(data: Dict[str, Any]) -> bool:
+        return bool(
+            _value_is_meaningful(data.get("risk_score"), allow_zero=True)
+            or _value_is_meaningful(data.get("risk_level"))
+            or _value_is_meaningful(data.get("evidence_tier"))
+            or _value_is_meaningful(data.get("risk_reasons"))
+            or _value_is_meaningful(data.get("suspicion_flags"))
+            or _value_is_meaningful(data.get("alt_cluster_key"))
+            or _value_is_meaningful(data.get("same_fingerprint_count"), allow_zero=True)
+            or _value_is_meaningful(data.get("similar_name_count"), allow_zero=True)
+        )
 
-    merged["risk_score"] = _pick_max_int(
-        live.get("risk_score"),
-        live.get("score"),
-        local.get("risk_score"),
-        local.get("score"),
-        join.get("risk_score"),
-        join.get("score"),
-        db.get("risk_score"),
-        db.get("score"),
-        default=0,
+    authoritative = None
+    for candidate in (live, join, db, local):
+        if isinstance(candidate, dict) and _has_risk_payload(candidate):
+            authoritative = dict(candidate)
+            break
+
+    if authoritative is None:
+        authoritative = dict(local)
+
+    merged = dict(authoritative)
+    computed_age_days = _account_age_days(target)
+
+    merged["risk_score"] = _safe_int(
+        _pick_first_meaningful(
+            authoritative.get("risk_score"),
+            authoritative.get("score"),
+            default=0,
+            allow_zero=True,
+        ),
+        0,
     )
     merged["score"] = merged["risk_score"]
 
-    explicit_level = _safe_str(
+    merged["risk_level"] = _safe_str(
         _pick_first_meaningful(
-            live.get("risk_level"),
-            live.get("level"),
-            local.get("risk_level"),
-            local.get("level"),
-            join.get("risk_level"),
-            join.get("level"),
-            db.get("risk_level"),
-            db.get("level"),
-            default="low",
+            authoritative.get("risk_level"),
+            authoritative.get("level"),
+            default=_score_to_level(merged["risk_score"]),
         ),
-        "low",
-    ).lower()
-
-    merged["account_age_days"] = _pick_max_int(
-        live.get("account_age_days"),
-        live.get("age_days"),
-        local.get("account_age_days"),
-        join.get("account_age_days"),
-        join.get("age_days"),
-        db.get("account_age_days"),
-        db.get("age_days"),
-        computed_age_days,
-        default=0,
+        _score_to_level(merged["risk_score"]),
     )
-    if merged["account_age_days"] < 0:
-        merged["account_age_days"] = 0
+    merged["level"] = merged["risk_level"]
 
+    merged["evidence_tier"] = _safe_str(
+        _pick_first_meaningful(
+            authoritative.get("evidence_tier"),
+            default="clear",
+        ),
+        "clear",
+    )
+
+    merged["account_age_days"] = _safe_int(
+        _pick_first_meaningful(
+            authoritative.get("account_age_days"),
+            authoritative.get("age_days"),
+            computed_age_days,
+            default=0,
+            allow_zero=True,
+        ),
+        computed_age_days,
+    )
     merged["account_age_human"] = _safe_str(
         _pick_first_meaningful(
-            live.get("account_age_human"),
-            local.get("account_age_human"),
+            authoritative.get("account_age_human"),
+            _account_age_human(target),
             default=_account_age_human(target),
         ),
         _account_age_human(target),
     )
-
     merged["age_bucket"] = _safe_str(
         _pick_first_meaningful(
-            live.get("age_bucket"),
-            local.get("age_bucket"),
-            join.get("age_bucket"),
-            db.get("age_bucket"),
+            authoritative.get("age_bucket"),
             _age_bucket(merged["account_age_days"]),
             default="unknown",
         ),
@@ -1139,24 +1192,13 @@ def _build_merged_risk_source(
 
     merged["fingerprint"] = _safe_str(
         _pick_first_meaningful(
-            live.get("fingerprint"),
-            local.get("fingerprint"),
-            db.get("last_join_fingerprint"),
-            db.get("fingerprint"),
-            join.get("fingerprint"),
+            authoritative.get("fingerprint"),
+            authoritative.get("last_join_fingerprint"),
             _behavior_fingerprint(target),
             default="",
         )
     )
-    merged["last_join_fingerprint"] = _safe_str(
-        _pick_first_meaningful(
-            db.get("last_join_fingerprint"),
-            live.get("last_join_fingerprint"),
-            join.get("last_join_fingerprint"),
-            merged.get("fingerprint"),
-            default="",
-        )
-    )
+    merged["last_join_fingerprint"] = merged["fingerprint"]
 
     for key in (
         "alt_cluster_size",
@@ -1165,33 +1207,25 @@ def _build_merged_risk_source(
         "similar_name_count",
         "same_age_bucket_count",
     ):
-        merged[key] = _pick_max_int(
-            live.get(key),
-            live.get("burst_count") if key == "burst_join_count" else None,
-            local.get(key),
-            join.get(key),
-            join.get("burst_count") if key == "burst_join_count" else None,
-            db.get(key),
-            db.get("burst_count") if key == "burst_join_count" else None,
-            default=0,
+        merged[key] = _safe_int(
+            _pick_first_meaningful(
+                authoritative.get(key),
+                default=0,
+                allow_zero=True,
+            ),
+            0,
         )
 
     merged["alt_cluster_key"] = _safe_str(
         _pick_first_meaningful(
-            live.get("alt_cluster_key"),
-            local.get("alt_cluster_key"),
-            join.get("alt_cluster_key"),
-            db.get("alt_cluster_key"),
+            authoritative.get("alt_cluster_key"),
             default="",
         )
     )
     merged["warn_count"] = max(0, int(warn_count or 0))
     merged["default_avatar"] = _safe_bool(
         _pick_first_meaningful(
-            live.get("default_avatar"),
-            local.get("default_avatar"),
-            join.get("default_avatar"),
-            db.get("default_avatar"),
+            authoritative.get("default_avatar"),
             default=False,
             allow_zero=True,
         ),
@@ -1199,10 +1233,7 @@ def _build_merged_risk_source(
     )
     merged["suspicious_name_pattern"] = _safe_bool(
         _pick_first_meaningful(
-            live.get("suspicious_name_pattern"),
-            local.get("suspicious_name_pattern"),
-            join.get("suspicious_name_pattern"),
-            db.get("suspicious_name_pattern"),
+            authoritative.get("suspicious_name_pattern"),
             default=False,
             allow_zero=True,
         ),
@@ -1210,109 +1241,65 @@ def _build_merged_risk_source(
     )
     merged["repeated_char_pattern"] = _safe_bool(
         _pick_first_meaningful(
-            live.get("repeated_char_pattern"),
-            local.get("repeated_char_pattern"),
-            join.get("repeated_char_pattern"),
-            db.get("repeated_char_pattern"),
+            authoritative.get("repeated_char_pattern"),
             default=False,
             allow_zero=True,
         ),
         False,
     )
-    merged["joined_after_creation_seconds"] = _pick_max_int(
-        local.get("joined_after_creation_seconds"),
-        join.get("joined_after_creation_seconds"),
-        db.get("joined_after_creation_seconds"),
-        default=0,
+    merged["joined_after_creation_seconds"] = _pick_first_meaningful(
+        authoritative.get("joined_after_creation_seconds"),
+        default=None,
+        allow_zero=True,
     )
-    if merged["joined_after_creation_seconds"] <= 0:
-        merged["joined_after_creation_seconds"] = None
-
     merged["joined_after_creation_human"] = _safe_str(
         _pick_first_meaningful(
-            local.get("joined_after_creation_human"),
-            join.get("joined_after_creation_human"),
-            db.get("joined_after_creation_human"),
+            authoritative.get("joined_after_creation_human"),
             default="",
         )
     )
 
     merged["is_bot_account"] = _safe_bool(
         _pick_first_meaningful(
-            local.get("is_bot_account"),
-            live.get("is_bot_account"),
-            join.get("is_bot_account"),
-            db.get("is_bot_account"),
-            default=False,
+            authoritative.get("is_bot_account"),
+            default=bool(getattr(target, "bot", False)) if target else False,
             allow_zero=True,
         ),
-        False,
+        bool(getattr(target, "bot", False)) if target else False,
     )
 
     merged["suspicion_flags"] = _merge_unique_strings(
-        _extract_flags_from_profile_like(live),
-        _extract_flags_from_profile_like(local),
-        _extract_flags_from_profile_like(join),
-        _extract_flags_from_profile_like(db),
-        live.get("suspicion_flags"),
-        local.get("suspicion_flags"),
-        join.get("suspicion_flags"),
-        db.get("suspicion_flags"),
+        authoritative.get("suspicion_flags"),
         max_items=12,
     )
     merged["risk_reasons"] = _merge_unique_strings(
-        live.get("risk_reasons"),
-        live.get("reasons"),
-        local.get("risk_reasons"),
-        local.get("reasons"),
-        join.get("risk_reasons"),
-        join.get("reasons"),
-        db.get("risk_reasons"),
-        db.get("reasons"),
+        authoritative.get("risk_reasons"),
+        authoritative.get("reasons"),
         max_items=8,
     )
     merged["cluster_members"] = _merge_unique_dict_rows(
-        live.get("cluster_members"),
-        local.get("cluster_members"),
-        join.get("cluster_members"),
-        db.get("cluster_members"),
+        authoritative.get("cluster_members"),
         max_items=8,
     )
     merged["joined_at"] = _safe_str(_pick_first_meaningful(join.get("joined_at"), db.get("joined_at"), default=""))
     merged["entry_method"] = _safe_str(_pick_first_meaningful(join.get("entry_method"), db.get("entry_method"), default=""))
     merged["verification_source"] = _safe_str(_pick_first_meaningful(join.get("verification_source"), db.get("verification_source"), default=""))
 
-    same_fp = _safe_int(merged.get("same_fingerprint_count"), 0)
-    same_name = _safe_int(merged.get("similar_name_count"), 0)
-    same_age = _safe_int(merged.get("same_age_bucket_count"), 0)
-    burst = _safe_int(merged.get("burst_join_count"), 0)
-    cluster_size = _safe_int(merged.get("alt_cluster_size"), 0)
-
-    if same_fp >= 2:
-        merged["risk_score"] = max(_safe_int(merged["risk_score"], 0), 80)
-    elif same_fp == 1:
-        merged["risk_score"] = max(_safe_int(merged["risk_score"], 0), 60)
-
-    if cluster_size >= 4:
-        merged["risk_score"] = max(_safe_int(merged["risk_score"], 0), 65)
-    elif cluster_size >= 2:
-        merged["risk_score"] = max(_safe_int(merged["risk_score"], 0), 50)
-
-    if burst >= 5:
-        merged["risk_score"] = max(_safe_int(merged["risk_score"], 0), 60)
-    elif burst >= 3:
-        merged["risk_score"] = max(_safe_int(merged["risk_score"], 0), 45)
-
-    if same_name >= 2:
-        merged["risk_score"] = max(_safe_int(merged["risk_score"], 0), 45)
-
-    if same_age >= 5 and _safe_int(merged.get("account_age_days"), 0) <= 7:
-        merged["risk_score"] = max(_safe_int(merged["risk_score"], 0), 40)
-
-    score_level = _score_to_level(_safe_int(merged["risk_score"], 0))
-    merged["risk_level"] = explicit_level if _level_rank(explicit_level) >= _level_rank(score_level) else score_level
-    merged["level"] = merged["risk_level"]
-    merged["score"] = merged["risk_score"]
+    if merged["is_bot_account"]:
+        merged["risk_score"] = 0
+        merged["score"] = 0
+        merged["risk_level"] = "low"
+        merged["level"] = "low"
+        merged["evidence_tier"] = "clear"
+        merged["alt_cluster_size"] = 0
+        merged["burst_join_count"] = 0
+        merged["same_fingerprint_count"] = 0
+        merged["similar_name_count"] = 0
+        merged["same_age_bucket_count"] = 0
+        merged["alt_cluster_key"] = ""
+        merged["cluster_members"] = []
+        merged["risk_reasons"] = ["Discord marks this account as a bot; excluded from alt-risk scoring."]
+        merged["suspicion_flags"] = ["bot_account"]
 
     return merged
 
@@ -2087,6 +2074,8 @@ def sb_count_staff_actions_since(
 _STAFF_ALERT_LAST_SENT: Dict[str, datetime] = {}
 _QUICK_MOD_ACTION_LOCKS: Dict[str, asyncio.Lock] = {}
 _MODLOG_ROUTER_REGISTERED = False
+_RECENT_MODLOG_ACTIONS: Dict[str, datetime] = {}
+_DUPLICATE_MODLOG_WINDOW_SECONDS = 15
 
 
 def _quick_mod_lock(guild_id: int, target_id: int, action: str) -> asyncio.Lock:
@@ -2096,6 +2085,78 @@ def _quick_mod_lock(guild_id: int, target_id: int, action: str) -> asyncio.Lock:
         lock = asyncio.Lock()
         _QUICK_MOD_ACTION_LOCKS[key] = lock
     return lock
+
+
+def _recent_modlog_key(
+    *,
+    guild_id: int,
+    action: str,
+    actor_id: Optional[int],
+    target_id: Optional[int],
+    duration: Optional[str] = None,
+    until: Optional[datetime] = None,
+    added_roles: Optional[List[str]] = None,
+    removed_roles: Optional[List[str]] = None,
+) -> str:
+    a = str(action or "").strip().lower()
+    actor = int(actor_id or 0)
+    target = int(target_id or 0)
+    dur = str(duration or "").strip().lower()
+    until_key = ""
+    try:
+        if until:
+            until_key = _safe_dt_utc(until).replace(second=0, microsecond=0).isoformat()
+    except Exception:
+        until_key = ""
+
+    added_key = ",".join(sorted(str(x).strip().lower() for x in (added_roles or []) if str(x).strip()))
+    removed_key = ",".join(sorted(str(x).strip().lower() for x in (removed_roles or []) if str(x).strip()))
+
+    return f"{int(guild_id)}:{a}:{target}:{actor}:{dur}:{until_key}:{added_key}:{removed_key}"
+
+
+def _should_suppress_duplicate_modlog(
+    *,
+    guild_id: int,
+    action: str,
+    actor_id: Optional[int],
+    target_id: Optional[int],
+    duration: Optional[str] = None,
+    until: Optional[datetime] = None,
+    added_roles: Optional[List[str]] = None,
+    removed_roles: Optional[List[str]] = None,
+) -> bool:
+    action_clean = str(action or "").strip().lower()
+    if action_clean in {"member_join", "abuse_alert", "quick_mod_failed"}:
+        return False
+
+    now = _now_utc()
+    cutoff = timedelta(seconds=_DUPLICATE_MODLOG_WINDOW_SECONDS)
+
+    try:
+        for key, ts in list(_RECENT_MODLOG_ACTIONS.items()):
+            if (now - ts) > cutoff:
+                _RECENT_MODLOG_ACTIONS.pop(key, None)
+    except Exception:
+        pass
+
+    key = _recent_modlog_key(
+        guild_id=guild_id,
+        action=action_clean,
+        actor_id=actor_id,
+        target_id=target_id,
+        duration=duration,
+        until=until,
+        added_roles=added_roles,
+        removed_roles=removed_roles,
+    )
+
+    last = _RECENT_MODLOG_ACTIONS.get(key)
+    if last and (now - last) <= cutoff:
+        return True
+
+    _RECENT_MODLOG_ACTIONS[key] = now
+    return False
 
 
 # ==========================================================
@@ -2343,6 +2404,7 @@ def build_member_join_embed(
 
     score = _safe_int(normalized_profile.get("risk_score"), 0)
     level = _safe_str(normalized_profile.get("risk_level"), "low").lower()
+    tier = _safe_str(normalized_profile.get("evidence_tier"), "clear")
     age_days = _safe_int(normalized_profile.get("account_age_days"), _account_age_days(member))
     age_human = _safe_str(normalized_profile.get("account_age_human"), _account_age_human(member))
     age_bucket = _safe_str(normalized_profile.get("age_bucket"), _age_bucket(age_days))
@@ -2371,8 +2433,8 @@ def build_member_join_embed(
 
     risk_head = _join_nonempty(
         [
-            f"{level.upper()} risk",
-            f"Score: {score}/100",
+            tier.replace("_", " ").upper(),
+            f"{level.upper()} / {score}/100",
             f"Account age: {age_human}",
             f"Bucket: {age_bucket}" if age_bucket else "",
         ]
@@ -2527,6 +2589,24 @@ async def post_dashboard_mod_action_log(
     view: Optional[discord.ui.View] = None,
 ) -> None:
     try:
+        target_id = int(getattr(target, "id", 0) or 0) or None
+
+        if _should_suppress_duplicate_modlog(
+            guild_id=int(guild.id),
+            action=action,
+            actor_id=actor_id,
+            target_id=target_id,
+            duration=duration,
+            until=until,
+            added_roles=added_roles,
+            removed_roles=removed_roles,
+        ):
+            print(
+                f"ℹ️ Suppressed duplicate modlog entry "
+                f"guild={guild.id} action={action} target={target_id} actor={actor_id}"
+            )
+            return
+
         context_snapshot = await _fetch_member_context_snapshot(guild, target)
 
         embed = build_modlog_embed(
@@ -2544,7 +2624,6 @@ async def post_dashboard_mod_action_log(
         )
         await _post_modlog(guild, embed, view=view)
 
-        target_id = int(getattr(target, "id", 0) or 0) or None
         target_display = _member_display(target)
 
         snapshot_for_metadata = {
