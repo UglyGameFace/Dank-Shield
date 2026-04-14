@@ -214,6 +214,23 @@ def register_all_commands(bot: Any, tree: Any) -> None:
             pass
 
     # ------------------------------------------------------------
+    # Ticket automation admin
+    # ------------------------------------------------------------
+    try:
+        from .ticket_automation_admin import register_ticket_automation_admin_commands
+        register_ticket_automation_admin_commands(bot, tree)
+        try:
+            print("✅ commands_ext: registered ticket automation admin commands")
+        except Exception:
+            pass
+    except Exception as e:
+        errors.append(f"ticket_automation_admin: {repr(e)}")
+        try:
+            print(f"⚠️ commands_ext: failed registering ticket automation admin commands: {repr(e)}")
+        except Exception:
+            pass
+
+    # ------------------------------------------------------------
     # Moderation
     # ------------------------------------------------------------
     try:
