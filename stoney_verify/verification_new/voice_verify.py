@@ -53,6 +53,13 @@ except Exception:
         raise RuntimeError("verify_ui._issue_token_url unavailable")
 
 
+try:
+    from ..tickets_new.repository import safe_optional_update_by_channel_id
+except Exception:
+    async def safe_optional_update_by_channel_id(*args, **kwargs) -> bool:  # type: ignore
+        return False
+
+
 def _parse_iso_datetime(value: str) -> Optional[datetime]:
     try:
         text = str(value or "").strip()
@@ -478,6 +485,32 @@ def _vc_request_status_active(status: str) -> bool:
     }
 
 
+async def _update_ticket_vc_status(
+    *,
+    ticket_channel: Optional[discord.TextChannel],
+    status_text: str,
+    owner: Optional[discord.Member] = None,
+    staff_member: Optional[discord.Member] = None,
+) -> None:
+    if not isinstance(ticket_channel, discord.TextChannel):
+        return
+
+    try:
+        payload: Dict[str, Any] = {
+            "decision": status_text,
+            "closed_reason": status_text,
+        }
+        if isinstance(owner, discord.Member):
+            payload["user_id"] = str(owner.id)
+            payload["username"] = str(owner)
+        if isinstance(staff_member, discord.Member):
+            payload["assigned_to"] = str(staff_member.id)
+            payload["claimed_by"] = str(staff_member.id)
+        await safe_optional_update_by_channel_id(ticket_channel.id, payload)
+    except Exception:
+        pass
+
+
 async def _upsert_ticket_vc_accept_message(
     *,
     guild: discord.Guild,
@@ -829,6 +862,13 @@ async def queue_vc_request(
         except Exception:
             pass
 
+    await _update_ticket_vc_status(
+        ticket_channel=ticket_channel,
+        status_text="VC REQUESTED",
+        owner=owner if isinstance(owner, discord.Member) else None,
+        staff_member=None,
+    )
+
     await _safe_send(
         ticket_channel,
         (
@@ -973,6 +1013,13 @@ async def accept_vc_request(
         view=_build_ticket_vc_staff_controls(tok),
     )
 
+    await _update_ticket_vc_status(
+        ticket_channel=ticket_channel,
+        status_text="VC ACCEPTED",
+        owner=owner,
+        staff_member=staff_member,
+    )
+
     await _upsert_ticket_vc_accept_message(
         guild=guild,
         ticket_channel=ticket_channel,
@@ -1064,6 +1111,13 @@ async def request_upload_instead(
     await _mark_request_status(
         tok,
         status="UPLOAD_REQUESTED",
+        staff_member=staff_member,
+    )
+
+    await _update_ticket_vc_status(
+        ticket_channel=ticket_channel,
+        status_text="VC UPLOAD REQUESTED",
+        owner=owner if isinstance(owner, discord.Member) else None,
         staff_member=staff_member,
     )
 
@@ -1222,6 +1276,13 @@ async def reissue_vc_token(
         view=None,
     )
 
+    await _update_ticket_vc_status(
+        ticket_channel=ticket_channel,
+        status_text="VC REISSUED",
+        owner=owner if isinstance(owner, discord.Member) else None,
+        staff_member=staff_member,
+    )
+
     return _result(
         True,
         "VC token reissued.",
@@ -1298,6 +1359,13 @@ async def approve_vc_request(
                 "approved_by": int(staff_member.id),
                 "approved_at": _utc_now().isoformat(),
             },
+        )
+
+        await _update_ticket_vc_status(
+            ticket_channel=ticket_channel if isinstance(ticket_channel, discord.TextChannel) else None,
+            status_text="APPROVED (VC)",
+            owner=owner if isinstance(owner, discord.Member) else None,
+            staff_member=staff_member,
         )
 
         await _end_vc_session_record(
@@ -1381,6 +1449,13 @@ async def deny_vc_request(
             },
         )
 
+        await _update_ticket_vc_status(
+            ticket_channel=ticket_channel if isinstance(ticket_channel, discord.TextChannel) else None,
+            status_text="DENIED (VC)",
+            owner=owner if isinstance(owner, discord.Member) else None,
+            staff_member=staff_member,
+        )
+
         await _end_vc_session_record(
             guild=guild,
             token=tok,
@@ -1451,6 +1526,13 @@ async def end_vc_session(
         extra={
             "ended_reason": str(reason),
         },
+    )
+
+    await _update_ticket_vc_status(
+        ticket_channel=ticket_channel if isinstance(ticket_channel, discord.TextChannel) else None,
+        status_text="VC ENDED",
+        owner=owner if isinstance(owner, discord.Member) else None,
+        staff_member=staff_member,
     )
 
     await _end_vc_session_record(
@@ -1542,6 +1624,13 @@ async def takeover_vc_request(
         },
     )
 
+    await _update_ticket_vc_status(
+        ticket_channel=ticket_channel,
+        status_text="VC TAKEN OVER",
+        owner=owner if isinstance(owner, discord.Member) else None,
+        staff_member=staff_member,
+    )
+
     await _safe_send(
         ticket_channel,
         (
@@ -1615,6 +1704,13 @@ async def unlock_vc_request(
     await _mark_request_status(
         tok,
         status="COMPLETED",
+        staff_member=staff_member,
+    )
+
+    await _update_ticket_vc_status(
+        ticket_channel=ticket_channel if isinstance(ticket_channel, discord.TextChannel) else None,
+        status_text="VC RESET",
+        owner=owner if isinstance(owner, discord.Member) else None,
         staff_member=staff_member,
     )
 
