@@ -78,6 +78,142 @@ def register_all_commands(bot: Any, tree: Any) -> None:
             pass
 
     # ------------------------------------------------------------
+    # Ticket channel admin
+    # ------------------------------------------------------------
+    try:
+        from .ticket_channel_admin import register_ticket_channel_admin_commands
+        register_ticket_channel_admin_commands(bot, tree)
+        try:
+            print("✅ commands_ext: registered ticket channel admin commands")
+        except Exception:
+            pass
+    except Exception as e:
+        errors.append(f"ticket_channel_admin: {repr(e)}")
+        try:
+            print(f"⚠️ commands_ext: failed registering ticket channel admin commands: {repr(e)}")
+        except Exception:
+            pass
+
+    # ------------------------------------------------------------
+    # Ticket intake / routing admin
+    # ------------------------------------------------------------
+    try:
+        from .ticket_intake_admin import register_ticket_intake_admin_commands
+        register_ticket_intake_admin_commands(bot, tree)
+        try:
+            print("✅ commands_ext: registered ticket intake admin commands")
+        except Exception:
+            pass
+    except Exception as e:
+        errors.append(f"ticket_intake_admin: {repr(e)}")
+        try:
+            print(f"⚠️ commands_ext: failed registering ticket intake admin commands: {repr(e)}")
+        except Exception:
+            pass
+
+    # ------------------------------------------------------------
+    # Ticket queue / history admin
+    # ------------------------------------------------------------
+    try:
+        from .ticket_queue_admin import register_ticket_queue_admin_commands
+        register_ticket_queue_admin_commands(bot, tree)
+        try:
+            print("✅ commands_ext: registered ticket queue admin commands")
+        except Exception:
+            pass
+    except Exception as e:
+        errors.append(f"ticket_queue_admin: {repr(e)}")
+        try:
+            print(f"⚠️ commands_ext: failed registering ticket queue admin commands: {repr(e)}")
+        except Exception:
+            pass
+
+    # ------------------------------------------------------------
+    # Ticket category admin
+    # ------------------------------------------------------------
+    try:
+        from .ticket_category_admin import register_ticket_category_admin_commands
+        register_ticket_category_admin_commands(bot, tree)
+        try:
+            print("✅ commands_ext: registered ticket category admin commands")
+        except Exception:
+            pass
+    except Exception as e:
+        errors.append(f"ticket_category_admin: {repr(e)}")
+        try:
+            print(f"⚠️ commands_ext: failed registering ticket category admin commands: {repr(e)}")
+        except Exception:
+            pass
+
+    # ------------------------------------------------------------
+    # Ticket governance / guardrails admin
+    # ------------------------------------------------------------
+    try:
+        from .ticket_governance_admin import register_ticket_governance_admin_commands
+        register_ticket_governance_admin_commands(bot, tree)
+        try:
+            print("✅ commands_ext: registered ticket governance admin commands")
+        except Exception:
+            pass
+    except Exception as e:
+        errors.append(f"ticket_governance_admin: {repr(e)}")
+        try:
+            print(f"⚠️ commands_ext: failed registering ticket governance admin commands: {repr(e)}")
+        except Exception:
+            pass
+
+    # ------------------------------------------------------------
+    # Ticket SLA admin
+    # ------------------------------------------------------------
+    try:
+        from .ticket_sla_admin import register_ticket_sla_admin_commands
+        register_ticket_sla_admin_commands(bot, tree)
+        try:
+            print("✅ commands_ext: registered ticket SLA admin commands")
+        except Exception:
+            pass
+    except Exception as e:
+        errors.append(f"ticket_sla_admin: {repr(e)}")
+        try:
+            print(f"⚠️ commands_ext: failed registering ticket SLA admin commands: {repr(e)}")
+        except Exception:
+            pass
+
+    # ------------------------------------------------------------
+    # Ticket resolution admin
+    # ------------------------------------------------------------
+    try:
+        from .ticket_resolution_admin import register_ticket_resolution_admin_commands
+        register_ticket_resolution_admin_commands(bot, tree)
+        try:
+            print("✅ commands_ext: registered ticket resolution admin commands")
+        except Exception:
+            pass
+    except Exception as e:
+        errors.append(f"ticket_resolution_admin: {repr(e)}")
+        try:
+            print(f"⚠️ commands_ext: failed registering ticket resolution admin commands: {repr(e)}")
+        except Exception:
+            pass
+
+    # ------------------------------------------------------------
+    # Ticket macro admin
+    # ------------------------------------------------------------
+    try:
+        from .ticket_macro_admin import register_ticket_macro_admin_commands
+        register_ticket_macro_admin_commands(bot, tree)
+        try:
+            print("✅ commands_ext: registered ticket macro admin commands")
+        except Exception:
+            pass
+    except Exception as e:
+        errors.append(f"ticket_macro_admin: {repr(e)}")
+        try:
+            print(f"⚠️ commands_ext: failed registering ticket macro admin commands: {repr(e)}")
+        except Exception:
+            pass
+
+    # ------------------------------------------------------------
     # Moderation
     # ------------------------------------------------------------
     try:
