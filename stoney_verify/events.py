@@ -11,7 +11,7 @@ import discord
 
 from .globals import *
 
-# Split-out admin slash commands (guarded against duplicate registration)
+# Split-out admin slash commands
 from . import verify_admin_commands  # noqa: F401
 
 from .raidguard import (
@@ -43,9 +43,15 @@ except Exception:
     vc_sessions = None  # type: ignore
 
 try:
-    from .tickets_new.service import find_open_ticket_for_owner
+    from .tickets_new.service import (
+        find_open_ticket_for_owner,
+        mark_ticket_closed as tickets_mark_ticket_closed,
+        mark_ticket_deleted as tickets_mark_ticket_deleted,
+    )
 except Exception:
     find_open_ticket_for_owner = None  # type: ignore
+    tickets_mark_ticket_closed = None  # type: ignore
+    tickets_mark_ticket_deleted = None  # type: ignore
 
 try:
     from .channel_cleanup import ensure_channel_cleanup_worker_started
@@ -53,8 +59,7 @@ except Exception:
     async def ensure_channel_cleanup_worker_started() -> bool:
         return False
 
-# NEW: timer helpers from commands.py
-# app.py imports commands BEFORE events, so this is safe in your current load order.
+# Timer helpers from commands.py
 try:
     from .commands import (
         start_join_grace_then_kick_timer_for_member,
@@ -73,7 +78,7 @@ except Exception:
 
 
 # ============================================================
-# ✅ Internal helpers (defensive shape repair)
+# Internal helpers
 # ============================================================
 
 def _ensure_gid_dict_of_lists(container: Any, gid: int) -> None:
@@ -195,9 +200,7 @@ def _member_is_pending_verification(member: discord.Member) -> bool:
 
 def _as_int(v: Any, default: int = 0) -> int:
     try:
-        if v is None:
-            return default
-        if isinstance(v, bool):
+        if v is None or isinstance(v, bool):
             return default
         return int(str(v).strip())
     except Exception:
@@ -206,9 +209,7 @@ def _as_int(v: Any, default: int = 0) -> int:
 
 def _as_float(v: Any, default: float = 0.0) -> float:
     try:
-        if v is None:
-            return default
-        if isinstance(v, bool):
+        if v is None or isinstance(v, bool):
             return default
         return float(str(v).strip())
     except Exception:
@@ -314,6 +315,13 @@ def _derive_suspicion_flags_from_profile(profile: Dict[str, Any]) -> List[str]:
     return flags[:20]
 
 
+def _sync_iso_now() -> str:
+    try:
+        return now_utc().isoformat()
+    except Exception:
+        return datetime.now(timezone.utc).isoformat()
+
+
 def _build_risk_payload_from_profile(
     risk_profile: Optional[Dict[str, Any]],
     *,
@@ -389,7 +397,6 @@ def _extract_existing_risk_payload(existing: Dict[str, Any]) -> Dict[str, Any]:
         return {}
 
     out: Dict[str, Any] = {}
-
     for key in (
         "risk_score",
         "risk_level",
@@ -418,99 +425,11 @@ def _extract_existing_risk_payload(existing: Dict[str, Any]) -> Dict[str, Any]:
     ):
         if key in existing:
             out[key] = existing.get(key)
-
     return out
 
 
-async def _resolve_unverified_chat_channel(guild: discord.Guild) -> Optional[discord.TextChannel]:
-    """
-    Best-effort fallback channel for verification timer notices when no ticket exists yet.
-    Priority:
-    1) explicit configured IDs
-    2) exact name match: unverified-chat
-    3) looser unverified/verify waiting-room style names
-    """
-    candidate_ids: List[int] = []
-
-    for key in (
-        "UNVERIFIED_CHAT_CHANNEL_ID",
-        "UNVERIFIED_ONLY_CHAT_CHANNEL_ID",
-        "VERIFY_WAIT_CHANNEL_ID",
-        "VERIFY_HELP_CHANNEL_ID",
-        "UNVERIFIED_CHANNEL_ID",
-    ):
-        try:
-            raw = globals().get(key)
-            cid = _as_int(raw, 0)
-            if cid > 0 and cid not in candidate_ids:
-                candidate_ids.append(cid)
-        except Exception:
-            pass
-
-    for key in (
-        "UNVERIFIED_CHAT_CHANNEL_ID",
-        "UNVERIFIED_ONLY_CHAT_CHANNEL_ID",
-        "VERIFY_WAIT_CHANNEL_ID",
-        "VERIFY_HELP_CHANNEL_ID",
-        "UNVERIFIED_CHANNEL_ID",
-    ):
-        try:
-            raw = os.getenv(key, "")
-            cid = _as_int(raw, 0)
-            if cid > 0 and cid not in candidate_ids:
-                candidate_ids.append(cid)
-        except Exception:
-            pass
-
-    for cid in candidate_ids:
-        try:
-            ch = guild.get_channel(int(cid))
-            if isinstance(ch, discord.TextChannel):
-                return ch
-        except Exception:
-            pass
-
-        try:
-            fetched = await guild.fetch_channel(int(cid))
-            if isinstance(fetched, discord.TextChannel):
-                return fetched
-        except Exception:
-            pass
-
-    exact_names = {
-        "unverified-chat",
-        "unverified",
-        "verify-chat",
-        "verification-chat",
-    }
-
-    fuzzy_terms = (
-        "unverified",
-        "verify",
-        "verification",
-    )
-
-    try:
-        for ch in list(guild.text_channels):
-            name = str(getattr(ch, "name", "") or "").strip().lower()
-            if name in exact_names:
-                return ch
-    except Exception:
-        pass
-
-    try:
-        for ch in list(guild.text_channels):
-            name = str(getattr(ch, "name", "") or "").strip().lower()
-            if any(term in name for term in fuzzy_terms):
-                return ch
-    except Exception:
-        pass
-
-    return None
-
-
 # ============================================================
-# ✅ Async wrappers for blocking Supabase/PostgREST work
+# Async wrappers for blocking Supabase work
 # ============================================================
 
 async def _run_blocking_db(fn, *args, **kwargs):
@@ -656,7 +575,7 @@ async def _bulk_mark_departed_members_async(sb: Any, guild_id: str, active_ids: 
 
 
 # ============================================================
-# ✅ Verification ticket cleanup helpers (Option A)
+# Verification ticket cleanup helpers
 # ============================================================
 
 async def _auto_close_verification_ticket_for_departed_member(
@@ -698,12 +617,6 @@ async def _auto_close_verification_ticket_for_departed_member(
         except Exception:
             send_tickettool_style_transcript = None  # type: ignore
 
-        try:
-            from .tickets_new.service import mark_ticket_closed, mark_ticket_deleted
-        except Exception:
-            mark_ticket_closed = None  # type: ignore
-            mark_ticket_deleted = None  # type: ignore
-
         if isinstance(channel, discord.TextChannel):
             print(
                 f"🧹 Auto-closing verification ticket for departed member "
@@ -724,8 +637,8 @@ async def _auto_close_verification_ticket_for_departed_member(
 
             deleted_ok = False
             try:
-                if mark_ticket_deleted:
-                    deleted_ok = await mark_ticket_deleted(
+                if tickets_mark_ticket_deleted:
+                    deleted_ok = await tickets_mark_ticket_deleted(
                         channel_id=channel.id,
                         deleted_by=None,
                         reason=leave_reason,
@@ -735,8 +648,8 @@ async def _auto_close_verification_ticket_for_departed_member(
 
             if not deleted_ok:
                 try:
-                    if mark_ticket_closed:
-                        await mark_ticket_closed(
+                    if tickets_mark_ticket_closed:
+                        await tickets_mark_ticket_closed(
                             channel=channel,
                             closed_by=None,
                             reason=leave_reason,
@@ -753,8 +666,8 @@ async def _auto_close_verification_ticket_for_departed_member(
             return
 
         try:
-            if mark_ticket_deleted:
-                await mark_ticket_deleted(
+            if tickets_mark_ticket_deleted:
+                await tickets_mark_ticket_deleted(
                     channel_id=channel_id,
                     deleted_by=None,
                     reason=leave_reason,
@@ -829,12 +742,6 @@ async def _reconcile_stale_open_verification_tickets() -> None:
                 except Exception:
                     send_tickettool_style_transcript = None  # type: ignore
 
-                try:
-                    from .tickets_new.service import mark_ticket_closed, mark_ticket_deleted
-                except Exception:
-                    mark_ticket_closed = None  # type: ignore
-                    mark_ticket_deleted = None  # type: ignore
-
                 if isinstance(channel, discord.TextChannel):
                     try:
                         if send_tickettool_style_transcript:
@@ -850,8 +757,8 @@ async def _reconcile_stale_open_verification_tickets() -> None:
 
                     deleted_ok = False
                     try:
-                        if mark_ticket_deleted:
-                            deleted_ok = await mark_ticket_deleted(
+                        if tickets_mark_ticket_deleted:
+                            deleted_ok = await tickets_mark_ticket_deleted(
                                 channel_id=channel.id,
                                 deleted_by=None,
                                 reason="AUTO CLOSED: user already left server",
@@ -861,8 +768,8 @@ async def _reconcile_stale_open_verification_tickets() -> None:
 
                     if not deleted_ok:
                         try:
-                            if mark_ticket_closed:
-                                await mark_ticket_closed(
+                            if tickets_mark_ticket_closed:
+                                await tickets_mark_ticket_closed(
                                     channel=channel,
                                     closed_by=None,
                                     reason="AUTO CLOSED: user already left server",
@@ -876,8 +783,8 @@ async def _reconcile_stale_open_verification_tickets() -> None:
                         print(f"⚠️ Startup ticket delete failed channel={channel.id}: {repr(e)}")
                 else:
                     try:
-                        if mark_ticket_deleted:
-                            await mark_ticket_deleted(
+                        if tickets_mark_ticket_deleted:
+                            await tickets_mark_ticket_deleted(
                                 channel_id=channel_id,
                                 deleted_by=None,
                                 reason="AUTO CLOSED: user already left server",
@@ -898,16 +805,8 @@ async def _reconcile_stale_open_verification_tickets() -> None:
 
 
 # ============================================================
-# ✅ Dashboard / Supabase member sync helpers
+# Dashboard / Supabase member sync helpers
 # ============================================================
-
-def _sync_iso_now() -> str:
-    try:
-        return now_utc().isoformat()
-    except Exception:
-        from datetime import datetime, timezone
-        return datetime.now(timezone.utc).isoformat()
-
 
 def _safe_member_username(member: discord.Member) -> str:
     try:
@@ -1494,11 +1393,6 @@ async def _mark_member_left(member: discord.Member) -> None:
 
 
 async def _initial_member_sync_sweep() -> None:
-    """
-    Full startup sweep:
-    - sync every current guild member into guild_members
-    - mark any tracked row not currently present as in_guild = false
-    """
     try:
         sb = get_supabase()
         if not sb:
@@ -1542,7 +1436,7 @@ async def _initial_member_sync_sweep() -> None:
 
 
 # ============================================================
-# ✅ Invite cache + entry-path persistence helpers
+# Invite cache + entry-path persistence helpers
 # ============================================================
 
 _INVITE_USES_CACHE: Dict[int, Dict[str, int]] = {}
@@ -1964,7 +1858,7 @@ async def _persist_member_join_context(
 
 
 # ============================================================
-# ✅ VC session helpers (owner + assigned staff only / relock)
+# VC session helpers
 # ============================================================
 
 def _vc_meta_dict(row: Dict[str, Any]) -> Dict[str, Any]:
@@ -2217,10 +2111,8 @@ async def _maybe_finish_vc_sessions_after_voice_change(
         print("⚠️ _maybe_finish_vc_sessions_after_voice_change error:", repr(e))
 
 
-# Guard to avoid double-modlog spam when we auto-remove Unverified
+# Guards
 _AUTO_UV_REMOVAL_TS: Dict[Tuple[int, int], Any] = {}
-
-# Guard to avoid duplicate watchdog tasks for the same member
 _JOIN_VERIFY_TASKS: Dict[Tuple[int, int], asyncio.Task] = {}
 
 
@@ -2438,6 +2330,86 @@ async def _ensure_unverified_on_join(member: discord.Member) -> bool:
         return False
 
 
+async def _resolve_unverified_chat_channel(guild: discord.Guild) -> Optional[discord.TextChannel]:
+    candidate_ids: List[int] = []
+
+    for key in (
+        "UNVERIFIED_CHAT_CHANNEL_ID",
+        "UNVERIFIED_ONLY_CHAT_CHANNEL_ID",
+        "VERIFY_WAIT_CHANNEL_ID",
+        "VERIFY_HELP_CHANNEL_ID",
+        "UNVERIFIED_CHANNEL_ID",
+    ):
+        try:
+            raw = globals().get(key)
+            cid = _as_int(raw, 0)
+            if cid > 0 and cid not in candidate_ids:
+                candidate_ids.append(cid)
+        except Exception:
+            pass
+
+    for key in (
+        "UNVERIFIED_CHAT_CHANNEL_ID",
+        "UNVERIFIED_ONLY_CHAT_CHANNEL_ID",
+        "VERIFY_WAIT_CHANNEL_ID",
+        "VERIFY_HELP_CHANNEL_ID",
+        "UNVERIFIED_CHANNEL_ID",
+    ):
+        try:
+            raw = os.getenv(key, "")
+            cid = _as_int(raw, 0)
+            if cid > 0 and cid not in candidate_ids:
+                candidate_ids.append(cid)
+        except Exception:
+            pass
+
+    for cid in candidate_ids:
+        try:
+            ch = guild.get_channel(int(cid))
+            if isinstance(ch, discord.TextChannel):
+                return ch
+        except Exception:
+            pass
+
+        try:
+            fetched = await guild.fetch_channel(int(cid))
+            if isinstance(fetched, discord.TextChannel):
+                return fetched
+        except Exception:
+            pass
+
+    exact_names = {
+        "unverified-chat",
+        "unverified",
+        "verify-chat",
+        "verification-chat",
+    }
+
+    fuzzy_terms = (
+        "unverified",
+        "verify",
+        "verification",
+    )
+
+    try:
+        for ch in list(guild.text_channels):
+            name = str(getattr(ch, "name", "") or "").strip().lower()
+            if name in exact_names:
+                return ch
+    except Exception:
+        pass
+
+    try:
+        for ch in list(guild.text_channels):
+            name = str(getattr(ch, "name", "") or "").strip().lower()
+            if any(term in name for term in fuzzy_terms):
+                return ch
+    except Exception:
+        pass
+
+    return None
+
+
 async def _join_verification_watchdog(guild_id: int, member_id: int) -> None:
     key = (int(guild_id), int(member_id))
 
@@ -2448,10 +2420,7 @@ async def _join_verification_watchdog(guild_id: int, member_id: int) -> None:
             try:
                 guild = bot.get_guild(int(guild_id))
                 if guild is None:
-                    try:
-                        await asyncio.sleep(2.0)
-                    except Exception:
-                        pass
+                    await asyncio.sleep(2.0)
                     continue
 
                 try:
@@ -2596,7 +2565,7 @@ def _schedule_join_verification_watchdog(member: discord.Member) -> None:
 
 
 # ============================================================
-# ✅ MEMBER LOGS / RAID DETECTION / ALT CLUSTERING
+# MEMBER LOGS / RAID DETECTION / ALT CLUSTERING
 # ============================================================
 
 @bot.event
@@ -2697,10 +2666,6 @@ async def on_member_join(member: discord.Member):
 
         try:
             embed.set_thumbnail(url=member.display_avatar.url)
-        except Exception:
-            pass
-
-        try:
             embed.set_author(name=str(member), icon_url=member.display_avatar.url)
         except Exception:
             pass
@@ -2803,7 +2768,6 @@ async def on_member_join(member: discord.Member):
         if not getattr(member, "bot", False):
             try:
                 cutoff = now_utc() - timedelta(minutes=max(5, int(ALT_CLUSTER_WINDOW_MINUTES)))
-
                 for b, ts in list((ALT_JOIN_BUCKET_TS.get(gid) or {}).items()):
                     if ts < cutoff:
                         ALT_JOIN_BUCKET_TS[gid].pop(b, None)
@@ -2879,10 +2843,6 @@ async def on_member_remove(member: discord.Member):
                 pass
             return
 
-        # Do NOT log bans here anymore.
-        # on_member_ban is the authoritative ban path.
-        # We only suppress a fake "left" log if a recent ban audit already exists
-        # or appears moments later.
         suppress_leave_for_ban = False
         try:
             entry = await _audit_find_recent_ban(guild, int(member.id))
@@ -2973,7 +2933,6 @@ async def on_member_ban(guild: discord.Guild, user: discord.User):
             embed.add_field(name="Reason", value=f"`{reason or '—'}`", inline=False)
             await _post_modlog(guild, embed)
 
-        # Keep guild_members / ticket cleanup in the authoritative ban path too.
         try:
             member_like = guild.get_member(int(user.id))
             if member_like is None:
@@ -3217,92 +3176,10 @@ async def on_voice_state_update(
 
 
 # ============================================================
-# ✅ Startup wiring (runs once)
+# Startup wiring
 # ============================================================
 
-@bot.event
-async def on_ready():
-    try:
-        if getattr(bot, "_vc_sweeper_task", None) and not bot._vc_sweeper_task.done():  # type: ignore[attr-defined]
-            try:
-                if not getattr(bot, "_invite_cache_warm_started", False):  # type: ignore[attr-defined]
-                    try:
-                        bot._invite_cache_warm_started = True  # type: ignore[attr-defined]
-                    except Exception:
-                        pass
-
-                    async def _run_invite_cache_warm():
-                        try:
-                            await _warm_all_guild_invite_caches()
-                        except Exception as e:
-                            print("⚠️ background invite cache warm error:", e)
-                            try:
-                                traceback.print_exc()
-                            except Exception:
-                                pass
-
-                    asyncio.create_task(_run_invite_cache_warm())
-
-                if not getattr(bot, "_initial_member_sync_started", False):  # type: ignore[attr-defined]
-                    try:
-                        bot._initial_member_sync_started = True  # type: ignore[attr-defined]
-                    except Exception:
-                        pass
-
-                    async def _run_startup_member_sync():
-                        try:
-                            await _initial_member_sync_sweep()
-                            try:
-                                bot._initial_member_sync_done = True  # type: ignore[attr-defined]
-                            except Exception:
-                                pass
-                        except Exception as e:
-                            print("⚠️ background initial member sync error:", e)
-                            try:
-                                traceback.print_exc()
-                            except Exception:
-                                pass
-
-                    asyncio.create_task(_run_startup_member_sync())
-
-                if not getattr(bot, "_stale_verification_reconcile_started", False):  # type: ignore[attr-defined]
-                    try:
-                        bot._stale_verification_reconcile_started = True  # type: ignore[attr-defined]
-                    except Exception:
-                        pass
-
-                    async def _run_stale_verification_reconcile():
-                        try:
-                            await _reconcile_stale_open_verification_tickets()
-                        except Exception as e:
-                            print("⚠️ background stale verification reconciliation error:", e)
-                            try:
-                                traceback.print_exc()
-                            except Exception:
-                                pass
-
-                    asyncio.create_task(_run_stale_verification_reconcile())
-
-                try:
-                    started = await ensure_channel_cleanup_worker_started()
-                    print(f"🧹 Channel cleanup worker status: started={started}")
-                except Exception as e:
-                    print(f"⚠️ Failed starting channel cleanup worker: {repr(e)}")
-            except Exception:
-                pass
-            return
-    except Exception:
-        pass
-
-    try:
-        task = asyncio.create_task(vc_sweeper_loop(bot))
-        try:
-            bot._vc_sweeper_task = task  # type: ignore[attr-defined]
-        except Exception:
-            pass
-    except Exception:
-        pass
-
+async def _run_startup_once_flags() -> None:
     try:
         if not getattr(bot, "_invite_cache_warm_started", False):  # type: ignore[attr-defined]
             try:
@@ -3314,21 +3191,14 @@ async def on_ready():
                 try:
                     await _warm_all_guild_invite_caches()
                 except Exception as e:
-                    print("⚠️ on_ready invite cache warm error:", e)
+                    print("⚠️ invite cache warm error:", e)
                     try:
                         traceback.print_exc()
                     except Exception:
                         pass
 
             asyncio.create_task(_run_invite_cache_warm())
-    except Exception as e:
-        print("⚠️ on_ready invite cache warm scheduling error:", e)
-        try:
-            traceback.print_exc()
-        except Exception:
-            pass
 
-    try:
         if not getattr(bot, "_initial_member_sync_started", False):  # type: ignore[attr-defined]
             try:
                 bot._initial_member_sync_started = True  # type: ignore[attr-defined]
@@ -3343,21 +3213,14 @@ async def on_ready():
                     except Exception:
                         pass
                 except Exception as e:
-                    print("⚠️ on_ready background member sync sweep error:", e)
+                    print("⚠️ background initial member sync error:", e)
                     try:
                         traceback.print_exc()
                     except Exception:
                         pass
 
             asyncio.create_task(_run_startup_member_sync())
-    except Exception as e:
-        print("⚠️ on_ready member sync scheduling error:", e)
-        try:
-            traceback.print_exc()
-        except Exception:
-            pass
 
-    try:
         if not getattr(bot, "_stale_verification_reconcile_started", False):  # type: ignore[attr-defined]
             try:
                 bot._stale_verification_reconcile_started = True  # type: ignore[attr-defined]
@@ -3368,22 +3231,39 @@ async def on_ready():
                 try:
                     await _reconcile_stale_open_verification_tickets()
                 except Exception as e:
-                    print("⚠️ on_ready stale verification reconciliation error:", e)
+                    print("⚠️ stale verification reconciliation error:", e)
                     try:
                         traceback.print_exc()
                     except Exception:
                         pass
 
             asyncio.create_task(_run_stale_verification_reconcile())
-    except Exception as e:
-        print("⚠️ on_ready stale verification reconciliation scheduling error:", e)
+
         try:
-            traceback.print_exc()
-        except Exception:
-            pass
+            started = await ensure_channel_cleanup_worker_started()
+            print(f"🧹 Channel cleanup worker status: started={started}")
+        except Exception as e:
+            print(f"⚠️ Failed starting channel cleanup worker: {repr(e)}")
+    except Exception:
+        pass
+
+
+@bot.event
+async def on_ready():
+    try:
+        if getattr(bot, "_vc_sweeper_task", None) and not bot._vc_sweeper_task.done():  # type: ignore[attr-defined]
+            await _run_startup_once_flags()
+            return
+    except Exception:
+        pass
 
     try:
-        started = await ensure_channel_cleanup_worker_started()
-        print(f"🧹 Channel cleanup worker status: started={started}")
-    except Exception as e:
-        print(f"⚠️ Failed starting channel cleanup worker: {repr(e)}")
+        task = asyncio.create_task(vc_sweeper_loop(bot))
+        try:
+            bot._vc_sweeper_task = task  # type: ignore[attr-defined]
+        except Exception:
+            pass
+    except Exception:
+        pass
+
+    await _run_startup_once_flags()
