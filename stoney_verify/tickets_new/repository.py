@@ -11,29 +11,20 @@ import discord
 
 from ..globals import get_supabase, now_utc, reset_supabase
 
-# ====
+# ============================================================
 # tickets_new/repository.py
-# ----
+# ------------------------------------------------------------
 # Purpose:
 # - centralize tickets-table CRUD
 # - centralize ticket notes CRUD
 # - centralize ticket messages reads/writes
 # - centralize ticket activity-feed reads/writes
 # - centralize member_joins inserts
+# - centralize ticket-user linking helpers
 # - handle mixed old/new schema safely
 # - support both channel_id and discord_thread_id lookup paths
-# - stay compatible with the existing tickets_new/service.py flow
-#
-# Current real schema support:
-#   table: tickets
-#   table: ticket_notes
-#   table: ticket_messages
-#   table: activity_feed_events
-#   table: member_joins
-#
-# Legacy fallback support:
-#   table: ticket_internal_notes
-# ====
+# - stay compatible with tickets_new/service.py and dashboard consumers
+# ============================================================
 
 TICKETS_TABLE = "tickets"
 TICKET_NOTES_TABLE = "ticket_notes"
@@ -67,7 +58,6 @@ _OPTIONAL_TICKET_COLUMNS: Set[str] = {
     "matched_intake_type",
     "matched_category_reason",
     "matched_category_score",
-    # compatibility / optional columns used elsewhere
     "last_activity_at",
     "last_message_id",
     "panel_message_id",
@@ -78,6 +68,14 @@ _OPTIONAL_TICKET_COLUMNS: Set[str] = {
     "reopen_reason",
     "close_reason",
     "delete_reason",
+    "owner_id",         # compatibility alias
+    "owner_name",       # compatibility alias
+    "requester_id",     # compatibility alias
+    "requester_name",   # compatibility alias
+    "claimed_by_name",
+    "assigned_to_name",
+    "closed_by_name",
+    "deleted_by_name",
 }
 
 # None = unknown / auto-detect, True = supported, False = unsupported
@@ -94,10 +92,7 @@ _TICKET_NOTES_BACKEND: Optional[str] = None
 
 _PINNED_NOTE_PREFIX = "[PINNED] "
 
-# ---- activity_feed_events optional columns ----
-# Columns in activity_feed_events that may not exist in all schema versions.
-# This set grows at runtime as unsupported columns are discovered so future
-# calls skip them without retrying.
+# Optional activity_feed_events columns
 _OPTIONAL_ACTIVITY_EVENT_COLUMNS: Set[str] = {
     "meta",
     "search_text",
@@ -108,11 +103,7 @@ _OPTIONAL_ACTIVITY_EVENT_COLUMNS: Set[str] = {
 }
 _ACTIVITY_EVENT_UNSUPPORTED_COLS: Set[str] = set()
 
-# ---- member_joins optional columns ----
-# Columns that may be absent from the member_joins table or may cause trigger
-# errors (PostgreSQL error 42703) when present.  Most notably, a trigger on
-# member_joins may reference NEW.created_at which doesn't exist if the column
-# was never added to the table.
+# Optional member_joins columns
 _OPTIONAL_MEMBER_JOIN_COLUMNS: Set[str] = {
     "created_at",
     "username",
@@ -121,12 +112,11 @@ _OPTIONAL_MEMBER_JOIN_COLUMNS: Set[str] = {
 _MEMBER_JOIN_UNSUPPORTED_COLS: Set[str] = set()
 
 
-# ====
+# ============================================================
 # Small helpers
-# ====
+# ============================================================
 
 def _repo_debug(msg: str) -> None:
-    """Print a debug-level repository diagnostic message."""
     try:
         print(f"🧩 tickets_repository {msg}")
     except Exception:
@@ -134,7 +124,6 @@ def _repo_debug(msg: str) -> None:
 
 
 def _now_iso() -> str:
-    """Return the current UTC time as an ISO-8601 string."""
     try:
         return now_utc().isoformat()
     except Exception:
@@ -142,7 +131,6 @@ def _now_iso() -> str:
 
 
 def _as_str_id(value: Any) -> Optional[str]:
-    """Coerce *value* to a non-empty string suitable for a DB id column."""
     try:
         if value is None:
             return None
@@ -155,7 +143,6 @@ def _as_str_id(value: Any) -> Optional[str]:
 
 
 def _as_int(value: Any, default: int = 0) -> int:
-    """Coerce *value* to int, returning *default* on failure."""
     try:
         if value is None or isinstance(value, bool):
             return default
@@ -165,7 +152,6 @@ def _as_int(value: Any, default: int = 0) -> int:
 
 
 def _clean_text(value: Any) -> Optional[str]:
-    """Strip whitespace; return None for empty/None values."""
     try:
         if value is None:
             return None
@@ -176,24 +162,31 @@ def _clean_text(value: Any) -> Optional[str]:
 
 
 def _safe_meta(value: Any) -> Dict[str, Any]:
-    """Return a safe copy of *value* if it is a dict, otherwise return {}."""
     if isinstance(value, dict):
         return dict(value)
     return {}
 
 
 def _normalize_ticket_row(row: Any) -> Optional[Dict[str, Any]]:
-    """Normalize a raw DB ticket row to a plain dict."""
     try:
         if not isinstance(row, dict):
             return None
-        return dict(row)
+        out = dict(row)
+
+        # Normalize owner compatibility aliases for safer downstream use.
+        user_id = _as_str_id(out.get("user_id"))
+        username = _clean_text(out.get("username"))
+        out["owner_id"] = _as_str_id(out.get("owner_id")) or user_id
+        out["requester_id"] = _as_str_id(out.get("requester_id")) or user_id
+        out["owner_name"] = _clean_text(out.get("owner_name")) or username
+        out["requester_name"] = _clean_text(out.get("requester_name")) or username
+
+        return out
     except Exception:
         return None
 
 
 def _normalize_note_row(row: Any) -> Optional[Dict[str, Any]]:
-    """Normalize a raw DB note row to a plain dict."""
     try:
         if not isinstance(row, dict):
             return None
@@ -203,7 +196,6 @@ def _normalize_note_row(row: Any) -> Optional[Dict[str, Any]]:
 
 
 def _boolish(value: Any, default: bool = False) -> bool:
-    """Coerce *value* to bool in a permissive way."""
     try:
         if isinstance(value, bool):
             return value
@@ -220,7 +212,6 @@ def _boolish(value: Any, default: bool = False) -> bool:
 
 
 def _utc_iso(dt: Optional[datetime]) -> Optional[str]:
-    """Convert a datetime to a UTC ISO-8601 string."""
     if dt is None:
         return None
     try:
@@ -235,7 +226,6 @@ def _utc_iso(dt: Optional[datetime]) -> Optional[str]:
 
 
 def _safe_str(value: Any) -> str:
-    """Safely coerce *value* to str."""
     try:
         return str(value)
     except Exception:
@@ -243,7 +233,6 @@ def _safe_str(value: Any) -> str:
 
 
 def _normalize_note_text(value: Any, limit: int = 4000) -> str:
-    """Normalize and truncate note body text."""
     try:
         text = _safe_str(value).replace("\r\n", "\n").replace("\r", "\n").strip()
         return text[:limit]
@@ -252,7 +241,6 @@ def _normalize_note_text(value: Any, limit: int = 4000) -> str:
 
 
 def _normalize_message_text(value: Any, limit: int = 6000) -> str:
-    """Normalize and truncate message body text."""
     try:
         text = _safe_str(value).replace("\r\n", "\n").replace("\r", "\n").strip()
         return text[:limit]
@@ -261,17 +249,14 @@ def _normalize_message_text(value: Any, limit: int = 6000) -> str:
 
 
 def _normalize_json_list(value: Any) -> List[Any]:
-    """Return *value* as a list, or [] if it is not already a list."""
     if isinstance(value, list):
         return list(value)
     return []
 
 
 def _ticket_internal_notes_table_name() -> str:
-    """Return the configured legacy internal-notes table name."""
     try:
         from ..globals import TICKET_INTERNAL_NOTES_TABLE  # type: ignore
-
         name = _safe_str(TICKET_INTERNAL_NOTES_TABLE).strip()
         return name or LEGACY_TICKET_INTERNAL_NOTES_TABLE
     except Exception:
@@ -279,7 +264,6 @@ def _ticket_internal_notes_table_name() -> str:
 
 
 def _sb():
-    """Return the Supabase client, or None if unavailable."""
     try:
         return get_supabase()
     except Exception:
@@ -290,10 +274,6 @@ def _preserve_existing_created_at(
     existing: Optional[Dict[str, Any]],
     payload: Dict[str, Any],
 ) -> Dict[str, Any]:
-    """
-    If *existing* has a non-empty 'created_at', copy it into *payload* so we
-    never clobber the original creation timestamp on an update/upsert.
-    """
     out = dict(payload or {})
     if isinstance(existing, dict):
         existing_created = existing.get("created_at")
@@ -302,15 +282,24 @@ def _preserve_existing_created_at(
     return out
 
 
-# ====
-# Compatibility helpers used elsewhere in your project
-# ====
+def _owner_id_from_row(row: Optional[Dict[str, Any]]) -> Optional[str]:
+    if not isinstance(row, dict):
+        return None
+    return (
+        _as_str_id(row.get("user_id"))
+        or _as_str_id(row.get("owner_id"))
+        or _as_str_id(row.get("requester_id"))
+    )
+
+
+# ============================================================
+# Compatibility helpers used elsewhere in the project
+# ============================================================
 
 TICKET_NUM_RE = re.compile(r"^(?:ticket|closed)-(\d+)$", re.I)
 
 
 def _extract_ticket_number_from_name(name: Optional[str]) -> Optional[int]:
-    """Extract the numeric ticket number from a channel name like 'ticket-42'."""
     if not name:
         return None
     m = TICKET_NUM_RE.match(str(name).strip().lower())
@@ -323,7 +312,6 @@ def _extract_ticket_number_from_name(name: Optional[str]) -> Optional[int]:
 
 
 def _parse_ticket_number_from_topic(channel: discord.TextChannel) -> Optional[int]:
-    """Parse ticket_number=N from a channel topic string."""
     try:
         topic = channel.topic or ""
         m = re.search(r"(?:^|;)ticket_number=(\d+)(?:;|$)", topic)
@@ -335,7 +323,6 @@ def _parse_ticket_number_from_topic(channel: discord.TextChannel) -> Optional[in
 
 
 def _parse_owner_id_from_topic(channel: discord.TextChannel) -> Optional[int]:
-    """Parse owner_id=N from a channel topic string."""
     try:
         topic = channel.topic or ""
         m = re.search(r"(?:^|;)owner_id=(\d+)(?:;|$)", topic)
@@ -347,7 +334,6 @@ def _parse_owner_id_from_topic(channel: discord.TextChannel) -> Optional[int]:
 
 
 def _title_for_ticket(owner: discord.abc.User, category: str, is_ghost: bool) -> str:
-    """Build a human-readable ticket title from the owner and category."""
     base_name = (
         getattr(owner, "display_name", None)
         or getattr(owner, "name", None)
@@ -357,12 +343,11 @@ def _title_for_ticket(owner: discord.abc.User, category: str, is_ghost: bool) ->
     return f"{prefix}{category.title()} - {base_name}"[:180]
 
 
-# ====
+# ============================================================
 # Retry / DB execution helpers
-# ====
+# ============================================================
 
 def _is_retryable_db_error(error: Exception) -> bool:
-    """Return True if *error* looks like a transient network/connection error."""
     text = repr(error).lower()
     markers = (
         "remoteprotocolerror",
@@ -388,18 +373,12 @@ def _is_retryable_db_error(error: Exception) -> bool:
 
 
 def _sleep_backoff(attempt: int) -> None:
-    """Sleep with exponential back-off plus small random jitter."""
     base = min(0.35 * (2 ** max(0, attempt - 1)), 3.0)
     jitter = random.uniform(0.05, 0.25)
     time.sleep(base + jitter)
 
 
 def _execute_db_op(op_name: str, executor, max_attempts: int = 5):
-    """
-    Execute *executor()* up to *max_attempts* times, retrying on transient
-    network errors with exponential back-off.  Non-transient errors are re-raised
-    immediately.
-    """
     last_error = None
 
     for attempt in range(1, max_attempts + 1):
@@ -424,20 +403,14 @@ def _execute_db_op(op_name: str, executor, max_attempts: int = 5):
 
 
 async def _run_db_op(op_name: str, executor, max_attempts: int = 5):
-    """Async wrapper around :func:`_execute_db_op`."""
     return await asyncio.to_thread(_execute_db_op, op_name, executor, max_attempts)
 
 
-# ====
+# ============================================================
 # Schema-compat helpers
-# ====
+# ============================================================
 
 def _missing_column_error(exc: Exception, column_name: str) -> bool:
-    """
-    Return True if *exc* indicates that *column_name* is absent from the DB
-    schema (PostgREST PGRST204 / schema-cache miss, or a generic 'does not exist'
-    message that mentions the column name).
-    """
     try:
         text = repr(exc)
         text_l = text.lower()
@@ -456,13 +429,6 @@ def _missing_column_error(exc: Exception, column_name: str) -> bool:
 
 
 def _trigger_field_error(exc: Exception, field_name: str) -> bool:
-    """
-    Return True if *exc* is a PostgreSQL error 42703 that mentions *field_name*.
-
-    Error 42703 arises when a DB trigger body references a field (e.g.
-    NEW.created_at) that does not exist in the table.  This is distinct from
-    PGRST204 which is a PostgREST schema-cache error.
-    """
     try:
         text = repr(exc).lower()
         return "42703" in text and str(field_name).lower() in text
@@ -471,7 +437,6 @@ def _trigger_field_error(exc: Exception, field_name: str) -> bool:
 
 
 def _table_missing_error(exc: Exception, table_name: str) -> bool:
-    """Return True if *exc* suggests that *table_name* does not exist."""
     text = repr(exc or "").lower()
     name = str(table_name or "").lower()
     return (
@@ -488,10 +453,6 @@ def _table_missing_error(exc: Exception, table_name: str) -> bool:
 
 
 def _strip_known_unsupported_columns(payload: Dict[str, Any]) -> Dict[str, Any]:
-    """
-    Return a copy of *payload* with all columns currently marked as unsupported
-    (i.e. ``_OPTIONAL_COLUMN_SUPPORT[col] is False``) removed.
-    """
     out = dict(payload or {})
     for col, supported in _OPTIONAL_COLUMN_SUPPORT.items():
         if supported is False:
@@ -500,7 +461,6 @@ def _strip_known_unsupported_columns(payload: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _strip_columns(payload: Dict[str, Any], columns: Sequence[str]) -> Dict[str, Any]:
-    """Return a copy of *payload* with all *columns* removed."""
     out = dict(payload or {})
     for col in columns:
         out.pop(col, None)
@@ -511,12 +471,6 @@ def _detect_and_mark_unsupported_optional_columns(
     exc: Exception,
     payload: Dict[str, Any],
 ) -> List[str]:
-    """
-    Inspect *exc* for a missing-column error.  For each column in *payload* that
-    is in ``_OPTIONAL_TICKET_COLUMNS`` and whose name appears in the error, mark
-    it as unsupported in ``_OPTIONAL_COLUMN_SUPPORT`` and return the list of
-    newly-marked columns.
-    """
     removed: List[str] = []
     for col in list(payload.keys()):
         if col not in _OPTIONAL_TICKET_COLUMNS:
@@ -533,53 +487,27 @@ async def _write_ticket_with_optional_fallback(
     payload: Dict[str, Any],
     writer,
 ) -> Any:
-    """
-    Attempt ``writer(payload)`` and automatically strip unsupported optional
-    columns if the DB rejects them.
-
-    **Key fix (multi-column cumulative stripping):**
-    The original code only did a single retry, stripping just the ONE column
-    mentioned in the error.  When multiple columns are absent (e.g.
-    ``panel_message_id``, ``webhook_id``, ``webhook_url`` all missing), the old
-    code would fail on each successive call — one column progress at a time —
-    until it finally gave up.
-
-    This version loops until either success or no further strippable columns are
-    detected.  On each iteration:
-
-    1. ``_strip_known_unsupported_columns`` rebuilds the payload from *scratch*,
-       dropping *every* column that has been marked bad so far (not just the one
-       from the most recent error).
-    2. The newly-detected column is recorded in the module-level
-       ``_OPTIONAL_COLUMN_SUPPORT`` dict so all future calls also skip it.
-
-    The loop is bounded by ``len(_OPTIONAL_TICKET_COLUMNS)`` iterations so it
-    can never spin indefinitely.
-    """
-    # Strip everything already known to be unsupported before the first attempt.
     current = _strip_known_unsupported_columns(payload)
 
-    max_retries = len(_OPTIONAL_TICKET_COLUMNS)  # generous but finite upper bound
-    for attempt in range(1, max_retries + 2):  # +2 = initial attempt + up to max_retries
-        snapshot = current  # capture for lambda — avoids late-binding issues
+    max_retries = len(_OPTIONAL_TICKET_COLUMNS)
+    for attempt in range(1, max_retries + 2):
+        snapshot = current
         try:
             return await _run_db_op(op_name, lambda: writer(snapshot))
         except Exception as e:
             removed = _detect_and_mark_unsupported_optional_columns(e, snapshot)
             if removed and attempt <= max_retries:
-                # Rebuild payload from scratch, stripping ALL known-bad columns at once.
                 current = _strip_known_unsupported_columns(payload)
                 print(
                     f"⚠️ {op_name}: retrying without unsupported ticket columns {removed}"
                 )
                 continue
-            # Either no strippable column was found, or we exhausted retries → re-raise.
             raise
 
 
-# ====
+# ============================================================
 # Raw sync DB functions
-# ====
+# ============================================================
 
 def _insert_ticket_sync(payload: Dict[str, Any]):
     sb = _sb()
@@ -811,9 +739,9 @@ def _delete_ticket_row_by_channel_id_sync(channel_id: str):
     )
 
 
-# ====
+# ============================================================
 # Async wrappers
-# ====
+# ============================================================
 
 async def _insert_ticket_async(payload: Dict[str, Any]):
     return await _run_db_op("insert ticket row", lambda: _insert_ticket_sync(payload))
@@ -917,9 +845,9 @@ async def _delete_ticket_row_by_channel_id_async(channel_id: str):
     )
 
 
-# ====
+# ============================================================
 # Public payload builders
-# ====
+# ============================================================
 
 def build_ticket_payload(
     *,
@@ -967,22 +895,32 @@ def build_ticket_payload(
     last_activity_at: Optional[str] = None,
     last_message_id: Optional[int | str] = None,
     decision: Optional[str] = None,
+    owner_name: Optional[str] = None,
+    requester_name: Optional[str] = None,
+    claimed_by_name: Optional[str] = None,
+    assigned_to_name: Optional[str] = None,
+    closed_by_name: Optional[str] = None,
+    deleted_by_name: Optional[str] = None,
     extra: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """
     Build the canonical tickets-table insert/upsert payload dict.
 
-    Optional compatibility columns (panel_message_id, webhook_url, webhook_id,
-    etc.) are included here but are automatically stripped by
-    :func:`_write_ticket_with_optional_fallback` if the live DB schema does not
-    have them.
+    Important compatibility decision:
+    - real live schema uses `user_id` / `username` as owner fields
+    - owner_id/requester_id aliases are included only as optional compatibility
+      columns for environments that added them later
     """
     now_iso = _now_iso()
+    clean_owner_id = _as_str_id(owner_id)
+    clean_username = _clean_text(username)
+    clean_owner_name = _clean_text(owner_name) or clean_username
+    clean_requester_name = _clean_text(requester_name) or clean_username
 
     payload: Dict[str, Any] = {
         "guild_id": _as_str_id(guild_id),
-        "user_id": _as_str_id(owner_id),
-        "username": _clean_text(username),
+        "user_id": clean_owner_id,
+        "username": clean_username,
         "title": _clean_text(title),
         "category": _clean_text(category) or "verification_issue",
         "status": _clean_text(status) or "open",
@@ -1023,13 +961,21 @@ def build_ticket_payload(
         "matched_intake_type": _clean_text(matched_intake_type),
         "matched_category_reason": _clean_text(matched_category_reason),
         "matched_category_score": int(matched_category_score or 0),
-        # optional compatibility fields — stripped automatically if DB lacks them
         "panel_message_id": _as_str_id(panel_message_id),
         "webhook_url": _clean_text(webhook_url),
         "webhook_id": _as_str_id(webhook_id),
         "last_activity_at": last_activity_at,
         "last_message_id": _as_str_id(last_message_id),
         "decision": _clean_text(decision),
+        # compatibility aliases
+        "owner_id": clean_owner_id,
+        "requester_id": clean_owner_id,
+        "owner_name": clean_owner_name,
+        "requester_name": clean_requester_name,
+        "claimed_by_name": _clean_text(claimed_by_name),
+        "assigned_to_name": _clean_text(assigned_to_name),
+        "closed_by_name": _clean_text(closed_by_name),
+        "deleted_by_name": _clean_text(deleted_by_name),
     }
 
     if extra:
@@ -1067,7 +1013,6 @@ def build_ticket_payload_from_channel(
     matched_category_score: Optional[int] = None,
     extra: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
-    """Build a ticket payload by introspecting a Discord channel/thread object."""
     guild_id = getattr(channel.guild, "id", None)
     channel_id = getattr(channel, "id", None)
     channel_name = getattr(channel, "name", None)
@@ -1109,12 +1054,11 @@ def build_ticket_payload_from_channel(
     )
 
 
-# ====
+# ============================================================
 # Public fetch helpers
-# ====
+# ============================================================
 
 async def get_ticket_by_id(ticket_id: int | str) -> Optional[Dict[str, Any]]:
-    """Fetch a single ticket row by its primary-key UUID."""
     tid = _as_str_id(ticket_id)
     if not tid:
         return None
@@ -1134,7 +1078,6 @@ async def get_ticket_by_number(
     guild_id: int | str,
     ticket_number: int,
 ) -> Optional[Dict[str, Any]]:
-    """Fetch a ticket by its human-visible sequential number within a guild."""
     gid = _as_str_id(guild_id)
     if not gid:
         return None
@@ -1150,7 +1093,6 @@ async def get_ticket_by_number(
 
 
 async def get_ticket_by_channel_id(channel_id: int | str) -> Optional[Dict[str, Any]]:
-    """Fetch a ticket by its Discord channel_id (exact match only)."""
     cid = _as_str_id(channel_id)
     if not cid:
         return None
@@ -1166,9 +1108,6 @@ async def get_ticket_by_channel_id(channel_id: int | str) -> Optional[Dict[str, 
 
 
 async def get_ticket_by_any_channel_id(channel_id: int | str) -> Optional[Dict[str, Any]]:
-    """
-    Fetch a ticket by channel_id, falling back to discord_thread_id if not found.
-    """
     cid = _as_str_id(channel_id)
     if not cid:
         return None
@@ -1194,7 +1133,6 @@ async def find_open_ticket_for_owner(
     category: Optional[str] = None,
     statuses: Optional[Sequence[str]] = None,
 ) -> Optional[Dict[str, Any]]:
-    """Return the most recent open/claimed ticket for a given owner in a guild."""
     gid = _as_str_id(guild_id)
     oid = _as_str_id(owner_id)
     if not gid or not oid:
@@ -1216,7 +1154,6 @@ async def list_open_tickets_for_guild(
     category: Optional[str] = None,
     statuses: Optional[Sequence[str]] = None,
 ) -> List[Dict[str, Any]]:
-    """List all open/claimed tickets for a guild, optionally filtered by category."""
     gid = _as_str_id(guild_id)
     if not gid:
         return []
@@ -1241,7 +1178,6 @@ async def list_tickets_for_owner(
     owner_id: int | str,
     limit: int = 25,
 ) -> List[Dict[str, Any]]:
-    """List the most recent tickets for a specific owner in a guild."""
     gid = _as_str_id(guild_id)
     oid = _as_str_id(owner_id)
     if not gid or not oid:
@@ -1263,18 +1199,11 @@ async def list_tickets_for_owner(
         return []
 
 
-# ====
+# ============================================================
 # Public write helpers
-# ====
+# ============================================================
 
 async def insert_ticket(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-    """
-    Insert a new ticket row.
-
-    Automatically strips any optional columns not present in the live schema
-    (e.g. panel_message_id, webhook_id, webhook_url) using a cumulative retry
-    loop so that ALL absent columns are handled in a single call sequence.
-    """
     try:
         clean = dict(payload or {})
         clean.setdefault("updated_at", _now_iso())
@@ -1294,17 +1223,6 @@ async def insert_ticket(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
 
 
 async def upsert_ticket(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-    """
-    Upsert a ticket row, falling back to a manual fetch+update or insert if the
-    native upsert fails (e.g. due to missing optional columns or a schema-cache
-    miss).
-
-    The multi-column cumulative stripping in
-    :func:`_write_ticket_with_optional_fallback` means that all absent optional
-    columns (panel_message_id, webhook_id, webhook_url, …) are handled within
-    a single call sequence rather than propagating failures across multiple
-    top-level calls.
-    """
     clean = dict(payload or {})
     clean["updated_at"] = _now_iso()
     clean.setdefault("created_at", _now_iso())
@@ -1395,7 +1313,6 @@ async def create_ticket_record(
     matched_category_score: Optional[int] = None,
     extra: Optional[Dict[str, Any]] = None,
 ) -> Optional[Dict[str, Any]]:
-    """Convenience wrapper: build payload and upsert in one call."""
     payload = build_ticket_payload(
         guild_id=guild_id,
         owner_id=owner_id,
@@ -1464,7 +1381,6 @@ async def sync_ticket_record_from_channel(
     matched_category_score: Optional[int] = None,
     extra: Optional[Dict[str, Any]] = None,
 ) -> Optional[Dict[str, Any]]:
-    """Build a ticket payload from a Discord channel object and upsert it."""
     payload = build_ticket_payload_from_channel(
         channel=channel,
         owner_id=owner_id,
@@ -1502,13 +1418,6 @@ async def update_ticket_by_channel_id(
     *,
     allow_thread_fallback: bool = True,
 ) -> Optional[Dict[str, Any]]:
-    """
-    Update an existing ticket identified by *channel_id*.
-
-    Attempts to locate the ticket by id first (preferred) so the update is
-    precise.  Falls back to a channel_id / discord_thread_id WHERE clause if no
-    row is found yet.
-    """
     cid = _as_str_id(channel_id)
     if not cid:
         return None
@@ -1564,10 +1473,6 @@ async def safe_optional_update_by_channel_id(
     channel_id: int | str,
     payload: Dict[str, Any],
 ) -> bool:
-    """
-    Best-effort update: silently returns False instead of raising on error.
-    Useful for fire-and-forget updates (e.g. last_activity_at, webhook_url).
-    """
     cid = _as_str_id(channel_id)
     if not cid:
         return False
@@ -1616,7 +1521,6 @@ async def touch_ticket(
     last_activity_at: Optional[str] = None,
     last_message_id: Optional[int | str] = None,
 ) -> bool:
-    """Update last_activity_at (and optionally last_message_id) for a ticket."""
     payload: Dict[str, Any] = {
         "last_activity_at": last_activity_at or _now_iso(),
     }
@@ -1628,7 +1532,6 @@ async def touch_ticket(
 
 
 async def set_ticket_panel_message_id(channel_id: int | str, panel_message_id: int | str) -> bool:
-    """Store the panel message id on the ticket row."""
     row = await update_ticket_by_channel_id(
         channel_id,
         {"panel_message_id": _as_str_id(panel_message_id)},
@@ -1643,7 +1546,6 @@ async def set_ticket_webhook(
     webhook_url: Optional[str],
     webhook_id: Optional[int | str] = None,
 ) -> bool:
-    """Store webhook_url / webhook_id on the ticket row."""
     row = await update_ticket_by_channel_id(
         channel_id,
         {
@@ -1662,7 +1564,6 @@ async def attach_transcript_to_ticket(
     transcript_message_id: Optional[int | str],
     transcript_channel_id: Optional[int | str],
 ) -> bool:
-    """Attach a transcript URL and related ids to the ticket row."""
     return await safe_optional_update_by_channel_id(
         channel_id,
         {
@@ -1681,7 +1582,6 @@ async def mark_ticket_closed(
     decision: Optional[str] = None,
     extra_payload: Optional[Dict[str, Any]] = None,
 ) -> bool:
-    """Mark a ticket as closed."""
     payload: Dict[str, Any] = {
         "status": "closed",
         "closed_at": _now_iso(),
@@ -1706,7 +1606,6 @@ async def mark_ticket_deleted(
     reason: Optional[str] = None,
     extra_payload: Optional[Dict[str, Any]] = None,
 ) -> bool:
-    """Mark a ticket as deleted (soft-delete)."""
     payload: Dict[str, Any] = {
         "status": "deleted",
         "deleted_at": _now_iso(),
@@ -1731,7 +1630,6 @@ async def reopen_ticket(
     reason: Optional[str] = None,
     extra_payload: Optional[Dict[str, Any]] = None,
 ) -> bool:
-    """Reopen a previously closed ticket."""
     payload: Dict[str, Any] = {
         "status": "open",
         "reopened_at": _now_iso(),
@@ -1758,13 +1656,14 @@ async def assign_ticket(
     channel_id: int | str,
     staff_member: discord.Member | discord.User,
 ) -> bool:
-    """Assign (claim) a ticket to a staff member."""
     row = await update_ticket_by_channel_id(
         channel_id,
         {
             "status": "claimed",
             "assigned_to": _as_str_id(getattr(staff_member, "id", None)),
             "claimed_by": _as_str_id(getattr(staff_member, "id", None)),
+            "assigned_to_name": _safe_str(staff_member),
+            "claimed_by_name": _safe_str(staff_member),
         },
         allow_thread_fallback=True,
     )
@@ -1775,13 +1674,14 @@ async def unclaim_ticket(
     *,
     channel_id: int | str,
 ) -> bool:
-    """Remove the current claim/assignment from a ticket."""
     row = await update_ticket_by_channel_id(
         channel_id,
         {
             "status": "open",
             "assigned_to": None,
             "claimed_by": None,
+            "assigned_to_name": None,
+            "claimed_by_name": None,
         },
         allow_thread_fallback=True,
     )
@@ -1793,13 +1693,14 @@ async def transfer_ticket(
     channel_id: int | str,
     to_staff_member: discord.Member | discord.User,
 ) -> bool:
-    """Transfer a ticket's claim/assignment to a different staff member."""
     row = await update_ticket_by_channel_id(
         channel_id,
         {
             "status": "claimed",
             "assigned_to": _as_str_id(getattr(to_staff_member, "id", None)),
             "claimed_by": _as_str_id(getattr(to_staff_member, "id", None)),
+            "assigned_to_name": _safe_str(to_staff_member),
+            "claimed_by_name": _safe_str(to_staff_member),
         },
         allow_thread_fallback=True,
     )
@@ -1811,7 +1712,6 @@ async def set_ticket_priority(
     channel_id: int | str,
     priority: str,
 ) -> bool:
-    """Update the priority field of a ticket."""
     clean_priority = _clean_text(priority)
     if not clean_priority:
         return False
@@ -1825,7 +1725,6 @@ async def set_ticket_priority(
 
 
 async def delete_ticket_row(channel_id: int | str) -> bool:
-    """Permanently delete a ticket row from the DB."""
     cid = _as_str_id(channel_id)
     if not cid:
         return False
@@ -1843,9 +1742,9 @@ async def delete_ticket_row(channel_id: int | str) -> bool:
         return False
 
 
-# ====
+# ============================================================
 # Ticket notes helpers
-# ====
+# ============================================================
 
 def _normalize_ticket_notes_row(row: Dict[str, Any]) -> Dict[str, Any]:
     content = _safe_str(row.get("content") or "")
@@ -1891,14 +1790,6 @@ async def add_internal_note(
     note: str,
     is_pinned: bool = False,
 ) -> bool:
-    """
-    Add an internal staff note to a ticket.
-
-    Tries the modern ``ticket_notes`` table first, falling back to the legacy
-    ``ticket_internal_notes`` table if the modern one is missing.  Within the
-    modern table, a compat retry strips ``updated_at`` / ``is_pinned`` if they
-    are absent from the live schema.
-    """
     global _TICKET_NOTES_BACKEND
 
     sb = _sb()
@@ -1916,11 +1807,7 @@ async def add_internal_note(
         _repo_debug(f"add-note rejected empty-note channel={channel_id}")
         return False
 
-    # ----
-    # 1) Current real schema: ticket_notes
-    # ----
     if _TICKET_NOTES_BACKEND in (None, TICKET_NOTES_TABLE):
-        # Try full modern payload first
         try:
             note_payload = {
                 "ticket_id": str(row.get("id")),
@@ -1944,7 +1831,6 @@ async def add_internal_note(
             return True
 
         except Exception as e:
-            # Missing modern columns? retry without them.
             if (
                 _missing_column_error(e, "updated_at")
                 or _missing_column_error(e, "is_pinned")
@@ -1988,9 +1874,6 @@ async def add_internal_note(
                     f"trying legacy internal notes table."
                 )
 
-    # ----
-    # 2) Legacy fallback: ticket_internal_notes
-    # ----
     legacy_table = _ticket_internal_notes_table_name()
 
     if _TICKET_NOTES_BACKEND in (None, LEGACY_TICKET_INTERNAL_NOTES_TABLE, legacy_table):
@@ -2043,12 +1926,6 @@ async def list_internal_notes(
     channel_id: int | str,
     limit: int = 25,
 ) -> List[Dict[str, Any]]:
-    """
-    Return internal staff notes for the ticket identified by *channel_id*.
-
-    Tries modern ``ticket_notes`` first, falling back to ``ticket_internal_notes``.
-    Handles a missing ``is_pinned`` column in the ORDER BY via a compat retry.
-    """
     global _TICKET_NOTES_BACKEND
 
     sb = _sb()
@@ -2062,9 +1939,6 @@ async def list_internal_notes(
     ticket_id = str(row.get("id"))
     max_limit = max(1, min(int(limit or 25), 100))
 
-    # ----
-    # 1) Current real schema: ticket_notes
-    # ----
     if _TICKET_NOTES_BACKEND in (None, TICKET_NOTES_TABLE):
         try:
             def _read_ticket_notes_sync():
@@ -2092,7 +1966,6 @@ async def list_internal_notes(
             return out
 
         except Exception as e:
-            # Retry if is_pinned ordering column is missing
             if _missing_column_error(e, "is_pinned"):
                 try:
                     def _read_ticket_notes_compat_sync():
@@ -2141,9 +2014,6 @@ async def list_internal_notes(
                     f"trying legacy internal notes table."
                 )
 
-    # ----
-    # 2) Legacy fallback: ticket_internal_notes
-    # ----
     legacy_table = _ticket_internal_notes_table_name()
 
     if _TICKET_NOTES_BACKEND in (None, LEGACY_TICKET_INTERNAL_NOTES_TABLE, legacy_table):
@@ -2188,9 +2058,9 @@ async def list_internal_notes(
     return []
 
 
-# ====
+# ============================================================
 # Ticket messages helpers
-# ====
+# ============================================================
 
 def _normalize_ticket_message_row(row: Dict[str, Any]) -> Dict[str, Any]:
     return {
@@ -2217,7 +2087,6 @@ async def add_ticket_message(
     attachments: Optional[List[Any]] = None,
     source: Optional[str] = None,
 ) -> Optional[Dict[str, Any]]:
-    """Insert a message record for a ticket thread."""
     sb = _sb()
     if sb is None:
         return None
@@ -2261,7 +2130,6 @@ async def list_ticket_messages(
     channel_id: int | str,
     limit: int = 50,
 ) -> List[Dict[str, Any]]:
-    """Return all recorded messages for a ticket thread, in chronological order."""
     sb = _sb()
     if sb is None:
         return []
@@ -2299,9 +2167,9 @@ async def list_ticket_messages(
         return []
 
 
-# ====
+# ============================================================
 # Ticket activity-feed helpers
-# ====
+# ============================================================
 
 def _normalize_activity_feed_row(row: Dict[str, Any]) -> Dict[str, Any]:
     return {
@@ -2325,7 +2193,6 @@ def _normalize_activity_feed_row(row: Dict[str, Any]) -> Dict[str, Any]:
         "reason": _clean_text(row.get("reason")),
         "search_text": _safe_str(row.get("search_text") or ""),
         "metadata": _safe_meta(row.get("metadata")),
-        # 'meta' is the legacy field name; fall back gracefully
         "meta": _safe_meta(row.get("meta") or row.get("metadata")),
         "created_at": row.get("created_at"),
         "raw": dict(row),
@@ -2355,21 +2222,10 @@ async def insert_activity_event(
     meta: Optional[Dict[str, Any]] = None,
     extra: Optional[Dict[str, Any]] = None,
 ) -> Optional[Dict[str, Any]]:
-    """
-    Insert a row into the ``activity_feed_events`` table.
-
-    **Schema-compat behaviour:**
-    Optional columns (``meta``, ``search_text``, ``ticket_message_id``,
-    ``related_table``, ``related_id``, ``metadata``) are automatically stripped
-    and the insert retried if the live DB schema does not have them.  The set of
-    known-unsupported columns (``_ACTIVITY_EVENT_UNSUPPORTED_COLS``) grows at
-    runtime so successive calls skip them without a round-trip.
-    """
     sb = _sb()
     if sb is None:
         return None
 
-    # Build full payload — optional columns will be stripped as needed below.
     payload: Dict[str, Any] = {
         "guild_id": _as_str_id(guild_id),
         "event_family": _clean_text(event_family) or "unknown",
@@ -2396,13 +2252,12 @@ async def insert_activity_event(
     if extra:
         payload.update(dict(extra))
 
-    # Strip all columns already known to be unsupported (cumulative across calls).
     for col in list(_ACTIVITY_EVENT_UNSUPPORTED_COLS):
         payload.pop(col, None)
 
     max_retries = len(_OPTIONAL_ACTIVITY_EVENT_COLUMNS) + 1
     for attempt in range(1, max_retries + 2):
-        snapshot = dict(payload)  # capture for closure
+        snapshot = dict(payload)
         try:
             def _insert_event_sync():
                 return sb.table(ACTIVITY_FEED_EVENTS_TABLE).insert(snapshot).execute()
@@ -2411,10 +2266,8 @@ async def insert_activity_event(
             rows = getattr(resp, "data", None) or []
             if rows and isinstance(rows[0], dict):
                 return _normalize_activity_feed_row(rows[0])
-            # Insert succeeded but returned no data (some PostgREST configs).
             return {}
         except Exception as e:
-            # Detect any optional columns reported missing in this error.
             removed: List[str] = []
             for col in list(snapshot.keys()):
                 if col in _OPTIONAL_ACTIVITY_EVENT_COLUMNS and _missing_column_error(e, col):
@@ -2431,7 +2284,6 @@ async def insert_activity_event(
             print(f"⚠️ repository.insert_activity_event failed: {repr(e)}")
             return None
 
-    # Should not be reachable, but be safe.
     print("⚠️ repository.insert_activity_event exhausted schema-compat retries")
     return None
 
@@ -2444,10 +2296,6 @@ async def list_ticket_activity_events(
     target_user_id: Optional[int | str] = None,
     limit: int = 50,
 ) -> List[Dict[str, Any]]:
-    """
-    List activity-feed events, filtered by one or more of guild_id, ticket_id,
-    channel_id, target_user_id.  At least one filter must be provided.
-    """
     sb = _sb()
     if sb is None:
         return []
@@ -2498,7 +2346,6 @@ async def get_latest_ticket_activity(
     channel_id: Optional[int | str] = None,
     target_user_id: Optional[int | str] = None,
 ) -> Optional[Dict[str, Any]]:
-    """Return the most recent activity-feed event matching the supplied filters."""
     rows = await list_ticket_activity_events(
         guild_id=guild_id,
         ticket_id=ticket_id,
@@ -2509,9 +2356,9 @@ async def get_latest_ticket_activity(
     return rows[0] if rows else None
 
 
-# ====
+# ============================================================
 # Member joins helpers
-# ====
+# ============================================================
 
 async def insert_member_join(
     *,
@@ -2521,24 +2368,6 @@ async def insert_member_join(
     joined_at: Optional[str] = None,
     extra: Optional[Dict[str, Any]] = None,
 ) -> Optional[Dict[str, Any]]:
-    """
-    Insert a row into the ``member_joins`` table.
-
-    **Error 42703 handling:**
-    PostgreSQL triggers on member_joins may reference ``NEW.created_at`` even
-    when that column does not exist in the table, producing::
-
-        Error 42703: record "new" has no field "created_at"
-
-    This is a *trigger* error (not a PostgREST PGRST204 schema-cache error) so
-    the normal ``_missing_column_error`` helper does not catch it.  This function
-    checks specifically for ``42703`` in the error text and strips the offending
-    column before retrying.  The column is then added to
-    ``_MEMBER_JOIN_UNSUPPORTED_COLS`` so all future calls skip it without a retry.
-
-    The same loop also handles standard PGRST204 missing-column errors for other
-    optional fields (``username``, ``joined_at``).
-    """
     sb = _sb()
     if sb is None:
         return None
@@ -2554,13 +2383,12 @@ async def insert_member_join(
     if extra:
         payload.update(dict(extra))
 
-    # Strip columns already known to be unsupported from previous calls.
     for col in list(_MEMBER_JOIN_UNSUPPORTED_COLS):
         payload.pop(col, None)
 
     max_retries = len(_OPTIONAL_MEMBER_JOIN_COLUMNS) + 1
     for attempt in range(1, max_retries + 2):
-        snapshot = dict(payload)  # capture for closure
+        snapshot = dict(payload)
         try:
             def _insert_join_sync():
                 return sb.table(MEMBER_JOINS_TABLE).insert(snapshot).execute()
@@ -2575,7 +2403,6 @@ async def insert_member_join(
             err_text = repr(e)
             removed: List[str] = []
 
-            # Handle PostgreSQL trigger error 42703 (field not in NEW record).
             if "42703" in err_text:
                 for col in list(snapshot.keys()):
                     if col in _OPTIONAL_MEMBER_JOIN_COLUMNS and col.lower() in err_text.lower():
@@ -2583,7 +2410,6 @@ async def insert_member_join(
                         payload.pop(col, None)
                         removed.append(col)
 
-            # Also handle standard PostgREST PGRST204 schema-cache misses.
             if not removed:
                 for col in list(snapshot.keys()):
                     if col in _OPTIONAL_MEMBER_JOIN_COLUMNS and _missing_column_error(e, col):
@@ -2607,15 +2433,11 @@ async def insert_member_join(
     return None
 
 
-# ====
+# ============================================================
 # Diagnostics
-# ====
+# ============================================================
 
 async def repository_healthcheck() -> Dict[str, Any]:
-    """
-    Run a lightweight probe against the tickets table and return a status dict
-    containing schema-compat state for debugging.
-    """
     out: Dict[str, Any] = {
         "ok": False,
         "table": TICKETS_TABLE,
