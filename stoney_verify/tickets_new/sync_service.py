@@ -98,6 +98,20 @@ def _guess_status_from_channel(channel: discord.TextChannel) -> str:
     return OPEN_STATUS
 
 
+def _guess_priority_from_existing(existing: Optional[Dict[str, Any]]) -> str:
+    if not isinstance(existing, dict):
+        return "medium"
+
+    try:
+        value = str(existing.get("priority") or "").strip().lower()
+        if value in VALID_PRIORITIES:
+            return value
+    except Exception:
+        pass
+
+    return "medium"
+
+
 async def _fetch_recent_messages(
     channel: discord.TextChannel,
     limit: int = 50,
@@ -296,6 +310,7 @@ def _build_core_ticket_payload(
     owner: Optional[discord.Member],
     source: str,
     messages: List[discord.Message],
+    existing: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     category = _guess_category_from_channel(channel)
     is_ghost = _guess_is_ghost(channel)
@@ -314,16 +329,24 @@ def _build_core_ticket_payload(
     )
 
     status = CLAIMED_STATUS if claimed_by and guessed_status == OPEN_STATUS else guessed_status
+    priority = _guess_priority_from_existing(existing)
 
-    return {
+    payload: Dict[str, Any] = {
         "guild_id": str(guild.id),
         "user_id": owner_id or "",
+        "owner_id": owner_id or "",
+        "requester_id": owner_id or "",
         "username": username,
+        "owner_name": username,
+        "requester_name": username,
         "title": title,
         "category": "ghost" if is_ghost else category,
         "status": status,
-        "priority": "medium",
+        "priority": priority,
         "claimed_by": claimed_by,
+        "assigned_to": claimed_by,
+        "claimed_by_name": None,
+        "assigned_to_name": None,
         "closed_by": None,
         "closed_reason": None,
         "initial_message": initial_message,
@@ -335,12 +358,20 @@ def _build_core_ticket_payload(
         "channel_id": str(channel.id),
         "channel_name": channel.name,
         "ticket_number": int(ticket_number) if ticket_number is not None else None,
-        "assigned_to": claimed_by,
         "reopened_at": None,
         "sla_deadline": None,
         "is_ghost": bool(is_ghost),
         "source": source,
     }
+
+    if isinstance(existing, dict):
+        try:
+            payload["claimed_by_name"] = existing.get("claimed_by_name")
+            payload["assigned_to_name"] = existing.get("assigned_to_name")
+        except Exception:
+            pass
+
+    return payload
 
 
 def _build_insert_payload(core: Dict[str, Any]) -> Dict[str, Any]:
@@ -372,10 +403,18 @@ def _build_update_payload(existing: Dict[str, Any], core: Dict[str, Any]) -> Dic
     now_iso = _utc_iso(now_utc())
 
     if not str(payload.get("user_id") or "").strip():
-        payload["user_id"] = str(existing.get("user_id") or "")
+        payload["user_id"] = str(existing.get("user_id") or existing.get("owner_id") or existing.get("requester_id") or "")
+    if not str(payload.get("owner_id") or "").strip():
+        payload["owner_id"] = str(existing.get("owner_id") or existing.get("user_id") or existing.get("requester_id") or "")
+    if not str(payload.get("requester_id") or "").strip():
+        payload["requester_id"] = str(existing.get("requester_id") or existing.get("user_id") or existing.get("owner_id") or "")
 
     if not str(payload.get("username") or "").strip():
-        payload["username"] = str(existing.get("username") or "")
+        payload["username"] = str(existing.get("username") or existing.get("owner_name") or existing.get("requester_name") or "")
+    if not str(payload.get("owner_name") or "").strip():
+        payload["owner_name"] = str(existing.get("owner_name") or existing.get("username") or existing.get("requester_name") or "")
+    if not str(payload.get("requester_name") or "").strip():
+        payload["requester_name"] = str(existing.get("requester_name") or existing.get("username") or existing.get("owner_name") or "")
 
     if not str(payload.get("title") or "").strip():
         payload["title"] = str(existing.get("title") or "")
@@ -404,12 +443,20 @@ def _build_update_payload(existing: Dict[str, Any], core: Dict[str, Any]) -> Dic
 
     existing_claimed_by = str(existing.get("claimed_by") or "").strip()
     existing_assigned_to = str(existing.get("assigned_to") or "").strip()
+    existing_claimed_by_name = str(existing.get("claimed_by_name") or "").strip()
+    existing_assigned_to_name = str(existing.get("assigned_to_name") or "").strip()
 
     if not str(payload.get("claimed_by") or "").strip() and existing_claimed_by:
         payload["claimed_by"] = existing_claimed_by
 
     if not str(payload.get("assigned_to") or "").strip() and existing_assigned_to:
         payload["assigned_to"] = existing_assigned_to or existing_claimed_by
+
+    if not str(payload.get("claimed_by_name") or "").strip() and existing_claimed_by_name:
+        payload["claimed_by_name"] = existing_claimed_by_name
+
+    if not str(payload.get("assigned_to_name") or "").strip() and existing_assigned_to_name:
+        payload["assigned_to_name"] = existing_assigned_to_name or existing_claimed_by_name
 
     if (
         existing_status == CLAIMED_STATUS
@@ -419,6 +466,10 @@ def _build_update_payload(existing: Dict[str, Any], core: Dict[str, Any]) -> Dic
         payload["status"] = CLAIMED_STATUS
         payload["claimed_by"] = existing_claimed_by
         payload["assigned_to"] = existing_assigned_to or existing_claimed_by
+        if existing_claimed_by_name:
+            payload["claimed_by_name"] = existing_claimed_by_name
+        if existing_assigned_to_name:
+            payload["assigned_to_name"] = existing_assigned_to_name or existing_claimed_by_name
 
     payload_status = str(payload.get("status") or OPEN_STATUS).lower()
 
@@ -437,11 +488,14 @@ def _build_update_payload(existing: Dict[str, Any], core: Dict[str, Any]) -> Dic
         payload["deleted_by"] = None
         payload["closed_by"] = existing.get("closed_by")
         payload["closed_reason"] = existing.get("closed_reason")
+        payload["closed_by_name"] = existing.get("closed_by_name")
     elif payload_status == DELETED_STATUS:
         payload["deleted_at"] = existing.get("deleted_at") or now_iso
         payload["deleted_by"] = existing.get("deleted_by")
+        payload["deleted_by_name"] = existing.get("deleted_by_name")
         payload["closed_at"] = existing.get("closed_at") or now_iso
         payload["closed_by"] = existing.get("closed_by")
+        payload["closed_by_name"] = existing.get("closed_by_name")
         payload["closed_reason"] = existing.get("closed_reason")
 
     return payload
@@ -451,12 +505,17 @@ def _normalize_ticket_payload_for_compare(payload: Dict[str, Any]) -> Dict[str, 
     return {
         "guild_id": str(payload.get("guild_id") or ""),
         "user_id": str(payload.get("user_id") or ""),
+        "owner_id": str(payload.get("owner_id") or ""),
+        "requester_id": str(payload.get("requester_id") or ""),
         "username": str(payload.get("username") or ""),
+        "owner_name": str(payload.get("owner_name") or ""),
+        "requester_name": str(payload.get("requester_name") or ""),
         "title": str(payload.get("title") or ""),
         "category": str(payload.get("category") or ""),
         "status": str(payload.get("status") or ""),
         "priority": str(payload.get("priority") or ""),
         "claimed_by": str(payload.get("claimed_by") or "") or None,
+        "claimed_by_name": str(payload.get("claimed_by_name") or "") or None,
         "closed_by": str(payload.get("closed_by") or "") or None,
         "closed_reason": str(payload.get("closed_reason") or "") or None,
         "initial_message": str(payload.get("initial_message") or ""),
@@ -465,6 +524,7 @@ def _normalize_ticket_payload_for_compare(payload: Dict[str, Any]) -> Dict[str, 
         "channel_name": str(payload.get("channel_name") or ""),
         "ticket_number": payload.get("ticket_number"),
         "assigned_to": str(payload.get("assigned_to") or "") or None,
+        "assigned_to_name": str(payload.get("assigned_to_name") or "") or None,
         "is_ghost": bool(payload.get("is_ghost")),
         "source": str(payload.get("source") or ""),
     }
@@ -483,17 +543,18 @@ async def _sync_channel_internal(
     dry_run: bool,
 ) -> Dict[str, Any]:
     guild = channel.guild
+    existing = await get_ticket_by_any_channel_id(channel.id)
     owner = _extract_owner_member(guild, channel)
     messages = await _fetch_recent_messages(channel, limit=50)
+
     core_payload = _build_core_ticket_payload(
         guild=guild,
         channel=channel,
         owner=owner,
         source=source,
         messages=messages,
+        existing=existing,
     )
-
-    existing = await get_ticket_by_any_channel_id(channel.id)
 
     row_summary: Dict[str, Any] = {
         "channel_id": str(channel.id),
@@ -528,6 +589,12 @@ async def _sync_channel_internal(
                         "channel_name": channel.name,
                         "is_ghost": core_payload.get("is_ghost"),
                         "ticket_number": core_payload.get("ticket_number"),
+                        "user_id": core_payload.get("user_id"),
+                        "owner_id": core_payload.get("owner_id"),
+                        "requester_id": core_payload.get("requester_id"),
+                        "username": core_payload.get("username"),
+                        "owner_name": core_payload.get("owner_name"),
+                        "requester_name": core_payload.get("requester_name"),
                     },
                 )
             except Exception:
@@ -549,6 +616,12 @@ async def _sync_channel_internal(
                     "channel_name": channel.name,
                     "is_ghost": core_payload.get("is_ghost"),
                     "ticket_number": core_payload.get("ticket_number"),
+                    "user_id": core_payload.get("user_id"),
+                    "owner_id": core_payload.get("owner_id"),
+                    "requester_id": core_payload.get("requester_id"),
+                    "username": core_payload.get("username"),
+                    "owner_name": core_payload.get("owner_name"),
+                    "requester_name": core_payload.get("requester_name"),
                 },
             )
         except Exception:
