@@ -41,6 +41,20 @@ def _json_ok(**extra: Any):
     return web.json_response(payload)
 
 
+def _safe_int(value: Any, default: int = 0) -> int:
+    try:
+        return int(str(value).strip())
+    except Exception:
+        return default
+
+
+def _safe_str(value: Any) -> str:
+    try:
+        return str(value)
+    except Exception:
+        return ""
+
+
 def _channel_to_payload(channel: discord.TextChannel) -> Dict[str, Any]:
     return {
         "channel_id": str(channel.id),
@@ -56,15 +70,15 @@ async def _get_guild_or_error(guild_id: Any) -> tuple[Optional[discord.Guild], O
     if not guild_id:
         return None, _json_error("guild_id required")
 
-    try:
-        gid = int(str(guild_id))
-    except Exception:
+    gid = _safe_int(guild_id, 0)
+    if gid <= 0:
         return None, _json_error("guild_id must be a valid integer string")
 
     guild = bot.get_guild(gid)
     if guild is None:
         try:
-            guild = await bot.fetch_guild(gid)
+            await bot.fetch_guild(gid)
+            guild = bot.get_guild(gid)
         except Exception:
             guild = None
 
@@ -81,9 +95,8 @@ async def _get_member_from_guild(
     if not user_id:
         return None, _json_error("user_id required")
 
-    try:
-        uid = int(str(user_id))
-    except Exception:
+    uid = _safe_int(user_id, 0)
+    if uid <= 0:
         return None, _json_error("user_id must be a valid integer string")
 
     member = guild.get_member(uid)
@@ -105,9 +118,8 @@ async def _get_text_channel(
     if not channel_id:
         return None, _json_error("channel_id required")
 
-    try:
-        cid = int(str(channel_id))
-    except Exception:
+    cid = _safe_int(channel_id, 0)
+    if cid <= 0:
         return None, _json_error("channel_id must be a valid integer string")
 
     channel = bot.get_channel(cid)
@@ -139,34 +151,33 @@ async def create_ticket(request: web.Request):
         return err
     assert member is not None
 
-    category = str(data.get("category") or "support").strip() or "support"
+    category = _safe_str(data.get("category") or "support").strip() or "support"
     is_ghost = bool(data.get("ghost", False))
     opening_message = data.get("opening_message")
-    priority = str(data.get("priority") or "medium").strip() or "medium"
+    priority = _safe_str(data.get("priority") or "medium").strip().lower() or "medium"
 
     parent_category_id = None
-    try:
-        if data.get("parent_category_id") is not None:
-            parent_category_id = int(str(data["parent_category_id"]))
-    except Exception:
-        parent_category_id = None
+    if data.get("parent_category_id") is not None:
+        parsed_parent = _safe_int(data.get("parent_category_id"), 0)
+        parent_category_id = parsed_parent if parsed_parent > 0 else None
 
     staff_role_ids = None
     if isinstance(data.get("staff_role_ids"), list):
         parsed: list[int] = []
         for rid in data["staff_role_ids"]:
-            try:
-                parsed.append(int(str(rid)))
-            except Exception:
-                continue
+            role_id = _safe_int(rid, 0)
+            if role_id > 0:
+                parsed.append(role_id)
         staff_role_ids = parsed or None
 
     allow_duplicate = bool(data.get("allow_duplicate", False))
+    normalized_category = "ghost" if is_ghost else category
+
     if not allow_duplicate:
         existing = await find_open_ticket_for_owner(
             guild_id=guild.id,
             owner_id=member.id,
-            category=("ghost" if is_ghost else category),
+            category=normalized_category,
         )
         if existing:
             return _json_ok(
@@ -213,14 +224,16 @@ async def close_ticket(request: web.Request):
     staff_id = data.get("staff_id")
     if staff_id:
         try:
-            closed_by = guild.get_member(int(str(staff_id)))
-            if closed_by is None:
-                closed_by = await guild.fetch_member(int(str(staff_id)))
+            closed_by, _ = await _get_member_from_guild(guild, staff_id)
         except Exception:
             closed_by = None
 
     reason = data.get("reason")
-    ok = await mark_ticket_closed(channel=channel, closed_by=closed_by, reason=reason)
+    ok = await mark_ticket_closed(
+        channel=channel,
+        closed_by=closed_by,
+        reason=reason,
+    )
 
     if not ok:
         return _json_error("Failed to mark ticket closed", 500)
@@ -297,9 +310,7 @@ async def delete_ticket(request: web.Request):
     staff_id = data.get("staff_id")
     if staff_id:
         try:
-            deleted_by = guild.get_member(int(str(staff_id)))
-            if deleted_by is None:
-                deleted_by = await guild.fetch_member(int(str(staff_id)))
+            deleted_by, _ = await _get_member_from_guild(guild, staff_id)
         except Exception:
             deleted_by = None
 
@@ -311,7 +322,10 @@ async def delete_ticket(request: web.Request):
         reason=reason,
     )
 
-    return web.json_response(result)
+    if isinstance(result, dict):
+        return web.json_response(result)
+
+    return _json_ok(deleted=bool(result), channel_id=str(channel.id))
 
 
 async def sync_active_tickets(request: web.Request):
@@ -408,9 +422,8 @@ async def role_member_sync(request: web.Request):
     if not role_id:
         return _json_error("role_id required")
 
-    try:
-        rid = int(str(role_id))
-    except Exception:
+    rid = _safe_int(role_id, 0)
+    if rid <= 0:
         return _json_error("role_id must be a valid integer string")
 
     role = guild.get_role(rid)
@@ -422,7 +435,17 @@ async def role_member_sync(request: web.Request):
 
 
 async def health(request: web.Request):
-    return _json_ok(status="online")
+    guild_count = 0
+    try:
+        guild_count = len(getattr(bot, "guilds", []) or [])
+    except Exception:
+        guild_count = 0
+
+    return _json_ok(
+        status="online",
+        guild_count=guild_count,
+        api="structured_bot_api",
+    )
 
 
 async def start_api(bot_instance: discord.Client):
