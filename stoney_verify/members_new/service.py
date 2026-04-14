@@ -6,32 +6,26 @@ from typing import Any, Dict, List, Optional, Set
 import discord
 
 from ..globals import get_supabase, now_utc
-
+from .sync_service import (
+    mark_member_left as sync_service_mark_member_left,
+    run_departed_reconciliation_for_guild as sync_service_run_departed_reconciliation_for_guild,
+    run_full_member_sync_for_guild as sync_service_run_full_member_sync_for_guild,
+    sync_member_to_supabase,
+)
 
 # ============================================================
 # Member sync service for the NEW structure
 # ------------------------------------------------------------
-# IMPORTANT:
-# Your real Supabase schema uses `guild_members`, not `members`.
+# This module is now the REAL orchestrator for member truth.
 #
-# This file keeps the richer helper structure you already added,
-# but the actual live sync/write operations delegate to your
-# EXISTING legacy sync logic in stoney_verify/events.py.
-#
-# Why:
-# - preserves your real schema
-# - preserves guild_members history logic
-# - avoids breaking current dashboard expectations
-# - keeps helper serialization available for future dashboard use
+# It no longer delegates live sync ownership to legacy events.py.
+# Instead:
+# - live member writes go through members_new.sync_service
+# - departed fallback updates are handled here when Discord only
+#   gives us a User / Object instead of a cached Member
+# - reconciliation/full-sync entrypoints remain stable for other
+#   modules that already import this file
 # ============================================================
-
-
-def _get_legacy_events_module():
-    """
-    Lazy import avoids circular imports during startup.
-    """
-    from .. import events as legacy_events
-    return legacy_events
 
 
 def _utc_iso(dt: Optional[datetime]) -> Optional[str]:
@@ -55,15 +49,24 @@ def _safe_str(x: Any) -> str:
         return ""
 
 
+def _safe_int(value: Any, default: int = 0) -> int:
+    try:
+        if value is None or isinstance(value, bool):
+            return default
+        return int(str(value).strip())
+    except Exception:
+        return default
+
+
 def _display_avatar_url(member: discord.abc.User) -> Optional[str]:
     try:
         if getattr(member, "display_avatar", None):
-            return member.display_avatar.url  # type: ignore[attr-defined]
+            return str(member.display_avatar.url)  # type: ignore[attr-defined]
     except Exception:
         pass
     try:
         if getattr(member, "avatar", None):
-            return member.avatar.url  # type: ignore[attr-defined]
+            return str(member.avatar.url)  # type: ignore[attr-defined]
     except Exception:
         pass
     return None
@@ -142,9 +145,8 @@ def _member_row(member: discord.Member, *, active: bool = True, departed: bool =
     """
     Canonical future-facing member payload.
 
-    NOTE:
-    This is intentionally retained for future dashboard enrichment, but the
-    current live database write path delegates to legacy guild_members sync.
+    This remains useful for debugging, future dashboard enrichments,
+    and any manual inspection paths that want a normalized view.
     """
     now = now_utc()
 
@@ -177,66 +179,7 @@ def _member_row(member: discord.Member, *, active: bool = True, departed: bool =
     return row
 
 
-def _upsert(table: str, payload: Dict[str, Any], *, on_conflict: str = "id") -> bool:
-    """
-    Retained for future use.
-
-    IMPORTANT:
-    This helper is no longer used by the live member sync flow because your
-    real schema does NOT use a `members` table.
-    """
-    sb = get_supabase()
-    if sb is None:
-        print(f"⚠️ Supabase unavailable; skipped upsert into {table}.")
-        return False
-
-    try:
-        sb.table(table).upsert(payload, on_conflict=on_conflict).execute()
-        return True
-    except TypeError:
-        try:
-            sb.table(table).upsert(payload).execute()
-            return True
-        except Exception as e:
-            print(f"❌ Upsert failed for {table}:", repr(e))
-            return False
-    except Exception as e:
-        print(f"❌ Upsert failed for {table}:", repr(e))
-        return False
-
-
-def _update_member_departed(member_id: int | str, *, active: bool, departed: bool) -> bool:
-    """
-    Retained for future use.
-
-    IMPORTANT:
-    This helper is no longer used by the live member sync flow because your
-    real schema does NOT use a `members` table.
-    """
-    sb = get_supabase()
-    if sb is None:
-        print("⚠️ Supabase unavailable; skipped departed member update.")
-        return False
-
-    payload = {
-        "active": bool(active),
-        "departed": bool(departed),
-        "last_synced_at": _utc_iso(now_utc()),
-    }
-
-    try:
-        sb.table("members").update(payload).eq("id", str(member_id)).execute()
-        return True
-    except Exception as e:
-        print("❌ Member departed update failed:", repr(e))
-        return False
-
-
 def _load_live_members(guild: discord.Guild) -> List[discord.Member]:
-    """
-    Best-effort cached member list only.
-    Async fetching happens in the async callers.
-    """
     try:
         return list(guild.members)
     except Exception:
@@ -280,221 +223,285 @@ def _guild_member_rows_for_guild(guild_id: int) -> List[Dict[str, Any]]:
     try:
         res = (
             sb.table("guild_members")
-            .select("guild_id,user_id,in_guild")
+            .select("*")
             .eq("guild_id", str(guild_id))
             .execute()
         )
         rows = getattr(res, "data", None) or []
-        return [r for r in rows if isinstance(r, dict)]
+        return [dict(r) for r in rows if isinstance(r, dict)]
     except Exception as e:
         print(f"❌ Failed reading guild_members for guild {guild_id}:", repr(e))
         return []
 
 
-async def sync_member(member: discord.Member, *, active: bool = True, departed: bool = False) -> bool:
+def _best_effort_mark_departed_by_user_id_sync(
+    *,
+    guild_id: int,
+    user_id: int,
+    username: Optional[str] = None,
+    avatar_url: Optional[str] = None,
+    is_bot: bool = False,
+) -> bool:
     """
-    Sync one member using the EXISTING legacy guild_members logic.
+    Fallback path for member removals when Discord gives us a User/Object
+    instead of a cached Member.
 
-    Called on:
-    - member join
-    - member update
-    - manual sync / reconciliation
+    This preserves history in guild_members without relying on legacy events.py.
     """
-    try:
-        legacy_events = _get_legacy_events_module()
-
-        if hasattr(legacy_events, "_sync_member_to_supabase"):
-            await legacy_events._sync_member_to_supabase(
-                member,
-                in_guild=bool(active and not departed),
-            )
-            print(f"✅ members_new.sync_member delegated → {member} ({member.id})")
-            return True
-
-        print("⚠️ Legacy _sync_member_to_supabase helper not found.")
+    sb = get_supabase()
+    if sb is None:
+        print("⚠️ Supabase unavailable; skipped best-effort departed update.")
         return False
 
+    now_iso = _utc_iso(now_utc())
+    if not now_iso:
+        now_iso = datetime.now(timezone.utc).isoformat()
+
+    existing: Optional[Dict[str, Any]] = None
+    try:
+        res = (
+            sb.table("guild_members")
+            .select("*")
+            .eq("guild_id", str(guild_id))
+            .eq("user_id", str(user_id))
+            .limit(1)
+            .execute()
+        )
+        rows = getattr(res, "data", None) or []
+        if rows:
+            existing = dict(rows[0])
+    except Exception as e:
+        print(
+            f"❌ Failed reading existing guild_members row for departed user {user_id} "
+            f"in guild {guild_id}: {repr(e)}"
+        )
+        existing = None
+
+    if existing:
+        times_left = _safe_int(existing.get("times_left"), 0)
+        if existing.get("in_guild") is not False:
+            times_left += 1
+
+        payload: Dict[str, Any] = {
+            "username": username or existing.get("username") or existing.get("last_seen_username") or "",
+            "display_name": existing.get("display_name") or username or "",
+            "avatar_url": avatar_url or existing.get("avatar_url"),
+            "in_guild": False,
+            "data_health": "left_guild",
+            "synced_at": now_iso,
+            "updated_at": now_iso,
+            "last_seen_at": now_iso,
+            "left_at": existing.get("left_at") or now_iso,
+            "times_left": times_left,
+            "role_state": "left_guild",
+            "role_state_reason": "Member left or was removed from guild.",
+            "is_bot": bool(existing.get("is_bot")) or bool(is_bot),
+        }
+
+        try:
+            sb.table("guild_members").update(payload).eq("guild_id", str(guild_id)).eq("user_id", str(user_id)).execute()
+            return True
+        except Exception as e:
+            print(
+                f"❌ Failed updating existing guild_members departed row for user {user_id} "
+                f"in guild {guild_id}: {repr(e)}"
+            )
+            return False
+
+    payload = {
+        "guild_id": str(guild_id),
+        "user_id": str(user_id),
+        "username": username or str(user_id),
+        "display_name": username or str(user_id),
+        "avatar_url": avatar_url,
+        "in_guild": False,
+        "data_health": "left_guild",
+        "synced_at": now_iso,
+        "updated_at": now_iso,
+        "last_seen_at": now_iso,
+        "left_at": now_iso,
+        "times_joined": 1,
+        "times_left": 1,
+        "role_ids": [],
+        "role_names": [],
+        "roles": [],
+        "has_any_role": False,
+        "has_unverified": False,
+        "has_verified_role": False,
+        "has_staff_role": False,
+        "has_secondary_verified_role": False,
+        "has_cosmetic_only": False,
+        "role_state": "left_guild",
+        "role_state_reason": "Member left or was removed from guild.",
+        "is_bot": bool(is_bot),
+        "created_at": now_iso,
+        "first_seen_at": now_iso,
+        "last_seen_username": username or str(user_id),
+        "last_seen_display_name": username or str(user_id),
+        "last_seen_nickname": "",
+        "previous_usernames": [],
+        "previous_display_names": [],
+        "previous_nicknames": [],
+    }
+
+    try:
+        try:
+            sb.table("guild_members").upsert(payload, on_conflict="guild_id,user_id").execute()
+        except TypeError:
+            sb.table("guild_members").upsert(payload).execute()
+        return True
+    except Exception as e:
+        print(
+            f"❌ Failed inserting best-effort departed guild_members row for user {user_id} "
+            f"in guild {guild_id}: {repr(e)}"
+        )
+        return False
+
+
+async def sync_member(member: discord.Member, *, active: bool = True, departed: bool = False) -> bool:
+    """
+    Sync one live member through the real new sync service.
+    """
+    try:
+        await sync_member_to_supabase(
+            member,
+            in_guild=bool(active and not departed),
+        )
+        print(f"✅ members_new.sync_member → {member} ({member.id})")
+        return True
     except Exception as e:
         print(f"❌ members_new.sync_member failed for {member} ({member.id}):", repr(e))
         return False
 
 
-async def sync_member_remove(member: discord.Member) -> bool:
+async def sync_member_remove(
+    member_or_user: discord.Member | discord.User | discord.Object | Any,
+    guild: Optional[discord.Guild] = None,
+) -> bool:
     """
     Mark a member as departed instead of hard-deleting them.
 
-    This preserves history for:
-    - ghost/member archive views
-    - kicked/banned lookup
-    - previously used usernames when they rejoin
-
-    Uses the EXISTING legacy guild_members logic.
+    Supports:
+    - discord.Member (preferred)
+    - discord.User / discord.Object with guild supplied
     """
     try:
-        legacy_events = _get_legacy_events_module()
-
-        if hasattr(legacy_events, "_mark_member_left"):
-            await legacy_events._mark_member_left(member)
-            print(f"✅ members_new.sync_member_remove delegated → {member} ({member.id})")
+        if isinstance(member_or_user, discord.Member):
+            await sync_service_mark_member_left(member_or_user)
+            print(f"✅ members_new.sync_member_remove → {member_or_user} ({member_or_user.id})")
             return True
 
-        if hasattr(legacy_events, "_sync_member_to_supabase"):
-            await legacy_events._sync_member_to_supabase(member, in_guild=False)
-            print(f"✅ members_new.sync_member_remove fallback delegated → {member} ({member.id})")
+        if guild is None:
+            print("⚠️ sync_member_remove received non-Member without guild.")
+            return False
+
+        user_id = _safe_int(getattr(member_or_user, "id", None), 0)
+        if user_id <= 0:
+            print("⚠️ sync_member_remove could not resolve user id.")
+            return False
+
+        cached_member = None
+        try:
+            cached_member = guild.get_member(user_id)
+        except Exception:
+            cached_member = None
+
+        if isinstance(cached_member, discord.Member):
+            await sync_service_mark_member_left(cached_member)
+            print(f"✅ members_new.sync_member_remove cached-member → {cached_member} ({cached_member.id})")
             return True
 
-        print("⚠️ Legacy member-left helpers not found.")
-        return False
+        username = None
+        try:
+            username = _safe_str(getattr(member_or_user, "name", None) or getattr(member_or_user, "global_name", None) or member_or_user)
+        except Exception:
+            username = str(user_id)
+
+        avatar_url = None
+        try:
+            avatar_url = _display_avatar_url(member_or_user)  # type: ignore[arg-type]
+        except Exception:
+            avatar_url = None
+
+        is_bot = bool(getattr(member_or_user, "bot", False))
+
+        ok = _best_effort_mark_departed_by_user_id_sync(
+            guild_id=int(guild.id),
+            user_id=user_id,
+            username=username,
+            avatar_url=avatar_url,
+            is_bot=is_bot,
+        )
+
+        if ok:
+            print(f"✅ members_new.sync_member_remove best-effort → {username} ({user_id})")
+        else:
+            print(f"❌ members_new.sync_member_remove best-effort failed → {username} ({user_id})")
+        return ok
 
     except Exception as e:
-        print(f"❌ members_new.sync_member_remove failed for {member} ({member.id}):", repr(e))
+        try:
+            subject = f"{member_or_user} ({getattr(member_or_user, 'id', 'unknown')})"
+        except Exception:
+            subject = "unknown-member"
+        print(f"❌ members_new.sync_member_remove failed for {subject}:", repr(e))
         return False
 
 
 async def sync_all_members(guild: discord.Guild) -> Dict[str, int]:
     """
-    Full reconciliation pass using your EXISTING guild_members sync.
+    Full reconciliation pass through the real new sync service.
     Safe for startup or manual dashboard-triggered sync.
 
-    Returns summary counts.
+    Returns a normalized summary shape expected by callers.
     """
-    processed = 0
-    failed = 0
-
-    members = await _ensure_member_list(guild)
-
-    for member in members:
-        try:
-            ok = await sync_member(member, active=True, departed=False)
-            if ok:
-                processed += 1
-            else:
-                failed += 1
-        except Exception as e:
-            failed += 1
-            print(f"❌ Full member sync failed for {member} ({member.id}):", repr(e))
-
-    summary = {"processed": processed, "failed": failed, "total_seen": len(members)}
-    print("🧩 Full member sync summary:", summary)
-    return summary
+    try:
+        raw = await sync_service_run_full_member_sync_for_guild(guild)
+        summary = {
+            "processed": _safe_int(raw.get("active_members_synced"), 0),
+            "failed": _safe_int(raw.get("errors"), 0),
+            "total_seen": _safe_int(raw.get("active_members_synced"), 0),
+            "marked_departed": _safe_int(raw.get("marked_departed"), 0),
+        }
+        print("🧩 Full member sync summary:", summary)
+        return summary
+    except Exception as e:
+        print(f"❌ Full member sync failed for guild {guild.id}:", repr(e))
+        return {
+            "processed": 0,
+            "failed": 1,
+            "total_seen": 0,
+            "marked_departed": 0,
+        }
 
 
 async def reconcile_departed_members(guild: discord.Guild) -> Dict[str, int]:
     """
-    Lightweight departed-member reconciliation.
-
-    IMPORTANT:
-    This must NOT call legacy_events._initial_member_sync_sweep(),
-    because that re-runs the entire full sync and causes duplicate
-    startup work / event loop blocking.
-
-    What this does:
-    - loads current live guild member IDs
-    - loads tracked DB rows from guild_members
-    - marks rows missing from the live guild as departed via legacy
-      _mark_member_left when possible
+    Lightweight departed-member reconciliation through the real new sync service.
     """
-    checked = 0
-    marked_departed = 0
-
     try:
-        members = await _ensure_member_list(guild)
-        active_ids: Set[int] = set()
-
-        for member in members:
-            try:
-                active_ids.add(int(member.id))
-            except Exception:
-                continue
-
-        rows = _guild_member_rows_for_guild(int(guild.id))
-        checked = len(rows)
-
-        legacy_events = _get_legacy_events_module()
-        can_mark_left = hasattr(legacy_events, "_mark_member_left")
-
-        for row in rows:
-            try:
-                user_id = int(str(row.get("user_id") or "0") or 0)
-            except Exception:
-                user_id = 0
-
-            if user_id <= 0:
-                continue
-
-            if user_id in active_ids:
-                continue
-
-            # Already departed in DB — do not churn it again
-            try:
-                in_guild = row.get("in_guild")
-                if in_guild is False:
-                    continue
-            except Exception:
-                pass
-
-            fake_member: Optional[discord.Member] = None
-            try:
-                fake_member = guild.get_member(user_id)
-            except Exception:
-                fake_member = None
-
-            # Normal path: if somehow cached, use real member object
-            if isinstance(fake_member, discord.Member):
-                try:
-                    await sync_member_remove(fake_member)
-                    marked_departed += 1
-                except Exception as e:
-                    print(f"❌ Failed departed sync for cached member {user_id}:", repr(e))
-                continue
-
-            # Fallback path: direct DB update without doing a full legacy sweep
-            try:
-                sb = get_supabase()
-                if sb is None:
-                    continue
-
-                now_iso = _utc_iso(now_utc())
-                payload = {
-                    "in_guild": False,
-                    "data_health": "left_guild",
-                    "synced_at": now_iso,
-                    "updated_at": now_iso,
-                    "left_at": row.get("left_at") or now_iso,
-                }
-
-                # Best effort times_left increment
-                try:
-                    times_left = int(row.get("times_left") or 0) + 1
-                    payload["times_left"] = times_left
-                except Exception:
-                    pass
-
-                sb.table("guild_members").update(payload).eq("guild_id", str(guild.id)).eq("user_id", str(user_id)).execute()
-                marked_departed += 1
-            except Exception as e:
-                print(f"❌ Failed lightweight departed update for user {user_id}:", repr(e))
-
+        raw = await sync_service_run_departed_reconciliation_for_guild(guild)
+        summary = {
+            "checked": _safe_int(raw.get("checked"), 0),
+            "marked_departed": _safe_int(raw.get("marked_departed"), 0),
+        }
         print(
             f"🧹 Departed reconciliation complete for guild {guild.id}: "
-            f"checked={checked} marked_departed={marked_departed}"
+            f"checked={summary['checked']} marked_departed={summary['marked_departed']}"
         )
-        return {
-            "checked": checked,
-            "marked_departed": marked_departed,
-        }
-
+        return summary
     except Exception as e:
         print("❌ Failed to run departed reconciliation:", repr(e))
-        return {"checked": checked, "marked_departed": marked_departed}
+        return {
+            "checked": 0,
+            "marked_departed": 0,
+        }
 
 
 async def sync_role_members(role: discord.Role) -> Dict[str, int]:
     """
     Force-resync all members who currently have a given role.
     Useful for interactive dashboard role refresh actions.
-
-    Uses the EXISTING legacy guild_members sync.
     """
     processed = 0
     failed = 0
@@ -521,3 +528,13 @@ async def sync_role_members(role: discord.Role) -> Dict[str, int]:
     }
     print("🎭 Role member sync summary:", summary)
     return summary
+
+
+__all__ = [
+    "sync_member",
+    "sync_member_remove",
+    "sync_all_members",
+    "reconcile_departed_members",
+    "sync_role_members",
+    "_member_row",
+]
