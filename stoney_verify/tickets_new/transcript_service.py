@@ -105,6 +105,26 @@ def _collect_attachment_urls(msg: discord.Message) -> List[str]:
     return urls
 
 
+def _collect_attachment_rows(msg: discord.Message) -> List[Dict[str, Any]]:
+    rows: List[Dict[str, Any]] = []
+    try:
+        for a in msg.attachments:
+            try:
+                rows.append(
+                    {
+                        "url": _safe_text(getattr(a, "url", "") or ""),
+                        "filename": _safe_text(getattr(a, "filename", "") or ""),
+                        "size": getattr(a, "size", None),
+                        "content_type": _safe_text(getattr(a, "content_type", "") or ""),
+                    }
+                )
+            except Exception:
+                continue
+    except Exception:
+        pass
+    return rows
+
+
 def _collect_sticker_names(msg: discord.Message) -> List[str]:
     names: List[str] = []
     try:
@@ -271,14 +291,14 @@ def _render_html_message(msg: discord.Message) -> str:
     edited_html = f'<span class="edited">(edited {edited_at})</span>' if edited_at else ""
 
     attachment_html = ""
-    attachments = getattr(msg, "attachments", None) or []
+    attachments = _collect_attachment_rows(msg)
     if attachments:
         parts: List[str] = []
         for a in attachments:
             try:
-                url = html.escape(a.url)
-                filename = html.escape(a.filename)
-                size = getattr(a, "size", None)
+                url = html.escape(_safe_text(a.get("url") or ""))
+                filename = html.escape(_safe_text(a.get("filename") or "attachment"))
+                size = a.get("size")
                 size_text = f" ({size} bytes)" if size is not None else ""
                 parts.append(
                     f'<div class="attachment"><a href="{url}" target="_blank" rel="noopener noreferrer">{filename}</a>{html.escape(size_text)}</div>'
@@ -323,6 +343,8 @@ def _build_html_transcript(
 ) -> bytes:
     channel_name = html.escape(channel.name)
     guild_name = html.escape(channel.guild.name)
+    topic = html.escape(_safe_topic_text(channel.topic))
+    generated_at = html.escape(_utc_iso(now_utc()) or "")
 
     rendered: List[str] = []
     for msg in messages:
@@ -367,6 +389,7 @@ def _build_html_transcript(
   .sub {{
     color: #9fb0d1;
     font-size: 14px;
+    margin-bottom: 4px;
   }}
   .message {{
     display: flex;
@@ -469,6 +492,8 @@ def _build_html_transcript(
     <div class="header">
       <div class="title">Transcript for #{channel_name}</div>
       <div class="sub">Guild: {guild_name}</div>
+      <div class="sub">Topic: {topic}</div>
+      <div class="sub">Generated At: {generated_at}</div>
     </div>
     {"".join(rendered)}
   </div>
