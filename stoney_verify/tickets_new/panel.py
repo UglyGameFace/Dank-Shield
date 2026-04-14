@@ -989,6 +989,7 @@ class TransferTicketModal(discord.ui.Modal, title="Transfer Ticket"):
             ok = await transfer_ticket(
                 channel_id=self.channel_id,
                 to_staff_member=target_member,
+                actor=actor,
             )
 
             if not ok:
@@ -1046,6 +1047,7 @@ class SetPriorityModal(discord.ui.Modal, title="Set Ticket Priority"):
             ok = await set_ticket_priority(
                 channel_id=self.channel_id,
                 priority=priority_value,
+                actor=actor,
             )
 
             if not ok:
@@ -1379,6 +1381,7 @@ class TicketChannelActionsView(discord.ui.View):
 
         ok = await unclaim_ticket(
             channel_id=channel.id,
+            actor=member,
         )
         if not ok:
             return await _safe_followup(interaction, "Failed to unclaim this ticket.")
