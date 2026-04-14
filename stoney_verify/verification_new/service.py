@@ -59,6 +59,13 @@ except Exception:
         return False
 
 
+try:
+    from ..tickets_new.repository import safe_optional_update_by_channel_id
+except Exception:
+    async def safe_optional_update_by_channel_id(*args, **kwargs) -> bool:  # type: ignore
+        return False
+
+
 # ============================================================
 # Datetime / expiration helpers
 # ============================================================
@@ -235,6 +242,29 @@ async def _auto_close_after_decision_safe(
             closer=closer,
             decision=decision,
         )
+    except Exception:
+        pass
+
+
+async def _update_ticket_decision_metadata(
+    *,
+    channel: Optional[discord.TextChannel],
+    decision: str,
+    staff_member: discord.Member,
+    owner: Optional[discord.Member] = None,
+) -> None:
+    if not isinstance(channel, discord.TextChannel):
+        return
+
+    try:
+        payload: Dict[str, Any] = {
+            "decision": decision,
+            "closed_reason": decision,
+        }
+        if isinstance(owner, discord.Member):
+            payload["user_id"] = str(owner.id)
+            payload["username"] = str(owner)
+        await safe_optional_update_by_channel_id(channel.id, payload)
     except Exception:
         pass
 
@@ -540,6 +570,12 @@ async def request_resubmission(
         resolved_owner = None
 
     await _mark_decision_safe(token, "RESUBMIT REQUESTED", int(staff_member.id))
+    await _update_ticket_decision_metadata(
+        channel=resolved_channel,
+        decision="RESUBMIT REQUESTED",
+        staff_member=staff_member,
+        owner=resolved_owner if isinstance(resolved_owner, discord.Member) else None,
+    )
 
     reissue = await reissue_verify_ui(
         channel=resolved_channel,
@@ -617,6 +653,12 @@ async def approve_verification(
     if not can_assign:
         await _mark_decision_safe(token, f"{decision_text} (roles failed)", int(staff_member.id))
         await _set_used_safe(token, True)
+        await _update_ticket_decision_metadata(
+            channel=resolved_channel if isinstance(resolved_channel, discord.TextChannel) else None,
+            decision=f"{decision_text} (roles failed)",
+            staff_member=staff_member,
+            owner=resolved_owner if isinstance(resolved_owner, discord.Member) else None,
+        )
 
         if close_after and isinstance(resolved_channel, discord.TextChannel):
             await _auto_close_after_decision_safe(
@@ -636,6 +678,12 @@ async def approve_verification(
     if not isinstance(resolved_owner, discord.Member):
         await _mark_decision_safe(token, f"{decision_text} (owner not detected)", int(staff_member.id))
         await _set_used_safe(token, True)
+        await _update_ticket_decision_metadata(
+            channel=resolved_channel if isinstance(resolved_channel, discord.TextChannel) else None,
+            decision=f"{decision_text} (owner not detected)",
+            staff_member=staff_member,
+            owner=None,
+        )
 
         if close_after and isinstance(resolved_channel, discord.TextChannel):
             await _auto_close_after_decision_safe(
@@ -680,6 +728,12 @@ async def approve_verification(
                 approved_user_id=int(resolved_owner.id),
             )
             await _set_used_safe(token, True)
+            await _update_ticket_decision_metadata(
+                channel=resolved_channel if isinstance(resolved_channel, discord.TextChannel) else None,
+                decision=f"{decision_text} (unverified cleanup failed)",
+                staff_member=staff_member,
+                owner=resolved_owner,
+            )
 
             return _result(
                 False,
@@ -692,6 +746,12 @@ async def approve_verification(
 
     except discord.Forbidden:
         await _mark_decision_safe(token, f"{decision_text} (role add failed)", int(staff_member.id))
+        await _update_ticket_decision_metadata(
+            channel=resolved_channel if isinstance(resolved_channel, discord.TextChannel) else None,
+            decision=f"{decision_text} (role add failed)",
+            staff_member=staff_member,
+            owner=resolved_owner,
+        )
 
         return _result(
             False,
@@ -716,6 +776,12 @@ async def approve_verification(
         approved_user_id=int(resolved_owner.id),
     )
     await _set_used_safe(token, True)
+    await _update_ticket_decision_metadata(
+        channel=resolved_channel if isinstance(resolved_channel, discord.TextChannel) else None,
+        decision=decision_text,
+        staff_member=staff_member,
+        owner=resolved_owner,
+    )
 
     if close_after and isinstance(resolved_channel, discord.TextChannel):
         await _auto_close_after_decision_safe(
@@ -774,6 +840,12 @@ async def deny_verification(
 
     await _mark_decision_safe(token, decision_text, int(staff_member.id))
     await _set_used_safe(token, True)
+    await _update_ticket_decision_metadata(
+        channel=resolved_channel if isinstance(resolved_channel, discord.TextChannel) else None,
+        decision=decision_text,
+        staff_member=staff_member,
+        owner=resolved_owner if isinstance(resolved_owner, discord.Member) else None,
+    )
 
     if close_after and isinstance(resolved_channel, discord.TextChannel):
         await _auto_close_after_decision_safe(
