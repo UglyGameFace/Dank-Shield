@@ -20,6 +20,7 @@ from .repository import (
     find_open_ticket_for_owner as repo_find_open_ticket_for_owner,
     get_ticket_by_any_channel_id as repo_get_ticket_by_any_channel_id,
     list_internal_notes as repo_list_internal_notes,
+    list_open_tickets_for_guild as repo_list_open_tickets_for_guild,
     mark_ticket_closed as repo_mark_ticket_closed,
     mark_ticket_deleted as repo_mark_ticket_deleted,
     reopen_ticket as repo_reopen_ticket,
@@ -261,6 +262,97 @@ def _actor_name(actor: Optional[discord.Member | discord.User]) -> Optional[str]
         return str(actor)
     except Exception:
         return None
+
+
+def _ticket_status(row: Optional[Dict[str, Any]]) -> str:
+    if not isinstance(row, dict):
+        return "unknown"
+    try:
+        return str(row.get("status") or "").strip().lower()
+    except Exception:
+        return "unknown"
+
+
+def _ticket_claimed_by_id(row: Optional[Dict[str, Any]]) -> int:
+    if not isinstance(row, dict):
+        return 0
+    for key in ("assigned_to", "claimed_by"):
+        try:
+            value = int(str(row.get(key) or "0") or 0)
+            if value > 0:
+                return value
+        except Exception:
+            continue
+    return 0
+
+
+def _ticket_owner_id(row: Optional[Dict[str, Any]]) -> int:
+    if not isinstance(row, dict):
+        return 0
+    for key in ("user_id", "owner_id", "requester_id"):
+        try:
+            value = int(str(row.get(key) or "0") or 0)
+            if value > 0:
+                return value
+        except Exception:
+            continue
+    return 0
+
+
+def _ticket_is_openish(row: Optional[Dict[str, Any]]) -> bool:
+    return _ticket_status(row) in {"open", "claimed"}
+
+
+def _actor_is_elevated_staff(actor: Optional[discord.Member | discord.User]) -> bool:
+    try:
+        if actor is None:
+            return False
+        if not isinstance(actor, discord.Member):
+            return False
+        if actor.guild_permissions.administrator:
+            return True
+        if actor.guild_permissions.manage_channels:
+            return True
+        if actor.guild_permissions.manage_guild:
+            return True
+
+        staff_role_id = _safe_int(globals().get("STAFF_ROLE_ID"), 0)
+        if staff_role_id and any(int(r.id) == staff_role_id for r in actor.roles):
+            return True
+    except Exception:
+        return False
+    return False
+
+
+def _normalize_queue_row(row: Dict[str, Any]) -> Dict[str, Any]:
+    out = dict(row)
+
+    try:
+        out["ticket_status"] = _ticket_status(row)
+    except Exception:
+        out["ticket_status"] = "unknown"
+
+    try:
+        out["claimed_by_id"] = _ticket_claimed_by_id(row)
+    except Exception:
+        out["claimed_by_id"] = 0
+
+    try:
+        out["owner_user_id"] = _ticket_owner_id(row)
+    except Exception:
+        out["owner_user_id"] = 0
+
+    try:
+        out["is_unclaimed"] = bool(out["ticket_status"] == "open" and out["claimed_by_id"] <= 0)
+    except Exception:
+        out["is_unclaimed"] = False
+
+    try:
+        out["is_claimed"] = bool(out["ticket_status"] == "claimed" and out["claimed_by_id"] > 0)
+    except Exception:
+        out["is_claimed"] = False
+
+    return out
 
 
 # ============================================================
@@ -1315,10 +1407,45 @@ async def assign_ticket(
     channel_id: int | str,
     staff_member: discord.Member | discord.User,
 ) -> bool:
+    row = await _ticket_row_for_channel_id(channel_id)
+
+    if not row:
+        _service_debug(f"assign rejected channel={channel_id} reason=no-row")
+        return False
+
+    if not _ticket_is_openish(row):
+        _service_debug(
+            f"assign rejected channel={channel_id} "
+            f"reason=bad-status status={_ticket_status(row)}"
+        )
+        return False
+
+    existing_claimed_by = _ticket_claimed_by_id(row)
+    target_staff_id = _actor_id(staff_member) or 0
+
+    if target_staff_id <= 0:
+        _service_debug(f"assign rejected channel={channel_id} reason=invalid-staff")
+        return False
+
+    if existing_claimed_by > 0 and existing_claimed_by != target_staff_id:
+        _service_debug(
+            f"assign rejected channel={channel_id} "
+            f"reason=already-claimed existing={existing_claimed_by} target={target_staff_id}"
+        )
+        return False
+
+    if existing_claimed_by == target_staff_id and _ticket_status(row) == "claimed":
+        _service_debug(
+            f"assign noop channel={channel_id} "
+            f"reason=already-claimed-by-same-staff staff={target_staff_id}"
+        )
+        return True
+
     ok = await repo_assign_ticket(
         channel_id=channel_id,
         staff_member=staff_member,
     )
+
     if ok:
         try:
             ticket_row = await _ticket_row_for_channel_id(channel_id)
@@ -1338,7 +1465,10 @@ async def assign_ticket(
         except Exception as e:
             print(f"⚠️ Failed logging ticket_claimed for {channel_id}: {repr(e)}")
 
-        print(f"✅ Ticket assigned → {channel_id} to {staff_member}")
+        _service_debug(f"assign success channel={channel_id} to={target_staff_id}")
+    else:
+        _service_debug(f"assign failed channel={channel_id} to={target_staff_id}")
+
     return ok
 
 
@@ -1347,12 +1477,41 @@ async def unclaim_ticket(
     channel_id: int | str,
     actor: Optional[discord.Member | discord.User] = None,
 ) -> bool:
+    row = await _ticket_row_for_channel_id(channel_id)
+
+    if not row:
+        _service_debug(f"unclaim rejected channel={channel_id} reason=no-row")
+        return False
+
+    if not _ticket_is_openish(row):
+        _service_debug(
+            f"unclaim rejected channel={channel_id} "
+            f"reason=bad-status status={_ticket_status(row)}"
+        )
+        return False
+
+    existing_claimed_by = _ticket_claimed_by_id(row)
+    if existing_claimed_by <= 0:
+        _service_debug(f"unclaim noop channel={channel_id} reason=not-claimed")
+        return True
+
+    actor_id = _actor_id(actor) or 0
+    actor_is_elevated = _actor_is_elevated_staff(actor)
+
+    if actor is not None and actor_id > 0:
+        if actor_id != existing_claimed_by and not actor_is_elevated:
+            _service_debug(
+                f"unclaim rejected channel={channel_id} "
+                f"reason=not-owner-of-claim actor={actor_id} claimed_by={existing_claimed_by}"
+            )
+            return False
+
     ok = await repo_unclaim_ticket(channel_id=channel_id)
     if ok:
         try:
             ticket_row = await _ticket_row_for_channel_id(channel_id)
             guild_id = (
-                int(str(ticket_row.get("guild_id") or "0"))
+                int(str(ticket_row.get('guild_id') or '0'))
                 if isinstance(ticket_row, dict) and ticket_row.get("guild_id")
                 else None
             )
@@ -1363,13 +1522,17 @@ async def unclaim_ticket(
                     actor_name=_actor_name(actor),
                     channel_id=channel_id,
                     ticket_row=ticket_row,
+                    metadata={
+                        "previous_claimed_by": existing_claimed_by,
+                    },
                 )
         except Exception as e:
             print(f"⚠️ Failed logging ticket_unclaimed for {channel_id}: {repr(e)}")
 
-        _service_debug(f"unclaim success channel={channel_id}")
+        _service_debug(f"unclaim success channel={channel_id} previous={existing_claimed_by}")
     else:
         _service_debug(f"unclaim failed channel={channel_id}")
+
     return ok
 
 
@@ -1379,6 +1542,43 @@ async def transfer_ticket(
     to_staff_member: discord.Member | discord.User,
     actor: Optional[discord.Member | discord.User] = None,
 ) -> bool:
+    row = await _ticket_row_for_channel_id(channel_id)
+
+    if not row:
+        _service_debug(f"transfer rejected channel={channel_id} reason=no-row")
+        return False
+
+    if not _ticket_is_openish(row):
+        _service_debug(
+            f"transfer rejected channel={channel_id} "
+            f"reason=bad-status status={_ticket_status(row)}"
+        )
+        return False
+
+    target_staff_id = _actor_id(to_staff_member) or 0
+    if target_staff_id <= 0:
+        _service_debug(f"transfer rejected channel={channel_id} reason=invalid-target")
+        return False
+
+    existing_claimed_by = _ticket_claimed_by_id(row)
+    actor_id = _actor_id(actor) or 0
+    actor_is_elevated = _actor_is_elevated_staff(actor)
+
+    if existing_claimed_by > 0 and actor is not None:
+        if actor_id != existing_claimed_by and not actor_is_elevated:
+            _service_debug(
+                f"transfer rejected channel={channel_id} "
+                f"reason=actor-does-not-own-claim actor={actor_id} claimed_by={existing_claimed_by}"
+            )
+            return False
+
+    if existing_claimed_by == target_staff_id and _ticket_status(row) == "claimed":
+        _service_debug(
+            f"transfer noop channel={channel_id} "
+            f"reason=already-owned-by-target target={target_staff_id}"
+        )
+        return True
+
     ok = await repo_transfer_ticket(
         channel_id=channel_id,
         to_staff_member=to_staff_member,
@@ -1402,6 +1602,7 @@ async def transfer_ticket(
                     reason=f"Transferred to {to_staff_member}",
                     ticket_row=ticket_row,
                     metadata={
+                        "previous_claimed_by": existing_claimed_by,
                         "transfer_to_user_id": _actor_id(to_staff_member),
                         "transfer_to_name": _actor_name(to_staff_member),
                     },
@@ -1409,9 +1610,12 @@ async def transfer_ticket(
         except Exception as e:
             print(f"⚠️ Failed logging ticket_transferred for {channel_id}: {repr(e)}")
 
-        _service_debug(f"transfer success channel={channel_id} to={to_staff_member.id}")
+        _service_debug(
+            f"transfer success channel={channel_id} "
+            f"from={existing_claimed_by} to={target_staff_id}"
+        )
     else:
-        _service_debug(f"transfer failed channel={channel_id} to={getattr(to_staff_member, 'id', 'unknown')}")
+        _service_debug(f"transfer failed channel={channel_id} to={target_staff_id}")
     return ok
 
 
@@ -1503,6 +1707,59 @@ async def list_internal_notes(
         channel_id=channel_id,
         limit=limit,
     )
+
+
+async def list_open_ticket_queue(
+    *,
+    guild_id: int | str,
+) -> list[Dict[str, Any]]:
+    try:
+        rows = await repo_list_open_tickets_for_guild(
+            guild_id=guild_id,
+            category=None,
+            statuses=["open", "claimed"],
+        )
+    except Exception as e:
+        print("⚠️ list_open_ticket_queue failed:", repr(e))
+        return []
+
+    normalized = [_normalize_queue_row(r) for r in rows if isinstance(r, dict)]
+    normalized.sort(
+        key=lambda r: (
+            0 if bool(r.get("is_unclaimed")) else 1,
+            str(r.get("created_at") or ""),
+        )
+    )
+    return normalized
+
+
+async def list_unclaimed_tickets(
+    *,
+    guild_id: int | str,
+) -> list[Dict[str, Any]]:
+    rows = await list_open_ticket_queue(guild_id=guild_id)
+    return [r for r in rows if bool(r.get("is_unclaimed"))]
+
+
+async def list_claimed_tickets(
+    *,
+    guild_id: int | str,
+) -> list[Dict[str, Any]]:
+    rows = await list_open_ticket_queue(guild_id=guild_id)
+    return [r for r in rows if bool(r.get("is_claimed"))]
+
+
+async def list_tickets_claimed_by_staff(
+    *,
+    guild_id: int | str,
+    staff_id: int | str,
+) -> list[Dict[str, Any]]:
+    target_staff_id = _safe_int(staff_id, 0)
+    if target_staff_id <= 0:
+        return []
+
+    rows = await list_claimed_tickets(guild_id=guild_id)
+    return [r for r in rows if int(r.get("claimed_by_id") or 0) == target_staff_id]
 
 
 async def reopen_ticket(
@@ -1605,6 +1862,10 @@ __all__ = [
     "set_ticket_priority",
     "add_internal_note",
     "list_internal_notes",
+    "list_open_ticket_queue",
+    "list_unclaimed_tickets",
+    "list_claimed_tickets",
+    "list_tickets_claimed_by_staff",
     "reopen_ticket",
     "reopen_ticket_channel",
 ]
