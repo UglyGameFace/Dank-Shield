@@ -18,7 +18,10 @@ from ..members_new.service import (
 # NEW ticket system
 from ..tickets_new.service import create_ticket_channel
 from ..tickets_new.transcript_service import delete_ticket_with_optional_transcript
-from ..tickets_new.sync_service import sync_active_ticket_channels_for_guild
+from ..tickets_new.sync_service import (
+    sync_active_ticket_channels_for_guild,
+    sync_one_ticket_channel,
+)
 
 # Verify / role UI helpers
 from ..transcripts import (
@@ -1214,6 +1217,36 @@ async def execute_command(cmd: Dict[str, Any]):
             "summary": summary,
         }
 
+    if action == "sync_single_ticket":
+        channel_id = _safe_int(payload.get("channel_id"))
+        dry_run = _safe_bool(payload.get("dry_run"), False)
+
+        if channel_id <= 0:
+            return {
+                "synced": False,
+                "reason": "missing_channel_id",
+            }
+
+        channel = await safe_fetch_channel(guild, channel_id)
+        if channel is None or not isinstance(channel, discord.TextChannel):
+            return {
+                "synced": False,
+                "reason": "channel_missing",
+                "channel_id": str(channel_id),
+            }
+
+        summary = await sync_one_ticket_channel(
+            channel,
+            source="bot_command_sync_single_ticket",
+            dry_run=dry_run,
+        )
+
+        return {
+            "synced": True,
+            "channel_id": str(channel_id),
+            "summary": summary,
+        }
+
     if action == "portal_ticket_reply":
         channel_id = _safe_int(payload.get("channel_id"))
         user_id = _safe_str(payload.get("user_id"))
@@ -1766,3 +1799,4 @@ def start_worker():
     except Exception as e:
         print("❌ Failed to start bot command worker:", repr(e))
         return None
+}
