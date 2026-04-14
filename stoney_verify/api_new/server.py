@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from aiohttp import web
 
@@ -8,11 +8,15 @@ import discord
 
 from ..globals import bot
 from ..tickets_new.service import (
+    assign_ticket,
     create_ticket_channel,
     find_open_ticket_for_owner,
+    list_claimed_tickets,
+    list_open_ticket_queue,
+    list_tickets_claimed_by_staff,
+    list_unclaimed_tickets,
     mark_ticket_closed,
     reopen_ticket,
-    assign_ticket,
 )
 from ..tickets_new.transcript_service import delete_ticket_with_optional_transcript
 from ..tickets_new.sync_service import (
@@ -53,6 +57,32 @@ def _safe_str(value: Any) -> str:
         return str(value)
     except Exception:
         return ""
+
+
+def _queue_row_payload(row: Dict[str, Any]) -> Dict[str, Any]:
+    return {
+        "id": row.get("id"),
+        "guild_id": _safe_str(row.get("guild_id") or ""),
+        "channel_id": _safe_str(row.get("channel_id") or row.get("discord_thread_id") or ""),
+        "channel_name": _safe_str(row.get("channel_name") or ""),
+        "ticket_number": row.get("ticket_number"),
+        "title": _safe_str(row.get("title") or ""),
+        "category": _safe_str(row.get("category") or ""),
+        "status": _safe_str(row.get("status") or row.get("ticket_status") or ""),
+        "priority": _safe_str(row.get("priority") or ""),
+        "user_id": _safe_str(row.get("user_id") or row.get("owner_id") or row.get("requester_id") or ""),
+        "username": _safe_str(row.get("username") or row.get("owner_name") or row.get("requester_name") or ""),
+        "claimed_by": _safe_str(row.get("claimed_by") or row.get("assigned_to") or ""),
+        "claimed_by_id": row.get("claimed_by_id"),
+        "is_unclaimed": bool(row.get("is_unclaimed", False)),
+        "is_claimed": bool(row.get("is_claimed", False)),
+        "is_ghost": bool(row.get("is_ghost", False)),
+        "source": _safe_str(row.get("source") or ""),
+        "created_at": row.get("created_at"),
+        "updated_at": row.get("updated_at"),
+        "closed_at": row.get("closed_at"),
+        "deleted_at": row.get("deleted_at"),
+    }
 
 
 def _channel_to_payload(channel: discord.TextChannel) -> Dict[str, Any]:
@@ -163,7 +193,7 @@ async def create_ticket(request: web.Request):
 
     staff_role_ids = None
     if isinstance(data.get("staff_role_ids"), list):
-        parsed: list[int] = []
+        parsed: List[int] = []
         for rid in data["staff_role_ids"]:
             role_id = _safe_int(rid, 0)
             if role_id > 0:
@@ -380,6 +410,116 @@ async def sync_one_ticket(request: web.Request):
     return _json_ok(summary=summary)
 
 
+async def get_ticket_queue(request: web.Request):
+    guild_id = request.query.get("guild_id")
+    if not guild_id:
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        guild_id = body.get("guild_id")
+
+    guild, err = await _get_guild_or_error(guild_id)
+    if err:
+        return err
+    assert guild is not None
+
+    rows = await list_open_ticket_queue(guild_id=guild.id)
+    payload_rows = [_queue_row_payload(row) for row in rows]
+
+    return _json_ok(
+        queue=payload_rows,
+        total=len(payload_rows),
+        unclaimed=sum(1 for row in payload_rows if bool(row.get("is_unclaimed"))),
+        claimed=sum(1 for row in payload_rows if bool(row.get("is_claimed"))),
+    )
+
+
+async def get_unclaimed_tickets(request: web.Request):
+    guild_id = request.query.get("guild_id")
+    if not guild_id:
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        guild_id = body.get("guild_id")
+
+    guild, err = await _get_guild_or_error(guild_id)
+    if err:
+        return err
+    assert guild is not None
+
+    rows = await list_unclaimed_tickets(guild_id=guild.id)
+    payload_rows = [_queue_row_payload(row) for row in rows]
+
+    return _json_ok(
+        tickets=payload_rows,
+        total=len(payload_rows),
+    )
+
+
+async def get_claimed_tickets(request: web.Request):
+    guild_id = request.query.get("guild_id")
+    if not guild_id:
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        guild_id = body.get("guild_id")
+
+    guild, err = await _get_guild_or_error(guild_id)
+    if err:
+        return err
+    assert guild is not None
+
+    rows = await list_claimed_tickets(guild_id=guild.id)
+    payload_rows = [_queue_row_payload(row) for row in rows]
+
+    return _json_ok(
+        tickets=payload_rows,
+        total=len(payload_rows),
+    )
+
+
+async def get_my_claimed_tickets(request: web.Request):
+    guild_id = request.query.get("guild_id")
+    staff_id = request.query.get("staff_id")
+
+    if not guild_id or not staff_id:
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        guild_id = guild_id or body.get("guild_id")
+        staff_id = staff_id or body.get("staff_id")
+
+    guild, err = await _get_guild_or_error(guild_id)
+    if err:
+        return err
+    assert guild is not None
+
+    if not staff_id:
+        return _json_error("staff_id required")
+
+    staff_member, err = await _get_member_from_guild(guild, staff_id)
+    if err:
+        return err
+    assert staff_member is not None
+
+    rows = await list_tickets_claimed_by_staff(
+        guild_id=guild.id,
+        staff_id=staff_member.id,
+    )
+    payload_rows = [_queue_row_payload(row) for row in rows]
+
+    return _json_ok(
+        tickets=payload_rows,
+        total=len(payload_rows),
+        staff_id=str(staff_member.id),
+        staff_name=str(staff_member),
+    )
+
+
 async def force_member_sync(request: web.Request):
     try:
         data = await request.json()
@@ -467,6 +607,18 @@ async def start_api(bot_instance: discord.Client):
     app.router.add_post("/ticket/delete", delete_ticket)
     app.router.add_post("/ticket/reopen", reopen_ticket_endpoint)
     app.router.add_post("/ticket/assign", assign_ticket_endpoint)
+
+    app.router.add_get("/tickets/queue", get_ticket_queue)
+    app.router.add_post("/tickets/queue", get_ticket_queue)
+
+    app.router.add_get("/tickets/unclaimed", get_unclaimed_tickets)
+    app.router.add_post("/tickets/unclaimed", get_unclaimed_tickets)
+
+    app.router.add_get("/tickets/claimed", get_claimed_tickets)
+    app.router.add_post("/tickets/claimed", get_claimed_tickets)
+
+    app.router.add_get("/tickets/my-claimed", get_my_claimed_tickets)
+    app.router.add_post("/tickets/my-claimed", get_my_claimed_tickets)
 
     app.router.add_post("/tickets/sync-active", sync_active_tickets)
     app.router.add_post("/tickets/sync-one", sync_one_ticket)
