@@ -70,6 +70,7 @@ except Exception:
 # WORKERS
 from .workers.bot_command_worker import start_worker
 from .workers.metrics_sync_worker import start_metrics_worker
+from .workers.ticket_automation_worker import start_ticket_automation_worker
 
 
 _STARTED_LEGACY_ACTIONS_API = False
@@ -652,6 +653,15 @@ async def _start_workers_once() -> None:
             print("ℹ️ Metrics sync worker was not started")
     except Exception as e:
         print("⚠️ Metrics worker failed:", repr(e))
+
+    try:
+        automation_task = start_ticket_automation_worker()
+        if automation_task is not None:
+            print("🤖 Ticket automation worker startup requested")
+        else:
+            print("ℹ️ Ticket automation worker was not started")
+    except Exception as e:
+        print("⚠️ Ticket automation worker failed:", repr(e))
 
 
 async def _startup_background_runner() -> None:
