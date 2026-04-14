@@ -1,16 +1,16 @@
 from __future__ import annotations
 
 import traceback
-from typing import Any, Optional
+from typing import Any
 
 import discord
 
 from ..members_new.service import (
+    reconcile_departed_members,
     sync_all_members,
     sync_member,
     sync_member_remove,
     sync_role_members,
-    reconcile_departed_members,
 )
 
 # ============================================================
@@ -20,10 +20,8 @@ from ..members_new.service import (
 # This module intentionally does NOT own Discord @bot.event handlers.
 # The primary runtime event owner is stoney_verify/events.py.
 #
-# Keeping event handlers out of this file avoids import-order collisions
-# where a newer helper module silently overrides the richer legacy event
-# flow that also feeds modlog, raid detection, verification assignment,
-# and dashboard sync behavior.
+# It exists as the stable new-structure facade used by other modules
+# such as api_new/server.py and task/worker flows.
 # ============================================================
 
 
@@ -99,7 +97,7 @@ async def sync_role_snapshot(role: discord.Role):
 # Public helper API expected by other modules
 # ------------------------------------------------------------
 # These names are kept stable because api_new/server.py and
-# tasks_new/command_queue.py import them directly.
+# other modules import them directly.
 # ============================================================
 
 
