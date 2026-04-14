@@ -220,13 +220,9 @@ async def close_ticket(request: web.Request):
     assert channel is not None
 
     closed_by = None
-    guild = channel.guild
     staff_id = data.get("staff_id")
     if staff_id:
-        try:
-            closed_by, _ = await _get_member_from_guild(guild, staff_id)
-        except Exception:
-            closed_by = None
+        closed_by, _ = await _get_member_from_guild(channel.guild, staff_id)
 
     reason = data.get("reason")
     ok = await mark_ticket_closed(
@@ -251,7 +247,20 @@ async def reopen_ticket_endpoint(request: web.Request):
     if not channel_id:
         return _json_error("channel_id required")
 
-    ok = await reopen_ticket(channel_id=channel_id)
+    actor = None
+    actor_id = data.get("actor_id") or data.get("staff_id")
+    if actor_id:
+        channel, err = await _get_text_channel(channel_id)
+        if err:
+            return err
+        assert channel is not None
+        actor, _ = await _get_member_from_guild(channel.guild, actor_id)
+
+    ok = await reopen_ticket(
+        channel_id=channel_id,
+        actor=actor,
+        reason=data.get("reason"),
+    )
     if not ok:
         return _json_error("Failed to reopen ticket", 500)
 
@@ -277,8 +286,7 @@ async def assign_ticket_endpoint(request: web.Request):
         return err
     assert channel is not None
 
-    guild = channel.guild
-    staff, err = await _get_member_from_guild(guild, staff_id)
+    staff, err = await _get_member_from_guild(channel.guild, staff_id)
     if err:
         return err
     assert staff is not None
@@ -306,13 +314,9 @@ async def delete_ticket(request: web.Request):
     reason = data.get("reason") or "Deleted from dashboard"
 
     deleted_by = None
-    guild = channel.guild
     staff_id = data.get("staff_id")
     if staff_id:
-        try:
-            deleted_by, _ = await _get_member_from_guild(guild, staff_id)
-        except Exception:
-            deleted_by = None
+        deleted_by, _ = await _get_member_from_guild(channel.guild, staff_id)
 
     result = await delete_ticket_with_optional_transcript(
         channel=channel,
@@ -334,8 +338,7 @@ async def sync_active_tickets(request: web.Request):
     except Exception:
         data = {}
 
-    guild_id = data.get("guild_id")
-    guild, err = await _get_guild_or_error(guild_id)
+    guild, err = await _get_guild_or_error(data.get("guild_id"))
     if err:
         return err
     assert guild is not None
