@@ -1,8 +1,9 @@
 from __future__ import annotations
 
-import os
 import asyncio
+import os
 import traceback
+
 import discord
 from discord.ext import commands as ext_commands
 
@@ -58,6 +59,8 @@ from .tickets_new import service as _tickets_service  # noqa: F401
 from .tickets_new import transcript_service as _transcript_service  # noqa: F401
 from .tickets_new import panel as _tickets_panel  # noqa: F401
 from .tickets_new import sync_service as _tickets_sync_service  # noqa: F401
+from .verification_new import service as _verification_service  # noqa: F401
+from .verification_new import voice_verify as _voice_verify_service  # noqa: F401
 
 # API SERVERS
 from .api_new.server import start_api
@@ -469,10 +472,6 @@ async def _maybe_run_departed_reconcile_once() -> None:
 
             try:
                 bot._initial_member_sync_started = True  # type: ignore[attr-defined]
-            except Exception:
-                pass
-
-            try:
                 bot._initial_member_sync_done = True  # type: ignore[attr-defined]
             except Exception:
                 pass
@@ -741,6 +740,75 @@ def _should_ignore_foreign_prefix_command(
         return False
 
 
+async def _run_startup_once_flags() -> None:
+    try:
+        if not getattr(bot, "_invite_cache_warm_started", False):  # type: ignore[attr-defined]
+            try:
+                bot._invite_cache_warm_started = True  # type: ignore[attr-defined]
+            except Exception:
+                pass
+
+            async def _run_invite_cache_warm():
+                try:
+                    await _warm_all_guild_invite_caches()
+                except Exception as e:
+                    print("⚠️ invite cache warm error:", e)
+                    try:
+                        traceback.print_exc()
+                    except Exception:
+                        pass
+
+            asyncio.create_task(_run_invite_cache_warm())
+
+        if not getattr(bot, "_initial_member_sync_started", False):  # type: ignore[attr-defined]
+            try:
+                bot._initial_member_sync_started = True  # type: ignore[attr-defined]
+            except Exception:
+                pass
+
+            async def _run_startup_member_sync():
+                try:
+                    await _initial_member_sync_sweep()
+                    try:
+                        bot._initial_member_sync_done = True  # type: ignore[attr-defined]
+                    except Exception:
+                        pass
+                except Exception as e:
+                    print("⚠️ background initial member sync error:", e)
+                    try:
+                        traceback.print_exc()
+                    except Exception:
+                        pass
+
+            asyncio.create_task(_run_startup_member_sync())
+
+        if not getattr(bot, "_stale_verification_reconcile_started", False):  # type: ignore[attr-defined]
+            try:
+                bot._stale_verification_reconcile_started = True  # type: ignore[attr-defined]
+            except Exception:
+                pass
+
+            async def _run_stale_verification_reconcile():
+                try:
+                    await _reconcile_stale_open_verification_tickets()
+                except Exception as e:
+                    print("⚠️ stale verification reconciliation error:", e)
+                    try:
+                        traceback.print_exc()
+                    except Exception:
+                        pass
+
+            asyncio.create_task(_run_stale_verification_reconcile())
+
+        try:
+            started = await ensure_channel_cleanup_worker_started()
+            print(f"🧹 Channel cleanup worker status: started={started}")
+        except Exception as e:
+            print(f"⚠️ Failed starting channel cleanup worker: {repr(e)}")
+    except Exception:
+        pass
+
+
 # Register ticket event listeners once at import/startup time.
 _setup_ticket_events_once()
 
@@ -780,8 +848,6 @@ async def on_command_error(ctx: ext_commands.Context, error: Exception) -> None:
         if _should_ignore_foreign_prefix_command(ctx, base_error):
             return
 
-        # Also suppress ugly stack spam for any other unknown prefix command.
-        # This bot is primarily slash-command driven now.
         if isinstance(base_error, ext_commands.CommandNotFound):
             try:
                 raw = str(getattr(getattr(ctx, "message", None), "content", "") or "").strip()
@@ -791,7 +857,6 @@ async def on_command_error(ctx: ext_commands.Context, error: Exception) -> None:
                 pass
             return
 
-        # Respect command/cog-local handlers if they exist.
         try:
             if ctx.command and hasattr(ctx.command, "on_error"):
                 return
