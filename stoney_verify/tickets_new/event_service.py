@@ -633,10 +633,14 @@ async def log_ticket_event(
     resolved_target_user_id = (
         _as_str_id(target_user_id)
         or _as_str_id(row.get("user_id") if isinstance(row, dict) else None)
+        or _as_str_id(row.get("owner_id") if isinstance(row, dict) else None)
+        or _as_str_id(row.get("requester_id") if isinstance(row, dict) else None)
     )
     resolved_target_name = (
         _clean_text(target_name, 160)
         or _clean_text(row.get("username") if isinstance(row, dict) else None, 160)
+        or _clean_text(row.get("owner_name") if isinstance(row, dict) else None, 160)
+        or _clean_text(row.get("requester_name") if isinstance(row, dict) else None, 160)
     )
     resolved_category = _clean_text(row.get("category") if isinstance(row, dict) else None, 120)
     resolved_priority = _clean_text(row.get("priority") if isinstance(row, dict) else None, 40)
