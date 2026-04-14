@@ -14,7 +14,10 @@ from .tickets_new.service import (
     reopen_ticket_channel,
 )
 from .tickets_new.sync_service import sync_one_ticket_channel
-from .tickets_new.repository import _find_ticket_row_by_channel_id
+from .tickets_new.repository import (
+    _find_ticket_row_by_channel_id,
+    safe_optional_update_by_channel_id,
+)
 
 # NEW: timer-cancel bridge from active commands_ext timer system
 try:
@@ -28,12 +31,13 @@ except Exception:
 # ticket_events.py
 # ------------------------------------------------------------
 # Purpose:
-# - thin event bridge for ticket channels
+# - thin runtime event bridge for ticket channels
 # - no worker/API startup here
 # - no duplicate ticket state engine here
 # - delegates persistence/state to tickets_new.service + sync_service
 # - cancels pending verification wait timers when a real
 #   verification ticket is created / resolved for a user
+# - keeps runtime channel state aligned with the new repository/service layer
 # ============================================================
 
 TICKET_NAME_RE = re.compile(r"^(ticket|closed)-(\d+)$", re.I)
@@ -285,7 +289,6 @@ async def _is_ticket_channel(channel: discord.TextChannel) -> bool:
         return True
 
     if _looks_like_ticket_category(channel):
-        # category match is only a hint, so verify through DB if possible
         try:
             row = await _find_ticket_row_by_channel_id(channel.id)
             if row is not None:
@@ -293,7 +296,6 @@ async def _is_ticket_channel(channel: discord.TextChannel) -> bool:
         except Exception:
             pass
 
-        # still allow event-driven sync for ticket-category channels
         return True
 
     try:
@@ -310,6 +312,18 @@ def _cancel_pending_sync(channel_id: int) -> None:
     task = _PENDING_SYNC_TASKS.pop(int(channel_id), None)
     if task and not task.done():
         task.cancel()
+
+
+async def _update_channel_name_cache(channel: discord.TextChannel) -> None:
+    try:
+        await safe_optional_update_by_channel_id(
+            channel.id,
+            {
+                "channel_name": str(channel.name or ""),
+            },
+        )
+    except Exception:
+        pass
 
 
 async def _run_channel_sync(
@@ -342,8 +356,11 @@ async def _run_channel_sync(
                     f"name='{channel.name}' action={action}{extra}"
                 )
 
-            # After a successful channel sync, try to resolve the owner and
-            # cancel any pre-ticket verification wait timers for them.
+            try:
+                await _update_channel_name_cache(channel)
+            except Exception:
+                pass
+
             try:
                 await _maybe_cancel_wait_timers_for_ticket_owner(
                     channel,
@@ -403,9 +420,11 @@ async def _handle_channel_create(channel: discord.abc.GuildChannel) -> None:
     if not await _is_ticket_channel(channel):
         return
 
-    # Best-effort immediate cancel if the owner is already encoded in the topic.
-    # This makes the timer drop as soon as the ticket channel exists, without
-    # waiting on the DB-backed sync as the only path.
+    try:
+        await _update_channel_name_cache(channel)
+    except Exception:
+        pass
+
     try:
         await _maybe_cancel_wait_timers_for_ticket_owner(
             channel,
@@ -510,6 +529,10 @@ async def _handle_channel_update(
                     reason="Channel updated to closed state",
                 )
                 if ok:
+                    try:
+                        await _update_channel_name_cache(after)
+                    except Exception:
+                        pass
                     print(
                         f"🧩 ticket_events close-detect -> channel={after.id} "
                         f"name='{after.name}'"
@@ -522,8 +545,14 @@ async def _handle_channel_update(
                     channel=after,
                     owner=None,
                     staff_role_ids=None,
+                    actor=None,
+                    reason="Channel updated to open state",
                 )
                 if ok:
+                    try:
+                        await _update_channel_name_cache(after)
+                    except Exception:
+                        pass
                     print(
                         f"🧩 ticket_events reopen-detect -> channel={after.id} "
                         f"name='{after.name}'"
@@ -536,8 +565,11 @@ async def _handle_channel_update(
                 repr(e),
             )
 
-    # If the topic/name/category just changed into a usable ticket shape and we
-    # can now resolve the owner, cancel timers before the delayed sync too.
+    try:
+        await _update_channel_name_cache(after)
+    except Exception:
+        pass
+
     try:
         await _maybe_cancel_wait_timers_for_ticket_owner(
             after,
@@ -576,9 +608,6 @@ async def _handle_message(message: discord.Message) -> None:
     except Exception:
         return
 
-    # Sometimes the very first staff/user message lands after the ticket exists
-    # and after topic/DB state is stable. Use that as another safe fallback to
-    # kill old pre-ticket timers.
     try:
         await _maybe_cancel_wait_timers_for_ticket_owner(
             channel,
@@ -590,7 +619,6 @@ async def _handle_message(message: discord.Message) -> None:
             repr(e),
         )
 
-    # Debounced reconciliation for real user/staff activity.
     _schedule_channel_sync(
         channel,
         source="event_message_activity",
