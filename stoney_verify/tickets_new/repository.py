@@ -68,31 +68,23 @@ _OPTIONAL_TICKET_COLUMNS: Set[str] = {
     "reopen_reason",
     "close_reason",
     "delete_reason",
-    "owner_id",         # compatibility alias
-    "owner_name",       # compatibility alias
-    "requester_id",     # compatibility alias
-    "requester_name",   # compatibility alias
+    "owner_id",
+    "owner_name",
+    "requester_id",
+    "requester_name",
     "claimed_by_name",
     "assigned_to_name",
     "closed_by_name",
     "deleted_by_name",
 }
 
-# None = unknown / auto-detect, True = supported, False = unsupported
 _OPTIONAL_COLUMN_SUPPORT: Dict[str, Optional[bool]] = {
     col: None for col in _OPTIONAL_TICKET_COLUMNS
 }
 
-# Values:
-# None = unknown / auto-detect
-# "ticket_notes" = current schema
-# "ticket_internal_notes" = legacy schema
-# "unavailable" = neither table works
 _TICKET_NOTES_BACKEND: Optional[str] = None
-
 _PINNED_NOTE_PREFIX = "[PINNED] "
 
-# Optional activity_feed_events columns
 _OPTIONAL_ACTIVITY_EVENT_COLUMNS: Set[str] = {
     "meta",
     "search_text",
@@ -103,13 +95,45 @@ _OPTIONAL_ACTIVITY_EVENT_COLUMNS: Set[str] = {
 }
 _ACTIVITY_EVENT_UNSUPPORTED_COLS: Set[str] = set()
 
-# Optional member_joins columns
 _OPTIONAL_MEMBER_JOIN_COLUMNS: Set[str] = {
     "created_at",
     "username",
     "joined_at",
 }
 _MEMBER_JOIN_UNSUPPORTED_COLS: Set[str] = set()
+
+# Columns we should never blindly write back from a fetched row.
+_ROW_ONLY_TICKET_COLUMNS: Set[str] = {
+    "id",
+}
+
+# Canonical ticket columns that are safe to patch directly.
+_BASE_TICKET_WRITE_COLUMNS: Set[str] = {
+    "guild_id",
+    "user_id",
+    "username",
+    "title",
+    "category",
+    "status",
+    "priority",
+    "claimed_by",
+    "closed_by",
+    "closed_reason",
+    "initial_message",
+    "ai_category_confidence",
+    "mod_suggestion",
+    "mod_suggestion_confidence",
+    "created_at",
+    "updated_at",
+    "closed_at",
+    "discord_thread_id",
+    "channel_id",
+    "channel_name",
+}
+
+_ALLOWED_TICKET_WRITE_COLUMNS: Set[str] = (
+    _BASE_TICKET_WRITE_COLUMNS | _OPTIONAL_TICKET_COLUMNS
+)
 
 
 # ============================================================
@@ -173,7 +197,6 @@ def _normalize_ticket_row(row: Any) -> Optional[Dict[str, Any]]:
             return None
         out = dict(row)
 
-        # Normalize owner compatibility aliases for safer downstream use.
         user_id = _as_str_id(out.get("user_id"))
         username = _clean_text(out.get("username"))
         out["owner_id"] = _as_str_id(out.get("owner_id")) or user_id
@@ -290,6 +313,60 @@ def _owner_id_from_row(row: Optional[Dict[str, Any]]) -> Optional[str]:
         or _as_str_id(row.get("owner_id"))
         or _as_str_id(row.get("requester_id"))
     )
+
+
+def _ticket_status(row: Optional[Dict[str, Any]]) -> str:
+    if not isinstance(row, dict):
+        return "unknown"
+    try:
+        return str(row.get("status") or "").strip().lower()
+    except Exception:
+        return "unknown"
+
+
+def _ticket_claimed_by_id(row: Optional[Dict[str, Any]]) -> int:
+    if not isinstance(row, dict):
+        return 0
+    for key in ("assigned_to", "claimed_by"):
+        try:
+            value = int(str(row.get(key) or "0") or 0)
+            if value > 0:
+                return value
+        except Exception:
+            continue
+    return 0
+
+
+def _clean_ticket_payload(
+    payload: Dict[str, Any],
+    *,
+    include_created_at: bool = False,
+) -> Dict[str, Any]:
+    out: Dict[str, Any] = {}
+    for key, value in dict(payload or {}).items():
+        if key in _ROW_ONLY_TICKET_COLUMNS:
+            continue
+        if key not in _ALLOWED_TICKET_WRITE_COLUMNS:
+            continue
+        if key == "created_at" and not include_created_at:
+            continue
+        out[key] = value
+    return out
+
+
+def _ticket_patch_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
+    out = _clean_ticket_payload(payload, include_created_at=False)
+    out.pop("guild_id", None)
+    out.pop("user_id", None)
+    out.pop("username", None)
+    out.pop("channel_id", None)
+    out.pop("discord_thread_id", None)
+    out["updated_at"] = _now_iso()
+    return out
+
+
+def _nonempty_ticket_patch(payload: Dict[str, Any]) -> bool:
+    return any(k != "updated_at" for k in payload.keys())
 
 
 # ============================================================
@@ -460,13 +537,6 @@ def _strip_known_unsupported_columns(payload: Dict[str, Any]) -> Dict[str, Any]:
     return out
 
 
-def _strip_columns(payload: Dict[str, Any], columns: Sequence[str]) -> Dict[str, Any]:
-    out = dict(payload or {})
-    for col in columns:
-        out.pop(col, None)
-    return out
-
-
 def _detect_and_mark_unsupported_optional_columns(
     exc: Exception,
     payload: Dict[str, Any],
@@ -491,7 +561,7 @@ async def _write_ticket_with_optional_fallback(
 
     max_retries = len(_OPTIONAL_TICKET_COLUMNS)
     for attempt in range(1, max_retries + 2):
-        snapshot = current
+        snapshot = dict(current)
         try:
             return await _run_db_op(op_name, lambda: writer(snapshot))
         except Exception as e:
@@ -903,14 +973,6 @@ def build_ticket_payload(
     deleted_by_name: Optional[str] = None,
     extra: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
-    """
-    Build the canonical tickets-table insert/upsert payload dict.
-
-    Important compatibility decision:
-    - real live schema uses `user_id` / `username` as owner fields
-    - owner_id/requester_id aliases are included only as optional compatibility
-      columns for environments that added them later
-    """
     now_iso = _now_iso()
     clean_owner_id = _as_str_id(owner_id)
     clean_username = _clean_text(username)
@@ -967,7 +1029,6 @@ def build_ticket_payload(
         "last_activity_at": last_activity_at,
         "last_message_id": _as_str_id(last_message_id),
         "decision": _clean_text(decision),
-        # compatibility aliases
         "owner_id": clean_owner_id,
         "requester_id": clean_owner_id,
         "owner_name": clean_owner_name,
@@ -981,7 +1042,7 @@ def build_ticket_payload(
     if extra:
         payload.update(dict(extra))
 
-    return payload
+    return _clean_ticket_payload(payload, include_created_at=True)
 
 
 def build_ticket_payload_from_channel(
@@ -1205,7 +1266,7 @@ async def list_tickets_for_owner(
 
 async def insert_ticket(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     try:
-        clean = dict(payload or {})
+        clean = _clean_ticket_payload(dict(payload or {}), include_created_at=True)
         clean.setdefault("updated_at", _now_iso())
         clean.setdefault("created_at", _now_iso())
 
@@ -1223,7 +1284,7 @@ async def insert_ticket(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
 
 
 async def upsert_ticket(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-    clean = dict(payload or {})
+    clean = _clean_ticket_payload(dict(payload or {}), include_created_at=True)
     clean["updated_at"] = _now_iso()
     clean.setdefault("created_at", _now_iso())
 
@@ -1254,14 +1315,12 @@ async def upsert_ticket(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
 
         if existing and existing.get("id") is not None:
             ticket_id = str(existing["id"])
-            merged = dict(existing)
-            merged.update(clean)
-            merged.pop("id", None)
-            merged = _preserve_existing_created_at(existing, merged)
+            patch = _clean_ticket_payload(clean, include_created_at=False)
+            patch = _preserve_existing_created_at(existing, patch)
 
             res = await _write_ticket_with_optional_fallback(
                 op_name="update existing ticket during upsert",
-                payload=merged,
+                payload=patch,
                 writer=lambda p: _update_ticket_by_id_sync(ticket_id, p),
             )
             rows = getattr(res, "data", None) or []
@@ -1422,8 +1481,13 @@ async def update_ticket_by_channel_id(
     if not cid:
         return None
 
-    clean = dict(payload or {})
-    clean["updated_at"] = _now_iso()
+    clean = _ticket_patch_payload(dict(payload or {}))
+    if not _nonempty_ticket_patch(clean):
+        return (
+            await get_ticket_by_any_channel_id(cid)
+            if allow_thread_fallback
+            else await get_ticket_by_channel_id(cid)
+        )
 
     try:
         row = (
@@ -1433,14 +1497,10 @@ async def update_ticket_by_channel_id(
         )
         if row and row.get("id") is not None:
             ticket_id = str(row["id"])
-            merged = dict(row)
-            merged.update(clean)
-            merged.pop("id", None)
-            merged = _preserve_existing_created_at(row, merged)
 
             res = await _write_ticket_with_optional_fallback(
                 op_name="update ticket by located id",
-                payload=merged,
+                payload=clean,
                 writer=lambda p: _update_ticket_by_id_sync(ticket_id, p),
             )
             rows = getattr(res, "data", None) or []
@@ -1478,20 +1538,16 @@ async def safe_optional_update_by_channel_id(
         return False
 
     try:
-        clean = dict(payload or {})
-        clean["updated_at"] = _now_iso()
+        clean = _ticket_patch_payload(dict(payload or {}))
+        if not _nonempty_ticket_patch(clean):
+            return True
 
         row = await get_ticket_by_any_channel_id(cid)
         if row and row.get("id") is not None:
             ticket_id = str(row["id"])
-            merged = dict(row)
-            merged.update(clean)
-            merged.pop("id", None)
-            merged = _preserve_existing_created_at(row, merged)
-
             await _write_ticket_with_optional_fallback(
                 op_name="safe optional update by located id",
-                payload=merged,
+                payload=clean,
                 writer=lambda p: _update_ticket_by_id_sync(ticket_id, p),
             )
             return True
@@ -1564,6 +1620,14 @@ async def attach_transcript_to_ticket(
     transcript_message_id: Optional[int | str],
     transcript_channel_id: Optional[int | str],
 ) -> bool:
+    existing = await get_ticket_by_any_channel_id(channel_id)
+    if existing:
+        same_url = _clean_text(existing.get("transcript_url")) == _clean_text(transcript_url)
+        same_msg = _as_str_id(existing.get("transcript_message_id")) == _as_str_id(transcript_message_id)
+        same_ch = _as_str_id(existing.get("transcript_channel_id")) == _as_str_id(transcript_channel_id)
+        if same_url and same_msg and same_ch:
+            return True
+
     return await safe_optional_update_by_channel_id(
         channel_id,
         {
@@ -1582,10 +1646,15 @@ async def mark_ticket_closed(
     decision: Optional[str] = None,
     extra_payload: Optional[Dict[str, Any]] = None,
 ) -> bool:
+    existing = await get_ticket_by_any_channel_id(channel_id)
+    if existing and _ticket_status(existing) == "closed":
+        return True
+
     payload: Dict[str, Any] = {
         "status": "closed",
         "closed_at": _now_iso(),
         "closed_reason": _clean_text(reason),
+        "reopened_at": None,
     }
 
     if closed_by is not None:
@@ -1606,6 +1675,10 @@ async def mark_ticket_deleted(
     reason: Optional[str] = None,
     extra_payload: Optional[Dict[str, Any]] = None,
 ) -> bool:
+    existing = await get_ticket_by_any_channel_id(channel_id)
+    if existing and _ticket_status(existing) == "deleted":
+        return True
+
     payload: Dict[str, Any] = {
         "status": "deleted",
         "deleted_at": _now_iso(),
@@ -1630,6 +1703,10 @@ async def reopen_ticket(
     reason: Optional[str] = None,
     extra_payload: Optional[Dict[str, Any]] = None,
 ) -> bool:
+    existing = await get_ticket_by_any_channel_id(channel_id)
+    if existing and _ticket_status(existing) == "open":
+        return True
+
     payload: Dict[str, Any] = {
         "status": "open",
         "reopened_at": _now_iso(),
@@ -1656,14 +1733,22 @@ async def assign_ticket(
     channel_id: int | str,
     staff_member: discord.Member | discord.User,
 ) -> bool:
+    staff_id = _as_str_id(getattr(staff_member, "id", None))
+    staff_name = _safe_str(staff_member)
+
+    existing = await get_ticket_by_any_channel_id(channel_id)
+    if existing:
+        if _ticket_status(existing) == "claimed" and _ticket_claimed_by_id(existing) == _as_int(staff_id, 0):
+            return True
+
     row = await update_ticket_by_channel_id(
         channel_id,
         {
             "status": "claimed",
-            "assigned_to": _as_str_id(getattr(staff_member, "id", None)),
-            "claimed_by": _as_str_id(getattr(staff_member, "id", None)),
-            "assigned_to_name": _safe_str(staff_member),
-            "claimed_by_name": _safe_str(staff_member),
+            "assigned_to": staff_id,
+            "claimed_by": staff_id,
+            "assigned_to_name": staff_name,
+            "claimed_by_name": staff_name,
         },
         allow_thread_fallback=True,
     )
@@ -1674,6 +1759,11 @@ async def unclaim_ticket(
     *,
     channel_id: int | str,
 ) -> bool:
+    existing = await get_ticket_by_any_channel_id(channel_id)
+    if existing:
+        if _ticket_status(existing) == "open" and _ticket_claimed_by_id(existing) <= 0:
+            return True
+
     row = await update_ticket_by_channel_id(
         channel_id,
         {
@@ -1693,14 +1783,22 @@ async def transfer_ticket(
     channel_id: int | str,
     to_staff_member: discord.Member | discord.User,
 ) -> bool:
+    staff_id = _as_str_id(getattr(to_staff_member, "id", None))
+    staff_name = _safe_str(to_staff_member)
+
+    existing = await get_ticket_by_any_channel_id(channel_id)
+    if existing:
+        if _ticket_status(existing) == "claimed" and _ticket_claimed_by_id(existing) == _as_int(staff_id, 0):
+            return True
+
     row = await update_ticket_by_channel_id(
         channel_id,
         {
             "status": "claimed",
-            "assigned_to": _as_str_id(getattr(to_staff_member, "id", None)),
-            "claimed_by": _as_str_id(getattr(to_staff_member, "id", None)),
-            "assigned_to_name": _safe_str(to_staff_member),
-            "claimed_by_name": _safe_str(to_staff_member),
+            "assigned_to": staff_id,
+            "claimed_by": staff_id,
+            "assigned_to_name": staff_name,
+            "claimed_by_name": staff_name,
         },
         allow_thread_fallback=True,
     )
@@ -1715,6 +1813,10 @@ async def set_ticket_priority(
     clean_priority = _clean_text(priority)
     if not clean_priority:
         return False
+
+    existing = await get_ticket_by_any_channel_id(channel_id)
+    if existing and _clean_text(existing.get("priority")) == clean_priority.lower():
+        return True
 
     row = await update_ticket_by_channel_id(
         channel_id,
@@ -1824,6 +1926,9 @@ async def add_internal_note(
 
             await _run_db_op(f"insert ticket note channel={channel_id}", _insert_ticket_note_sync)
             _TICKET_NOTES_BACKEND = TICKET_NOTES_TABLE
+
+            await touch_ticket(channel_id, last_activity_at=_now_iso())
+
             _repo_debug(
                 f"add-note success backend={TICKET_NOTES_TABLE} "
                 f"channel={channel_id} ticket_id={row.get('id')} author={getattr(author, 'id', None)}"
@@ -1852,6 +1957,9 @@ async def add_internal_note(
                         _insert_ticket_note_compat_sync,
                     )
                     _TICKET_NOTES_BACKEND = TICKET_NOTES_TABLE
+
+                    await touch_ticket(channel_id, last_activity_at=_now_iso())
+
                     _repo_debug(
                         f"add-note compat success backend={TICKET_NOTES_TABLE} "
                         f"channel={channel_id} ticket_id={row.get('id')} author={getattr(author, 'id', None)}"
@@ -1899,6 +2007,9 @@ async def add_internal_note(
                 _insert_legacy_note_sync,
             )
             _TICKET_NOTES_BACKEND = legacy_table
+
+            await touch_ticket(channel_id, last_activity_at=_now_iso())
+
             _repo_debug(
                 f"add-note success backend={legacy_table} "
                 f"channel={channel_id} ticket_id={row.get('id')} author={getattr(author, 'id', None)}"
@@ -2119,7 +2230,13 @@ async def add_ticket_message(
         )
         rows = getattr(resp, "data", None) or []
         if rows:
-            return _normalize_ticket_message_row(rows[0])
+            normalized = _normalize_ticket_message_row(rows[0])
+            await touch_ticket(
+                channel_id,
+                last_activity_at=_now_iso(),
+                last_message_id=normalized.get("id"),
+            )
+            return normalized
     except Exception as e:
         print(f"⚠️ repository.add_ticket_message failed: {repr(e)}")
     return None
