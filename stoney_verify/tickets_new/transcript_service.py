@@ -620,6 +620,7 @@ async def delete_ticket_with_optional_transcript(
         transcript_message: Optional[discord.Message] = None
         transcript_url: Optional[str] = None
         transcript_channel_id: Optional[int] = None
+        transcript_message_id: Optional[int] = None
 
         should_post_transcript = (not is_ghost) or force_transcript_for_ghost
 
@@ -643,6 +644,11 @@ async def delete_ticket_with_optional_transcript(
 
             if transcript_message is not None:
                 try:
+                    transcript_message_id = int(transcript_message.id)
+                except Exception:
+                    transcript_message_id = None
+
+                try:
                     transcript_channel_id = int(transcript_message.channel.id)
                 except Exception:
                     transcript_channel_id = None
@@ -651,32 +657,32 @@ async def delete_ticket_with_optional_transcript(
                     await attach_transcript_to_ticket(
                         channel_id=channel.id,
                         transcript_url=transcript_url,
-                        transcript_message_id=getattr(transcript_message, "id", None),
+                        transcript_message_id=transcript_message_id,
                         transcript_channel_id=transcript_channel_id,
-                        actor=deleted_by,
                     )
                 except Exception as e:
                     print("⚠️ Failed attaching transcript metadata:", repr(e))
 
+        db_marked_deleted = False
         try:
-            await mark_ticket_deleted(
+            db_marked_deleted = await mark_ticket_deleted(
                 channel_id=channel.id,
                 deleted_by=deleted_by,
                 reason=reason or "Deleted",
             )
         except Exception as e:
             print("⚠️ Failed marking ticket deleted in DB before channel delete:", repr(e))
+            db_marked_deleted = False
 
         try:
             await channel.delete(reason=reason or "Ticket deleted")
             return {
                 "ok": True,
                 "deleted": True,
+                "db_marked_deleted": bool(db_marked_deleted),
                 "transcript_posted": transcript_message is not None,
                 "transcript_url": transcript_url,
-                "transcript_message_id": getattr(transcript_message, "id", None)
-                if transcript_message
-                else None,
+                "transcript_message_id": transcript_message_id,
                 "transcript_channel_id": transcript_channel_id,
                 "reason": None,
             }
@@ -685,11 +691,10 @@ async def delete_ticket_with_optional_transcript(
             return {
                 "ok": False,
                 "deleted": False,
+                "db_marked_deleted": bool(db_marked_deleted),
                 "transcript_posted": transcript_message is not None,
                 "transcript_url": transcript_url,
-                "transcript_message_id": getattr(transcript_message, "id", None)
-                if transcript_message
-                else None,
+                "transcript_message_id": transcript_message_id,
                 "transcript_channel_id": transcript_channel_id,
                 "reason": repr(e),
             }
