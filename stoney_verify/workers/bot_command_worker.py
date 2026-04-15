@@ -1799,4 +1799,3 @@ def start_worker():
     except Exception as e:
         print("❌ Failed to start bot command worker:", repr(e))
         return None
-}
