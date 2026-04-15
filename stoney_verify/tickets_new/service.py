@@ -1002,6 +1002,9 @@ async def create_ticket_channel(
     - cancels pre-ticket verification wait timers as soon as a real ticket exists
     """
     user_lock = _user_ticket_creation_lock(owner.id)
+    clean_priority = _safe_str(priority).strip().lower()
+    if clean_priority not in _VALID_TICKET_PRIORITIES:
+        clean_priority = "medium"
 
     async with user_lock:
         existing_row = await repo_find_open_ticket_for_owner(
@@ -1045,7 +1048,7 @@ async def create_ticket_channel(
                                 ),
                                 category=_safe_str(existing_row.get("category") or category),
                                 status=_safe_str(existing_row.get("status") or "open"),
-                                priority=_safe_str(existing_row.get("priority") or priority),
+                                priority=_safe_str(existing_row.get("priority") or clean_priority),
                                 ticket_number=_safe_int(existing_row.get("ticket_number"), 0) or None,
                                 assigned_to=existing_row.get("assigned_to"),
                                 is_ghost=_safe_bool(existing_row.get("is_ghost"), is_ghost),
@@ -1146,7 +1149,7 @@ async def create_ticket_channel(
             channel_name=channel.name,
             category="ghost" if is_ghost else category,
             status="open",
-            priority=priority,
+            priority=clean_priority,
             initial_message=intro_message,
             ticket_number=ticket_number,
             is_ghost=is_ghost,
@@ -1177,7 +1180,7 @@ async def create_ticket_channel(
                     "ticket_number": ticket_number,
                     "category": category,
                     "is_ghost": bool(is_ghost),
-                    "priority": priority,
+                    "priority": clean_priority,
                 },
             )
         except Exception as e:
@@ -1213,6 +1216,10 @@ async def sync_existing_ticket_channel(
     if ticket_number is None:
         ticket_number = _parse_ticket_number_from_topic(channel)
 
+    clean_priority = _safe_str(priority).strip().lower()
+    if clean_priority not in _VALID_TICKET_PRIORITIES:
+        clean_priority = "medium"
+
     try:
         row = await repo_sync_ticket_record_from_channel(
             channel=channel,
@@ -1221,7 +1228,7 @@ async def sync_existing_ticket_channel(
             title=_title_for_ticket(owner_for_row, category, is_ghost),
             category="ghost" if is_ghost else category,
             status=status,
-            priority=priority,
+            priority=clean_priority,
             initial_message=initial_message or "",
             ticket_number=ticket_number,
             is_ghost=is_ghost,
@@ -1259,6 +1266,19 @@ async def mark_ticket_closed(
     closed_by: Optional[discord.Member | discord.User] = None,
     reason: Optional[str] = None,
 ) -> bool:
+    row_before = await _ticket_row_for_channel_id(channel.id)
+    if row_before and _ticket_status(row_before) == "closed":
+        try:
+            await _apply_closed_permissions(
+                channel,
+                channel.guild.get_member(_parse_owner_id_from_topic(channel) or 0)
+                if _parse_owner_id_from_topic(channel)
+                else None,
+            )
+        except Exception:
+            pass
+        return True
+
     ok = await repo_mark_ticket_closed(
         channel_id=channel.id,
         closed_by=getattr(closed_by, "id", None) if closed_by else None,
@@ -1322,6 +1342,10 @@ async def mark_ticket_deleted(
     deleted_by: Optional[discord.Member | discord.User] = None,
     reason: Optional[str] = None,
 ) -> bool:
+    row_before = await _ticket_row_for_channel_id(channel_id)
+    if row_before and _ticket_status(row_before) == "deleted":
+        return True
+
     ok = await repo_mark_ticket_deleted(
         channel_id=channel_id,
         deleted_by=getattr(deleted_by, "id", None) if deleted_by else None,
@@ -1364,6 +1388,14 @@ async def attach_transcript_to_ticket(
     lock = _channel_lock(_TRANSCRIPT_ATTACH_LOCKS, channel_id)
 
     async with lock:
+        row_before = await _ticket_row_for_channel_id(channel_id)
+        if isinstance(row_before, dict):
+            same_url = _safe_str(row_before.get("transcript_url")) == _safe_str(transcript_url)
+            same_msg = _safe_str(row_before.get("transcript_message_id")) == _safe_str(transcript_message_id)
+            same_ch = _safe_str(row_before.get("transcript_channel_id")) == _safe_str(transcript_channel_id)
+            if same_url and same_msg and same_ch:
+                return True
+
         try:
             ok = await repo_attach_transcript_to_ticket(
                 channel_id=channel_id,
@@ -1630,6 +1662,10 @@ async def set_ticket_priority(
         _service_debug(f"set-priority rejected channel={channel_id} priority={clean_priority!r}")
         return False
 
+    row_before = await _ticket_row_for_channel_id(channel_id)
+    if row_before and _safe_str(row_before.get("priority")).strip().lower() == clean_priority:
+        return True
+
     ok = await repo_set_ticket_priority(
         channel_id=channel_id,
         priority=clean_priority,
@@ -1667,10 +1703,14 @@ async def add_internal_note(
     note: str,
     is_pinned: bool = False,
 ) -> bool:
+    clean_note = _safe_str(note).strip()
+    if not clean_note:
+        return False
+
     ok = await repo_add_internal_note(
         channel_id=channel_id,
         author=author,
-        note=note,
+        note=clean_note,
         is_pinned=is_pinned,
     )
 
@@ -1688,7 +1728,7 @@ async def add_internal_note(
                     actor_user_id=_actor_id(author),
                     actor_name=_actor_name(author),
                     channel_id=channel_id,
-                    note_preview=_safe_str(note)[:200],
+                    note_preview=clean_note[:200],
                     is_pinned=is_pinned,
                     ticket_row=ticket_row,
                 )
@@ -1768,6 +1808,10 @@ async def reopen_ticket(
     actor: Optional[discord.Member | discord.User] = None,
     reason: Optional[str] = None,
 ) -> bool:
+    row_before = await _ticket_row_for_channel_id(channel_id)
+    if row_before and _ticket_status(row_before) == "open" and _ticket_claimed_by_id(row_before) <= 0:
+        return True
+
     ok = await repo_reopen_ticket(channel_id=channel_id)
     if ok:
         try:
