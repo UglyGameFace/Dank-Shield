@@ -2,31 +2,28 @@
 from __future__ import annotations
 
 import asyncio
-import io
 import re
 from typing import Any, Dict, List, Optional, Tuple, Union
 
 import discord
 
 from .globals import *  # noqa
-
 from .tickets import (
-    is_verification_ticket_channel,
     find_ticket_owner_retry,
+    is_verification_ticket_channel,
     wait_for_channel_ready,
 )
 from .verify_ui import post_or_replace_verify_ui
 
 from .tickets_new.service import (
+    attach_transcript_to_ticket,
     mark_ticket_closed,
     reopen_ticket_channel,
-    mark_ticket_deleted,
-    attach_transcript_to_ticket,
 )
 from .tickets_new.transcript_service import (
+    delete_ticket_with_optional_transcript,
     generate_transcript_files,
     post_transcript_to_channel,
-    delete_ticket_with_optional_transcript,
     staff_delete_closed_ticket,
 )
 
@@ -64,10 +61,10 @@ except Exception:
 # Markers / locks
 # ============================================================
 
-_CLOSE_PROMPT_MARKER = "stoney_verify:close_prompt:v3"
-_STAFF_CLOSED_MARKER = "stoney_verify:staff_closed:v3"
-_CLOSE_REOPENED_MARKER = "stoney_verify:ticket_reopened:v2"
-_STAFF_REVIEW_PANEL_MARKER = "stoney_verify:staff_review_panel:v1"
+_CLOSE_PROMPT_MARKER = "stoney_verify:close_prompt:v4"
+_STAFF_CLOSED_MARKER = "stoney_verify:staff_closed:v4"
+_CLOSE_REOPENED_MARKER = "stoney_verify:ticket_reopened:v3"
+_STAFF_REVIEW_PANEL_MARKER = "stoney_verify:staff_review_panel:v2"
 
 _CLOSE_PROMPT_LOCKS: Dict[int, asyncio.Lock] = {}
 _STAFF_REVIEW_PANEL_LOCKS: Dict[int, asyncio.Lock] = {}
@@ -91,6 +88,13 @@ def _safe_text(value: Any) -> str:
         return str(value)
     except Exception:
         return ""
+
+
+def _safe_int(value: Any, default: int = 0) -> int:
+    try:
+        return int(str(value).strip())
+    except Exception:
+        return default
 
 
 def _vc_channel_id() -> int:
@@ -345,7 +349,6 @@ async def build_html_transcript(
     counts_uid: Dict[int, int] = {}
     mentions_uid: Dict[int, int] = {}
 
-    rows: List[str] = []
     scanned = 0
 
     try:
@@ -441,17 +444,8 @@ async def auto_close_after_decision(
     decision: Optional[str] = None,
 ):
     """
-    Auto-close wrapper.
-
-    Old behavior:
-    - wait
-    - post transcript
-    - mark deleted
-    - delete channel
-
-    New behavior:
-    - wait
-    - delegate all transcript/delete execution to transcript_service
+    Auto-close wrapper that fully delegates transcript/delete execution
+    to tickets_new.transcript_service.
     """
     try:
         if int(AUTO_DELETE_TICKET_SECONDS or 0) <= 0:  # type: ignore[name-defined]
@@ -467,11 +461,9 @@ async def auto_close_after_decision(
 
         is_ghost = False
         try:
-            lower_name = str(channel.name or "").lower()
-            if "ghost" in lower_name:
-                is_ghost = True
+            is_ghost = "ghost" in str(channel.name or "").lower()
         except Exception:
-            pass
+            is_ghost = False
 
         result = await delete_ticket_with_optional_transcript(
             channel=channel,
@@ -827,6 +819,8 @@ class StaffClosedTicketView(discord.ui.View):
             reopened = await reopen_ticket_channel(
                 channel=channel,
                 owner=owner,
+                actor=interaction.user,
+                reason="Reopened from Discord ticket controls",
             )
         except Exception as e:
             print("⚠️ reopen_ticket_channel failed:", e)
