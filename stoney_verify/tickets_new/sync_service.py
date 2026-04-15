@@ -303,6 +303,78 @@ def _candidate_ticket_channels(guild: discord.Guild) -> List[discord.TextChannel
     return out
 
 
+def _preserve_authoritative_status(
+    *,
+    existing: Optional[Dict[str, Any]],
+    guessed_status: str,
+    guessed_claimed_by: Optional[str],
+) -> Dict[str, Any]:
+    if not isinstance(existing, dict):
+        status = CLAIMED_STATUS if guessed_claimed_by and guessed_status == OPEN_STATUS else guessed_status
+        return {
+            "status": status,
+            "claimed_by": guessed_claimed_by,
+            "assigned_to": guessed_claimed_by,
+        }
+
+    existing_status = str(existing.get("status") or "").strip().lower()
+    existing_claimed_by = str(existing.get("claimed_by") or "").strip()
+    existing_assigned_to = str(existing.get("assigned_to") or "").strip()
+    status = guessed_status
+    claimed_by = guessed_claimed_by
+    assigned_to = guessed_claimed_by
+
+    if existing_status == DELETED_STATUS:
+        status = DELETED_STATUS
+        claimed_by = existing_claimed_by or claimed_by
+        assigned_to = existing_assigned_to or claimed_by
+        return {
+            "status": status,
+            "claimed_by": claimed_by,
+            "assigned_to": assigned_to,
+        }
+
+    if existing_status == CLOSED_STATUS and guessed_status != DELETED_STATUS:
+        status = CLOSED_STATUS
+        claimed_by = existing_claimed_by or claimed_by
+        assigned_to = existing_assigned_to or claimed_by
+        return {
+            "status": status,
+            "claimed_by": claimed_by,
+            "assigned_to": assigned_to,
+        }
+
+    if existing_status == CLAIMED_STATUS:
+        if existing_claimed_by:
+            status = CLAIMED_STATUS
+            claimed_by = existing_claimed_by
+            assigned_to = existing_assigned_to or existing_claimed_by
+        elif guessed_claimed_by:
+            status = CLAIMED_STATUS
+            claimed_by = guessed_claimed_by
+            assigned_to = guessed_claimed_by
+        else:
+            status = OPEN_STATUS
+            claimed_by = None
+            assigned_to = None
+        return {
+            "status": status,
+            "claimed_by": claimed_by,
+            "assigned_to": assigned_to,
+        }
+
+    if guessed_claimed_by and guessed_status == OPEN_STATUS:
+        status = CLAIMED_STATUS
+        claimed_by = guessed_claimed_by
+        assigned_to = guessed_claimed_by
+
+    return {
+        "status": status,
+        "claimed_by": claimed_by,
+        "assigned_to": assigned_to,
+    }
+
+
 def _build_core_ticket_payload(
     *,
     guild: discord.Guild,
@@ -316,7 +388,7 @@ def _build_core_ticket_payload(
     is_ghost = _guess_is_ghost(channel)
     guessed_status = _guess_status_from_channel(channel)
     ticket_number = _ticket_number_for_channel(channel)
-    claimed_by = _extract_claimed_staff_id_from_messages(messages)
+    claimed_by_from_messages = _extract_claimed_staff_id_from_messages(messages)
     initial_message = _extract_initial_message(messages)
     now_iso = _utc_iso(now_utc())
 
@@ -328,7 +400,11 @@ def _build_core_ticket_payload(
         else f"{'[GHOST] ' if is_ghost else ''}{category.title()} - {username}"[:180]
     )
 
-    status = CLAIMED_STATUS if claimed_by and guessed_status == OPEN_STATUS else guessed_status
+    authoritative = _preserve_authoritative_status(
+        existing=existing,
+        guessed_status=guessed_status,
+        guessed_claimed_by=claimed_by_from_messages,
+    )
     priority = _guess_priority_from_existing(existing)
 
     payload: Dict[str, Any] = {
@@ -341,10 +417,10 @@ def _build_core_ticket_payload(
         "requester_name": username,
         "title": title,
         "category": "ghost" if is_ghost else category,
-        "status": status,
+        "status": authoritative["status"],
         "priority": priority,
-        "claimed_by": claimed_by,
-        "assigned_to": claimed_by,
+        "claimed_by": authoritative["claimed_by"],
+        "assigned_to": authoritative["assigned_to"],
         "claimed_by_name": None,
         "assigned_to_name": None,
         "closed_by": None,
@@ -458,11 +534,7 @@ def _build_update_payload(existing: Dict[str, Any], core: Dict[str, Any]) -> Dic
     if not str(payload.get("assigned_to_name") or "").strip() and existing_assigned_to_name:
         payload["assigned_to_name"] = existing_assigned_to_name or existing_claimed_by_name
 
-    if (
-        existing_status == CLAIMED_STATUS
-        and payload_status == OPEN_STATUS
-        and existing_claimed_by
-    ):
+    if existing_status == CLAIMED_STATUS and payload_status == OPEN_STATUS and existing_claimed_by:
         payload["status"] = CLAIMED_STATUS
         payload["claimed_by"] = existing_claimed_by
         payload["assigned_to"] = existing_assigned_to or existing_claimed_by
@@ -604,6 +676,7 @@ async def _sync_channel_internal(
             return row_summary
 
         row_summary["action"] = "error"
+        row_summary["error"] = "update_failed"
         return row_summary
 
     insert_payload = _build_insert_payload(core_payload)
@@ -631,6 +704,7 @@ async def _sync_channel_internal(
         return row_summary
 
     row_summary["action"] = "error"
+    row_summary["error"] = "insert_failed"
     return row_summary
 
 
