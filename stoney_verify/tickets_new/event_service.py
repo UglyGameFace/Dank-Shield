@@ -276,10 +276,12 @@ def _strip_columns(payload: Dict[str, Any], columns: Sequence[str]) -> Dict[str,
 
 def _detect_and_mark_unsupported_optional_columns(exc: Exception, payload: Dict[str, Any]) -> List[str]:
     removed: List[str] = []
+    missing_name = _extract_missing_column_name(exc)
+
     for col in list(payload.keys()):
         if col not in _OPTIONAL_EVENT_COLUMNS:
             continue
-        if _missing_column_error(exc, col):
+        if _missing_column_error(exc, col) or (missing_name and missing_name == col):
             _OPTIONAL_EVENT_COLUMN_SUPPORT[col] = False
             removed.append(col)
     return removed
@@ -293,18 +295,18 @@ async def _write_event_with_optional_fallback(
 ):
     current = _strip_known_unsupported_columns(payload)
 
-    try:
-        return await _run_db_op(op_name, lambda: writer(current))
-    except Exception as e:
-        removed = _detect_and_mark_unsupported_optional_columns(e, current)
-        if removed:
-            retry_payload = _strip_columns(current, removed)
-            print(f"⚠️ {op_name}: retrying without unsupported event columns {removed}")
-            return await _run_db_op(
-                f"{op_name} (retry without unsupported columns)",
-                lambda: writer(retry_payload),
-            )
-        raise
+    max_retries = len(_OPTIONAL_EVENT_COLUMNS)
+    for attempt in range(1, max_retries + 2):
+        snapshot = dict(current)
+        try:
+            return await _run_db_op(op_name, lambda: writer(snapshot))
+        except Exception as e:
+            removed = _detect_and_mark_unsupported_optional_columns(e, snapshot)
+            if removed and attempt <= max_retries:
+                current = _strip_columns(current, removed)
+                print(f"⚠️ {op_name}: retrying without unsupported event columns {removed}")
+                continue
+            raise
 
 
 # ============================================================
