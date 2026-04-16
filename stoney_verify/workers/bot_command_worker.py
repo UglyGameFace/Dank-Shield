@@ -84,6 +84,49 @@ def _get_resident_role_id() -> int:
     return _get_global_int("RESIDENT_ROLE_ID", 0)
 
 
+def _get_stoner_role_id() -> int:
+    return _get_global_int("STONER_ROLE_ID", 0)
+
+
+def _get_drunken_role_id() -> int:
+    return _get_global_int("DRUNKEN_ROLE_ID", 0)
+
+
+def _member_has_any_role(member: Optional[discord.Member], role_ids: List[int]) -> bool:
+    try:
+        if not isinstance(member, discord.Member):
+            return False
+        wanted = {int(r) for r in role_ids if int(r) > 0}
+        if not wanted:
+            return False
+        return any(int(getattr(role, "id", 0) or 0) in wanted for role in (member.roles or []))
+    except Exception:
+        return False
+
+
+def _member_already_verified(member: Optional[discord.Member]) -> bool:
+    try:
+        if not isinstance(member, discord.Member):
+            return False
+
+        verified_ids = [
+            _get_verified_role_id(),
+            _get_resident_role_id(),
+            _get_stoner_role_id(),
+            _get_drunken_role_id(),
+        ]
+        verified_ids = [rid for rid in verified_ids if int(rid) > 0]
+
+        has_verified = _member_has_any_role(member, verified_ids)
+
+        unverified_id = _get_unverified_role_id()
+        has_unverified = _member_has_any_role(member, [unverified_id]) if unverified_id > 0 else False
+
+        return bool(has_verified and not has_unverified)
+    except Exception:
+        return False
+
+
 def _is_retryable_db_error(error: Exception) -> bool:
     text = repr(error).lower()
     markers = (
@@ -241,7 +284,6 @@ async def claim_command(cmd_id: str) -> Tuple[bool, Optional[Dict[str, Any]]]:
         if sb is None:
             return None
 
-        # Step 1: update state
         (
             sb.table("bot_commands")
             .update(
@@ -255,7 +297,6 @@ async def claim_command(cmd_id: str) -> Tuple[bool, Optional[Dict[str, Any]]]:
             .execute()
         )
 
-        # Step 2: re-read only the row we just claimed
         res = (
             sb.table("bot_commands")
             .select("*")
@@ -1350,6 +1391,40 @@ async def execute_command(cmd: Dict[str, Any]):
 
         if member is None:
             return {"approved": False, "reason": "member_missing", "user_id": str(user_id)}
+
+        # HARD STOP: never approve again if the member already has real verified access.
+        if _member_already_verified(member):
+            if ticket_id:
+                await insert_ticket_note(
+                    ticket_id=ticket_id,
+                    staff_id=staff_id,
+                    staff_name=staff_name,
+                    content=(
+                        f"Duplicate approval blocked.\n"
+                        f"Member: {username} ({member.id})\n"
+                        f"Reason: member already appears verified before worker execution."
+                    ),
+                )
+                await update_ticket_by_id(
+                    ticket_id,
+                    {
+                        "status": "closed",
+                        "closed_reason": "Duplicate approval blocked: already verified",
+                        "closed_by": staff_id or None,
+                        "claimed_by": staff_id or None,
+                        "assigned_to": staff_id or None,
+                        "closed_at": now_iso(),
+                    },
+                )
+
+            return {
+                "approved": False,
+                "skipped": True,
+                "already_verified": True,
+                "reason": "member_already_verified",
+                "user_id": str(member.id),
+                "ticket_id": ticket_id or None,
+            }
 
         verified_role = guild.get_role(_get_verified_role_id()) if _get_verified_role_id() > 0 else None
         unverified_role = guild.get_role(_get_unverified_role_id()) if _get_unverified_role_id() > 0 else None
