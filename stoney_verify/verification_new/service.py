@@ -290,6 +290,52 @@ async def _remove_unverified_role_if_present(
         return False, str(e)
 
 
+def _member_has_any_role(member: Optional[discord.Member], role_ids: List[int]) -> bool:
+    try:
+        if not isinstance(member, discord.Member):
+            return False
+        wanted = {int(r) for r in role_ids if int(r) > 0}
+        if not wanted:
+            return False
+        return any(int(getattr(role, "id", 0) or 0) in wanted for role in (member.roles or []))
+    except Exception:
+        return False
+
+
+def _member_looks_already_verified(member: Optional[discord.Member]) -> bool:
+    try:
+        if not isinstance(member, discord.Member):
+            return False
+
+        verified_ids: List[int] = []
+        for raw in [
+            VERIFIED_ROLE_ID,
+            RESIDENT_ROLE_ID,
+            STONER_ROLE_ID,
+            DRUNKEN_ROLE_ID,
+        ]:
+            try:
+                rid = int(raw or 0)
+                if rid > 0:
+                    verified_ids.append(rid)
+            except Exception:
+                continue
+
+        has_verified = _member_has_any_role(member, verified_ids)
+
+        unverified_id = 0
+        try:
+            unverified_id = int(UNVERIFIED_ROLE_ID or 0)
+        except Exception:
+            unverified_id = 0
+
+        has_unverified = _member_has_any_role(member, [unverified_id]) if unverified_id > 0 else False
+
+        return bool(has_verified and not has_unverified)
+    except Exception:
+        return False
+
+
 def _token_belongs_to_guild(token_info: Dict[str, Any], guild: discord.Guild) -> bool:
     try:
         token_guild = str(token_info.get("guild_id") or "").strip()
@@ -647,6 +693,31 @@ async def approve_verification(
             "This token has already been used.",
             owner=resolved_owner,
             channel=resolved_channel,
+        )
+
+    # HARD STOP: shared service-level duplicate protection.
+    if _member_looks_already_verified(resolved_owner):
+        await _mark_decision_safe(
+            token,
+            f"{decision_text} (already verified)",
+            int(staff_member.id),
+            approved_user_id=int(resolved_owner.id) if isinstance(resolved_owner, discord.Member) else None,
+        )
+        await _set_used_safe(token, True)
+        await _update_ticket_decision_metadata(
+            channel=resolved_channel if isinstance(resolved_channel, discord.TextChannel) else None,
+            decision=f"{decision_text} (already verified)",
+            staff_member=staff_member,
+            owner=resolved_owner if isinstance(resolved_owner, discord.Member) else None,
+        )
+
+        return _result(
+            False,
+            "Duplicate approval blocked: member already appears verified.",
+            owner=resolved_owner,
+            channel=resolved_channel,
+            roles=[],
+            already_verified=True,
         )
 
     can_assign, error_msg, roles_to_assign = await check_bot_can_assign_roles(guild)
