@@ -505,6 +505,73 @@ async def _remove_unverified_role_if_present(
         return False, str(e)
 
 
+def _member_has_any_role(member: Optional[discord.Member], role_ids: list[int]) -> bool:
+    try:
+        if not isinstance(member, discord.Member):
+            return False
+        wanted = {int(r) for r in role_ids if int(r) > 0}
+        if not wanted:
+            return False
+        return any(int(getattr(role, "id", 0) or 0) in wanted for role in member.roles)
+    except Exception:
+        return False
+
+
+def _member_looks_already_verified(member: Optional[discord.Member]) -> bool:
+    try:
+        if not isinstance(member, discord.Member):
+            return False
+
+        verified_ids: list[int] = []
+        for raw in [
+            VERIFIED_ROLE_ID,
+            RESIDENT_ROLE_ID,
+            STONER_ROLE_ID,
+            DRUNKEN_ROLE_ID,
+        ]:
+            try:
+                val = int(raw or 0)
+                if val > 0:
+                    verified_ids.append(val)
+            except Exception:
+                continue
+
+        has_verified = _member_has_any_role(member, verified_ids)
+
+        unverified_id = 0
+        try:
+            unverified_id = int(UNVERIFIED_ROLE_ID or 0)
+        except Exception:
+            unverified_id = 0
+
+        has_unverified = _member_has_any_role(member, [unverified_id]) if unverified_id > 0 else False
+
+        return bool(has_verified and not has_unverified)
+    except Exception:
+        return False
+
+
+async def _disable_interaction_message_if_possible(
+    interaction: discord.Interaction,
+    *,
+    content_suffix: str = "",
+) -> None:
+    try:
+        if not interaction.message:
+            return
+
+        base = interaction.message.content or ""
+        if content_suffix:
+            if base:
+                base = f"{base}\n{content_suffix}"
+            else:
+                base = content_suffix
+
+        await interaction.message.edit(content=base, view=None)
+    except Exception:
+        pass
+
+
 async def handle_possible_submission(message: discord.Message) -> None:
     if not isinstance(message.channel, discord.TextChannel):
         return
@@ -1696,7 +1763,7 @@ async def _handle_standard_staff_decision(
         try:
             expected_uid = token_info.get("requester_id") or token_info.get("user_id")
             if expected_uid:
-                owner = guild.get_member(int(str(expected_uid)))
+                owner = guild.get_member(int(str(expected_uid))) or await guild.fetch_member(int(str(expected_uid)))
         except Exception:
             owner = None
 
@@ -1711,7 +1778,39 @@ async def _handle_standard_staff_decision(
             return True
 
         if token_info.get("used", False):
+            await _disable_interaction_message_if_possible(
+                interaction,
+                content_suffix="🔒 This decision panel has already been used.",
+            )
             await interaction.followup.send("❌ This token has already been used.", ephemeral=True)
+            return True
+
+        if action == "approve" and _member_looks_already_verified(owner):
+            try:
+                sb_mark_decision(
+                    token,
+                    "APPROVED (already verified)",
+                    int(interaction.user.id),
+                    approved_user_id=int(owner.id) if owner else None,
+                )
+            except Exception:
+                pass
+
+            try:
+                sb_set_used(token, True)
+            except Exception:
+                pass
+
+            ACTIVE_DECISION_PANEL_MSG_ID.pop(token, None)
+
+            await _disable_interaction_message_if_possible(
+                interaction,
+                content_suffix="✅ Member already appears verified. Panel closed.",
+            )
+            await interaction.followup.send(
+                "✅ This member already appears verified. Duplicate approval was blocked.",
+                ephemeral=True,
+            )
             return True
 
         if action == "denyclose":
@@ -1720,6 +1819,14 @@ async def _handle_standard_staff_decision(
                 sb_set_used(token, True)
             except Exception:
                 pass
+
+            ACTIVE_DECISION_PANEL_MSG_ID.pop(token, None)
+
+            await _disable_interaction_message_if_possible(
+                interaction,
+                content_suffix=f"⛔ Denied by {interaction.user.mention}.",
+            )
+
             RUNTIME_STATS["denied"] += 1
             await interaction.followup.send(
                 "⛔ **Denied** (saved). Ticket will close automatically if auto-close is enabled.",
@@ -1752,6 +1859,13 @@ async def _handle_standard_staff_decision(
             except Exception as e:
                 print("⚠️ resubmit flow failed:", e)
 
+            ACTIVE_DECISION_PANEL_MSG_ID.pop(token, None)
+
+            await _disable_interaction_message_if_possible(
+                interaction,
+                content_suffix=f"🔁 Resubmission requested by {interaction.user.mention}.",
+            )
+
             await interaction.followup.send(
                 "✅ Resubmission requested. A new link was posted and the ticket stays open.",
                 ephemeral=True,
@@ -1765,6 +1879,14 @@ async def _handle_standard_staff_decision(
                 sb_set_used(token, True)
             except Exception:
                 pass
+
+            ACTIVE_DECISION_PANEL_MSG_ID.pop(token, None)
+
+            await _disable_interaction_message_if_possible(
+                interaction,
+                content_suffix="❌ Approval attempt ended with role assignment failure.",
+            )
+
             await interaction.followup.send(
                 f"❌ **Cannot assign roles:** {error_msg}\n\n*Decision was saved but roles were not granted.*",
                 ephemeral=True,
@@ -1782,6 +1904,14 @@ async def _handle_standard_staff_decision(
                 sb_set_used(token, True)
             except Exception:
                 pass
+
+            ACTIVE_DECISION_PANEL_MSG_ID.pop(token, None)
+
+            await _disable_interaction_message_if_possible(
+                interaction,
+                content_suffix="⚠️ Approved, but owner could not be detected.",
+            )
+
             await interaction.followup.send(
                 "✅ Approved (saved) but I couldn't detect the ticket owner to grant roles.",
                 ephemeral=True,
@@ -1839,6 +1969,14 @@ async def _handle_standard_staff_decision(
             sb_set_used(token, True)
         except Exception:
             pass
+
+        ACTIVE_DECISION_PANEL_MSG_ID.pop(token, None)
+
+        await _disable_interaction_message_if_possible(
+            interaction,
+            content_suffix=f"✅ Approved by {interaction.user.mention}.",
+        )
+
         RUNTIME_STATS["approved"] += 1
 
         msg = f"✅ **Approved!** Granted {', '.join([r.mention for r in roles_to_assign])} to {owner.mention}."
