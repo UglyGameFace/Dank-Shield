@@ -19,6 +19,7 @@ from ..globals import *  # noqa: F401,F403
 # - preserve name history / leave-rejoin history
 # - avoid breaking on mixed / evolving schemas
 # - avoid repeated schema-cache failures for optional columns
+# - keep member truth deterministic after verification actions
 # ============================================================
 
 GUILD_MEMBERS_TABLE = "guild_members"
@@ -26,7 +27,7 @@ MEMBER_JOINS_TABLE = "member_joins"
 TICKETS_TABLE = "tickets"
 
 _OPTIONAL_GUILD_MEMBER_COLUMNS = {
-    # voice snapshot fields are NOT present in your current real schema
+    # voice snapshot fields are NOT present in some real schemas
     "in_voice",
     "voice_channel_id",
     "voice_channel_name",
@@ -37,10 +38,12 @@ _OPTIONAL_GUILD_MEMBER_COLUMNS = {
     "voice_streaming",
     "voice_video",
     "voice_suppressed",
-    # keep these optional in case of older environments
+    # older / mixed environments
     "nickname",
     "roles",
     "top_role",
+    "highest_role_id",
+    "highest_role_name",
     "previous_usernames",
     "previous_display_names",
     "previous_nicknames",
@@ -68,8 +71,16 @@ _OPTIONAL_GUILD_MEMBER_COLUMNS = {
     "verification_source",
     "entry_reason",
     "approval_reason",
+    "has_any_role",
+    "has_unverified",
+    "has_verified_role",
+    "has_staff_role",
+    "has_secondary_verified_role",
+    "has_cosmetic_only",
+    "role_state",
+    "role_state_reason",
+    "data_health",
 }
-
 _OPTIONAL_GUILD_MEMBER_COLUMN_SUPPORT: Dict[str, Optional[bool]] = {
     col: None for col in _OPTIONAL_GUILD_MEMBER_COLUMNS
 }
@@ -81,9 +92,7 @@ _OPTIONAL_GUILD_MEMBER_COLUMN_SUPPORT: Dict[str, Optional[bool]] = {
 
 def _as_int(v: Any, default: int = 0) -> int:
     try:
-        if v is None:
-            return default
-        if isinstance(v, bool):
+        if v is None or isinstance(v, bool):
             return default
         return int(str(v).strip())
     except Exception:
@@ -92,7 +101,7 @@ def _as_int(v: Any, default: int = 0) -> int:
 
 def _safe_str(v: Any) -> str:
     try:
-        return str(v)
+        return str(v or "")
     except Exception:
         return ""
 
@@ -321,10 +330,14 @@ def _member_role_snapshot(member: discord.Member) -> Dict[str, Any]:
     has_verified_role = bool(
         (VERIFIED_ROLE_ID and _member_has_role_id(member, int(VERIFIED_ROLE_ID)))
         or (RESIDENT_ROLE_ID and _member_has_role_id(member, int(RESIDENT_ROLE_ID)))
+        or (STONER_ROLE_ID and _member_has_role_id(member, int(STONER_ROLE_ID)))
+        or (DRUNKEN_ROLE_ID and _member_has_role_id(member, int(DRUNKEN_ROLE_ID)))
     )
     has_staff_role = bool(STAFF_ROLE_ID and _member_has_role_id(member, int(STAFF_ROLE_ID)))
     has_secondary_verified_role = bool(
-        RESIDENT_ROLE_ID and _member_has_role_id(member, int(RESIDENT_ROLE_ID))
+        (RESIDENT_ROLE_ID and _member_has_role_id(member, int(RESIDENT_ROLE_ID)))
+        or (STONER_ROLE_ID and _member_has_role_id(member, int(STONER_ROLE_ID)))
+        or (DRUNKEN_ROLE_ID and _member_has_role_id(member, int(DRUNKEN_ROLE_ID)))
     )
 
     try:
@@ -353,6 +366,13 @@ def _member_role_snapshot(member: discord.Member) -> Dict[str, Any]:
     except Exception:
         is_bot_like = bool(getattr(member, "bot", False))
 
+    has_cosmetic_only = bool(
+        has_any_real_roles
+        and not has_verified_role
+        and not has_staff_role
+        and not has_unverified
+    )
+
     role_state = "unknown"
     role_state_reason = ""
 
@@ -378,6 +398,9 @@ def _member_role_snapshot(member: discord.Member) -> Dict[str, Any]:
         elif has_unverified:
             role_state = "unverified_only"
             role_state_reason = "Member has Unverified and is pending verification."
+        elif has_cosmetic_only:
+            role_state = "cosmetic_only"
+            role_state_reason = "Member has only cosmetic/non-verification roles."
         else:
             role_state = "missing_unverified"
             role_state_reason = "Member has no verified role and no Unverified."
@@ -397,7 +420,7 @@ def _member_role_snapshot(member: discord.Member) -> Dict[str, Any]:
         "has_verified_role": has_verified_role,
         "has_staff_role": has_staff_role,
         "has_secondary_verified_role": has_secondary_verified_role,
-        "has_cosmetic_only": False,
+        "has_cosmetic_only": has_cosmetic_only,
         "role_state": role_state,
         "role_state_reason": role_state_reason,
         "data_health": "ok",
@@ -1087,7 +1110,7 @@ async def mark_member_left(member: discord.Member) -> None:
             "synced_at": now_iso,
             "updated_at": now_iso,
             "last_seen_at": now_iso,
-            "left_at": existing.get("left_at") or now_iso,
+            "left_at": now_iso,
             "times_joined": times_joined,
             "times_left": times_left,
             "last_seen_username": username or existing.get("last_seen_username") or existing.get("username") or "",
@@ -1160,7 +1183,7 @@ async def mark_member_left(member: discord.Member) -> None:
                     "data_health": "left_guild",
                     "synced_at": now_iso,
                     "updated_at": now_iso,
-                    "left_at": existing.get("left_at") or now_iso,
+                    "left_at": now_iso,
                     "times_left": times_left,
                     "role_state": "left_guild",
                     "role_state_reason": "Member left or was removed from guild.",
@@ -1211,10 +1234,20 @@ async def _bulk_mark_departed_members_async(
                 "updated_at": now_iso,
                 "role_state": "left_guild",
                 "role_state_reason": "Member left or was removed from guild.",
+                "in_voice": False,
+                "voice_channel_id": None,
+                "voice_channel_name": None,
+                "voice_muted": False,
+                "voice_deafened": False,
+                "voice_self_muted": False,
+                "voice_self_deafened": False,
+                "voice_streaming": False,
+                "voice_video": False,
+                "voice_suppressed": False,
             }
 
             if row.get("in_guild") is not False:
-                payload["left_at"] = row.get("left_at") or now_iso
+                payload["left_at"] = now_iso
                 payload["times_left"] = int(row.get("times_left") or 0) + 1
 
             try:
@@ -1231,6 +1264,7 @@ async def _bulk_mark_departed_members_async(
 async def run_full_member_sync_for_guild(guild: discord.Guild) -> Dict[str, Any]:
     summary: Dict[str, Any] = {
         "guild_id": str(getattr(guild, "id", "")),
+        "checked": 0,
         "active_members_synced": 0,
         "marked_departed": 0,
         "errors": 0,
@@ -1248,6 +1282,8 @@ async def run_full_member_sync_for_guild(guild: discord.Guild) -> Dict[str, Any]
             members = [m async for m in guild.fetch_members(limit=None)]
         except Exception:
             members = list(getattr(guild, "members", []) or [])
+
+        summary["checked"] = len(members)
 
         for idx, member in enumerate(members, start=1):
             try:
@@ -1287,6 +1323,7 @@ async def run_departed_reconciliation_for_guild(guild: discord.Guild) -> Dict[st
         "guild_id": str(getattr(guild, "id", "")),
         "checked": 0,
         "marked_departed": 0,
+        "errors": 0,
     }
 
     try:
@@ -1318,6 +1355,7 @@ async def run_departed_reconciliation_for_guild(guild: discord.Guild) -> Dict[st
 
     except Exception as e:
         summary["error"] = repr(e)
+        summary["errors"] = 1
         print("⚠️ members_new.sync_service.run_departed_reconciliation_for_guild error:", repr(e))
         try:
             traceback.print_exc()
@@ -1329,6 +1367,7 @@ async def run_departed_reconciliation_for_guild(guild: discord.Guild) -> Dict[st
 async def run_full_member_sync_for_all_guilds(bot_instance=bot) -> Dict[str, Any]:
     out: Dict[str, Any] = {
         "guilds": 0,
+        "checked": 0,
         "active_members_synced": 0,
         "marked_departed": 0,
         "errors": 0,
@@ -1344,6 +1383,7 @@ async def run_full_member_sync_for_all_guilds(bot_instance=bot) -> Dict[str, Any
         try:
             summary = await run_full_member_sync_for_guild(guild)
             out["guilds"] += 1
+            out["checked"] += int(summary.get("checked") or 0)
             out["active_members_synced"] += int(summary.get("active_members_synced") or 0)
             out["marked_departed"] += int(summary.get("marked_departed") or 0)
             out["errors"] += int(summary.get("errors") or 0)
@@ -1374,8 +1414,7 @@ async def run_departed_reconciliation_for_all_guilds(bot_instance=bot) -> Dict[s
             out["guilds"] += 1
             out["checked"] += int(summary.get("checked") or 0)
             out["marked_departed"] += int(summary.get("marked_departed") or 0)
-            if summary.get("error"):
-                out["errors"] += 1
+            out["errors"] += int(summary.get("errors") or 0)
             out["rows"].append(summary)
         except Exception:
             out["errors"] += 1
