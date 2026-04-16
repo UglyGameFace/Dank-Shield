@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import re
+from difflib import SequenceMatcher
 from typing import Any, Dict, List, Optional, Tuple
 
 import discord
@@ -65,6 +66,73 @@ VALID_PRIORITIES = {"low", "medium", "high", "urgent"}
 
 _PERSISTENT_VIEWS_REGISTERED = False
 
+_COMMON_STOPWORDS = {
+    "a", "an", "the", "and", "or", "for", "to", "of", "in", "on", "at", "by",
+    "with", "from", "my", "me", "i", "im", "i'm", "is", "it", "this", "that",
+    "need", "want", "help", "issue", "problem", "ticket", "please", "can",
+    "could", "would", "you", "we", "our", "about", "regarding", "trying",
+    "try", "into", "out", "up", "down",
+}
+
+_REASON_SYNONYM_REPLACEMENTS: Tuple[Tuple[str, str], ...] = (
+    (r"\bcod\b", "call of duty"),
+    (r"\bwar zone\b", "warzone"),
+    (r"\blobbys\b", "lobbies"),
+    (r"\blobbys\b", "lobbies"),
+    (r"\bbo6\b", "black ops 6"),
+    (r"\bbo3\b", "black ops 3"),
+    (r"\bbo2\b", "black ops 2"),
+    (r"\bbo1\b", "black ops 1"),
+    (r"\bmw3\b", "modern warfare 3"),
+    (r"\bmw2\b", "modern warfare 2"),
+    (r"\bwaw\b", "world at war"),
+    (r"\bacc\b", "account"),
+    (r"\bverif\b", "verify"),
+    (r"\bverification issue\b", "verification"),
+    (r"\bvc\b", "voice chat"),
+    (r"\bdisc\b", "discord"),
+    (r"\bpls\b", "please"),
+    (r"\bu\b", "you"),
+)
+
+_INTENT_KEYWORD_GROUPS: Dict[str, Tuple[str, ...]] = {
+    "verification": (
+        "verify", "verification", "unverified", "verified", "id", "id verify",
+        "voice chat verify", "secure upload", "face pic", "selfie", "approval",
+        "approve", "approved", "rejected verification",
+    ),
+    "appeal": (
+        "appeal", "ban", "unban", "banned", "kick", "kicked", "timeout",
+        "muted", "blacklisted", "punishment", "warn", "warning", "strike",
+    ),
+    "report": (
+        "report", "reported", "scam", "scammer", "abuse", "abusive", "harass",
+        "harassment", "threat", "threaten", "fraud", "fake", "impersonating",
+        "spam", "spamming", "raid", "raiding", "nsfw", "rule break", "rulebreak",
+    ),
+    "purchase": (
+        "buy", "purchase", "paid", "payment", "refund", "chargeback",
+        "receipt", "order", "checkout", "invoice", "price", "pricing",
+    ),
+    "partnership": (
+        "partner", "partnership", "collab", "collaboration", "sponsor",
+        "promotion", "promo", "advertise", "advertising",
+    ),
+    "bug": (
+        "bug", "broken", "not working", "issue", "error", "glitch", "stuck",
+        "crash", "failed", "failure", "isnt working", "isn't working",
+    ),
+    "gaming_lobby": (
+        "call of duty", "warzone", "modern warfare", "black ops", "zombies",
+        "lobby", "lobbies", "bot lobby", "ranked lobby", "unlock all",
+        "challenge lobby", "recovery", "recoveries", "mod menu",
+    ),
+    "account": (
+        "account", "login", "username", "email", "password", "2fa",
+        "locked out", "hacked", "compromised", "access issue",
+    ),
+}
+
 
 def _debug(msg: str) -> None:
     try:
@@ -110,10 +178,26 @@ def _slugify(value: str) -> str:
         return ""
 
 
+def _canonicalize_reason_text(text: str) -> str:
+    value = _slugify(_normalize_text(text, limit=_REASON_MAX_LEN))
+    for pattern, replacement in _REASON_SYNONYM_REPLACEMENTS:
+        try:
+            value = re.sub(pattern, replacement, value, flags=re.I)
+        except Exception:
+            continue
+    value = re.sub(r"[^a-z0-9\s/_-]+", " ", value)
+    value = re.sub(r"\s+", " ", value).strip()
+    return value
+
+
 def _tokenize_text(text: str) -> List[str]:
-    cleaned = _slugify(text)
+    cleaned = _canonicalize_reason_text(text)
     cleaned = re.sub(r"[^a-z0-9]+", " ", cleaned)
     return [part for part in cleaned.split() if part]
+
+
+def _token_set(text: str) -> set[str]:
+    return {t for t in _tokenize_text(text) if t and t not in _COMMON_STOPWORDS}
 
 
 def _truncate(text: str, limit: int = 280) -> str:
@@ -372,7 +456,7 @@ def _normalize_keywords(value: Any) -> List[str]:
             raw_items = str(value or "").split(",")
 
         for item in raw_items:
-            text = _normalize_text(str(item or ""), limit=120).lower()
+            text = _canonicalize_reason_text(str(item or ""))
             if text and text not in out:
                 out.append(text)
     except Exception:
@@ -380,11 +464,66 @@ def _normalize_keywords(value: Any) -> List[str]:
     return out
 
 
+def _keyword_variants(phrase: str) -> List[str]:
+    base = _canonicalize_reason_text(phrase)
+    if not base:
+        return []
+
+    variants: set[str] = {base}
+
+    if "lobbies" in base:
+        variants.add(base.replace("lobbies", "lobby"))
+        variants.add(base.replace("lobbies", "lobbys"))
+    if "lobby" in base:
+        variants.add(base.replace("lobby", "lobbies"))
+        variants.add(base.replace("lobby", "lobbys"))
+
+    if "call of duty" in base:
+        variants.add(base.replace("call of duty", "cod"))
+
+    if "black ops" in base:
+        variants.add(base.replace("black ops", "bo"))
+
+    if "modern warfare" in base:
+        variants.add(base.replace("modern warfare", "mw"))
+
+    return [v for v in variants if v]
+
+
 def _normalize_category_row(row: Dict[str, Any]) -> Dict[str, Any]:
-    slug = _normalize_text(str(row.get("slug") or ""), limit=120).lower()
+    slug = _canonicalize_reason_text(str(row.get("slug") or ""))
     name = _normalize_text(str(row.get("name") or ""), limit=200)
     description = _normalize_text(str(row.get("description") or ""), limit=500)
     intake_type = _normalize_text(str(row.get("intake_type") or ""), limit=80).lower()
+
+    normalized_keywords = _normalize_keywords(row.get("match_keywords"))
+    slug_text = slug.replace("-", " ").replace("_", " ")
+    name_text = _canonicalize_reason_text(name)
+    description_text = _canonicalize_reason_text(description)
+
+    aliases: List[str] = []
+    aliases.extend(_keyword_variants(slug_text))
+    aliases.extend(_keyword_variants(name_text))
+    aliases.extend(_keyword_variants(description_text))
+
+    for keyword in normalized_keywords:
+        aliases.extend(_keyword_variants(keyword))
+
+    for intent_name, words in _INTENT_KEYWORD_GROUPS.items():
+        haystack = f"{slug_text} {name_text} {description_text} {' '.join(normalized_keywords)} {intake_type}"
+        if (
+            intent_name in haystack
+            or any(word in haystack for word in words)
+        ):
+            aliases.extend(words)
+
+    deduped_aliases: List[str] = []
+    seen: set[str] = set()
+    for alias in aliases:
+        cleaned = _canonicalize_reason_text(alias)
+        if cleaned and cleaned not in seen:
+            seen.add(cleaned)
+            deduped_aliases.append(cleaned)
 
     return {
         "id": row.get("id"),
@@ -393,7 +532,8 @@ def _normalize_category_row(row: Dict[str, Any]) -> Dict[str, Any]:
         "name": name,
         "description": description,
         "intake_type": intake_type,
-        "match_keywords": _normalize_keywords(row.get("match_keywords")),
+        "match_keywords": normalized_keywords,
+        "match_aliases": deduped_aliases,
         "is_default": bool(row.get("is_default", False)),
         "sort_order": row.get("sort_order"),
     }
@@ -494,84 +634,190 @@ def _find_category_label_by_slug(
     slug: str,
     fallback: str,
 ) -> str:
-    slug_clean = str(slug or "").strip().lower()
+    slug_clean = _canonicalize_reason_text(slug)
     for cat in categories:
-        if str(cat.get("slug") or "").strip().lower() == slug_clean:
+        if _canonicalize_reason_text(str(cat.get("slug") or "")) == slug_clean:
             label = str(cat.get("name") or "").strip()
             if label:
                 return label
     return fallback
 
 
-def _reason_has_cod_legacy_signals(reason: str) -> bool:
-    text = f" {_normalize_text(reason).lower()} "
-    signals = (
-        " mw2 ", " mw3 ", " bo1 ", " bo2 ", " bo3 ",
-        " world at war ", " waw ", " ghosts ", " cod ghosts ",
-        " advanced warfare ", " aw ", " infinite warfare ", " iw ",
-        " recovery ", " recoveries ", " challenge lobby ", " challenge lobbies ",
-        " unlock all ", " mod menu ", " rgh ", " jtag ",
-        " old cod ", " older cod ", " legacy cod ",
+def _phrase_hits(reason_norm: str, aliases: List[str]) -> int:
+    score = 0
+    padded_reason = f" {reason_norm} "
+    for alias in aliases:
+        for variant in _keyword_variants(alias):
+            if not variant:
+                continue
+            if f" {variant} " in padded_reason:
+                score += 18 if len(variant.split()) > 1 else 10
+            elif variant in reason_norm:
+                score += 8
+    return score
+
+
+def _token_overlap_score(reason_tokens: set[str], category_tokens: set[str]) -> int:
+    if not reason_tokens or not category_tokens:
+        return 0
+
+    overlap = reason_tokens & category_tokens
+    if not overlap:
+        return 0
+
+    score = 0
+    for token in overlap:
+        if len(token) >= 6:
+            score += 7
+        elif len(token) >= 4:
+            score += 4
+        else:
+            score += 2
+    return score
+
+
+def _fuzzy_token_score(reason_tokens: set[str], category_tokens: set[str]) -> int:
+    if not reason_tokens or not category_tokens:
+        return 0
+
+    score = 0
+    for rt in reason_tokens:
+        if len(rt) < 4:
+            continue
+        for ct in category_tokens:
+            if len(ct) < 4:
+                continue
+            try:
+                ratio = SequenceMatcher(None, rt, ct).ratio()
+            except Exception:
+                ratio = 0.0
+            if ratio >= 0.92:
+                score += 5
+                break
+            if ratio >= 0.84:
+                score += 2
+                break
+    return score
+
+
+def _reason_intent_hits(reason_norm: str) -> Dict[str, int]:
+    hits: Dict[str, int] = {}
+    for intent_name, words in _INTENT_KEYWORD_GROUPS.items():
+        score = 0
+        for word in words:
+            canonical = _canonicalize_reason_text(word)
+            if not canonical:
+                continue
+            if canonical in reason_norm:
+                score += 1
+        hits[intent_name] = score
+    return hits
+
+
+def _category_intent_score(reason_norm: str, cat: Dict[str, Any]) -> int:
+    intent_hits = _reason_intent_hits(reason_norm)
+    haystack = " ".join(
+        [
+            _canonicalize_reason_text(str(cat.get("slug") or "")),
+            _canonicalize_reason_text(str(cat.get("name") or "")),
+            _canonicalize_reason_text(str(cat.get("description") or "")),
+            _canonicalize_reason_text(str(cat.get("intake_type") or "")),
+            " ".join([_canonicalize_reason_text(x) for x in (cat.get("match_keywords") or [])]),
+            " ".join([_canonicalize_reason_text(x) for x in (cat.get("match_aliases") or [])]),
+        ]
     )
-    return any(s in text for s in signals)
+
+    score = 0
+    for intent_name, hit_count in intent_hits.items():
+        if hit_count <= 0:
+            continue
+
+        if intent_name == "gaming_lobby":
+            if any(
+                marker in haystack
+                for marker in (
+                    "call of duty", "cod", "warzone", "lobby", "lobbies",
+                    "challenge lobby", "recovery", "recoveries", "mod menu",
+                    "modern warfare", "black ops", "zombies",
+                )
+            ):
+                score += 45 + (hit_count * 8)
+                continue
+
+        if intent_name in haystack:
+            score += 25 + (hit_count * 4)
+            continue
+
+        intent_words = _INTENT_KEYWORD_GROUPS.get(intent_name, ())
+        if any(word in haystack for word in intent_words):
+            score += 18 + (hit_count * 3)
+
+    return score
+
+
+def _support_penalty(reason_norm: str, cat: Dict[str, Any]) -> int:
+    slug = _canonicalize_reason_text(str(cat.get("slug") or ""))
+    name = _canonicalize_reason_text(str(cat.get("name") or ""))
+    intake_type = _canonicalize_reason_text(str(cat.get("intake_type") or ""))
+    if slug not in {"support", "general support", "general-support", "general_support"} and "support" not in name:
+        return 0
+
+    hits = _reason_intent_hits(reason_norm)
+    strong_other_intent = (
+        hits.get("gaming_lobby", 0) >= 1
+        or hits.get("verification", 0) >= 2
+        or hits.get("appeal", 0) >= 1
+        or hits.get("report", 0) >= 1
+        or hits.get("purchase", 0) >= 1
+        or hits.get("partnership", 0) >= 1
+        or hits.get("account", 0) >= 2
+    )
+    if strong_other_intent:
+        return 22
+
+    if intake_type == "question" and hits.get("bug", 0) >= 1:
+        return 5
+
+    return 0
 
 
 def _score_reason_against_category(reason: str, cat: Dict[str, Any]) -> int:
-    reason_norm = _normalize_text(reason, limit=_REASON_MAX_LEN).lower()
-    reason_tokens = set(_tokenize_text(reason_norm))
+    reason_norm = _canonicalize_reason_text(reason)
+    reason_tokens = _token_set(reason_norm)
 
-    slug = str(cat.get("slug") or "").lower()
-    name = str(cat.get("name") or "").lower()
-    desc = str(cat.get("description") or "").lower()
-    keywords = [str(x).lower() for x in (cat.get("match_keywords") or [])]
+    slug_text = _canonicalize_reason_text(str(cat.get("slug") or "").replace("-", " ").replace("_", " "))
+    name_text = _canonicalize_reason_text(str(cat.get("name") or ""))
+    desc_text = _canonicalize_reason_text(str(cat.get("description") or ""))
+    intake_type = _canonicalize_reason_text(str(cat.get("intake_type") or ""))
+    keywords = [_canonicalize_reason_text(x) for x in (cat.get("match_keywords") or [])]
+    aliases = [_canonicalize_reason_text(x) for x in (cat.get("match_aliases") or [])]
+
+    category_tokens = set()
+    for source_text in [slug_text, name_text, desc_text, intake_type, *keywords, *aliases]:
+        category_tokens.update(_token_set(source_text))
 
     score = 0
 
-    for kw in keywords:
-        kw_clean = _normalize_text(kw, limit=120).lower()
-        if not kw_clean:
-            continue
-        if kw_clean in reason_norm:
-            score += 25
-            if len(kw_clean.split()) > 1:
-                score += 10
+    score += _phrase_hits(reason_norm, aliases)
+    score += _phrase_hits(reason_norm, keywords)
 
-    slug_words = [w for w in re.split(r"[-_\s]+", slug) if w]
-    name_words = [w for w in _tokenize_text(name)]
-    desc_words = [w for w in _tokenize_text(desc)]
+    if slug_text and slug_text in reason_norm:
+        score += 14
+    if name_text and name_text in reason_norm:
+        score += 12
+    if intake_type and intake_type in reason_norm:
+        score += 10
 
-    for word in slug_words:
-        if len(word) >= 3 and word in reason_tokens:
-            score += 6
+    score += _token_overlap_score(reason_tokens, category_tokens)
+    score += _fuzzy_token_score(reason_tokens, category_tokens)
+    score += _category_intent_score(reason_norm, cat)
 
-    for word in name_words:
-        if len(word) >= 3 and word in reason_tokens:
-            score += 5
+    if bool(cat.get("is_default")):
+        score += 2
 
-    for word in desc_words[:25]:
-        if len(word) >= 4 and word in reason_tokens:
-            score += 2
+    score -= _support_penalty(reason_norm, cat)
 
-    intake_type = str(cat.get("intake_type") or "").lower()
-    if intake_type == "appeal" and any(x in reason_norm for x in ["appeal", "unban", "timeout", "ban", "muted", "banned"]):
-        score += 6
-    elif intake_type == "report" and any(x in reason_norm for x in ["report", "scam", "abuse", "harassment", "threat"]):
-        score += 6
-    elif intake_type == "partnership" and any(x in reason_norm for x in ["partner", "partnership", "collab", "promo", "sponsor"]):
-        score += 6
-    elif intake_type == "question" and any(x in reason_norm for x in ["question", "help", "how do i", "how to"]):
-        score += 4
-
-    if _reason_has_cod_legacy_signals(reason_norm):
-        haystack = f"{slug} {name} {desc} {' '.join(keywords)}"
-        if any(x in haystack for x in [
-            "cod", "call of duty", "legacy", "older", "old school", "recovery",
-            "recoveries", "challenge lobby", "challenge lobbies", "unlock all",
-            "mod menu", "mw2", "mw3", "bo2", "bo3", "ghosts", "waw", "rgh", "jtag"
-        ]):
-            score += 40
-
-    return score
+    return max(score, 0)
 
 
 async def _infer_dashboard_category(
@@ -580,30 +826,41 @@ async def _infer_dashboard_category(
     reason: str,
 ) -> Tuple[str, str, List[Dict[str, Any]]]:
     categories = await _fetch_dashboard_ticket_categories(guild_id)
+    reason_norm = _canonicalize_reason_text(reason)
 
     if not categories:
         _debug(f"category infer fallback=support guild={guild_id} reason_len={len(reason or '')}")
         return FALLBACK_SUPPORT_CATEGORY, "Support", []
 
-    best: Optional[Dict[str, Any]] = None
-    best_score = 0
-
+    scored: List[Tuple[int, Dict[str, Any]]] = []
     for cat in categories:
-        score = _score_reason_against_category(reason, cat)
-        if score > best_score:
-            best_score = score
-            best = cat
+        score = _score_reason_against_category(reason_norm, cat)
+        scored.append((score, cat))
 
-    if best is not None and best_score > 0:
-        _debug(
-            f"category infer matched guild={guild_id} "
-            f"slug={best.get('slug')} label={best.get('name')} score={best_score}"
-        )
-        return (
-            str(best.get("slug") or FALLBACK_SUPPORT_CATEGORY),
-            str(best.get("name") or "Support"),
-            categories,
-        )
+    scored.sort(
+        key=lambda item: (
+            item[0],
+            1 if bool(item[1].get("is_default")) else 0,
+            -(item[1].get("sort_order") if isinstance(item[1].get("sort_order"), int) else 10_000),
+        ),
+        reverse=True,
+    )
+
+    best_score, best = scored[0]
+    second_score = scored[1][0] if len(scored) > 1 else 0
+
+    if best is not None and best_score >= 14:
+        if best_score >= second_score + 5 or best_score >= 24:
+            _debug(
+                f"category infer matched guild={guild_id} "
+                f"slug={best.get('slug')} label={best.get('name')} "
+                f"score={best_score} second={second_score} reason={_truncate(reason_norm, 140)!r}"
+            )
+            return (
+                str(best.get("slug") or FALLBACK_SUPPORT_CATEGORY),
+                str(best.get("name") or "Support"),
+                categories,
+            )
 
     default_slug = _find_default_category_slug(categories)
     default_cat = next((c for c in categories if str(c.get("slug") or "") == default_slug), None)
@@ -611,7 +868,8 @@ async def _infer_dashboard_category(
     if default_cat is not None:
         _debug(
             f"category infer default guild={guild_id} "
-            f"slug={default_cat.get('slug')} label={default_cat.get('name')}"
+            f"slug={default_cat.get('slug')} label={default_cat.get('name')} "
+            f"best_score={best_score} second={second_score} reason={_truncate(reason_norm, 140)!r}"
         )
         return (
             str(default_cat.get("slug") or FALLBACK_SUPPORT_CATEGORY),
