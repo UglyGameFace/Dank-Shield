@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from aiohttp import web
 
@@ -18,6 +18,13 @@ from ..tickets_new.service import (
     mark_ticket_closed,
     reopen_ticket,
 )
+
+try:
+    from ..tickets_new.service import unclaim_ticket, transfer_ticket
+except Exception:
+    unclaim_ticket = None  # type: ignore
+    transfer_ticket = None  # type: ignore
+
 from ..tickets_new.transcript_service import delete_ticket_with_optional_transcript
 from ..tickets_new.sync_service import (
     sync_active_ticket_channels_for_guild,
@@ -59,6 +66,17 @@ def _safe_str(value: Any) -> str:
         return ""
 
 
+def _safe_bool(value: Any, default: bool = False) -> bool:
+    if isinstance(value, bool):
+        return value
+    text = _safe_str(value).strip().lower()
+    if text in {"1", "true", "yes", "y", "on"}:
+        return True
+    if text in {"0", "false", "no", "n", "off"}:
+        return False
+    return default
+
+
 def _queue_row_payload(row: Dict[str, Any]) -> Dict[str, Any]:
     return {
         "id": row.get("id"),
@@ -74,6 +92,7 @@ def _queue_row_payload(row: Dict[str, Any]) -> Dict[str, Any]:
         "username": _safe_str(row.get("username") or row.get("owner_name") or row.get("requester_name") or ""),
         "claimed_by": _safe_str(row.get("claimed_by") or row.get("assigned_to") or ""),
         "claimed_by_id": row.get("claimed_by_id"),
+        "assigned_to": _safe_str(row.get("assigned_to") or ""),
         "is_unclaimed": bool(row.get("is_unclaimed", False)),
         "is_claimed": bool(row.get("is_claimed", False)),
         "is_ghost": bool(row.get("is_ghost", False)),
@@ -94,6 +113,29 @@ def _channel_to_payload(channel: discord.TextChannel) -> Dict[str, Any]:
         "category_id": str(channel.category.id) if channel.category else None,
         "category_name": channel.category.name if channel.category else None,
     }
+
+
+async def _request_data(request: web.Request) -> Dict[str, Any]:
+    try:
+        if request.can_read_body:
+            data = await request.json()
+            if isinstance(data, dict):
+                return data
+    except Exception:
+        pass
+    return {}
+
+
+async def _merged_request_data(request: web.Request) -> Dict[str, Any]:
+    data = await _request_data(request)
+    merged: Dict[str, Any] = {}
+    try:
+        merged.update(dict(request.query))
+    except Exception:
+        pass
+    if isinstance(data, dict):
+        merged.update(data)
+    return merged
 
 
 async def _get_guild_or_error(guild_id: Any) -> tuple[Optional[discord.Guild], Optional[web.Response]]:
@@ -165,10 +207,154 @@ async def _get_text_channel(
     return channel, None
 
 
-async def create_ticket(request: web.Request):
+async def _close_ticket_via_service(
+    *,
+    channel: discord.TextChannel,
+    closed_by: Optional[discord.Member],
+    reason: Optional[str],
+) -> bool:
     try:
-        data: Dict[str, Any] = await request.json()
+        return bool(
+            await mark_ticket_closed(
+                channel=channel,
+                closed_by=closed_by,
+                reason=reason,
+            )
+        )
+    except TypeError:
+        pass
     except Exception:
+        raise
+
+    try:
+        return bool(
+            await mark_ticket_closed(
+                channel_id=channel.id,
+                closed_by=closed_by.id if closed_by else None,
+                reason=reason,
+            )
+        )
+    except TypeError:
+        pass
+    except Exception:
+        raise
+
+    try:
+        return bool(
+            await mark_ticket_closed(
+                channel_id=channel.id,
+                reason=reason,
+            )
+        )
+    except Exception:
+        return False
+
+
+async def _reopen_ticket_via_service(
+    *,
+    channel: discord.TextChannel,
+    actor: Optional[discord.Member],
+    reason: Optional[str],
+) -> bool:
+    try:
+        return bool(
+            await reopen_ticket(
+                channel_id=channel.id,
+                actor=actor,
+                reason=reason,
+            )
+        )
+    except TypeError:
+        pass
+    except Exception:
+        raise
+
+    try:
+        return bool(
+            await reopen_ticket(
+                channel_id=channel.id,
+                reopened_by=actor.id if actor else None,
+                reason=reason,
+            )
+        )
+    except TypeError:
+        pass
+    except Exception:
+        raise
+
+    try:
+        return bool(
+            await reopen_ticket(
+                channel_id=channel.id,
+                reason=reason,
+            )
+        )
+    except Exception:
+        return False
+
+
+async def _assign_ticket_via_service(
+    *,
+    channel: discord.TextChannel,
+    staff: discord.Member,
+) -> bool:
+    try:
+        return bool(await assign_ticket(channel_id=channel.id, staff_member=staff))
+    except TypeError:
+        pass
+    except Exception:
+        raise
+
+    try:
+        return bool(await assign_ticket(channel=channel, staff_member=staff))
+    except Exception:
+        return False
+
+
+async def _unclaim_ticket_via_service(
+    *,
+    channel: discord.TextChannel,
+) -> bool:
+    if unclaim_ticket is None:
+        return False
+
+    try:
+        return bool(await unclaim_ticket(channel_id=channel.id))
+    except TypeError:
+        pass
+    except Exception:
+        raise
+
+    try:
+        return bool(await unclaim_ticket(channel=channel))
+    except Exception:
+        return False
+
+
+async def _transfer_ticket_via_service(
+    *,
+    channel: discord.TextChannel,
+    to_staff: discord.Member,
+) -> bool:
+    if transfer_ticket is None:
+        return False
+
+    try:
+        return bool(await transfer_ticket(channel_id=channel.id, to_staff_member=to_staff))
+    except TypeError:
+        pass
+    except Exception:
+        raise
+
+    try:
+        return bool(await transfer_ticket(channel=channel, to_staff_member=to_staff))
+    except Exception:
+        return False
+
+
+async def create_ticket(request: web.Request):
+    data = await _request_data(request)
+    if request.can_read_body and not isinstance(data, dict):
         return _json_error("Invalid JSON body")
 
     guild, err = await _get_guild_or_error(data.get("guild_id"))
@@ -182,7 +368,7 @@ async def create_ticket(request: web.Request):
     assert member is not None
 
     category = _safe_str(data.get("category") or "support").strip() or "support"
-    is_ghost = bool(data.get("ghost", False))
+    is_ghost = _safe_bool(data.get("ghost"), False)
     opening_message = data.get("opening_message")
     priority = _safe_str(data.get("priority") or "medium").strip().lower() or "medium"
 
@@ -200,7 +386,7 @@ async def create_ticket(request: web.Request):
                 parsed.append(role_id)
         staff_role_ids = parsed or None
 
-    allow_duplicate = bool(data.get("allow_duplicate", False))
+    allow_duplicate = _safe_bool(data.get("allow_duplicate"), False)
     normalized_category = "ghost" if is_ghost else category
 
     if not allow_duplicate:
@@ -213,7 +399,7 @@ async def create_ticket(request: web.Request):
             return _json_ok(
                 created=False,
                 duplicate=True,
-                existing_ticket=existing,
+                existing_ticket=_queue_row_payload(existing),
             )
 
     channel = await create_ticket_channel(
@@ -239,9 +425,8 @@ async def create_ticket(request: web.Request):
 
 
 async def close_ticket(request: web.Request):
-    try:
-        data = await request.json()
-    except Exception:
+    data = await _request_data(request)
+    if request.can_read_body and not isinstance(data, dict):
         return _json_error("Invalid JSON body")
 
     channel, err = await _get_text_channel(data.get("channel_id"))
@@ -254,8 +439,8 @@ async def close_ticket(request: web.Request):
     if staff_id:
         closed_by, _ = await _get_member_from_guild(channel.guild, staff_id)
 
-    reason = data.get("reason")
-    ok = await mark_ticket_closed(
+    reason = _safe_str(data.get("reason")).strip() or None
+    ok = await _close_ticket_via_service(
         channel=channel,
         closed_by=closed_by,
         reason=reason,
@@ -264,43 +449,46 @@ async def close_ticket(request: web.Request):
     if not ok:
         return _json_error("Failed to mark ticket closed", 500)
 
-    return _json_ok(closed=True, channel_id=str(channel.id))
+    return _json_ok(
+        closed=True,
+        channel_id=str(channel.id),
+        closed_by=str(closed_by.id) if closed_by else None,
+    )
 
 
 async def reopen_ticket_endpoint(request: web.Request):
-    try:
-        data = await request.json()
-    except Exception:
+    data = await _request_data(request)
+    if request.can_read_body and not isinstance(data, dict):
         return _json_error("Invalid JSON body")
 
-    channel_id = data.get("channel_id")
-    if not channel_id:
-        return _json_error("channel_id required")
+    channel, err = await _get_text_channel(data.get("channel_id"))
+    if err:
+        return err
+    assert channel is not None
 
     actor = None
     actor_id = data.get("actor_id") or data.get("staff_id")
     if actor_id:
-        channel, err = await _get_text_channel(channel_id)
-        if err:
-            return err
-        assert channel is not None
         actor, _ = await _get_member_from_guild(channel.guild, actor_id)
 
-    ok = await reopen_ticket(
-        channel_id=channel_id,
+    ok = await _reopen_ticket_via_service(
+        channel=channel,
         actor=actor,
-        reason=data.get("reason"),
+        reason=_safe_str(data.get("reason")).strip() or None,
     )
     if not ok:
         return _json_error("Failed to reopen ticket", 500)
 
-    return _json_ok(reopened=True, channel_id=str(channel_id))
+    return _json_ok(
+        reopened=True,
+        channel_id=str(channel.id),
+        actor_id=str(actor.id) if actor else None,
+    )
 
 
 async def assign_ticket_endpoint(request: web.Request):
-    try:
-        data = await request.json()
-    except Exception:
+    data = await _request_data(request)
+    if request.can_read_body and not isinstance(data, dict):
         return _json_error("Invalid JSON body")
 
     channel_id = data.get("channel_id")
@@ -321,17 +509,24 @@ async def assign_ticket_endpoint(request: web.Request):
         return err
     assert staff is not None
 
-    ok = await assign_ticket(channel_id=channel.id, staff_member=staff)
+    ok = await _assign_ticket_via_service(channel=channel, staff=staff)
     if not ok:
         return _json_error("Failed to assign ticket", 500)
 
-    return _json_ok(assigned=True, channel_id=str(channel.id), staff_id=str(staff.id))
+    return _json_ok(
+        assigned=True,
+        channel_id=str(channel.id),
+        staff_id=str(staff.id),
+        staff_name=str(staff),
+    )
 
 
-async def delete_ticket(request: web.Request):
-    try:
-        data = await request.json()
-    except Exception:
+async def unclaim_ticket_endpoint(request: web.Request):
+    if unclaim_ticket is None:
+        return _json_error("Unclaim ticket is not available in this build", 501)
+
+    data = await _request_data(request)
+    if request.can_read_body and not isinstance(data, dict):
         return _json_error("Invalid JSON body")
 
     channel, err = await _get_text_channel(data.get("channel_id"))
@@ -339,9 +534,66 @@ async def delete_ticket(request: web.Request):
         return err
     assert channel is not None
 
-    ghost = bool(data.get("ghost", False))
-    force_transcript = bool(data.get("force_transcript", False))
-    reason = data.get("reason") or "Deleted from dashboard"
+    ok = await _unclaim_ticket_via_service(channel=channel)
+    if not ok:
+        return _json_error("Failed to unclaim ticket", 500)
+
+    return _json_ok(
+        unclaimed=True,
+        channel_id=str(channel.id),
+    )
+
+
+async def transfer_ticket_endpoint(request: web.Request):
+    if transfer_ticket is None:
+        return _json_error("Transfer ticket is not available in this build", 501)
+
+    data = await _request_data(request)
+    if request.can_read_body and not isinstance(data, dict):
+        return _json_error("Invalid JSON body")
+
+    channel, err = await _get_text_channel(data.get("channel_id"))
+    if err:
+        return err
+    assert channel is not None
+
+    target_staff_id = data.get("to_staff_id") or data.get("staff_id")
+    if not target_staff_id:
+        return _json_error("to_staff_id required")
+
+    to_staff, err = await _get_member_from_guild(channel.guild, target_staff_id)
+    if err:
+        return err
+    assert to_staff is not None
+
+    ok = await _transfer_ticket_via_service(
+        channel=channel,
+        to_staff=to_staff,
+    )
+    if not ok:
+        return _json_error("Failed to transfer ticket", 500)
+
+    return _json_ok(
+        transferred=True,
+        channel_id=str(channel.id),
+        to_staff_id=str(to_staff.id),
+        to_staff_name=str(to_staff),
+    )
+
+
+async def delete_ticket(request: web.Request):
+    data = await _request_data(request)
+    if request.can_read_body and not isinstance(data, dict):
+        return _json_error("Invalid JSON body")
+
+    channel, err = await _get_text_channel(data.get("channel_id"))
+    if err:
+        return err
+    assert channel is not None
+
+    ghost = _safe_bool(data.get("ghost"), False)
+    force_transcript = _safe_bool(data.get("force_transcript"), False)
+    reason = _safe_str(data.get("reason") or "Deleted from dashboard").strip() or "Deleted from dashboard"
 
     deleted_by = None
     staff_id = data.get("staff_id")
@@ -357,26 +609,29 @@ async def delete_ticket(request: web.Request):
     )
 
     if isinstance(result, dict):
-        return web.json_response(result)
+        payload = dict(result)
+        payload.setdefault("ok", bool(result.get("ok", False)))
+        return web.json_response(payload)
 
-    return _json_ok(deleted=bool(result), channel_id=str(channel.id))
+    return _json_ok(
+        deleted=bool(result),
+        channel_id=str(channel.id),
+    )
 
 
 async def sync_active_tickets(request: web.Request):
-    try:
-        data: Dict[str, Any] = await request.json()
-    except Exception:
-        data = {}
+    data = await _request_data(request)
 
     guild, err = await _get_guild_or_error(data.get("guild_id"))
     if err:
         return err
     assert guild is not None
 
-    include_closed_visible_channels = bool(
-        data.get("include_closed_visible_channels", True)
+    include_closed_visible_channels = _safe_bool(
+        data.get("include_closed_visible_channels"),
+        True,
     )
-    dry_run = bool(data.get("dry_run", False))
+    dry_run = _safe_bool(data.get("dry_run"), False)
 
     summary = await sync_active_ticket_channels_for_guild(
         guild,
@@ -389,9 +644,8 @@ async def sync_active_tickets(request: web.Request):
 
 
 async def sync_one_ticket(request: web.Request):
-    try:
-        data: Dict[str, Any] = await request.json()
-    except Exception:
+    data = await _request_data(request)
+    if request.can_read_body and not isinstance(data, dict):
         return _json_error("Invalid JSON body")
 
     channel, err = await _get_text_channel(data.get("channel_id"))
@@ -399,7 +653,7 @@ async def sync_one_ticket(request: web.Request):
         return err
     assert channel is not None
 
-    dry_run = bool(data.get("dry_run", False))
+    dry_run = _safe_bool(data.get("dry_run"), False)
 
     summary = await sync_one_ticket_channel(
         channel,
@@ -411,15 +665,9 @@ async def sync_one_ticket(request: web.Request):
 
 
 async def get_ticket_queue(request: web.Request):
-    guild_id = request.query.get("guild_id")
-    if not guild_id:
-        try:
-            body = await request.json()
-        except Exception:
-            body = {}
-        guild_id = body.get("guild_id")
+    data = await _merged_request_data(request)
 
-    guild, err = await _get_guild_or_error(guild_id)
+    guild, err = await _get_guild_or_error(data.get("guild_id"))
     if err:
         return err
     assert guild is not None
@@ -436,15 +684,9 @@ async def get_ticket_queue(request: web.Request):
 
 
 async def get_unclaimed_tickets(request: web.Request):
-    guild_id = request.query.get("guild_id")
-    if not guild_id:
-        try:
-            body = await request.json()
-        except Exception:
-            body = {}
-        guild_id = body.get("guild_id")
+    data = await _merged_request_data(request)
 
-    guild, err = await _get_guild_or_error(guild_id)
+    guild, err = await _get_guild_or_error(data.get("guild_id"))
     if err:
         return err
     assert guild is not None
@@ -459,15 +701,9 @@ async def get_unclaimed_tickets(request: web.Request):
 
 
 async def get_claimed_tickets(request: web.Request):
-    guild_id = request.query.get("guild_id")
-    if not guild_id:
-        try:
-            body = await request.json()
-        except Exception:
-            body = {}
-        guild_id = body.get("guild_id")
+    data = await _merged_request_data(request)
 
-    guild, err = await _get_guild_or_error(guild_id)
+    guild, err = await _get_guild_or_error(data.get("guild_id"))
     if err:
         return err
     assert guild is not None
@@ -482,22 +718,14 @@ async def get_claimed_tickets(request: web.Request):
 
 
 async def get_my_claimed_tickets(request: web.Request):
-    guild_id = request.query.get("guild_id")
-    staff_id = request.query.get("staff_id")
+    data = await _merged_request_data(request)
 
-    if not guild_id or not staff_id:
-        try:
-            body = await request.json()
-        except Exception:
-            body = {}
-        guild_id = guild_id or body.get("guild_id")
-        staff_id = staff_id or body.get("staff_id")
-
-    guild, err = await _get_guild_or_error(guild_id)
+    guild, err = await _get_guild_or_error(data.get("guild_id"))
     if err:
         return err
     assert guild is not None
 
+    staff_id = data.get("staff_id")
     if not staff_id:
         return _json_error("staff_id required")
 
@@ -521,9 +749,8 @@ async def get_my_claimed_tickets(request: web.Request):
 
 
 async def force_member_sync(request: web.Request):
-    try:
-        data = await request.json()
-    except Exception:
+    data = await _request_data(request)
+    if request.can_read_body and not isinstance(data, dict):
         return _json_error("Invalid JSON body")
 
     guild, err = await _get_guild_or_error(data.get("guild_id"))
@@ -536,9 +763,8 @@ async def force_member_sync(request: web.Request):
 
 
 async def reconcile_departed(request: web.Request):
-    try:
-        data = await request.json()
-    except Exception:
+    data = await _request_data(request)
+    if request.can_read_body and not isinstance(data, dict):
         return _json_error("Invalid JSON body")
 
     guild, err = await _get_guild_or_error(data.get("guild_id"))
@@ -551,9 +777,8 @@ async def reconcile_departed(request: web.Request):
 
 
 async def role_member_sync(request: web.Request):
-    try:
-        data = await request.json()
-    except Exception:
+    data = await _request_data(request)
+    if request.can_read_body and not isinstance(data, dict):
         return _json_error("Invalid JSON body")
 
     guild, err = await _get_guild_or_error(data.get("guild_id"))
@@ -607,6 +832,12 @@ async def start_api(bot_instance: discord.Client):
     app.router.add_post("/ticket/delete", delete_ticket)
     app.router.add_post("/ticket/reopen", reopen_ticket_endpoint)
     app.router.add_post("/ticket/assign", assign_ticket_endpoint)
+
+    if unclaim_ticket is not None:
+        app.router.add_post("/ticket/unclaim", unclaim_ticket_endpoint)
+
+    if transfer_ticket is not None:
+        app.router.add_post("/ticket/transfer", transfer_ticket_endpoint)
 
     app.router.add_get("/tickets/queue", get_ticket_queue)
     app.router.add_post("/tickets/queue", get_ticket_queue)
