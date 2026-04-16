@@ -246,6 +246,61 @@ async def _ticket_row_for_channel_id(channel_id: int | str) -> Optional[Dict[str
     return None
 
 
+async def _resolve_text_channel_from_row(
+    guild: discord.Guild,
+    row: Optional[Dict[str, Any]],
+) -> Optional[discord.TextChannel]:
+    if not isinstance(row, dict):
+        return None
+
+    channel_id = 0
+    try:
+        channel_id = _safe_int(row.get("channel_id") or row.get("discord_thread_id"), 0)
+    except Exception:
+        channel_id = 0
+
+    if channel_id <= 0:
+        return None
+
+    try:
+        existing_channel = guild.get_channel(channel_id)
+        if isinstance(existing_channel, discord.TextChannel):
+            return existing_channel
+    except Exception:
+        pass
+
+    try:
+        fetched = await guild.fetch_channel(channel_id)
+        if isinstance(fetched, discord.TextChannel):
+            return fetched
+    except Exception:
+        pass
+
+    return None
+
+
+async def _repair_stale_open_ticket_row(
+    *,
+    row: Dict[str, Any],
+    owner: discord.Member,
+) -> None:
+    existing_channel_id = _safe_int(row.get("channel_id") or row.get("discord_thread_id"), 0)
+    if existing_channel_id <= 0:
+        return
+
+    try:
+        await repo_mark_ticket_deleted(
+            channel_id=existing_channel_id,
+            reason="Stale open ticket row repaired during ticket creation",
+        )
+        print(
+            f"🧹 Repaired stale open ticket row for owner={owner.id} "
+            f"missing_channel={existing_channel_id}"
+        )
+    except Exception as e:
+        print(f"⚠️ Failed repairing stale open ticket row {existing_channel_id}: {repr(e)}")
+
+
 def _actor_id(actor: Optional[discord.Member | discord.User]) -> Optional[int]:
     try:
         if actor is None:
@@ -1014,70 +1069,48 @@ async def create_ticket_channel(
         )
 
         if existing_row:
-            existing_channel_id = _row_channel_id(existing_row)
-            if existing_channel_id > 0:
+            existing_channel = await _resolve_text_channel_from_row(guild, existing_row)
+            if isinstance(existing_channel, discord.TextChannel):
                 try:
-                    existing_channel = guild.get_channel(existing_channel_id)
-                    if existing_channel is None:
-                        try:
-                            fetched = await guild.fetch_channel(existing_channel_id)
-                            existing_channel = fetched if isinstance(fetched, discord.TextChannel) else None
-                        except Exception:
-                            existing_channel = None
-
-                    if isinstance(existing_channel, discord.TextChannel):
-                        try:
-                            cancelled = await _cancel_verification_wait_timers_safe(guild.id, owner.id)
-                            if cancelled:
-                                print(
-                                    f"⏹️ Cancelled verification wait timer(s) for owner={owner.id} "
-                                    f"because existing ticket {existing_channel.id} was reused."
-                                )
-                        except Exception:
-                            pass
-
-                        try:
-                            await repo_sync_ticket_record_from_channel(
-                                channel=existing_channel,
-                                owner_id=owner.id,
-                                username=str(owner),
-                                title=_title_for_ticket(
-                                    owner,
-                                    _safe_str(existing_row.get("category") or category),
-                                    _safe_bool(existing_row.get("is_ghost"), is_ghost),
-                                ),
-                                category=_safe_str(existing_row.get("category") or category),
-                                status=_safe_str(existing_row.get("status") or "open"),
-                                priority=_safe_str(existing_row.get("priority") or clean_priority),
-                                ticket_number=_safe_int(existing_row.get("ticket_number"), 0) or None,
-                                assigned_to=existing_row.get("assigned_to"),
-                                is_ghost=_safe_bool(existing_row.get("is_ghost"), is_ghost),
-                                source=_safe_str(existing_row.get("source") or source),
-                            )
-                        except Exception as e:
-                            print(f"⚠️ Existing ticket sync failed for {existing_channel.id}: {repr(e)}")
-
-                        await _maybe_post_verification_ui(
-                            channel=existing_channel,
-                            owner=owner,
-                            is_ghost=_safe_bool(existing_row.get("is_ghost"), is_ghost),
+                    cancelled = await _cancel_verification_wait_timers_safe(guild.id, owner.id)
+                    if cancelled:
+                        print(
+                            f"⏹️ Cancelled verification wait timer(s) for owner={owner.id} "
+                            f"because existing ticket {existing_channel.id} was reused."
                         )
-                        await _maybe_post_close_controls(existing_channel)
-                        return existing_channel
                 except Exception:
                     pass
 
                 try:
-                    await repo_mark_ticket_deleted(
-                        channel_id=existing_channel_id,
-                        reason="Stale open ticket row repaired during ticket creation",
-                    )
-                    print(
-                        f"🧹 Repaired stale open ticket row for owner={owner.id} "
-                        f"missing_channel={existing_channel_id}"
+                    await repo_sync_ticket_record_from_channel(
+                        channel=existing_channel,
+                        owner_id=owner.id,
+                        username=str(owner),
+                        title=_title_for_ticket(
+                            owner,
+                            _safe_str(existing_row.get("category") or category),
+                            _safe_bool(existing_row.get("is_ghost"), is_ghost),
+                        ),
+                        category=_safe_str(existing_row.get("category") or category),
+                        status=_safe_str(existing_row.get("status") or "open"),
+                        priority=_safe_str(existing_row.get("priority") or clean_priority),
+                        ticket_number=_safe_int(existing_row.get("ticket_number"), 0) or None,
+                        assigned_to=existing_row.get("assigned_to"),
+                        is_ghost=_safe_bool(existing_row.get("is_ghost"), is_ghost),
+                        source=_safe_str(existing_row.get("source") or source),
                     )
                 except Exception as e:
-                    print(f"⚠️ Failed repairing stale open ticket row {existing_channel_id}: {repr(e)}")
+                    print(f"⚠️ Existing ticket sync failed for {existing_channel.id}: {repr(e)}")
+
+                await _maybe_post_verification_ui(
+                    channel=existing_channel,
+                    owner=owner,
+                    is_ghost=_safe_bool(existing_row.get("is_ghost"), is_ghost),
+                )
+                await _maybe_post_close_controls(existing_channel)
+                return existing_channel
+
+            await _repair_stale_open_ticket_row(row=existing_row, owner=owner)
 
         parent = _resolve_ticket_parent_category(
             guild,
@@ -1267,27 +1300,18 @@ async def mark_ticket_closed(
     reason: Optional[str] = None,
 ) -> bool:
     row_before = await _ticket_row_for_channel_id(channel.id)
-    if row_before and _ticket_status(row_before) == "closed":
-        try:
-            await _apply_closed_permissions(
-                channel,
-                channel.guild.get_member(_parse_owner_id_from_topic(channel) or 0)
-                if _parse_owner_id_from_topic(channel)
-                else None,
-            )
-        except Exception:
-            pass
-        return True
-
-    ok = await repo_mark_ticket_closed(
-        channel_id=channel.id,
-        closed_by=getattr(closed_by, "id", None) if closed_by else None,
-        reason=reason,
-    )
 
     ticket_number = _extract_ticket_number_from_name(channel.name)
     if ticket_number is None:
         ticket_number = _parse_ticket_number_from_topic(channel)
+
+    ok = True
+    if not (row_before and _ticket_status(row_before) == "closed"):
+        ok = await repo_mark_ticket_closed(
+            channel_id=channel.id,
+            closed_by=getattr(closed_by, "id", None) if closed_by else None,
+            reason=reason,
+        )
 
     if ticket_number is not None:
         new_name = _format_ticket_channel_name(ticket_number, closed=True)
@@ -1809,6 +1833,9 @@ async def reopen_ticket(
     reason: Optional[str] = None,
 ) -> bool:
     row_before = await _ticket_row_for_channel_id(channel_id)
+
+    # Service-level reopen should reflect DB state. If already open and unclaimed,
+    # that's a no-op success for the DB layer.
     if row_before and _ticket_status(row_before) == "open" and _ticket_claimed_by_id(row_before) <= 0:
         return True
 
@@ -1845,6 +1872,7 @@ async def reopen_ticket_channel(
     actor: Optional[discord.Member | discord.User] = None,
     reason: Optional[str] = None,
 ) -> bool:
+    # Always repair Discord-side state, even if DB was already open.
     ok = await reopen_ticket(
         channel_id=channel.id,
         actor=actor,
