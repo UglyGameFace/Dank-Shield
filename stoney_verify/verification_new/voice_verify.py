@@ -93,7 +93,7 @@ def _safe_int(value: Any, default: int = 0) -> int:
 
 def _safe_str(value: Any) -> str:
     try:
-        return str(value)
+        return str(value or "")
     except Exception:
         return ""
 
@@ -485,6 +485,18 @@ def _vc_request_status_active(status: str) -> bool:
     }
 
 
+def _vc_request_already_final(status: str) -> bool:
+    return str(status or "").upper() in {
+        "APPROVED",
+        "DENIED",
+        "ENDED",
+        "COMPLETED",
+        "CANCELED",
+        "REISSUED",
+        "STALE",
+    }
+
+
 async def _update_ticket_vc_status(
     *,
     ticket_channel: Optional[discord.TextChannel],
@@ -793,6 +805,19 @@ async def queue_vc_request(
     except Exception:
         pass
 
+    existing = dict(VC_REQUESTS.get(tok) or {})
+    existing_status = str(existing.get("status") or "").upper()
+
+    if _vc_request_already_final(existing_status):
+        return _result(
+            False,
+            f"This VC request is already finalized ({existing_status}). Reissue a VC token if you need a new session.",
+            token=tok,
+            channel=ticket_channel,
+            owner=owner,
+            request=existing,
+        )
+
     try:
         cooldown_seconds = int(globals().get("VC_REQUEST_COOLDOWN_SECONDS", 60) or 60)
     except Exception:
@@ -816,8 +841,7 @@ async def queue_vc_request(
     if not vc_channel:
         return _result(False, "VC verification channel isn’t configured correctly.", channel=ticket_channel, owner=owner)
 
-    existing = dict(VC_REQUESTS.get(tok) or {})
-    if _vc_request_status_active(str(existing.get("status") or "")):
+    if _vc_request_status_active(existing_status):
         return _result(
             True,
             "VC request is already queued.",
@@ -930,6 +954,14 @@ async def accept_vc_request(
     accepted_by = int(req.get("accepted_by") or 0) if req else 0
     current_status = str(req.get("status") or "").upper()
 
+    if _vc_request_already_final(current_status):
+        return _result(
+            False,
+            f"This VC request is already finalized ({current_status}).",
+            channel=ticket_channel,
+            owner=owner,
+        )
+
     if current_status == "ACCEPTED" and accepted_by == int(staff_member.id):
         return _result(
             True,
@@ -1010,7 +1042,7 @@ async def accept_vc_request(
         queue_message,
         content=f"✅ Claimed by {staff_member.mention}.",
         embed=None,
-        view=_build_ticket_vc_staff_controls(tok),
+        view=None,
     )
 
     await _update_ticket_vc_status(
@@ -1061,6 +1093,16 @@ async def request_upload_instead(
     tok = str(ctx.get("token") or token or "").strip()
     ticket_channel = ctx.get("channel")
     owner = ctx.get("owner")
+    req = dict(ctx.get("request") or {})
+    current_status = str(req.get("status") or "").upper()
+
+    if _vc_request_already_final(current_status):
+        return _result(
+            False,
+            f"This VC request is already finalized ({current_status}).",
+            channel=ticket_channel,
+            owner=owner,
+        )
 
     if not isinstance(ticket_channel, discord.TextChannel):
         return _result(False, "Could not resolve the verification ticket channel.")
@@ -1177,6 +1219,14 @@ async def reissue_vc_token(
     owner = ctx.get("owner")
     token_info = ctx.get("token_info")
     old_req = dict(ctx.get("request") or {})
+    current_status = str(old_req.get("status") or "").upper()
+
+    if _vc_request_already_final(current_status) and current_status != "REISSUED":
+        return _result(
+            False,
+            f"This VC request is already finalized ({current_status}).",
+            old_token=old_token,
+        )
 
     if not isinstance(ticket_channel, discord.TextChannel):
         try:
@@ -1315,6 +1365,16 @@ async def approve_vc_request(
     tok = str(ctx.get("token") or token or "").strip()
     ticket_channel = ctx.get("channel")
     owner = ctx.get("owner")
+    req = dict(ctx.get("request") or {})
+    current_status = str(req.get("status") or "").upper()
+
+    if _vc_request_already_final(current_status):
+        return _result(
+            False,
+            f"This VC request is already finalized ({current_status}).",
+            channel=ticket_channel,
+            owner=owner,
+        )
 
     if isinstance(owner, discord.Member):
         try:
@@ -1404,6 +1464,16 @@ async def deny_vc_request(
     tok = str(ctx.get("token") or token or "").strip()
     ticket_channel = ctx.get("channel")
     owner = ctx.get("owner")
+    req = dict(ctx.get("request") or {})
+    current_status = str(req.get("status") or "").upper()
+
+    if _vc_request_already_final(current_status):
+        return _result(
+            False,
+            f"This VC request is already finalized ({current_status}).",
+            channel=ticket_channel,
+            owner=owner,
+        )
 
     if isinstance(owner, discord.Member):
         try:
@@ -1493,6 +1563,16 @@ async def end_vc_session(
     tok = str(ctx.get("token") or token or "").strip()
     ticket_channel = ctx.get("channel")
     owner = ctx.get("owner")
+    req = dict(ctx.get("request") or {})
+    current_status = str(req.get("status") or "").upper()
+
+    if _vc_request_already_final(current_status):
+        return _result(
+            False,
+            f"This VC request is already finalized ({current_status}).",
+            channel=ticket_channel,
+            owner=owner,
+        )
 
     if isinstance(owner, discord.Member):
         try:
@@ -1586,6 +1666,15 @@ async def takeover_vc_request(
     ticket_channel = ctx.get("channel")
     owner = ctx.get("owner")
     req = dict(ctx.get("request") or {})
+    current_status = str(req.get("status") or "").upper()
+
+    if _vc_request_already_final(current_status):
+        return _result(
+            False,
+            f"This VC request is already finalized ({current_status}).",
+            channel=ticket_channel,
+            owner=owner,
+        )
 
     if not isinstance(ticket_channel, discord.TextChannel):
         return _result(False, "Could not resolve the verification ticket channel.")
@@ -1675,6 +1764,16 @@ async def unlock_vc_request(
     tok = str(ctx.get("token") or token or "").strip()
     ticket_channel = ctx.get("channel")
     owner = ctx.get("owner")
+    req = dict(ctx.get("request") or {})
+    current_status = str(req.get("status") or "").upper()
+
+    if _vc_request_already_final(current_status):
+        return _result(
+            False,
+            f"This VC request is already finalized ({current_status}).",
+            channel=ticket_channel,
+            owner=owner,
+        )
 
     if isinstance(owner, discord.Member):
         try:
