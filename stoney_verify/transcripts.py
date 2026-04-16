@@ -14,6 +14,10 @@ from .tickets import (
     wait_for_channel_ready,
 )
 from .verify_ui import post_or_replace_verify_ui
+from .verification_new.service import (
+    approve_verification,
+    deny_verification,
+)
 
 from .tickets_new.service import (
     attach_transcript_to_ticket,
@@ -147,6 +151,37 @@ def _is_staff_member(member: Optional[discord.Member]) -> bool:
             )
         except Exception:
             return False
+
+
+def _role_by_id(guild: discord.Guild, role_id: int) -> Optional[discord.Role]:
+    try:
+        if not guild or not role_id or int(role_id) <= 0:
+            return None
+        role = guild.get_role(int(role_id))
+        return role if isinstance(role, discord.Role) else None
+    except Exception:
+        return None
+
+
+async def _remove_unverified_role_if_present(
+    member: Optional[discord.Member],
+    *,
+    reason: str,
+) -> Tuple[bool, Optional[str]]:
+    try:
+        if not isinstance(member, discord.Member):
+            return False, None
+
+        unverified_role = _role_by_id(member.guild, int(UNVERIFIED_ROLE_ID or 0))
+        if not unverified_role or unverified_role not in member.roles:
+            return False, None
+
+        await member.remove_roles(unverified_role, reason=reason)
+        return True, None
+    except discord.Forbidden:
+        return False, "I can't remove the Unverified role. Check role hierarchy and Manage Roles."
+    except Exception as e:
+        return False, str(e)
 
 
 async def _reply_ephemeral(interaction: discord.Interaction, content: str) -> None:
@@ -502,14 +537,15 @@ class VerificationStaffReviewView(discord.ui.View):
     async def _resolve_ticket_context(
         self,
         interaction: discord.Interaction,
-    ) -> tuple[Optional[str], Optional[int], Optional[str]]:
+    ) -> tuple[Optional[str], Optional[int], Optional[str], Optional[discord.Member], Optional[discord.TextChannel]]:
         channel = interaction.channel
         if not isinstance(channel, discord.TextChannel):
-            return (None, None, None)
+            return (None, None, None, None, None)
 
         ticket_id: Optional[str] = None
         member_id: Optional[int] = None
         member_name: Optional[str] = None
+        member_obj: Optional[discord.Member] = None
 
         try:
             svc = get_supabase()
@@ -534,73 +570,40 @@ class VerificationStaffReviewView(discord.ui.View):
         except Exception:
             pass
 
-        if member_id is None:
+        if member_id is not None:
+            try:
+                member_obj = channel.guild.get_member(member_id)
+                if member_obj is None:
+                    member_obj = await channel.guild.fetch_member(member_id)
+            except Exception:
+                member_obj = None
+
+        if member_obj is None:
             try:
                 owner = await _resolve_ticket_owner(channel)
                 if owner:
+                    member_obj = owner
                     member_id = int(owner.id)
                     member_name = member_name or str(owner)
             except Exception:
                 pass
 
-        return (ticket_id, member_id, member_name)
+        return (ticket_id, member_id, member_name, member_obj, channel)
 
-    async def _queue_worker_action(
+    async def _disable_panel_after_action(
         self,
-        *,
         interaction: discord.Interaction,
-        action: str,
-        reason: str,
-    ) -> bool:
-        if not await self._ensure_staff(interaction):
-            return False
-
-        channel = interaction.channel
-        if not isinstance(channel, discord.TextChannel):
-            await _reply_ephemeral(interaction, "❌ Invalid channel.")
-            return False
-
-        ticket_id, member_id, member_name = await self._resolve_ticket_context(interaction)
-        if member_id is None:
-            await _reply_ephemeral(interaction, "❌ Could not resolve the ticket member.")
-            return False
-
+        *,
+        status_line: str,
+    ) -> None:
         try:
-            guild_id = str(channel.guild.id)
-            staff_id = str(interaction.user.id)
-            staff_name = getattr(interaction.user, "display_name", None) or getattr(interaction.user, "name", None) or str(interaction.user)
-
-            payload = {
-                "ticket_id": ticket_id,
-                "channel_id": str(channel.id),
-                "user_id": str(member_id),
-                "username": member_name or str(member_id),
-                "staff_id": staff_id,
-                "staff_name": staff_name,
-                "reason": reason,
-                "verification_source": "discord_staff_panel",
-                "approval_reason": reason,
-            }
-
-            sb = get_supabase()
-            if sb is None:
-                await _reply_ephemeral(interaction, "❌ Database is unavailable.")
-                return False
-
-            sb.table("bot_commands").insert({
-                "guild_id": guild_id,
-                "action": action,
-                "status": "pending",
-                "requested_by": staff_id,
-                "payload": payload,
-                "created_at": now_utc().isoformat(),  # type: ignore[name-defined]
-            }).execute()
-
-            return True
-        except Exception as e:
-            print(f"⚠️ Failed queueing {action} from staff review panel:", repr(e))
-            await _reply_ephemeral(interaction, f"❌ Failed to queue action: {e}")
-            return False
+            if interaction.message:
+                content = interaction.message.content or ""
+                if status_line:
+                    content = f"{content}\n{status_line}" if content else status_line
+                await interaction.message.edit(content=content, view=None)
+        except Exception:
+            pass
 
     @discord.ui.button(
         label="Approve",
@@ -614,13 +617,55 @@ class VerificationStaffReviewView(discord.ui.View):
         interaction: discord.Interaction,
         button: discord.ui.Button,
     ):
-        ok = await self._queue_worker_action(
-            interaction=interaction,
-            action="approve_verification",
-            reason="Approved from Discord staff review panel.",
+        if not await self._ensure_staff(interaction):
+            return
+
+        ticket_id, member_id, member_name, member_obj, channel = await self._resolve_ticket_context(interaction)
+        if not isinstance(channel, discord.TextChannel):
+            return await _reply_ephemeral(interaction, "❌ Invalid channel.")
+        if member_id is None:
+            return await _reply_ephemeral(interaction, "❌ Could not resolve the ticket member.")
+
+        result = await approve_verification(
+            guild=channel.guild,
+            channel=channel,
+            token="",
+            staff_member=interaction.user,
+            decision_text="APPROVED",
+            close_after=False,
+            owner=member_obj,
         )
-        if ok:
-            await _reply_ephemeral(interaction, "✅ Approval queued.")
+
+        if result.get("already_verified"):
+            await self._disable_panel_after_action(
+                interaction,
+                status_line="✅ Member already appears verified. Duplicate approval blocked.",
+            )
+            return await _reply_ephemeral(
+                interaction,
+                "✅ This member already appears verified. Duplicate approval was blocked.",
+            )
+
+        if not result.get("ok"):
+            return await _reply_ephemeral(
+                interaction,
+                f"❌ {result.get('message') or 'Approval failed.'}",
+            )
+
+        try:
+            target = member_obj.mention if isinstance(member_obj, discord.Member) else (f"<@{member_id}>" if member_id else f"`{member_name or 'member'}`")
+            await channel.send(
+                f"✅ {target} was approved by **{getattr(interaction.user, 'display_name', None) or getattr(interaction.user, 'name', None) or str(interaction.user)}**.\n"
+                f"Reason: Approved from Discord staff review panel."
+            )
+        except Exception:
+            pass
+
+        await self._disable_panel_after_action(
+            interaction,
+            status_line=f"✅ Approved by {interaction.user.mention}.",
+        )
+        await _reply_ephemeral(interaction, "✅ Member approved.")
 
     @discord.ui.button(
         label="Deny",
@@ -634,13 +679,44 @@ class VerificationStaffReviewView(discord.ui.View):
         interaction: discord.Interaction,
         button: discord.ui.Button,
     ):
-        ok = await self._queue_worker_action(
-            interaction=interaction,
-            action="deny_verification",
-            reason="Denied from Discord staff review panel.",
+        if not await self._ensure_staff(interaction):
+            return
+
+        ticket_id, member_id, member_name, member_obj, channel = await self._resolve_ticket_context(interaction)
+        if not isinstance(channel, discord.TextChannel):
+            return await _reply_ephemeral(interaction, "❌ Invalid channel.")
+        if member_id is None:
+            return await _reply_ephemeral(interaction, "❌ Could not resolve the ticket member.")
+
+        result = await deny_verification(
+            guild=channel.guild,
+            channel=channel,
+            token="",
+            staff_member=interaction.user,
+            decision_text="DENIED",
+            close_after=False,
         )
-        if ok:
-            await _reply_ephemeral(interaction, "❌ Denial queued.")
+
+        if not result.get("ok"):
+            return await _reply_ephemeral(
+                interaction,
+                f"❌ {result.get('message') or 'Denial failed.'}",
+            )
+
+        try:
+            target = member_obj.mention if isinstance(member_obj, discord.Member) else (f"<@{member_id}>" if member_id else f"`{member_name or 'member'}`")
+            await channel.send(
+                f"❌ Verification denied for {target} by **{getattr(interaction.user, 'display_name', None) or getattr(interaction.user, 'name', None) or str(interaction.user)}**.\n"
+                f"Reason: Denied from Discord staff review panel."
+            )
+        except Exception:
+            pass
+
+        await self._disable_panel_after_action(
+            interaction,
+            status_line=f"❌ Denied by {interaction.user.mention}.",
+        )
+        await _reply_ephemeral(interaction, "❌ Member denied.")
 
     @discord.ui.button(
         label="Remove Unverified",
@@ -654,13 +730,33 @@ class VerificationStaffReviewView(discord.ui.View):
         interaction: discord.Interaction,
         button: discord.ui.Button,
     ):
-        ok = await self._queue_worker_action(
-            interaction=interaction,
-            action="remove_unverified_role",
-            reason="Removed unverified role from Discord staff review panel.",
+        if not await self._ensure_staff(interaction):
+            return
+
+        ticket_id, member_id, member_name, member_obj, channel = await self._resolve_ticket_context(interaction)
+        if not isinstance(channel, discord.TextChannel):
+            return await _reply_ephemeral(interaction, "❌ Invalid channel.")
+        if not isinstance(member_obj, discord.Member):
+            return await _reply_ephemeral(interaction, "❌ Could not resolve the ticket member.")
+
+        removed, remove_error = await _remove_unverified_role_if_present(
+            member_obj,
+            reason=f"Removed unverified role from Discord staff review panel by {interaction.user} ({interaction.user.id})",
         )
-        if ok:
-            await _reply_ephemeral(interaction, "🧹 Remove-unverified queued.")
+        if remove_error:
+            return await _reply_ephemeral(interaction, f"❌ {remove_error}")
+
+        if not removed:
+            return await _reply_ephemeral(interaction, "ℹ️ Member did not have the Unverified role.")
+
+        try:
+            await channel.send(
+                f"🧹 Removed **Unverified** from {member_obj.mention} by **{getattr(interaction.user, 'display_name', None) or getattr(interaction.user, 'name', None) or str(interaction.user)}**."
+            )
+        except Exception:
+            pass
+
+        await _reply_ephemeral(interaction, "🧹 Unverified role removed.")
 
     @discord.ui.button(
         label="Repost Member Verify UI",
