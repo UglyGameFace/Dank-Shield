@@ -32,7 +32,7 @@ except Exception:
 
 
 VERIFY_UI_TITLE = "Stoney Baloney Verification"
-VERIFY_UI_FOOTER = "stoney_verify:verify_ui:v6"
+VERIFY_UI_FOOTER = "stoney_verify:verify_ui:v7"
 
 
 # ============================================================
@@ -155,6 +155,38 @@ def _vc_channel_id() -> int:
     return 0
 
 
+def _safe_int(value: Any, default: int = 0) -> int:
+    try:
+        return int(str(value).strip())
+    except Exception:
+        return default
+
+
+def _safe_str(value: Any) -> str:
+    try:
+        return str(value or "").strip()
+    except Exception:
+        return ""
+
+
+def _is_staff_member(member: Optional[discord.Member]) -> bool:
+    try:
+        if not isinstance(member, discord.Member):
+            return False
+        return bool(is_staff(member))  # type: ignore[name-defined]
+    except Exception:
+        try:
+            return bool(
+                member and (
+                    member.guild_permissions.manage_channels
+                    or member.guild_permissions.manage_messages
+                    or member.guild_permissions.administrator
+                )
+            )
+        except Exception:
+            return False
+
+
 # ============================================================
 # Owner parsing / resolution
 # ============================================================
@@ -190,7 +222,7 @@ async def _resolve_ticket_owner_id(
     Priority:
       1) tickets.py owner resolution (DB/topic/scope-aware)
       2) existing verify embed user field
-      3) fallback: interaction user only when ownership is otherwise unknown
+      3) NO unsafe fallback to interaction.user
     """
     if isinstance(channel, discord.TextChannel):
         try:
@@ -209,10 +241,39 @@ async def _resolve_ticket_owner_id(
     except Exception:
         pass
 
+    return 0
+
+
+async def _resolve_ticket_owner_member(
+    *,
+    channel: Optional[discord.abc.GuildChannel],
+    interaction: discord.Interaction,
+) -> Optional[discord.Member]:
+    if not isinstance(channel, discord.TextChannel):
+        return None
+
     try:
-        return int(getattr(interaction.user, "id", 0) or 0)
+        owner = await find_ticket_owner_retry(channel, tries=6, delay=1.0)
+        if isinstance(owner, discord.Member):
+            return owner
     except Exception:
-        return 0
+        pass
+
+    owner_id = await _resolve_ticket_owner_id(channel=channel, interaction=interaction)
+    if owner_id <= 0 or not channel.guild:
+        return None
+
+    try:
+        member = channel.guild.get_member(owner_id)
+        if member is not None:
+            return member
+    except Exception:
+        pass
+
+    try:
+        return await channel.guild.fetch_member(owner_id)
+    except Exception:
+        return None
 
 
 # ============================================================
@@ -332,7 +393,7 @@ class VerifyView(discord.ui.View):
 
         self.add_item(
             discord.ui.Button(
-                label= "Upload ID",
+                label="Upload ID",
                 style=discord.ButtonStyle.primary,
                 emoji="🔐",
                 custom_id="sv:verify:get",
@@ -437,6 +498,9 @@ async def _store_token_best_effort(
         cid = int(getattr(channel, "id", 0) or 0)
         rid = int(requester_id or 0)
 
+        if rid <= 0:
+            return False
+
         webhook_url = ""
         if isinstance(channel, discord.TextChannel):
             webhook_url = await _best_effort_webhook_url(channel)
@@ -533,10 +597,15 @@ async def post_or_replace_verify_ui(
         except Exception:
             owner_id = 0
 
+    if owner_id <= 0:
+        return ""
+
     member_obj: Optional[discord.Member] = None
     try:
-        if owner_id and guild:
+        if guild:
             member_obj = guild.get_member(int(owner_id)) or None
+            if member_obj is None:
+                member_obj = await guild.fetch_member(int(owner_id))
     except Exception:
         member_obj = None
 
@@ -567,7 +636,7 @@ async def post_or_replace_verify_ui(
             e0 = msg.embeds[0]
             title_ok = (e0.title or "") == VERIFY_UI_TITLE
             footer_text = str(getattr(getattr(e0, "footer", None), "text", "") or "")
-            footer_ok = VERIFY_UI_FOOTER in footer_text
+            footer_ok = VERIFY_UI_FOOTER.split(" • ")[0] in footer_text
 
             if title_ok or footer_ok:
                 await msg.edit(embed=embed, view=view)
@@ -814,14 +883,32 @@ async def maybe_handle_verify_ui_interaction(interaction: discord.Interaction, *
         staff = False
         try:
             if guild and isinstance(user, discord.Member):
-                staff = is_staff(user)  # type: ignore[name-defined]
+                staff = _is_staff_member(user)
         except Exception:
             staff = False
 
         owner_id = await _resolve_ticket_owner_id(channel=channel, interaction=interaction)
+        owner_member = await _resolve_ticket_owner_member(channel=channel, interaction=interaction)
 
-        if action in ("get", "raw", "regen", "vc") and not staff:
-            if owner_id and int(user.id) != int(owner_id):
+        owner_only_actions = {"get", "raw", "regen", "vc"}
+        if action in owner_only_actions and not staff:
+            if owner_id <= 0:
+                try:
+                    if not interaction.response.is_done():
+                        await interaction.response.send_message(
+                            "❌ I couldn't verify the ticket owner for this action. Ask staff to repost or repair the verify UI.",
+                            ephemeral=True,
+                        )
+                    else:
+                        await interaction.followup.send(
+                            "❌ I couldn't verify the ticket owner for this action. Ask staff to repost or repair the verify UI.",
+                            ephemeral=True,
+                        )
+                except Exception:
+                    pass
+                return True
+
+            if int(user.id) != int(owner_id):
                 try:
                     if not interaction.response.is_done():
                         await interaction.response.send_message("❌ Only the **ticket owner** can use that button.", ephemeral=True)
@@ -846,9 +933,15 @@ async def maybe_handle_verify_ui_interaction(interaction: discord.Interaction, *
         # Secure upload token issuing
         # --------------------------------------------------------
         if action in ("get", "raw", "regen"):
-            ttl = int(TOKEN_TTL_MINUTES or 20)
-            requester_id = int(owner_id or user.id)
+            requester_id = int(owner_id or 0)
+            if requester_id <= 0:
+                await interaction.response.send_message(
+                    "❌ I couldn't resolve the ticket owner, so I won't issue a verification token.",
+                    ephemeral=True,
+                )
+                return True
 
+            ttl = int(TOKEN_TTL_MINUTES or 20)
             token, url = await _issue_token_url(
                 site_url=site_url,
                 guild=guild,
@@ -905,6 +998,13 @@ async def maybe_handle_verify_ui_interaction(interaction: discord.Interaction, *
                 )
                 return True
 
+            if owner_id <= 0:
+                await interaction.response.send_message(
+                    "❌ I couldn't resolve the ticket owner, so I won't create a VC verification request.",
+                    ephemeral=True,
+                )
+                return True
+
             vc_id = _vc_channel_id()
             if vc_id <= 0:
                 await interaction.response.send_message(
@@ -946,7 +1046,8 @@ async def maybe_handle_verify_ui_interaction(interaction: discord.Interaction, *
                 pass
 
             ttl = int(VC_REQUEST_TTL_MINUTES or 0) or int(TOKEN_TTL_MINUTES or 20)
-            requester_id = int(owner_id or user.id)
+            requester_id = int(owner_id)
+
             token, _url = await _issue_token_url(
                 site_url=site_url,
                 guild=guild,
@@ -960,6 +1061,7 @@ async def maybe_handle_verify_ui_interaction(interaction: discord.Interaction, *
                     "status": "PENDING",
                     "requested_at": _now_utc().isoformat(),
                     "requested_by": int(user.id),
+                    "owner_id": int(owner_id),
                     "ticket_channel_id": int(channel.id),
                     "guild_id": int(guild.id),
                 }
@@ -970,13 +1072,13 @@ async def maybe_handle_verify_ui_interaction(interaction: discord.Interaction, *
             staff_posted = await _post_vc_request_to_staff(
                 guild=guild,
                 ticket_channel=channel,
-                owner_id=int(owner_id or user.id),
+                owner_id=int(owner_id),
                 token=token,
             )
 
             await _post_user_vc_status_message(
                 ticket_channel=channel,
-                owner_id=int(owner_id or user.id),
+                owner_id=int(owner_id),
                 vc_id=int(vc_id),
                 staff_posted=bool(staff_posted),
             )
