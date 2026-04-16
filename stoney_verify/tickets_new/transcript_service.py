@@ -281,11 +281,20 @@ def _render_embed_html(msg: discord.Message) -> str:
         return ""
 
 
+def _render_avatar_html(msg: discord.Message) -> str:
+    avatar = html.escape(_safe_avatar_url(msg))
+    author = html.escape(_safe_text(getattr(msg, "author", "Unknown"))[:1] or "?")
+
+    if avatar:
+        return f'<img class="avatar" src="{avatar}" alt="avatar">'
+
+    return f'<div class="avatar avatar-fallback" aria-label="avatar-fallback">{author.upper()}</div>'
+
+
 def _render_html_message(msg: discord.Message) -> str:
     created = html.escape(_utc_iso(getattr(msg, "created_at", None)) or "")
     edited_at = html.escape(_utc_iso(getattr(msg, "edited_at", None)) or "")
     author = html.escape(_safe_text(getattr(msg, "author", "Unknown")))
-    avatar = html.escape(_safe_avatar_url(msg))
     content = html.escape(msg.content or "").replace("\n", "<br>")
 
     edited_html = f'<span class="edited">(edited {edited_at})</span>' if edited_at else ""
@@ -299,9 +308,15 @@ def _render_html_message(msg: discord.Message) -> str:
                 url = html.escape(_safe_text(a.get("url") or ""))
                 filename = html.escape(_safe_text(a.get("filename") or "attachment"))
                 size = a.get("size")
-                size_text = f" ({size} bytes)" if size is not None else ""
+                ctype = html.escape(_safe_text(a.get("content_type") or ""))
+                meta_bits: List[str] = []
+                if size is not None:
+                    meta_bits.append(f"{size} bytes")
+                if ctype:
+                    meta_bits.append(ctype)
+                meta = f" ({html.escape(' • '.join(meta_bits))})" if meta_bits else ""
                 parts.append(
-                    f'<div class="attachment"><a href="{url}" target="_blank" rel="noopener noreferrer">{filename}</a>{html.escape(size_text)}</div>'
+                    f'<div class="attachment"><a href="{url}" target="_blank" rel="noopener noreferrer">{filename}</a>{meta}</div>'
                 )
             except Exception:
                 continue
@@ -316,11 +331,12 @@ def _render_html_message(msg: discord.Message) -> str:
         )
 
     embed_html = _render_embed_html(msg)
+    avatar_html = _render_avatar_html(msg)
 
     return f"""
     <div class="message">
       <div class="avatar-wrap">
-        <img class="avatar" src="{avatar}" alt="avatar">
+        {avatar_html}
       </div>
       <div class="body">
         <div class="meta">
@@ -409,6 +425,19 @@ def _build_html_transcript(
     border-radius: 999px;
     object-fit: cover;
     background: #1b2540;
+    display: block;
+  }}
+  .avatar-fallback {{
+    width: 44px;
+    height: 44px;
+    border-radius: 999px;
+    background: #1b2540;
+    color: #dfe7fb;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: 700;
+    font-size: 18px;
   }}
   .body {{
     flex: 1;
@@ -553,6 +582,32 @@ async def _get_transcripts_channel(
     return None
 
 
+def _transcript_summary_embed(
+    *,
+    ticket_channel: discord.TextChannel,
+    deleted_by: Optional[discord.Member | discord.User],
+    reason: Optional[str],
+    message_count: int,
+) -> discord.Embed:
+    deleted_by_text = _safe_text(deleted_by) if deleted_by else "Unknown"
+    reason_text = reason or "Ticket deleted"
+    topic_text = _safe_topic_text(ticket_channel.topic, max_len=1000)
+
+    embed = discord.Embed(
+        title=f"🧾 Transcript for #{ticket_channel.name}",
+        color=discord.Color.blurple(),
+        timestamp=now_utc(),
+    )
+    embed.add_field(name="Channel ID", value=f"`{ticket_channel.id}`", inline=True)
+    embed.add_field(name="Guild ID", value=f"`{ticket_channel.guild.id}`", inline=True)
+    embed.add_field(name="Messages", value=f"`{message_count}`", inline=True)
+    embed.add_field(name="Deleted/Finished By", value=f"`{deleted_by_text}`", inline=False)
+    embed.add_field(name="Reason", value=f"`{_truncate_for_discord(reason_text, 900)}`", inline=False)
+    embed.add_field(name="Topic", value=f"`{_truncate_for_discord(topic_text, 900)}`", inline=False)
+    embed.set_footer(text=f"Generated at {_utc_iso(now_utc()) or ''}")
+    return embed
+
+
 async def post_transcript_to_channel(
     *,
     ticket_channel: discord.TextChannel,
@@ -568,25 +623,16 @@ async def post_transcript_to_channel(
             return None, None
 
         txt_file, html_file, message_count = await generate_transcript_files(ticket_channel)
-
-        deleted_by_text = _safe_text(deleted_by) if deleted_by else "Unknown"
-        reason_text = reason or "Ticket deleted"
-        topic_text = _safe_topic_text(ticket_channel.topic)
-
-        header = (
-            f"🧾 Transcript for #{ticket_channel.name}\n"
-            f"Channel ID: `{ticket_channel.id}`\n"
-            f"Guild ID: `{ticket_channel.guild.id}`\n"
-            f"Deleted/finished by: `{deleted_by_text}`\n"
-            f"Reason: `{reason_text}`\n"
-            f"Topic: `{topic_text}`\n"
-            f"Messages: `{message_count}`\n"
-            f"Generated At: `{_utc_iso(now_utc())}`"
+        embed = _transcript_summary_embed(
+            ticket_channel=ticket_channel,
+            deleted_by=deleted_by,
+            reason=reason,
+            message_count=message_count,
         )
 
         try:
             posted = await transcript_channel.send(
-                content=_truncate_for_discord(header, limit=1900),
+                embed=embed,
                 files=[txt_file, html_file],
                 allowed_mentions=discord.AllowedMentions.none(),
             )
@@ -635,6 +681,8 @@ async def delete_ticket_with_optional_transcript(
                 return {
                     "ok": False,
                     "deleted": False,
+                    "db_marked_deleted": False,
+                    "transcript_required": True,
                     "transcript_posted": False,
                     "transcript_url": None,
                     "transcript_message_id": None,
@@ -659,6 +707,7 @@ async def delete_ticket_with_optional_transcript(
                         transcript_url=transcript_url,
                         transcript_message_id=transcript_message_id,
                         transcript_channel_id=transcript_channel_id,
+                        actor=deleted_by,
                     )
                 except Exception as e:
                     print("⚠️ Failed attaching transcript metadata:", repr(e))
@@ -680,6 +729,7 @@ async def delete_ticket_with_optional_transcript(
                 "ok": True,
                 "deleted": True,
                 "db_marked_deleted": bool(db_marked_deleted),
+                "transcript_required": bool(should_post_transcript),
                 "transcript_posted": transcript_message is not None,
                 "transcript_url": transcript_url,
                 "transcript_message_id": transcript_message_id,
@@ -692,6 +742,7 @@ async def delete_ticket_with_optional_transcript(
                 "ok": False,
                 "deleted": False,
                 "db_marked_deleted": bool(db_marked_deleted),
+                "transcript_required": bool(should_post_transcript),
                 "transcript_posted": transcript_message is not None,
                 "transcript_url": transcript_url,
                 "transcript_message_id": transcript_message_id,
