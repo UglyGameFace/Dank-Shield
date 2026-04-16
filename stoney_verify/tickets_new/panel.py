@@ -78,7 +78,6 @@ _REASON_SYNONYM_REPLACEMENTS: Tuple[Tuple[str, str], ...] = (
     (r"\bcod\b", "call of duty"),
     (r"\bwar zone\b", "warzone"),
     (r"\blobbys\b", "lobbies"),
-    (r"\blobbys\b", "lobbies"),
     (r"\bbo6\b", "black ops 6"),
     (r"\bbo3\b", "black ops 3"),
     (r"\bbo2\b", "black ops 2"),
@@ -643,6 +642,17 @@ def _find_category_label_by_slug(
     return fallback
 
 
+def _find_category_row_by_slug(
+    categories: List[Dict[str, Any]],
+    slug: str,
+) -> Optional[Dict[str, Any]]:
+    slug_clean = _canonicalize_reason_text(slug)
+    for cat in categories:
+        if _canonicalize_reason_text(str(cat.get("slug") or "")) == slug_clean:
+            return cat
+    return None
+
+
 def _phrase_hits(reason_norm: str, aliases: List[str]) -> int:
     score = 0
     padded_reason = f" {reason_norm} "
@@ -820,17 +830,46 @@ def _score_reason_against_category(reason: str, cat: Dict[str, Any]) -> int:
     return max(score, 0)
 
 
+def _build_match_payload(
+    *,
+    matched_row: Optional[Dict[str, Any]],
+    matched_score: Optional[int],
+    matched_reason: str,
+    category_slug: str,
+) -> Dict[str, Any]:
+    return {
+        "matched_category_id": str(matched_row.get("id")) if matched_row and matched_row.get("id") is not None else None,
+        "matched_category_name": str(matched_row.get("name") or "").strip() if matched_row else None,
+        "matched_category_slug": str(matched_row.get("slug") or category_slug).strip() if matched_row else category_slug,
+        "matched_intake_type": str(matched_row.get("intake_type") or "").strip() if matched_row else None,
+        "matched_category_reason": _truncate(matched_reason, 500) if matched_reason else None,
+        "matched_category_score": int(matched_score) if matched_score is not None else None,
+        "category_override": False,
+        "category_id": str(matched_row.get("id")) if matched_row and matched_row.get("id") is not None else None,
+    }
+
+
 async def _infer_dashboard_category(
     *,
     guild_id: int,
     reason: str,
-) -> Tuple[str, str, List[Dict[str, Any]]]:
+) -> Tuple[str, str, List[Dict[str, Any]], Dict[str, Any]]:
     categories = await _fetch_dashboard_ticket_categories(guild_id)
     reason_norm = _canonicalize_reason_text(reason)
 
     if not categories:
         _debug(f"category infer fallback=support guild={guild_id} reason_len={len(reason or '')}")
-        return FALLBACK_SUPPORT_CATEGORY, "Support", []
+        return (
+            FALLBACK_SUPPORT_CATEGORY,
+            "Support",
+            [],
+            _build_match_payload(
+                matched_row=None,
+                matched_score=0,
+                matched_reason=f"No dashboard ticket categories found; fallback to {FALLBACK_SUPPORT_CATEGORY}.",
+                category_slug=FALLBACK_SUPPORT_CATEGORY,
+            ),
+        )
 
     scored: List[Tuple[int, Dict[str, Any]]] = []
     for cat in categories:
@@ -860,6 +899,16 @@ async def _infer_dashboard_category(
                 str(best.get("slug") or FALLBACK_SUPPORT_CATEGORY),
                 str(best.get("name") or "Support"),
                 categories,
+                _build_match_payload(
+                    matched_row=best,
+                    matched_score=best_score,
+                    matched_reason=(
+                        f"Matched from reason text using category scoring. "
+                        f"best_score={best_score}, second_score={second_score}, "
+                        f"reason={_truncate(reason_norm, 220)!r}"
+                    ),
+                    category_slug=str(best.get("slug") or FALLBACK_SUPPORT_CATEGORY),
+                ),
             )
 
     default_slug = _find_default_category_slug(categories)
@@ -875,10 +924,35 @@ async def _infer_dashboard_category(
             str(default_cat.get("slug") or FALLBACK_SUPPORT_CATEGORY),
             str(default_cat.get("name") or "Support"),
             categories,
+            _build_match_payload(
+                matched_row=default_cat,
+                matched_score=best_score,
+                matched_reason=(
+                    f"No strong category winner. Fell back to default category. "
+                    f"best_score={best_score}, second_score={second_score}, "
+                    f"reason={_truncate(reason_norm, 220)!r}"
+                ),
+                category_slug=str(default_cat.get("slug") or FALLBACK_SUPPORT_CATEGORY),
+            ),
         )
 
     _debug(f"category infer fallback=no-default guild={guild_id}")
-    return FALLBACK_SUPPORT_CATEGORY, "Support", categories
+    return (
+        FALLBACK_SUPPORT_CATEGORY,
+        "Support",
+        categories,
+        _build_match_payload(
+            matched_row=None,
+            matched_score=best_score,
+            matched_reason=(
+                f"No default dashboard category found. "
+                f"Fallback to {FALLBACK_SUPPORT_CATEGORY}. "
+                f"best_score={best_score}, second_score={second_score}, "
+                f"reason={_truncate(reason_norm, 220)!r}"
+            ),
+            category_slug=FALLBACK_SUPPORT_CATEGORY,
+        ),
+    )
 
 
 def _opening_message_for_category(
@@ -942,12 +1016,13 @@ async def _create_ticket_for_member(
     reason: str = "",
     source: str,
     is_ghost: bool = False,
+    match_payload: Optional[Dict[str, Any]] = None,
 ) -> None:
     reason_preview = _normalize_text(reason, limit=120)
     _debug(
         f"create request guild={guild.id} user={user.id} "
         f"category={category} label={category_label!r} source={source} "
-        f"ghost={is_ghost} reason={reason_preview!r}"
+        f"ghost={is_ghost} reason={reason_preview!r} match={match_payload!r}"
     )
 
     existing_channel = await _resolve_existing_open_ticket_channel(
@@ -982,6 +1057,8 @@ async def _create_ticket_for_member(
         is_ghost=is_ghost,
     )
 
+    payload = dict(match_payload or {})
+
     channel = await create_ticket_channel(
         guild=guild,
         owner=user,
@@ -992,6 +1069,14 @@ async def _create_ticket_for_member(
         staff_role_ids=staff_role_ids,
         opening_message=opening_message,
         priority="low" if is_ghost else "medium",
+        matched_category_id=payload.get("matched_category_id"),
+        matched_category_name=payload.get("matched_category_name"),
+        matched_category_slug=payload.get("matched_category_slug"),
+        matched_intake_type=payload.get("matched_intake_type"),
+        matched_category_reason=payload.get("matched_category_reason"),
+        matched_category_score=payload.get("matched_category_score"),
+        category_override=bool(payload.get("category_override", False)),
+        category_id=payload.get("category_id"),
     )
 
     if channel is None:
@@ -1004,7 +1089,8 @@ async def _create_ticket_for_member(
 
     _debug(
         f"create success guild={guild.id} user={user.id} "
-        f"channel={channel.id} name={channel.name!r} category={category} source={source}"
+        f"channel={channel.id} name={channel.name!r} category={category} "
+        f"source={source} matched_slug={payload.get('matched_category_slug')!r}"
     )
 
     await _safe_followup(
@@ -1103,14 +1189,23 @@ class TicketReasonModal(discord.ui.Modal, title="Create Ticket"):
                 f"reason={_normalize_text(reason_text, limit=160)!r}"
             )
 
-            category_slug, category_label, _categories = await _infer_dashboard_category(
+            category_slug, category_label, categories, match_payload = await _infer_dashboard_category(
                 guild_id=int(guild.id),
                 reason=reason_text,
             )
 
+            if not match_payload:
+                matched_row = _find_category_row_by_slug(categories, category_slug)
+                match_payload = _build_match_payload(
+                    matched_row=matched_row,
+                    matched_score=None,
+                    matched_reason="Modal classification fallback payload.",
+                    category_slug=category_slug,
+                )
+
             _debug(
                 f"reason-modal inferred guild={guild.id} user={user.id} "
-                f"slug={category_slug} label={category_label!r}"
+                f"slug={category_slug} label={category_label!r} match={match_payload!r}"
             )
 
             await _create_ticket_for_member(
@@ -1122,6 +1217,7 @@ class TicketReasonModal(discord.ui.Modal, title="Create Ticket"):
                 reason=reason_text,
                 source="discord_button_reason_modal",
                 is_ghost=False,
+                match_payload=match_payload,
             )
         except Exception as e:
             print("❌ Ticket reason modal submit failed:", repr(e))
@@ -1165,14 +1261,23 @@ class GhostTicketReasonModal(discord.ui.Modal, title="Create Ghost Ticket"):
                 f"reason={_normalize_text(reason_text, limit=160)!r}"
             )
 
-            category_slug, category_label, _categories = await _infer_dashboard_category(
+            category_slug, category_label, categories, match_payload = await _infer_dashboard_category(
                 guild_id=int(guild.id),
                 reason=reason_text,
             )
 
+            if not match_payload:
+                matched_row = _find_category_row_by_slug(categories, category_slug)
+                match_payload = _build_match_payload(
+                    matched_row=matched_row,
+                    matched_score=None,
+                    matched_reason="Ghost modal classification fallback payload.",
+                    category_slug=category_slug,
+                )
+
             _debug(
                 f"ghost-modal inferred guild={guild.id} user={user.id} "
-                f"slug={category_slug} label={category_label!r}"
+                f"slug={category_slug} label={category_label!r} match={match_payload!r}"
             )
 
             await _create_ticket_for_member(
@@ -1184,6 +1289,7 @@ class GhostTicketReasonModal(discord.ui.Modal, title="Create Ghost Ticket"):
                 reason=reason_text,
                 source="discord_staff_ghost_reason_modal",
                 is_ghost=True,
+                match_payload=match_payload,
             )
         except Exception as e:
             print("❌ Ghost ticket reason modal submit failed:", repr(e))
@@ -1993,10 +2099,17 @@ class TicketPanelView(discord.ui.View):
                     verification_slug,
                     "Verification",
                 )
+                verification_row = _find_category_row_by_slug(categories, verification_slug)
+                verification_match_payload = _build_match_payload(
+                    matched_row=verification_row,
+                    matched_score=999,
+                    matched_reason="User routed directly to verification because they only have the Unverified role.",
+                    category_slug=verification_slug,
+                )
 
                 _debug(
                     f"public-create unverified-route guild={guild.id} user={user.id} "
-                    f"verification_slug={verification_slug}"
+                    f"verification_slug={verification_slug} match={verification_match_payload!r}"
                 )
 
                 await _create_ticket_for_member(
@@ -2008,6 +2121,7 @@ class TicketPanelView(discord.ui.View):
                     reason="",
                     source="discord_button_unverified",
                     is_ghost=False,
+                    match_payload=verification_match_payload,
                 )
                 return
 
@@ -2056,9 +2170,16 @@ class StaffGhostTicketView(discord.ui.View):
                 await _safe_followup(interaction, "You do not have permission to use this.")
                 return
 
+            quick_payload = _build_match_payload(
+                matched_row=None,
+                matched_score=0,
+                matched_reason="Quick ghost ticket created without category inference.",
+                category_slug=FALLBACK_GHOST_CATEGORY,
+            )
+
             _debug(
                 f"ghost-quick click guild={guild.id} user={user.id} "
-                f"category={FALLBACK_GHOST_CATEGORY}"
+                f"category={FALLBACK_GHOST_CATEGORY} match={quick_payload!r}"
             )
 
             await _create_ticket_for_member(
@@ -2070,6 +2191,7 @@ class StaffGhostTicketView(discord.ui.View):
                 reason="",
                 source="discord_staff_hidden_quick_ghost",
                 is_ghost=True,
+                match_payload=quick_payload,
             )
 
         except Exception as e:
