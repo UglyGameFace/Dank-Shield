@@ -1,4 +1,3 @@
-# stoney_verify/verification_new/service.py
 from __future__ import annotations
 
 from datetime import datetime, timezone
@@ -137,7 +136,7 @@ def _safe_int(value: Any, default: int = 0) -> int:
 
 def _safe_str(value: Any) -> str:
     try:
-        return str(value)
+        return str(value or "").strip()
     except Exception:
         return ""
 
@@ -439,6 +438,43 @@ def _ensure_staff_member(staff_member: discord.Member) -> Tuple[bool, str]:
         return False, "Staff validation failed."
 
 
+def _decision_already_finalized(token_info: Optional[Dict[str, Any]]) -> bool:
+    try:
+        if not token_info:
+            return False
+
+        decision = _safe_str(token_info.get("decision")).upper()
+        if decision in {
+            "APPROVED",
+            "APPROVED (VC)",
+            "DENIED",
+            "DENIED (VC)",
+            "APPROVED (ALREADY VERIFIED)",
+            "APPROVED (VC) (ALREADY VERIFIED)",
+        }:
+            return True
+
+        if bool(token_info.get("used", False)):
+            return True
+
+        return False
+    except Exception:
+        return False
+
+
+def _roles_to_grant_for_member(
+    member: discord.Member,
+    roles_to_assign: List[discord.Role],
+) -> List[discord.Role]:
+    return [
+        role
+        for role in _unique_roles(roles_to_assign)
+        if isinstance(role, discord.Role)
+        and role.guild.id == member.guild.id
+        and role not in member.roles
+    ]
+
+
 # ============================================================
 # Shared context resolution
 # ============================================================
@@ -615,6 +651,17 @@ async def request_resubmission(
     if resolved_owner is not None and not isinstance(resolved_owner, discord.Member):
         resolved_owner = None
 
+    token_info = ctx.get("token_info")
+    if _decision_already_finalized(token_info):
+        return _result(
+            False,
+            "This verification decision is already finalized.",
+            token=token,
+            owner=resolved_owner,
+            channel=resolved_channel,
+            already_finalized=True,
+        )
+
     await _mark_decision_safe(token, "RESUBMIT REQUESTED", int(staff_member.id))
     await _update_ticket_decision_metadata(
         channel=resolved_channel,
@@ -687,26 +734,28 @@ async def approve_verification(
     if resolved_owner is not None and not isinstance(resolved_owner, discord.Member):
         resolved_owner = None
 
-    if token_info and bool(token_info.get("used", False)):
+    if _decision_already_finalized(token_info):
         return _result(
             False,
-            "This token has already been used.",
+            "This verification decision is already finalized.",
             owner=resolved_owner,
             channel=resolved_channel,
+            already_finalized=True,
         )
 
-    # HARD STOP: shared service-level duplicate protection.
+    # HARD STOP: shared duplicate protection
     if _member_looks_already_verified(resolved_owner):
+        already_decision = f"{decision_text} (already verified)"
         await _mark_decision_safe(
             token,
-            f"{decision_text} (already verified)",
+            already_decision,
             int(staff_member.id),
             approved_user_id=int(resolved_owner.id) if isinstance(resolved_owner, discord.Member) else None,
         )
         await _set_used_safe(token, True)
         await _update_ticket_decision_metadata(
             channel=resolved_channel if isinstance(resolved_channel, discord.TextChannel) else None,
-            decision=f"{decision_text} (already verified)",
+            decision=already_decision,
             staff_member=staff_member,
             owner=resolved_owner if isinstance(resolved_owner, discord.Member) else None,
         )
@@ -722,11 +771,12 @@ async def approve_verification(
 
     can_assign, error_msg, roles_to_assign = await check_bot_can_assign_roles(guild)
     if not can_assign:
-        await _mark_decision_safe(token, f"{decision_text} (roles failed)", int(staff_member.id))
+        failed_decision = f"{decision_text} (roles failed)"
+        await _mark_decision_safe(token, failed_decision, int(staff_member.id))
         await _set_used_safe(token, True)
         await _update_ticket_decision_metadata(
             channel=resolved_channel if isinstance(resolved_channel, discord.TextChannel) else None,
-            decision=f"{decision_text} (roles failed)",
+            decision=failed_decision,
             staff_member=staff_member,
             owner=resolved_owner if isinstance(resolved_owner, discord.Member) else None,
         )
@@ -735,7 +785,7 @@ async def approve_verification(
             await _auto_close_after_decision_safe(
                 resolved_channel,
                 closer=staff_member,
-                decision=f"{decision_text} (roles failed)",
+                decision=failed_decision,
             )
 
         return _result(
@@ -747,11 +797,12 @@ async def approve_verification(
         )
 
     if not isinstance(resolved_owner, discord.Member):
-        await _mark_decision_safe(token, f"{decision_text} (owner not detected)", int(staff_member.id))
+        no_owner_decision = f"{decision_text} (owner not detected)"
+        await _mark_decision_safe(token, no_owner_decision, int(staff_member.id))
         await _set_used_safe(token, True)
         await _update_ticket_decision_metadata(
             channel=resolved_channel if isinstance(resolved_channel, discord.TextChannel) else None,
-            decision=f"{decision_text} (owner not detected)",
+            decision=no_owner_decision,
             staff_member=staff_member,
             owner=None,
         )
@@ -760,7 +811,7 @@ async def approve_verification(
             await _auto_close_after_decision_safe(
                 resolved_channel,
                 closer=staff_member,
-                decision=f"{decision_text} (owner not detected)",
+                decision=no_owner_decision,
             )
 
         return _result(
@@ -771,13 +822,7 @@ async def approve_verification(
             roles=[],
         )
 
-    grant_roles = [
-        role
-        for role in _unique_roles(roles_to_assign)
-        if isinstance(role, discord.Role)
-        and role.guild.id == resolved_owner.guild.id
-        and role not in resolved_owner.roles
-    ]
+    grant_roles = _roles_to_grant_for_member(resolved_owner, roles_to_assign)
 
     try:
         if grant_roles:
@@ -792,16 +837,17 @@ async def approve_verification(
         )
 
         if remove_error:
+            partial_decision = f"{decision_text} (unverified cleanup failed)"
             await _mark_decision_safe(
                 token,
-                f"{decision_text} (unverified cleanup failed)",
+                partial_decision,
                 int(staff_member.id),
                 approved_user_id=int(resolved_owner.id),
             )
             await _set_used_safe(token, True)
             await _update_ticket_decision_metadata(
                 channel=resolved_channel if isinstance(resolved_channel, discord.TextChannel) else None,
-                decision=f"{decision_text} (unverified cleanup failed)",
+                decision=partial_decision,
                 staff_member=staff_member,
                 owner=resolved_owner,
             )
@@ -816,10 +862,11 @@ async def approve_verification(
             )
 
     except discord.Forbidden:
-        await _mark_decision_safe(token, f"{decision_text} (role add failed)", int(staff_member.id))
+        failed_decision = f"{decision_text} (role add failed)"
+        await _mark_decision_safe(token, failed_decision, int(staff_member.id))
         await _update_ticket_decision_metadata(
             channel=resolved_channel if isinstance(resolved_channel, discord.TextChannel) else None,
-            decision=f"{decision_text} (role add failed)",
+            decision=failed_decision,
             staff_member=staff_member,
             owner=resolved_owner,
         )
@@ -901,12 +948,13 @@ async def deny_verification(
     token_info = ctx.get("token_info")
     resolved_owner = ctx.get("owner")
 
-    if token_info and bool(token_info.get("used", False)):
+    if _decision_already_finalized(token_info):
         return _result(
             False,
-            "This token has already been used.",
+            "This verification decision is already finalized.",
             owner=resolved_owner,
             channel=resolved_channel,
+            already_finalized=True,
         )
 
     await _mark_decision_safe(token, decision_text, int(staff_member.id))
