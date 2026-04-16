@@ -1718,8 +1718,23 @@ async def reopen_ticket(
     extra_payload: Optional[Dict[str, Any]] = None,
 ) -> bool:
     existing = await get_ticket_by_any_channel_id(channel_id)
-    if existing and _ticket_status(existing) == "open":
-        return True
+
+    # Only treat reopen as a true no-op if the row is already fully reset.
+    if existing:
+        status_now = _ticket_status(existing)
+        claimed_now = _ticket_claimed_by_id(existing)
+        closed_at_now = existing.get("closed_at")
+        deleted_at_now = existing.get("deleted_at")
+        decision_now = _clean_text(existing.get("decision"))
+
+        if (
+            status_now == "open"
+            and claimed_now <= 0
+            and not closed_at_now
+            and not deleted_at_now
+            and not decision_now
+        ):
+            return True
 
     payload: Dict[str, Any] = {
         "status": "open",
@@ -1729,6 +1744,11 @@ async def reopen_ticket(
         "closed_reason": None,
         "deleted_at": None,
         "deleted_by": None,
+        "claimed_by": None,
+        "assigned_to": None,
+        "claimed_by_name": None,
+        "assigned_to_name": None,
+        "decision": None,
     }
 
     if reopened_by is not None:
