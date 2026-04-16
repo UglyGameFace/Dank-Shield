@@ -572,6 +572,33 @@ async def _disable_interaction_message_if_possible(
         pass
 
 
+def _is_persistent_view_managed_custom_id(custom_id: str) -> bool:
+    """
+    These custom IDs are already handled by persistent discord.ui.View callbacks
+    elsewhere in the bot. The global interaction router must NOT reply
+    'Invalid button' for them.
+    """
+    cid = _safe_str(custom_id)
+    if not cid:
+        return False
+
+    prefixes = (
+        "sv:ticket:",
+        "sv:verify:staff:",
+        "verify:",
+    )
+    if any(cid.startswith(prefix) for prefix in prefixes):
+        return True
+
+    exact = {
+        "verify:get_upload",
+        "verify:vc",
+        "verify:reveal_raw",
+        "verify:regen",
+    }
+    return cid in exact
+
+
 async def handle_possible_submission(message: discord.Message) -> None:
     if not isinstance(message.channel, discord.TextChannel):
         return
@@ -2019,6 +2046,13 @@ async def handle_component_interaction(interaction: discord.Interaction) -> None
     data = interaction.data or {}
     custom_id = (data.get("custom_id", "") or "").strip()
 
+    # IMPORTANT:
+    # Let persistent view callbacks handle their own buttons.
+    # This prevents fake "Invalid button" responses on buttons that
+    # are already wired up through discord.ui.View classes.
+    if _is_persistent_view_managed_custom_id(custom_id):
+        return
+
     try:
         if isinstance(interaction.channel, discord.TextChannel):
             mark_ticket_activity(interaction.channel.id)
@@ -2129,7 +2163,8 @@ async def handle_component_interaction(interaction: discord.Interaction) -> None
                 return
         except Exception:
             return
-        await interaction.followup.send("❌ Invalid button.", ephemeral=True)
+        # Do not emit invalid-button noise here.
+        # Unknown actions should fall through quietly unless we truly own them.
         return
 
     return
