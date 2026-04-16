@@ -331,7 +331,6 @@ except Exception:
         return None
 
 
-# NEW: hard-proof / truth layer
 try:
     from .identity_proof_service import record_verified_identity_for_user
 except Exception:
@@ -422,7 +421,6 @@ def _extract_identity_source(token_info: Optional[Dict[str, Any]], *, default: s
         if text in allowed:
             return text
 
-    # Map common internal wording into allowed values
     text = _safe_str(token_info.get("verification_source") or token_info.get("source")).lower()
     if "voice" in text or "vc" in text:
         return "voice_verification"
@@ -443,11 +441,6 @@ async def _persist_identity_proof_on_approval(
     channel: discord.TextChannel,
     approval_mode: str,
 ) -> Tuple[bool, Optional[str]]:
-    """
-    Only writes hard proof when a real identity_fingerprint exists.
-    This avoids fake certainty and keeps approvals normal when no
-    proof fingerprint was captured.
-    """
     try:
         if not isinstance(owner, discord.Member):
             return False, None
@@ -1616,7 +1609,6 @@ async def _handle_vc_staff_action(
             await interaction.followup.send(f"❌ Unexpected error: {e}", ephemeral=True)
             return True
 
-        # NEW: only persist hard proof when a real fingerprint exists
         proof_saved, proof_meta = await _persist_identity_proof_on_approval(
             guild=guild,
             owner=owner,
@@ -1832,7 +1824,6 @@ async def _handle_standard_staff_decision(
             await interaction.followup.send(f"❌ Unexpected error: {e}", ephemeral=True)
             return True
 
-        # NEW: only persist hard proof when a real fingerprint exists
         proof_saved, proof_meta = await _persist_identity_proof_on_approval(
             guild=guild,
             owner=owner,
@@ -1859,6 +1850,28 @@ async def _handle_standard_staff_decision(
         await interaction.followup.send(msg, ephemeral=True)
         await auto_close_after_decision(channel, closer=interaction.user, decision="APPROVED")
         return True
+
+
+def _known_component_action(action: str) -> bool:
+    return action in {
+        "approve",
+        "denyclose",
+        "resubmit",
+        "vc_accept",
+        "vc_upload",
+        "vc_end",
+        "vc_approve",
+        "vc_denyclose",
+        "vc_reissue",
+        "vc_start",
+        "vc_complete",
+        "vc_cancel",
+        "sv:verify:get",
+        "sv:verify:raw",
+        "sv:verify:regen",
+        "sv:verify:vc",
+        "sv:verify:reissue",
+    }
 
 
 async def handle_component_interaction(interaction: discord.Interaction) -> None:
@@ -1972,23 +1985,16 @@ async def handle_component_interaction(interaction: discord.Interaction) -> None
         if handled:
             return
 
-    if action not in (
-        "approve",
-        "denyclose",
-        "resubmit",
-        "vc_accept",
-        "vc_upload",
-        "vc_end",
-        "vc_approve",
-        "vc_denyclose",
-        "vc_reissue",
-        "sv:verify:get",
-        "sv:verify:raw",
-        "sv:verify:regen",
-        "sv:verify:vc",
-        "sv:verify:reissue",
-    ):
+    if not _known_component_action(action):
+        try:
+            if interaction.response.is_done():
+                return
+        except Exception:
+            return
         await interaction.followup.send("❌ Invalid button.", ephemeral=True)
+        return
+
+    return
 
 
 def register_interaction_handlers(bot_instance: Any) -> None:
