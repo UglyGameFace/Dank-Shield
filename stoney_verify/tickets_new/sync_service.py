@@ -320,53 +320,54 @@ def _preserve_authoritative_status(
     existing_status = str(existing.get("status") or "").strip().lower()
     existing_claimed_by = str(existing.get("claimed_by") or "").strip()
     existing_assigned_to = str(existing.get("assigned_to") or "").strip()
+
     status = guessed_status
     claimed_by = guessed_claimed_by
     assigned_to = guessed_claimed_by
 
+    # Deleted is always authoritative.
     if existing_status == DELETED_STATUS:
-        status = DELETED_STATUS
-        claimed_by = existing_claimed_by or claimed_by
-        assigned_to = existing_assigned_to or claimed_by
         return {
-            "status": status,
-            "claimed_by": claimed_by,
-            "assigned_to": assigned_to,
+            "status": DELETED_STATUS,
+            "claimed_by": existing_claimed_by or claimed_by,
+            "assigned_to": existing_assigned_to or existing_claimed_by or claimed_by,
         }
 
+    # Closed row stays closed unless something else intentionally reopens it elsewhere.
     if existing_status == CLOSED_STATUS and guessed_status != DELETED_STATUS:
-        status = CLOSED_STATUS
-        claimed_by = existing_claimed_by or claimed_by
-        assigned_to = existing_assigned_to or claimed_by
         return {
-            "status": status,
-            "claimed_by": claimed_by,
-            "assigned_to": assigned_to,
+            "status": CLOSED_STATUS,
+            "claimed_by": existing_claimed_by or claimed_by,
+            "assigned_to": existing_assigned_to or existing_claimed_by or claimed_by,
         }
 
+    # Existing claimed state should not be downgraded just because the channel name looks open.
     if existing_status == CLAIMED_STATUS:
         if existing_claimed_by:
-            status = CLAIMED_STATUS
-            claimed_by = existing_claimed_by
-            assigned_to = existing_assigned_to or existing_claimed_by
-        elif guessed_claimed_by:
-            status = CLAIMED_STATUS
-            claimed_by = guessed_claimed_by
-            assigned_to = guessed_claimed_by
-        else:
-            status = OPEN_STATUS
-            claimed_by = None
-            assigned_to = None
+            return {
+                "status": CLAIMED_STATUS,
+                "claimed_by": existing_claimed_by,
+                "assigned_to": existing_assigned_to or existing_claimed_by,
+            }
+        if guessed_claimed_by:
+            return {
+                "status": CLAIMED_STATUS,
+                "claimed_by": guessed_claimed_by,
+                "assigned_to": guessed_claimed_by,
+            }
         return {
-            "status": status,
-            "claimed_by": claimed_by,
-            "assigned_to": assigned_to,
+            "status": OPEN_STATUS,
+            "claimed_by": None,
+            "assigned_to": None,
         }
 
+    # Open row can be upgraded to claimed if the recent messages prove it.
     if guessed_claimed_by and guessed_status == OPEN_STATUS:
-        status = CLAIMED_STATUS
-        claimed_by = guessed_claimed_by
-        assigned_to = guessed_claimed_by
+        return {
+            "status": CLAIMED_STATUS,
+            "claimed_by": guessed_claimed_by,
+            "assigned_to": guessed_claimed_by,
+        }
 
     return {
         "status": status,
@@ -393,11 +394,14 @@ def _build_core_ticket_payload(
     now_iso = _utc_iso(now_utc())
 
     owner_id = str(owner.id) if owner else str(_parse_owner_id_from_topic(channel) or "")
-    username = _safe_str(owner) if owner else (owner_id or "Unknown User")
+    username = _safe_str(owner) if owner else (
+        str(existing.get("username") or "").strip() if isinstance(existing, dict) else ""
+    ) or (owner_id or "Unknown User")
     title = (
         _title_for_ticket(owner, category, is_ghost)
         if owner is not None
-        else f"{'[GHOST] ' if is_ghost else ''}{category.title()} - {username}"[:180]
+        else (str(existing.get("title") or "").strip() if isinstance(existing, dict) else "")
+        or f"{'[GHOST] ' if is_ghost else ''}{category.title()} - {username}"[:180]
     )
 
     authoritative = _preserve_authoritative_status(
