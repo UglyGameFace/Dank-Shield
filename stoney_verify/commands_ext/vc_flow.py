@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import os
 import re
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, Optional, Tuple, List
 
 import discord
 from discord import app_commands
@@ -75,12 +75,46 @@ VC_STAFF_ACTIONS = {
     "vc_accept",
 }
 
+VC_ACTIVE_STATUSES = {
+    "PENDING",
+    "ACCEPTED",
+    "STAFF_ACCEPTED",
+    "READY",
+    "IN_VC",
+    "STARTED",
+    "TAKEN_OVER",
+    "RESTARTED",
+}
+
+VC_TERMINAL_STATUSES = {
+    "COMPLETED",
+    "CANCELED",
+    "DENIED",
+    "UPLOAD_REQUESTED",
+    "EXPIRED",
+    "STALE",
+}
+
 DEFAULT_VC_VERIFY_REQUESTS_CHANNEL_ID = 1476977094729793710
 
 
 # ============================================================
 # Helpers
 # ============================================================
+def _safe_int(value: Any, default: int = 0) -> int:
+    try:
+        return int(str(value).strip())
+    except Exception:
+        return default
+
+
+def _safe_str(value: Any) -> str:
+    try:
+        return str(value or "").strip()
+    except Exception:
+        return ""
+
+
 def _vc_requests_channel_id() -> int:
     """Resolve the staff alert channel id for VC verify request panels."""
     for key in ("VC_VERIFY_REQUESTS_CHANNEL_ID", "VC_VERIFY_QUEUE_CHANNEL_ID"):
@@ -207,7 +241,7 @@ def _can_manage_channel(
         return False, f"Error checking permissions: {e}"
 
 
-def _resolve_ticket_channel_from_token_info(
+async def _resolve_ticket_channel_from_token_info(
     guild: discord.Guild,
     token_info: Dict[str, Any],
 ) -> Optional[discord.TextChannel]:
@@ -215,15 +249,24 @@ def _resolve_ticket_channel_from_token_info(
     Resolve the real ticket text channel from Supabase token_info.
     Returns None if channel doesn't exist or is not a text channel.
     """
+    ch_id = _safe_int(token_info.get("channel_id"), 0)
+    if ch_id <= 0:
+        return None
+
     try:
-        ch_id = int(str(token_info.get("channel_id") or "0") or 0)
-        if not ch_id:
-            return None
         ch = guild.get_channel(ch_id)
         if isinstance(ch, discord.TextChannel):
             return ch
     except Exception:
         pass
+
+    try:
+        fetched = await guild.fetch_channel(ch_id)
+        if isinstance(fetched, discord.TextChannel):
+            return fetched
+    except Exception:
+        pass
+
     return None
 
 
@@ -287,23 +330,7 @@ def _build_vc_staff_embed(
     return emb
 
 
-async def _post_staff_vc_request_panel(
-    *,
-    guild: discord.Guild,
-    token: str,
-    requester_id: int,
-    requester_mention: str,
-    ticket_channel_id: int,
-) -> Optional[int]:
-    """
-    Post the staff VC request panel.
-
-    Priority:
-      1) VC queue / requests channel
-      2) MODLOG channel
-      3) TRANSCRIPTS channel
-      4) Ticket channel (last resort)
-    """
+def _build_staff_vc_request_view(token: str) -> discord.ui.View:
     staff_view = discord.ui.View(timeout=None)
     staff_view.add_item(
         discord.ui.Button(
@@ -326,7 +353,27 @@ async def _post_staff_vc_request_panel(
             custom_id=make_custom_id("vc_reissue", token),
         )
     )
+    return staff_view
 
+
+async def _post_staff_vc_request_panel(
+    *,
+    guild: discord.Guild,
+    token: str,
+    requester_id: int,
+    requester_mention: str,
+    ticket_channel_id: int,
+) -> Optional[int]:
+    """
+    Post the staff VC request panel.
+
+    Priority:
+      1) VC queue / requests channel
+      2) MODLOG channel
+      3) TRANSCRIPTS channel
+      4) Ticket channel (last resort)
+    """
+    staff_view = _build_staff_vc_request_view(token)
     emb = _build_vc_staff_embed(
         guild=guild,
         requester_id=int(requester_id),
@@ -338,7 +385,7 @@ async def _post_staff_vc_request_panel(
     ping = _staff_ping_text()
     content = ping if ping else None
 
-    candidate_ids: list[int] = []
+    candidate_ids: List[int] = []
 
     try:
         candidate_ids.append(int(_vc_requests_channel_id()))
@@ -388,6 +435,22 @@ async def _post_staff_vc_request_panel(
 
         try:
             msg = await ch.send(content=content, embed=emb, view=staff_view)  # type: ignore[misc]
+            try:
+                VC_REQUESTS.setdefault(token, {})
+                VC_REQUESTS[token].setdefault("staff_msg_refs", [])
+                VC_REQUESTS[token]["staff_msg_refs"].append(
+                    {
+                        "channel_id": int(getattr(getattr(msg, "channel", None), "id", 0) or 0),
+                        "message_id": int(getattr(msg, "id", 0) or 0),
+                    }
+                )
+                VC_REQUESTS[token]["staff_msg_ids"] = [
+                    int(ref["message_id"])
+                    for ref in VC_REQUESTS[token].get("staff_msg_refs", [])
+                    if isinstance(ref, dict) and int(ref.get("message_id", 0) or 0) > 0
+                ]
+            except Exception:
+                pass
             return int(getattr(msg, "id", 0) or 0) or None
         except Exception as e:
             print(f"⚠️ Failed to post staff VC panel to {getattr(ch, 'id', None)}: {e}")
@@ -395,6 +458,17 @@ async def _post_staff_vc_request_panel(
 
     print("⚠️ VC staff panel: no target channel resolved or all posts failed.")
     return None
+
+
+def _set_request_status(token: str, status: str, **extra: Any) -> None:
+    try:
+        req = VC_REQUESTS.get(token) or {}
+        req["status"] = str(status).upper().strip()
+        for k, v in extra.items():
+            req[k] = v
+        VC_REQUESTS[token] = req
+    except Exception:
+        pass
 
 
 async def _cleanup_vc_permissions(
@@ -567,34 +641,68 @@ async def _vc_disable_panels_everywhere(
     """
     try:
         req = VC_REQUESTS.get(token) or {}
-        msg_ids = req.get("staff_msg_ids") or []
-        if not isinstance(msg_ids, list):
-            msg_ids = []
-    except Exception:
-        msg_ids = []
+        msg_refs = req.get("staff_msg_refs") or []
+        if not isinstance(msg_refs, list):
+            msg_refs = []
 
-    if not msg_ids:
-        return
-
-    staff_ch = await _get_staff_alert_channel(guild)
-    if not staff_ch:
-        return
-
-    for mid in list(msg_ids):
-        try:
-            m = await staff_ch.fetch_message(int(mid))  # type: ignore[attr-defined]
-            try:
-                await m.edit(content=(m.content or ""), view=None)
-            except Exception:
-                pass
-
-            try:
+        if not msg_refs:
+            # Back-compat fallback to a single channel assumption
+            msg_ids = req.get("staff_msg_ids") or []
+            staff_ch = await _get_staff_alert_channel(guild)
+            if staff_ch and isinstance(msg_ids, list):
+                for mid in list(msg_ids):
+                    try:
+                        m = await staff_ch.fetch_message(int(mid))  # type: ignore[attr-defined]
+                        try:
+                            await m.edit(content=(m.content or ""), view=None)
+                        except Exception:
+                            pass
+                    except Exception:
+                        continue
                 if status_text:
-                    await staff_ch.send(f"ℹ️ VC request `{token}`: {status_text}")  # type: ignore[misc]
+                    try:
+                        await staff_ch.send(f"ℹ️ VC request `{token}`: {status_text}")  # type: ignore[misc]
+                    except Exception:
+                        pass
+            return
+
+        notified_channels: set[int] = set()
+
+        for ref in list(msg_refs):
+            try:
+                channel_id = int(ref.get("channel_id", 0) or 0)
+                message_id = int(ref.get("message_id", 0) or 0)
             except Exception:
-                pass
-        except Exception:
-            continue
+                continue
+
+            if channel_id <= 0 or message_id <= 0:
+                continue
+
+            ch = await _resolve_text_channel(guild, channel_id)
+            if not ch or not hasattr(ch, "fetch_message"):
+                continue
+
+            try:
+                m = await ch.fetch_message(message_id)  # type: ignore[attr-defined]
+                try:
+                    await m.edit(content=(m.content or ""), view=None)
+                except Exception:
+                    pass
+                notified_channels.add(channel_id)
+            except Exception:
+                continue
+
+        if status_text:
+            for channel_id in notified_channels:
+                ch = await _resolve_text_channel(guild, channel_id)
+                if not ch:
+                    continue
+                try:
+                    await ch.send(f"ℹ️ VC request `{token}`: {status_text}")  # type: ignore[misc]
+                except Exception:
+                    continue
+    except Exception as e:
+        print(f"⚠️ _vc_disable_panels_everywhere failed: {e}")
 
 
 async def _cleanup_stale_vc_request(
@@ -617,26 +725,27 @@ async def _cleanup_stale_vc_request(
             return True
 
         ticket_ch = guild.get_channel(ticket_ch_id)
+        if ticket_ch is None:
+            try:
+                ticket_ch = await guild.fetch_channel(int(ticket_ch_id))
+            except Exception:
+                ticket_ch = None
+
         if isinstance(ticket_ch, discord.TextChannel):
             return False
 
-        VC_REQUESTS.pop(token, None)
+        _set_request_status(token, "STALE", stale_reason=reason, cleaned_at=now_utc().isoformat())
 
-        msg_ids = req.get("staff_msg_ids", [])
-        staff_ch = await _get_staff_alert_channel(guild)
-        if staff_ch and msg_ids:
-            for mid in msg_ids:
-                try:
-                    msg = await staff_ch.fetch_message(mid)  # type: ignore[attr-defined]
-                    await msg.edit(
-                        content=(
-                            "🚫 **Request cancelled** – ticket channel no longer exists.\n"
-                            f"Reason: {reason}"
-                        ),
-                        view=None,
-                    )
-                except Exception:
-                    pass
+        try:
+            await _vc_disable_panels_everywhere(
+                guild,
+                token,
+                status_text=f"Request cancelled — ticket channel no longer exists. Reason: {reason}",
+            )
+        except Exception:
+            pass
+
+        VC_REQUESTS.pop(token, None)
         return True
     except Exception as e:
         print(f"⚠️ Error in _cleanup_stale_vc_request: {e}")
@@ -655,16 +764,7 @@ def _find_active_vc_token_for_channel(channel_id: int) -> Optional[str]:
                 continue
 
             status = str(req.get("status") or "").upper()
-            if status in {
-                "PENDING",
-                "ACCEPTED",
-                "STAFF_ACCEPTED",
-                "READY",
-                "IN_VC",
-                "STARTED",
-                "TAKEN_OVER",
-                "RESTARTED",
-            }:
+            if status in VC_ACTIVE_STATUSES:
                 return str(tok)
         except Exception:
             continue
@@ -684,7 +784,7 @@ async def _resolve_vc_ticket_and_owner(
     if not token_info:
         return None, None, None
 
-    ticket_ch = _resolve_ticket_channel_from_token_info(guild, token_info)
+    ticket_ch = await _resolve_ticket_channel_from_token_info(guild, token_info)
     owner = None
 
     try:
@@ -741,14 +841,14 @@ async def _vc_lock_channel_for_session(
     except Exception:
         pass
 
-    try:
-        VC_REQUESTS.setdefault(token, {})
-        VC_REQUESTS[token]["accepted_staff_id"] = int(staff_member.id)
-        VC_REQUESTS[token]["assigned_staff_id"] = int(staff_member.id)
-        VC_REQUESTS[token]["status"] = "ACCEPTED"
-        VC_REQUESTS[token]["vc_channel_id"] = int(VC_VERIFY_CHANNEL_ID or 0)
-    except Exception:
-        pass
+    _set_request_status(
+        token,
+        "ACCEPTED",
+        accepted_staff_id=int(staff_member.id),
+        assigned_staff_id=int(staff_member.id),
+        vc_channel_id=int(VC_VERIFY_CHANNEL_ID or 0),
+        accepted_at=now_utc().isoformat(),
+    )
 
     if _vc_verify_mod and hasattr(_vc_verify_mod, "vc_unlock_session_participants"):
         ok, msg = await _vc_verify_mod.vc_unlock_session_participants(
@@ -838,6 +938,7 @@ async def _vc_unlock_channel_for_next_session(
     try:
         req = VC_REQUESTS.get(token) or {}
         req["status"] = "COMPLETED"
+        req["completed_at"] = now_utc().isoformat()
         req.pop("accepted_staff_id", None)
         req.pop("assigned_staff_id", None)
         VC_REQUESTS[token] = req
@@ -926,6 +1027,13 @@ async def _vc_reissue_command(
         ch2 = guild.get_channel(int(resolved_ticket_id))
         if isinstance(ch2, discord.TextChannel):
             ticket_ch = ch2
+        elif resolved_ticket_id:
+            try:
+                fetched = await guild.fetch_channel(int(resolved_ticket_id))
+                if isinstance(fetched, discord.TextChannel):
+                    ticket_ch = fetched
+            except Exception:
+                ticket_ch = None
 
     if not ticket_ch:
         await _cleanup_stale_vc_request(
@@ -979,18 +1087,17 @@ async def _vc_reissue_command(
             ephemeral=True,
         )
 
-    try:
-        VC_REQUESTS[new_token] = {
-            "status": "PENDING",
-            "requested_at": now_utc().isoformat(),
-            "requested_by": int(rid or interaction.user.id),
-            "ticket_channel_id": int(ticket_ch.id),
-            "guild_id": int(guild.id),
-            "reissued_from": resolved_token,
-            "reissued_by": int(interaction.user.id),
-        }
-    except Exception:
-        pass
+    _set_request_status(
+        new_token,
+        "PENDING",
+        requested_at=now_utc().isoformat(),
+        requested_by=int(rid or interaction.user.id),
+        owner_id=int(rid or 0),
+        ticket_channel_id=int(ticket_ch.id),
+        guild_id=int(guild.id),
+        reissued_from=resolved_token,
+        reissued_by=int(interaction.user.id),
+    )
 
     qch = await _get_vc_queue_channel(guild)
     if not qch and isinstance(interaction.channel, discord.TextChannel):
@@ -1033,28 +1140,7 @@ async def _vc_reissue_command(
                     token=new_token,
                 )
 
-                staff_view = discord.ui.View(timeout=None)
-                staff_view.add_item(
-                    discord.ui.Button(
-                        label="✅ Accept VC Verify",
-                        style=discord.ButtonStyle.success,
-                        custom_id=make_custom_id("vc_accept", new_token),
-                    )
-                )
-                staff_view.add_item(
-                    discord.ui.Button(
-                        label="🔁 Ask for Upload Instead",
-                        style=discord.ButtonStyle.secondary,
-                        custom_id=make_custom_id("vc_upload", new_token),
-                    )
-                )
-                staff_view.add_item(
-                    discord.ui.Button(
-                        label="♻️ Reissue Token",
-                        style=discord.ButtonStyle.secondary,
-                        custom_id=make_custom_id("vc_reissue", new_token),
-                    )
-                )
+                staff_view = _build_staff_vc_request_view(new_token)
 
                 try:
                     await msg.edit(embed=emb, view=staff_view)
@@ -1089,8 +1175,23 @@ async def _vc_reissue_command(
 
     try:
         if updated_panel_mid:
-            VC_REQUESTS.setdefault(new_token, {}).setdefault("staff_msg_ids", [])
-            VC_REQUESTS[new_token]["staff_msg_ids"] = [int(updated_panel_mid)]
+            refs = VC_REQUESTS.setdefault(new_token, {}).setdefault("staff_msg_refs", [])
+            if isinstance(refs, list) and not any(
+                int(ref.get("message_id", 0) or 0) == int(updated_panel_mid)
+                for ref in refs
+                if isinstance(ref, dict)
+            ):
+                refs.append(
+                    {
+                        "channel_id": int(getattr(qch, "id", 0) or 0) if qch else 0,
+                        "message_id": int(updated_panel_mid),
+                    }
+                )
+            VC_REQUESTS[new_token]["staff_msg_ids"] = [
+                int(ref["message_id"])
+                for ref in VC_REQUESTS[new_token].get("staff_msg_refs", [])
+                if isinstance(ref, dict) and int(ref.get("message_id", 0) or 0) > 0
+            ]
     except Exception:
         pass
 
@@ -1124,8 +1225,7 @@ async def _vc_reissue_command(
                 )
                 await ticket_msg.edit(view=new_view)
 
-                if new_token not in VC_REQUESTS:
-                    VC_REQUESTS[new_token] = {}
+                VC_REQUESTS.setdefault(new_token, {})
                 VC_REQUESTS[new_token]["ticket_panel_msg_id"] = ticket_panel_msg_id
             except Exception as e:
                 print(f"⚠️ Failed to update ticket panel in /vc_reissue: {e}")
@@ -1216,11 +1316,15 @@ async def _vc_takeover_command(
 
     req = VC_REQUESTS.setdefault(tok, {})
     prev_staff = int(req.get("accepted_staff_id") or req.get("accepted_by") or 0)
-    req["accepted_staff_id"] = int(interaction.user.id)
-    req["accepted_by"] = int(interaction.user.id)
-    req["status"] = "ACCEPTED"
-    req["takeover_at"] = now_utc().isoformat()
-    req["takeover_by"] = int(interaction.user.id)
+
+    _set_request_status(
+        tok,
+        "TAKEN_OVER",
+        accepted_staff_id=int(interaction.user.id),
+        accepted_by=int(interaction.user.id),
+        takeover_at=now_utc().isoformat(),
+        takeover_by=int(interaction.user.id),
+    )
 
     try:
         if _vc_sessions_mod and hasattr(_vc_sessions_mod, "takeover_session"):
