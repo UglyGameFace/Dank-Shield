@@ -652,6 +652,11 @@ def register_ticket_admin_commands(bot, tree) -> None:
         if service_reopen_ticket_channel is None:
             return await reply_once(interaction, {"content": "❌ Ticket reopen service is unavailable.", "ephemeral": True})
 
+        try:
+            await interaction.response.defer(ephemeral=True)
+        except Exception:
+            pass
+
         owner = await _owner_for_ticket(ch, row)
         owner_member = owner if isinstance(owner, discord.Member) else None
 
@@ -662,9 +667,17 @@ def register_ticket_admin_commands(bot, tree) -> None:
             reason=reason,
         )
         if not ok:
-            return await reply_once(interaction, {"content": "❌ Failed to reopen this ticket.", "ephemeral": True})
+            try:
+                await interaction.followup.send("❌ Failed to reopen this ticket.", ephemeral=True)
+            except Exception:
+                pass
+            return
 
-        await reply_once(interaction, {"content": f"✅ Reopened {ch.mention}.", "ephemeral": True})
+        try:
+            await interaction.followup.send(f"✅ Reopened {ch.mention}.", ephemeral=True)
+        except Exception:
+            pass
+
         try:
             await ch.send(f"♻️ Ticket reopened by {interaction.user.mention}.")
         except Exception:
