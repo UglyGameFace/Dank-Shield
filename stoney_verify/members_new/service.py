@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional, Set
+from typing import Any, Dict, List, Optional
 
 import discord
 
@@ -16,15 +16,7 @@ from .sync_service import (
 # ============================================================
 # Member sync service for the NEW structure
 # ------------------------------------------------------------
-# This module is now the REAL orchestrator for member truth.
-#
-# It no longer delegates live sync ownership to legacy events.py.
-# Instead:
-# - live member writes go through members_new.sync_service
-# - departed fallback updates are handled here when Discord only
-#   gives us a User / Object instead of a cached Member
-# - reconciliation/full-sync entrypoints remain stable for other
-#   modules that already import this file
+# Real orchestrator for member truth.
 # ============================================================
 
 
@@ -44,7 +36,7 @@ def _utc_iso(dt: Optional[datetime]) -> Optional[str]:
 
 def _safe_str(x: Any) -> str:
     try:
-        return str(x)
+        return str(x or "")
     except Exception:
         return ""
 
@@ -54,6 +46,22 @@ def _safe_int(value: Any, default: int = 0) -> int:
         if value is None or isinstance(value, bool):
             return default
         return int(str(value).strip())
+    except Exception:
+        return default
+
+
+def _truthy(value: Any, default: bool = False) -> bool:
+    try:
+        if isinstance(value, bool):
+            return value
+        if value is None:
+            return default
+        text = str(value).strip().lower()
+        if text in {"1", "true", "yes", "y", "on"}:
+            return True
+        if text in {"0", "false", "no", "n", "off"}:
+            return False
+        return bool(value)
     except Exception:
         return default
 
@@ -103,10 +111,6 @@ def _serialize_role_names(member: discord.Member) -> List[str]:
 
 
 def _role_summary(member: discord.Member) -> List[Dict[str, Any]]:
-    """
-    Dashboard-friendly role payload for future interactive role/member views.
-    Kept here intentionally for later dashboard-side enrichment.
-    """
     out: List[Dict[str, Any]] = []
     try:
         for role in member.roles:
@@ -128,47 +132,155 @@ def _role_summary(member: discord.Member) -> List[Dict[str, Any]]:
     return out
 
 
+def _configured_role_ids() -> Dict[str, int]:
+    role_map: Dict[str, int] = {}
+    for key in (
+        "UNVERIFIED_ROLE_ID",
+        "VERIFIED_ROLE_ID",
+        "RESIDENT_ROLE_ID",
+        "STAFF_ROLE_ID",
+        "STONER_ROLE_ID",
+        "DRUNKEN_ROLE_ID",
+    ):
+        try:
+            value = _safe_int(globals().get(key), 0)
+            if value > 0:
+                role_map[key] = value
+        except Exception:
+            continue
+    return role_map
+
+
+def _member_has_role_id(member: discord.Member, role_id: int) -> bool:
+    try:
+        if role_id <= 0:
+            return False
+        return any(int(getattr(role, "id", 0) or 0) == int(role_id) for role in (member.roles or []))
+    except Exception:
+        return False
+
+
+def _member_role_flags(member: discord.Member) -> Dict[str, bool]:
+    cfg = _configured_role_ids()
+
+    verified_role_id = _safe_int(cfg.get("VERIFIED_ROLE_ID"), 0)
+    resident_role_id = _safe_int(cfg.get("RESIDENT_ROLE_ID"), 0)
+    staff_role_id = _safe_int(cfg.get("STAFF_ROLE_ID"), 0)
+    stoner_role_id = _safe_int(cfg.get("STONER_ROLE_ID"), 0)
+    drunken_role_id = _safe_int(cfg.get("DRUNKEN_ROLE_ID"), 0)
+    unverified_role_id = _safe_int(cfg.get("UNVERIFIED_ROLE_ID"), 0)
+
+    has_verified_role = (
+        _member_has_role_id(member, verified_role_id)
+        or _member_has_role_id(member, resident_role_id)
+        or _member_has_role_id(member, stoner_role_id)
+        or _member_has_role_id(member, drunken_role_id)
+    )
+
+    has_staff_role = _member_has_role_id(member, staff_role_id)
+    has_unverified = _member_has_role_id(member, unverified_role_id)
+    has_any_role = len(_serialize_role_ids(member)) > 0
+
+    role_names = {str(r.name).strip().lower() for r in getattr(member, "roles", []) if getattr(r, "name", None) and str(r.name) != "@everyone"}
+
+    has_secondary_verified_role = bool(
+        {"resident", "stoner", "drunken"} & role_names
+    )
+
+    cosmetic_only = bool(has_any_role and not has_verified_role and not has_staff_role and not has_unverified)
+
+    return {
+        "has_any_role": has_any_role,
+        "has_unverified": has_unverified,
+        "has_verified_role": has_verified_role,
+        "has_staff_role": has_staff_role,
+        "has_secondary_verified_role": has_secondary_verified_role,
+        "has_cosmetic_only": cosmetic_only,
+    }
+
+
+def _role_state(member: discord.Member) -> Dict[str, str]:
+    flags = _member_role_flags(member)
+
+    if flags["has_staff_role"]:
+        return {
+            "role_state": "staff",
+            "role_state_reason": "Member has staff-level role(s).",
+        }
+
+    if flags["has_verified_role"] and not flags["has_unverified"]:
+        return {
+            "role_state": "verified",
+            "role_state_reason": "Member has verified/resident role state and is not unverified.",
+        }
+
+    if flags["has_unverified"]:
+        return {
+            "role_state": "unverified",
+            "role_state_reason": "Member still has the Unverified role.",
+        }
+
+    if flags["has_cosmetic_only"]:
+        return {
+            "role_state": "cosmetic_only",
+            "role_state_reason": "Member has only cosmetic/non-verification roles.",
+        }
+
+    if flags["has_any_role"]:
+        return {
+            "role_state": "role_mixed",
+            "role_state_reason": "Member has roles but no clear verified/unverified state.",
+        }
+
+    return {
+        "role_state": "no_roles",
+        "role_state_reason": "Member has no tracked roles.",
+    }
+
+
 def _has_verified_role(member: discord.Member) -> bool:
     try:
-        for role in member.roles:
-            try:
-                if str(role.name).strip().lower() == "verified":
-                    return True
-            except Exception:
-                continue
+        state = _member_role_flags(member)
+        return bool(state["has_verified_role"] and not state["has_unverified"])
     except Exception:
-        pass
-    return False
+        return False
 
 
 def _member_row(member: discord.Member, *, active: bool = True, departed: bool = False) -> Dict[str, Any]:
-    """
-    Canonical future-facing member payload.
-
-    This remains useful for debugging, future dashboard enrichments,
-    and any manual inspection paths that want a normalized view.
-    """
     now = now_utc()
+    role_flags = _member_role_flags(member)
+    role_state = _role_state(member)
 
     row: Dict[str, Any] = {
         "id": str(member.id),
         "discord_id": str(member.id),
+        "user_id": str(member.id),
         "username": _safe_str(member),
         "display_name": _safe_str(getattr(member, "display_name", "")),
         "name": _safe_str(getattr(member, "name", "")),
         "global_name": _safe_str(getattr(member, "global_name", "")),
         "avatar": _display_avatar_url(member),
+        "avatar_url": _display_avatar_url(member),
         "verified": _has_verified_role(member),
         "roles": _serialize_role_ids(member),
+        "role_ids": _serialize_role_ids(member),
         "role_names": _serialize_role_names(member),
         "role_summary": _role_summary(member),
         "guild_id": str(member.guild.id) if getattr(member, "guild", None) else None,
         "joined_at": _utc_iso(getattr(member, "joined_at", None)),
         "created_at_discord": _utc_iso(getattr(member, "created_at", None)),
         "bot": bool(getattr(member, "bot", False)),
-        "active": bool(active),
+        "is_bot": bool(getattr(member, "bot", False)),
+        "active": bool(active and not departed),
         "departed": bool(departed),
+        "in_guild": bool(active and not departed),
         "last_synced_at": _utc_iso(now),
+        "synced_at": _utc_iso(now),
+        "updated_at": _utc_iso(now),
+        "last_seen_at": _utc_iso(now),
+        "last_seen_username": _safe_str(member),
+        "last_seen_display_name": _safe_str(getattr(member, "display_name", "")),
+        "last_seen_nickname": _safe_str(getattr(member, "nick", "")),
     }
 
     try:
@@ -176,6 +288,8 @@ def _member_row(member: discord.Member, *, active: bool = True, departed: bool =
     except Exception:
         row["nick"] = None
 
+    row.update(role_flags)
+    row.update(role_state)
     return row
 
 
@@ -187,9 +301,6 @@ def _load_live_members(guild: discord.Guild) -> List[discord.Member]:
 
 
 async def _ensure_member_list(guild: discord.Guild) -> List[discord.Member]:
-    """
-    Best-effort member resolution with cache first, then fetch_members fallback.
-    """
     try:
         if not guild.chunked:
             try:
@@ -213,9 +324,6 @@ async def _ensure_member_list(guild: discord.Guild) -> List[discord.Member]:
 
 
 def _guild_member_rows_for_guild(guild_id: int) -> List[Dict[str, Any]]:
-    """
-    Read tracked guild_members rows for this guild.
-    """
     sb = get_supabase()
     if sb is None:
         return []
@@ -242,12 +350,6 @@ def _best_effort_mark_departed_by_user_id_sync(
     avatar_url: Optional[str] = None,
     is_bot: bool = False,
 ) -> bool:
-    """
-    Fallback path for member removals when Discord gives us a User/Object
-    instead of a cached Member.
-
-    This preserves history in guild_members without relying on legacy events.py.
-    """
     sb = get_supabase()
     if sb is None:
         print("⚠️ Supabase unavailable; skipped best-effort departed update.")
@@ -279,23 +381,36 @@ def _best_effort_mark_departed_by_user_id_sync(
 
     if existing:
         times_left = _safe_int(existing.get("times_left"), 0)
-        if existing.get("in_guild") is not False:
+        if _truthy(existing.get("in_guild"), False):
             times_left += 1
 
         payload: Dict[str, Any] = {
-            "username": username or existing.get("username") or existing.get("last_seen_username") or "",
-            "display_name": existing.get("display_name") or username or "",
+            "username": username or existing.get("username") or existing.get("last_seen_username") or str(user_id),
+            "display_name": existing.get("display_name") or username or str(user_id),
             "avatar_url": avatar_url or existing.get("avatar_url"),
             "in_guild": False,
+            "active": False,
+            "departed": True,
             "data_health": "left_guild",
             "synced_at": now_iso,
             "updated_at": now_iso,
             "last_seen_at": now_iso,
-            "left_at": existing.get("left_at") or now_iso,
+            "left_at": now_iso,
             "times_left": times_left,
+            "role_ids": [],
+            "role_names": [],
+            "roles": [],
+            "role_summary": [],
+            "has_any_role": False,
+            "has_unverified": False,
+            "has_verified_role": False,
+            "has_staff_role": False,
+            "has_secondary_verified_role": False,
+            "has_cosmetic_only": False,
             "role_state": "left_guild",
             "role_state_reason": "Member left or was removed from guild.",
             "is_bot": bool(existing.get("is_bot")) or bool(is_bot),
+            "verified": False,
         }
 
         try:
@@ -311,10 +426,13 @@ def _best_effort_mark_departed_by_user_id_sync(
     payload = {
         "guild_id": str(guild_id),
         "user_id": str(user_id),
+        "discord_id": str(user_id),
         "username": username or str(user_id),
         "display_name": username or str(user_id),
         "avatar_url": avatar_url,
         "in_guild": False,
+        "active": False,
+        "departed": True,
         "data_health": "left_guild",
         "synced_at": now_iso,
         "updated_at": now_iso,
@@ -325,6 +443,7 @@ def _best_effort_mark_departed_by_user_id_sync(
         "role_ids": [],
         "role_names": [],
         "roles": [],
+        "role_summary": [],
         "has_any_role": False,
         "has_unverified": False,
         "has_verified_role": False,
@@ -334,14 +453,13 @@ def _best_effort_mark_departed_by_user_id_sync(
         "role_state": "left_guild",
         "role_state_reason": "Member left or was removed from guild.",
         "is_bot": bool(is_bot),
+        "bot": bool(is_bot),
+        "verified": False,
         "created_at": now_iso,
         "first_seen_at": now_iso,
         "last_seen_username": username or str(user_id),
         "last_seen_display_name": username or str(user_id),
         "last_seen_nickname": "",
-        "previous_usernames": [],
-        "previous_display_names": [],
-        "previous_nicknames": [],
     }
 
     try:
@@ -359,9 +477,6 @@ def _best_effort_mark_departed_by_user_id_sync(
 
 
 async def sync_member(member: discord.Member, *, active: bool = True, departed: bool = False) -> bool:
-    """
-    Sync one live member through the real new sync service.
-    """
     try:
         await sync_member_to_supabase(
             member,
@@ -378,13 +493,6 @@ async def sync_member_remove(
     member_or_user: discord.Member | discord.User | discord.Object | Any,
     guild: Optional[discord.Guild] = None,
 ) -> bool:
-    """
-    Mark a member as departed instead of hard-deleting them.
-
-    Supports:
-    - discord.Member (preferred)
-    - discord.User / discord.Object with guild supplied
-    """
     try:
         if isinstance(member_or_user, discord.Member):
             await sync_service_mark_member_left(member_or_user)
@@ -449,19 +557,18 @@ async def sync_member_remove(
 
 
 async def sync_all_members(guild: discord.Guild) -> Dict[str, int]:
-    """
-    Full reconciliation pass through the real new sync service.
-    Safe for startup or manual dashboard-triggered sync.
-
-    Returns a normalized summary shape expected by callers.
-    """
     try:
         raw = await sync_service_run_full_member_sync_for_guild(guild)
+        active_synced = _safe_int(raw.get("active_members_synced"), 0)
+        marked_departed = _safe_int(raw.get("marked_departed"), 0)
+        errors = _safe_int(raw.get("errors"), 0)
+        checked = _safe_int(raw.get("checked"), active_synced)
+
         summary = {
-            "processed": _safe_int(raw.get("active_members_synced"), 0),
-            "failed": _safe_int(raw.get("errors"), 0),
-            "total_seen": _safe_int(raw.get("active_members_synced"), 0),
-            "marked_departed": _safe_int(raw.get("marked_departed"), 0),
+            "processed": active_synced,
+            "failed": errors,
+            "total_seen": checked,
+            "marked_departed": marked_departed,
         }
         print("🧩 Full member sync summary:", summary)
         return summary
@@ -476,9 +583,6 @@ async def sync_all_members(guild: discord.Guild) -> Dict[str, int]:
 
 
 async def reconcile_departed_members(guild: discord.Guild) -> Dict[str, int]:
-    """
-    Lightweight departed-member reconciliation through the real new sync service.
-    """
     try:
         raw = await sync_service_run_departed_reconciliation_for_guild(guild)
         summary = {
@@ -499,10 +603,6 @@ async def reconcile_departed_members(guild: discord.Guild) -> Dict[str, int]:
 
 
 async def sync_role_members(role: discord.Role) -> Dict[str, int]:
-    """
-    Force-resync all members who currently have a given role.
-    Useful for interactive dashboard role refresh actions.
-    """
     processed = 0
     failed = 0
 
