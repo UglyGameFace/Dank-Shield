@@ -76,6 +76,19 @@ except Exception:
     async def cancel_verification_wait_timers_for_member(guild_id: int, user_id: int) -> bool:
         return False
 
+try:
+    from .members_new.sync_service import (
+        sync_member_to_supabase as new_sync_member_to_supabase,
+        mark_member_left as new_mark_member_left,
+        run_full_member_sync_for_guild as new_run_full_member_sync_for_guild,
+        run_departed_reconciliation_for_guild as new_run_departed_reconciliation_for_guild,
+    )
+except Exception:
+    new_sync_member_to_supabase = None  # type: ignore
+    new_mark_member_left = None  # type: ignore
+    new_run_full_member_sync_for_guild = None  # type: ignore
+    new_run_departed_reconciliation_for_guild = None  # type: ignore
+
 
 # ============================================================
 # Internal helpers
@@ -168,6 +181,18 @@ def _member_has_any_safe_access_role(member: discord.Member, *, include_unverifi
     except Exception:
         pass
 
+    try:
+        if STONER_ROLE_ID and _member_has_role_id(member, int(STONER_ROLE_ID)):
+            return True
+    except Exception:
+        pass
+
+    try:
+        if DRUNKEN_ROLE_ID and _member_has_role_id(member, int(DRUNKEN_ROLE_ID)):
+            return True
+    except Exception:
+        pass
+
     if include_unverified:
         try:
             if UNVERIFIED_ROLE_ID and _member_has_role_id(member, int(UNVERIFIED_ROLE_ID)):
@@ -187,13 +212,24 @@ def _member_is_pending_verification(member: discord.Member) -> bool:
         verified_id = int(VERIFIED_ROLE_ID or 0)
         resident_id = int(RESIDENT_ROLE_ID or 0) if RESIDENT_ROLE_ID else 0
         staff_id = int(STAFF_ROLE_ID or 0) if STAFF_ROLE_ID else 0
+        stoner_id = int(STONER_ROLE_ID or 0) if STONER_ROLE_ID else 0
+        drunken_id = int(DRUNKEN_ROLE_ID or 0) if DRUNKEN_ROLE_ID else 0
 
         has_unverified = _member_has_role_id(member, uv_id) if uv_id else False
         has_verified = _member_has_role_id(member, verified_id) if verified_id else False
         has_resident = _member_has_role_id(member, resident_id) if resident_id else False
         has_staff = _member_has_role_id(member, staff_id) if staff_id else False
+        has_stoner = _member_has_role_id(member, stoner_id) if stoner_id else False
+        has_drunken = _member_has_role_id(member, drunken_id) if drunken_id else False
 
-        return bool(has_unverified and not has_verified and not has_resident and not has_staff)
+        return bool(
+            has_unverified
+            and not has_verified
+            and not has_resident
+            and not has_staff
+            and not has_stoner
+            and not has_drunken
+        )
     except Exception:
         return False
 
@@ -319,6 +355,7 @@ def _sync_iso_now() -> str:
     try:
         return now_utc().isoformat()
     except Exception:
+        from datetime import datetime, timezone
         return datetime.now(timezone.utc).isoformat()
 
 
@@ -426,6 +463,61 @@ def _extract_existing_risk_payload(existing: Dict[str, Any]) -> Dict[str, Any]:
         if key in existing:
             out[key] = existing.get(key)
     return out
+
+
+def _startup_task_running(attr_name: str) -> bool:
+    try:
+        task = getattr(bot, attr_name, None)
+        if task and hasattr(task, "done") and not task.done():
+            return True
+    except Exception:
+        pass
+    return False
+
+
+def _assign_startup_task(attr_name: str, coro) -> None:
+    try:
+        task = asyncio.create_task(coro)
+        setattr(bot, attr_name, task)
+    except Exception:
+        pass
+
+
+async def _new_sync_member_safe(
+    member: discord.Member,
+    *,
+    in_guild: bool,
+    risk_profile: Optional[Dict[str, Any]] = None,
+) -> None:
+    try:
+        if callable(new_sync_member_to_supabase):
+            try:
+                await new_sync_member_to_supabase(member, in_guild=in_guild)
+                return
+            except TypeError:
+                await new_sync_member_to_supabase(member)  # type: ignore[misc]
+                return
+    except Exception as e:
+        print("⚠️ new_sync_member_to_supabase failed:", repr(e))
+
+    try:
+        await _sync_member_to_supabase(member, in_guild=in_guild, risk_profile=risk_profile)
+    except Exception as e:
+        print("⚠️ legacy _sync_member_to_supabase fallback failed:", repr(e))
+
+
+async def _new_mark_member_left_safe(member: discord.Member) -> None:
+    try:
+        if callable(new_mark_member_left):
+            await new_mark_member_left(member)
+            return
+    except Exception as e:
+        print("⚠️ new_mark_member_left failed:", repr(e))
+
+    try:
+        await _mark_member_left(member)
+    except Exception as e:
+        print("⚠️ legacy _mark_member_left fallback failed:", repr(e))
 
 
 # ============================================================
@@ -562,6 +654,8 @@ async def _bulk_mark_departed_members_async(sb: Any, guild_id: str, active_ids: 
                 "data_health": "left_guild",
                 "synced_at": _sync_iso_now(),
                 "updated_at": _sync_iso_now(),
+                "role_state": "left_guild",
+                "role_state_reason": "Member left or was removed from guild.",
             }
             try:
                 await _guild_members_update_member_async(sb, str(guild_id), uid, payload)
@@ -957,11 +1051,15 @@ def _member_role_snapshot(member: discord.Member) -> Dict[str, Any]:
     has_unverified = bool(UNVERIFIED_ROLE_ID and _member_has_role_id(member, int(UNVERIFIED_ROLE_ID)))
     has_verified_role = bool(
         (VERIFIED_ROLE_ID and _member_has_role_id(member, int(VERIFIED_ROLE_ID))) or
-        (RESIDENT_ROLE_ID and _member_has_role_id(member, int(RESIDENT_ROLE_ID)))
+        (RESIDENT_ROLE_ID and _member_has_role_id(member, int(RESIDENT_ROLE_ID))) or
+        (STONER_ROLE_ID and _member_has_role_id(member, int(STONER_ROLE_ID))) or
+        (DRUNKEN_ROLE_ID and _member_has_role_id(member, int(DRUNKEN_ROLE_ID)))
     )
     has_staff_role = bool(STAFF_ROLE_ID and _member_has_role_id(member, int(STAFF_ROLE_ID)))
     has_secondary_verified_role = bool(
         (RESIDENT_ROLE_ID and _member_has_role_id(member, int(RESIDENT_ROLE_ID)))
+        or (STONER_ROLE_ID and _member_has_role_id(member, int(STONER_ROLE_ID)))
+        or (DRUNKEN_ROLE_ID and _member_has_role_id(member, int(DRUNKEN_ROLE_ID)))
     )
 
     try:
@@ -979,6 +1077,13 @@ def _member_role_snapshot(member: discord.Member) -> Dict[str, Any]:
         is_bot_like = bool(getattr(member, "bot", False) or getattr(getattr(member, "public_flags", None), "verified_bot", False))
     except Exception:
         is_bot_like = bool(getattr(member, "bot", False))
+
+    has_cosmetic_only = bool(
+        has_any_real_roles
+        and not has_verified_role
+        and not has_staff_role
+        and not has_unverified
+    )
 
     role_state = "unknown"
     role_state_reason = ""
@@ -1005,6 +1110,9 @@ def _member_role_snapshot(member: discord.Member) -> Dict[str, Any]:
         elif has_unverified:
             role_state = "unverified_only"
             role_state_reason = "Member has Unverified and is pending verification."
+        elif has_cosmetic_only:
+            role_state = "cosmetic_only"
+            role_state_reason = "Member has only cosmetic/non-verification roles."
         else:
             role_state = "missing_unverified"
             role_state_reason = "Member has no verified role and no Unverified."
@@ -1024,7 +1132,7 @@ def _member_role_snapshot(member: discord.Member) -> Dict[str, Any]:
         "has_verified_role": has_verified_role,
         "has_staff_role": has_staff_role,
         "has_secondary_verified_role": has_secondary_verified_role,
-        "has_cosmetic_only": False,
+        "has_cosmetic_only": has_cosmetic_only,
         "role_state": role_state,
         "role_state_reason": role_state_reason,
         "data_health": "ok",
@@ -1289,7 +1397,10 @@ async def _mark_member_left(member: discord.Member) -> None:
         if existing.get("nickname") and str(existing.get("nickname")).strip() != nickname:
             previous_nicknames = _append_unique_history(previous_nicknames, str(existing.get("nickname")).strip())
 
-        times_left = int(existing.get("times_left") or 0) + 1
+        times_left = int(existing.get("times_left") or 0)
+        if existing.get("in_guild") is not False:
+            times_left += 1
+
         times_joined = int(existing.get("times_joined") or 0) or 1
         existing_risk_payload = _extract_existing_risk_payload(existing)
 
@@ -1379,6 +1490,10 @@ async def _mark_member_left(member: discord.Member) -> None:
                     "data_health": "left_guild",
                     "synced_at": now_iso,
                     "updated_at": now_iso,
+                    "left_at": now_iso,
+                    "times_left": times_left,
+                    "role_state": "left_guild",
+                    "role_state_reason": "Member left or was removed from guild.",
                 },
             )
         except Exception as e2:
@@ -1394,16 +1509,29 @@ async def _mark_member_left(member: discord.Member) -> None:
 
 async def _initial_member_sync_sweep() -> None:
     try:
-        sb = get_supabase()
-        if not sb:
-            return
-
         guilds = list(getattr(bot, "guilds", []) or [])
     except Exception:
         guilds = []
 
     for guild in guilds:
         try:
+            if callable(new_run_full_member_sync_for_guild):
+                try:
+                    summary = await new_run_full_member_sync_for_guild(guild)
+                    print(
+                        f"✅ Initial member sync complete for guild {guild.id}: "
+                        f"active={int(summary.get('active_members_synced') or 0)} "
+                        f"marked_departed={int(summary.get('marked_departed') or 0)} "
+                        f"errors={int(summary.get('errors') or 0)}"
+                    )
+                    continue
+                except Exception as e:
+                    print(f"⚠️ new full member sync failed for guild {guild.id}: {repr(e)}")
+
+            sb = get_supabase()
+            if not sb:
+                continue
+
             active_ids: set[str] = set()
 
             try:
@@ -1414,16 +1542,12 @@ async def _initial_member_sync_sweep() -> None:
             for idx, member in enumerate(members, start=1):
                 try:
                     active_ids.add(str(member.id))
-                    await _sync_member_to_supabase(member, in_guild=True)
+                    await _new_sync_member_safe(member, in_guild=True)
 
                     if idx % 10 == 0:
                         await asyncio.sleep(0)
                 except Exception:
                     continue
-
-            sb = get_supabase()
-            if not sb:
-                continue
 
             marked_departed = await _bulk_mark_departed_members_async(sb, str(guild.id), active_ids)
 
@@ -2209,6 +2333,8 @@ async def _ensure_unverified_on_join(member: discord.Member) -> bool:
         v_id = int(VERIFIED_ROLE_ID or 0)
         resident_id = int(RESIDENT_ROLE_ID or 0) if RESIDENT_ROLE_ID else 0
         staff_id = int(STAFF_ROLE_ID or 0) if STAFF_ROLE_ID else 0
+        stoner_id = int(STONER_ROLE_ID or 0) if STONER_ROLE_ID else 0
+        drunken_id = int(DRUNKEN_ROLE_ID or 0) if DRUNKEN_ROLE_ID else 0
 
         if not uv_id:
             print("⚠️ [VERIFY] UNVERIFIED_ROLE_ID missing or invalid.")
@@ -2270,6 +2396,14 @@ async def _ensure_unverified_on_join(member: discord.Member) -> bool:
 
                 if staff_id and _member_has_role_id(fresh_member, staff_id):
                     print(f"ℹ️ [VERIFY] Skip Unverified for {fresh_member.id}; already has Staff.")
+                    return False
+
+                if stoner_id and _member_has_role_id(fresh_member, stoner_id):
+                    print(f"ℹ️ [VERIFY] Skip Unverified for {fresh_member.id}; already has Stoner.")
+                    return False
+
+                if drunken_id and _member_has_role_id(fresh_member, drunken_id):
+                    print(f"ℹ️ [VERIFY] Skip Unverified for {fresh_member.id}; already has Drunken.")
                     return False
 
                 if _member_has_role_id(fresh_member, uv_id):
@@ -2445,6 +2579,8 @@ async def _join_verification_watchdog(guild_id: int, member_id: int) -> None:
                 has_unverified = False
                 has_staff = False
                 has_resident = False
+                has_stoner = False
+                has_drunken = False
 
                 try:
                     if VERIFIED_ROLE_ID:
@@ -2465,12 +2601,24 @@ async def _join_verification_watchdog(guild_id: int, member_id: int) -> None:
                     pass
 
                 try:
+                    if STONER_ROLE_ID:
+                        has_stoner = _member_has_role_id(member, int(STONER_ROLE_ID))
+                except Exception:
+                    pass
+
+                try:
+                    if DRUNKEN_ROLE_ID:
+                        has_drunken = _member_has_role_id(member, int(DRUNKEN_ROLE_ID))
+                except Exception:
+                    pass
+
+                try:
                     if UNVERIFIED_ROLE_ID:
                         has_unverified = _member_has_role_id(member, int(UNVERIFIED_ROLE_ID))
                 except Exception:
                     pass
 
-                if not has_verified and not has_staff and not has_resident and not has_unverified:
+                if not has_verified and not has_staff and not has_resident and not has_stoner and not has_drunken and not has_unverified:
                     try:
                         added = await _ensure_unverified_on_join(member)
                         if added:
@@ -2498,11 +2646,11 @@ async def _join_verification_watchdog(guild_id: int, member_id: int) -> None:
                         )
 
                 try:
-                    await _sync_member_to_supabase(member, in_guild=True)
+                    await _new_sync_member_safe(member, in_guild=True)
                 except Exception:
                     pass
 
-                if has_verified or has_staff or has_resident or has_unverified:
+                if has_verified or has_staff or has_resident or has_stoner or has_drunken or has_unverified:
                     return
 
                 await asyncio.sleep(3.0)
@@ -2699,8 +2847,9 @@ async def on_member_join(member: discord.Member):
         if target_ch:
             await target_ch.send(embed=embed, view=build_quick_mod_view(member.id))
 
+        ensured_unverified = False
         try:
-            await _ensure_unverified_on_join(member)
+            ensured_unverified = await _ensure_unverified_on_join(member)
         except Exception as e:
             print("⚠️ _ensure_unverified_on_join wrapper error:", e)
             try:
@@ -2715,7 +2864,7 @@ async def on_member_join(member: discord.Member):
             print(f"⚠️ Failed to schedule join verification watchdog for {member.id}: {repr(e)}")
 
         try:
-            await _sync_member_to_supabase(
+            await _new_sync_member_safe(
                 member,
                 in_guild=True,
                 risk_profile=risk_profile,
@@ -2830,7 +2979,7 @@ async def on_member_remove(member: discord.Member):
                 pass
 
             try:
-                await _mark_member_left(member)
+                await _new_mark_member_left_safe(member)
             except Exception:
                 pass
 
@@ -2864,7 +3013,7 @@ async def on_member_remove(member: discord.Member):
 
         if suppress_leave_for_ban:
             try:
-                await _mark_member_left(member)
+                await _new_mark_member_left_safe(member)
             except Exception:
                 pass
 
@@ -2884,7 +3033,7 @@ async def on_member_remove(member: discord.Member):
         await _post_modlog(guild, embed, view=None)
 
         try:
-            await _mark_member_left(member)
+            await _new_mark_member_left_safe(member)
         except Exception:
             pass
 
@@ -2943,7 +3092,7 @@ async def on_member_ban(guild: discord.Guild, user: discord.User):
 
             if isinstance(member_like, discord.Member):
                 try:
-                    await _mark_member_left(member_like)
+                    await _new_mark_member_left_safe(member_like)
                 except Exception:
                     pass
 
@@ -2986,7 +3135,7 @@ async def on_member_update(before: discord.Member, after: discord.Member):
                     ts = _AUTO_UV_REMOVAL_TS.get(key)
                     if ts and (now_utc() - ts).total_seconds() <= 15:
                         try:
-                            await _sync_member_to_supabase(after, in_guild=True)
+                            await _new_sync_member_safe(after, in_guild=True)
                         except Exception:
                             pass
                         return
@@ -3012,12 +3161,16 @@ async def on_member_update(before: discord.Member, after: discord.Member):
                     v_id = int(VERIFIED_ROLE_ID or 0)
                     resident_id = int(RESIDENT_ROLE_ID or 0) if RESIDENT_ROLE_ID else 0
                     staff_id = int(STAFF_ROLE_ID or 0) if STAFF_ROLE_ID else 0
+                    stoner_id = int(STONER_ROLE_ID or 0) if STONER_ROLE_ID else 0
+                    drunken_id = int(DRUNKEN_ROLE_ID or 0) if DRUNKEN_ROLE_ID else 0
 
                     if uv_id:
                         has_unverified = _member_has_role_id(after, uv_id)
                         has_verified = _member_has_role_id(after, v_id) if v_id else False
                         has_resident = _member_has_role_id(after, resident_id) if resident_id else False
                         has_staff = _member_has_role_id(after, staff_id) if staff_id else False
+                        has_stoner = _member_has_role_id(after, stoner_id) if stoner_id else False
+                        has_drunken = _member_has_role_id(after, drunken_id) if drunken_id else False
 
                         non_default_roles = [r for r in (after.roles or []) if not r.is_default()]
                         has_no_real_roles = len(non_default_roles) == 0
@@ -3028,6 +3181,8 @@ async def on_member_update(before: discord.Member, after: discord.Member):
                             and not has_verified
                             and not has_resident
                             and not has_staff
+                            and not has_stoner
+                            and not has_drunken
                         ):
                             uv_role = guild.get_role(uv_id)
                             if uv_role is not None:
@@ -3095,7 +3250,7 @@ async def on_member_update(before: discord.Member, after: discord.Member):
             print("⚠️ maybe_log_member_update_diff error:", repr(e))
 
         try:
-            await _sync_member_to_supabase(after, in_guild=True)
+            await _new_sync_member_safe(after, in_guild=True)
         except Exception:
             pass
 
@@ -3152,7 +3307,7 @@ async def on_voice_state_update(
             print("⚠️ maybe_log_voice_state_update error:", repr(e))
 
         try:
-            await _sync_member_to_supabase(member, in_guild=True)
+            await _new_sync_member_safe(member, in_guild=True)
         except Exception as e:
             print("⚠️ voice sync to supabase failed:", repr(e))
 
@@ -3187,17 +3342,18 @@ async def _run_startup_once_flags() -> None:
             except Exception:
                 pass
 
-            async def _run_invite_cache_warm():
-                try:
-                    await _warm_all_guild_invite_caches()
-                except Exception as e:
-                    print("⚠️ invite cache warm error:", e)
+            if not _startup_task_running("_invite_cache_warm_task"):
+                async def _run_invite_cache_warm():
                     try:
-                        traceback.print_exc()
-                    except Exception:
-                        pass
+                        await _warm_all_guild_invite_caches()
+                    except Exception as e:
+                        print("⚠️ invite cache warm error:", e)
+                        try:
+                            traceback.print_exc()
+                        except Exception:
+                            pass
 
-            asyncio.create_task(_run_invite_cache_warm())
+                _assign_startup_task("_invite_cache_warm_task", _run_invite_cache_warm())
 
         if not getattr(bot, "_initial_member_sync_started", False):  # type: ignore[attr-defined]
             try:
@@ -3205,21 +3361,22 @@ async def _run_startup_once_flags() -> None:
             except Exception:
                 pass
 
-            async def _run_startup_member_sync():
-                try:
-                    await _initial_member_sync_sweep()
+            if not _startup_task_running("_initial_member_sync_task"):
+                async def _run_startup_member_sync():
                     try:
-                        bot._initial_member_sync_done = True  # type: ignore[attr-defined]
-                    except Exception:
-                        pass
-                except Exception as e:
-                    print("⚠️ background initial member sync error:", e)
-                    try:
-                        traceback.print_exc()
-                    except Exception:
-                        pass
+                        await _initial_member_sync_sweep()
+                        try:
+                            bot._initial_member_sync_done = True  # type: ignore[attr-defined]
+                        except Exception:
+                            pass
+                    except Exception as e:
+                        print("⚠️ background initial member sync error:", e)
+                        try:
+                            traceback.print_exc()
+                        except Exception:
+                            pass
 
-            asyncio.create_task(_run_startup_member_sync())
+                _assign_startup_task("_initial_member_sync_task", _run_startup_member_sync())
 
         if not getattr(bot, "_stale_verification_reconcile_started", False):  # type: ignore[attr-defined]
             try:
@@ -3227,17 +3384,28 @@ async def _run_startup_once_flags() -> None:
             except Exception:
                 pass
 
-            async def _run_stale_verification_reconcile():
-                try:
-                    await _reconcile_stale_open_verification_tickets()
-                except Exception as e:
-                    print("⚠️ stale verification reconciliation error:", e)
+            if not _startup_task_running("_stale_verification_reconcile_task"):
+                async def _run_stale_verification_reconcile():
                     try:
-                        traceback.print_exc()
-                    except Exception:
-                        pass
+                        await _reconcile_stale_open_verification_tickets()
+                    except Exception as e:
+                        print("⚠️ stale verification reconciliation error:", e)
+                        try:
+                            traceback.print_exc()
+                        except Exception:
+                            pass
 
-            asyncio.create_task(_run_stale_verification_reconcile())
+                _assign_startup_task("_stale_verification_reconcile_task", _run_stale_verification_reconcile())
+
+        try:
+            if callable(new_run_departed_reconciliation_for_guild):
+                for guild in list(getattr(bot, "guilds", []) or []):
+                    try:
+                        await new_run_departed_reconciliation_for_guild(guild)
+                    except Exception:
+                        continue
+        except Exception:
+            pass
 
         try:
             started = await ensure_channel_cleanup_worker_started()
@@ -3251,19 +3419,20 @@ async def _run_startup_once_flags() -> None:
 @bot.event
 async def on_ready():
     try:
-        if getattr(bot, "_vc_sweeper_task", None) and not bot._vc_sweeper_task.done():  # type: ignore[attr-defined]
-            await _run_startup_once_flags()
-            return
-    except Exception:
-        pass
+        if not _startup_task_running("_vc_sweeper_task"):
+            try:
+                task = asyncio.create_task(vc_sweeper_loop(bot))
+                try:
+                    bot._vc_sweeper_task = task  # type: ignore[attr-defined]
+                except Exception:
+                    pass
+            except Exception:
+                pass
 
-    try:
-        task = asyncio.create_task(vc_sweeper_loop(bot))
+        await _run_startup_once_flags()
+    except Exception as e:
+        print("⚠️ on_ready error:", repr(e))
         try:
-            bot._vc_sweeper_task = task  # type: ignore[attr-defined]
+            traceback.print_exc()
         except Exception:
             pass
-    except Exception:
-        pass
-
-    await _run_startup_once_flags()
