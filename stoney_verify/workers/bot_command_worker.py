@@ -29,6 +29,12 @@ from ..transcripts import (
     post_or_replace_verification_staff_panel,
 )
 
+# NEW verification service parity layer
+from ..verification_new.service import (
+    approve_verification,
+    deny_verification,
+)
+
 POLL_INTERVAL = 3
 COMMAND_STALE_PROCESSING_SECONDS = 300
 
@@ -773,54 +779,6 @@ async def _persist_assigned_ticket(
     )
 
 
-async def _add_roles(
-    member: discord.Member,
-    roles: List[discord.Role],
-    reason: str,
-) -> List[int]:
-    added_ids: List[int] = []
-    if not roles:
-        return added_ids
-
-    for role in roles:
-        if role is None:
-            continue
-        try:
-            if role not in member.roles:
-                await member.add_roles(role, reason=reason)
-                added_ids.append(int(role.id))
-        except Exception as e:
-            print(
-                f"⚠️ Failed adding role {getattr(role, 'id', '?')} "
-                f"to {member.id}: {repr(e)}"
-            )
-    return added_ids
-
-
-async def _remove_roles(
-    member: discord.Member,
-    roles: List[discord.Role],
-    reason: str,
-) -> List[int]:
-    removed_ids: List[int] = []
-    if not roles:
-        return removed_ids
-
-    for role in roles:
-        if role is None:
-            continue
-        try:
-            if role in member.roles:
-                await member.remove_roles(role, reason=reason)
-                removed_ids.append(int(role.id))
-        except Exception as e:
-            print(
-                f"⚠️ Failed removing role {getattr(role, 'id', '?')} "
-                f"from {member.id}: {repr(e)}"
-            )
-    return removed_ids
-
-
 async def _record_verification_context(
     *,
     guild_id: str,
@@ -877,6 +835,47 @@ async def _record_verification_context(
         approved_by_name=approved_by_name,
         source_ticket_id=source_ticket_id,
         join_note=entry_reason or approval_reason,
+    )
+
+
+async def _safe_send_channel_message(channel: Optional[discord.abc.Messageable], content: str) -> None:
+    try:
+        if channel is not None:
+            await channel.send(content)
+    except Exception:
+        pass
+
+
+async def _log_verification_note_and_event(
+    *,
+    ticket_id: Optional[str],
+    guild_id: str,
+    user_id: str,
+    actor_id: Optional[str],
+    actor_name: Optional[str],
+    note: Optional[str],
+    event_type: str,
+    title: str,
+    reason: Optional[str],
+    metadata: Optional[Dict[str, Any]] = None,
+) -> None:
+    if ticket_id:
+        await insert_ticket_note(
+            ticket_id=ticket_id,
+            staff_id=actor_id,
+            staff_name=actor_name,
+            content=note or title,
+        )
+
+    await insert_member_event(
+        guild_id=guild_id,
+        user_id=user_id,
+        actor_id=actor_id,
+        actor_name=actor_name,
+        event_type=event_type,
+        title=title,
+        reason=reason,
+        metadata=metadata or {},
     )
 
 
@@ -1371,7 +1370,6 @@ async def execute_command(cmd: Dict[str, Any]):
         staff_id = _safe_str(payload.get("staff_id"))
         staff_name = _safe_str(payload.get("staff_name")) or "Dashboard Staff"
         reason = _safe_str(payload.get("reason")) or "Approved by staff review"
-        extra_role_id = _safe_int(payload.get("role_id"))
 
         invited_by = _safe_str(payload.get("invited_by")) or None
         invited_by_name = _safe_str(payload.get("invited_by_name")) or None
@@ -1388,11 +1386,11 @@ async def execute_command(cmd: Dict[str, Any]):
 
         member = guild.get_member(user_id)
         channel = await safe_fetch_channel(guild, channel_id) if channel_id else None
+        staff_member = guild.get_member(_safe_int(staff_id)) if staff_id else None
 
         if member is None:
             return {"approved": False, "reason": "member_missing", "user_id": str(user_id)}
 
-        # HARD STOP: never approve again if the member already has real verified access.
         if _member_already_verified(member):
             if ticket_id:
                 await insert_ticket_note(
@@ -1426,30 +1424,128 @@ async def execute_command(cmd: Dict[str, Any]):
                 "ticket_id": ticket_id or None,
             }
 
-        verified_role = guild.get_role(_get_verified_role_id()) if _get_verified_role_id() > 0 else None
-        unverified_role = guild.get_role(_get_unverified_role_id()) if _get_unverified_role_id() > 0 else None
-        resident_role = guild.get_role(_get_resident_role_id()) if _get_resident_role_id() > 0 else None
-        extra_role = guild.get_role(extra_role_id) if extra_role_id > 0 else None
+        service_result = await approve_verification(
+            guild=guild,
+            channel=channel if isinstance(channel, discord.TextChannel) else None,
+            token=_safe_str(payload.get("token")),
+            staff_member=staff_member if isinstance(staff_member, discord.Member) else None,  # type: ignore[arg-type]
+            decision_text="APPROVED",
+            close_after=True,
+            owner=member,
+        ) if isinstance(staff_member, discord.Member) and _safe_str(payload.get("token")) else None
 
-        added = await _add_roles(
-            member,
-            [r for r in [verified_role, resident_role, extra_role] if r is not None],
-            reason=f"Verification approved by {staff_name} ({staff_id})",
-        )
-        removed = await _remove_roles(
-            member,
-            [r for r in [unverified_role] if r is not None],
-            reason=f"Verification approved by {staff_name} ({staff_id})",
-        )
+        if service_result and service_result.get("already_verified"):
+            if ticket_id:
+                await insert_ticket_note(
+                    ticket_id=ticket_id,
+                    staff_id=staff_id,
+                    staff_name=staff_name,
+                    content=(
+                        f"Duplicate approval blocked.\n"
+                        f"Member: {username} ({member.id})\n"
+                        f"Reason: verification service detected already-verified state."
+                    ),
+                )
+                await update_ticket_by_id(
+                    ticket_id,
+                    {
+                        "status": "closed",
+                        "closed_reason": "Duplicate approval blocked: already verified",
+                        "closed_by": staff_id or None,
+                        "claimed_by": staff_id or None,
+                        "assigned_to": staff_id or None,
+                        "closed_at": now_iso(),
+                    },
+                )
+
+            return {
+                "approved": False,
+                "skipped": True,
+                "already_verified": True,
+                "reason": "member_already_verified",
+                "user_id": str(member.id),
+                "ticket_id": ticket_id or None,
+            }
+
+        if service_result and not service_result.get("ok"):
+            if ticket_id:
+                await insert_ticket_note(
+                    ticket_id=ticket_id,
+                    staff_id=staff_id,
+                    staff_name=staff_name,
+                    content=(
+                        "Verification approval failed.\n"
+                        f"Member: {username} ({member.id})\n"
+                        f"Reason: {_safe_str(service_result.get('message')) or reason}"
+                    ),
+                )
+
+            return {
+                "approved": False,
+                "reason": _safe_str(service_result.get("message")) or "approval_failed",
+                "user_id": str(member.id),
+                "ticket_id": ticket_id or None,
+            }
+
+        added_role_ids: List[str] = []
+        removed_role_ids: List[str] = []
+
+        if service_result and service_result.get("ok"):
+            added_role_ids = [
+                str(getattr(role, "id", role))
+                for role in (service_result.get("roles") or [])
+            ]
+        else:
+            # Fallback parity path if no token/service route is available
+            verified_role = guild.get_role(_get_verified_role_id()) if _get_verified_role_id() > 0 else None
+            resident_role = guild.get_role(_get_resident_role_id()) if _get_resident_role_id() > 0 else None
+            unverified_role = guild.get_role(_get_unverified_role_id()) if _get_unverified_role_id() > 0 else None
+
+            added = []
+            if verified_role is not None and verified_role not in member.roles:
+                try:
+                    await member.add_roles(
+                        verified_role,
+                        reason=f"Verification approved by {staff_name} ({staff_id})",
+                    )
+                    added.append(int(verified_role.id))
+                except Exception as e:
+                    return {
+                        "approved": False,
+                        "reason": f"failed_add_verified_role:{repr(e)}",
+                        "user_id": str(member.id),
+                        "ticket_id": ticket_id or None,
+                    }
+
+            if resident_role is not None and resident_role not in member.roles:
+                try:
+                    await member.add_roles(
+                        resident_role,
+                        reason=f"Verification approved by {staff_name} ({staff_id})",
+                    )
+                    added.append(int(resident_role.id))
+                except Exception:
+                    pass
+
+            removed = []
+            if unverified_role is not None and unverified_role in member.roles:
+                try:
+                    await member.remove_roles(
+                        unverified_role,
+                        reason=f"Verification approved by {staff_name} ({staff_id})",
+                    )
+                    removed.append(int(unverified_role.id))
+                except Exception:
+                    pass
+
+            added_role_ids = [str(x) for x in added]
+            removed_role_ids = [str(x) for x in removed]
 
         if channel is not None:
-            try:
-                await channel.send(
-                    f"✅ {member.mention} was approved by **{staff_name}**.\n"
-                    f"Reason: {reason}"
-                )
-            except Exception:
-                pass
+            await _safe_send_channel_message(
+                channel,
+                f"✅ {member.mention} was approved by **{staff_name}**.\nReason: {reason}",
+            )
 
         if ticket_id:
             await insert_ticket_note(
@@ -1460,8 +1556,8 @@ async def execute_command(cmd: Dict[str, Any]):
                     f"Verification approved.\n"
                     f"Member: {username} ({member.id})\n"
                     f"Reason: {reason}\n"
-                    f"Added roles: {added or []}\n"
-                    f"Removed roles: {removed or []}"
+                    f"Added roles: {added_role_ids or []}\n"
+                    f"Removed roles: {removed_role_ids or []}"
                 ),
             )
             await update_ticket_by_id(
@@ -1508,8 +1604,8 @@ async def execute_command(cmd: Dict[str, Any]):
             metadata={
                 "ticket_id": ticket_id or None,
                 "channel_id": str(channel_id) if channel_id else None,
-                "added_role_ids": [str(x) for x in added],
-                "removed_role_ids": [str(x) for x in removed],
+                "added_role_ids": added_role_ids,
+                "removed_role_ids": removed_role_ids,
                 "invited_by": invited_by,
                 "invited_by_name": invited_by_name,
                 "invite_code": invite_code,
@@ -1524,9 +1620,10 @@ async def execute_command(cmd: Dict[str, Any]):
         return {
             "approved": True,
             "user_id": str(member.id),
-            "added_role_ids": [str(x) for x in added],
-            "removed_role_ids": [str(x) for x in removed],
+            "added_role_ids": added_role_ids,
+            "removed_role_ids": removed_role_ids,
             "ticket_id": ticket_id or None,
+            "service_used": bool(service_result is not None),
         }
 
     if action == "deny_verification":
@@ -1550,16 +1647,43 @@ async def execute_command(cmd: Dict[str, Any]):
 
         member = guild.get_member(user_id)
         channel = await safe_fetch_channel(guild, channel_id) if channel_id else None
+        staff_member = guild.get_member(_safe_int(staff_id)) if staff_id else None
+
+        service_result = await deny_verification(
+            guild=guild,
+            channel=channel if isinstance(channel, discord.TextChannel) else None,
+            token=_safe_str(payload.get("token")),
+            staff_member=staff_member if isinstance(staff_member, discord.Member) else None,  # type: ignore[arg-type]
+            decision_text="DENIED",
+            close_after=True,
+        ) if isinstance(staff_member, discord.Member) and _safe_str(payload.get("token")) else None
+
+        if service_result and not service_result.get("ok"):
+            if ticket_id:
+                await insert_ticket_note(
+                    ticket_id=ticket_id,
+                    staff_id=staff_id,
+                    staff_name=staff_name,
+                    content=(
+                        "Verification denial failed.\n"
+                        f"Member: {user_id}\n"
+                        f"Reason: {_safe_str(service_result.get('message')) or reason}"
+                    ),
+                )
+
+            return {
+                "denied": False,
+                "reason": _safe_str(service_result.get("message")) or "deny_failed",
+                "user_id": str(user_id),
+                "ticket_id": ticket_id or None,
+            }
 
         if channel is not None:
-            try:
-                target = member.mention if member is not None else f"`{user_id}`"
-                await channel.send(
-                    f"❌ Verification denied for {target} by **{staff_name}**.\n"
-                    f"Reason: {reason}"
-                )
-            except Exception:
-                pass
+            target = member.mention if member is not None else f"`{user_id}`"
+            await _safe_send_channel_message(
+                channel,
+                f"❌ Verification denied for {target} by **{staff_name}**.\nReason: {reason}",
+            )
 
         if ticket_id:
             await insert_ticket_note(
@@ -1611,6 +1735,7 @@ async def execute_command(cmd: Dict[str, Any]):
             "user_id": str(user_id),
             "ticket_id": ticket_id or None,
             "reason_text": reason,
+            "service_used": bool(service_result is not None),
         }
 
     if action == "remove_unverified_role":
@@ -1624,12 +1749,44 @@ async def execute_command(cmd: Dict[str, Any]):
         if member is None:
             return {"removed": False, "reason": "member_missing", "user_id": str(user_id)}
 
+        if _member_already_verified(member):
+            if ticket_id:
+                await insert_ticket_note(
+                    ticket_id=ticket_id,
+                    staff_id=staff_id,
+                    staff_name=staff_name,
+                    content=(
+                        f"Skipped removing Unverified.\n"
+                        f"Member: {member.id}\n"
+                        f"Reason: member already appears fully verified."
+                    ),
+                )
+
+            return {
+                "removed": False,
+                "skipped": True,
+                "reason": "member_already_verified",
+                "user_id": str(member.id),
+                "ticket_id": ticket_id or None,
+            }
+
         unverified_role = guild.get_role(_get_unverified_role_id()) if _get_unverified_role_id() > 0 else None
-        removed = await _remove_roles(
-            member,
-            [r for r in [unverified_role] if r is not None],
-            reason=f"{reason} by {staff_name} ({staff_id})",
-        )
+        removed: List[int] = []
+
+        if unverified_role is not None and unverified_role in member.roles:
+            try:
+                await member.remove_roles(
+                    unverified_role,
+                    reason=f"{reason} by {staff_name} ({staff_id})",
+                )
+                removed.append(int(unverified_role.id))
+            except Exception as e:
+                return {
+                    "removed": False,
+                    "reason": f"failed_remove_unverified:{repr(e)}",
+                    "user_id": str(member.id),
+                    "ticket_id": ticket_id or None,
+                }
 
         if ticket_id:
             await insert_ticket_note(
