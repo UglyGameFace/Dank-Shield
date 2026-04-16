@@ -369,6 +369,14 @@ def _nonempty_ticket_patch(payload: Dict[str, Any]) -> bool:
     return any(k != "updated_at" for k in payload.keys())
 
 
+def _result_rows(resp: Any) -> List[Dict[str, Any]]:
+    try:
+        rows = getattr(resp, "data", None) or []
+        return [r for r in rows if isinstance(r, dict)]
+    except Exception:
+        return []
+
+
 # ============================================================
 # Compatibility helpers used elsewhere in the project
 # ============================================================
@@ -1126,7 +1134,7 @@ async def get_ticket_by_id(ticket_id: int | str) -> Optional[Dict[str, Any]]:
 
     try:
         res = await _select_ticket_by_id_async(tid)
-        rows = getattr(res, "data", None) or []
+        rows = _result_rows(res)
         if rows:
             return _normalize_ticket_row(rows[0])
     except Exception as e:
@@ -1145,7 +1153,7 @@ async def get_ticket_by_number(
 
     try:
         res = await _select_ticket_by_number_async(gid, int(ticket_number))
-        rows = getattr(res, "data", None) or []
+        rows = _result_rows(res)
         if rows:
             return _normalize_ticket_row(rows[0])
     except Exception as e:
@@ -1160,7 +1168,7 @@ async def get_ticket_by_channel_id(channel_id: int | str) -> Optional[Dict[str, 
 
     try:
         res = await _select_ticket_by_channel_id_async(cid)
-        rows = getattr(res, "data", None) or []
+        rows = _result_rows(res)
         if rows:
             return _normalize_ticket_row(rows[0])
     except Exception as e:
@@ -1175,7 +1183,7 @@ async def get_ticket_by_any_channel_id(channel_id: int | str) -> Optional[Dict[s
 
     try:
         res = await _select_ticket_by_any_channel_id_async(cid)
-        rows = getattr(res, "data", None) or []
+        rows = _result_rows(res)
         if rows:
             return _normalize_ticket_row(rows[0])
     except Exception as e:
@@ -1201,7 +1209,7 @@ async def find_open_ticket_for_owner(
 
     try:
         res = await _select_open_ticket_for_owner_async(gid, oid, category, statuses)
-        rows = getattr(res, "data", None) or []
+        rows = _result_rows(res)
         if rows:
             return _normalize_ticket_row(rows[0])
     except Exception as e:
@@ -1221,7 +1229,7 @@ async def list_open_tickets_for_guild(
 
     try:
         res = await _select_open_tickets_for_guild_async(gid, category, statuses)
-        rows = getattr(res, "data", None) or []
+        rows = _result_rows(res)
         out: List[Dict[str, Any]] = []
         for row in rows:
             norm = _normalize_ticket_row(row)
@@ -1248,7 +1256,7 @@ async def list_tickets_for_owner(
 
     try:
         res = await _select_tickets_for_owner_async(gid, oid, max_limit)
-        rows = getattr(res, "data", None) or []
+        rows = _result_rows(res)
         out: List[Dict[str, Any]] = []
         for row in rows:
             norm = _normalize_ticket_row(row)
@@ -1275,7 +1283,7 @@ async def insert_ticket(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
             payload=clean,
             writer=_insert_ticket_sync,
         )
-        rows = getattr(res, "data", None) or []
+        rows = _result_rows(res)
         if rows:
             return _normalize_ticket_row(rows[0])
     except Exception as e:
@@ -1289,9 +1297,11 @@ async def upsert_ticket(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     clean.setdefault("created_at", _now_iso())
 
     channel_id = _as_str_id(clean.get("channel_id"))
-    fallback_lookup_id = channel_id or _as_str_id(clean.get("discord_thread_id"))
+    thread_id = _as_str_id(clean.get("discord_thread_id"))
+    fallback_lookup_id = channel_id or thread_id
 
     try:
+        # Fast path: channel_id-backed upsert
         if channel_id:
             try:
                 res = await _write_ticket_with_optional_fallback(
@@ -1299,7 +1309,7 @@ async def upsert_ticket(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
                     payload=clean,
                     writer=_upsert_ticket_sync,
                 )
-                rows = getattr(res, "data", None) or []
+                rows = _result_rows(res)
                 if rows:
                     return _normalize_ticket_row(rows[0])
 
@@ -1309,10 +1319,12 @@ async def upsert_ticket(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
             except Exception as upsert_error:
                 print(f"⚠️ repository.upsert_ticket direct upsert fallback: {repr(upsert_error)}")
 
+        # Locate existing row by either channel_id or discord_thread_id
         existing = None
         if fallback_lookup_id:
             existing = await get_ticket_by_any_channel_id(fallback_lookup_id)
 
+        # If row exists already, patch by id instead of guessing another insert
         if existing and existing.get("id") is not None:
             ticket_id = str(existing["id"])
             patch = _clean_ticket_payload(clean, include_created_at=False)
@@ -1323,7 +1335,7 @@ async def upsert_ticket(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
                 payload=patch,
                 writer=lambda p: _update_ticket_by_id_sync(ticket_id, p),
             )
-            rows = getattr(res, "data", None) or []
+            rows = _result_rows(res)
             if rows:
                 return _normalize_ticket_row(rows[0])
             return await get_ticket_by_id(ticket_id)
@@ -1503,7 +1515,7 @@ async def update_ticket_by_channel_id(
                 payload=clean,
                 writer=lambda p: _update_ticket_by_id_sync(ticket_id, p),
             )
-            rows = getattr(res, "data", None) or []
+            rows = _result_rows(res)
             if rows:
                 return _normalize_ticket_row(rows[0])
             return await get_ticket_by_id(ticket_id)
@@ -1518,7 +1530,7 @@ async def update_ticket_by_channel_id(
             payload=clean,
             writer=lambda p: writer(cid, p),
         )
-        rows = getattr(res, "data", None) or []
+        rows = _result_rows(res)
         if rows:
             return _normalize_ticket_row(rows[0])
 
@@ -1543,21 +1555,21 @@ async def safe_optional_update_by_channel_id(
             return True
 
         row = await get_ticket_by_any_channel_id(cid)
-        if row and row.get("id") is not None:
-            ticket_id = str(row["id"])
-            await _write_ticket_with_optional_fallback(
-                op_name="safe optional update by located id",
-                payload=clean,
-                writer=lambda p: _update_ticket_by_id_sync(ticket_id, p),
-            )
+        if not row or row.get("id") is None:
+            return False
+
+        ticket_id = str(row["id"])
+        res = await _write_ticket_with_optional_fallback(
+            op_name="safe optional update by located id",
+            payload=clean,
+            writer=lambda p: _update_ticket_by_id_sync(ticket_id, p),
+        )
+        rows = _result_rows(res)
+        if rows:
             return True
 
-        await _write_ticket_with_optional_fallback(
-            op_name="safe optional update by channel id",
-            payload=clean,
-            writer=lambda p: _update_ticket_by_any_channel_id_sync(cid, p),
-        )
-        return True
+        refreshed = await get_ticket_by_id(ticket_id)
+        return refreshed is not None
 
     except Exception as e:
         print(f"⚠️ repository.safe_optional_update_by_channel_id failed: {repr(e)}")
@@ -1621,12 +1633,14 @@ async def attach_transcript_to_ticket(
     transcript_channel_id: Optional[int | str],
 ) -> bool:
     existing = await get_ticket_by_any_channel_id(channel_id)
-    if existing:
-        same_url = _clean_text(existing.get("transcript_url")) == _clean_text(transcript_url)
-        same_msg = _as_str_id(existing.get("transcript_message_id")) == _as_str_id(transcript_message_id)
-        same_ch = _as_str_id(existing.get("transcript_channel_id")) == _as_str_id(transcript_channel_id)
-        if same_url and same_msg and same_ch:
-            return True
+    if not existing:
+        return False
+
+    same_url = _clean_text(existing.get("transcript_url")) == _clean_text(transcript_url)
+    same_msg = _as_str_id(existing.get("transcript_message_id")) == _as_str_id(transcript_message_id)
+    same_ch = _as_str_id(existing.get("transcript_channel_id")) == _as_str_id(transcript_channel_id)
+    if same_url and same_msg and same_ch:
+        return True
 
     return await safe_optional_update_by_channel_id(
         channel_id,
@@ -1814,13 +1828,14 @@ async def set_ticket_priority(
     if not clean_priority:
         return False
 
+    normalized_priority = clean_priority.lower()
     existing = await get_ticket_by_any_channel_id(channel_id)
-    if existing and _clean_text(existing.get("priority")) == clean_priority.lower():
+    if existing and _clean_text(existing.get("priority")) == normalized_priority:
         return True
 
     row = await update_ticket_by_channel_id(
         channel_id,
-        {"priority": clean_priority.lower()},
+        {"priority": normalized_priority},
         allow_thread_fallback=True,
     )
     return row is not None
@@ -1837,8 +1852,8 @@ async def delete_ticket_row(channel_id: int | str) -> bool:
             await _delete_ticket_row_by_id_async(str(row["id"]))
             return True
 
-        await _delete_ticket_row_by_channel_id_async(cid)
-        return True
+        # no row exists to delete
+        return False
     except Exception as e:
         print(f"⚠️ repository.delete_ticket_row failed: {repr(e)}")
         return False
@@ -2067,13 +2082,12 @@ async def list_internal_notes(
                 f"list ticket notes channel={channel_id}",
                 _read_ticket_notes_sync,
             )
-            rows = getattr(resp, "data", None) or []
+            rows = _result_rows(resp)
             _TICKET_NOTES_BACKEND = TICKET_NOTES_TABLE
 
             out: List[Dict[str, Any]] = []
             for item in rows:
-                if isinstance(item, dict):
-                    out.append(_normalize_ticket_notes_row(item))
+                out.append(_normalize_ticket_notes_row(item))
             return out
 
         except Exception as e:
@@ -2093,13 +2107,12 @@ async def list_internal_notes(
                         f"list compat ticket notes channel={channel_id}",
                         _read_ticket_notes_compat_sync,
                     )
-                    rows = getattr(resp, "data", None) or []
+                    rows = _result_rows(resp)
                     _TICKET_NOTES_BACKEND = TICKET_NOTES_TABLE
 
                     out: List[Dict[str, Any]] = []
                     for item in rows:
-                        if isinstance(item, dict):
-                            out.append(_normalize_ticket_notes_row(item))
+                        out.append(_normalize_ticket_notes_row(item))
                     out.sort(
                         key=lambda r: (
                             not bool(r.get("is_pinned", False)),
@@ -2144,13 +2157,12 @@ async def list_internal_notes(
                 f"list legacy internal notes channel={channel_id}",
                 _read_legacy_notes_sync,
             )
-            rows = getattr(resp, "data", None) or []
+            rows = _result_rows(resp)
             _TICKET_NOTES_BACKEND = legacy_table
 
             out: List[Dict[str, Any]] = []
             for item in rows:
-                if isinstance(item, dict):
-                    out.append(_normalize_legacy_internal_note_row(item))
+                out.append(_normalize_legacy_internal_note_row(item))
             return out
 
         except Exception as e:
@@ -2228,7 +2240,7 @@ async def add_ticket_message(
             f"insert ticket message channel={channel_id}",
             _insert_message_sync,
         )
-        rows = getattr(resp, "data", None) or []
+        rows = _result_rows(resp)
         if rows:
             normalized = _normalize_ticket_message_row(rows[0])
             await touch_ticket(
@@ -2273,11 +2285,10 @@ async def list_ticket_messages(
             f"list ticket messages channel={channel_id}",
             _read_messages_sync,
         )
-        rows = getattr(resp, "data", None) or []
+        rows = _result_rows(resp)
         out: List[Dict[str, Any]] = []
         for item in rows:
-            if isinstance(item, dict):
-                out.append(_normalize_ticket_message_row(item))
+            out.append(_normalize_ticket_message_row(item))
         return out
     except Exception as e:
         print(f"⚠️ repository.list_ticket_messages failed: {repr(e)}")
@@ -2380,10 +2391,10 @@ async def insert_activity_event(
                 return sb.table(ACTIVITY_FEED_EVENTS_TABLE).insert(snapshot).execute()
 
             resp = await _run_db_op("insert activity event", _insert_event_sync)
-            rows = getattr(resp, "data", None) or []
-            if rows and isinstance(rows[0], dict):
+            rows = _result_rows(resp)
+            if rows:
                 return _normalize_activity_feed_row(rows[0])
-            return {}
+            return None
         except Exception as e:
             removed: List[str] = []
             for col in list(snapshot.keys()):
@@ -2445,11 +2456,10 @@ async def list_ticket_activity_events(
             "list ticket activity events",
             _read_events_sync,
         )
-        rows = getattr(resp, "data", None) or []
+        rows = _result_rows(resp)
         out: List[Dict[str, Any]] = []
         for item in rows:
-            if isinstance(item, dict):
-                out.append(_normalize_activity_feed_row(item))
+            out.append(_normalize_activity_feed_row(item))
         return out
     except Exception as e:
         print(f"⚠️ repository.list_ticket_activity_events failed: {repr(e)}")
@@ -2511,10 +2521,10 @@ async def insert_member_join(
                 return sb.table(MEMBER_JOINS_TABLE).insert(snapshot).execute()
 
             resp = await _run_db_op("insert member join", _insert_join_sync)
-            rows = getattr(resp, "data", None) or []
-            if rows and isinstance(rows[0], dict):
+            rows = _result_rows(resp)
+            if rows:
                 return dict(rows[0])
-            return {}
+            return None
 
         except Exception as e:
             err_text = repr(e)
