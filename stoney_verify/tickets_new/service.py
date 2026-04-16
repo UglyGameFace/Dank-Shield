@@ -170,6 +170,23 @@ def _safe_bool(value: Any, default: bool = False) -> bool:
     return default
 
 
+def _safe_opt_text(value: Any) -> Optional[str]:
+    try:
+        text = str(value or "").strip()
+        return text or None
+    except Exception:
+        return None
+
+
+def _safe_opt_int(value: Any) -> Optional[int]:
+    try:
+        if value is None or value == "":
+            return None
+        return int(str(value).strip())
+    except Exception:
+        return None
+
+
 def _sb() -> Any:
     try:
         return get_supabase()
@@ -408,6 +425,30 @@ def _normalize_queue_row(row: Dict[str, Any]) -> Dict[str, Any]:
         out["is_claimed"] = False
 
     return out
+
+
+def _category_metadata_payload(
+    *,
+    matched_category_id: Optional[str] = None,
+    matched_category_name: Optional[str] = None,
+    matched_category_slug: Optional[str] = None,
+    matched_intake_type: Optional[str] = None,
+    matched_category_reason: Optional[str] = None,
+    matched_category_score: Optional[int] = None,
+    category_override: bool = False,
+    category_id: Optional[str] = None,
+) -> Dict[str, Any]:
+    payload: Dict[str, Any] = {
+        "matched_category_id": _safe_opt_text(matched_category_id),
+        "matched_category_name": _safe_opt_text(matched_category_name),
+        "matched_category_slug": _safe_opt_text(matched_category_slug),
+        "matched_intake_type": _safe_opt_text(matched_intake_type),
+        "matched_category_reason": _safe_opt_text(matched_category_reason),
+        "matched_category_score": _safe_opt_int(matched_category_score),
+        "category_override": bool(category_override),
+        "category_id": _safe_opt_text(category_id),
+    }
+    return payload
 
 
 # ============================================================
@@ -1047,6 +1088,14 @@ async def create_ticket_channel(
     staff_role_ids: Optional[list[int]] = None,
     opening_message: Optional[str] = None,
     priority: str = "medium",
+    matched_category_id: Optional[str] = None,
+    matched_category_name: Optional[str] = None,
+    matched_category_slug: Optional[str] = None,
+    matched_intake_type: Optional[str] = None,
+    matched_category_reason: Optional[str] = None,
+    matched_category_score: Optional[int] = None,
+    category_override: bool = False,
+    category_id: Optional[str] = None,
 ) -> Optional[discord.TextChannel]:
     """
     - one open/claimed ticket total per user
@@ -1055,11 +1104,23 @@ async def create_ticket_channel(
     - verification UI only for actual Unverified users
     - close controls posted once
     - cancels pre-ticket verification wait timers as soon as a real ticket exists
+    - preserves matched category metadata from smarter intake routing
     """
     user_lock = _user_ticket_creation_lock(owner.id)
     clean_priority = _safe_str(priority).strip().lower()
     if clean_priority not in _VALID_TICKET_PRIORITIES:
         clean_priority = "medium"
+
+    category_meta = _category_metadata_payload(
+        matched_category_id=matched_category_id,
+        matched_category_name=matched_category_name,
+        matched_category_slug=matched_category_slug,
+        matched_intake_type=matched_intake_type,
+        matched_category_reason=matched_category_reason,
+        matched_category_score=matched_category_score,
+        category_override=category_override,
+        category_id=category_id,
+    )
 
     async with user_lock:
         existing_row = await repo_find_open_ticket_for_owner(
@@ -1098,6 +1159,14 @@ async def create_ticket_channel(
                         assigned_to=existing_row.get("assigned_to"),
                         is_ghost=_safe_bool(existing_row.get("is_ghost"), is_ghost),
                         source=_safe_str(existing_row.get("source") or source),
+                        matched_category_id=_safe_opt_text(existing_row.get("matched_category_id")) or category_meta["matched_category_id"],
+                        matched_category_name=_safe_opt_text(existing_row.get("matched_category_name")) or category_meta["matched_category_name"],
+                        matched_category_slug=_safe_opt_text(existing_row.get("matched_category_slug")) or category_meta["matched_category_slug"],
+                        matched_intake_type=_safe_opt_text(existing_row.get("matched_intake_type")) or category_meta["matched_intake_type"],
+                        matched_category_reason=_safe_opt_text(existing_row.get("matched_category_reason")) or category_meta["matched_category_reason"],
+                        matched_category_score=_safe_opt_int(existing_row.get("matched_category_score")) or category_meta["matched_category_score"],
+                        category_override=bool(existing_row.get("category_override", category_meta["category_override"])),
+                        category_id=_safe_opt_text(existing_row.get("category_id")) or category_meta["category_id"],
                     )
                 except Exception as e:
                     print(f"⚠️ Existing ticket sync failed for {existing_channel.id}: {repr(e)}")
@@ -1132,6 +1201,7 @@ async def create_ticket_channel(
         )
 
         try:
+            await guild.create_text_channel  # sanity
             channel = await guild.create_text_channel(
                 name=channel_name,
                 category=parent,
@@ -1187,6 +1257,14 @@ async def create_ticket_channel(
             ticket_number=ticket_number,
             is_ghost=is_ghost,
             source=source,
+            matched_category_id=category_meta["matched_category_id"],
+            matched_category_name=category_meta["matched_category_name"],
+            matched_category_slug=category_meta["matched_category_slug"],
+            matched_intake_type=category_meta["matched_intake_type"],
+            matched_category_reason=category_meta["matched_category_reason"],
+            matched_category_score=category_meta["matched_category_score"],
+            category_override=bool(category_meta["category_override"]),
+            category_id=category_meta["category_id"],
         )
 
         if inserted is None:
@@ -1194,7 +1272,10 @@ async def create_ticket_channel(
         else:
             print(
                 f"✅ Ticket row inserted/upserted → #{channel.name} ({channel.id}) "
-                f"[ticket_number={ticket_number}]"
+                f"[ticket_number={ticket_number}] category={category!r} "
+                f"matched_slug={category_meta['matched_category_slug']!r} "
+                f"matched_name={category_meta['matched_category_name']!r} "
+                f"matched_score={category_meta['matched_category_score']!r}"
             )
 
         ticket_row = inserted
@@ -1214,6 +1295,14 @@ async def create_ticket_channel(
                     "category": category,
                     "is_ghost": bool(is_ghost),
                     "priority": clean_priority,
+                    "matched_category_id": category_meta["matched_category_id"],
+                    "matched_category_name": category_meta["matched_category_name"],
+                    "matched_category_slug": category_meta["matched_category_slug"],
+                    "matched_intake_type": category_meta["matched_intake_type"],
+                    "matched_category_reason": category_meta["matched_category_reason"],
+                    "matched_category_score": category_meta["matched_category_score"],
+                    "category_override": bool(category_meta["category_override"]),
+                    "category_id": category_meta["category_id"],
                 },
             )
         except Exception as e:
@@ -1239,6 +1328,14 @@ async def sync_existing_ticket_channel(
     status: str = "open",
     priority: str = "medium",
     initial_message: Optional[str] = None,
+    matched_category_id: Optional[str] = None,
+    matched_category_name: Optional[str] = None,
+    matched_category_slug: Optional[str] = None,
+    matched_intake_type: Optional[str] = None,
+    matched_category_reason: Optional[str] = None,
+    matched_category_score: Optional[int] = None,
+    category_override: bool = False,
+    category_id: Optional[str] = None,
 ) -> bool:
     owner_for_row = owner
     if owner_for_row is None:
@@ -1253,6 +1350,17 @@ async def sync_existing_ticket_channel(
     if clean_priority not in _VALID_TICKET_PRIORITIES:
         clean_priority = "medium"
 
+    category_meta = _category_metadata_payload(
+        matched_category_id=matched_category_id,
+        matched_category_name=matched_category_name,
+        matched_category_slug=matched_category_slug,
+        matched_intake_type=matched_intake_type,
+        matched_category_reason=matched_category_reason,
+        matched_category_score=matched_category_score,
+        category_override=category_override,
+        category_id=category_id,
+    )
+
     try:
         row = await repo_sync_ticket_record_from_channel(
             channel=channel,
@@ -1266,6 +1374,14 @@ async def sync_existing_ticket_channel(
             ticket_number=ticket_number,
             is_ghost=is_ghost,
             source=source,
+            matched_category_id=category_meta["matched_category_id"],
+            matched_category_name=category_meta["matched_category_name"],
+            matched_category_slug=category_meta["matched_category_slug"],
+            matched_intake_type=category_meta["matched_intake_type"],
+            matched_category_reason=category_meta["matched_category_reason"],
+            matched_category_score=category_meta["matched_category_score"],
+            category_override=bool(category_meta["category_override"]),
+            category_id=category_meta["category_id"],
         )
         ok = row is not None
     except Exception as e:
@@ -1288,7 +1404,10 @@ async def sync_existing_ticket_channel(
         pass
 
     if ok:
-        print(f"✅ Existing ticket row synced → #{channel.name} ({channel.id})")
+        print(
+            f"✅ Existing ticket row synced → #{channel.name} ({channel.id}) "
+            f"category={category!r} matched_slug={category_meta['matched_category_slug']!r}"
+        )
 
     return ok
 
@@ -1834,8 +1953,6 @@ async def reopen_ticket(
 ) -> bool:
     row_before = await _ticket_row_for_channel_id(channel_id)
 
-    # Service-level reopen should reflect DB state. If already open and unclaimed,
-    # that's a no-op success for the DB layer.
     if row_before and _ticket_status(row_before) == "open" and _ticket_claimed_by_id(row_before) <= 0:
         return True
 
@@ -1872,7 +1989,6 @@ async def reopen_ticket_channel(
     actor: Optional[discord.Member | discord.User] = None,
     reason: Optional[str] = None,
 ) -> bool:
-    # Always repair Discord-side state, even if DB was already open.
     ok = await reopen_ticket(
         channel_id=channel.id,
         actor=actor,
