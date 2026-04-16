@@ -65,10 +65,10 @@ except Exception:
 # Markers / locks
 # ============================================================
 
-_CLOSE_PROMPT_MARKER = "stoney_verify:close_prompt:v4"
-_STAFF_CLOSED_MARKER = "stoney_verify:staff_closed:v4"
-_CLOSE_REOPENED_MARKER = "stoney_verify:ticket_reopened:v3"
-_STAFF_REVIEW_PANEL_MARKER = "stoney_verify:staff_review_panel:v2"
+_CLOSE_PROMPT_MARKER = "stoney_verify:close_prompt:v5"
+_STAFF_CLOSED_MARKER = "stoney_verify:staff_closed:v5"
+_CLOSE_REOPENED_MARKER = "stoney_verify:ticket_reopened:v4"
+_STAFF_REVIEW_PANEL_MARKER = "stoney_verify:staff_review_panel:v3"
 
 _CLOSE_PROMPT_LOCKS: Dict[int, asyncio.Lock] = {}
 _STAFF_REVIEW_PANEL_LOCKS: Dict[int, asyncio.Lock] = {}
@@ -264,6 +264,87 @@ async def _unlock_ticket_for_owner(channel: discord.TextChannel, owner: Optional
         await channel.set_permissions(owner, overwrite=overwrite, reason="Ticket reopened")
     except Exception as e:
         print(f"⚠️ Failed to unlock ticket owner perms: {e}")
+
+
+def _staff_display_name(user: discord.abc.User) -> str:
+    try:
+        return (
+            getattr(user, "display_name", None)
+            or getattr(user, "name", None)
+            or str(user)
+        )
+    except Exception:
+        return "Staff"
+
+
+def _disabled_view_from_existing_message(message: Optional[discord.Message]) -> Optional[discord.ui.View]:
+    if message is None:
+        return None
+
+    try:
+        comps = getattr(message, "components", None) or []
+        if not comps:
+            return None
+
+        view = discord.ui.View(timeout=None)
+
+        for row in comps:
+            for child in (getattr(row, "children", None) or []):
+                try:
+                    style = getattr(child, "style", discord.ButtonStyle.secondary)
+                    label = getattr(child, "label", None)
+                    emoji = getattr(child, "emoji", None)
+                    url = getattr(child, "url", None)
+                    custom_id = getattr(child, "custom_id", None)
+
+                    if url:
+                        item = discord.ui.Button(
+                            label=label,
+                            style=discord.ButtonStyle.link,
+                            emoji=emoji,
+                            url=url,
+                            row=getattr(child, "row", None),
+                            disabled=True,
+                        )
+                    else:
+                        item = discord.ui.Button(
+                            label=label,
+                            style=style,
+                            emoji=emoji,
+                            custom_id=custom_id,
+                            row=getattr(child, "row", None),
+                            disabled=True,
+                        )
+                    view.add_item(item)
+                except Exception:
+                    continue
+
+        return view
+    except Exception:
+        return None
+
+
+async def _freeze_message_controls(
+    message: Optional[discord.Message],
+    *,
+    content_suffix: Optional[str] = None,
+) -> None:
+    if message is None:
+        return
+
+    try:
+        content = message.content or ""
+        if content_suffix:
+            if content_suffix not in content:
+                content = f"{content}\n{content_suffix}" if content else content_suffix
+
+        frozen_view = _disabled_view_from_existing_message(message)
+        await message.edit(content=content, view=frozen_view)
+    except Exception:
+        try:
+            await message.edit(view=None)
+        except Exception:
+            pass
 
 
 # ============================================================
@@ -596,14 +677,10 @@ class VerificationStaffReviewView(discord.ui.View):
         *,
         status_line: str,
     ) -> None:
-        try:
-            if interaction.message:
-                content = interaction.message.content or ""
-                if status_line:
-                    content = f"{content}\n{status_line}" if content else status_line
-                await interaction.message.edit(content=content, view=None)
-        except Exception:
-            pass
+        await _freeze_message_controls(
+            interaction.message,
+            content_suffix=status_line,
+        )
 
     @discord.ui.button(
         label="Approve",
@@ -655,7 +732,7 @@ class VerificationStaffReviewView(discord.ui.View):
         try:
             target = member_obj.mention if isinstance(member_obj, discord.Member) else (f"<@{member_id}>" if member_id else f"`{member_name or 'member'}`")
             await channel.send(
-                f"✅ {target} was approved by **{getattr(interaction.user, 'display_name', None) or getattr(interaction.user, 'name', None) or str(interaction.user)}**.\n"
+                f"✅ {target} was approved by **{_staff_display_name(interaction.user)}**.\n"
                 f"Reason: Approved from Discord staff review panel."
             )
         except Exception:
@@ -706,7 +783,7 @@ class VerificationStaffReviewView(discord.ui.View):
         try:
             target = member_obj.mention if isinstance(member_obj, discord.Member) else (f"<@{member_id}>" if member_id else f"`{member_name or 'member'}`")
             await channel.send(
-                f"❌ Verification denied for {target} by **{getattr(interaction.user, 'display_name', None) or getattr(interaction.user, 'name', None) or str(interaction.user)}**.\n"
+                f"❌ Verification denied for {target} by **{_staff_display_name(interaction.user)}**.\n"
                 f"Reason: Denied from Discord staff review panel."
             )
         except Exception:
@@ -751,11 +828,15 @@ class VerificationStaffReviewView(discord.ui.View):
 
         try:
             await channel.send(
-                f"🧹 Removed **Unverified** from {member_obj.mention} by **{getattr(interaction.user, 'display_name', None) or getattr(interaction.user, 'name', None) or str(interaction.user)}**."
+                f"🧹 Removed **Unverified** from {member_obj.mention} by **{_staff_display_name(interaction.user)}**."
             )
         except Exception:
             pass
 
+        await _freeze_message_controls(
+            interaction.message,
+            content_suffix=f"🧹 Unverified removed by {interaction.user.mention}.",
+        )
         await _reply_ephemeral(interaction, "🧹 Unverified role removed.")
 
     @discord.ui.button(
@@ -932,6 +1013,10 @@ class StaffClosedTicketView(discord.ui.View):
         except Exception:
             pass
 
+        await _freeze_message_controls(
+            interaction.message,
+            content_suffix=f"🔓 Reopened by {interaction.user.mention}.",
+        )
         await _reply_ephemeral(interaction, "✅ Ticket reopened." if reopened else "⚠️ Ticket reopen partially completed.")
 
     @discord.ui.button(
@@ -1062,8 +1147,10 @@ class ConfirmCloseTicketView(discord.ui.View):
             closed = True
 
         try:
-            if interaction.message:
-                await interaction.message.edit(view=None)
+            await _freeze_message_controls(
+                interaction.message,
+                content_suffix="🔒 Ticket close confirmed.",
+            )
         except Exception:
             pass
 
@@ -1094,8 +1181,10 @@ class ConfirmCloseTicketView(discord.ui.View):
             return await _reply_ephemeral(interaction, "❌ Only the ticket owner or staff can do that.")
 
         try:
-            if interaction.message:
-                await interaction.message.edit(content="❎ Ticket close cancelled.", view=None)
+            await _freeze_message_controls(
+                interaction.message,
+                content_suffix="❎ Ticket close cancelled.",
+            )
         except Exception:
             pass
 
