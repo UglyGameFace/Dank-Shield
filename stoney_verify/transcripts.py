@@ -989,6 +989,12 @@ class StaffClosedTicketView(discord.ui.View):
         if not isinstance(channel, discord.TextChannel):
             return await _reply_ephemeral(interaction, "❌ Invalid channel.")
 
+        try:
+            if not interaction.response.is_done():
+                await interaction.response.defer(ephemeral=True)
+        except Exception:
+            pass
+
         owner = await _resolve_ticket_owner(channel)
         reopened = False
 
@@ -1004,20 +1010,40 @@ class StaffClosedTicketView(discord.ui.View):
             reopened = False
 
         if not reopened:
-            await _rename_channel_open(channel)
-            await _unlock_ticket_for_owner(channel, owner)
+            try:
+                await _rename_channel_open(channel)
+            except Exception:
+                pass
+
+            try:
+                await _unlock_ticket_for_owner(channel, owner)
+            except Exception:
+                pass
+
             reopened = True
 
         try:
-            await channel.send(f"🔓 Ticket reopened by {interaction.user.mention}.\n{_CLOSE_REOPENED_MARKER}")
+            await channel.send(
+                f"🔓 Ticket reopened by {interaction.user.mention}.\n{_CLOSE_REOPENED_MARKER}"
+            )
         except Exception:
             pass
 
-        await _freeze_message_controls(
-            interaction.message,
-            content_suffix=f"🔓 Reopened by {interaction.user.mention}.",
-        )
-        await _reply_ephemeral(interaction, "✅ Ticket reopened." if reopened else "⚠️ Ticket reopen partially completed.")
+        try:
+            await _freeze_message_controls(
+                interaction.message,
+                content_suffix=f"🔓 Reopened by {interaction.user.mention}.",
+            )
+        except Exception:
+            pass
+
+        try:
+            await interaction.followup.send(
+                "✅ Ticket reopened." if reopened else "⚠️ Ticket reopen partially completed.",
+                ephemeral=True,
+            )
+        except Exception:
+            pass
 
     @discord.ui.button(
         label="Post Transcript",
@@ -1126,7 +1152,16 @@ class ConfirmCloseTicketView(discord.ui.View):
             return await _reply_ephemeral(interaction, "❌ Invalid channel.")
 
         if not await _user_can_close_ticket(interaction, channel):
-            return await _reply_ephemeral(interaction, "❌ Only the ticket owner or staff can close this ticket.")
+            return await _reply_ephemeral(
+                interaction,
+                "❌ Only the ticket owner or staff can close this ticket.",
+            )
+
+        try:
+            if not interaction.response.is_done():
+                await interaction.response.defer(ephemeral=True)
+        except Exception:
+            pass
 
         owner = await _resolve_ticket_owner(channel)
         closed = False
@@ -1142,8 +1177,16 @@ class ConfirmCloseTicketView(discord.ui.View):
             closed = False
 
         if not closed:
-            await _rename_channel_closed(channel)
-            await _lock_ticket_for_owner(channel, owner)
+            try:
+                await _rename_channel_closed(channel)
+            except Exception:
+                pass
+
+            try:
+                await _lock_ticket_for_owner(channel, owner)
+            except Exception:
+                pass
+
             closed = True
 
         try:
@@ -1159,7 +1202,13 @@ class ConfirmCloseTicketView(discord.ui.View):
         except Exception as e:
             print("⚠️ Failed posting staff-closed message:", e)
 
-        await _reply_ephemeral(interaction, "✅ Ticket closed." if closed else "⚠️ Ticket close partially completed.")
+        try:
+            await interaction.followup.send(
+                "✅ Ticket closed." if closed else "⚠️ Ticket close partially completed.",
+                ephemeral=True,
+            )
+        except Exception:
+            pass
 
     @discord.ui.button(
         label="Cancel",
