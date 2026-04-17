@@ -1,9 +1,8 @@
-        from __future__ import annotations
+from __future__ import annotations
 
-from typing import Optional, Tuple, List
+from typing import Optional
 
 import asyncio
-import re
 
 import discord
 from discord import app_commands
@@ -14,7 +13,14 @@ from ..tickets import find_ticket_owner_retry, is_verification_ticket_channel
 from ..tickets_new.service import find_open_ticket_for_owner
 from ..transcripts import ensure_verify_ui_present
 
-from .common import _staff_check, reply_once
+from .common import (
+    _staff_check,
+    reply_once,
+    require_target_member,
+    resolve_member_any,
+    safe_defer,
+    safe_followup,
+)
 
 try:
     from .vc_flow import _get_vc_channel, _can_manage_channel
@@ -63,167 +69,6 @@ def register_role_admin_commands(bot, tree) -> None:
             return has_unverified
         except Exception:
             return False
-
-    async def _resolve_member_any(guild: discord.Guild, user_id: int) -> Optional[discord.Member]:
-        member = guild.get_member(int(user_id))
-        if member is None:
-            try:
-                member = await guild.fetch_member(int(user_id))
-            except Exception:
-                member = None
-        return member
-
-    def _normalize_lookup_text(value: object) -> str:
-        try:
-            return str(value or "").strip().lower()
-        except Exception:
-            return ""
-
-    def _parse_member_id_from_target(target: str) -> int:
-        text = str(target or "").strip()
-        if not text:
-            return 0
-
-        mention_match = re.search(r"<@!?(\d+)>", text)
-        if mention_match:
-            try:
-                return int(mention_match.group(1))
-            except Exception:
-                return 0
-
-        if text.isdigit():
-            try:
-                return int(text)
-            except Exception:
-                return 0
-
-        return 0
-
-    async def _resolve_member_from_target(
-        guild: discord.Guild,
-        target: str,
-    ) -> Optional[discord.Member]:
-        raw = str(target or "").strip()
-        if not raw:
-            return None
-
-        # mention or raw numeric id
-        user_id = _parse_member_id_from_target(raw)
-        if user_id > 0:
-            member = await _resolve_member_any(guild, user_id)
-            if member is not None:
-                return member
-
-        lowered = _normalize_lookup_text(raw)
-        if not lowered:
-            return None
-
-        # Try cache first
-        try:
-            member_list = list(guild.members or [])
-        except Exception:
-            member_list = []
-
-        def _candidate_strings(member: discord.Member) -> List[str]:
-            vals = [
-                getattr(member, "name", None),
-                getattr(member, "display_name", None),
-                getattr(member, "global_name", None),
-                str(member),
-            ]
-            out: List[str] = []
-            for v in vals:
-                norm = _normalize_lookup_text(v)
-                if norm and norm not in out:
-                    out.append(norm)
-            return out
-
-        # exact match pass
-        for member in member_list:
-            try:
-                if lowered in _candidate_strings(member):
-                    return member
-            except Exception:
-                continue
-
-        # discriminator form exact
-        for member in member_list:
-            try:
-                tag = f"{member.name}#{member.discriminator}" if getattr(member, "discriminator", "0") != "0" else member.name
-                if _normalize_lookup_text(tag) == lowered:
-                    return member
-            except Exception:
-                continue
-
-        # startswith pass
-        startswith_hits: List[discord.Member] = []
-        for member in member_list:
-            try:
-                values = _candidate_strings(member)
-                if any(v.startswith(lowered) for v in values):
-                    startswith_hits.append(member)
-            except Exception:
-                continue
-
-        if len(startswith_hits) == 1:
-            return startswith_hits[0]
-
-        # contains pass
-        contains_hits: List[discord.Member] = []
-        for member in member_list:
-            try:
-                values = _candidate_strings(member)
-                if any(lowered in v for v in values):
-                    contains_hits.append(member)
-            except Exception:
-                continue
-
-        if len(contains_hits) == 1:
-            return contains_hits[0]
-
-        # final attempt: chunk and retry
-        try:
-            await guild.chunk(cache=True)
-            member_list = list(guild.members or [])
-        except Exception:
-            member_list = member_list
-
-        for member in member_list:
-            try:
-                if lowered in _candidate_strings(member):
-                    return member
-            except Exception:
-                continue
-
-        return None
-
-    async def _require_target_member(
-        interaction: discord.Interaction,
-        target: str,
-    ) -> Optional[discord.Member]:
-        guild = interaction.guild
-        if guild is None:
-            await reply_once(
-                interaction,
-                {"content": "❌ This command must be used in a server.", "ephemeral": True},
-            )
-            return None
-
-        member = await _resolve_member_from_target(guild, target)
-        if member is None:
-            await reply_once(
-                interaction,
-                {
-                    "content": (
-                        "❌ I could not resolve that member.\n"
-                        "Use a mention, raw user ID, exact username, or exact display name."
-                    ),
-                    "ephemeral": True,
-                },
-            )
-            return None
-
-        return member
 
     async def _resolve_open_ticket_channel_for_owner(
         guild: discord.Guild,
@@ -406,7 +251,7 @@ def register_role_admin_commands(bot, tree) -> None:
         if not _staff_check(interaction):
             return await interaction.response.send_message("❌ Staff only.", ephemeral=True)
 
-        await interaction.response.defer(ephemeral=True)
+        await safe_defer(interaction, ephemeral=True)
 
         try:
             uv_id = int(UNVERIFIED_ROLE_ID or 0)
@@ -424,21 +269,24 @@ def register_role_admin_commands(bot, tree) -> None:
             staff_id = 0
 
         if not uv_id:
-            return await interaction.followup.send(
+            return await safe_followup(
+                interaction,
                 "❌ UNVERIFIED_ROLE_ID is not set.",
                 ephemeral=True,
             )
 
         guild = interaction.guild
         if not guild:
-            return await interaction.followup.send(
+            return await safe_followup(
+                interaction,
                 "❌ Invalid context (no guild).",
                 ephemeral=True,
             )
 
         uv_role = guild.get_role(int(uv_id))
         if not uv_role:
-            return await interaction.followup.send(
+            return await safe_followup(
+                interaction,
                 f"❌ Role with ID {uv_id} not found.",
                 ephemeral=True,
             )
@@ -448,14 +296,16 @@ def register_role_admin_commands(bot, tree) -> None:
 
         me = guild.me
         if not me or not me.guild_permissions.manage_roles:
-            return await interaction.followup.send(
+            return await safe_followup(
+                interaction,
                 "❌ I lack **Manage Roles** permission.",
                 ephemeral=True,
             )
 
         try:
             if me.top_role <= uv_role and not me.guild_permissions.administrator:
-                return await interaction.followup.send(
+                return await safe_followup(
+                    interaction,
                     "❌ My role is not high enough to assign **Unverified** (role hierarchy).",
                     ephemeral=True,
                 )
@@ -511,7 +361,8 @@ def register_role_admin_commands(bot, tree) -> None:
                 except Exception:
                     pass
 
-        await interaction.followup.send(
+        await safe_followup(
+            interaction,
             "✅ **fix_unverified complete**\n"
             f"- Added Unverified: **{added}**\n"
             f"- Already had Unverified: **{already_ok}**\n"
@@ -549,7 +400,7 @@ def register_role_admin_commands(bot, tree) -> None:
             )
             return
 
-        member = await _require_target_member(interaction, user)
+        member = await require_target_member(interaction, user)
         if member is None:
             return
 
@@ -599,7 +450,7 @@ def register_role_admin_commands(bot, tree) -> None:
             )
             return
 
-        member = await _require_target_member(interaction, user)
+        member = await require_target_member(interaction, user)
         if member is None:
             return
 
@@ -652,11 +503,11 @@ def register_role_admin_commands(bot, tree) -> None:
             return
 
         guild = interaction.guild
-        member = await _require_target_member(interaction, user)
+        member = await require_target_member(interaction, user)
         if member is None:
             return
 
-        await interaction.response.defer(ephemeral=True)
+        await safe_defer(interaction, ephemeral=True)
 
         verified_role = _role_by_id(guild, int(VERIFIED_ROLE_ID or 0))
         resident_role = _role_by_id(guild, int(RESIDENT_ROLE_ID or 0))
@@ -671,14 +522,16 @@ def register_role_admin_commands(bot, tree) -> None:
             missing.append("RESIDENT_ROLE_ID")
 
         if missing:
-            return await interaction.followup.send(
+            return await safe_followup(
+                interaction,
                 f"❌ Missing/invalid role config: {', '.join(missing)}",
                 ephemeral=True,
             )
 
         me = guild.me
         if not me or not me.guild_permissions.manage_roles:
-            return await interaction.followup.send(
+            return await safe_followup(
+                interaction,
                 "❌ I need **Manage Roles** permission.",
                 ephemeral=True,
             )
@@ -694,7 +547,8 @@ def register_role_admin_commands(bot, tree) -> None:
                 continue
             try:
                 if me.top_role <= r and not me.guild_permissions.administrator:
-                    return await interaction.followup.send(
+                    return await safe_followup(
+                        interaction,
                         f"❌ I can’t manage {r.mention} due to **role hierarchy** (move my role above it).",
                         ephemeral=True,
                     )
@@ -730,15 +584,20 @@ def register_role_admin_commands(bot, tree) -> None:
             if drunken and not drunken_role:
                 lines.append("- Note: DRUNKEN_ROLE_ID not set, skipped.")
 
-            return await interaction.followup.send("\n".join(lines), ephemeral=True)
+            return await safe_followup(interaction, "\n".join(lines), ephemeral=True)
 
         except discord.Forbidden:
-            return await interaction.followup.send(
+            return await safe_followup(
+                interaction,
                 "❌ Forbidden (role hierarchy or missing permissions).",
                 ephemeral=True,
             )
         except Exception as e:
-            return await interaction.followup.send(f"❌ Failed: {e}", ephemeral=True)
+            return await safe_followup(
+                interaction,
+                f"❌ Failed: {e}",
+                ephemeral=True,
+            )
 
     # ============================================================
     # /verify_diagnose
@@ -764,11 +623,11 @@ def register_role_admin_commands(bot, tree) -> None:
             )
             return
 
-        member = await _require_target_member(interaction, user)
+        member = await require_target_member(interaction, user)
         if member is None:
             return
 
-        await interaction.response.defer(ephemeral=True)
+        await safe_defer(interaction, ephemeral=True)
 
         verified_role = _role_by_id(guild, int(VERIFIED_ROLE_ID or 0))
         resident_role = _role_by_id(guild, int(RESIDENT_ROLE_ID or 0))
@@ -777,7 +636,7 @@ def register_role_admin_commands(bot, tree) -> None:
 
         open_ticket = await _resolve_open_ticket_channel_for_owner(guild, int(member.id))
         vc_channel = _get_vc_channel(guild)
-        me = guild.me or await _resolve_member_any(
+        me = guild.me or await resolve_member_any(
             guild,
             int(getattr(getattr(bot, "user", None), "id", 0) or 0),
         )
@@ -852,7 +711,7 @@ def register_role_admin_commands(bot, tree) -> None:
             inline=False,
         )
 
-        await interaction.followup.send(embed=embed, ephemeral=True)
+        await safe_followup(interaction, embed=embed, ephemeral=True)
 
     # ============================================================
     # /fix_unverified_member
@@ -882,7 +741,7 @@ def register_role_admin_commands(bot, tree) -> None:
             )
             return
 
-        member = await _require_target_member(interaction, user)
+        member = await require_target_member(interaction, user)
         if member is None:
             return
 
@@ -900,7 +759,7 @@ def register_role_admin_commands(bot, tree) -> None:
             )
             return
 
-        await interaction.response.defer(ephemeral=True)
+        await safe_defer(interaction, ephemeral=True)
 
         added: list[str] = []
         removed: list[str] = []
@@ -935,15 +794,17 @@ def register_role_admin_commands(bot, tree) -> None:
             if ticket_ch:
                 lines.append(f"Ticket: {ticket_ch.mention}")
 
-            await interaction.followup.send("\n".join(lines), ephemeral=True)
+            await safe_followup(interaction, "\n".join(lines), ephemeral=True)
 
         except discord.Forbidden:
-            await interaction.followup.send(
+            await safe_followup(
+                interaction,
                 "❌ Forbidden. Check Manage Roles + hierarchy.",
                 ephemeral=True,
             )
         except Exception as e:
-            await interaction.followup.send(
+            await safe_followup(
+                interaction,
                 f"❌ Failed to repair Unverified: {e}",
                 ephemeral=True,
             )
@@ -971,7 +832,7 @@ def register_role_admin_commands(bot, tree) -> None:
             )
             return
 
-        member = await _require_target_member(interaction, user)
+        member = await require_target_member(interaction, user)
         if member is None:
             return
 
