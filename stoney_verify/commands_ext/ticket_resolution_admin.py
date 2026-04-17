@@ -168,6 +168,25 @@ async def _add_resolution_note(channel_id: int, author: discord.abc.User, note: 
         pass
 
 
+def _ticket_status(row: Optional[Dict[str, Any]]) -> str:
+    try:
+        return _safe_str((row or {}).get("status"), "unknown").lower()
+    except Exception:
+        return "unknown"
+
+
+def _actor_member(guild: Optional[discord.Guild], user: discord.abc.User) -> Optional[discord.Member]:
+    if guild is None:
+        return None
+    try:
+        member = guild.get_member(int(user.id))
+        if member:
+            return member
+    except Exception:
+        pass
+    return None
+
+
 def register_ticket_resolution_admin_commands(bot, tree) -> None:
     @tree.command(
         name="ticket_resolve",
@@ -193,12 +212,37 @@ def register_ticket_resolution_admin_commands(bot, tree) -> None:
         if ch is None:
             return
 
+        if service_mark_ticket_closed is None:
+            return await reply_once(interaction, {"content": "❌ Ticket close service is unavailable.", "ephemeral": True})
+
         try:
             await interaction.response.defer(ephemeral=True)
         except Exception:
             pass
 
+        status = _ticket_status(row)
+        if status == "deleted":
+            try:
+                await interaction.followup.send(
+                    "❌ This ticket is already marked deleted and cannot be resolved.",
+                    ephemeral=True,
+                )
+            except Exception:
+                pass
+            return
+
+        if status == "closed":
+            try:
+                await interaction.followup.send(
+                    f"ℹ️ {ch.mention} is already closed.",
+                    ephemeral=True,
+                )
+            except Exception:
+                pass
+            return
+
         owner = await _ticket_owner(ch, row)
+        actor_member = _actor_member(interaction.guild, interaction.user)
 
         try:
             _cancel_kick_timer(ch.id)
@@ -219,28 +263,49 @@ def register_ticket_resolution_admin_commands(bot, tree) -> None:
         except Exception:
             pass
 
+        transcript_ok = True
         try:
             await send_tickettool_style_transcript(
                 ch,
                 owner,
-                closed_by=ch.guild.get_member(int(interaction.user.id)),
+                closed_by=actor_member,
                 decision=clean_reason,
             )
         except Exception:
-            pass
+            transcript_ok = False
 
-        if callable(service_mark_ticket_closed):
+        try:
+            ok = await service_mark_ticket_closed(
+                channel=ch,
+                closed_by=actor_member,
+                reason=clean_reason,
+            )
+        except Exception as e:
             try:
-                await service_mark_ticket_closed(
-                    channel=ch,
-                    closed_by=ch.guild.get_member(int(interaction.user.id)),
-                    reason=clean_reason,
+                await interaction.followup.send(
+                    f"❌ Failed resolving ticket state: `{e}`",
+                    ephemeral=True,
                 )
             except Exception:
                 pass
+            return
+
+        if not ok:
+            try:
+                await interaction.followup.send(
+                    "❌ Failed to resolve this ticket.",
+                    ephemeral=True,
+                )
+            except Exception:
+                pass
+            return
 
         try:
-            await ch.send(f"✅ Ticket resolved by {interaction.user.mention}.\n**Reason:** {clean_reason}")
+            await ch.send(
+                f"✅ Ticket resolved by {interaction.user.mention}.\n"
+                f"**Reason:** {clean_reason}\n"
+                "Use `/ticket_reopen_reason` if this needs to be reopened."
+            )
         except Exception:
             pass
 
@@ -250,17 +315,16 @@ def register_ticket_resolution_admin_commands(bot, tree) -> None:
             pass
 
         try:
-            await interaction.followup.send(f"✅ Resolving {ch.mention} now.", ephemeral=True)
+            await interaction.followup.send(
+                (
+                    f"✅ Resolved {ch.mention}."
+                    if transcript_ok
+                    else f"✅ Resolved {ch.mention}, but transcript generation failed."
+                ),
+                ephemeral=True,
+            )
         except Exception:
             pass
-
-        try:
-            await ch.delete(reason=f"Resolved by {interaction.user}: {clean_reason}")
-        except Exception as e:
-            try:
-                await interaction.followup.send(f"⚠️ Transcript/close recorded, but channel delete failed: `{e}`", ephemeral=True)
-            except Exception:
-                pass
 
     @tree.command(
         name="ticket_reopen_reason",
@@ -288,6 +352,19 @@ def register_ticket_resolution_admin_commands(bot, tree) -> None:
 
         if service_reopen_ticket_channel is None:
             return await reply_once(interaction, {"content": "❌ Ticket reopen service is unavailable.", "ephemeral": True})
+
+        status = _ticket_status(row)
+        if status == "deleted":
+            return await reply_once(
+                interaction,
+                {"content": "❌ Deleted tickets cannot be reopened.", "ephemeral": True},
+            )
+
+        if status in {"open", "claimed"}:
+            return await reply_once(
+                interaction,
+                {"content": f"ℹ️ {ch.mention} is already open.", "ephemeral": True},
+            )
 
         owner = await _ticket_owner(ch, row)
         owner_member = owner if isinstance(owner, discord.Member) else None
