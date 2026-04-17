@@ -1201,7 +1201,9 @@ async def create_ticket_channel(
         )
 
         try:
-            await guild.create_text_channel  # sanity
+            if not callable(getattr(guild, "create_text_channel", None)):
+                raise TypeError("guild.create_text_channel is not callable")
+
             channel = await guild.create_text_channel(
                 name=channel_name,
                 category=parent,
