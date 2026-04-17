@@ -12,6 +12,7 @@ from ..globals import now_utc
 from .common import (
     _staff_check,
     RUNTIME_STATS,
+    member_autocomplete,
     require_target_member,
     safe_defer,
     safe_followup,
@@ -30,6 +31,7 @@ def register_moderation_commands(bot, tree) -> None:
         member="Mention, ID, username, or display name of the member to kick",
         reason="Reason (optional)",
     )
+    @app_commands.autocomplete(member=member_autocomplete)
     async def mod_kick_slash(
         interaction: discord.Interaction,
         member: str,
@@ -92,7 +94,7 @@ def register_moderation_commands(bot, tree) -> None:
                 reason=reason or f"Kick by {interaction.user} ({interaction.user.id})",
             )
             try:
-                RUNTIME_STATS["mod_actions"] += 1
+                RUNTIME_STATS["mod_actions"] = int(RUNTIME_STATS.get("mod_actions", 0)) + 1
             except Exception:
                 pass
 
@@ -127,6 +129,7 @@ def register_moderation_commands(bot, tree) -> None:
         reason="Reason (optional)",
         delete_message_days="Delete message days (0-7)",
     )
+    @app_commands.autocomplete(member=member_autocomplete)
     async def mod_ban_slash(
         interaction: discord.Interaction,
         member: str,
@@ -194,7 +197,7 @@ def register_moderation_commands(bot, tree) -> None:
                 delete_message_days=dmd,
             )
             try:
-                RUNTIME_STATS["mod_actions"] += 1
+                RUNTIME_STATS["mod_actions"] = int(RUNTIME_STATS.get("mod_actions", 0)) + 1
             except Exception:
                 pass
 
@@ -229,6 +232,7 @@ def register_moderation_commands(bot, tree) -> None:
         minutes="Minutes (default MOD_TIMEOUT_MINUTES)",
         reason="Reason (optional)",
     )
+    @app_commands.autocomplete(member=member_autocomplete)
     async def mod_timeout_slash(
         interaction: discord.Interaction,
         member: str,
@@ -297,7 +301,7 @@ def register_moderation_commands(bot, tree) -> None:
                 reason=reason or f"Timeout by {interaction.user} ({interaction.user.id})",
             )
             try:
-                RUNTIME_STATS["mod_actions"] += 1
+                RUNTIME_STATS["mod_actions"] = int(RUNTIME_STATS.get("mod_actions", 0)) + 1
             except Exception:
                 pass
 
@@ -333,10 +337,14 @@ def register_moderation_commands(bot, tree) -> None:
 
         await safe_defer(interaction, ephemeral=True)
 
+        guild = interaction.guild
+        if guild is None:
+            return await safe_followup(interaction, "❌ Invalid context.", ephemeral=True)
+
         lines = []
         lines.append(f"**Bot User:** {bot.user}")
-        lines.append(f"**Guild ID:** {interaction.guild.id}")
-        lines.append(f"**Guild Name:** {interaction.guild.name}")
+        lines.append(f"**Guild ID:** {guild.id}")
+        lines.append(f"**Guild Name:** {guild.name}")
 
         intents = bot.intents
         lines.append("**Intents:**")
@@ -346,10 +354,13 @@ def register_moderation_commands(bot, tree) -> None:
         lines.append(f"- Message Content: {intents.message_content}")
 
         try:
-            me = interaction.guild.me
-            lines.append(f"**Bot Member:** {me} (roles: {len(me.roles)})")
+            me = guild.me
+            if me:
+                lines.append(f"**Bot Member:** {me} (roles: {len(me.roles)})")
+            else:
+                lines.append("**Bot Member:** not resolved")
 
-            members = [m for m in interaction.guild.members[:5]]
+            members = [m for m in guild.members[:5]]
             lines.append(
                 "**First few members in cache:** "
                 + (", ".join(str(m) for m in members) if members else "none")
