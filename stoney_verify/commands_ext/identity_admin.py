@@ -8,6 +8,7 @@ from discord import app_commands
 from ..globals import *  # noqa: F401,F403
 from .common import (
     _staff_check,
+    member_autocomplete,
     reply_once,
     require_target_member,
     safe_str,
@@ -210,6 +211,7 @@ def register_identity_admin_commands(bot: Any, tree: Any) -> None:
         description="Inspect hard-proof and manual identity link context for a member.",
     )
     @app_commands.describe(member="Mention, ID, username, or display name to inspect")
+    @app_commands.autocomplete(member=member_autocomplete)
     async def identity_truth(interaction: discord.Interaction, member: str):
         if not _staff_check(interaction):
             await reply_once(interaction, {"content": "❌ Staff only.", "ephemeral": True})
@@ -257,6 +259,7 @@ def register_identity_admin_commands(bot: Any, tree: Any) -> None:
         member_b="Second member: mention, ID, username, or display name",
         reason="Why you are confirming this duplicate identity link",
     )
+    @app_commands.autocomplete(member_a=member_autocomplete, member_b=member_autocomplete)
     async def identity_confirm_duplicate(
         interaction: discord.Interaction,
         member_a: str,
@@ -330,6 +333,7 @@ def register_identity_admin_commands(bot: Any, tree: Any) -> None:
         member_b="Second member: mention, ID, username, or display name",
         reason="Why this looks like the same person",
     )
+    @app_commands.autocomplete(member_a=member_autocomplete, member_b=member_autocomplete)
     async def identity_mark_likely(
         interaction: discord.Interaction,
         member_a: str,
@@ -403,6 +407,7 @@ def register_identity_admin_commands(bot: Any, tree: Any) -> None:
         member_b="Second member: mention, ID, username, or display name",
         reason="Why these accounts should not be linked",
     )
+    @app_commands.autocomplete(member_a=member_autocomplete, member_b=member_autocomplete)
     async def identity_mark_not_linked(
         interaction: discord.Interaction,
         member_a: str,
@@ -477,6 +482,7 @@ def register_identity_admin_commands(bot: Any, tree: Any) -> None:
         source="Source: manual_review, id_verification, voice_verification, etc.",
         notes="Optional notes about the verification source",
     )
+    @app_commands.autocomplete(member=member_autocomplete)
     async def identity_record_fingerprint(
         interaction: discord.Interaction,
         member: str,
