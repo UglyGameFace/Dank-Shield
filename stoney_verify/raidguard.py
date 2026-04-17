@@ -34,7 +34,6 @@ _SUSPICIOUS_NAME_RE = re.compile(
 # ============================================================
 # Time / config helpers
 # ============================================================
-
 def _utcnow() -> datetime:
     try:
         return now_utc()
@@ -101,7 +100,6 @@ def _suspicious_age_days() -> int:
 # ============================================================
 # Generic helpers
 # ============================================================
-
 def _normalize_text(value: Any) -> str:
     try:
         return str(value or "").strip()
@@ -277,7 +275,6 @@ def _dedupe_list(values: List[str], max_items: int = 20) -> List[str]:
 # ============================================================
 # Core signal helpers
 # ============================================================
-
 def _account_age_days(member: discord.Member) -> int:
     try:
         created_at = getattr(member, "created_at", None)
@@ -336,7 +333,6 @@ def _behavior_fingerprint(member: discord.Member) -> str:
 # ============================================================
 # Hard-proof helpers
 # ============================================================
-
 def _proof_cache_valid(ts: datetime) -> bool:
     try:
         return (_utcnow() - ts).total_seconds() <= max(5, int(_PROOF_CACHE_TTL_SECONDS))
@@ -567,7 +563,6 @@ def _build_hard_cluster_members(
 # ============================================================
 # Join profile / cluster engine
 # ============================================================
-
 def _prune_recent_join_profiles(guild_id: int) -> None:
     try:
         window = timedelta(minutes=_cluster_window_minutes())
@@ -615,6 +610,7 @@ def _recent_join_burst_count(guild_id: int) -> int:
 
 def _build_recent_cluster_matches(
     guild_id: int,
+    target_user_id: int,
     username_normalized: str,
     fingerprint: str,
     age_bucket: str,
@@ -626,32 +622,52 @@ def _build_recent_cluster_matches(
     same_age_bucket_matches: List[Dict[str, Any]] = []
 
     threshold = _cluster_similarity_threshold()
+    seen_fp_ids: Set[int] = set()
+    seen_age_ids: Set[int] = set()
+    best_name_match_by_user: Dict[int, Dict[str, Any]] = {}
 
     for row in profiles:
         try:
             if bool(row.get("is_bot_account")):
                 continue
 
+            row_user_id = int(str(row.get("user_id") or "0") or 0)
+            if row_user_id <= 0:
+                continue
+
+            # Never compare the subject account against itself
+            if row_user_id == int(target_user_id):
+                continue
+
             other_name = str(row.get("username_normalized") or "")
             other_fp = str(row.get("fingerprint") or "")
             other_bucket = str(row.get("age_bucket") or "")
 
-            if other_fp and other_fp == fingerprint:
-                same_fp_matches.append(row)
+            if other_fp and fingerprint and other_fp == fingerprint and row_user_id not in seen_fp_ids:
+                seen_fp_ids.add(row_user_id)
+                same_fp_matches.append(dict(row))
 
-            if other_bucket and other_bucket == age_bucket:
-                same_age_bucket_matches.append(row)
+            if other_bucket and age_bucket and other_bucket == age_bucket and row_user_id not in seen_age_ids:
+                seen_age_ids.add(row_user_id)
+                same_age_bucket_matches.append(dict(row))
 
             if username_normalized and other_name:
                 sim = _name_similarity(username_normalized, other_name)
                 if sim >= threshold:
                     enriched = dict(row)
                     enriched["similarity"] = sim
-                    similar_name_matches.append(enriched)
+
+                    existing = best_name_match_by_user.get(row_user_id)
+                    if existing is None or float(existing.get("similarity") or 0.0) < sim:
+                        best_name_match_by_user[row_user_id] = enriched
         except Exception:
             continue
 
-    similar_name_matches.sort(key=lambda x: float(x.get("similarity") or 0.0), reverse=True)
+    similar_name_matches = list(best_name_match_by_user.values())
+    similar_name_matches.sort(
+        key=lambda x: float(x.get("similarity") or 0.0),
+        reverse=True,
+    )
 
     return {
         "similar_name_matches": similar_name_matches[:8],
@@ -666,8 +682,23 @@ def _record_join_profile(member: discord.Member, profile: Dict[str, Any]) -> Non
             return
 
         gid = int(member.guild.id)
+        uid = int(member.id)
+
         _prune_recent_join_profiles(gid)
-        _RECENT_JOIN_PROFILES[gid].append(profile)
+        dq = _RECENT_JOIN_PROFILES[gid]
+
+        kept: Deque[Dict[str, Any]] = deque()
+        for row in list(dq):
+            try:
+                row_uid = int(str(row.get("user_id") or "0") or 0)
+                if row_uid == uid:
+                    continue
+            except Exception:
+                pass
+            kept.append(row)
+
+        _RECENT_JOIN_PROFILES[gid] = kept
+        _RECENT_JOIN_PROFILES[gid].append(dict(profile))
     except Exception:
         pass
 
@@ -675,7 +706,6 @@ def _record_join_profile(member: discord.Member, profile: Dict[str, Any]) -> Non
 # ============================================================
 # Evidence-driven scoring
 # ============================================================
-
 def build_member_risk_profile(member: discord.Member) -> Dict[str, Any]:
     guild_id = int(member.guild.id)
     user_id = int(member.id)
@@ -751,7 +781,13 @@ def build_member_risk_profile(member: discord.Member) -> Dict[str, Any]:
     manual_not_linked_ids = set(hard_ctx.get("manual_not_linked_ids") or set())
     matched_identity_fingerprints = list(hard_ctx.get("matched_identity_fingerprints") or [])
 
-    cluster = _build_recent_cluster_matches(guild_id, username_normalized, fingerprint, age_bucket)
+    cluster = _build_recent_cluster_matches(
+        guild_id,
+        user_id,
+        username_normalized,
+        fingerprint,
+        age_bucket,
+    )
     similar_name_matches = _filter_not_linked_matches(cluster["similar_name_matches"], manual_not_linked_ids)
     same_fp_matches = _filter_not_linked_matches(cluster["same_fp_matches"], manual_not_linked_ids)
     same_age_bucket_matches = _filter_not_linked_matches(cluster["same_age_bucket_matches"], manual_not_linked_ids)
@@ -926,14 +962,20 @@ def build_member_risk_profile(member: discord.Member) -> Dict[str, Any]:
     cluster_members: List[Dict[str, Any]] = []
     cluster_members.extend(_build_hard_cluster_members(proof_matches, manual_confirmed, manual_likely))
 
-    existing_member_ids = {int(row.get("user_id") or 0) for row in cluster_members if int(row.get("user_id") or 0) > 0}
+    existing_member_ids = {
+        int(row.get("user_id") or 0)
+        for row in cluster_members
+        if int(row.get("user_id") or 0) > 0 and int(row.get("user_id") or 0) != user_id
+    }
 
     for row in same_fp_matches[:4]:
         try:
             uid = int(row.get("user_id") or 0)
         except Exception:
             uid = 0
-        if uid > 0 and uid not in existing_member_ids:
+        if uid <= 0 or uid == user_id:
+            continue
+        if uid not in existing_member_ids:
             existing_member_ids.add(uid)
             cluster_members.append(
                 {
@@ -949,7 +991,9 @@ def build_member_risk_profile(member: discord.Member) -> Dict[str, Any]:
             uid = int(row.get("user_id") or 0)
         except Exception:
             uid = 0
-        if uid > 0 and uid not in existing_member_ids:
+        if uid <= 0 or uid == user_id:
+            continue
+        if uid not in existing_member_ids:
             existing_member_ids.add(uid)
             cluster_members.append(
                 {
@@ -1096,7 +1140,6 @@ def build_alt_detection_summary(member: discord.Member) -> str:
 # ============================================================
 # Raid / alert actions
 # ============================================================
-
 async def _post_raidlog(guild: discord.Guild, message: str) -> None:
     try:
         target: Optional[discord.TextChannel] = None
@@ -1338,7 +1381,6 @@ async def _mass_role_strip_if_needed(member: discord.Member) -> Optional[str]:
 # ============================================================
 # Public helper to be called by join event after logging
 # ============================================================
-
 def track_member_join_risk(member: discord.Member) -> Dict[str, Any]:
     profile = build_member_risk_profile(member)
 
