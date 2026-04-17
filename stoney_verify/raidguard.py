@@ -635,7 +635,7 @@ def _build_recent_cluster_matches(
             if row_user_id <= 0:
                 continue
 
-            # Never compare the subject account against itself
+            # Never compare the target account to itself.
             if row_user_id == int(target_user_id):
                 continue
 
@@ -687,6 +687,8 @@ def _record_join_profile(member: discord.Member, profile: Dict[str, Any]) -> Non
         _prune_recent_join_profiles(gid)
         dq = _RECENT_JOIN_PROFILES[gid]
 
+        # Remove any stale copies of the same member first so the cache
+        # cannot self-inflate cluster counts later in the join flow.
         kept: Deque[Dict[str, Any]] = deque()
         for row in list(dq):
             try:
