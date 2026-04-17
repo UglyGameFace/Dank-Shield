@@ -1398,6 +1398,23 @@ def _build_merged_risk_source(
     merged["entry_method"] = _safe_str(_pick_first_meaningful(join.get("entry_method"), db.get("entry_method"), default=""))
     merged["verification_source"] = _safe_str(_pick_first_meaningful(join.get("verification_source"), db.get("verification_source"), default=""))
 
+    if target is not None:
+        try:
+            merged["user_id"] = int(getattr(target, "id", 0) or 0)
+        except Exception:
+            merged["user_id"] = 0
+    else:
+        merged["user_id"] = _safe_int(
+            _pick_first_meaningful(
+                authoritative.get("user_id"),
+                join.get("user_id"),
+                db.get("user_id"),
+                default=0,
+                allow_zero=True,
+            ),
+            0,
+        )
+
     if merged["is_bot_account"]:
         merged["risk_score"] = 0
         merged["score"] = 0
@@ -1521,23 +1538,43 @@ def _context_linked_accounts_value(
     if not source:
         return ""
 
+    current_user_id = _safe_int(source.get("user_id"), 0)
+
     cluster_members = source.get("cluster_members")
     if not isinstance(cluster_members, list) or not cluster_members:
         return ""
 
     lines: List[str] = []
-    for row in cluster_members[:6]:
+    seen_ids: set[int] = set()
+
+    for row in cluster_members[:10]:
         if not isinstance(row, dict):
             continue
+
+        uid = _safe_int(row.get("user_id"), 0)
+
+        if uid > 0 and uid == current_user_id:
+            continue
+
+        if uid > 0 and uid in seen_ids:
+            continue
+        if uid > 0:
+            seen_ids.add(uid)
+
         display_name = _safe_str(row.get("display_name"))
         username = _safe_str(row.get("username"))
-        uid = _safe_str(row.get("user_id"))
-        label = display_name or username or uid or "Unknown"
+        label = display_name or username or (str(uid) if uid > 0 else "Unknown")
+
         if username and display_name and username != display_name:
             label = f"{display_name} / {username}"
-        if uid:
+
+        if uid > 0:
             label = f"{label} (`{uid}`)"
+
         lines.append(f"• {label} — {_pretty_cluster_reason(row.get('reason'))}")
+
+    if not lines:
+        return ""
 
     return _chunk_lines(lines, 900)
 
