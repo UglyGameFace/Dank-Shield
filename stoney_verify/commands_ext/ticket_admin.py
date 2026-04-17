@@ -248,6 +248,37 @@ def _queue_embed(title: str, guild: discord.Guild, rows: List[Dict[str, Any]], e
     return embed
 
 
+def _ticket_status(row: Optional[Dict[str, Any]]) -> str:
+    try:
+        return _safe_str((row or {}).get("status"), "unknown").lower()
+    except Exception:
+        return "unknown"
+
+
+def _is_closed_status(row: Optional[Dict[str, Any]]) -> bool:
+    return _ticket_status(row) == "closed"
+
+
+def _is_deleted_status(row: Optional[Dict[str, Any]]) -> bool:
+    return _ticket_status(row) == "deleted"
+
+
+def _is_openish_status(row: Optional[Dict[str, Any]]) -> bool:
+    return _ticket_status(row) in {"open", "claimed"}
+
+
+def _actor_member(guild: Optional[discord.Guild], user: discord.abc.User) -> Optional[discord.Member]:
+    if guild is None:
+        return None
+    try:
+        member = guild.get_member(int(user.id))
+        if member:
+            return member
+    except Exception:
+        pass
+    return None
+
+
 def register_ticket_admin_commands(bot, tree) -> None:
     @tree.command(
         name="post_ticket_panel",
@@ -384,11 +415,11 @@ def register_ticket_admin_commands(bot, tree) -> None:
 
     @tree.command(
         name="close_ticket",
-        description="(Staff) Post transcript then close/delete a verification ticket.",
+        description="Close a ticket without deleting the channel.",
     )
     @app_commands.describe(
         channel="Ticket channel to close (leave empty to use the current channel)",
-        reason="Optional reason to store in transcript decision field",
+        reason="Optional close reason stored in transcript/close metadata",
     )
     async def close_ticket_slash(
         interaction: discord.Interaction,
@@ -398,81 +429,45 @@ def register_ticket_admin_commands(bot, tree) -> None:
         if not _staff_check(interaction):
             return await interaction.response.send_message("❌ Staff only.", ephemeral=True)
 
+        ch, row = await _ensure_ticket_context(interaction, channel)
+        if ch is None:
+            return
+
+        if service_mark_ticket_closed is None:
+            return await reply_once(
+                interaction,
+                {"content": "❌ Ticket close service is unavailable.", "ephemeral": True},
+            )
+
         try:
             await interaction.response.defer(ephemeral=True)
         except Exception:
             pass
 
-        guild = interaction.guild
-        if not guild:
-            try:
-                return await interaction.followup.send(
-                    "❌ Invalid context (no guild).",
-                    ephemeral=True,
-                )
-            except Exception:
-                return
-
-        ch = channel or interaction.channel
-        if not isinstance(ch, discord.TextChannel):
-            try:
-                return await interaction.followup.send(
-                    "❌ Invalid channel (must be a text channel).",
-                    ephemeral=True,
-                )
-            except Exception:
-                return
-
-        row = await _ticket_row_for_channel(ch)
-        if not (_is_ticket_channel(ch, row) or is_verification_ticket_channel(ch)):
-            try:
-                return await interaction.followup.send(
-                    f"❌ That channel isn’t a ticket channel.\n"
-                    f"Target: {ch.mention} (`{ch.id}`)",
-                    ephemeral=True,
-                )
-            except Exception:
-                return
-
-        me = guild.me
-        if not me and bot.user:
-            try:
-                me = guild.get_member(bot.user.id) or await guild.fetch_member(bot.user.id)
-            except Exception:
-                me = None
-
-        if not me:
-            try:
-                return await interaction.followup.send(
-                    "❌ Bot member missing in guild cache.",
-                    ephemeral=True,
-                )
-            except Exception:
-                return
-
-        perms = ch.permissions_for(me)
-        if not perms.view_channel:
-            try:
-                return await interaction.followup.send(
-                    "❌ I can’t even view that channel (permission issue).",
-                    ephemeral=True,
-                )
-            except Exception:
-                return
-
-        if not perms.manage_channels:
+        status = _ticket_status(row)
+        if status == "deleted":
             try:
                 await interaction.followup.send(
-                    "❌ I **cannot delete** this ticket because I’m missing **Manage Channels** "
-                    "in that category/channel.\n"
-                    "Fix: give my role **Manage Channels** (or Admin) for the ticket category.",
+                    "❌ This ticket is already marked deleted and cannot be closed.",
                     ephemeral=True,
                 )
             except Exception:
                 pass
             return
 
+        if status == "closed":
+            try:
+                await interaction.followup.send(
+                    f"ℹ️ {ch.mention} is already closed.",
+                    ephemeral=True,
+                )
+            except Exception:
+                pass
+            return
+
+        guild = interaction.guild
         owner = await _owner_for_ticket(ch, row)
+        actor_member = _actor_member(guild, interaction.user)
         decision = (reason.strip() if reason else "STAFF CLOSED")
 
         try:
@@ -485,58 +480,73 @@ def register_ticket_admin_commands(bot, tree) -> None:
         except Exception:
             pass
 
+        transcript_ok = True
         try:
             await send_tickettool_style_transcript(
                 ch,
                 owner,
-                closed_by=guild.get_member(int(interaction.user.id)),
+                closed_by=actor_member,
                 decision=decision,
+            )
+        except Exception:
+            transcript_ok = False
+
+        try:
+            ok = await service_mark_ticket_closed(
+                channel=ch,
+                closed_by=actor_member,
+                reason=decision,
+            )
+        except Exception as e:
+            try:
+                await interaction.followup.send(
+                    f"❌ Failed closing ticket state: `{e}`",
+                    ephemeral=True,
+                )
+            except Exception:
+                pass
+            return
+
+        if not ok:
+            try:
+                await interaction.followup.send(
+                    "❌ Failed to close this ticket.",
+                    ephemeral=True,
+                )
+            except Exception:
+                pass
+            return
+
+        try:
+            await ch.send(
+                f"🔒 Ticket closed by {interaction.user.mention}.\n"
+                f"**Reason:** {decision}\n"
+                f"Use `/ticket_reopen` if this needs to be reopened."
             )
         except Exception:
             pass
 
-        if callable(service_mark_ticket_closed):
-            try:
-                await service_mark_ticket_closed(
-                    channel=ch,
-                    closed_by=guild.get_member(int(interaction.user.id)),
-                    reason=decision,
-                )
-            except Exception:
-                pass
-
         try:
-            await interaction.followup.send("✅ Closing ticket now…", ephemeral=True)
+            mark_ticket_activity(ch.id)
         except Exception:
             pass
 
         try:
-            await ch.delete(reason=f"Closed by staff: {decision}")
-            try:
-                RUNTIME_STATS["tickets_closed"] += 1
-            except Exception:
-                pass
-            return
-        except discord.Forbidden:
-            try:
-                await interaction.followup.send(
-                    "⚠️ I tried to delete it but got **Forbidden**. Check category overrides + role position.",
-                    ephemeral=True,
-                )
-            except Exception:
-                pass
-            return
-        except discord.NotFound:
-            return
-        except Exception as e:
-            try:
-                await interaction.followup.send(
-                    f"⚠️ Failed to delete ticket: `{e}`",
-                    ephemeral=True,
-                )
-            except Exception:
-                pass
-            return
+            RUNTIME_STATS["tickets_closed"] += 1
+        except Exception:
+            pass
+
+        try:
+            await interaction.followup.send(
+                (
+                    f"✅ Closed {ch.mention}."
+                    if transcript_ok
+                    else f"✅ Closed {ch.mention}, but transcript generation failed."
+                ),
+                ephemeral=True,
+            )
+        except Exception:
+            pass
 
     @tree.command(
         name="ticket_claim",
@@ -657,6 +667,27 @@ def register_ticket_admin_commands(bot, tree) -> None:
         except Exception:
             pass
 
+        status = _ticket_status(row)
+        if status == "deleted":
+            try:
+                await interaction.followup.send(
+                    "❌ Deleted tickets cannot be reopened.",
+                    ephemeral=True,
+                )
+            except Exception:
+                pass
+            return
+
+        if status in {"open", "claimed"}:
+            try:
+                await interaction.followup.send(
+                    f"ℹ️ {ch.mention} is already open.",
+                    ephemeral=True,
+                )
+            except Exception:
+                pass
+            return
+
         owner = await _owner_for_ticket(ch, row)
         owner_member = owner if isinstance(owner, discord.Member) else None
 
@@ -679,7 +710,13 @@ def register_ticket_admin_commands(bot, tree) -> None:
             pass
 
         try:
-            await ch.send(f"♻️ Ticket reopened by {interaction.user.mention}.")
+            if reason and reason.strip():
+                await ch.send(
+                    f"♻️ Ticket reopened by {interaction.user.mention}.\n"
+                    f"**Reason:** {reason.strip()}"
+                )
+            else:
+                await ch.send(f"♻️ Ticket reopened by {interaction.user.mention}.")
         except Exception:
             pass
 
@@ -711,29 +748,105 @@ def register_ticket_admin_commands(bot, tree) -> None:
         except Exception:
             pass
 
+        status = _ticket_status(row)
+        if status == "deleted":
+            try:
+                await interaction.followup.send("ℹ️ This ticket is already deleted.", ephemeral=True)
+            except Exception:
+                pass
+            return
+
+        guild = interaction.guild
         owner = await _owner_for_ticket(ch, row)
+        actor_member = _actor_member(guild, interaction.user)
+        delete_reason = reason.strip() if reason and reason.strip() else "Deleted by staff"
+
+        try:
+            _cancel_kick_timer(ch.id)
+        except Exception:
+            pass
+
+        try:
+            await kick_timer_persist_delete(int(ch.id))
+        except Exception:
+            pass
+
+        transcript_ok = True
         try:
             await send_tickettool_style_transcript(
                 ch,
                 owner,
-                closed_by=interaction.guild.get_member(int(interaction.user.id)) if interaction.guild else None,
-                decision=(reason.strip() if reason else "STAFF DELETED"),
+                closed_by=actor_member,
+                decision=delete_reason,
             )
         except Exception:
-            pass
+            transcript_ok = False
 
         try:
-            await service_mark_ticket_deleted(channel_id=ch.id, deleted_by=interaction.user, reason=reason or "Deleted by staff")
-        except Exception:
-            pass
-
-        try:
-            await ch.delete(reason=reason or f"Deleted by {interaction.user}")
+            ok = await service_mark_ticket_deleted(
+                channel_id=ch.id,
+                deleted_by=interaction.user,
+                reason=delete_reason,
+            )
         except Exception as e:
-            return await reply_once(interaction, {"content": f"❌ Failed to delete ticket channel: {e}", "ephemeral": True})
+            try:
+                await interaction.followup.send(
+                    f"❌ Failed marking ticket deleted in DB: `{e}`",
+                    ephemeral=True,
+                )
+            except Exception:
+                pass
+            return
+
+        if not ok:
+            try:
+                await interaction.followup.send(
+                    "❌ Failed to mark this ticket deleted.",
+                    ephemeral=True,
+                )
+            except Exception:
+                pass
+            return
 
         try:
-            await interaction.followup.send("✅ Ticket deleted.", ephemeral=True)
+            await ch.delete(reason=f"{delete_reason} | actor={interaction.user}")
+        except discord.Forbidden:
+            try:
+                await interaction.followup.send(
+                    "⚠️ Ticket was marked deleted, but I do not have permission to delete the channel.",
+                    ephemeral=True,
+                )
+            except Exception:
+                pass
+            return
+        except discord.NotFound:
+            try:
+                await interaction.followup.send(
+                    "✅ Ticket was already gone. Delete state was recorded.",
+                    ephemeral=True,
+                )
+            except Exception:
+                pass
+            return
+        except Exception as e:
+            try:
+                await interaction.followup.send(
+                    f"⚠️ Ticket was marked deleted, but channel deletion failed: `{e}`",
+                    ephemeral=True,
+                )
+            except Exception:
+                pass
+            return
+
+        try:
+            await interaction.followup.send(
+                (
+                    "✅ Ticket deleted."
+                    if transcript_ok
+                    else "✅ Ticket deleted, but transcript generation failed."
+                ),
+                ephemeral=True,
+            )
         except Exception:
             pass
 
