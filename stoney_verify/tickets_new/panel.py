@@ -132,6 +132,142 @@ _INTENT_KEYWORD_GROUPS: Dict[str, Tuple[str, ...]] = {
     ),
 }
 
+_DEFAULT_BOOTSTRAP_CATEGORIES: Tuple[Dict[str, Any], ...] = (
+    {
+        "name": "Verification",
+        "slug": "verification_issue",
+        "description": "Verification help, secure upload, VC verify, selfie, or approval issues.",
+        "intake_type": "verification",
+        "match_keywords": [
+            "verification",
+            "verify",
+            "unverified",
+            "verified",
+            "id verification",
+            "secure upload",
+            "verify in vc",
+            "vc verify",
+            "face pic",
+            "selfie",
+            "approval",
+        ],
+        "button_label": "Verification",
+        "sort_order": 1,
+        "is_default": False,
+    },
+    {
+        "name": "Appeals",
+        "slug": "appeal",
+        "description": "Appeals for bans, kicks, blacklists, warns, timeouts, and punishments.",
+        "intake_type": "appeal",
+        "match_keywords": [
+            "appeal",
+            "ban appeal",
+            "unban",
+            "kick appeal",
+            "timeout appeal",
+            "warn appeal",
+            "blacklist appeal",
+        ],
+        "button_label": "Appeal",
+        "sort_order": 2,
+        "is_default": False,
+    },
+    {
+        "name": "Reports",
+        "slug": "report",
+        "description": "User reports, scams, abuse, threats, harassment, raids, and rulebreaking.",
+        "intake_type": "report",
+        "match_keywords": [
+            "report",
+            "scam",
+            "scammer",
+            "abuse",
+            "harassment",
+            "threat",
+            "rule break",
+            "raid",
+            "spam",
+        ],
+        "button_label": "Report",
+        "sort_order": 3,
+        "is_default": False,
+    },
+    {
+        "name": "COD Services",
+        "slug": "cod_services",
+        "description": "Call of Duty lobbies, recoveries, unlock all, zombies rank, and related service requests.",
+        "intake_type": "custom",
+        "match_keywords": [
+            "cod",
+            "call of duty",
+            "lobby",
+            "lobbies",
+            "bot lobby",
+            "challenge lobby",
+            "recovery",
+            "recoveries",
+            "unlock all",
+            "warzone",
+            "black ops",
+            "modern warfare",
+            "waw",
+            "zombies",
+        ],
+        "button_label": "COD Services",
+        "sort_order": 4,
+        "is_default": False,
+    },
+    {
+        "name": "Partnerships",
+        "slug": "partnership",
+        "description": "Partnerships, sponsorships, collaborations, and promotions.",
+        "intake_type": "partnership",
+        "match_keywords": [
+            "partnership",
+            "partner",
+            "collab",
+            "collaboration",
+            "sponsor",
+            "promotion",
+        ],
+        "button_label": "Partnership",
+        "sort_order": 5,
+        "is_default": False,
+    },
+    {
+        "name": "Questions",
+        "slug": "question",
+        "description": "General questions and how-to requests.",
+        "intake_type": "question",
+        "match_keywords": [
+            "question",
+            "questions",
+            "how to",
+            "how do i",
+            "help question",
+        ],
+        "button_label": "Question",
+        "sort_order": 6,
+        "is_default": False,
+    },
+    {
+        "name": "Support",
+        "slug": "support",
+        "description": "General support fallback for anything that does not fit a more specific category.",
+        "intake_type": "general",
+        "match_keywords": [
+            "support",
+            "help",
+            "general support",
+            "assistance",
+        ],
+        "button_label": "Support",
+        "sort_order": 999,
+        "is_default": True,
+    },
+)
+
 
 def _debug(msg: str) -> None:
     try:
@@ -538,7 +674,71 @@ def _normalize_category_row(row: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-def _fetch_dashboard_ticket_categories_sync(guild_id: int) -> List[Dict[str, Any]]:
+def _bootstrap_categories_payload_for_guild(guild_id: int) -> List[Dict[str, Any]]:
+    payload: List[Dict[str, Any]] = []
+    for row in _DEFAULT_BOOTSTRAP_CATEGORIES:
+        out = dict(row)
+        out["guild_id"] = str(guild_id)
+        payload.append(out)
+    return payload
+
+
+def _seed_dashboard_ticket_categories_sync(guild_id: int) -> List[Dict[str, Any]]:
+    sb = None
+    try:
+        sb = get_supabase()
+    except Exception:
+        sb = None
+
+    if not sb:
+        _debug(f"category bootstrap skipped; supabase unavailable guild={guild_id}")
+        return []
+
+    payload = _bootstrap_categories_payload_for_guild(guild_id)
+    inserted = 0
+
+    for row in payload:
+        slug = str(row.get("slug") or "").strip()
+        if not slug:
+            continue
+
+        try:
+            existing_res = (
+                sb.table("ticket_categories")
+                .select("id, slug")
+                .eq("guild_id", str(guild_id))
+                .eq("slug", slug)
+                .limit(1)
+                .execute()
+            )
+            existing_rows = getattr(existing_res, "data", None) or []
+            if existing_rows:
+                continue
+        except Exception as e:
+            print(
+                f"⚠️ ticket category bootstrap existing-check failed "
+                f"guild={guild_id} slug={slug} error={repr(e)}"
+            )
+            continue
+
+        try:
+            sb.table("ticket_categories").insert(row).execute()
+            inserted += 1
+        except Exception as e:
+            print(
+                f"⚠️ ticket category bootstrap insert failed "
+                f"guild={guild_id} slug={slug} error={repr(e)}"
+            )
+
+    _debug(f"category bootstrap guild={guild_id} inserted={inserted}")
+    return _fetch_dashboard_ticket_categories_sync(guild_id, allow_bootstrap=False)
+
+
+def _fetch_dashboard_ticket_categories_sync(
+    guild_id: int,
+    *,
+    allow_bootstrap: bool = True,
+) -> List[Dict[str, Any]]:
     sb = None
     try:
         sb = get_supabase()
@@ -578,7 +778,12 @@ def _fetch_dashboard_ticket_categories_sync(guild_id: int) -> List[Dict[str, Any
         pass
 
     _debug(f"category fetch guild={guild_id} count={len(normalized)}")
-    return normalized
+
+    if normalized or not allow_bootstrap:
+        return normalized
+
+    _debug(f"category fetch empty -> bootstrap guild={guild_id}")
+    return _seed_dashboard_ticket_categories_sync(guild_id)
 
 
 async def _fetch_dashboard_ticket_categories(guild_id: int) -> List[Dict[str, Any]]:
