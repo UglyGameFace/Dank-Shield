@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import re
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, Optional, Tuple, List
 
 import discord
 
@@ -161,12 +161,67 @@ if "_staff_check" not in globals():
             return False
 
 
+def safe_str(value: Any, default: str = "") -> str:
+    try:
+        text = str(value or "").strip()
+        return text if text else default
+    except Exception:
+        return default
+
+
+def safe_int(value: Any, default: int = 0) -> int:
+    try:
+        return int(str(value).strip())
+    except Exception:
+        return default
+
+
+def normalize_lookup_text(value: object) -> str:
+    try:
+        return str(value or "").strip().lower()
+    except Exception:
+        return ""
+
+
+async def safe_defer(interaction: discord.Interaction, *, ephemeral: bool = True) -> None:
+    try:
+        if not interaction.response.is_done():
+            await interaction.response.defer(ephemeral=ephemeral)
+    except Exception:
+        pass
+
+
+async def safe_followup(
+    interaction: discord.Interaction,
+    content: Optional[str] = None,
+    **kwargs: Any,
+) -> None:
+    payload = dict(kwargs)
+    if content is not None:
+        payload["content"] = content
+    payload.setdefault("ephemeral", True)
+
+    try:
+        if interaction.response.is_done():
+            await interaction.followup.send(**payload)
+        else:
+            await interaction.response.send_message(**payload)
+    except Exception:
+        try:
+            await interaction.followup.send(**payload)
+        except Exception:
+            pass
+
+
 async def reply_once(interaction: discord.Interaction, payload: Dict[str, Any]) -> None:
     """
     Safe reply helper: replies if possible, else followUps.
     payload example: {"content":"...", "ephemeral": True}
     """
     try:
+        payload = dict(payload or {})
+        payload.setdefault("ephemeral", True)
+
         if interaction.response.is_done():
             await interaction.followup.send(**payload)
         else:
@@ -460,6 +515,172 @@ def _staff_ping_text() -> str:
 
 
 # ============================================================
+# Shared member target resolution helpers
+# ============================================================
+def parse_member_id_from_target(target: str) -> int:
+    text = str(target or "").strip()
+    if not text:
+        return 0
+
+    mention_match = re.search(r"<@!?(\d+)>", text)
+    if mention_match:
+        try:
+            return int(mention_match.group(1))
+        except Exception:
+            return 0
+
+    if text.isdigit():
+        try:
+            return int(text)
+        except Exception:
+            return 0
+
+    return 0
+
+
+async def resolve_member_any(guild: discord.Guild, user_id: int) -> Optional[discord.Member]:
+    try:
+        member = guild.get_member(int(user_id))
+        if member is not None:
+            return member
+    except Exception:
+        pass
+
+    try:
+        return await guild.fetch_member(int(user_id))
+    except Exception:
+        return None
+
+
+def member_candidate_strings(member: discord.Member) -> List[str]:
+    vals = [
+        getattr(member, "name", None),
+        getattr(member, "display_name", None),
+        getattr(member, "global_name", None),
+        str(member),
+    ]
+    out: List[str] = []
+    for v in vals:
+        norm = normalize_lookup_text(v)
+        if norm and norm not in out:
+            out.append(norm)
+    return out
+
+
+async def resolve_member_from_target(
+    guild: discord.Guild,
+    target: str,
+) -> Optional[discord.Member]:
+    raw = str(target or "").strip()
+    if not raw:
+        return None
+
+    user_id = parse_member_id_from_target(raw)
+    if user_id > 0:
+        member = await resolve_member_any(guild, user_id)
+        if member is not None:
+            return member
+
+    lowered = normalize_lookup_text(raw)
+    if not lowered:
+        return None
+
+    try:
+        member_list = list(guild.members or [])
+    except Exception:
+        member_list = []
+
+    # exact matches first
+    for member in member_list:
+        try:
+            if lowered in member_candidate_strings(member):
+                return member
+        except Exception:
+            continue
+
+    # discriminator style exact
+    for member in member_list:
+        try:
+            tag = f"{member.name}#{member.discriminator}" if getattr(member, "discriminator", "0") != "0" else member.name
+            if normalize_lookup_text(tag) == lowered:
+                return member
+        except Exception:
+            continue
+
+    # startswith fallback
+    startswith_hits: List[discord.Member] = []
+    for member in member_list:
+        try:
+            values = member_candidate_strings(member)
+            if any(v.startswith(lowered) for v in values):
+                startswith_hits.append(member)
+        except Exception:
+            continue
+
+    if len(startswith_hits) == 1:
+        return startswith_hits[0]
+
+    # contains fallback
+    contains_hits: List[discord.Member] = []
+    for member in member_list:
+        try:
+            values = member_candidate_strings(member)
+            if any(lowered in v for v in values):
+                contains_hits.append(member)
+        except Exception:
+            continue
+
+    if len(contains_hits) == 1:
+        return contains_hits[0]
+
+    # final chunk-and-retry
+    try:
+        await guild.chunk(cache=True)
+        member_list = list(guild.members or [])
+    except Exception:
+        member_list = member_list
+
+    for member in member_list:
+        try:
+            if lowered in member_candidate_strings(member):
+                return member
+        except Exception:
+            continue
+
+    return None
+
+
+async def require_target_member(
+    interaction: discord.Interaction,
+    target: str,
+    *,
+    label: str = "member",
+) -> Optional[discord.Member]:
+    guild = interaction.guild
+    if guild is None:
+        await safe_followup(
+            interaction,
+            "❌ This command must be used in a server.",
+            ephemeral=True,
+        )
+        return None
+
+    member = await resolve_member_from_target(guild, target)
+    if member is None:
+        await safe_followup(
+            interaction,
+            (
+                f"❌ I could not resolve that {label}.\n"
+                "Use a mention, raw user ID, exact username, or exact display name."
+            ),
+            ephemeral=True,
+        )
+        return None
+
+    return member
+
+
+# ============================================================
 # Per-token lock helper
 # ============================================================
 _LOCKS: Dict[str, asyncio.Lock] = {}
@@ -501,6 +722,11 @@ __all__ = [
     "STONER_ROLE_ID",
     "DRUNKEN_ROLE_ID",
     "_staff_check",
+    "safe_str",
+    "safe_int",
+    "normalize_lookup_text",
+    "safe_defer",
+    "safe_followup",
     "reply_once",
     "token_is_expired",
     "build_verify_link",
@@ -512,5 +738,10 @@ __all__ = [
     "extract_token_from_message",
     "mark_ticket_activity",
     "_staff_ping_text",
+    "parse_member_id_from_target",
+    "resolve_member_any",
+    "member_candidate_strings",
+    "resolve_member_from_target",
+    "require_target_member",
     "_get_lock",
 ]
