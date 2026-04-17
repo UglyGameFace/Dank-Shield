@@ -2,13 +2,16 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
 
-import re
-
 import discord
 from discord import app_commands
 
 from ..globals import *  # noqa: F401,F403
-from .common import reply_once, _staff_check
+from .common import (
+    _staff_check,
+    reply_once,
+    require_target_member,
+    safe_str,
+)
 
 try:
     from ..identity_proof_service import (
@@ -34,20 +37,13 @@ except Exception:
 _IDENTITY_ADMIN_REGISTERED = False
 
 
-def _safe_str(value: Any) -> str:
-    try:
-        return str(value or "").strip()
-    except Exception:
-        return ""
-
-
 def _chunk_lines(lines: List[str], *, limit: int = 1000) -> List[str]:
     chunks: List[str] = []
     current: List[str] = []
     current_len = 0
 
     for line in lines:
-        text = _safe_str(line)
+        text = safe_str(line)
         if not text:
             continue
         projected = current_len + len(text) + (1 if current else 0)
@@ -72,171 +68,6 @@ def _member_label(member: discord.Member | discord.User) -> str:
         return f"`{getattr(member, 'id', 'unknown')}`"
 
 
-def _normalize_lookup_text(value: object) -> str:
-    try:
-        return str(value or "").strip().lower()
-    except Exception:
-        return ""
-
-
-def _parse_member_id_from_target(target: str) -> int:
-    text = str(target or "").strip()
-    if not text:
-        return 0
-
-    mention_match = re.search(r"<@!?(\d+)>", text)
-    if mention_match:
-        try:
-            return int(mention_match.group(1))
-        except Exception:
-            return 0
-
-    if text.isdigit():
-        try:
-            return int(text)
-        except Exception:
-            return 0
-
-    return 0
-
-
-async def _resolve_member_any(guild: discord.Guild, user_id: int) -> Optional[discord.Member]:
-    try:
-        member = guild.get_member(int(user_id))
-        if member is not None:
-            return member
-    except Exception:
-        pass
-
-    try:
-        return await guild.fetch_member(int(user_id))
-    except Exception:
-        return None
-
-
-async def _resolve_member_from_target(
-    guild: discord.Guild,
-    target: str,
-) -> Optional[discord.Member]:
-    raw = str(target or "").strip()
-    if not raw:
-        return None
-
-    user_id = _parse_member_id_from_target(raw)
-    if user_id > 0:
-        member = await _resolve_member_any(guild, user_id)
-        if member is not None:
-            return member
-
-    lowered = _normalize_lookup_text(raw)
-    if not lowered:
-        return None
-
-    try:
-        member_list = list(guild.members or [])
-    except Exception:
-        member_list = []
-
-    def _candidate_strings(member: discord.Member) -> List[str]:
-        vals = [
-            getattr(member, "name", None),
-            getattr(member, "display_name", None),
-            getattr(member, "global_name", None),
-            str(member),
-        ]
-        out: List[str] = []
-        for v in vals:
-            norm = _normalize_lookup_text(v)
-            if norm and norm not in out:
-                out.append(norm)
-        return out
-
-    for member in member_list:
-        try:
-            if lowered in _candidate_strings(member):
-                return member
-        except Exception:
-            continue
-
-    for member in member_list:
-        try:
-            tag = f"{member.name}#{member.discriminator}" if getattr(member, "discriminator", "0") != "0" else member.name
-            if _normalize_lookup_text(tag) == lowered:
-                return member
-        except Exception:
-            continue
-
-    startswith_hits: List[discord.Member] = []
-    for member in member_list:
-        try:
-            values = _candidate_strings(member)
-            if any(v.startswith(lowered) for v in values):
-                startswith_hits.append(member)
-        except Exception:
-            continue
-
-    if len(startswith_hits) == 1:
-        return startswith_hits[0]
-
-    contains_hits: List[discord.Member] = []
-    for member in member_list:
-        try:
-            values = _candidate_strings(member)
-            if any(lowered in v for v in values):
-                contains_hits.append(member)
-        except Exception:
-            continue
-
-    if len(contains_hits) == 1:
-        return contains_hits[0]
-
-    try:
-        await guild.chunk(cache=True)
-        member_list = list(guild.members or [])
-    except Exception:
-        member_list = member_list
-
-    for member in member_list:
-        try:
-            if lowered in _candidate_strings(member):
-                return member
-        except Exception:
-            continue
-
-    return None
-
-
-async def _require_target_member(
-    interaction: discord.Interaction,
-    target: str,
-    *,
-    label: str = "member",
-) -> Optional[discord.Member]:
-    guild = interaction.guild
-    if guild is None:
-        await reply_once(
-            interaction,
-            {"content": "❌ This command must be used in a server.", "ephemeral": True},
-        )
-        return None
-
-    member = await _resolve_member_from_target(guild, target)
-    if member is None:
-        await reply_once(
-            interaction,
-            {
-                "content": (
-                    f"❌ I could not resolve that {label}.\n"
-                    "Use a mention, raw user ID, exact username, or exact display name."
-                ),
-                "ephemeral": True,
-            },
-        )
-        return None
-
-    return member
-
-
 def _render_truth_context_embed(
     guild: discord.Guild,
     member: discord.Member,
@@ -251,8 +82,8 @@ def _render_truth_context_embed(
     embed.add_field(name="Member", value=_member_label(member), inline=False)
 
     if risk_profile:
-        tier = _safe_str(risk_profile.get("evidence_tier")) or "clear"
-        level = _safe_str(risk_profile.get("level")) or "low"
+        tier = safe_str(risk_profile.get("evidence_tier")) or "clear"
+        level = safe_str(risk_profile.get("level")) or "low"
         score = int(risk_profile.get("score") or 0)
         embed.add_field(
             name="Current Risk Engine Output",
@@ -299,7 +130,7 @@ def _render_truth_context_embed(
             lines.append(
                 f"• {_other_label(row.get('matched_user_id') or row.get('other_user_id'))} "
                 f"confidence=`{row.get('match_confidence', 100)}` "
-                f"fingerprint=`{_safe_str(row.get('identity_fingerprint'))[:24] or 'hidden'}`"
+                f"fingerprint=`{safe_str(row.get('identity_fingerprint'))[:24] or 'hidden'}`"
             )
         for idx, chunk in enumerate(_chunk_lines(lines, limit=900), start=1):
             embed.add_field(
@@ -313,8 +144,8 @@ def _render_truth_context_embed(
         for row in manual_confirmed[:10]:
             lines.append(
                 f"• {_other_label(row.get('other_user_id'))} "
-                f"by=`{_safe_str(row.get('created_by')) or 'unknown'}` "
-                f"reason={_safe_str(row.get('reason'))[:120] or '—'}"
+                f"by=`{safe_str(row.get('created_by')) or 'unknown'}` "
+                f"reason={safe_str(row.get('reason'))[:120] or '—'}"
             )
         for idx, chunk in enumerate(_chunk_lines(lines, limit=900), start=1):
             embed.add_field(
@@ -328,8 +159,8 @@ def _render_truth_context_embed(
         for row in manual_likely[:10]:
             lines.append(
                 f"• {_other_label(row.get('other_user_id'))} "
-                f"by=`{_safe_str(row.get('created_by')) or 'unknown'}` "
-                f"reason={_safe_str(row.get('reason'))[:120] or '—'}"
+                f"by=`{safe_str(row.get('created_by')) or 'unknown'}` "
+                f"reason={safe_str(row.get('reason'))[:120] or '—'}"
             )
         for idx, chunk in enumerate(_chunk_lines(lines, limit=900), start=1):
             embed.add_field(
@@ -343,8 +174,8 @@ def _render_truth_context_embed(
         for row in manual_not_linked[:10]:
             lines.append(
                 f"• {_other_label(row.get('other_user_id'))} "
-                f"by=`{_safe_str(row.get('created_by')) or 'unknown'}` "
-                f"reason={_safe_str(row.get('reason'))[:120] or '—'}"
+                f"by=`{safe_str(row.get('created_by')) or 'unknown'}` "
+                f"reason={safe_str(row.get('reason'))[:120] or '—'}"
             )
         for idx, chunk in enumerate(_chunk_lines(lines, limit=900), start=1):
             embed.add_field(
@@ -374,9 +205,6 @@ def register_identity_admin_commands(bot: Any, tree: Any) -> None:
             pass
         return
 
-    # ------------------------------------------------------------
-    # /identity_truth
-    # ------------------------------------------------------------
     @tree.command(
         name="identity_truth",
         description="Inspect hard-proof and manual identity link context for a member.",
@@ -394,7 +222,7 @@ def register_identity_admin_commands(bot: Any, tree: Any) -> None:
             )
             return
 
-        resolved_member = await _require_target_member(interaction, member)
+        resolved_member = await require_target_member(interaction, member)
         if resolved_member is None:
             return
 
@@ -420,9 +248,6 @@ def register_identity_admin_commands(bot: Any, tree: Any) -> None:
         embed = _render_truth_context_embed(interaction.guild, resolved_member, truth, risk_profile)
         await reply_once(interaction, {"embed": embed, "ephemeral": True})
 
-    # ------------------------------------------------------------
-    # /identity_confirm_duplicate
-    # ------------------------------------------------------------
     @tree.command(
         name="identity_confirm_duplicate",
         description="Staff-confirm that two members are the same person.",
@@ -449,11 +274,11 @@ def register_identity_admin_commands(bot: Any, tree: Any) -> None:
             )
             return
 
-        resolved_a = await _require_target_member(interaction, member_a, label="first member")
+        resolved_a = await require_target_member(interaction, member_a, label="first member")
         if resolved_a is None:
             return
 
-        resolved_b = await _require_target_member(interaction, member_b, label="second member")
+        resolved_b = await require_target_member(interaction, member_b, label="second member")
         if resolved_b is None:
             return
 
@@ -470,7 +295,7 @@ def register_identity_admin_commands(bot: Any, tree: Any) -> None:
                 user_a_id=str(resolved_a.id),
                 user_b_id=str(resolved_b.id),
                 created_by=str(interaction.user.id),
-                reason=_safe_str(reason),
+                reason=safe_str(reason),
                 evidence={
                     "source": "identity_admin_command",
                     "staff_name": getattr(interaction.user, "display_name", None) or str(interaction.user),
@@ -492,13 +317,10 @@ def register_identity_admin_commands(bot: Any, tree: Any) -> None:
         )
         embed.add_field(name="Member A", value=_member_label(resolved_a), inline=False)
         embed.add_field(name="Member B", value=_member_label(resolved_b), inline=False)
-        embed.add_field(name="Reason", value=_safe_str(reason)[:1000] or "—", inline=False)
-        embed.add_field(name="Link ID", value=f"`{_safe_str((row or {}).get('id')) or 'unknown'}`", inline=False)
+        embed.add_field(name="Reason", value=safe_str(reason)[:1000] or "—", inline=False)
+        embed.add_field(name="Link ID", value=f"`{safe_str((row or {}).get('id')) or 'unknown'}`", inline=False)
         await reply_once(interaction, {"embed": embed, "ephemeral": True})
 
-    # ------------------------------------------------------------
-    # /identity_mark_likely
-    # ------------------------------------------------------------
     @tree.command(
         name="identity_mark_likely",
         description="Mark two members as likely the same person, but not fully confirmed.",
@@ -525,11 +347,11 @@ def register_identity_admin_commands(bot: Any, tree: Any) -> None:
             )
             return
 
-        resolved_a = await _require_target_member(interaction, member_a, label="first member")
+        resolved_a = await require_target_member(interaction, member_a, label="first member")
         if resolved_a is None:
             return
 
-        resolved_b = await _require_target_member(interaction, member_b, label="second member")
+        resolved_b = await require_target_member(interaction, member_b, label="second member")
         if resolved_b is None:
             return
 
@@ -546,7 +368,7 @@ def register_identity_admin_commands(bot: Any, tree: Any) -> None:
                 user_a_id=str(resolved_a.id),
                 user_b_id=str(resolved_b.id),
                 created_by=str(interaction.user.id),
-                reason=_safe_str(reason),
+                reason=safe_str(reason),
                 evidence={
                     "source": "identity_admin_command",
                     "staff_name": getattr(interaction.user, "display_name", None) or str(interaction.user),
@@ -568,13 +390,10 @@ def register_identity_admin_commands(bot: Any, tree: Any) -> None:
         )
         embed.add_field(name="Member A", value=_member_label(resolved_a), inline=False)
         embed.add_field(name="Member B", value=_member_label(resolved_b), inline=False)
-        embed.add_field(name="Reason", value=_safe_str(reason)[:1000] or "—", inline=False)
-        embed.add_field(name="Link ID", value=f"`{_safe_str((row or {}).get('id')) or 'unknown'}`", inline=False)
+        embed.add_field(name="Reason", value=safe_str(reason)[:1000] or "—", inline=False)
+        embed.add_field(name="Link ID", value=f"`{safe_str((row or {}).get('id')) or 'unknown'}`", inline=False)
         await reply_once(interaction, {"embed": embed, "ephemeral": True})
 
-    # ------------------------------------------------------------
-    # /identity_mark_not_linked
-    # ------------------------------------------------------------
     @tree.command(
         name="identity_mark_not_linked",
         description="Suppress repeated false positives by marking two members as not linked.",
@@ -601,11 +420,11 @@ def register_identity_admin_commands(bot: Any, tree: Any) -> None:
             )
             return
 
-        resolved_a = await _require_target_member(interaction, member_a, label="first member")
+        resolved_a = await require_target_member(interaction, member_a, label="first member")
         if resolved_a is None:
             return
 
-        resolved_b = await _require_target_member(interaction, member_b, label="second member")
+        resolved_b = await require_target_member(interaction, member_b, label="second member")
         if resolved_b is None:
             return
 
@@ -622,7 +441,7 @@ def register_identity_admin_commands(bot: Any, tree: Any) -> None:
                 user_a_id=str(resolved_a.id),
                 user_b_id=str(resolved_b.id),
                 created_by=str(interaction.user.id),
-                reason=_safe_str(reason),
+                reason=safe_str(reason),
                 evidence={
                     "source": "identity_admin_command",
                     "staff_name": getattr(interaction.user, "display_name", None) or str(interaction.user),
@@ -644,13 +463,10 @@ def register_identity_admin_commands(bot: Any, tree: Any) -> None:
         )
         embed.add_field(name="Member A", value=_member_label(resolved_a), inline=False)
         embed.add_field(name="Member B", value=_member_label(resolved_b), inline=False)
-        embed.add_field(name="Reason", value=_safe_str(reason)[:1000] or "—", inline=False)
-        embed.add_field(name="Link ID", value=f"`{_safe_str((row or {}).get('id')) or 'unknown'}`", inline=False)
+        embed.add_field(name="Reason", value=safe_str(reason)[:1000] or "—", inline=False)
+        embed.add_field(name="Link ID", value=f"`{safe_str((row or {}).get('id')) or 'unknown'}`", inline=False)
         await reply_once(interaction, {"embed": embed, "ephemeral": True})
 
-    # ------------------------------------------------------------
-    # /identity_record_fingerprint
-    # ------------------------------------------------------------
     @tree.command(
         name="identity_record_fingerprint",
         description="Record a trusted identity fingerprint for a member from verified evidence.",
@@ -679,11 +495,11 @@ def register_identity_admin_commands(bot: Any, tree: Any) -> None:
             )
             return
 
-        resolved_member = await _require_target_member(interaction, member)
+        resolved_member = await require_target_member(interaction, member)
         if resolved_member is None:
             return
 
-        source_text = _safe_str(source).lower()
+        source_text = safe_str(source).lower()
         allowed = {
             "manual_review",
             "id_verification",
@@ -710,12 +526,12 @@ def register_identity_admin_commands(bot: Any, tree: Any) -> None:
             row = record_verified_identity_for_user(
                 guild_id=str(interaction.guild_id or 0),
                 user_id=str(resolved_member.id),
-                identity_fingerprint=_safe_str(identity_fingerprint),
+                identity_fingerprint=safe_str(identity_fingerprint),
                 source=source_text,
                 created_by=str(interaction.user.id),
                 fingerprint_version="v1",
                 confidence=100,
-                notes=_safe_str(notes) or None,
+                notes=safe_str(notes) or None,
                 evidence={
                     "source": "identity_admin_command",
                     "staff_name": getattr(interaction.user, "display_name", None) or str(interaction.user),
@@ -736,14 +552,14 @@ def register_identity_admin_commands(bot: Any, tree: Any) -> None:
         )
         embed.add_field(name="Member", value=_member_label(resolved_member), inline=False)
         embed.add_field(name="Source", value=f"`{source_text}`", inline=True)
-        embed.add_field(name="Proof ID", value=f"`{_safe_str((row or {}).get('id')) or 'unknown'}`", inline=True)
+        embed.add_field(name="Proof ID", value=f"`{safe_str((row or {}).get('id')) or 'unknown'}`", inline=True)
         embed.add_field(
             name="Fingerprint",
-            value=f"`{_safe_str(identity_fingerprint)[:64]}`",
+            value=f"`{safe_str(identity_fingerprint)[:64]}`",
             inline=False,
         )
         if notes:
-            embed.add_field(name="Notes", value=_safe_str(notes)[:1000], inline=False)
+            embed.add_field(name="Notes", value=safe_str(notes)[:1000], inline=False)
         await reply_once(interaction, {"embed": embed, "ephemeral": True})
 
     _IDENTITY_ADMIN_REGISTERED = True
