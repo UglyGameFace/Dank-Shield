@@ -6,6 +6,7 @@ import re
 from typing import Any, Dict, Optional, Tuple, List
 
 import discord
+from discord import app_commands
 
 from ..globals import *  # noqa: F401,F403
 from ..globals import _parse_iso_datetime
@@ -28,7 +29,6 @@ try:
     if not hasattr(_g, "TICKET_LAST_ACTIVITY"):
         _g.TICKET_LAST_ACTIVITY = {}
 
-    # Rebind local names to shared module attributes
     VC_REQUESTS = _g.VC_REQUESTS  # type: ignore
     VC_REQUEST_COOLDOWNS = _g.VC_REQUEST_COOLDOWNS  # type: ignore
     RUNTIME_STATS = _g.RUNTIME_STATS  # type: ignore
@@ -57,7 +57,6 @@ except Exception:
 
 # ============================================================
 # Compatibility / safety fallbacks
-# Prevent NameError across versions while splitting commands.py
 # ============================================================
 try:
     ENABLE_BOOT_TICKET_SWEEP  # type: ignore[name-defined]
@@ -259,7 +258,6 @@ def token_is_expired(token_info: Dict[str, Any]) -> bool:
         return True
 
 
-# Best-effort import of link builder
 try:
     from ..verify_ui import build_verify_link  # type: ignore
 except Exception:
@@ -278,7 +276,6 @@ _BACKGROUND_TASKS: set[asyncio.Task] = set()
 
 
 def _track_task(task: Optional[asyncio.Task], label: str = "task") -> None:
-    """Track background tasks so they don't get GC'd. Safe no-op if task is None."""
     try:
         if task is None:
             return
@@ -309,28 +306,6 @@ def _discord_channel_url(guild_id: int, channel_id: int) -> str:
 # CUSTOM ID HELPERS
 # ---------------------------
 def make_custom_id(action: str, token: Optional[str] = None) -> str:
-    """
-    Verification + staff panel IDs.
-
-    VERIFY UI:
-      sv:verify:get
-      sv:verify:raw
-      sv:verify:regen
-      sv:verify:vc
-      sv:verify:reissue
-
-    STAFF DECISIONS:
-      approve
-      denyclose
-      resubmit
-
-    VC STAFF FLOW:
-      vc_accept
-      vc_upload
-      vc_approve
-      vc_denyclose
-      vc_end
-    """
     a = (action or "").strip()
     t = (token or "").strip()
 
@@ -342,15 +317,6 @@ def make_custom_id(action: str, token: Optional[str] = None) -> str:
 
 
 def parse_custom_id(custom_id: str) -> Tuple[Optional[str], Optional[str]]:
-    """
-    Returns (action, token) or (None, None).
-
-    Supports:
-      - Verify UI:  sv:verify:<subaction>[:<token>]
-      - Actions:    sv:act:<action>[:<token>]
-      - Legacy:     <action>:<token>
-      - Stale/other: action appears anywhere, token is the next segment
-    """
     cid = (custom_id or "").strip()
     if not cid:
         return None, None
@@ -386,19 +352,16 @@ def parse_custom_id(custom_id: str) -> Tuple[Optional[str], Optional[str]]:
     if len(parts) < 2:
         return None, None
 
-    # sv:verify:<subaction>[:token]
     if len(parts) >= 3 and parts[0].lower() == "sv" and parts[1].lower() == "verify":
         sub = str(parts[2] or "").strip().lower()
         tok = str(parts[3] or "").strip() if len(parts) >= 4 else None
         return f"sv:verify:{sub}", tok
 
-    # sv:act:<action>[:token]
     if len(parts) >= 3 and parts[0].lower() == "sv" and parts[1].lower() == "act":
         act = str(parts[2] or "").strip().lower()
         tok = str(parts[3] or "").strip() if len(parts) >= 4 else None
         return act, tok
 
-    # legacy: <action>:<token>
     if len(parts) == 2:
         act = str(parts[0] or "").strip().lower()
         tok = str(parts[1] or "").strip()
@@ -415,7 +378,6 @@ def parse_custom_id(custom_id: str) -> Tuple[Optional[str], Optional[str]]:
         ):
             return act, tok
 
-    # stale: action anywhere, token next segment
     known = {
         "approve",
         "denyclose",
@@ -437,12 +399,6 @@ def parse_custom_id(custom_id: str) -> Tuple[Optional[str], Optional[str]]:
 
 
 def make_mod_id(action: str, user_id: int, extra: str = "") -> str:
-    """
-    Staff quick-action button IDs.
-
-    Compatible with tickets.parse_mod_id() which supports:
-      - sv:mod:ban:<uid>[:extra...]
-    """
     a = (action or "").strip().lower()
     uid = int(user_id)
     ex = (extra or "").strip()
@@ -456,10 +412,6 @@ def make_mod_id(action: str, user_id: int, extra: str = "") -> str:
 # TOKEN / SUBMISSION HELPERS
 # ---------------------------
 def extract_token_from_message(message: discord.Message) -> Optional[str]:
-    """
-    Detects token string from webhook submission messages and embeds.
-    Accepts "t:<token>" in content/embeds.
-    """
     try:
         txt = (message.content or "")
         m = TOKEN_RE.search(txt)
@@ -489,7 +441,6 @@ def extract_token_from_message(message: discord.Message) -> Optional[str]:
 
 
 def mark_ticket_activity(channel_id: int) -> None:
-    """Counts as engagement for the 24h timer (button clicks, submissions, staff actions, etc.)."""
     try:
         TICKET_LAST_ACTIVITY[int(channel_id)] = now_utc()
     except Exception:
@@ -497,7 +448,6 @@ def mark_ticket_activity(channel_id: int) -> None:
 
 
 def _staff_ping_text() -> str:
-    """Optional ping line for staff in ticket/queue posts."""
     try:
         vc_staff = globals().get("VC_STAFF_ROLE_ID")
         if vc_staff:
@@ -590,7 +540,6 @@ async def resolve_member_from_target(
     except Exception:
         member_list = []
 
-    # exact matches first
     for member in member_list:
         try:
             if lowered in member_candidate_strings(member):
@@ -598,7 +547,6 @@ async def resolve_member_from_target(
         except Exception:
             continue
 
-    # discriminator style exact
     for member in member_list:
         try:
             tag = f"{member.name}#{member.discriminator}" if getattr(member, "discriminator", "0") != "0" else member.name
@@ -607,7 +555,6 @@ async def resolve_member_from_target(
         except Exception:
             continue
 
-    # startswith fallback
     startswith_hits: List[discord.Member] = []
     for member in member_list:
         try:
@@ -620,7 +567,6 @@ async def resolve_member_from_target(
     if len(startswith_hits) == 1:
         return startswith_hits[0]
 
-    # contains fallback
     contains_hits: List[discord.Member] = []
     for member in member_list:
         try:
@@ -633,7 +579,6 @@ async def resolve_member_from_target(
     if len(contains_hits) == 1:
         return contains_hits[0]
 
-    # final chunk-and-retry
     try:
         await guild.chunk(cache=True)
         member_list = list(guild.members or [])
@@ -678,6 +623,124 @@ async def require_target_member(
         return None
 
     return member
+
+
+def _member_autocomplete_score(member: discord.Member, query: str) -> tuple[int, str]:
+    q = normalize_lookup_text(query)
+    if not q:
+        return (9999, "")
+
+    candidates = member_candidate_strings(member)
+    best = 9999
+    best_text = ""
+
+    for text in candidates:
+        if text == q:
+            return (0, text)
+        if text.startswith(q):
+            score = 10 + max(0, len(text) - len(q))
+            if score < best:
+                best = score
+                best_text = text
+        elif q in text:
+            score = 100 + text.index(q)
+            if score < best:
+                best = score
+                best_text = text
+
+    return (best, best_text)
+
+
+def _member_choice_name(member: discord.Member) -> str:
+    try:
+        display = safe_str(getattr(member, "display_name", None)) or safe_str(getattr(member, "name", None)) or str(member.id)
+        username = safe_str(getattr(member, "name", None)) or display
+        global_name = safe_str(getattr(member, "global_name", None))
+        discriminator = safe_str(getattr(member, "discriminator", None))
+
+        extra = ""
+        if global_name and global_name.lower() != display.lower() and global_name.lower() != username.lower():
+            extra = f" | {global_name}"
+        elif display.lower() != username.lower():
+            extra = f" | {username}"
+        elif discriminator and discriminator != "0":
+            extra = f" | {username}#{discriminator}"
+
+        label = f"{display}{extra} ({member.id})"
+        return label[:100]
+    except Exception:
+        return str(member.id)
+
+
+async def member_autocomplete(
+    interaction: discord.Interaction,
+    current: str,
+) -> List[app_commands.Choice[str]]:
+    guild = interaction.guild
+    if guild is None:
+        return []
+
+    query = normalize_lookup_text(current)
+    results: List[tuple[int, discord.Member]] = []
+
+    try:
+        member_list = list(guild.members or [])
+    except Exception:
+        member_list = []
+
+    if not member_list:
+        try:
+            await guild.chunk(cache=True)
+            member_list = list(guild.members or [])
+        except Exception:
+            member_list = []
+
+    if query:
+        raw_id = parse_member_id_from_target(current)
+        if raw_id > 0:
+            direct = await resolve_member_any(guild, raw_id)
+            if direct is not None:
+                return [app_commands.Choice(name=_member_choice_name(direct), value=str(direct.id))]
+
+    for member in member_list:
+        try:
+            if getattr(member, "bot", False):
+                continue
+
+            if not query:
+                score = (
+                    0 if getattr(member, "status", None) == discord.Status.online else 50,
+                    safe_str(getattr(member, "display_name", "")).lower(),
+                )
+                results.append((score[0], member))
+                continue
+
+            score, _matched = _member_autocomplete_score(member, query)
+            if score < 9999:
+                results.append((score, member))
+        except Exception:
+            continue
+
+    results.sort(key=lambda item: (item[0], safe_str(getattr(item[1], "display_name", "")).lower(), item[1].id))
+
+    choices: List[app_commands.Choice[str]] = []
+    seen_ids: set[int] = set()
+
+    for _score, member in results[:25]:
+        try:
+            if int(member.id) in seen_ids:
+                continue
+            seen_ids.add(int(member.id))
+            choices.append(
+                app_commands.Choice(
+                    name=_member_choice_name(member),
+                    value=str(member.id),
+                )
+            )
+        except Exception:
+            continue
+
+    return choices
 
 
 # ============================================================
@@ -743,5 +806,6 @@ __all__ = [
     "member_candidate_strings",
     "resolve_member_from_target",
     "require_target_member",
+    "member_autocomplete",
     "_get_lock",
 ]
