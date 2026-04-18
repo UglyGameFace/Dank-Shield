@@ -1,4 +1,3 @@
-# stoney_verify/transcripts.py
 from __future__ import annotations
 
 import asyncio
@@ -13,7 +12,11 @@ from .tickets import (
     is_verification_ticket_channel,
     wait_for_channel_ready,
 )
-from .verify_ui import post_or_replace_verify_ui
+from .verify_ui import (
+    post_or_replace_verify_ui,
+    VERIFY_UI_TITLE,
+    VERIFY_UI_FOOTER,
+)
 from .verification_new.service import (
     approve_verification,
     deny_verification,
@@ -733,7 +736,7 @@ class VerificationStaffReviewView(discord.ui.View):
             target = member_obj.mention if isinstance(member_obj, discord.Member) else (f"<@{member_id}>" if member_id else f"`{member_name or 'member'}`")
             await channel.send(
                 f"✅ {target} was approved by **{_staff_display_name(interaction.user)}**.\n"
-                f"Reason: Approved from Discord staff review panel."
+                "Reason: Approved from Discord staff review panel."
             )
         except Exception:
             pass
@@ -784,7 +787,7 @@ class VerificationStaffReviewView(discord.ui.View):
             target = member_obj.mention if isinstance(member_obj, discord.Member) else (f"<@{member_id}>" if member_id else f"`{member_name or 'member'}`")
             await channel.send(
                 f"❌ Verification denied for {target} by **{_staff_display_name(interaction.user)}**.\n"
-                f"Reason: Denied from Discord staff review panel."
+                "Reason: Denied from Discord staff review panel."
             )
         except Exception:
             pass
@@ -1241,21 +1244,23 @@ class ConfirmCloseTicketView(discord.ui.View):
 
 
 # ============================================================
-# UI helpers
+# Verify UI helpers
 # ============================================================
 
-VERIFY_EMBED_TITLE = "Stoney Balonney Verification"
-VERIFY_EMBED_DESC = "Token-scoped upload. Staff review happens inside your private Discord ticket."
-
-
 def build_verify_ui_view(*, token: str | None = None) -> discord.ui.View:
+    """
+    Compatibility shim.
+
+    The real verify UI lives in verify_ui.py now.
+    We intentionally mirror the same custom IDs so old callers keep working.
+    """
     view = discord.ui.View(timeout=None)
 
     view.add_item(
         discord.ui.Button(
             label="Get Secure Upload",
             style=discord.ButtonStyle.primary,
-            custom_id="verify:get_upload",
+            custom_id="sv:verify:get",
             emoji="🔐",
             row=0,
         )
@@ -1267,22 +1272,24 @@ def build_verify_ui_view(*, token: str | None = None) -> discord.ui.View:
             discord.ui.Button(
                 label="Verify in VC",
                 style=discord.ButtonStyle.secondary,
-                custom_id="verify:vc",
+                custom_id="sv:verify:vc",
                 emoji="🎙️",
                 row=0,
             )
         )
 
     try:
-        view.add_item(
-            discord.ui.Button(
-                label="Tap to view website",
-                style=discord.ButtonStyle.link,
-                url=VERIFY_SITE_URL,  # type: ignore[name-defined]
-                emoji="🌐",
-                row=1,
+        site_url = str(globals().get("VERIFY_SITE_URL", "") or "").strip()
+        if site_url:
+            view.add_item(
+                discord.ui.Button(
+                    label="Tap to view website",
+                    style=discord.ButtonStyle.link,
+                    url=site_url,
+                    emoji="🌐",
+                    row=1,
+                )
             )
-        )
     except Exception:
         pass
 
@@ -1290,7 +1297,7 @@ def build_verify_ui_view(*, token: str | None = None) -> discord.ui.View:
         discord.ui.Button(
             label="Reveal Raw Link",
             style=discord.ButtonStyle.secondary,
-            custom_id="verify:reveal_raw",
+            custom_id="sv:verify:raw",
             emoji="🔎",
             row=1,
         )
@@ -1302,7 +1309,7 @@ def build_verify_ui_view(*, token: str | None = None) -> discord.ui.View:
                 discord.ui.Button(
                     label="Generate New Link",
                     style=discord.ButtonStyle.secondary,
-                    custom_id="verify:regen",
+                    custom_id="sv:verify:regen",
                     emoji="🔁",
                     row=1,
                 )
@@ -1313,66 +1320,109 @@ def build_verify_ui_view(*, token: str | None = None) -> discord.ui.View:
     return view
 
 
-async def find_last_verify_ui_message(channel: discord.TextChannel, limit: int = 80) -> Optional[discord.Message]:
+def _is_current_verify_ui_embed(embed: Optional[discord.Embed]) -> bool:
+    if embed is None:
+        return False
+
+    try:
+        title = str(getattr(embed, "title", "") or "").strip()
+        footer_text = str(getattr(getattr(embed, "footer", None), "text", "") or "").strip()
+
+        if title == VERIFY_UI_TITLE:
+            return True
+        if VERIFY_UI_FOOTER and VERIFY_UI_FOOTER.split(" • ")[0] in footer_text:
+            return True
+    except Exception:
+        pass
+
+    return False
+
+
+def _is_legacy_verify_ui_embed(embed: Optional[discord.Embed]) -> bool:
+    if embed is None:
+        return False
+
+    try:
+        title = str(getattr(embed, "title", "") or "").strip()
+        footer_text = str(getattr(getattr(embed, "footer", None), "text", "") or "").strip()
+
+        legacy_titles = {
+            "Stoney Balonney Verification",
+            "Stoney Baloney Verification",
+        }
+
+        if title in legacy_titles and title != VERIFY_UI_TITLE:
+            return True
+
+        if "stoney_verify:verify_ui:" in footer_text and (VERIFY_UI_FOOTER.split(" • ")[0] not in footer_text):
+            return True
+
+        user_field = False
+        privacy_field = False
+        for f in (embed.fields or []):
+            name = str(getattr(f, "name", "") or "").strip().lower()
+            if name in {"👤 user", "user"}:
+                user_field = True
+            if name in {"🔒 privacy", "privacy"}:
+                privacy_field = True
+
+        if user_field and privacy_field and title != VERIFY_UI_TITLE:
+            return True
+    except Exception:
+        pass
+
+    return False
+
+
+async def find_last_verify_ui_message(
+    channel: discord.TextChannel,
+    limit: int = 80,
+    *,
+    include_legacy: bool = False,
+) -> Optional[discord.Message]:
     try:
         async for msg in channel.history(limit=limit):
             if not msg.author or not bot.user or msg.author.id != bot.user.id:
                 continue
-            if msg.embeds:
-                for e in msg.embeds:
-                    title = (e.title or "").strip()
-                    footer_text = str(getattr(getattr(e, "footer", None), "text", "") or "")
-                    if title == VERIFY_EMBED_TITLE or title == "Stoney Balonney Verification" or "stoney_verify:verify_ui:" in footer_text:
-                        return msg
-            if msg.content and "🌿 **Verification Required**" in msg.content:
-                return msg
+            if not msg.embeds:
+                continue
+
+            for e in msg.embeds:
+                if _is_current_verify_ui_embed(e):
+                    return msg
+
+                if include_legacy and _is_legacy_verify_ui_embed(e):
+                    return msg
     except Exception:
         pass
     return None
 
 
-def _build_verify_embed(*, user: discord.abc.User, ttl_minutes: int, reason: str) -> discord.Embed:
-    e = discord.Embed(
-        title=VERIFY_EMBED_TITLE,
-        color=VERIFY_EMBED_COLOR,
-        timestamp=now_utc(),  # type: ignore[name-defined]
-    )
-
+async def _delete_stale_verify_ui_messages(channel: discord.TextChannel, limit: int = 80) -> int:
+    removed = 0
     try:
-        if VERIFY_EMBED_THUMBNAIL_URL:
-            e.set_thumbnail(url=VERIFY_EMBED_THUMBNAIL_URL)
+        me_id = int(getattr(getattr(bot, "user", None), "id", 0) or 0)
+        async for msg in channel.history(limit=limit):
+            if int(getattr(getattr(msg, "author", None), "id", 0) or 0) != me_id:
+                continue
+            if not msg.embeds:
+                continue
+
+            should_delete = False
+            for e in msg.embeds:
+                if _is_legacy_verify_ui_embed(e):
+                    should_delete = True
+                    break
+
+            if should_delete:
+                try:
+                    await msg.delete()
+                    removed += 1
+                except Exception:
+                    continue
     except Exception:
         pass
-
-    e.description = f"👋 **User:** {user.mention}\n({safe_user_display(user)} • `{user.id}`)"
-
-    e.add_field(
-        name="🌿 Verification Required",
-        value=(
-            "Press **Get Secure Upload** to receive your secure upload link.\n"
-            "You may redact private info before submitting.\n"
-            "If you don't trust uploads, you can request **Verify in VC**."
-        ),
-        inline=False,
-    )
-    e.add_field(
-        name="⏳ Expiration",
-        value=f"Link expires in **{ttl_minutes} minutes**.",
-        inline=False,
-    )
-    e.add_field(
-        name="⚠️ Approval",
-        value="Roles are granted only after **staff approval**.",
-        inline=False,
-    )
-    e.add_field(
-        name="🔒 Privacy",
-        value="The upload link is only shown to the ticket owner (ephemeral).",
-        inline=False,
-    )
-
-    e.set_footer(text=f"Reason: {reason}")
-    return e
+    return removed
 
 
 async def ensure_verify_ui_present(channel: Union[discord.abc.GuildChannel, discord.Thread], reason: str = "ensure") -> bool:
@@ -1414,9 +1464,17 @@ async def ensure_verify_ui_present(channel: Union[discord.abc.GuildChannel, disc
         except Exception:
             pass
 
-        existing = await find_last_verify_ui_message(post_channel, limit=80)
-        if existing:
+        # If the current/new verify UI already exists, keep it.
+        current = await find_last_verify_ui_message(post_channel, limit=80, include_legacy=False)
+        if current:
             return True
+
+        # If only legacy/broken UI exists, delete it and force a rebuild
+        # using verify_ui.py as the single source of truth.
+        try:
+            await _delete_stale_verify_ui_messages(post_channel, limit=80)
+        except Exception:
+            pass
 
         owner = None
         try:
@@ -1434,6 +1492,13 @@ async def ensure_verify_ui_present(channel: Union[discord.abc.GuildChannel, disc
                 requester_id = int(getattr(owner, "id", owner))
         except Exception:
             requester_id = None
+
+        if not requester_id:
+            print(
+                f"⚠️ ensure_verify_ui_present: no requester_id resolved "
+                f"for channel={post_channel.id} reason={reason}"
+            )
+            return False
 
         result = await post_or_replace_verify_ui(
             post_channel,
