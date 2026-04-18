@@ -1,12 +1,20 @@
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional, Tuple
+import hmac
+from typing import Any, Dict, List, Optional
 
 from aiohttp import web
 
 import discord
 
-from ..globals import bot
+from ..globals import (
+    BOT_API_ALLOW_INSECURE,
+    BOT_API_BIND_HOST,
+    BOT_API_PORT,
+    BOT_API_REQUIRE_AUTH,
+    BOT_API_SHARED_SECRET,
+    bot,
+)
 from ..tickets_new.service import (
     assign_ticket,
     create_ticket_channel,
@@ -113,6 +121,139 @@ def _channel_to_payload(channel: discord.TextChannel) -> Dict[str, Any]:
         "category_id": str(channel.category.id) if channel.category else None,
         "category_name": channel.category.name if channel.category else None,
     }
+
+
+def _api_bind_host() -> str:
+    host = _safe_str(BOT_API_BIND_HOST).strip()
+    return host or "127.0.0.1"
+
+
+def _api_bind_port() -> int:
+    port = _safe_int(BOT_API_PORT, 8081)
+    if port <= 0 or port > 65535:
+        return 8081
+    return port
+
+
+def _shared_secret() -> str:
+    return _safe_str(BOT_API_SHARED_SECRET).strip()
+
+
+def _has_shared_secret() -> bool:
+    return bool(_shared_secret())
+
+
+def _is_local_only_host(host: str) -> bool:
+    normalized = _safe_str(host).strip().lower()
+    return normalized in {"127.0.0.1", "localhost", "::1"}
+
+
+def _allow_insecure_mode() -> bool:
+    return bool(BOT_API_ALLOW_INSECURE)
+
+
+def _should_require_api_auth() -> bool:
+    return bool(BOT_API_REQUIRE_AUTH and _has_shared_secret())
+
+
+def _extract_bearer_token(value: str) -> str:
+    raw = _safe_str(value).strip()
+    if not raw:
+        return ""
+
+    lower = raw.lower()
+    if not lower.startswith("bearer "):
+        return ""
+
+    return raw[7:].strip()
+
+
+def _auth_candidates(request: web.Request) -> List[str]:
+    out: List[str] = []
+
+    bearer = _extract_bearer_token(request.headers.get("Authorization", ""))
+    if bearer:
+        out.append(bearer)
+
+    for header_name in ("X-API-Key", "X-Stoney-Internal-Auth"):
+        candidate = _safe_str(request.headers.get(header_name, "")).strip()
+        if candidate:
+            out.append(candidate)
+
+    return out
+
+
+def _request_has_valid_auth(request: web.Request) -> bool:
+    secret = _shared_secret()
+    if not secret:
+        return False
+
+    for candidate in _auth_candidates(request):
+        if candidate and hmac.compare_digest(candidate, secret):
+            return True
+
+    return False
+
+
+def _validate_api_startup_config() -> None:
+    bind_host = _api_bind_host()
+    bind_port = _api_bind_port()
+    require_auth = bool(BOT_API_REQUIRE_AUTH)
+    allow_insecure = _allow_insecure_mode()
+    secret_present = _has_shared_secret()
+
+    if require_auth:
+        if secret_present:
+            print(
+                f"🔐 Structured Bot API security mode: SECURE "
+                f"(auth required, host={bind_host}, port={bind_port})"
+            )
+            return
+
+        if allow_insecure and _is_local_only_host(bind_host):
+            print(
+                f"⚠️ Structured Bot API security mode: INSECURE LOCAL DEV "
+                f"(missing shared secret, host={bind_host}, port={bind_port})"
+            )
+            return
+
+        raise RuntimeError(
+            "Structured Bot API refused to start: BOT_API_REQUIRE_AUTH=true but "
+            "BOT_API_SHARED_SECRET is missing. Set BOT_API_SHARED_SECRET or only use "
+            "BOT_API_ALLOW_INSECURE=true on localhost for local development."
+        )
+
+    if not allow_insecure:
+        raise RuntimeError(
+            "Structured Bot API refused to start: BOT_API_REQUIRE_AUTH=false requires "
+            "BOT_API_ALLOW_INSECURE=true. Refusing to run an unauthenticated API without "
+            "an explicit insecure override."
+        )
+
+    if not _is_local_only_host(bind_host):
+        raise RuntimeError(
+            "Structured Bot API refused to start: insecure mode is only allowed on "
+            "localhost-safe bind hosts (127.0.0.1, localhost, or ::1)."
+        )
+
+    print(
+        f"⚠️ Structured Bot API security mode: INSECURE LOCAL DEV "
+        f"(auth disabled, host={bind_host}, port={bind_port})"
+    )
+
+
+@web.middleware
+async def _auth_middleware(request: web.Request, handler):
+    if request.path == "/health":
+        return await handler(request)
+
+    if not _should_require_api_auth():
+        return await handler(request)
+
+    if _request_has_valid_auth(request):
+        return await handler(request)
+
+    return _json_error("Unauthorized", 401)
 
 
 async def _request_data(request: web.Request) -> Dict[str, Any]:
@@ -813,6 +954,9 @@ async def health(request: web.Request):
         status="online",
         guild_count=guild_count,
         api="structured_bot_api",
+        auth_required=_should_require_api_auth(),
+        bind_host=_api_bind_host(),
+        bind_port=_api_bind_port(),
     )
 
 
@@ -823,7 +967,9 @@ async def start_api(bot_instance: discord.Client):
         print("⚠️ New structured Bot API already running; skipping duplicate start.")
         return
 
-    app = web.Application()
+    _validate_api_startup_config()
+
+    app = web.Application(middlewares=[_auth_middleware])
 
     app.router.add_get("/health", health)
 
@@ -861,10 +1007,16 @@ async def start_api(bot_instance: discord.Client):
     runner = web.AppRunner(app)
     await runner.setup()
 
-    site = web.TCPSite(runner, "0.0.0.0", 8081)
+    bind_host = _api_bind_host()
+    bind_port = _api_bind_port()
+
+    site = web.TCPSite(runner, bind_host, bind_port)
     await site.start()
 
     _API_RUNNER = runner
     _API_SITE = site
 
-    print("🌐 New structured Bot API started on port 8081")
+    print(
+        f"🌐 New structured Bot API started on {bind_host}:{bind_port} "
+        f"(auth_required={_should_require_api_auth()})"
+    )
