@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from typing import Optional, Tuple, Dict, Any, List
 
 import discord
@@ -200,6 +200,93 @@ def _get_session_status(token: str) -> str:
         return str(row.get("status") or "").upper().strip()
     except Exception:
         return ""
+
+
+async def _resolve_session_vc_channel(
+    guild: discord.Guild,
+    *,
+    token: str,
+    session_row: Optional[Dict[str, Any]] = None,
+) -> Optional[discord.abc.GuildChannel]:
+    vc_channel_id = _as_int(
+        (session_row or {}).get("vc_channel_id") or _get_vc_channel_id_from_session(token),
+        0,
+    )
+    if vc_channel_id <= 0:
+        return await _resolve_vc_channel(guild)
+
+    ch = guild.get_channel(vc_channel_id)
+    if isinstance(ch, (discord.VoiceChannel, discord.StageChannel)):
+        return ch
+
+    try:
+        fetched = await guild.fetch_channel(vc_channel_id)
+        if isinstance(fetched, (discord.VoiceChannel, discord.StageChannel)):
+            return fetched
+    except Exception:
+        return None
+
+    return None
+
+
+async def _vc_channel_has_active_users(
+    guild: discord.Guild,
+    *,
+    token: str,
+    session_row: Optional[Dict[str, Any]] = None,
+) -> bool:
+    ch = await _resolve_session_vc_channel(guild, token=token, session_row=session_row)
+    if not isinstance(ch, (discord.VoiceChannel, discord.StageChannel)):
+        return False
+
+    try:
+        return any(not getattr(member, "bot", False) for member in (ch.members or []))
+    except Exception:
+        return False
+
+
+async def _extend_live_session_expiry(
+    *,
+    token: str,
+    session_row: Optional[Dict[str, Any]] = None,
+    reason: str,
+) -> None:
+    try:
+        if vc_sessions and hasattr(vc_sessions, "extend_expiry"):
+            vc_sessions.extend_expiry(
+                token=str(token),
+                minutes=_as_int((session_row or {}).get("access_minutes"), 0),
+                reason=reason,
+                by_staff_id=_get_assigned_staff_id(token),
+            )
+    except Exception:
+        pass
+
+    try:
+        if vc_sessions and hasattr(vc_sessions, "touch_watchdog"):
+            vc_sessions.touch_watchdog(str(token))
+    except Exception:
+        pass
+
+
+async def _session_notify_ticket_channel(
+    guild: discord.Guild,
+    *,
+    token: str,
+    text: str,
+) -> None:
+    ticket_channel_id = _get_ticket_channel_id_from_session(token)
+    if ticket_channel_id <= 0:
+        return
+
+    try:
+        ticket_ch = guild.get_channel(ticket_channel_id)
+        if ticket_ch is None:
+            ticket_ch = await guild.fetch_channel(ticket_channel_id)
+        if isinstance(ticket_ch, discord.TextChannel):
+            await ticket_ch.send(text)
+    except Exception:
+        pass
 
 
 def _session_unlock_guard(
@@ -412,6 +499,9 @@ async def vc_session_everyone_left(
     guild: discord.Guild,
     token: str,
 ) -> bool:
+    if await _vc_channel_has_active_users(guild, token=token):
+        return False
+
     vc_id = _get_vc_channel_id_from_session(token)
     if not vc_id:
         return False
@@ -520,7 +610,7 @@ async def vc_sweeper_loop(bot_client: discord.Client, *, interval_seconds: int =
         try:
             res = (
                 sb.table("vc_verify_sessions")
-                .select("token,guild_id,owner_id,status,vc_channel_id,revoke_at,meta")
+                .select("token,guild_id,owner_id,status,vc_channel_id,revoke_at,access_minutes,meta")
                 .in_("status", ["STAFF_ACCEPTED", "OWNER_CONFIRMED", "READY", "IN_VC", "STARTED", "TAKEN_OVER", "RESTARTED"])
                 .lte("revoke_at", now_iso)
                 .limit(100)
@@ -543,9 +633,34 @@ async def vc_sweeper_loop(bot_client: discord.Client, *, interval_seconds: int =
                         _vc_session_transition(token=token, new_status="EXPIRED", staff_id=0)
                     continue
 
+                live_users_present = await _vc_channel_has_active_users(
+                    guild,
+                    token=token,
+                    session_row=row if isinstance(row, dict) else None,
+                )
+
+                if live_users_present:
+                    await _extend_live_session_expiry(
+                        token=token,
+                        session_row=row if isinstance(row, dict) else None,
+                        reason="verify vc still has active users",
+                    )
+                    await _session_notify_ticket_channel(
+                        guild,
+                        token=token,
+                        text="♻️ VC verify session timer was automatically extended because the verify VC still has active users.",
+                    )
+                    continue
+
                 await vc_relock_session(guild=guild, token=token, reason="sweeper-expire")
 
                 if callable(_vc_session_transition):
                     _vc_session_transition(token=token, new_status="EXPIRED", staff_id=0)
+
+                await _session_notify_ticket_channel(
+                    guild,
+                    token=token,
+                    text="⌛ VC verify session expired after the verify VC became empty.",
+                )
             except Exception:
                 continue
