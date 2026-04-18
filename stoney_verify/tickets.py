@@ -74,6 +74,7 @@ def _env_int_list_local(key: str) -> List[int]:
     raw = _env_str_local(key, "")
     if not raw:
         return []
+
     out: List[int] = []
     for part in re.split(r"[,\s]+", raw.strip()):
         if not part:
