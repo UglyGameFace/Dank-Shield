@@ -1,3 +1,4 @@
+# stoney_verify/members_new/sync_service.py
 from __future__ import annotations
 
 import asyncio
@@ -27,7 +28,6 @@ MEMBER_JOINS_TABLE = "member_joins"
 TICKETS_TABLE = "tickets"
 
 _OPTIONAL_GUILD_MEMBER_COLUMNS = {
-    # voice snapshot fields are NOT present in some real schemas
     "in_voice",
     "voice_channel_id",
     "voice_channel_name",
@@ -38,7 +38,6 @@ _OPTIONAL_GUILD_MEMBER_COLUMNS = {
     "voice_streaming",
     "voice_video",
     "voice_suppressed",
-    # older / mixed environments
     "nickname",
     "roles",
     "top_role",
@@ -69,6 +68,8 @@ _OPTIONAL_GUILD_MEMBER_COLUMNS = {
     "source_ticket_id",
     "entry_method",
     "verification_source",
+    "join_source",
+    "vanity_used",
     "entry_reason",
     "approval_reason",
     "has_any_role",
@@ -672,6 +673,32 @@ async def _member_joins_select_latest_async(
     return None
 
 
+def _member_joins_update_row_sync(
+    sb: Any,
+    join_id: Any,
+    payload: Dict[str, Any],
+):
+    return (
+        sb.table(MEMBER_JOINS_TABLE)
+        .update(payload)
+        .eq("id", join_id)
+        .execute()
+    )
+
+
+async def _member_joins_update_row_async(
+    sb: Any,
+    join_id: Any,
+    payload: Dict[str, Any],
+):
+    return await _run_blocking_db(
+        _member_joins_update_row_sync,
+        sb,
+        join_id,
+        payload,
+    )
+
+
 def _tickets_select_latest_for_member_sync(
     sb: Any,
     guild_id: str,
@@ -726,6 +753,7 @@ def _ticket_looks_like_verification(ticket_row: Dict[str, Any]) -> bool:
             "verification-issue",
             "verify",
             "id_verify",
+            "id-verify",
         }
 
         if category in verification_markers:
@@ -762,12 +790,127 @@ def _pick_latest_source_ticket_id(ticket_rows: List[Dict[str, Any]]) -> Optional
     return None
 
 
+def _infer_entry_method(
+    *,
+    latest_join: Optional[Dict[str, Any]],
+    existing: Dict[str, Any],
+    latest_ticket_rows: List[Dict[str, Any]],
+) -> Optional[str]:
+    explicit = _coalesce_str(
+        (latest_join or {}).get("entry_method"),
+        existing.get("entry_method"),
+        (latest_join or {}).get("join_source"),
+        (latest_join or {}).get("verification_source"),
+        existing.get("join_source"),
+        existing.get("verification_source"),
+    )
+    if explicit:
+        return explicit
+
+    invite_code = _coalesce_str((latest_join or {}).get("invite_code"), existing.get("invite_code"))
+    invited_by = _coalesce_str((latest_join or {}).get("invited_by"), existing.get("invited_by"))
+    vouched_by = _coalesce_str((latest_join or {}).get("vouched_by"), existing.get("vouched_by"))
+
+    if vouched_by:
+        return "vouched"
+    if invite_code or invited_by:
+        if _safe_bool((latest_join or {}).get("vanity_used"), False):
+            return "vanity_invite"
+        return "invite"
+    if _pick_latest_verification_ticket_id(latest_ticket_rows):
+        return "manual_verification"
+
+    return None
+
+
+def _infer_verification_source(
+    *,
+    latest_join: Optional[Dict[str, Any]],
+    existing: Dict[str, Any],
+    latest_ticket_rows: List[Dict[str, Any]],
+    entry_method: Optional[str],
+) -> Optional[str]:
+    explicit = _coalesce_str(
+        (latest_join or {}).get("verification_source"),
+        existing.get("verification_source"),
+    )
+    if explicit:
+        return explicit
+
+    if _pick_latest_verification_ticket_id(latest_ticket_rows):
+        return "ticket_verification"
+    if entry_method == "vouched":
+        return "vouch_join"
+    if entry_method == "vanity_invite":
+        return "vanity_invite"
+    if entry_method == "invite":
+        return "invite_join"
+    return None
+
+
+def _infer_join_source(
+    *,
+    latest_join: Optional[Dict[str, Any]],
+    existing: Dict[str, Any],
+    entry_method: Optional[str],
+    verification_source: Optional[str],
+) -> Optional[str]:
+    return _coalesce_str(
+        (latest_join or {}).get("join_source"),
+        existing.get("join_source"),
+        verification_source,
+        entry_method,
+    )
+
+
 def _entry_metadata_from_existing_join_and_tickets(
     *,
     existing: Dict[str, Any],
     latest_join: Optional[Dict[str, Any]],
     latest_ticket_rows: List[Dict[str, Any]],
-) -> Dict[str, Optional[str]]:
+) -> Dict[str, Any]:
+    entry_method = _infer_entry_method(
+        latest_join=latest_join,
+        existing=existing,
+        latest_ticket_rows=latest_ticket_rows,
+    )
+    verification_source = _infer_verification_source(
+        latest_join=latest_join,
+        existing=existing,
+        latest_ticket_rows=latest_ticket_rows,
+        entry_method=entry_method,
+    )
+    join_source = _infer_join_source(
+        latest_join=latest_join,
+        existing=existing,
+        entry_method=entry_method,
+        verification_source=verification_source,
+    )
+
+    verification_ticket_id = _coalesce_str(
+        (latest_join or {}).get("verification_ticket_id"),
+        existing.get("verification_ticket_id"),
+        _pick_latest_verification_ticket_id(latest_ticket_rows),
+        (latest_join or {}).get("source_ticket_id"),
+    )
+
+    source_ticket_id = _coalesce_str(
+        (latest_join or {}).get("source_ticket_id"),
+        existing.get("source_ticket_id"),
+        _pick_latest_source_ticket_id(latest_ticket_rows),
+    )
+
+    approval_reason = _coalesce_str(
+        existing.get("approval_reason"),
+        (latest_join or {}).get("approval_reason"),
+        (latest_join or {}).get("join_note") if _coalesce_str((latest_join or {}).get("approved_by")) else None,
+    )
+
+    entry_reason = _coalesce_str(
+        (latest_join or {}).get("join_note"),
+        existing.get("entry_reason"),
+    )
+
     return {
         "invited_by": _coalesce_str(
             (latest_join or {}).get("invited_by"),
@@ -797,32 +940,63 @@ def _entry_metadata_from_existing_join_and_tickets(
             (latest_join or {}).get("approved_by_name"),
             existing.get("approved_by_name"),
         ),
-        "verification_ticket_id": _coalesce_str(
-            existing.get("verification_ticket_id"),
-            _pick_latest_verification_ticket_id(latest_ticket_rows),
-            (latest_join or {}).get("source_ticket_id"),
+        "verification_ticket_id": verification_ticket_id,
+        "source_ticket_id": source_ticket_id,
+        "entry_method": entry_method,
+        "verification_source": verification_source,
+        "join_source": join_source,
+        "vanity_used": _safe_bool(
+            (latest_join or {}).get("vanity_used"),
+            _safe_bool(existing.get("vanity_used"), False),
         ),
-        "source_ticket_id": _coalesce_str(
-            existing.get("source_ticket_id"),
-            (latest_join or {}).get("source_ticket_id"),
-            _pick_latest_source_ticket_id(latest_ticket_rows),
-        ),
-        "entry_method": _coalesce_str(
-            (latest_join or {}).get("entry_method"),
-            existing.get("entry_method"),
-        ),
-        "verification_source": _coalesce_str(
-            (latest_join or {}).get("verification_source"),
-            existing.get("verification_source"),
-        ),
-        "entry_reason": _coalesce_str(
-            (latest_join or {}).get("join_note"),
-            existing.get("entry_reason"),
-        ),
-        "approval_reason": _coalesce_str(
-            existing.get("approval_reason"),
-        ),
+        "entry_reason": entry_reason,
+        "approval_reason": approval_reason,
     }
+
+
+async def _best_effort_update_latest_join_row(
+    sb: Any,
+    latest_join: Optional[Dict[str, Any]],
+    entry_meta: Dict[str, Any],
+    now_iso: str,
+) -> None:
+    try:
+        if not isinstance(latest_join, dict):
+            return
+        join_id = latest_join.get("id")
+        if join_id is None:
+            return
+
+        payload: Dict[str, Any] = {
+            "updated_at": now_iso,
+        }
+
+        for key in (
+            "invited_by",
+            "invited_by_name",
+            "invite_code",
+            "vouched_by",
+            "vouched_by_name",
+            "approved_by",
+            "approved_by_name",
+            "source_ticket_id",
+            "entry_method",
+            "verification_source",
+            "join_source",
+        ):
+            value = entry_meta.get(key)
+            if value is not None:
+                payload[key] = value
+
+        if "vanity_used" in entry_meta:
+            payload["vanity_used"] = bool(entry_meta.get("vanity_used"))
+
+        if entry_meta.get("approval_reason") and not _coalesce_str(latest_join.get("join_note")):
+            payload["join_note"] = entry_meta.get("approval_reason")
+
+        await _member_joins_update_row_async(sb, join_id, payload)
+    except Exception:
+        pass
 
 
 # ============================================================
@@ -958,6 +1132,13 @@ async def sync_member_to_supabase(member: discord.Member, in_guild: bool = True)
             latest_ticket_rows=latest_ticket_rows,
         )
 
+        await _best_effort_update_latest_join_row(
+            sb,
+            latest_join,
+            entry_meta,
+            now_iso,
+        )
+
         full_payload = {
             "guild_id": guild_id,
             "user_id": user_id,
@@ -1020,6 +1201,8 @@ async def sync_member_to_supabase(member: discord.Member, in_guild: bool = True)
             "source_ticket_id": entry_meta["source_ticket_id"],
             "entry_method": entry_meta["entry_method"],
             "verification_source": entry_meta["verification_source"],
+            "join_source": entry_meta["join_source"],
+            "vanity_used": bool(entry_meta["vanity_used"]),
             "entry_reason": entry_meta["entry_reason"],
             "approval_reason": entry_meta["approval_reason"],
         }
@@ -1155,6 +1338,8 @@ async def mark_member_left(member: discord.Member) -> None:
             "source_ticket_id": existing.get("source_ticket_id"),
             "entry_method": existing.get("entry_method"),
             "verification_source": existing.get("verification_source"),
+            "join_source": existing.get("join_source"),
+            "vanity_used": _safe_bool(existing.get("vanity_used"), False),
             "entry_reason": existing.get("entry_reason"),
             "approval_reason": existing.get("approval_reason"),
         }
@@ -1187,6 +1372,18 @@ async def mark_member_left(member: discord.Member) -> None:
                     "times_left": times_left,
                     "role_state": "left_guild",
                     "role_state_reason": "Member left or was removed from guild.",
+                    "join_source": existing.get("join_source"),
+                    "vanity_used": _safe_bool(existing.get("vanity_used"), False),
+                    "in_voice": False,
+                    "voice_channel_id": None,
+                    "voice_channel_name": None,
+                    "voice_muted": False,
+                    "voice_deafened": False,
+                    "voice_self_muted": False,
+                    "voice_self_deafened": False,
+                    "voice_streaming": False,
+                    "voice_video": False,
+                    "voice_suppressed": False,
                 },
             )
         except Exception as e2:
