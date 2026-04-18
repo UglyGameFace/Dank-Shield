@@ -1,3 +1,25 @@
+# ============================================================
+# File: stoney_verify/verification_new/service.py
+# Purpose:
+#   Shared verification service layer for ticket-based and VC-based
+#   verification flows.
+#
+# What this file handles:
+#   - resolve verification context from token / channel / guild
+#   - ensure and reissue verify UI
+#   - request resubmission
+#   - approve / deny verification
+#   - approve / deny VC verification
+#   - persist verification decision context into:
+#       * guild_members
+#       * member_joins
+#       * member_events
+#
+# Notes:
+#   - Designed to keep dashboard data truthful after staff actions
+#   - Centralizes decision logic so ticket + VC verification stay consistent
+# ============================================================
+
 from __future__ import annotations
 
 from datetime import datetime, timezone
@@ -201,6 +223,218 @@ def _unique_roles(roles: List[discord.Role]) -> List[discord.Role]:
 def _roles_display(roles: List[discord.Role]) -> str:
     names = [r.name for r in roles if isinstance(r, discord.Role)]
     return ", ".join(names) if names else "no new roles"
+
+
+def _decision_kind(decision_text: str) -> str:
+    text = _safe_str(decision_text).upper()
+    if "DENIED" in text:
+        return "denied"
+    if "RESUBMIT" in text:
+        return "resubmit"
+    return "approved"
+
+
+def _verification_source_from_decision(decision_text: str) -> str:
+    text = _safe_str(decision_text).upper()
+    if "VC" in text and "DENIED" in text:
+        return "vc_staff_denial"
+    if "VC" in text and "APPROVED" in text:
+        return "vc_staff_approval"
+    if "DENIED" in text:
+        return "ticket_staff_denial"
+    if "RESUBMIT" in text:
+        return "ticket_resubmit_requested"
+    return "ticket_staff_approval"
+
+
+def _entry_method_from_token_info(
+    token_info: Optional[Dict[str, Any]],
+    fallback: str = "manual_verification",
+) -> str:
+    if not isinstance(token_info, dict):
+        return fallback
+
+    for key in ("entry_method", "join_source", "verification_source"):
+        value = _safe_str(token_info.get(key))
+        if value:
+            return value
+
+    return fallback
+
+
+def _member_display_name(member: Optional[discord.Member]) -> Optional[str]:
+    try:
+        if not isinstance(member, discord.Member):
+            return None
+        return str(member.display_name or member.name or member)
+    except Exception:
+        return None
+
+
+def _ticket_channel_id_value(channel: Optional[discord.TextChannel]) -> Optional[str]:
+    try:
+        if isinstance(channel, discord.TextChannel):
+            return str(channel.id)
+    except Exception:
+        pass
+    return None
+
+
+def _sync_member_verification_context(
+    *,
+    guild: discord.Guild,
+    owner: Optional[discord.Member],
+    channel: Optional[discord.TextChannel],
+    token_info: Optional[Dict[str, Any]],
+    staff_member: discord.Member,
+    decision_text: str,
+) -> None:
+    try:
+        if not isinstance(owner, discord.Member):
+            return
+
+        sb = get_supabase()
+        if not sb:
+            return
+
+        guild_id = str(guild.id)
+        user_id = str(owner.id)
+        now_iso = _utc_now().isoformat()
+        decision_kind = _decision_kind(decision_text)
+        verification_source = _verification_source_from_decision(decision_text)
+        entry_method = _entry_method_from_token_info(token_info)
+        ticket_channel_id = _ticket_channel_id_value(channel)
+        staff_id = str(staff_member.id)
+        staff_name = _member_display_name(staff_member) or str(staff_member)
+
+        member_patch: Dict[str, Any] = {
+            "approved_by": staff_id,
+            "approved_by_name": staff_name,
+            "approval_reason": str(decision_text),
+            "verification_source": verification_source,
+            "entry_method": entry_method,
+            "updated_at": now_iso,
+            "synced_at": now_iso,
+            "source_ticket_id": ticket_channel_id,
+            "verification_ticket_id": ticket_channel_id,
+        }
+
+        if isinstance(token_info, dict):
+            invite_code = _safe_str(token_info.get("invite_code"))
+            invited_by = _safe_str(token_info.get("invited_by"))
+            invited_by_name = _safe_str(token_info.get("invited_by_name"))
+            vouched_by = _safe_str(token_info.get("vouched_by"))
+            vouched_by_name = _safe_str(token_info.get("vouched_by_name"))
+
+            if invite_code:
+                member_patch["invite_code"] = invite_code
+            if invited_by:
+                member_patch["invited_by"] = invited_by
+            if invited_by_name:
+                member_patch["invited_by_name"] = invited_by_name
+            if vouched_by:
+                member_patch["vouched_by"] = vouched_by
+            if vouched_by_name:
+                member_patch["vouched_by_name"] = vouched_by_name
+
+        if decision_kind == "denied":
+            member_patch["has_verified_role"] = False
+        elif decision_kind == "approved":
+            member_patch["has_verified_role"] = True
+            member_patch["in_guild"] = True
+
+        try:
+            (
+                sb.table("guild_members")
+                .update(member_patch)
+                .eq("guild_id", guild_id)
+                .eq("user_id", user_id)
+                .execute()
+            )
+        except Exception:
+            pass
+
+        latest_join_row: Optional[Dict[str, Any]] = None
+        try:
+            join_res = (
+                sb.table("member_joins")
+                .select("id")
+                .eq("guild_id", guild_id)
+                .eq("user_id", user_id)
+                .order("joined_at", desc=True)
+                .limit(1)
+                .execute()
+            )
+            join_rows = getattr(join_res, "data", None) or []
+            if join_rows:
+                latest_join_row = dict(join_rows[0])
+        except Exception:
+            latest_join_row = None
+
+        join_patch: Dict[str, Any] = {
+            "approved_by": staff_id,
+            "approved_by_name": staff_name,
+            "join_note": str(decision_text),
+            "entry_method": entry_method,
+            "verification_source": verification_source,
+            "source_ticket_id": ticket_channel_id,
+        }
+
+        if latest_join_row and latest_join_row.get("id") is not None:
+            try:
+                (
+                    sb.table("member_joins")
+                    .update(join_patch)
+                    .eq("id", latest_join_row.get("id"))
+                    .execute()
+                )
+            except Exception:
+                pass
+
+        event_type = {
+            "approved": "verification_approved",
+            "denied": "verification_denied",
+            "resubmit": "verification_resubmit_requested",
+        }.get(decision_kind, "verification_updated")
+
+        title = {
+            "approved": "Verification Approved",
+            "denied": "Verification Denied",
+            "resubmit": "Verification Resubmission Requested",
+        }.get(decision_kind, "Verification Updated")
+
+        metadata: Dict[str, Any] = {
+            "decision": str(decision_text),
+            "decision_kind": decision_kind,
+            "verification_source": verification_source,
+            "entry_method": entry_method,
+            "source_ticket_id": ticket_channel_id,
+            "channel_id": ticket_channel_id,
+            "channel_name": channel.name if isinstance(channel, discord.TextChannel) else None,
+        }
+
+        try:
+            (
+                sb.table("member_events")
+                .insert(
+                    {
+                        "guild_id": guild_id,
+                        "user_id": user_id,
+                        "actor_id": staff_id,
+                        "actor_name": staff_name,
+                        "event_type": event_type,
+                        "title": title,
+                        "reason": str(decision_text),
+                        "metadata": metadata,
+                        "created_at": now_iso,
+                    }
+                )
+                .execute()
+            )
+        except Exception:
+            pass
+    except Exception:
+        pass
 
 
 async def _mark_decision_safe(
@@ -669,6 +903,14 @@ async def request_resubmission(
         staff_member=staff_member,
         owner=resolved_owner if isinstance(resolved_owner, discord.Member) else None,
     )
+    _sync_member_verification_context(
+        guild=guild,
+        owner=resolved_owner if isinstance(resolved_owner, discord.Member) else None,
+        channel=resolved_channel,
+        token_info=token_info if isinstance(token_info, dict) else None,
+        staff_member=staff_member,
+        decision_text="RESUBMIT REQUESTED",
+    )
 
     reissue = await reissue_verify_ui(
         channel=resolved_channel,
@@ -743,7 +985,6 @@ async def approve_verification(
             already_finalized=True,
         )
 
-    # HARD STOP: shared duplicate protection
     if _member_looks_already_verified(resolved_owner):
         already_decision = f"{decision_text} (already verified)"
         await _mark_decision_safe(
@@ -758,6 +999,14 @@ async def approve_verification(
             decision=already_decision,
             staff_member=staff_member,
             owner=resolved_owner if isinstance(resolved_owner, discord.Member) else None,
+        )
+        _sync_member_verification_context(
+            guild=guild,
+            owner=resolved_owner if isinstance(resolved_owner, discord.Member) else None,
+            channel=resolved_channel if isinstance(resolved_channel, discord.TextChannel) else None,
+            token_info=token_info if isinstance(token_info, dict) else None,
+            staff_member=staff_member,
+            decision_text=already_decision,
         )
 
         return _result(
@@ -779,6 +1028,14 @@ async def approve_verification(
             decision=failed_decision,
             staff_member=staff_member,
             owner=resolved_owner if isinstance(resolved_owner, discord.Member) else None,
+        )
+        _sync_member_verification_context(
+            guild=guild,
+            owner=resolved_owner if isinstance(resolved_owner, discord.Member) else None,
+            channel=resolved_channel if isinstance(resolved_channel, discord.TextChannel) else None,
+            token_info=token_info if isinstance(token_info, dict) else None,
+            staff_member=staff_member,
+            decision_text=failed_decision,
         )
 
         if close_after and isinstance(resolved_channel, discord.TextChannel):
@@ -851,6 +1108,14 @@ async def approve_verification(
                 staff_member=staff_member,
                 owner=resolved_owner,
             )
+            _sync_member_verification_context(
+                guild=guild,
+                owner=resolved_owner,
+                channel=resolved_channel if isinstance(resolved_channel, discord.TextChannel) else None,
+                token_info=token_info if isinstance(token_info, dict) else None,
+                staff_member=staff_member,
+                decision_text=partial_decision,
+            )
 
             return _result(
                 False,
@@ -869,6 +1134,14 @@ async def approve_verification(
             decision=failed_decision,
             staff_member=staff_member,
             owner=resolved_owner,
+        )
+        _sync_member_verification_context(
+            guild=guild,
+            owner=resolved_owner,
+            channel=resolved_channel if isinstance(resolved_channel, discord.TextChannel) else None,
+            token_info=token_info if isinstance(token_info, dict) else None,
+            staff_member=staff_member,
+            decision_text=failed_decision,
         )
 
         return _result(
@@ -899,6 +1172,14 @@ async def approve_verification(
         decision=decision_text,
         staff_member=staff_member,
         owner=resolved_owner,
+    )
+    _sync_member_verification_context(
+        guild=guild,
+        owner=resolved_owner,
+        channel=resolved_channel if isinstance(resolved_channel, discord.TextChannel) else None,
+        token_info=token_info if isinstance(token_info, dict) else None,
+        staff_member=staff_member,
+        decision_text=decision_text,
     )
 
     if close_after and isinstance(resolved_channel, discord.TextChannel):
@@ -964,6 +1245,14 @@ async def deny_verification(
         decision=decision_text,
         staff_member=staff_member,
         owner=resolved_owner if isinstance(resolved_owner, discord.Member) else None,
+    )
+    _sync_member_verification_context(
+        guild=guild,
+        owner=resolved_owner if isinstance(resolved_owner, discord.Member) else None,
+        channel=resolved_channel if isinstance(resolved_channel, discord.TextChannel) else None,
+        token_info=token_info if isinstance(token_info, dict) else None,
+        staff_member=staff_member,
+        decision_text=decision_text,
     )
 
     if close_after and isinstance(resolved_channel, discord.TextChannel):
