@@ -451,10 +451,6 @@ def _category_metadata_payload(
     return payload
 
 
-# ============================================================
-# Verification wait timer cancellation bridge
-# ============================================================
-
 async def _cancel_verification_wait_timers_safe(guild_id: int, owner_id: int) -> bool:
     try:
         from ..commands import cancel_verification_wait_timers_for_member
@@ -470,10 +466,6 @@ async def _cancel_verification_wait_timers_safe(guild_id: int, owner_id: int) ->
         )
         return False
 
-
-# ============================================================
-# Ticket numbering / counter helpers
-# ============================================================
 
 def _title_for_ticket(owner: discord.abc.User, category: str, is_ghost: bool) -> str:
     base_name = (
@@ -809,10 +801,6 @@ async def _next_ticket_number(
     return await _reserve_next_ticket_number(guild, parent=parent)
 
 
-# ============================================================
-# Channel permission / UI helpers
-# ============================================================
-
 def _build_overwrites(
     guild: discord.Guild,
     owner: discord.Member,
@@ -1060,9 +1048,70 @@ def _row_channel_id(row: Dict[str, Any]) -> int:
     return _safe_int(row.get("channel_id") or row.get("discord_thread_id"), 0)
 
 
-# ============================================================
-# Public ticket service API
-# ============================================================
+def _safe_owner_mention(owner: Optional[discord.Member]) -> str:
+    try:
+        if isinstance(owner, discord.Member):
+            mention = str(owner.mention or "").strip()
+            if mention and "unknown-user" not in mention.lower():
+                return mention
+    except Exception:
+        pass
+    return ""
+
+
+def _contains_bad_owner_placeholder(text: str) -> bool:
+    lowered = _safe_str(text).lower()
+    bad_markers = (
+        "@unknown-user",
+        "unknown-user",
+        "<@0>",
+        "<@!0>",
+        "ticket owner: unknown",
+    )
+    return any(marker in lowered for marker in bad_markers)
+
+
+def _build_default_opening_message(
+    *,
+    owner: discord.Member,
+    category: str,
+    channel_name: str,
+) -> str:
+    owner_mention = _safe_owner_mention(owner)
+    welcome_prefix = f"{owner_mention} " if owner_mention else ""
+    lines = [
+        f"🎫 {welcome_prefix}welcome to your verification ticket.",
+        f"Ticket: `{channel_name}`",
+        f"Category: `{category}`",
+        "Please complete verification using the panel below.",
+    ]
+    return "\n".join(lines)
+
+
+def _sanitize_opening_message(
+    *,
+    opening_message: Optional[str],
+    owner: discord.Member,
+    category: str,
+    channel_name: str,
+) -> str:
+    candidate = _safe_str(opening_message).strip()
+    if not candidate:
+        return _build_default_opening_message(
+            owner=owner,
+            category=category,
+            channel_name=channel_name,
+        )
+
+    if _contains_bad_owner_placeholder(candidate):
+        return _build_default_opening_message(
+            owner=owner,
+            category=category,
+            channel_name=channel_name,
+        )
+
+    return candidate
+
 
 async def find_open_ticket_for_owner(
     *,
@@ -1097,15 +1146,6 @@ async def create_ticket_channel(
     category_override: bool = False,
     category_id: Optional[str] = None,
 ) -> Optional[discord.TextChannel]:
-    """
-    - one open/claimed ticket total per user
-    - per-user creation lock
-    - numbered channels
-    - verification UI only for actual Unverified users
-    - close controls posted once
-    - cancels pre-ticket verification wait timers as soon as a real ticket exists
-    - preserves matched category metadata from smarter intake routing
-    """
     user_lock = _user_ticket_creation_lock(owner.id)
     clean_priority = _safe_str(priority).strip().lower()
     if clean_priority not in _VALID_TICKET_PRIORITIES:
@@ -1230,16 +1270,21 @@ async def create_ticket_channel(
         except Exception:
             pass
 
-        intro_message = opening_message or (
-            f"🎫 Ticket opened for {owner.mention}\n"
-            f"Ticket: `{channel_name}`\n"
-            f"Category: `{category}`"
+        intro_message = _sanitize_opening_message(
+            opening_message=opening_message,
+            owner=owner,
+            category=category,
+            channel_name=channel_name,
         )
 
         try:
             await channel.send(
                 intro_message,
-                allowed_mentions=discord.AllowedMentions.none(),
+                allowed_mentions=discord.AllowedMentions(
+                    users=[owner],
+                    roles=False,
+                    everyone=False,
+                ),
             )
         except Exception as e:
             print("⚠️ Failed sending opening ticket message:", repr(e))
