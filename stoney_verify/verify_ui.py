@@ -187,6 +187,92 @@ def _is_staff_member(member: Optional[discord.Member]) -> bool:
             return False
 
 
+def _member_mention_or_fallback(
+    member: Optional[discord.Member],
+    member_id: int,
+) -> str:
+    try:
+        if isinstance(member, discord.Member):
+            return member.mention
+    except Exception:
+        pass
+
+    try:
+        mid = int(member_id or 0)
+    except Exception:
+        mid = 0
+
+    if mid > 0:
+        return f"<@{mid}>"
+    return ""
+
+
+def _vc_request_status_is_active(status: Any) -> bool:
+    try:
+        return str(status or "").upper().strip() in {
+            "PENDING",
+            "ACCEPTED",
+            "STAFF_ACCEPTED",
+            "READY",
+            "IN_VC",
+            "STARTED",
+            "TAKEN_OVER",
+            "RESTARTED",
+        }
+    except Exception:
+        return False
+
+
+def _find_active_vc_request_for_ticket_owner(
+    *,
+    ticket_channel_id: int,
+    owner_id: int,
+    exclude_token: Optional[str] = None,
+) -> Optional[Tuple[str, Dict[str, Any]]]:
+    try:
+        tcid = int(ticket_channel_id or 0)
+        oid = int(owner_id or 0)
+    except Exception:
+        return None
+
+    if tcid <= 0 or oid <= 0:
+        return None
+
+    excluded = _safe_str(exclude_token)
+
+    for tok, req in list((VC_REQUESTS or {}).items()):
+        try:
+            token_text = _safe_str(tok)
+            if not token_text:
+                continue
+            if excluded and token_text == excluded:
+                continue
+            if not isinstance(req, dict):
+                continue
+
+            req_ticket_channel_id = int(req.get("ticket_channel_id") or 0)
+            req_owner_id = int(
+                req.get("owner_id")
+                or req.get("requester_id")
+                or req.get("requested_by")
+                or 0
+            )
+            req_status = str(req.get("status") or "").upper().strip()
+
+            if req_ticket_channel_id != tcid:
+                continue
+            if req_owner_id != oid:
+                continue
+            if not _vc_request_status_is_active(req_status):
+                continue
+
+            return token_text, dict(req)
+        except Exception:
+            continue
+
+    return None
+
+
 # ============================================================
 # Owner parsing / resolution
 # ============================================================
@@ -751,7 +837,7 @@ async def _post_vc_request_to_staff(
     if not qch:
         return False
 
-    owner_mention = f"<@{owner_id}>" if owner_id else "Unknown user"
+    owner_mention = f"<@{owner_id}>" if owner_id else "Ticket owner unresolved"
     vc_id = _vc_channel_id()
     ping = _staff_ping_text()
 
@@ -828,19 +914,22 @@ async def _post_user_vc_status_message(
     *,
     ticket_channel: discord.TextChannel,
     owner_id: int,
+    owner_member: Optional[discord.Member],
     vc_id: int,
     staff_posted: bool,
 ) -> None:
     try:
-        mention = f"<@{owner_id}>" if owner_id else ""
+        mention = _member_mention_or_fallback(owner_member, owner_id)
+        prefix = f"{mention} " if mention else ""
+
         if staff_posted:
             await ticket_channel.send(
-                f"🎙️ {mention} **VC verification request sent.**\n"
+                f"🎙️ {prefix}**VC verification request sent.**\n"
                 "Staff has been notified. Please wait here — when a staff member is ready, they'll tell you to join VC."
             )
         else:
             await ticket_channel.send(
-                f"🎙️ {mention} **VC verification request sent.**\n"
+                f"🎙️ {prefix}**VC verification request sent.**\n"
                 "Staff will respond here when they're ready. Please wait."
             )
     except Exception:
@@ -1026,24 +1115,16 @@ async def maybe_handle_verify_ui_interaction(interaction: discord.Interaction, *
             except Exception:
                 pass
 
-            try:
-                for tok, req in list((VC_REQUESTS or {}).items()):
-                    if not isinstance(req, dict):
-                        continue
-                    if req.get("status") != "PENDING":
-                        continue
-                    if int(req.get("ticket_channel_id", 0) or 0) != int(channel.id):
-                        continue
-                    if int(req.get("requested_by", 0) or 0) != int(user.id):
-                        continue
-
-                    await interaction.response.send_message(
-                        "✅ VC request is already queued. Staff will respond soon.",
-                        ephemeral=True,
-                    )
-                    return True
-            except Exception:
-                pass
+            existing_req = _find_active_vc_request_for_ticket_owner(
+                ticket_channel_id=int(channel.id),
+                owner_id=int(owner_id),
+            )
+            if existing_req:
+                await interaction.response.send_message(
+                    "✅ VC request is already queued for this ticket. Staff will respond soon.",
+                    ephemeral=True,
+                )
+                return True
 
             ttl = int(VC_REQUEST_TTL_MINUTES or 0) or int(TOKEN_TTL_MINUTES or 20)
             requester_id = int(owner_id)
@@ -1061,6 +1142,7 @@ async def maybe_handle_verify_ui_interaction(interaction: discord.Interaction, *
                     "status": "PENDING",
                     "requested_at": _now_utc().isoformat(),
                     "requested_by": int(user.id),
+                    "requester_id": int(owner_id),
                     "owner_id": int(owner_id),
                     "ticket_channel_id": int(channel.id),
                     "guild_id": int(guild.id),
@@ -1079,6 +1161,7 @@ async def maybe_handle_verify_ui_interaction(interaction: discord.Interaction, *
             await _post_user_vc_status_message(
                 ticket_channel=channel,
                 owner_id=int(owner_id),
+                owner_member=owner_member,
                 vc_id=int(vc_id),
                 staff_posted=bool(staff_posted),
             )
