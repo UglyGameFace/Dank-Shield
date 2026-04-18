@@ -77,6 +77,9 @@ def _initial_meta(meta: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         "unlock_guard_reason": "",
         "ticket_required": True,
         "vc_locked_by_default": True,
+        "session_extended_count": 0,
+        "session_extended_reason": "",
+        "session_extended_at": None,
     }
     if isinstance(meta, dict):
         base.update(meta)
@@ -95,6 +98,19 @@ def _normalize_status(value: Any) -> str:
         return str(value or "").upper().strip() or "PENDING"
     except Exception:
         return "PENDING"
+
+
+def _active_statuses() -> set[str]:
+    return {
+        "PENDING",
+        "STAFF_ACCEPTED",
+        "OWNER_CONFIRMED",
+        "READY",
+        "STARTED",
+        "IN_VC",
+        "TAKEN_OVER",
+        "RESTARTED",
+    }
 
 
 def get_session(token: str) -> Optional[Dict[str, Any]]:
@@ -214,6 +230,104 @@ def update_meta(
         sb.table(_table()).update({"meta": meta}).eq("token", str(token)).execute()
     except Exception:
         return
+
+
+def extend_expiry(
+    *,
+    token: str,
+    minutes: int = 0,
+    reason: str = "",
+    by_staff_id: int = 0,
+) -> None:
+    if not sb_enabled():
+        return
+    sb = _sb()
+    if not sb:
+        return
+
+    try:
+        current = get_session(token) or {}
+        if not current:
+            return
+
+        access_minutes = int(current.get("access_minutes") or 0)
+        extension_minutes = int(minutes or access_minutes or _access_minutes())
+        if extension_minutes <= 0:
+            extension_minutes = _access_minutes()
+
+        meta_current = _merge_meta(current.get("meta"))
+        extension_count = int(meta_current.get("session_extended_count") or 0) + 1
+        now_iso = _utcnow().isoformat()
+
+        meta = _merge_meta(
+            meta_current,
+            {
+                "session_extended_count": extension_count,
+                "session_extended_reason": str(reason or "session still active"),
+                "session_extended_at": now_iso,
+                "last_action": "extend_expiry",
+                "last_action_at": now_iso,
+                "last_action_by": int(by_staff_id or 0) or None,
+            },
+        )
+
+        revoke_at = (_utcnow() + timedelta(minutes=extension_minutes)).isoformat()
+
+        sb.table(_table()).update(
+            {
+                "revoke_at": revoke_at,
+                "meta": meta,
+            }
+        ).eq("token", str(token)).execute()
+    except Exception:
+        return
+
+
+def get_reusable_session(
+    *,
+    guild_id: int,
+    owner_id: int,
+    vc_channel_id: Optional[int] = None,
+) -> Optional[Dict[str, Any]]:
+    if not sb_enabled():
+        return None
+    sb = _sb()
+    if not sb:
+        return None
+
+    try:
+        query = (
+            sb.table(_table())
+            .select("*")
+            .eq("guild_id", int(guild_id))
+            .eq("owner_id", int(owner_id))
+            .limit(25)
+        )
+
+        if vc_channel_id and int(vc_channel_id) > 0:
+            query = query.eq("vc_channel_id", int(vc_channel_id))
+
+        res = query.execute()
+        rows = getattr(res, "data", None) or []
+
+        active_rows = []
+        for raw in rows:
+            if not isinstance(raw, dict):
+                continue
+            row = dict(raw)
+            row["meta"] = _merge_meta(row.get("meta"))
+            row["status"] = _normalize_status(row.get("status"))
+            if row.get("status") in _active_statuses():
+                active_rows.append(row)
+
+        active_rows.sort(
+            key=lambda item: str(item.get("updated_at") or item.get("created_at") or ""),
+            reverse=True,
+        )
+
+        return active_rows[0] if active_rows else None
+    except Exception:
+        return None
 
 
 def _allowed_unlock_statuses() -> set[str]:
