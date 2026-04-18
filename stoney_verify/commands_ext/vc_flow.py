@@ -843,9 +843,10 @@ async def _vc_lock_channel_for_session(
 
     _set_request_status(
         token,
-        "ACCEPTED",
+        "STAFF_ACCEPTED",
         accepted_staff_id=int(staff_member.id),
         assigned_staff_id=int(staff_member.id),
+        accepted_by=int(staff_member.id),
         vc_channel_id=int(VC_VERIFY_CHANNEL_ID or 0),
         accepted_at=now_utc().isoformat(),
     )
@@ -1093,6 +1094,7 @@ async def _vc_reissue_command(
         requested_at=now_utc().isoformat(),
         requested_by=int(rid or interaction.user.id),
         owner_id=int(rid or 0),
+        requester_id=int(rid or 0),
         ticket_channel_id=int(ticket_ch.id),
         guild_id=int(guild.id),
         reissued_from=resolved_token,
@@ -1322,6 +1324,7 @@ async def _vc_takeover_command(
         "TAKEN_OVER",
         accepted_staff_id=int(interaction.user.id),
         accepted_by=int(interaction.user.id),
+        assigned_staff_id=int(interaction.user.id),
         takeover_at=now_utc().isoformat(),
         takeover_by=int(interaction.user.id),
     )
