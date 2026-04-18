@@ -1,3 +1,7 @@
+# ============================================================
+# File: stoney_verify/events.py
+# ============================================================
+
 from __future__ import annotations
 
 import asyncio
@@ -1638,6 +1642,47 @@ def _invite_meta(invite: discord.Invite) -> Dict[str, Any]:
     }
 
 
+def _build_join_context(
+    *,
+    entry_method: str,
+    join_source: str,
+    verification_source: str,
+    invite_code: Optional[str] = None,
+    invited_by: Optional[str] = None,
+    invited_by_name: Optional[str] = None,
+    vouched_by: Optional[str] = None,
+    vouched_by_name: Optional[str] = None,
+    approved_by: Optional[str] = None,
+    approved_by_name: Optional[str] = None,
+    entry_reason: Optional[str] = None,
+    approval_reason: Optional[str] = None,
+    join_note: Optional[str] = None,
+    channel_id: Optional[str] = None,
+    channel_name: Optional[str] = None,
+    vanity_used: bool = False,
+    source_ticket_id: Optional[str] = None,
+) -> Dict[str, Any]:
+    return {
+        "entry_method": str(entry_method or "").strip() or "unknown_join",
+        "join_source": str(join_source or "").strip() or "unknown_join",
+        "verification_source": str(verification_source or "").strip() or "join_observer_unresolved",
+        "invite_code": str(invite_code or "").strip() or None,
+        "invited_by": str(invited_by or "").strip() or None,
+        "invited_by_name": str(invited_by_name or "").strip() or None,
+        "vouched_by": str(vouched_by or "").strip() or None,
+        "vouched_by_name": str(vouched_by_name or "").strip() or None,
+        "approved_by": str(approved_by or "").strip() or None,
+        "approved_by_name": str(approved_by_name or "").strip() or None,
+        "entry_reason": str(entry_reason or "").strip() or None,
+        "approval_reason": str(approval_reason or "").strip() or None,
+        "join_note": str(join_note or "").strip() or None,
+        "channel_id": str(channel_id or "").strip() or None,
+        "channel_name": str(channel_name or "").strip() or None,
+        "vanity_used": bool(vanity_used),
+        "source_ticket_id": str(source_ticket_id or "").strip() or None,
+    }
+
+
 async def _refresh_guild_invite_cache(guild: discord.Guild) -> bool:
     gid = int(guild.id)
 
@@ -1699,22 +1744,14 @@ async def _detect_join_entry_context(member: discord.Member) -> Dict[str, Any]:
     guild = member.guild
     gid = int(guild.id)
 
-    default_context: Dict[str, Any] = {
-        "entry_method": "unknown_join",
-        "verification_source": "join_observer_unresolved",
-        "invite_code": None,
-        "invited_by": None,
-        "invited_by_name": None,
-        "vouched_by": None,
-        "vouched_by_name": None,
-        "approved_by": None,
-        "approved_by_name": None,
-        "entry_reason": "Joined, but invite attribution was unavailable.",
-        "approval_reason": None,
-        "join_note": "Invite attribution unavailable at join time.",
-        "channel_id": None,
-        "channel_name": None,
-    }
+    default_context = _build_join_context(
+        entry_method="unknown_join",
+        join_source="unknown_join",
+        verification_source="join_observer_unresolved",
+        entry_reason="Joined, but invite attribution was unavailable.",
+        join_note="Invite attribution unavailable at join time.",
+        vanity_used=False,
+    )
 
     old_uses = dict(_INVITE_USES_CACHE.get(gid) or {})
     old_meta = dict(_INVITE_META_CACHE.get(gid) or {})
@@ -1767,31 +1804,28 @@ async def _detect_join_entry_context(member: discord.Member) -> Dict[str, Any]:
         channel_name = str(meta.get("channel_name") or "").strip() or None
         channel_id = str(meta.get("channel_id") or "").strip() or None
 
-        context = {
-            "entry_method": "discord_invite",
-            "verification_source": "discord_invite",
-            "invite_code": best_code,
-            "invited_by": inviter_id,
-            "invited_by_name": inviter_name,
-            "vouched_by": None,
-            "vouched_by_name": None,
-            "approved_by": None,
-            "approved_by_name": None,
-            "entry_reason": (
+        context = _build_join_context(
+            entry_method="invite",
+            join_source="discord_invite",
+            verification_source="invite_join",
+            invite_code=best_code,
+            invited_by=inviter_id,
+            invited_by_name=inviter_name,
+            entry_reason=(
                 f"Joined using invite `{best_code}`"
                 + (f" created by {inviter_name}" if inviter_name else "")
                 + (f" in #{channel_name}" if channel_name else "")
                 + "."
             ),
-            "approval_reason": None,
-            "join_note": (
+            join_note=(
                 f"Invite `{best_code}`"
                 + (f" • inviter: {inviter_name}" if inviter_name else "")
                 + (f" • channel: #{channel_name}" if channel_name else "")
             ),
-            "channel_id": channel_id,
-            "channel_name": channel_name,
-        }
+            channel_id=channel_id,
+            channel_name=channel_name,
+            vanity_used=False,
+        )
 
         _INVITE_USES_CACHE[gid] = current_uses
         _INVITE_META_CACHE[gid] = current_meta
@@ -1803,22 +1837,16 @@ async def _detect_join_entry_context(member: discord.Member) -> Dict[str, Any]:
         and vanity_uses is not None
         and int(vanity_uses) > int(old_vanity_uses)
     ):
-        context = {
-            "entry_method": "vanity_invite",
-            "verification_source": "discord_vanity",
-            "invite_code": vanity_code or "vanity",
-            "invited_by": None,
-            "invited_by_name": "Vanity URL",
-            "vouched_by": None,
-            "vouched_by_name": None,
-            "approved_by": None,
-            "approved_by_name": None,
-            "entry_reason": "Joined using the server vanity URL.",
-            "approval_reason": None,
-            "join_note": "Joined through vanity invite tracking.",
-            "channel_id": None,
-            "channel_name": None,
-        }
+        context = _build_join_context(
+            entry_method="vanity_invite",
+            join_source="vanity_invite",
+            verification_source="vanity_invite",
+            invite_code=vanity_code or "vanity",
+            invited_by_name="Vanity URL",
+            entry_reason="Joined using the server vanity URL.",
+            join_note="Joined through vanity invite tracking.",
+            vanity_used=True,
+        )
 
         _INVITE_USES_CACHE[gid] = current_uses
         _INVITE_META_CACHE[gid] = current_meta
@@ -1826,25 +1854,40 @@ async def _detect_join_entry_context(member: discord.Member) -> Dict[str, Any]:
         return context
 
     if not invites_ok:
-        default_context["verification_source"] = "invite_tracking_unavailable"
-        default_context["entry_reason"] = (
-            "Joined, but the bot could not inspect invite usage. "
-            "Check Manage Server / invite read permissions."
+        default_context = _build_join_context(
+            entry_method="invite_tracking_unavailable",
+            join_source="invite_tracking_unavailable",
+            verification_source="invite_tracking_unavailable",
+            entry_reason=(
+                "Joined, but the bot could not inspect invite usage. "
+                "Check Manage Server / invite read permissions."
+            ),
+            join_note="Invite tracking unavailable for this join.",
+            vanity_used=False,
         )
-        default_context["join_note"] = "Invite tracking unavailable for this join."
     elif not old_uses and current_uses:
-        default_context["verification_source"] = "invite_cache_warming"
-        default_context["entry_reason"] = (
-            "Joined before the bot had a usable invite baseline cache. "
-            "Future joins should attribute correctly after cache warm-up."
+        default_context = _build_join_context(
+            entry_method="invite_cache_warming",
+            join_source="invite_cache_warming",
+            verification_source="invite_cache_warming",
+            entry_reason=(
+                "Joined before the bot had a usable invite baseline cache. "
+                "Future joins should attribute correctly after cache warm-up."
+            ),
+            join_note="Invite cache was still warming when this member joined.",
+            vanity_used=False,
         )
-        default_context["join_note"] = "Invite cache was still warming when this member joined."
     else:
-        default_context["verification_source"] = "invite_unresolved"
-        default_context["entry_reason"] = (
-            "Joined, but invite attribution could not be resolved from the invite delta."
+        default_context = _build_join_context(
+            entry_method="invite_unresolved",
+            join_source="invite_unresolved",
+            verification_source="invite_unresolved",
+            entry_reason=(
+                "Joined, but invite attribution could not be resolved from the invite delta."
+            ),
+            join_note="Invite delta did not clearly resolve this join.",
+            vanity_used=False,
         )
-        default_context["join_note"] = "Invite delta did not clearly resolve this join."
 
     _INVITE_USES_CACHE[gid] = current_uses
     _INVITE_META_CACHE[gid] = current_meta
@@ -1872,6 +1915,7 @@ async def _persist_member_join_context(
 
         guild_member_patch = {
             "entry_method": context.get("entry_method"),
+            "join_source": context.get("join_source"),
             "verification_source": context.get("verification_source"),
             "invite_code": context.get("invite_code"),
             "invited_by": context.get("invited_by"),
@@ -1882,7 +1926,9 @@ async def _persist_member_join_context(
             "approved_by_name": context.get("approved_by_name"),
             "entry_reason": context.get("entry_reason"),
             "approval_reason": context.get("approval_reason"),
+            "source_ticket_id": context.get("source_ticket_id"),
             "joined_at": joined_at,
+            "vanity_used": bool(context.get("vanity_used", False)),
             "synced_at": now_iso,
             "updated_at": now_iso,
             "last_seen_at": now_iso,
@@ -1902,6 +1948,7 @@ async def _persist_member_join_context(
             "avatar_url": _safe_member_avatar_url(member),
             "joined_at": joined_at,
             "entry_method": context.get("entry_method"),
+            "join_source": context.get("join_source"),
             "verification_source": context.get("verification_source"),
             "invite_code": context.get("invite_code"),
             "invited_by": context.get("invited_by"),
@@ -1911,7 +1958,8 @@ async def _persist_member_join_context(
             "approved_by": context.get("approved_by"),
             "approved_by_name": context.get("approved_by_name"),
             "join_note": context.get("join_note"),
-            "source_ticket_id": None,
+            "source_ticket_id": context.get("source_ticket_id"),
+            "vanity_used": bool(context.get("vanity_used", False)),
             "risk_score": risk_payload.get("risk_score", 0),
             "risk_level": risk_payload.get("risk_level", "low"),
             "risk_reasons": risk_payload.get("risk_reasons", []),
@@ -1946,18 +1994,31 @@ async def _persist_member_join_context(
                 {
                     "guild_id": guild_id,
                     "user_id": user_id,
-                    "actor_id": context.get("invited_by"),
-                    "actor_name": context.get("invited_by_name") or "System",
+                    "actor_id": context.get("invited_by") or context.get("approved_by") or context.get("vouched_by"),
+                    "actor_name": (
+                        context.get("invited_by_name")
+                        or context.get("approved_by_name")
+                        or context.get("vouched_by_name")
+                        or "System"
+                    ),
                     "event_type": "member_joined",
                     "title": "Member Joined",
                     "reason": context.get("entry_reason"),
                     "metadata": {
                         "invite_code": context.get("invite_code"),
                         "entry_method": context.get("entry_method"),
+                        "join_source": context.get("join_source"),
                         "verification_source": context.get("verification_source"),
                         "channel_id": context.get("channel_id"),
                         "channel_name": context.get("channel_name"),
                         "joined_at": joined_at,
+                        "vanity_used": bool(context.get("vanity_used", False)),
+                        "invited_by": context.get("invited_by"),
+                        "invited_by_name": context.get("invited_by_name"),
+                        "vouched_by": context.get("vouched_by"),
+                        "vouched_by_name": context.get("vouched_by_name"),
+                        "approved_by": context.get("approved_by"),
+                        "approved_by_name": context.get("approved_by_name"),
                         "risk_score": risk_payload.get("risk_score", 0),
                         "risk_level": risk_payload.get("risk_level", "low"),
                         "fingerprint": risk_payload.get("fingerprint"),
