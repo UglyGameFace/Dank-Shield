@@ -164,6 +164,12 @@ def get_supabase(*, force_new: bool = False) -> Optional[Client]:
 VERIFY_SITE_URL: str = _env_str("VERIFY_SITE_URL")
 BOT_ACTIONS_API_URL: str = _env_str("BOT_ACTIONS_API_URL")
 
+BOT_API_SHARED_SECRET: str = _env_str("BOT_API_SHARED_SECRET")
+BOT_API_BIND_HOST: str = _env_str("BOT_API_BIND_HOST", "127.0.0.1")
+BOT_API_PORT: int = _env_int("BOT_API_PORT", 8081)
+BOT_API_REQUIRE_AUTH: bool = _env_bool("BOT_API_REQUIRE_AUTH", True)
+BOT_API_ALLOW_INSECURE: bool = _env_bool("BOT_API_ALLOW_INSECURE", False)
+
 
 # ============================================================
 # Verification Channels
@@ -486,5 +492,8 @@ def config_summary() -> dict:
         "staff_role": STAFF_ROLE_ID,
         "transcripts_channel": TRANSCRIPTS_CHANNEL_ID,
         "verify_kick_hours": VERIFY_KICK_HOURS,
+        "bot_api_bind_host": BOT_API_BIND_HOST,
+        "bot_api_port": BOT_API_PORT,
+        "bot_api_require_auth": BOT_API_REQUIRE_AUTH,
         "supabase": bool(SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY),
     }
