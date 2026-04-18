@@ -1,3 +1,7 @@
+# ============================================================
+# File: stoney_verify/workers/bot_command_worker.py
+# ============================================================
+
 from __future__ import annotations
 
 import asyncio
@@ -68,6 +72,75 @@ def _safe_bool(value: Any, default: bool = False) -> bool:
     if text in {"0", "false", "no", "n", "off"}:
         return False
     return default
+
+
+def _safe_dict(value: Any) -> Dict[str, Any]:
+    if isinstance(value, dict):
+        return dict(value)
+    return {}
+
+
+def _safe_list(value: Any) -> List[Any]:
+    if isinstance(value, list):
+        return list(value)
+    return []
+
+
+def _first_non_empty_str(*values: Any) -> str:
+    for value in values:
+        text = _safe_str(value)
+        if text:
+            return text
+    return ""
+
+
+def _first_positive_int(*values: Any) -> int:
+    for value in values:
+        parsed = _safe_int(value, 0)
+        if parsed > 0:
+            return parsed
+    return 0
+
+
+def _parse_int_list(value: Any) -> List[int]:
+    out: List[int] = []
+    seen: set[int] = set()
+
+    for item in _safe_list(value):
+        rid = _safe_int(item, 0)
+        if rid > 0 and rid not in seen:
+            seen.add(rid)
+            out.append(rid)
+
+    return out
+
+
+def _ticket_result_payload(row: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    if not isinstance(row, dict):
+        return None
+
+    return {
+        "id": _safe_str(row.get("id")) or None,
+        "guild_id": _safe_str(row.get("guild_id")) or None,
+        "channel_id": _safe_str(row.get("channel_id") or row.get("discord_thread_id")) or None,
+        "channel_name": _safe_str(row.get("channel_name")) or None,
+        "ticket_number": row.get("ticket_number"),
+        "title": _safe_str(row.get("title")) or None,
+        "category": _safe_str(row.get("category")) or None,
+        "matched_category_name": _safe_str(row.get("matched_category_name")) or None,
+        "matched_category_slug": _safe_str(row.get("matched_category_slug")) or None,
+        "matched_intake_type": _safe_str(row.get("matched_intake_type")) or None,
+        "status": _safe_str(row.get("status")) or None,
+        "priority": _safe_str(row.get("priority")) or None,
+        "user_id": _safe_str(row.get("user_id") or row.get("owner_id") or row.get("requester_id")) or None,
+        "username": _safe_str(row.get("username")) or None,
+        "claimed_by": _safe_str(row.get("claimed_by")) or None,
+        "assigned_to": _safe_str(row.get("assigned_to")) or None,
+        "created_at": row.get("created_at"),
+        "updated_at": row.get("updated_at"),
+        "closed_at": row.get("closed_at"),
+        "deleted_at": row.get("deleted_at"),
+    }
 
 
 def _get_global_int(name: str, default: int = 0) -> int:
@@ -412,6 +485,44 @@ async def get_ticket_by_channel_id(channel_id: int) -> Optional[Dict[str, Any]]:
         return None
 
 
+async def get_open_ticket_for_user(
+    guild_id: str,
+    user_id: str,
+) -> Optional[Dict[str, Any]]:
+    guild_id_text = _safe_str(guild_id)
+    user_id_text = _safe_str(user_id)
+
+    if not guild_id_text or not user_id_text:
+        return None
+
+    def _read() -> Optional[Dict[str, Any]]:
+        sb = get_supabase()
+        if sb is None:
+            return None
+
+        res = (
+            sb.table("tickets")
+            .select("*")
+            .eq("guild_id", guild_id_text)
+            .eq("user_id", user_id_text)
+            .in_("status", ["open", "claimed"])
+            .order("updated_at", desc=True)
+            .limit(1)
+            .execute()
+        )
+
+        rows = getattr(res, "data", None) or []
+        if rows:
+            return rows[0]
+        return None
+
+    try:
+        return await _run_db_op("get open ticket for user", _read)
+    except Exception as e:
+        print("⚠️ Failed fetching open ticket for user:", repr(e))
+        return None
+
+
 async def update_ticket_by_channel_id(
     channel_id: int,
     patch: Dict[str, Any],
@@ -592,6 +703,7 @@ async def patch_guild_member_entry_fields(
     verification_ticket_id: Optional[str] = None,
     source_ticket_id: Optional[str] = None,
     entry_method: Optional[str] = None,
+    join_source: Optional[str] = None,
     verification_source: Optional[str] = None,
     entry_reason: Optional[str] = None,
     approval_reason: Optional[str] = None,
@@ -610,6 +722,7 @@ async def patch_guild_member_entry_fields(
         "verification_ticket_id": _safe_str(verification_ticket_id) or None,
         "source_ticket_id": _safe_str(source_ticket_id) or None,
         "entry_method": _safe_str(entry_method) or None,
+        "join_source": _safe_str(join_source) or None,
         "verification_source": _safe_str(verification_source) or None,
         "entry_reason": _safe_str(entry_reason) or None,
         "approval_reason": _safe_str(approval_reason) or None,
@@ -646,6 +759,7 @@ async def patch_latest_member_join_context(
     invited_by_name: Optional[str] = None,
     invite_code: Optional[str] = None,
     entry_method: Optional[str] = None,
+    join_source: Optional[str] = None,
     verification_source: Optional[str] = None,
     vouched_by: Optional[str] = None,
     vouched_by_name: Optional[str] = None,
@@ -691,6 +805,7 @@ async def patch_latest_member_join_context(
             "invited_by_name": _safe_str(invited_by_name) or None,
             "invite_code": _safe_str(invite_code) or None,
             "entry_method": _safe_str(entry_method) or None,
+            "join_source": _safe_str(join_source) or None,
             "verification_source": _safe_str(verification_source) or None,
             "vouched_by": _safe_str(vouched_by) or None,
             "vouched_by_name": _safe_str(vouched_by_name) or None,
@@ -796,6 +911,7 @@ async def _record_verification_context(
     verification_ticket_id: Optional[str],
     source_ticket_id: Optional[str],
     entry_method: Optional[str],
+    join_source: Optional[str],
     verification_source: Optional[str],
     entry_reason: Optional[str],
     approval_reason: Optional[str],
@@ -813,6 +929,7 @@ async def _record_verification_context(
         verification_ticket_id=verification_ticket_id,
         source_ticket_id=source_ticket_id,
         entry_method=entry_method,
+        join_source=join_source,
         verification_source=verification_source,
         entry_reason=entry_reason,
         approval_reason=approval_reason,
@@ -828,6 +945,7 @@ async def _record_verification_context(
         invited_by_name=invited_by_name,
         invite_code=invite_code,
         entry_method=entry_method,
+        join_source=join_source,
         verification_source=verification_source,
         vouched_by=vouched_by,
         vouched_by_name=vouched_by_name,
@@ -886,7 +1004,7 @@ async def _log_verification_note_and_event(
 
 async def execute_command(cmd: Dict[str, Any]):
     action = _safe_str(cmd.get("action"))
-    payload = cmd.get("payload") or {}
+    payload = _safe_dict(cmd.get("payload") or {})
 
     guild_id = _safe_str(cmd.get("guild_id"))
     guild = bot.get_guild(_safe_int(guild_id))
@@ -897,26 +1015,90 @@ async def execute_command(cmd: Dict[str, Any]):
     print(f"⚙️ Executing bot command: {action}")
 
     if action == "create_ticket":
-        user_id = _safe_int(payload.get("user_id"))
+        member_snapshot = _safe_dict(payload.get("member_snapshot"))
+        dashboard_context = _safe_dict(payload.get("dashboard_context"))
+
+        user_id = _first_positive_int(
+            payload.get("user_id"),
+            payload.get("owner_id"),
+            payload.get("requester_id"),
+        )
+        if user_id <= 0:
+            raise RuntimeError("User id missing from create_ticket payload")
+
         member = guild.get_member(user_id)
+        if member is None:
+            try:
+                member = await guild.fetch_member(user_id)
+            except Exception:
+                member = None
 
         if member is None:
             raise RuntimeError("User not found in guild")
 
-        category = _safe_str(payload.get("category")) or "support"
+        category = (
+            _first_non_empty_str(
+                payload.get("category"),
+                payload.get("category_slug"),
+                payload.get("matched_category_slug"),
+                dashboard_context.get("requested_category_slug"),
+                payload.get("matched_intake_type"),
+                payload.get("intake_type"),
+                dashboard_context.get("requested_intake_type"),
+            )
+            or "support"
+        )
+
         ghost = _safe_bool(payload.get("ghost"), False)
-        opening_message = _safe_str(payload.get("opening_message"))
-        priority = _safe_str(payload.get("priority")) or "medium"
 
-        parent_category_id = _safe_int(payload.get("parent_category_id"), 0) or None
+        member_message = _first_non_empty_str(
+            payload.get("member_message"),
+            payload.get("message"),
+        )
+        initial_message = _first_non_empty_str(
+            payload.get("initial_message"),
+            payload.get("opening_message"),
+        )
 
-        staff_role_ids_raw = payload.get("staff_role_ids")
-        staff_role_ids: List[int] = []
-        if isinstance(staff_role_ids_raw, list):
-            for v in staff_role_ids_raw:
-                rid = _safe_int(v, 0)
-                if rid > 0:
-                    staff_role_ids.append(rid)
+        opening_message = initial_message or member_message
+        if initial_message and member_message and member_message not in initial_message:
+            opening_message = f"{initial_message}\n\nUser message: {member_message}"
+
+        priority = _first_non_empty_str(
+            payload.get("priority"),
+            dashboard_context.get("requested_priority"),
+        ) or "medium"
+
+        source_value = _first_non_empty_str(
+            payload.get("source"),
+            payload.get("create_from"),
+            "dashboard",
+        )
+        worker_source = (
+            source_value
+            if source_value.endswith("_create_ticket")
+            else f"{source_value}_create_ticket"
+        )
+
+        parent_category_id = _first_positive_int(
+            payload.get("parent_category_id"),
+            dashboard_context.get("parent_category_id"),
+        ) or None
+
+        staff_role_ids = _parse_int_list(payload.get("staff_role_ids"))
+        if not staff_role_ids:
+            staff_role_ids = _parse_int_list(dashboard_context.get("staff_role_ids"))
+
+        existing_open_ticket = await get_open_ticket_for_user(
+            guild_id=guild_id,
+            user_id=str(member.id),
+        )
+        if existing_open_ticket:
+            return {
+                "created": False,
+                "duplicate": True,
+                "existing_ticket": _ticket_result_payload(existing_open_ticket),
+            }
 
         channel = None
 
@@ -925,7 +1107,7 @@ async def execute_command(cmd: Dict[str, Any]):
                 guild=guild,
                 owner=member,
                 category=category,
-                source="dashboard_create_ticket",
+                source=worker_source,
                 is_ghost=ghost,
                 parent_category_id=parent_category_id,
                 staff_role_ids=staff_role_ids,
@@ -955,15 +1137,131 @@ async def execute_command(cmd: Dict[str, Any]):
 
         ticket_row = await get_ticket_by_channel_id(int(channel.id))
 
+        if ticket_row is None and isinstance(channel, discord.TextChannel):
+            try:
+                await sync_one_ticket_channel(
+                    channel,
+                    source="bot_command_create_ticket_backfill",
+                    dry_run=False,
+                )
+            except Exception as e:
+                print("⚠️ Ticket row backfill after create_ticket failed:", repr(e))
+
+            ticket_row = await get_ticket_by_channel_id(int(channel.id))
+
+        invited_by = _first_non_empty_str(
+            payload.get("invited_by"),
+            member_snapshot.get("invited_by"),
+        ) or None
+        invited_by_name = _first_non_empty_str(
+            payload.get("invited_by_name"),
+            member_snapshot.get("invited_by_name"),
+        ) or None
+        invite_code = _first_non_empty_str(
+            payload.get("invite_code"),
+            member_snapshot.get("invite_code"),
+        ) or None
+        vouched_by = _first_non_empty_str(
+            payload.get("vouched_by"),
+            member_snapshot.get("vouched_by"),
+        ) or None
+        vouched_by_name = _first_non_empty_str(
+            payload.get("vouched_by_name"),
+            member_snapshot.get("vouched_by_name"),
+        ) or None
+        approved_by = _first_non_empty_str(
+            payload.get("approved_by"),
+            member_snapshot.get("approved_by"),
+        ) or None
+        approved_by_name = _first_non_empty_str(
+            payload.get("approved_by_name"),
+            member_snapshot.get("approved_by_name"),
+        ) or None
+
+        join_source = _first_non_empty_str(
+            payload.get("join_source"),
+            member_snapshot.get("join_source"),
+            payload.get("entry_method"),
+            member_snapshot.get("entry_method"),
+        ) or None
+
+        entry_method = _first_non_empty_str(
+            payload.get("entry_method"),
+            member_snapshot.get("entry_method"),
+            join_source,
+            "ticket",
+        ) or "ticket"
+
+        verification_source = _first_non_empty_str(
+            payload.get("verification_source"),
+            member_snapshot.get("verification_source"),
+            source_value,
+            "dashboard_create_ticket",
+        ) or "dashboard_create_ticket"
+
+        entry_reason = _first_non_empty_str(
+            payload.get("entry_reason"),
+            member_snapshot.get("entry_reason"),
+        ) or None
+
+        approval_reason = _first_non_empty_str(
+            payload.get("approval_reason"),
+            member_snapshot.get("approval_reason"),
+        ) or None
+
+        category_name = _first_non_empty_str(
+            payload.get("category_name"),
+            payload.get("matched_category_name"),
+            dashboard_context.get("requested_category_name"),
+            category,
+        )
+        category_slug = _first_non_empty_str(
+            payload.get("category_slug"),
+            payload.get("matched_category_slug"),
+            dashboard_context.get("requested_category_slug"),
+            category,
+        )
+        intake_type = _first_non_empty_str(
+            payload.get("intake_type"),
+            payload.get("matched_intake_type"),
+            dashboard_context.get("requested_intake_type"),
+            category,
+        )
+
         if ticket_row:
+            enriched_ticket = await update_ticket_by_channel_id(
+                int(channel.id),
+                {
+                    "source": source_value,
+                    "category": category_slug or category,
+                    "matched_category_name": category_name or None,
+                    "matched_category_slug": category_slug or None,
+                    "matched_intake_type": intake_type or None,
+                    "priority": priority,
+                    "initial_message": opening_message or None,
+                    "username": getattr(member, "name", None),
+                },
+            )
+            if enriched_ticket:
+                ticket_row = enriched_ticket
+
             verification_ticket_id = (
-                _safe_str(payload.get("verification_ticket_id"))
-                or _safe_str(payload.get("source_ticket_id"))
-                or _safe_str(ticket_row.get("id"))
+                _first_non_empty_str(
+                    payload.get("verification_ticket_id"),
+                    member_snapshot.get("verification_ticket_id"),
+                    payload.get("source_ticket_id"),
+                    member_snapshot.get("source_ticket_id"),
+                    ticket_row.get("id"),
+                )
+                or None
             )
             source_ticket_id = (
-                _safe_str(payload.get("source_ticket_id"))
-                or _safe_str(ticket_row.get("id"))
+                _first_non_empty_str(
+                    payload.get("source_ticket_id"),
+                    member_snapshot.get("source_ticket_id"),
+                    ticket_row.get("id"),
+                )
+                or None
             )
 
             await _record_verification_context(
@@ -972,19 +1270,20 @@ async def execute_command(cmd: Dict[str, Any]):
                 username=getattr(member, "name", None),
                 display_name=getattr(member, "display_name", None),
                 avatar_url=getattr(getattr(member, "display_avatar", None), "url", None),
-                invited_by=_safe_str(payload.get("invited_by")) or None,
-                invited_by_name=_safe_str(payload.get("invited_by_name")) or None,
-                invite_code=_safe_str(payload.get("invite_code")) or None,
-                vouched_by=_safe_str(payload.get("vouched_by")) or None,
-                vouched_by_name=_safe_str(payload.get("vouched_by_name")) or None,
-                approved_by=_safe_str(payload.get("approved_by")) or None,
-                approved_by_name=_safe_str(payload.get("approved_by_name")) or None,
+                invited_by=invited_by,
+                invited_by_name=invited_by_name,
+                invite_code=invite_code,
+                vouched_by=vouched_by,
+                vouched_by_name=vouched_by_name,
+                approved_by=approved_by,
+                approved_by_name=approved_by_name,
                 verification_ticket_id=verification_ticket_id,
                 source_ticket_id=source_ticket_id,
-                entry_method=_safe_str(payload.get("entry_method")) or "ticket",
-                verification_source=_safe_str(payload.get("verification_source")) or "dashboard_create_ticket",
-                entry_reason=_safe_str(payload.get("entry_reason")) or None,
-                approval_reason=_safe_str(payload.get("approval_reason")) or None,
+                entry_method=entry_method,
+                join_source=join_source,
+                verification_source=verification_source,
+                entry_reason=entry_reason,
+                approval_reason=approval_reason,
             )
 
             await insert_member_event(
@@ -994,23 +1293,30 @@ async def execute_command(cmd: Dict[str, Any]):
                 actor_name="Dashboard",
                 event_type="ticket_created",
                 title="Ticket Created",
-                reason=opening_message or f"Created {category} ticket from dashboard.",
+                reason=opening_message or f"Created {category_slug or category} ticket from dashboard.",
                 metadata={
                     "ticket_id": _safe_str(ticket_row.get("id")) or None,
                     "ticket_number": ticket_row.get("ticket_number"),
                     "channel_id": str(channel.id),
-                    "category": category,
+                    "category": category_slug or category,
+                    "matched_category_name": category_name or None,
+                    "matched_category_slug": category_slug or None,
+                    "matched_intake_type": intake_type or None,
                     "priority": priority,
-                    "entry_method": _safe_str(payload.get("entry_method")) or None,
-                    "verification_source": _safe_str(payload.get("verification_source")) or None,
+                    "entry_method": entry_method,
+                    "join_source": join_source,
+                    "verification_source": verification_source,
+                    "member_message": member_message or None,
                     "source": "bot_command_worker",
                 },
             )
 
         return {
             "created": True,
+            "duplicate": False,
             "channel_id": str(channel.id),
             "channel_name": getattr(channel, "name", None),
+            "ticket": _ticket_result_payload(ticket_row) if ticket_row else None,
         }
 
     if action == "close_ticket":
@@ -1383,6 +1689,7 @@ async def execute_command(cmd: Dict[str, Any]):
         )
         entry_reason = _safe_str(payload.get("entry_reason")) or reason
         approval_reason = _safe_str(payload.get("approval_reason")) or reason
+        join_source = _safe_str(payload.get("join_source")) or None
 
         member = guild.get_member(user_id)
         channel = await safe_fetch_channel(guild, channel_id) if channel_id else None
@@ -1588,6 +1895,7 @@ async def execute_command(cmd: Dict[str, Any]):
             verification_ticket_id=ticket_id or None,
             source_ticket_id=ticket_id or None,
             entry_method=entry_method,
+            join_source=join_source,
             verification_source=verification_source,
             entry_reason=entry_reason,
             approval_reason=approval_reason,
@@ -1612,6 +1920,7 @@ async def execute_command(cmd: Dict[str, Any]):
                 "vouched_by": vouched_by,
                 "vouched_by_name": vouched_by_name,
                 "entry_method": entry_method,
+                "join_source": join_source,
                 "verification_source": verification_source,
                 "source": "bot_command_worker",
             },
