@@ -9,9 +9,7 @@ import discord
 from discord import app_commands
 
 from ..globals import *  # noqa: F401,F403
-
 from ..tickets import find_ticket_owner_retry
-from ..verify_ui import post_or_replace_verify_ui
 
 from .common import (
     VC_ACCESS_TASKS,
@@ -126,7 +124,6 @@ def _request_lock(token: str) -> asyncio.Lock:
 
 
 def _vc_requests_channel_id() -> int:
-    """Resolve the staff alert channel id for VC verify request panels."""
     for key in ("VC_VERIFY_REQUESTS_CHANNEL_ID", "VC_VERIFY_QUEUE_CHANNEL_ID"):
         v = os.getenv(key)
         if v and str(v).strip().isdigit():
@@ -142,22 +139,23 @@ def _vc_requests_channel_id() -> int:
 
 
 def _get_vc_channel(guild: discord.Guild) -> Optional[discord.VoiceChannel]:
-    """Return the VC verification channel, or None if not configured/accessible."""
     try:
-        if not VC_VERIFY_CHANNEL_ID:
-            print("⚠️ VC_VERIFY_CHANNEL_ID is not set.")
+        vc_id = int(globals().get("VC_VERIFY_CHANNEL_ID", 0) or 0)
+        if vc_id <= 0:
+            vc_id = int(globals().get("VC_VERIFY_VC_ID", 0) or 0)
+
+        if vc_id <= 0:
+            print("⚠️ VC verify channel id is not configured.")
             return None
 
-        ch = guild.get_channel(int(VC_VERIFY_CHANNEL_ID))
-        if not isinstance(ch, discord.VoiceChannel):
-            print(
-                f"⚠️ Channel {VC_VERIFY_CHANNEL_ID} is not a voice channel "
-                f"(type: {type(ch).__name__})"
-            )
-            return None
-        return ch
+        ch = guild.get_channel(vc_id)
+        if isinstance(ch, discord.VoiceChannel):
+            return ch
+
+        print(f"⚠️ Channel {vc_id} is not a voice channel (type={type(ch).__name__}).")
+        return None
     except Exception as e:
-        print(f"⚠️ Error in _get_vc_channel: {e}")
+        print(f"⚠️ Error resolving VC channel: {e}")
         return None
 
 
@@ -165,7 +163,6 @@ async def _resolve_text_channel(
     guild: discord.Guild,
     channel_id: int,
 ) -> Optional[discord.abc.Messageable]:
-    """Resolve a staff post destination reliably."""
     if not channel_id:
         return None
 
@@ -197,7 +194,6 @@ async def _resolve_text_channel(
 
 
 async def _get_vc_queue_channel(guild: discord.Guild) -> Optional[discord.abc.Messageable]:
-    """VC verify staff queue channel."""
     try:
         cid = _vc_requests_channel_id()
         return await _resolve_text_channel(guild, int(cid or 0))
@@ -206,7 +202,6 @@ async def _get_vc_queue_channel(guild: discord.Guild) -> Optional[discord.abc.Me
 
 
 async def _get_staff_alert_channel(guild: discord.Guild) -> Optional[discord.abc.Messageable]:
-    """Where staff-only VC request panels should go."""
     q = await _get_vc_queue_channel(guild)
     if q:
         return q
@@ -234,10 +229,6 @@ def _can_manage_channel(
     me: discord.Member,
     channel: discord.abc.GuildChannel,
 ) -> Tuple[bool, str]:
-    """
-    Check if the bot can manage the channel.
-    Returns (True, "") or (False, reason).
-    """
     try:
         if not me:
             return False, "Bot member not found in guild."
@@ -255,10 +246,6 @@ async def _resolve_ticket_channel_from_token_info(
     guild: discord.Guild,
     token_info: Dict[str, Any],
 ) -> Optional[discord.TextChannel]:
-    """
-    Resolve the real ticket text channel from Supabase token_info.
-    Returns None if channel doesn't exist or is not a text channel.
-    """
     ch_id = _safe_int(token_info.get("channel_id"), 0)
     if ch_id <= 0:
         return None
@@ -288,13 +275,12 @@ def _build_vc_staff_embed(
     ticket_channel_id: int,
     token: str,
 ) -> discord.Embed:
-    """Staff VC verification panel embed."""
     member = guild.get_member(int(requester_id))
 
     if member:
         user_display = f"{member.mention} — **{member.display_name}**"
     else:
-        user_display = f"<@{requester_id}>"
+        user_display = requester_mention or f"<@{requester_id}>"
 
     emb = discord.Embed(
         title="🎙️ VC Verification Requested",
@@ -313,11 +299,13 @@ def _build_vc_staff_embed(
         value=f"<#{int(ticket_channel_id)}>\n`{ticket_channel_id}`",
         inline=True,
     )
+
+    vc_id = _safe_int(globals().get("VC_VERIFY_CHANNEL_ID", 0) or globals().get("VC_VERIFY_VC_ID", 0), 0)
     emb.add_field(
         name="VC Channel",
         value=(
-            f"<#{int(VC_VERIFY_CHANNEL_ID)}>\n`{VC_VERIFY_CHANNEL_ID}`"
-            if VC_VERIFY_CHANNEL_ID
+            f"<#{vc_id}>\n`{vc_id}`"
+            if vc_id > 0
             else "`Not configured`"
         ),
         inline=True,
@@ -334,9 +322,7 @@ def _build_vc_staff_embed(
             globals().get("VC_REQUEST_TTL_MINUTES", TOKEN_TTL_MINUTES or 20),
         ) or 20
     )
-    emb.set_footer(
-        text=f"Stoney Verify • VC staff panel | TTL {vc_footer_ttl}m"
-    )
+    emb.set_footer(text=f"Stoney Verify • VC staff panel | TTL {vc_footer_ttl}m")
     return emb
 
 
@@ -374,15 +360,6 @@ async def _post_staff_vc_request_panel(
     requester_mention: str,
     ticket_channel_id: int,
 ) -> Optional[int]:
-    """
-    Post the staff VC request panel.
-
-    Priority:
-      1) VC queue / requests channel
-      2) MODLOG channel
-      3) TRANSCRIPTS channel
-      4) Ticket channel (last resort)
-    """
     staff_view = _build_staff_vc_request_view(token)
     emb = _build_vc_staff_embed(
         guild=guild,
@@ -434,11 +411,11 @@ async def _post_staff_vc_request_panel(
             me = guild.me
             if me and hasattr(ch, "permissions_for"):
                 perms = ch.permissions_for(me)  # type: ignore[attr-defined]
-                if not (getattr(perms, "view_channel", True) and getattr(perms, "send_messages", True)):
-                    print(
-                        f"⚠️ VC staff panel: bot lacks view/send perms in "
-                        f"{getattr(ch, 'id', None)}"
-                    )
+                if not (
+                    getattr(perms, "view_channel", True)
+                    and getattr(perms, "send_messages", True)
+                ):
+                    print(f"⚠️ VC staff panel: bot lacks view/send perms in {getattr(ch, 'id', None)}")
                     continue
         except Exception:
             pass
@@ -459,6 +436,8 @@ async def _post_staff_vc_request_panel(
                     for ref in VC_REQUESTS[token].get("staff_msg_refs", [])
                     if isinstance(ref, dict) and int(ref.get("message_id", 0) or 0) > 0
                 ]
+                VC_REQUESTS[token]["staff_panel_msg_id"] = int(getattr(msg, "id", 0) or 0)
+                VC_REQUESTS[token]["staff_panel_channel_id"] = int(getattr(getattr(msg, "channel", None), "id", 0) or 0)
             except Exception:
                 pass
             return int(getattr(msg, "id", 0) or 0) or None
@@ -505,10 +484,6 @@ async def _cleanup_vc_permissions(
     keep_member: Optional[discord.Member] = None,
     keep_members: Optional[List[discord.Member]] = None,
 ) -> None:
-    """
-    Remove all non-staff member overwrites from the VC channel,
-    optionally keeping one or more members.
-    """
     vc = _get_vc_channel(guild)
     if not vc:
         return
@@ -591,10 +566,6 @@ async def _vc_grant_access(
     member: discord.Member,
     token: str,
 ) -> Tuple[bool, str]:
-    """
-    Grant the member access to the VC verification channel.
-    Returns (success, message).
-    """
     print(f"🔍 _vc_grant_access: guild={guild.id}, member={member.id}, token={token}")
 
     vc = _get_vc_channel(guild)
@@ -668,10 +639,6 @@ async def _vc_disable_panels_everywhere(
     token: str,
     status_text: str,
 ) -> None:
-    """
-    When one staff member handles a VC request, disable the old buttons
-    everywhere we posted them.
-    """
     try:
         req = VC_REQUESTS.get(token) or {}
         msg_refs = req.get("staff_msg_refs") or []
@@ -742,10 +709,6 @@ async def _cleanup_stale_vc_request(
     token: str,
     reason: str,
 ) -> bool:
-    """
-    If a VC request's ticket channel no longer exists, delete the request entry
-    and disable the panel message (if any). Returns True if cleanup was performed.
-    """
     try:
         req = VC_REQUESTS.get(token)
         if not req:
@@ -835,6 +798,181 @@ async def _resolve_vc_ticket_and_owner(
     return ticket_ch if isinstance(ticket_ch, discord.TextChannel) else None, owner, token_info
 
 
+# ============================================================
+# Shared VC request creation
+# ============================================================
+async def create_vc_request_for_ticket(
+    *,
+    guild: discord.Guild,
+    ticket_channel: discord.TextChannel,
+    requester_id: int,
+    requested_by_id: int,
+    token: str,
+    owner_member: Optional[discord.Member] = None,
+) -> Dict[str, Any]:
+    """
+    Single source of truth for creating a VC request from a ticket.
+
+    Returns:
+      {
+        "ok": bool,
+        "token": str,
+        "staff_posted": bool,
+        "duplicate": bool,
+        "message": str,
+        "staff_panel_message_id": Optional[int],
+      }
+    """
+    if not isinstance(ticket_channel, discord.TextChannel):
+        return {
+            "ok": False,
+            "token": str(token or ""),
+            "staff_posted": False,
+            "duplicate": False,
+            "message": "Ticket channel is invalid.",
+            "staff_panel_message_id": None,
+        }
+
+    if not guild:
+        return {
+            "ok": False,
+            "token": str(token or ""),
+            "staff_posted": False,
+            "duplicate": False,
+            "message": "Guild context missing.",
+            "staff_panel_message_id": None,
+        }
+
+    requester_id = int(requester_id or 0)
+    requested_by_id = int(requested_by_id or 0)
+    token = str(token or "").strip()
+
+    if requester_id <= 0:
+        return {
+            "ok": False,
+            "token": token,
+            "staff_posted": False,
+            "duplicate": False,
+            "message": "Ticket owner could not be resolved.",
+            "staff_panel_message_id": None,
+        }
+
+    if not token:
+        return {
+            "ok": False,
+            "token": token,
+            "staff_posted": False,
+            "duplicate": False,
+            "message": "VC token missing.",
+            "staff_panel_message_id": None,
+        }
+
+    try:
+        vc_id = int(globals().get("VC_VERIFY_CHANNEL_ID", 0) or globals().get("VC_VERIFY_VC_ID", 0) or 0)
+    except Exception:
+        vc_id = 0
+
+    if vc_id <= 0:
+        return {
+            "ok": False,
+            "token": token,
+            "staff_posted": False,
+            "duplicate": False,
+            "message": "VC verification channel is not configured.",
+            "staff_panel_message_id": None,
+        }
+
+    async with _request_lock(token):
+        existing_same_owner = None
+        try:
+            for existing_token, req in list((VC_REQUESTS or {}).items()):
+                if str(existing_token or "").strip() == token:
+                    continue
+                if not isinstance(req, dict):
+                    continue
+                if int(req.get("ticket_channel_id") or 0) != int(ticket_channel.id):
+                    continue
+                req_owner_id = int(req.get("owner_id") or req.get("requester_id") or req.get("requested_by") or 0)
+                req_status = str(req.get("status") or "").upper().strip()
+                if req_owner_id == requester_id and req_status in VC_ACTIVE_STATUSES:
+                    existing_same_owner = str(existing_token)
+                    break
+        except Exception:
+            existing_same_owner = None
+
+        if existing_same_owner:
+            return {
+                "ok": True,
+                "token": existing_same_owner,
+                "staff_posted": True,
+                "duplicate": True,
+                "message": "VC request already queued for this ticket owner.",
+                "staff_panel_message_id": None,
+            }
+
+        requester_mention = (
+            owner_member.mention
+            if isinstance(owner_member, discord.Member)
+            else f"<@{int(requester_id)}>"
+        )
+
+        VC_REQUESTS[token] = {
+            "status": "PENDING",
+            "requested_at": now_utc().isoformat(),
+            "requested_by": int(requested_by_id or requester_id),
+            "requester_id": int(requester_id),
+            "owner_id": int(requester_id),
+            "ticket_channel_id": int(ticket_channel.id),
+            "guild_id": int(guild.id),
+            "vc_channel_id": int(vc_id),
+            "staff_msg_ids": [],
+            "staff_msg_refs": [],
+        }
+
+        try:
+            RUNTIME_STATS["vc_requests"] = int(RUNTIME_STATS.get("vc_requests", 0) or 0) + 1
+        except Exception:
+            pass
+
+        staff_panel_mid = await _post_staff_vc_request_panel(
+            guild=guild,
+            token=token,
+            requester_id=int(requester_id),
+            requester_mention=requester_mention,
+            ticket_channel_id=int(ticket_channel.id),
+        )
+
+        if staff_panel_mid:
+            try:
+                VC_REQUESTS[token]["staff_panel_msg_id"] = int(staff_panel_mid)
+            except Exception:
+                pass
+            return {
+                "ok": True,
+                "token": token,
+                "staff_posted": True,
+                "duplicate": False,
+                "message": "VC request queued and staff panel posted.",
+                "staff_panel_message_id": int(staff_panel_mid),
+            }
+
+        try:
+            RUNTIME_STATS["vc_staff_panel_posts_failed"] = int(
+                RUNTIME_STATS.get("vc_staff_panel_posts_failed", 0) or 0
+            ) + 1
+        except Exception:
+            pass
+
+        return {
+            "ok": True,
+            "token": token,
+            "staff_posted": False,
+            "duplicate": False,
+            "message": "VC request created but staff panel could not be posted.",
+            "staff_panel_message_id": None,
+        }
+
+
 async def _vc_lock_channel_for_session(
     guild: discord.Guild,
     owner: Optional[discord.Member],
@@ -855,7 +993,7 @@ async def _vc_lock_channel_for_session(
                     ticket_channel_id=int((VC_REQUESTS.get(token) or {}).get("ticket_channel_id") or 0),
                     requester_id=int(owner.id),
                     owner_id=int(owner.id),
-                    vc_channel_id=int(VC_VERIFY_CHANNEL_ID or 0),
+                    vc_channel_id=int(globals().get("VC_VERIFY_CHANNEL_ID", 0) or globals().get("VC_VERIFY_VC_ID", 0) or 0),
                     queue_channel_id=int(globals().get("VC_VERIFY_QUEUE_CHANNEL_ID", 0) or 0),
                     access_minutes=int(globals().get("VC_VERIFY_ACCESS_MINUTES", 30) or 30),
                     meta={
@@ -880,7 +1018,7 @@ async def _vc_lock_channel_for_session(
             accepted_staff_id=int(staff_member.id),
             assigned_staff_id=int(staff_member.id),
             accepted_by=int(staff_member.id),
-            vc_channel_id=int(VC_VERIFY_CHANNEL_ID or 0),
+            vc_channel_id=int(globals().get("VC_VERIFY_CHANNEL_ID", 0) or globals().get("VC_VERIFY_VC_ID", 0) or 0),
             accepted_at=now_utc().isoformat(),
             owner_id=int(owner.id),
             requester_id=int(owner.id),
@@ -1108,6 +1246,7 @@ async def _vc_reissue_command(
         rid = 0
 
     try:
+        from ..verify_ui import post_or_replace_verify_ui  # lazy import to avoid circular imports
         await post_or_replace_verify_ui(
             ticket_ch,
             requester_id=rid or None,
@@ -1120,7 +1259,7 @@ async def _vc_reissue_command(
         pass
 
     try:
-        from ..verify_ui import _issue_token_url  # type: ignore
+        from ..verify_ui import _issue_token_url  # lazy import to avoid circular imports
         new_token, _ = await _issue_token_url(
             site_url=VERIFY_SITE_URL,
             guild=guild,
@@ -1135,83 +1274,14 @@ async def _vc_reissue_command(
             ephemeral=True,
         )
 
-    _set_request_status(
-        new_token,
-        "PENDING",
-        requested_at=now_utc().isoformat(),
-        requested_by=int(rid or interaction.user.id),
-        owner_id=int(rid or 0),
+    result = await create_vc_request_for_ticket(
+        guild=guild,
+        ticket_channel=ticket_ch,
         requester_id=int(rid or 0),
-        ticket_channel_id=int(ticket_ch.id),
-        guild_id=int(guild.id),
-        reissued_from=resolved_token,
-        reissued_by=int(interaction.user.id),
+        requested_by_id=int(interaction.user.id),
+        token=new_token,
+        owner_member=(guild.get_member(int(rid)) if rid else None),
     )
-
-    qch = await _get_vc_queue_channel(guild)
-    if not qch and isinstance(interaction.channel, discord.TextChannel):
-        qch = interaction.channel
-
-    updated_panel_mid: Optional[int] = None
-
-    try:
-        if isinstance(qch, discord.TextChannel):
-            me_id = int(getattr(getattr(bot, "user", None), "id", 0) or 0)
-            async for msg in qch.history(limit=50):
-                if int(getattr(getattr(msg, "author", None), "id", 0) or 0) != me_id:
-                    continue
-                if not msg.embeds:
-                    continue
-
-                e = msg.embeds[0]
-                ft = str(getattr(getattr(e, "footer", None), "text", "") or "")
-                if "VC staff panel" not in ft:
-                    continue
-
-                old_tok = ""
-                try:
-                    for f in (e.fields or []):
-                        if (f.name or "").strip().lower() == "token":
-                            old_tok = str(f.value or "").strip().strip("`")
-                            break
-                except Exception:
-                    old_tok = ""
-
-                if old_tok and old_tok != resolved_token:
-                    continue
-
-                requester_mention = f"<@{int(rid or 0)}>" if rid else f"<@{int(interaction.user.id)}>"
-                emb = _build_vc_staff_embed(
-                    guild=guild,
-                    requester_id=int(rid or 0),
-                    requester_mention=requester_mention,
-                    ticket_channel_id=int(ticket_ch.id),
-                    token=new_token,
-                )
-
-                staff_view = _build_staff_vc_request_view(new_token)
-
-                try:
-                    await msg.edit(embed=emb, view=staff_view)
-                    updated_panel_mid = int(msg.id)
-                except Exception:
-                    updated_panel_mid = None
-                break
-    except Exception:
-        updated_panel_mid = None
-
-    if updated_panel_mid is None:
-        try:
-            requester_mention = f"<@{int(rid or 0)}>" if rid else f"<@{int(interaction.user.id)}>"
-            updated_panel_mid = await _post_staff_vc_request_panel(
-                guild=guild,
-                token=new_token,
-                requester_id=int(rid or interaction.user.id),
-                requester_mention=requester_mention,
-                ticket_channel_id=int(ticket_ch.id),
-            )
-        except Exception:
-            updated_panel_mid = None
 
     try:
         await _vc_disable_panels_everywhere(
@@ -1219,28 +1289,6 @@ async def _vc_reissue_command(
             resolved_token,
             status_text=f"Reissued → `{new_token}` by {interaction.user.mention}",
         )
-    except Exception:
-        pass
-
-    try:
-        if updated_panel_mid:
-            refs = VC_REQUESTS.setdefault(new_token, {}).setdefault("staff_msg_refs", [])
-            if isinstance(refs, list) and not any(
-                int(ref.get("message_id", 0) or 0) == int(updated_panel_mid)
-                for ref in refs
-                if isinstance(ref, dict)
-            ):
-                refs.append(
-                    {
-                        "channel_id": int(getattr(qch, "id", 0) or 0) if qch else 0,
-                        "message_id": int(updated_panel_mid),
-                    }
-                )
-            VC_REQUESTS[new_token]["staff_msg_ids"] = [
-                int(ref["message_id"])
-                for ref in VC_REQUESTS[new_token].get("staff_msg_refs", [])
-                if isinstance(ref, dict) and int(ref.get("message_id", 0) or 0) > 0
-            ]
     except Exception:
         pass
 
@@ -1279,8 +1327,9 @@ async def _vc_reissue_command(
             except Exception as e:
                 print(f"⚠️ Failed to update ticket panel in /vc_reissue: {e}")
 
+    status_note = "staff panel posted" if result.get("staff_posted") else "staff panel routing failed"
     return await interaction.followup.send(
-        f"✅ Reissued VC token.\nOld: `{resolved_token}`\nNew: `{new_token}`\nTicket: {ticket_ch.mention}",
+        f"✅ Reissued VC token.\nOld: `{resolved_token}`\nNew: `{new_token}`\nTicket: {ticket_ch.mention}\nStatus: {status_note}",
         ephemeral=True,
     )
 
@@ -1564,6 +1613,8 @@ def register_extra_commands(tree) -> None:
 
 __all__ = [
     "VC_STAFF_ACTIONS",
+    "VC_ACTIVE_STATUSES",
+    "VC_TERMINAL_STATUSES",
     "DEFAULT_VC_VERIFY_REQUESTS_CHANNEL_ID",
     "_vc_requests_channel_id",
     "_get_vc_channel",
@@ -1574,6 +1625,7 @@ __all__ = [
     "_resolve_ticket_channel_from_token_info",
     "_build_vc_staff_embed",
     "_post_staff_vc_request_panel",
+    "create_vc_request_for_ticket",
     "_cleanup_vc_permissions",
     "_vc_grant_access",
     "_vc_revoke_access",
