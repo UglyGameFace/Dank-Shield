@@ -5,7 +5,7 @@ import random
 import re
 import time
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import discord
 
@@ -85,7 +85,7 @@ def _build_confirm_close_ticket_view():
         return None
 
 
-_TICKET_CREATION_LOCKS: Dict[int, asyncio.Lock] = {}
+_TICKET_CREATION_LOCKS: Dict[Tuple[int, int], asyncio.Lock] = {}
 TICKET_NUM_RE = re.compile(r"^(?:ticket|closed)-(\d+)$", re.I)
 _TICKET_NUMBER_LOCKS: Dict[int, asyncio.Lock] = {}
 _TRANSCRIPT_ATTACH_LOCKS: Dict[str, asyncio.Lock] = {}
@@ -109,12 +109,12 @@ def _ticket_number_lock(guild_id: int) -> asyncio.Lock:
     return lock
 
 
-def _user_ticket_creation_lock(user_id: int) -> asyncio.Lock:
-    uid = int(user_id)
-    lock = _TICKET_CREATION_LOCKS.get(uid)
+def _guild_user_ticket_creation_lock(guild_id: int, user_id: int) -> asyncio.Lock:
+    key = (int(guild_id), int(user_id))
+    lock = _TICKET_CREATION_LOCKS.get(key)
     if lock is None:
         lock = asyncio.Lock()
-        _TICKET_CREATION_LOCKS[uid] = lock
+        _TICKET_CREATION_LOCKS[key] = lock
     return lock
 
 
@@ -1113,6 +1113,197 @@ def _sanitize_opening_message(
     return candidate
 
 
+def _canonical_ticket_category(category: str, is_ghost: bool) -> str:
+    clean = _safe_str(category).strip().lower() or "support"
+    return "ghost" if is_ghost else clean
+
+
+def _channel_name_exists(
+    guild: discord.Guild,
+    *,
+    channel_name: str,
+    parent: Optional[discord.CategoryChannel] = None,
+) -> bool:
+    try:
+        channels = list(parent.channels) if parent else list(guild.channels)
+    except Exception:
+        channels = list(guild.channels)
+
+    for ch in channels:
+        try:
+            if isinstance(ch, discord.TextChannel) and str(ch.name).lower() == str(channel_name).lower():
+                return True
+        except Exception:
+            continue
+    return False
+
+
+async def _reserve_unique_ticket_number_and_name(
+    guild: discord.Guild,
+    *,
+    parent: Optional[discord.CategoryChannel] = None,
+    max_attempts: int = 25,
+) -> Tuple[int, str]:
+    for _ in range(max_attempts):
+        number = await _next_ticket_number(guild, parent=parent)
+        name = _format_ticket_channel_name(number, closed=False)
+        if not _channel_name_exists(guild, channel_name=name, parent=parent):
+            return number, name
+
+    fallback = max(
+        _db_max_ticket_number(int(guild.id)),
+        _channel_scan_max_ticket_number(guild, parent=parent),
+    ) + 1
+    return fallback, _format_ticket_channel_name(fallback, closed=False)
+
+
+async def _ensure_channel_identity(
+    *,
+    channel: discord.TextChannel,
+    owner: discord.Member,
+    category: str,
+    is_ghost: bool,
+    ticket_number: Optional[int],
+) -> int:
+    resolved_number = ticket_number or _extract_ticket_number_from_name(channel.name) or _parse_ticket_number_from_topic(channel) or 0
+
+    if resolved_number <= 0:
+        resolved_number = await _next_ticket_number(channel.guild, parent=channel.category)
+
+    desired_topic = _topic_for_ticket(
+        owner_id=int(owner.id),
+        category=_canonical_ticket_category(category, is_ghost),
+        is_ghost=is_ghost,
+        ticket_number=resolved_number,
+    )
+
+    desired_name = _format_ticket_channel_name(resolved_number, closed=False)
+
+    try:
+        edits: Dict[str, Any] = {}
+        if channel.topic != desired_topic:
+            edits["topic"] = desired_topic
+        if channel.name != desired_name and not _channel_name_exists(
+            channel.guild,
+            channel_name=desired_name,
+            parent=channel.category,
+        ):
+            edits["name"] = desired_name
+        if edits:
+            await channel.edit(reason="Normalize ticket channel identity", **edits)
+    except Exception as e:
+        print(f"⚠️ Failed normalizing ticket channel identity for {channel.id}: {repr(e)}")
+
+    try:
+        await repo_safe_optional_update_by_channel_id(
+            channel.id,
+            {
+                "channel_name": channel.name,
+                "ticket_number": resolved_number,
+            },
+        )
+    except Exception:
+        pass
+
+    return resolved_number
+
+
+async def _sync_existing_open_ticket_channel(
+    *,
+    channel: discord.TextChannel,
+    owner: discord.Member,
+    category: str,
+    source: str,
+    is_ghost: bool,
+    clean_priority: str,
+    category_meta: Dict[str, Any],
+    opening_message: Optional[str] = None,
+) -> Optional[Dict[str, Any]]:
+    normalized_ticket_number = await _ensure_channel_identity(
+        channel=channel,
+        owner=owner,
+        category=category,
+        is_ghost=is_ghost,
+        ticket_number=_extract_ticket_number_from_name(channel.name) or _parse_ticket_number_from_topic(channel),
+    )
+
+    try:
+        await _apply_open_permissions(
+            channel,
+            owner,
+            staff_role_ids=_default_staff_role_ids(),
+        )
+    except Exception:
+        pass
+
+    try:
+        row = await repo_sync_ticket_record_from_channel(
+            channel=channel,
+            owner_id=owner.id,
+            username=str(owner),
+            title=_title_for_ticket(owner, category, is_ghost),
+            category=_canonical_ticket_category(category, is_ghost),
+            status="claimed" if False else "open" if False else _ticket_status(await _ticket_row_for_channel_id(channel.id)) or "open",
+            priority=clean_priority,
+            initial_message=_safe_str(opening_message or ""),
+            ticket_number=normalized_ticket_number,
+            is_ghost=is_ghost,
+            source=source,
+            matched_category_id=category_meta["matched_category_id"],
+            matched_category_name=category_meta["matched_category_name"],
+            matched_category_slug=category_meta["matched_category_slug"],
+            matched_intake_type=category_meta["matched_intake_type"],
+            matched_category_reason=category_meta["matched_category_reason"],
+            matched_category_score=category_meta["matched_category_score"],
+            category_override=bool(category_meta["category_override"]),
+            category_id=category_meta["category_id"],
+        )
+        return row if isinstance(row, dict) else None
+    except Exception as e:
+        print(f"⚠️ Existing ticket sync failed for {channel.id}: {repr(e)}")
+        return None
+
+
+async def _safe_log_created(
+    *,
+    guild_id: int,
+    owner: discord.Member,
+    channel_id: int,
+    ticket_row: Optional[Dict[str, Any]],
+    source: str,
+    ticket_number: int,
+    category: str,
+    is_ghost: bool,
+    clean_priority: str,
+    category_meta: Dict[str, Any],
+) -> None:
+    try:
+        await log_ticket_created(
+            guild_id=guild_id,
+            actor_user_id=owner.id,
+            actor_name=str(owner),
+            channel_id=channel_id,
+            ticket_row=ticket_row,
+            source=source,
+            metadata={
+                "ticket_number": ticket_number,
+                "category": category,
+                "is_ghost": bool(is_ghost),
+                "priority": clean_priority,
+                "matched_category_id": category_meta["matched_category_id"],
+                "matched_category_name": category_meta["matched_category_name"],
+                "matched_category_slug": category_meta["matched_category_slug"],
+                "matched_intake_type": category_meta["matched_intake_type"],
+                "matched_category_reason": category_meta["matched_category_reason"],
+                "matched_category_score": category_meta["matched_category_score"],
+                "category_override": bool(category_meta["category_override"]),
+                "category_id": category_meta["category_id"],
+            },
+        )
+    except Exception as e:
+        print(f"⚠️ Failed logging ticket_created for {channel_id}: {repr(e)}")
+
+
 async def find_open_ticket_for_owner(
     *,
     guild_id: int | str,
@@ -1146,7 +1337,7 @@ async def create_ticket_channel(
     category_override: bool = False,
     category_id: Optional[str] = None,
 ) -> Optional[discord.TextChannel]:
-    user_lock = _user_ticket_creation_lock(owner.id)
+    user_lock = _guild_user_ticket_creation_lock(guild.id, owner.id)
     clean_priority = _safe_str(priority).strip().lower()
     if clean_priority not in _VALID_TICKET_PRIORITIES:
         clean_priority = "medium"
@@ -1182,34 +1373,25 @@ async def create_ticket_channel(
                 except Exception:
                     pass
 
-                try:
-                    await repo_sync_ticket_record_from_channel(
-                        channel=existing_channel,
-                        owner_id=owner.id,
-                        username=str(owner),
-                        title=_title_for_ticket(
-                            owner,
-                            _safe_str(existing_row.get("category") or category),
-                            _safe_bool(existing_row.get("is_ghost"), is_ghost),
-                        ),
-                        category=_safe_str(existing_row.get("category") or category),
-                        status=_safe_str(existing_row.get("status") or "open"),
-                        priority=_safe_str(existing_row.get("priority") or clean_priority),
-                        ticket_number=_safe_int(existing_row.get("ticket_number"), 0) or None,
-                        assigned_to=existing_row.get("assigned_to"),
-                        is_ghost=_safe_bool(existing_row.get("is_ghost"), is_ghost),
-                        source=_safe_str(existing_row.get("source") or source),
-                        matched_category_id=_safe_opt_text(existing_row.get("matched_category_id")) or category_meta["matched_category_id"],
-                        matched_category_name=_safe_opt_text(existing_row.get("matched_category_name")) or category_meta["matched_category_name"],
-                        matched_category_slug=_safe_opt_text(existing_row.get("matched_category_slug")) or category_meta["matched_category_slug"],
-                        matched_intake_type=_safe_opt_text(existing_row.get("matched_intake_type")) or category_meta["matched_intake_type"],
-                        matched_category_reason=_safe_opt_text(existing_row.get("matched_category_reason")) or category_meta["matched_category_reason"],
-                        matched_category_score=_safe_opt_int(existing_row.get("matched_category_score")) or category_meta["matched_category_score"],
-                        category_override=bool(existing_row.get("category_override", category_meta["category_override"])),
-                        category_id=_safe_opt_text(existing_row.get("category_id")) or category_meta["category_id"],
-                    )
-                except Exception as e:
-                    print(f"⚠️ Existing ticket sync failed for {existing_channel.id}: {repr(e)}")
+                await _sync_existing_open_ticket_channel(
+                    channel=existing_channel,
+                    owner=owner,
+                    category=_safe_str(existing_row.get("category") or category),
+                    source=_safe_str(existing_row.get("source") or source),
+                    is_ghost=_safe_bool(existing_row.get("is_ghost"), is_ghost),
+                    clean_priority=_safe_str(existing_row.get("priority") or clean_priority) or clean_priority,
+                    category_meta={
+                        "matched_category_id": _safe_opt_text(existing_row.get("matched_category_id")) or category_meta["matched_category_id"],
+                        "matched_category_name": _safe_opt_text(existing_row.get("matched_category_name")) or category_meta["matched_category_name"],
+                        "matched_category_slug": _safe_opt_text(existing_row.get("matched_category_slug")) or category_meta["matched_category_slug"],
+                        "matched_intake_type": _safe_opt_text(existing_row.get("matched_intake_type")) or category_meta["matched_intake_type"],
+                        "matched_category_reason": _safe_opt_text(existing_row.get("matched_category_reason")) or category_meta["matched_category_reason"],
+                        "matched_category_score": _safe_opt_int(existing_row.get("matched_category_score")) or category_meta["matched_category_score"],
+                        "category_override": bool(existing_row.get("category_override", category_meta["category_override"])),
+                        "category_id": _safe_opt_text(existing_row.get("category_id")) or category_meta["category_id"],
+                    },
+                    opening_message=opening_message,
+                )
 
                 await _maybe_post_verification_ui(
                     channel=existing_channel,
@@ -1217,6 +1399,9 @@ async def create_ticket_channel(
                     is_ghost=_safe_bool(existing_row.get("is_ghost"), is_ghost),
                 )
                 await _maybe_post_close_controls(existing_channel)
+                _service_debug(
+                    f"reused-existing-ticket guild={guild.id} owner={owner.id} channel={existing_channel.id}"
+                )
                 return existing_channel
 
             await _repair_stale_open_ticket_row(row=existing_row, owner=owner)
@@ -1231,8 +1416,10 @@ async def create_ticket_channel(
             if rid not in all_staff_role_ids:
                 all_staff_role_ids.append(rid)
 
-        ticket_number = await _next_ticket_number(guild, parent=parent)
-        channel_name = _format_ticket_channel_name(ticket_number, closed=False)
+        ticket_number, channel_name = await _reserve_unique_ticket_number_and_name(
+            guild,
+            parent=parent,
+        )
         overwrites = _build_overwrites(
             guild,
             owner,
@@ -1250,7 +1437,7 @@ async def create_ticket_channel(
                 overwrites=overwrites,
                 topic=_topic_for_ticket(
                     owner_id=owner.id,
-                    category=category,
+                    category=_canonical_ticket_category(category, is_ghost),
                     is_ghost=is_ghost,
                     ticket_number=ticket_number,
                 ),
@@ -1297,7 +1484,7 @@ async def create_ticket_channel(
             channel_id=channel.id,
             discord_thread_id=channel.id,
             channel_name=channel.name,
-            category="ghost" if is_ghost else category,
+            category=_canonical_ticket_category(category, is_ghost),
             status="open",
             priority=clean_priority,
             initial_message=intro_message,
@@ -1330,30 +1517,28 @@ async def create_ticket_channel(
             ticket_row = await _ticket_row_for_channel_id(channel.id)
 
         try:
-            await log_ticket_created(
-                guild_id=guild.id,
-                actor_user_id=owner.id,
-                actor_name=str(owner),
-                channel_id=channel.id,
-                ticket_row=ticket_row,
-                source=source,
-                metadata={
+            await repo_safe_optional_update_by_channel_id(
+                channel.id,
+                {
+                    "channel_name": channel.name,
                     "ticket_number": ticket_number,
-                    "category": category,
-                    "is_ghost": bool(is_ghost),
-                    "priority": clean_priority,
-                    "matched_category_id": category_meta["matched_category_id"],
-                    "matched_category_name": category_meta["matched_category_name"],
-                    "matched_category_slug": category_meta["matched_category_slug"],
-                    "matched_intake_type": category_meta["matched_intake_type"],
-                    "matched_category_reason": category_meta["matched_category_reason"],
-                    "matched_category_score": category_meta["matched_category_score"],
-                    "category_override": bool(category_meta["category_override"]),
-                    "category_id": category_meta["category_id"],
                 },
             )
-        except Exception as e:
-            print(f"⚠️ Failed logging ticket_created for {channel.id}: {repr(e)}")
+        except Exception:
+            pass
+
+        await _safe_log_created(
+            guild_id=guild.id,
+            owner=owner,
+            channel_id=channel.id,
+            ticket_row=ticket_row,
+            source=source,
+            ticket_number=ticket_number,
+            category=category,
+            is_ghost=is_ghost,
+            clean_priority=clean_priority,
+            category_meta=category_meta,
+        )
 
         await _maybe_post_verification_ui(
             channel=channel,
@@ -1362,6 +1547,9 @@ async def create_ticket_channel(
         )
 
         await _maybe_post_close_controls(channel)
+        _service_debug(
+            f"create success guild={guild.id} owner={owner.id} channel={channel.id} ticket_number={ticket_number}"
+        )
         return channel
 
 
@@ -1389,9 +1577,21 @@ async def sync_existing_ticket_channel(
         print("⚠️ sync_existing_ticket_channel called without owner; using bot placeholder.")
         owner_for_row = channel.guild.me or channel.guild.owner
 
+    if owner_for_row is None:
+        return False
+
     ticket_number = _extract_ticket_number_from_name(channel.name)
     if ticket_number is None:
         ticket_number = _parse_ticket_number_from_topic(channel)
+
+    if isinstance(owner_for_row, discord.Member):
+        ticket_number = await _ensure_channel_identity(
+            channel=channel,
+            owner=owner_for_row,
+            category=category,
+            is_ghost=is_ghost,
+            ticket_number=ticket_number,
+        )
 
     clean_priority = _safe_str(priority).strip().lower()
     if clean_priority not in _VALID_TICKET_PRIORITIES:
@@ -1414,7 +1614,7 @@ async def sync_existing_ticket_channel(
             owner_id=owner_for_row.id,
             username=str(owner_for_row),
             title=_title_for_ticket(owner_for_row, category, is_ghost),
-            category="ghost" if is_ghost else category,
+            category=_canonical_ticket_category(category, is_ghost),
             status=status,
             priority=clean_priority,
             initial_message=initial_message or "",
@@ -1649,6 +1849,13 @@ async def assign_ticket(
         _service_debug(f"assign rejected channel={channel_id} reason=invalid-staff")
         return False
 
+    owner_id = _ticket_owner_id(row)
+    if owner_id > 0 and owner_id == target_staff_id:
+        _service_debug(
+            f"assign rejected channel={channel_id} reason=staff-is-owner owner={owner_id}"
+        )
+        return False
+
     if existing_claimed_by > 0 and existing_claimed_by != target_staff_id:
         _service_debug(
             f"assign rejected channel={channel_id} "
@@ -1780,6 +1987,13 @@ async def transfer_ticket(
     target_staff_id = _actor_id(to_staff_member) or 0
     if target_staff_id <= 0:
         _service_debug(f"transfer rejected channel={channel_id} reason=invalid-target")
+        return False
+
+    owner_id = _ticket_owner_id(row)
+    if owner_id > 0 and owner_id == target_staff_id:
+        _service_debug(
+            f"transfer rejected channel={channel_id} reason=target-is-owner owner={owner_id}"
+        )
         return False
 
     existing_claimed_by = _ticket_claimed_by_id(row)
