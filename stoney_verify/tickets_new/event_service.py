@@ -27,6 +27,7 @@ except Exception:
 # - support schema drift safely
 # - build strong search_text for dashboard filtering/history
 # - provide ticket-specific wrappers for common actions
+# - suppress duplicate burst logs so dashboard history stays clean
 # ============================================================
 
 ACTIVITY_FEED_TABLE = "activity_feed_events"
@@ -55,6 +56,8 @@ _OPTIONAL_EVENT_COLUMN_SUPPORT: Dict[str, Optional[bool]] = {
 }
 
 _MISSING_COLUMN_RE = re.compile(r"'([^']+)' column")
+_EVENT_DEDUP_WINDOW_SECONDS = 3.0
+_EVENT_DEDUP_CACHE: Dict[str, float] = {}
 
 
 # ============================================================
@@ -128,6 +131,33 @@ def _normalize_slugish(value: Any) -> str:
         return ""
 
 
+def _normalize_event_type(value: Any) -> str:
+    text = _clean_text(value, 120) or "activity_event"
+    text = text.strip().lower()
+    text = re.sub(r"[^a-z0-9_\- ]+", "", text)
+    text = re.sub(r"[\s\-]+", "_", text)
+    text = re.sub(r"_+", "_", text).strip("_")
+    return text or "activity_event"
+
+
+def _normalize_event_family(value: Any) -> str:
+    text = _clean_text(value, 80) or "system"
+    text = text.strip().lower()
+    text = re.sub(r"[^a-z0-9_\- ]+", "", text)
+    text = re.sub(r"[\s\-]+", "_", text)
+    text = re.sub(r"_+", "_", text).strip("_")
+    return text or "system"
+
+
+def _normalize_source(value: Any) -> str:
+    text = _clean_text(value, 80) or "system"
+    text = text.strip().lower()
+    text = re.sub(r"[^a-z0-9_\- ]+", "", text)
+    text = re.sub(r"[\s\-]+", "_", text)
+    text = re.sub(r"_+", "_", text).strip("_")
+    return text or "system"
+
+
 def _safe_dict(value: Any) -> Dict[str, Any]:
     if isinstance(value, dict):
         return dict(value)
@@ -149,6 +179,14 @@ def _sb():
         return get_supabase()
     except Exception:
         return None
+
+
+def _result_rows(resp: Any) -> List[Dict[str, Any]]:
+    try:
+        rows = getattr(resp, "data", None) or []
+        return [r for r in rows if isinstance(r, dict)]
+    except Exception:
+        return []
 
 
 # ============================================================
@@ -310,6 +348,75 @@ async def _write_event_with_optional_fallback(
 
 
 # ============================================================
+# Dedup helpers
+# ============================================================
+
+def _prune_event_dedup_cache() -> None:
+    try:
+        now_ts = time.time()
+        stale_keys = [
+            key
+            for key, ts in list(_EVENT_DEDUP_CACHE.items())
+            if (now_ts - float(ts)) > max(_EVENT_DEDUP_WINDOW_SECONDS * 3, 12.0)
+        ]
+        for key in stale_keys:
+            _EVENT_DEDUP_CACHE.pop(key, None)
+    except Exception:
+        pass
+
+
+def _event_signature(payload: Dict[str, Any]) -> str:
+    meta = _safe_dict(payload.get("metadata") or payload.get("meta"))
+    important_meta = {
+        "ticket_number": meta.get("ticket_number"),
+        "new_priority": meta.get("new_priority"),
+        "transfer_target_user_id": meta.get("transfer_target_user_id"),
+        "transcript_message_id": meta.get("transcript_message_id"),
+        "transcript_channel_id": meta.get("transcript_channel_id"),
+        "note_preview": meta.get("note_preview"),
+        "is_pinned": meta.get("is_pinned"),
+        "previous_claimed_by": meta.get("previous_claimed_by"),
+    }
+
+    signature_blob = {
+        "guild_id": payload.get("guild_id"),
+        "event_type": payload.get("event_type"),
+        "event_family": payload.get("event_family"),
+        "source": payload.get("source"),
+        "actor_user_id": payload.get("actor_user_id"),
+        "target_user_id": payload.get("target_user_id"),
+        "channel_id": payload.get("channel_id"),
+        "ticket_id": payload.get("ticket_id"),
+        "ticket_message_id": payload.get("ticket_message_id"),
+        "related_id": payload.get("related_id"),
+        "reason": payload.get("reason"),
+        "title": payload.get("title"),
+        "important_meta": important_meta,
+    }
+    return _safe_json(signature_blob)
+
+
+def _event_recently_logged(payload: Dict[str, Any]) -> bool:
+    try:
+        meta = _safe_dict(payload.get("metadata") or payload.get("meta"))
+        if bool(meta.get("allow_duplicate_event")):
+            return False
+
+        _prune_event_dedup_cache()
+
+        sig = _event_signature(payload)
+        now_ts = time.time()
+        last_ts = _EVENT_DEDUP_CACHE.get(sig)
+        if last_ts is not None and (now_ts - float(last_ts)) <= _EVENT_DEDUP_WINDOW_SECONDS:
+            return True
+
+        _EVENT_DEDUP_CACHE[sig] = now_ts
+        return False
+    except Exception:
+        return False
+
+
+# ============================================================
 # Search / indexing helpers
 # ============================================================
 
@@ -347,6 +454,7 @@ def _description_for_ticket_event(
     priority: Optional[str],
     reason: Optional[str],
     channel_name: Optional[str],
+    metadata: Optional[Dict[str, Any]] = None,
 ) -> str:
     actor = _clean_text(actor_name, 120) or "Someone"
     target = _clean_text(target_name, 120) or "ticket"
@@ -354,6 +462,13 @@ def _description_for_ticket_event(
     priority_text = _clean_text(priority, 40)
     reason_text = _clean_text(reason, 240)
     channel_text = _clean_text(channel_name, 120)
+    meta = _safe_dict(metadata)
+
+    transfer_target_name = _clean_text(meta.get("transfer_target_name"), 120)
+    new_priority = _clean_text(meta.get("new_priority"), 40)
+    note_preview = _clean_text(meta.get("note_preview"), 120)
+    is_pinned = bool(meta.get("is_pinned"))
+    transcript_url = _clean_text(meta.get("transcript_url"), 240)
 
     event_key = _normalize_slugish(event_type)
 
@@ -364,11 +479,20 @@ def _description_for_ticket_event(
     elif event_key == "ticket unclaimed":
         base = f"{actor} unclaimed {target}'s ticket."
     elif event_key == "ticket transferred":
-        base = f"{actor} transferred {target}'s ticket."
+        base = (
+            f"{actor} transferred {target}'s ticket"
+            + (f" to {transfer_target_name}." if transfer_target_name else ".")
+        )
     elif event_key == "ticket priority updated":
-        base = f"{actor} changed the ticket priority."
+        base = (
+            f"{actor} changed the ticket priority"
+            + (f" to {new_priority}." if new_priority else ".")
+        )
     elif event_key == "ticket note added":
-        base = f"{actor} added an internal note."
+        base = (
+            f"{actor} added "
+            + ("a pinned internal note." if is_pinned else "an internal note.")
+        )
     elif event_key == "ticket closed":
         base = f"{actor} closed {target}'s ticket."
     elif event_key == "ticket reopened":
@@ -387,6 +511,10 @@ def _description_for_ticket_event(
         extras.append(f"Priority: {priority_text}")
     if channel_text:
         extras.append(f"Channel: {channel_text}")
+    if note_preview:
+        extras.append(f"Note: {note_preview}")
+    if transcript_url:
+        extras.append("Transcript attached")
     if reason_text:
         extras.append(f"Reason: {reason_text}")
 
@@ -432,6 +560,49 @@ async def _resolve_ticket_row(
     return None
 
 
+def _ticket_owner_user_id(row: Optional[Dict[str, Any]]) -> Optional[str]:
+    if not isinstance(row, dict):
+        return None
+    return (
+        _as_str_id(row.get("user_id"))
+        or _as_str_id(row.get("owner_id"))
+        or _as_str_id(row.get("requester_id"))
+    )
+
+
+def _ticket_owner_name(row: Optional[Dict[str, Any]]) -> Optional[str]:
+    if not isinstance(row, dict):
+        return None
+    return (
+        _clean_text(row.get("username"), 160)
+        or _clean_text(row.get("owner_name"), 160)
+        or _clean_text(row.get("requester_name"), 160)
+    )
+
+
+def _enrich_ticket_metadata(
+    row: Optional[Dict[str, Any]],
+    metadata: Optional[Dict[str, Any]],
+) -> Dict[str, Any]:
+    meta = _safe_dict(metadata)
+
+    if row:
+        meta.setdefault("ticket_status", row.get("status"))
+        meta.setdefault("ticket_category", row.get("category"))
+        meta.setdefault("ticket_priority", row.get("priority"))
+        meta.setdefault("ticket_number", row.get("ticket_number"))
+        meta.setdefault("is_ghost", row.get("is_ghost"))
+        meta.setdefault("claimed_by", row.get("claimed_by"))
+        meta.setdefault("assigned_to", row.get("assigned_to"))
+        meta.setdefault("claimed_by_name", row.get("claimed_by_name"))
+        meta.setdefault("assigned_to_name", row.get("assigned_to_name"))
+        meta.setdefault("owner_user_id", _ticket_owner_user_id(row))
+        meta.setdefault("owner_name", _ticket_owner_name(row))
+        meta.setdefault("source_ticket_row", "repository_lookup")
+
+    return meta
+
+
 # ============================================================
 # Public payload builders
 # ============================================================
@@ -462,9 +633,9 @@ def build_activity_event_payload(
     meta = _safe_dict(metadata)
     title_text = _clean_text(title, 240) or "Activity Event"
     description_text = _clean_text(description, 1000) or title_text
-    event_type_text = _clean_text(event_type, 120) or "activity_event"
-    event_family_text = _clean_text(event_family, 80) or "system"
-    source_text = _clean_text(source, 80) or "system"
+    event_type_text = _normalize_event_type(event_type)
+    event_family_text = _normalize_event_family(event_family)
+    source_text = _normalize_source(source)
 
     payload: Dict[str, Any] = {
         "guild_id": _as_str_id(guild_id),
@@ -489,30 +660,31 @@ def build_activity_event_payload(
         "created_at": created_at or _now_iso(),
     }
 
-    payload["search_text"] = _build_search_text(
-        [
-            payload.get("title"),
-            payload.get("description"),
-            payload.get("event_type"),
-            payload.get("event_family"),
-            payload.get("source"),
-            payload.get("actor_user_id"),
-            payload.get("actor_name"),
-            payload.get("target_user_id"),
-            payload.get("target_name"),
-            payload.get("channel_id"),
-            payload.get("channel_name"),
-            payload.get("ticket_id"),
-            payload.get("ticket_message_id"),
-            payload.get("related_id"),
-            payload.get("related_table"),
-            payload.get("reason"),
-        ],
-        meta,
-    )
-
     if extra:
         payload.update(dict(extra))
+
+    if not _clean_text(payload.get("search_text")):
+        payload["search_text"] = _build_search_text(
+            [
+                payload.get("title"),
+                payload.get("description"),
+                payload.get("event_type"),
+                payload.get("event_family"),
+                payload.get("source"),
+                payload.get("actor_user_id"),
+                payload.get("actor_name"),
+                payload.get("target_user_id"),
+                payload.get("target_name"),
+                payload.get("channel_id"),
+                payload.get("channel_name"),
+                payload.get("ticket_id"),
+                payload.get("ticket_message_id"),
+                payload.get("related_id"),
+                payload.get("related_table"),
+                payload.get("reason"),
+            ],
+            meta,
+        )
 
     return payload
 
@@ -526,12 +698,19 @@ async def insert_activity_event(payload: Dict[str, Any]) -> Optional[Dict[str, A
         clean = dict(payload or {})
         clean.setdefault("created_at", _now_iso())
 
+        if _event_recently_logged(clean):
+            _debug(
+                f"dedup skip event_type={clean.get('event_type')} "
+                f"channel={clean.get('channel_id')} ticket={clean.get('ticket_id')}"
+            )
+            return {"deduped": True, **clean}
+
         res = await _write_event_with_optional_fallback(
             op_name="insert activity event",
             payload=clean,
             writer=_insert_event_sync,
         )
-        rows = getattr(res, "data", None) or []
+        rows = _result_rows(res)
         if rows and isinstance(rows[0], dict):
             return dict(rows[0])
     except Exception as e:
@@ -610,7 +789,7 @@ async def log_ticket_event(
     extra: Optional[Dict[str, Any]] = None,
 ) -> bool:
     row = await _resolve_ticket_row(channel_id=channel_id, ticket_row=ticket_row)
-    meta = _safe_dict(metadata)
+    meta = _enrich_ticket_metadata(row, metadata)
 
     resolved_guild_id = (
         _as_str_id(guild_id)
@@ -634,15 +813,11 @@ async def log_ticket_event(
     )
     resolved_target_user_id = (
         _as_str_id(target_user_id)
-        or _as_str_id(row.get("user_id") if isinstance(row, dict) else None)
-        or _as_str_id(row.get("owner_id") if isinstance(row, dict) else None)
-        or _as_str_id(row.get("requester_id") if isinstance(row, dict) else None)
+        or _ticket_owner_user_id(row)
     )
     resolved_target_name = (
         _clean_text(target_name, 160)
-        or _clean_text(row.get("username") if isinstance(row, dict) else None, 160)
-        or _clean_text(row.get("owner_name") if isinstance(row, dict) else None, 160)
-        or _clean_text(row.get("requester_name") if isinstance(row, dict) else None, 160)
+        or _ticket_owner_name(row)
     )
     resolved_category = _clean_text(row.get("category") if isinstance(row, dict) else None, 120)
     resolved_priority = _clean_text(row.get("priority") if isinstance(row, dict) else None, 40)
@@ -656,15 +831,8 @@ async def log_ticket_event(
         priority=resolved_priority,
         reason=reason,
         channel_name=resolved_channel_name,
+        metadata=meta,
     )
-
-    if row:
-        meta.setdefault("ticket_status", row.get("status"))
-        meta.setdefault("ticket_category", row.get("category"))
-        meta.setdefault("ticket_priority", row.get("priority"))
-        meta.setdefault("ticket_number", row.get("ticket_number"))
-        meta.setdefault("is_ghost", row.get("is_ghost"))
-        meta.setdefault("source_ticket_row", "repository_lookup")
 
     return await log_activity_event(
         guild_id=resolved_guild_id,
@@ -703,6 +871,8 @@ async def log_ticket_created(
     source: str = "tickets_new_create",
     metadata: Optional[Dict[str, Any]] = None,
 ) -> bool:
+    meta = _safe_dict(metadata)
+    meta.setdefault("allow_duplicate_event", False)
     return await log_ticket_event(
         guild_id=guild_id,
         event_type="ticket_created",
@@ -711,7 +881,7 @@ async def log_ticket_created(
         channel_id=channel_id,
         ticket_row=ticket_row,
         source=source,
-        metadata=metadata,
+        metadata=meta,
     )
 
 
@@ -962,6 +1132,7 @@ async def event_service_healthcheck() -> Dict[str, Any]:
         "optional_columns_marked_unsupported": sorted(
             [k for k, v in _OPTIONAL_EVENT_COLUMN_SUPPORT.items() if v is False]
         ),
+        "dedup_cache_size": len(_EVENT_DEDUP_CACHE),
     }
 
     try:
