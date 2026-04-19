@@ -50,23 +50,6 @@ except Exception:
 
 
 try:
-    from ..transcripts import (
-        auto_close_after_decision,
-        check_bot_can_assign_roles,
-        ensure_verify_ui_present,
-    )
-except Exception:
-    async def auto_close_after_decision(*args, **kwargs) -> None:  # type: ignore
-        return None
-
-    async def check_bot_can_assign_roles(*args, **kwargs) -> Tuple[bool, str, List[discord.Role]]:  # type: ignore
-        return False, "transcripts.py missing", []
-
-    async def ensure_verify_ui_present(*args, **kwargs) -> bool:  # type: ignore
-        return False
-
-
-try:
     from ..tickets_new.repository import safe_optional_update_by_channel_id
 except Exception:
     async def safe_optional_update_by_channel_id(*args, **kwargs) -> bool:  # type: ignore
@@ -74,6 +57,58 @@ except Exception:
 
 
 _VERIFICATION_ACTION_LOCKS: Dict[str, asyncio.Lock] = {}
+
+
+# ============================================================
+# Lazy transcript imports
+# ------------------------------------------------------------
+# IMPORTANT:
+# Do NOT import ..transcripts at module load time.
+# That created a circular import:
+# verification_new.service -> transcripts.py -> verification_new.service
+#
+# So these helpers import only when needed.
+# ============================================================
+
+async def _transcripts_auto_close_after_decision(
+    channel: Optional[discord.TextChannel],
+    *,
+    closer: discord.Member,
+    decision: str,
+) -> None:
+    if not isinstance(channel, discord.TextChannel):
+        return
+    try:
+        from ..transcripts import auto_close_after_decision as _auto_close_after_decision
+        await _auto_close_after_decision(
+            channel,
+            closer=closer,
+            decision=decision,
+        )
+    except Exception:
+        return
+
+
+async def _transcripts_check_bot_can_assign_roles(
+    guild: discord.Guild,
+) -> Tuple[bool, str, List[discord.Role]]:
+    try:
+        from ..transcripts import check_bot_can_assign_roles as _check_bot_can_assign_roles
+        return await _check_bot_can_assign_roles(guild)
+    except Exception as e:
+        return False, f"transcripts import failed: {e}", []
+
+
+async def _transcripts_ensure_verify_ui_present(
+    channel: discord.TextChannel,
+    *,
+    reason: str,
+) -> bool:
+    try:
+        from ..transcripts import ensure_verify_ui_present as _ensure_verify_ui_present
+        return await _ensure_verify_ui_present(channel, reason=reason)
+    except Exception:
+        return False
 
 
 # ============================================================
@@ -519,7 +554,7 @@ async def _auto_close_after_decision_safe(
         return
 
     try:
-        await auto_close_after_decision(
+        await _transcripts_auto_close_after_decision(
             channel,
             closer=closer,
             decision=decision,
@@ -908,7 +943,7 @@ async def ensure_ticket_verify_ui(
     requester_id: Optional[int] = None,
 ) -> Dict[str, Any]:
     try:
-        ok = await ensure_verify_ui_present(
+        ok = await _transcripts_ensure_verify_ui_present(
             channel,
             reason=f"verification_service_ensure:{int(requester_id or 0)}",
         )
@@ -1136,7 +1171,7 @@ async def approve_verification(
                 already_verified=True,
             )
 
-        can_assign, error_msg, roles_to_assign = await check_bot_can_assign_roles(guild)
+        can_assign, error_msg, roles_to_assign = await _transcripts_check_bot_can_assign_roles(guild)
         if not can_assign:
             failed_decision = f"{decision_text} (roles unavailable)"
             await _mark_decision_safe(token, failed_decision, int(staff_member.id))
