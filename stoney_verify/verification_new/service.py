@@ -3,25 +3,11 @@
 # Purpose:
 #   Shared verification service layer for ticket-based and VC-based
 #   verification flows.
-#
-# What this file handles:
-#   - resolve verification context from token / channel / guild
-#   - ensure and reissue verify UI
-#   - request resubmission
-#   - approve / deny verification
-#   - approve / deny VC verification
-#   - persist verification decision context into:
-#       * guild_members
-#       * member_joins
-#       * member_events
-#
-# Notes:
-#   - Designed to keep dashboard data truthful after staff actions
-#   - Centralizes decision logic so ticket + VC verification stay consistent
 # ============================================================
 
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -85,6 +71,9 @@ try:
 except Exception:
     async def safe_optional_update_by_channel_id(*args, **kwargs) -> bool:  # type: ignore
         return False
+
+
+_VERIFICATION_ACTION_LOCKS: Dict[str, asyncio.Lock] = {}
 
 
 # ============================================================
@@ -280,6 +269,45 @@ def _ticket_channel_id_value(channel: Optional[discord.TextChannel]) -> Optional
     return None
 
 
+def _action_lock_key(
+    *,
+    guild: discord.Guild,
+    token: Optional[str],
+    channel: Optional[discord.TextChannel],
+    owner: Optional[discord.Member],
+    action: str,
+) -> str:
+    if _safe_str(token):
+        return f"{guild.id}:token:{_safe_str(token)}:{action}"
+    if isinstance(channel, discord.TextChannel):
+        return f"{guild.id}:channel:{channel.id}:{action}"
+    if isinstance(owner, discord.Member):
+        return f"{guild.id}:owner:{owner.id}:{action}"
+    return f"{guild.id}:fallback:{action}"
+
+
+def _action_lock(
+    *,
+    guild: discord.Guild,
+    token: Optional[str],
+    channel: Optional[discord.TextChannel],
+    owner: Optional[discord.Member],
+    action: str,
+) -> asyncio.Lock:
+    key = _action_lock_key(
+        guild=guild,
+        token=token,
+        channel=channel,
+        owner=owner,
+        action=action,
+    )
+    lock = _VERIFICATION_ACTION_LOCKS.get(key)
+    if lock is None:
+        lock = asyncio.Lock()
+        _VERIFICATION_ACTION_LOCKS[key] = lock
+    return lock
+
+
 def _sync_member_verification_context(
     *,
     guild: discord.Guild,
@@ -339,9 +367,16 @@ def _sync_member_verification_context(
 
         if decision_kind == "denied":
             member_patch["has_verified_role"] = False
+            member_patch["role_state"] = "unverified_only"
+            member_patch["role_state_reason"] = "Verification denied."
         elif decision_kind == "approved":
             member_patch["has_verified_role"] = True
+            member_patch["has_unverified"] = False
             member_patch["in_guild"] = True
+            member_patch["role_state"] = "verified_ok"
+            member_patch["role_state_reason"] = "Verification approved by staff."
+        elif decision_kind == "resubmit":
+            member_patch["role_state_reason"] = "Staff requested resubmission."
 
         try:
             (
@@ -443,6 +478,8 @@ async def _mark_decision_safe(
     staff_id: int,
     approved_user_id: Optional[int] = None,
 ) -> None:
+    if not _safe_str(token):
+        return
     try:
         sb_mark_decision(
             token,
@@ -455,6 +492,8 @@ async def _mark_decision_safe(
 
 
 async def _set_used_safe(token: str, used: bool = True) -> None:
+    if not _safe_str(token):
+        return
     try:
         sb_set_used(token, used)
     except Exception:
@@ -709,6 +748,48 @@ def _roles_to_grant_for_member(
     ]
 
 
+async def _finalize_token_decision(
+    *,
+    token: str,
+    decision: str,
+    staff_member: discord.Member,
+    approved_user_id: Optional[int] = None,
+    mark_used: bool = True,
+) -> None:
+    if not _safe_str(token):
+        return
+    await _mark_decision_safe(
+        token,
+        decision,
+        int(staff_member.id),
+        approved_user_id=approved_user_id,
+    )
+    if mark_used:
+        await _set_used_safe(token, True)
+
+
+async def _apply_verified_roles(
+    *,
+    member: discord.Member,
+    staff_member: discord.Member,
+    roles_to_assign: List[discord.Role],
+) -> Tuple[List[discord.Role], Optional[str]]:
+    grant_roles = _roles_to_grant_for_member(member, roles_to_assign)
+
+    if grant_roles:
+        await member.add_roles(
+            *grant_roles,
+            reason=f"Stoney Verify approved by {staff_member} ({staff_member.id})",
+        )
+
+    _, remove_error = await _remove_unverified_role_if_present(
+        member,
+        reason=f"Stoney Verify approval cleanup by {staff_member} ({staff_member.id})",
+    )
+
+    return grant_roles, remove_error
+
+
 # ============================================================
 # Shared context resolution
 # ============================================================
@@ -819,10 +900,7 @@ async def ensure_ticket_verify_ui(
     try:
         ok = await ensure_verify_ui_present(
             channel,
-            requester_id=requester_id,
-            site_url=VERIFY_SITE_URL,
-            ttl_minutes=int(TOKEN_TTL_MINUTES or 20),
-            allow_regen=bool(ALLOW_USER_VERIFYLINK),
+            reason=f"verification_service_ensure:{int(requester_id or 0)}",
         )
         return _result(
             bool(ok),
@@ -896,51 +974,63 @@ async def request_resubmission(
             already_finalized=True,
         )
 
-    await _mark_decision_safe(token, "RESUBMIT REQUESTED", int(staff_member.id))
-    await _update_ticket_decision_metadata(
-        channel=resolved_channel,
-        decision="RESUBMIT REQUESTED",
-        staff_member=staff_member,
-        owner=resolved_owner if isinstance(resolved_owner, discord.Member) else None,
-    )
-    _sync_member_verification_context(
+    lock = _action_lock(
         guild=guild,
+        token=token,
+        channel=resolved_channel,
         owner=resolved_owner if isinstance(resolved_owner, discord.Member) else None,
-        channel=resolved_channel,
-        token_info=token_info if isinstance(token_info, dict) else None,
-        staff_member=staff_member,
-        decision_text="RESUBMIT REQUESTED",
+        action="resubmit",
     )
 
-    reissue = await reissue_verify_ui(
-        channel=resolved_channel,
-        requester_id=int(resolved_owner.id) if isinstance(resolved_owner, discord.Member) else None,
-        actor_id=int(staff_member.id),
-        reason="resubmit_requested",
-    )
+    async with lock:
+        await _mark_decision_safe(token, "RESUBMIT REQUESTED", int(staff_member.id))
+        await _update_ticket_decision_metadata(
+            channel=resolved_channel,
+            decision="RESUBMIT REQUESTED",
+            staff_member=staff_member,
+            owner=resolved_owner if isinstance(resolved_owner, discord.Member) else None,
+        )
+        _sync_member_verification_context(
+            guild=guild,
+            owner=resolved_owner if isinstance(resolved_owner, discord.Member) else None,
+            channel=resolved_channel,
+            token_info=token_info if isinstance(token_info, dict) else None,
+            staff_member=staff_member,
+            decision_text="RESUBMIT REQUESTED",
+        )
 
-    if prompt_in_channel:
-        try:
-            if isinstance(resolved_owner, discord.Member):
-                await resolved_channel.send(
-                    f"🔁 {resolved_owner.mention} Please **resubmit** your ID using the new secure upload button above.",
-                    allowed_mentions=discord.AllowedMentions.none(),
-                )
-            else:
-                await resolved_channel.send(
-                    "🔁 Please **resubmit** your ID using the new secure upload button above.",
-                    allowed_mentions=discord.AllowedMentions.none(),
-                )
-        except Exception:
-            pass
+        reissue = await reissue_verify_ui(
+            channel=resolved_channel,
+            requester_id=int(resolved_owner.id) if isinstance(resolved_owner, discord.Member) else None,
+            actor_id=int(staff_member.id),
+            reason="resubmit_requested",
+        )
 
-    return _result(
-        bool(reissue.get("ok")),
-        "Resubmission requested." if reissue.get("ok") else str(reissue.get("message") or "Failed to request resubmission."),
-        token=str(reissue.get("token") or ""),
-        owner=resolved_owner,
-        channel=resolved_channel,
-    )
+        if reissue.get("ok"):
+            await _set_used_safe(token, True)
+
+        if prompt_in_channel:
+            try:
+                if isinstance(resolved_owner, discord.Member):
+                    await resolved_channel.send(
+                        f"🔁 {resolved_owner.mention} Please **resubmit** your ID using the new secure upload button above.",
+                        allowed_mentions=discord.AllowedMentions.none(),
+                    )
+                else:
+                    await resolved_channel.send(
+                        "🔁 Please **resubmit** your ID using the new secure upload button above.",
+                        allowed_mentions=discord.AllowedMentions.none(),
+                    )
+            except Exception:
+                pass
+
+        return _result(
+            bool(reissue.get("ok")),
+            "Resubmission requested." if reissue.get("ok") else str(reissue.get("message") or "Failed to request resubmission."),
+            token=str(reissue.get("token") or ""),
+            owner=resolved_owner,
+            channel=resolved_channel,
+        )
 
 
 # ============================================================
@@ -976,132 +1066,155 @@ async def approve_verification(
     if resolved_owner is not None and not isinstance(resolved_owner, discord.Member):
         resolved_owner = None
 
-    if _decision_already_finalized(token_info):
-        return _result(
-            False,
-            "This verification decision is already finalized.",
-            owner=resolved_owner,
-            channel=resolved_channel,
-            already_finalized=True,
-        )
+    lock = _action_lock(
+        guild=guild,
+        token=token,
+        channel=resolved_channel if isinstance(resolved_channel, discord.TextChannel) else None,
+        owner=resolved_owner if isinstance(resolved_owner, discord.Member) else None,
+        action="approve",
+    )
 
-    if _member_looks_already_verified(resolved_owner):
-        already_decision = f"{decision_text} (already verified)"
-        await _mark_decision_safe(
-            token,
-            already_decision,
-            int(staff_member.id),
-            approved_user_id=int(resolved_owner.id) if isinstance(resolved_owner, discord.Member) else None,
-        )
-        await _set_used_safe(token, True)
-        await _update_ticket_decision_metadata(
-            channel=resolved_channel if isinstance(resolved_channel, discord.TextChannel) else None,
-            decision=already_decision,
-            staff_member=staff_member,
-            owner=resolved_owner if isinstance(resolved_owner, discord.Member) else None,
-        )
-        _sync_member_verification_context(
-            guild=guild,
-            owner=resolved_owner if isinstance(resolved_owner, discord.Member) else None,
-            channel=resolved_channel if isinstance(resolved_channel, discord.TextChannel) else None,
-            token_info=token_info if isinstance(token_info, dict) else None,
-            staff_member=staff_member,
-            decision_text=already_decision,
-        )
+    async with lock:
+        if _decision_already_finalized(token_info):
+            return _result(
+                False,
+                "This verification decision is already finalized.",
+                owner=resolved_owner,
+                channel=resolved_channel,
+                already_finalized=True,
+            )
 
-        return _result(
-            False,
-            "Duplicate approval blocked: member already appears verified.",
-            owner=resolved_owner,
-            channel=resolved_channel,
-            roles=[],
-            already_verified=True,
-        )
+        if _member_looks_already_verified(resolved_owner):
+            already_decision = f"{decision_text} (already verified)"
+            await _finalize_token_decision(
+                token=token,
+                decision=already_decision,
+                staff_member=staff_member,
+                approved_user_id=int(resolved_owner.id) if isinstance(resolved_owner, discord.Member) else None,
+                mark_used=True,
+            )
+            await _update_ticket_decision_metadata(
+                channel=resolved_channel if isinstance(resolved_channel, discord.TextChannel) else None,
+                decision=already_decision,
+                staff_member=staff_member,
+                owner=resolved_owner if isinstance(resolved_owner, discord.Member) else None,
+            )
+            _sync_member_verification_context(
+                guild=guild,
+                owner=resolved_owner if isinstance(resolved_owner, discord.Member) else None,
+                channel=resolved_channel if isinstance(resolved_channel, discord.TextChannel) else None,
+                token_info=token_info if isinstance(token_info, dict) else None,
+                staff_member=staff_member,
+                decision_text=already_decision,
+            )
 
-    can_assign, error_msg, roles_to_assign = await check_bot_can_assign_roles(guild)
-    if not can_assign:
-        failed_decision = f"{decision_text} (roles failed)"
-        await _mark_decision_safe(token, failed_decision, int(staff_member.id))
-        await _set_used_safe(token, True)
-        await _update_ticket_decision_metadata(
-            channel=resolved_channel if isinstance(resolved_channel, discord.TextChannel) else None,
-            decision=failed_decision,
-            staff_member=staff_member,
-            owner=resolved_owner if isinstance(resolved_owner, discord.Member) else None,
-        )
-        _sync_member_verification_context(
-            guild=guild,
-            owner=resolved_owner if isinstance(resolved_owner, discord.Member) else None,
-            channel=resolved_channel if isinstance(resolved_channel, discord.TextChannel) else None,
-            token_info=token_info if isinstance(token_info, dict) else None,
-            staff_member=staff_member,
-            decision_text=failed_decision,
-        )
+            return _result(
+                False,
+                "Duplicate approval blocked: member already appears verified.",
+                owner=resolved_owner,
+                channel=resolved_channel,
+                roles=[],
+                already_verified=True,
+            )
 
-        if close_after and isinstance(resolved_channel, discord.TextChannel):
-            await _auto_close_after_decision_safe(
-                resolved_channel,
-                closer=staff_member,
+        can_assign, error_msg, roles_to_assign = await check_bot_can_assign_roles(guild)
+        if not can_assign:
+            failed_decision = f"{decision_text} (roles unavailable)"
+            await _mark_decision_safe(token, failed_decision, int(staff_member.id))
+            await _update_ticket_decision_metadata(
+                channel=resolved_channel if isinstance(resolved_channel, discord.TextChannel) else None,
                 decision=failed_decision,
+                staff_member=staff_member,
+                owner=resolved_owner if isinstance(resolved_owner, discord.Member) else None,
+            )
+            _sync_member_verification_context(
+                guild=guild,
+                owner=resolved_owner if isinstance(resolved_owner, discord.Member) else None,
+                channel=resolved_channel if isinstance(resolved_channel, discord.TextChannel) else None,
+                token_info=token_info if isinstance(token_info, dict) else None,
+                staff_member=staff_member,
+                decision_text=failed_decision,
             )
 
-        return _result(
-            False,
-            f"Cannot assign roles: {error_msg}",
-            owner=resolved_owner,
-            channel=resolved_channel,
-            roles=[],
-        )
+            return _result(
+                False,
+                f"Cannot assign roles: {error_msg}",
+                owner=resolved_owner,
+                channel=resolved_channel,
+                roles=[],
+                retryable=True,
+            )
 
-    if not isinstance(resolved_owner, discord.Member):
-        no_owner_decision = f"{decision_text} (owner not detected)"
-        await _mark_decision_safe(token, no_owner_decision, int(staff_member.id))
-        await _set_used_safe(token, True)
-        await _update_ticket_decision_metadata(
-            channel=resolved_channel if isinstance(resolved_channel, discord.TextChannel) else None,
-            decision=no_owner_decision,
-            staff_member=staff_member,
-            owner=None,
-        )
-
-        if close_after and isinstance(resolved_channel, discord.TextChannel):
-            await _auto_close_after_decision_safe(
-                resolved_channel,
-                closer=staff_member,
+        if not isinstance(resolved_owner, discord.Member):
+            no_owner_decision = f"{decision_text} (owner not detected)"
+            await _mark_decision_safe(token, no_owner_decision, int(staff_member.id))
+            await _update_ticket_decision_metadata(
+                channel=resolved_channel if isinstance(resolved_channel, discord.TextChannel) else None,
                 decision=no_owner_decision,
+                staff_member=staff_member,
+                owner=None,
             )
 
-        return _result(
-            False,
-            "Approved decision saved, but I couldn't detect the ticket owner to grant roles.",
-            owner=None,
-            channel=resolved_channel,
-            roles=[],
-        )
-
-    grant_roles = _roles_to_grant_for_member(resolved_owner, roles_to_assign)
-
-    try:
-        if grant_roles:
-            await resolved_owner.add_roles(
-                *grant_roles,
-                reason=f"Stoney Verify approved by {staff_member} ({staff_member.id})",
+            return _result(
+                False,
+                "Approval is blocked because I couldn't detect the ticket owner to grant roles.",
+                owner=None,
+                channel=resolved_channel,
+                roles=[],
+                retryable=True,
             )
 
-        _, remove_error = await _remove_unverified_role_if_present(
-            resolved_owner,
-            reason=f"Stoney Verify approval cleanup by {staff_member} ({staff_member.id})",
-        )
+        try:
+            grant_roles, remove_error = await _apply_verified_roles(
+                member=resolved_owner,
+                staff_member=staff_member,
+                roles_to_assign=roles_to_assign,
+            )
+        except discord.Forbidden:
+            failed_decision = f"{decision_text} (role add failed)"
+            await _mark_decision_safe(token, failed_decision, int(staff_member.id))
+            await _update_ticket_decision_metadata(
+                channel=resolved_channel if isinstance(resolved_channel, discord.TextChannel) else None,
+                decision=failed_decision,
+                staff_member=staff_member,
+                owner=resolved_owner,
+            )
+            _sync_member_verification_context(
+                guild=guild,
+                owner=resolved_owner,
+                channel=resolved_channel if isinstance(resolved_channel, discord.TextChannel) else None,
+                token_info=token_info if isinstance(token_info, dict) else None,
+                staff_member=staff_member,
+                decision_text=failed_decision,
+            )
+
+            return _result(
+                False,
+                "I can't add roles. Fix my role position + permissions (Manage Roles) and try again.",
+                owner=resolved_owner,
+                channel=resolved_channel,
+                roles=[],
+                retryable=True,
+            )
+        except Exception as e:
+            return _result(
+                False,
+                f"Unexpected error: {e}",
+                owner=resolved_owner,
+                channel=resolved_channel,
+                roles=[],
+                retryable=True,
+            )
 
         if remove_error:
             partial_decision = f"{decision_text} (unverified cleanup failed)"
-            await _mark_decision_safe(
-                token,
-                partial_decision,
-                int(staff_member.id),
+            await _finalize_token_decision(
+                token=token,
+                decision=partial_decision,
+                staff_member=staff_member,
                 approved_user_id=int(resolved_owner.id),
+                mark_used=True,
             )
-            await _set_used_safe(token, True)
             await _update_ticket_decision_metadata(
                 channel=resolved_channel if isinstance(resolved_channel, discord.TextChannel) else None,
                 decision=partial_decision,
@@ -1126,12 +1239,16 @@ async def approve_verification(
                 partial_success=True,
             )
 
-    except discord.Forbidden:
-        failed_decision = f"{decision_text} (role add failed)"
-        await _mark_decision_safe(token, failed_decision, int(staff_member.id))
+        await _finalize_token_decision(
+            token=token,
+            decision=decision_text,
+            staff_member=staff_member,
+            approved_user_id=int(resolved_owner.id),
+            mark_used=True,
+        )
         await _update_ticket_decision_metadata(
             channel=resolved_channel if isinstance(resolved_channel, discord.TextChannel) else None,
-            decision=failed_decision,
+            decision=decision_text,
             staff_member=staff_member,
             owner=resolved_owner,
         )
@@ -1141,67 +1258,29 @@ async def approve_verification(
             channel=resolved_channel if isinstance(resolved_channel, discord.TextChannel) else None,
             token_info=token_info if isinstance(token_info, dict) else None,
             staff_member=staff_member,
-            decision_text=failed_decision,
+            decision_text=decision_text,
+        )
+
+        if close_after and isinstance(resolved_channel, discord.TextChannel):
+            await _auto_close_after_decision_safe(
+                resolved_channel,
+                closer=staff_member,
+                decision=decision_text,
+            )
+
+        message = (
+            f"Approved. Granted {_roles_display(grant_roles)} to {resolved_owner.display_name}."
+            if grant_roles
+            else f"Approved for {resolved_owner.display_name}."
         )
 
         return _result(
-            False,
-            "I can't add roles. Fix my role position + permissions (Manage Roles) and try again.",
+            True,
+            message,
             owner=resolved_owner,
             channel=resolved_channel,
-            roles=[],
+            roles=grant_roles,
         )
-    except Exception as e:
-        return _result(
-            False,
-            f"Unexpected error: {e}",
-            owner=resolved_owner,
-            channel=resolved_channel,
-            roles=[],
-        )
-
-    await _mark_decision_safe(
-        token,
-        decision_text,
-        int(staff_member.id),
-        approved_user_id=int(resolved_owner.id),
-    )
-    await _set_used_safe(token, True)
-    await _update_ticket_decision_metadata(
-        channel=resolved_channel if isinstance(resolved_channel, discord.TextChannel) else None,
-        decision=decision_text,
-        staff_member=staff_member,
-        owner=resolved_owner,
-    )
-    _sync_member_verification_context(
-        guild=guild,
-        owner=resolved_owner,
-        channel=resolved_channel if isinstance(resolved_channel, discord.TextChannel) else None,
-        token_info=token_info if isinstance(token_info, dict) else None,
-        staff_member=staff_member,
-        decision_text=decision_text,
-    )
-
-    if close_after and isinstance(resolved_channel, discord.TextChannel):
-        await _auto_close_after_decision_safe(
-            resolved_channel,
-            closer=staff_member,
-            decision=decision_text,
-        )
-
-    message = (
-        f"Approved. Granted {_roles_display(grant_roles)} to {resolved_owner.display_name}."
-        if grant_roles
-        else f"Approved for {resolved_owner.display_name}."
-    )
-
-    return _result(
-        True,
-        message,
-        owner=resolved_owner,
-        channel=resolved_channel,
-        roles=grant_roles,
-    )
 
 
 async def deny_verification(
@@ -1229,45 +1308,59 @@ async def deny_verification(
     token_info = ctx.get("token_info")
     resolved_owner = ctx.get("owner")
 
-    if _decision_already_finalized(token_info):
+    lock = _action_lock(
+        guild=guild,
+        token=token,
+        channel=resolved_channel if isinstance(resolved_channel, discord.TextChannel) else None,
+        owner=resolved_owner if isinstance(resolved_owner, discord.Member) else None,
+        action="deny",
+    )
+
+    async with lock:
+        if _decision_already_finalized(token_info):
+            return _result(
+                False,
+                "This verification decision is already finalized.",
+                owner=resolved_owner,
+                channel=resolved_channel,
+                already_finalized=True,
+            )
+
+        await _finalize_token_decision(
+            token=token,
+            decision=decision_text,
+            staff_member=staff_member,
+            approved_user_id=None,
+            mark_used=True,
+        )
+        await _update_ticket_decision_metadata(
+            channel=resolved_channel if isinstance(resolved_channel, discord.TextChannel) else None,
+            decision=decision_text,
+            staff_member=staff_member,
+            owner=resolved_owner if isinstance(resolved_owner, discord.Member) else None,
+        )
+        _sync_member_verification_context(
+            guild=guild,
+            owner=resolved_owner if isinstance(resolved_owner, discord.Member) else None,
+            channel=resolved_channel if isinstance(resolved_channel, discord.TextChannel) else None,
+            token_info=token_info if isinstance(token_info, dict) else None,
+            staff_member=staff_member,
+            decision_text=decision_text,
+        )
+
+        if close_after and isinstance(resolved_channel, discord.TextChannel):
+            await _auto_close_after_decision_safe(
+                resolved_channel,
+                closer=staff_member,
+                decision=decision_text,
+            )
+
         return _result(
-            False,
-            "This verification decision is already finalized.",
+            True,
+            "Denied and saved.",
             owner=resolved_owner,
             channel=resolved_channel,
-            already_finalized=True,
         )
-
-    await _mark_decision_safe(token, decision_text, int(staff_member.id))
-    await _set_used_safe(token, True)
-    await _update_ticket_decision_metadata(
-        channel=resolved_channel if isinstance(resolved_channel, discord.TextChannel) else None,
-        decision=decision_text,
-        staff_member=staff_member,
-        owner=resolved_owner if isinstance(resolved_owner, discord.Member) else None,
-    )
-    _sync_member_verification_context(
-        guild=guild,
-        owner=resolved_owner if isinstance(resolved_owner, discord.Member) else None,
-        channel=resolved_channel if isinstance(resolved_channel, discord.TextChannel) else None,
-        token_info=token_info if isinstance(token_info, dict) else None,
-        staff_member=staff_member,
-        decision_text=decision_text,
-    )
-
-    if close_after and isinstance(resolved_channel, discord.TextChannel):
-        await _auto_close_after_decision_safe(
-            resolved_channel,
-            closer=staff_member,
-            decision=decision_text,
-        )
-
-    return _result(
-        True,
-        "Denied and saved.",
-        owner=resolved_owner,
-        channel=resolved_channel,
-    )
 
 
 # ============================================================
