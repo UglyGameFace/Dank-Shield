@@ -14,6 +14,12 @@ try:
 except Exception:
     vc_sessions = None  # type: ignore
 
+try:
+    from .store import sb_get_token_info
+except Exception:
+    def sb_get_token_info(token: str) -> Optional[Dict[str, Any]]:  # type: ignore
+        return None
+
 
 # ============================================================
 # Fallback globals / safety
@@ -377,6 +383,112 @@ def _vc_session_is_active_status(status: str) -> bool:
     }
 
 
+def _ensure_session_backing(
+    *,
+    guild: discord.Guild,
+    token: str,
+    owner: Optional[discord.Member] = None,
+    staff_member: Optional[discord.Member] = None,
+) -> Optional[Dict[str, Any]]:
+    tok = _safe_str(token)
+    if not tok:
+        return None
+
+    row = _get_session_row(tok)
+    if row:
+        return row
+
+    if not vc_sessions or not hasattr(vc_sessions, "ensure_session"):
+        return None
+
+    token_info = sb_get_token_info(tok) or {}
+    req = VC_REQUESTS.get(tok) or {}
+
+    owner_id = 0
+    if isinstance(owner, discord.Member):
+        owner_id = int(owner.id)
+    if owner_id <= 0:
+        owner_id = _as_int(token_info.get("requester_id") or token_info.get("user_id"), 0)
+    if owner_id <= 0:
+        owner_id = _as_int(req.get("owner_id") or req.get("requester_id"), 0)
+
+    ticket_channel_id = _as_int(token_info.get("channel_id"), 0)
+    if ticket_channel_id <= 0:
+        ticket_channel_id = _as_int(req.get("ticket_channel_id"), 0)
+
+    vc_channel_id = _as_int(req.get("vc_channel_id"), 0)
+    if vc_channel_id <= 0:
+        vc_channel_id = _configured_vc_channel_id()
+
+    queue_channel_id = _as_int(req.get("queue_channel_id"), 0)
+    if queue_channel_id <= 0:
+        queue_channel_id = _configured_vc_queue_channel_id()
+
+    access_minutes = _as_int((req or {}).get("access_minutes"), 0)
+    if access_minutes <= 0:
+        access_minutes = _as_int(globals().get("VC_VERIFY_ACCESS_MINUTES"), 30) or 30
+
+    if owner_id <= 0 or ticket_channel_id <= 0 or vc_channel_id <= 0:
+        return None
+
+    meta: Dict[str, Any] = {
+        "ticket_required": True,
+        "vc_locked_by_default": True,
+    }
+
+    if isinstance(staff_member, discord.Member):
+        meta.update(
+            {
+                "staff_confirmed": True,
+                "assigned_staff_id": int(staff_member.id),
+                "assigned_staff_name": str(staff_member.display_name),
+            }
+        )
+
+    try:
+        row = vc_sessions.ensure_session(
+            token=tok,
+            guild_id=int(guild.id),
+            ticket_channel_id=int(ticket_channel_id),
+            requester_id=int(owner_id),
+            owner_id=int(owner_id),
+            vc_channel_id=int(vc_channel_id),
+            queue_channel_id=int(queue_channel_id or 0),
+            access_minutes=int(access_minutes),
+            meta=meta,
+        )
+    except Exception:
+        row = None
+
+    try:
+        if row and isinstance(staff_member, discord.Member) and hasattr(vc_sessions, "set_staff_accepted"):
+            vc_sessions.set_staff_accepted(
+                token=tok,
+                staff_id=int(staff_member.id),
+                staff_name=str(staff_member.display_name),
+            )
+    except Exception:
+        pass
+
+    try:
+        req = VC_REQUESTS.get(tok) or {}
+        req["owner_id"] = int(owner_id)
+        req["requester_id"] = int(owner_id)
+        req["ticket_channel_id"] = int(ticket_channel_id)
+        req["vc_channel_id"] = int(vc_channel_id)
+        req["guild_id"] = int(guild.id)
+        if isinstance(staff_member, discord.Member):
+            req["accepted_staff_id"] = int(staff_member.id)
+            req["assigned_staff_id"] = int(staff_member.id)
+            req["accepted_by"] = int(staff_member.id)
+            req["status"] = str(req.get("status") or "STAFF_ACCEPTED").upper()
+        VC_REQUESTS[tok] = req
+    except Exception:
+        pass
+
+    return _get_session_row(tok) or row
+
+
 async def _resolve_session_vc_channel(
     guild: discord.Guild,
     *,
@@ -593,6 +705,13 @@ def _session_unlock_guard(
     if not token:
         return False, "Missing VC session token."
 
+    session_row = _ensure_session_backing(
+        guild=guild,
+        token=token,
+        owner=owner,
+        staff_member=staff_member,
+    ) or _get_session_row(token)
+
     if vc_sessions is not None and hasattr(vc_sessions, "session_is_unlockable"):
         try:
             ok, reason = vc_sessions.session_is_unlockable(
@@ -600,31 +719,54 @@ def _session_unlock_guard(
                 expected_guild_id=int(guild.id),
                 expected_staff_id=int(staff_member.id),
             )
+            if not ok and "session not found" in str(reason or "").lower():
+                session_row = _ensure_session_backing(
+                    guild=guild,
+                    token=token,
+                    owner=owner,
+                    staff_member=staff_member,
+                ) or session_row
+                ok, reason = vc_sessions.session_is_unlockable(
+                    token=str(token),
+                    expected_guild_id=int(guild.id),
+                    expected_staff_id=int(staff_member.id),
+                )
             if not ok:
                 return False, reason
         except Exception as e:
             return False, f"Failed session guard lookup: {e}"
 
-    owner_id = _get_owner_id(token)
+    row = session_row or {}
+    owner_id = _as_int(row.get("owner_id") or row.get("requester_id"), 0) or _get_owner_id(token)
     if int(owner.id) != int(owner_id):
         return False, "Owner does not match this VC session."
 
-    ticket_channel_id = _get_ticket_channel_id_from_session(token)
+    ticket_channel_id = _as_int(row.get("ticket_channel_id"), 0) or _get_ticket_channel_id_from_session(token)
     if ticket_channel_id <= 0:
         return False, "VC session is not ticket-backed."
 
-    vc_channel_id = _get_vc_channel_id_from_session(token)
+    vc_channel_id = _as_int(row.get("vc_channel_id"), 0) or _get_vc_channel_id_from_session(token)
     configured_vc_id = _configured_vc_channel_id()
     if configured_vc_id <= 0:
         return False, "Configured ID Verify VC is missing."
     if vc_channel_id != configured_vc_id:
         return False, "Session VC does not match configured ID Verify VC."
 
-    status = _get_session_status(token)
+    status = str((row.get("status") or _get_session_status(token) or "")).upper().strip()
     if status not in {"STAFF_ACCEPTED", "OWNER_CONFIRMED", "READY", "TAKEN_OVER", "RESTARTED"}:
         return False, f"Session status `{status or 'UNKNOWN'}` is not allowed to unlock VC."
 
-    assigned_staff_id = _get_assigned_staff_id(token)
+    assigned_staff_id = 0
+    try:
+        meta = row.get("meta") or {}
+        if isinstance(meta, dict):
+            assigned_staff_id = int(meta.get("assigned_staff_id") or 0)
+    except Exception:
+        assigned_staff_id = 0
+
+    if assigned_staff_id <= 0:
+        assigned_staff_id = _get_assigned_staff_id(token)
+
     if assigned_staff_id > 0 and int(staff_member.id) != int(assigned_staff_id):
         return False, "Only the assigned staff member can unlock this VC session."
 
