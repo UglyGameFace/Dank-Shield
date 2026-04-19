@@ -383,6 +383,16 @@ except Exception:
 _INTERACTION_HANDLERS_REGISTERED = False
 
 
+def _bump_runtime_stat(key: str, amount: int = 1) -> None:
+    try:
+        RUNTIME_STATS[key] = int(RUNTIME_STATS.get(key, 0) or 0) + int(amount)
+    except Exception:
+        try:
+            RUNTIME_STATS[key] = int(amount)
+        except Exception:
+            pass
+
+
 def _role_by_id(guild: discord.Guild, role_id: int) -> Optional[discord.Role]:
     try:
         if not guild or not role_id or int(role_id) <= 0:
@@ -955,7 +965,7 @@ async def handle_possible_submission(message: discord.Message) -> None:
     except Exception:
         pass
 
-    RUNTIME_STATS["submissions_seen"] += 1
+    _bump_runtime_stat("submissions_seen")
     mark_ticket_activity(message.channel.id)
 
     try:
@@ -1034,7 +1044,7 @@ async def handle_possible_submission(message: discord.Message) -> None:
         view=view,
     )
     ACTIVE_DECISION_PANEL_MSG_ID[token] = int(panel_msg.id)
-    RUNTIME_STATS["panels_posted"] += 1
+    _bump_runtime_stat("panels_posted")
 
 
 async def _defer_ephemeral(interaction: discord.Interaction) -> None:
@@ -1094,7 +1104,7 @@ async def _handle_mod_quick_action(
                 reason=f"QuickAction ban by {interaction.user} ({interaction.user.id})",
                 delete_message_days=0,
             )
-            RUNTIME_STATS["mod_actions"] += 1
+            _bump_runtime_stat("mod_actions")
             await interaction.followup.send(f"🔨 Banned {target.mention}.", ephemeral=True)
             return True
 
@@ -1106,7 +1116,7 @@ async def _handle_mod_quick_action(
                 target,
                 reason=f"QuickAction kick by {interaction.user} ({interaction.user.id})",
             )
-            RUNTIME_STATS["mod_actions"] += 1
+            _bump_runtime_stat("mod_actions")
             await interaction.followup.send(f"👢 Kicked {target.mention}.", ephemeral=True)
             return True
 
@@ -1125,7 +1135,7 @@ async def _handle_mod_quick_action(
                 until,
                 reason=f"QuickAction timeout by {interaction.user} ({interaction.user.id})",
             )
-            RUNTIME_STATS["mod_actions"] += 1
+            _bump_runtime_stat("mod_actions")
             await interaction.followup.send(
                 f"⏳ Timed out {target.mention} for {mins} minutes.",
                 ephemeral=True,
@@ -1289,7 +1299,7 @@ async def _handle_vc_staff_action(
             "guild_id": int(guild.id),
             "vc_channel_id": int(globals().get("VC_VERIFY_CHANNEL_ID", 0) or globals().get("VC_VERIFY_VC_ID", 0) or 0),
         }
-        RUNTIME_STATS["vc_accepted"] += 1
+        _bump_runtime_stat("vc_accepted")
 
         vc_ch = _get_vc_channel(guild)
         if not vc_ch:
@@ -1349,7 +1359,7 @@ async def _handle_vc_staff_action(
                 )
                 msg_obj = interaction.message
             else:
-                msg_obj = await interaction.channel.send(  # type: ignore[union-attr]
+                msg_obj = await interaction.channel.send(
                     content=f"✅ VC verify accepted by {interaction.user.mention} for {owner.mention}.",
                     view=staff_controls,
                 )
@@ -1557,7 +1567,7 @@ async def _handle_vc_staff_action(
                 pass
             await interaction.followup.send("❌ VC request canceled and access revoked.", ephemeral=True)
         else:
-            RUNTIME_STATS["vc_ended"] += 1
+            _bump_runtime_stat("vc_ended")
             await interaction.followup.send("🧹 VC session ended (access revoked).", ephemeral=True)
         return True
 
@@ -1676,9 +1686,12 @@ async def _handle_vc_staff_action(
             pass
 
         try:
-            await _vc_unlock_channel_for_next_session(guild, token)
+            await _vc_unlock_channel_for_next_SESSION(guild, token)  # noqa: F821
         except Exception:
-            pass
+            try:
+                await _vc_unlock_channel_for_next_session(guild, token)
+            except Exception:
+                pass
 
         try:
             await _disable_interaction_message_if_possible(
@@ -1688,7 +1701,7 @@ async def _handle_vc_staff_action(
         except Exception:
             pass
 
-        RUNTIME_STATS["vc_denied"] += 1
+        _bump_runtime_stat("vc_denied")
         await interaction.followup.send("⛔ **Denied (VC)**.", ephemeral=True)
         await auto_close_after_decision(ticket_ch, closer=interaction.user, decision="DENIED (VC)")
         return True
@@ -1770,7 +1783,7 @@ async def _handle_vc_staff_action(
         except Exception:
             pass
 
-        RUNTIME_STATS["vc_approved"] += 1
+        _bump_runtime_stat("vc_approved")
 
         msg = str(result.get("message") or "✅ Approved (VC).")
         if proof_saved and proof_meta:
@@ -1877,7 +1890,7 @@ async def _handle_standard_staff_decision(
             content_suffix=f"🔁 Resubmission requested by {interaction.user.mention}.",
         )
 
-        RUNTIME_STATS["resubmit"] += 1
+        _bump_runtime_stat("resubmit")
         await interaction.followup.send(
             "✅ Resubmission requested. A new link was posted and the ticket stays open.",
             ephemeral=True,
@@ -1916,7 +1929,7 @@ async def _handle_standard_staff_decision(
             content_suffix=f"⛔ Denied by {interaction.user.mention}.",
         )
 
-        RUNTIME_STATS["denied"] += 1
+        _bump_runtime_stat("denied")
         await interaction.followup.send(
             "⛔ **Denied**.",
             ephemeral=True,
@@ -1984,7 +1997,7 @@ async def _handle_standard_staff_decision(
         content_suffix=f"✅ Approved by {interaction.user.mention}.",
     )
 
-    RUNTIME_STATS["approved"] += 1
+    _bump_runtime_stat("approved")
 
     msg = str(result.get("message") or "✅ Approved.")
     if proof_saved and proof_meta:
