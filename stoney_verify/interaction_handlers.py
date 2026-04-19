@@ -425,6 +425,90 @@ def _parse_iso_datetime(value: str) -> Optional[datetime]:
         return None
 
 
+def _configured_vc_channel_id() -> int:
+    try:
+        return int(globals().get("VC_VERIFY_CHANNEL_ID", 0) or globals().get("VC_VERIFY_VC_ID", 0) or 0)
+    except Exception:
+        return 0
+
+
+def _configured_vc_queue_channel_id() -> int:
+    try:
+        return int(_vc_requests_channel_id() or 0)
+    except Exception:
+        return 0
+
+
+def _configured_vc_access_minutes() -> int:
+    try:
+        return int(globals().get("VC_VERIFY_ACCESS_MINUTES", 30) or 30)
+    except Exception:
+        return 30
+
+
+def _get_vc_session_module():
+    try:
+        from . import vc_sessions  # type: ignore
+        return vc_sessions
+    except Exception:
+        return None
+
+
+def _ensure_vc_request_session(
+    *,
+    guild: discord.Guild,
+    token: str,
+    ticket_channel: discord.TextChannel,
+    owner: discord.Member,
+    staff_member: Optional[discord.Member] = None,
+) -> bool:
+    vc_sessions = _get_vc_session_module()
+    if not vc_sessions or not hasattr(vc_sessions, "ensure_session"):
+        return False
+
+    try:
+        meta: Dict[str, Any] = {
+            "ticket_required": True,
+            "vc_locked_by_default": True,
+        }
+        if isinstance(staff_member, discord.Member):
+            meta.update(
+                {
+                    "staff_confirmed": True,
+                    "assigned_staff_id": int(staff_member.id),
+                    "assigned_staff_name": str(staff_member.display_name),
+                }
+            )
+
+        row = vc_sessions.ensure_session(
+            token=str(token),
+            guild_id=int(guild.id),
+            ticket_channel_id=int(ticket_channel.id),
+            requester_id=int(owner.id),
+            owner_id=int(owner.id),
+            vc_channel_id=int(_configured_vc_channel_id()),
+            queue_channel_id=int(_configured_vc_queue_channel_id()),
+            access_minutes=int(_configured_vc_access_minutes()),
+            meta=meta,
+        )
+        if isinstance(staff_member, discord.Member) and hasattr(vc_sessions, "set_staff_accepted"):
+            try:
+                vc_sessions.set_staff_accepted(
+                    token=str(token),
+                    staff_id=int(staff_member.id),
+                    staff_name=str(staff_member.display_name),
+                )
+            except Exception:
+                pass
+        return bool(row)
+    except Exception as e:
+        try:
+            print(f"⚠️ _ensure_vc_request_session failed for token {token}: {repr(e)}")
+        except Exception:
+            pass
+        return False
+
+
 async def _resolve_ticket_channel_from_token_info_safe(
     guild: discord.Guild,
     token_info: Dict[str, Any],
@@ -1286,6 +1370,20 @@ async def _handle_vc_staff_action(
             )
             return True
 
+        session_ok = _ensure_vc_request_session(
+            guild=guild,
+            token=token,
+            ticket_channel=ticket_ch,
+            owner=owner,
+            staff_member=interaction.user,
+        )
+        if not session_ok:
+            await interaction.followup.send(
+                "❌ Failed to prepare the VC session record. Try again.",
+                ephemeral=True,
+            )
+            return True
+
         VC_REQUESTS[token] = {
             **req,
             "status": "STAFF_ACCEPTED",
@@ -1297,7 +1395,9 @@ async def _handle_vc_staff_action(
             "requester_id": int(owner.id),
             "ticket_channel_id": int(ticket_ch.id),
             "guild_id": int(guild.id),
-            "vc_channel_id": int(globals().get("VC_VERIFY_CHANNEL_ID", 0) or globals().get("VC_VERIFY_VC_ID", 0) or 0),
+            "vc_channel_id": int(_configured_vc_channel_id() or 0),
+            "queue_channel_id": int(_configured_vc_queue_channel_id() or 0),
+            "access_minutes": int(_configured_vc_access_minutes()),
         }
         _bump_runtime_stat("vc_accepted")
 
@@ -1398,6 +1498,20 @@ async def _handle_vc_staff_action(
             )
             return True
 
+        session_ok = _ensure_vc_request_session(
+            guild=guild,
+            token=token,
+            ticket_channel=ticket_ch,
+            owner=owner,
+            staff_member=interaction.user,
+        )
+        if not session_ok:
+            await interaction.followup.send(
+                "❌ Failed to prepare the VC session record.",
+                ephemeral=True,
+            )
+            return True
+
         lock_ok, lock_msg = await _vc_lock_channel_for_session(
             guild,
             owner,
@@ -1426,18 +1540,16 @@ async def _handle_vc_staff_action(
                 "requested_by": int(req.get("requested_by") or owner.id),
                 "ticket_channel_id": int(getattr(ticket_ch, "id", 0) or 0),
                 "guild_id": int(guild.id),
-                "vc_channel_id": int(globals().get("VC_VERIFY_CHANNEL_ID", 0) or globals().get("VC_VERIFY_VC_ID", 0) or 0),
+                "vc_channel_id": int(_configured_vc_channel_id() or 0),
+                "queue_channel_id": int(_configured_vc_queue_channel_id() or 0),
+                "access_minutes": int(_configured_vc_access_minutes()),
             }
         except Exception:
             pass
 
+        vc_sessions = _get_vc_session_module()
         try:
-            from . import vc_sessions  # type: ignore
-        except Exception:
-            vc_sessions = None  # type: ignore
-
-        try:
-            vc_id = int(globals().get("VC_VERIFY_CHANNEL_ID", 0) or globals().get("VC_VERIFY_VC_ID", 0) or 0)
+            vc_id = int(_configured_vc_channel_id() or 0)
             if vc_sessions and hasattr(vc_sessions, "start_session"):
                 await vc_sessions.start_session(
                     guild_id=guild.id,
@@ -1450,7 +1562,7 @@ async def _handle_vc_staff_action(
         except Exception:
             pass
 
-        vc_id = int(globals().get("VC_VERIFY_CHANNEL_ID", 0) or globals().get("VC_VERIFY_VC_ID", 0) or 0)
+        vc_id = int(_configured_vc_channel_id() or 0)
         view = None
         if vc_id:
             try:
@@ -1474,7 +1586,7 @@ async def _handle_vc_staff_action(
         except Exception:
             move_result = ""
 
-        access_min = int(globals().get("VC_VERIFY_ACCESS_MINUTES", 30) or 30)
+        access_min = int(_configured_vc_access_minutes())
 
         try:
             await _send_or_edit_ticket_vc_status(
@@ -1517,6 +1629,7 @@ async def _handle_vc_staff_action(
         except Exception:
             pass
 
+        _bump_runtime_stat("vc_started")
         await interaction.followup.send(
             "▶️ VC session started. Owner + assigned staff now have VC access.",
             ephemeral=True,
@@ -1538,6 +1651,18 @@ async def _handle_vc_staff_action(
 
         try:
             await _vc_unlock_channel_for_next_session(guild, token)
+        except Exception:
+            pass
+
+        vc_sessions = _get_vc_session_module()
+        try:
+            if vc_sessions and hasattr(vc_sessions, "end_session"):
+                await vc_sessions.end_session(
+                    guild_id=guild.id,
+                    token=str(token),
+                    status=("CANCELED" if action == "vc_cancel" else "COMPLETED"),
+                    staff_id=int(interaction.user.id),
+                )
         except Exception:
             pass
 
@@ -1686,12 +1811,9 @@ async def _handle_vc_staff_action(
             pass
 
         try:
-            await _vc_unlock_channel_for_next_SESSION(guild, token)  # noqa: F821
+            await _vc_unlock_channel_for_next_session(guild, token)
         except Exception:
-            try:
-                await _vc_unlock_channel_for_next_session(guild, token)
-            except Exception:
-                pass
+            pass
 
         try:
             await _disable_interaction_message_if_possible(
