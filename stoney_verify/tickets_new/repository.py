@@ -77,7 +77,6 @@ _OPTIONAL_TICKET_COLUMNS: Set[str] = {
     "closed_by_name",
     "deleted_by_name",
 }
-
 _OPTIONAL_COLUMN_SUPPORT: Dict[str, Optional[bool]] = {
     col: None for col in _OPTIONAL_TICKET_COLUMNS
 }
@@ -135,6 +134,19 @@ _ALLOWED_TICKET_WRITE_COLUMNS: Set[str] = (
     _BASE_TICKET_WRITE_COLUMNS | _OPTIONAL_TICKET_COLUMNS
 )
 
+_VALID_TICKET_STATUSES: Set[str] = {
+    "open",
+    "claimed",
+    "closed",
+    "deleted",
+}
+_VALID_TICKET_PRIORITIES: Set[str] = {
+    "low",
+    "medium",
+    "high",
+    "urgent",
+}
+
 
 # ============================================================
 # Small helpers
@@ -191,6 +203,26 @@ def _safe_meta(value: Any) -> Dict[str, Any]:
     return {}
 
 
+def _normalize_ticket_status(value: Any) -> str:
+    raw = (_clean_text(value) or "open").lower()
+    if raw in _VALID_TICKET_STATUSES:
+        return raw
+    if raw in {"reopened", "active"}:
+        return "open"
+    return "open"
+
+
+def _normalize_ticket_priority(value: Any) -> str:
+    raw = (_clean_text(value) or "medium").lower()
+    if raw in _VALID_TICKET_PRIORITIES:
+        return raw
+    return "medium"
+
+
+def _normalize_ticket_category(value: Any) -> str:
+    return (_clean_text(value) or "verification_issue").lower()
+
+
 def _normalize_ticket_row(row: Any) -> Optional[Dict[str, Any]]:
     try:
         if not isinstance(row, dict):
@@ -203,6 +235,14 @@ def _normalize_ticket_row(row: Any) -> Optional[Dict[str, Any]]:
         out["requester_id"] = _as_str_id(out.get("requester_id")) or user_id
         out["owner_name"] = _clean_text(out.get("owner_name")) or username
         out["requester_name"] = _clean_text(out.get("requester_name")) or username
+
+        out["status"] = _normalize_ticket_status(out.get("status"))
+        out["priority"] = _normalize_ticket_priority(out.get("priority"))
+        out["category"] = _normalize_ticket_category(out.get("category"))
+
+        if out["status"] == "open":
+            if _as_str_id(out.get("assigned_to")) or _as_str_id(out.get("claimed_by")):
+                out["status"] = "claimed"
 
         return out
     except Exception:
@@ -305,6 +345,36 @@ def _preserve_existing_created_at(
     return out
 
 
+def _merge_existing_ticket_identity(
+    existing: Optional[Dict[str, Any]],
+    payload: Dict[str, Any],
+) -> Dict[str, Any]:
+    out = dict(payload or {})
+    if not isinstance(existing, dict):
+        return out
+
+    for key in (
+        "guild_id",
+        "user_id",
+        "owner_id",
+        "requester_id",
+        "username",
+        "owner_name",
+        "requester_name",
+        "created_at",
+    ):
+        if out.get(key) is None and existing.get(key) is not None:
+            out[key] = existing.get(key)
+
+    if out.get("ticket_number") is None and existing.get("ticket_number") is not None:
+        out["ticket_number"] = existing.get("ticket_number")
+
+    if out.get("channel_name") is None and existing.get("channel_name") is not None:
+        out["channel_name"] = existing.get("channel_name")
+
+    return out
+
+
 def _owner_id_from_row(row: Optional[Dict[str, Any]]) -> Optional[str]:
     if not isinstance(row, dict):
         return None
@@ -319,7 +389,7 @@ def _ticket_status(row: Optional[Dict[str, Any]]) -> str:
     if not isinstance(row, dict):
         return "unknown"
     try:
-        return str(row.get("status") or "").strip().lower()
+        return _normalize_ticket_status(row.get("status"))
     except Exception:
         return "unknown"
 
@@ -351,6 +421,14 @@ def _clean_ticket_payload(
         if key == "created_at" and not include_created_at:
             continue
         out[key] = value
+
+    if "status" in out:
+        out["status"] = _normalize_ticket_status(out.get("status"))
+    if "priority" in out:
+        out["priority"] = _normalize_ticket_priority(out.get("priority"))
+    if "category" in out and out.get("category") is not None:
+        out["category"] = _normalize_ticket_category(out.get("category"))
+
     return out
 
 
@@ -986,16 +1064,22 @@ def build_ticket_payload(
     clean_username = _clean_text(username)
     clean_owner_name = _clean_text(owner_name) or clean_username
     clean_requester_name = _clean_text(requester_name) or clean_username
+    clean_claimed_by = _as_str_id(claimed_by)
+    clean_assigned_to = _as_str_id(assigned_to)
+
+    normalized_status = _normalize_ticket_status(status)
+    if normalized_status == "open" and (clean_claimed_by or clean_assigned_to):
+        normalized_status = "claimed"
 
     payload: Dict[str, Any] = {
         "guild_id": _as_str_id(guild_id),
         "user_id": clean_owner_id,
         "username": clean_username,
         "title": _clean_text(title),
-        "category": _clean_text(category) or "verification_issue",
-        "status": _clean_text(status) or "open",
-        "priority": _clean_text(priority) or "medium",
-        "claimed_by": _as_str_id(claimed_by),
+        "category": _normalize_ticket_category(category),
+        "status": normalized_status,
+        "priority": _normalize_ticket_priority(priority),
+        "claimed_by": clean_claimed_by,
         "closed_by": _as_str_id(closed_by),
         "closed_reason": _clean_text(closed_reason),
         "initial_message": _clean_text(initial_message) or "",
@@ -1011,7 +1095,7 @@ def build_ticket_payload(
         "channel_id": _as_str_id(channel_id),
         "channel_name": _clean_text(channel_name),
         "ticket_number": int(ticket_number) if ticket_number is not None else None,
-        "assigned_to": _as_str_id(assigned_to),
+        "assigned_to": clean_assigned_to,
         "reopened_at": reopened_at,
         "sla_deadline": sla_deadline,
         "is_ghost": bool(is_ghost),
@@ -1301,6 +1385,14 @@ async def upsert_ticket(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     fallback_lookup_id = channel_id or thread_id
 
     try:
+        existing = None
+        if fallback_lookup_id:
+            existing = await get_ticket_by_any_channel_id(fallback_lookup_id)
+
+        if existing:
+            clean = _merge_existing_ticket_identity(existing, clean)
+            clean = _preserve_existing_created_at(existing, clean)
+
         # Fast path: channel_id-backed upsert
         if channel_id:
             try:
@@ -1318,11 +1410,6 @@ async def upsert_ticket(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
                     return fetched
             except Exception as upsert_error:
                 print(f"⚠️ repository.upsert_ticket direct upsert fallback: {repr(upsert_error)}")
-
-        # Locate existing row by either channel_id or discord_thread_id
-        existing = None
-        if fallback_lookup_id:
-            existing = await get_ticket_by_any_channel_id(fallback_lookup_id)
 
         # If row exists already, patch by id instead of guessing another insert
         if existing and existing.get("id") is not None:
@@ -1509,6 +1596,20 @@ async def update_ticket_by_channel_id(
         )
         if row and row.get("id") is not None:
             ticket_id = str(row["id"])
+
+            # Keep state transitions internally consistent.
+            if clean.get("status") == "open":
+                if "claimed_by" not in clean and "assigned_to" not in clean:
+                    clean.setdefault("claimed_by", None)
+                    clean.setdefault("assigned_to", None)
+                    clean.setdefault("claimed_by_name", None)
+                    clean.setdefault("assigned_to_name", None)
+
+            if clean.get("status") == "claimed":
+                claimed = _as_str_id(clean.get("claimed_by")) or _as_str_id(clean.get("assigned_to"))
+                if claimed:
+                    clean["claimed_by"] = claimed
+                    clean["assigned_to"] = claimed
 
             res = await _write_ticket_with_optional_fallback(
                 op_name="update ticket by located id",
@@ -1783,6 +1884,7 @@ async def assign_ticket(
             "claimed_by": staff_id,
             "assigned_to_name": staff_name,
             "claimed_by_name": staff_name,
+            "last_activity_at": _now_iso(),
         },
         allow_thread_fallback=True,
     )
@@ -1806,6 +1908,7 @@ async def unclaim_ticket(
             "claimed_by": None,
             "assigned_to_name": None,
             "claimed_by_name": None,
+            "last_activity_at": _now_iso(),
         },
         allow_thread_fallback=True,
     )
@@ -1833,6 +1936,7 @@ async def transfer_ticket(
             "claimed_by": staff_id,
             "assigned_to_name": staff_name,
             "claimed_by_name": staff_name,
+            "last_activity_at": _now_iso(),
         },
         allow_thread_fallback=True,
     )
@@ -1848,7 +1952,7 @@ async def set_ticket_priority(
     if not clean_priority:
         return False
 
-    normalized_priority = clean_priority.lower()
+    normalized_priority = _normalize_ticket_priority(clean_priority)
     existing = await get_ticket_by_any_channel_id(channel_id)
     if existing and _clean_text(existing.get("priority")) == normalized_priority:
         return True
@@ -1872,7 +1976,6 @@ async def delete_ticket_row(channel_id: int | str) -> bool:
             await _delete_ticket_row_by_id_async(str(row["id"]))
             return True
 
-        # no row exists to delete
         return False
     except Exception as e:
         print(f"⚠️ repository.delete_ticket_row failed: {repr(e)}")
