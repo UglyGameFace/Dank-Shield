@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 from datetime import timedelta
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -369,6 +370,26 @@ def _safe_str(value: Any) -> str:
         return ""
 
 
+async def _resolve_ticket_channel_from_token_info_safe(
+    guild: discord.Guild,
+    token_info: Dict[str, Any],
+) -> Optional[discord.TextChannel]:
+    """
+    Handles both versions safely:
+    - sync implementation
+    - async implementation
+    """
+    try:
+        result = _resolve_ticket_channel_from_token_info(guild, token_info)
+        if inspect.isawaitable(result):
+            result = await result
+        if isinstance(result, discord.TextChannel):
+            return result
+    except Exception as e:
+        print(f"⚠️ _resolve_ticket_channel_from_token_info_safe failed: {repr(e)}")
+    return None
+
+
 def _vc_request_status_is_active(status: Any) -> bool:
     try:
         return str(status or "").upper().strip() in {
@@ -678,11 +699,6 @@ async def _disable_interaction_message_if_possible(
 
 
 def _is_persistent_view_managed_custom_id(custom_id: str) -> bool:
-    """
-    These custom IDs are already handled by persistent discord.ui.View callbacks
-    elsewhere in the bot. The global interaction router must NOT reply
-    'Invalid button' for them.
-    """
     cid = _safe_str(custom_id)
     if not cid:
         return False
@@ -1228,7 +1244,7 @@ async def _handle_vc_staff_action(
             return True
 
         try:
-            ticket_ch = _resolve_ticket_channel_from_token_info(guild, token_info_q)
+            ticket_ch = await _resolve_ticket_channel_from_token_info_safe(guild, token_info_q)
         except Exception:
             ticket_ch = None
 
@@ -1424,7 +1440,7 @@ async def _handle_vc_staff_action(
 
     if action == "vc_reissue":
         try:
-            ticket_ch = _resolve_ticket_channel_from_token_info(guild, token_info_q)
+            ticket_ch = await _resolve_ticket_channel_from_token_info_safe(guild, token_info_q)
         except Exception:
             ticket_ch = None
 
@@ -1569,7 +1585,7 @@ async def _handle_vc_staff_action(
         await interaction.followup.send(msg, ephemeral=True)
         return True
 
-    ticket_ch = _resolve_ticket_channel_from_token_info(guild, token_info_q)
+    ticket_ch = await _resolve_ticket_channel_from_token_info_safe(guild, token_info_q)
     if not ticket_ch:
         await _cleanup_stale_vc_request(guild, token, reason="ticket channel not found")
         await interaction.followup.send(
@@ -2225,10 +2241,6 @@ async def handle_component_interaction(interaction: discord.Interaction) -> None
     data = interaction.data or {}
     custom_id = (data.get("custom_id", "") or "").strip()
 
-    # IMPORTANT:
-    # Let persistent view callbacks handle their own buttons.
-    # This prevents fake "Invalid button" responses on buttons that
-    # are already wired up through discord.ui.View classes.
     if _is_persistent_view_managed_custom_id(custom_id):
         return
 
