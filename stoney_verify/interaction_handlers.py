@@ -626,6 +626,240 @@ async def _disable_interaction_message_if_possible(
         pass
 
 
+def _service_missing_result(result: Optional[Dict[str, Any]]) -> bool:
+    try:
+        if not isinstance(result, dict):
+            return True
+        if bool(result.get("ok")):
+            return False
+        text = str(result.get("message") or "").lower()
+        return (
+            "verification_new.service missing" in text
+            or "service missing" in text
+        )
+    except Exception:
+        return True
+
+
+def _member_has_any_role(member: Optional[discord.Member], role_ids: List[int]) -> bool:
+    try:
+        if not isinstance(member, discord.Member):
+            return False
+        wanted = {int(r) for r in role_ids if int(r) > 0}
+        if not wanted:
+            return False
+        return any(int(getattr(role, "id", 0) or 0) in wanted for role in member.roles)
+    except Exception:
+        return False
+
+
+def _member_looks_already_verified(member: Optional[discord.Member]) -> bool:
+    try:
+        if not isinstance(member, discord.Member):
+            return False
+
+        verified_ids: List[int] = []
+        for raw in [
+            VERIFIED_ROLE_ID,
+            RESIDENT_ROLE_ID,
+            STONER_ROLE_ID,
+            DRUNKEN_ROLE_ID,
+        ]:
+            try:
+                rid = int(raw or 0)
+                if rid > 0:
+                    verified_ids.append(rid)
+            except Exception:
+                continue
+
+        has_verified = _member_has_any_role(member, verified_ids)
+
+        unverified_id = 0
+        try:
+            unverified_id = int(UNVERIFIED_ROLE_ID or 0)
+        except Exception:
+            unverified_id = 0
+
+        has_unverified = _member_has_any_role(member, [unverified_id]) if unverified_id > 0 else False
+        return bool(has_verified and not has_unverified)
+    except Exception:
+        return False
+
+
+async def _legacy_request_resubmission(
+    *,
+    guild: discord.Guild,
+    channel: discord.TextChannel,
+    token: str,
+    staff_member: discord.Member,
+    owner: Optional[discord.Member],
+) -> Dict[str, Any]:
+    try:
+        sb_mark_decision(token, "RESUBMIT REQUESTED", int(staff_member.id))
+    except Exception:
+        pass
+
+    try:
+        await post_or_replace_verify_ui(
+            channel,
+            requester_id=int(owner.id) if isinstance(owner, discord.Member) else None,
+            reason=f"resubmit_requested:{staff_member.id}",
+            site_url=VERIFY_SITE_URL,
+            ttl_minutes=TOKEN_TTL_MINUTES,
+            allow_regen=ALLOW_USER_VERIFYLINK,
+        )
+    except Exception as e:
+        return {"ok": False, "message": f"Failed to post resubmission UI: {e}"}
+
+    try:
+        sb_set_used(token, True)
+    except Exception:
+        pass
+
+    try:
+        if isinstance(owner, discord.Member):
+            await channel.send(
+                f"🔁 {owner.mention} Please **resubmit** your ID using the new secure upload button above."
+            )
+        else:
+            await channel.send(
+                "🔁 Please **resubmit** your ID using the new secure upload button above."
+            )
+    except Exception:
+        pass
+
+    return {
+        "ok": True,
+        "message": "Resubmission requested.",
+    }
+
+
+async def _legacy_deny_verification(
+    *,
+    channel: discord.TextChannel,
+    token: str,
+    staff_member: discord.Member,
+    decision_text: str,
+) -> Dict[str, Any]:
+    try:
+        sb_mark_decision(token, decision_text, int(staff_member.id))
+    except Exception:
+        pass
+
+    try:
+        sb_set_used(token, True)
+    except Exception:
+        pass
+
+    return {
+        "ok": True,
+        "message": f"{decision_text} saved.",
+    }
+
+
+async def _legacy_approve_verification(
+    *,
+    guild: discord.Guild,
+    channel: discord.TextChannel,
+    token: str,
+    staff_member: discord.Member,
+    owner: Optional[discord.Member],
+    decision_text: str,
+) -> Dict[str, Any]:
+    if not isinstance(owner, discord.Member):
+        return {
+            "ok": False,
+            "message": "Approval is blocked because I couldn't detect the ticket owner to grant roles.",
+        }
+
+    if _member_looks_already_verified(owner):
+        try:
+            sb_mark_decision(
+                token,
+                f"{decision_text} (already verified)",
+                int(staff_member.id),
+                approved_user_id=int(owner.id),
+            )
+        except Exception:
+            pass
+        try:
+            sb_set_used(token, True)
+        except Exception:
+            pass
+        return {
+            "ok": False,
+            "already_verified": True,
+            "message": "Duplicate approval blocked: member already appears verified.",
+        }
+
+    can_assign, error_msg, roles_to_assign = await check_bot_can_assign_roles(guild)
+    if not can_assign:
+        try:
+            sb_mark_decision(token, f"{decision_text} (roles unavailable)", int(staff_member.id))
+        except Exception:
+            pass
+        return {
+            "ok": False,
+            "message": f"Cannot assign roles: {error_msg}",
+        }
+
+    try:
+        grant_roles = [role for role in roles_to_assign if isinstance(role, discord.Role) and role not in owner.roles]
+        if grant_roles:
+            await owner.add_roles(
+                *grant_roles,
+                reason=f"Stoney Verify approved by {staff_member} ({staff_member.id})",
+            )
+
+        _, remove_error = await _remove_unverified_role_if_present(
+            owner,
+            reason=f"Stoney Verify approval cleanup by {staff_member} ({staff_member.id})",
+        )
+        if remove_error:
+            try:
+                sb_mark_decision(
+                    token,
+                    f"{decision_text} (unverified cleanup failed)",
+                    int(staff_member.id),
+                    approved_user_id=int(owner.id),
+                )
+            except Exception:
+                pass
+            try:
+                sb_set_used(token, True)
+            except Exception:
+                pass
+            return {
+                "ok": False,
+                "message": f"Roles were added, but removing Unverified failed: {remove_error}",
+            }
+
+        try:
+            sb_mark_decision(token, decision_text, int(staff_member.id), approved_user_id=int(owner.id))
+        except Exception:
+            pass
+        try:
+            sb_set_used(token, True)
+        except Exception:
+            pass
+
+        role_names = ", ".join(role.name for role in grant_roles) if grant_roles else "no new roles"
+        return {
+            "ok": True,
+            "message": f"Approved. Granted {role_names} to {owner.display_name}.",
+        }
+    except discord.Forbidden:
+        return {
+            "ok": False,
+            "message": "I can't add roles. Fix my role position + permissions (Manage Roles) and try again.",
+        }
+    except Exception as e:
+        return {
+            "ok": False,
+            "message": f"Unexpected error: {e}",
+        }
+
+
 def _is_persistent_view_managed_custom_id(custom_id: str) -> bool:
     cid = _safe_str(custom_id)
     if not cid:
@@ -1420,6 +1654,14 @@ async def _handle_vc_staff_action(
             close_after=False,
         )
 
+        if _service_missing_result(result):
+            result = await _legacy_deny_verification(
+                channel=ticket_ch,
+                token=token,
+                staff_member=interaction.user,
+                decision_text="DENIED (VC)",
+            )
+
         if not result.get("ok"):
             await interaction.followup.send(
                 f"❌ {result.get('message') or 'VC denial failed.'}",
@@ -1460,6 +1702,16 @@ async def _handle_vc_staff_action(
             owner=owner if isinstance(owner, discord.Member) else None,
             close_after=False,
         )
+
+        if _service_missing_result(result):
+            result = await _legacy_approve_verification(
+                guild=guild,
+                channel=ticket_ch,
+                token=token,
+                staff_member=interaction.user,
+                owner=owner if isinstance(owner, discord.Member) else None,
+                decision_text="APPROVED (VC)",
+            )
 
         if not result.get("ok"):
             if result.get("already_verified"):
@@ -1602,6 +1854,15 @@ async def _handle_standard_staff_decision(
             prompt_in_channel=True,
         )
 
+        if _service_missing_result(result):
+            result = await _legacy_request_resubmission(
+                guild=guild,
+                channel=channel,
+                token=token,
+                staff_member=interaction.user,
+                owner=owner if isinstance(owner, discord.Member) else None,
+            )
+
         if not result.get("ok"):
             await interaction.followup.send(
                 f"❌ {result.get('message') or 'Failed to request resubmission.'}",
@@ -1632,6 +1893,14 @@ async def _handle_standard_staff_decision(
             decision_text="DENIED",
             close_after=False,
         )
+
+        if _service_missing_result(result):
+            result = await _legacy_deny_verification(
+                channel=channel,
+                token=token,
+                staff_member=interaction.user,
+                decision_text="DENIED",
+            )
 
         if not result.get("ok"):
             await interaction.followup.send(
@@ -1664,6 +1933,16 @@ async def _handle_standard_staff_decision(
         close_after=False,
         owner=owner if isinstance(owner, discord.Member) else None,
     )
+
+    if _service_missing_result(result):
+        result = await _legacy_approve_verification(
+            guild=guild,
+            channel=channel,
+            token=token,
+            staff_member=interaction.user,
+            owner=owner if isinstance(owner, discord.Member) else None,
+            decision_text="APPROVED",
+        )
 
     if not result.get("ok"):
         if result.get("already_verified"):
