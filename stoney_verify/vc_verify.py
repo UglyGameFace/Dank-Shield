@@ -2,17 +2,53 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone
 from typing import Optional, Tuple, Dict, Any, List
 
 import discord
 
-from .globals import *
+from .globals import *  # noqa
 
 try:
     from . import vc_sessions
 except Exception:
     vc_sessions = None  # type: ignore
+
+
+# ============================================================
+# Fallback globals / safety
+# ============================================================
+
+try:
+    VC_REQUESTS  # type: ignore[name-defined]
+except Exception:
+    VC_REQUESTS: Dict[str, Dict[str, Any]] = {}
+
+try:
+    TICKET_LAST_ACTIVITY  # type: ignore[name-defined]
+except Exception:
+    TICKET_LAST_ACTIVITY: Dict[int, datetime] = {}
+
+try:
+    VC_VERIFY_ACCESS_MINUTES  # type: ignore[name-defined]
+except Exception:
+    VC_VERIFY_ACCESS_MINUTES = 30
+
+try:
+    STAFF_ROLE_ID  # type: ignore[name-defined]
+except Exception:
+    STAFF_ROLE_ID = 0
+
+
+# ============================================================
+# Small helpers
+# ============================================================
+
+def _utcnow() -> datetime:
+    try:
+        return now_utc()  # type: ignore[name-defined]
+    except Exception:
+        return datetime.now(timezone.utc)
 
 
 def _safe_track_task(task: "asyncio.Task", *, label: str = "") -> None:
@@ -26,96 +62,158 @@ def _safe_track_task(task: "asyncio.Task", *, label: str = "") -> None:
 
 def mark_ticket_activity(channel_id: int) -> None:
     try:
-        TICKET_LAST_ACTIVITY[int(channel_id)] = now_utc()
+        TICKET_LAST_ACTIVITY[int(channel_id)] = _utcnow()
     except Exception:
         pass
 
 
-def _staff_ping_text() -> str:
+def _safe_str(value: Any) -> str:
     try:
-        vc_rid = int(globals().get("VC_STAFF_ROLE_ID") or 0)
-        if vc_rid:
-            return f"<@&{vc_rid}>"
+        return str(value or "").strip()
     except Exception:
-        pass
-    try:
-        rid = int(STAFF_ROLE_ID or 0)
-        if rid:
-            return f"<@&{rid}>"
-    except Exception:
-        pass
-    return ""
+        return ""
 
 
-def _as_int(v: object, default: int = 0) -> int:
+def _as_int(value: Any, default: int = 0) -> int:
     try:
-        if v is None:
+        if value is None or isinstance(value, bool):
             return default
-        if isinstance(v, bool):
-            return default
-        return int(str(v).strip())
+        return int(str(value).strip())
     except Exception:
         return default
 
 
 def _configured_vc_channel_id() -> int:
-    return _as_int(globals().get("VC_VERIFY_CHANNEL_ID", 0) or globals().get("VC_VERIFY_VC_ID", 0), 0)
+    return _as_int(
+        globals().get("VC_VERIFY_CHANNEL_ID", 0)
+        or globals().get("VC_VERIFY_VC_ID", 0),
+        0,
+    )
+
+
+def _configured_vc_queue_channel_id() -> int:
+    return _as_int(globals().get("VC_VERIFY_QUEUE_CHANNEL_ID", 0), 0)
+
+
+def _staff_ping_text() -> str:
+    try:
+        vc_rid = int(globals().get("VC_STAFF_ROLE_ID") or 0)
+        if vc_rid > 0:
+            return f"<@&{vc_rid}>"
+    except Exception:
+        pass
+
+    try:
+        rid = int(STAFF_ROLE_ID or 0)
+        if rid > 0:
+            return f"<@&{rid}>"
+    except Exception:
+        pass
+
+    return ""
+
+
+def _is_staff_member(member: Optional[discord.Member]) -> bool:
+    try:
+        if not isinstance(member, discord.Member):
+            return False
+        checker = globals().get("is_staff")
+        if callable(checker):
+            try:
+                return bool(checker(member))
+            except Exception:
+                pass
+        return bool(
+            member.guild_permissions.administrator
+            or member.guild_permissions.manage_guild
+            or member.guild_permissions.manage_channels
+            or member.guild_permissions.manage_messages
+        )
+    except Exception:
+        return False
+
+
+def _has_perm(member: Optional[discord.Member], *, perm: str) -> bool:
+    try:
+        if not member:
+            return False
+        p = member.guild_permissions
+        return bool(getattr(p, perm, False))
+    except Exception:
+        return False
 
 
 def _get_vc_channel(guild: discord.Guild) -> Optional[discord.abc.GuildChannel]:
     vc_id = _configured_vc_channel_id()
-    if not vc_id:
+    if vc_id <= 0:
         return None
 
-    ch = guild.get_channel(vc_id)
-    if isinstance(ch, (discord.VoiceChannel, discord.StageChannel)):
-        return ch
-
     try:
-        asyncio.get_event_loop().create_task(guild.fetch_channel(vc_id))
+        ch = guild.get_channel(vc_id)
+        if isinstance(ch, (discord.VoiceChannel, discord.StageChannel)):
+            return ch
     except Exception:
         pass
+
     return None
 
 
 async def _resolve_vc_channel(guild: discord.Guild) -> Optional[discord.abc.GuildChannel]:
     vc_id = _configured_vc_channel_id()
-    if not vc_id:
+    if vc_id <= 0:
         return None
 
-    ch = guild.get_channel(vc_id)
-    if isinstance(ch, (discord.VoiceChannel, discord.StageChannel)):
-        return ch
     try:
-        ch2 = await guild.fetch_channel(vc_id)
-        if isinstance(ch2, (discord.VoiceChannel, discord.StageChannel)):
-            return ch2
+        ch = guild.get_channel(vc_id)
+        if isinstance(ch, (discord.VoiceChannel, discord.StageChannel)):
+            return ch
     except Exception:
-        return None
+        pass
+
+    try:
+        fetched = await guild.fetch_channel(vc_id)
+        if isinstance(fetched, (discord.VoiceChannel, discord.StageChannel)):
+            return fetched
+    except Exception:
+        pass
+
     return None
 
 
 def _get_vc_queue_channel(guild: discord.Guild) -> Optional[discord.TextChannel]:
-    qid = _as_int(globals().get("VC_VERIFY_QUEUE_CHANNEL_ID", 0), 0)
-    if not qid:
+    qid = _configured_vc_queue_channel_id()
+    if qid <= 0:
         return None
-    ch = guild.get_channel(qid)
-    return ch if isinstance(ch, discord.TextChannel) else None
+
+    try:
+        ch = guild.get_channel(qid)
+        if isinstance(ch, discord.TextChannel):
+            return ch
+    except Exception:
+        pass
+
+    return None
 
 
 async def _resolve_vc_queue_channel(guild: discord.Guild) -> Optional[discord.TextChannel]:
-    qid = _as_int(globals().get("VC_VERIFY_QUEUE_CHANNEL_ID", 0), 0)
-    if not qid:
+    qid = _configured_vc_queue_channel_id()
+    if qid <= 0:
         return None
-    ch = guild.get_channel(qid)
-    if isinstance(ch, discord.TextChannel):
-        return ch
+
     try:
-        ch2 = await guild.fetch_channel(qid)
-        if isinstance(ch2, discord.TextChannel):
-            return ch2
+        ch = guild.get_channel(qid)
+        if isinstance(ch, discord.TextChannel):
+            return ch
     except Exception:
-        return None
+        pass
+
+    try:
+        fetched = await guild.fetch_channel(qid)
+        if isinstance(fetched, discord.TextChannel):
+            return fetched
+    except Exception:
+        pass
+
     return None
 
 
@@ -129,16 +227,33 @@ def _can_manage_channel(me: Optional[discord.Member], ch: discord.abc.GuildChann
         return False
 
 
-def _member_in_target_vc(member: Optional[discord.Member], vc_channel_id: int) -> bool:
-    try:
-        if not member:
-            return False
-        state = getattr(member, "voice", None)
-        ch = getattr(state, "channel", None)
-        return bool(ch and int(getattr(ch, "id", 0) or 0) == int(vc_channel_id))
-    except Exception:
-        return False
+async def _resolve_text_channel_by_id(
+    guild: discord.Guild,
+    channel_id: int,
+) -> Optional[discord.TextChannel]:
+    if channel_id <= 0:
+        return None
 
+    try:
+        ch = guild.get_channel(channel_id)
+        if isinstance(ch, discord.TextChannel):
+            return ch
+    except Exception:
+        pass
+
+    try:
+        fetched = await guild.fetch_channel(channel_id)
+        if isinstance(fetched, discord.TextChannel):
+            return fetched
+    except Exception:
+        pass
+
+    return None
+
+
+# ============================================================
+# Session helpers
+# ============================================================
 
 def _get_session_row(token: str) -> Optional[Dict[str, Any]]:
     try:
@@ -149,19 +264,34 @@ def _get_session_row(token: str) -> Optional[Dict[str, Any]]:
     return None
 
 
-def _get_assigned_staff_id(token: str) -> int:
+def _session_meta(token: str) -> Dict[str, Any]:
     try:
         row = _get_session_row(token) or {}
         meta = row.get("meta") or {}
+        if isinstance(meta, dict):
+            return dict(meta)
+    except Exception:
+        pass
+    return {}
+
+
+def _get_assigned_staff_id(token: str) -> int:
+    try:
+        meta = _session_meta(token)
         sid = int(meta.get("assigned_staff_id") or 0)
-        if sid:
+        if sid > 0:
             return sid
     except Exception:
         pass
 
     try:
         req = VC_REQUESTS.get(token) or {}
-        return int(req.get("assigned_staff_id") or 0)
+        return int(
+            req.get("assigned_staff_id")
+            or req.get("accepted_staff_id")
+            or req.get("accepted_by")
+            or 0
+        )
     except Exception:
         return 0
 
@@ -171,28 +301,53 @@ def _get_owner_id(token: str) -> int:
         row = _get_session_row(token) or {}
         return int(row.get("owner_id") or row.get("requester_id") or 0)
     except Exception:
+        pass
+
+    try:
+        req = VC_REQUESTS.get(token) or {}
+        return int(req.get("owner_id") or req.get("requester_id") or 0)
+    except Exception:
         return 0
 
 
 def _get_vc_channel_id_from_session(token: str) -> int:
     try:
         row = _get_session_row(token) or {}
-        return int(row.get("vc_channel_id") or 0)
+        cid = int(row.get("vc_channel_id") or 0)
+        if cid > 0:
+            return cid
     except Exception:
         pass
+
     try:
         req = VC_REQUESTS.get(token) or {}
-        return int(req.get("vc_channel_id") or 0)
+        cid = int(req.get("vc_channel_id") or 0)
+        if cid > 0:
+            return cid
     except Exception:
-        return 0
+        pass
+
+    return _configured_vc_channel_id()
 
 
 def _get_ticket_channel_id_from_session(token: str) -> int:
     try:
         row = _get_session_row(token) or {}
-        return int(row.get("ticket_channel_id") or 0)
+        cid = int(row.get("ticket_channel_id") or 0)
+        if cid > 0:
+            return cid
     except Exception:
-        return 0
+        pass
+
+    try:
+        req = VC_REQUESTS.get(token) or {}
+        cid = int(req.get("ticket_channel_id") or 0)
+        if cid > 0:
+            return cid
+    except Exception:
+        pass
+
+    return 0
 
 
 def _get_session_status(token: str) -> str:
@@ -200,7 +355,26 @@ def _get_session_status(token: str) -> str:
         row = _get_session_row(token) or {}
         return str(row.get("status") or "").upper().strip()
     except Exception:
+        pass
+
+    try:
+        req = VC_REQUESTS.get(token) or {}
+        return str(req.get("status") or "").upper().strip()
+    except Exception:
         return ""
+
+
+def _vc_session_is_active_status(status: str) -> bool:
+    return status in {
+        "PENDING",
+        "STAFF_ACCEPTED",
+        "OWNER_CONFIRMED",
+        "READY",
+        "IN_VC",
+        "STARTED",
+        "TAKEN_OVER",
+        "RESTARTED",
+    }
 
 
 async def _resolve_session_vc_channel(
@@ -216,18 +390,32 @@ async def _resolve_session_vc_channel(
     if vc_channel_id <= 0:
         return await _resolve_vc_channel(guild)
 
-    ch = guild.get_channel(vc_channel_id)
-    if isinstance(ch, (discord.VoiceChannel, discord.StageChannel)):
-        return ch
+    try:
+        ch = guild.get_channel(vc_channel_id)
+        if isinstance(ch, (discord.VoiceChannel, discord.StageChannel)):
+            return ch
+    except Exception:
+        pass
 
     try:
         fetched = await guild.fetch_channel(vc_channel_id)
         if isinstance(fetched, (discord.VoiceChannel, discord.StageChannel)):
             return fetched
     except Exception:
-        return None
+        pass
 
     return None
+
+
+def _member_in_target_vc(member: Optional[discord.Member], vc_channel_id: int) -> bool:
+    try:
+        if not member:
+            return False
+        state = getattr(member, "voice", None)
+        ch = getattr(state, "channel", None)
+        return bool(ch and int(getattr(ch, "id", 0) or 0) == int(vc_channel_id))
+    except Exception:
+        return False
 
 
 async def _vc_channel_has_active_users(
@@ -280,15 +468,120 @@ async def _session_notify_ticket_channel(
     if ticket_channel_id <= 0:
         return
 
+    ch = await _resolve_text_channel_by_id(guild, ticket_channel_id)
+    if not isinstance(ch, discord.TextChannel):
+        return
+
     try:
-        ticket_ch = guild.get_channel(ticket_channel_id)
-        if ticket_ch is None:
-            ticket_ch = await guild.fetch_channel(ticket_channel_id)
-        if isinstance(ticket_ch, discord.TextChannel):
-            await ticket_ch.send(text)
+        await ch.send(text)
     except Exception:
         pass
 
+
+# ============================================================
+# Overwrite memory / restore helpers
+# ============================================================
+
+def _request_store(token: str) -> Dict[str, Any]:
+    try:
+        VC_REQUESTS.setdefault(str(token), {})
+        req = VC_REQUESTS[str(token)]
+        if isinstance(req, dict):
+            return req
+    except Exception:
+        pass
+    VC_REQUESTS[str(token)] = {}
+    return VC_REQUESTS[str(token)]
+
+
+def _overwrite_store_key(member_id: int) -> str:
+    return f"prev_overwrite_values:{int(member_id)}"
+
+
+def _remember_previous_overwrite(
+    *,
+    token: str,
+    member: discord.Member,
+    overwrite: discord.PermissionOverwrite,
+) -> None:
+    try:
+        store = _request_store(token)
+        key = _overwrite_store_key(int(member.id))
+        if key not in store:
+            store[key] = dict(getattr(overwrite, "_values", {}) or {})
+    except Exception:
+        pass
+
+
+def _read_previous_overwrite(
+    *,
+    token: str,
+    member: discord.Member,
+) -> Dict[str, Any]:
+    try:
+        store = _request_store(token)
+        data = store.get(_overwrite_store_key(int(member.id))) or {}
+        if isinstance(data, dict):
+            return dict(data)
+    except Exception:
+        pass
+    return {}
+
+
+def _clear_previous_overwrite(
+    *,
+    token: str,
+    member: discord.Member,
+) -> None:
+    try:
+        store = _request_store(token)
+        store.pop(_overwrite_store_key(int(member.id)), None)
+    except Exception:
+        pass
+
+
+async def _cleanup_nonstaff_overwrites(
+    guild: discord.Guild,
+    *,
+    token: str,
+    keep_members: Optional[List[discord.Member]] = None,
+    reason: str,
+) -> None:
+    vc = await _resolve_session_vc_channel(guild, token=token)
+    if not isinstance(vc, (discord.VoiceChannel, discord.StageChannel)):
+        return
+
+    me = guild.me
+    if not _can_manage_channel(me, vc):
+        return
+
+    preserve_ids = {
+        int(m.id)
+        for m in list(keep_members or [])
+        if isinstance(m, discord.Member)
+    }
+
+    for target, _overwrite in list(vc.overwrites.items()):
+        if not isinstance(target, discord.Member):
+            continue
+        if _is_staff_member(target):
+            continue
+        if int(target.id) in preserve_ids:
+            continue
+
+        try:
+            await vc.set_permissions(
+                target,
+                overwrite=None,
+                reason=reason,
+            )
+        except Exception:
+            continue
+
+
+# ============================================================
+# Session guard
+# ============================================================
 
 def _session_unlock_guard(
     *,
@@ -300,20 +593,17 @@ def _session_unlock_guard(
     if not token:
         return False, "Missing VC session token."
 
-    if vc_sessions is None or not hasattr(vc_sessions, "session_is_unlockable"):
-        return False, "VC session guard is unavailable."
-
-    try:
-        ok, reason = vc_sessions.session_is_unlockable(
-            token=str(token),
-            expected_guild_id=int(guild.id),
-            expected_staff_id=int(staff_member.id),
-        )
-    except Exception as e:
-        return False, f"Failed session guard lookup: {e}"
-
-    if not ok:
-        return False, reason
+    if vc_sessions is not None and hasattr(vc_sessions, "session_is_unlockable"):
+        try:
+            ok, reason = vc_sessions.session_is_unlockable(
+                token=str(token),
+                expected_guild_id=int(guild.id),
+                expected_staff_id=int(staff_member.id),
+            )
+            if not ok:
+                return False, reason
+        except Exception as e:
+            return False, f"Failed session guard lookup: {e}"
 
     owner_id = _get_owner_id(token)
     if int(owner.id) != int(owner_id):
@@ -334,8 +624,16 @@ def _session_unlock_guard(
     if status not in {"STAFF_ACCEPTED", "OWNER_CONFIRMED", "READY", "TAKEN_OVER", "RESTARTED"}:
         return False, f"Session status `{status or 'UNKNOWN'}` is not allowed to unlock VC."
 
+    assigned_staff_id = _get_assigned_staff_id(token)
+    if assigned_staff_id > 0 and int(staff_member.id) != int(assigned_staff_id):
+        return False, "Only the assigned staff member can unlock this VC session."
+
     return True, "Guard passed."
 
+
+# ============================================================
+# Access lifecycle
+# ============================================================
 
 async def _vc_revoke_access(
     guild: discord.Guild,
@@ -343,21 +641,15 @@ async def _vc_revoke_access(
     token: str,
     reason: str = "manual",
 ) -> None:
-    vc = await _resolve_vc_channel(guild)
-    if not vc:
+    vc = await _resolve_session_vc_channel(guild, token=token)
+    if not isinstance(vc, (discord.VoiceChannel, discord.StageChannel)):
         return
 
     me = guild.me
     if not _can_manage_channel(me, vc):
         return
 
-    prev_vals: Dict[str, Any] = {}
-    try:
-        prev_vals = (VC_REQUESTS.get(token) or {}).get(f"prev_overwrite_values:{member.id}") or {}
-        if not isinstance(prev_vals, dict):
-            prev_vals = {}
-    except Exception:
-        prev_vals = {}
+    prev_vals = _read_previous_overwrite(token=token, member=member)
 
     try:
         if prev_vals:
@@ -376,11 +668,7 @@ async def _vc_revoke_access(
     except Exception:
         pass
 
-    try:
-        if token in VC_REQUESTS:
-            VC_REQUESTS[token].pop(f"prev_overwrite_values:{member.id}", None)
-    except Exception:
-        pass
+    _clear_previous_overwrite(token=token, member=member)
 
 
 async def _vc_grant_access(
@@ -388,8 +676,8 @@ async def _vc_grant_access(
     member: discord.Member,
     token: str,
 ) -> Tuple[bool, str]:
-    vc = await _resolve_vc_channel(guild)
-    if not vc:
+    vc = await _resolve_session_vc_channel(guild, token=token)
+    if not isinstance(vc, (discord.VoiceChannel, discord.StageChannel)):
         return False, "VC verify channel not found (check VC_VERIFY_CHANNEL_ID)."
 
     me = guild.me
@@ -397,15 +685,8 @@ async def _vc_grant_access(
         return False, "I need **Manage Channels** and **View Channel** on the VC verify channel."
 
     try:
-        prev = vc.overwrites_for(member)
-        prev_vals = dict(getattr(prev, "_values", {}) or {})
-    except Exception:
-        prev_vals = {}
-
-    try:
-        VC_REQUESTS.setdefault(token, {})
-        VC_REQUESTS[token][f"prev_overwrite_values:{member.id}"] = prev_vals
-        VC_REQUESTS[token]["vc_channel_id"] = int(vc.id)
+        current = vc.overwrites_for(member)
+        _remember_previous_overwrite(token=token, member=member, overwrite=current)
     except Exception:
         pass
 
@@ -415,7 +696,11 @@ async def _vc_grant_access(
         ow.connect = True
         ow.speak = True
         ow.use_voice_activation = True
-        await vc.set_permissions(member, overwrite=ow, reason=f"VC verify access (token={token})")
+        await vc.set_permissions(
+            member,
+            overwrite=ow,
+            reason=f"VC verify access (token={token})",
+        )
     except discord.Forbidden:
         return False, "Forbidden while setting VC permissions."
     except Exception as e:
@@ -453,6 +738,16 @@ async def vc_unlock_session_participants(
         return False, msg2
 
     try:
+        await _cleanup_nonstaff_overwrites(
+            guild,
+            token=token,
+            keep_members=[owner, staff_member],
+            reason=f"VC session private lock token={token}",
+        )
+    except Exception:
+        pass
+
+    try:
         if vc_sessions and hasattr(vc_sessions, "mark_unlocked"):
             vc_sessions.mark_unlocked(
                 token=str(token),
@@ -477,16 +772,27 @@ async def vc_relock_session(
     owner = guild.get_member(owner_id) if owner_id else None
     staff = guild.get_member(staff_id) if staff_id else None
 
-    if owner:
+    if isinstance(owner, discord.Member):
         try:
             await _vc_revoke_access(guild, owner, token, reason=reason)
         except Exception:
             pass
-    if staff:
+
+    if isinstance(staff, discord.Member):
         try:
             await _vc_revoke_access(guild, staff, token, reason=reason)
         except Exception:
             pass
+
+    try:
+        await _cleanup_nonstaff_overwrites(
+            guild,
+            token=token,
+            keep_members=[],
+            reason=f"VC session cleanup token={token}",
+        )
+    except Exception:
+        pass
 
     try:
         if vc_sessions and hasattr(vc_sessions, "clear_unlock"):
@@ -504,7 +810,7 @@ async def vc_session_everyone_left(
         return False
 
     vc_id = _get_vc_channel_id_from_session(token)
-    if not vc_id:
+    if vc_id <= 0:
         return False
 
     owner = guild.get_member(_get_owner_id(token))
@@ -516,15 +822,9 @@ async def vc_session_everyone_left(
     return not owner_in and not staff_in
 
 
-def _has_perm(member: Optional[discord.Member], *, perm: str) -> bool:
-    try:
-        if not member:
-            return False
-        p = member.guild_permissions
-        return bool(getattr(p, perm, False))
-    except Exception:
-        return False
-
+# ============================================================
+# VC movement helper
+# ============================================================
 
 async def vc_move_member_into_verify_vc(
     *,
@@ -532,7 +832,7 @@ async def vc_move_member_into_verify_vc(
     member: discord.Member,
 ) -> Tuple[bool, str]:
     vc = await _resolve_vc_channel(guild)
-    if not vc or not isinstance(vc, (discord.VoiceChannel, discord.StageChannel)):
+    if not isinstance(vc, (discord.VoiceChannel, discord.StageChannel)):
         return False, "VC verify channel not found."
 
     try:
@@ -562,30 +862,12 @@ async def vc_move_member_into_verify_vc(
         return False, f"Failed to move user: {e}"
 
 
-try:
-    from .vc_sessions import transition as _vc_session_transition  # type: ignore
-    from .vc_sessions import sb_enabled as _vc_sb_enabled  # type: ignore
-except Exception:
-    _vc_session_transition = None  # type: ignore
-    _vc_sb_enabled = lambda: False  # type: ignore
-
-
-def _sb_client():
-    for k in ("sb", "supabase", "SUPABASE"):
-        try:
-            v = globals().get(k)
-            if v:
-                return v
-        except Exception:
-            pass
-    return None
-
+# ============================================================
+# Sweeper
+# ============================================================
 
 async def vc_sweeper_loop(bot_client: discord.Client, *, interval_seconds: int = 120) -> None:
-    if not callable(_vc_sb_enabled) or not _vc_sb_enabled():
-        return
-    sb = _sb_client()
-    if not sb:
+    if not vc_sessions or not hasattr(vc_sessions, "sb_enabled") or not vc_sessions.sb_enabled():
         return
 
     try:
@@ -604,11 +886,20 @@ async def vc_sweeper_loop(bot_client: discord.Client, *, interval_seconds: int =
             continue
 
         try:
-            now_iso = now_utc().isoformat()  # type: ignore[name-defined]
-        except Exception:
-            now_iso = datetime.now(timezone.utc).isoformat()
+            sb = None
+            for k in ("sb", "supabase", "SUPABASE"):
+                try:
+                    v = globals().get(k)
+                    if v:
+                        sb = v
+                        break
+                except Exception:
+                    continue
+            if not sb:
+                continue
 
-        try:
+            now_iso = _utcnow().isoformat()
+
             res = (
                 sb.table("vc_verify_sessions")
                 .select("token,guild_id,owner_id,status,vc_channel_id,revoke_at,access_minutes,meta")
@@ -623,15 +914,18 @@ async def vc_sweeper_loop(bot_client: discord.Client, *, interval_seconds: int =
 
         for row in rows:
             try:
-                token = str(row.get("token") or "")
-                gid = int(row.get("guild_id") or 0)
-                if not token or not gid:
+                token = _safe_str((row or {}).get("token"))
+                gid = _as_int((row or {}).get("guild_id"), 0)
+                if not token or gid <= 0:
                     continue
 
                 guild = bot_client.get_guild(gid)
                 if not guild:
-                    if callable(_vc_session_transition):
-                        _vc_session_transition(token=token, new_status="EXPIRED", staff_id=0)
+                    try:
+                        if hasattr(vc_sessions, "transition"):
+                            vc_sessions.transition(token=token, new_status="EXPIRED", staff_id=0)
+                    except Exception:
+                        pass
                     continue
 
                 live_users_present = await _vc_channel_has_active_users(
@@ -655,8 +949,11 @@ async def vc_sweeper_loop(bot_client: discord.Client, *, interval_seconds: int =
 
                 await vc_relock_session(guild=guild, token=token, reason="sweeper-expire")
 
-                if callable(_vc_session_transition):
-                    _vc_session_transition(token=token, new_status="EXPIRED", staff_id=0)
+                try:
+                    if hasattr(vc_sessions, "transition"):
+                        vc_sessions.transition(token=token, new_status="EXPIRED", staff_id=0)
+                except Exception:
+                    pass
 
                 await _session_notify_ticket_channel(
                     guild,
@@ -665,3 +962,21 @@ async def vc_sweeper_loop(bot_client: discord.Client, *, interval_seconds: int =
                 )
             except Exception:
                 continue
+
+
+__all__ = [
+    "mark_ticket_activity",
+    "_staff_ping_text",
+    "_get_vc_channel",
+    "_resolve_vc_channel",
+    "_get_vc_queue_channel",
+    "_resolve_vc_queue_channel",
+    "_can_manage_channel",
+    "_vc_grant_access",
+    "_vc_revoke_access",
+    "vc_unlock_session_participants",
+    "vc_relock_session",
+    "vc_session_everyone_left",
+    "vc_move_member_into_verify_vc",
+    "vc_sweeper_loop",
+]
