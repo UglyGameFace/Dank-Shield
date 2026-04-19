@@ -232,6 +232,35 @@ async def reply_once(interaction: discord.Interaction, payload: Dict[str, Any]) 
             pass
 
 
+def ensure_runtime_stat_keys() -> None:
+    defaults = {
+        "member_joins": 0,
+        "member_leaves_detected": 0,
+        "member_kicks_detected": 0,
+        "member_bans_detected": 0,
+        "mod_actions": 0,
+        "submissions_seen": 0,
+        "panels_posted": 0,
+        "approved": 0,
+        "denied": 0,
+        "resubmit": 0,
+        "vc_requests": 0,
+        "vc_staff_panel_posts_failed": 0,
+        "vc_accepted": 0,
+        "vc_started": 0,
+        "vc_approved": 0,
+        "vc_denied": 0,
+        "vc_ended": 0,
+    }
+
+    try:
+        for key, value in defaults.items():
+            if key not in RUNTIME_STATS:
+                RUNTIME_STATS[key] = value
+    except Exception:
+        pass
+
+
 def token_is_expired(token_info: Dict[str, Any]) -> bool:
     """
     Common expiry gate used across handlers.
@@ -761,6 +790,9 @@ def _get_lock(key: str) -> asyncio.Lock:
     return lock
 
 
+ensure_runtime_stat_keys()
+
+
 __all__ = [
     "VC_REQUESTS",
     "VC_REQUEST_COOLDOWNS",
@@ -791,6 +823,7 @@ __all__ = [
     "safe_defer",
     "safe_followup",
     "reply_once",
+    "ensure_runtime_stat_keys",
     "token_is_expired",
     "build_verify_link",
     "_track_task",
