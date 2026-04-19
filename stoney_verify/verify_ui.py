@@ -5,7 +5,7 @@ import re
 import asyncio
 import urllib.parse
 from datetime import datetime, timezone, timedelta
-from typing import Optional, Tuple, Dict, Any
+from typing import Optional, Tuple, Dict, Any, List
 
 import discord
 
@@ -32,7 +32,7 @@ except Exception:
 
 
 VERIFY_UI_TITLE = "Stoney Baloney Verification"
-VERIFY_UI_FOOTER = "stoney_verify:verify_ui:v7"
+VERIFY_UI_FOOTER = "stoney_verify:verify_ui:v8"
 
 
 # ============================================================
@@ -761,49 +761,80 @@ def _staff_ping_text() -> str:
 
 def _make_vc_staff_view(token: str) -> discord.ui.View:
     """
-    Staff-only VC panel controls.
+    Initial staff-only VC panel controls.
 
-    Custom IDs:
-      sv:act:vc_start:<token>
-      sv:act:vc_complete:<token>
-      sv:act:vc_cancel:<token>
-      sv:act:vc_upload:<token>
-      sv:act:vc_reissue:<token>
+    This is the queue-stage panel, so it needs ACCEPT first.
     """
     v = discord.ui.View(timeout=None)
 
-    v.add_item(discord.ui.Button(
-        label="▶️ Start VC Session",
-        style=discord.ButtonStyle.primary,
-        custom_id=f"sv:act:vc_start:{token}",
-        row=1,
-    ))
-    v.add_item(discord.ui.Button(
-        label="🏁 Complete",
-        style=discord.ButtonStyle.secondary,
-        custom_id=f"sv:act:vc_complete:{token}",
-        row=2,
-    ))
-    v.add_item(discord.ui.Button(
-        label="❌ Cancel",
-        style=discord.ButtonStyle.danger,
-        custom_id=f"sv:act:vc_cancel:{token}",
-        row=2,
-    ))
-    v.add_item(discord.ui.Button(
-        label="🔁 Ask for Upload Instead",
-        style=discord.ButtonStyle.secondary,
-        custom_id=f"sv:act:vc_upload:{token}",
-        row=3,
-    ))
-    v.add_item(discord.ui.Button(
-        label="♻️ Reissue Token",
-        style=discord.ButtonStyle.secondary,
-        custom_id=f"sv:act:vc_reissue:{token}",
-        row=3,
-    ))
+    v.add_item(
+        discord.ui.Button(
+            label="✅ Accept VC Verify",
+            style=discord.ButtonStyle.success,
+            custom_id=f"sv:act:vc_accept:{token}",
+            row=0,
+        )
+    )
+    v.add_item(
+        discord.ui.Button(
+            label="🔁 Ask for Upload Instead",
+            style=discord.ButtonStyle.secondary,
+            custom_id=f"sv:act:vc_upload:{token}",
+            row=1,
+        )
+    )
+    v.add_item(
+        discord.ui.Button(
+            label="♻️ Reissue Token",
+            style=discord.ButtonStyle.secondary,
+            custom_id=f"sv:act:vc_reissue:{token}",
+            row=1,
+        )
+    )
 
     return v
+
+
+async def _resolve_staff_post_channel(
+    guild: discord.Guild,
+    channel_id: int,
+) -> Optional[discord.TextChannel]:
+    if int(channel_id or 0) <= 0:
+        return None
+
+    try:
+        ch = guild.get_channel(int(channel_id))
+        if isinstance(ch, discord.TextChannel):
+            return ch
+    except Exception:
+        pass
+
+    try:
+        fetched = await guild.fetch_channel(int(channel_id))
+        if isinstance(fetched, discord.TextChannel):
+            return fetched
+    except Exception:
+        pass
+
+    return None
+
+
+def _vc_staff_candidate_channel_ids() -> List[int]:
+    out: List[int] = []
+
+    for raw in [
+        globals().get("VC_VERIFY_QUEUE_CHANNEL_ID", 0),
+        globals().get("MODLOG_CHANNEL_ID", 0),
+        globals().get("TRANSCRIPTS_CHANNEL_ID", 0),
+    ]:
+        try:
+            cid = int(raw or 0)
+            if cid > 0 and cid not in out:
+                out.append(cid)
+        except Exception:
+            continue
+
+    return out
 
 
 async def _post_vc_request_to_staff(
@@ -816,27 +847,11 @@ async def _post_vc_request_to_staff(
     """
     Staff-only VC request routing.
 
-    Posts ONLY in the configured VC queue channel.
+    Priority:
+      1) VC queue channel
+      2) Modlog
+      3) Transcripts
     """
-    try:
-        qid = int(VC_VERIFY_QUEUE_CHANNEL_ID or 0)
-    except Exception:
-        qid = 0
-
-    qch: Optional[discord.TextChannel] = None
-    if qid > 0:
-        ch = guild.get_channel(qid)
-        if not isinstance(ch, discord.TextChannel):
-            try:
-                ch = await guild.fetch_channel(qid)
-            except Exception:
-                ch = None
-        if isinstance(ch, discord.TextChannel):
-            qch = ch
-
-    if not qch:
-        return False
-
     owner_mention = f"<@{owner_id}>" if owner_id else "Ticket owner unresolved"
     vc_id = _vc_channel_id()
     ping = _staff_ping_text()
@@ -865,49 +880,79 @@ async def _post_vc_request_to_staff(
 
     view = _make_vc_staff_view(token)
 
-    try:
-        me_id = int(getattr(getattr(bot, "user", None), "id", 0) or 0)  # type: ignore[name-defined]
-        async for msg in qch.history(limit=25):
-            if int(getattr(getattr(msg, "author", None), "id", 0) or 0) != me_id:
-                continue
-            if not msg.embeds:
-                continue
+    candidate_ids = _vc_staff_candidate_channel_ids()
+    if not candidate_ids:
+        try:
+            print("⚠️ VC request routing failed: no staff queue/modlog/transcripts channel configured.")
+        except Exception:
+            pass
+        return False
 
-            e0 = msg.embeds[0]
-            ft = str(getattr(getattr(e0, "footer", None), "text", "") or "")
-            if "VC staff panel" not in ft:
-                continue
+    for cid in candidate_ids:
+        ch = await _resolve_staff_post_channel(guild, int(cid))
+        if not isinstance(ch, discord.TextChannel):
+            continue
 
-            same_ticket = False
+        try:
+            me = guild.me
+            if me:
+                perms = ch.permissions_for(me)
+                if not (perms.view_channel and perms.send_messages):
+                    print(f"⚠️ VC request routing skipped channel={ch.id}: missing send/view permissions")
+                    continue
+        except Exception:
+            pass
+
+        try:
+            content = "New VC verify request queued:"
+            if ping:
+                content = f"{ping}\n{content}"
+
+            msg = await ch.send(content=content, embed=emb, view=view)
+
             try:
-                for f in (e0.fields or []):
-                    if (f.name or "").strip().lower() == "ticket":
-                        if str(ticket_channel.id) in str(f.value or ""):
-                            same_ticket = True
-                            break
+                VC_REQUESTS.setdefault(token, {})
+                VC_REQUESTS[token].setdefault("staff_msg_refs", [])
+                VC_REQUESTS[token]["staff_msg_refs"].append(
+                    {
+                        "channel_id": int(ch.id),
+                        "message_id": int(msg.id),
+                    }
+                )
+                VC_REQUESTS[token]["staff_msg_ids"] = [
+                    int(ref["message_id"])
+                    for ref in VC_REQUESTS[token].get("staff_msg_refs", [])
+                    if isinstance(ref, dict) and int(ref.get("message_id", 0) or 0) > 0
+                ]
+                VC_REQUESTS[token]["staff_panel_msg_id"] = int(msg.id)
+                VC_REQUESTS[token]["staff_panel_channel_id"] = int(ch.id)
             except Exception:
-                same_ticket = False
+                pass
 
-            if same_ticket:
-                try:
-                    content = msg.content or ""
-                    if ping and ping not in content:
-                        content = f"{ping}\n" + (content or "New VC verify request queued:")
-                    await msg.edit(content=content or None, embed=emb, view=view)
-                    return True
-                except Exception:
-                    break
+            try:
+                print(
+                    f"✅ VC staff request posted token={token} "
+                    f"ticket={ticket_channel.id} staff_channel={ch.id} owner={owner_id}"
+                )
+            except Exception:
+                pass
+
+            return True
+        except Exception as e:
+            try:
+                print(f"⚠️ Failed posting VC staff request panel to channel={getattr(ch, 'id', 0)}: {e}")
+            except Exception:
+                pass
+            continue
+
+    try:
+        print(
+            f"⚠️ VC request routing failed for token={token} ticket={ticket_channel.id}: "
+            "all staff channels failed"
+        )
     except Exception:
         pass
-
-    try:
-        content = "New VC verify request queued:"
-        if ping:
-            content = f"{ping}\n{content}"
-        await qch.send(content=content, embed=emb, view=view)
-        return True
-    except Exception:
-        return False
+    return False
 
 
 async def _post_user_vc_status_message(
@@ -929,9 +974,10 @@ async def _post_user_vc_status_message(
             )
         else:
             await ticket_channel.send(
-                f"🎙️ {prefix}**VC verification request sent.**\n"
-                "Staff will respond here when they're ready. Please wait."
+                f"⚠️ {prefix}**VC request was created, but staff routing failed.**\n"
+                "A staff member can still recover it with `/vc_status`, `/vc_reissue`, or by checking the bot config for the VC queue channel."
             )
+        return
     except Exception:
         pass
 
@@ -1157,6 +1203,14 @@ async def maybe_handle_verify_ui_interaction(interaction: discord.Interaction, *
                 owner_id=int(owner_id),
                 token=token,
             )
+
+            if not staff_posted:
+                try:
+                    RUNTIME_STATS["vc_staff_panel_posts_failed"] = int(
+                        RUNTIME_STATS.get("vc_staff_panel_posts_failed", 0) or 0
+                    ) + 1
+                except Exception:
+                    pass
 
             await _post_user_vc_status_message(
                 ticket_channel=channel,
