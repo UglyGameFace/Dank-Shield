@@ -2299,6 +2299,202 @@ async def _maybe_finish_vc_sessions_after_voice_change(
 # Guards
 _AUTO_UV_REMOVAL_TS: Dict[Tuple[int, int], Any] = {}
 _JOIN_VERIFY_TASKS: Dict[Tuple[int, int], asyncio.Task] = {}
+_JOIN_PROCESS_LOCKS: Dict[Tuple[int, int], asyncio.Lock] = {}
+
+
+def _member_runtime_key(guild_id: Any, member_id: Any) -> Tuple[int, int]:
+    return (_as_int(guild_id, 0), _as_int(member_id, 0))
+
+
+def _get_member_processing_lock(guild_id: Any, member_id: Any) -> asyncio.Lock:
+    key = _member_runtime_key(guild_id, member_id)
+    lock = _JOIN_PROCESS_LOCKS.get(key)
+    if lock is None:
+        lock = asyncio.Lock()
+        _JOIN_PROCESS_LOCKS[key] = lock
+    return lock
+
+
+async def _refetch_live_member(guild: discord.Guild, member_id: int) -> Optional[discord.Member]:
+    try:
+        member = guild.get_member(int(member_id))
+        if isinstance(member, discord.Member):
+            return member
+    except Exception:
+        pass
+
+    try:
+        fetched = await guild.fetch_member(int(member_id))
+        if isinstance(fetched, discord.Member):
+            return fetched
+    except Exception:
+        pass
+
+    return None
+
+
+async def _sync_verification_wait_timer_for_member(
+    member: discord.Member,
+    *,
+    source: str,
+) -> None:
+    try:
+        if getattr(member, "bot", False):
+            return
+
+        gid = int(member.guild.id)
+        uid = int(member.id)
+
+        if _member_has_any_safe_access_role(member, include_unverified=False):
+            try:
+                cancelled = await cancel_verification_wait_timers_for_member(gid, uid)
+                print(
+                    f"🛑 [VERIFY-TIMER] cancel "
+                    f"guild={gid} member={uid} cancelled={cancelled} source={source}"
+                )
+            except Exception as e:
+                print(
+                    f"⚠️ [VERIFY-TIMER] cancel failed "
+                    f"guild={gid} member={uid} source={source} error={repr(e)}"
+                )
+            return
+
+        if _member_is_pending_verification(member):
+            try:
+                fallback_channel = await _resolve_unverified_chat_channel(member.guild)
+                started = await start_join_grace_then_kick_timer_for_member(
+                    member,
+                    source_channel=fallback_channel,
+                )
+                print(
+                    f"⏳ [VERIFY-TIMER] start "
+                    f"guild={gid} member={uid} started={started} "
+                    f"channel={getattr(fallback_channel, 'id', None)} source={source}"
+                )
+            except Exception as e:
+                print(
+                    f"⚠️ [VERIFY-TIMER] start failed "
+                    f"guild={gid} member={uid} source={source} error={repr(e)}"
+                )
+            return
+
+        try:
+            cancelled = await cancel_verification_wait_timers_for_member(gid, uid)
+            print(
+                f"🛑 [VERIFY-TIMER] cleanup "
+                f"guild={gid} member={uid} cancelled={cancelled} source={source}"
+            )
+        except Exception as e:
+            print(
+                f"⚠️ [VERIFY-TIMER] cleanup failed "
+                f"guild={gid} member={uid} source={source} error={repr(e)}"
+            )
+    except Exception as e:
+        print(
+            f"⚠️ _sync_verification_wait_timer_for_member error "
+            f"member={getattr(member, 'id', 'unknown')} source={source} error={repr(e)}"
+        )
+
+
+async def _ensure_member_verification_safe_state(
+    member: discord.Member,
+    *,
+    source: str,
+    risk_profile: Optional[Dict[str, Any]] = None,
+    fail_closed: bool = True,
+) -> bool:
+    try:
+        live_member = await _refetch_live_member(member.guild, int(member.id)) or member
+
+        if getattr(live_member, "bot", False):
+            return True
+
+        if _member_has_any_safe_access_role(live_member, include_unverified=False):
+            try:
+                await _new_sync_member_safe(
+                    live_member,
+                    in_guild=True,
+                    risk_profile=risk_profile,
+                )
+            except Exception:
+                pass
+
+            await _sync_verification_wait_timer_for_member(
+                live_member,
+                source=f"{source}:already-safe",
+            )
+            return True
+
+        if _member_is_pending_verification(live_member):
+            try:
+                await _new_sync_member_safe(
+                    live_member,
+                    in_guild=True,
+                    risk_profile=risk_profile,
+                )
+            except Exception:
+                pass
+
+            await _sync_verification_wait_timer_for_member(
+                live_member,
+                source=f"{source}:pending-verification",
+            )
+            return True
+
+        ensured_unverified = False
+        try:
+            ensured_unverified = await _ensure_unverified_on_join(live_member)
+        except Exception as e:
+            print(
+                f"⚠️ [VERIFY] _ensure_unverified_on_join failed "
+                f"member={live_member.id} source={source} error={repr(e)}"
+            )
+
+        live_member = await _refetch_live_member(member.guild, int(member.id)) or live_member
+
+        try:
+            await _new_sync_member_safe(
+                live_member,
+                in_guild=True,
+                risk_profile=risk_profile,
+            )
+        except Exception:
+            pass
+
+        if _member_has_any_safe_access_role(live_member, include_unverified=False):
+            await _sync_verification_wait_timer_for_member(
+                live_member,
+                source=f"{source}:gained-safe-role",
+            )
+            return True
+
+        if _member_is_pending_verification(live_member):
+            await _sync_verification_wait_timer_for_member(
+                live_member,
+                source=f"{source}:confirmed-unverified",
+            )
+            return True
+
+        if fail_closed:
+            await _handle_join_verification_failure(
+                live_member,
+                (
+                    f"{source}: member has no safe verification role state after recovery. "
+                    f"ensured_unverified={ensured_unverified}"
+                ),
+            )
+
+        return False
+    except Exception as e:
+        print(
+            f"⚠️ _ensure_member_verification_safe_state error "
+            f"member={getattr(member, 'id', 'unknown')} source={source} error={repr(e)}"
+        )
+        try:
+            traceback.print_exc()
+        except Exception:
+            pass
+        return False
 
 
 async def _resolve_bot_member(guild: discord.Guild) -> Optional[discord.Member]:
@@ -2365,6 +2561,11 @@ async def _handle_join_verification_failure(member: discord.Member, reason: str)
             await _post_modlog(guild, embed, view=build_quick_mod_view(member.id))
         except Exception as e:
             print(f"⚠️ [VERIFY] Failed posting fail-closed modlog for {member.id}: {repr(e)}")
+
+        try:
+            await cancel_verification_wait_timers_for_member(int(guild.id), int(member.id))
+        except Exception:
+            pass
 
         try:
             await member.kick(reason=f"Verification fail-closed: {str(reason)[:400]}")
@@ -2636,83 +2837,15 @@ async def _join_verification_watchdog(guild_id: int, member_id: int) -> None:
                 if getattr(member, "bot", False):
                     return
 
-                has_verified = False
-                has_unverified = False
-                has_staff = False
-                has_resident = False
-                has_stoner = False
-                has_drunken = False
-
-                try:
-                    if VERIFIED_ROLE_ID:
-                        has_verified = _member_has_role_id(member, int(VERIFIED_ROLE_ID))
-                except Exception:
-                    pass
-
-                try:
-                    if STAFF_ROLE_ID:
-                        has_staff = _member_has_role_id(member, int(STAFF_ROLE_ID))
-                except Exception:
-                    pass
-
-                try:
-                    if RESIDENT_ROLE_ID:
-                        has_resident = _member_has_role_id(member, int(RESIDENT_ROLE_ID))
-                except Exception:
-                    pass
-
-                try:
-                    if STONER_ROLE_ID:
-                        has_stoner = _member_has_role_id(member, int(STONER_ROLE_ID))
-                except Exception:
-                    pass
-
-                try:
-                    if DRUNKEN_ROLE_ID:
-                        has_drunken = _member_has_role_id(member, int(DRUNKEN_ROLE_ID))
-                except Exception:
-                    pass
-
-                try:
-                    if UNVERIFIED_ROLE_ID:
-                        has_unverified = _member_has_role_id(member, int(UNVERIFIED_ROLE_ID))
-                except Exception:
-                    pass
-
-                if not has_verified and not has_staff and not has_resident and not has_stoner and not has_drunken and not has_unverified:
-                    try:
-                        added = await _ensure_unverified_on_join(member)
-                        if added:
-                            has_unverified = True
-                            try:
-                                fallback_channel = await _resolve_unverified_chat_channel(guild)
-                                started = await start_join_grace_then_kick_timer_for_member(
-                                    member,
-                                    source_channel=fallback_channel,
-                                )
-                                print(
-                                    f"⏳ [VERIFY-WATCHDOG] join grace timer start "
-                                    f"guild={guild_id} member={member_id} started={started} "
-                                    f"channel={getattr(fallback_channel, 'id', None)}"
-                                )
-                            except Exception as e:
-                                print(
-                                    f"⚠️ [VERIFY-WATCHDOG] failed to start join-grace timer "
-                                    f"guild={guild_id} member={member_id} attempt={attempt} error={repr(e)}"
-                                )
-                    except Exception as e:
-                        print(
-                            f"⚠️ [VERIFY-WATCHDOG] _ensure_unverified_on_join failed "
-                            f"guild={guild_id} member={member_id} attempt={attempt} error={repr(e)}"
-                        )
-
-                try:
-                    await _new_sync_member_safe(member, in_guild=True)
-                except Exception:
-                    pass
-
-                if has_verified or has_staff or has_resident or has_stoner or has_drunken or has_unverified:
-                    return
+                lock = _get_member_processing_lock(guild_id, member_id)
+                async with lock:
+                    ok = await _ensure_member_verification_safe_state(
+                        member,
+                        source=f"watchdog-attempt-{attempt}",
+                        fail_closed=False,
+                    )
+                    if ok:
+                        return
 
                 await asyncio.sleep(3.0)
 
@@ -2788,211 +2921,184 @@ async def on_member_join(member: discord.Member):
         _ensure_gid_dict_of_lists(ALT_JOIN_BUCKETS, gid)
         _ensure_gid_dict(ALT_JOIN_BUCKET_TS, gid)
 
-        if not getattr(member, "bot", False):
-            JOIN_TIMES[gid].append(now_utc())
-            RAID_RECENT_JOINERS[gid][int(member.id)] = now_utc()
+        lock = _get_member_processing_lock(gid, int(member.id))
+        async with lock:
+            try:
+                RUNTIME_STATS["member_joins"] += 1
+            except Exception:
+                pass
 
-        age_days = _account_age_days(member)
-        fp = _behavior_fingerprint(member)
+            if not getattr(member, "bot", False):
+                JOIN_TIMES[gid].append(now_utc())
+                RAID_RECENT_JOINERS[gid][int(member.id)] = now_utc()
 
-        try:
-            if getattr(member, "bot", False):
+            age_days = _account_age_days(member)
+            fp = _behavior_fingerprint(member)
+
+            try:
+                if getattr(member, "bot", False):
+                    risk_profile = {
+                        "score": 0,
+                        "risk_score": 0,
+                        "level": "low",
+                        "risk_level": "low",
+                        "evidence_tier": "clear",
+                        "reasons": ["Discord marks this account as a bot; excluded from raid/alt scoring."],
+                        "risk_reasons": ["Discord marks this account as a bot; excluded from raid/alt scoring."],
+                        "same_fingerprint_count": 0,
+                        "similar_name_count": 0,
+                        "same_age_bucket_count": 0,
+                        "burst_count": 0,
+                        "burst_join_count": 0,
+                        "fingerprint": fp,
+                        "suspicion_flags": ["bot_account"],
+                        "is_bot_account": True,
+                    }
+                else:
+                    risk_profile = track_member_join_risk(member)
+            except Exception:
                 risk_profile = {
                     "score": 0,
                     "risk_score": 0,
                     "level": "low",
                     "risk_level": "low",
                     "evidence_tier": "clear",
-                    "reasons": ["Discord marks this account as a bot; excluded from raid/alt scoring."],
-                    "risk_reasons": ["Discord marks this account as a bot; excluded from raid/alt scoring."],
+                    "reasons": [],
+                    "risk_reasons": [],
                     "same_fingerprint_count": 0,
                     "similar_name_count": 0,
                     "same_age_bucket_count": 0,
                     "burst_count": 0,
                     "burst_join_count": 0,
                     "fingerprint": fp,
-                    "suspicion_flags": ["bot_account"],
-                    "is_bot_account": True,
+                    "suspicion_flags": ["bot_account"] if getattr(member, "bot", False) else [],
+                    "is_bot_account": bool(getattr(member, "bot", False)),
                 }
-            else:
-                risk_profile = track_member_join_risk(member)
-        except Exception:
-            risk_profile = {
-                "score": 0,
-                "risk_score": 0,
-                "level": "low",
-                "risk_level": "low",
-                "evidence_tier": "clear",
-                "reasons": [],
-                "risk_reasons": [],
-                "same_fingerprint_count": 0,
-                "similar_name_count": 0,
-                "same_age_bucket_count": 0,
-                "burst_count": 0,
-                "burst_join_count": 0,
-                "fingerprint": fp,
-                "suspicion_flags": ["bot_account"] if getattr(member, "bot", False) else [],
-                "is_bot_account": bool(getattr(member, "bot", False)),
-            }
 
-        embed = discord.Embed(
-            title="📥 Member Joined",
-            color=discord.Color.green(),
-            timestamp=now_utc(),
-        )
-        embed.add_field(
-            name="User",
-            value=f"{member.mention} (`{member.id}`)\n`{member}`",
-            inline=False,
-        )
-        embed.add_field(
-            name="Account Age",
-            value=f"`{age_days} days` (created `{member.created_at}`)",
-            inline=False,
-        )
-        embed.add_field(name="Fingerprint", value=f"`{fp}`", inline=False)
-        embed.add_field(
-            name="Alt Risk",
-            value=(
-                f"`{risk_profile.get('score', 0)}/100` "
-                f"(`{risk_profile.get('evidence_tier', 'clear')}` / `{risk_profile.get('level', 'low')}`)\n"
-                f"fp matches: `{risk_profile.get('same_fingerprint_count', 0)}` • "
-                f"name matches: `{risk_profile.get('similar_name_count', 0)}` • "
-                f"age bucket matches: `{risk_profile.get('same_age_bucket_count', 0)}` • "
-                f"burst: `{risk_profile.get('burst_count', 0)}`"
-            ),
-            inline=False,
-        )
-        reasons = list(risk_profile.get("reasons") or risk_profile.get("risk_reasons") or [])
-        if reasons:
+            embed = discord.Embed(
+                title="📥 Member Joined",
+                color=discord.Color.green(),
+                timestamp=now_utc(),
+            )
             embed.add_field(
-                name="Risk Reasons",
-                value="\n".join(f"• {str(x)[:180]}" for x in reasons[:5]),
+                name="User",
+                value=f"{member.mention} (`{member.id}`)\n`{member}`",
                 inline=False,
             )
-        if member.joined_at:
-            embed.add_field(name="Joined At", value=f"`{member.joined_at}`", inline=False)
+            embed.add_field(
+                name="Account Age",
+                value=f"`{age_days} days` (created `{member.created_at}`)",
+                inline=False,
+            )
+            embed.add_field(name="Fingerprint", value=f"`{fp}`", inline=False)
+            embed.add_field(
+                name="Alt Risk",
+                value=(
+                    f"`{risk_profile.get('score', 0)}/100` "
+                    f"(`{risk_profile.get('evidence_tier', 'clear')}` / `{risk_profile.get('level', 'low')}`)\n"
+                    f"fp matches: `{risk_profile.get('same_fingerprint_count', 0)}` • "
+                    f"name matches: `{risk_profile.get('similar_name_count', 0)}` • "
+                    f"age bucket matches: `{risk_profile.get('same_age_bucket_count', 0)}` • "
+                    f"burst: `{risk_profile.get('burst_count', 0)}`"
+                ),
+                inline=False,
+            )
+            reasons = list(risk_profile.get("reasons") or risk_profile.get("risk_reasons") or [])
+            if reasons:
+                embed.add_field(
+                    name="Risk Reasons",
+                    value="\n".join(f"• {str(x)[:180]}" for x in reasons[:5]),
+                    inline=False,
+                )
+            if member.joined_at:
+                embed.add_field(name="Joined At", value=f"`{member.joined_at}`", inline=False)
 
-        try:
-            embed.set_thumbnail(url=member.display_avatar.url)
-            embed.set_author(name=str(member), icon_url=member.display_avatar.url)
-        except Exception:
-            pass
-
-        if not getattr(member, "bot", False):
-            bucket = f"{_age_bucket(age_days)}"
-            _ensure_bucket_list(ALT_JOIN_BUCKETS, gid, bucket)
-            ALT_JOIN_BUCKETS[gid][bucket].append(int(member.id))
-            ALT_JOIN_BUCKET_TS[gid][bucket] = now_utc()
-
-            triggered, msg = await _maybe_trigger_raid(guild)
-            if triggered:
-                await _post_raidlog(guild, msg)
-
-            strip_msg = await _mass_role_strip_if_needed(member)
-            if strip_msg:
-                await _post_raidlog(guild, strip_msg)
-
-        target_ch: Optional[discord.TextChannel] = None
-        try:
-            if JOIN_LOG_CHANNEL_ID and int(JOIN_LOG_CHANNEL_ID) != 0:
-                ch = guild.get_channel(int(JOIN_LOG_CHANNEL_ID))
-                if isinstance(ch, discord.TextChannel):
-                    target_ch = ch
-        except Exception:
-            target_ch = None
-
-        if not target_ch:
-            target_ch = _get_modlog_channel(guild)
-
-        if target_ch:
-            await target_ch.send(embed=embed, view=build_quick_mod_view(member.id))
-
-        ensured_unverified = False
-        try:
-            ensured_unverified = await _ensure_unverified_on_join(member)
-        except Exception as e:
-            print("⚠️ _ensure_unverified_on_join wrapper error:", e)
             try:
-                traceback.print_exc()
+                embed.set_thumbnail(url=member.display_avatar.url)
+                embed.set_author(name=str(member), icon_url=member.display_avatar.url)
             except Exception:
                 pass
 
-        try:
             if not getattr(member, "bot", False):
-                _schedule_join_verification_watchdog(member)
-        except Exception as e:
-            print(f"⚠️ Failed to schedule join verification watchdog for {member.id}: {repr(e)}")
+                bucket = f"{_age_bucket(age_days)}"
+                _ensure_bucket_list(ALT_JOIN_BUCKETS, gid, bucket)
+                ALT_JOIN_BUCKETS[gid][bucket].append(int(member.id))
+                ALT_JOIN_BUCKET_TS[gid][bucket] = now_utc()
 
-        try:
-            await _new_sync_member_safe(
-                member,
-                in_guild=True,
-                risk_profile=risk_profile,
-            )
-        except Exception:
-            pass
+                triggered, msg = await _maybe_trigger_raid(guild)
+                if triggered:
+                    await _post_raidlog(guild, msg)
 
-        try:
-            if not getattr(member, "bot", False):
-                await _persist_member_join_context(
+                strip_msg = await _mass_role_strip_if_needed(member)
+                if strip_msg:
+                    await _post_raidlog(guild, strip_msg)
+
+            target_ch: Optional[discord.TextChannel] = None
+            try:
+                if JOIN_LOG_CHANNEL_ID and int(JOIN_LOG_CHANNEL_ID) != 0:
+                    ch = guild.get_channel(int(JOIN_LOG_CHANNEL_ID))
+                    if isinstance(ch, discord.TextChannel):
+                        target_ch = ch
+            except Exception:
+                target_ch = None
+
+            if not target_ch:
+                target_ch = _get_modlog_channel(guild)
+
+            if target_ch:
+                await target_ch.send(embed=embed, view=build_quick_mod_view(member.id))
+
+            try:
+                await _new_sync_member_safe(
                     member,
+                    in_guild=True,
                     risk_profile=risk_profile,
                 )
-        except Exception as e:
-            print(f"⚠️ Failed persisting join entry context for {member.id}: {repr(e)}")
-
-        try:
-            if not getattr(member, "bot", False):
-                fresh_member = guild.get_member(member.id)
-                if fresh_member is None:
-                    try:
-                        fresh_member = await guild.fetch_member(member.id)
-                    except Exception:
-                        fresh_member = member
-
-                if isinstance(fresh_member, discord.Member) and _member_is_pending_verification(fresh_member):
-                    fallback_channel = await _resolve_unverified_chat_channel(guild)
-                    started = await start_join_grace_then_kick_timer_for_member(
-                        fresh_member,
-                        source_channel=fallback_channel,
-                    )
-                    print(
-                        f"⏳ [VERIFY] join grace timer start "
-                        f"guild={gid} member={fresh_member.id} started={started} "
-                        f"fallback_channel={getattr(fallback_channel, 'id', None)}"
-                    )
-        except Exception as e:
-            print(f"⚠️ Failed to start join grace timer for {member.id}: {repr(e)}")
-
-        if (
-            not getattr(member, "bot", False)
-            and not _member_has_any_safe_access_role(member, include_unverified=True)
-        ):
-            await _handle_join_verification_failure(
-                member,
-                "Unverified could not be assigned during on_member_join and member has no safe access role.",
-            )
-            return
-
-        if not getattr(member, "bot", False):
-            try:
-                cutoff = now_utc() - timedelta(minutes=max(5, int(ALT_CLUSTER_WINDOW_MINUTES)))
-                for b, ts in list((ALT_JOIN_BUCKET_TS.get(gid) or {}).items()):
-                    if ts < cutoff:
-                        ALT_JOIN_BUCKET_TS[gid].pop(b, None)
-                        ALT_JOIN_BUCKETS[gid].pop(b, None)
-
-                for b, ids in list((ALT_JOIN_BUCKETS.get(gid) or {}).items()):
-                    if len(ids) >= int(ALT_CLUSTER_MIN_GROUP):
-                        await _post_raidlog(
-                            guild,
-                            f"🧩 **Alt/Cluster Flag**: `{len(ids)}` joins in `{b}` bucket within ~{ALT_CLUSTER_WINDOW_MINUTES}m. "
-                            + "IDs: "
-                            + ", ".join([f"`{x}`" for x in ids[-10:]]),
-                        )
             except Exception:
                 pass
+
+            try:
+                if not getattr(member, "bot", False):
+                    await _persist_member_join_context(
+                        member,
+                        risk_profile=risk_profile,
+                    )
+            except Exception as e:
+                print(f"⚠️ Failed persisting join entry context for {member.id}: {repr(e)}")
+
+            safe_state_ok = await _ensure_member_verification_safe_state(
+                member,
+                source="on_member_join",
+                risk_profile=risk_profile,
+                fail_closed=True,
+            )
+            if not safe_state_ok:
+                return
+
+            if not getattr(member, "bot", False):
+                try:
+                    _schedule_join_verification_watchdog(member)
+                except Exception as e:
+                    print(f"⚠️ Failed to schedule join verification watchdog for {member.id}: {repr(e)}")
+
+            if not getattr(member, "bot", False):
+                try:
+                    cutoff = now_utc() - timedelta(minutes=max(5, int(ALT_CLUSTER_WINDOW_MINUTES)))
+                    for b, ts in list((ALT_JOIN_BUCKET_TS.get(gid) or {}).items()):
+                        if ts < cutoff:
+                            ALT_JOIN_BUCKET_TS[gid].pop(b, None)
+                            ALT_JOIN_BUCKETS[gid].pop(b, None)
+
+                    for b, ids in list((ALT_JOIN_BUCKETS.get(gid) or {}).items()):
+                        if len(ids) >= int(ALT_CLUSTER_MIN_GROUP):
+                            await _post_raidlog(
+                                guild,
+                                f"🧩 **Alt/Cluster Flag**: `{len(ids)}` joins in `{b}` bucket within ~{ALT_CLUSTER_WINDOW_MINUTES}m. "
+                                + "IDs: "
+                                + ", ".join([f"`{x}`" for x in ids[-10:]]),
+                            )
+                except Exception:
+                    pass
 
     except Exception as e:
         print("⚠️ on_member_join error:", e)
@@ -3315,12 +3421,21 @@ async def on_member_update(before: discord.Member, after: discord.Member):
         except Exception:
             pass
 
-        try:
-            if not getattr(after, "bot", False):
-                if _member_has_any_safe_access_role(after, include_unverified=False):
-                    await cancel_verification_wait_timers_for_member(gid, int(after.id))
-        except Exception as e:
-            print(f"⚠️ Failed cancelling verification wait timers on member update for {after.id}: {repr(e)}")
+        if b_roles != a_roles:
+            try:
+                if not getattr(after, "bot", False):
+                    await _sync_verification_wait_timer_for_member(
+                        after,
+                        source="on_member_update",
+                    )
+
+                    if not _member_has_any_safe_access_role(after, include_unverified=True):
+                        _schedule_join_verification_watchdog(after)
+            except Exception as e:
+                print(
+                    f"⚠️ verification timer/watchdog sync failed on member update "
+                    f"member={after.id} error={repr(e)}"
+                )
 
     except Exception as e:
         print("⚠️ on_member_update error:", e)
