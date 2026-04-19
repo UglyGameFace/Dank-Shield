@@ -7,6 +7,9 @@ from typing import Any, Dict, Optional
 from .globals import *  # noqa
 
 
+_MEM_SESSIONS: Dict[str, Dict[str, Any]] = {}
+
+
 def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
@@ -19,14 +22,21 @@ def _sb():
                 return v
         except Exception:
             pass
+
+    try:
+        getter = globals().get("get_supabase")
+        if callable(getter):
+            v = getter()
+            if v:
+                return v
+    except Exception:
+        pass
+
     return None
 
 
 def sb_enabled() -> bool:
-    try:
-        return bool(globals().get("SUPABASE_ENABLED", False))
-    except Exception:
-        return False
+    return bool(_sb())
 
 
 def _table() -> str:
@@ -101,22 +111,80 @@ def _normalize_status(value: Any) -> str:
         return "PENDING"
 
 
-def _active_statuses() -> set[str]:
-    return {
-        "PENDING",
-        "STAFF_ACCEPTED",
-        "OWNER_CONFIRMED",
-        "READY",
-        "STARTED",
-        "IN_VC",
-        "TAKEN_OVER",
-        "RESTARTED",
-    }
+def _normalize_row(row: Dict[str, Any]) -> Dict[str, Any]:
+    now_iso = _utcnow().isoformat()
+    token = str(row.get("token") or "").strip()
+
+    normalized = dict(row)
+    normalized["token"] = token
+    normalized["status"] = _normalize_status(normalized.get("status"))
+    normalized["meta"] = _merge_meta(normalized.get("meta"))
+    normalized["access_minutes"] = int(normalized.get("access_minutes") or _access_minutes())
+    normalized["ticket_channel_id"] = int(normalized.get("ticket_channel_id") or 0) or None
+    normalized["requester_id"] = int(normalized.get("requester_id") or 0) or None
+    normalized["owner_id"] = int(normalized.get("owner_id") or normalized.get("requester_id") or 0) or None
+    normalized["vc_channel_id"] = int(normalized.get("vc_channel_id") or _configured_vc_channel_id() or 0) or None
+    normalized["queue_channel_id"] = int(normalized.get("queue_channel_id") or _queue_channel_id() or 0) or None
+
+    if not normalized.get("created_at"):
+        normalized["created_at"] = now_iso
+    normalized["updated_at"] = normalized.get("updated_at") or now_iso
+
+    return normalized
 
 
-def get_session(token: str) -> Optional[Dict[str, Any]]:
-    if not sb_enabled():
+def _write_mem(row: Dict[str, Any]) -> Dict[str, Any]:
+    normalized = _normalize_row(row)
+    token = str(normalized.get("token") or "").strip()
+    if token:
+        _MEM_SESSIONS[token] = normalized
+    return normalized
+
+
+def _read_mem(token: str) -> Optional[Dict[str, Any]]:
+    tok = str(token or "").strip()
+    if not tok:
         return None
+    row = _MEM_SESSIONS.get(tok)
+    if isinstance(row, dict):
+        return _normalize_row(row)
+    return None
+
+
+def _db_upsert(payload: Dict[str, Any]) -> None:
+    sb = _sb()
+    if not sb:
+        return
+
+    try:
+        sb.table(_table()).upsert(payload, on_conflict="token").execute()
+        return
+    except Exception:
+        pass
+
+    try:
+        sb.table(_table()).upsert(payload).execute()
+        return
+    except Exception:
+        pass
+
+    try:
+        sb.table(_table()).insert(payload).execute()
+    except Exception:
+        return
+
+
+def _db_update(token: str, patch: Dict[str, Any]) -> None:
+    sb = _sb()
+    if not sb:
+        return
+    try:
+        sb.table(_table()).update(patch).eq("token", str(token)).execute()
+    except Exception:
+        return
+
+
+def _db_get(token: str) -> Optional[Dict[str, Any]]:
     sb = _sb()
     if not sb:
         return None
@@ -125,13 +193,24 @@ def get_session(token: str) -> Optional[Dict[str, Any]]:
         res = sb.table(_table()).select("*").eq("token", str(token)).limit(1).execute()
         rows = getattr(res, "data", None) or []
         if rows:
-            row = dict(rows[0])
-            row["meta"] = _merge_meta(row.get("meta"))
-            row["status"] = _normalize_status(row.get("status"))
-            return row
+            return _normalize_row(dict(rows[0]))
     except Exception:
         return None
+
     return None
+
+
+def get_session(token: str) -> Optional[Dict[str, Any]]:
+    tok = str(token or "").strip()
+    if not tok:
+        return None
+
+    row = _db_get(tok)
+    if row:
+        _write_mem(row)
+        return row
+
+    return _read_mem(tok)
 
 
 def create_session(
@@ -146,16 +225,16 @@ def create_session(
     access_minutes: int,
     meta: Optional[Dict[str, Any]] = None,
 ) -> None:
-    if not sb_enabled():
-        return
-    sb = _sb()
-    if not sb:
+    tok = str(token or "").strip()
+    if not tok:
         return
 
-    try:
-        revoke_at = _utcnow() + timedelta(minutes=int(access_minutes or 30))
-        payload = {
-            "token": str(token),
+    now_iso = _utcnow().isoformat()
+    revoke_at = (_utcnow() + timedelta(minutes=int(access_minutes or 30))).isoformat()
+
+    payload = _normalize_row(
+        {
+            "token": tok,
             "guild_id": int(guild_id),
             "ticket_channel_id": int(ticket_channel_id or 0) or None,
             "requester_id": int(requester_id or 0) or None,
@@ -164,12 +243,15 @@ def create_session(
             "queue_channel_id": int(queue_channel_id or 0) or None,
             "status": "PENDING",
             "access_minutes": int(access_minutes or 30),
-            "revoke_at": revoke_at.isoformat(),
+            "revoke_at": revoke_at,
             "meta": _initial_meta(meta),
+            "created_at": now_iso,
+            "updated_at": now_iso,
         }
-        sb.table(_table()).upsert(payload).execute()
-    except Exception:
-        return
+    )
+
+    _write_mem(payload)
+    _db_upsert(payload)
 
 
 def ensure_session(
@@ -202,16 +284,17 @@ def ensure_session(
     return get_session(token)
 
 
+def _update_local(token: str, patch: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    current = get_session(token) or {"token": str(token)}
+    updated = _normalize_row({**current, **patch, "updated_at": _utcnow().isoformat()})
+    _write_mem(updated)
+    return updated
+
+
 def set_queue_message(*, token: str, queue_message_id: int) -> None:
-    if not sb_enabled():
-        return
-    sb = _sb()
-    if not sb:
-        return
-    try:
-        sb.table(_table()).update({"queue_message_id": int(queue_message_id)}).eq("token", str(token)).execute()
-    except Exception:
-        return
+    row = _update_local(str(token), {"queue_message_id": int(queue_message_id)})
+    if row:
+        _db_update(str(token), {"queue_message_id": int(queue_message_id), "updated_at": row["updated_at"]})
 
 
 def update_meta(
@@ -219,18 +302,11 @@ def update_meta(
     token: str,
     patch: Dict[str, Any],
 ) -> None:
-    if not sb_enabled():
-        return
-    sb = _sb()
-    if not sb:
-        return
-
-    try:
-        current = get_session(token) or {}
-        meta = _merge_meta(current.get("meta"), patch)
-        sb.table(_table()).update({"meta": meta}).eq("token", str(token)).execute()
-    except Exception:
-        return
+    current = get_session(token) or {}
+    meta = _merge_meta(current.get("meta"), patch)
+    row = _update_local(str(token), {"meta": meta})
+    if row:
+        _db_update(str(token), {"meta": meta, "updated_at": row["updated_at"]})
 
 
 def extend_expiry(
@@ -240,48 +316,48 @@ def extend_expiry(
     reason: str = "",
     by_staff_id: int = 0,
 ) -> None:
-    if not sb_enabled():
-        return
-    sb = _sb()
-    if not sb:
+    current = get_session(token) or {}
+    if not current:
         return
 
-    try:
-        current = get_session(token) or {}
-        if not current:
-            return
+    access_minutes = int(current.get("access_minutes") or 0)
+    extension_minutes = int(minutes or access_minutes or _access_minutes())
+    if extension_minutes <= 0:
+        extension_minutes = _access_minutes()
 
-        access_minutes = int(current.get("access_minutes") or 0)
-        extension_minutes = int(minutes or access_minutes or _access_minutes())
-        if extension_minutes <= 0:
-            extension_minutes = _access_minutes()
+    meta_current = _merge_meta(current.get("meta"))
+    extension_count = int(meta_current.get("session_extended_count") or 0) + 1
+    now_iso = _utcnow().isoformat()
 
-        meta_current = _merge_meta(current.get("meta"))
-        extension_count = int(meta_current.get("session_extended_count") or 0) + 1
-        now_iso = _utcnow().isoformat()
+    meta = _merge_meta(
+        meta_current,
+        {
+            "session_extended_count": extension_count,
+            "session_extended_reason": str(reason or "session still active"),
+            "session_extended_at": now_iso,
+            "last_action": "extend_expiry",
+            "last_action_at": now_iso,
+            "last_action_by": int(by_staff_id or 0) or None,
+        },
+    )
 
-        meta = _merge_meta(
-            meta_current,
-            {
-                "session_extended_count": extension_count,
-                "session_extended_reason": str(reason or "session still active"),
-                "session_extended_at": now_iso,
-                "last_action": "extend_expiry",
-                "last_action_at": now_iso,
-                "last_action_by": int(by_staff_id or 0) or None,
-            },
-        )
+    revoke_at = (_utcnow() + timedelta(minutes=extension_minutes)).isoformat()
+    row = _update_local(str(token), {"revoke_at": revoke_at, "meta": meta})
+    if row:
+        _db_update(str(token), {"revoke_at": revoke_at, "meta": meta, "updated_at": row["updated_at"]})
 
-        revoke_at = (_utcnow() + timedelta(minutes=extension_minutes)).isoformat()
 
-        sb.table(_table()).update(
-            {
-                "revoke_at": revoke_at,
-                "meta": meta,
-            }
-        ).eq("token", str(token)).execute()
-    except Exception:
-        return
+def _active_statuses() -> set[str]:
+    return {
+        "PENDING",
+        "STAFF_ACCEPTED",
+        "OWNER_CONFIRMED",
+        "READY",
+        "IN_VC",
+        "STARTED",
+        "TAKEN_OVER",
+        "RESTARTED",
+    }
 
 
 def get_reusable_session(
@@ -290,45 +366,58 @@ def get_reusable_session(
     owner_id: int,
     vc_channel_id: Optional[int] = None,
 ) -> Optional[Dict[str, Any]]:
-    if not sb_enabled():
-        return None
-    sb = _sb()
-    if not sb:
-        return None
+    candidates: list[Dict[str, Any]] = []
 
-    try:
-        query = (
-            sb.table(_table())
-            .select("*")
-            .eq("guild_id", int(guild_id))
-            .eq("owner_id", int(owner_id))
-            .limit(25)
-        )
+    if sb_enabled():
+        sb = _sb()
+        if sb:
+            try:
+                query = (
+                    sb.table(_table())
+                    .select("*")
+                    .eq("guild_id", int(guild_id))
+                    .eq("owner_id", int(owner_id))
+                    .limit(25)
+                )
+                if vc_channel_id and int(vc_channel_id) > 0:
+                    query = query.eq("vc_channel_id", int(vc_channel_id))
+                res = query.execute()
+                rows = getattr(res, "data", None) or []
+                for raw in rows:
+                    if isinstance(raw, dict):
+                        candidates.append(_normalize_row(dict(raw)))
+            except Exception:
+                pass
 
-        if vc_channel_id and int(vc_channel_id) > 0:
-            query = query.eq("vc_channel_id", int(vc_channel_id))
-
-        res = query.execute()
-        rows = getattr(res, "data", None) or []
-
-        active_rows = []
-        for raw in rows:
-            if not isinstance(raw, dict):
+    for raw in list(_MEM_SESSIONS.values()):
+        try:
+            row = _normalize_row(dict(raw))
+            if int(row.get("guild_id") or 0) != int(guild_id):
                 continue
-            row = dict(raw)
-            row["meta"] = _merge_meta(row.get("meta"))
-            row["status"] = _normalize_status(row.get("status"))
-            if row.get("status") in _active_statuses():
-                active_rows.append(row)
+            if int(row.get("owner_id") or row.get("requester_id") or 0) != int(owner_id):
+                continue
+            if vc_channel_id and int(vc_channel_id) > 0 and int(row.get("vc_channel_id") or 0) != int(vc_channel_id):
+                continue
+            candidates.append(row)
+        except Exception:
+            continue
 
-        active_rows.sort(
-            key=lambda item: str(item.get("updated_at") or item.get("created_at") or ""),
-            reverse=True,
-        )
+    dedup: Dict[str, Dict[str, Any]] = {}
+    for row in candidates:
+        tok = str(row.get("token") or "").strip()
+        if tok:
+            dedup[tok] = row
 
-        return active_rows[0] if active_rows else None
-    except Exception:
-        return None
+    active_rows = []
+    for row in dedup.values():
+        if _normalize_status(row.get("status")) in _active_statuses():
+            active_rows.append(row)
+
+    active_rows.sort(
+        key=lambda item: str(item.get("updated_at") or item.get("created_at") or ""),
+        reverse=True,
+    )
+    return active_rows[0] if active_rows else None
 
 
 def _allowed_unlock_statuses() -> set[str]:
@@ -366,19 +455,15 @@ def session_is_unlockable(
 
     if ticket_channel_id <= 0:
         return False, "Session is missing a ticket channel."
-
     if owner_id <= 0:
         return False, "Session is missing an owner."
-
     if vc_channel_id <= 0:
         return False, "Session is missing a VC channel."
-
     if configured_vc_id > 0 and vc_channel_id != configured_vc_id:
         return False, "Session VC does not match configured verify VC."
 
     meta = _merge_meta(row.get("meta"))
     assigned_staff_id = int(meta.get("assigned_staff_id") or 0)
-
     if expected_staff_id > 0 and assigned_staff_id > 0 and assigned_staff_id != int(expected_staff_id):
         return False, "Only the assigned staff member can unlock this VC session."
 
@@ -392,12 +477,7 @@ def transition(
     staff_id: int = 0,
     extra: Optional[Dict[str, Any]] = None,
 ) -> None:
-    if not sb_enabled():
-        return
-    sb = _sb()
-    if not sb:
-        return
-
+    current = get_session(token) or {"token": str(token)}
     now = _utcnow().isoformat()
     status = _normalize_status(new_status)
     patch: Dict[str, Any] = {"status": status}
@@ -426,13 +506,13 @@ def transition(
         patch["restarted_by"] = int(staff_id or 0) or None
 
     if extra is not None:
-        current = get_session(token) or {}
         patch["meta"] = _merge_meta(current.get("meta"), extra)
 
-    try:
-        sb.table(_table()).update(patch).eq("token", str(token)).execute()
-    except Exception:
-        return
+    row = _update_local(str(token), patch)
+    if row:
+        db_patch = dict(patch)
+        db_patch["updated_at"] = row["updated_at"]
+        _db_update(str(token), db_patch)
 
 
 def set_staff_accepted(
@@ -630,15 +710,9 @@ def clear_unlock(
 
 
 def touch_watchdog(token: str) -> None:
-    if not sb_enabled():
-        return
-    sb = _sb()
-    if not sb:
-        return
-    try:
-        sb.table(_table()).update({"last_watchdog_at": _utcnow().isoformat()}).eq("token", str(token)).execute()
-    except Exception:
-        return
+    row = _update_local(str(token), {"last_watchdog_at": _utcnow().isoformat()})
+    if row:
+        _db_update(str(token), {"last_watchdog_at": row["last_watchdog_at"], "updated_at": row["updated_at"]})
 
 
 async def start_session(
@@ -664,6 +738,7 @@ async def start_session(
         )
     except Exception:
         pass
+
     try:
         mark_started(token=str(token), by_staff_id=int(staff_id))
     except Exception:
