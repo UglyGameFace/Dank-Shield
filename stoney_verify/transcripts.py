@@ -34,6 +34,13 @@ from .tickets_new.transcript_service import (
     staff_delete_closed_ticket,
 )
 
+try:
+    from .tickets_new.repository import get_ticket_by_any_channel_id
+except Exception:
+    async def get_ticket_by_any_channel_id(channel_id: int | str) -> Optional[Dict[str, Any]]:  # type: ignore
+        return None
+
+
 # ============================================================
 # Compatibility / safety
 # ============================================================
@@ -68,13 +75,19 @@ except Exception:
 # Markers / locks
 # ============================================================
 
-_CLOSE_PROMPT_MARKER = "stoney_verify:close_prompt:v5"
-_STAFF_CLOSED_MARKER = "stoney_verify:staff_closed:v5"
-_CLOSE_REOPENED_MARKER = "stoney_verify:ticket_reopened:v4"
-_STAFF_REVIEW_PANEL_MARKER = "stoney_verify:staff_review_panel:v3"
+_CLOSE_PROMPT_MARKER = "stoney_verify:close_prompt:v6"
+_STAFF_CLOSED_MARKER = "stoney_verify:staff_closed:v6"
+_CLOSE_REOPENED_MARKER = "stoney_verify:ticket_reopened:v5"
+_STAFF_REVIEW_PANEL_MARKER = "stoney_verify:staff_review_panel:v4"
+_TRANSCRIPT_POSTED_MARKER = "stoney_verify:transcript_posted:v3"
 
 _CLOSE_PROMPT_LOCKS: Dict[int, asyncio.Lock] = {}
 _STAFF_REVIEW_PANEL_LOCKS: Dict[int, asyncio.Lock] = {}
+_STAFF_CLOSED_LOCKS: Dict[int, asyncio.Lock] = {}
+_TRANSCRIPT_POST_LOCKS: Dict[int, asyncio.Lock] = {}
+_CLOSE_ACTION_LOCKS: Dict[int, asyncio.Lock] = {}
+_REOPEN_ACTION_LOCKS: Dict[int, asyncio.Lock] = {}
+_DELETE_ACTION_LOCKS: Dict[int, asyncio.Lock] = {}
 
 
 def _lock_for(container: Dict[int, asyncio.Lock], channel_id: int) -> asyncio.Lock:
@@ -100,6 +113,20 @@ def _safe_text(value: Any) -> str:
 def _safe_int(value: Any, default: int = 0) -> int:
     try:
         return int(str(value).strip())
+    except Exception:
+        return default
+
+
+def _safe_bool(value: Any, default: bool = False) -> bool:
+    try:
+        if isinstance(value, bool):
+            return value
+        text = str(value).strip().lower()
+        if text in {"1", "true", "yes", "y", "on"}:
+            return True
+        if text in {"0", "false", "no", "n", "off"}:
+            return False
+        return default
     except Exception:
         return default
 
@@ -205,6 +232,59 @@ async def _resolve_ticket_owner(channel: discord.TextChannel) -> Optional[discor
         return await find_ticket_owner_retry(channel)
     except Exception:
         return None
+
+
+async def _ticket_row(channel_id: int | str) -> Optional[Dict[str, Any]]:
+    try:
+        row = await get_ticket_by_any_channel_id(channel_id)
+        if isinstance(row, dict):
+            return row
+    except Exception:
+        pass
+    return None
+
+
+def _row_status(row: Optional[Dict[str, Any]]) -> str:
+    try:
+        return str((row or {}).get("status") or "").strip().lower()
+    except Exception:
+        return ""
+
+
+async def _ticket_is_closed(channel: discord.TextChannel) -> bool:
+    try:
+        row = await _ticket_row(channel.id)
+        if row and _row_status(row) == "closed":
+            return True
+        if str(channel.name or "").lower().startswith("closed-"):
+            return True
+    except Exception:
+        pass
+    return False
+
+
+async def _ticket_is_deleted(channel: discord.TextChannel) -> bool:
+    try:
+        row = await _ticket_row(channel.id)
+        if row and _row_status(row) == "deleted":
+            return True
+    except Exception:
+        pass
+    return False
+
+
+async def _ticket_has_transcript(channel_id: int | str) -> bool:
+    try:
+        row = await _ticket_row(channel_id)
+        if not row:
+            return False
+        return bool(
+            str(row.get("transcript_url") or "").strip()
+            or str(row.get("transcript_message_id") or "").strip()
+            or str(row.get("transcript_channel_id") or "").strip()
+        )
+    except Exception:
+        return False
 
 
 async def _user_can_close_ticket(interaction: discord.Interaction, channel: discord.TextChannel) -> bool:
@@ -354,7 +434,7 @@ async def _freeze_message_controls(
 # Close prompt / staff closed panel helpers
 # ============================================================
 
-async def _has_staff_closed_message(channel: discord.TextChannel, limit: int = 50) -> bool:
+async def _find_staff_closed_message(channel: discord.TextChannel, limit: int = 50) -> Optional[discord.Message]:
     try:
         me_id = int(getattr(getattr(bot, "user", None), "id", 0) or 0)
         async for msg in channel.history(limit=limit):
@@ -366,37 +446,43 @@ async def _has_staff_closed_message(channel: discord.TextChannel, limit: int = 5
                 for e in embeds:
                     footer_text = str(getattr(getattr(e, "footer", None), "text", "") or "")
                     if _STAFF_CLOSED_MARKER in footer_text:
-                        return True
+                        return msg
             except Exception:
                 pass
 
             try:
                 content = str(getattr(msg, "content", "") or "")
                 if _STAFF_CLOSED_MARKER in content:
-                    return True
+                    return msg
             except Exception:
                 pass
     except Exception:
         pass
-    return False
+    return None
+
+
+async def _has_staff_closed_message(channel: discord.TextChannel, limit: int = 50) -> bool:
+    return (await _find_staff_closed_message(channel, limit=limit)) is not None
 
 
 async def _post_staff_closed_message(channel: discord.TextChannel, closed_by: discord.abc.User) -> None:
-    if await _has_staff_closed_message(channel):
-        return
+    lock = _lock_for(_STAFF_CLOSED_LOCKS, channel.id)
+    async with lock:
+        if await _has_staff_closed_message(channel):
+            return
 
-    embed = discord.Embed(
-        title="🔒 Ticket Closed",
-        description=(
-            f"This ticket was closed by {closed_by.mention}.\n"
-            "The ticket owner is now locked from replying until staff reopens it or deletes it."
-        ),
-        color=discord.Color.orange(),
-        timestamp=now_utc(),  # type: ignore[name-defined]
-    )
-    embed.set_footer(text=_STAFF_CLOSED_MARKER)
+        embed = discord.Embed(
+            title="🔒 Ticket Closed",
+            description=(
+                f"This ticket was closed by {closed_by.mention}.\n"
+                "The ticket owner is now locked from replying until staff reopens it or deletes it."
+            ),
+            color=discord.Color.orange(),
+            timestamp=now_utc(),  # type: ignore[name-defined]
+        )
+        embed.set_footer(text=_STAFF_CLOSED_MARKER)
 
-    await channel.send(embed=embed, view=StaffClosedTicketView())
+        await channel.send(embed=embed, view=StaffClosedTicketView())
 
 
 async def _find_existing_close_prompt(channel: discord.TextChannel, limit: int = 50) -> Optional[discord.Message]:
@@ -433,6 +519,12 @@ async def prompt_ticket_close_confirmation(
 ) -> Optional[discord.Message]:
     lock = _lock_for(_CLOSE_PROMPT_LOCKS, channel.id)
     async with lock:
+        if await _ticket_is_deleted(channel):
+            return None
+
+        if await _ticket_is_closed(channel):
+            return await _find_staff_closed_message(channel)
+
         existing = await _find_existing_close_prompt(channel)
         if existing:
             return existing
@@ -530,31 +622,46 @@ async def send_tickettool_style_transcript(
     Wrapper around tickets_new.transcript_service.post_transcript_to_channel.
 
     Keeps the old public function name so existing callers do not break.
+    Prevents duplicate transcript posts for the same ticket row.
     """
-    try:
-        reason = decision or "Ticket transcript requested"
-        posted, transcript_url = await post_transcript_to_channel(
-            ticket_channel=channel,
-            deleted_by=closed_by,
-            reason=reason,
-        )
+    lock = _lock_for(_TRANSCRIPT_POST_LOCKS, channel.id)
 
-        if posted is None:
-            return
-
+    async with lock:
         try:
-            await attach_transcript_to_ticket(
-                channel_id=channel.id,
-                transcript_url=transcript_url or getattr(posted, "jump_url", None),
-                transcript_message_id=posted.id,
-                transcript_channel_id=posted.channel.id,
-                actor=closed_by,
-            )
-        except Exception as e:
-            print("⚠️ Failed attaching transcript metadata to ticket:", e)
+            if await _ticket_has_transcript(channel.id):
+                return
 
-    except Exception as e:
-        print("⚠️ send_tickettool_style_transcript wrapper failed:", repr(e))
+            reason = decision or "Ticket transcript requested"
+            posted, transcript_url = await post_transcript_to_channel(
+                ticket_channel=channel,
+                deleted_by=closed_by,
+                reason=reason,
+            )
+
+            if posted is None:
+                return
+
+            try:
+                await attach_transcript_to_ticket(
+                    channel_id=channel.id,
+                    transcript_url=transcript_url or getattr(posted, "jump_url", None),
+                    transcript_message_id=posted.id,
+                    transcript_channel_id=posted.channel.id,
+                    actor=closed_by,
+                )
+            except Exception as e:
+                print("⚠️ Failed attaching transcript metadata to ticket:", e)
+
+            try:
+                await channel.send(
+                    f"🧾 Transcript has been posted.\n{_TRANSCRIPT_POSTED_MARKER}",
+                    allowed_mentions=discord.AllowedMentions.none(),
+                )
+            except Exception:
+                pass
+
+        except Exception as e:
+            print("⚠️ send_tickettool_style_transcript wrapper failed:", repr(e))
 
 
 async def auto_close_after_decision(
@@ -578,9 +685,28 @@ async def auto_close_after_decision(
         )
         await asyncio.sleep(int(AUTO_DELETE_TICKET_SECONDS))  # type: ignore[name-defined]
 
+        try:
+            fresh_channel = channel.guild.get_channel(channel.id)
+            if not isinstance(fresh_channel, discord.TextChannel):
+                try:
+                    fetched = await channel.guild.fetch_channel(channel.id)
+                    if isinstance(fetched, discord.TextChannel):
+                        fresh_channel = fetched
+                    else:
+                        return
+                except Exception:
+                    return
+            channel = fresh_channel
+        except Exception:
+            return
+
         is_ghost = False
         try:
-            is_ghost = "ghost" in str(channel.name or "").lower()
+            row = await _ticket_row(channel.id)
+            if row:
+                is_ghost = _safe_bool(row.get("is_ghost"), False)
+            else:
+                is_ghost = "ghost" in str(channel.name or "").lower()
         except Exception:
             is_ghost = False
 
@@ -632,25 +758,16 @@ class VerificationStaffReviewView(discord.ui.View):
         member_obj: Optional[discord.Member] = None
 
         try:
-            svc = get_supabase()
-            if svc:
-                res = (
-                    svc.table("tickets")
-                    .select("*")
-                    .or_(f"channel_id.eq.{channel.id},discord_thread_id.eq.{channel.id}")
-                    .order("created_at", desc=False)
-                    .limit(1)
-                    .execute()
+            row = await _ticket_row(channel.id)
+            if row:
+                ticket_id = str(row.get("id") or "").strip() or None
+                member_id = _safe_int(row.get("user_id") or row.get("owner_id") or row.get("requester_id"), 0) or None
+                member_name = (
+                    str(row.get("username") or "").strip()
+                    or str(row.get("owner_name") or "").strip()
+                    or str(row.get("requester_name") or "").strip()
+                    or None
                 )
-                rows = getattr(res, "data", None) or []
-                if rows:
-                    row = rows[0]
-                    ticket_id = str(row.get("id") or "").strip() or None
-                    try:
-                        member_id = int(str(row.get("user_id") or "0").strip() or 0) or None
-                    except Exception:
-                        member_id = None
-                    member_name = str(row.get("username") or "").strip() or None
         except Exception:
             pass
 
@@ -992,61 +1109,75 @@ class StaffClosedTicketView(discord.ui.View):
         if not isinstance(channel, discord.TextChannel):
             return await _reply_ephemeral(interaction, "❌ Invalid channel.")
 
-        try:
-            if not interaction.response.is_done():
-                await interaction.response.defer(ephemeral=True)
-        except Exception:
-            pass
+        lock = _lock_for(_REOPEN_ACTION_LOCKS, channel.id)
+        async with lock:
+            try:
+                if not interaction.response.is_done():
+                    await interaction.response.defer(ephemeral=True)
+            except Exception:
+                pass
 
-        owner = await _resolve_ticket_owner(channel)
-        reopened = False
+            if await _ticket_is_deleted(channel):
+                return await _reply_ephemeral(interaction, "❌ Ticket is already deleted.")
 
-        try:
-            reopened = await reopen_ticket_channel(
-                channel=channel,
-                owner=owner,
-                actor=interaction.user,
-                reason="Reopened from Discord ticket controls",
-            )
-        except Exception as e:
-            print("⚠️ reopen_ticket_channel failed:", e)
+            owner = await _resolve_ticket_owner(channel)
             reopened = False
 
-        if not reopened:
             try:
-                await _rename_channel_open(channel)
+                reopened = await reopen_ticket_channel(
+                    channel=channel,
+                    owner=owner,
+                    actor=interaction.user,
+                    reason="Reopened from Discord ticket controls",
+                )
+            except Exception as e:
+                print("⚠️ reopen_ticket_channel failed:", e)
+                reopened = False
+
+            if not reopened:
+                try:
+                    await _rename_channel_open(channel)
+                except Exception:
+                    pass
+
+                try:
+                    await _unlock_ticket_for_owner(channel, owner)
+                except Exception:
+                    pass
+
+                reopened = True
+
+            try:
+                if is_verification_ticket_channel(channel):
+                    await ensure_verify_ui_present(
+                        channel,
+                        reason=f"ticket_reopened:{getattr(interaction.user, 'id', 'staff')}",
+                    )
             except Exception:
                 pass
 
             try:
-                await _unlock_ticket_for_owner(channel, owner)
+                await channel.send(
+                    f"🔓 Ticket reopened by {interaction.user.mention}.\n{_CLOSE_REOPENED_MARKER}"
+                )
             except Exception:
                 pass
 
-            reopened = True
+            try:
+                await _freeze_message_controls(
+                    interaction.message,
+                    content_suffix=f"🔓 Reopened by {interaction.user.mention}.",
+                )
+            except Exception:
+                pass
 
-        try:
-            await channel.send(
-                f"🔓 Ticket reopened by {interaction.user.mention}.\n{_CLOSE_REOPENED_MARKER}"
-            )
-        except Exception:
-            pass
-
-        try:
-            await _freeze_message_controls(
-                interaction.message,
-                content_suffix=f"🔓 Reopened by {interaction.user.mention}.",
-            )
-        except Exception:
-            pass
-
-        try:
-            await interaction.followup.send(
-                "✅ Ticket reopened." if reopened else "⚠️ Ticket reopen partially completed.",
-                ephemeral=True,
-            )
-        except Exception:
-            pass
+            try:
+                await interaction.followup.send(
+                    "✅ Ticket reopened." if reopened else "⚠️ Ticket reopen partially completed.",
+                    ephemeral=True,
+                )
+            except Exception:
+                pass
 
     @discord.ui.button(
         label="Post Transcript",
@@ -1070,6 +1201,9 @@ class StaffClosedTicketView(discord.ui.View):
         owner = await _resolve_ticket_owner(channel)
 
         try:
+            if await _ticket_has_transcript(channel.id):
+                return await _reply_ephemeral(interaction, "ℹ️ Transcript already exists for this ticket.")
+
             await send_tickettool_style_transcript(
                 channel,
                 owner,
@@ -1100,34 +1234,40 @@ class StaffClosedTicketView(discord.ui.View):
         if not isinstance(channel, discord.TextChannel):
             return await _reply_ephemeral(interaction, "❌ Invalid channel.")
 
-        is_ghost = False
-        try:
-            is_ghost = "ghost" in str(channel.name or "").lower()
-        except Exception:
+        lock = _lock_for(_DELETE_ACTION_LOCKS, channel.id)
+        async with lock:
             is_ghost = False
+            try:
+                row = await _ticket_row(channel.id)
+                if row:
+                    is_ghost = _safe_bool(row.get("is_ghost"), False)
+                else:
+                    is_ghost = "ghost" in str(channel.name or "").lower()
+            except Exception:
+                is_ghost = False
 
-        try:
-            result = await staff_delete_closed_ticket(
-                channel=channel,
-                staff_member=interaction.user,
-                is_ghost=is_ghost,
-                reason="Deleted by staff",
-            )
+            try:
+                result = await staff_delete_closed_ticket(
+                    channel=channel,
+                    staff_member=interaction.user,
+                    is_ghost=is_ghost,
+                    reason="Deleted by staff",
+                )
 
-            if bool(result.get("deleted")):
-                try:
-                    RUNTIME_STATS["tickets_closed"] = int(RUNTIME_STATS.get("tickets_closed", 0) or 0) + 1
-                except Exception:
-                    pass
-                return
+                if bool(result.get("deleted")):
+                    try:
+                        RUNTIME_STATS["tickets_closed"] = int(RUNTIME_STATS.get("tickets_closed", 0) or 0) + 1
+                    except Exception:
+                        pass
+                    return
 
-            await _reply_ephemeral(
-                interaction,
-                f"❌ Failed to delete ticket: {result.get('reason') or 'Unknown error'}",
-            )
-        except Exception as e:
-            print("⚠️ staff_delete_closed_ticket failed:", e)
-            await _reply_ephemeral(interaction, f"❌ Failed to delete ticket: {e}")
+                await _reply_ephemeral(
+                    interaction,
+                    f"❌ Failed to delete ticket: {result.get('reason') or 'Unknown error'}",
+                )
+            except Exception as e:
+                print("⚠️ staff_delete_closed_ticket failed:", e)
+                await _reply_ephemeral(interaction, f"❌ Failed to delete ticket: {e}")
 
 
 # ============================================================
@@ -1160,58 +1300,66 @@ class ConfirmCloseTicketView(discord.ui.View):
                 "❌ Only the ticket owner or staff can close this ticket.",
             )
 
-        try:
-            if not interaction.response.is_done():
-                await interaction.response.defer(ephemeral=True)
-        except Exception:
-            pass
-
-        owner = await _resolve_ticket_owner(channel)
-        closed = False
-
-        try:
-            closed = await mark_ticket_closed(
-                channel=channel,
-                closed_by=interaction.user if isinstance(interaction.user, (discord.Member, discord.User)) else None,
-                reason="Closed from ticket UI",
-            )
-        except Exception as e:
-            print("⚠️ mark_ticket_closed failed:", e)
-            closed = False
-
-        if not closed:
+        lock = _lock_for(_CLOSE_ACTION_LOCKS, channel.id)
+        async with lock:
             try:
-                await _rename_channel_closed(channel)
+                if not interaction.response.is_done():
+                    await interaction.response.defer(ephemeral=True)
+            except Exception:
+                pass
+
+            if await _ticket_is_deleted(channel):
+                return await _reply_ephemeral(interaction, "❌ Ticket is already deleted.")
+
+            owner = await _resolve_ticket_owner(channel)
+
+            already_closed = await _ticket_is_closed(channel)
+            closed = already_closed
+
+            if not already_closed:
+                try:
+                    closed = await mark_ticket_closed(
+                        channel=channel,
+                        closed_by=interaction.user if isinstance(interaction.user, (discord.Member, discord.User)) else None,
+                        reason="Closed from ticket UI",
+                    )
+                except Exception as e:
+                    print("⚠️ mark_ticket_closed failed:", e)
+                    closed = False
+
+            if not closed:
+                try:
+                    await _rename_channel_closed(channel)
+                except Exception:
+                    pass
+
+                try:
+                    await _lock_ticket_for_owner(channel, owner)
+                except Exception:
+                    pass
+
+                closed = True
+
+            try:
+                await _freeze_message_controls(
+                    interaction.message,
+                    content_suffix="🔒 Ticket close confirmed.",
+                )
             except Exception:
                 pass
 
             try:
-                await _lock_ticket_for_owner(channel, owner)
+                await _post_staff_closed_message(channel, interaction.user)
+            except Exception as e:
+                print("⚠️ Failed posting staff-closed message:", e)
+
+            try:
+                await interaction.followup.send(
+                    "✅ Ticket closed." if closed else "⚠️ Ticket close partially completed.",
+                    ephemeral=True,
+                )
             except Exception:
                 pass
-
-            closed = True
-
-        try:
-            await _freeze_message_controls(
-                interaction.message,
-                content_suffix="🔒 Ticket close confirmed.",
-            )
-        except Exception:
-            pass
-
-        try:
-            await _post_staff_closed_message(channel, interaction.user)
-        except Exception as e:
-            print("⚠️ Failed posting staff-closed message:", e)
-
-        try:
-            await interaction.followup.send(
-                "✅ Ticket closed." if closed else "⚠️ Ticket close partially completed.",
-                ephemeral=True,
-            )
-        except Exception:
-            pass
 
     @discord.ui.button(
         label="Cancel",
@@ -1231,6 +1379,9 @@ class ConfirmCloseTicketView(discord.ui.View):
 
         if not await _user_can_close_ticket(interaction, channel):
             return await _reply_ephemeral(interaction, "❌ Only the ticket owner or staff can do that.")
+
+        if await _ticket_is_closed(channel):
+            return await _reply_ephemeral(interaction, "ℹ️ Ticket is already closed.")
 
         try:
             await _freeze_message_controls(
@@ -1464,13 +1615,10 @@ async def ensure_verify_ui_present(channel: Union[discord.abc.GuildChannel, disc
         except Exception:
             pass
 
-        # If the current/new verify UI already exists, keep it.
         current = await find_last_verify_ui_message(post_channel, limit=80, include_legacy=False)
         if current:
             return True
 
-        # If only legacy/broken UI exists, delete it and force a rebuild
-        # using verify_ui.py as the single source of truth.
         try:
             await _delete_stale_verify_ui_messages(post_channel, limit=80)
         except Exception:
@@ -1492,6 +1640,16 @@ async def ensure_verify_ui_present(channel: Union[discord.abc.GuildChannel, disc
                 requester_id = int(getattr(owner, "id", owner))
         except Exception:
             requester_id = None
+
+        if not requester_id:
+            try:
+                row = await _ticket_row(post_channel.id)
+                requester_id = _safe_int(
+                    (row or {}).get("user_id") or (row or {}).get("owner_id") or (row or {}).get("requester_id"),
+                    0,
+                ) or None
+            except Exception:
+                requester_id = None
 
         if not requester_id:
             print(
