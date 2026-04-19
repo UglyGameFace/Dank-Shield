@@ -472,6 +472,16 @@ def _sync_member_verification_context(
         pass
 
 
+def _ui_result_is_success(value: Any) -> bool:
+    try:
+        if value is True:
+            return True
+        text = _safe_str(value).lower()
+        return text in {"posted", "updated", "ok", "success", "true"}
+    except Exception:
+        return False
+
+
 async def _mark_decision_safe(
     token: str,
     decision: str,
@@ -902,10 +912,20 @@ async def ensure_ticket_verify_ui(
             channel,
             reason=f"verification_service_ensure:{int(requester_id or 0)}",
         )
-        return _result(
-            bool(ok),
-            "Verify UI ensured." if ok else "Verify UI could not be ensured.",
+        if ok:
+            return _result(True, "Verify UI ensured.")
+
+        fallback = await post_or_replace_verify_ui(
+            channel,
+            requester_id=requester_id,
+            reason=f"verification_service_fallback:{int(requester_id or 0)}",
+            site_url=VERIFY_SITE_URL,
+            ttl_minutes=int(TOKEN_TTL_MINUTES or 20),
+            allow_regen=bool(ALLOW_USER_VERIFYLINK),
         )
+        if _ui_result_is_success(fallback):
+            return _result(True, "Verify UI refreshed.", ui_result=str(fallback))
+        return _result(False, "Verify UI could not be ensured.")
     except Exception as e:
         return _result(False, f"Failed to ensure verify UI: {e}")
 
@@ -918,7 +938,7 @@ async def reissue_verify_ui(
     reason: str = "reissue",
 ) -> Dict[str, Any]:
     try:
-        new_token = await post_or_replace_verify_ui(
+        ui_result = await post_or_replace_verify_ui(
             channel,
             requester_id=requester_id,
             reason=f"{reason}:{actor_id}",
@@ -926,12 +946,11 @@ async def reissue_verify_ui(
             ttl_minutes=int(TOKEN_TTL_MINUTES or 20),
             allow_regen=bool(ALLOW_USER_VERIFYLINK),
         )
-        if not new_token:
-            return _result(False, "Failed to reissue verify link.", token=None)
-
-        return _result(True, "Verify link reissued.", token=new_token)
+        if not _ui_result_is_success(ui_result):
+            return _result(False, "Failed to refresh verify UI.", ui_result=str(ui_result or ""))
+        return _result(True, "Verify UI refreshed.", ui_result=str(ui_result or ""))
     except Exception as e:
-        return _result(False, f"Failed to reissue verify link: {e}", token=None)
+        return _result(False, f"Failed to refresh verify UI: {e}", ui_result="")
 
 
 async def request_resubmission(
@@ -1013,12 +1032,12 @@ async def request_resubmission(
             try:
                 if isinstance(resolved_owner, discord.Member):
                     await resolved_channel.send(
-                        f"🔁 {resolved_owner.mention} Please **resubmit** your ID using the new secure upload button above.",
+                        f"🔁 {resolved_owner.mention} Please **resubmit** your ID using the secure upload button above.",
                         allowed_mentions=discord.AllowedMentions.none(),
                     )
                 else:
                     await resolved_channel.send(
-                        "🔁 Please **resubmit** your ID using the new secure upload button above.",
+                        "🔁 Please **resubmit** your ID using the secure upload button above.",
                         allowed_mentions=discord.AllowedMentions.none(),
                     )
             except Exception:
@@ -1027,7 +1046,7 @@ async def request_resubmission(
         return _result(
             bool(reissue.get("ok")),
             "Resubmission requested." if reissue.get("ok") else str(reissue.get("message") or "Failed to request resubmission."),
-            token=str(reissue.get("token") or ""),
+            ui_result=str(reissue.get("ui_result") or ""),
             owner=resolved_owner,
             channel=resolved_channel,
         )
