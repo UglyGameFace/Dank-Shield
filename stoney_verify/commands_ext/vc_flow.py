@@ -96,6 +96,7 @@ VC_TERMINAL_STATUSES = {
 }
 
 DEFAULT_VC_VERIFY_REQUESTS_CHANNEL_ID = 1476977094729793710
+_VC_REQUEST_LOCKS: Dict[str, asyncio.Lock] = {}
 
 
 # ============================================================
@@ -113,6 +114,15 @@ def _safe_str(value: Any) -> str:
         return str(value or "").strip()
     except Exception:
         return ""
+
+
+def _request_lock(token: str) -> asyncio.Lock:
+    key = _safe_str(token)
+    lock = _VC_REQUEST_LOCKS.get(key)
+    if lock is None:
+        lock = asyncio.Lock()
+        _VC_REQUEST_LOCKS[key] = lock
+    return lock
 
 
 def _vc_requests_channel_id() -> int:
@@ -471,13 +481,33 @@ def _set_request_status(token: str, status: str, **extra: Any) -> None:
         pass
 
 
+def _preserve_member_ids(
+    keep_member: Optional[discord.Member] = None,
+    keep_members: Optional[List[discord.Member]] = None,
+) -> set[int]:
+    ids: set[int] = set()
+
+    if isinstance(keep_member, discord.Member):
+        ids.add(int(keep_member.id))
+
+    for member in list(keep_members or []):
+        try:
+            if isinstance(member, discord.Member):
+                ids.add(int(member.id))
+        except Exception:
+            continue
+
+    return ids
+
+
 async def _cleanup_vc_permissions(
     guild: discord.Guild,
     keep_member: Optional[discord.Member] = None,
+    keep_members: Optional[List[discord.Member]] = None,
 ) -> None:
     """
     Remove all non-staff member overwrites from the VC channel,
-    optionally keeping one member (the current user).
+    optionally keeping one or more members.
     """
     vc = _get_vc_channel(guild)
     if not vc:
@@ -495,11 +525,16 @@ async def _cleanup_vc_permissions(
             pass
         return
 
+    preserve_ids = _preserve_member_ids(
+        keep_member=keep_member,
+        keep_members=keep_members,
+    )
+
     for target, _ow in list(vc.overwrites.items()):
         if not isinstance(target, discord.Member):
             continue
 
-        if is_staff(target) or (keep_member and target.id == keep_member.id):
+        if is_staff(target) or int(target.id) in preserve_ids:
             continue
 
         try:
@@ -604,8 +639,6 @@ async def _vc_grant_access(
         print(f"❌ {msg}")
         return False, msg
 
-    await _cleanup_vc_permissions(guild, keep_member=member)
-
     access_minutes = int(globals().get("VC_VERIFY_ACCESS_MINUTES", 30) or 30)
 
     async def _revoke_later():
@@ -646,7 +679,6 @@ async def _vc_disable_panels_everywhere(
             msg_refs = []
 
         if not msg_refs:
-            # Back-compat fallback to a single channel assumption
             msg_ids = req.get("staff_msg_ids") or []
             staff_ch = await _get_staff_alert_channel(guild)
             if staff_ch and isinstance(msg_ids, list):
@@ -814,106 +846,121 @@ async def _vc_lock_channel_for_session(
     if not isinstance(staff_member, discord.Member):
         return False, "Assigned staff member could not be resolved."
 
-    try:
-        if _vc_sessions_mod and hasattr(_vc_sessions_mod, "ensure_session"):
-            _vc_sessions_mod.ensure_session(
-                token=str(token),
-                guild_id=int(guild.id),
-                ticket_channel_id=int((VC_REQUESTS.get(token) or {}).get("ticket_channel_id") or 0),
-                requester_id=int(owner.id),
-                owner_id=int(owner.id),
-                vc_channel_id=int(VC_VERIFY_CHANNEL_ID or 0),
-                queue_channel_id=int(globals().get("VC_VERIFY_QUEUE_CHANNEL_ID", 0) or 0),
-                access_minutes=int(globals().get("VC_VERIFY_ACCESS_MINUTES", 30) or 30),
-                meta={
-                    "assigned_staff_id": int(staff_member.id),
-                    "assigned_staff_name": str(staff_member.display_name),
-                    "staff_confirmed": True,
-                },
-            )
-
-        if _vc_sessions_mod and hasattr(_vc_sessions_mod, "set_staff_accepted"):
-            _vc_sessions_mod.set_staff_accepted(
-                token=str(token),
-                staff_id=int(staff_member.id),
-                staff_name=str(staff_member.display_name),
-            )
-    except Exception:
-        pass
-
-    _set_request_status(
-        token,
-        "STAFF_ACCEPTED",
-        accepted_staff_id=int(staff_member.id),
-        assigned_staff_id=int(staff_member.id),
-        accepted_by=int(staff_member.id),
-        vc_channel_id=int(VC_VERIFY_CHANNEL_ID or 0),
-        accepted_at=now_utc().isoformat(),
-    )
-
-    if _vc_verify_mod and hasattr(_vc_verify_mod, "vc_unlock_session_participants"):
-        ok, msg = await _vc_verify_mod.vc_unlock_session_participants(
-            guild=guild,
-            token=str(token),
-            owner=owner,
-            staff_member=staff_member,
-        )
-        if not ok:
-            return False, msg
-    else:
-        ok, msg = await _vc_grant_access(guild, owner, token)
-        if not ok:
-            return False, msg
-        ok2, msg2 = await _vc_grant_access(guild, staff_member, token)
-        if not ok2:
-            return False, msg2
-
-    vc = None
-    try:
-        if _vc_verify_mod and hasattr(_vc_verify_mod, "_resolve_vc_channel"):
-            vc = await _vc_verify_mod._resolve_vc_channel(guild)
-    except Exception:
-        vc = None
-
-    if isinstance(vc, (discord.VoiceChannel, discord.StageChannel)):
+    async with _request_lock(token):
         try:
-            me = guild.me
-            can_manage = False
-            try:
-                perms_result = _can_manage_channel(me, vc) if me else (False, "")
-                can_manage = bool(perms_result[0])
-            except Exception:
-                can_manage = False
+            if _vc_sessions_mod and hasattr(_vc_sessions_mod, "ensure_session"):
+                _vc_sessions_mod.ensure_session(
+                    token=str(token),
+                    guild_id=int(guild.id),
+                    ticket_channel_id=int((VC_REQUESTS.get(token) or {}).get("ticket_channel_id") or 0),
+                    requester_id=int(owner.id),
+                    owner_id=int(owner.id),
+                    vc_channel_id=int(VC_VERIFY_CHANNEL_ID or 0),
+                    queue_channel_id=int(globals().get("VC_VERIFY_QUEUE_CHANNEL_ID", 0) or 0),
+                    access_minutes=int(globals().get("VC_VERIFY_ACCESS_MINUTES", 30) or 30),
+                    meta={
+                        "assigned_staff_id": int(staff_member.id),
+                        "assigned_staff_name": str(staff_member.display_name),
+                        "staff_confirmed": True,
+                    },
+                )
 
-            if me and can_manage:
-                for target, _ow in list(vc.overwrites.items()):
-                    if not isinstance(target, discord.Member):
-                        continue
-                    if target.id in {int(owner.id), int(staff_member.id)} or is_staff(target):
-                        continue
-                    try:
-                        await vc.set_permissions(
-                            target,
-                            overwrite=None,
-                            reason=f"VC session lock cleanup token={token}",
-                        )
-                    except Exception:
-                        pass
-
-                for m in list(getattr(vc, "members", []) or []):
-                    if int(m.id) in {int(owner.id), int(staff_member.id)}:
-                        continue
-                    try:
-                        await m.move_to(
-                            None,
-                            reason=f"VC session private lock token={token}",
-                        )
-                    except Exception:
-                        pass
+            if _vc_sessions_mod and hasattr(_vc_sessions_mod, "set_staff_accepted"):
+                _vc_sessions_mod.set_staff_accepted(
+                    token=str(token),
+                    staff_id=int(staff_member.id),
+                    staff_name=str(staff_member.display_name),
+                )
         except Exception:
             pass
 
-    return True, "VC locked to ticket owner + assigned staff."
+        _set_request_status(
+            token,
+            "STAFF_ACCEPTED",
+            accepted_staff_id=int(staff_member.id),
+            assigned_staff_id=int(staff_member.id),
+            accepted_by=int(staff_member.id),
+            vc_channel_id=int(VC_VERIFY_CHANNEL_ID or 0),
+            accepted_at=now_utc().isoformat(),
+            owner_id=int(owner.id),
+            requester_id=int(owner.id),
+            guild_id=int(guild.id),
+        )
+
+        if _vc_verify_mod and hasattr(_vc_verify_mod, "vc_unlock_session_participants"):
+            ok, msg = await _vc_verify_mod.vc_unlock_session_participants(
+                guild=guild,
+                token=str(token),
+                owner=owner,
+                staff_member=staff_member,
+            )
+            if not ok:
+                return False, msg
+        else:
+            ok, msg = await _vc_grant_access(guild, owner, token)
+            if not ok:
+                return False, msg
+
+            ok2, msg2 = await _vc_grant_access(guild, staff_member, token)
+            if not ok2:
+                return False, msg2
+
+            try:
+                await _cleanup_vc_permissions(
+                    guild,
+                    keep_members=[owner, staff_member],
+                )
+            except Exception:
+                pass
+
+        vc = None
+        try:
+            if _vc_verify_mod and hasattr(_vc_verify_mod, "_resolve_vc_channel"):
+                vc = await _vc_verify_mod._resolve_vc_channel(guild)
+        except Exception:
+            vc = None
+
+        if isinstance(vc, (discord.VoiceChannel, discord.StageChannel)):
+            try:
+                me = guild.me
+                can_manage = False
+                try:
+                    perms_result = _can_manage_channel(me, vc) if me else (False, "")
+                    can_manage = bool(perms_result[0])
+                except Exception:
+                    can_manage = False
+
+                if me and can_manage:
+                    preserve_ids = {int(owner.id), int(staff_member.id)}
+
+                    for target, _ow in list(vc.overwrites.items()):
+                        if not isinstance(target, discord.Member):
+                            continue
+                        if target.id in preserve_ids or is_staff(target):
+                            continue
+                        try:
+                            await vc.set_permissions(
+                                target,
+                                overwrite=None,
+                                reason=f"VC session lock cleanup token={token}",
+                            )
+                        except Exception:
+                            pass
+
+                    for m in list(getattr(vc, "members", []) or []):
+                        if int(m.id) in preserve_ids:
+                            continue
+                        try:
+                            await m.move_to(
+                                None,
+                                reason=f"VC session private lock token={token}",
+                            )
+                        except Exception:
+                            pass
+            except Exception:
+                pass
+
+        return True, "VC locked to ticket owner + assigned staff."
 
 
 async def _vc_unlock_channel_for_next_session(
@@ -1428,7 +1475,7 @@ async def _vc_cleanup_command(interaction: discord.Interaction):
     await interaction.response.defer(ephemeral=True)
 
     try:
-        await _cleanup_vc_permissions(guild, keep_member=None)
+        await _cleanup_vc_permissions(guild, keep_members=None)
         await interaction.followup.send("✅ VC verify channel cleanup complete.", ephemeral=True)
     except Exception as e:
         await interaction.followup.send(f"❌ VC cleanup failed: {e}", ephemeral=True)
