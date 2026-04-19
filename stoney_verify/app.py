@@ -13,15 +13,18 @@ from .globals import bot, DISCORD_TOKEN, GUILD_ID, get_supabase, claim_startup_f
 # IMPORT ORDER MATTERS
 # ------------------------------------------------------------
 # commands.py defines a no-op @bot.event on_ready
-# events.py defines the real @bot.event on_ready that starts
-# vc sweeper + initial member sync protections.
+# events.py defines real runtime event behavior for:
+# - VC sweeper
+# - invite warmup
+# - initial member sync
+# - stale verification reconciliation
 #
-# Therefore:
-#   commands MUST be imported BEFORE events
-# so that events.py is the final on_ready owner.
+# commands MUST load BEFORE events so events owns the final
+# core runtime behavior.
 # ============================================================
 
-# Normalize a few compatibility globals before importing modules that depend on them.
+# Normalize compatibility globals before importing modules
+# that rely on them.
 try:
     from . import globals as _g  # type: ignore
 
@@ -36,7 +39,9 @@ try:
 except Exception:
     pass
 
-# EXISTING MODULES / REAL OWNERS
+# ============================================================
+# CORE MODULES / OWNERS
+# ============================================================
 from . import tickets  # noqa: F401
 from . import vc_verify  # noqa: F401
 from . import modlog  # noqa: F401
@@ -46,14 +51,16 @@ from . import timers  # noqa: F401
 from . import commands  # noqa: F401
 from . import events  # noqa: F401
 
-# Ticket event bridge (thin listener layer)
+# Thin ticket listener bridge
 try:
     from . import ticket_events  # noqa: F401
 except Exception as e:
     ticket_events = None  # type: ignore
     print("⚠️ ticket_events import failed:", repr(e))
 
-# SUPPORTING SERVICES ONLY
+# ============================================================
+# SUPPORTING SERVICES
+# ============================================================
 from .members_new import service as _members_service  # noqa: F401
 from .tickets_new import service as _tickets_service  # noqa: F401
 from .tickets_new import transcript_service as _transcript_service  # noqa: F401
@@ -62,7 +69,23 @@ from .tickets_new import sync_service as _tickets_sync_service  # noqa: F401
 from .verification_new import service as _verification_service  # noqa: F401
 from .verification_new import voice_verify as _voice_verify_service  # noqa: F401
 
+try:
+    from .members_new.sync_service import (
+        run_departed_reconciliation_for_guild as _run_departed_reconciliation_for_guild,
+    )
+except Exception:
+    _run_departed_reconciliation_for_guild = None  # type: ignore
+
+try:
+    from .tickets_new.sync_service import (
+        sync_active_ticket_channels_for_guild as _sync_active_ticket_channels_for_guild,
+    )
+except Exception:
+    _sync_active_ticket_channels_for_guild = None  # type: ignore
+
+# ============================================================
 # API SERVERS
+# ============================================================
 from .api_new.server import start_api
 
 try:
@@ -70,7 +93,9 @@ try:
 except Exception:
     start_bot_actions_server = None
 
+# ============================================================
 # WORKERS
+# ============================================================
 from .workers.bot_command_worker import start_worker
 from .workers.metrics_sync_worker import start_metrics_worker
 from .workers.ticket_automation_worker import start_ticket_automation_worker
@@ -90,7 +115,6 @@ _DID_PERMISSION_SELF_CHECK = False
 _STARTUP_BACKGROUND_TASK: asyncio.Task | None = None
 
 # Foreign prefix commands owned by other bots in the same server.
-# We ignore them here so this verify bot does not spam CommandNotFound.
 _IGNORED_FOREIGN_PREFIX_COMMANDS = {
     "ask",
 }
@@ -433,13 +457,8 @@ async def _maybe_run_departed_reconcile_once() -> None:
 
     _DID_DEPARTED_RECONCILE = True
 
-    try:
-        from .events_new.members import (
-            run_full_member_sync_for_guild,
-            run_departed_reconciliation_for_guild,
-        )
-    except Exception as e:
-        print("⚠️ Failed importing reconcile helpers:", repr(e))
+    if _run_departed_reconciliation_for_guild is None:
+        print("⚠️ Departed reconcile helper unavailable; skipping.")
         return
 
     guild = await _resolve_runtime_guild()
@@ -447,40 +466,9 @@ async def _maybe_run_departed_reconcile_once() -> None:
         print("⚠️ Skipping departed reconcile: guild could not be resolved from cache.")
         return
 
-    initial_sync_started = False
-    initial_sync_done = False
-
-    try:
-        initial_sync_started = bool(getattr(bot, "_initial_member_sync_started", False))
-    except Exception:
-        initial_sync_started = False
-
-    try:
-        initial_sync_done = bool(getattr(bot, "_initial_member_sync_done", False))
-    except Exception:
-        initial_sync_done = False
-
-    if initial_sync_done:
-        print("✅ events.py already completed initial sync; fallback full member sync not needed.")
-    elif initial_sync_started:
-        print("ℹ️ events.py initial sync already started; skipping fallback full member sync.")
-    else:
-        try:
-            print("🧩 events.py did not start initial sync; running fallback full member sync...")
-            summary_full = await run_full_member_sync_for_guild(guild)
-            print("✅ Fallback startup member sync complete:", summary_full)
-
-            try:
-                bot._initial_member_sync_started = True  # type: ignore[attr-defined]
-                bot._initial_member_sync_done = True  # type: ignore[attr-defined]
-            except Exception:
-                pass
-        except Exception as e:
-            print("❌ Fallback member sync failed:", repr(e))
-
     try:
         print("🧹 Running departed-member reconciliation...")
-        summary_departed = await run_departed_reconciliation_for_guild(guild)
+        summary_departed = await _run_departed_reconciliation_for_guild(guild)
         print("✅ Departed reconciliation complete:", summary_departed)
     except Exception as e:
         print("❌ Departed reconcile failed:", repr(e))
@@ -494,10 +482,8 @@ async def _maybe_run_ticket_sync_once() -> None:
 
     _DID_TICKET_SYNC = True
 
-    try:
-        from .tickets_new.sync_service import sync_active_ticket_channels_for_guild
-    except Exception as e:
-        print("⚠️ Failed importing ticket sync helper:", repr(e))
+    if _sync_active_ticket_channels_for_guild is None:
+        print("⚠️ Ticket sync helper unavailable; skipping startup ticket sync.")
         return
 
     guild = await _resolve_runtime_guild()
@@ -507,7 +493,7 @@ async def _maybe_run_ticket_sync_once() -> None:
 
     try:
         print("🎫 Running startup ticket sync/backfill...")
-        summary = await sync_active_ticket_channels_for_guild(
+        summary = await _sync_active_ticket_channels_for_guild(
             guild,
             source="startup_ticket_sync",
             include_closed_visible_channels=True,
@@ -740,75 +726,6 @@ def _should_ignore_foreign_prefix_command(
         return False
 
 
-async def _run_startup_once_flags() -> None:
-    try:
-        if not getattr(bot, "_invite_cache_warm_started", False):  # type: ignore[attr-defined]
-            try:
-                bot._invite_cache_warm_started = True  # type: ignore[attr-defined]
-            except Exception:
-                pass
-
-            async def _run_invite_cache_warm():
-                try:
-                    await _warm_all_guild_invite_caches()
-                except Exception as e:
-                    print("⚠️ invite cache warm error:", e)
-                    try:
-                        traceback.print_exc()
-                    except Exception:
-                        pass
-
-            asyncio.create_task(_run_invite_cache_warm())
-
-        if not getattr(bot, "_initial_member_sync_started", False):  # type: ignore[attr-defined]
-            try:
-                bot._initial_member_sync_started = True  # type: ignore[attr-defined]
-            except Exception:
-                pass
-
-            async def _run_startup_member_sync():
-                try:
-                    await _initial_member_sync_sweep()
-                    try:
-                        bot._initial_member_sync_done = True  # type: ignore[attr-defined]
-                    except Exception:
-                        pass
-                except Exception as e:
-                    print("⚠️ background initial member sync error:", e)
-                    try:
-                        traceback.print_exc()
-                    except Exception:
-                        pass
-
-            asyncio.create_task(_run_startup_member_sync())
-
-        if not getattr(bot, "_stale_verification_reconcile_started", False):  # type: ignore[attr-defined]
-            try:
-                bot._stale_verification_reconcile_started = True  # type: ignore[attr-defined]
-            except Exception:
-                pass
-
-            async def _run_stale_verification_reconcile():
-                try:
-                    await _reconcile_stale_open_verification_tickets()
-                except Exception as e:
-                    print("⚠️ stale verification reconciliation error:", e)
-                    try:
-                        traceback.print_exc()
-                    except Exception:
-                        pass
-
-            asyncio.create_task(_run_stale_verification_reconcile())
-
-        try:
-            started = await ensure_channel_cleanup_worker_started()
-            print(f"🧹 Channel cleanup worker status: started={started}")
-        except Exception as e:
-            print(f"⚠️ Failed starting channel cleanup worker: {repr(e)}")
-    except Exception:
-        pass
-
-
 # Register ticket event listeners once at import/startup time.
 _setup_ticket_events_once()
 
@@ -825,22 +742,21 @@ async def on_ready() -> None:
         await _start_workers_once()
         await _run_permission_self_check_once()
 
-        # Heavy work belongs in the background so the gateway heartbeat stays healthy.
+        # Heavy work stays in the background.
         _ensure_startup_background_runner()
 
     except Exception as e:
         print("❌ app.py on_ready listener failed:", repr(e))
+        try:
+            traceback.print_exc()
+        except Exception:
+            pass
 
 
 @bot.event
 async def on_command_error(ctx: ext_commands.Context, error: Exception) -> None:
     """
     Silence foreign prefix-command noise from other bots in the same server.
-
-    Example:
-      - game bot owns !ask
-      - verify bot also sees !ask
-      - verify bot should ignore it instead of spamming CommandNotFound
     """
     try:
         base_error = getattr(error, "original", error)
