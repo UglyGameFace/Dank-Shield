@@ -17,10 +17,6 @@ from .verify_ui import (
     VERIFY_UI_TITLE,
     VERIFY_UI_FOOTER,
 )
-from .verification_new.service import (
-    approve_verification,
-    deny_verification,
-)
 
 from .tickets_new.service import (
     attach_transcript_to_ticket,
@@ -39,6 +35,40 @@ try:
 except Exception:
     async def get_ticket_by_any_channel_id(channel_id: int | str) -> Optional[Dict[str, Any]]:  # type: ignore
         return None
+
+
+# ============================================================
+# Lazy service imports
+# ------------------------------------------------------------
+# IMPORTANT:
+# Do NOT import verification_new.service at module load time.
+# That created a circular import:
+# transcripts.py -> verification_new.service -> transcripts.py
+#
+# We resolve that by importing those service functions only
+# when the buttons are actually pressed.
+# ============================================================
+
+async def _approve_verification_service(*args, **kwargs) -> Dict[str, Any]:
+    try:
+        from .verification_new.service import approve_verification as _approve_verification
+        return await _approve_verification(*args, **kwargs)
+    except Exception as e:
+        return {
+            "ok": False,
+            "message": f"verification_new.service import failed: {e}",
+        }
+
+
+async def _deny_verification_service(*args, **kwargs) -> Dict[str, Any]:
+    try:
+        from .verification_new.service import deny_verification as _deny_verification
+        return await _deny_verification(*args, **kwargs)
+    except Exception as e:
+        return {
+            "ok": False,
+            "message": f"verification_new.service import failed: {e}",
+        }
 
 
 # ============================================================
@@ -94,8 +124,7 @@ def _lock_for(container: Dict[int, asyncio.Lock], channel_id: int) -> asyncio.Lo
     cid = int(channel_id)
     lock = container.get(cid)
     if lock is None:
-        lock = asyncio.Lock()
-        container[cid] = lock
+        lock = container[cid] = asyncio.Lock()
     return lock
 
 
@@ -823,7 +852,7 @@ class VerificationStaffReviewView(discord.ui.View):
         if member_id is None:
             return await _reply_ephemeral(interaction, "❌ Could not resolve the ticket member.")
 
-        result = await approve_verification(
+        result = await _approve_verification_service(
             guild=channel.guild,
             channel=channel,
             token="",
@@ -885,7 +914,7 @@ class VerificationStaffReviewView(discord.ui.View):
         if member_id is None:
             return await _reply_ephemeral(interaction, "❌ Could not resolve the ticket member.")
 
-        result = await deny_verification(
+        result = await _deny_verification_service(
             guild=channel.guild,
             channel=channel,
             token="",
