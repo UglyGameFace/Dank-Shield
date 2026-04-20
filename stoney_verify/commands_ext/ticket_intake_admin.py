@@ -18,6 +18,26 @@ try:
 except Exception:
     TicketChannelActionsView = None  # type: ignore
 
+try:
+    from ..tickets_new.repository import (
+        get_ticket_by_any_channel_id as repo_get_ticket_by_any_channel_id,
+    )
+except Exception:
+    async def repo_get_ticket_by_any_channel_id(channel_id: int | str):  # type: ignore
+        return None
+
+
+# ============================================================
+# ticket_intake_admin.py
+# ------------------------------------------------------------
+# Hardening goals:
+# - deterministic category listing / default selection
+# - transparent category routing preview with reasons
+# - duplicate slug / multiple-default detection
+# - only post staff action panels in real, non-deleted ticket channels
+# - avoid raw confusing fallback behavior
+# ============================================================
+
 
 def _safe_int(value: Any, default: int = 0) -> int:
     try:
@@ -140,6 +160,7 @@ def _fetch_ticket_categories_sync(guild_id: int) -> List[Dict[str, Any]]:
                 c.get("sort_order") is None,
                 c.get("sort_order") if c.get("sort_order") is not None else 10_000,
                 str(c.get("name") or "").lower(),
+                str(c.get("slug") or "").lower(),
             )
         )
     except Exception:
@@ -152,10 +173,24 @@ async def _fetch_ticket_categories(guild_id: int) -> List[Dict[str, Any]]:
     return await _run_blocking(_fetch_ticket_categories_sync, guild_id)
 
 
-def _find_default_category_slug(categories: List[Dict[str, Any]]) -> str:
+def _duplicate_slugs(categories: List[Dict[str, Any]]) -> List[str]:
+    seen: Dict[str, int] = {}
     for cat in categories:
-        if bool(cat.get("is_default")):
-            return str(cat.get("slug") or "support")
+        slug = _safe_str(cat.get("slug")).lower()
+        if not slug:
+            continue
+        seen[slug] = seen.get(slug, 0) + 1
+    return sorted([slug for slug, count in seen.items() if count > 1])
+
+
+def _default_categories(categories: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    return [cat for cat in categories if bool(cat.get("is_default"))]
+
+
+def _find_default_category_slug(categories: List[Dict[str, Any]]) -> str:
+    defaults = _default_categories(categories)
+    if defaults:
+        return str(defaults[0].get("slug") or "support")
 
     for cat in categories:
         slug = str(cat.get("slug") or "")
@@ -187,7 +222,7 @@ def _find_category_by_slug(categories: List[Dict[str, Any]], slug: str) -> Optio
     return None
 
 
-def _score_reason_against_category(reason: str, cat: Dict[str, Any]) -> int:
+def _score_reason_against_category(reason: str, cat: Dict[str, Any]) -> Tuple[int, List[str]]:
     reason_norm = _normalize_text(reason, limit=600).lower()
     reason_tokens = set(_tokenize_text(reason_norm))
 
@@ -197,6 +232,7 @@ def _score_reason_against_category(reason: str, cat: Dict[str, Any]) -> int:
     keywords = [str(x).lower() for x in (cat.get("match_keywords") or [])]
 
     score = 0
+    reasons: List[str] = []
 
     for kw in keywords:
         kw_clean = _normalize_text(kw, limit=120).lower()
@@ -204,8 +240,10 @@ def _score_reason_against_category(reason: str, cat: Dict[str, Any]) -> int:
             continue
         if kw_clean in reason_norm:
             score += 25
+            reasons.append(f"keyword match: `{kw_clean}` (+25)")
             if len(kw_clean.split()) > 1:
                 score += 10
+                reasons.append(f"multi-word keyword bonus: `{kw_clean}` (+10)")
 
     slug_words = [w for w in re.split(r"[-_\s]+", slug) if w]
     name_words = [w for w in _tokenize_text(name)]
@@ -214,46 +252,65 @@ def _score_reason_against_category(reason: str, cat: Dict[str, Any]) -> int:
     for word in slug_words:
         if len(word) >= 3 and word in reason_tokens:
             score += 6
+            reasons.append(f"slug token: `{word}` (+6)")
 
     for word in name_words:
         if len(word) >= 3 and word in reason_tokens:
             score += 5
+            reasons.append(f"name token: `{word}` (+5)")
 
     for word in desc_words[:25]:
         if len(word) >= 4 and word in reason_tokens:
             score += 2
+            reasons.append(f"description token: `{word}` (+2)")
 
     intake_type = str(cat.get("intake_type") or "").lower()
     if intake_type == "appeal" and any(x in reason_norm for x in ["appeal", "unban", "timeout", "ban", "muted", "banned"]):
         score += 6
+        reasons.append("appeal intent bonus (+6)")
     elif intake_type == "report" and any(x in reason_norm for x in ["report", "scam", "abuse", "harassment", "threat"]):
         score += 6
+        reasons.append("report intent bonus (+6)")
     elif intake_type == "partnership" and any(x in reason_norm for x in ["partner", "partnership", "collab", "promo", "sponsor"]):
         score += 6
+        reasons.append("partnership intent bonus (+6)")
     elif intake_type == "question" and any(x in reason_norm for x in ["question", "help", "how do i", "how to"]):
         score += 4
+        reasons.append("question intent bonus (+4)")
+    elif intake_type == "verification" and any(x in reason_norm for x in ["verify", "verification", "id", "identity", "vc"]):
+        score += 6
+        reasons.append("verification intent bonus (+6)")
 
-    return score
+    return score, reasons
 
 
-def _infer_category(categories: List[Dict[str, Any]], reason: str) -> Tuple[str, str, int]:
+def _infer_category(categories: List[Dict[str, Any]], reason: str) -> Tuple[str, str, int, str, List[Tuple[Dict[str, Any], int]]]:
     if not categories:
-        return "support", "Support", 0
+        return "support", "Support", 0, "No dashboard categories found. Falling back to `support`.", []
 
+    scored: List[Tuple[Dict[str, Any], int]] = []
     best: Optional[Dict[str, Any]] = None
     best_score = 0
+    best_reasons: List[str] = []
 
     for cat in categories:
-        score = _score_reason_against_category(reason, cat)
+        score, reasons = _score_reason_against_category(reason, cat)
+        scored.append((cat, score))
         if score > best_score:
             best = cat
             best_score = score
+            best_reasons = reasons
+
+    scored.sort(key=lambda item: item[1], reverse=True)
 
     if best is not None and best_score > 0:
+        why = "; ".join(best_reasons[:6]) if best_reasons else "best score won"
         return (
             _safe_str(best.get("slug"), "support"),
             _safe_str(best.get("name"), "Support"),
             best_score,
+            why,
+            scored[:5],
         )
 
     default_slug = _find_default_category_slug(categories)
@@ -263,9 +320,50 @@ def _infer_category(categories: List[Dict[str, Any]], reason: str) -> Tuple[str,
             _safe_str(default_cat.get("slug"), "support"),
             _safe_str(default_cat.get("name"), "Support"),
             0,
+            f"No positive keyword/intent match. Falling back to default category `{default_slug}`.",
+            scored[:5],
         )
 
-    return "support", "Support", 0
+    return "support", "Support", 0, "No positive match. Falling back to `support`.", scored[:5]
+
+
+async def _ticket_context_for_actions(
+    interaction: discord.Interaction,
+    channel: Optional[discord.TextChannel] = None,
+) -> Tuple[Optional[discord.TextChannel], Optional[Dict[str, Any]]]:
+    ch = channel or interaction.channel
+    if not isinstance(ch, discord.TextChannel):
+        await reply_once(interaction, {"content": "❌ Must be used in a ticket text channel.", "ephemeral": True})
+        return None, None
+
+    try:
+        row = await repo_get_ticket_by_any_channel_id(int(ch.id))
+        row = dict(row) if isinstance(row, dict) else None
+    except Exception:
+        row = None
+
+    if row is None:
+        await reply_once(
+            interaction,
+            {
+                "content": (
+                    f"❌ `{ch.name}` is not a tracked ticket channel.\n"
+                    "Use this only inside a real ticket."
+                ),
+                "ephemeral": True,
+            },
+        )
+        return None, None
+
+    status = _safe_str((row or {}).get("status"), "unknown").lower()
+    if status == "deleted":
+        await reply_once(
+            interaction,
+            {"content": "❌ You cannot post a staff actions panel into a deleted ticket.", "ephemeral": True},
+        )
+        return None, None
+
+    return ch, row
 
 
 def register_ticket_intake_admin_commands(bot, tree) -> None:
@@ -295,12 +393,19 @@ def register_ticket_intake_admin_commands(bot, tree) -> None:
 
         default_slug = _find_default_category_slug(rows)
         verification_slug = _find_verification_category_slug(rows)
+        duplicate_slugs = _duplicate_slugs(rows)
+        default_count = len(_default_categories(rows))
 
         summary = [
             f"Configured categories: **{len(rows)}**",
             f"Default category: `{default_slug}`",
             f"Verification category: `{verification_slug}`",
         ]
+        if duplicate_slugs:
+            summary.append(f"⚠️ Duplicate slugs: {', '.join([f'`{s}`' for s in duplicate_slugs[:6]])}")
+        if default_count > 1:
+            summary.append(f"⚠️ Multiple defaults detected: `{default_count}`")
+
         embed.description = "\n".join(summary)
 
         for row in rows[:10]:
@@ -335,7 +440,7 @@ def register_ticket_intake_admin_commands(bot, tree) -> None:
             return await reply_once(interaction, {"content": "❌ Reason cannot be empty.", "ephemeral": True})
 
         rows = await _fetch_ticket_categories(guild.id)
-        slug, label, score = _infer_category(rows, clean_reason)
+        slug, label, score, why, top_matches = _infer_category(rows, clean_reason)
 
         matched = _find_category_by_slug(rows, slug)
 
@@ -348,6 +453,7 @@ def register_ticket_intake_admin_commands(bot, tree) -> None:
         embed.add_field(name="Matched Category", value=f"**{label}**\n`{slug}`", inline=True)
         embed.add_field(name="Match Score", value=f"`{score}`", inline=True)
         embed.add_field(name="Default Category", value=f"`{_find_default_category_slug(rows)}`", inline=True)
+        embed.add_field(name="Why It Matched", value=_truncate(why, 1024), inline=False)
 
         if matched:
             keywords = matched.get("match_keywords") or []
@@ -359,6 +465,12 @@ def register_ticket_intake_admin_commands(bot, tree) -> None:
                 )[:1024],
                 inline=False,
             )
+
+        if top_matches:
+            lines = []
+            for cat, cat_score in top_matches[:5]:
+                lines.append(f"• `{_safe_str(cat.get('slug'), 'unknown')}` — score `{cat_score}`")
+            embed.add_field(name="Top Candidates", value="\n".join(lines)[:1024], inline=False)
 
         if not rows:
             embed.description = "No dashboard categories were found, so this would fall back to `support`."
@@ -387,6 +499,9 @@ def register_ticket_intake_admin_commands(bot, tree) -> None:
         staff_role_id = _safe_int(globals().get("STAFF_ROLE_ID"), 0)
         staff_role = guild.get_role(staff_role_id) if staff_role_id > 0 else None
 
+        duplicate_slugs = _duplicate_slugs(rows)
+        default_count = len(_default_categories(rows))
+
         embed = discord.Embed(
             title="📡 Ticket Intake Status",
             color=discord.Color.blurple(),
@@ -405,21 +520,28 @@ def register_ticket_intake_admin_commands(bot, tree) -> None:
             value=(f"{staff_role.mention}\n`{staff_role.id}`" if staff_role else "Not configured / not found"),
             inline=False,
         )
-        embed.add_field(
-            name="Public Ticket Panel Command",
-            value="`/post_ticket_panel`",
-            inline=True,
-        )
-        embed.add_field(
-            name="Ghost Ticket Panel Command",
-            value="`/post_ghost_ticket_panel`",
-            inline=True,
-        )
-        embed.add_field(
-            name="Ticket Actions Panel Command",
-            value="`/ticket_post_actions`",
-            inline=True,
-        )
+        embed.add_field(name="Public Ticket Panel Command", value="`/post_ticket_panel`", inline=True)
+        embed.add_field(name="Ghost Ticket Panel Command", value="`/post_ghost_ticket_panel`", inline=True)
+        embed.add_field(name="Ticket Actions Panel Command", value="`/ticket_post_actions`", inline=True)
+
+        warnings: List[str] = []
+        if not rows:
+            warnings.append("No dashboard ticket categories found.")
+        if duplicate_slugs:
+            warnings.append(f"Duplicate slugs detected: {', '.join(duplicate_slugs[:8])}")
+        if default_count > 1:
+            warnings.append(f"Multiple default categories detected: {default_count}")
+        if ticket_parent is None:
+            warnings.append("Ticket parent category is missing or not reachable.")
+        if staff_role is None:
+            warnings.append("Staff role is missing or not reachable.")
+
+        if warnings:
+            embed.add_field(
+                name="Warnings",
+                value="\n".join([f"• {_truncate(w, 180)}" for w in warnings])[:1024],
+                inline=False,
+            )
 
         await reply_once(interaction, {"embed": embed, "ephemeral": True})
 
@@ -440,7 +562,10 @@ def register_ticket_intake_admin_commands(bot, tree) -> None:
         row = _find_category_by_slug(rows, slug)
 
         if row is None:
-            return await reply_once(interaction, {"content": f"❌ No ticket category found for slug `{_safe_str(slug)}`.", "ephemeral": True})
+            return await reply_once(
+                interaction,
+                {"content": f"❌ No ticket category found for slug `{_safe_str(slug)}`.", "ephemeral": True},
+            )
 
         embed = discord.Embed(
             title="🔎 Ticket Category Preview",
@@ -475,12 +600,25 @@ def register_ticket_intake_admin_commands(bot, tree) -> None:
         if not _staff_check(interaction):
             return await reply_once(interaction, {"content": "❌ Staff only.", "ephemeral": True})
 
-        ch = channel or interaction.channel
-        if not isinstance(ch, discord.TextChannel):
-            return await reply_once(interaction, {"content": "❌ Must be used in a text channel.", "ephemeral": True})
+        ch, row = await _ticket_context_for_actions(interaction, channel)
+        if ch is None:
+            return
 
         if TicketChannelActionsView is None:
             return await reply_once(interaction, {"content": "❌ Ticket actions view is unavailable.", "ephemeral": True})
+
+        status = _safe_str((row or {}).get("status"), "unknown").lower()
+        if status == "closed":
+            return await reply_once(
+                interaction,
+                {
+                    "content": (
+                        "❌ Do not post the open-ticket actions panel into a closed ticket.\n"
+                        "Use the closed-ticket controls created by the ticket service instead."
+                    ),
+                    "ephemeral": True,
+                },
+            )
 
         embed = discord.Embed(
             title="🛠️ Ticket Staff Actions",
@@ -491,6 +629,9 @@ def register_ticket_intake_admin_commands(bot, tree) -> None:
             color=discord.Color.blurple(),
             timestamp=now_utc(),
         )
+        embed.add_field(name="Channel", value=f"{ch.mention}\n`{ch.id}`", inline=False)
+        embed.add_field(name="Status", value=f"`{status}`", inline=True)
+        embed.add_field(name="Category", value=f"`{_safe_str((row or {}).get('category'), 'unknown')}`", inline=True)
         embed.set_footer(text="Stoney Verify Ticket System")
 
         try:
@@ -501,5 +642,11 @@ def register_ticket_intake_admin_commands(bot, tree) -> None:
             )
         except Exception as e:
             return await reply_once(interaction, {"content": f"❌ Failed to post ticket actions panel: {e}", "ephemeral": True})
+
+        try:
+            from .common import mark_ticket_activity
+            mark_ticket_activity(ch.id)
+        except Exception:
+            pass
 
         await reply_once(interaction, {"content": f"✅ Posted ticket actions panel in {ch.mention}.", "ephemeral": True})
