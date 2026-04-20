@@ -34,6 +34,13 @@ TOPIC_CATEGORY_RE = re.compile(r"(?:^|;)category=([^;]+)(?:;|$)", re.I)
 TOPIC_GHOST_RE = re.compile(r"(?:^|;)ghost\s*=\s*(true|false|1|0|yes|no)(?:;|$)", re.I)
 
 
+def _sync_debug(msg: str) -> None:
+    try:
+        print(f"🧩 ticket_sync {msg}")
+    except Exception:
+        pass
+
+
 def _utc_iso(dt: Optional[datetime]) -> Optional[str]:
     if dt is None:
         return None
@@ -46,6 +53,20 @@ def _utc_iso(dt: Optional[datetime]) -> Optional[str]:
             return dt.isoformat()
         except Exception:
             return None
+
+
+def _parse_iso(value: Any) -> Optional[datetime]:
+    try:
+        raw = str(value or "").strip()
+        if not raw:
+            return None
+        raw = raw.replace("Z", "+00:00")
+        parsed = datetime.fromisoformat(raw)
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return parsed.astimezone(timezone.utc)
+    except Exception:
+        return None
 
 
 def _safe_topic(channel: discord.TextChannel) -> str:
@@ -96,6 +117,19 @@ def _normalize_priority(value: Any, default: str = "medium") -> str:
     return default
 
 
+def _prefer_newer_iso(a: Any, b: Any) -> Optional[str]:
+    da = _parse_iso(a)
+    db = _parse_iso(b)
+
+    if da and db:
+        return _utc_iso(max(da, db))
+    if da:
+        return _utc_iso(da)
+    if db:
+        return _utc_iso(db)
+    return None
+
+
 def _guess_category_from_channel(channel: discord.TextChannel) -> str:
     topic = _safe_topic(channel)
 
@@ -136,21 +170,22 @@ def _guess_is_ghost(channel: discord.TextChannel) -> bool:
         return False
 
 
-def _guess_status_from_channel(channel: discord.TextChannel) -> str:
+def _channel_looks_closed(channel: discord.TextChannel) -> bool:
     try:
-        name = str(channel.name or "").strip().lower()
-        if name.startswith("closed-"):
-            return CLOSED_STATUS
+        return str(channel.name or "").strip().lower().startswith("closed-")
     except Exception:
-        pass
+        return False
 
+
+def _guess_status_from_channel(channel: discord.TextChannel) -> str:
+    if _channel_looks_closed(channel):
+        return CLOSED_STATUS
     return OPEN_STATUS
 
 
 def _guess_priority_from_existing(existing: Optional[Dict[str, Any]]) -> str:
     if not isinstance(existing, dict):
         return "medium"
-
     return _normalize_priority(existing.get("priority"), "medium")
 
 
@@ -173,10 +208,8 @@ def _extract_claimed_staff_id_from_messages(
     messages: List[discord.Message],
 ) -> Optional[str]:
     """
-    IMPORTANT:
-    - Do NOT trust bot-authored “Ticket claimed by ...” messages as the claimer ID.
-    - Prefer a mentioned user ID in the content.
-    - Fall back to a non-bot author only when appropriate.
+    Prefer explicit mentions / IDs.
+    Avoid trusting bot-authored "claimed" copy as ownership truth.
     """
     for msg in messages:
         try:
@@ -381,7 +414,31 @@ def _candidate_ticket_channels(guild: discord.Guild) -> List[discord.TextChannel
     return out
 
 
-def _preserve_authoritative_status(
+def _ticket_claimed_by(existing: Optional[Dict[str, Any]]) -> Optional[str]:
+    if not isinstance(existing, dict):
+        return None
+    for key in ("claimed_by", "assigned_to"):
+        value = str(existing.get(key) or "").strip()
+        if value:
+            return value
+    return None
+
+
+def _ticket_transcript_payload(existing: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    if not isinstance(existing, dict):
+        return {
+            "transcript_url": None,
+            "transcript_message_id": None,
+            "transcript_channel_id": None,
+        }
+    return {
+        "transcript_url": existing.get("transcript_url"),
+        "transcript_message_id": existing.get("transcript_message_id"),
+        "transcript_channel_id": existing.get("transcript_channel_id"),
+    }
+
+
+def _merge_authoritative_status(
     *,
     existing: Optional[Dict[str, Any]],
     guessed_status: str,
@@ -400,34 +457,30 @@ def _preserve_authoritative_status(
     existing_status = _normalize_status(existing.get("status"), OPEN_STATUS)
     existing_claimed_by = str(existing.get("claimed_by") or "").strip()
     existing_assigned_to = str(existing.get("assigned_to") or "").strip()
+    persistent_assignee = existing_claimed_by or existing_assigned_to
 
-    # Deleted is always authoritative.
     if existing_status == DELETED_STATUS:
         return {
             "status": DELETED_STATUS,
-            "claimed_by": existing_claimed_by or guessed_claimed_by,
-            "assigned_to": existing_assigned_to or existing_claimed_by or guessed_claimed_by,
+            "claimed_by": persistent_assignee or guessed_claimed_by,
+            "assigned_to": persistent_assignee or guessed_claimed_by,
         }
 
-    # Closed channel signal should be allowed to close an existing claimed/open row.
+    if existing_status == CLOSED_STATUS:
+        return {
+            "status": CLOSED_STATUS,
+            "claimed_by": persistent_assignee or guessed_claimed_by,
+            "assigned_to": persistent_assignee or guessed_claimed_by,
+        }
+
     if guessed_status == CLOSED_STATUS and existing_status in {OPEN_STATUS, CLAIMED_STATUS}:
         return {
             "status": CLOSED_STATUS,
-            "claimed_by": existing_claimed_by or guessed_claimed_by,
-            "assigned_to": existing_assigned_to or existing_claimed_by or guessed_claimed_by,
+            "claimed_by": persistent_assignee or guessed_claimed_by,
+            "assigned_to": persistent_assignee or guessed_claimed_by,
         }
 
-    # Closed row stays closed unless something else intentionally reopens it elsewhere.
-    if existing_status == CLOSED_STATUS and guessed_status != DELETED_STATUS:
-        return {
-            "status": CLOSED_STATUS,
-            "claimed_by": existing_claimed_by or guessed_claimed_by,
-            "assigned_to": existing_assigned_to or existing_claimed_by or guessed_claimed_by,
-        }
-
-    # Existing claimed state should not be downgraded just because the channel name looks open.
     if existing_status == CLAIMED_STATUS:
-        persistent_assignee = existing_claimed_by or existing_assigned_to
         if persistent_assignee:
             return {
                 "status": CLAIMED_STATUS,
@@ -446,7 +499,6 @@ def _preserve_authoritative_status(
             "assigned_to": None,
         }
 
-    # Open row can be upgraded to claimed if recent messages prove it.
     if guessed_claimed_by and guessed_status == OPEN_STATUS:
         return {
             "status": CLAIMED_STATUS,
@@ -471,7 +523,10 @@ def _claimed_display_name(
     if not claimed_id:
         try:
             existing_name = str((existing or {}).get("claimed_by_name") or "").strip()
-            return existing_name or None
+            if existing_name:
+                return existing_name
+            existing_assigned_name = str((existing or {}).get("assigned_to_name") or "").strip()
+            return existing_assigned_name or None
         except Exception:
             return None
 
@@ -529,7 +584,7 @@ def _build_core_ticket_payload(
         or f"{'[GHOST] ' if is_ghost else ''}{category.title()} - {username}"[:180]
     )
 
-    authoritative = _preserve_authoritative_status(
+    authoritative = _merge_authoritative_status(
         existing=existing,
         guessed_status=guessed_status,
         guessed_claimed_by=claimed_by_from_messages,
@@ -610,6 +665,32 @@ def _build_insert_payload(core: Dict[str, Any]) -> Dict[str, Any]:
     return payload
 
 
+def _preserve_existing_metadata(existing: Dict[str, Any], payload: Dict[str, Any]) -> None:
+    for key in (
+        "transcript_url",
+        "transcript_message_id",
+        "transcript_channel_id",
+        "category_id",
+        "category_override",
+        "category_set_by",
+        "category_set_at",
+        "matched_category_id",
+        "matched_category_name",
+        "matched_category_slug",
+        "matched_intake_type",
+        "matched_category_reason",
+        "matched_category_score",
+        "decision",
+        "source_ticket_id",
+        "panel_message_id",
+        "webhook_id",
+        "webhook_url",
+        "transcript_message_url",
+    ):
+        if existing.get(key) is not None and payload.get(key) in {None, ""}:
+            payload[key] = existing.get(key)
+
+
 def _build_update_payload(existing: Dict[str, Any], core: Dict[str, Any]) -> Dict[str, Any]:
     payload = dict(core)
     now_iso = _utc_iso(now_utc())
@@ -683,6 +764,14 @@ def _build_update_payload(existing: Dict[str, Any], core: Dict[str, Any]) -> Dic
     payload_status = _normalize_status(payload.get("status"), OPEN_STATUS)
 
     if payload_status in {OPEN_STATUS, CLAIMED_STATUS}:
+        if existing_status == CLOSED_STATUS:
+            payload["status"] = CLOSED_STATUS
+            payload_status = CLOSED_STATUS
+        elif existing_status == DELETED_STATUS:
+            payload["status"] = DELETED_STATUS
+            payload_status = DELETED_STATUS
+
+    if payload_status in {OPEN_STATUS, CLAIMED_STATUS}:
         payload["closed_at"] = None
         payload["closed_by"] = None
         payload["closed_reason"] = None
@@ -710,35 +799,12 @@ def _build_update_payload(existing: Dict[str, Any], core: Dict[str, Any]) -> Dic
         payload["closed_by_name"] = existing.get("closed_by_name")
         payload["closed_reason"] = existing.get("closed_reason")
 
-    # Preserve transcript linkage.
-    for key in ("transcript_url", "transcript_message_id", "transcript_channel_id"):
-        if existing.get(key) and not payload.get(key):
-            payload[key] = existing.get(key)
+    _preserve_existing_metadata(existing, payload)
 
-    # Preserve categorization metadata that sync cannot reliably infer.
-    for key in (
-        "category_id",
-        "category_override",
-        "category_set_by",
-        "category_set_at",
-        "matched_category_id",
-        "matched_category_name",
-        "matched_category_slug",
-        "matched_intake_type",
-        "matched_category_reason",
-        "matched_category_score",
-        "decision",
-        "source_ticket_id",
-        "panel_message_id",
-        "webhook_id",
-        "webhook_url",
-    ):
-        if key in existing and key not in payload:
-            payload[key] = existing.get(key)
-
-    # Preserve last activity if sync did not infer one.
-    if not payload.get("last_activity_at"):
-        payload["last_activity_at"] = existing.get("last_activity_at")
+    payload["last_activity_at"] = _prefer_newer_iso(
+        payload.get("last_activity_at"),
+        existing.get("last_activity_at"),
+    )
     if not payload.get("last_message_id"):
         payload["last_message_id"] = existing.get("last_message_id")
 
@@ -760,6 +826,8 @@ def _normalize_ticket_payload_for_compare(payload: Dict[str, Any]) -> Dict[str, 
         "priority": str(payload.get("priority") or ""),
         "claimed_by": str(payload.get("claimed_by") or "") or None,
         "claimed_by_name": str(payload.get("claimed_by_name") or "") or None,
+        "assigned_to": str(payload.get("assigned_to") or "") or None,
+        "assigned_to_name": str(payload.get("assigned_to_name") or "") or None,
         "closed_by": str(payload.get("closed_by") or "") or None,
         "closed_reason": str(payload.get("closed_reason") or "") or None,
         "initial_message": str(payload.get("initial_message") or ""),
@@ -767,8 +835,6 @@ def _normalize_ticket_payload_for_compare(payload: Dict[str, Any]) -> Dict[str, 
         "channel_id": str(payload.get("channel_id") or ""),
         "channel_name": str(payload.get("channel_name") or ""),
         "ticket_number": payload.get("ticket_number"),
-        "assigned_to": str(payload.get("assigned_to") or "") or None,
-        "assigned_to_name": str(payload.get("assigned_to_name") or "") or None,
         "is_ghost": bool(payload.get("is_ghost")),
         "source": str(payload.get("source") or ""),
         "last_activity_at": str(payload.get("last_activity_at") or "") or None,
@@ -776,6 +842,14 @@ def _normalize_ticket_payload_for_compare(payload: Dict[str, Any]) -> Dict[str, 
         "transcript_url": str(payload.get("transcript_url") or "") or None,
         "transcript_message_id": str(payload.get("transcript_message_id") or "") or None,
         "transcript_channel_id": str(payload.get("transcript_channel_id") or "") or None,
+        "matched_category_id": str(payload.get("matched_category_id") or "") or None,
+        "matched_category_name": str(payload.get("matched_category_name") or "") or None,
+        "matched_category_slug": str(payload.get("matched_category_slug") or "") or None,
+        "matched_intake_type": str(payload.get("matched_intake_type") or "") or None,
+        "matched_category_reason": str(payload.get("matched_category_reason") or "") or None,
+        "matched_category_score": payload.get("matched_category_score"),
+        "category_override": bool(payload.get("category_override")),
+        "category_id": str(payload.get("category_id") or "") or None,
     }
 
 
@@ -822,6 +896,21 @@ async def _sync_channel_internal(
         update_payload = _build_update_payload(existing, core_payload)
 
         if _existing_row_matches_payload(existing, update_payload):
+            try:
+                await safe_optional_update_by_channel_id(
+                    channel.id,
+                    {
+                        "channel_name": channel.name,
+                        "last_activity_at": _prefer_newer_iso(
+                            core_payload.get("last_activity_at"),
+                            existing.get("last_activity_at"),
+                        ),
+                        "last_message_id": core_payload.get("last_message_id") or existing.get("last_message_id"),
+                    },
+                )
+            except Exception:
+                pass
+
             row_summary["action"] = "unchanged"
             return row_summary
 
@@ -844,18 +933,19 @@ async def _sync_channel_internal(
                         "username": core_payload.get("username"),
                         "owner_name": core_payload.get("owner_name"),
                         "requester_name": core_payload.get("requester_name"),
-                        "claimed_by": core_payload.get("claimed_by"),
-                        "claimed_by_name": core_payload.get("claimed_by_name"),
-                        "assigned_to": core_payload.get("assigned_to"),
-                        "assigned_to_name": core_payload.get("assigned_to_name"),
-                        "last_activity_at": core_payload.get("last_activity_at"),
-                        "last_message_id": core_payload.get("last_message_id"),
+                        "claimed_by": update_payload.get("claimed_by"),
+                        "claimed_by_name": update_payload.get("claimed_by_name"),
+                        "assigned_to": update_payload.get("assigned_to"),
+                        "assigned_to_name": update_payload.get("assigned_to_name"),
+                        "last_activity_at": update_payload.get("last_activity_at"),
+                        "last_message_id": update_payload.get("last_message_id"),
                     },
                 )
             except Exception:
                 pass
 
             row_summary["action"] = "updated"
+            row_summary["status"] = update_payload.get("status")
             return row_summary
 
         row_summary["action"] = "error"
