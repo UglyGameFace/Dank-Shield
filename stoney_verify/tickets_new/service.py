@@ -77,9 +77,11 @@ except Exception:
 
 
 _TICKET_CREATION_LOCKS: Dict[Tuple[int, int], asyncio.Lock] = {}
-TICKET_NUM_RE = re.compile(r"^(?:ticket|closed)-(\d+)$", re.I)
 _TICKET_NUMBER_LOCKS: Dict[int, asyncio.Lock] = {}
+_TICKET_MUTATION_LOCKS: Dict[str, asyncio.Lock] = {}
 _TRANSCRIPT_ATTACH_LOCKS: Dict[str, asyncio.Lock] = {}
+
+TICKET_NUM_RE = re.compile(r"^(?:ticket|closed)-(\d+)$", re.I)
 
 _VALID_TICKET_PRIORITIES = {"low", "medium", "high", "urgent"}
 _VALID_TICKET_STATUSES = {"open", "claimed", "closed", "deleted"}
@@ -117,6 +119,10 @@ def _channel_lock(bucket: Dict[str, asyncio.Lock], channel_id: int | str) -> asy
         lock = asyncio.Lock()
         bucket[key] = lock
     return lock
+
+
+def _ticket_mutation_lock(channel_id: int | str) -> asyncio.Lock:
+    return _channel_lock(_TICKET_MUTATION_LOCKS, channel_id)
 
 
 def _counter_table_name() -> str:
@@ -368,6 +374,23 @@ def _ticket_is_openish(row: Optional[Dict[str, Any]]) -> bool:
     return _ticket_status(row) in {"open", "claimed"}
 
 
+def _ticket_is_deleted(row: Optional[Dict[str, Any]]) -> bool:
+    return _ticket_status(row) == "deleted"
+
+
+def _ticket_is_closed(row: Optional[Dict[str, Any]]) -> bool:
+    return _ticket_status(row) == "closed"
+
+
+def _row_is_ghost(row: Optional[Dict[str, Any]], default: bool = False) -> bool:
+    if not isinstance(row, dict):
+        return default
+    try:
+        return _safe_bool(row.get("is_ghost"), default)
+    except Exception:
+        return default
+
+
 def _actor_is_elevated_staff(actor: Optional[discord.Member | discord.User]) -> bool:
     try:
         if actor is None:
@@ -522,6 +545,37 @@ def _parse_owner_id_from_topic(channel: discord.TextChannel) -> Optional[int]:
         return int(m.group(1))
     except Exception:
         return None
+
+
+async def _resolve_owner_member_from_channel_or_row(
+    channel: discord.TextChannel,
+    row: Optional[Dict[str, Any]],
+) -> Optional[discord.Member]:
+    owner_id = _ticket_owner_id(row)
+    if owner_id <= 0:
+        try:
+            owner_id = _parse_owner_id_from_topic(channel) or 0
+        except Exception:
+            owner_id = 0
+
+    if owner_id <= 0:
+        return None
+
+    try:
+        member = channel.guild.get_member(owner_id)
+        if member:
+            return member
+    except Exception:
+        pass
+
+    try:
+        fetched = await channel.guild.fetch_member(owner_id)
+        if isinstance(fetched, discord.Member):
+            return fetched
+    except Exception:
+        pass
+
+    return None
 
 
 def _resolve_ticket_parent_category(
@@ -1697,76 +1751,78 @@ async def mark_ticket_closed(
     closed_by: Optional[discord.Member | discord.User] = None,
     reason: Optional[str] = None,
 ) -> bool:
-    row_before = await _ticket_row_for_channel_id(channel.id)
+    lock = _ticket_mutation_lock(channel.id)
 
-    ticket_number = _extract_ticket_number_from_name(channel.name)
-    if ticket_number is None:
-        ticket_number = _parse_ticket_number_from_topic(channel)
+    async with lock:
+        row_before = await _ticket_row_for_channel_id(channel.id)
+        status_before = _ticket_status(row_before)
 
-    ok = True
-    if not (row_before and _ticket_status(row_before) == "closed"):
-        ok = await repo_mark_ticket_closed(
-            channel_id=channel.id,
-            closed_by=getattr(closed_by, "id", None) if closed_by else None,
-            closed_by_name=_actor_name(closed_by),
-            reason=reason,
-        )
+        if status_before == "deleted":
+            _service_debug(f"close rejected channel={channel.id} reason=already-deleted")
+            return False
 
-    if ticket_number is not None:
-        new_name = _format_ticket_channel_name(ticket_number, closed=True)
-        try:
-            if channel.name != new_name:
-                await channel.edit(name=new_name, reason="Ticket closed")
-        except Exception as e:
-            print(f"⚠️ Failed renaming channel to {new_name}:", repr(e))
+        ticket_number = _extract_ticket_number_from_name(channel.name)
+        if ticket_number is None:
+            ticket_number = _parse_ticket_number_from_topic(channel)
 
-    owner_member: Optional[discord.Member] = None
-    try:
-        owner_id = _parse_owner_id_from_topic(channel)
-        if owner_id:
-            owner_member = channel.guild.get_member(owner_id)
-    except Exception:
-        owner_member = None
-
-    await _apply_closed_permissions(channel, owner_member)
-
-    try:
-        await repo_safe_optional_update_by_channel_id(
-            channel.id,
-            {"channel_name": channel.name},
-        )
-    except Exception:
-        pass
-
-    try:
-        await _freeze_open_ticket_controls_safe(channel, closed_by=closed_by)
-    except Exception:
-        pass
-
-    try:
-        await _post_staff_closed_message_safe(channel, closed_by=closed_by)
-    except Exception:
-        pass
-
-    if ok:
-        try:
-            ticket_row = await _ticket_row_for_channel_id(channel.id)
-            await log_ticket_closed(
-                guild_id=channel.guild.id,
-                actor_user_id=_actor_id(closed_by),
-                actor_name=_actor_name(closed_by),
+        ok = True
+        if status_before != "closed":
+            ok = await repo_mark_ticket_closed(
                 channel_id=channel.id,
+                closed_by=getattr(closed_by, "id", None) if closed_by else None,
+                closed_by_name=_actor_name(closed_by),
                 reason=reason,
-                ticket_row=ticket_row,
-                metadata={
-                    "channel_name_after_close": channel.name,
-                },
             )
-        except Exception as e:
-            print(f"⚠️ Failed logging ticket_closed for {channel.id}: {repr(e)}")
 
-        print(f"✅ Ticket marked closed → #{channel.name} ({channel.id})")
-    return ok
+        if ticket_number is not None:
+            new_name = _format_ticket_channel_name(ticket_number, closed=True)
+            try:
+                if channel.name != new_name:
+                    await channel.edit(name=new_name, reason="Ticket closed")
+            except Exception as e:
+                print(f"⚠️ Failed renaming channel to {new_name}:", repr(e))
+
+        owner_member = await _resolve_owner_member_from_channel_or_row(channel, row_before)
+
+        await _apply_closed_permissions(channel, owner_member)
+
+        try:
+            await repo_safe_optional_update_by_channel_id(
+                channel.id,
+                {"channel_name": channel.name},
+            )
+        except Exception:
+            pass
+
+        try:
+            await _freeze_open_ticket_controls_safe(channel, closed_by=closed_by)
+        except Exception:
+            pass
+
+        try:
+            await _post_staff_closed_message_safe(channel, closed_by=closed_by)
+        except Exception:
+            pass
+
+        if ok:
+            try:
+                ticket_row = await _ticket_row_for_channel_id(channel.id)
+                await log_ticket_closed(
+                    guild_id=channel.guild.id,
+                    actor_user_id=_actor_id(closed_by),
+                    actor_name=_actor_name(closed_by),
+                    channel_id=channel.id,
+                    reason=reason,
+                    ticket_row=ticket_row,
+                    metadata={
+                        "channel_name_after_close": channel.name,
+                    },
+                )
+            except Exception as e:
+                print(f"⚠️ Failed logging ticket_closed for {channel.id}: {repr(e)}")
+
+            print(f"✅ Ticket marked closed → #{channel.name} ({channel.id})")
+        return ok
 
 
 async def mark_ticket_deleted(
@@ -1775,40 +1831,51 @@ async def mark_ticket_deleted(
     deleted_by: Optional[discord.Member | discord.User] = None,
     reason: Optional[str] = None,
 ) -> bool:
-    row_before = await _ticket_row_for_channel_id(channel_id)
-    if row_before and _ticket_status(row_before) == "deleted":
-        return True
+    lock = _ticket_mutation_lock(channel_id)
 
-    ok = await repo_mark_ticket_deleted(
-        channel_id=channel_id,
-        deleted_by=getattr(deleted_by, "id", None) if deleted_by else None,
-        deleted_by_name=_actor_name(deleted_by),
-        reason=reason or "Deleted",
-    )
+    async with lock:
+        row_before = await _ticket_row_for_channel_id(channel_id)
+        status_before = _ticket_status(row_before)
 
-    if ok:
-        try:
-            ticket_row = await _ticket_row_for_channel_id(channel_id)
-            guild_id = (
-                int(str(ticket_row.get("guild_id") or "0"))
-                if isinstance(ticket_row, dict) and ticket_row.get("guild_id")
-                else None
+        if status_before == "deleted":
+            return True
+
+        if status_before in {"open", "claimed"}:
+            _service_debug(
+                f"delete rejected channel={channel_id} reason=not-closed status={status_before}"
             )
-            if guild_id:
-                await log_ticket_deleted(
-                    guild_id=guild_id,
-                    actor_user_id=_actor_id(deleted_by),
-                    actor_name=_actor_name(deleted_by),
-                    channel_id=channel_id,
-                    reason=reason or "Deleted",
-                    ticket_row=ticket_row,
+            return False
+
+        ok = await repo_mark_ticket_deleted(
+            channel_id=channel_id,
+            deleted_by=getattr(deleted_by, "id", None) if deleted_by else None,
+            deleted_by_name=_actor_name(deleted_by),
+            reason=reason or "Deleted",
+        )
+
+        if ok:
+            try:
+                ticket_row = await _ticket_row_for_channel_id(channel_id)
+                guild_id = (
+                    int(str(ticket_row.get("guild_id") or "0"))
+                    if isinstance(ticket_row, dict) and ticket_row.get("guild_id")
+                    else None
                 )
-        except Exception as e:
-            print(f"⚠️ Failed logging ticket_deleted for {channel_id}: {repr(e)}")
+                if guild_id:
+                    await log_ticket_deleted(
+                        guild_id=guild_id,
+                        actor_user_id=_actor_id(deleted_by),
+                        actor_name=_actor_name(deleted_by),
+                        channel_id=channel_id,
+                        reason=reason or "Deleted",
+                        ticket_row=ticket_row,
+                    )
+            except Exception as e:
+                print(f"⚠️ Failed logging ticket_deleted for {channel_id}: {repr(e)}")
 
-        print(f"✅ Ticket marked deleted → {channel_id}")
+            print(f"✅ Ticket marked deleted → {channel_id}")
 
-    return ok
+        return ok
 
 
 async def attach_transcript_to_ticket(
@@ -1874,76 +1941,79 @@ async def assign_ticket(
     channel_id: int | str,
     staff_member: discord.Member | discord.User,
 ) -> bool:
-    row = await _ticket_row_for_channel_id(channel_id)
+    lock = _ticket_mutation_lock(channel_id)
 
-    if not row:
-        _service_debug(f"assign rejected channel={channel_id} reason=no-row")
-        return False
+    async with lock:
+        row = await _ticket_row_for_channel_id(channel_id)
 
-    if not _ticket_is_openish(row):
-        _service_debug(
-            f"assign rejected channel={channel_id} "
-            f"reason=bad-status status={_ticket_status(row)}"
-        )
-        return False
+        if not row:
+            _service_debug(f"assign rejected channel={channel_id} reason=no-row")
+            return False
 
-    existing_claimed_by = _ticket_claimed_by_id(row)
-    target_staff_id = _actor_id(staff_member) or 0
-
-    if target_staff_id <= 0:
-        _service_debug(f"assign rejected channel={channel_id} reason=invalid-staff")
-        return False
-
-    owner_id = _ticket_owner_id(row)
-    if owner_id > 0 and owner_id == target_staff_id:
-        _service_debug(
-            f"assign rejected channel={channel_id} reason=staff-is-owner owner={owner_id}"
-        )
-        return False
-
-    if existing_claimed_by > 0 and existing_claimed_by != target_staff_id:
-        _service_debug(
-            f"assign rejected channel={channel_id} "
-            f"reason=already-claimed existing={existing_claimed_by} target={target_staff_id}"
-        )
-        return False
-
-    if existing_claimed_by == target_staff_id and _ticket_status(row) == "claimed":
-        _service_debug(
-            f"assign noop channel={channel_id} "
-            f"reason=already-claimed-by-same-staff staff={target_staff_id}"
-        )
-        return True
-
-    ok = await repo_assign_ticket(
-        channel_id=channel_id,
-        staff_member=staff_member,
-    )
-
-    if ok:
-        try:
-            ticket_row = await _ticket_row_for_channel_id(channel_id)
-            guild_id = (
-                int(str(ticket_row.get("guild_id") or "0"))
-                if isinstance(ticket_row, dict) and ticket_row.get("guild_id")
-                else None
+        if not _ticket_is_openish(row):
+            _service_debug(
+                f"assign rejected channel={channel_id} "
+                f"reason=bad-status status={_ticket_status(row)}"
             )
-            if guild_id:
-                await log_ticket_claimed(
-                    guild_id=guild_id,
-                    actor_user_id=_actor_id(staff_member),
-                    actor_name=_actor_name(staff_member),
-                    channel_id=channel_id,
-                    ticket_row=ticket_row,
+            return False
+
+        existing_claimed_by = _ticket_claimed_by_id(row)
+        target_staff_id = _actor_id(staff_member) or 0
+
+        if target_staff_id <= 0:
+            _service_debug(f"assign rejected channel={channel_id} reason=invalid-staff")
+            return False
+
+        owner_id = _ticket_owner_id(row)
+        if owner_id > 0 and owner_id == target_staff_id:
+            _service_debug(
+                f"assign rejected channel={channel_id} reason=staff-is-owner owner={owner_id}"
+            )
+            return False
+
+        if existing_claimed_by > 0 and existing_claimed_by != target_staff_id:
+            _service_debug(
+                f"assign rejected channel={channel_id} "
+                f"reason=already-claimed existing={existing_claimed_by} target={target_staff_id}"
+            )
+            return False
+
+        if existing_claimed_by == target_staff_id and _ticket_status(row) == "claimed":
+            _service_debug(
+                f"assign noop channel={channel_id} "
+                f"reason=already-claimed-by-same-staff staff={target_staff_id}"
+            )
+            return True
+
+        ok = await repo_assign_ticket(
+            channel_id=channel_id,
+            staff_member=staff_member,
+        )
+
+        if ok:
+            try:
+                ticket_row = await _ticket_row_for_channel_id(channel_id)
+                guild_id = (
+                    int(str(ticket_row.get("guild_id") or "0"))
+                    if isinstance(ticket_row, dict) and ticket_row.get("guild_id")
+                    else None
                 )
-        except Exception as e:
-            print(f"⚠️ Failed logging ticket_claimed for {channel_id}: {repr(e)}")
+                if guild_id:
+                    await log_ticket_claimed(
+                        guild_id=guild_id,
+                        actor_user_id=_actor_id(staff_member),
+                        actor_name=_actor_name(staff_member),
+                        channel_id=channel_id,
+                        ticket_row=ticket_row,
+                    )
+            except Exception as e:
+                print(f"⚠️ Failed logging ticket_claimed for {channel_id}: {repr(e)}")
 
-        _service_debug(f"assign success channel={channel_id} to={target_staff_id}")
-    else:
-        _service_debug(f"assign failed channel={channel_id} to={target_staff_id}")
+            _service_debug(f"assign success channel={channel_id} to={target_staff_id}")
+        else:
+            _service_debug(f"assign failed channel={channel_id} to={target_staff_id}")
 
-    return ok
+        return ok
 
 
 async def unclaim_ticket(
@@ -1951,63 +2021,66 @@ async def unclaim_ticket(
     channel_id: int | str,
     actor: Optional[discord.Member | discord.User] = None,
 ) -> bool:
-    row = await _ticket_row_for_channel_id(channel_id)
+    lock = _ticket_mutation_lock(channel_id)
 
-    if not row:
-        _service_debug(f"unclaim rejected channel={channel_id} reason=no-row")
-        return False
+    async with lock:
+        row = await _ticket_row_for_channel_id(channel_id)
 
-    if not _ticket_is_openish(row):
-        _service_debug(
-            f"unclaim rejected channel={channel_id} "
-            f"reason=bad-status status={_ticket_status(row)}"
-        )
-        return False
+        if not row:
+            _service_debug(f"unclaim rejected channel={channel_id} reason=no-row")
+            return False
 
-    existing_claimed_by = _ticket_claimed_by_id(row)
-    if existing_claimed_by <= 0:
-        _service_debug(f"unclaim noop channel={channel_id} reason=not-claimed")
-        return True
-
-    actor_id = _actor_id(actor) or 0
-    actor_is_elevated = _actor_is_elevated_staff(actor)
-
-    if actor is not None and actor_id > 0:
-        if actor_id != existing_claimed_by and not actor_is_elevated:
+        if not _ticket_is_openish(row):
             _service_debug(
                 f"unclaim rejected channel={channel_id} "
-                f"reason=not-owner-of-claim actor={actor_id} claimed_by={existing_claimed_by}"
+                f"reason=bad-status status={_ticket_status(row)}"
             )
             return False
 
-    ok = await repo_unclaim_ticket(channel_id=channel_id)
-    if ok:
-        try:
-            ticket_row = await _ticket_row_for_channel_id(channel_id)
-            guild_id = (
-                int(str(ticket_row.get('guild_id') or '0'))
-                if isinstance(ticket_row, dict) and ticket_row.get("guild_id")
-                else None
-            )
-            if guild_id:
-                await log_ticket_unclaimed(
-                    guild_id=guild_id,
-                    actor_user_id=_actor_id(actor),
-                    actor_name=_actor_name(actor),
-                    channel_id=channel_id,
-                    ticket_row=ticket_row,
-                    metadata={
-                        "previous_claimed_by": existing_claimed_by,
-                    },
+        existing_claimed_by = _ticket_claimed_by_id(row)
+        if existing_claimed_by <= 0:
+            _service_debug(f"unclaim noop channel={channel_id} reason=not-claimed")
+            return True
+
+        actor_id = _actor_id(actor) or 0
+        actor_is_elevated = _actor_is_elevated_staff(actor)
+
+        if actor is not None and actor_id > 0:
+            if actor_id != existing_claimed_by and not actor_is_elevated:
+                _service_debug(
+                    f"unclaim rejected channel={channel_id} "
+                    f"reason=not-owner-of-claim actor={actor_id} claimed_by={existing_claimed_by}"
                 )
-        except Exception as e:
-            print(f"⚠️ Failed logging ticket_unclaimed for {channel_id}: {repr(e)}")
+                return False
 
-        _service_debug(f"unclaim success channel={channel_id} previous={existing_claimed_by}")
-    else:
-        _service_debug(f"unclaim failed channel={channel_id}")
+        ok = await repo_unclaim_ticket(channel_id=channel_id)
+        if ok:
+            try:
+                ticket_row = await _ticket_row_for_channel_id(channel_id)
+                guild_id = (
+                    int(str(ticket_row.get('guild_id') or '0'))
+                    if isinstance(ticket_row, dict) and ticket_row.get("guild_id")
+                    else None
+                )
+                if guild_id:
+                    await log_ticket_unclaimed(
+                        guild_id=guild_id,
+                        actor_user_id=_actor_id(actor),
+                        actor_name=_actor_name(actor),
+                        channel_id=channel_id,
+                        ticket_row=ticket_row,
+                        metadata={
+                            "previous_claimed_by": existing_claimed_by,
+                        },
+                    )
+            except Exception as e:
+                print(f"⚠️ Failed logging ticket_unclaimed for {channel_id}: {repr(e)}")
 
-    return ok
+            _service_debug(f"unclaim success channel={channel_id} previous={existing_claimed_by}")
+        else:
+            _service_debug(f"unclaim failed channel={channel_id}")
+
+        return ok
 
 
 async def transfer_ticket(
@@ -2016,88 +2089,91 @@ async def transfer_ticket(
     to_staff_member: discord.Member | discord.User,
     actor: Optional[discord.Member | discord.User] = None,
 ) -> bool:
-    row = await _ticket_row_for_channel_id(channel_id)
+    lock = _ticket_mutation_lock(channel_id)
 
-    if not row:
-        _service_debug(f"transfer rejected channel={channel_id} reason=no-row")
-        return False
+    async with lock:
+        row = await _ticket_row_for_channel_id(channel_id)
 
-    if not _ticket_is_openish(row):
-        _service_debug(
-            f"transfer rejected channel={channel_id} "
-            f"reason=bad-status status={_ticket_status(row)}"
-        )
-        return False
+        if not row:
+            _service_debug(f"transfer rejected channel={channel_id} reason=no-row")
+            return False
 
-    target_staff_id = _actor_id(to_staff_member) or 0
-    if target_staff_id <= 0:
-        _service_debug(f"transfer rejected channel={channel_id} reason=invalid-target")
-        return False
-
-    owner_id = _ticket_owner_id(row)
-    if owner_id > 0 and owner_id == target_staff_id:
-        _service_debug(
-            f"transfer rejected channel={channel_id} reason=target-is-owner owner={owner_id}"
-        )
-        return False
-
-    existing_claimed_by = _ticket_claimed_by_id(row)
-    actor_id = _actor_id(actor) or 0
-    actor_is_elevated = _actor_is_elevated_staff(actor)
-
-    if existing_claimed_by > 0 and actor is not None:
-        if actor_id != existing_claimed_by and not actor_is_elevated:
+        if not _ticket_is_openish(row):
             _service_debug(
                 f"transfer rejected channel={channel_id} "
-                f"reason=actor-does-not-own-claim actor={actor_id} claimed_by={existing_claimed_by}"
+                f"reason=bad-status status={_ticket_status(row)}"
             )
             return False
 
-    if existing_claimed_by == target_staff_id and _ticket_status(row) == "claimed":
-        _service_debug(
-            f"transfer noop channel={channel_id} "
-            f"reason=already-owned-by-target target={target_staff_id}"
-        )
-        return True
+        target_staff_id = _actor_id(to_staff_member) or 0
+        if target_staff_id <= 0:
+            _service_debug(f"transfer rejected channel={channel_id} reason=invalid-target")
+            return False
 
-    ok = await repo_transfer_ticket(
-        channel_id=channel_id,
-        to_staff_member=to_staff_member,
-    )
-    if ok:
-        try:
-            ticket_row = await _ticket_row_for_channel_id(channel_id)
-            guild_id = (
-                int(str(ticket_row.get("guild_id") or "0"))
-                if isinstance(ticket_row, dict) and ticket_row.get("guild_id")
-                else None
+        owner_id = _ticket_owner_id(row)
+        if owner_id > 0 and owner_id == target_staff_id:
+            _service_debug(
+                f"transfer rejected channel={channel_id} reason=target-is-owner owner={owner_id}"
             )
-            if guild_id:
-                await log_ticket_transferred(
-                    guild_id=guild_id,
-                    actor_user_id=_actor_id(actor),
-                    actor_name=_actor_name(actor),
-                    target_user_id=None,
-                    target_name=None,
-                    channel_id=channel_id,
-                    reason=f"Transferred to {to_staff_member}",
-                    ticket_row=ticket_row,
-                    metadata={
-                        "previous_claimed_by": existing_claimed_by,
-                        "transfer_to_user_id": _actor_id(to_staff_member),
-                        "transfer_to_name": _actor_name(to_staff_member),
-                    },
-                )
-        except Exception as e:
-            print(f"⚠️ Failed logging ticket_transferred for {channel_id}: {repr(e)}")
+            return False
 
-        _service_debug(
-            f"transfer success channel={channel_id} "
-            f"from={existing_claimed_by} to={target_staff_id}"
+        existing_claimed_by = _ticket_claimed_by_id(row)
+        actor_id = _actor_id(actor) or 0
+        actor_is_elevated = _actor_is_elevated_staff(actor)
+
+        if existing_claimed_by > 0 and actor is not None:
+            if actor_id != existing_claimed_by and not actor_is_elevated:
+                _service_debug(
+                    f"transfer rejected channel={channel_id} "
+                    f"reason=actor-does-not-own-claim actor={actor_id} claimed_by={existing_claimed_by}"
+                )
+                return False
+
+        if existing_claimed_by == target_staff_id and _ticket_status(row) == "claimed":
+            _service_debug(
+                f"transfer noop channel={channel_id} "
+                f"reason=already-owned-by-target target={target_staff_id}"
+            )
+            return True
+
+        ok = await repo_transfer_ticket(
+            channel_id=channel_id,
+            to_staff_member=to_staff_member,
         )
-    else:
-        _service_debug(f"transfer failed channel={channel_id} to={target_staff_id}")
-    return ok
+        if ok:
+            try:
+                ticket_row = await _ticket_row_for_channel_id(channel_id)
+                guild_id = (
+                    int(str(ticket_row.get("guild_id") or "0"))
+                    if isinstance(ticket_row, dict) and ticket_row.get("guild_id")
+                    else None
+                )
+                if guild_id:
+                    await log_ticket_transferred(
+                        guild_id=guild_id,
+                        actor_user_id=_actor_id(actor),
+                        actor_name=_actor_name(actor),
+                        target_user_id=None,
+                        target_name=None,
+                        channel_id=channel_id,
+                        reason=f"Transferred to {to_staff_member}",
+                        ticket_row=ticket_row,
+                        metadata={
+                            "previous_claimed_by": existing_claimed_by,
+                            "transfer_to_user_id": _actor_id(to_staff_member),
+                            "transfer_to_name": _actor_name(to_staff_member),
+                        },
+                    )
+            except Exception as e:
+                print(f"⚠️ Failed logging ticket_transferred for {channel_id}: {repr(e)}")
+
+            _service_debug(
+                f"transfer success channel={channel_id} "
+                f"from={existing_claimed_by} to={target_staff_id}"
+            )
+        else:
+            _service_debug(f"transfer failed channel={channel_id} to={target_staff_id}")
+        return ok
 
 
 async def set_ticket_priority(
@@ -2111,38 +2187,45 @@ async def set_ticket_priority(
         _service_debug(f"set-priority rejected channel={channel_id} priority={clean_priority!r}")
         return False
 
-    row_before = await _ticket_row_for_channel_id(channel_id)
-    if row_before and _safe_str(row_before.get("priority")).strip().lower() == clean_priority:
-        return True
+    lock = _ticket_mutation_lock(channel_id)
 
-    ok = await repo_set_ticket_priority(
-        channel_id=channel_id,
-        priority=clean_priority,
-    )
-    if ok:
-        try:
-            ticket_row = await _ticket_row_for_channel_id(channel_id)
-            guild_id = (
-                int(str(ticket_row.get("guild_id") or "0"))
-                if isinstance(ticket_row, dict) and ticket_row.get("guild_id")
-                else None
-            )
-            if guild_id:
-                await log_ticket_priority_updated(
-                    guild_id=guild_id,
-                    actor_user_id=_actor_id(actor),
-                    actor_name=_actor_name(actor),
-                    channel_id=channel_id,
-                    new_priority=clean_priority,
-                    ticket_row=ticket_row,
+    async with lock:
+        row_before = await _ticket_row_for_channel_id(channel_id)
+        if row_before and _ticket_status(row_before) == "deleted":
+            _service_debug(f"set-priority rejected channel={channel_id} reason=deleted")
+            return False
+
+        if row_before and _safe_str(row_before.get("priority")).strip().lower() == clean_priority:
+            return True
+
+        ok = await repo_set_ticket_priority(
+            channel_id=channel_id,
+            priority=clean_priority,
+        )
+        if ok:
+            try:
+                ticket_row = await _ticket_row_for_channel_id(channel_id)
+                guild_id = (
+                    int(str(ticket_row.get("guild_id") or "0"))
+                    if isinstance(ticket_row, dict) and ticket_row.get("guild_id")
+                    else None
                 )
-        except Exception as e:
-            print(f"⚠️ Failed logging ticket_priority_updated for {channel_id}: {repr(e)}")
+                if guild_id:
+                    await log_ticket_priority_updated(
+                        guild_id=guild_id,
+                        actor_user_id=_actor_id(actor),
+                        actor_name=_actor_name(actor),
+                        channel_id=channel_id,
+                        new_priority=clean_priority,
+                        ticket_row=ticket_row,
+                    )
+            except Exception as e:
+                print(f"⚠️ Failed logging ticket_priority_updated for {channel_id}: {repr(e)}")
 
-        _service_debug(f"set-priority success channel={channel_id} priority={clean_priority}")
-    else:
-        _service_debug(f"set-priority failed channel={channel_id} priority={clean_priority}")
-    return ok
+            _service_debug(f"set-priority success channel={channel_id} priority={clean_priority}")
+        else:
+            _service_debug(f"set-priority failed channel={channel_id} priority={clean_priority}")
+        return ok
 
 
 async def add_internal_note(
@@ -2156,35 +2239,43 @@ async def add_internal_note(
     if not clean_note:
         return False
 
-    ok = await repo_add_internal_note(
-        channel_id=channel_id,
-        author=author,
-        note=clean_note,
-        is_pinned=is_pinned,
-    )
+    lock = _ticket_mutation_lock(channel_id)
 
-    if ok:
-        try:
-            ticket_row = await _ticket_row_for_channel_id(channel_id)
-            guild_id = (
-                int(str(ticket_row.get("guild_id") or "0"))
-                if isinstance(ticket_row, dict) and ticket_row.get("guild_id")
-                else None
-            )
-            if guild_id:
-                await log_ticket_note_added(
-                    guild_id=guild_id,
-                    actor_user_id=_actor_id(author),
-                    actor_name=_actor_name(author),
-                    channel_id=channel_id,
-                    note_preview=clean_note[:200],
-                    is_pinned=is_pinned,
-                    ticket_row=ticket_row,
+    async with lock:
+        row_before = await _ticket_row_for_channel_id(channel_id)
+        if row_before and _ticket_status(row_before) == "deleted":
+            _service_debug(f"note rejected channel={channel_id} reason=deleted")
+            return False
+
+        ok = await repo_add_internal_note(
+            channel_id=channel_id,
+            author=author,
+            note=clean_note,
+            is_pinned=is_pinned,
+        )
+
+        if ok:
+            try:
+                ticket_row = await _ticket_row_for_channel_id(channel_id)
+                guild_id = (
+                    int(str(ticket_row.get("guild_id") or "0"))
+                    if isinstance(ticket_row, dict) and ticket_row.get("guild_id")
+                    else None
                 )
-        except Exception as e:
-            print(f"⚠️ Failed logging ticket_note_added for {channel_id}: {repr(e)}")
+                if guild_id:
+                    await log_ticket_note_added(
+                        guild_id=guild_id,
+                        actor_user_id=_actor_id(author),
+                        actor_name=_actor_name(author),
+                        channel_id=channel_id,
+                        note_preview=clean_note[:200],
+                        is_pinned=is_pinned,
+                        ticket_row=ticket_row,
+                    )
+            except Exception as e:
+                print(f"⚠️ Failed logging ticket_note_added for {channel_id}: {repr(e)}")
 
-    return ok
+        return ok
 
 
 async def list_internal_notes(
@@ -2257,39 +2348,50 @@ async def reopen_ticket(
     actor: Optional[discord.Member | discord.User] = None,
     reason: Optional[str] = None,
 ) -> bool:
-    row_before = await _ticket_row_for_channel_id(channel_id)
+    lock = _ticket_mutation_lock(channel_id)
 
-    if row_before and _ticket_status(row_before) == "open" and _ticket_claimed_by_id(row_before) <= 0:
-        return True
+    async with lock:
+        row_before = await _ticket_row_for_channel_id(channel_id)
+        status_before = _ticket_status(row_before)
 
-    ok = await repo_reopen_ticket(
-        channel_id=channel_id,
-        reopened_by=getattr(actor, "id", None) if actor else None,
-        reopened_by_name=_actor_name(actor),
-        reason=reason,
-    )
-    if ok:
-        try:
-            ticket_row = await _ticket_row_for_channel_id(channel_id)
-            guild_id = (
-                int(str(ticket_row.get("guild_id") or "0"))
-                if isinstance(ticket_row, dict) and ticket_row.get("guild_id")
-                else None
-            )
-            if guild_id:
-                await log_ticket_reopened(
-                    guild_id=guild_id,
-                    actor_user_id=_actor_id(actor),
-                    actor_name=_actor_name(actor),
-                    channel_id=channel_id,
-                    reason=reason,
-                    ticket_row=ticket_row,
+        if status_before == "deleted":
+            _service_debug(f"reopen rejected channel={channel_id} reason=deleted")
+            return False
+
+        if status_before == "open" and _ticket_claimed_by_id(row_before) <= 0:
+            return True
+
+        if status_before == "claimed":
+            return True
+
+        ok = await repo_reopen_ticket(
+            channel_id=channel_id,
+            reopened_by=getattr(actor, "id", None) if actor else None,
+            reopened_by_name=_actor_name(actor),
+            reason=reason,
+        )
+        if ok:
+            try:
+                ticket_row = await _ticket_row_for_channel_id(channel_id)
+                guild_id = (
+                    int(str(ticket_row.get("guild_id") or "0"))
+                    if isinstance(ticket_row, dict) and ticket_row.get("guild_id")
+                    else None
                 )
-        except Exception as e:
-            print(f"⚠️ Failed logging ticket_reopened for {channel_id}: {repr(e)}")
+                if guild_id:
+                    await log_ticket_reopened(
+                        guild_id=guild_id,
+                        actor_user_id=_actor_id(actor),
+                        actor_name=_actor_name(actor),
+                        channel_id=channel_id,
+                        reason=reason,
+                        ticket_row=ticket_row,
+                    )
+            except Exception as e:
+                print(f"⚠️ Failed logging ticket_reopened for {channel_id}: {repr(e)}")
 
-        print(f"✅ Ticket reopened → {channel_id}")
-    return ok
+            print(f"✅ Ticket reopened → {channel_id}")
+        return ok
 
 
 async def reopen_ticket_channel(
@@ -2300,61 +2402,89 @@ async def reopen_ticket_channel(
     actor: Optional[discord.Member | discord.User] = None,
     reason: Optional[str] = None,
 ) -> bool:
-    ok = await reopen_ticket(
-        channel_id=channel.id,
-        actor=actor,
-        reason=reason,
-    )
+    lock = _ticket_mutation_lock(channel.id)
 
-    ticket_number = _extract_ticket_number_from_name(channel.name)
-    if ticket_number is None:
-        ticket_number = _parse_ticket_number_from_topic(channel)
+    async with lock:
+        row_before = await _ticket_row_for_channel_id(channel.id)
+        status_before = _ticket_status(row_before)
 
-    if ticket_number is not None:
-        new_name = _format_ticket_channel_name(ticket_number, closed=False)
+        if status_before == "deleted":
+            _service_debug(f"reopen-channel rejected channel={channel.id} reason=deleted")
+            return False
+
+        ok = True
+        if status_before not in {"open", "claimed"}:
+            ok = await repo_reopen_ticket(
+                channel_id=channel.id,
+                reopened_by=getattr(actor, "id", None) if actor else None,
+                reopened_by_name=_actor_name(actor),
+                reason=reason,
+            )
+
+            if ok:
+                try:
+                    ticket_row = await _ticket_row_for_channel_id(channel.id)
+                    guild_id = (
+                        int(str(ticket_row.get("guild_id") or "0"))
+                        if isinstance(ticket_row, dict) and ticket_row.get("guild_id")
+                        else None
+                    )
+                    if guild_id:
+                        await log_ticket_reopened(
+                            guild_id=guild_id,
+                            actor_user_id=_actor_id(actor),
+                            actor_name=_actor_name(actor),
+                            channel_id=channel.id,
+                            reason=reason,
+                            ticket_row=ticket_row,
+                        )
+                except Exception as e:
+                    print(f"⚠️ Failed logging ticket_reopened for {channel.id}: {repr(e)}")
+
+        ticket_number = _extract_ticket_number_from_name(channel.name)
+        if ticket_number is None:
+            ticket_number = _parse_ticket_number_from_topic(channel)
+
+        if ticket_number is not None:
+            new_name = _format_ticket_channel_name(ticket_number, closed=False)
+            try:
+                if channel.name != new_name:
+                    await channel.edit(name=new_name, reason="Ticket reopened")
+            except Exception as e:
+                print(f"⚠️ Failed renaming reopened ticket to {new_name}:", repr(e))
+
+        if owner is None:
+            owner = await _resolve_owner_member_from_channel_or_row(channel, row_before)
+
+        await _apply_open_permissions(
+            channel,
+            owner,
+            staff_role_ids=staff_role_ids or _default_staff_role_ids(),
+        )
+
         try:
-            if channel.name != new_name:
-                await channel.edit(name=new_name, reason="Ticket reopened")
-        except Exception as e:
-            print(f"⚠️ Failed renaming reopened ticket to {new_name}:", repr(e))
-
-    if owner is None:
-        try:
-            owner_id = _parse_owner_id_from_topic(channel)
-            if owner_id:
-                owner = channel.guild.get_member(owner_id)
+            await repo_safe_optional_update_by_channel_id(
+                channel.id,
+                {"channel_name": channel.name},
+            )
         except Exception:
-            owner = None
+            pass
 
-    await _apply_open_permissions(
-        channel,
-        owner,
-        staff_role_ids=staff_role_ids or _default_staff_role_ids(),
-    )
+        try:
+            await _freeze_staff_closed_message_safe(channel, reopened_by=actor)
+        except Exception:
+            pass
 
-    try:
-        await repo_safe_optional_update_by_channel_id(
-            channel.id,
-            {"channel_name": channel.name},
-        )
-    except Exception:
-        pass
+        try:
+            await _refresh_open_ticket_ui(
+                channel=channel,
+                owner=owner,
+                is_ghost=_row_is_ghost(row_before, False),
+            )
+        except Exception:
+            pass
 
-    try:
-        await _freeze_staff_closed_message_safe(channel, reopened_by=actor)
-    except Exception:
-        pass
-
-    try:
-        await _refresh_open_ticket_ui(
-            channel=channel,
-            owner=owner,
-            is_ghost=False,
-        )
-    except Exception:
-        pass
-
-    return ok
+        return ok
 
 
 __all__ = [
