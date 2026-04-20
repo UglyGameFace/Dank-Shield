@@ -352,7 +352,6 @@ _DEFAULT_BOOTSTRAP_CATEGORIES: Tuple[Dict[str, Any], ...] = (
 )
 
 
-
 def _debug(msg: str) -> None:
     try:
         print(f"🧩 ticket_panel {msg}")
@@ -556,6 +555,49 @@ def _staff_role_ids_for_ticket(guild: discord.Guild) -> List[int]:
 def _ticket_parent_category_id() -> Optional[int]:
     cid = _safe_int(TICKET_CATEGORY_ID, 0)
     return cid if cid > 0 else None
+
+
+def _channel_looks_closed(channel: discord.TextChannel) -> bool:
+    try:
+        return str(channel.name or "").lower().startswith("closed-")
+    except Exception:
+        return False
+
+
+def _ticket_status_from_row(row: Optional[Dict[str, Any]]) -> str:
+    if not isinstance(row, dict):
+        return "unknown"
+    raw = str(row.get("status") or "unknown").strip().lower()
+    if raw in {"open", "claimed", "closed", "deleted"}:
+        return raw
+    if raw in {"active", "reopened"}:
+        return "open"
+    return "unknown"
+
+
+def _ticket_is_deleted(row: Optional[Dict[str, Any]]) -> bool:
+    return _ticket_status_from_row(row) == "deleted"
+
+
+def _ticket_is_closed_or_stale_closed(channel: discord.TextChannel, row: Optional[Dict[str, Any]]) -> bool:
+    status = _ticket_status_from_row(row)
+    return status == "closed" or _channel_looks_closed(channel)
+
+
+def _ticket_is_open_like(channel: discord.TextChannel, row: Optional[Dict[str, Any]]) -> bool:
+    status = _ticket_status_from_row(row)
+    if status in {"open", "claimed"} and not _channel_looks_closed(channel):
+        return True
+    return False
+
+
+def _open_panel_state_error(channel: discord.TextChannel, row: Optional[Dict[str, Any]]) -> str:
+    status = _ticket_status_from_row(row)
+    if status == "deleted":
+        return "❌ This ticket is already deleted."
+    if _ticket_is_closed_or_stale_closed(channel, row):
+        return "❌ These are stale open-ticket controls. Use the closed-ticket controls instead."
+    return "❌ This ticket is not in an active state for that action."
 
 
 async def _safe_defer(interaction: discord.Interaction) -> None:
@@ -1616,6 +1658,12 @@ class TransferTicketModal(discord.ui.Modal, title="Transfer Ticket"):
 
             await _safe_defer(interaction)
 
+            row = await _ticket_row_for_channel(channel)
+            if _ticket_is_deleted(row):
+                return await _safe_followup(interaction, "❌ This ticket is deleted.")
+            if _ticket_is_closed_or_stale_closed(channel, row):
+                return await _safe_followup(interaction, "❌ Closed tickets cannot be transferred. Reopen it first.")
+
             target_id = _extract_user_id_from_text(str(self.target_user.value or ""))
             if target_id <= 0:
                 return await _safe_followup(interaction, "Could not parse that user ID or mention.")
@@ -1633,7 +1681,6 @@ class TransferTicketModal(discord.ui.Modal, title="Transfer Ticket"):
             if not _is_staff_member(target_member):
                 return await _safe_followup(interaction, "That member is not staff.")
 
-            row = await _ticket_row_for_channel(channel)
             claimed_by_id = _claimed_by_id_from_row(row)
 
             if claimed_by_id == int(target_member.id):
@@ -1692,6 +1739,12 @@ class SetPriorityModal(discord.ui.Modal, title="Set Ticket Priority"):
                 return await _safe_followup(interaction, "Only staff can change ticket priority.")
 
             await _safe_defer(interaction)
+
+            row = await _ticket_row_for_channel(channel)
+            if _ticket_is_deleted(row):
+                return await _safe_followup(interaction, "❌ This ticket is deleted.")
+            if _ticket_is_closed_or_stale_closed(channel, row):
+                return await _safe_followup(interaction, "❌ Closed tickets cannot have priority changed. Reopen it first.")
 
             priority_value = str(self.priority.value or "").strip().lower()
             if priority_value not in VALID_PRIORITIES:
@@ -1758,6 +1811,10 @@ class AddInternalNoteModal(discord.ui.Modal, title="Add Internal Note"):
                 return await _safe_followup(interaction, "Only staff can add internal notes.")
 
             await _safe_defer(interaction)
+
+            row = await _ticket_row_for_channel(channel)
+            if _ticket_is_deleted(row):
+                return await _safe_followup(interaction, "❌ This ticket is deleted.")
 
             note_text = _normalize_multiline_text(str(self.note_body.value or ""))
             if not note_text:
@@ -1851,6 +1908,12 @@ class MacroSelect(discord.ui.Select):
 
             if not _is_staff_member(actor):
                 return await _safe_followup(interaction, "Only staff can use ticket macros.")
+
+            row = await _ticket_row_for_channel(channel)
+            if _ticket_is_deleted(row):
+                return await _safe_followup(interaction, "❌ This ticket is deleted.")
+            if _ticket_is_closed_or_stale_closed(channel, row):
+                return await _safe_followup(interaction, "❌ These are stale open-ticket controls. Closed tickets cannot send macros.")
 
             slug = str(self.values[0] if self.values else "").strip()
             if not slug or slug == "__none__":
@@ -1954,6 +2017,9 @@ class TicketChannelActionsView(discord.ui.View):
         await _safe_defer(interaction)
 
         row = await _ticket_row_for_channel(channel)
+        if not _ticket_is_open_like(channel, row):
+            return await _safe_followup(interaction, _open_panel_state_error(channel, row))
+
         claimed_by_id = _claimed_by_id_from_row(row)
 
         _debug(
@@ -2022,6 +2088,9 @@ class TicketChannelActionsView(discord.ui.View):
         await _safe_defer(interaction)
 
         row = await _ticket_row_for_channel(channel)
+        if not _ticket_is_open_like(channel, row):
+            return await _safe_followup(interaction, _open_panel_state_error(channel, row))
+
         claimed_by_id = _claimed_by_id_from_row(row)
 
         _debug(
@@ -2065,6 +2134,10 @@ class TicketChannelActionsView(discord.ui.View):
         if not _is_staff_member(member):
             return await _safe_followup(interaction, "Only staff can transfer tickets.")
 
+        row = await _ticket_row_for_channel(channel)
+        if not _ticket_is_open_like(channel, row):
+            return await _safe_followup(interaction, _open_panel_state_error(channel, row))
+
         _debug(
             f"transfer modal-open guild={member.guild.id if member.guild else 0} "
             f"user={member.id} channel={channel.id}"
@@ -2100,6 +2173,9 @@ class TicketChannelActionsView(discord.ui.View):
             return await _safe_followup(interaction, "Only staff can change ticket priority.")
 
         row = await _ticket_row_for_channel(channel)
+        if not _ticket_is_open_like(channel, row):
+            return await _safe_followup(interaction, _open_panel_state_error(channel, row))
+
         current_priority = _priority_from_row(row)
 
         _debug(
@@ -2135,6 +2211,10 @@ class TicketChannelActionsView(discord.ui.View):
 
         if not _is_staff_member(member):
             return await _safe_followup(interaction, "Only staff can add internal notes.")
+
+        row = await _ticket_row_for_channel(channel)
+        if _ticket_is_deleted(row):
+            return await _safe_followup(interaction, "❌ This ticket is deleted.")
 
         _debug(
             f"note modal-open guild={member.guild.id if member.guild else 0} "
@@ -2172,6 +2252,10 @@ class TicketChannelActionsView(discord.ui.View):
 
         await _safe_defer(interaction)
 
+        row = await _ticket_row_for_channel(channel)
+        if _ticket_is_deleted(row):
+            return await _safe_followup(interaction, "❌ This ticket is deleted.")
+
         notes = await list_internal_notes(channel_id=channel.id, limit=8)
         content = _format_notes_for_display(notes)
 
@@ -2207,6 +2291,10 @@ class TicketChannelActionsView(discord.ui.View):
 
         await _safe_defer(interaction)
 
+        row = await _ticket_row_for_channel(channel)
+        if _ticket_is_deleted(row):
+            return await _safe_followup(interaction, "❌ This ticket is deleted.")
+
         content = await format_available_macros_for_ticket(
             channel=channel,
             limit=_MACRO_OPTION_LIMIT,
@@ -2241,6 +2329,10 @@ class TicketChannelActionsView(discord.ui.View):
 
         if not _is_staff_member(member):
             return await _safe_followup(interaction, "Only staff can use ticket macros.")
+
+        row = await _ticket_row_for_channel(channel)
+        if not _ticket_is_open_like(channel, row):
+            return await _safe_followup(interaction, _open_panel_state_error(channel, row))
 
         try:
             macro_rows = await list_available_macros_for_ticket(channel=channel)
@@ -2321,10 +2413,11 @@ class TicketChannelActionsView(discord.ui.View):
                 "Only the ticket owner or staff can close this ticket.",
             )
 
-        try:
-            await _safe_defer(interaction)
-        except Exception:
-            pass
+        await _safe_defer(interaction)
+
+        row = await _ticket_row_for_channel(channel)
+        if not _ticket_is_open_like(channel, row):
+            return await _safe_followup(interaction, _open_panel_state_error(channel, row))
 
         try:
             await prompt_ticket_close_confirmation(
