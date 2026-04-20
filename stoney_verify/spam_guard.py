@@ -19,14 +19,15 @@ from .globals import *  # noqa: F401,F403
 # - /spam_guard opens a full control panel
 # - toggle on/off
 # - mode select: log_only / delete_only / timeout / quarantine / kick / ban
-# - allow invite-posting roles
-# - exempt roles
+# - invite-allowed roles
+# - fully exempt roles
 # - exempt users
 # - allowed channels
 # - allowed invite codes
 # - external-invites-only toggle
+# - allow-server-invites toggle
 # - apply-to-verified toggle
-# - threshold modal
+# - thresholds modal
 # - action/settings modal
 # - list modal
 # - runtime works immediately
@@ -34,7 +35,7 @@ from .globals import *  # noqa: F401,F403
 # ============================================================
 
 GUILD_SECURITY_SETTINGS_TABLE = "guild_security_settings"
-SPAM_PANEL_FOOTER = "stoney_verify:spam_guard_panel:v2"
+SPAM_PANEL_FOOTER = "stoney_verify:spam_guard_panel:v3"
 
 INVITE_RE = re.compile(
     r"(?:https?://)?(?:www\.)?(?:discord(?:app)?\.com/invite|discord\.gg)/([A-Za-z0-9-]+)",
@@ -146,6 +147,7 @@ def _is_staffish(member: Optional[discord.Member]) -> bool:
             return True
         if member.guild_permissions.manage_messages:
             return True
+
         staff_role_id = int(STAFF_ROLE_ID or 0)
         if staff_role_id > 0:
             return any(int(r.id) == staff_role_id for r in (member.roles or []))
@@ -158,6 +160,7 @@ def _is_verifiedish(member: Optional[discord.Member]) -> bool:
     try:
         if not isinstance(member, discord.Member):
             return False
+
         verified_ids = [
             int(VERIFIED_ROLE_ID or 0),
             int(RESIDENT_ROLE_ID or 0),
@@ -167,6 +170,7 @@ def _is_verifiedish(member: Optional[discord.Member]) -> bool:
         wanted = {rid for rid in verified_ids if rid > 0}
         if not wanted:
             return False
+
         return any(int(r.id) in wanted for r in (member.roles or []))
     except Exception:
         return False
@@ -175,8 +179,9 @@ def _is_verifiedish(member: Optional[discord.Member]) -> bool:
 def _normalize_id_list(values: Any, *, limit: int = 50) -> List[str]:
     out: List[str] = []
     try:
+        source: List[Any]
         if isinstance(values, list):
-            source = values
+            source = list(values)
         elif values is None:
             source = []
         else:
@@ -184,9 +189,31 @@ def _normalize_id_list(values: Any, *, limit: int = 50) -> List[str]:
 
         for raw in source:
             text = _safe_str(raw)
-            if not text:
+            if not text or not text.isdigit():
                 continue
-            if not text.isdigit():
+            if text not in out:
+                out.append(text)
+            if len(out) >= limit:
+                break
+    except Exception:
+        pass
+    return out
+
+
+def _normalize_code_list(values: Any, *, limit: int = 50) -> List[str]:
+    out: List[str] = []
+    try:
+        source: List[Any]
+        if isinstance(values, list):
+            source = list(values)
+        elif values is None:
+            source = []
+        else:
+            source = [values]
+
+        for raw in source:
+            text = _safe_str(raw).lower()
+            if not text:
                 continue
             if text not in out:
                 out.append(text)
@@ -217,7 +244,7 @@ def _parse_csvish_codes(text: str, *, limit: int = 50) -> List[str]:
         code = code.replace("https://discord.gg/", "").replace("http://discord.gg/", "")
         code = code.replace("https://discord.com/invite/", "").replace("http://discord.com/invite/", "")
         code = code.replace("https://discordapp.com/invite/", "").replace("http://discordapp.com/invite/", "")
-        code = code.strip()
+        code = code.strip().lower()
         if not code:
             continue
         if code not in out:
@@ -228,48 +255,45 @@ def _parse_csvish_codes(text: str, *, limit: int = 50) -> List[str]:
 
 
 def _format_role_list(guild: discord.Guild, ids: List[str], *, max_items: int = 8) -> str:
-    names: List[str] = []
+    items: List[str] = []
     for rid in ids[:max_items]:
         try:
             role = guild.get_role(int(rid))
-            names.append(role.mention if isinstance(role, discord.Role) else f"`{rid}`")
+            items.append(role.mention if isinstance(role, discord.Role) else f"`{rid}`")
         except Exception:
-            names.append(f"`{rid}`")
-    if not names:
+            items.append(f"`{rid}`")
+    if not items:
         return "—"
     extra = f" +{len(ids) - max_items} more" if len(ids) > max_items else ""
-    return ", ".join(names) + extra
+    return ", ".join(items) + extra
 
 
 def _format_channel_list(guild: discord.Guild, ids: List[str], *, max_items: int = 8) -> str:
-    names: List[str] = []
+    items: List[str] = []
     for cid in ids[:max_items]:
         try:
             ch = guild.get_channel(int(cid))
-            names.append(ch.mention if isinstance(ch, discord.abc.GuildChannel) else f"`{cid}`")
+            items.append(ch.mention if isinstance(ch, discord.abc.GuildChannel) else f"`{cid}`")
         except Exception:
-            names.append(f"`{cid}`")
-    if not names:
+            items.append(f"`{cid}`")
+    if not items:
         return "—"
     extra = f" +{len(ids) - max_items} more" if len(ids) > max_items else ""
-    return ", ".join(names) + extra
+    return ", ".join(items) + extra
 
 
 def _format_user_list(guild: discord.Guild, ids: List[str], *, max_items: int = 8) -> str:
-    labels: List[str] = []
+    items: List[str] = []
     for uid in ids[:max_items]:
         try:
             member = guild.get_member(int(uid))
-            if isinstance(member, discord.Member):
-                labels.append(f"{member.mention}")
-            else:
-                labels.append(f"`{uid}`")
+            items.append(member.mention if isinstance(member, discord.Member) else f"`{uid}`")
         except Exception:
-            labels.append(f"`{uid}`")
-    if not labels:
+            items.append(f"`{uid}`")
+    if not items:
         return "—"
     extra = f" +{len(ids) - max_items} more" if len(ids) > max_items else ""
-    return ", ".join(labels) + extra
+    return ", ".join(items) + extra
 
 
 def _normalize_mode(value: Any, default: str = "timeout") -> str:
@@ -299,7 +323,7 @@ def _normalize_message_content(content: str) -> str:
 
 def _extract_invite_codes(content: str) -> List[str]:
     try:
-        return list(dict.fromkeys([code.strip() for code in INVITE_RE.findall(content or "") if code.strip()]))
+        return list(dict.fromkeys([code.strip().lower() for code in INVITE_RE.findall(content or "") if code.strip()]))
     except Exception:
         return []
 
@@ -334,6 +358,10 @@ async def _ensure_staff_panel_access(interaction: discord.Interaction) -> bool:
         return False
     return True
 
+
+# ============================================================
+# Settings defaults / normalization
+# ============================================================
 
 def _default_settings(guild_id: int) -> Dict[str, Any]:
     return {
@@ -379,23 +407,50 @@ def _normalize_settings(guild_id: int, row: Optional[Dict[str, Any]]) -> Dict[st
         row.get("spam_allow_server_invites", row.get("allow_server_invites")),
         base["allow_server_invites"],
     )
-    base["window_seconds"] = max(5, min(60, _safe_int(row.get("spam_window_seconds", row.get("window_seconds")), base["window_seconds"])))
-    base["message_threshold"] = max(3, min(20, _safe_int(row.get("spam_message_threshold", row.get("message_threshold")), base["message_threshold"])))
-    base["duplicate_threshold"] = max(2, min(12, _safe_int(row.get("spam_duplicate_threshold", row.get("duplicate_threshold")), base["duplicate_threshold"])))
-    base["invite_threshold"] = max(1, min(12, _safe_int(row.get("spam_invite_threshold", row.get("invite_threshold")), base["invite_threshold"])))
-    base["multi_invite_immediate"] = max(2, min(8, _safe_int(row.get("spam_multi_invite_immediate", row.get("multi_invite_immediate")), base["multi_invite_immediate"])))
-    base["delete_history"] = max(1, min(30, _safe_int(row.get("spam_delete_history", row.get("delete_history")), base["delete_history"])))
-    base["timeout_minutes"] = max(1, min(1440, _safe_int(row.get("spam_timeout_minutes", row.get("timeout_minutes")), base["timeout_minutes"])))
-    base["cooldown_seconds"] = max(5, min(300, _safe_int(row.get("spam_cooldown_seconds", row.get("cooldown_seconds")), base["cooldown_seconds"])))
+    base["window_seconds"] = max(
+        5,
+        min(60, _safe_int(row.get("spam_window_seconds", row.get("window_seconds")), base["window_seconds"])),
+    )
+    base["message_threshold"] = max(
+        3,
+        min(20, _safe_int(row.get("spam_message_threshold", row.get("message_threshold")), base["message_threshold"])),
+    )
+    base["duplicate_threshold"] = max(
+        2,
+        min(12, _safe_int(row.get("spam_duplicate_threshold", row.get("duplicate_threshold")), base["duplicate_threshold"])),
+    )
+    base["invite_threshold"] = max(
+        1,
+        min(12, _safe_int(row.get("spam_invite_threshold", row.get("invite_threshold")), base["invite_threshold"])),
+    )
+    base["multi_invite_immediate"] = max(
+        2,
+        min(8, _safe_int(row.get("spam_multi_invite_immediate", row.get("multi_invite_immediate")), base["multi_invite_immediate"])),
+    )
+    base["delete_history"] = max(
+        1,
+        min(30, _safe_int(row.get("spam_delete_history", row.get("delete_history")), base["delete_history"])),
+    )
+    base["timeout_minutes"] = max(
+        1,
+        min(1440, _safe_int(row.get("spam_timeout_minutes", row.get("timeout_minutes")), base["timeout_minutes"])),
+    )
+    base["cooldown_seconds"] = max(
+        5,
+        min(300, _safe_int(row.get("spam_cooldown_seconds", row.get("cooldown_seconds")), base["cooldown_seconds"])),
+    )
     base["quarantine_role_id"] = _safe_str(row.get("spam_quarantine_role_id", row.get("quarantine_role_id")))
 
     base["exempt_role_ids"] = _normalize_id_list(row.get("spam_exempt_role_ids", row.get("exempt_role_ids")))
-    base["invite_allowed_role_ids"] = _normalize_id_list(row.get("spam_invite_allowed_role_ids", row.get("invite_allowed_role_ids")))
+    base["invite_allowed_role_ids"] = _normalize_id_list(
+        row.get("spam_invite_allowed_role_ids", row.get("invite_allowed_role_ids"))
+    )
     base["allowed_channel_ids"] = _normalize_id_list(row.get("spam_allowed_channel_ids", row.get("allowed_channel_ids")))
     base["exempt_user_ids"] = _normalize_id_list(row.get("spam_exempt_user_ids", row.get("exempt_user_ids")))
+
     raw_codes = row.get("spam_allowed_invite_codes", row.get("allowed_invite_codes"))
     if isinstance(raw_codes, list):
-        base["allowed_invite_codes"] = [str(x).strip() for x in raw_codes if str(x).strip()]
+        base["allowed_invite_codes"] = _normalize_code_list(raw_codes)
     else:
         base["allowed_invite_codes"] = _parse_csvish_codes(str(raw_codes or ""))
 
@@ -479,8 +534,10 @@ def _upsert_settings_sync(payload: Dict[str, Any]) -> bool:
         if _is_table_missing_error(e):
             _SETTINGS_TABLE_AVAILABLE = False
             return False
-        # schema mismatch or missing columns -> runtime only fallback
+
+        # If the table exists but columns are missing, fall back to runtime-only
         _SETTINGS_TABLE_AVAILABLE = False
+        _debug(f"settings upsert runtime fallback error={repr(e)}")
         return False
 
 
@@ -537,7 +594,12 @@ async def save_spam_settings(
 # Panel rendering
 # ============================================================
 
-def _build_panel_embed(guild: discord.Guild, settings: Dict[str, Any], *, persisted_hint: Optional[bool] = None) -> discord.Embed:
+def _build_panel_embed(
+    guild: discord.Guild,
+    settings: Dict[str, Any],
+    *,
+    persisted_hint: Optional[bool] = None,
+) -> discord.Embed:
     enabled = bool(settings["enabled"])
     mode = _safe_str(settings["mode"])
     persistence = (
@@ -577,7 +639,7 @@ def _build_panel_embed(guild: discord.Guild, settings: Dict[str, Any], *, persis
         inline=True,
     )
     embed.add_field(
-        name="Actions",
+        name="Action Controls",
         value=(
             f"timeout=`{int(settings['timeout_minutes'])}m`\n"
             f"delete_history=`{int(settings['delete_history'])}`\n"
@@ -603,7 +665,6 @@ def _build_panel_embed(guild: discord.Guild, settings: Dict[str, Any], *, persis
         ),
         inline=False,
     )
-
     embed.add_field(
         name="Invite Allowed Roles",
         value=_format_role_list(guild, list(settings.get("invite_allowed_role_ids") or [])),
@@ -691,9 +752,9 @@ async def _fetch_guild_invite_codes(guild: discord.Guild) -> Set[str]:
     try:
         invites = await guild.invites()
         for inv in invites:
-            code = _safe_str(getattr(inv, "code", ""))
+            code = _safe_str(getattr(inv, "code", "")).lower()
             if code:
-                codes.add(code.lower())
+                codes.add(code)
     except Exception:
         pass
 
@@ -713,7 +774,6 @@ def _state_for_user(guild_id: int, user_id: int) -> Dict[str, Any]:
     found = _MESSAGE_WINDOWS.get(key)
     if found is None:
         found = {
-            "timestamps": deque(maxlen=80),
             "messages": deque(maxlen=40),
             "last_action_at": 0.0,
         }
@@ -723,14 +783,6 @@ def _state_for_user(guild_id: int, user_id: int) -> Dict[str, Any]:
 
 def _cleanup_state(state: Dict[str, Any], *, now_mono: float, keep_seconds: int) -> None:
     cutoff = float(now_mono) - float(keep_seconds)
-
-    timestamps = state.get("timestamps")
-    if not isinstance(timestamps, deque):
-        timestamps = deque(maxlen=80)
-        state["timestamps"] = timestamps
-
-    while timestamps and float(timestamps[0]) < cutoff:
-        timestamps.popleft()
 
     messages = state.get("messages")
     if not isinstance(messages, deque):
@@ -986,24 +1038,20 @@ async def handle_incoming_spam_message(message: discord.Message) -> bool:
         if bool(settings.get("allow_server_invites", True)) and invite_codes:
             guild_invite_codes = await _fetch_guild_invite_codes(guild)
 
-        blocked_invite_codes = []
-        if invite_codes:
-            for code in invite_codes:
-                code_lower = code.lower()
-                allowed = False
+        blocked_invite_codes: List[str] = []
+        for code in invite_codes:
+            allowed = False
+            if code in allowed_invite_codes:
+                allowed = True
+            if bool(settings.get("allow_server_invites", True)) and code in guild_invite_codes:
+                allowed = True
 
-                if code_lower in allowed_invite_codes:
-                    allowed = True
-                if bool(settings.get("allow_server_invites", True)) and code_lower in guild_invite_codes:
-                    allowed = True
-
-                if bool(settings.get("block_external_invites_only", True)):
-                    if not allowed:
-                        blocked_invite_codes.append(code)
-                else:
-                    # block all invite codes unless manually allowed
-                    if not allowed:
-                        blocked_invite_codes.append(code)
+            if bool(settings.get("block_external_invites_only", True)):
+                if not allowed:
+                    blocked_invite_codes.append(code)
+            else:
+                if not allowed:
+                    blocked_invite_codes.append(code)
 
         now_mono = time.monotonic()
         state_key = f"spam:{guild.id}:{member.id}"
@@ -1016,10 +1064,7 @@ async def handle_incoming_spam_message(message: discord.Message) -> bool:
                 keep_seconds=max(15, int(settings["window_seconds"]) * 4),
             )
 
-            timestamps: Deque[float] = state["timestamps"]
             messages: Deque[Dict[str, Any]] = state["messages"]
-
-            timestamps.append(now_mono)
 
             content_norm = _normalize_message_content(message.content or "")
             messages.append(
@@ -1039,6 +1084,7 @@ async def handle_incoming_spam_message(message: discord.Message) -> bool:
                 row for row in list(messages)
                 if float(row.get("ts", 0.0) or 0.0) >= recent_cutoff
             ]
+
             recent_count = len(recent_messages)
             duplicate_count = 0
             if content_norm:
@@ -1047,15 +1093,25 @@ async def handle_incoming_spam_message(message: discord.Message) -> bool:
                     if str(row.get("norm") or "") == content_norm
                 )
 
-            blocked_invite_recent_count = sum(int(row.get("blocked_invites", 0) or 0) > 0 for row in recent_messages)
+            blocked_invite_recent_count = sum(
+                1 for row in recent_messages
+                if int(row.get("blocked_invites", 0) or 0) > 0
+            )
             total_blocked_invites = sum(int(row.get("blocked_invites", 0) or 0) for row in recent_messages)
-            channel_count = len({int(row.get("channel_id", 0) or 0) for row in recent_messages if int(row.get("channel_id", 0) or 0) > 0})
+            channel_count = len(
+                {
+                    int(row.get("channel_id", 0) or 0)
+                    for row in recent_messages
+                    if int(row.get("channel_id", 0) or 0) > 0
+                }
+            )
             mention_everyone_count = sum(1 for row in recent_messages if bool(row.get("mention_everyone")))
 
             should_fire = False
             reasons: List[str] = []
 
-            # invite-specific rules
+            # Invite-specific rules. Invite-allowed roles and allowed channels
+            # bypass invite-link enforcement only, not generic spam floods.
             if not invite_role_bypass and not channel_bypass:
                 if len(blocked_invite_codes) >= int(settings["multi_invite_immediate"]):
                     should_fire = True
@@ -1073,7 +1129,7 @@ async def handle_incoming_spam_message(message: discord.Message) -> bool:
                         f"`{recent_count}` messages inside `{int(settings['window_seconds'])}s` and current message contained a blocked invite"
                     )
 
-            # generic hacked-account flood behavior
+            # Generic hacked-account style flood behavior
             if duplicate_count >= int(settings["duplicate_threshold"]) and recent_count >= 3:
                 should_fire = True
                 reasons.append(
@@ -1082,9 +1138,7 @@ async def handle_incoming_spam_message(message: discord.Message) -> bool:
 
             if channel_count >= 3 and recent_count >= int(settings["message_threshold"]):
                 should_fire = True
-                reasons.append(
-                    f"rapid posting across `{channel_count}` channels"
-                )
+                reasons.append(f"rapid posting across `{channel_count}` channels")
 
             if mention_everyone_count >= 2:
                 should_fire = True
@@ -1100,8 +1154,6 @@ async def handle_incoming_spam_message(message: discord.Message) -> bool:
             state["last_action_at"] = now_mono
 
             delete_count = 0
-            action_taken = "log-only"
-
             if _normalize_mode(settings.get("mode")) in {"delete_only", "timeout", "quarantine", "kick", "ban"}:
                 delete_count = await _delete_recent_messages(
                     guild=guild,
@@ -1197,11 +1249,11 @@ class SpamThresholdsModal(discord.ui.Modal, title="Spam Guard Thresholds"):
             settings, persisted = await save_spam_settings(
                 self.guild_id,
                 {
-                    "window_seconds": int(str(self.window_seconds)),
-                    "message_threshold": int(str(self.message_threshold)),
-                    "duplicate_threshold": int(str(self.duplicate_threshold)),
-                    "invite_threshold": int(str(self.invite_threshold)),
-                    "multi_invite_immediate": int(str(self.multi_invite_immediate)),
+                    "window_seconds": int(_safe_str(self.window_seconds.value)),
+                    "message_threshold": int(_safe_str(self.message_threshold.value)),
+                    "duplicate_threshold": int(_safe_str(self.duplicate_threshold.value)),
+                    "invite_threshold": int(_safe_str(self.invite_threshold.value)),
+                    "multi_invite_immediate": int(_safe_str(self.multi_invite_immediate.value)),
                 },
                 updated_by=interaction.user if isinstance(interaction.user, discord.Member) else None,
             )
@@ -1274,11 +1326,11 @@ class SpamActionSettingsModal(discord.ui.Modal, title="Spam Guard Action Setting
             settings, persisted = await save_spam_settings(
                 self.guild_id,
                 {
-                    "timeout_minutes": int(str(self.timeout_minutes)),
-                    "delete_history": int(str(self.delete_history)),
-                    "cooldown_seconds": int(str(self.cooldown_seconds)),
-                    "quarantine_role_id": _safe_str(str(self.quarantine_role_id)),
-                    "allowed_invite_codes": _parse_csvish_codes(str(self.allowed_invite_codes)),
+                    "timeout_minutes": int(_safe_str(self.timeout_minutes.value)),
+                    "delete_history": int(_safe_str(self.delete_history.value)),
+                    "cooldown_seconds": int(_safe_str(self.cooldown_seconds.value)),
+                    "quarantine_role_id": _safe_str(self.quarantine_role_id.value),
+                    "allowed_invite_codes": _parse_csvish_codes(_safe_str(self.allowed_invite_codes.value)),
                 },
                 updated_by=interaction.user if isinstance(interaction.user, discord.Member) else None,
             )
@@ -1331,8 +1383,8 @@ class SpamListsModal(discord.ui.Modal, title="Spam Guard Lists"):
             settings, persisted = await save_spam_settings(
                 self.guild_id,
                 {
-                    "allowed_channel_ids": _parse_csvish_ids(str(self.allowed_channel_ids)),
-                    "exempt_user_ids": _parse_csvish_ids(str(self.exempt_user_ids)),
+                    "allowed_channel_ids": _parse_csvish_ids(_safe_str(self.allowed_channel_ids.value)),
+                    "exempt_user_ids": _parse_csvish_ids(_safe_str(self.exempt_user_ids.value)),
                 },
                 updated_by=interaction.user if isinstance(interaction.user, discord.Member) else None,
             )
@@ -1360,7 +1412,7 @@ class SpamModeSelect(discord.ui.Select):
     def __init__(self):
         options = [
             discord.SelectOption(label="Log Only", value="log_only", description="Only log incidents"),
-            discord.SelectOption(label="Delete Only", value="delete_only", description="Delete spam, no punishment"),
+            discord.SelectOption(label="Delete Only", value="delete_only", description="Delete spam only"),
             discord.SelectOption(label="Timeout", value="timeout", description="Delete spam and timeout"),
             discord.SelectOption(label="Quarantine", value="quarantine", description="Delete spam and add quarantine role"),
             discord.SelectOption(label="Kick", value="kick", description="Delete spam and kick"),
@@ -1382,12 +1434,11 @@ class SpamModeSelect(discord.ui.Select):
             return await _reply_ephemeral(interaction, "Invalid context.")
 
         new_mode = _normalize_mode(self.values[0], "timeout")
-        settings, persisted = await save_spam_settings(
+        _, persisted = await save_spam_settings(
             interaction.guild.id,
             {"mode": new_mode},
             updated_by=interaction.user if isinstance(interaction.user, discord.Member) else None,
         )
-        _ = settings
         await _refresh_panel_message(
             guild=interaction.guild,
             channel=interaction.channel,
@@ -1413,12 +1464,11 @@ class SpamInviteAllowedRolesSelect(discord.ui.RoleSelect):
         if interaction.guild is None or not isinstance(interaction.channel, discord.TextChannel) or interaction.message is None:
             return await _reply_ephemeral(interaction, "Invalid context.")
 
-        settings, persisted = await save_spam_settings(
+        _, persisted = await save_spam_settings(
             interaction.guild.id,
             {"invite_allowed_role_ids": [str(role.id) for role in self.values]},
             updated_by=interaction.user if isinstance(interaction.user, discord.Member) else None,
         )
-        _ = settings
         await _refresh_panel_message(
             guild=interaction.guild,
             channel=interaction.channel,
@@ -1444,12 +1494,11 @@ class SpamExemptRolesSelect(discord.ui.RoleSelect):
         if interaction.guild is None or not isinstance(interaction.channel, discord.TextChannel) or interaction.message is None:
             return await _reply_ephemeral(interaction, "Invalid context.")
 
-        settings, persisted = await save_spam_settings(
+        _, persisted = await save_spam_settings(
             interaction.guild.id,
             {"exempt_role_ids": [str(role.id) for role in self.values]},
             updated_by=interaction.user if isinstance(interaction.user, discord.Member) else None,
         )
-        _ = settings
         await _refresh_panel_message(
             guild=interaction.guild,
             channel=interaction.channel,
@@ -1481,12 +1530,11 @@ class SpamGuardPanelView(discord.ui.View):
 
         current = await get_spam_settings(interaction.guild.id)
         new_value = not bool(current["enabled"])
-        settings, persisted = await save_spam_settings(
+        _, persisted = await save_spam_settings(
             interaction.guild.id,
             {"enabled": new_value},
             updated_by=interaction.user if isinstance(interaction.user, discord.Member) else None,
         )
-        _ = settings
         await _refresh_panel_message(
             guild=interaction.guild,
             channel=interaction.channel,
@@ -1510,12 +1558,11 @@ class SpamGuardPanelView(discord.ui.View):
 
         current = await get_spam_settings(interaction.guild.id)
         new_value = not bool(current["block_external_invites_only"])
-        settings, persisted = await save_spam_settings(
+        _, persisted = await save_spam_settings(
             interaction.guild.id,
             {"block_external_invites_only": new_value},
             updated_by=interaction.user if isinstance(interaction.user, discord.Member) else None,
         )
-        _ = settings
         await _refresh_panel_message(
             guild=interaction.guild,
             channel=interaction.channel,
@@ -1523,6 +1570,34 @@ class SpamGuardPanelView(discord.ui.View):
             persisted_hint=persisted,
         )
         await _reply_ephemeral(interaction, f"✅ External-only invite blocking set to `{new_value}`.")
+
+    @discord.ui.button(
+        label="Toggle Allow Server Invites",
+        style=discord.ButtonStyle.secondary,
+        custom_id="spamguard:toggle_server_invites",
+        row=0,
+    )
+    async def toggle_server_invites(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        if not await _ensure_staff_panel_access(interaction):
+            return
+        if interaction.guild is None or not isinstance(interaction.channel, discord.TextChannel) or interaction.message is None:
+            return await _reply_ephemeral(interaction, "Invalid context.")
+
+        current = await get_spam_settings(interaction.guild.id)
+        new_value = not bool(current["allow_server_invites"])
+        _, persisted = await save_spam_settings(
+            interaction.guild.id,
+            {"allow_server_invites": new_value},
+            updated_by=interaction.user if isinstance(interaction.user, discord.Member) else None,
+        )
+        await _refresh_panel_message(
+            guild=interaction.guild,
+            channel=interaction.channel,
+            message_id=interaction.message.id,
+            persisted_hint=persisted,
+        )
+        await _reply_ephemeral(interaction, f"✅ Allow-server-invites set to `{new_value}`.")
 
     @discord.ui.button(
         label="Toggle Verified Users",
@@ -1539,12 +1614,11 @@ class SpamGuardPanelView(discord.ui.View):
 
         current = await get_spam_settings(interaction.guild.id)
         new_value = not bool(current["apply_to_verified_users"])
-        settings, persisted = await save_spam_settings(
+        _, persisted = await save_spam_settings(
             interaction.guild.id,
             {"apply_to_verified_users": new_value},
             updated_by=interaction.user if isinstance(interaction.user, discord.Member) else None,
         )
-        _ = settings
         await _refresh_panel_message(
             guild=interaction.guild,
             channel=interaction.channel,
