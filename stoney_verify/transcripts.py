@@ -1404,7 +1404,14 @@ class TicketOpenActionsView(discord.ui.View):
                     closed = False
 
                 if not closed:
-                    return await _reply_ephemeral(interaction, "❌ Failed to close ticket.")
+                    actually_closed = False
+                    try:
+                        actually_closed = await _ticket_is_closed(channel)
+                    except Exception:
+                        actually_closed = False
+
+                    if not actually_closed:
+                        return await _reply_ephemeral(interaction, "❌ Failed to close ticket.")
 
                 try:
                     await _freeze_message_controls(
@@ -1489,10 +1496,17 @@ class TicketOpenActionsView(discord.ui.View):
                     closed_ok = False
 
                 if not closed_ok:
-                    return await _reply_ephemeral(
-                        interaction,
-                        "❌ Failed to move ticket into closed state before delete.",
-                    )
+                    actually_closed = False
+                    try:
+                        actually_closed = await _ticket_is_closed(channel)
+                    except Exception:
+                        actually_closed = False
+
+                    if not actually_closed:
+                        return await _reply_ephemeral(
+                            interaction,
+                            "❌ Failed to move ticket into closed state before delete.",
+                        )
 
                 try:
                     await _freeze_message_controls(
@@ -1820,7 +1834,14 @@ class ConfirmCloseTicketView(discord.ui.View):
                 closed = False
 
             if not closed:
-                return await _reply_ephemeral(interaction, "❌ Failed to close ticket.")
+                actually_closed = False
+                try:
+                    actually_closed = await _ticket_is_closed(channel)
+                except Exception:
+                    actually_closed = False
+
+                if not actually_closed:
+                    return await _reply_ephemeral(interaction, "❌ Failed to close ticket.")
 
             try:
                 await _freeze_message_controls(
