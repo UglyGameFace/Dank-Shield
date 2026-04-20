@@ -937,7 +937,7 @@ async def _apply_closed_permissions(
     try:
         await channel.edit(overwrites=overwrites, reason="Ticket closed; owner reply locked")
     except Exception as e:
-        print(f"⚠️ Failed applying closed permissions for {channel.id}:", repr(e))
+        print(f"⚠️ Failed applying closed permissions for {channel.id}: {repr(e)}")
 
 
 async def _apply_open_permissions(
@@ -959,7 +959,7 @@ async def _apply_open_permissions(
     try:
         await channel.edit(overwrites=overwrites, reason="Ticket reopened; owner reply restored")
     except Exception as e:
-        print(f"⚠️ Failed applying open permissions for {channel.id}:", repr(e))
+        print(f"⚠️ Failed applying open permissions for {channel.id}: {repr(e)}")
 
 
 def _member_has_role_id(member: discord.Member, role_id: int) -> bool:
@@ -1765,14 +1765,18 @@ async def mark_ticket_closed(
         if ticket_number is None:
             ticket_number = _parse_ticket_number_from_topic(channel)
 
-        ok = True
+        repo_close_ok = True
         if status_before != "closed":
-            ok = await repo_mark_ticket_closed(
-                channel_id=channel.id,
-                closed_by=getattr(closed_by, "id", None) if closed_by else None,
-                closed_by_name=_actor_name(closed_by),
-                reason=reason,
-            )
+            try:
+                repo_close_ok = await repo_mark_ticket_closed(
+                    channel_id=channel.id,
+                    closed_by=getattr(closed_by, "id", None) if closed_by else None,
+                    closed_by_name=_actor_name(closed_by),
+                    reason=reason,
+                )
+            except Exception as e:
+                print(f"⚠️ repo_mark_ticket_closed exception for {channel.id}: {repr(e)}")
+                repo_close_ok = False
 
         if ticket_number is not None:
             new_name = _format_ticket_channel_name(ticket_number, closed=True)
@@ -1780,11 +1784,14 @@ async def mark_ticket_closed(
                 if channel.name != new_name:
                     await channel.edit(name=new_name, reason="Ticket closed")
             except Exception as e:
-                print(f"⚠️ Failed renaming channel to {new_name}:", repr(e))
+                print(f"⚠️ Failed renaming channel to {new_name}: {repr(e)}")
 
         owner_member = await _resolve_owner_member_from_channel_or_row(channel, row_before)
 
-        await _apply_closed_permissions(channel, owner_member)
+        try:
+            await _apply_closed_permissions(channel, owner_member)
+        except Exception as e:
+            print(f"⚠️ Failed applying closed permissions for {channel.id}: {repr(e)}")
 
         try:
             await repo_safe_optional_update_by_channel_id(
@@ -1804,25 +1811,58 @@ async def mark_ticket_closed(
         except Exception:
             pass
 
-        if ok:
+        final_row = None
+        final_status = "unknown"
+        try:
+            final_row = await _ticket_row_for_channel_id(channel.id)
+            final_status = _ticket_status(final_row)
+        except Exception:
+            final_row = None
+            final_status = "unknown"
+
+        channel_looks_closed = False
+        try:
+            channel_looks_closed = str(channel.name or "").lower().startswith("closed-")
+        except Exception:
+            channel_looks_closed = False
+
+        final_ok = bool(
+            repo_close_ok
+            or final_status == "closed"
+            or channel_looks_closed
+        )
+
+        if final_ok:
             try:
-                ticket_row = await _ticket_row_for_channel_id(channel.id)
                 await log_ticket_closed(
                     guild_id=channel.guild.id,
                     actor_user_id=_actor_id(closed_by),
                     actor_name=_actor_name(closed_by),
                     channel_id=channel.id,
                     reason=reason,
-                    ticket_row=ticket_row,
+                    ticket_row=final_row,
                     metadata={
                         "channel_name_after_close": channel.name,
+                        "repo_close_ok": bool(repo_close_ok),
+                        "final_status": final_status,
+                        "channel_looks_closed": bool(channel_looks_closed),
                     },
                 )
             except Exception as e:
                 print(f"⚠️ Failed logging ticket_closed for {channel.id}: {repr(e)}")
 
-            print(f"✅ Ticket marked closed → #{channel.name} ({channel.id})")
-        return ok
+            print(
+                f"✅ Ticket marked closed → #{channel.name} ({channel.id}) "
+                f"[repo_close_ok={repo_close_ok} final_status={final_status}]"
+            )
+            return True
+
+        _service_debug(
+            f"close unresolved channel={channel.id} "
+            f"repo_close_ok={repo_close_ok} final_status={final_status} "
+            f"channel_name={channel.name!r}"
+        )
+        return False
 
 
 async def mark_ticket_deleted(
@@ -2451,7 +2491,7 @@ async def reopen_ticket_channel(
                 if channel.name != new_name:
                     await channel.edit(name=new_name, reason="Ticket reopened")
             except Exception as e:
-                print(f"⚠️ Failed renaming reopened ticket to {new_name}:", repr(e))
+                print(f"⚠️ Failed renaming reopened ticket to {new_name}: {repr(e)}")
 
         if owner is None:
             owner = await _resolve_owner_member_from_channel_or_row(channel, row_before)
