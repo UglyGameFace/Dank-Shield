@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 from typing import Any, Dict, List, Optional, Tuple
 
 import discord
@@ -121,9 +120,26 @@ def _safe_int(value: Any, default: int = 0) -> int:
 
 def _ticket_status(row: Optional[Dict[str, Any]]) -> str:
     try:
-        return _safe_str((row or {}).get("status"), "unknown").lower()
+        raw = _safe_str((row or {}).get("status"), "unknown").lower()
+        if raw in {"open", "claimed", "closed", "deleted"}:
+            return raw
     except Exception:
-        return "unknown"
+        pass
+    return "unknown"
+
+
+def _channel_looks_closed(channel: discord.TextChannel) -> bool:
+    try:
+        return _safe_str(channel.name).lower().startswith("closed-")
+    except Exception:
+        return False
+
+
+def _channel_looks_open(channel: discord.TextChannel) -> bool:
+    try:
+        return _safe_str(channel.name).lower().startswith("ticket-")
+    except Exception:
+        return False
 
 
 def _is_ticket_channel(channel: discord.TextChannel, row: Optional[Dict[str, Any]]) -> bool:
@@ -143,26 +159,35 @@ async def _ticket_row_for_channel(channel: discord.TextChannel) -> Optional[Dict
         return None
 
 
+async def _send_ephemeral(
+    interaction: discord.Interaction,
+    content: Optional[str] = None,
+    *,
+    embed: Optional[discord.Embed] = None,
+) -> None:
+    try:
+        if interaction.response.is_done():
+            await interaction.followup.send(content=content, embed=embed, ephemeral=True)
+        else:
+            await interaction.response.send_message(content=content, embed=embed, ephemeral=True)
+    except Exception:
+        pass
+
+
 async def _ensure_ticket_context(
     interaction: discord.Interaction,
     channel: Optional[discord.TextChannel] = None,
 ) -> Tuple[Optional[discord.TextChannel], Optional[Dict[str, Any]]]:
     ch = channel or interaction.channel
     if not isinstance(ch, discord.TextChannel):
-        await reply_once(
-            interaction,
-            {"content": "❌ Must be used in a ticket text channel.", "ephemeral": True},
-        )
+        await _send_ephemeral(interaction, "❌ Must be used in a ticket text channel.")
         return None, None
 
     row = await _ticket_row_for_channel(ch)
     if not _is_ticket_channel(ch, row):
-        await reply_once(
+        await _send_ephemeral(
             interaction,
-            {
-                "content": f"❌ `{ch.name}` is not recognized as a ticket channel.",
-                "ephemeral": True,
-            },
+            f"❌ `{ch.name}` is not recognized as a ticket channel.",
         )
         return None, None
 
@@ -283,6 +308,72 @@ async def _post_ticket_transcript(
         return True, None
     except Exception:
         return False, None
+
+
+async def _refresh_ticket_row(channel: discord.TextChannel) -> Optional[Dict[str, Any]]:
+    return await _ticket_row_for_channel(channel)
+
+
+async def _repair_closed_drift_for_delete(
+    *,
+    channel: discord.TextChannel,
+    row: Optional[Dict[str, Any]],
+    actor: Optional[discord.Member | discord.User],
+) -> Optional[Dict[str, Any]]:
+    status = _ticket_status(row)
+
+    if status == "deleted":
+        return row
+
+    if _channel_looks_closed(channel) and status in {"open", "claimed", "unknown"}:
+        if service_mark_ticket_closed is None:
+            return row
+
+        try:
+            await service_mark_ticket_closed(
+                channel=channel,
+                closed_by=actor,
+                reason="State repaired before delete",
+            )
+        except Exception:
+            return row
+
+        return await _refresh_ticket_row(channel)
+
+    return row
+
+
+async def _repair_open_drift_for_reopen(
+    *,
+    channel: discord.TextChannel,
+    row: Optional[Dict[str, Any]],
+    actor: Optional[discord.Member | discord.User],
+) -> Optional[Dict[str, Any]]:
+    status = _ticket_status(row)
+
+    if status == "deleted":
+        return row
+
+    if _channel_looks_open(channel) and status == "closed":
+        if service_reopen_ticket_channel is None:
+            return row
+
+        owner = await _owner_for_ticket(channel, row)
+        owner_member = owner if isinstance(owner, discord.Member) else None
+
+        try:
+            await service_reopen_ticket_channel(
+                channel=channel,
+                owner=owner_member,
+                actor=actor,
+                reason="State repaired before reopen check",
+            )
+        except Exception:
+            return row
+
+        return await _refresh_ticket_row(channel)
+
+    return row
 
 
 def register_ticket_admin_commands(bot, tree) -> None:
@@ -435,17 +526,17 @@ def register_ticket_admin_commands(bot, tree) -> None:
         if not _staff_check(interaction):
             return await interaction.response.send_message("❌ Staff only.", ephemeral=True)
 
+        await safe_defer(interaction, ephemeral=True)
+
         ch, row = await _ensure_ticket_context(interaction, channel)
         if ch is None:
             return
 
         if service_mark_ticket_closed is None:
-            return await reply_once(
-                interaction,
-                {"content": "❌ Ticket close service is unavailable.", "ephemeral": True},
+            return await interaction.followup.send(
+                "❌ Ticket close service is unavailable.",
+                ephemeral=True,
             )
-
-        await safe_defer(interaction, ephemeral=True)
 
         status = _ticket_status(row)
         if status == "deleted":
@@ -454,7 +545,7 @@ def register_ticket_admin_commands(bot, tree) -> None:
                 ephemeral=True,
             )
 
-        if status == "closed":
+        if status == "closed" and _channel_looks_closed(ch):
             return await interaction.followup.send(
                 f"ℹ️ {ch.mention} is already closed.",
                 ephemeral=True,
@@ -463,7 +554,7 @@ def register_ticket_admin_commands(bot, tree) -> None:
         guild = interaction.guild
         owner = await _owner_for_ticket(ch, row)
         actor_member = _actor_member(guild, interaction.user) or interaction.user
-        decision = (reason.strip() if reason else "STAFF CLOSED")
+        decision = reason.strip() if reason and reason.strip() else "STAFF CLOSED"
 
         await _cleanup_ticket_timer_state(ch.id)
 
@@ -496,7 +587,7 @@ def register_ticket_admin_commands(bot, tree) -> None:
             await ch.send(
                 f"🔒 Ticket closed by {interaction.user.mention}.\n"
                 f"**Reason:** {decision}\n"
-                f"Use `/ticket_reopen` if this needs to be reopened."
+                "Use `/ticket_reopen` if this needs to be reopened."
             )
         except Exception:
             pass
@@ -649,25 +740,34 @@ def register_ticket_admin_commands(bot, tree) -> None:
         reason: Optional[str] = None,
     ):
         if not _staff_check(interaction):
-            return await reply_once(interaction, {"content": "❌ Staff only.", "ephemeral": True})
+            return await interaction.response.send_message("❌ Staff only.", ephemeral=True)
+
+        await safe_defer(interaction, ephemeral=True)
 
         ch, row = await _ensure_ticket_context(interaction, channel)
         if ch is None:
             return
 
         if service_reopen_ticket_channel is None:
-            return await reply_once(interaction, {"content": "❌ Ticket reopen service is unavailable.", "ephemeral": True})
+            return await interaction.followup.send(
+                "❌ Ticket reopen service is unavailable.",
+                ephemeral=True,
+            )
 
-        await safe_defer(interaction, ephemeral=True)
-
+        row = await _repair_open_drift_for_reopen(
+            channel=ch,
+            row=row,
+            actor=interaction.user,
+        )
         status = _ticket_status(row)
+
         if status == "deleted":
             return await interaction.followup.send(
                 "❌ Deleted tickets cannot be reopened.",
                 ephemeral=True,
             )
 
-        if status in {"open", "claimed"}:
+        if status in {"open", "claimed"} and _channel_looks_open(ch):
             return await interaction.followup.send(
                 f"ℹ️ {ch.mention} is already open.",
                 ephemeral=True,
@@ -712,21 +812,39 @@ def register_ticket_admin_commands(bot, tree) -> None:
         reason: Optional[str] = None,
     ):
         if not _staff_check(interaction):
-            return await reply_once(interaction, {"content": "❌ Staff only.", "ephemeral": True})
+            return await interaction.response.send_message("❌ Staff only.", ephemeral=True)
+
+        await safe_defer(interaction, ephemeral=True)
 
         ch, row = await _ensure_ticket_context(interaction, channel)
         if ch is None:
             return
 
-        await safe_defer(interaction, ephemeral=True)
-
+        row = await _repair_closed_drift_for_delete(
+            channel=ch,
+            row=row,
+            actor=interaction.user,
+        )
         status = _ticket_status(row)
+
         if status == "deleted":
             return await interaction.followup.send("ℹ️ This ticket is already deleted.", ephemeral=True)
 
-        if status != "closed":
+        if status != "closed" and not _channel_looks_closed(ch):
             return await interaction.followup.send(
                 "❌ Ticket must be closed before deletion. Close it first, then delete it.",
+                ephemeral=True,
+            )
+
+        row = await _refresh_ticket_row(ch)
+        status = _ticket_status(row)
+
+        if status == "deleted":
+            return await interaction.followup.send("ℹ️ This ticket is already deleted.", ephemeral=True)
+
+        if status != "closed" and not _channel_looks_closed(ch):
+            return await interaction.followup.send(
+                "❌ Ticket is not in a valid closed state for deletion.",
                 ephemeral=True,
             )
 
@@ -834,13 +952,13 @@ def register_ticket_admin_commands(bot, tree) -> None:
         reason: Optional[str] = None,
     ):
         if not _staff_check(interaction):
-            return await reply_once(interaction, {"content": "❌ Staff only.", "ephemeral": True})
+            return await interaction.response.send_message("❌ Staff only.", ephemeral=True)
+
+        await safe_defer(interaction, ephemeral=True)
 
         ch, row = await _ensure_ticket_context(interaction, channel)
         if ch is None:
             return
-
-        await safe_defer(interaction, ephemeral=True)
 
         owner = await _owner_for_ticket(ch, row)
         actor_member = _actor_member(interaction.guild, interaction.user) or interaction.user
