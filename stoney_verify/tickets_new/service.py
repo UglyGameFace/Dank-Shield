@@ -1403,7 +1403,7 @@ async def create_ticket_channel(
                 except Exception:
                     pass
 
-                synced_row = await _sync_existing_open_ticket_channel(
+                await _sync_existing_open_ticket_channel(
                     channel=existing_channel,
                     owner=owner,
                     category=_safe_str(existing_row.get("category") or category),
@@ -1708,6 +1708,7 @@ async def mark_ticket_closed(
         ok = await repo_mark_ticket_closed(
             channel_id=channel.id,
             closed_by=getattr(closed_by, "id", None) if closed_by else None,
+            closed_by_name=_actor_name(closed_by),
             reason=reason,
         )
 
@@ -1781,6 +1782,7 @@ async def mark_ticket_deleted(
     ok = await repo_mark_ticket_deleted(
         channel_id=channel_id,
         deleted_by=getattr(deleted_by, "id", None) if deleted_by else None,
+        deleted_by_name=_actor_name(deleted_by),
         reason=reason or "Deleted",
     )
 
@@ -1834,6 +1836,7 @@ async def attach_transcript_to_ticket(
                 transcript_url=transcript_url,
                 transcript_message_id=transcript_message_id,
                 transcript_channel_id=transcript_channel_id,
+                actor=actor,
             )
             if ok:
                 try:
@@ -2262,6 +2265,7 @@ async def reopen_ticket(
     ok = await repo_reopen_ticket(
         channel_id=channel_id,
         reopened_by=getattr(actor, "id", None) if actor else None,
+        reopened_by_name=_actor_name(actor),
         reason=reason,
     )
     if ok:
