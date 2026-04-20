@@ -60,15 +60,25 @@ def _slugify(value: str) -> str:
         return ""
 
 
-def _normalize_keywords(value: str) -> List[str]:
+def _normalize_keywords(value: Any) -> List[str]:
     out: List[str] = []
+
     try:
-        for raw in str(value or "").split(","):
+        if isinstance(value, list):
+            raw_items = value
+        else:
+            raw_items = str(value or "").split(",")
+
+        for raw in raw_items:
             item = str(raw or "").strip().lower()
-            if item and item not in out:
+            item = re.sub(r"\s+", " ", item)
+            if not item:
+                continue
+            if item not in out:
                 out.append(item[:80])
     except Exception:
         pass
+
     return out[:25]
 
 
@@ -77,6 +87,12 @@ async def _run_blocking(fn, *args, **kwargs):
 
 
 def _normalize_category_row(row: Dict[str, Any]) -> Dict[str, Any]:
+    sort_order = row.get("sort_order")
+    try:
+        sort_order = int(sort_order) if sort_order is not None else None
+    except Exception:
+        sort_order = None
+
     return {
         "id": row.get("id"),
         "guild_id": _safe_str(row.get("guild_id")),
@@ -84,14 +100,21 @@ def _normalize_category_row(row: Dict[str, Any]) -> Dict[str, Any]:
         "name": _safe_str(row.get("name")),
         "description": _safe_str(row.get("description")),
         "intake_type": _safe_str(row.get("intake_type"), "general").lower(),
-        "match_keywords": list(row.get("match_keywords") or []) if isinstance(row.get("match_keywords"), list) else [],
+        "match_keywords": _normalize_keywords(row.get("match_keywords")),
         "is_default": bool(row.get("is_default", False)),
-        "sort_order": row.get("sort_order"),
+        "sort_order": sort_order,
     }
 
 
+def _sb():
+    try:
+        return get_supabase()
+    except Exception:
+        return None
+
+
 def _fetch_categories_sync(guild_id: int) -> List[Dict[str, Any]]:
-    sb = get_supabase()
+    sb = _sb()
     if not sb:
         return []
 
@@ -104,7 +127,14 @@ def _fetch_categories_sync(guild_id: int) -> List[Dict[str, Any]]:
         )
         rows = getattr(res, "data", None) or []
         out = [_normalize_category_row(x) for x in rows if isinstance(x, dict)]
-        out.sort(key=lambda r: (r.get("sort_order") is None, r.get("sort_order") if r.get("sort_order") is not None else 10_000, r.get("name", "").lower()))
+        out.sort(
+            key=lambda r: (
+                r.get("sort_order") is None,
+                r.get("sort_order") if r.get("sort_order") is not None else 10_000,
+                r.get("name", "").lower(),
+                r.get("slug", "").lower(),
+            )
+        )
         return out
     except Exception:
         return []
@@ -115,7 +145,7 @@ async def _fetch_categories(guild_id: int) -> List[Dict[str, Any]]:
 
 
 def _fetch_category_by_slug_sync(guild_id: int, slug: str) -> Optional[Dict[str, Any]]:
-    sb = get_supabase()
+    sb = _sb()
     if not sb:
         return None
 
@@ -141,7 +171,7 @@ async def _fetch_category_by_slug(guild_id: int, slug: str) -> Optional[Dict[str
 
 
 def _insert_category_sync(payload: Dict[str, Any]) -> bool:
-    sb = get_supabase()
+    sb = _sb()
     if not sb:
         return False
     try:
@@ -156,7 +186,7 @@ async def _insert_category(payload: Dict[str, Any]) -> bool:
 
 
 def _update_category_sync(guild_id: int, slug: str, patch: Dict[str, Any]) -> bool:
-    sb = get_supabase()
+    sb = _sb()
     if not sb:
         return False
     try:
@@ -171,7 +201,7 @@ async def _update_category(guild_id: int, slug: str, patch: Dict[str, Any]) -> b
 
 
 def _delete_category_sync(guild_id: int, slug: str) -> bool:
-    sb = get_supabase()
+    sb = _sb()
     if not sb:
         return False
     try:
@@ -185,19 +215,76 @@ async def _delete_category(guild_id: int, slug: str) -> bool:
     return await _run_blocking(_delete_category_sync, guild_id, slug)
 
 
-def _clear_default_sync(guild_id: int) -> bool:
-    sb = get_supabase()
+def _clear_default_except_sync(guild_id: int, keep_slug: Optional[str] = None) -> bool:
+    sb = _sb()
     if not sb:
         return False
+
     try:
-        sb.table("ticket_categories").update({"is_default": False}).eq("guild_id", str(int(guild_id))).eq("is_default", True).execute()
+        query = (
+            sb.table("ticket_categories")
+            .update({"is_default": False})
+            .eq("guild_id", str(int(guild_id)))
+            .eq("is_default", True)
+        )
+        if keep_slug:
+            query = query.neq("slug", str(keep_slug).lower())
+        query.execute()
         return True
     except Exception:
         return False
 
 
-async def _clear_default(guild_id: int) -> bool:
-    return await _run_blocking(_clear_default_sync, guild_id)
+async def _clear_default_except(guild_id: int, keep_slug: Optional[str] = None) -> bool:
+    return await _run_blocking(_clear_default_except_sync, guild_id, keep_slug)
+
+
+def _set_default_sync(guild_id: int, slug: str) -> bool:
+    sb = _sb()
+    if not sb:
+        return False
+
+    try:
+        # Set target first so we never end up with zero defaults if cleanup fails.
+        sb.table("ticket_categories").update({"is_default": True}).eq("guild_id", str(int(guild_id))).eq("slug", str(slug).lower()).execute()
+        _clear_default_except_sync(guild_id, keep_slug=slug)
+        return True
+    except Exception:
+        return False
+
+
+async def _set_default(guild_id: int, slug: str) -> bool:
+    return await _run_blocking(_set_default_sync, guild_id, slug)
+
+
+def _duplicate_slugs(rows: List[Dict[str, Any]]) -> List[str]:
+    counts: Dict[str, int] = {}
+    for row in rows:
+        slug = _safe_str(row.get("slug")).lower()
+        if not slug:
+            continue
+        counts[slug] = counts.get(slug, 0) + 1
+    return sorted([slug for slug, count in counts.items() if count > 1])
+
+
+def _default_categories(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    return [row for row in rows if bool(row.get("is_default"))]
+
+
+def _choose_replacement_default(rows: List[Dict[str, Any]], deleted_slug: str) -> Optional[Dict[str, Any]]:
+    candidates = [row for row in rows if _safe_str(row.get("slug")).lower() != deleted_slug.lower()]
+    if not candidates:
+        return None
+
+    candidates.sort(
+        key=lambda r: (
+            r.get("sort_order") is None,
+            r.get("sort_order") if r.get("sort_order") is not None else 10_000,
+            r.get("name", "").lower(),
+            r.get("slug", "").lower(),
+        )
+    )
+    return candidates[0]
 
 
 def _category_embed(title: str, row: Dict[str, Any]) -> discord.Embed:
@@ -207,9 +294,41 @@ def _category_embed(title: str, row: Dict[str, Any]) -> discord.Embed:
     embed.add_field(name="Type", value=f"`{_safe_str(row.get('intake_type'), 'general')}`", inline=True)
     embed.add_field(name="Default", value="Yes" if bool(row.get("is_default")) else "No", inline=True)
     embed.add_field(name="Sort Order", value=f"`{row.get('sort_order')}`", inline=True)
-    embed.add_field(name="Keywords", value=(", ".join([f"`{_truncate(x, 40)}`" for x in (row.get("match_keywords") or [])]) or "—")[:1024], inline=False)
+    embed.add_field(
+        name="Keywords",
+        value=(", ".join([f"`{_truncate(x, 40)}`" for x in (row.get("match_keywords") or [])]) or "—")[:1024],
+        inline=False,
+    )
     embed.add_field(name="Description", value=_truncate(row.get("description") or "No description.", 1024), inline=False)
     return embed
+
+
+def _governance_warnings(rows: List[Dict[str, Any]]) -> List[str]:
+    warnings: List[str] = []
+
+    duplicates = _duplicate_slugs(rows)
+    if duplicates:
+        warnings.append(f"Duplicate slugs detected: {', '.join([f'`{x}`' for x in duplicates[:6]])}")
+
+    defaults = _default_categories(rows)
+    if len(defaults) == 0:
+        warnings.append("No default category is set.")
+    elif len(defaults) > 1:
+        warnings.append(f"Multiple default categories detected: `{len(defaults)}`")
+
+    return warnings
+
+
+def _validated_sort_order(value: Optional[int]) -> Optional[int]:
+    if value is None:
+        return None
+    try:
+        num = int(value)
+    except Exception:
+        return None
+    if num < -9999 or num > 9999:
+        return None
+    return num
 
 
 def register_ticket_category_admin_commands(bot, tree) -> None:
@@ -247,33 +366,54 @@ def register_ticket_category_admin_commands(bot, tree) -> None:
         if not slug_clean:
             return await reply_once(interaction, {"content": "❌ Invalid slug.", "ephemeral": True})
 
+        name_clean = _safe_str(name)[:120]
+        if not name_clean:
+            return await reply_once(interaction, {"content": "❌ Category name cannot be empty.", "ephemeral": True})
+
         type_clean = _safe_str(intake_type, "general").lower()
         if type_clean not in _ALLOWED_INTAKE_TYPES:
-            return await reply_once(interaction, {"content": f"❌ Invalid intake type. Use one of: {', '.join(sorted(_ALLOWED_INTAKE_TYPES))}", "ephemeral": True})
+            return await reply_once(
+                interaction,
+                {"content": f"❌ Invalid intake type. Use one of: {', '.join(sorted(_ALLOWED_INTAKE_TYPES))}", "ephemeral": True},
+            )
+
+        sort_clean = _validated_sort_order(sort_order)
+        if sort_order is not None and sort_clean is None:
+            return await reply_once(
+                interaction,
+                {"content": "❌ Sort order must be between `-9999` and `9999`.", "ephemeral": True},
+            )
 
         existing = await _fetch_category_by_slug(guild.id, slug_clean)
         if existing:
             return await reply_once(interaction, {"content": f"❌ Category `{slug_clean}` already exists.", "ephemeral": True})
 
-        if bool(is_default):
-            await _clear_default(guild.id)
-
         payload = {
             "guild_id": str(guild.id),
             "slug": slug_clean,
-            "name": _safe_str(name)[:120],
+            "name": name_clean,
             "description": _safe_str(description)[:500],
             "intake_type": type_clean,
             "match_keywords": _normalize_keywords(_safe_str(keywords)),
             "is_default": bool(is_default),
-            "sort_order": int(sort_order) if sort_order is not None else None,
+            "sort_order": sort_clean,
         }
 
         ok = await _insert_category(payload)
         if not ok:
             return await reply_once(interaction, {"content": "❌ Failed to create ticket category.", "ephemeral": True})
 
-        embed = _category_embed("✅ Ticket Category Created", payload)
+        if bool(is_default):
+            await _set_default(guild.id, slug_clean)
+
+        created = await _fetch_category_by_slug(guild.id, slug_clean) or payload
+        embed = _category_embed("✅ Ticket Category Created", created)
+
+        rows = await _fetch_categories(guild.id)
+        warnings = _governance_warnings(rows)
+        if warnings:
+            embed.add_field(name="Governance Warnings", value="\n".join([f"• {w}" for w in warnings])[:1024], inline=False)
+
         await reply_once(interaction, {"embed": embed, "ephemeral": True})
 
     @tree.command(
@@ -312,22 +452,38 @@ def register_ticket_category_admin_commands(bot, tree) -> None:
             return await reply_once(interaction, {"content": f"❌ Category `{slug_clean}` was not found.", "ephemeral": True})
 
         patch: Dict[str, Any] = {}
+
         if name is not None:
-            patch["name"] = _safe_str(name)[:120]
+            name_clean = _safe_str(name)[:120]
+            if not name_clean:
+                return await reply_once(interaction, {"content": "❌ Category name cannot be empty.", "ephemeral": True})
+            patch["name"] = name_clean
+
         if intake_type is not None:
             type_clean = _safe_str(intake_type, "general").lower()
             if type_clean not in _ALLOWED_INTAKE_TYPES:
-                return await reply_once(interaction, {"content": f"❌ Invalid intake type. Use one of: {', '.join(sorted(_ALLOWED_INTAKE_TYPES))}", "ephemeral": True})
+                return await reply_once(
+                    interaction,
+                    {"content": f"❌ Invalid intake type. Use one of: {', '.join(sorted(_ALLOWED_INTAKE_TYPES))}", "ephemeral": True},
+                )
             patch["intake_type"] = type_clean
+
         if description is not None:
             patch["description"] = _safe_str(description)[:500]
+
         if keywords is not None:
             patch["match_keywords"] = _normalize_keywords(_safe_str(keywords))
+
         if sort_order is not None:
-            patch["sort_order"] = int(sort_order)
+            sort_clean = _validated_sort_order(sort_order)
+            if sort_clean is None:
+                return await reply_once(
+                    interaction,
+                    {"content": "❌ Sort order must be between `-9999` and `9999`.", "ephemeral": True},
+                )
+            patch["sort_order"] = sort_clean
+
         if is_default is not None:
-            if bool(is_default):
-                await _clear_default(guild.id)
             patch["is_default"] = bool(is_default)
 
         if not patch:
@@ -337,8 +493,26 @@ def register_ticket_category_admin_commands(bot, tree) -> None:
         if not ok:
             return await reply_once(interaction, {"content": "❌ Failed to update ticket category.", "ephemeral": True})
 
+        if is_default is True:
+            await _set_default(guild.id, slug_clean)
+        elif is_default is False and bool(row.get("is_default")):
+            # Prevent a no-default state: move default to another category if possible.
+            rows_after = await _fetch_categories(guild.id)
+            replacement = _choose_replacement_default(rows_after, slug_clean)
+            if replacement is not None:
+                await _set_default(guild.id, _safe_str(replacement.get("slug")))
+            else:
+                # Only category left: keep it default.
+                await _set_default(guild.id, slug_clean)
+
         updated = await _fetch_category_by_slug(guild.id, slug_clean) or {**row, **patch}
         embed = _category_embed("✅ Ticket Category Updated", updated)
+
+        rows = await _fetch_categories(guild.id)
+        warnings = _governance_warnings(rows)
+        if warnings:
+            embed.add_field(name="Governance Warnings", value="\n".join([f"• {w}" for w in warnings])[:1024], inline=False)
+
         await reply_once(interaction, {"embed": embed, "ephemeral": True})
 
     @tree.command(
@@ -359,11 +533,38 @@ def register_ticket_category_admin_commands(bot, tree) -> None:
         if not row:
             return await reply_once(interaction, {"content": f"❌ Category `{slug_clean}` was not found.", "ephemeral": True})
 
+        rows_before = await _fetch_categories(guild.id)
+        if len(rows_before) <= 1:
+            return await reply_once(
+                interaction,
+                {
+                    "content": (
+                        "❌ You cannot delete the only remaining ticket category.\n"
+                        "Create another category first so routing always has at least one valid target."
+                    ),
+                    "ephemeral": True,
+                },
+            )
+
+        replacement_default = None
+        if bool(row.get("is_default")):
+            replacement_default = _choose_replacement_default(rows_before, slug_clean)
+
         ok = await _delete_category(guild.id, slug_clean)
         if not ok:
             return await reply_once(interaction, {"content": "❌ Failed to delete ticket category.", "ephemeral": True})
 
-        await reply_once(interaction, {"content": f"✅ Deleted ticket category `{slug_clean}`.", "ephemeral": True})
+        auto_msg = ""
+        if replacement_default is not None:
+            replacement_slug = _safe_str(replacement_default.get("slug"))
+            if replacement_slug:
+                await _set_default(guild.id, replacement_slug)
+                auto_msg = f"\n⭐ Auto-promoted `{replacement_slug}` as the new default category."
+
+        await reply_once(
+            interaction,
+            {"content": f"✅ Deleted ticket category `{slug_clean}`.{auto_msg}", "ephemeral": True},
+        )
 
     @tree.command(
         name="ticket_category_set_default",
@@ -383,13 +584,18 @@ def register_ticket_category_admin_commands(bot, tree) -> None:
         if not row:
             return await reply_once(interaction, {"content": f"❌ Category `{slug_clean}` was not found.", "ephemeral": True})
 
-        await _clear_default(guild.id)
-        ok = await _update_category(guild.id, slug_clean, {"is_default": True})
+        ok = await _set_default(guild.id, slug_clean)
         if not ok:
             return await reply_once(interaction, {"content": "❌ Failed to set default category.", "ephemeral": True})
 
         updated = await _fetch_category_by_slug(guild.id, slug_clean) or {**row, "is_default": True}
         embed = _category_embed("⭐ Default Ticket Category Updated", updated)
+
+        rows = await _fetch_categories(guild.id)
+        warnings = _governance_warnings(rows)
+        if warnings:
+            embed.add_field(name="Governance Warnings", value="\n".join([f"• {w}" for w in warnings])[:1024], inline=False)
+
         await reply_once(interaction, {"embed": embed, "ephemeral": True})
 
     @tree.command(
@@ -417,11 +623,18 @@ def register_ticket_category_admin_commands(bot, tree) -> None:
         if not row:
             return await reply_once(interaction, {"content": f"❌ Category `{slug_clean}` was not found.", "ephemeral": True})
 
-        ok = await _update_category(guild.id, slug_clean, {"sort_order": int(sort_order)})
+        sort_clean = _validated_sort_order(sort_order)
+        if sort_clean is None:
+            return await reply_once(
+                interaction,
+                {"content": "❌ Sort order must be between `-9999` and `9999`.", "ephemeral": True},
+            )
+
+        ok = await _update_category(guild.id, slug_clean, {"sort_order": sort_clean})
         if not ok:
             return await reply_once(interaction, {"content": "❌ Failed to reorder ticket category.", "ephemeral": True})
 
-        updated = await _fetch_category_by_slug(guild.id, slug_clean) or {**row, "sort_order": int(sort_order)}
+        updated = await _fetch_category_by_slug(guild.id, slug_clean) or {**row, "sort_order": sort_clean}
         embed = _category_embed("↕️ Ticket Category Reordered", updated)
         await reply_once(interaction, {"embed": embed, "ephemeral": True})
 
