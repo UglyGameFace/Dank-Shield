@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import inspect
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 import discord
 
@@ -382,6 +382,66 @@ except Exception:
 
 _INTERACTION_HANDLERS_REGISTERED = False
 
+_VC_TERMINAL_STATUSES: Set[str] = {
+    "APPROVED",
+    "DENIED",
+    "CANCELED",
+    "COMPLETED",
+    "ENDED",
+    "EXPIRED",
+}
+_VC_ACCEPTABLE_STATUSES: Set[str] = {
+    "",
+    "PENDING",
+    "UPLOAD_REQUESTED",
+    "REISSUED",
+}
+_VC_STARTABLE_STATUSES: Set[str] = {
+    "STAFF_ACCEPTED",
+    "READY",
+    "TAKEN_OVER",
+    "RESTARTED",
+}
+_VC_DECISIONABLE_STATUSES: Set[str] = {
+    "STAFF_ACCEPTED",
+    "READY",
+    "STARTED",
+    "IN_VC",
+    "TAKEN_OVER",
+    "RESTARTED",
+}
+_VC_UPLOADABLE_STATUSES: Set[str] = {
+    "PENDING",
+    "UPLOAD_REQUESTED",
+    "STAFF_ACCEPTED",
+    "READY",
+    "REISSUED",
+}
+_VC_CANCELABLE_STATUSES: Set[str] = {
+    "",
+    "PENDING",
+    "UPLOAD_REQUESTED",
+    "STAFF_ACCEPTED",
+    "READY",
+    "STARTED",
+    "IN_VC",
+    "TAKEN_OVER",
+    "RESTARTED",
+}
+_VC_REISSUEABLE_STATUSES: Set[str] = {
+    "",
+    "PENDING",
+    "UPLOAD_REQUESTED",
+    "STAFF_ACCEPTED",
+    "READY",
+    "STARTED",
+    "IN_VC",
+    "TAKEN_OVER",
+    "RESTARTED",
+    "EXPIRED",
+    "CANCELED",
+}
+
 
 def _bump_runtime_stat(key: str, amount: int = 1) -> None:
     try:
@@ -475,6 +535,109 @@ def _set_vc_request_cache(token: str, patch: Dict[str, Any]) -> Dict[str, Any]:
 def _interaction_action_lock(action: str, token: Optional[str], channel_id: Optional[int | str] = None) -> asyncio.Lock:
     key = f"interaction:{_safe_str(action)}:{_safe_str(token) or _safe_str(channel_id) or 'default'}"
     return _get_lock(key)
+
+
+def _member_is_elevated_staff(member: Optional[discord.Member]) -> bool:
+    try:
+        if not isinstance(member, discord.Member):
+            return False
+        if member.guild_permissions.administrator:
+            return True
+        if member.guild_permissions.manage_channels:
+            return True
+        if member.guild_permissions.manage_guild:
+            return True
+    except Exception:
+        pass
+    return False
+
+
+def _normalize_vc_status(status: Any) -> str:
+    raw = _safe_str(status).upper()
+    aliases = {
+        "ACCEPTED": "STAFF_ACCEPTED",
+        "STAFF_ACCEPTED": "STAFF_ACCEPTED",
+        "REISSUE": "REISSUED",
+        "UPLOAD": "UPLOAD_REQUESTED",
+        "DONE": "COMPLETED",
+        "CLOSED": "ENDED",
+    }
+    return aliases.get(raw, raw)
+
+
+def _vc_request_status(token: str) -> str:
+    try:
+        return _normalize_vc_status((_vc_request_cache(token) or {}).get("status") or "")
+    except Exception:
+        return ""
+
+
+def _vc_request_assigned_staff_id(token: str) -> int:
+    req = _vc_request_cache(token)
+    return int(
+        req.get("accepted_staff_id")
+        or req.get("accepted_by")
+        or req.get("assigned_staff_id")
+        or 0
+    )
+
+
+def _vc_current_panel_message_ids(token: str) -> Set[int]:
+    ids: Set[int] = set()
+    req = _vc_request_cache(token)
+    for key in ("staff_panel_msg_id", "ticket_panel_msg_id", "queue_message_id"):
+        try:
+            mid = int(req.get(key) or 0)
+            if mid > 0:
+                ids.add(mid)
+        except Exception:
+            continue
+    return ids
+
+
+def _vc_interaction_message_is_current(interaction: discord.Interaction, token: str) -> bool:
+    try:
+        if not interaction.message:
+            return True
+        current_ids = _vc_current_panel_message_ids(token)
+        if not current_ids:
+            return True
+        return int(interaction.message.id) in current_ids
+    except Exception:
+        return True
+
+
+def _vc_action_allowed_for_status(action: str, status: str) -> bool:
+    current = _normalize_vc_status(status)
+
+    if action == "vc_accept":
+        return current in _VC_ACCEPTABLE_STATUSES
+    if action == "vc_start":
+        return current in _VC_STARTABLE_STATUSES
+    if action in {"vc_approve", "vc_denyclose"}:
+        return current in _VC_DECISIONABLE_STATUSES
+    if action == "vc_upload":
+        return current in _VC_UPLOADABLE_STATUSES
+    if action in {"vc_cancel", "vc_end", "vc_complete"}:
+        return current in _VC_CANCELABLE_STATUSES
+    if action == "vc_reissue":
+        return current in _VC_REISSUEABLE_STATUSES
+    return False
+
+
+def _vc_action_status_error(action: str, status: str) -> str:
+    human = _normalize_vc_status(status) or "UNKNOWN"
+    if action == "vc_accept":
+        return f"❌ This VC request is already in status `{human}`. Use the latest controls."
+    if action == "vc_start":
+        return f"❌ This VC request is not ready to start from status `{human}`."
+    if action in {"vc_approve", "vc_denyclose"}:
+        return f"❌ This VC request is not in an active VC session state. Current status: `{human}`."
+    if action == "vc_upload":
+        return f"❌ Upload reroute is not valid from status `{human}`."
+    if action in {"vc_cancel", "vc_end", "vc_complete"}:
+        return f"❌ This VC request is already finished. Current status: `{human}`."
+    return f"❌ This VC request cannot perform `{action}` from status `{human}`."
 
 
 def _ensure_vc_request_session(
@@ -997,26 +1160,9 @@ def _is_persistent_view_managed_custom_id(custom_id: str) -> bool:
 
 
 def _sync_vc_request_status(token: str, *, status: str, **extra: Any) -> Dict[str, Any]:
-    patch = {"status": str(status).upper().strip()}
+    patch = {"status": _normalize_vc_status(str(status).upper().strip())}
     patch.update(extra)
     return _set_vc_request_cache(token, patch)
-
-
-def _vc_request_status(token: str) -> str:
-    try:
-        return str((_vc_request_cache(token) or {}).get("status") or "").upper().strip()
-    except Exception:
-        return ""
-
-
-def _vc_request_assigned_staff_id(token: str) -> int:
-    req = _vc_request_cache(token)
-    return int(
-        req.get("accepted_staff_id")
-        or req.get("accepted_by")
-        or req.get("assigned_staff_id")
-        or 0
-    )
 
 
 def _vc_session_set_staff_accepted(token: str, staff_member: discord.Member) -> None:
@@ -1357,11 +1503,35 @@ async def _handle_vc_staff_action(
         return True
 
     expired = token_is_expired(token_info_q)
+    current_status = _vc_request_status(token)
+    assigned_staff_id = _vc_request_assigned_staff_id(token)
+    actor_is_elevated = _member_is_elevated_staff(interaction.user)
+
+    if not _vc_interaction_message_is_current(interaction, token):
+        await interaction.followup.send(
+            "❌ Those VC controls are stale. Use the latest VC panel.",
+            ephemeral=True,
+        )
+        return True
 
     if expired and action not in {"vc_reissue", "vc_cancel"}:
         await _cleanup_stale_vc_request(guild, token, reason="expired before vc staff action")
         await interaction.followup.send(
             "❌ This VC request token expired.\nUse **Reissue Token** or `/vc_reissue`.",
+            ephemeral=True,
+        )
+        return True
+
+    if current_status in _VC_TERMINAL_STATUSES and action not in {"vc_reissue"}:
+        await interaction.followup.send(
+            f"❌ This VC request is already finished (`{current_status}`). Use the latest controls.",
+            ephemeral=True,
+        )
+        return True
+
+    if current_status and not _vc_action_allowed_for_status(action, current_status):
+        await interaction.followup.send(
+            _vc_action_status_error(action, current_status),
             ephemeral=True,
         )
         return True
@@ -1386,6 +1556,35 @@ async def _handle_vc_staff_action(
             owner = None
 
     async with _interaction_action_lock(action, token, ticket_ch.id):
+        current_status = _vc_request_status(token)
+        assigned_staff_id = _vc_request_assigned_staff_id(token)
+
+        if current_status in _VC_TERMINAL_STATUSES and action not in {"vc_reissue"}:
+            await interaction.followup.send(
+                f"❌ This VC request is already finished (`{current_status}`).",
+                ephemeral=True,
+            )
+            return True
+
+        if current_status and not _vc_action_allowed_for_status(action, current_status):
+            await interaction.followup.send(
+                _vc_action_status_error(action, current_status),
+                ephemeral=True,
+            )
+            return True
+
+        if (
+            assigned_staff_id > 0
+            and assigned_staff_id != int(interaction.user.id)
+            and action in {"vc_start", "vc_upload", "vc_approve", "vc_denyclose", "vc_end", "vc_complete"}
+            and not actor_is_elevated
+        ):
+            await interaction.followup.send(
+                "❌ Another staff member already owns this VC request. Use `/vc_takeover` first.",
+                ephemeral=True,
+            )
+            return True
+
         if action == "vc_upload":
             try:
                 if owner:
@@ -1713,6 +1912,7 @@ async def _handle_vc_staff_action(
                         content=f"▶️ VC session started by {interaction.user.mention} for {owner.mention}.",
                         view=approve_view,
                     )
+                    _set_vc_request_cache(token, {"staff_panel_msg_id": int(interaction.message.id)})
             except Exception:
                 pass
 
@@ -2059,6 +2259,10 @@ async def _handle_standard_staff_decision(
         await interaction.followup.send("❌ This token expired. Generate a new link.", ephemeral=True)
         return True
 
+    if token_info.get("used", False):
+        await interaction.followup.send("❌ This decision token was already handled. Use the latest panel.", ephemeral=True)
+        return True
+
     if str(token_info.get("channel_id") or "") != str(channel.id):
         await interaction.followup.send(
             "❌ That decision token doesn’t belong to this ticket.",
@@ -2083,6 +2287,14 @@ async def _handle_standard_staff_decision(
             owner = None
 
     async with _interaction_action_lock(action, token, channel.id):
+        token_info_live = sb_get_token_info(token)
+        if not token_info_live or token_info_live.get("used", False):
+            await interaction.followup.send(
+                "❌ This decision token was already handled. Use the latest panel.",
+                ephemeral=True,
+            )
+            return True
+
         if action == "resubmit":
             result = await request_resubmission(
                 guild=guild,
@@ -2275,7 +2487,6 @@ async def handle_component_interaction(interaction: discord.Interaction) -> None
     except Exception:
         pass
 
-    # Let verify UI buttons route first, including older custom_ids.
     try:
         handled = await maybe_handle_verify_ui_interaction(interaction, site_url=SITE_URL)
         if handled:
@@ -2283,7 +2494,6 @@ async def handle_component_interaction(interaction: discord.Interaction) -> None
     except Exception:
         pass
 
-    # These are now owned by persistent View callbacks in transcripts.py.
     if _is_persistent_view_managed_custom_id(custom_id):
         return
 
@@ -2299,6 +2509,9 @@ async def handle_component_interaction(interaction: discord.Interaction) -> None
 
     action, token = parse_custom_id(custom_id)
     if not action:
+        return
+
+    if not _known_component_action(action):
         return
 
     await _defer_ephemeral(interaction)
@@ -2361,14 +2574,6 @@ async def handle_component_interaction(interaction: discord.Interaction) -> None
         )
         if handled:
             return
-
-    if not _known_component_action(action):
-        try:
-            if interaction.response.is_done():
-                return
-        except Exception:
-            return
-        return
 
     return
 
