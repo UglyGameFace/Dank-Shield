@@ -76,21 +76,13 @@ except Exception:
         return False
 
 
-def _build_confirm_close_ticket_view():
-    try:
-        from ..transcripts import ConfirmCloseTicketView
-        return ConfirmCloseTicketView()
-    except Exception as e:
-        print("❌ Failed importing/building ConfirmCloseTicketView:", repr(e))
-        return None
-
-
 _TICKET_CREATION_LOCKS: Dict[Tuple[int, int], asyncio.Lock] = {}
 TICKET_NUM_RE = re.compile(r"^(?:ticket|closed)-(\d+)$", re.I)
 _TICKET_NUMBER_LOCKS: Dict[int, asyncio.Lock] = {}
 _TRANSCRIPT_ATTACH_LOCKS: Dict[str, asyncio.Lock] = {}
 
 _VALID_TICKET_PRIORITIES = {"low", "medium", "high", "urgent"}
+_VALID_TICKET_STATUSES = {"open", "claimed", "closed", "deleted"}
 
 
 def _service_debug(msg: str) -> None:
@@ -340,7 +332,8 @@ def _ticket_status(row: Optional[Dict[str, Any]]) -> str:
     if not isinstance(row, dict):
         return "unknown"
     try:
-        return str(row.get("status") or "").strip().lower()
+        status = str(row.get("status") or "").strip().lower()
+        return status if status in _VALID_TICKET_STATUSES else "unknown"
     except Exception:
         return "unknown"
 
@@ -981,67 +974,99 @@ async def _maybe_post_verification_ui(
         print("⚠️ verification UI failed:", repr(e))
 
 
-async def _has_close_controls_posted(channel: discord.TextChannel, limit: int = 40) -> bool:
+async def _post_or_replace_open_ticket_controls_safe(channel: discord.TextChannel) -> None:
     try:
-        me_id = int(getattr(getattr(bot, "user", None), "id", 0) or 0)
-        async for msg in channel.history(limit=limit):
-            try:
-                if int(getattr(getattr(msg, "author", None), "id", 0) or 0) != me_id:
-                    continue
-            except Exception:
-                continue
+        from ..transcripts import post_or_replace_open_ticket_controls
+    except Exception as e:
+        print(f"⚠️ open ticket controls import failed for {channel.id}: {repr(e)}")
+        return
 
-            try:
-                comps = getattr(msg, "components", None) or []
-                for row in comps:
-                    children = getattr(row, "children", None) or []
-                    for child in children:
-                        cid = str(getattr(child, "custom_id", "") or "")
-                        if cid in (
-                            "sv:ticket:confirm_close",
-                            "sv:ticket:cancel_close",
-                            "sv:ticket:reopen",
-                            "sv:ticket:transcript",
-                            "sv:ticket:delete",
-                        ):
-                            return True
-            except Exception:
-                pass
+    try:
+        await post_or_replace_open_ticket_controls(channel)
+    except Exception as e:
+        print(f"⚠️ open ticket controls update failed for {channel.id}: {repr(e)}")
 
+
+async def _freeze_open_ticket_controls_safe(
+    channel: discord.TextChannel,
+    *,
+    closed_by: Optional[discord.Member | discord.User] = None,
+) -> None:
+    try:
+        from ..transcripts import _freeze_open_controls_message
+    except Exception:
+        return
+
+    try:
+        await _freeze_open_controls_message(channel, closed_by=closed_by)
+    except Exception as e:
+        print(f"⚠️ failed freezing open controls for {channel.id}: {repr(e)}")
+
+
+async def _post_staff_closed_message_safe(
+    channel: discord.TextChannel,
+    *,
+    closed_by: Optional[discord.Member | discord.User] = None,
+) -> None:
+    if closed_by is None:
+        return
+
+    try:
+        from ..transcripts import _post_staff_closed_message
+    except Exception:
+        return
+
+    try:
+        await _post_staff_closed_message(channel, closed_by)
+    except Exception as e:
+        print(f"⚠️ failed posting staff closed panel for {channel.id}: {repr(e)}")
+
+
+async def _freeze_staff_closed_message_safe(
+    channel: discord.TextChannel,
+    *,
+    reopened_by: Optional[discord.Member | discord.User] = None,
+) -> None:
+    try:
+        from ..transcripts import _find_staff_closed_message, _freeze_message_controls
+    except Exception:
+        return
+
+    try:
+        msg = await _find_staff_closed_message(channel)
+        if not msg:
+            return
+        suffix = "🔓 Ticket reopened."
+        if reopened_by is not None:
             try:
-                content = str(getattr(msg, "content", "") or "")
-                if "close this ticket" in content.lower() and comps:
-                    return True
+                suffix = f"🔓 Reopened by {reopened_by.mention}."
             except Exception:
-                pass
+                suffix = "🔓 Ticket reopened."
+        await _freeze_message_controls(msg, content_suffix=suffix)
+    except Exception as e:
+        print(f"⚠️ failed freezing staff closed message for {channel.id}: {repr(e)}")
+
+
+async def _refresh_open_ticket_ui(
+    *,
+    channel: discord.TextChannel,
+    owner: Optional[discord.Member],
+    is_ghost: bool,
+) -> None:
+    if isinstance(owner, discord.Member):
+        try:
+            await _maybe_post_verification_ui(
+                channel=channel,
+                owner=owner,
+                is_ghost=is_ghost,
+            )
+        except Exception:
+            pass
+
+    try:
+        await _post_or_replace_open_ticket_controls_safe(channel)
     except Exception:
         pass
-
-    return False
-
-
-async def _maybe_post_close_controls(channel: discord.TextChannel) -> None:
-    try:
-        view = _build_confirm_close_ticket_view()
-        if view is None:
-            print(
-                f"⚠️ close controls unavailable for ticket={channel.id} "
-                "(ConfirmCloseTicketView import failed)"
-            )
-            return
-
-        already_posted = await _has_close_controls_posted(channel)
-        if already_posted:
-            return
-
-        await channel.send(
-            "When you're done here, you can close this ticket below.",
-            view=view,
-            allowed_mentions=discord.AllowedMentions.none(),
-        )
-        print(f"🧩 close controls posted -> ticket={channel.id}")
-    except Exception as e:
-        print(f"⚠️ failed to post close controls for ticket={channel.id}: {repr(e)}")
 
 
 def _row_channel_id(row: Dict[str, Any]) -> int:
@@ -1219,6 +1244,11 @@ async def _sync_existing_open_ticket_channel(
     category_meta: Dict[str, Any],
     opening_message: Optional[str] = None,
 ) -> Optional[Dict[str, Any]]:
+    existing_row_before = await _ticket_row_for_channel_id(channel.id)
+    current_status = _ticket_status(existing_row_before)
+    if current_status not in {"open", "claimed"}:
+        current_status = "open"
+
     normalized_ticket_number = await _ensure_channel_identity(
         channel=channel,
         owner=owner,
@@ -1243,7 +1273,7 @@ async def _sync_existing_open_ticket_channel(
             username=str(owner),
             title=_title_for_ticket(owner, category, is_ghost),
             category=_canonical_ticket_category(category, is_ghost),
-            status="claimed" if False else "open" if False else _ticket_status(await _ticket_row_for_channel_id(channel.id)) or "open",
+            status=current_status,
             priority=clean_priority,
             initial_message=_safe_str(opening_message or ""),
             ticket_number=normalized_ticket_number,
@@ -1373,7 +1403,7 @@ async def create_ticket_channel(
                 except Exception:
                     pass
 
-                await _sync_existing_open_ticket_channel(
+                synced_row = await _sync_existing_open_ticket_channel(
                     channel=existing_channel,
                     owner=owner,
                     category=_safe_str(existing_row.get("category") or category),
@@ -1393,12 +1423,11 @@ async def create_ticket_channel(
                     opening_message=opening_message,
                 )
 
-                await _maybe_post_verification_ui(
+                await _refresh_open_ticket_ui(
                     channel=existing_channel,
                     owner=owner,
                     is_ghost=_safe_bool(existing_row.get("is_ghost"), is_ghost),
                 )
-                await _maybe_post_close_controls(existing_channel)
                 _service_debug(
                     f"reused-existing-ticket guild={guild.id} owner={owner.id} channel={existing_channel.id}"
                 )
@@ -1540,13 +1569,11 @@ async def create_ticket_channel(
             category_meta=category_meta,
         )
 
-        await _maybe_post_verification_ui(
+        await _refresh_open_ticket_ui(
             channel=channel,
             owner=owner,
             is_ghost=is_ghost,
         )
-
-        await _maybe_post_close_controls(channel)
         _service_debug(
             f"create success guild={guild.id} owner={owner.id} channel={channel.id} ticket_number={ticket_number}"
         )
@@ -1645,10 +1672,15 @@ async def sync_existing_ticket_channel(
     except Exception:
         pass
 
-    try:
-        await _maybe_post_close_controls(channel)
-    except Exception:
-        pass
+    if ok and _ticket_status(await _ticket_row_for_channel_id(channel.id)) in {"open", "claimed"}:
+        try:
+            await _refresh_open_ticket_ui(
+                channel=channel,
+                owner=owner if isinstance(owner, discord.Member) else None,
+                is_ghost=is_ghost,
+            )
+        except Exception:
+            pass
 
     if ok:
         print(
@@ -1702,6 +1734,16 @@ async def mark_ticket_closed(
             channel.id,
             {"channel_name": channel.name},
         )
+    except Exception:
+        pass
+
+    try:
+        await _freeze_open_ticket_controls_safe(channel, closed_by=closed_by)
+    except Exception:
+        pass
+
+    try:
+        await _post_staff_closed_message_safe(channel, closed_by=closed_by)
     except Exception:
         pass
 
@@ -2217,7 +2259,11 @@ async def reopen_ticket(
     if row_before and _ticket_status(row_before) == "open" and _ticket_claimed_by_id(row_before) <= 0:
         return True
 
-    ok = await repo_reopen_ticket(channel_id=channel_id)
+    ok = await repo_reopen_ticket(
+        channel_id=channel_id,
+        reopened_by=getattr(actor, "id", None) if actor else None,
+        reason=reason,
+    )
     if ok:
         try:
             ticket_row = await _ticket_row_for_channel_id(channel_id)
@@ -2291,7 +2337,16 @@ async def reopen_ticket_channel(
         pass
 
     try:
-        await _maybe_post_close_controls(channel)
+        await _freeze_staff_closed_message_safe(channel, reopened_by=actor)
+    except Exception:
+        pass
+
+    try:
+        await _refresh_open_ticket_ui(
+            channel=channel,
+            owner=owner,
+            is_ghost=False,
+        )
     except Exception:
         pass
 
