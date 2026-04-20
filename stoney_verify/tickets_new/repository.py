@@ -89,6 +89,7 @@ _EXTENDED_TICKET_WRITE_COLUMNS: Set[str] = {
     "webhook_url",
     "webhook_id",
     "reopened_by",
+    "reopened_by_name",
     "reopen_reason",
     "close_reason",
     "delete_reason",
@@ -935,6 +936,9 @@ def build_ticket_payload(
     ticket_number: Optional[int] = None,
     assigned_to: Optional[int | str] = None,
     reopened_at: Optional[str] = None,
+    reopened_by: Optional[int | str] = None,
+    reopened_by_name: Optional[str] = None,
+    reopen_reason: Optional[str] = None,
     sla_deadline: Optional[str] = None,
     is_ghost: bool = False,
     deleted_at: Optional[str] = None,
@@ -965,6 +969,8 @@ def build_ticket_payload(
     assigned_to_name: Optional[str] = None,
     closed_by_name: Optional[str] = None,
     deleted_by_name: Optional[str] = None,
+    close_reason: Optional[str] = None,
+    delete_reason: Optional[str] = None,
     extra: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     now_iso = _now_iso()
@@ -974,6 +980,9 @@ def build_ticket_payload(
     clean_requester_name = _clean_text(requester_name) or clean_username
     clean_claimed_by = _as_str_id(claimed_by)
     clean_assigned_to = _as_str_id(assigned_to)
+    clean_closed_reason = _clean_text(closed_reason)
+    clean_close_reason = _clean_text(close_reason) or clean_closed_reason
+    clean_delete_reason = _clean_text(delete_reason)
 
     normalized_status = _normalize_ticket_status(status)
     if normalized_status == "open" and (clean_claimed_by or clean_assigned_to):
@@ -989,8 +998,8 @@ def build_ticket_payload(
         "priority": _normalize_ticket_priority(priority),
         "claimed_by": clean_claimed_by,
         "closed_by": _as_str_id(closed_by),
-        "closed_reason": _clean_text(closed_reason),
-        "close_reason": _clean_text(closed_reason),
+        "closed_reason": clean_closed_reason,
+        "close_reason": clean_close_reason,
         "initial_message": _clean_text(initial_message) or "",
         "ai_category_confidence": ai_category_confidence if ai_category_confidence is not None else 0,
         "mod_suggestion": _clean_text(mod_suggestion),
@@ -1004,10 +1013,14 @@ def build_ticket_payload(
         "ticket_number": int(ticket_number) if ticket_number is not None else None,
         "assigned_to": clean_assigned_to,
         "reopened_at": reopened_at,
+        "reopened_by": _as_str_id(reopened_by),
+        "reopened_by_name": _clean_text(reopened_by_name),
+        "reopen_reason": _clean_text(reopen_reason),
         "sla_deadline": sla_deadline,
         "is_ghost": bool(is_ghost),
         "deleted_at": deleted_at,
         "deleted_by": _as_str_id(deleted_by),
+        "delete_reason": clean_delete_reason,
         "transcript_url": _clean_text(transcript_url),
         "transcript_message_id": _as_str_id(transcript_message_id),
         "transcript_channel_id": _as_str_id(transcript_channel_id),
@@ -1620,7 +1633,9 @@ async def attach_transcript_to_ticket(
     transcript_url: Optional[str],
     transcript_message_id: Optional[int | str],
     transcript_channel_id: Optional[int | str],
+    actor: Optional[discord.Member | discord.User] = None,
 ) -> bool:
+    _ = actor
     existing = await get_ticket_by_any_channel_id(channel_id)
     if not existing:
         return False
@@ -1645,6 +1660,7 @@ async def mark_ticket_closed(
     *,
     channel_id: int | str,
     closed_by: Optional[int | str] = None,
+    closed_by_name: Optional[str] = None,
     reason: Optional[str] = None,
     decision: Optional[str] = None,
     extra_payload: Optional[Dict[str, Any]] = None,
@@ -1653,16 +1669,22 @@ async def mark_ticket_closed(
     if existing and _ticket_status(existing) == "closed":
         return True
 
+    clean_reason = _clean_text(reason)
     payload: Dict[str, Any] = {
         "status": "closed",
         "closed_at": _now_iso(),
-        "closed_reason": _clean_text(reason),
-        "close_reason": _clean_text(reason),
+        "closed_reason": clean_reason,
+        "close_reason": clean_reason,
         "reopened_at": None,
+        "reopened_by": None,
+        "reopened_by_name": None,
+        "reopen_reason": None,
     }
 
     if closed_by is not None:
         payload["closed_by"] = _as_str_id(closed_by)
+    if closed_by_name is not None:
+        payload["closed_by_name"] = _clean_text(closed_by_name)
     if decision is not None:
         payload["decision"] = _clean_text(decision)
     if extra_payload:
@@ -1676,6 +1698,7 @@ async def mark_ticket_deleted(
     *,
     channel_id: int | str,
     deleted_by: Optional[int | str] = None,
+    deleted_by_name: Optional[str] = None,
     reason: Optional[str] = None,
     extra_payload: Optional[Dict[str, Any]] = None,
 ) -> bool:
@@ -1691,11 +1714,18 @@ async def mark_ticket_deleted(
         "closed_reason": clean_reason,
         "close_reason": clean_reason,
         "delete_reason": clean_reason,
+        "reopened_at": None,
+        "reopened_by": None,
+        "reopened_by_name": None,
+        "reopen_reason": None,
     }
 
     if deleted_by is not None:
         payload["deleted_by"] = _as_str_id(deleted_by)
         payload["closed_by"] = _as_str_id(deleted_by)
+    if deleted_by_name is not None:
+        payload["deleted_by_name"] = _clean_text(deleted_by_name)
+        payload["closed_by_name"] = _clean_text(deleted_by_name)
     if extra_payload:
         payload.update(dict(extra_payload))
 
@@ -1707,6 +1737,7 @@ async def reopen_ticket(
     *,
     channel_id: int | str,
     reopened_by: Optional[int | str] = None,
+    reopened_by_name: Optional[str] = None,
     reason: Optional[str] = None,
     extra_payload: Optional[Dict[str, Any]] = None,
 ) -> bool:
@@ -1731,12 +1762,17 @@ async def reopen_ticket(
     payload: Dict[str, Any] = {
         "status": "open",
         "reopened_at": _now_iso(),
+        "reopened_by": _as_str_id(reopened_by),
+        "reopened_by_name": _clean_text(reopened_by_name),
+        "reopen_reason": _clean_text(reason),
         "closed_at": None,
         "closed_by": None,
+        "closed_by_name": None,
         "closed_reason": None,
         "close_reason": None,
         "deleted_at": None,
         "deleted_by": None,
+        "deleted_by_name": None,
         "delete_reason": None,
         "claimed_by": None,
         "assigned_to": None,
@@ -1745,10 +1781,6 @@ async def reopen_ticket(
         "decision": None,
     }
 
-    if reopened_by is not None:
-        payload["reopened_by"] = _as_str_id(reopened_by)
-    if reason is not None:
-        payload["reopen_reason"] = _clean_text(reason)
     if extra_payload:
         payload.update(dict(extra_payload))
 
