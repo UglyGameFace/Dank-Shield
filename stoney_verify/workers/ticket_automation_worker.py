@@ -18,15 +18,16 @@ from ..globals import (
 from ..commands_ext.common import TICKET_LAST_ACTIVITY
 
 try:
-    from ..transcripts import send_tickettool_style_transcript
-except Exception:
-    async def send_tickettool_style_transcript(*args, **kwargs) -> None:  # type: ignore
-        return None
-
-try:
     from ..tickets_new.service import mark_ticket_closed as service_mark_ticket_closed
 except Exception:
     service_mark_ticket_closed = None  # type: ignore
+
+try:
+    from ..tickets_new.transcript_service import (
+        post_transcript_to_channel as transcript_post_to_channel,
+    )
+except Exception:
+    transcript_post_to_channel = None  # type: ignore
 
 
 AUTOMATION_POLL_SECONDS = 120
@@ -162,11 +163,39 @@ def _normalize_settings(row: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     src = dict(row or {})
     out = dict(_DEFAULT_SETTINGS)
     out["enabled"] = _safe_bool(src.get("enabled"), _DEFAULT_SETTINGS["enabled"])
-    out["sla_breach_alerts_enabled"] = _safe_bool(src.get("sla_breach_alerts_enabled"), _DEFAULT_SETTINGS["sla_breach_alerts_enabled"])
-    out["inactivity_reminders_enabled"] = _safe_bool(src.get("inactivity_reminders_enabled"), _DEFAULT_SETTINGS["inactivity_reminders_enabled"])
-    out["auto_close_enabled"] = _safe_bool(src.get("auto_close_enabled"), _DEFAULT_SETTINGS["auto_close_enabled"])
-    out["inactivity_reminder_minutes"] = max(1, _safe_int(src.get("inactivity_reminder_minutes"), _DEFAULT_SETTINGS["inactivity_reminder_minutes"]))
-    out["auto_close_minutes"] = max(5, _safe_int(src.get("auto_close_minutes"), _DEFAULT_SETTINGS["auto_close_minutes"]))
+    out["sla_breach_alerts_enabled"] = _safe_bool(
+        src.get("sla_breach_alerts_enabled"),
+        _DEFAULT_SETTINGS["sla_breach_alerts_enabled"],
+    )
+    out["inactivity_reminders_enabled"] = _safe_bool(
+        src.get("inactivity_reminders_enabled"),
+        _DEFAULT_SETTINGS["inactivity_reminders_enabled"],
+    )
+    out["auto_close_enabled"] = _safe_bool(
+        src.get("auto_close_enabled"),
+        _DEFAULT_SETTINGS["auto_close_enabled"],
+    )
+
+    reminder_minutes = max(
+        1,
+        _safe_int(
+            src.get("inactivity_reminder_minutes"),
+            _DEFAULT_SETTINGS["inactivity_reminder_minutes"],
+        ),
+    )
+    auto_close_minutes = max(
+        5,
+        _safe_int(
+            src.get("auto_close_minutes"),
+            _DEFAULT_SETTINGS["auto_close_minutes"],
+        ),
+    )
+
+    if auto_close_minutes <= reminder_minutes:
+        auto_close_minutes = reminder_minutes + 1
+
+    out["inactivity_reminder_minutes"] = reminder_minutes
+    out["auto_close_minutes"] = auto_close_minutes
     out["staff_alert_channel_id"] = _safe_str(src.get("staff_alert_channel_id")) or None
     return out
 
@@ -276,37 +305,84 @@ def _list_active_tickets_sync(guild_id: int) -> List[Dict[str, Any]]:
         return []
 
 
-def _resolve_ticket_channel(guild: discord.Guild, row: Dict[str, Any]) -> Optional[discord.abc.GuildChannel]:
+def _row_status(row: Dict[str, Any]) -> str:
     try:
-        channel_id = _safe_int(row.get("channel_id") or row.get("discord_thread_id"), 0)
-        if channel_id <= 0:
-            return None
+        raw = _safe_str(row.get("status")).lower()
+        if raw in {"open", "claimed", "closed", "deleted"}:
+            return raw
+    except Exception:
+        pass
+    return "unknown"
+
+
+def _channel_looks_closed(channel: discord.abc.GuildChannel) -> bool:
+    try:
+        return _safe_str(getattr(channel, "name", "")).lower().startswith("closed-")
+    except Exception:
+        return False
+
+
+async def _resolve_ticket_channel(guild: discord.Guild, row: Dict[str, Any]) -> Optional[discord.abc.GuildChannel]:
+    channel_id = _safe_int(row.get("channel_id") or row.get("discord_thread_id"), 0)
+    if channel_id <= 0:
+        return None
+
+    try:
         ch = guild.get_channel(channel_id)
         if ch is not None:
             return ch
     except Exception:
+        pass
+
+    try:
+        fetched = await guild.fetch_channel(channel_id)
+        return fetched
+    except Exception:
         return None
+
+
+async def _resolve_owner(guild: discord.Guild, row: Dict[str, Any]) -> Optional[discord.Member]:
+    owner_id = _safe_int(row.get("owner_id") or row.get("user_id"), 0)
+    if owner_id <= 0:
+        return None
+
+    try:
+        member = guild.get_member(owner_id)
+        if member is not None:
+            return member
+    except Exception:
+        pass
+
+    try:
+        fetched = await guild.fetch_member(owner_id)
+        if isinstance(fetched, discord.Member):
+            return fetched
+    except Exception:
+        pass
+
     return None
 
 
-def _resolve_owner(guild: discord.Guild, row: Dict[str, Any]) -> Optional[discord.Member]:
-    try:
-        owner_id = _safe_int(row.get("owner_id") or row.get("user_id"), 0)
-        if owner_id <= 0:
-            return None
-        return guild.get_member(owner_id)
-    except Exception:
+async def _resolve_assignee(guild: discord.Guild, row: Dict[str, Any]) -> Optional[discord.Member]:
+    assignee_id = _safe_int(row.get("assigned_to") or row.get("claimed_by"), 0)
+    if assignee_id <= 0:
         return None
 
-
-def _resolve_assignee(guild: discord.Guild, row: Dict[str, Any]) -> Optional[discord.Member]:
     try:
-        assignee_id = _safe_int(row.get("assigned_to"), 0)
-        if assignee_id <= 0:
-            return None
-        return guild.get_member(assignee_id)
+        member = guild.get_member(assignee_id)
+        if member is not None:
+            return member
     except Exception:
-        return None
+        pass
+
+    try:
+        fetched = await guild.fetch_member(assignee_id)
+        if isinstance(fetched, discord.Member):
+            return fetched
+    except Exception:
+        pass
+
+    return None
 
 
 def _effective_last_activity(row: Dict[str, Any]) -> Optional[datetime]:
@@ -335,7 +411,10 @@ def _effective_last_activity(row: Dict[str, Any]) -> Optional[datetime]:
 
 async def _safe_send_message(channel: discord.abc.Messageable, content: str) -> bool:
     try:
-        await channel.send(content, allowed_mentions=discord.AllowedMentions(users=True, roles=True, everyone=False))
+        await channel.send(
+            content,
+            allowed_mentions=discord.AllowedMentions(users=True, roles=True, everyone=False),
+        )
         return True
     except Exception as e:
         print("⚠️ Ticket automation send failed:", repr(e))
@@ -349,8 +428,13 @@ async def _send_staff_alert(guild: discord.Guild, settings: Dict[str, Any], cont
     try:
         ch = guild.get_channel(channel_id)
         if ch is None:
+            try:
+                ch = await guild.fetch_channel(channel_id)
+            except Exception:
+                ch = None
+        if ch is None or not hasattr(ch, "send"):
             return False
-        return await _safe_send_message(ch, content)
+        return await _safe_send_message(ch, content)  # type: ignore[arg-type]
     except Exception:
         return False
 
@@ -361,8 +445,8 @@ async def _send_sla_breach_alert(
     row: Dict[str, Any],
     settings: Dict[str, Any],
 ) -> bool:
-    owner = _resolve_owner(guild, row)
-    assignee = _resolve_assignee(guild, row)
+    owner = await _resolve_owner(guild, row)
+    assignee = await _resolve_assignee(guild, row)
     due = _parse_iso(row.get("sla_deadline"))
     channel_ref = getattr(channel, "mention", f"`{getattr(channel, 'id', 'unknown')}`")
     msg = (
@@ -386,8 +470,8 @@ async def _send_inactivity_reminder(
     minutes_idle: int,
     settings: Dict[str, Any],
 ) -> bool:
-    owner = _resolve_owner(guild, row)
-    assignee = _resolve_assignee(guild, row)
+    owner = await _resolve_owner(guild, row)
+    assignee = await _resolve_assignee(guild, row)
     mentions = []
     if owner is not None:
         mentions.append(owner.mention)
@@ -405,6 +489,7 @@ async def _send_inactivity_reminder(
     sent_main = False
     if isinstance(channel, (discord.TextChannel, discord.Thread)):
         sent_main = await _safe_send_message(channel, msg)
+
     channel_ref = getattr(channel, "mention", f"`{getattr(channel, 'id', 'unknown')}`")
     sent_staff = await _send_staff_alert(
         guild,
@@ -415,48 +500,92 @@ async def _send_inactivity_reminder(
     return sent_main or sent_staff
 
 
+async def _repair_stale_closed_drift(
+    guild: discord.Guild,
+    channel: discord.abc.GuildChannel,
+    row: Dict[str, Any],
+) -> bool:
+    if not isinstance(channel, discord.TextChannel):
+        return False
+    if service_mark_ticket_closed is None:
+        return False
+    if not _channel_looks_closed(channel):
+        return False
+    if _row_status(row) not in {"open", "claimed", "unknown"}:
+        return False
+
+    try:
+        await service_mark_ticket_closed(
+            channel=channel,
+            closed_by=guild.me if getattr(guild, "me", None) else None,
+            reason="State repaired by ticket automation worker",
+        )
+        return True
+    except Exception as e:
+        print("⚠️ Ticket automation state repair failed:", repr(e))
+        return False
+
+
 async def _auto_close_ticket(
     guild: discord.Guild,
     channel: discord.abc.GuildChannel,
     row: Dict[str, Any],
     minutes_idle: int,
+    settings: Dict[str, Any],
 ) -> bool:
-    if not isinstance(channel, (discord.TextChannel, discord.Thread)):
+    if not isinstance(channel, discord.TextChannel):
+        return False
+    if not callable(service_mark_ticket_closed):
         return False
 
     reason = f"Auto-closed after {minutes_idle} minute(s) of inactivity."
-    owner = _resolve_owner(guild, row)
-    try:
-        await send_tickettool_style_transcript(
-            channel,
-            owner,
-            closed_by=guild.me if getattr(guild, "me", None) else None,
-            decision=reason,
-        )
-    except Exception as e:
-        print("⚠️ Ticket automation transcript failed:", repr(e))
 
-    if callable(service_mark_ticket_closed):
+    owner = await _resolve_owner(guild, row)
+    actor = guild.me if getattr(guild, "me", None) else None
+
+    transcript_url: Optional[str] = None
+    if callable(transcript_post_to_channel):
         try:
-            await service_mark_ticket_closed(
-                channel=channel,
-                closed_by=guild.me if getattr(guild, "me", None) else None,
+            _msg, transcript_url = await transcript_post_to_channel(
+                ticket_channel=channel,
+                deleted_by=actor,
                 reason=reason,
             )
         except Exception as e:
-            print("⚠️ Ticket automation DB close failed:", repr(e))
+            print("⚠️ Ticket automation transcript failed:", repr(e))
 
     try:
-        await _safe_send_message(channel, f"🧹 {reason}")
+        closed_ok = await service_mark_ticket_closed(
+            channel=channel,
+            closed_by=actor,
+            reason=reason,
+        )
+    except Exception as e:
+        print("⚠️ Ticket automation DB close failed:", repr(e))
+        return False
+
+    if not closed_ok:
+        return False
+
+    try:
+        transcript_line = f"\n🧾 Transcript: {transcript_url}" if transcript_url else ""
+        owner_line = f"{owner.mention} " if owner is not None else ""
+        await _safe_send_message(channel, f"🧹 {owner_line}{reason}{transcript_line}")
     except Exception:
         pass
 
+    channel_ref = getattr(channel, "mention", f"`{getattr(channel, 'id', 'unknown')}`")
     try:
-        await channel.delete(reason=reason)
-        return True
-    except Exception as e:
-        print("⚠️ Ticket automation delete failed:", repr(e))
-        return False
+        await _send_staff_alert(
+            guild,
+            settings,
+            f"🧹 Auto-closed {channel_ref} "
+            f"(ticket #{_safe_str(row.get('ticket_number'), 'unknown')}) after {minutes_idle} minute(s) of inactivity.",
+        )
+    except Exception:
+        pass
+
+    return True
 
 
 async def _process_ticket(guild: discord.Guild, row: Dict[str, Any], settings: Dict[str, Any]) -> Dict[str, int]:
@@ -467,12 +596,22 @@ async def _process_ticket(guild: discord.Guild, row: Dict[str, Any], settings: D
         "auto_closed": 0,
     }
 
-    channel = _resolve_ticket_channel(guild, row)
+    if _row_status(row) not in {"open", "claimed"}:
+        return summary
+
+    channel = await _resolve_ticket_channel(guild, row)
     if channel is None:
         return summary
 
     channel_id = _safe_int(row.get("channel_id") or row.get("discord_thread_id"), 0)
     if channel_id <= 0:
+        return summary
+
+    repaired = await _repair_stale_closed_drift(guild, channel, row)
+    if repaired:
+        return summary
+
+    if _channel_looks_closed(channel):
         return summary
 
     state = await asyncio.to_thread(_get_ticket_state_sync, guild.id, channel_id)
@@ -504,17 +643,20 @@ async def _process_ticket(guild: discord.Guild, row: Dict[str, Any], settings: D
     minutes_idle = max(0, int((now - last_activity).total_seconds() // 60))
     reminder_after = max(1, _safe_int(settings.get("inactivity_reminder_minutes"), 240))
     auto_close_after = max(reminder_after + 1, _safe_int(settings.get("auto_close_minutes"), 1440))
+
     last_reminder_at = _parse_iso(state.get("last_inactivity_reminder_at"))
     auto_closed_at = _parse_iso(state.get("auto_closed_at"))
 
-    if (
+    should_send_reminder = (
         _safe_bool(settings.get("inactivity_reminders_enabled"), True)
         and minutes_idle >= reminder_after
         and (
             last_reminder_at is None
-            or int((now - last_reminder_at).total_seconds() // 60) >= reminder_after
+            or last_activity > last_reminder_at
         )
-    ):
+    )
+
+    if should_send_reminder:
         sent = await _send_inactivity_reminder(guild, channel, row, minutes_idle, settings)
         if sent:
             summary["inactivity_reminders"] += 1
@@ -531,7 +673,7 @@ async def _process_ticket(guild: discord.Guild, row: Dict[str, Any], settings: D
         and minutes_idle >= auto_close_after
         and auto_closed_at is None
     ):
-        closed = await _auto_close_ticket(guild, channel, row, minutes_idle)
+        closed = await _auto_close_ticket(guild, channel, row, minutes_idle, settings)
         if closed:
             summary["auto_closed"] += 1
             await asyncio.to_thread(
