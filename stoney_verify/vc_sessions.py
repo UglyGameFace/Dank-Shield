@@ -1,17 +1,110 @@
-# stoney_verify/vc_sessions.py
 from __future__ import annotations
 
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Optional
 
 from .globals import *  # noqa
 
 
+# ============================================================
+# VC session storage / cache
+# ------------------------------------------------------------
+# DB is the source of truth.
+# Memory is only a warm cache / fallback.
+# ============================================================
+
 _MEM_SESSIONS: Dict[str, Dict[str, Any]] = {}
 
+_ALLOWED_STATUSES: set[str] = {
+    "PENDING",
+    "STAFF_ACCEPTED",
+    "OWNER_CONFIRMED",
+    "READY",
+    "IN_VC",
+    "STARTED",
+    "TAKEN_OVER",
+    "RESTARTED",
+    "COMPLETED",
+    "DONE",
+    "CANCELED",
+    "CANCELLED",
+    "EXPIRED",
+}
+
+_ACTIVE_REUSABLE_STATUSES: set[str] = {
+    "PENDING",
+    "STAFF_ACCEPTED",
+    "OWNER_CONFIRMED",
+    "READY",
+    "IN_VC",
+    "STARTED",
+    "TAKEN_OVER",
+    "RESTARTED",
+}
+
+_ALLOWED_UNLOCK_STATUSES: set[str] = {
+    "STAFF_ACCEPTED",
+    "OWNER_CONFIRMED",
+    "READY",
+    "TAKEN_OVER",
+    "RESTARTED",
+}
+
+
+# ============================================================
+# Small helpers
+# ============================================================
 
 def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
+
+
+def _utc_iso(value: Optional[datetime] = None) -> str:
+    dt = value or _utcnow()
+    try:
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt.astimezone(timezone.utc).isoformat()
+    except Exception:
+        return datetime.now(timezone.utc).isoformat()
+
+
+def _as_int(value: Any, default: int = 0) -> int:
+    try:
+        if value is None or isinstance(value, bool):
+            return default
+        return int(str(value).strip())
+    except Exception:
+        return default
+
+
+def _as_str(value: Any, default: str = "") -> str:
+    try:
+        text = str(value or "").strip()
+        return text if text else default
+    except Exception:
+        return default
+
+
+def _normalize_ts(value: Any) -> Optional[str]:
+    try:
+        if value is None:
+            return None
+        if isinstance(value, datetime):
+            if value.tzinfo is None:
+                value = value.replace(tzinfo=timezone.utc)
+            return value.astimezone(timezone.utc).isoformat()
+        text = str(value).strip()
+        return text or None
+    except Exception:
+        return None
+
+
+def _log(msg: str) -> None:
+    try:
+        print(f"🧩 vc_sessions {msg}")
+    except Exception:
+        pass
 
 
 def _sb():
@@ -63,7 +156,8 @@ def _configured_vc_channel_id() -> int:
 
 def _access_minutes() -> int:
     try:
-        return int(globals().get("VC_VERIFY_ACCESS_MINUTES") or 30)
+        value = int(globals().get("VC_VERIFY_ACCESS_MINUTES") or 30)
+        return value if value > 0 else 30
     except Exception:
         return 30
 
@@ -78,7 +172,7 @@ def _initial_meta(meta: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         "takeover_count": 0,
         "restart_count": 0,
         "last_action": "created",
-        "last_action_at": _utcnow().isoformat(),
+        "last_action_at": _utc_iso(),
         "last_action_by": None,
         "started_via": None,
         "restart_reason": None,
@@ -105,44 +199,118 @@ def _merge_meta(old_meta: Any, new_meta: Optional[Dict[str, Any]] = None) -> Dic
 
 
 def _normalize_status(value: Any) -> str:
-    try:
-        return str(value or "").upper().strip() or "PENDING"
-    except Exception:
+    raw = _as_str(value, "PENDING").upper()
+
+    aliases = {
+        "ACCEPTED": "STAFF_ACCEPTED",
+        "STAFF_ACCEPT": "STAFF_ACCEPTED",
+        "OWNER_ACCEPTED": "OWNER_CONFIRMED",
+        "CONFIRMED": "OWNER_CONFIRMED",
+        "UNLOCKED": "READY",
+        "START": "STARTED",
+        "STARTED": "STARTED",
+        "ACTIVE": "IN_VC",
+        "COMPLETE": "COMPLETED",
+        "FINISHED": "COMPLETED",
+        "CANCEL": "CANCELED",
+        "CANCELLED": "CANCELLED",
+        "CANCELED": "CANCELED",
+        "EXPIRE": "EXPIRED",
+    }
+    status = aliases.get(raw, raw)
+    if status not in _ALLOWED_STATUSES:
         return "PENDING"
+    return status
 
 
 def _normalize_row(row: Dict[str, Any]) -> Dict[str, Any]:
-    now_iso = _utcnow().isoformat()
-    token = str(row.get("token") or "").strip()
+    now_iso = _utc_iso()
+    token = _as_str(row.get("token"))
 
     normalized = dict(row)
+
     normalized["token"] = token
     normalized["status"] = _normalize_status(normalized.get("status"))
-    normalized["meta"] = _merge_meta(normalized.get("meta"))
-    normalized["access_minutes"] = int(normalized.get("access_minutes") or _access_minutes())
-    normalized["ticket_channel_id"] = int(normalized.get("ticket_channel_id") or 0) or None
-    normalized["requester_id"] = int(normalized.get("requester_id") or 0) or None
-    normalized["owner_id"] = int(normalized.get("owner_id") or normalized.get("requester_id") or 0) or None
-    normalized["vc_channel_id"] = int(normalized.get("vc_channel_id") or _configured_vc_channel_id() or 0) or None
-    normalized["queue_channel_id"] = int(normalized.get("queue_channel_id") or _queue_channel_id() or 0) or None
+    normalized["guild_id"] = _as_int(normalized.get("guild_id"), 0)
+    normalized["ticket_channel_id"] = _as_int(normalized.get("ticket_channel_id"), 0) or None
+    normalized["requester_id"] = _as_int(normalized.get("requester_id"), 0) or None
+    normalized["owner_id"] = _as_int(normalized.get("owner_id"), 0) or _as_int(normalized.get("requester_id"), 0) or None
+    normalized["vc_channel_id"] = _as_int(normalized.get("vc_channel_id"), 0) or _configured_vc_channel_id() or None
+    normalized["queue_channel_id"] = _as_int(normalized.get("queue_channel_id"), 0) or _queue_channel_id() or None
+    normalized["queue_message_id"] = _as_int(normalized.get("queue_message_id"), 0) or None
 
-    if not normalized.get("created_at"):
-        normalized["created_at"] = now_iso
-    normalized["updated_at"] = normalized.get("updated_at") or now_iso
+    normalized["accepted_by"] = _as_int(normalized.get("accepted_by"), 0) or None
+    normalized["started_by"] = _as_int(normalized.get("started_by"), 0) or None
+    normalized["completed_by"] = _as_int(normalized.get("completed_by"), 0) or None
+    normalized["canceled_by"] = _as_int(normalized.get("canceled_by"), 0) or None
+    normalized["restarted_by"] = _as_int(normalized.get("restarted_by"), 0) or None
+
+    normalized["access_minutes"] = _as_int(normalized.get("access_minutes"), _access_minutes())
+    if normalized["access_minutes"] <= 0:
+        normalized["access_minutes"] = _access_minutes()
+
+    normalized["created_at"] = _normalize_ts(normalized.get("created_at")) or now_iso
+    normalized["updated_at"] = _normalize_ts(normalized.get("updated_at")) or now_iso
+    normalized["accepted_at"] = _normalize_ts(normalized.get("accepted_at"))
+    normalized["ready_at"] = _normalize_ts(normalized.get("ready_at"))
+    normalized["started_at"] = _normalize_ts(normalized.get("started_at"))
+    normalized["completed_at"] = _normalize_ts(normalized.get("completed_at"))
+    normalized["canceled_at"] = _normalize_ts(normalized.get("canceled_at"))
+    normalized["expired_at"] = _normalize_ts(normalized.get("expired_at"))
+    normalized["restarted_at"] = _normalize_ts(normalized.get("restarted_at"))
+    normalized["revoke_at"] = _normalize_ts(normalized.get("revoke_at"))
+    normalized["last_watchdog_at"] = _normalize_ts(normalized.get("last_watchdog_at"))
+
+    normalized["meta"] = _merge_meta(normalized.get("meta"))
 
     return normalized
 
 
+def _db_payload(row: Dict[str, Any]) -> Dict[str, Any]:
+    normalized = _normalize_row(row)
+
+    payload: Dict[str, Any] = {
+        "token": normalized["token"],
+        "guild_id": normalized["guild_id"],
+        "ticket_channel_id": normalized["ticket_channel_id"],
+        "requester_id": normalized["requester_id"],
+        "owner_id": normalized["owner_id"],
+        "vc_channel_id": normalized["vc_channel_id"],
+        "queue_channel_id": normalized["queue_channel_id"],
+        "queue_message_id": normalized["queue_message_id"],
+        "status": normalized["status"],
+        "created_at": normalized["created_at"],
+        "accepted_at": normalized["accepted_at"],
+        "accepted_by": normalized["accepted_by"],
+        "ready_at": normalized["ready_at"],
+        "started_at": normalized["started_at"],
+        "started_by": normalized["started_by"],
+        "completed_at": normalized["completed_at"],
+        "completed_by": normalized["completed_by"],
+        "canceled_at": normalized["canceled_at"],
+        "canceled_by": normalized["canceled_by"],
+        "access_minutes": normalized["access_minutes"],
+        "revoke_at": normalized["revoke_at"],
+        "last_watchdog_at": normalized["last_watchdog_at"],
+        "updated_at": normalized["updated_at"],
+        "expired_at": normalized["expired_at"],
+        "restarted_at": normalized["restarted_at"],
+        "restarted_by": normalized["restarted_by"],
+        "meta": normalized["meta"],
+    }
+    return payload
+
+
 def _write_mem(row: Dict[str, Any]) -> Dict[str, Any]:
     normalized = _normalize_row(row)
-    token = str(normalized.get("token") or "").strip()
+    token = _as_str(normalized.get("token"))
     if token:
         _MEM_SESSIONS[token] = normalized
     return normalized
 
 
 def _read_mem(token: str) -> Optional[Dict[str, Any]]:
-    tok = str(token or "").strip()
+    tok = _as_str(token)
     if not tok:
         return None
     row = _MEM_SESSIONS.get(tok)
@@ -151,37 +319,61 @@ def _read_mem(token: str) -> Optional[Dict[str, Any]]:
     return None
 
 
-def _db_upsert(payload: Dict[str, Any]) -> None:
+# ============================================================
+# DB helpers
+# ============================================================
+
+def _db_upsert(payload: Dict[str, Any]) -> bool:
     sb = _sb()
     if not sb:
-        return
+        return False
+
+    clean = _db_payload(payload)
 
     try:
-        sb.table(_table()).upsert(payload, on_conflict="token").execute()
-        return
-    except Exception:
-        pass
+        sb.table(_table()).upsert(clean, on_conflict="token").execute()
+        return True
+    except Exception as e:
+        _log(f"db_upsert primary failed token={clean.get('token')} err={repr(e)}")
 
     try:
-        sb.table(_table()).upsert(payload).execute()
-        return
-    except Exception:
-        pass
+        sb.table(_table()).upsert(clean).execute()
+        return True
+    except Exception as e:
+        _log(f"db_upsert fallback failed token={clean.get('token')} err={repr(e)}")
 
     try:
-        sb.table(_table()).insert(payload).execute()
-    except Exception:
-        return
+        sb.table(_table()).insert(clean).execute()
+        return True
+    except Exception as e:
+        _log(f"db_insert final failed token={clean.get('token')} err={repr(e)}")
+        return False
 
 
-def _db_update(token: str, patch: Dict[str, Any]) -> None:
+def _db_update(token: str, patch: Dict[str, Any]) -> bool:
     sb = _sb()
     if not sb:
-        return
+        return False
+
+    tok = _as_str(token)
+    if not tok:
+        return False
+
+    clean = dict(patch or {})
+    clean.pop("token", None)
+    if "status" in clean:
+        clean["status"] = _normalize_status(clean.get("status"))
+    if "meta" in clean:
+        clean["meta"] = _merge_meta(clean.get("meta"))
+    if "updated_at" not in clean:
+        clean["updated_at"] = _utc_iso()
+
     try:
-        sb.table(_table()).update(patch).eq("token", str(token)).execute()
-    except Exception:
-        return
+        sb.table(_table()).update(clean).eq("token", tok).execute()
+        return True
+    except Exception as e:
+        _log(f"db_update failed token={tok} err={repr(e)}")
+        return False
 
 
 def _db_get(token: str) -> Optional[Dict[str, Any]]:
@@ -189,19 +381,63 @@ def _db_get(token: str) -> Optional[Dict[str, Any]]:
     if not sb:
         return None
 
+    tok = _as_str(token)
+    if not tok:
+        return None
+
     try:
-        res = sb.table(_table()).select("*").eq("token", str(token)).limit(1).execute()
+        res = sb.table(_table()).select("*").eq("token", tok).limit(1).execute()
         rows = getattr(res, "data", None) or []
         if rows:
             return _normalize_row(dict(rows[0]))
-    except Exception:
+    except Exception as e:
+        _log(f"db_get failed token={tok} err={repr(e)}")
         return None
 
     return None
 
 
+def _db_list_for_owner(
+    *,
+    guild_id: int,
+    owner_id: int,
+    vc_channel_id: Optional[int] = None,
+    limit: int = 25,
+) -> list[Dict[str, Any]]:
+    sb = _sb()
+    if not sb:
+        return []
+
+    out: list[Dict[str, Any]] = []
+    try:
+        query = (
+            sb.table(_table())
+            .select("*")
+            .eq("guild_id", int(guild_id))
+            .eq("owner_id", int(owner_id))
+            .limit(int(limit))
+        )
+        if vc_channel_id and int(vc_channel_id) > 0:
+            query = query.eq("vc_channel_id", int(vc_channel_id))
+        res = query.execute()
+        rows = getattr(res, "data", None) or []
+        for raw in rows:
+            if isinstance(raw, dict):
+                out.append(_normalize_row(dict(raw)))
+    except Exception as e:
+        _log(
+            f"db_list_for_owner failed guild={guild_id} owner={owner_id} "
+            f"vc={int(vc_channel_id or 0)} err={repr(e)}"
+        )
+    return out
+
+
+# ============================================================
+# Public session helpers
+# ============================================================
+
 def get_session(token: str) -> Optional[Dict[str, Any]]:
-    tok = str(token or "").strip()
+    tok = _as_str(token)
     if not tok:
         return None
 
@@ -225,12 +461,14 @@ def create_session(
     access_minutes: int,
     meta: Optional[Dict[str, Any]] = None,
 ) -> None:
-    tok = str(token or "").strip()
+    tok = _as_str(token)
     if not tok:
         return
 
-    now_iso = _utcnow().isoformat()
-    revoke_at = (_utcnow() + timedelta(minutes=int(access_minutes or 30))).isoformat()
+    now_iso = _utc_iso()
+    access_mins = int(access_minutes or _access_minutes())
+    if access_mins <= 0:
+        access_mins = _access_minutes()
 
     payload = _normalize_row(
         {
@@ -238,15 +476,29 @@ def create_session(
             "guild_id": int(guild_id),
             "ticket_channel_id": int(ticket_channel_id or 0) or None,
             "requester_id": int(requester_id or 0) or None,
-            "owner_id": int(owner_id or 0) or None,
+            "owner_id": int(owner_id or 0) or int(requester_id or 0) or None,
             "vc_channel_id": int(vc_channel_id or 0) or None,
             "queue_channel_id": int(queue_channel_id or 0) or None,
+            "queue_message_id": None,
             "status": "PENDING",
-            "access_minutes": int(access_minutes or 30),
-            "revoke_at": revoke_at,
-            "meta": _initial_meta(meta),
             "created_at": now_iso,
             "updated_at": now_iso,
+            "accepted_at": None,
+            "accepted_by": None,
+            "ready_at": None,
+            "started_at": None,
+            "started_by": None,
+            "completed_at": None,
+            "completed_by": None,
+            "canceled_at": None,
+            "canceled_by": None,
+            "expired_at": None,
+            "restarted_at": None,
+            "restarted_by": None,
+            "access_minutes": access_mins,
+            "revoke_at": _utc_iso(_utcnow() + timedelta(minutes=access_mins)),
+            "last_watchdog_at": None,
+            "meta": _initial_meta(meta),
         }
     )
 
@@ -266,12 +518,45 @@ def ensure_session(
     access_minutes: Optional[int] = None,
     meta: Optional[Dict[str, Any]] = None,
 ) -> Optional[Dict[str, Any]]:
-    row = get_session(token)
+    tok = _as_str(token)
+    if not tok:
+        return None
+
+    row = get_session(tok)
     if row:
+        patch: Dict[str, Any] = {}
+        desired_queue_channel_id = int(queue_channel_id or _queue_channel_id() or 0) or None
+        desired_vc_channel_id = int(vc_channel_id or 0) or None
+        desired_ticket_channel_id = int(ticket_channel_id or 0) or None
+        desired_owner_id = int(owner_id or 0) or int(requester_id or 0) or None
+        desired_requester_id = int(requester_id or 0) or None
+        desired_access_minutes = int(access_minutes or row.get("access_minutes") or _access_minutes())
+
+        if not row.get("queue_channel_id") and desired_queue_channel_id:
+            patch["queue_channel_id"] = desired_queue_channel_id
+        if not row.get("vc_channel_id") and desired_vc_channel_id:
+            patch["vc_channel_id"] = desired_vc_channel_id
+        if not row.get("ticket_channel_id") and desired_ticket_channel_id:
+            patch["ticket_channel_id"] = desired_ticket_channel_id
+        if not row.get("owner_id") and desired_owner_id:
+            patch["owner_id"] = desired_owner_id
+        if not row.get("requester_id") and desired_requester_id:
+            patch["requester_id"] = desired_requester_id
+        if int(row.get("access_minutes") or 0) <= 0 and desired_access_minutes > 0:
+            patch["access_minutes"] = desired_access_minutes
+            patch["revoke_at"] = _utc_iso(_utcnow() + timedelta(minutes=desired_access_minutes))
+        if isinstance(meta, dict) and meta:
+            patch["meta"] = _merge_meta(row.get("meta"), meta)
+
+        if patch:
+            updated = _update_local(tok, patch)
+            if updated:
+                _db_update(tok, _db_payload(updated))
+                return updated
         return row
 
     create_session(
-        token=str(token),
+        token=tok,
         guild_id=int(guild_id),
         ticket_channel_id=int(ticket_channel_id or 0),
         requester_id=int(requester_id or 0),
@@ -281,12 +566,25 @@ def ensure_session(
         access_minutes=int(access_minutes or _access_minutes()),
         meta=meta,
     )
-    return get_session(token)
+    return get_session(tok)
 
 
 def _update_local(token: str, patch: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-    current = get_session(token) or {"token": str(token)}
-    updated = _normalize_row({**current, **patch, "updated_at": _utcnow().isoformat()})
+    tok = _as_str(token)
+    if not tok:
+        return None
+
+    current = get_session(tok) or {"token": tok}
+    merged = dict(current)
+
+    for key, value in dict(patch or {}).items():
+        if key == "meta":
+            merged["meta"] = _merge_meta(current.get("meta"), value if isinstance(value, dict) else None)
+        else:
+            merged[key] = value
+
+    merged["updated_at"] = _utc_iso()
+    updated = _normalize_row(merged)
     _write_mem(updated)
     return updated
 
@@ -325,12 +623,12 @@ def extend_expiry(
     if extension_minutes <= 0:
         extension_minutes = _access_minutes()
 
-    meta_current = _merge_meta(current.get("meta"))
-    extension_count = int(meta_current.get("session_extended_count") or 0) + 1
-    now_iso = _utcnow().isoformat()
+    now_iso = _utc_iso()
+    current_meta = _merge_meta(current.get("meta"))
+    extension_count = int(current_meta.get("session_extended_count") or 0) + 1
 
     meta = _merge_meta(
-        meta_current,
+        current_meta,
         {
             "session_extended_count": extension_count,
             "session_extended_reason": str(reason or "session still active"),
@@ -341,23 +639,17 @@ def extend_expiry(
         },
     )
 
-    revoke_at = (_utcnow() + timedelta(minutes=extension_minutes)).isoformat()
+    revoke_at = _utc_iso(_utcnow() + timedelta(minutes=extension_minutes))
     row = _update_local(str(token), {"revoke_at": revoke_at, "meta": meta})
     if row:
-        _db_update(str(token), {"revoke_at": revoke_at, "meta": meta, "updated_at": row["updated_at"]})
-
-
-def _active_statuses() -> set[str]:
-    return {
-        "PENDING",
-        "STAFF_ACCEPTED",
-        "OWNER_CONFIRMED",
-        "READY",
-        "IN_VC",
-        "STARTED",
-        "TAKEN_OVER",
-        "RESTARTED",
-    }
+        _db_update(
+            str(token),
+            {
+                "revoke_at": revoke_at,
+                "meta": meta,
+                "updated_at": row["updated_at"],
+            },
+        )
 
 
 def get_reusable_session(
@@ -368,26 +660,14 @@ def get_reusable_session(
 ) -> Optional[Dict[str, Any]]:
     candidates: list[Dict[str, Any]] = []
 
-    if sb_enabled():
-        sb = _sb()
-        if sb:
-            try:
-                query = (
-                    sb.table(_table())
-                    .select("*")
-                    .eq("guild_id", int(guild_id))
-                    .eq("owner_id", int(owner_id))
-                    .limit(25)
-                )
-                if vc_channel_id and int(vc_channel_id) > 0:
-                    query = query.eq("vc_channel_id", int(vc_channel_id))
-                res = query.execute()
-                rows = getattr(res, "data", None) or []
-                for raw in rows:
-                    if isinstance(raw, dict):
-                        candidates.append(_normalize_row(dict(raw)))
-            except Exception:
-                pass
+    candidates.extend(
+        _db_list_for_owner(
+            guild_id=int(guild_id),
+            owner_id=int(owner_id),
+            vc_channel_id=int(vc_channel_id or 0) or None,
+            limit=25,
+        )
+    )
 
     for raw in list(_MEM_SESSIONS.values()):
         try:
@@ -404,13 +684,13 @@ def get_reusable_session(
 
     dedup: Dict[str, Dict[str, Any]] = {}
     for row in candidates:
-        tok = str(row.get("token") or "").strip()
+        tok = _as_str(row.get("token"))
         if tok:
             dedup[tok] = row
 
     active_rows = []
     for row in dedup.values():
-        if _normalize_status(row.get("status")) in _active_statuses():
+        if _normalize_status(row.get("status")) in _ACTIVE_REUSABLE_STATUSES:
             active_rows.append(row)
 
     active_rows.sort(
@@ -418,16 +698,6 @@ def get_reusable_session(
         reverse=True,
     )
     return active_rows[0] if active_rows else None
-
-
-def _allowed_unlock_statuses() -> set[str]:
-    return {
-        "STAFF_ACCEPTED",
-        "OWNER_CONFIRMED",
-        "READY",
-        "TAKEN_OVER",
-        "RESTARTED",
-    }
 
 
 def session_is_unlockable(
@@ -441,7 +711,7 @@ def session_is_unlockable(
         return False, "Session not found."
 
     status = _normalize_status(row.get("status"))
-    if status not in _allowed_unlock_statuses():
+    if status not in _ALLOWED_UNLOCK_STATUSES:
         return False, f"Session status `{status}` cannot unlock VC."
 
     guild_id = int(row.get("guild_id") or 0)
@@ -477,42 +747,53 @@ def transition(
     staff_id: int = 0,
     extra: Optional[Dict[str, Any]] = None,
 ) -> None:
-    current = get_session(token) or {"token": str(token)}
-    now = _utcnow().isoformat()
+    tok = _as_str(token)
+    if not tok:
+        return
+
+    current = get_session(tok) or {"token": tok}
+    now = _utc_iso()
     status = _normalize_status(new_status)
     patch: Dict[str, Any] = {"status": status}
 
-    if status in ("ACCEPTED", "STAFF_ACCEPTED"):
+    if status == "STAFF_ACCEPTED":
         patch["accepted_at"] = now
         patch["accepted_by"] = int(staff_id or 0) or None
-    elif status in ("READY",):
+
+    elif status == "READY":
         patch["ready_at"] = now
-    elif status in ("IN_VC", "STARTED"):
+
+    elif status in {"IN_VC", "STARTED"}:
         patch["started_at"] = now
         patch["started_by"] = int(staff_id or 0) or None
-    elif status in ("COMPLETED", "DONE"):
+
+    elif status in {"COMPLETED", "DONE"}:
         patch["completed_at"] = now
         patch["completed_by"] = int(staff_id or 0) or None
-    elif status in ("CANCELED", "CANCELLED"):
+
+    elif status in {"CANCELED", "CANCELLED"}:
         patch["canceled_at"] = now
         patch["canceled_by"] = int(staff_id or 0) or None
-    elif status in ("EXPIRED",):
+
+    elif status == "EXPIRED":
         patch["expired_at"] = now
-    elif status in ("TAKEN_OVER",):
+
+    elif status == "TAKEN_OVER":
         patch["accepted_at"] = now
         patch["accepted_by"] = int(staff_id or 0) or None
-    elif status in ("RESTARTED",):
+
+    elif status == "RESTARTED":
         patch["restarted_at"] = now
         patch["restarted_by"] = int(staff_id or 0) or None
 
     if extra is not None:
         patch["meta"] = _merge_meta(current.get("meta"), extra)
 
-    row = _update_local(str(token), patch)
+    row = _update_local(tok, patch)
     if row:
         db_patch = dict(patch)
         db_patch["updated_at"] = row["updated_at"]
-        _db_update(str(token), db_patch)
+        _db_update(tok, db_patch)
 
 
 def set_staff_accepted(
@@ -529,7 +810,7 @@ def set_staff_accepted(
             "assigned_staff_id": int(staff_id),
             "assigned_staff_name": str(staff_name or ""),
             "last_action": "staff_accept",
-            "last_action_at": _utcnow().isoformat(),
+            "last_action_at": _utc_iso(),
             "last_action_by": int(staff_id),
         },
     )
@@ -547,7 +828,7 @@ def set_owner_confirmed(
         {
             "owner_confirmed": True,
             "last_action": "owner_confirm",
-            "last_action_at": _utcnow().isoformat(),
+            "last_action_at": _utc_iso(),
             "last_action_by": int(owner_id),
         },
     )
@@ -571,7 +852,7 @@ def mark_unlocked(
             "unlock_guard_passed": True,
             "unlock_guard_reason": str(guard_reason or "passed"),
             "last_action": "unlock",
-            "last_action_at": _utcnow().isoformat(),
+            "last_action_at": _utc_iso(),
             "last_action_by": int(by_staff_id or 0) or None,
         },
     )
@@ -588,7 +869,7 @@ def mark_started(
         current.get("meta"),
         {
             "last_action": "start",
-            "last_action_at": _utcnow().isoformat(),
+            "last_action_at": _utc_iso(),
             "last_action_by": int(by_staff_id),
         },
     )
@@ -606,7 +887,7 @@ def mark_completed(
         {
             "unlocked": False,
             "last_action": "complete",
-            "last_action_at": _utcnow().isoformat(),
+            "last_action_at": _utc_iso(),
             "last_action_by": int(by_staff_id),
         },
     )
@@ -625,7 +906,7 @@ def mark_canceled(
         {
             "unlocked": False,
             "last_action": "cancel",
-            "last_action_at": _utcnow().isoformat(),
+            "last_action_at": _utc_iso(),
             "last_action_by": int(by_staff_id),
             "cancel_reason": str(reason or ""),
         },
@@ -655,7 +936,7 @@ def restart_session(
             "restart_count": restart_count,
             "restart_reason": str(reason or ""),
             "last_action": "restart",
-            "last_action_at": _utcnow().isoformat(),
+            "last_action_at": _utc_iso(),
             "last_action_by": int(by_staff_id),
         },
     )
@@ -683,7 +964,7 @@ def takeover_session(
             "takeover_count": takeover_count,
             "takeover_reason": str(reason or ""),
             "last_action": "takeover",
-            "last_action_at": _utcnow().isoformat(),
+            "last_action_at": _utc_iso(),
             "last_action_by": int(new_staff_id),
         },
     )
@@ -702,7 +983,7 @@ def clear_unlock(
         {
             "unlocked": False,
             "last_action": action_name,
-            "last_action_at": _utcnow().isoformat(),
+            "last_action_at": _utc_iso(),
             "last_action_by": int(by_staff_id or 0) or None,
         },
     )
@@ -710,10 +991,20 @@ def clear_unlock(
 
 
 def touch_watchdog(token: str) -> None:
-    row = _update_local(str(token), {"last_watchdog_at": _utcnow().isoformat()})
+    row = _update_local(str(token), {"last_watchdog_at": _utc_iso()})
     if row:
-        _db_update(str(token), {"last_watchdog_at": row["last_watchdog_at"], "updated_at": row["updated_at"]})
+        _db_update(
+            str(token),
+            {
+                "last_watchdog_at": row["last_watchdog_at"],
+                "updated_at": row["updated_at"],
+            },
+        )
 
+
+# ============================================================
+# Async wrappers used by higher-level VC flow
+# ============================================================
 
 async def start_session(
     *,
@@ -736,13 +1027,13 @@ async def start_session(
             access_minutes=int(_access_minutes()),
             meta={"started_via": "button"},
         )
-    except Exception:
-        pass
+    except Exception as e:
+        _log(f"start_session ensure_session failed token={token} err={repr(e)}")
 
     try:
         mark_started(token=str(token), by_staff_id=int(staff_id))
-    except Exception:
-        pass
+    except Exception as e:
+        _log(f"start_session mark_started failed token={token} err={repr(e)}")
 
 
 async def end_session(
@@ -754,13 +1045,39 @@ async def end_session(
 ) -> None:
     try:
         norm = _normalize_status(status or "COMPLETED")
-        if norm in ("COMPLETED", "DONE"):
+        if norm in {"COMPLETED", "DONE"}:
             mark_completed(token=str(token), by_staff_id=int(staff_id))
-        elif norm in ("CANCELED", "CANCELLED"):
+        elif norm in {"CANCELED", "CANCELLED"}:
             mark_canceled(token=str(token), by_staff_id=int(staff_id))
         elif norm == "EXPIRED":
             transition(token=str(token), new_status="EXPIRED", staff_id=int(staff_id))
         else:
             transition(token=str(token), new_status=norm, staff_id=int(staff_id))
-    except Exception:
-        pass
+    except Exception as e:
+        _log(f"end_session failed token={token} status={status} err={repr(e)}")
+
+
+__all__ = [
+    "sb_enabled",
+    "get_session",
+    "create_session",
+    "ensure_session",
+    "set_queue_message",
+    "update_meta",
+    "extend_expiry",
+    "get_reusable_session",
+    "session_is_unlockable",
+    "transition",
+    "set_staff_accepted",
+    "set_owner_confirmed",
+    "mark_unlocked",
+    "mark_started",
+    "mark_completed",
+    "mark_canceled",
+    "restart_session",
+    "takeover_session",
+    "clear_unlock",
+    "touch_watchdog",
+    "start_session",
+    "end_session",
+]
