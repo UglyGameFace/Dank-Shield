@@ -17,6 +17,7 @@ from .globals import *
 
 # Split-out admin slash commands
 from . import verify_admin_commands  # noqa: F401
+from . import spam_guard  # noqa: F401
 
 from .raidguard import (
     _account_age_days,
