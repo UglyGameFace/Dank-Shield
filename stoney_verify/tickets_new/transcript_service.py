@@ -11,6 +11,13 @@ import discord
 from ..globals import TRANSCRIPTS_CHANNEL_ID, now_utc
 from .service import attach_transcript_to_ticket, mark_ticket_deleted
 
+try:
+    from .repository import get_ticket_by_any_channel_id
+except Exception:
+    async def get_ticket_by_any_channel_id(channel_id: int | str) -> Optional[Dict[str, Any]]:  # type: ignore
+        return None
+
+
 # ============================================================
 # transcript_service.py
 # ------------------------------------------------------------
@@ -21,6 +28,7 @@ from .service import attach_transcript_to_ticket, mark_ticket_deleted
 # - Best-effort attach transcript metadata to DB
 # - Mark ticket deleted in DB before final delete
 # - Avoid duplicate concurrent transcript/delete flows
+# - Stay idempotent when the same delete/transcript action is hit twice
 # ============================================================
 
 _DELETE_LOCKS: Dict[str, asyncio.Lock] = {}
@@ -66,6 +74,13 @@ def _safe_text(value: Any) -> str:
         return str(value)
     except Exception:
         return ""
+
+
+def _safe_int(value: Any, default: int = 0) -> int:
+    try:
+        return int(str(value).strip())
+    except Exception:
+        return default
 
 
 def _safe_topic_text(value: Any, max_len: int = 800) -> str:
@@ -582,16 +597,82 @@ async def _get_transcripts_channel(
     return None
 
 
+async def _ticket_row(channel_id: int | str) -> Optional[Dict[str, Any]]:
+    try:
+        row = await get_ticket_by_any_channel_id(channel_id)
+        if isinstance(row, dict):
+            return row
+    except Exception as e:
+        print("⚠️ Failed loading ticket row for transcript flow:", repr(e))
+    return None
+
+
+def _row_status(row: Optional[Dict[str, Any]]) -> str:
+    try:
+        return str((row or {}).get("status") or "").strip().lower()
+    except Exception:
+        return ""
+
+
+def _row_has_transcript(row: Optional[Dict[str, Any]]) -> bool:
+    if not isinstance(row, dict):
+        return False
+    try:
+        return bool(
+            str(row.get("transcript_url") or "").strip()
+            or str(row.get("transcript_message_id") or "").strip()
+            or str(row.get("transcript_channel_id") or "").strip()
+        )
+    except Exception:
+        return False
+
+
+def _row_transcript_payload(row: Optional[Dict[str, Any]]) -> Tuple[Optional[str], Optional[int], Optional[int]]:
+    if not isinstance(row, dict):
+        return None, None, None
+
+    try:
+        url = _safe_text(row.get("transcript_url") or "").strip() or None
+    except Exception:
+        url = None
+
+    try:
+        message_id = _safe_int(row.get("transcript_message_id"), 0) or None
+    except Exception:
+        message_id = None
+
+    try:
+        channel_id = _safe_int(row.get("transcript_channel_id"), 0) or None
+    except Exception:
+        channel_id = None
+
+    return url, message_id, channel_id
+
+
 def _transcript_summary_embed(
     *,
     ticket_channel: discord.TextChannel,
     deleted_by: Optional[discord.Member | discord.User],
     reason: Optional[str],
     message_count: int,
+    ticket_row: Optional[Dict[str, Any]] = None,
 ) -> discord.Embed:
     deleted_by_text = _safe_text(deleted_by) if deleted_by else "Unknown"
     reason_text = reason or "Ticket deleted"
     topic_text = _safe_topic_text(ticket_channel.topic, max_len=1000)
+
+    ticket_number = None
+    owner_id = None
+    status = None
+    category = None
+    priority = None
+
+    if isinstance(ticket_row, dict):
+        ticket_number = ticket_row.get("ticket_number")
+        owner_id = ticket_row.get("user_id") or ticket_row.get("owner_id") or ticket_row.get("requester_id")
+        status = ticket_row.get("status")
+        category = ticket_row.get("category")
+        priority = ticket_row.get("priority")
 
     embed = discord.Embed(
         title=f"🧾 Transcript for #{ticket_channel.name}",
@@ -601,6 +682,18 @@ def _transcript_summary_embed(
     embed.add_field(name="Channel ID", value=f"`{ticket_channel.id}`", inline=True)
     embed.add_field(name="Guild ID", value=f"`{ticket_channel.guild.id}`", inline=True)
     embed.add_field(name="Messages", value=f"`{message_count}`", inline=True)
+
+    if ticket_number is not None:
+        embed.add_field(name="Ticket #", value=f"`{ticket_number}`", inline=True)
+    if owner_id:
+        embed.add_field(name="Owner ID", value=f"`{owner_id}`", inline=True)
+    if status:
+        embed.add_field(name="Status", value=f"`{status}`", inline=True)
+    if category:
+        embed.add_field(name="Category", value=f"`{_truncate_for_discord(_safe_text(category), 200)}`", inline=True)
+    if priority:
+        embed.add_field(name="Priority", value=f"`{_truncate_for_discord(_safe_text(priority), 60)}`", inline=True)
+
     embed.add_field(name="Deleted/Finished By", value=f"`{deleted_by_text}`", inline=False)
     embed.add_field(name="Reason", value=f"`{_truncate_for_discord(reason_text, 900)}`", inline=False)
     embed.add_field(name="Topic", value=f"`{_truncate_for_discord(topic_text, 900)}`", inline=False)
@@ -617,6 +710,15 @@ async def post_transcript_to_channel(
     lock = _channel_lock(_TRANSCRIPT_POST_LOCKS, ticket_channel.id)
 
     async with lock:
+        row_before = await _ticket_row(ticket_channel.id)
+        if _row_has_transcript(row_before):
+            existing_url, existing_message_id, existing_channel_id = _row_transcript_payload(row_before)
+            print(
+                f"ℹ️ Transcript already attached for channel={ticket_channel.id} "
+                f"url={existing_url!r} msg={existing_message_id!r} ch={existing_channel_id!r}"
+            )
+            return None, existing_url
+
         transcript_channel = await _get_transcripts_channel(ticket_channel.guild)
         if transcript_channel is None:
             print("⚠️ Transcript post skipped: transcripts channel unavailable.")
@@ -628,6 +730,7 @@ async def post_transcript_to_channel(
             deleted_by=deleted_by,
             reason=reason,
             message_count=message_count,
+            ticket_row=row_before,
         )
 
         try:
@@ -637,6 +740,18 @@ async def post_transcript_to_channel(
                 allowed_mentions=discord.AllowedMentions.none(),
             )
             jump_url = getattr(posted, "jump_url", None)
+
+            try:
+                await attach_transcript_to_ticket(
+                    channel_id=ticket_channel.id,
+                    transcript_url=jump_url,
+                    transcript_message_id=posted.id,
+                    transcript_channel_id=posted.channel.id,
+                    actor=deleted_by,
+                )
+            except Exception as e:
+                print("⚠️ Failed attaching transcript metadata during post:", repr(e))
+
             return posted, jump_url
         except Exception as e:
             print("❌ Failed posting transcript:", repr(e))
@@ -655,10 +770,15 @@ async def delete_ticket_with_optional_transcript(
     Main deletion flow.
 
     Normal tickets:
-      transcript MUST post before delete
+      transcript MUST exist before delete
 
     Ghost tickets:
       transcript optional unless force_transcript_for_ghost=True
+
+    Guarantees:
+    - idempotent lock per channel
+    - transcript is not reposted if one is already attached
+    - DB is marked deleted before final channel delete
     """
     lock = _channel_lock(_DELETE_LOCKS, channel.id)
 
@@ -668,22 +788,32 @@ async def delete_ticket_with_optional_transcript(
         transcript_channel_id: Optional[int] = None
         transcript_message_id: Optional[int] = None
 
+        row_before = await _ticket_row(channel.id)
+        already_had_transcript = _row_has_transcript(row_before)
+        existing_url, existing_message_id, existing_channel_id = _row_transcript_payload(row_before)
+
+        if already_had_transcript:
+            transcript_url = existing_url
+            transcript_message_id = existing_message_id
+            transcript_channel_id = existing_channel_id
+
         should_post_transcript = (not is_ghost) or force_transcript_for_ghost
 
-        if should_post_transcript:
+        if should_post_transcript and not already_had_transcript:
             transcript_message, transcript_url = await post_transcript_to_channel(
                 ticket_channel=channel,
                 deleted_by=deleted_by,
                 reason=reason,
             )
 
-            if transcript_message is None and not is_ghost:
+            if transcript_message is None and not transcript_url and not is_ghost:
                 return {
                     "ok": False,
                     "deleted": False,
                     "db_marked_deleted": False,
                     "transcript_required": True,
                     "transcript_posted": False,
+                    "transcript_already_existed": False,
                     "transcript_url": None,
                     "transcript_message_id": None,
                     "transcript_channel_id": None,
@@ -730,7 +860,8 @@ async def delete_ticket_with_optional_transcript(
                 "deleted": True,
                 "db_marked_deleted": bool(db_marked_deleted),
                 "transcript_required": bool(should_post_transcript),
-                "transcript_posted": transcript_message is not None,
+                "transcript_posted": transcript_message is not None or already_had_transcript,
+                "transcript_already_existed": bool(already_had_transcript),
                 "transcript_url": transcript_url,
                 "transcript_message_id": transcript_message_id,
                 "transcript_channel_id": transcript_channel_id,
@@ -743,7 +874,8 @@ async def delete_ticket_with_optional_transcript(
                 "deleted": False,
                 "db_marked_deleted": bool(db_marked_deleted),
                 "transcript_required": bool(should_post_transcript),
-                "transcript_posted": transcript_message is not None,
+                "transcript_posted": transcript_message is not None or already_had_transcript,
+                "transcript_already_existed": bool(already_had_transcript),
                 "transcript_url": transcript_url,
                 "transcript_message_id": transcript_message_id,
                 "transcript_channel_id": transcript_channel_id,
