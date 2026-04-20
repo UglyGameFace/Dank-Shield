@@ -472,6 +472,11 @@ def _set_vc_request_cache(token: str, patch: Dict[str, Any]) -> Dict[str, Any]:
     return merged
 
 
+def _interaction_action_lock(action: str, token: Optional[str], channel_id: Optional[int | str] = None) -> asyncio.Lock:
+    key = f"interaction:{_safe_str(action)}:{_safe_str(token) or _safe_str(channel_id) or 'default'}"
+    return _get_lock(key)
+
+
 def _ensure_vc_request_session(
     *,
     guild: discord.Guild,
@@ -1383,628 +1388,636 @@ async def _handle_vc_staff_action(
         except Exception:
             owner = None
 
-    if action == "vc_upload":
-        try:
-            if owner:
-                await _vc_revoke_access(guild, owner, token, reason="upload-requested")
-        except Exception:
-            pass
+    async with _interaction_action_lock(action, token, ticket_ch.id):
+        if action == "vc_upload":
+            try:
+                if owner:
+                    await _vc_revoke_access(guild, owner, token, reason="upload-requested")
+            except Exception:
+                pass
 
-        try:
-            await post_or_replace_verify_ui(
-                ticket_ch,
-                requester_id=int(owner.id) if owner else None,
-                reason=f"vc_upload_requested:{interaction.user.id}",
-                site_url=VERIFY_SITE_URL,
-                ttl_minutes=TOKEN_TTL_MINUTES,
-                allow_regen=ALLOW_USER_VERIFYLINK,
-            )
-        except Exception:
-            pass
+            try:
+                await post_or_replace_verify_ui(
+                    ticket_ch,
+                    requester_id=int(owner.id) if owner else None,
+                    reason=f"vc_upload_requested:{interaction.user.id}",
+                    site_url=VERIFY_SITE_URL,
+                    ttl_minutes=TOKEN_TTL_MINUTES,
+                    allow_regen=ALLOW_USER_VERIFYLINK,
+                )
+            except Exception:
+                pass
 
-        try:
-            await _vc_disable_panels_everywhere(
-                guild,
+            try:
+                await _vc_disable_panels_everywhere(
+                    guild,
+                    token,
+                    status_text=f"Upload requested by {interaction.user.mention}",
+                )
+            except Exception:
+                pass
+
+            _sync_vc_request_status(
                 token,
-                status_text=f"Upload requested by {interaction.user.mention}",
+                status="UPLOAD_REQUESTED",
+                handled_by=int(interaction.user.id),
+                handled_at=now_utc().isoformat(),
             )
-        except Exception:
-            pass
 
-        _sync_vc_request_status(
-            token,
-            status="UPLOAD_REQUESTED",
-            handled_by=int(interaction.user.id),
-            handled_at=now_utc().isoformat(),
-        )
+            try:
+                if owner:
+                    await ticket_ch.send(
+                        f"🔁 {owner.mention} Staff requested **secure upload** instead.\n"
+                        "Use the **Upload ID** button above."
+                    )
+                else:
+                    await ticket_ch.send(
+                        "🔁 Staff requested **secure upload** instead.\n"
+                        "Use the **Upload ID** button above."
+                    )
+            except Exception:
+                pass
 
-        try:
-            if owner:
-                await ticket_ch.send(
-                    f"🔁 {owner.mention} Staff requested **secure upload** instead.\n"
-                    "Use the **Upload ID** button above."
-                )
-            else:
-                await ticket_ch.send(
-                    "🔁 Staff requested **secure upload** instead.\n"
-                    "Use the **Upload ID** button above."
-                )
-        except Exception:
-            pass
-
-        await _disable_interaction_message_if_possible(
-            interaction,
-            content_suffix=f"🔁 Upload requested by {interaction.user.mention}.",
-        )
-        await interaction.followup.send("✅ Requested upload instead (ticket stays open).", ephemeral=True)
-        return True
-
-    if action == "vc_accept":
-        token_info_live = sb_get_token_info(token)
-        if token_info_live and token_info_live.get("used", False):
-            await interaction.followup.send("❌ This token has already been used.", ephemeral=True)
+            await _disable_interaction_message_if_possible(
+                interaction,
+                content_suffix=f"🔁 Upload requested by {interaction.user.mention}.",
+            )
+            await interaction.followup.send("✅ Requested upload instead (ticket stays open).", ephemeral=True)
             return True
 
-        existing_staff_id = _vc_request_assigned_staff_id(token)
-        existing_status = _vc_request_status(token)
+        if action == "vc_accept":
+            token_info_live = sb_get_token_info(token)
+            if token_info_live and token_info_live.get("used", False):
+                await interaction.followup.send("❌ This token has already been used.", ephemeral=True)
+                return True
 
-        if existing_status in {"STAFF_ACCEPTED", "STARTED", "IN_VC", "TAKEN_OVER", "READY"}:
-            if existing_staff_id and existing_staff_id != int(interaction.user.id):
+            existing_staff_id = _vc_request_assigned_staff_id(token)
+            existing_status = _vc_request_status(token)
+
+            if existing_status in {"STAFF_ACCEPTED", "STARTED", "IN_VC", "TAKEN_OVER", "READY"}:
+                if existing_staff_id and existing_staff_id != int(interaction.user.id):
+                    await interaction.followup.send(
+                        "❌ Another staff member already accepted this VC request.",
+                        ephemeral=True,
+                    )
+                    return True
+
+            if not isinstance(owner, discord.Member):
                 await interaction.followup.send(
-                    "❌ Another staff member already accepted this VC request.",
+                    "❌ Could not detect ticket owner for VC verification.",
                     ephemeral=True,
                 )
                 return True
 
-        if not isinstance(owner, discord.Member):
-            await interaction.followup.send(
-                "❌ Could not detect ticket owner for VC verification.",
-                ephemeral=True,
-            )
-            return True
+            vc_ch = _get_vc_channel(guild)
+            if not vc_ch:
+                await interaction.followup.send("❌ VC verification channel not found.", ephemeral=True)
+                return True
 
-        session_ok = _ensure_vc_request_session(
-            guild=guild,
-            token=token,
-            ticket_channel=ticket_ch,
-            owner=owner,
-            staff_member=interaction.user,
-        )
-        if not session_ok:
-            await interaction.followup.send(
-                "❌ Failed to prepare the VC session record. Try again.",
-                ephemeral=True,
-            )
-            return True
+            me = guild.me
+            if not me:
+                await interaction.followup.send("❌ Bot member missing.", ephemeral=True)
+                return True
 
-        _vc_session_set_staff_accepted(token, interaction.user)
-
-        _sync_vc_request_status(
-            token,
-            status="STAFF_ACCEPTED",
-            accepted_by=int(interaction.user.id),
-            accepted_staff_id=int(interaction.user.id),
-            assigned_staff_id=int(interaction.user.id),
-            accepted_at=now_utc().isoformat(),
-            owner_id=int(owner.id),
-            requester_id=int(owner.id),
-            ticket_channel_id=int(ticket_ch.id),
-            guild_id=int(guild.id),
-            vc_channel_id=int(_configured_vc_channel_id() or 0),
-            queue_channel_id=int(_configured_vc_queue_channel_id() or 0),
-            access_minutes=int(_configured_vc_access_minutes()),
-        )
-        _bump_runtime_stat("vc_accepted")
-
-        vc_ch = _get_vc_channel(guild)
-        if not vc_ch:
-            await interaction.followup.send("❌ VC verification channel not found.", ephemeral=True)
-            return True
-
-        me = guild.me
-        if not me:
-            await interaction.followup.send("❌ Bot member missing.", ephemeral=True)
-            return True
-
-        ok, perm_msg = _can_manage_channel(me, vc_ch)
-        if not ok:
-            await interaction.followup.send(
-                f"❌ Bot lacks required permissions: {perm_msg}",
-                ephemeral=True,
-            )
-            return True
-
-        try:
-            await _vc_disable_panels_everywhere(
-                guild,
-                token,
-                status_text=f"Accepted by {interaction.user.mention}",
-            )
-        except Exception:
-            pass
-
-        staff_controls = discord.ui.View(timeout=None)
-        staff_controls.add_item(discord.ui.Button(
-            label="▶️ Start VC Session",
-            style=discord.ButtonStyle.success,
-            custom_id=make_custom_id("vc_start", token),
-        ))
-        staff_controls.add_item(discord.ui.Button(
-            label="🔁 Ask for Upload Instead",
-            style=discord.ButtonStyle.secondary,
-            custom_id=make_custom_id("vc_upload", token),
-        ))
-        staff_controls.add_item(discord.ui.Button(
-            label="♻️ Reissue Token",
-            style=discord.ButtonStyle.secondary,
-            custom_id=make_custom_id("vc_reissue", token),
-        ))
-        staff_controls.add_item(discord.ui.Button(
-            label="🧹 End VC Session",
-            style=discord.ButtonStyle.secondary,
-            custom_id=make_custom_id("vc_end", token),
-        ))
-
-        try:
-            if getattr(interaction, "message", None):
-                await interaction.message.edit(
-                    content=f"✅ VC verify accepted by {interaction.user.mention} for {owner.mention}.",
-                    embed=None,
-                    view=staff_controls,
+            ok, perm_msg = _can_manage_channel(me, vc_ch)
+            if not ok:
+                await interaction.followup.send(
+                    f"❌ Bot lacks required permissions: {perm_msg}",
+                    ephemeral=True,
                 )
-                msg_obj = interaction.message
-            else:
-                msg_obj = await interaction.channel.send(
-                    content=f"✅ VC verify accepted by {interaction.user.mention} for {owner.mention}.",
-                    view=staff_controls,
-                )
-            _set_vc_request_cache(token, {"staff_panel_msg_id": int(getattr(msg_obj, "id", 0) or 0)})
-        except Exception:
-            pass
+                return True
 
-        try:
-            await _send_or_edit_ticket_vc_status(
-                ticket_channel=ticket_ch,
-                owner=owner,
-                content_msg=(
-                    f"✅ **VC Verify accepted** by {interaction.user.mention}\n\n"
-                    f"{owner.mention} please wait here. When staff is ready, you'll be told to join <#{int(vc_ch.id)}>."
-                ),
-                view=None,
-            )
-        except Exception:
-            pass
-
-        await interaction.followup.send(
-            "✅ Accepted VC verify. Press **Start VC Session** when you're ready to actually open the VC.",
-            ephemeral=True,
-        )
-        return True
-
-    if action == "vc_start":
-        if not isinstance(interaction.user, discord.Member):
-            await interaction.followup.send("❌ Staff member could not be resolved.", ephemeral=True)
-            return True
-
-        if not isinstance(owner, discord.Member):
-            await interaction.followup.send(
-                "❌ Could not detect the ticket owner for this VC session.",
-                ephemeral=True,
-            )
-            return True
-
-        session_ok = _ensure_vc_request_session(
-            guild=guild,
-            token=token,
-            ticket_channel=ticket_ch,
-            owner=owner,
-            staff_member=interaction.user,
-        )
-        if not session_ok:
-            await interaction.followup.send(
-                "❌ Failed to prepare the VC session record.",
-                ephemeral=True,
-            )
-            return True
-
-        lock_ok, lock_msg = await _vc_lock_channel_for_session(
-            guild,
-            owner,
-            interaction.user,
-            token,
-        )
-        if not lock_ok:
-            await interaction.followup.send(
-                f"❌ Failed to start VC session: {lock_msg}",
-                ephemeral=True,
-            )
-            return True
-
-        _sync_vc_request_status(
-            token,
-            status="STARTED",
-            started_by=str(interaction.user.id),
-            started_at=now_utc().isoformat(),
-            accepted_by=int(_vc_request_cache(token).get("accepted_by") or interaction.user.id),
-            accepted_staff_id=int(_vc_request_cache(token).get("accepted_staff_id") or interaction.user.id),
-            assigned_staff_id=int(_vc_request_cache(token).get("assigned_staff_id") or interaction.user.id),
-            owner_id=int(owner.id),
-            requester_id=int(owner.id),
-            requested_by=int(_vc_request_cache(token).get("requested_by") or owner.id),
-            ticket_channel_id=int(getattr(ticket_ch, "id", 0) or 0),
-            guild_id=int(guild.id),
-            vc_channel_id=int(_configured_vc_channel_id() or 0),
-            queue_channel_id=int(_configured_vc_queue_channel_id() or 0),
-            access_minutes=int(_configured_vc_access_minutes()),
-        )
-
-        await _vc_session_mark_started(
-            guild=guild,
-            token=token,
-            ticket_channel=ticket_ch,
-            owner=owner,
-            staff_member=interaction.user,
-        )
-
-        vc_id = int(_configured_vc_channel_id() or 0)
-        view = None
-        if vc_id:
-            try:
-                view = discord.ui.View(timeout=1800)
-                view.add_item(discord.ui.Button(
-                    label="🎙️ Join ID-Verify VC",
-                    style=discord.ButtonStyle.link,
-                    url=_discord_channel_url(guild.id, vc_id),
-                ))
-            except Exception:
-                view = None
-
-        move_result = ""
-        try:
-            moved, move_msg = await vc_move_member_into_verify_vc(
+            session_ok = _ensure_vc_request_session(
                 guild=guild,
-                member=owner,
-            )
-            if moved:
-                move_result = f"\n✅ {move_msg}"
-        except Exception:
-            move_result = ""
-
-        access_min = int(_configured_vc_access_minutes())
-
-        try:
-            await _send_or_edit_ticket_vc_status(
+                token=token,
                 ticket_channel=ticket_ch,
                 owner=owner,
-                content_msg=(
-                    f"🎙️ **VC session started** by {interaction.user.mention}\n\n"
-                    f"{owner.mention} tap below to join <#{vc_id}> now.\n"
-                    f"⏳ Temporary access expires in ~{access_min} minutes."
-                    f"{move_result}"
-                ),
-                view=view,
+                staff_member=interaction.user,
             )
-        except Exception:
-            pass
+            if not session_ok:
+                await interaction.followup.send(
+                    "❌ Failed to prepare the VC session record. Try again.",
+                    ephemeral=True,
+                )
+                return True
 
-        try:
-            approve_view = discord.ui.View(timeout=None)
-            approve_view.add_item(discord.ui.Button(
-                label="✅ Approve (VC)",
+            _vc_session_set_staff_accepted(token, interaction.user)
+
+            _sync_vc_request_status(
+                token,
+                status="STAFF_ACCEPTED",
+                accepted_by=int(interaction.user.id),
+                accepted_staff_id=int(interaction.user.id),
+                assigned_staff_id=int(interaction.user.id),
+                accepted_at=now_utc().isoformat(),
+                owner_id=int(owner.id),
+                requester_id=int(owner.id),
+                ticket_channel_id=int(ticket_ch.id),
+                guild_id=int(guild.id),
+                vc_channel_id=int(_configured_vc_channel_id() or 0),
+                queue_channel_id=int(_configured_vc_queue_channel_id() or 0),
+                access_minutes=int(_configured_vc_access_minutes()),
+            )
+            _bump_runtime_stat("vc_accepted")
+
+            try:
+                await _vc_disable_panels_everywhere(
+                    guild,
+                    token,
+                    status_text=f"Accepted by {interaction.user.mention}",
+                )
+            except Exception:
+                pass
+
+            staff_controls = discord.ui.View(timeout=None)
+            staff_controls.add_item(discord.ui.Button(
+                label="▶️ Start VC Session",
                 style=discord.ButtonStyle.success,
-                custom_id=make_custom_id("vc_approve", token),
+                custom_id=make_custom_id("vc_start", token),
             ))
-            approve_view.add_item(discord.ui.Button(
-                label="⛔ Deny & Close (VC)",
-                style=discord.ButtonStyle.danger,
-                custom_id=make_custom_id("vc_denyclose", token),
+            staff_controls.add_item(discord.ui.Button(
+                label="🔁 Ask for Upload Instead",
+                style=discord.ButtonStyle.secondary,
+                custom_id=make_custom_id("vc_upload", token),
             ))
-            approve_view.add_item(discord.ui.Button(
+            staff_controls.add_item(discord.ui.Button(
+                label="♻️ Reissue Token",
+                style=discord.ButtonStyle.secondary,
+                custom_id=make_custom_id("vc_reissue", token),
+            ))
+            staff_controls.add_item(discord.ui.Button(
                 label="🧹 End VC Session",
                 style=discord.ButtonStyle.secondary,
                 custom_id=make_custom_id("vc_end", token),
             ))
 
-            if interaction.message:
-                await interaction.message.edit(
-                    content=f"▶️ VC session started by {interaction.user.mention} for {owner.mention}.",
-                    view=approve_view,
-                )
-        except Exception:
-            pass
-
-        _bump_runtime_stat("vc_started")
-        await interaction.followup.send(
-            "▶️ VC session started. Owner + assigned staff now have VC access.",
-            ephemeral=True,
-        )
-        return True
-
-    if action in {"vc_cancel", "vc_end", "vc_complete"}:
-        try:
-            if isinstance(owner, discord.Member):
-                await _vc_revoke_access(guild, owner, token, reason=action)
-        except Exception:
-            pass
-
-        try:
-            if isinstance(interaction.user, discord.Member):
-                await _vc_revoke_access(guild, interaction.user, token, reason=action)
-        except Exception:
-            pass
-
-        try:
-            await _vc_unlock_channel_for_next_session(guild, token)
-        except Exception:
-            pass
-
-        end_status = "CANCELED" if action == "vc_cancel" else "COMPLETED"
-        await _vc_session_mark_ended(
-            guild=guild,
-            token=token,
-            status=end_status,
-            staff_member=interaction.user,
-        )
-
-        _sync_vc_request_status(
-            token,
-            status=("CANCELED" if action == "vc_cancel" else "ENDED"),
-            ended_by=int(interaction.user.id),
-            ended_at=now_utc().isoformat(),
-        )
-
-        try:
-            await _disable_interaction_message_if_possible(
-                interaction,
-                content_suffix=f"🧹 VC session ended by {interaction.user.mention}.",
-            )
-        except Exception:
-            pass
-
-        if action == "vc_cancel":
             try:
-                sb_mark_decision(token, "CANCELED", int(interaction.user.id))
+                if getattr(interaction, "message", None):
+                    await interaction.message.edit(
+                        content=f"✅ VC verify accepted by {interaction.user.mention} for {owner.mention}.",
+                        embed=None,
+                        view=staff_controls,
+                    )
+                    msg_obj = interaction.message
+                else:
+                    msg_obj = await interaction.channel.send(
+                        content=f"✅ VC verify accepted by {interaction.user.mention} for {owner.mention}.",
+                        view=staff_controls,
+                    )
+                _set_vc_request_cache(token, {"staff_panel_msg_id": int(getattr(msg_obj, 'id', 0) or 0)})
             except Exception:
                 pass
-            await interaction.followup.send("❌ VC request canceled and access revoked.", ephemeral=True)
-        else:
-            _bump_runtime_stat("vc_ended")
-            await interaction.followup.send("🧹 VC session ended (access revoked).", ephemeral=True)
-        return True
 
-    if action == "vc_reissue":
-        rid = 0
-        try:
-            rid = int(str(token_info_q.get("requester_id") or token_info_q.get("user_id") or "0") or 0)
-        except Exception:
-            rid = 0
-
-        try:
-            vc_ttl = int(globals().get("VC_REQUEST_TTL_MINUTES", 0) or 0)
-        except Exception:
-            vc_ttl = 0
-        if vc_ttl <= 0:
-            vc_ttl = max(20, int(TOKEN_TTL_MINUTES or 20))
-
-        try:
-            from .verify_ui import _issue_token_url  # type: ignore
-            new_token, _ = await _issue_token_url(
-                site_url=VERIFY_SITE_URL,
-                guild=guild,
-                channel=ticket_ch,
-                requester_id=int(rid or 0),
-                ttl_minutes=vc_ttl,
-            )
-        except Exception as e:
-            await interaction.followup.send(f"❌ Failed to reissue VC token: {e}", ephemeral=True)
-            return True
-
-        try:
-            from .commands_ext.vc_flow import create_vc_request_for_ticket
-            result = await create_vc_request_for_ticket(
-                guild=guild,
-                ticket_channel=ticket_ch,
-                requester_id=int(rid or 0),
-                requested_by_id=int(interaction.user.id),
-                token=new_token,
-                owner_member=(owner if isinstance(owner, discord.Member) else None),
-            )
-        except Exception as e:
-            await interaction.followup.send(f"❌ Failed to recreate VC request: {e}", ephemeral=True)
-            return True
-
-        try:
-            await _vc_disable_panels_everywhere(
-                guild,
-                token,
-                status_text=f"Reissued → `{new_token}` by {interaction.user.mention}",
-            )
-        except Exception:
-            pass
-
-        old_entry = _vc_request_cache(token)
-        if old_entry and old_entry.get("ticket_panel_msg_id"):
-            ticket_panel_msg_id = old_entry["ticket_panel_msg_id"]
             try:
-                ticket_msg = await ticket_ch.fetch_message(ticket_panel_msg_id)
-                new_view = discord.ui.View(timeout=None)
-                new_view.add_item(discord.ui.Button(
-                    label="✅ Approve (VC)",
-                    style=discord.ButtonStyle.success,
-                    custom_id=make_custom_id("vc_approve", new_token),
-                ))
-                new_view.add_item(discord.ui.Button(
-                    label="⛔ Deny & Close (VC)",
-                    style=discord.ButtonStyle.danger,
-                    custom_id=make_custom_id("vc_denyclose", new_token),
-                ))
-                new_view.add_item(discord.ui.Button(
-                    label="🧹 End VC Session",
-                    style=discord.ButtonStyle.secondary,
-                    custom_id=make_custom_id("vc_end", new_token),
-                ))
-                await ticket_msg.edit(view=new_view)
-                _set_vc_request_cache(new_token, {"ticket_panel_msg_id": ticket_panel_msg_id})
-            except Exception as e:
-                print(f"⚠️ Failed to update ticket panel during reissue: {e}")
+                await _send_or_edit_ticket_vc_status(
+                    ticket_channel=ticket_ch,
+                    owner=owner,
+                    content_msg=(
+                        f"✅ **VC Verify accepted** by {interaction.user.mention}\n\n"
+                        f"{owner.mention} please wait here. When staff is ready, you'll be told to join <#{int(vc_ch.id)}>."
+                    ),
+                    view=None,
+                )
+            except Exception:
+                pass
 
-        status_note = "staff panel posted" if result.get("staff_posted") else "staff panel routing failed"
-        await interaction.followup.send(
-            f"✅ Reissued VC token.\nOld: `{token}`\nNew: `{new_token}`\nTicket: {ticket_ch.mention}\nStatus: {status_note}",
-            ephemeral=True,
-        )
-        return True
-
-    if action == "vc_denyclose":
-        result = await deny_vc_verification(
-            guild=guild,
-            channel=ticket_ch,
-            token=token,
-            staff_member=interaction.user,
-            close_after=False,
-        )
-
-        if _service_missing_result(result):
-            result = await _legacy_deny_verification(
-                channel=ticket_ch,
-                token=token,
-                staff_member=interaction.user,
-                decision_text="DENIED (VC)",
-            )
-
-        if not result.get("ok"):
             await interaction.followup.send(
-                f"❌ {result.get('message') or 'VC denial failed.'}",
+                "✅ Accepted VC verify. Press **Start VC Session** when you're ready to actually open the VC.",
                 ephemeral=True,
             )
             return True
 
-        try:
-            if isinstance(owner, discord.Member):
-                await _vc_revoke_access(guild, owner, token, reason="vc-denied")
-        except Exception:
-            pass
+        if action == "vc_start":
+            if not isinstance(interaction.user, discord.Member):
+                await interaction.followup.send("❌ Staff member could not be resolved.", ephemeral=True)
+                return True
 
-        try:
-            await _vc_unlock_channel_for_next_session(guild, token)
-        except Exception:
-            pass
+            if not isinstance(owner, discord.Member):
+                await interaction.followup.send(
+                    "❌ Could not detect the ticket owner for this VC session.",
+                    ephemeral=True,
+                )
+                return True
 
-        await _vc_session_mark_ended(
-            guild=guild,
-            token=token,
-            status="CANCELED",
-            staff_member=interaction.user,
-        )
-
-        try:
-            await _disable_interaction_message_if_possible(
-                interaction,
-                content_suffix=f"⛔ VC denied by {interaction.user.mention}.",
+            session_ok = _ensure_vc_request_session(
+                guild=guild,
+                token=token,
+                ticket_channel=ticket_ch,
+                owner=owner,
+                staff_member=interaction.user,
             )
-        except Exception:
-            pass
+            if not session_ok:
+                await interaction.followup.send(
+                    "❌ Failed to prepare the VC session record.",
+                    ephemeral=True,
+                )
+                return True
 
-        _bump_runtime_stat("vc_denied")
-        await interaction.followup.send("⛔ **Denied (VC)**.", ephemeral=True)
-        await auto_close_after_decision(ticket_ch, closer=interaction.user, decision="DENIED (VC)")
-        return True
+            lock_ok, lock_msg = await _vc_lock_channel_for_session(
+                guild,
+                owner,
+                interaction.user,
+                token,
+            )
+            if not lock_ok:
+                await interaction.followup.send(
+                    f"❌ Failed to start VC session: {lock_msg}",
+                    ephemeral=True,
+                )
+                return True
 
-    if action == "vc_approve":
-        result = await approve_vc_verification(
-            guild=guild,
-            channel=ticket_ch,
-            token=token,
-            staff_member=interaction.user,
-            owner=owner if isinstance(owner, discord.Member) else None,
-            close_after=False,
-        )
+            _sync_vc_request_status(
+                token,
+                status="STARTED",
+                started_by=str(interaction.user.id),
+                started_at=now_utc().isoformat(),
+                accepted_by=int(_vc_request_cache(token).get("accepted_by") or interaction.user.id),
+                accepted_staff_id=int(_vc_request_cache(token).get("accepted_staff_id") or interaction.user.id),
+                assigned_staff_id=int(_vc_request_cache(token).get("assigned_staff_id") or interaction.user.id),
+                owner_id=int(owner.id),
+                requester_id=int(owner.id),
+                requested_by=int(_vc_request_cache(token).get("requested_by") or owner.id),
+                ticket_channel_id=int(getattr(ticket_ch, "id", 0) or 0),
+                guild_id=int(guild.id),
+                vc_channel_id=int(_configured_vc_channel_id() or 0),
+                queue_channel_id=int(_configured_vc_queue_channel_id() or 0),
+                access_minutes=int(_configured_vc_access_minutes()),
+            )
 
-        if _service_missing_result(result):
-            result = await _legacy_approve_verification(
+            await _vc_session_mark_started(
+                guild=guild,
+                token=token,
+                ticket_channel=ticket_ch,
+                owner=owner,
+                staff_member=interaction.user,
+            )
+
+            vc_id = int(_configured_vc_channel_id() or 0)
+            view = None
+            if vc_id:
+                try:
+                    view = discord.ui.View(timeout=1800)
+                    view.add_item(discord.ui.Button(
+                        label="🎙️ Join ID-Verify VC",
+                        style=discord.ButtonStyle.link,
+                        url=_discord_channel_url(guild.id, vc_id),
+                    ))
+                except Exception:
+                    view = None
+
+            move_result = ""
+            try:
+                moved, move_msg = await vc_move_member_into_verify_vc(
+                    guild=guild,
+                    member=owner,
+                )
+                if moved:
+                    move_result = f"\n✅ {move_msg}"
+            except Exception:
+                move_result = ""
+
+            access_min = int(_configured_vc_access_minutes())
+
+            try:
+                await _send_or_edit_ticket_vc_status(
+                    ticket_channel=ticket_ch,
+                    owner=owner,
+                    content_msg=(
+                        f"🎙️ **VC session started** by {interaction.user.mention}\n\n"
+                        f"{owner.mention} tap below to join <#{vc_id}> now.\n"
+                        f"⏳ Temporary access expires in ~{access_min} minutes."
+                        f"{move_result}"
+                    ),
+                    view=view,
+                )
+            except Exception:
+                pass
+
+            try:
+                approve_view = discord.ui.View(timeout=None)
+                approve_view.add_item(discord.ui.Button(
+                    label="✅ Approve (VC)",
+                    style=discord.ButtonStyle.success,
+                    custom_id=make_custom_id("vc_approve", token),
+                ))
+                approve_view.add_item(discord.ui.Button(
+                    label="⛔ Deny & Close (VC)",
+                    style=discord.ButtonStyle.danger,
+                    custom_id=make_custom_id("vc_denyclose", token),
+                ))
+                approve_view.add_item(discord.ui.Button(
+                    label="🧹 End VC Session",
+                    style=discord.ButtonStyle.secondary,
+                    custom_id=make_custom_id("vc_end", token),
+                ))
+
+                if interaction.message:
+                    await interaction.message.edit(
+                        content=f"▶️ VC session started by {interaction.user.mention} for {owner.mention}.",
+                        view=approve_view,
+                    )
+            except Exception:
+                pass
+
+            _bump_runtime_stat("vc_started")
+            await interaction.followup.send(
+                "▶️ VC session started. Owner + assigned staff now have VC access.",
+                ephemeral=True,
+            )
+            return True
+
+        if action in {"vc_cancel", "vc_end", "vc_complete"}:
+            try:
+                if isinstance(owner, discord.Member):
+                    await _vc_revoke_access(guild, owner, token, reason=action)
+            except Exception:
+                pass
+
+            try:
+                if isinstance(interaction.user, discord.Member):
+                    await _vc_revoke_access(guild, interaction.user, token, reason=action)
+            except Exception:
+                pass
+
+            try:
+                await _vc_unlock_channel_for_next_session(guild, token)
+            except Exception:
+                pass
+
+            end_status = "CANCELED" if action == "vc_cancel" else "COMPLETED"
+            await _vc_session_mark_ended(
+                guild=guild,
+                token=token,
+                status=end_status,
+                staff_member=interaction.user,
+            )
+
+            _sync_vc_request_status(
+                token,
+                status=("CANCELED" if action == "vc_cancel" else "ENDED"),
+                ended_by=int(interaction.user.id),
+                ended_at=now_utc().isoformat(),
+            )
+
+            try:
+                await _disable_interaction_message_if_possible(
+                    interaction,
+                    content_suffix=f"🧹 VC session ended by {interaction.user.mention}.",
+                )
+            except Exception:
+                pass
+
+            if action == "vc_cancel":
+                try:
+                    sb_mark_decision(token, "CANCELED", int(interaction.user.id))
+                except Exception:
+                    pass
+                await interaction.followup.send("❌ VC request canceled and access revoked.", ephemeral=True)
+            else:
+                _bump_runtime_stat("vc_ended")
+                await interaction.followup.send("🧹 VC session ended (access revoked).", ephemeral=True)
+            return True
+
+        if action == "vc_reissue":
+            rid = 0
+            try:
+                rid = int(str(token_info_q.get("requester_id") or token_info_q.get("user_id") or "0") or 0)
+            except Exception:
+                rid = 0
+
+            try:
+                vc_ttl = int(globals().get("VC_REQUEST_TTL_MINUTES", 0) or 0)
+            except Exception:
+                vc_ttl = 0
+            if vc_ttl <= 0:
+                vc_ttl = max(20, int(TOKEN_TTL_MINUTES or 20))
+
+            try:
+                from .verify_ui import _issue_token_url  # type: ignore
+                new_token, _ = await _issue_token_url(
+                    site_url=VERIFY_SITE_URL,
+                    guild=guild,
+                    channel=ticket_ch,
+                    requester_id=int(rid or 0),
+                    ttl_minutes=vc_ttl,
+                )
+            except Exception as e:
+                await interaction.followup.send(f"❌ Failed to reissue VC token: {e}", ephemeral=True)
+                return True
+
+            try:
+                from .commands_ext.vc_flow import create_vc_request_for_ticket
+                result = await create_vc_request_for_ticket(
+                    guild=guild,
+                    ticket_channel=ticket_ch,
+                    requester_id=int(rid or 0),
+                    requested_by_id=int(interaction.user.id),
+                    token=new_token,
+                    owner_member=(owner if isinstance(owner, discord.Member) else None),
+                )
+            except Exception as e:
+                await interaction.followup.send(f"❌ Failed to recreate VC request: {e}", ephemeral=True)
+                return True
+
+            if not bool((result or {}).get("ok")):
+                await interaction.followup.send(
+                    f"❌ {str((result or {}).get('message') or 'Failed to recreate VC request.')}",
+                    ephemeral=True,
+                )
+                return True
+
+            try:
+                await _vc_disable_panels_everywhere(
+                    guild,
+                    token,
+                    status_text=f"Reissued → `{new_token}` by {interaction.user.mention}",
+                )
+            except Exception:
+                pass
+
+            old_entry = _vc_request_cache(token)
+            if old_entry and old_entry.get("ticket_panel_msg_id"):
+                ticket_panel_msg_id = old_entry["ticket_panel_msg_id"]
+                try:
+                    ticket_msg = await ticket_ch.fetch_message(ticket_panel_msg_id)
+                    new_view = discord.ui.View(timeout=None)
+                    new_view.add_item(discord.ui.Button(
+                        label="✅ Approve (VC)",
+                        style=discord.ButtonStyle.success,
+                        custom_id=make_custom_id("vc_approve", new_token),
+                    ))
+                    new_view.add_item(discord.ui.Button(
+                        label="⛔ Deny & Close (VC)",
+                        style=discord.ButtonStyle.danger,
+                        custom_id=make_custom_id("vc_denyclose", new_token),
+                    ))
+                    new_view.add_item(discord.ui.Button(
+                        label="🧹 End VC Session",
+                        style=discord.ButtonStyle.secondary,
+                        custom_id=make_custom_id("vc_end", new_token),
+                    ))
+                    await ticket_msg.edit(view=new_view)
+                    _set_vc_request_cache(new_token, {"ticket_panel_msg_id": ticket_panel_msg_id})
+                except Exception as e:
+                    print(f"⚠️ Failed to update ticket panel during reissue: {e}")
+
+            status_note = "staff panel posted" if result.get("staff_posted") else "staff panel routing failed"
+            await interaction.followup.send(
+                f"✅ Reissued VC token.\nOld: `{token}`\nNew: `{new_token}`\nTicket: {ticket_ch.mention}\nStatus: {status_note}",
+                ephemeral=True,
+            )
+            return True
+
+        if action == "vc_denyclose":
+            result = await deny_vc_verification(
+                guild=guild,
+                channel=ticket_ch,
+                token=token,
+                staff_member=interaction.user,
+                close_after=False,
+            )
+
+            if _service_missing_result(result):
+                result = await _legacy_deny_verification(
+                    channel=ticket_ch,
+                    token=token,
+                    staff_member=interaction.user,
+                    decision_text="DENIED (VC)",
+                )
+
+            if not result.get("ok"):
+                await interaction.followup.send(
+                    f"❌ {result.get('message') or 'VC denial failed.'}",
+                    ephemeral=True,
+                )
+                return True
+
+            try:
+                if isinstance(owner, discord.Member):
+                    await _vc_revoke_access(guild, owner, token, reason="vc-denied")
+            except Exception:
+                pass
+
+            try:
+                await _vc_unlock_channel_for_next_session(guild, token)
+            except Exception:
+                pass
+
+            await _vc_session_mark_ended(
+                guild=guild,
+                token=token,
+                status="CANCELED",
+                staff_member=interaction.user,
+            )
+
+            try:
+                await _disable_interaction_message_if_possible(
+                    interaction,
+                    content_suffix=f"⛔ VC denied by {interaction.user.mention}.",
+                )
+            except Exception:
+                pass
+
+            _bump_runtime_stat("vc_denied")
+            await interaction.followup.send("⛔ **Denied (VC)**.", ephemeral=True)
+            await auto_close_after_decision(ticket_ch, closer=interaction.user, decision="DENIED (VC)")
+            return True
+
+        if action == "vc_approve":
+            result = await approve_vc_verification(
                 guild=guild,
                 channel=ticket_ch,
                 token=token,
                 staff_member=interaction.user,
                 owner=owner if isinstance(owner, discord.Member) else None,
-                decision_text="APPROVED (VC)",
+                close_after=False,
             )
 
-        if not result.get("ok"):
-            if result.get("already_verified"):
-                await _disable_interaction_message_if_possible(
-                    interaction,
-                    content_suffix="✅ Member already appears verified. Duplicate approval blocked.",
+            if _service_missing_result(result):
+                result = await _legacy_approve_verification(
+                    guild=guild,
+                    channel=ticket_ch,
+                    token=token,
+                    staff_member=interaction.user,
+                    owner=owner if isinstance(owner, discord.Member) else None,
+                    decision_text="APPROVED (VC)",
                 )
+
+            if not result.get("ok"):
+                if result.get("already_verified"):
+                    await _disable_interaction_message_if_possible(
+                        interaction,
+                        content_suffix="✅ Member already appears verified. Duplicate approval blocked.",
+                    )
+                    await interaction.followup.send(
+                        "✅ This member already appears verified. Duplicate approval was blocked.",
+                        ephemeral=True,
+                    )
+                    return True
+
                 await interaction.followup.send(
-                    "✅ This member already appears verified. Duplicate approval was blocked.",
+                    f"❌ {result.get('message') or 'VC approval failed.'}",
                     ephemeral=True,
                 )
                 return True
 
-            await interaction.followup.send(
-                f"❌ {result.get('message') or 'VC approval failed.'}",
-                ephemeral=True,
-            )
-            return True
-
-        token_info_live = sb_get_token_info(token)
-        proof_saved = False
-        proof_meta: Optional[str] = None
-        if isinstance(owner, discord.Member):
-            proof_saved, proof_meta = await _persist_identity_proof_on_approval(
-                guild=guild,
-                owner=owner,
-                token=token,
-                token_info=token_info_live,
-                staff_member=interaction.user,
-                channel=ticket_ch,
-                approval_mode="vc",
-            )
-
-        try:
+            token_info_live = sb_get_token_info(token)
+            proof_saved = False
+            proof_meta: Optional[str] = None
             if isinstance(owner, discord.Member):
-                await _vc_revoke_access(guild, owner, token, reason="vc-approved")
-        except Exception:
-            pass
+                proof_saved, proof_meta = await _persist_identity_proof_on_approval(
+                    guild=guild,
+                    owner=owner,
+                    token=token,
+                    token_info=token_info_live,
+                    staff_member=interaction.user,
+                    channel=ticket_ch,
+                    approval_mode="vc",
+                )
 
-        try:
-            if isinstance(interaction.user, discord.Member):
-                await _vc_revoke_access(guild, interaction.user, token, reason="vc-approved")
-        except Exception:
-            pass
+            try:
+                if isinstance(owner, discord.Member):
+                    await _vc_revoke_access(guild, owner, token, reason="vc-approved")
+            except Exception:
+                pass
 
-        try:
-            await _vc_unlock_channel_for_next_session(guild, token)
-        except Exception:
-            pass
+            try:
+                if isinstance(interaction.user, discord.Member):
+                    await _vc_revoke_access(guild, interaction.user, token, reason="vc-approved")
+            except Exception:
+                pass
 
-        await _vc_session_mark_ended(
-            guild=guild,
-            token=token,
-            status="COMPLETED",
-            staff_member=interaction.user,
-        )
+            try:
+                await _vc_unlock_channel_for_next_session(guild, token)
+            except Exception:
+                pass
 
-        try:
-            await _disable_interaction_message_if_possible(
-                interaction,
-                content_suffix=f"✅ VC approved by {interaction.user.mention}.",
+            await _vc_session_mark_ended(
+                guild=guild,
+                token=token,
+                status="COMPLETED",
+                staff_member=interaction.user,
             )
-        except Exception:
-            pass
 
-        _bump_runtime_stat("vc_approved")
+            try:
+                await _disable_interaction_message_if_possible(
+                    interaction,
+                    content_suffix=f"✅ VC approved by {interaction.user.mention}.",
+                )
+            except Exception:
+                pass
 
-        msg = str(result.get("message") or "✅ Approved (VC).")
-        if proof_saved and proof_meta:
-            msg += f"\n🧬 Stored hard identity proof (`{proof_meta}`) for future confirmed-duplicate checks."
-        elif proof_saved:
-            msg += "\n🧬 Stored hard identity proof for future confirmed-duplicate checks."
+            _bump_runtime_stat("vc_approved")
 
-        await interaction.followup.send(msg, ephemeral=True)
-        await auto_close_after_decision(ticket_ch, closer=interaction.user, decision="APPROVED (VC)")
-        return True
+            msg = str(result.get("message") or "✅ Approved (VC).")
+            if proof_saved and proof_meta:
+                msg += f"\n🧬 Stored hard identity proof (`{proof_meta}`) for future confirmed-duplicate checks."
+            elif proof_saved:
+                msg += "\n🧬 Stored hard identity proof for future confirmed-duplicate checks."
+
+            await interaction.followup.send(msg, ephemeral=True)
+            await auto_close_after_decision(ticket_ch, closer=interaction.user, decision="APPROVED (VC)")
+            return True
 
     return False
 
@@ -2023,6 +2036,10 @@ async def _handle_standard_staff_decision(
 
     if not isinstance(interaction.user, discord.Member) or not is_staff(interaction.user):
         await interaction.followup.send("❌ Staff only.", ephemeral=True)
+        return True
+
+    if not _safe_str(token):
+        await interaction.followup.send("❌ Missing decision token.", ephemeral=True)
         return True
 
     try:
@@ -2068,157 +2085,158 @@ async def _handle_standard_staff_decision(
         except Exception:
             owner = None
 
-    if action == "resubmit":
-        result = await request_resubmission(
-            guild=guild,
-            channel=channel,
-            token=token,
-            staff_member=interaction.user,
-            owner=owner if isinstance(owner, discord.Member) else None,
-            prompt_in_channel=True,
-        )
-
-        if _service_missing_result(result):
-            result = await _legacy_request_resubmission(
+    async with _interaction_action_lock(action, token, channel.id):
+        if action == "resubmit":
+            result = await request_resubmission(
                 guild=guild,
                 channel=channel,
                 token=token,
                 staff_member=interaction.user,
                 owner=owner if isinstance(owner, discord.Member) else None,
+                prompt_in_channel=True,
             )
 
-        if not result.get("ok"):
+            if _service_missing_result(result):
+                result = await _legacy_request_resubmission(
+                    guild=guild,
+                    channel=channel,
+                    token=token,
+                    staff_member=interaction.user,
+                    owner=owner if isinstance(owner, discord.Member) else None,
+                )
+
+            if not result.get("ok"):
+                await interaction.followup.send(
+                    f"❌ {result.get('message') or 'Failed to request resubmission.'}",
+                    ephemeral=True,
+                )
+                return True
+
+            ACTIVE_DECISION_PANEL_MSG_ID.pop(token, None)
+
+            await _disable_interaction_message_if_possible(
+                interaction,
+                content_suffix=f"🔁 Resubmission requested by {interaction.user.mention}.",
+            )
+
+            _bump_runtime_stat("resubmit")
             await interaction.followup.send(
-                f"❌ {result.get('message') or 'Failed to request resubmission.'}",
+                "✅ Resubmission requested. A new link was posted and the ticket stays open.",
                 ephemeral=True,
             )
             return True
 
-        ACTIVE_DECISION_PANEL_MSG_ID.pop(token, None)
-
-        await _disable_interaction_message_if_possible(
-            interaction,
-            content_suffix=f"🔁 Resubmission requested by {interaction.user.mention}.",
-        )
-
-        _bump_runtime_stat("resubmit")
-        await interaction.followup.send(
-            "✅ Resubmission requested. A new link was posted and the ticket stays open.",
-            ephemeral=True,
-        )
-        return True
-
-    if action == "denyclose":
-        result = await deny_verification(
-            guild=guild,
-            channel=channel,
-            token=token,
-            staff_member=interaction.user,
-            decision_text="DENIED",
-            close_after=False,
-        )
-
-        if _service_missing_result(result):
-            result = await _legacy_deny_verification(
+        if action == "denyclose":
+            result = await deny_verification(
+                guild=guild,
                 channel=channel,
                 token=token,
                 staff_member=interaction.user,
                 decision_text="DENIED",
+                close_after=False,
+            )
+
+            if _service_missing_result(result):
+                result = await _legacy_deny_verification(
+                    channel=channel,
+                    token=token,
+                    staff_member=interaction.user,
+                    decision_text="DENIED",
+                )
+
+            if not result.get("ok"):
+                await interaction.followup.send(
+                    f"❌ {result.get('message') or 'Denial failed.'}",
+                    ephemeral=True,
+                )
+                return True
+
+            ACTIVE_DECISION_PANEL_MSG_ID.pop(token, None)
+
+            await _disable_interaction_message_if_possible(
+                interaction,
+                content_suffix=f"⛔ Denied by {interaction.user.mention}.",
+            )
+
+            _bump_runtime_stat("denied")
+            await interaction.followup.send(
+                "⛔ **Denied**.",
+                ephemeral=True,
+            )
+            await auto_close_after_decision(channel, closer=interaction.user, decision="DENIED")
+            return True
+
+        result = await approve_verification(
+            guild=guild,
+            channel=channel,
+            token=token,
+            staff_member=interaction.user,
+            decision_text="APPROVED",
+            close_after=False,
+            owner=owner if isinstance(owner, discord.Member) else None,
+        )
+
+        if _service_missing_result(result):
+            result = await _legacy_approve_verification(
+                guild=guild,
+                channel=channel,
+                token=token,
+                staff_member=interaction.user,
+                owner=owner if isinstance(owner, discord.Member) else None,
+                decision_text="APPROVED",
             )
 
         if not result.get("ok"):
+            if result.get("already_verified"):
+                ACTIVE_DECISION_PANEL_MSG_ID.pop(token, None)
+                await _disable_interaction_message_if_possible(
+                    interaction,
+                    content_suffix="✅ Member already appears verified. Panel closed.",
+                )
+                await interaction.followup.send(
+                    "✅ This member already appears verified. Duplicate approval was blocked.",
+                    ephemeral=True,
+                )
+                return True
+
             await interaction.followup.send(
-                f"❌ {result.get('message') or 'Denial failed.'}",
+                f"❌ {result.get('message') or 'Approval failed.'}",
                 ephemeral=True,
             )
             return True
+
+        token_info_live = sb_get_token_info(token)
+        proof_saved = False
+        proof_meta: Optional[str] = None
+        if isinstance(owner, discord.Member):
+            proof_saved, proof_meta = await _persist_identity_proof_on_approval(
+                guild=guild,
+                owner=owner,
+                token=token,
+                token_info=token_info_live,
+                staff_member=interaction.user,
+                channel=channel,
+                approval_mode="standard",
+            )
 
         ACTIVE_DECISION_PANEL_MSG_ID.pop(token, None)
 
         await _disable_interaction_message_if_possible(
             interaction,
-            content_suffix=f"⛔ Denied by {interaction.user.mention}.",
+            content_suffix=f"✅ Approved by {interaction.user.mention}.",
         )
 
-        _bump_runtime_stat("denied")
-        await interaction.followup.send(
-            "⛔ **Denied**.",
-            ephemeral=True,
-        )
-        await auto_close_after_decision(channel, closer=interaction.user, decision="DENIED")
+        _bump_runtime_stat("approved")
+
+        msg = str(result.get("message") or "✅ Approved.")
+        if proof_saved and proof_meta:
+            msg += f"\n🧬 Stored hard identity proof (`{proof_meta}`) for future confirmed-duplicate checks."
+        elif proof_saved:
+            msg += "\n🧬 Stored hard identity proof for future confirmed-duplicate checks."
+
+        await interaction.followup.send(msg, ephemeral=True)
+        await auto_close_after_decision(channel, closer=interaction.user, decision="APPROVED")
         return True
-
-    result = await approve_verification(
-        guild=guild,
-        channel=channel,
-        token=token,
-        staff_member=interaction.user,
-        decision_text="APPROVED",
-        close_after=False,
-        owner=owner if isinstance(owner, discord.Member) else None,
-    )
-
-    if _service_missing_result(result):
-        result = await _legacy_approve_verification(
-            guild=guild,
-            channel=channel,
-            token=token,
-            staff_member=interaction.user,
-            owner=owner if isinstance(owner, discord.Member) else None,
-            decision_text="APPROVED",
-        )
-
-    if not result.get("ok"):
-        if result.get("already_verified"):
-            ACTIVE_DECISION_PANEL_MSG_ID.pop(token, None)
-            await _disable_interaction_message_if_possible(
-                interaction,
-                content_suffix="✅ Member already appears verified. Panel closed.",
-            )
-            await interaction.followup.send(
-                "✅ This member already appears verified. Duplicate approval was blocked.",
-                ephemeral=True,
-            )
-            return True
-
-        await interaction.followup.send(
-            f"❌ {result.get('message') or 'Approval failed.'}",
-            ephemeral=True,
-        )
-        return True
-
-    token_info_live = sb_get_token_info(token)
-    proof_saved = False
-    proof_meta: Optional[str] = None
-    if isinstance(owner, discord.Member):
-        proof_saved, proof_meta = await _persist_identity_proof_on_approval(
-            guild=guild,
-            owner=owner,
-            token=token,
-            token_info=token_info_live,
-            staff_member=interaction.user,
-            channel=channel,
-            approval_mode="standard",
-        )
-
-    ACTIVE_DECISION_PANEL_MSG_ID.pop(token, None)
-
-    await _disable_interaction_message_if_possible(
-        interaction,
-        content_suffix=f"✅ Approved by {interaction.user.mention}.",
-    )
-
-    _bump_runtime_stat("approved")
-
-    msg = str(result.get("message") or "✅ Approved.")
-    if proof_saved and proof_meta:
-        msg += f"\n🧬 Stored hard identity proof (`{proof_meta}`) for future confirmed-duplicate checks."
-    elif proof_saved:
-        msg += "\n🧬 Stored hard identity proof for future confirmed-duplicate checks."
-
-    await interaction.followup.send(msg, ephemeral=True)
-    await auto_close_after_decision(channel, closer=interaction.user, decision="APPROVED")
-    return True
 
 
 def _known_component_action(action: str) -> bool:
@@ -2227,14 +2245,14 @@ def _known_component_action(action: str) -> bool:
         "denyclose",
         "resubmit",
         "vc_accept",
-        "vc_upload",
-        "vc_end",
+        "vc_start",
         "vc_complete",
+        "vc_cancel",
+        "vc_upload",
+        "vc_reissue",
+        "vc_end",
         "vc_approve",
         "vc_denyclose",
-        "vc_reissue",
-        "vc_start",
-        "vc_cancel",
         "sv:verify:get",
         "sv:verify:raw",
         "sv:verify:regen",
