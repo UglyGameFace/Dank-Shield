@@ -1,9 +1,9 @@
-# stoney_verify/verification_new/voice_verify.py
 from __future__ import annotations
 
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional, Tuple
 
+import asyncio
 import discord
 
 from ..globals import *  # noqa: F401,F403
@@ -93,7 +93,7 @@ def _safe_int(value: Any, default: int = 0) -> int:
 
 def _safe_str(value: Any) -> str:
     try:
-        return str(value or "")
+        return str(value or "").strip()
     except Exception:
         return ""
 
@@ -323,6 +323,9 @@ except Exception:
     vc_sessions = None  # type: ignore
 
 
+_VC_ACTION_LOCKS: Dict[str, asyncio.Lock] = {}
+
+
 # ============================================================
 # Internal helpers
 # ============================================================
@@ -403,6 +406,24 @@ def _build_ticket_vc_staff_controls(token: str) -> discord.ui.View:
         )
     )
     return view
+
+
+def _vc_token_lock(token: str) -> asyncio.Lock:
+    tok = _safe_str(token)
+    if not tok:
+        tok = "missing-token"
+    lock = _VC_ACTION_LOCKS.get(tok)
+    if lock is None:
+        lock = asyncio.Lock()
+        _VC_ACTION_LOCKS[tok] = lock
+    return lock
+
+
+def _refresh_vc_request(token: str) -> Dict[str, Any]:
+    try:
+        return dict(VC_REQUESTS.get(str(token)) or {})
+    except Exception:
+        return {}
 
 
 async def _safe_send(channel: Optional[discord.TextChannel], *args, **kwargs) -> None:
@@ -495,6 +516,31 @@ def _vc_request_already_final(status: str) -> bool:
         "REISSUED",
         "STALE",
     }
+
+
+def _token_already_finalized(token_info: Optional[Dict[str, Any]]) -> bool:
+    try:
+        if not token_info:
+            return False
+
+        decision = _safe_str(token_info.get("decision")).upper()
+        if decision in {
+            "APPROVED (VC)",
+            "DENIED (VC)",
+            "VC UPLOAD REQUESTED",
+            "VC REISSUED",
+            "VC ENDED",
+            "VC RESET",
+        }:
+            return True
+
+        status = _safe_str(token_info.get("status")).lower()
+        if status in {"approved", "denied", "used"}:
+            return True
+
+        return bool(token_info.get("used", False))
+    except Exception:
+        return False
 
 
 async def _update_ticket_vc_status(
@@ -654,6 +700,21 @@ async def _mark_request_status(
         pass
 
 
+async def _finalize_old_token_for_reissue(
+    *,
+    token: str,
+    new_token: str,
+    staff_member: discord.Member,
+) -> None:
+    await _mark_decision_safe(
+        token,
+        f"VC REISSUED -> {new_token}",
+        int(staff_member.id),
+        approved_user_id=None,
+    )
+    await _set_used_safe(token, True)
+
+
 # ============================================================
 # Context
 # ============================================================
@@ -799,118 +860,137 @@ async def queue_vc_request(
     if isinstance(owner, discord.Member) and int(owner.id) != int(requester.id):
         return _result(False, "Only the ticket owner can request VC verify.", channel=ticket_channel, owner=owner)
 
-    try:
-        if token_info and bool(token_info.get("used", False)):
-            return _result(False, "This token has already been used.", channel=ticket_channel, owner=owner)
-    except Exception:
-        pass
-
-    existing = dict(VC_REQUESTS.get(tok) or {})
-    existing_status = str(existing.get("status") or "").upper()
-
-    if _vc_request_already_final(existing_status):
-        return _result(
-            False,
-            f"This VC request is already finalized ({existing_status}). Reissue a VC token if you need a new session.",
+    lock = _vc_token_lock(tok)
+    async with lock:
+        fresh_ctx = await resolve_vc_context(
+            guild=guild,
             token=tok,
             channel=ticket_channel,
-            owner=owner,
-            request=existing,
+            allow_expired=False,
         )
+        if not fresh_ctx.get("ok"):
+            return fresh_ctx
 
-    try:
-        cooldown_seconds = int(globals().get("VC_REQUEST_COOLDOWN_SECONDS", 60) or 60)
-    except Exception:
-        cooldown_seconds = 60
+        fresh_token_info = fresh_ctx.get("token_info")
+        fresh_owner = fresh_ctx.get("owner")
+        fresh_ticket_channel = fresh_ctx.get("channel")
+        if not isinstance(fresh_ticket_channel, discord.TextChannel):
+            return _result(False, "Could not resolve the verification ticket channel.")
 
-    try:
-        last = VC_REQUEST_COOLDOWNS.get(int(requester.id))
-        if last and (_utc_now() - last).total_seconds() < cooldown_seconds:
-            left = int(cooldown_seconds - (_utc_now() - last).total_seconds())
+        if _token_already_finalized(fresh_token_info):
             return _result(
                 False,
-                f"Please wait {left}s before requesting VC verify again.",
-                cooldown_left_seconds=left,
-                channel=ticket_channel,
-                owner=owner,
+                "This VC token has already been finalized. Reissue a VC token for a new session.",
+                channel=fresh_ticket_channel,
+                owner=fresh_owner,
             )
-    except Exception:
-        pass
 
-    vc_channel = _get_vc_channel(guild)
-    if not vc_channel:
-        return _result(False, "VC verification channel isn’t configured correctly.", channel=ticket_channel, owner=owner)
+        existing = _refresh_vc_request(tok)
+        existing_status = str(existing.get("status") or "").upper()
 
-    if _vc_request_status_active(existing_status):
-        return _result(
-            True,
-            "VC request is already queued.",
-            token=tok,
-            channel=ticket_channel,
-            owner=owner,
-            request=existing,
-            already_exists=True,
-        )
+        if _vc_request_already_final(existing_status):
+            return _result(
+                False,
+                f"This VC request is already finalized ({existing_status}). Reissue a VC token if you need a new session.",
+                token=tok,
+                channel=fresh_ticket_channel,
+                owner=fresh_owner,
+                request=existing,
+            )
 
-    try:
-        VC_REQUEST_COOLDOWNS[int(requester.id)] = _utc_now()
-    except Exception:
-        pass
-
-    VC_REQUESTS[tok] = {
-        "status": "PENDING",
-        "requested_at": _utc_now().isoformat(),
-        "requested_by": int(requester.id),
-        "ticket_channel_id": int(ticket_channel.id),
-        "guild_id": int(guild.id),
-        "staff_msg_ids": [],
-    }
-
-    try:
-        RUNTIME_STATS["vc_requests"] = int(RUNTIME_STATS.get("vc_requests", 0) or 0) + 1
-    except Exception:
-        pass
-
-    requester_mention = owner.mention if isinstance(owner, discord.Member) else requester.mention
-    staff_mid = await _post_staff_vc_request_panel(
-        guild=guild,
-        token=tok,
-        requester_id=int(requester.id),
-        requester_mention=requester_mention,
-        ticket_channel_id=int(ticket_channel.id),
-    )
-
-    if staff_mid:
         try:
-            VC_REQUESTS[tok]["staff_msg_ids"] = [int(staff_mid)]
+            cooldown_seconds = int(globals().get("VC_REQUEST_COOLDOWN_SECONDS", 60) or 60)
+        except Exception:
+            cooldown_seconds = 60
+
+        try:
+            last = VC_REQUEST_COOLDOWNS.get(int(requester.id))
+            if last and (_utc_now() - last).total_seconds() < cooldown_seconds:
+                left = int(cooldown_seconds - (_utc_now() - last).total_seconds())
+                return _result(
+                    False,
+                    f"Please wait {left}s before requesting VC verify again.",
+                    cooldown_left_seconds=left,
+                    channel=fresh_ticket_channel,
+                    owner=fresh_owner,
+                )
         except Exception:
             pass
 
-    await _update_ticket_vc_status(
-        ticket_channel=ticket_channel,
-        status_text="VC REQUESTED",
-        owner=owner if isinstance(owner, discord.Member) else None,
-        staff_member=None,
-    )
+        vc_channel = _get_vc_channel(guild)
+        if not vc_channel:
+            return _result(False, "VC verification channel isn’t configured correctly.", channel=fresh_ticket_channel, owner=fresh_owner)
 
-    await _safe_send(
-        ticket_channel,
-        (
-            f"🎙️ {(owner.mention if isinstance(owner, discord.Member) else requester.mention)} "
-            "**VC verification request sent.**\n"
-            "Staff will respond here when they’re ready. Please wait."
-        ),
-    )
+        if _vc_request_status_active(existing_status):
+            return _result(
+                True,
+                "VC request is already queued.",
+                token=tok,
+                channel=fresh_ticket_channel,
+                owner=fresh_owner,
+                request=existing,
+                already_exists=True,
+            )
 
-    return _result(
-        True,
-        "VC verification request queued.",
-        token=tok,
-        channel=ticket_channel,
-        owner=owner,
-        vc_channel=vc_channel,
-        staff_panel_msg_id=staff_mid,
-    )
+        try:
+            VC_REQUEST_COOLDOWNS[int(requester.id)] = _utc_now()
+        except Exception:
+            pass
+
+        VC_REQUESTS[tok] = {
+            "status": "PENDING",
+            "requested_at": _utc_now().isoformat(),
+            "requested_by": int(requester.id),
+            "ticket_channel_id": int(fresh_ticket_channel.id),
+            "guild_id": int(guild.id),
+            "staff_msg_ids": [],
+        }
+
+        try:
+            RUNTIME_STATS["vc_requests"] = int(RUNTIME_STATS.get("vc_requests", 0) or 0) + 1
+        except Exception:
+            pass
+
+        requester_mention = fresh_owner.mention if isinstance(fresh_owner, discord.Member) else requester.mention
+        staff_mid = await _post_staff_vc_request_panel(
+            guild=guild,
+            token=tok,
+            requester_id=int(requester.id),
+            requester_mention=requester_mention,
+            ticket_channel_id=int(fresh_ticket_channel.id),
+        )
+
+        if staff_mid:
+            try:
+                VC_REQUESTS[tok]["staff_msg_ids"] = [int(staff_mid)]
+            except Exception:
+                pass
+
+        await _update_ticket_vc_status(
+            ticket_channel=fresh_ticket_channel,
+            status_text="VC REQUESTED",
+            owner=fresh_owner if isinstance(fresh_owner, discord.Member) else None,
+            staff_member=None,
+        )
+
+        await _safe_send(
+            fresh_ticket_channel,
+            (
+                f"🎙️ {(fresh_owner.mention if isinstance(fresh_owner, discord.Member) else requester.mention)} "
+                "**VC verification request sent.**\n"
+                "Staff will respond here when they’re ready. Please wait."
+            ),
+        )
+
+        return _result(
+            True,
+            "VC verification request queued.",
+            token=tok,
+            channel=fresh_ticket_channel,
+            owner=fresh_owner,
+            vc_channel=vc_channel,
+            staff_panel_msg_id=staff_mid,
+        )
 
 
 # ============================================================
@@ -928,147 +1008,150 @@ async def accept_vc_request(
     if not ok_staff:
         return _result(False, staff_err)
 
-    ctx = await resolve_vc_context(
-        guild=guild,
-        token=token,
-        allow_expired=False,
-    )
-    if not ctx.get("ok"):
-        return ctx
+    tok = _safe_str(token)
+    lock = _vc_token_lock(tok)
 
-    tok = str(ctx.get("token") or token or "").strip()
-    ticket_channel = ctx.get("channel")
-    owner = ctx.get("owner")
-    token_info = ctx.get("token_info")
-    req = dict(ctx.get("request") or {})
-
-    if not isinstance(ticket_channel, discord.TextChannel):
-        return _result(False, "Could not resolve the verification ticket channel.")
-
-    if token_info and bool(token_info.get("used", False)):
-        return _result(False, "This token has already been used.", channel=ticket_channel, owner=owner)
-
-    if not isinstance(owner, discord.Member):
-        return _result(False, "Could not detect ticket owner for VC verification.", channel=ticket_channel, owner=owner)
-
-    accepted_by = int(req.get("accepted_by") or 0) if req else 0
-    current_status = str(req.get("status") or "").upper()
-
-    if _vc_request_already_final(current_status):
-        return _result(
-            False,
-            f"This VC request is already finalized ({current_status}).",
-            channel=ticket_channel,
-            owner=owner,
-        )
-
-    if current_status == "ACCEPTED" and accepted_by == int(staff_member.id):
-        return _result(
-            True,
-            "You already accepted this VC request.",
+    async with lock:
+        ctx = await resolve_vc_context(
+            guild=guild,
             token=tok,
-            channel=ticket_channel,
-            owner=owner,
-            already_accepted=True,
+            allow_expired=False,
         )
+        if not ctx.get("ok"):
+            return ctx
 
-    if current_status == "ACCEPTED" and accepted_by and accepted_by != int(staff_member.id):
-        return _result(False, "Another staff member already accepted this VC request.", channel=ticket_channel, owner=owner)
+        ticket_channel = ctx.get("channel")
+        owner = ctx.get("owner")
+        token_info = ctx.get("token_info")
+        req = _refresh_vc_request(tok)
 
-    vc_channel = _get_vc_channel(guild)
-    if not vc_channel:
-        return _result(False, "VC verification channel not found.", channel=ticket_channel, owner=owner)
+        if not isinstance(ticket_channel, discord.TextChannel):
+            return _result(False, "Could not resolve the verification ticket channel.")
 
-    me = guild.me
-    if not me:
-        return _result(False, "Bot member missing.", channel=ticket_channel, owner=owner)
+        if _token_already_finalized(token_info):
+            return _result(False, "This token has already been finalized.", channel=ticket_channel, owner=owner)
 
-    ok_manage, perm_msg = _can_manage_channel(me, vc_channel)
-    if not ok_manage:
-        return _result(False, f"Bot lacks required permissions: {perm_msg}", channel=ticket_channel, owner=owner)
+        if not isinstance(owner, discord.Member):
+            return _result(False, "Could not detect ticket owner for VC verification.", channel=ticket_channel, owner=owner)
 
-    locked = False
-    lock_msg = ""
-    try:
-        locked, lock_msg = await _vc_lock_channel_for_session(
-            guild,
-            owner,
-            staff_member,
-            tok,
-        )
-    except Exception as e:
+        accepted_by = int(req.get("accepted_by") or 0) if req else 0
+        current_status = str(req.get("status") or "").upper()
+
+        if _vc_request_already_final(current_status):
+            return _result(
+                False,
+                f"This VC request is already finalized ({current_status}).",
+                channel=ticket_channel,
+                owner=owner,
+            )
+
+        if current_status == "ACCEPTED" and accepted_by == int(staff_member.id):
+            return _result(
+                True,
+                "You already accepted this VC request.",
+                token=tok,
+                channel=ticket_channel,
+                owner=owner,
+                already_accepted=True,
+            )
+
+        if current_status == "ACCEPTED" and accepted_by and accepted_by != int(staff_member.id):
+            return _result(False, "Another staff member already accepted this VC request.", channel=ticket_channel, owner=owner)
+
+        vc_channel = _get_vc_channel(guild)
+        if not vc_channel:
+            return _result(False, "VC verification channel not found.", channel=ticket_channel, owner=owner)
+
+        me = guild.me
+        if not me:
+            return _result(False, "Bot member missing.", channel=ticket_channel, owner=owner)
+
+        ok_manage, perm_msg = _can_manage_channel(me, vc_channel)
+        if not ok_manage:
+            return _result(False, f"Bot lacks required permissions: {perm_msg}", channel=ticket_channel, owner=owner)
+
         locked = False
-        lock_msg = str(e)
+        lock_msg = ""
+        try:
+            locked, lock_msg = await _vc_lock_channel_for_session(
+                guild,
+                owner,
+                staff_member,
+                tok,
+            )
+        except Exception as e:
+            locked = False
+            lock_msg = str(e)
 
-    if not locked:
-        ok_access, access_msg = await _vc_grant_access(guild, owner, tok)
-        if not ok_access:
-            return _result(False, access_msg or lock_msg or "Failed to grant VC access.", channel=ticket_channel, owner=owner)
+        if not locked:
+            ok_access, access_msg = await _vc_grant_access(guild, owner, tok)
+            if not ok_access:
+                return _result(False, access_msg or lock_msg or "Failed to grant VC access.", channel=ticket_channel, owner=owner)
+
+            try:
+                await _vc_grant_access(guild, staff_member, tok)
+            except Exception:
+                pass
 
         try:
-            await _vc_grant_access(guild, staff_member, tok)
+            VC_REQUESTS[tok] = {
+                **req,
+                "status": "ACCEPTED",
+                "accepted_by": int(staff_member.id),
+                "accepted_at": _utc_now().isoformat(),
+                "accepted_staff_id": int(staff_member.id),
+                "assigned_staff_id": int(staff_member.id),
+                "ticket_channel_id": int(ticket_channel.id),
+                "guild_id": int(guild.id),
+            }
         except Exception:
             pass
 
-    try:
-        VC_REQUESTS[tok] = {
-            **req,
-            "status": "ACCEPTED",
-            "accepted_by": int(staff_member.id),
-            "accepted_at": _utc_now().isoformat(),
-            "accepted_staff_id": int(staff_member.id),
-            "assigned_staff_id": int(staff_member.id),
-            "ticket_channel_id": int(ticket_channel.id),
-            "guild_id": int(guild.id),
-        }
-    except Exception:
-        pass
+        try:
+            RUNTIME_STATS["vc_accepted"] = int(RUNTIME_STATS.get("vc_accepted", 0) or 0) + 1
+        except Exception:
+            pass
 
-    try:
-        RUNTIME_STATS["vc_accepted"] = int(RUNTIME_STATS.get("vc_accepted", 0) or 0) + 1
-    except Exception:
-        pass
+        try:
+            await _vc_disable_panels_everywhere(
+                guild,
+                tok,
+                status_text=f"Accepted by {staff_member.mention}",
+            )
+        except Exception:
+            pass
 
-    try:
-        await _vc_disable_panels_everywhere(
-            guild,
-            tok,
-            status_text=f"Accepted by {staff_member.mention}",
+        await _safe_edit_message(
+            queue_message,
+            content=f"✅ Claimed by {staff_member.mention}.",
+            embed=None,
+            view=None,
         )
-    except Exception:
-        pass
 
-    await _safe_edit_message(
-        queue_message,
-        content=f"✅ Claimed by {staff_member.mention}.",
-        embed=None,
-        view=None,
-    )
+        await _update_ticket_vc_status(
+            ticket_channel=ticket_channel,
+            status_text="VC ACCEPTED",
+            owner=owner,
+            staff_member=staff_member,
+        )
 
-    await _update_ticket_vc_status(
-        ticket_channel=ticket_channel,
-        status_text="VC ACCEPTED",
-        owner=owner,
-        staff_member=staff_member,
-    )
+        await _upsert_ticket_vc_accept_message(
+            guild=guild,
+            ticket_channel=ticket_channel,
+            owner=owner,
+            staff_member=staff_member,
+            vc_channel=vc_channel,
+            token=tok,
+        )
 
-    await _upsert_ticket_vc_accept_message(
-        guild=guild,
-        ticket_channel=ticket_channel,
-        owner=owner,
-        staff_member=staff_member,
-        vc_channel=vc_channel,
-        token=tok,
-    )
-
-    return _result(
-        True,
-        "Accepted VC verify and granted temporary access.",
-        token=tok,
-        channel=ticket_channel,
-        owner=owner,
-        vc_channel=vc_channel,
-    )
+        return _result(
+            True,
+            "Accepted VC verify and granted temporary access.",
+            token=tok,
+            channel=ticket_channel,
+            owner=owner,
+            vc_channel=vc_channel,
+        )
 
 
 async def request_upload_instead(
@@ -1082,117 +1165,124 @@ async def request_upload_instead(
     if not ok_staff:
         return _result(False, staff_err)
 
-    ctx = await resolve_vc_context(
-        guild=guild,
-        token=token,
-        allow_expired=True,
-    )
-    if not ctx.get("ok"):
-        return ctx
+    tok = _safe_str(token)
+    lock = _vc_token_lock(tok)
 
-    tok = str(ctx.get("token") or token or "").strip()
-    ticket_channel = ctx.get("channel")
-    owner = ctx.get("owner")
-    req = dict(ctx.get("request") or {})
-    current_status = str(req.get("status") or "").upper()
-
-    if _vc_request_already_final(current_status):
-        return _result(
-            False,
-            f"This VC request is already finalized ({current_status}).",
-            channel=ticket_channel,
-            owner=owner,
+    async with lock:
+        ctx = await resolve_vc_context(
+            guild=guild,
+            token=tok,
+            allow_expired=True,
         )
+        if not ctx.get("ok"):
+            return ctx
 
-    if not isinstance(ticket_channel, discord.TextChannel):
-        return _result(False, "Could not resolve the verification ticket channel.")
+        ticket_channel = ctx.get("channel")
+        owner = ctx.get("owner")
+        token_info = ctx.get("token_info")
+        req = _refresh_vc_request(tok)
+        current_status = str(req.get("status") or "").upper()
 
-    if isinstance(owner, discord.Member):
+        if _vc_request_already_final(current_status) or _token_already_finalized(token_info):
+            return _result(
+                False,
+                f"This VC request is already finalized ({current_status or 'token final'}).",
+                channel=ticket_channel,
+                owner=owner,
+            )
+
+        if not isinstance(ticket_channel, discord.TextChannel):
+            return _result(False, "Could not resolve the verification ticket channel.")
+
+        if isinstance(owner, discord.Member):
+            try:
+                await _vc_revoke_access(guild, owner, tok, reason="upload-requested")
+            except Exception:
+                pass
+
         try:
-            await _vc_revoke_access(guild, owner, tok, reason="upload-requested")
+            await _vc_revoke_access(guild, staff_member, tok, reason="upload-requested")
         except Exception:
             pass
 
-    try:
-        await _vc_revoke_access(guild, staff_member, tok, reason="upload-requested")
-    except Exception:
-        pass
+        try:
+            await _vc_unlock_channel_for_next_session(guild, tok)
+        except Exception:
+            pass
 
-    try:
-        await _vc_unlock_channel_for_next_session(guild, tok)
-    except Exception:
-        pass
+        try:
+            await post_or_replace_verify_ui(
+                ticket_channel,
+                requester_id=int(owner.id) if isinstance(owner, discord.Member) else None,
+                reason=f"vc_upload_requested:{staff_member.id}",
+                site_url=VERIFY_SITE_URL,
+                ttl_minutes=int(TOKEN_TTL_MINUTES or 20),
+                allow_regen=bool(ALLOW_USER_VERIFYLINK),
+            )
+        except Exception:
+            pass
 
-    try:
-        await post_or_replace_verify_ui(
-            ticket_channel,
-            requester_id=int(owner.id) if isinstance(owner, discord.Member) else None,
-            reason=f"vc_upload_requested:{staff_member.id}",
-            site_url=VERIFY_SITE_URL,
-            ttl_minutes=int(TOKEN_TTL_MINUTES or 20),
-            allow_regen=bool(ALLOW_USER_VERIFYLINK),
+        try:
+            await _vc_disable_panels_everywhere(
+                guild,
+                tok,
+                status_text=f"Upload requested by {staff_member.mention}",
+            )
+        except Exception:
+            pass
+
+        await _safe_edit_message(
+            queue_message,
+            content="✅ VC request handled: staff requested upload instead.",
+            view=None,
         )
-    except Exception:
-        pass
 
-    try:
-        await _vc_disable_panels_everywhere(
-            guild,
+        await _mark_request_status(
             tok,
-            status_text=f"Upload requested by {staff_member.mention}",
-        )
-    except Exception:
-        pass
-
-    await _safe_edit_message(
-        queue_message,
-        content="✅ VC request handled: staff requested upload instead.",
-        view=None,
-    )
-
-    await _mark_request_status(
-        tok,
-        status="UPLOAD_REQUESTED",
-        staff_member=staff_member,
-    )
-
-    await _update_ticket_vc_status(
-        ticket_channel=ticket_channel,
-        status_text="VC UPLOAD REQUESTED",
-        owner=owner if isinstance(owner, discord.Member) else None,
-        staff_member=staff_member,
-    )
-
-    await _end_vc_session_record(
-        guild=guild,
-        token=tok,
-        status="CANCELED",
-        staff_id=int(staff_member.id),
-    )
-
-    try:
-        RUNTIME_STATS["vc_upload_requested"] = int(RUNTIME_STATS.get("vc_upload_requested", 0) or 0) + 1
-    except Exception:
-        pass
-
-    if isinstance(owner, discord.Member):
-        await _safe_send(
-            ticket_channel,
-            f"🔁 {owner.mention} Staff requested **secure upload** instead. Use the **Get Secure Upload** button above.",
-        )
-    else:
-        await _safe_send(
-            ticket_channel,
-            "🔁 Staff requested **secure upload** instead. Use the **Get Secure Upload** button above.",
+            status="UPLOAD_REQUESTED",
+            staff_member=staff_member,
         )
 
-    return _result(
-        True,
-        "Requested upload instead.",
-        token=tok,
-        channel=ticket_channel,
-        owner=owner,
-    )
+        await _mark_decision_safe(tok, "VC UPLOAD REQUESTED", int(staff_member.id))
+        await _set_used_safe(tok, True)
+
+        await _update_ticket_vc_status(
+            ticket_channel=ticket_channel,
+            status_text="VC UPLOAD REQUESTED",
+            owner=owner if isinstance(owner, discord.Member) else None,
+            staff_member=staff_member,
+        )
+
+        await _end_vc_session_record(
+            guild=guild,
+            token=tok,
+            status="CANCELED",
+            staff_id=int(staff_member.id),
+        )
+
+        try:
+            RUNTIME_STATS["vc_upload_requested"] = int(RUNTIME_STATS.get("vc_upload_requested", 0) or 0) + 1
+        except Exception:
+            pass
+
+        if isinstance(owner, discord.Member):
+            await _safe_send(
+                ticket_channel,
+                f"🔁 {owner.mention} Staff requested **secure upload** instead. Use the **Get Secure Upload** button above.",
+            )
+        else:
+            await _safe_send(
+                ticket_channel,
+                "🔁 Staff requested **secure upload** instead. Use the **Get Secure Upload** button above.",
+            )
+
+        return _result(
+            True,
+            "Requested upload instead.",
+            token=tok,
+            channel=ticket_channel,
+            owner=owner,
+        )
 
 
 async def reissue_vc_token(
@@ -1206,142 +1296,160 @@ async def reissue_vc_token(
     if not ok_staff:
         return _result(False, staff_err)
 
-    ctx = await resolve_vc_context(
-        guild=guild,
-        token=token,
-        allow_expired=True,
-    )
-    if not ctx.get("ok"):
-        return ctx
+    old_token = _safe_str(token)
+    old_lock = _vc_token_lock(old_token)
 
-    old_token = str(ctx.get("token") or token or "").strip()
-    ticket_channel = ctx.get("channel")
-    owner = ctx.get("owner")
-    token_info = ctx.get("token_info")
-    old_req = dict(ctx.get("request") or {})
-    current_status = str(old_req.get("status") or "").upper()
-
-    if _vc_request_already_final(current_status) and current_status != "REISSUED":
-        return _result(
-            False,
-            f"This VC request is already finalized ({current_status}).",
-            old_token=old_token,
-        )
-
-    if not isinstance(ticket_channel, discord.TextChannel):
-        try:
-            await _cleanup_stale_vc_request(guild, old_token, reason="ticket channel not found during reissue")
-        except Exception:
-            pass
-        return _result(False, "I couldn't resolve the ticket channel for this VC request.")
-
-    requester_id = int(owner.id) if isinstance(owner, discord.Member) else _requester_id_from_token_info(token_info)
-    if requester_id <= 0:
-        requester_id = int(staff_member.id)
-
-    try:
-        vc_ttl = int(globals().get("VC_REQUEST_TTL_MINUTES", 0) or 0)
-    except Exception:
-        vc_ttl = 0
-    if vc_ttl <= 0:
-        vc_ttl = max(20, int(TOKEN_TTL_MINUTES or 20))
-
-    try:
-        await post_or_replace_verify_ui(
-            ticket_channel,
-            requester_id=int(requester_id),
-            reason=f"vc_reissue_upload_ui:{staff_member.id}",
-            site_url=VERIFY_SITE_URL,
-            ttl_minutes=int(TOKEN_TTL_MINUTES or 20),
-            allow_regen=bool(ALLOW_USER_VERIFYLINK),
-        )
-    except Exception:
-        pass
-
-    try:
-        new_token, _ = await _issue_token_url(
-            site_url=VERIFY_SITE_URL,
+    async with old_lock:
+        ctx = await resolve_vc_context(
             guild=guild,
-            channel=ticket_channel,
-            requester_id=int(requester_id),
-            ttl_minutes=int(vc_ttl),
+            token=old_token,
+            allow_expired=True,
         )
-    except Exception as e:
-        return _result(False, f"Failed to reissue VC token: {e}", old_token=old_token)
+        if not ctx.get("ok"):
+            return ctx
 
-    VC_REQUESTS[new_token] = {
-        "status": "PENDING",
-        "requested_at": _utc_now().isoformat(),
-        "requested_by": int(requester_id),
-        "ticket_channel_id": int(ticket_channel.id),
-        "guild_id": int(guild.id),
-        "reissued_from": old_token,
-        "reissued_by": int(staff_member.id),
-        "staff_msg_ids": [],
-    }
+        ticket_channel = ctx.get("channel")
+        owner = ctx.get("owner")
+        token_info = ctx.get("token_info")
+        old_req = _refresh_vc_request(old_token)
+        current_status = str(old_req.get("status") or "").upper()
 
-    requester_mention = owner.mention if isinstance(owner, discord.Member) else f"<@{int(requester_id)}>"
-    staff_mid = await _post_staff_vc_request_panel(
-        guild=guild,
-        token=new_token,
-        requester_id=int(requester_id),
-        requester_mention=requester_mention,
-        ticket_channel_id=int(ticket_channel.id),
-    )
+        if _vc_request_already_final(current_status) and current_status != "REISSUED":
+            return _result(
+                False,
+                f"This VC request is already finalized ({current_status}).",
+                old_token=old_token,
+            )
 
-    if staff_mid:
+        if _token_already_finalized(token_info) and current_status != "REISSUED":
+            return _result(
+                False,
+                "This VC token is already finalized.",
+                old_token=old_token,
+            )
+
+        if not isinstance(ticket_channel, discord.TextChannel):
+            try:
+                await _cleanup_stale_vc_request(guild, old_token, reason="ticket channel not found during reissue")
+            except Exception:
+                pass
+            return _result(False, "I couldn't resolve the ticket channel for this VC request.")
+
+        requester_id = int(owner.id) if isinstance(owner, discord.Member) else _requester_id_from_token_info(token_info)
+        if requester_id <= 0:
+            requester_id = int(staff_member.id)
+
         try:
-            VC_REQUESTS[new_token]["staff_msg_ids"] = [int(staff_mid)]
+            vc_ttl = int(globals().get("VC_REQUEST_TTL_MINUTES", 0) or 0)
+        except Exception:
+            vc_ttl = 0
+        if vc_ttl <= 0:
+            vc_ttl = max(20, int(TOKEN_TTL_MINUTES or 20))
+
+        try:
+            await post_or_replace_verify_ui(
+                ticket_channel,
+                requester_id=int(requester_id),
+                reason=f"vc_reissue_upload_ui:{staff_member.id}",
+                site_url=VERIFY_SITE_URL,
+                ttl_minutes=int(TOKEN_TTL_MINUTES or 20),
+                allow_regen=bool(ALLOW_USER_VERIFYLINK),
+            )
         except Exception:
             pass
 
-    try:
-        await _vc_disable_panels_everywhere(
-            guild,
-            old_token,
-            status_text=f"Reissued by {staff_member.mention} → new token `{new_token}`",
-        )
-    except Exception:
-        pass
-
-    await _mark_request_status(
-        old_token,
-        status="REISSUED",
-        staff_member=staff_member,
-        extra={"reissued_to": new_token},
-    )
-
-    old_ticket_panel_id = int(old_req.get("ticket_panel_msg_id") or 0) if old_req else 0
-    if old_ticket_panel_id > 0:
         try:
-            msg = await ticket_channel.fetch_message(old_ticket_panel_id)
-            await msg.edit(view=_build_ticket_vc_staff_controls(new_token))
-            VC_REQUESTS[new_token]["ticket_panel_msg_id"] = int(old_ticket_panel_id)
-        except Exception:
-            pass
+            new_token, _ = await _issue_token_url(
+                site_url=VERIFY_SITE_URL,
+                guild=guild,
+                channel=ticket_channel,
+                requester_id=int(requester_id),
+                ttl_minutes=int(vc_ttl),
+            )
+        except Exception as e:
+            return _result(False, f"Failed to reissue VC token: {e}", old_token=old_token)
 
-    await _safe_edit_message(
-        queue_message,
-        content=f"♻️ Reissued by {staff_member.mention}.\nNew token: `{new_token}`",
-        view=None,
-    )
+        new_lock = _vc_token_lock(new_token)
+        async with new_lock:
+            VC_REQUESTS[new_token] = {
+                "status": "PENDING",
+                "requested_at": _utc_now().isoformat(),
+                "requested_by": int(requester_id),
+                "ticket_channel_id": int(ticket_channel.id),
+                "guild_id": int(guild.id),
+                "reissued_from": old_token,
+                "reissued_by": int(staff_member.id),
+                "staff_msg_ids": [],
+            }
 
-    await _update_ticket_vc_status(
-        ticket_channel=ticket_channel,
-        status_text="VC REISSUED",
-        owner=owner if isinstance(owner, discord.Member) else None,
-        staff_member=staff_member,
-    )
+            requester_mention = owner.mention if isinstance(owner, discord.Member) else f"<@{int(requester_id)}>"
+            staff_mid = await _post_staff_vc_request_panel(
+                guild=guild,
+                token=new_token,
+                requester_id=int(requester_id),
+                requester_mention=requester_mention,
+                ticket_channel_id=int(ticket_channel.id),
+            )
 
-    return _result(
-        True,
-        "VC token reissued.",
-        old_token=old_token,
-        token=new_token,
-        channel=ticket_channel,
-        owner=owner,
-        staff_panel_msg_id=staff_mid,
-    )
+            if staff_mid:
+                try:
+                    VC_REQUESTS[new_token]["staff_msg_ids"] = [int(staff_mid)]
+                except Exception:
+                    pass
+
+            try:
+                await _vc_disable_panels_everywhere(
+                    guild,
+                    old_token,
+                    status_text=f"Reissued by {staff_member.mention} → new token `{new_token}`",
+                )
+            except Exception:
+                pass
+
+            await _mark_request_status(
+                old_token,
+                status="REISSUED",
+                staff_member=staff_member,
+                extra={"reissued_to": new_token},
+            )
+
+            await _finalize_old_token_for_reissue(
+                token=old_token,
+                new_token=new_token,
+                staff_member=staff_member,
+            )
+
+            old_ticket_panel_id = int(old_req.get("ticket_panel_msg_id") or 0) if old_req else 0
+            if old_ticket_panel_id > 0:
+                try:
+                    msg = await ticket_channel.fetch_message(old_ticket_panel_id)
+                    await msg.edit(view=_build_ticket_vc_staff_controls(new_token))
+                    VC_REQUESTS[new_token]["ticket_panel_msg_id"] = int(old_ticket_panel_id)
+                except Exception:
+                    pass
+
+            await _safe_edit_message(
+                queue_message,
+                content=f"♻️ Reissued by {staff_member.mention}.\nNew token: `{new_token}`",
+                view=None,
+            )
+
+            await _update_ticket_vc_status(
+                ticket_channel=ticket_channel,
+                status_text="VC REISSUED",
+                owner=owner if isinstance(owner, discord.Member) else None,
+                staff_member=staff_member,
+            )
+
+            return _result(
+                True,
+                "VC token reissued.",
+                old_token=old_token,
+                token=new_token,
+                channel=ticket_channel,
+                owner=owner,
+                staff_panel_msg_id=staff_mid,
+            )
 
 
 async def approve_vc_request(
@@ -1354,93 +1462,97 @@ async def approve_vc_request(
     if not ok_staff:
         return _result(False, staff_err)
 
-    ctx = await resolve_vc_context(
-        guild=guild,
-        token=token,
-        allow_expired=True,
-    )
-    if not ctx.get("ok"):
-        return ctx
+    tok = _safe_str(token)
+    lock = _vc_token_lock(tok)
 
-    tok = str(ctx.get("token") or token or "").strip()
-    ticket_channel = ctx.get("channel")
-    owner = ctx.get("owner")
-    req = dict(ctx.get("request") or {})
-    current_status = str(req.get("status") or "").upper()
-
-    if _vc_request_already_final(current_status):
-        return _result(
-            False,
-            f"This VC request is already finalized ({current_status}).",
-            channel=ticket_channel,
-            owner=owner,
-        )
-
-    if isinstance(owner, discord.Member):
-        try:
-            await _vc_revoke_access(guild, owner, tok, reason="decision-made")
-        except Exception:
-            pass
-
-    try:
-        await _vc_revoke_access(guild, staff_member, tok, reason="decision-made")
-    except Exception:
-        pass
-
-    result = await approve_vc_verification(
-        guild=guild,
-        channel=ticket_channel if isinstance(ticket_channel, discord.TextChannel) else None,
-        token=tok,
-        staff_member=staff_member,
-        owner=owner if isinstance(owner, discord.Member) else None,
-        close_after=True,
-    )
-
-    if result.get("ok"):
-        try:
-            await _vc_disable_panels_everywhere(
-                guild,
-                tok,
-                status_text=f"Approved by {staff_member.mention}",
-            )
-        except Exception:
-            pass
-
-        try:
-            await _vc_unlock_channel_for_next_session(guild, tok)
-        except Exception:
-            pass
-
-        await _mark_request_status(
-            tok,
-            status="APPROVED",
-            staff_member=staff_member,
-            extra={
-                "approved_by": int(staff_member.id),
-                "approved_at": _utc_now().isoformat(),
-            },
-        )
-
-        await _update_ticket_vc_status(
-            ticket_channel=ticket_channel if isinstance(ticket_channel, discord.TextChannel) else None,
-            status_text="APPROVED (VC)",
-            owner=owner if isinstance(owner, discord.Member) else None,
-            staff_member=staff_member,
-        )
-
-        await _end_vc_session_record(
+    async with lock:
+        ctx = await resolve_vc_context(
             guild=guild,
             token=tok,
-            status="COMPLETED",
-            staff_id=int(staff_member.id),
+            allow_expired=True,
         )
+        if not ctx.get("ok"):
+            return ctx
+
+        ticket_channel = ctx.get("channel")
+        owner = ctx.get("owner")
+        token_info = ctx.get("token_info")
+        req = _refresh_vc_request(tok)
+        current_status = str(req.get("status") or "").upper()
+
+        if _vc_request_already_final(current_status) or _token_already_finalized(token_info):
+            return _result(
+                False,
+                f"This VC request is already finalized ({current_status or 'token final'}).",
+                channel=ticket_channel,
+                owner=owner,
+            )
+
+        if isinstance(owner, discord.Member):
+            try:
+                await _vc_revoke_access(guild, owner, tok, reason="decision-made")
+            except Exception:
+                pass
 
         try:
-            RUNTIME_STATS["vc_approved"] = int(RUNTIME_STATS.get("vc_approved", 0) or 0) + 1
+            await _vc_revoke_access(guild, staff_member, tok, reason="decision-made")
         except Exception:
             pass
 
-    return result
+        result = await approve_vc_verification(
+            guild=guild,
+            channel=ticket_channel if isinstance(ticket_channel, discord.TextChannel) else None,
+            token=tok,
+            staff_member=staff_member,
+            owner=owner if isinstance(owner, discord.Member) else None,
+            close_after=True,
+        )
+
+        if result.get("ok"):
+            try:
+                await _vc_disable_panels_everywhere(
+                    guild,
+                    tok,
+                    status_text=f"Approved by {staff_member.mention}",
+                )
+            except Exception:
+                pass
+
+            try:
+                await _vc_unlock_channel_for_next_session(guild, tok)
+            except Exception:
+                pass
+
+            await _mark_request_status(
+                tok,
+                status="APPROVED",
+                staff_member=staff_member,
+                extra={
+                    "approved_by": int(staff_member.id),
+                    "approved_at": _utc_now().isoformat(),
+                },
+            )
+
+            await _update_ticket_vc_status(
+                ticket_channel=ticket_channel if isinstance(ticket_channel, discord.TextChannel) else None,
+                status_text="APPROVED (VC)",
+                owner=owner if isinstance(owner, discord.Member) else None,
+                staff_member=staff_member,
+            )
+
+            await _end_vc_session_record(
+                guild=guild,
+                token=tok,
+                status="COMPLETED",
+                staff_id=int(staff_member.id),
+            )
+
+            try:
+                RUNTIME_STATS["vc_approved"] = int(RUNTIME_STATS.get("vc_approved", 0) or 0) + 1
+            except Exception:
+                pass
+
+        return result
 
 
 async def deny_vc_request(
@@ -1453,92 +1565,96 @@ async def deny_vc_request(
     if not ok_staff:
         return _result(False, staff_err)
 
-    ctx = await resolve_vc_context(
-        guild=guild,
-        token=token,
-        allow_expired=True,
-    )
-    if not ctx.get("ok"):
-        return ctx
+    tok = _safe_str(token)
+    lock = _vc_token_lock(tok)
 
-    tok = str(ctx.get("token") or token or "").strip()
-    ticket_channel = ctx.get("channel")
-    owner = ctx.get("owner")
-    req = dict(ctx.get("request") or {})
-    current_status = str(req.get("status") or "").upper()
-
-    if _vc_request_already_final(current_status):
-        return _result(
-            False,
-            f"This VC request is already finalized ({current_status}).",
-            channel=ticket_channel,
-            owner=owner,
-        )
-
-    if isinstance(owner, discord.Member):
-        try:
-            await _vc_revoke_access(guild, owner, tok, reason="denied")
-        except Exception:
-            pass
-
-    try:
-        await _vc_revoke_access(guild, staff_member, tok, reason="denied")
-    except Exception:
-        pass
-
-    result = await deny_vc_verification(
-        guild=guild,
-        channel=ticket_channel if isinstance(ticket_channel, discord.TextChannel) else None,
-        token=tok,
-        staff_member=staff_member,
-        close_after=True,
-    )
-
-    if result.get("ok"):
-        try:
-            await _vc_disable_panels_everywhere(
-                guild,
-                tok,
-                status_text=f"Denied by {staff_member.mention}",
-            )
-        except Exception:
-            pass
-
-        try:
-            await _vc_unlock_channel_for_next_session(guild, tok)
-        except Exception:
-            pass
-
-        await _mark_request_status(
-            tok,
-            status="DENIED",
-            staff_member=staff_member,
-            extra={
-                "denied_by": int(staff_member.id),
-                "denied_at": _utc_now().isoformat(),
-            },
-        )
-
-        await _update_ticket_vc_status(
-            ticket_channel=ticket_channel if isinstance(ticket_channel, discord.TextChannel) else None,
-            status_text="DENIED (VC)",
-            owner=owner if isinstance(owner, discord.Member) else None,
-            staff_member=staff_member,
-        )
-
-        await _end_vc_session_record(
+    async with lock:
+        ctx = await resolve_vc_context(
             guild=guild,
             token=tok,
-            status="DENIED",
-            staff_id=int(staff_member.id),
+            allow_expired=True,
         )
+        if not ctx.get("ok"):
+            return ctx
+
+        ticket_channel = ctx.get("channel")
+        owner = ctx.get("owner")
+        token_info = ctx.get("token_info")
+        req = _refresh_vc_request(tok)
+        current_status = str(req.get("status") or "").upper()
+
+        if _vc_request_already_final(current_status) or _token_already_finalized(token_info):
+            return _result(
+                False,
+                f"This VC request is already finalized ({current_status or 'token final'}).",
+                channel=ticket_channel,
+                owner=owner,
+            )
+
+        if isinstance(owner, discord.Member):
+            try:
+                await _vc_revoke_access(guild, owner, tok, reason="denied")
+            except Exception:
+                pass
 
         try:
-            RUNTIME_STATS["vc_denied"] = int(RUNTIME_STATS.get("vc_denied", 0) or 0) + 1
+            await _vc_revoke_access(guild, staff_member, tok, reason="denied")
         except Exception:
             pass
 
-    return result
+        result = await deny_vc_verification(
+            guild=guild,
+            channel=ticket_channel if isinstance(ticket_channel, discord.TextChannel) else None,
+            token=tok,
+            staff_member=staff_member,
+            close_after=True,
+        )
+
+        if result.get("ok"):
+            try:
+                await _vc_disable_panels_everywhere(
+                    guild,
+                    tok,
+                    status_text=f"Denied by {staff_member.mention}",
+                )
+            except Exception:
+                pass
+
+            try:
+                await _vc_unlock_channel_for_next_session(guild, tok)
+            except Exception:
+                pass
+
+            await _mark_request_status(
+                tok,
+                status="DENIED",
+                staff_member=staff_member,
+                extra={
+                    "denied_by": int(staff_member.id),
+                    "denied_at": _utc_now().isoformat(),
+                },
+            )
+
+            await _update_ticket_vc_status(
+                ticket_channel=ticket_channel if isinstance(ticket_channel, discord.TextChannel) else None,
+                status_text="DENIED (VC)",
+                owner=owner if isinstance(owner, discord.Member) else None,
+                staff_member=staff_member,
+            )
+
+            await _end_vc_session_record(
+                guild=guild,
+                token=tok,
+                status="DENIED",
+                staff_id=int(staff_member.id),
+            )
+
+            try:
+                RUNTIME_STATS["vc_denied"] = int(RUNTIME_STATS.get("vc_denied", 0) or 0) + 1
+            except Exception:
+                pass
+
+        return result
 
 
 async def end_vc_session(
@@ -1552,94 +1668,101 @@ async def end_vc_session(
     if not ok_staff:
         return _result(False, staff_err)
 
-    ctx = await resolve_vc_context(
-        guild=guild,
-        token=token,
-        allow_expired=True,
-    )
-    if not ctx.get("ok"):
-        return ctx
+    tok = _safe_str(token)
+    lock = _vc_token_lock(tok)
 
-    tok = str(ctx.get("token") or token or "").strip()
-    ticket_channel = ctx.get("channel")
-    owner = ctx.get("owner")
-    req = dict(ctx.get("request") or {})
-    current_status = str(req.get("status") or "").upper()
-
-    if _vc_request_already_final(current_status):
-        return _result(
-            False,
-            f"This VC request is already finalized ({current_status}).",
-            channel=ticket_channel,
-            owner=owner,
+    async with lock:
+        ctx = await resolve_vc_context(
+            guild=guild,
+            token=tok,
+            allow_expired=True,
         )
+        if not ctx.get("ok"):
+            return ctx
 
-    if isinstance(owner, discord.Member):
+        ticket_channel = ctx.get("channel")
+        owner = ctx.get("owner")
+        token_info = ctx.get("token_info")
+        req = _refresh_vc_request(tok)
+        current_status = str(req.get("status") or "").upper()
+
+        if _vc_request_already_final(current_status) or _token_already_finalized(token_info):
+            return _result(
+                False,
+                f"This VC request is already finalized ({current_status or 'token final'}).",
+                channel=ticket_channel,
+                owner=owner,
+            )
+
+        if isinstance(owner, discord.Member):
+            try:
+                await _vc_revoke_access(guild, owner, tok, reason=reason)
+            except Exception:
+                pass
+
         try:
-            await _vc_revoke_access(guild, owner, tok, reason=reason)
+            await _vc_revoke_access(guild, staff_member, tok, reason=reason)
         except Exception:
             pass
 
-    try:
-        await _vc_revoke_access(guild, staff_member, tok, reason=reason)
-    except Exception:
-        pass
+        try:
+            await _vc_disable_panels_everywhere(
+                guild,
+                tok,
+                status_text=f"Ended by {staff_member.mention}",
+            )
+        except Exception:
+            pass
 
-    try:
-        await _vc_disable_panels_everywhere(
-            guild,
+        try:
+            await _vc_unlock_channel_for_next_session(guild, tok)
+        except Exception:
+            pass
+
+        await _mark_request_status(
             tok,
-            status_text=f"Ended by {staff_member.mention}",
-        )
-    except Exception:
-        pass
-
-    try:
-        await _vc_unlock_channel_for_next_session(guild, tok)
-    except Exception:
-        pass
-
-    await _mark_request_status(
-        tok,
-        status="ENDED",
-        staff_member=staff_member,
-        extra={
-            "ended_reason": str(reason),
-        },
-    )
-
-    await _update_ticket_vc_status(
-        ticket_channel=ticket_channel if isinstance(ticket_channel, discord.TextChannel) else None,
-        status_text="VC ENDED",
-        owner=owner if isinstance(owner, discord.Member) else None,
-        staff_member=staff_member,
-    )
-
-    await _end_vc_session_record(
-        guild=guild,
-        token=tok,
-        status="CANCELED",
-        staff_id=int(staff_member.id),
-    )
-
-    try:
-        RUNTIME_STATS["vc_ended"] = int(RUNTIME_STATS.get("vc_ended", 0) or 0) + 1
-    except Exception:
-        pass
-
-    if isinstance(ticket_channel, discord.TextChannel):
-        await _safe_send(
-            ticket_channel,
-            f"🧹 VC session ended by {staff_member.mention}.",
+            status="ENDED",
+            staff_member=staff_member,
+            extra={
+                "ended_reason": str(reason),
+            },
         )
 
-    return _result(
-        True,
-        "VC session ended.",
-        token=tok,
-        channel=ticket_channel,
-        owner=owner,
-    )
+        await _mark_decision_safe(tok, "VC ENDED", int(staff_member.id))
+        await _set_used_safe(tok, True)
+
+        await _update_ticket_vc_status(
+            ticket_channel=ticket_channel if isinstance(ticket_channel, discord.TextChannel) else None,
+            status_text="VC ENDED",
+            owner=owner if isinstance(owner, discord.Member) else None,
+            staff_member=staff_member,
+        )
+
+        await _end_vc_session_record(
+            guild=guild,
+            token=tok,
+            status="CANCELED",
+            staff_id=int(staff_member.id),
+        )
+
+        try:
+            RUNTIME_STATS["vc_ended"] = int(RUNTIME_STATS.get("vc_ended", 0) or 0) + 1
+        except Exception:
+            pass
+
+        if isinstance(ticket_channel, discord.TextChannel):
+            await _safe_send(
+                ticket_channel,
+                f"🧹 VC session ended by {staff_member.mention}.",
+            )
+
+        return _result(
+            True,
+            "VC session ended.",
+            token=tok,
+            channel=ticket_channel,
+            owner=owner,
+        )
 
 
 async def takeover_vc_request(
@@ -1663,82 +1786,95 @@ async def takeover_vc_request(
         return ctx
 
     tok = str(ctx.get("token") or token or "").strip()
-    ticket_channel = ctx.get("channel")
-    owner = ctx.get("owner")
-    req = dict(ctx.get("request") or {})
-    current_status = str(req.get("status") or "").upper()
+    lock = _vc_token_lock(tok)
 
-    if _vc_request_already_final(current_status):
+    async with lock:
+        fresh_ctx = await resolve_vc_context(
+            guild=guild,
+            token=tok,
+            channel=channel,
+            allow_expired=True,
+        )
+        if not fresh_ctx.get("ok"):
+            return fresh_ctx
+
+        ticket_channel = fresh_ctx.get("channel")
+        owner = fresh_ctx.get("owner")
+        token_info = fresh_ctx.get("token_info")
+        req = _refresh_vc_request(tok)
+        current_status = str(req.get("status") or "").upper()
+
+        if _vc_request_already_final(current_status) or _token_already_finalized(token_info):
+            return _result(
+                False,
+                f"This VC request is already finalized ({current_status or 'token final'}).",
+                channel=ticket_channel,
+                owner=owner,
+            )
+
+        if not isinstance(ticket_channel, discord.TextChannel):
+            return _result(False, "Could not resolve the verification ticket channel.")
+
+        prev_staff = int(req.get("accepted_staff_id") or req.get("accepted_by") or 0) if req else 0
+
+        ok_lock, msg_lock = await _vc_lock_channel_for_session(
+            guild,
+            owner if isinstance(owner, discord.Member) else None,
+            staff_member,
+            tok,
+        )
+        if not ok_lock:
+            return _result(False, f"Failed to lock VC channel: {msg_lock}", token=tok, channel=ticket_channel, owner=owner)
+
+        try:
+            if vc_sessions and hasattr(vc_sessions, "takeover_session"):
+                vc_sessions.takeover_session(
+                    token=str(tok),
+                    new_staff_id=int(staff_member.id),
+                    new_staff_name=str(getattr(staff_member, "display_name", staff_member)),
+                    reason="manual takeover by staff",
+                )
+        except Exception:
+            pass
+
+        await _mark_request_status(
+            tok,
+            status="TAKEN_OVER",
+            staff_member=staff_member,
+            extra={
+                "accepted_staff_id": int(staff_member.id),
+                "accepted_by": int(staff_member.id),
+                "takeover_at": _utc_now().isoformat(),
+                "takeover_by": int(staff_member.id),
+            },
+        )
+
+        await _update_ticket_vc_status(
+            ticket_channel=ticket_channel,
+            status_text="VC TAKEN OVER",
+            owner=owner if isinstance(owner, discord.Member) else None,
+            staff_member=staff_member,
+        )
+
+        await _safe_send(
+            ticket_channel,
+            (
+                f"🔁 **VC verify takeover:** {staff_member.mention} has taken over this VC session"
+                + (
+                    f" from <@{prev_staff}>."
+                    if prev_staff and prev_staff != int(staff_member.id)
+                    else "."
+                )
+            ),
+        )
+
         return _result(
-            False,
-            f"This VC request is already finalized ({current_status}).",
+            True,
+            "VC session now belongs to the requesting staff member.",
+            token=tok,
             channel=ticket_channel,
             owner=owner,
         )
-
-    if not isinstance(ticket_channel, discord.TextChannel):
-        return _result(False, "Could not resolve the verification ticket channel.")
-
-    prev_staff = int(req.get("accepted_staff_id") or req.get("accepted_by") or 0) if req else 0
-
-    ok_lock, msg_lock = await _vc_lock_channel_for_session(
-        guild,
-        owner if isinstance(owner, discord.Member) else None,
-        staff_member,
-        tok,
-    )
-    if not ok_lock:
-        return _result(False, f"Failed to lock VC channel: {msg_lock}", token=tok, channel=ticket_channel, owner=owner)
-
-    try:
-        if vc_sessions and hasattr(vc_sessions, "takeover_session"):
-            vc_sessions.takeover_session(
-                token=str(tok),
-                new_staff_id=int(staff_member.id),
-                new_staff_name=str(getattr(staff_member, "display_name", staff_member)),
-                reason="manual takeover by staff",
-            )
-    except Exception:
-        pass
-
-    await _mark_request_status(
-        tok,
-        status="TAKEN_OVER",
-        staff_member=staff_member,
-        extra={
-            "accepted_staff_id": int(staff_member.id),
-            "accepted_by": int(staff_member.id),
-            "takeover_at": _utc_now().isoformat(),
-            "takeover_by": int(staff_member.id),
-        },
-    )
-
-    await _update_ticket_vc_status(
-        ticket_channel=ticket_channel,
-        status_text="VC TAKEN OVER",
-        owner=owner if isinstance(owner, discord.Member) else None,
-        staff_member=staff_member,
-    )
-
-    await _safe_send(
-        ticket_channel,
-        (
-            f"🔁 **VC verify takeover:** {staff_member.mention} has taken over this VC session"
-            + (
-                f" from <@{prev_staff}>."
-                if prev_staff and prev_staff != int(staff_member.id)
-                else "."
-            )
-        ),
-    )
-
-    return _result(
-        True,
-        "VC session now belongs to the requesting staff member.",
-        token=tok,
-        channel=ticket_channel,
-        owner=owner,
-    )
 
 
 async def unlock_vc_request(
@@ -1762,70 +1898,86 @@ async def unlock_vc_request(
         return ctx
 
     tok = str(ctx.get("token") or token or "").strip()
-    ticket_channel = ctx.get("channel")
-    owner = ctx.get("owner")
-    req = dict(ctx.get("request") or {})
-    current_status = str(req.get("status") or "").upper()
+    lock = _vc_token_lock(tok)
 
-    if _vc_request_already_final(current_status):
-        return _result(
-            False,
-            f"This VC request is already finalized ({current_status}).",
-            channel=ticket_channel,
-            owner=owner,
+    async with lock:
+        fresh_ctx = await resolve_vc_context(
+            guild=guild,
+            token=tok,
+            channel=channel,
+            allow_expired=True,
         )
+        if not fresh_ctx.get("ok"):
+            return fresh_ctx
 
-    if isinstance(owner, discord.Member):
+        ticket_channel = fresh_ctx.get("channel")
+        owner = fresh_ctx.get("owner")
+        token_info = fresh_ctx.get("token_info")
+        req = _refresh_vc_request(tok)
+        current_status = str(req.get("status") or "").upper()
+
+        if _vc_request_already_final(current_status) or _token_already_finalized(token_info):
+            return _result(
+                False,
+                f"This VC request is already finalized ({current_status or 'token final'}).",
+                channel=ticket_channel,
+                owner=owner,
+            )
+
+        if isinstance(owner, discord.Member):
+            try:
+                await _vc_revoke_access(guild, owner, tok, reason="manual-unlock")
+            except Exception:
+                pass
+
         try:
-            await _vc_revoke_access(guild, owner, tok, reason="manual-unlock")
+            await _vc_revoke_access(guild, staff_member, tok, reason="manual-unlock")
         except Exception:
             pass
 
-    try:
-        await _vc_revoke_access(guild, staff_member, tok, reason="manual-unlock")
-    except Exception:
-        pass
+        try:
+            await _vc_disable_panels_everywhere(
+                guild,
+                tok,
+                status_text=f"Unlocked by {staff_member.mention}",
+            )
+        except Exception:
+            pass
 
-    try:
-        await _vc_disable_panels_everywhere(
-            guild,
+        try:
+            await _vc_unlock_channel_for_next_session(guild, tok)
+        except Exception:
+            pass
+
+        await _mark_request_status(
             tok,
-            status_text=f"Unlocked by {staff_member.mention}",
-        )
-    except Exception:
-        pass
-
-    try:
-        await _vc_unlock_channel_for_next_session(guild, tok)
-    except Exception:
-        pass
-
-    await _mark_request_status(
-        tok,
-        status="COMPLETED",
-        staff_member=staff_member,
-    )
-
-    await _update_ticket_vc_status(
-        ticket_channel=ticket_channel if isinstance(ticket_channel, discord.TextChannel) else None,
-        status_text="VC RESET",
-        owner=owner if isinstance(owner, discord.Member) else None,
-        staff_member=staff_member,
-    )
-
-    if isinstance(ticket_channel, discord.TextChannel):
-        await _safe_send(
-            ticket_channel,
-            f"🧹 VC verify channel reset by {staff_member.mention}. Ready for the next person.",
+            status="COMPLETED",
+            staff_member=staff_member,
         )
 
-    return _result(
-        True,
-        "VC channel reset for the next session.",
-        token=tok,
-        channel=ticket_channel,
-        owner=owner,
-    )
+        await _mark_decision_safe(tok, "VC RESET", int(staff_member.id))
+        await _set_used_safe(tok, True)
+
+        await _update_ticket_vc_status(
+            ticket_channel=ticket_channel if isinstance(ticket_channel, discord.TextChannel) else None,
+            status_text="VC RESET",
+            owner=owner if isinstance(owner, discord.Member) else None,
+            staff_member=staff_member,
+        )
+
+        if isinstance(ticket_channel, discord.TextChannel):
+            await _safe_send(
+                ticket_channel,
+                f"🧹 VC verify channel reset by {staff_member.mention}. Ready for the next person.",
+            )
+
+        return _result(
+            True,
+            "VC channel reset for the next session.",
+            token=tok,
+            channel=ticket_channel,
+            owner=owner,
+        )
 
 
 async def vc_status(
