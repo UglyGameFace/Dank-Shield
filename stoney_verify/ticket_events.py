@@ -10,13 +10,14 @@ import discord
 from .globals import TICKET_CATEGORY_ID, TRANSCRIPTS_CHANNEL_ID
 from .tickets_new.service import (
     mark_ticket_closed,
-    mark_ticket_deleted,
     reopen_ticket_channel,
 )
 from .tickets_new.sync_service import sync_one_ticket_channel
 from .tickets_new.repository import (
     _find_ticket_row_by_channel_id,
     safe_optional_update_by_channel_id,
+    mark_ticket_closed as repo_mark_ticket_closed,
+    mark_ticket_deleted as repo_mark_ticket_deleted,
 )
 
 # NEW: timer-cancel bridge from active commands_ext timer system
@@ -36,6 +37,12 @@ except Exception:
 # - cancels member verification wait timers when a real ticket exists
 # - keeps runtime channel state aligned with DB/channel state
 # - avoids duplicate sync storms and self-trigger loops
+#
+# Hardening goals:
+# - do NOT treat every channel in a ticket-ish category as a ticket
+# - on external channel deletion, close + delete the DB row state safely
+# - avoid stale queued syncs racing transition handlers
+# - keep runtime memory maps from growing forever
 # ============================================================
 
 TICKET_NAME_RE = re.compile(r"^(ticket|closed)-(\d+)$", re.I)
@@ -158,6 +165,16 @@ def _extract_owner_id_from_topic_text(topic: str) -> int:
     return 0
 
 
+def _row_status(row: Optional[dict]) -> str:
+    try:
+        raw = str((row or {}).get("status") or "").strip().lower()
+        if raw in {"open", "claimed", "closed", "deleted"}:
+            return raw
+    except Exception:
+        pass
+    return "unknown"
+
+
 def _remember_self_mutation(channel_id: int) -> None:
     _RECENT_SELF_MUTATIONS[int(channel_id)] = time.monotonic()
 
@@ -206,6 +223,14 @@ def _cancel_pending_sync(channel_id: int) -> None:
     task = _PENDING_SYNC_TASKS.pop(int(channel_id), None)
     if task and not task.done():
         task.cancel()
+
+
+def _forget_channel_runtime_state(channel_id: int) -> None:
+    cid = int(channel_id)
+    _cancel_pending_sync(cid)
+    _RECENT_SELF_MUTATIONS.pop(cid, None)
+    _RECENT_TIMER_CANCELS.pop(cid, None)
+    _CHANNEL_LOCKS.pop(cid, None)
 
 
 async def _update_channel_name_cache(channel: discord.TextChannel) -> None:
@@ -283,27 +308,27 @@ async def _is_ticket_channel(channel: discord.TextChannel) -> bool:
     except Exception:
         pass
 
-    if _matches_ticket_name(channel.name):
+    name_match = _matches_ticket_name(channel.name)
+    topic_match = _topic_looks_ticketish(_safe_topic(channel))
+
+    if name_match or topic_match:
         return True
 
-    if _topic_looks_ticketish(_safe_topic(channel)):
-        return True
-
-    if _looks_like_ticket_category(channel):
-        try:
-            row = await _find_ticket_row_by_channel_id(channel.id)
-            if row is not None:
-                return True
-        except Exception:
-            pass
-        return True
-
+    row = None
     try:
         row = await _find_ticket_row_by_channel_id(channel.id)
         if row is not None:
             return True
     except Exception:
-        pass
+        row = None
+
+    # Category alone is too broad. Only accept category-based detection when
+    # there is another ticket signal too.
+    if _looks_like_ticket_category(channel):
+        if name_match or topic_match:
+            return True
+        if isinstance(row, dict):
+            return True
 
     return False
 
@@ -424,6 +449,8 @@ def _schedule_channel_sync(
     if not isinstance(channel, discord.TextChannel):
         return
 
+    _cleanup_recent_mutations()
+    _cleanup_recent_timer_cancels()
     _cancel_pending_sync(channel.id)
 
     async def _job() -> None:
@@ -481,6 +508,59 @@ async def _handle_channel_create(channel: discord.abc.GuildChannel) -> None:
     )
 
 
+async def _mark_deleted_after_external_channel_delete(
+    channel: discord.TextChannel,
+) -> bool:
+    """
+    External Discord deletion is authoritative.
+    If the row was still open/claimed, close it first, then mark deleted.
+    """
+    try:
+        row = await _find_ticket_row_by_channel_id(channel.id)
+    except Exception:
+        row = None
+
+    if not isinstance(row, dict):
+        return False
+
+    status = _row_status(row)
+    if status == "deleted":
+        return True
+
+    if status in {"open", "claimed"}:
+        try:
+            closed_ok = await repo_mark_ticket_closed(
+                channel_id=channel.id,
+                closed_by=None,
+                closed_by_name="System",
+                reason="Channel deleted externally",
+            )
+            if not closed_ok:
+                _debug(
+                    f"external-delete close-step failed channel={channel.id} status={status}"
+                )
+        except Exception as e:
+            print(
+                f"⚠️ ticket_events external-delete close-step failed for channel={channel.id}:",
+                repr(e),
+            )
+
+    try:
+        deleted_ok = await repo_mark_ticket_deleted(
+            channel_id=channel.id,
+            deleted_by=None,
+            deleted_by_name="System",
+            reason="Channel deleted event",
+        )
+        return bool(deleted_ok)
+    except Exception as e:
+        print(
+            f"⚠️ ticket_events external-delete delete-step failed for channel={channel.id}:",
+            repr(e),
+        )
+        return False
+
+
 async def _handle_channel_delete(channel: discord.abc.GuildChannel) -> None:
     if not isinstance(channel, discord.TextChannel):
         return
@@ -494,23 +574,27 @@ async def _handle_channel_delete(channel: discord.abc.GuildChannel) -> None:
         tracked = _matches_ticket_name(channel.name) or _topic_looks_ticketish(_safe_topic(channel))
 
     if not tracked:
+        _forget_channel_runtime_state(channel.id)
         return
 
     lock = _channel_lock(channel.id)
     async with lock:
         try:
-            ok = await mark_ticket_deleted(
-                channel_id=channel.id,
-                deleted_by=None,
-                reason="Channel deleted event",
-            )
+            ok = await _mark_deleted_after_external_channel_delete(channel)
             if ok:
                 _debug(f"delete -> channel={channel.id} name='{channel.name}'")
+            else:
+                _debug(
+                    f"delete -> channel={channel.id} name='{channel.name}' "
+                    f"warning=delete-state-not-persisted"
+                )
         except Exception as e:
             print(
                 f"⚠️ ticket_events delete handling failed for channel={getattr(channel, 'id', '?')}:",
                 repr(e),
             )
+
+    _forget_channel_runtime_state(channel.id)
 
 
 async def _handle_channel_update(
@@ -560,6 +644,8 @@ async def _handle_channel_update(
 
     async with lock:
         try:
+            _cancel_pending_sync(after.id)
+
             if not was_closed and is_closed:
                 _remember_self_mutation(after.id)
                 ok = await mark_ticket_closed(
@@ -573,7 +659,11 @@ async def _handle_channel_update(
                     except Exception:
                         pass
                     _debug(f"close-detect -> channel={after.id} name='{after.name}'")
-                return
+                    return
+
+                _debug(
+                    f"close-detect write-failed -> channel={after.id} name='{after.name}'"
+                )
 
             if was_closed and is_open:
                 _remember_self_mutation(after.id)
@@ -590,11 +680,12 @@ async def _handle_channel_update(
                     except Exception:
                         pass
                     _debug(f"reopen-detect -> channel={after.id} name='{after.name}'")
-                return
+                    return
 
-            # Stronger drift repair:
-            # if the channel stayed ticket-like but name/topic/category/perms changed,
-            # queue a normal sync instead of trying to guess more state here.
+                _debug(
+                    f"reopen-detect write-failed -> channel={after.id} name='{after.name}'"
+                )
+
         except Exception as e:
             print(
                 f"⚠️ ticket_events update transition handling failed for channel={after.id}:",
