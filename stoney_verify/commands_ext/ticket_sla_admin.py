@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import asyncio
-from datetime import timedelta, timezone
+from datetime import datetime, timedelta, timezone
 
 import discord
 from discord import app_commands
@@ -13,6 +13,22 @@ from ..globals import get_supabase, now_utc
 
 from ..tickets import is_verification_ticket_channel
 from .common import _staff_check, reply_once
+
+try:
+    from ..tickets_new.repository import (
+        get_ticket_by_any_channel_id as repo_get_ticket_by_any_channel_id,
+        safe_optional_update_by_channel_id,
+    )
+except Exception:
+    async def repo_get_ticket_by_any_channel_id(channel_id: int | str):  # type: ignore
+        return None
+
+    async def safe_optional_update_by_channel_id(channel_id: int | str, patch: Dict[str, Any]) -> bool:  # type: ignore
+        return False
+
+
+_MAX_SLA_MINUTES = 10080  # 7 days
+_MAX_DUE_SOON_MINUTES = 10080
 
 
 def _safe_int(value: Any, default: int = 0) -> int:
@@ -37,18 +53,48 @@ def _truncate(text: Any, limit: int = 200) -> str:
     return raw[: max(0, limit - 1)] + "…"
 
 
-def _discord_ts(value: Any) -> str:
+def _parse_iso(value: Any) -> Optional[datetime]:
     try:
-        dt = value
-        if isinstance(value, str):
-            dt = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
-        if dt is None:
-            return "unknown"
-        if getattr(dt, "tzinfo", None) is None:
+        raw = _safe_str(value)
+        if not raw:
+            return None
+        raw = raw.replace("Z", "+00:00")
+        dt = datetime.fromisoformat(raw)
+        if dt.tzinfo is None:
             dt = dt.replace(tzinfo=timezone.utc)
+        return dt.astimezone(timezone.utc)
+    except Exception:
+        return None
+
+
+def _discord_ts(value: Any) -> str:
+    dt = _parse_iso(value)
+    if not dt:
+        return "unknown"
+    try:
         return f"<t:{int(dt.timestamp())}:F>"
     except Exception:
         return _safe_str(value, "unknown")
+
+
+def _ticket_status(row: Optional[Dict[str, Any]]) -> str:
+    try:
+        raw = _safe_str((row or {}).get("status"), "unknown").lower()
+        if raw in {"open", "claimed", "closed", "deleted"}:
+            return raw
+    except Exception:
+        pass
+    return "unknown"
+
+
+def _ticket_priority(row: Optional[Dict[str, Any]]) -> str:
+    try:
+        raw = _safe_str((row or {}).get("priority"), "medium").lower()
+        if raw in {"low", "medium", "high", "urgent"}:
+            return raw
+    except Exception:
+        pass
+    return "medium"
 
 
 async def _run_blocking(fn, *args, **kwargs):
@@ -78,6 +124,13 @@ def _ticket_row_sync(channel_id: int) -> Optional[Dict[str, Any]]:
 
 
 async def _ticket_row_for_channel(channel: discord.TextChannel) -> Optional[Dict[str, Any]]:
+    try:
+        row = await repo_get_ticket_by_any_channel_id(int(channel.id))
+        if isinstance(row, dict):
+            return dict(row)
+    except Exception:
+        pass
+
     return await _run_blocking(_ticket_row_sync, int(channel.id))
 
 
@@ -93,7 +146,7 @@ def _is_ticket_channel(channel: discord.TextChannel, row: Optional[Dict[str, Any
 async def _ensure_ticket_context(
     interaction: discord.Interaction,
     channel: Optional[discord.TextChannel] = None,
-) -> tuple[Optional[discord.TextChannel], Optional[Dict[str, Any]]]:
+) -> Tuple[Optional[discord.TextChannel], Optional[Dict[str, Any]]]:
     ch = channel or interaction.channel
     if not isinstance(ch, discord.TextChannel):
         await reply_once(interaction, {"content": "❌ Must be used in a ticket text channel.", "ephemeral": True})
@@ -110,22 +163,11 @@ async def _ensure_ticket_context(
     return ch, row
 
 
-def _update_ticket_sla_sync(channel_id: int, patch: Dict[str, Any]) -> bool:
-    sb = get_supabase()
-    if not sb:
-        return False
-
-    for field in ("channel_id", "discord_thread_id"):
-        try:
-            sb.table("tickets").update(patch).eq(field, str(int(channel_id))).execute()
-            return True
-        except Exception:
-            continue
-    return False
-
-
 async def _update_ticket_sla(channel_id: int, patch: Dict[str, Any]) -> bool:
-    return await _run_blocking(_update_ticket_sla_sync, channel_id, patch)
+    try:
+        return await safe_optional_update_by_channel_id(channel_id, patch)
+    except Exception:
+        return False
 
 
 def _fetch_due_soon_sync(guild_id: int, horizon_minutes: int, limit: int = 15) -> List[Dict[str, Any]]:
@@ -149,7 +191,16 @@ def _fetch_due_soon_sync(guild_id: int, horizon_minutes: int, limit: int = 15) -
             .execute()
         )
         rows = getattr(res, "data", None) or []
-        return [dict(x) for x in rows if isinstance(x, dict)]
+        out: List[Dict[str, Any]] = []
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            if _ticket_status(row) not in {"open", "claimed"}:
+                continue
+            if not _safe_str(row.get("sla_deadline")):
+                continue
+            out.append(dict(row))
+        return out
     except Exception:
         return []
 
@@ -161,9 +212,9 @@ async def _fetch_due_soon(guild_id: int, horizon_minutes: int, limit: int = 15) 
 def _ticket_line(guild: discord.Guild, row: Dict[str, Any]) -> str:
     channel_id = _safe_int(row.get("channel_id") or row.get("discord_thread_id"), 0)
     ticket_number = _safe_str(row.get("ticket_number"))
-    priority = _safe_str(row.get("priority"), "medium")
-    status = _safe_str(row.get("status"), "unknown")
-    assignee = _safe_int(row.get("assigned_to"), 0)
+    priority = _ticket_priority(row)
+    status = _ticket_status(row)
+    assignee = _safe_int(row.get("assigned_to") or row.get("claimed_by"), 0)
     channel_ref = f"<#{channel_id}>" if channel_id > 0 else f"`{_safe_str(row.get('channel_name') or row.get('title') or 'ticket')}`"
     assignee_ref = f"<@{assignee}>" if assignee > 0 else "Unassigned"
     num = f"#{ticket_number} " if ticket_number else ""
@@ -188,17 +239,32 @@ def register_ticket_sla_admin_commands(bot, tree) -> None:
             return
 
         row = row or {}
+        status = _ticket_status(row)
+        priority = _ticket_priority(row)
+
         embed = discord.Embed(
             title="⏱️ Ticket SLA Status",
             color=discord.Color.blurple(),
             timestamp=now_utc(),
         )
         embed.add_field(name="Channel", value=f"{ch.mention}\n`{ch.id}`", inline=False)
-        embed.add_field(name="Status", value=f"`{_safe_str(row.get('status'), 'unknown')}`", inline=True)
-        embed.add_field(name="Priority", value=f"`{_safe_str(row.get('priority'), 'medium')}`", inline=True)
+        embed.add_field(name="Status", value=f"`{status}`", inline=True)
+        embed.add_field(name="Priority", value=f"`{priority}`", inline=True)
         embed.add_field(name="SLA Deadline", value=_discord_ts(row.get("sla_deadline")), inline=True)
         embed.add_field(name="Created", value=_discord_ts(row.get("created_at")), inline=True)
-        embed.add_field(name="Assigned", value=(f"<@{_safe_int(row.get('assigned_to'), 0)}>" if _safe_int(row.get("assigned_to"), 0) > 0 else "Unassigned"), inline=True)
+        embed.add_field(
+            name="Assigned",
+            value=(f"<@{_safe_int(row.get('assigned_to') or row.get('claimed_by'), 0)}>" if _safe_int(row.get("assigned_to") or row.get("claimed_by"), 0) > 0 else "Unassigned"),
+            inline=True,
+        )
+
+        if status in {"closed", "deleted"}:
+            embed.add_field(
+                name="Note",
+                value="This ticket is not active. SLA deadlines are informational only until the ticket is reopened.",
+                inline=False,
+            )
+
         await reply_once(interaction, {"embed": embed, "ephemeral": True})
 
     @tree.command(
@@ -220,9 +286,22 @@ def register_ticket_sla_admin_commands(bot, tree) -> None:
         if int(minutes) <= 0:
             return await reply_once(interaction, {"content": "❌ Minutes must be greater than 0.", "ephemeral": True})
 
+        if int(minutes) > _MAX_SLA_MINUTES:
+            return await reply_once(
+                interaction,
+                {"content": f"❌ Minutes cannot exceed `{_MAX_SLA_MINUTES}` (7 days).", "ephemeral": True},
+            )
+
         ch, row = await _ensure_ticket_context(interaction, channel)
         if ch is None:
             return
+
+        status = _ticket_status(row)
+        if status == "deleted":
+            return await reply_once(
+                interaction,
+                {"content": "❌ Cannot set an SLA deadline on a deleted ticket.", "ephemeral": True},
+            )
 
         deadline = now_utc() + timedelta(minutes=int(minutes))
         ok = await _update_ticket_sla(
@@ -240,10 +319,10 @@ def register_ticket_sla_admin_commands(bot, tree) -> None:
         except Exception:
             pass
 
-        await reply_once(
-            interaction,
-            {"content": f"✅ Set SLA deadline for {ch.mention} to {_discord_ts(deadline)}.", "ephemeral": True},
-        )
+        msg = f"✅ Set SLA deadline for {ch.mention} to {_discord_ts(deadline)}."
+        if status == "closed":
+            msg += "\n⚠️ This ticket is currently closed. The deadline is stored, but it will not matter until the ticket is reopened."
+        await reply_once(interaction, {"content": msg, "ephemeral": True})
 
     @tree.command(
         name="ticket_sla_clear",
@@ -260,6 +339,19 @@ def register_ticket_sla_admin_commands(bot, tree) -> None:
         ch, row = await _ensure_ticket_context(interaction, channel)
         if ch is None:
             return
+
+        status = _ticket_status(row)
+        if status == "deleted":
+            return await reply_once(
+                interaction,
+                {"content": "❌ Cannot clear SLA on a deleted ticket.", "ephemeral": True},
+            )
+
+        if not _safe_str((row or {}).get("sla_deadline")):
+            return await reply_once(
+                interaction,
+                {"content": f"ℹ️ {ch.mention} does not currently have an SLA deadline.", "ephemeral": True},
+            )
 
         ok = await _update_ticket_sla(
             ch.id,
@@ -294,7 +386,7 @@ def register_ticket_sla_admin_commands(bot, tree) -> None:
         if guild is None:
             return await reply_once(interaction, {"content": "❌ Guild only.", "ephemeral": True})
 
-        horizon = max(1, min(int(minutes), 10080))
+        horizon = max(1, min(int(minutes), _MAX_DUE_SOON_MINUTES))
         rows = await _fetch_due_soon(guild.id, horizon, limit=15)
 
         embed = discord.Embed(
@@ -313,4 +405,5 @@ def register_ticket_sla_admin_commands(bot, tree) -> None:
             value="\n".join([_ticket_line(guild, row) for row in rows[:15]])[:1024],
             inline=False,
         )
+        embed.set_footer(text=f"Showing {min(len(rows), 15)} ticket(s)")
         await reply_once(interaction, {"embed": embed, "ephemeral": True})
