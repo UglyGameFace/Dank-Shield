@@ -454,6 +454,24 @@ def _get_vc_session_module():
         return None
 
 
+def _vc_request_cache(token: str) -> Dict[str, Any]:
+    try:
+        req = VC_REQUESTS.get(str(token)) or {}
+        return dict(req) if isinstance(req, dict) else {}
+    except Exception:
+        return {}
+
+
+def _set_vc_request_cache(token: str, patch: Dict[str, Any]) -> Dict[str, Any]:
+    current = _vc_request_cache(token)
+    merged = {**current, **dict(patch or {})}
+    try:
+        VC_REQUESTS[str(token)] = merged
+    except Exception:
+        pass
+    return merged
+
+
 def _ensure_vc_request_session(
     *,
     guild: discord.Guild,
@@ -976,6 +994,91 @@ def _is_persistent_view_managed_custom_id(custom_id: str) -> bool:
     return cid in exact
 
 
+def _sync_vc_request_status(token: str, *, status: str, **extra: Any) -> Dict[str, Any]:
+    patch = {"status": str(status).upper().strip()}
+    patch.update(extra)
+    return _set_vc_request_cache(token, patch)
+
+
+def _vc_request_status(token: str) -> str:
+    try:
+        return str((_vc_request_cache(token) or {}).get("status") or "").upper().strip()
+    except Exception:
+        return ""
+
+
+def _vc_request_assigned_staff_id(token: str) -> int:
+    req = _vc_request_cache(token)
+    return int(
+        req.get("accepted_staff_id")
+        or req.get("accepted_by")
+        or req.get("assigned_staff_id")
+        or 0
+    )
+
+
+def _vc_session_set_staff_accepted(token: str, staff_member: discord.Member) -> None:
+    vc_sessions = _get_vc_session_module()
+    if not vc_sessions:
+        return
+    try:
+        if hasattr(vc_sessions, "set_staff_accepted"):
+            vc_sessions.set_staff_accepted(
+                token=str(token),
+                staff_id=int(staff_member.id),
+                staff_name=str(staff_member.display_name),
+            )
+    except Exception:
+        pass
+
+
+async def _vc_session_mark_started(
+    *,
+    guild: discord.Guild,
+    token: str,
+    ticket_channel: discord.TextChannel,
+    owner: discord.Member,
+    staff_member: discord.Member,
+) -> None:
+    vc_sessions = _get_vc_session_module()
+    if not vc_sessions:
+        return
+    try:
+        if hasattr(vc_sessions, "start_session"):
+            await vc_sessions.start_session(
+                guild_id=guild.id,
+                token=str(token),
+                ticket_channel_id=int(getattr(ticket_channel, "id", 0) or 0),
+                vc_channel_id=int(_configured_vc_channel_id() or 0),
+                user_id=int(owner.id),
+                staff_id=int(staff_member.id),
+            )
+    except Exception:
+        pass
+
+
+async def _vc_session_mark_ended(
+    *,
+    guild: discord.Guild,
+    token: str,
+    status: str,
+    staff_member: discord.Member,
+) -> None:
+    vc_sessions = _get_vc_session_module()
+    if not vc_sessions:
+        return
+    try:
+        if hasattr(vc_sessions, "end_session"):
+            await vc_sessions.end_session(
+                guild_id=guild.id,
+                token=str(token),
+                status=str(status),
+                staff_id=int(staff_member.id),
+            )
+    except Exception:
+        pass
+
+
 async def handle_possible_submission(message: discord.Message) -> None:
     if not isinstance(message.channel, discord.TextChannel):
         return
@@ -1308,16 +1411,12 @@ async def _handle_vc_staff_action(
         except Exception:
             pass
 
-        try:
-            req = VC_REQUESTS.get(token) or {}
-            VC_REQUESTS[token] = {
-                **req,
-                "status": "UPLOAD_REQUESTED",
-                "handled_by": int(interaction.user.id),
-                "handled_at": now_utc().isoformat(),
-            }
-        except Exception:
-            pass
+        _sync_vc_request_status(
+            token,
+            status="UPLOAD_REQUESTED",
+            handled_by=int(interaction.user.id),
+            handled_at=now_utc().isoformat(),
+        )
 
         try:
             if owner:
@@ -1346,14 +1445,8 @@ async def _handle_vc_staff_action(
             await interaction.followup.send("❌ This token has already been used.", ephemeral=True)
             return True
 
-        req = VC_REQUESTS.get(token) or {}
-        existing_staff_id = int(
-            req.get("accepted_staff_id")
-            or req.get("accepted_by")
-            or req.get("assigned_staff_id")
-            or 0
-        )
-        existing_status = str(req.get("status") or "").upper().strip()
+        existing_staff_id = _vc_request_assigned_staff_id(token)
+        existing_status = _vc_request_status(token)
 
         if existing_status in {"STAFF_ACCEPTED", "STARTED", "IN_VC", "TAKEN_OVER", "READY"}:
             if existing_staff_id and existing_staff_id != int(interaction.user.id):
@@ -1384,21 +1477,23 @@ async def _handle_vc_staff_action(
             )
             return True
 
-        VC_REQUESTS[token] = {
-            **req,
-            "status": "STAFF_ACCEPTED",
-            "accepted_by": int(interaction.user.id),
-            "accepted_staff_id": int(interaction.user.id),
-            "assigned_staff_id": int(interaction.user.id),
-            "accepted_at": now_utc().isoformat(),
-            "owner_id": int(owner.id),
-            "requester_id": int(owner.id),
-            "ticket_channel_id": int(ticket_ch.id),
-            "guild_id": int(guild.id),
-            "vc_channel_id": int(_configured_vc_channel_id() or 0),
-            "queue_channel_id": int(_configured_vc_queue_channel_id() or 0),
-            "access_minutes": int(_configured_vc_access_minutes()),
-        }
+        _vc_session_set_staff_accepted(token, interaction.user)
+
+        _sync_vc_request_status(
+            token,
+            status="STAFF_ACCEPTED",
+            accepted_by=int(interaction.user.id),
+            accepted_staff_id=int(interaction.user.id),
+            assigned_staff_id=int(interaction.user.id),
+            accepted_at=now_utc().isoformat(),
+            owner_id=int(owner.id),
+            requester_id=int(owner.id),
+            ticket_channel_id=int(ticket_ch.id),
+            guild_id=int(guild.id),
+            vc_channel_id=int(_configured_vc_channel_id() or 0),
+            queue_channel_id=int(_configured_vc_queue_channel_id() or 0),
+            access_minutes=int(_configured_vc_access_minutes()),
+        )
         _bump_runtime_stat("vc_accepted")
 
         vc_ch = _get_vc_channel(guild)
@@ -1463,7 +1558,7 @@ async def _handle_vc_staff_action(
                     content=f"✅ VC verify accepted by {interaction.user.mention} for {owner.mention}.",
                     view=staff_controls,
                 )
-            VC_REQUESTS[token]["staff_panel_msg_id"] = int(getattr(msg_obj, "id", 0) or 0)
+            _set_vc_request_cache(token, {"staff_panel_msg_id": int(getattr(msg_obj, "id", 0) or 0)})
         except Exception:
             pass
 
@@ -1525,42 +1620,31 @@ async def _handle_vc_staff_action(
             )
             return True
 
-        try:
-            req = VC_REQUESTS.get(token) or {}
-            VC_REQUESTS[token] = {
-                **req,
-                "status": "STARTED",
-                "started_by": str(interaction.user.id),
-                "started_at": now_utc().isoformat(),
-                "accepted_by": int(req.get("accepted_by") or interaction.user.id),
-                "accepted_staff_id": int(req.get("accepted_staff_id") or interaction.user.id),
-                "assigned_staff_id": int(req.get("assigned_staff_id") or interaction.user.id),
-                "owner_id": int(owner.id),
-                "requester_id": int(owner.id),
-                "requested_by": int(req.get("requested_by") or owner.id),
-                "ticket_channel_id": int(getattr(ticket_ch, "id", 0) or 0),
-                "guild_id": int(guild.id),
-                "vc_channel_id": int(_configured_vc_channel_id() or 0),
-                "queue_channel_id": int(_configured_vc_queue_channel_id() or 0),
-                "access_minutes": int(_configured_vc_access_minutes()),
-            }
-        except Exception:
-            pass
+        _sync_vc_request_status(
+            token,
+            status="STARTED",
+            started_by=str(interaction.user.id),
+            started_at=now_utc().isoformat(),
+            accepted_by=int(_vc_request_cache(token).get("accepted_by") or interaction.user.id),
+            accepted_staff_id=int(_vc_request_cache(token).get("accepted_staff_id") or interaction.user.id),
+            assigned_staff_id=int(_vc_request_cache(token).get("assigned_staff_id") or interaction.user.id),
+            owner_id=int(owner.id),
+            requester_id=int(owner.id),
+            requested_by=int(_vc_request_cache(token).get("requested_by") or owner.id),
+            ticket_channel_id=int(getattr(ticket_ch, "id", 0) or 0),
+            guild_id=int(guild.id),
+            vc_channel_id=int(_configured_vc_channel_id() or 0),
+            queue_channel_id=int(_configured_vc_queue_channel_id() or 0),
+            access_minutes=int(_configured_vc_access_minutes()),
+        )
 
-        vc_sessions = _get_vc_session_module()
-        try:
-            vc_id = int(_configured_vc_channel_id() or 0)
-            if vc_sessions and hasattr(vc_sessions, "start_session"):
-                await vc_sessions.start_session(
-                    guild_id=guild.id,
-                    token=token,
-                    ticket_channel_id=int(getattr(ticket_ch, "id", 0) or 0),
-                    vc_channel_id=vc_id,
-                    user_id=int(owner.id),
-                    staff_id=int(interaction.user.id),
-                )
-        except Exception:
-            pass
+        await _vc_session_mark_started(
+            guild=guild,
+            token=token,
+            ticket_channel=ticket_ch,
+            owner=owner,
+            staff_member=interaction.user,
+        )
 
         vc_id = int(_configured_vc_channel_id() or 0)
         view = None
@@ -1636,7 +1720,7 @@ async def _handle_vc_staff_action(
         )
         return True
 
-    if action in {"vc_cancel", "vc_end"}:
+    if action in {"vc_cancel", "vc_end", "vc_complete"}:
         try:
             if isinstance(owner, discord.Member):
                 await _vc_revoke_access(guild, owner, token, reason=action)
@@ -1654,28 +1738,20 @@ async def _handle_vc_staff_action(
         except Exception:
             pass
 
-        vc_sessions = _get_vc_session_module()
-        try:
-            if vc_sessions and hasattr(vc_sessions, "end_session"):
-                await vc_sessions.end_session(
-                    guild_id=guild.id,
-                    token=str(token),
-                    status=("CANCELED" if action == "vc_cancel" else "COMPLETED"),
-                    staff_id=int(interaction.user.id),
-                )
-        except Exception:
-            pass
+        end_status = "CANCELED" if action == "vc_cancel" else "COMPLETED"
+        await _vc_session_mark_ended(
+            guild=guild,
+            token=token,
+            status=end_status,
+            staff_member=interaction.user,
+        )
 
-        try:
-            req = VC_REQUESTS.get(token) or {}
-            VC_REQUESTS[token] = {
-                **req,
-                "status": "CANCELED" if action == "vc_cancel" else "ENDED",
-                "ended_by": int(interaction.user.id),
-                "ended_at": now_utc().isoformat(),
-            }
-        except Exception:
-            pass
+        _sync_vc_request_status(
+            token,
+            status=("CANCELED" if action == "vc_cancel" else "ENDED"),
+            ended_by=int(interaction.user.id),
+            ended_at=now_utc().isoformat(),
+        )
 
         try:
             await _disable_interaction_message_if_possible(
@@ -1746,7 +1822,7 @@ async def _handle_vc_staff_action(
         except Exception:
             pass
 
-        old_entry = VC_REQUESTS.get(token)
+        old_entry = _vc_request_cache(token)
         if old_entry and old_entry.get("ticket_panel_msg_id"):
             ticket_panel_msg_id = old_entry["ticket_panel_msg_id"]
             try:
@@ -1768,8 +1844,7 @@ async def _handle_vc_staff_action(
                     custom_id=make_custom_id("vc_end", new_token),
                 ))
                 await ticket_msg.edit(view=new_view)
-                VC_REQUESTS.setdefault(new_token, {})
-                VC_REQUESTS[new_token]["ticket_panel_msg_id"] = ticket_panel_msg_id
+                _set_vc_request_cache(new_token, {"ticket_panel_msg_id": ticket_panel_msg_id})
             except Exception as e:
                 print(f"⚠️ Failed to update ticket panel during reissue: {e}")
 
@@ -1814,6 +1889,13 @@ async def _handle_vc_staff_action(
             await _vc_unlock_channel_for_next_session(guild, token)
         except Exception:
             pass
+
+        await _vc_session_mark_ended(
+            guild=guild,
+            token=token,
+            status="CANCELED",
+            staff_member=interaction.user,
+        )
 
         try:
             await _disable_interaction_message_if_possible(
@@ -1896,6 +1978,13 @@ async def _handle_vc_staff_action(
             await _vc_unlock_channel_for_next_session(guild, token)
         except Exception:
             pass
+
+        await _vc_session_mark_ended(
+            guild=guild,
+            token=token,
+            status="COMPLETED",
+            staff_member=interaction.user,
+        )
 
         try:
             await _disable_interaction_message_if_possible(
@@ -2140,11 +2229,11 @@ def _known_component_action(action: str) -> bool:
         "vc_accept",
         "vc_upload",
         "vc_end",
+        "vc_complete",
         "vc_approve",
         "vc_denyclose",
         "vc_reissue",
         "vc_start",
-        "vc_complete",
         "vc_cancel",
         "sv:verify:get",
         "sv:verify:raw",
