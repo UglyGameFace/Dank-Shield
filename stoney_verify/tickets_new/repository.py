@@ -5,7 +5,7 @@ import random
 import re
 import time
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional, Sequence, Set
+from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
 
 import discord
 
@@ -22,6 +22,12 @@ from ..globals import get_supabase, now_utc, reset_supabase
 # - activity_feed_events supports BOTH metadata and meta
 # - member_joins supports created_at / username / joined_at
 # - channel_id and discord_thread_id lookup paths are both valid
+#
+# Repository hardening goals:
+# - preserve authoritative state/metadata
+# - reject invalid lifecycle transitions even if a caller is sloppy
+# - avoid silent resurrection of deleted tickets
+# - avoid delete-on-open corruption
 # ============================================================
 
 TICKETS_TABLE = "tickets"
@@ -30,12 +36,10 @@ TICKET_MESSAGES_TABLE = "ticket_messages"
 ACTIVITY_FEED_EVENTS_TABLE = "activity_feed_events"
 MEMBER_JOINS_TABLE = "member_joins"
 
-# Columns we never blindly write back from fetched rows.
 _ROW_ONLY_TICKET_COLUMNS: Set[str] = {
     "id",
 }
 
-# Base + informative locked columns.
 _BASE_TICKET_WRITE_COLUMNS: Set[str] = {
     "guild_id",
     "user_id",
@@ -83,7 +87,6 @@ _BASE_TICKET_WRITE_COLUMNS: Set[str] = {
     "last_message_id",
 }
 
-# Informative / compatibility columns that are now treated as real schema.
 _EXTENDED_TICKET_WRITE_COLUMNS: Set[str] = {
     "panel_message_id",
     "webhook_url",
@@ -123,6 +126,28 @@ _VALID_TICKET_PRIORITIES: Set[str] = {
 
 TICKET_NUM_RE = re.compile(r"^(?:ticket|closed)-(\d+)$", re.I)
 _PINNED_NOTE_PREFIX = "[PINNED] "
+
+_PRESERVE_ALWAYS_KEYS: Tuple[str, ...] = (
+    "transcript_url",
+    "transcript_message_id",
+    "transcript_channel_id",
+    "category_id",
+    "category_override",
+    "category_set_by",
+    "category_set_at",
+    "matched_category_id",
+    "matched_category_name",
+    "matched_category_slug",
+    "matched_intake_type",
+    "matched_category_reason",
+    "matched_category_score",
+    "decision",
+    "source_ticket_id",
+    "panel_message_id",
+    "webhook_id",
+    "webhook_url",
+    "transcript_message_url",
+)
 
 # ============================================================
 # Small helpers
@@ -204,7 +229,7 @@ def _boolish(value: Any, default: bool = False) -> bool:
             return True
         if text in {"0", "false", "no", "n", "off"}:
             return False
-        return bool(value)
+        return default
     except Exception:
         return default
 
@@ -221,6 +246,33 @@ def _utc_iso(dt: Optional[datetime]) -> Optional[str]:
             return dt.isoformat()
         except Exception:
             return None
+
+
+def _parse_iso(value: Any) -> Optional[datetime]:
+    try:
+        raw = str(value or "").strip()
+        if not raw:
+            return None
+        raw = raw.replace("Z", "+00:00")
+        parsed = datetime.fromisoformat(raw)
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return parsed.astimezone(timezone.utc)
+    except Exception:
+        return None
+
+
+def _prefer_newer_iso(a: Any, b: Any) -> Optional[str]:
+    da = _parse_iso(a)
+    db = _parse_iso(b)
+
+    if da and db:
+        return _utc_iso(max(da, db))
+    if da:
+        return _utc_iso(da)
+    if db:
+        return _utc_iso(db)
+    return None
 
 
 def _normalize_note_text(value: Any, limit: int = 4000) -> str:
@@ -272,6 +324,29 @@ def _result_rows(resp: Any) -> List[Dict[str, Any]]:
         return [r for r in rows if isinstance(r, dict)]
     except Exception:
         return []
+
+
+def _ticket_status(row: Optional[Dict[str, Any]]) -> str:
+    if not isinstance(row, dict):
+        return "unknown"
+    try:
+        raw = _normalize_ticket_status(row.get("status"))
+        return raw if raw in _VALID_TICKET_STATUSES else "unknown"
+    except Exception:
+        return "unknown"
+
+
+def _ticket_claimed_by_id(row: Optional[Dict[str, Any]]) -> int:
+    if not isinstance(row, dict):
+        return 0
+    for key in ("assigned_to", "claimed_by"):
+        try:
+            value = int(str(row.get(key) or "0") or 0)
+            if value > 0:
+                return value
+        except Exception:
+            continue
+    return 0
 
 
 def _normalize_ticket_row(row: Any) -> Optional[Dict[str, Any]]:
@@ -416,28 +491,6 @@ def _merge_existing_ticket_identity(
     return out
 
 
-def _ticket_status(row: Optional[Dict[str, Any]]) -> str:
-    if not isinstance(row, dict):
-        return "unknown"
-    try:
-        return _normalize_ticket_status(row.get("status"))
-    except Exception:
-        return "unknown"
-
-
-def _ticket_claimed_by_id(row: Optional[Dict[str, Any]]) -> int:
-    if not isinstance(row, dict):
-        return 0
-    for key in ("assigned_to", "claimed_by"):
-        try:
-            value = int(str(row.get(key) or "0") or 0)
-            if value > 0:
-                return value
-        except Exception:
-            continue
-    return 0
-
-
 def _clean_ticket_payload(
     payload: Dict[str, Any],
     *,
@@ -520,6 +573,207 @@ def _title_for_ticket(owner: discord.abc.User, category: str, is_ghost: bool) ->
     )
     prefix = "[GHOST] " if is_ghost else ""
     return f"{prefix}{category.title()} - {base_name}"[:180]
+
+
+# ============================================================
+# Transition guards
+# ============================================================
+
+
+def _merge_backfill_identity_fields(existing: Dict[str, Any], patch: Dict[str, Any]) -> Dict[str, Any]:
+    out = dict(patch)
+
+    for key in (
+        "owner_id",
+        "requester_id",
+        "owner_name",
+        "requester_name",
+    ):
+        if out.get(key) in {None, ""} and existing.get(key) not in {None, ""}:
+            out[key] = existing.get(key)
+
+    if out.get("title") in {None, ""} and existing.get("title") not in {None, ""}:
+        out["title"] = existing.get("title")
+
+    if out.get("channel_name") in {None, ""} and existing.get("channel_name") not in {None, ""}:
+        out["channel_name"] = existing.get("channel_name")
+
+    if out.get("ticket_number") is None and existing.get("ticket_number") is not None:
+        out["ticket_number"] = existing.get("ticket_number")
+
+    return out
+
+
+def _preserve_existing_metadata(existing: Dict[str, Any], payload: Dict[str, Any]) -> None:
+    for key in _PRESERVE_ALWAYS_KEYS:
+        if existing.get(key) is not None and payload.get(key) in {None, ""}:
+            payload[key] = existing.get(key)
+
+
+def _finalize_claim_fields(existing: Dict[str, Any], payload: Dict[str, Any]) -> None:
+    existing_claimed_by = _as_str_id(existing.get("claimed_by"))
+    existing_assigned_to = _as_str_id(existing.get("assigned_to"))
+    existing_claimed_name = _clean_text(existing.get("claimed_by_name"))
+    existing_assigned_name = _clean_text(existing.get("assigned_to_name"))
+
+    if not _as_str_id(payload.get("claimed_by")) and existing_claimed_by:
+        payload["claimed_by"] = existing_claimed_by
+    if not _as_str_id(payload.get("assigned_to")) and existing_assigned_to:
+        payload["assigned_to"] = existing_assigned_to or existing_claimed_by
+
+    if not _clean_text(payload.get("claimed_by_name")) and existing_claimed_name:
+        payload["claimed_by_name"] = existing_claimed_name
+    if not _clean_text(payload.get("assigned_to_name")) and existing_assigned_name:
+        payload["assigned_to_name"] = existing_assigned_name or existing_claimed_name
+
+
+def _prepare_ticket_update(
+    existing: Dict[str, Any],
+    payload: Dict[str, Any],
+) -> Optional[Dict[str, Any]]:
+    patch = _ticket_patch_payload(payload)
+    patch = _merge_backfill_identity_fields(existing, patch)
+
+    existing_status = _ticket_status(existing)
+    requested_status = (
+        _normalize_ticket_status(patch.get("status"))
+        if "status" in patch
+        else existing_status
+    )
+
+    existing_claimed_by = _as_str_id(existing.get("claimed_by"))
+    existing_assigned_to = _as_str_id(existing.get("assigned_to"))
+    existing_assignee = existing_claimed_by or existing_assigned_to
+
+    requested_claimed_by = _as_str_id(patch.get("claimed_by"))
+    requested_assigned_to = _as_str_id(patch.get("assigned_to"))
+    requested_assignee = requested_claimed_by or requested_assigned_to
+
+    if existing_status == "deleted":
+        if requested_status != "deleted":
+            _repo_debug(
+                f"reject invalid transition existing=deleted -> requested={requested_status}"
+            )
+            return None
+        requested_status = "deleted"
+
+    if existing_status in {"open", "claimed"} and requested_status == "deleted":
+        _repo_debug(
+            f"reject invalid transition existing={existing_status} -> requested=deleted"
+        )
+        return None
+
+    if existing_status == "closed" and requested_status == "open":
+        requested_status = "open"
+
+    if existing_status == "closed" and requested_status == "claimed":
+        if not requested_assignee:
+            _repo_debug("reject invalid transition closed -> claimed without assignee")
+            return None
+
+    if requested_status == "claimed" and not requested_assignee:
+        if existing_assignee:
+            requested_assignee = existing_assignee
+        else:
+            _repo_debug("reject claimed state without assignee")
+            return None
+
+    if requested_status == "open":
+        patch.setdefault("claimed_by", None)
+        patch.setdefault("assigned_to", None)
+        patch.setdefault("claimed_by_name", None)
+        patch.setdefault("assigned_to_name", None)
+
+    if requested_status == "claimed":
+        patch["claimed_by"] = requested_assignee
+        patch["assigned_to"] = requested_assignee
+
+        if not _clean_text(patch.get("claimed_by_name")) and _clean_text(patch.get("assigned_to_name")):
+            patch["claimed_by_name"] = _clean_text(patch.get("assigned_to_name"))
+        if not _clean_text(patch.get("assigned_to_name")) and _clean_text(patch.get("claimed_by_name")):
+            patch["assigned_to_name"] = _clean_text(patch.get("claimed_by_name"))
+
+    patch["status"] = requested_status
+
+    if requested_status in {"open", "claimed"}:
+        if existing_status == "deleted":
+            return None
+        patch["deleted_at"] = None
+        patch["deleted_by"] = None
+        patch["deleted_by_name"] = None
+        patch["delete_reason"] = None
+
+        if requested_status == "open":
+            patch["closed_at"] = None
+            patch["closed_by"] = None
+            patch["closed_by_name"] = None
+            patch["closed_reason"] = None
+            patch["close_reason"] = None
+
+    elif requested_status == "closed":
+        if existing_status == "deleted":
+            return None
+        patch.setdefault("closed_at", existing.get("closed_at") or _now_iso())
+        if "closed_reason" in patch and "close_reason" not in patch:
+            patch["close_reason"] = patch.get("closed_reason")
+        if "close_reason" in patch and "closed_reason" not in patch:
+            patch["closed_reason"] = patch.get("close_reason")
+        patch["deleted_at"] = None
+        patch["deleted_by"] = None
+        patch["deleted_by_name"] = None
+        patch["delete_reason"] = None
+
+        if existing_assignee and not requested_assignee:
+            patch["claimed_by"] = existing_claimed_by or existing_assignee
+            patch["assigned_to"] = existing_assigned_to or existing_assignee
+            if _clean_text(existing.get("claimed_by_name")) and not _clean_text(patch.get("claimed_by_name")):
+                patch["claimed_by_name"] = _clean_text(existing.get("claimed_by_name"))
+            if _clean_text(existing.get("assigned_to_name")) and not _clean_text(patch.get("assigned_to_name")):
+                patch["assigned_to_name"] = _clean_text(existing.get("assigned_to_name"))
+
+    elif requested_status == "deleted":
+        if existing_status not in {"closed", "deleted"}:
+            return None
+        patch.setdefault("closed_at", existing.get("closed_at") or _now_iso())
+        patch.setdefault("deleted_at", existing.get("deleted_at") or _now_iso())
+        if "delete_reason" in patch and "closed_reason" not in patch:
+            patch["closed_reason"] = patch.get("delete_reason")
+        if "delete_reason" in patch and "close_reason" not in patch:
+            patch["close_reason"] = patch.get("delete_reason")
+        if "deleted_by" in patch and "closed_by" not in patch:
+            patch["closed_by"] = patch.get("deleted_by")
+        if "deleted_by_name" in patch and "closed_by_name" not in patch:
+            patch["closed_by_name"] = patch.get("deleted_by_name")
+
+        if existing_assignee and not requested_assignee:
+            patch["claimed_by"] = existing_claimed_by or existing_assignee
+            patch["assigned_to"] = existing_assigned_to or existing_assignee
+            if _clean_text(existing.get("claimed_by_name")) and not _clean_text(patch.get("claimed_by_name")):
+                patch["claimed_by_name"] = _clean_text(existing.get("claimed_by_name"))
+            if _clean_text(existing.get("assigned_to_name")) and not _clean_text(patch.get("assigned_to_name")):
+                patch["assigned_to_name"] = _clean_text(existing.get("assigned_to_name"))
+
+    _preserve_existing_metadata(existing, patch)
+    _finalize_claim_fields(existing, patch)
+
+    patch["priority"] = _normalize_ticket_priority(
+        patch.get("priority") or existing.get("priority"),
+        "medium",
+    )
+
+    merged_last_activity = _prefer_newer_iso(
+        patch.get("last_activity_at"),
+        existing.get("last_activity_at"),
+    )
+    if merged_last_activity:
+        patch["last_activity_at"] = merged_last_activity
+    elif "last_activity_at" not in patch and existing.get("last_activity_at"):
+        patch["last_activity_at"] = existing.get("last_activity_at")
+
+    if not patch.get("last_message_id") and existing.get("last_message_id"):
+        patch["last_message_id"] = existing.get("last_message_id")
+
+    return patch
 
 
 # ============================================================
@@ -1488,8 +1742,8 @@ async def update_ticket_by_channel_id(
     if not cid:
         return None
 
-    clean = _ticket_patch_payload(dict(payload or {}))
-    if not _nonempty_ticket_patch(clean):
+    raw_patch = _ticket_patch_payload(dict(payload or {}))
+    if not _nonempty_ticket_patch(raw_patch):
         return (
             await get_ticket_by_any_channel_id(cid)
             if allow_thread_fallback
@@ -1505,26 +1759,18 @@ async def update_ticket_by_channel_id(
 
         if row and row.get("id") is not None:
             ticket_id = str(row["id"])
+            prepared = _prepare_ticket_update(row, raw_patch)
+            if prepared is None:
+                _repo_debug(
+                    f"update rejected channel={cid} "
+                    f"existing_status={_ticket_status(row)} patch_status={raw_patch.get('status')}"
+                )
+                return None
 
-            if clean.get("status") == "open":
-                if "claimed_by" not in clean and "assigned_to" not in clean:
-                    clean.setdefault("claimed_by", None)
-                    clean.setdefault("assigned_to", None)
-                    clean.setdefault("claimed_by_name", None)
-                    clean.setdefault("assigned_to_name", None)
+            if not _nonempty_ticket_patch(prepared):
+                return await get_ticket_by_id(ticket_id)
 
-            if clean.get("status") == "claimed":
-                claimed = _as_str_id(clean.get("claimed_by")) or _as_str_id(clean.get("assigned_to"))
-                if claimed:
-                    clean["claimed_by"] = claimed
-                    clean["assigned_to"] = claimed
-
-            if "closed_reason" in clean and "close_reason" not in clean:
-                clean["close_reason"] = clean.get("closed_reason")
-            if "close_reason" in clean and "closed_reason" not in clean:
-                clean["closed_reason"] = clean.get("close_reason")
-
-            res = await _update_ticket_by_id_async(ticket_id, clean)
+            res = await _update_ticket_by_id_async(ticket_id, prepared)
             rows = _result_rows(res)
             if rows:
                 return _normalize_ticket_row(rows[0])
@@ -1535,7 +1781,7 @@ async def update_ticket_by_channel_id(
             if allow_thread_fallback
             else _update_ticket_by_channel_id_async
         )
-        res = await writer(cid, clean)
+        res = await writer(cid, raw_patch)
         rows = _result_rows(res)
         if rows:
             return _normalize_ticket_row(rows[0])
@@ -1556,8 +1802,8 @@ async def safe_optional_update_by_channel_id(
         return False
 
     try:
-        clean = _ticket_patch_payload(dict(payload or {}))
-        if not _nonempty_ticket_patch(clean):
+        raw_patch = _ticket_patch_payload(dict(payload or {}))
+        if not _nonempty_ticket_patch(raw_patch):
             return True
 
         row = await get_ticket_by_any_channel_id(cid)
@@ -1565,7 +1811,14 @@ async def safe_optional_update_by_channel_id(
             return False
 
         ticket_id = str(row["id"])
-        res = await _update_ticket_by_id_async(ticket_id, clean)
+        prepared = _prepare_ticket_update(row, raw_patch)
+        if prepared is None:
+            return False
+
+        if not _nonempty_ticket_patch(prepared):
+            return True
+
+        res = await _update_ticket_by_id_async(ticket_id, prepared)
         rows = _result_rows(res)
         if rows:
             return True
@@ -1668,6 +1921,8 @@ async def mark_ticket_closed(
     existing = await get_ticket_by_any_channel_id(channel_id)
     if existing and _ticket_status(existing) == "closed":
         return True
+    if existing and _ticket_status(existing) == "deleted":
+        return False
 
     clean_reason = _clean_text(reason)
     payload: Dict[str, Any] = {
@@ -1705,12 +1960,14 @@ async def mark_ticket_deleted(
     existing = await get_ticket_by_any_channel_id(channel_id)
     if existing and _ticket_status(existing) == "deleted":
         return True
+    if existing and _ticket_status(existing) not in {"closed", "deleted"}:
+        return False
 
     clean_reason = _clean_text(reason) or "Deleted"
     payload: Dict[str, Any] = {
         "status": "deleted",
         "deleted_at": _now_iso(),
-        "closed_at": _now_iso(),
+        "closed_at": existing.get("closed_at") if isinstance(existing, dict) and existing.get("closed_at") else _now_iso(),
         "closed_reason": clean_reason,
         "close_reason": clean_reason,
         "delete_reason": clean_reason,
@@ -1749,6 +2006,9 @@ async def reopen_ticket(
         closed_at_now = existing.get("closed_at")
         deleted_at_now = existing.get("deleted_at")
         decision_now = _clean_text(existing.get("decision"))
+
+        if status_now == "deleted":
+            return False
 
         if (
             status_now == "open"
@@ -1795,10 +2055,15 @@ async def assign_ticket(
 ) -> bool:
     staff_id = _as_str_id(getattr(staff_member, "id", None))
     staff_name = _safe_str(staff_member)
+    if not staff_id:
+        return False
 
     existing = await get_ticket_by_any_channel_id(channel_id)
     if existing:
-        if _ticket_status(existing) == "claimed" and _ticket_claimed_by_id(existing) == _as_int(staff_id, 0):
+        existing_status = _ticket_status(existing)
+        if existing_status in {"closed", "deleted"}:
+            return False
+        if existing_status == "claimed" and _ticket_claimed_by_id(existing) == _as_int(staff_id, 0):
             return True
 
     row = await update_ticket_by_channel_id(
@@ -1822,6 +2087,8 @@ async def unclaim_ticket(
 ) -> bool:
     existing = await get_ticket_by_any_channel_id(channel_id)
     if existing:
+        if _ticket_status(existing) in {"closed", "deleted"}:
+            return False
         if _ticket_status(existing) == "open" and _ticket_claimed_by_id(existing) <= 0:
             return True
 
@@ -1847,10 +2114,15 @@ async def transfer_ticket(
 ) -> bool:
     staff_id = _as_str_id(getattr(to_staff_member, "id", None))
     staff_name = _safe_str(to_staff_member)
+    if not staff_id:
+        return False
 
     existing = await get_ticket_by_any_channel_id(channel_id)
     if existing:
-        if _ticket_status(existing) == "claimed" and _ticket_claimed_by_id(existing) == _as_int(staff_id, 0):
+        existing_status = _ticket_status(existing)
+        if existing_status in {"closed", "deleted"}:
+            return False
+        if existing_status == "claimed" and _ticket_claimed_by_id(existing) == _as_int(staff_id, 0):
             return True
 
     row = await update_ticket_by_channel_id(
@@ -1879,8 +2151,11 @@ async def set_ticket_priority(
 
     normalized_priority = _normalize_ticket_priority(clean_priority)
     existing = await get_ticket_by_any_channel_id(channel_id)
-    if existing and _clean_text(existing.get("priority")) == normalized_priority:
-        return True
+    if existing:
+        if _ticket_status(existing) == "deleted":
+            return False
+        if _clean_text(existing.get("priority")) == normalized_priority:
+            return True
 
     row = await update_ticket_by_channel_id(
         channel_id,
@@ -1927,6 +2202,10 @@ async def add_internal_note(
     row = await get_ticket_by_any_channel_id(channel_id)
     if not row or row.get("id") is None:
         _repo_debug(f"add-note failed no-ticket-row channel={channel_id}")
+        return False
+
+    if _ticket_status(row) == "deleted":
+        _repo_debug(f"add-note rejected deleted channel={channel_id}")
         return False
 
     note_text = _normalize_note_text(note)
@@ -2024,6 +2303,9 @@ async def add_ticket_message(
 
     row = await get_ticket_by_any_channel_id(channel_id)
     if not row or row.get("id") is None:
+        return None
+
+    if _ticket_status(row) == "deleted":
         return None
 
     clean_content = _normalize_message_text(content)
