@@ -1,10 +1,3 @@
-# ============================================================
-# File: stoney_verify/verification_new/service.py
-# Purpose:
-#   Shared verification service layer for ticket-based and VC-based
-#   verification flows.
-# ============================================================
-
 from __future__ import annotations
 
 import asyncio
@@ -50,10 +43,16 @@ except Exception:
 
 
 try:
-    from ..tickets_new.repository import safe_optional_update_by_channel_id
+    from ..tickets_new.repository import (
+        safe_optional_update_by_channel_id,
+        get_ticket_by_any_channel_id,
+    )
 except Exception:
     async def safe_optional_update_by_channel_id(*args, **kwargs) -> bool:  # type: ignore
         return False
+
+    async def get_ticket_by_any_channel_id(*args, **kwargs) -> Optional[Dict[str, Any]]:  # type: ignore
+        return None
 
 
 _VERIFICATION_ACTION_LOCKS: Dict[str, asyncio.Lock] = {}
@@ -343,6 +342,16 @@ def _action_lock(
     return lock
 
 
+async def _refresh_token_info(token: str) -> Optional[Dict[str, Any]]:
+    try:
+        tok = _safe_str(token)
+        if not tok:
+            return None
+        return sb_get_token_info(tok)
+    except Exception:
+        return None
+
+
 def _sync_member_verification_context(
     *,
     guild: discord.Guild,
@@ -570,6 +579,7 @@ async def _update_ticket_decision_metadata(
     staff_member: discord.Member,
     owner: Optional[discord.Member] = None,
 ) -> None:
+    _ = staff_member
     if not isinstance(channel, discord.TextChannel):
         return
 
@@ -769,7 +779,12 @@ def _decision_already_finalized(token_info: Optional[Dict[str, Any]]) -> bool:
             "DENIED (VC)",
             "APPROVED (ALREADY VERIFIED)",
             "APPROVED (VC) (ALREADY VERIFIED)",
+            "RESUBMIT REQUESTED",
         }:
+            return True
+
+        status = _safe_str(token_info.get("status")).lower()
+        if status in {"approved", "denied", "used"}:
             return True
 
         if bool(token_info.get("used", False)):
@@ -1018,15 +1033,6 @@ async def request_resubmission(
         resolved_owner = None
 
     token_info = ctx.get("token_info")
-    if _decision_already_finalized(token_info):
-        return _result(
-            False,
-            "This verification decision is already finalized.",
-            token=token,
-            owner=resolved_owner,
-            channel=resolved_channel,
-            already_finalized=True,
-        )
 
     lock = _action_lock(
         guild=guild,
@@ -1037,6 +1043,17 @@ async def request_resubmission(
     )
 
     async with lock:
+        fresh_token_info = await _refresh_token_info(token)
+        if _decision_already_finalized(fresh_token_info):
+            return _result(
+                False,
+                "This verification decision is already finalized.",
+                token=token,
+                owner=resolved_owner,
+                channel=resolved_channel,
+                already_finalized=True,
+            )
+
         await _mark_decision_safe(token, "RESUBMIT REQUESTED", int(staff_member.id))
         await _update_ticket_decision_metadata(
             channel=resolved_channel,
@@ -1048,7 +1065,7 @@ async def request_resubmission(
             guild=guild,
             owner=resolved_owner if isinstance(resolved_owner, discord.Member) else None,
             channel=resolved_channel,
-            token_info=token_info if isinstance(token_info, dict) else None,
+            token_info=fresh_token_info if isinstance(fresh_token_info, dict) else (token_info if isinstance(token_info, dict) else None),
             staff_member=staff_member,
             decision_text="RESUBMIT REQUESTED",
         )
@@ -1060,8 +1077,8 @@ async def request_resubmission(
             reason="resubmit_requested",
         )
 
-        if reissue.get("ok"):
-            await _set_used_safe(token, True)
+        # Do not mark token used on resubmit request.
+        # The user needs a fresh path, and "used" can wrongly block later actions.
 
         if prompt_in_channel:
             try:
@@ -1129,7 +1146,8 @@ async def approve_verification(
     )
 
     async with lock:
-        if _decision_already_finalized(token_info):
+        fresh_token_info = await _refresh_token_info(token)
+        if _decision_already_finalized(fresh_token_info):
             return _result(
                 False,
                 "This verification decision is already finalized.",
@@ -1157,7 +1175,7 @@ async def approve_verification(
                 guild=guild,
                 owner=resolved_owner if isinstance(resolved_owner, discord.Member) else None,
                 channel=resolved_channel if isinstance(resolved_channel, discord.TextChannel) else None,
-                token_info=token_info if isinstance(token_info, dict) else None,
+                token_info=fresh_token_info if isinstance(fresh_token_info, dict) else (token_info if isinstance(token_info, dict) else None),
                 staff_member=staff_member,
                 decision_text=already_decision,
             )
@@ -1185,7 +1203,7 @@ async def approve_verification(
                 guild=guild,
                 owner=resolved_owner if isinstance(resolved_owner, discord.Member) else None,
                 channel=resolved_channel if isinstance(resolved_channel, discord.TextChannel) else None,
-                token_info=token_info if isinstance(token_info, dict) else None,
+                token_info=fresh_token_info if isinstance(fresh_token_info, dict) else (token_info if isinstance(token_info, dict) else None),
                 staff_member=staff_member,
                 decision_text=failed_decision,
             )
@@ -1237,7 +1255,7 @@ async def approve_verification(
                 guild=guild,
                 owner=resolved_owner,
                 channel=resolved_channel if isinstance(resolved_channel, discord.TextChannel) else None,
-                token_info=token_info if isinstance(token_info, dict) else None,
+                token_info=fresh_token_info if isinstance(fresh_token_info, dict) else (token_info if isinstance(token_info, dict) else None),
                 staff_member=staff_member,
                 decision_text=failed_decision,
             )
@@ -1279,7 +1297,7 @@ async def approve_verification(
                 guild=guild,
                 owner=resolved_owner,
                 channel=resolved_channel if isinstance(resolved_channel, discord.TextChannel) else None,
-                token_info=token_info if isinstance(token_info, dict) else None,
+                token_info=fresh_token_info if isinstance(fresh_token_info, dict) else (token_info if isinstance(token_info, dict) else None),
                 staff_member=staff_member,
                 decision_text=partial_decision,
             )
@@ -1310,7 +1328,7 @@ async def approve_verification(
             guild=guild,
             owner=resolved_owner,
             channel=resolved_channel if isinstance(resolved_channel, discord.TextChannel) else None,
-            token_info=token_info if isinstance(token_info, dict) else None,
+            token_info=fresh_token_info if isinstance(fresh_token_info, dict) else (token_info if isinstance(token_info, dict) else None),
             staff_member=staff_member,
             decision_text=decision_text,
         )
@@ -1371,7 +1389,8 @@ async def deny_verification(
     )
 
     async with lock:
-        if _decision_already_finalized(token_info):
+        fresh_token_info = await _refresh_token_info(token)
+        if _decision_already_finalized(fresh_token_info):
             return _result(
                 False,
                 "This verification decision is already finalized.",
@@ -1397,7 +1416,7 @@ async def deny_verification(
             guild=guild,
             owner=resolved_owner if isinstance(resolved_owner, discord.Member) else None,
             channel=resolved_channel if isinstance(resolved_channel, discord.TextChannel) else None,
-            token_info=token_info if isinstance(token_info, dict) else None,
+            token_info=fresh_token_info if isinstance(fresh_token_info, dict) else (token_info if isinstance(token_info, dict) else None),
             staff_member=staff_member,
             decision_text=decision_text,
         )
