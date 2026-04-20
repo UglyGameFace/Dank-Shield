@@ -93,6 +93,7 @@ VC_TERMINAL_STATUSES = {
     "UPLOAD_REQUESTED",
     "EXPIRED",
     "STALE",
+    "PANEL_FAILED",
 }
 
 DEFAULT_VC_VERIFY_REQUESTS_CHANNEL_ID = 1476977094729793710
@@ -206,7 +207,7 @@ def _cancel_vc_access_task(token: str, member_id: Optional[int] = None) -> None:
     keys: List[str] = []
     if member_id is not None and int(member_id) > 0:
         keys.append(_vc_access_task_key(token, int(member_id)))
-    keys.append(str(token))  # compatibility for any old single-token task entry
+    keys.append(str(token))
 
     for key in keys:
         try:
@@ -261,6 +262,14 @@ def _token_status(token: str) -> str:
         return str((_vc_request_cache(token) or {}).get("status") or "").upper().strip()
     except Exception:
         return ""
+
+
+def _request_is_terminal(token: str) -> bool:
+    return _token_status(token) in VC_TERMINAL_STATUSES
+
+
+def _request_is_active(token: str) -> bool:
+    return _token_status(token) in VC_ACTIVE_STATUSES
 
 
 async def _mark_session_staff_accepted(token: str, staff_member: discord.Member) -> None:
@@ -603,11 +612,6 @@ async def _post_staff_vc_request_panel(
     try:
         if TRANSCRIPTS_CHANNEL_ID:
             candidate_ids.append(int(TRANSCRIPTS_CHANNEL_ID))
-    except Exception:
-        pass
-
-    try:
-        candidate_ids.append(int(ticket_channel_id))
     except Exception:
         pass
 
@@ -991,6 +995,7 @@ async def _cleanup_stale_vc_request(
                     token=str(token),
                     new_status="EXPIRED",
                     staff_id=0,
+                    extra={"stale_reason": reason},
                 )
             except Exception:
                 pass
@@ -1073,15 +1078,10 @@ async def create_vc_request_for_ticket(
     """
     Single source of truth for creating a VC request from a ticket.
 
-    Returns:
-      {
-        "ok": bool,
-        "token": str,
-        "staff_posted": bool,
-        "duplicate": bool,
-        "message": str,
-        "staff_panel_message_id": Optional[int],
-      }
+    Hardening:
+    - no silent success if staff panel fails
+    - no duplicate active requests for the same owner/ticket
+    - session record is created first, but failed panel posting marks request non-active
     """
     if not isinstance(ticket_channel, discord.TextChannel):
         return {
@@ -1225,12 +1225,39 @@ async def create_vc_request_for_ticket(
 
         _bump_runtime_stat("vc_staff_panel_posts_failed")
 
+        try:
+            _set_request_status(
+                token,
+                "PANEL_FAILED",
+                failed_at=now_utc().isoformat(),
+                fail_reason="staff panel could not be posted",
+            )
+        except Exception:
+            pass
+
+        try:
+            if _vc_sessions_mod and hasattr(_vc_sessions_mod, "mark_canceled"):
+                _vc_sessions_mod.mark_canceled(
+                    token=str(token),
+                    by_staff_id=int(requested_by_id or 0),
+                    reason="staff panel could not be posted",
+                )
+            elif _vc_sessions_mod and hasattr(_vc_sessions_mod, "transition"):
+                _vc_sessions_mod.transition(
+                    token=str(token),
+                    new_status="CANCELED",
+                    staff_id=int(requested_by_id or 0),
+                    extra={"cancel_reason": "staff panel could not be posted"},
+                )
+        except Exception:
+            pass
+
         return {
-            "ok": True,
+            "ok": False,
             "token": token,
             "staff_posted": False,
             "duplicate": False,
-            "message": "VC request created but staff panel could not be posted.",
+            "message": "VC request was not accepted because the staff panel could not be posted.",
             "staff_panel_message_id": None,
         }
 
@@ -1266,19 +1293,21 @@ async def _vc_lock_channel_for_session(
             assigned_staff=staff_member,
         )
 
-        _set_request_status(
-            token,
-            "STAFF_ACCEPTED",
-            accepted_staff_id=int(staff_member.id),
-            assigned_staff_id=int(staff_member.id),
-            accepted_by=int(staff_member.id),
-            vc_channel_id=int(_configured_vc_channel_id() or 0),
-            accepted_at=now_utc().isoformat(),
-            owner_id=int(owner.id),
-            requester_id=int(owner.id),
-            guild_id=int(guild.id),
-            ticket_channel_id=int(ticket_channel_id or req.get("ticket_channel_id") or 0),
-        )
+        current_status = _token_status(token)
+        if current_status not in VC_TERMINAL_STATUSES:
+            _set_vc_request_cache(
+                token,
+                {
+                    "accepted_staff_id": int(req.get("accepted_staff_id") or staff_member.id),
+                    "assigned_staff_id": int(staff_member.id),
+                    "accepted_by": int(req.get("accepted_by") or staff_member.id),
+                    "vc_channel_id": int(_configured_vc_channel_id() or 0),
+                    "owner_id": int(owner.id),
+                    "requester_id": int(owner.id),
+                    "guild_id": int(guild.id),
+                    "ticket_channel_id": int(ticket_channel_id or req.get("ticket_channel_id") or 0),
+                },
+            )
 
         await _mark_session_staff_accepted(token, staff_member)
 
@@ -1557,6 +1586,12 @@ async def _vc_reissue_command(
         owner_member=(guild.get_member(int(rid)) if rid else None),
     )
 
+    if not bool((result or {}).get("ok")):
+        return await interaction.followup.send(
+            f"❌ {str((result or {}).get('message') or 'Failed to recreate VC request.')}",
+            ephemeral=True,
+        )
+
     try:
         await _vc_disable_panels_everywhere(
             guild,
@@ -1599,9 +1634,8 @@ async def _vc_reissue_command(
             except Exception as e:
                 print(f"⚠️ Failed to update ticket panel in /vc_reissue: {e}")
 
-    status_note = "staff panel posted" if result.get("staff_posted") else "staff panel routing failed"
     return await interaction.followup.send(
-        f"✅ Reissued VC token.\nOld: `{resolved_token}`\nNew: `{new_token}`\nTicket: {ticket_ch.mention}\nStatus: {status_note}",
+        f"✅ Reissued VC token.\nOld: `{resolved_token}`\nNew: `{new_token}`\nTicket: {ticket_ch.mention}\nStatus: staff panel posted",
         ephemeral=True,
     )
 
