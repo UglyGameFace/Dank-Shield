@@ -1,4 +1,3 @@
-# stoney_verify/tickets_new/macros_service.py
 from __future__ import annotations
 
 import asyncio
@@ -26,32 +25,35 @@ except Exception:
 # ------------------------------------------------------------
 # Purpose:
 # - centralize ticket macro loading + resolution
-# - support default macros now
-# - support optional global-config macros
-# - support optional DB-backed macros later
-# - render placeholders safely
-# - keep outputs dashboard-friendly
-# - avoid requiring new schema right now
-#
-# Optional future DB table support:
-#   ticket_macros
-#
-# Expected loose/future-safe fields if present:
-#   guild_id, slug, name, body/content/message/text, category,
-#   active, sort_order, aliases, tags, send_as_note, close_after_send
+# - support default macros, global-config macros, and DB macros
+# - render placeholders safely and consistently
+# - keep slash-command macros and panel macros on one shared path
+# - block macro sends into closed/deleted tickets at the service layer
+# - avoid duplicate send races when staff spam-click macro actions
 # ============================================================
 
 MACROS_TABLE = "ticket_macros"
 
 _DEFAULT_ALLOWED_PLACEHOLDERS = {
+    # user / owner
     "user_mention",
     "user_name",
     "user_display",
     "user_id",
+    "owner_mention",
+    "owner_name",
+    "owner_display",
+    "owner_id",
+    # staff / assignee
     "staff_mention",
     "staff_name",
     "staff_display",
     "staff_id",
+    "assignee_mention",
+    "assignee_name",
+    "assignee_display",
+    "assignee_id",
+    # channel / ticket
     "channel_mention",
     "channel_name",
     "channel_id",
@@ -61,6 +63,7 @@ _DEFAULT_ALLOWED_PLACEHOLDERS = {
     "category",
     "priority",
     "status",
+    # guild / config
     "guild_name",
     "guild_id",
     "verify_site_url",
@@ -69,18 +72,18 @@ _DEFAULT_ALLOWED_PLACEHOLDERS = {
 }
 
 _MACROS_TABLE_AVAILABLE: Optional[bool] = None
+_MACRO_SEND_LOCKS: Dict[str, asyncio.Lock] = {}
 
 _VALID_BOOL_TRUE = {"1", "true", "yes", "y", "on"}
 _VALID_BOOL_FALSE = {"0", "false", "no", "n", "off"}
+
+_VALID_TICKET_STATUSES = {"open", "claimed", "closed", "deleted"}
 
 _PLACEHOLDER_RE = re.compile(r"\{([a-zA-Z0-9_]+)\}")
 
 
 # ============================================================
 # Default macros
-# ------------------------------------------------------------
-# These are the zero-schema fallback macros.
-# DB or global macros can override these by slug.
 # ============================================================
 
 DEFAULT_MACROS: List[Dict[str, Any]] = [
@@ -266,7 +269,7 @@ def _safe_bool(value: Any, default: bool = False) -> bool:
 
 def _clean_text(value: Any, limit: int = 4000) -> str:
     try:
-        text = str(value or "").strip()
+        text = str(value or "").replace("\r\n", "\n").replace("\r", "\n").strip()
         return text[:limit]
     except Exception:
         return ""
@@ -308,6 +311,39 @@ def _normalize_aliases(value: Any) -> List[str]:
     return out
 
 
+def _ticket_status_from_row(row: Optional[Dict[str, Any]]) -> str:
+    try:
+        raw = _safe_str((row or {}).get("status")).strip().lower()
+        if raw in _VALID_TICKET_STATUSES:
+            return raw
+    except Exception:
+        pass
+    return "unknown"
+
+
+def _ticket_is_closed_like(channel: discord.TextChannel, row: Optional[Dict[str, Any]]) -> bool:
+    status = _ticket_status_from_row(row)
+    if status == "closed":
+        return True
+    try:
+        return _safe_str(channel.name).lower().startswith("closed-")
+    except Exception:
+        return False
+
+
+def _ticket_is_deleted(row: Optional[Dict[str, Any]]) -> bool:
+    return _ticket_status_from_row(row) == "deleted"
+
+
+def _channel_send_lock(channel_id: int | str) -> asyncio.Lock:
+    key = str(channel_id)
+    lock = _MACRO_SEND_LOCKS.get(key)
+    if lock is None:
+        lock = asyncio.Lock()
+        _MACRO_SEND_LOCKS[key] = lock
+    return lock
+
+
 def _normalize_macro_row(raw: Dict[str, Any], source: str) -> Optional[Dict[str, Any]]:
     try:
         slug = _normalize_slug(
@@ -332,7 +368,11 @@ def _normalize_macro_row(raw: Dict[str, Any], source: str) -> Optional[Dict[str,
         category = _normalize_category(raw.get("category"))
         aliases = _normalize_aliases(raw.get("aliases"))
         sort_order = _safe_int(raw.get("sort_order"), 10_000)
-        active = _safe_bool(raw.get("active"), True)
+
+        active_value = raw.get("active")
+        if active_value is None and "is_active" in raw:
+            active_value = raw.get("is_active")
+        active = _safe_bool(active_value, True)
 
         tags = _normalize_aliases(raw.get("tags"))
         send_as_note = _safe_bool(raw.get("send_as_note"), False)
@@ -525,7 +565,6 @@ def _merge_macro_layers(layers: List[List[Dict[str, Any]]]) -> List[Dict[str, An
         for row in layer:
             key = _macro_key(row)
 
-            # Explicit inactive override removes the macro from merged output.
             if not _safe_bool(row.get("active"), True):
                 merged.pop(key, None)
                 continue
@@ -653,12 +692,44 @@ async def build_macro_context(
     guild = channel.guild
 
     owner: Optional[discord.Member] = None
+    assignee: Optional[discord.Member] = None
+
     try:
-        owner = await _resolve_member_from_user_id(guild, row.get("user_id"))
+        owner = await _resolve_member_from_user_id(
+            guild,
+            row.get("user_id") or row.get("owner_id") or row.get("requester_id"),
+        )
     except Exception:
         owner = None
 
+    try:
+        assignee = await _resolve_member_from_user_id(
+            guild,
+            row.get("assigned_to") or row.get("claimed_by"),
+        )
+    except Exception:
+        assignee = None
+
     vc_channel = _vc_channel_from_globals(guild)
+
+    owner_id = _safe_str(row.get("user_id") or row.get("owner_id") or row.get("requester_id")).strip()
+    assignee_id = _safe_str(row.get("assigned_to") or row.get("claimed_by")).strip()
+
+    owner_mention = (
+        owner.mention
+        if isinstance(owner, discord.Member)
+        else (f"<@{owner_id}>" if owner_id else "the user")
+    )
+    assignee_mention = (
+        assignee.mention
+        if isinstance(assignee, discord.Member)
+        else (f"<@{assignee_id}>" if assignee_id else "the assigned staff member")
+    )
+
+    owner_name = _safe_str(getattr(owner, "name", row.get("username"))).strip()
+    owner_display = _safe_str(getattr(owner, "display_name", row.get("username"))).strip()
+    assignee_name = _safe_str(getattr(assignee, "name", "")).strip()
+    assignee_display = _safe_str(getattr(assignee, "display_name", "")).strip()
 
     context: Dict[str, str] = {
         "guild_name": _safe_str(getattr(guild, "name", "")).strip(),
@@ -672,13 +743,18 @@ async def build_macro_context(
         "category": _safe_str(row.get("category")).strip(),
         "priority": _safe_str(row.get("priority") or "medium").strip(),
         "status": _safe_str(row.get("status") or "open").strip(),
-        "user_id": _safe_str(row.get("user_id")).strip(),
-        "user_name": _safe_str(row.get("username")).strip(),
-        "user_display": _safe_str(row.get("username")).strip(),
-        "user_mention": (
-            owner.mention if isinstance(owner, discord.Member)
-            else (f"<@{row.get('user_id')}>" if _safe_str(row.get("user_id")).strip() else "the user")
-        ),
+        "user_id": owner_id,
+        "user_name": owner_name,
+        "user_display": owner_display,
+        "user_mention": owner_mention,
+        "owner_id": owner_id,
+        "owner_name": owner_name,
+        "owner_display": owner_display,
+        "owner_mention": owner_mention,
+        "assignee_id": assignee_id,
+        "assignee_name": assignee_name,
+        "assignee_display": assignee_display,
+        "assignee_mention": assignee_mention,
         "staff_id": _safe_str(getattr(actor, "id", "")).strip() if actor else "",
         "staff_name": _safe_str(getattr(actor, "name", "")).strip() if actor else "",
         "staff_display": _safe_str(getattr(actor, "display_name", actor or "")).strip() if actor else "",
@@ -687,10 +763,6 @@ async def build_macro_context(
         "vc_channel_id": _safe_str(getattr(vc_channel, "id", "")).strip() if vc_channel else "",
         "vc_channel_mention": getattr(vc_channel, "mention", "the VC verify channel") if vc_channel else "the VC verify channel",
     }
-
-    if isinstance(owner, discord.Member):
-        context["user_name"] = _safe_str(getattr(owner, "name", owner)).strip()
-        context["user_display"] = _safe_str(getattr(owner, "display_name", owner)).strip()
 
     if isinstance(extra_context, dict):
         for key, value in extra_context.items():
@@ -771,6 +843,7 @@ async def preview_ticket_macro(
         "macro": macro,
         "content": content,
         "context": context,
+        "ticket_row": row,
     }
 
 
@@ -781,112 +854,139 @@ async def send_ticket_macro(
     actor: discord.Member | discord.User,
     extra_context: Optional[Dict[str, Any]] = None,
     force_as_note: Optional[bool] = None,
+    allow_closed: bool = False,
 ) -> Dict[str, Any]:
-    preview = await preview_ticket_macro(
-        channel=channel,
-        slug=slug,
-        actor=actor,
-        extra_context=extra_context,
-    )
-    if not preview.get("ok"):
-        return preview
+    lock = _channel_send_lock(channel.id)
 
-    macro = dict(preview.get("macro") or {})
-    content = _clean_text(preview.get("content"), limit=4000)
+    async with lock:
+        preview = await preview_ticket_macro(
+            channel=channel,
+            slug=slug,
+            actor=actor,
+            extra_context=extra_context,
+        )
+        if not preview.get("ok"):
+            return preview
 
-    if not content:
+        macro = dict(preview.get("macro") or {})
+        content = _clean_text(preview.get("content"), limit=4000)
+        row = preview.get("ticket_row") if isinstance(preview.get("ticket_row"), dict) else await get_ticket_by_any_channel_id(channel.id)
+
+        if not row:
+            return {
+                "ok": False,
+                "message": "Ticket row not found for this channel.",
+                "macro": macro,
+                "content": content,
+            }
+
+        if _ticket_is_deleted(row):
+            return {
+                "ok": False,
+                "message": "Deleted tickets cannot send macros.",
+                "macro": macro,
+                "content": content,
+            }
+
+        if not allow_closed and _ticket_is_closed_like(channel, row):
+            return {
+                "ok": False,
+                "message": "Closed tickets cannot send macros. Reopen the ticket first.",
+                "macro": macro,
+                "content": content,
+            }
+
+        if not content:
+            return {
+                "ok": False,
+                "message": "Rendered macro content was empty.",
+                "macro": macro,
+                "content": "",
+            }
+
+        send_as_note = (
+            _safe_bool(force_as_note, False)
+            if force_as_note is not None
+            else _safe_bool(macro.get("send_as_note"), False)
+        )
+        close_after_send = _safe_bool(macro.get("close_after_send"), False)
+
+        sent_message: Optional[discord.Message] = None
+        note_saved = False
+
+        if send_as_note:
+            note_saved = await repo_add_internal_note(
+                channel_id=channel.id,
+                author=actor,
+                note=content,
+                is_pinned=False,
+            )
+            if not note_saved:
+                return {
+                    "ok": False,
+                    "message": "Failed to save macro as an internal note.",
+                    "macro": macro,
+                    "content": content,
+                    "sent_message_id": None,
+                    "note_saved": False,
+                    "send_as_note": True,
+                    "close_after_send": close_after_send,
+                }
+        else:
+            try:
+                sent_message = await channel.send(
+                    content,
+                    allowed_mentions=discord.AllowedMentions(
+                        users=True,
+                        roles=False,
+                        everyone=False,
+                        replied_user=False,
+                    ),
+                )
+            except Exception as e:
+                return {
+                    "ok": False,
+                    "message": f"Failed to send macro: {e}",
+                    "macro": macro,
+                    "content": content,
+                    "sent_message_id": None,
+                    "note_saved": False,
+                    "send_as_note": False,
+                    "close_after_send": close_after_send,
+                }
+
+        try:
+            await emit_ticket_event(
+                guild_id=channel.guild.id,
+                channel_id=channel.id,
+                ticket_id=row.get("id"),
+                actor_user_id=getattr(actor, "id", None),
+                actor_name=_safe_str(actor),
+                event_type="ticket_macro_used",
+                title=f"Macro used: {macro.get('name') or macro.get('slug')}",
+                description=content[:1000],
+                metadata={
+                    "macro_slug": macro.get("slug"),
+                    "macro_name": macro.get("name"),
+                    "macro_source": macro.get("_source"),
+                    "send_as_note": send_as_note,
+                    "close_after_send": close_after_send,
+                    "message_id": getattr(sent_message, "id", None),
+                },
+            )
+        except Exception:
+            pass
+
         return {
-            "ok": False,
-            "message": "Rendered macro content was empty.",
-            "macro": macro,
-            "content": "",
-        }
-
-    row = await get_ticket_by_any_channel_id(channel.id)
-    if not row:
-        return {
-            "ok": False,
-            "message": "Ticket row not found for this channel.",
+            "ok": True,
+            "message": "Macro sent." if not send_as_note else "Macro saved as internal note.",
             "macro": macro,
             "content": content,
+            "sent_message_id": getattr(sent_message, "id", None),
+            "note_saved": note_saved,
+            "send_as_note": send_as_note,
+            "close_after_send": close_after_send,
         }
-
-    send_as_note = (
-        _safe_bool(force_as_note, False)
-        if force_as_note is not None
-        else _safe_bool(macro.get("send_as_note"), False)
-    )
-
-    sent_message: Optional[discord.Message] = None
-    note_saved = False
-
-    if send_as_note:
-        note_saved = await repo_add_internal_note(
-            channel_id=channel.id,
-            author=actor,
-            note=content,
-            is_pinned=False,
-        )
-        if not note_saved:
-            return {
-                "ok": False,
-                "message": "Failed to save macro as an internal note.",
-                "macro": macro,
-                "content": content,
-                "sent_message_id": None,
-                "note_saved": False,
-            }
-    else:
-        try:
-            sent_message = await channel.send(
-                content,
-                allowed_mentions=discord.AllowedMentions(
-                    users=True,
-                    roles=False,
-                    everyone=False,
-                    replied_user=False,
-                ),
-            )
-        except Exception as e:
-            return {
-                "ok": False,
-                "message": f"Failed to send macro: {e}",
-                "macro": macro,
-                "content": content,
-                "sent_message_id": None,
-                "note_saved": False,
-            }
-
-    try:
-        await emit_ticket_event(
-            guild_id=channel.guild.id,
-            channel_id=channel.id,
-            ticket_id=row.get("id"),
-            actor_user_id=getattr(actor, "id", None),
-            actor_name=_safe_str(actor),
-            event_type="ticket_macro_used",
-            title=f"Macro used: {macro.get('name') or macro.get('slug')}",
-            description=content[:1000],
-            metadata={
-                "macro_slug": macro.get("slug"),
-                "macro_name": macro.get("name"),
-                "macro_source": macro.get("_source"),
-                "send_as_note": send_as_note,
-                "message_id": getattr(sent_message, "id", None),
-            },
-        )
-    except Exception:
-        pass
-
-    return {
-        "ok": True,
-        "message": "Macro sent." if not send_as_note else "Macro saved as internal note.",
-        "macro": macro,
-        "content": content,
-        "sent_message_id": getattr(sent_message, "id", None),
-        "note_saved": note_saved,
-        "send_as_note": send_as_note,
-    }
 
 
 async def list_available_macros_for_ticket(
@@ -922,8 +1022,9 @@ async def format_available_macros_for_ticket(
         aliases = row.get("aliases") or []
         alias_text = f" | aliases: {', '.join(aliases[:4])}" if aliases else ""
         note_flag = " | note" if _safe_bool(row.get("send_as_note"), False) else ""
+        close_flag = " | closes" if _safe_bool(row.get("close_after_send"), False) else ""
         lines.append(
-            f"**{index}.** `{slug}` — {name} | category: `{category}` | source: `{source}`{note_flag}{alias_text}"
+            f"**{index}.** `{slug}` — {name} | category: `{category}` | source: `{source}`{note_flag}{close_flag}{alias_text}"
         )
 
     return "\n".join(lines)
