@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Optional, Tuple, Dict, Any, List
 
 import discord
@@ -57,6 +57,16 @@ def _utcnow() -> datetime:
         return datetime.now(timezone.utc)
 
 
+def _utc_iso(value: Optional[datetime] = None) -> str:
+    dt = value or _utcnow()
+    try:
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt.astimezone(timezone.utc).isoformat()
+    except Exception:
+        return datetime.now(timezone.utc).isoformat()
+
+
 def _safe_track_task(task: "asyncio.Task", *, label: str = "") -> None:
     try:
         fn = globals().get("_track_task")
@@ -98,7 +108,11 @@ def _configured_vc_channel_id() -> int:
 
 
 def _configured_vc_queue_channel_id() -> int:
-    return _as_int(globals().get("VC_VERIFY_QUEUE_CHANNEL_ID", 0), 0)
+    return _as_int(
+        globals().get("VC_VERIFY_QUEUE_CHANNEL_ID", 0)
+        or globals().get("VC_VERIFY_REQUESTS_CHANNEL_ID", 0),
+        0,
+    )
 
 
 def _staff_ping_text() -> str:
@@ -281,6 +295,54 @@ def _session_meta(token: str) -> Dict[str, Any]:
     return {}
 
 
+def _session_status(token: str) -> str:
+    try:
+        row = _get_session_row(token) or {}
+        return str(row.get("status") or "").upper().strip()
+    except Exception:
+        return ""
+
+
+def _session_revoke_at(token: str) -> Optional[datetime]:
+    try:
+        row = _get_session_row(token) or {}
+        value = _safe_str(row.get("revoke_at"))
+        if not value:
+            return None
+        if value.endswith("Z"):
+            value = value[:-1] + "+00:00"
+        dt = datetime.fromisoformat(value)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt.astimezone(timezone.utc)
+    except Exception:
+        return None
+
+
+def _request_store(token: str) -> Dict[str, Any]:
+    try:
+        VC_REQUESTS.setdefault(str(token), {})
+        req = VC_REQUESTS[str(token)]
+        if isinstance(req, dict):
+            return req
+    except Exception:
+        pass
+    VC_REQUESTS[str(token)] = {}
+    return VC_REQUESTS[str(token)]
+
+
+def _set_request_patch(token: str, patch: Dict[str, Any]) -> Dict[str, Any]:
+    store = _request_store(token)
+    store.update(dict(patch or {}))
+    return store
+
+
+def _set_request_status(token: str, status: str, **extra: Any) -> Dict[str, Any]:
+    patch = {"status": _safe_str(status).upper()}
+    patch.update(extra)
+    return _set_request_patch(token, patch)
+
+
 def _get_assigned_staff_id(token: str) -> int:
     try:
         meta = _session_meta(token)
@@ -380,6 +442,16 @@ def _vc_session_is_active_status(status: str) -> bool:
         "STARTED",
         "TAKEN_OVER",
         "RESTARTED",
+    }
+
+
+def _session_is_terminal(token: str) -> bool:
+    return _session_status(token) in {
+        "COMPLETED",
+        "DONE",
+        "CANCELED",
+        "CANCELLED",
+        "EXPIRED",
     }
 
 
@@ -570,6 +642,22 @@ async def _extend_live_session_expiry(
         pass
 
 
+def _session_recently_extended(token: str, *, within_seconds: int = 300) -> bool:
+    try:
+        meta = _session_meta(token)
+        ts = _safe_str(meta.get("session_extended_at"))
+        if not ts:
+            return False
+        if ts.endswith("Z"):
+            ts = ts[:-1] + "+00:00"
+        dt = datetime.fromisoformat(ts)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return (_utcnow() - dt.astimezone(timezone.utc)) <= timedelta(seconds=max(30, within_seconds))
+    except Exception:
+        return False
+
+
 async def _session_notify_ticket_channel(
     guild: discord.Guild,
     *,
@@ -593,18 +681,6 @@ async def _session_notify_ticket_channel(
 # ============================================================
 # Overwrite memory / restore helpers
 # ============================================================
-
-def _request_store(token: str) -> Dict[str, Any]:
-    try:
-        VC_REQUESTS.setdefault(str(token), {})
-        req = VC_REQUESTS[str(token)]
-        if isinstance(req, dict):
-            return req
-    except Exception:
-        pass
-    VC_REQUESTS[str(token)] = {}
-    return VC_REQUESTS[str(token)]
-
 
 def _overwrite_store_key(member_id: int) -> str:
     return f"prev_overwrite_values:{int(member_id)}"
@@ -689,6 +765,38 @@ async def _cleanup_nonstaff_overwrites(
             )
         except Exception:
             continue
+
+
+async def _disconnect_if_in_verify_vc(
+    guild: discord.Guild,
+    *,
+    member: Optional[discord.Member],
+    token: str,
+    reason: str,
+) -> None:
+    if not isinstance(member, discord.Member):
+        return
+
+    vc = await _resolve_session_vc_channel(guild, token=token)
+    if not isinstance(vc, (discord.VoiceChannel, discord.StageChannel)):
+        return
+
+    try:
+        state = getattr(member, "voice", None)
+        current = getattr(state, "channel", None)
+        if not current or int(getattr(current, "id", 0) or 0) != int(vc.id):
+            return
+    except Exception:
+        return
+
+    me = guild.me
+    if not _has_perm(me, perm="move_members"):
+        return
+
+    try:
+        await member.move_to(None, reason=reason)
+    except Exception:
+        pass
 
 
 # ============================================================
@@ -812,6 +920,14 @@ async def _vc_revoke_access(
 
     _clear_previous_overwrite(token=token, member=member)
 
+    try:
+        req = _request_store(token)
+        granted_ids = req.get("granted_member_ids") or []
+        if isinstance(granted_ids, list):
+            req["granted_member_ids"] = [int(x) for x in granted_ids if int(x) != int(member.id)]
+    except Exception:
+        pass
+
 
 async def _vc_grant_access(
     guild: discord.Guild,
@@ -821,6 +937,10 @@ async def _vc_grant_access(
     vc = await _resolve_session_vc_channel(guild, token=token)
     if not isinstance(vc, (discord.VoiceChannel, discord.StageChannel)):
         return False, "VC verify channel not found (check VC_VERIFY_CHANNEL_ID)."
+
+    configured_id = _configured_vc_channel_id()
+    if configured_id > 0 and int(vc.id) != configured_id:
+        return False, "Resolved VC channel does not match configured verify VC."
 
     me = guild.me
     if not _can_manage_channel(me, vc):
@@ -847,6 +967,19 @@ async def _vc_grant_access(
         return False, "Forbidden while setting VC permissions."
     except Exception as e:
         return False, f"Failed to set VC permissions: {e}"
+
+    try:
+        req = _request_store(token)
+        granted_ids = req.get("granted_member_ids") or []
+        if not isinstance(granted_ids, list):
+            granted_ids = []
+        if int(member.id) not in [int(x) for x in granted_ids]:
+            granted_ids.append(int(member.id))
+        req["granted_member_ids"] = granted_ids
+        req["vc_channel_id"] = int(vc.id)
+        req["last_grant_at"] = _utc_iso()
+    except Exception:
+        pass
 
     return True, "Temporary access granted."
 
@@ -899,6 +1032,21 @@ async def vc_unlock_session_participants(
     except Exception:
         pass
 
+    try:
+        _set_request_status(
+            token,
+            "READY",
+            owner_id=int(owner.id),
+            requester_id=int(owner.id),
+            assigned_staff_id=int(staff_member.id),
+            accepted_staff_id=int(staff_member.id),
+            accepted_by=int(staff_member.id),
+            vc_channel_id=int(_get_vc_channel_id_from_session(token) or _configured_vc_channel_id()),
+            unlocked_at=_utc_iso(),
+        )
+    except Exception:
+        pass
+
     return True, "Owner and assigned staff now have private VC access."
 
 
@@ -913,6 +1061,26 @@ async def vc_relock_session(
 
     owner = guild.get_member(owner_id) if owner_id else None
     staff = guild.get_member(staff_id) if staff_id else None
+
+    try:
+        await _disconnect_if_in_verify_vc(
+            guild,
+            member=owner,
+            token=token,
+            reason=f"VC verify session ended ({reason})",
+        )
+    except Exception:
+        pass
+
+    try:
+        await _disconnect_if_in_verify_vc(
+            guild,
+            member=staff,
+            token=token,
+            reason=f"VC verify session ended ({reason})",
+        )
+    except Exception:
+        pass
 
     if isinstance(owner, discord.Member):
         try:
@@ -939,6 +1107,13 @@ async def vc_relock_session(
     try:
         if vc_sessions and hasattr(vc_sessions, "clear_unlock"):
             vc_sessions.clear_unlock(token=str(token), action_name="relock")
+    except Exception:
+        pass
+
+    try:
+        req = _request_store(token)
+        req["last_relock_at"] = _utc_iso()
+        req["last_relock_reason"] = str(reason or "")
     except Exception:
         pass
 
@@ -1077,16 +1252,20 @@ async def vc_sweeper_loop(bot_client: discord.Client, *, interval_seconds: int =
                 )
 
                 if live_users_present:
+                    should_notify = not _session_recently_extended(token, within_seconds=300)
+
                     await _extend_live_session_expiry(
                         token=token,
                         session_row=row if isinstance(row, dict) else None,
                         reason="verify vc still has active users",
                     )
-                    await _session_notify_ticket_channel(
-                        guild,
-                        token=token,
-                        text="♻️ VC verify session timer was automatically extended because the verify VC still has active users.",
-                    )
+
+                    if should_notify:
+                        await _session_notify_ticket_channel(
+                            guild,
+                            token=token,
+                            text="♻️ VC verify session timer was automatically extended because the verify VC still has active users.",
+                        )
                     continue
 
                 await vc_relock_session(guild=guild, token=token, reason="sweeper-expire")
@@ -1094,6 +1273,16 @@ async def vc_sweeper_loop(bot_client: discord.Client, *, interval_seconds: int =
                 try:
                     if hasattr(vc_sessions, "transition"):
                         vc_sessions.transition(token=token, new_status="EXPIRED", staff_id=0)
+                except Exception:
+                    pass
+
+                try:
+                    _set_request_status(
+                        token,
+                        "EXPIRED",
+                        expired_at=_utc_iso(),
+                        expire_reason="verify vc empty at sweeper expiry",
+                    )
                 except Exception:
                     pass
 
