@@ -8,7 +8,7 @@ import discord
 from discord import app_commands
 
 from ..globals import *  # noqa: F401,F403
-from ..globals import now_utc
+from ..globals import get_supabase
 
 from ..tickets import (
     is_verification_ticket_channel,
@@ -23,15 +23,9 @@ from .kick_timers import (
 )
 
 try:
-    from ..transcripts import (
-        send_tickettool_style_transcript,
-        post_or_replace_open_ticket_controls,
-    )
+    from ..transcripts import send_tickettool_style_transcript
 except Exception:
     async def send_tickettool_style_transcript(*args, **kwargs) -> None:  # type: ignore
-        return None
-
-    async def post_or_replace_open_ticket_controls(*args, **kwargs):  # type: ignore
         return None
 
 try:
@@ -193,6 +187,18 @@ def _actor_member(guild: Optional[discord.Guild], user: discord.abc.User) -> Opt
     return None
 
 
+async def _cancel_ticket_kick_timer_if_any(channel_id: int) -> None:
+    try:
+        _cancel_kick_timer(channel_id)
+    except Exception:
+        pass
+
+    try:
+        await kick_timer_persist_delete(int(channel_id))
+    except Exception:
+        pass
+
+
 def register_ticket_resolution_admin_commands(bot, tree) -> None:
     @tree.command(
         name="ticket_resolve",
@@ -250,15 +256,7 @@ def register_ticket_resolution_admin_commands(bot, tree) -> None:
         owner = await _ticket_owner(ch, row)
         actor_member = _actor_member(interaction.guild, interaction.user)
 
-        try:
-            _cancel_kick_timer(ch.id)
-        except Exception:
-            pass
-
-        try:
-            await kick_timer_persist_delete(int(ch.id))
-        except Exception:
-            pass
+        await _cancel_ticket_kick_timer_if_any(ch.id)
 
         try:
             await _add_resolution_note(
@@ -273,7 +271,7 @@ def register_ticket_resolution_admin_commands(bot, tree) -> None:
         try:
             await send_tickettool_style_transcript(
                 ch,
-                owner,
+                owner if isinstance(owner, discord.Member) else None,
                 closed_by=actor_member,
                 decision=clean_reason,
             )
@@ -392,14 +390,6 @@ def register_ticket_resolution_admin_commands(bot, tree) -> None:
             )
         except Exception:
             pass
-
-        try:
-            await post_or_replace_open_ticket_controls(ch)
-        except Exception as e:
-            try:
-                print(f"⚠️ Failed to restore open ticket controls after reopen for {ch.id}: {e}")
-            except Exception:
-                pass
 
         try:
             await ch.send(f"♻️ Ticket reopened by {interaction.user.mention}.\n**Reason:** {clean_reason}")
