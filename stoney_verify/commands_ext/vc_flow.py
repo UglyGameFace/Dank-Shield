@@ -77,6 +77,7 @@ VC_ACTIVE_STATUSES = {
     "PENDING",
     "ACCEPTED",
     "STAFF_ACCEPTED",
+    "OWNER_CONFIRMED",
     "READY",
     "IN_VC",
     "STARTED",
@@ -86,6 +87,7 @@ VC_ACTIVE_STATUSES = {
 
 VC_TERMINAL_STATUSES = {
     "COMPLETED",
+    "DONE",
     "CANCELED",
     "DENIED",
     "UPLOAD_REQUESTED",
@@ -128,8 +130,7 @@ def _request_lock(token: str) -> asyncio.Lock:
     key = _safe_str(token)
     lock = _VC_REQUEST_LOCKS.get(key)
     if lock is None:
-        lock = asyncio.Lock()
-        _VC_REQUEST_LOCKS[key] = lock
+        lock = _VC_REQUEST_LOCKS[key] = asyncio.Lock()
     return lock
 
 
@@ -167,15 +168,148 @@ def _configured_vc_queue_channel_id() -> int:
 
 def _vc_access_minutes() -> int:
     try:
-        return int(globals().get("VC_VERIFY_ACCESS_MINUTES", 30) or 30)
+        value = int(globals().get("VC_VERIFY_ACCESS_MINUTES", 30) or 30)
+        return value if value > 0 else 30
     except Exception:
         return 30
+
+
+def _vc_request_cache(token: str) -> Dict[str, Any]:
+    try:
+        req = VC_REQUESTS.get(str(token)) or {}
+        return dict(req) if isinstance(req, dict) else {}
+    except Exception:
+        return {}
+
+
+def _set_vc_request_cache(token: str, patch: Dict[str, Any]) -> Dict[str, Any]:
+    current = _vc_request_cache(token)
+    merged = {**current, **dict(patch or {})}
+    try:
+        VC_REQUESTS[str(token)] = merged
+    except Exception:
+        pass
+    return merged
+
+
+def _set_request_status(token: str, status: str, **extra: Any) -> Dict[str, Any]:
+    patch = {"status": str(status).upper().strip()}
+    patch.update(extra)
+    return _set_vc_request_cache(token, patch)
+
+
+def _vc_access_task_key(token: str, member_id: int) -> str:
+    return f"{str(token)}:{int(member_id)}"
+
+
+def _cancel_vc_access_task(token: str, member_id: Optional[int] = None) -> None:
+    keys: List[str] = []
+    if member_id is not None and int(member_id) > 0:
+        keys.append(_vc_access_task_key(token, int(member_id)))
+    keys.append(str(token))  # compatibility for any old single-token task entry
+
+    for key in keys:
+        try:
+            task = VC_ACCESS_TASKS.get(key)
+            if task and not task.done():
+                task.cancel()
+        except Exception:
+            pass
+        try:
+            VC_ACCESS_TASKS.pop(key, None)
+        except Exception:
+            pass
+
+
+def _cancel_all_vc_access_tasks_for_token(token: str) -> None:
+    token = str(token)
+    keys_to_remove: List[str] = []
+
+    try:
+        for key in list(VC_ACCESS_TASKS.keys()):
+            text = str(key)
+            if text == token or text.startswith(f"{token}:"):
+                keys_to_remove.append(text)
+    except Exception:
+        keys_to_remove = [token]
+
+    for key in keys_to_remove:
+        try:
+            task = VC_ACCESS_TASKS.get(key)
+            if task and not task.done():
+                task.cancel()
+        except Exception:
+            pass
+        try:
+            VC_ACCESS_TASKS.pop(key, None)
+        except Exception:
+            pass
+
+
+def _assigned_staff_id_for_token(token: str) -> int:
+    req = _vc_request_cache(token)
+    return int(
+        req.get("assigned_staff_id")
+        or req.get("accepted_staff_id")
+        or req.get("accepted_by")
+        or 0
+    )
+
+
+def _token_status(token: str) -> str:
+    try:
+        return str((_vc_request_cache(token) or {}).get("status") or "").upper().strip()
+    except Exception:
+        return ""
+
+
+async def _mark_session_staff_accepted(token: str, staff_member: discord.Member) -> None:
+    if not _vc_sessions_mod:
+        return
+    try:
+        if hasattr(_vc_sessions_mod, "set_staff_accepted"):
+            _vc_sessions_mod.set_staff_accepted(
+                token=str(token),
+                staff_id=int(staff_member.id),
+                staff_name=str(staff_member.display_name),
+            )
+    except Exception:
+        pass
+
+
+async def _mark_session_restarted(token: str, staff_member: discord.Member, reason: str) -> None:
+    if not _vc_sessions_mod:
+        return
+    try:
+        if hasattr(_vc_sessions_mod, "restart_session"):
+            _vc_sessions_mod.restart_session(
+                token=str(token),
+                by_staff_id=int(staff_member.id),
+                by_staff_name=str(staff_member.display_name),
+                reason=str(reason or ""),
+            )
+    except Exception:
+        pass
+
+
+async def _mark_session_taken_over(token: str, staff_member: discord.Member, reason: str) -> None:
+    if not _vc_sessions_mod:
+        return
+    try:
+        if hasattr(_vc_sessions_mod, "takeover_session"):
+            _vc_sessions_mod.takeover_session(
+                token=str(token),
+                new_staff_id=int(staff_member.id),
+                new_staff_name=str(staff_member.display_name),
+                reason=str(reason or ""),
+            )
+    except Exception:
+        pass
 
 
 def _get_vc_channel(guild: discord.Guild) -> Optional[discord.VoiceChannel]:
     try:
         vc_id = _configured_vc_channel_id()
-
         if vc_id <= 0:
             print("⚠️ VC verify channel id is not configured.")
             return None
@@ -432,16 +566,6 @@ def _ensure_vc_session_record(
     except Exception as e:
         print(f"⚠️ ensure_session failed for VC token {token}: {e}")
 
-    if isinstance(assigned_staff, discord.Member) and hasattr(_vc_sessions_mod, "set_staff_accepted"):
-        try:
-            _vc_sessions_mod.set_staff_accepted(
-                token=str(token),
-                staff_id=int(assigned_staff.id),
-                staff_name=str(assigned_staff.display_name),
-            )
-        except Exception as e:
-            print(f"⚠️ set_staff_accepted failed for VC token {token}: {e}")
-
 
 async def _post_staff_vc_request_panel(
     *,
@@ -514,21 +638,29 @@ async def _post_staff_vc_request_panel(
         try:
             msg = await ch.send(content=content, embed=emb, view=staff_view)  # type: ignore[misc]
             try:
-                VC_REQUESTS.setdefault(token, {})
-                VC_REQUESTS[token].setdefault("staff_msg_refs", [])
-                VC_REQUESTS[token]["staff_msg_refs"].append(
+                req = _vc_request_cache(token)
+                msg_refs = req.get("staff_msg_refs") or []
+                if not isinstance(msg_refs, list):
+                    msg_refs = []
+                msg_refs.append(
                     {
                         "channel_id": int(getattr(getattr(msg, "channel", None), "id", 0) or 0),
                         "message_id": int(getattr(msg, "id", 0) or 0),
                     }
                 )
-                VC_REQUESTS[token]["staff_msg_ids"] = [
-                    int(ref["message_id"])
-                    for ref in VC_REQUESTS[token].get("staff_msg_refs", [])
-                    if isinstance(ref, dict) and int(ref.get("message_id", 0) or 0) > 0
-                ]
-                VC_REQUESTS[token]["staff_panel_msg_id"] = int(getattr(msg, "id", 0) or 0)
-                VC_REQUESTS[token]["staff_panel_channel_id"] = int(getattr(getattr(msg, "channel", None), "id", 0) or 0)
+                _set_vc_request_cache(
+                    token,
+                    {
+                        "staff_msg_refs": msg_refs,
+                        "staff_msg_ids": [
+                            int(ref["message_id"])
+                            for ref in msg_refs
+                            if isinstance(ref, dict) and int(ref.get("message_id", 0) or 0) > 0
+                        ],
+                        "staff_panel_msg_id": int(getattr(msg, "id", 0) or 0),
+                        "staff_panel_channel_id": int(getattr(getattr(msg, "channel", None), "id", 0) or 0),
+                    },
+                )
 
                 if _vc_sessions_mod and hasattr(_vc_sessions_mod, "set_queue_message"):
                     try:
@@ -547,17 +679,6 @@ async def _post_staff_vc_request_panel(
 
     print("⚠️ VC staff panel: no target channel resolved or all posts failed.")
     return None
-
-
-def _set_request_status(token: str, status: str, **extra: Any) -> None:
-    try:
-        req = VC_REQUESTS.get(token) or {}
-        req["status"] = str(status).upper().strip()
-        for k, v in extra.items():
-            req[k] = v
-        VC_REQUESTS[token] = req
-    except Exception:
-        pass
 
 
 def _preserve_member_ids(
@@ -637,20 +758,24 @@ async def _vc_revoke_access(
                 token,
                 reason=reason,
             )
+            _cancel_vc_access_task(token, int(member.id))
             return
         except Exception as e:
             print(f"⚠️ vc_verify._vc_revoke_access failed, falling back: {e}")
 
     vc = _get_vc_channel(guild)
     if not vc:
+        _cancel_vc_access_task(token, int(member.id))
         return
 
     me = guild.me
     if not me:
+        _cancel_vc_access_task(token, int(member.id))
         return
 
     ok, _ = _can_manage_channel(me, vc)
     if not ok:
+        _cancel_vc_access_task(token, int(member.id))
         return
 
     try:
@@ -663,14 +788,7 @@ async def _vc_revoke_access(
     except Exception as e:
         print(f"⚠️ Failed to revoke VC access: {e}")
 
-    try:
-        t = VC_ACCESS_TASKS.get(token)
-        if t and not t.done():
-            t.cancel()
-    except Exception:
-        pass
-
-    VC_ACCESS_TASKS.pop(token, None)
+    _cancel_vc_access_task(token, int(member.id))
 
 
 async def _vc_grant_access(
@@ -680,11 +798,14 @@ async def _vc_grant_access(
 ) -> Tuple[bool, str]:
     if _vc_verify_mod and hasattr(_vc_verify_mod, "_vc_grant_access"):
         try:
-            return await _vc_verify_mod._vc_grant_access(  # type: ignore[attr-defined]
+            ok, msg = await _vc_verify_mod._vc_grant_access(  # type: ignore[attr-defined]
                 guild,
                 member,
                 token,
             )
+            if ok:
+                _cancel_vc_access_task(token, int(member.id))
+            return ok, msg
         except Exception as e:
             print(f"⚠️ vc_verify._vc_grant_access failed, falling back: {e}")
 
@@ -734,7 +855,7 @@ async def _vc_grant_access(
 
     access_minutes = _vc_access_minutes()
 
-    async def _revoke_later():
+    async def _revoke_later() -> None:
         try:
             await asyncio.sleep(max(30, access_minutes * 60))
             await _vc_revoke_access(guild, member, token, reason="auto-expire")
@@ -744,12 +865,10 @@ async def _vc_grant_access(
             print(f"⚠️ Error in revoke_later: {e}")
 
     try:
-        old = VC_ACCESS_TASKS.get(token)
-        if old and not old.done():
-            old.cancel()
+        _cancel_vc_access_task(token, int(member.id))
         t = asyncio.create_task(_revoke_later())
         _track_task(t, label="vc_access_revoke")
-        VC_ACCESS_TASKS[token] = t
+        VC_ACCESS_TASKS[_vc_access_task_key(token, int(member.id))] = t
     except Exception as e:
         print(f"⚠️ Failed to schedule revoke task: {e}")
 
@@ -762,7 +881,7 @@ async def _vc_disable_panels_everywhere(
     status_text: str,
 ) -> None:
     try:
-        req = VC_REQUESTS.get(token) or {}
+        req = _vc_request_cache(token)
         msg_refs = req.get("staff_msg_refs") or []
         if not isinstance(msg_refs, list):
             msg_refs = []
@@ -832,13 +951,17 @@ async def _cleanup_stale_vc_request(
     reason: str,
 ) -> bool:
     try:
-        req = VC_REQUESTS.get(token)
+        req = _vc_request_cache(token)
         if not req:
             return False
 
         ticket_ch_id = req.get("ticket_channel_id")
         if not ticket_ch_id:
-            VC_REQUESTS.pop(token, None)
+            try:
+                VC_REQUESTS.pop(token, None)
+            except Exception:
+                pass
+            _cancel_all_vc_access_tasks_for_token(token)
             return True
 
         ticket_ch = guild.get_channel(ticket_ch_id)
@@ -872,7 +995,12 @@ async def _cleanup_stale_vc_request(
             except Exception:
                 pass
 
-        VC_REQUESTS.pop(token, None)
+        _cancel_all_vc_access_tasks_for_token(token)
+
+        try:
+            VC_REQUESTS.pop(token, None)
+        except Exception:
+            pass
         return True
     except Exception as e:
         print(f"⚠️ Error in _cleanup_stale_vc_request: {e}")
@@ -1044,20 +1172,23 @@ async def create_vc_request_for_ticket(
             else f"<@{int(requester_id)}>"
         )
 
-        VC_REQUESTS[token] = {
-            "status": "PENDING",
-            "requested_at": now_utc().isoformat(),
-            "requested_by": int(requested_by_id or requester_id),
-            "requester_id": int(requester_id),
-            "owner_id": int(requester_id),
-            "ticket_channel_id": int(ticket_channel.id),
-            "guild_id": int(guild.id),
-            "vc_channel_id": int(vc_id),
-            "queue_channel_id": int(_configured_vc_queue_channel_id() or 0),
-            "access_minutes": int(_vc_access_minutes()),
-            "staff_msg_ids": [],
-            "staff_msg_refs": [],
-        }
+        _set_vc_request_cache(
+            token,
+            {
+                "status": "PENDING",
+                "requested_at": now_utc().isoformat(),
+                "requested_by": int(requested_by_id or requester_id),
+                "requester_id": int(requester_id),
+                "owner_id": int(requester_id),
+                "ticket_channel_id": int(ticket_channel.id),
+                "guild_id": int(guild.id),
+                "vc_channel_id": int(vc_id),
+                "queue_channel_id": int(_configured_vc_queue_channel_id() or 0),
+                "access_minutes": int(_vc_access_minutes()),
+                "staff_msg_ids": [],
+                "staff_msg_refs": [],
+            },
+        )
 
         _ensure_vc_session_record(
             guild=guild,
@@ -1080,7 +1211,7 @@ async def create_vc_request_for_ticket(
 
         if staff_panel_mid:
             try:
-                VC_REQUESTS[token]["staff_panel_msg_id"] = int(staff_panel_mid)
+                _set_vc_request_cache(token, {"staff_panel_msg_id": int(staff_panel_mid)})
             except Exception:
                 pass
             return {
@@ -1116,7 +1247,7 @@ async def _vc_lock_channel_for_session(
         return False, "Assigned staff member could not be resolved."
 
     async with _request_lock(token):
-        req = VC_REQUESTS.get(token) or {}
+        req = _vc_request_cache(token)
         ticket_channel_id = int(req.get("ticket_channel_id") or 0)
 
         if ticket_channel_id <= 0:
@@ -1148,6 +1279,8 @@ async def _vc_lock_channel_for_session(
             guild_id=int(guild.id),
             ticket_channel_id=int(ticket_channel_id or req.get("ticket_channel_id") or 0),
         )
+
+        await _mark_session_staff_accepted(token, staff_member)
 
         if _vc_verify_mod and hasattr(_vc_verify_mod, "vc_unlock_session_participants"):
             ok, msg = await _vc_verify_mod.vc_unlock_session_participants(
@@ -1239,6 +1372,8 @@ async def _vc_unlock_channel_for_next_session(
     except Exception:
         pass
 
+    _cancel_all_vc_access_tasks_for_token(token)
+
     try:
         if _vc_sessions_mod and hasattr(_vc_sessions_mod, "mark_completed"):
             _vc_sessions_mod.mark_completed(
@@ -1261,7 +1396,7 @@ async def _vc_unlock_channel_for_next_session(
         pass
 
     try:
-        req = VC_REQUESTS.get(token) or {}
+        req = _vc_request_cache(token)
         req["status"] = "COMPLETED"
         req["completed_at"] = now_utc().isoformat()
         req.pop("accepted_staff_id", None)
@@ -1333,7 +1468,7 @@ async def _vc_reissue_command(
 
     if not resolved_token:
         return await interaction.followup.send(
-            "❌ Missing token.\nUse `/vc_reissue token:<token>` or run it inside the VC queue channel so I can read the latest panel.",
+            "❌ Missing token.\nUse `/vc_reissue token:<token>` or run it inside the VC queue channel so I can read the latest VC panel.",
             ephemeral=True,
         )
 
@@ -1431,7 +1566,7 @@ async def _vc_reissue_command(
     except Exception:
         pass
 
-    old_entry = VC_REQUESTS.get(resolved_token)
+    old_entry = _vc_request_cache(resolved_token)
     if old_entry and old_entry.get("ticket_panel_msg_id"):
         ticket_panel_msg_id = old_entry["ticket_panel_msg_id"]
         if ticket_ch:
@@ -1460,9 +1595,7 @@ async def _vc_reissue_command(
                     )
                 )
                 await ticket_msg.edit(view=new_view)
-
-                VC_REQUESTS.setdefault(new_token, {})
-                VC_REQUESTS[new_token]["ticket_panel_msg_id"] = ticket_panel_msg_id
+                _set_vc_request_cache(new_token, {"ticket_panel_msg_id": ticket_panel_msg_id})
             except Exception as e:
                 print(f"⚠️ Failed to update ticket panel in /vc_reissue: {e}")
 
@@ -1498,7 +1631,7 @@ async def _vc_status_command(
     if token_info is None:
         return await interaction.response.send_message("❌ Token not found.", ephemeral=True)
 
-    req = VC_REQUESTS.get(tok) or {}
+    req = _vc_request_cache(tok)
     accepted_by = int(req.get("accepted_staff_id") or req.get("accepted_by") or 0)
 
     msg = [f"🎙️ VC token: `{tok}`", f"Status: `{req.get('status') or 'UNKNOWN'}`"]
@@ -1551,8 +1684,7 @@ async def _vc_takeover_command(
             ephemeral=True,
         )
 
-    req = VC_REQUESTS.setdefault(tok, {})
-    prev_staff = int(req.get("accepted_staff_id") or req.get("accepted_by") or 0)
+    prev_staff = _assigned_staff_id_for_token(tok)
 
     _set_request_status(
         tok,
@@ -1564,16 +1696,7 @@ async def _vc_takeover_command(
         takeover_by=int(interaction.user.id),
     )
 
-    try:
-        if _vc_sessions_mod and hasattr(_vc_sessions_mod, "takeover_session"):
-            _vc_sessions_mod.takeover_session(
-                token=str(tok),
-                new_staff_id=int(interaction.user.id),
-                new_staff_name=str(getattr(interaction.user, "display_name", interaction.user)),
-                reason="manual takeover by staff",
-            )
-    except Exception:
-        pass
+    await _mark_session_taken_over(tok, interaction.user, "manual takeover by staff")
 
     ok, msg = await _vc_lock_channel_for_session(
         guild,
