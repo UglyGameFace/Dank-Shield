@@ -97,12 +97,12 @@ except Exception:
 # Markers / locks
 # ============================================================
 
-_CLOSE_PROMPT_MARKER = "stoney_verify:close_prompt:v7"
-_STAFF_CLOSED_MARKER = "stoney_verify:staff_closed:v7"
-_CLOSE_REOPENED_MARKER = "stoney_verify:ticket_reopened:v6"
-_STAFF_REVIEW_PANEL_MARKER = "stoney_verify:staff_review_panel:v4"
-_TRANSCRIPT_POSTED_MARKER = "stoney_verify:transcript_posted:v3"
-_OPEN_CONTROLS_MARKER = "stoney_verify:open_controls:v3"
+_CLOSE_PROMPT_MARKER = "stoney_verify:close_prompt:v8"
+_STAFF_CLOSED_MARKER = "stoney_verify:staff_closed:v8"
+_CLOSE_REOPENED_MARKER = "stoney_verify:ticket_reopened:v7"
+_STAFF_REVIEW_PANEL_MARKER = "stoney_verify:staff_review_panel:v5"
+_TRANSCRIPT_POSTED_MARKER = "stoney_verify:transcript_posted:v4"
+_OPEN_CONTROLS_MARKER = "stoney_verify:open_controls:v4"
 
 _CLOSE_PROMPT_LOCKS: Dict[int, asyncio.Lock] = {}
 _STAFF_REVIEW_PANEL_LOCKS: Dict[int, asyncio.Lock] = {}
@@ -112,6 +112,8 @@ _CLOSE_ACTION_LOCKS: Dict[int, asyncio.Lock] = {}
 _REOPEN_ACTION_LOCKS: Dict[int, asyncio.Lock] = {}
 _DELETE_ACTION_LOCKS: Dict[int, asyncio.Lock] = {}
 _OPEN_CONTROLS_LOCKS: Dict[int, asyncio.Lock] = {}
+
+_TRANSCRIPT_VIEWS_REGISTERED = False
 
 
 def _lock_for(container: Dict[int, asyncio.Lock], channel_id: int) -> asyncio.Lock:
@@ -274,12 +276,27 @@ def _row_status(row: Optional[Dict[str, Any]]) -> str:
         return ""
 
 
+def _row_is_closed(row: Optional[Dict[str, Any]]) -> bool:
+    return _row_status(row) == "closed"
+
+
+def _row_is_deleted(row: Optional[Dict[str, Any]]) -> bool:
+    return _row_status(row) == "deleted"
+
+
+def _channel_looks_closed(channel: discord.TextChannel) -> bool:
+    try:
+        return str(channel.name or "").lower().startswith("closed-")
+    except Exception:
+        return False
+
+
 async def _ticket_is_closed(channel: discord.TextChannel) -> bool:
     try:
         row = await _ticket_row(channel.id)
-        if row and _row_status(row) == "closed":
+        if row and _row_is_closed(row):
             return True
-        if str(channel.name or "").lower().startswith("closed-"):
+        if _channel_looks_closed(channel):
             return True
     except Exception:
         pass
@@ -289,7 +306,17 @@ async def _ticket_is_closed(channel: discord.TextChannel) -> bool:
 async def _ticket_is_deleted(channel: discord.TextChannel) -> bool:
     try:
         row = await _ticket_row(channel.id)
-        if row and _row_status(row) == "deleted":
+        if row and _row_is_deleted(row):
+            return True
+    except Exception:
+        pass
+    return False
+
+
+async def _ticket_is_open_like(channel: discord.TextChannel) -> bool:
+    try:
+        row = await _ticket_row(channel.id)
+        if row and _row_status(row) in {"open", "claimed"} and not _channel_looks_closed(channel):
             return True
     except Exception:
         pass
@@ -854,6 +881,9 @@ async def send_tickettool_style_transcript(
     closed_by: Optional[discord.Member] = None,
     decision: Optional[str] = None,
 ):
+    _ = owner
+    _ = owner_id
+
     lock = _lock_for(_TRANSCRIPT_POST_LOCKS, channel.id)
 
     async with lock:
@@ -1040,10 +1070,12 @@ class VerificationStaffReviewView(discord.ui.View):
         interaction: discord.Interaction,
         button: discord.ui.Button,
     ):
+        _ = button
         if not await self._ensure_staff(interaction):
             return
 
         ticket_id, member_id, member_name, member_obj, channel = await self._resolve_ticket_context(interaction)
+        _ = ticket_id
         if not isinstance(channel, discord.TextChannel):
             return await _reply_ephemeral(interaction, "❌ Invalid channel.")
         if member_id is None:
@@ -1102,10 +1134,12 @@ class VerificationStaffReviewView(discord.ui.View):
         interaction: discord.Interaction,
         button: discord.ui.Button,
     ):
+        _ = button
         if not await self._ensure_staff(interaction):
             return
 
         ticket_id, member_id, member_name, member_obj, channel = await self._resolve_ticket_context(interaction)
+        _ = ticket_id
         if not isinstance(channel, discord.TextChannel):
             return await _reply_ephemeral(interaction, "❌ Invalid channel.")
         if member_id is None:
@@ -1153,10 +1187,14 @@ class VerificationStaffReviewView(discord.ui.View):
         interaction: discord.Interaction,
         button: discord.ui.Button,
     ):
+        _ = button
         if not await self._ensure_staff(interaction):
             return
 
         ticket_id, member_id, member_name, member_obj, channel = await self._resolve_ticket_context(interaction)
+        _ = ticket_id
+        _ = member_id
+        _ = member_name
         if not isinstance(channel, discord.TextChannel):
             return await _reply_ephemeral(interaction, "❌ Invalid channel.")
         if not isinstance(member_obj, discord.Member):
@@ -1197,6 +1235,7 @@ class VerificationStaffReviewView(discord.ui.View):
         interaction: discord.Interaction,
         button: discord.ui.Button,
     ):
+        _ = button
         if not await self._ensure_staff(interaction):
             return
 
@@ -1322,6 +1361,7 @@ class TicketOpenActionsView(discord.ui.View):
         interaction: discord.Interaction,
         button: discord.ui.Button,
     ):
+        _ = button
         channel = interaction.channel
         if not isinstance(channel, discord.TextChannel):
             return await _reply_ephemeral(interaction, "❌ Invalid channel.")
@@ -1412,6 +1452,7 @@ class TicketOpenActionsView(discord.ui.View):
         interaction: discord.Interaction,
         button: discord.ui.Button,
     ):
+        _ = button
         if not isinstance(interaction.user, discord.Member) or not _is_staff_member(interaction.user):
             return await _reply_ephemeral(interaction, "❌ Staff only.")
 
@@ -1430,18 +1471,56 @@ class TicketOpenActionsView(discord.ui.View):
             except Exception:
                 pass
 
+            if await _ticket_is_deleted(channel):
+                return await _reply_ephemeral(interaction, "❌ Ticket is already deleted.")
+
+            # Canonical lifecycle:
+            # open -> closed -> deleted
+            # This prevents open-ticket delete corruption.
+            if await _ticket_is_open_like(channel):
+                try:
+                    closed_ok = await mark_ticket_closed(
+                        channel=channel,
+                        closed_by=interaction.user,
+                        reason="Closed as part of staff delete from open controls",
+                    )
+                except Exception as e:
+                    print("⚠️ open-delete close step failed:", e)
+                    closed_ok = False
+
+                if not closed_ok:
+                    return await _reply_ephemeral(
+                        interaction,
+                        "❌ Failed to move ticket into closed state before delete.",
+                    )
+
+                try:
+                    await _freeze_message_controls(
+                        interaction.message,
+                        content_suffix=f"🗑️ Delete started by {interaction.user.mention}.",
+                    )
+                except Exception:
+                    pass
+
+                try:
+                    await _freeze_all_close_prompts(
+                        channel,
+                        suffix=f"🗑️ Delete started by {interaction.user.mention}.",
+                    )
+                except Exception:
+                    pass
+
             is_ghost = await _detect_is_ghost_ticket(channel)
 
             try:
-                result = await delete_ticket_with_optional_transcript(
+                result = await staff_delete_closed_ticket(
                     channel=channel,
-                    deleted_by=interaction.user,
+                    staff_member=interaction.user,
                     is_ghost=is_ghost,
-                    force_transcript_for_ghost=False,
                     reason="Deleted by staff from open ticket controls",
                 )
             except Exception as e:
-                print("⚠️ delete_ticket_with_optional_transcript failed:", e)
+                print("⚠️ staff_delete_closed_ticket failed from open delete:", e)
                 return await _reply_ephemeral(interaction, f"❌ Failed to delete ticket: {e}")
 
             if bool(result.get("deleted")):
@@ -1483,6 +1562,7 @@ class StaffClosedTicketView(discord.ui.View):
         interaction: discord.Interaction,
         button: discord.ui.Button,
     ):
+        _ = button
         if not await self._ensure_staff(interaction):
             return
 
@@ -1500,6 +1580,28 @@ class StaffClosedTicketView(discord.ui.View):
 
             if await _ticket_is_deleted(channel):
                 return await _reply_ephemeral(interaction, "❌ Ticket is already deleted.")
+
+            if await _ticket_is_open_like(channel):
+                await _freeze_message_controls(
+                    interaction.message,
+                    content_suffix=f"🔓 Ticket already open. Checked by {interaction.user.mention}.",
+                )
+                controls_msg = await _ensure_open_ticket_controls_after_reopen(channel)
+                if controls_msg is None:
+                    try:
+                        await channel.send(
+                            _OPEN_CONTROLS_MARKER,
+                            embed=discord.Embed(
+                                title="🟢 Ticket Open",
+                                description="Recovered open-ticket controls.",
+                                color=discord.Color.green(),
+                                timestamp=now_utc(),
+                            ),
+                            view=TicketOpenActionsView(),
+                        )
+                    except Exception:
+                        pass
+                return await _reply_ephemeral(interaction, "ℹ️ Ticket is already open.")
 
             owner = await _resolve_ticket_owner(channel)
 
@@ -1571,6 +1673,7 @@ class StaffClosedTicketView(discord.ui.View):
         interaction: discord.Interaction,
         button: discord.ui.Button,
     ):
+        _ = button
         if not await self._ensure_staff(interaction):
             return
 
@@ -1607,6 +1710,7 @@ class StaffClosedTicketView(discord.ui.View):
         interaction: discord.Interaction,
         button: discord.ui.Button,
     ):
+        _ = button
         if not await self._ensure_staff(interaction):
             return
 
@@ -1673,6 +1777,7 @@ class ConfirmCloseTicketView(discord.ui.View):
         interaction: discord.Interaction,
         button: discord.ui.Button,
     ):
+        _ = button
         channel = interaction.channel
         if not isinstance(channel, discord.TextChannel):
             return await _reply_ephemeral(interaction, "❌ Invalid channel.")
@@ -1753,6 +1858,7 @@ class ConfirmCloseTicketView(discord.ui.View):
         interaction: discord.Interaction,
         button: discord.ui.Button,
     ):
+        _ = button
         channel = interaction.channel
         if not isinstance(channel, discord.TextChannel):
             return await _reply_ephemeral(interaction, "❌ Invalid channel.")
@@ -1779,6 +1885,7 @@ class ConfirmCloseTicketView(discord.ui.View):
 # ============================================================
 
 def build_verify_ui_view(*, token: str | None = None) -> discord.ui.View:
+    _ = token
     view = discord.ui.View(timeout=None)
 
     view.add_item(
@@ -2103,6 +2210,13 @@ async def check_bot_can_assign_roles(guild: discord.Guild) -> Tuple[bool, str, L
 
 @bot.listen("on_ready")
 async def _register_transcript_views():
+    global _TRANSCRIPT_VIEWS_REGISTERED
+
+    if _TRANSCRIPT_VIEWS_REGISTERED:
+        return
+
+    _TRANSCRIPT_VIEWS_REGISTERED = True
+
     try:
         bot.add_view(TicketOpenActionsView())
     except Exception as e:
