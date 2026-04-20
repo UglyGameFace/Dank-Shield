@@ -978,25 +978,22 @@ async def _legacy_approve_verification(
 
 
 def _is_persistent_view_managed_custom_id(custom_id: str) -> bool:
+    """
+    These IDs are handled by discord.py persistent View callbacks directly.
+
+    Important:
+    - DO NOT swallow verify-ui buttons here; those still route through
+      maybe_handle_verify_ui_interaction().
+    - Only ignore IDs that transcripts.py owns now.
+    """
     cid = _safe_str(custom_id)
     if not cid:
         return False
 
-    prefixes = (
-        "sv:ticket:",
-        "sv:verify:staff:",
-        "verify:",
+    return (
+        cid.startswith("sv:ticket:")
+        or cid.startswith("sv:verify:staff:")
     )
-    if any(cid.startswith(prefix) for prefix in prefixes):
-        return True
-
-    exact = {
-        "verify:get_upload",
-        "verify:vc",
-        "verify:reveal_raw",
-        "verify:regen",
-    }
-    return cid in exact
 
 
 def _sync_vc_request_status(token: str, *, status: str, **extra: Any) -> Dict[str, Any]:
@@ -2258,6 +2255,10 @@ def _known_component_action(action: str) -> bool:
         "sv:verify:regen",
         "sv:verify:vc",
         "sv:verify:reissue",
+        "verify:get_upload",
+        "verify:vc",
+        "verify:reveal_raw",
+        "verify:regen",
     }
 
 
@@ -2268,21 +2269,23 @@ async def handle_component_interaction(interaction: discord.Interaction) -> None
     data = interaction.data or {}
     custom_id = (data.get("custom_id", "") or "").strip()
 
-    if _is_persistent_view_managed_custom_id(custom_id):
-        return
-
     try:
         if isinstance(interaction.channel, discord.TextChannel):
             mark_ticket_activity(interaction.channel.id)
     except Exception:
         pass
 
+    # Let verify UI buttons route first, including older custom_ids.
     try:
         handled = await maybe_handle_verify_ui_interaction(interaction, site_url=SITE_URL)
         if handled:
             return
     except Exception:
         pass
+
+    # These are now owned by persistent View callbacks in transcripts.py.
+    if _is_persistent_view_managed_custom_id(custom_id):
+        return
 
     try:
         m_action, m_uid, m_extra = parse_mod_id(custom_id)
