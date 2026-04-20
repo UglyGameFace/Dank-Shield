@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import html
 import io
+import re
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -24,16 +25,22 @@ except Exception:
 # Purpose:
 # - Generate .txt + .html transcripts
 # - Post transcripts to TRANSCRIPTS_CHANNEL_ID
+# - Keep transcript metadata attached exactly once
 # - Let staff finish deletion safely
-# - Best-effort attach transcript metadata to DB
 # - Mark ticket deleted in DB before final delete
 # - Avoid duplicate concurrent transcript/delete flows
-# - Stay idempotent when the same delete/transcript action is hit twice
+# - Prevent stale closed-ticket delete controls from deleting a reopened ticket
 # ============================================================
 
 _DELETE_LOCKS: Dict[str, asyncio.Lock] = {}
 _TRANSCRIPT_POST_LOCKS: Dict[str, asyncio.Lock] = {}
 
+_TRANSCRIPT_MARKER = "stoney_verify:transcript_posted:v4"
+
+
+# ============================================================
+# Small helpers
+# ============================================================
 
 def _channel_lock(bucket: Dict[str, asyncio.Lock], channel_id: int | str) -> asyncio.Lock:
     key = str(channel_id)
@@ -191,6 +198,34 @@ def _render_embed_summary_text(msg: discord.Message) -> str:
     except Exception:
         return ""
 
+
+def _detect_ticket_number(name: str) -> Optional[str]:
+    try:
+        m = re.search(r"(\d{3,})$", str(name or ""))
+        return m.group(1) if m else None
+    except Exception:
+        return None
+
+
+def _transcript_basename(channel: discord.TextChannel, ticket_row: Optional[Dict[str, Any]] = None) -> str:
+    try:
+        if isinstance(ticket_row, dict):
+            ticket_number = ticket_row.get("ticket_number")
+            if ticket_number is not None and str(ticket_number).strip():
+                return f"ticket-{int(ticket_number):04d}"
+    except Exception:
+        pass
+
+    detected = _detect_ticket_number(channel.name)
+    if detected:
+        return f"ticket-{detected.zfill(4)}"
+
+    return _safe_filename(channel.name)
+
+
+# ============================================================
+# Message collection / rendering
+# ============================================================
 
 async def _collect_messages(channel: discord.TextChannel) -> List[discord.Message]:
     msgs: List[discord.Message] = []
@@ -551,7 +586,8 @@ async def generate_transcript_files(
     channel: discord.TextChannel,
 ) -> Tuple[discord.File, discord.File, int]:
     messages = await _collect_messages(channel)
-    safe = _safe_filename(channel.name)
+    row = await _ticket_row(channel.id)
+    safe = _safe_filename(_transcript_basename(channel, row))
 
     txt_bytes = _build_text_transcript(messages)
     html_bytes = _build_html_transcript(channel, messages)
@@ -567,6 +603,10 @@ async def generate_transcript_files(
 
     return txt_file, html_file, len(messages)
 
+
+# ============================================================
+# Channel / DB helpers
+# ============================================================
 
 async def _get_transcripts_channel(
     guild: discord.Guild,
@@ -649,6 +689,40 @@ def _row_transcript_payload(row: Optional[Dict[str, Any]]) -> Tuple[Optional[str
     return url, message_id, channel_id
 
 
+async def _attach_transcript_metadata_once(
+    *,
+    channel_id: int,
+    transcript_url: Optional[str],
+    transcript_message_id: Optional[int],
+    transcript_channel_id: Optional[int],
+    actor: Optional[discord.Member | discord.User] = None,
+) -> bool:
+    try:
+        await attach_transcript_to_ticket(
+            channel_id=channel_id,
+            transcript_url=transcript_url,
+            transcript_message_id=transcript_message_id,
+            transcript_channel_id=transcript_channel_id,
+            actor=actor,
+        )
+        return True
+    except Exception as e:
+        print("⚠️ Failed attaching transcript metadata:", repr(e))
+        return False
+
+
+async def _heal_existing_transcript_metadata_if_missing(
+    *,
+    channel_id: int,
+    actor: Optional[discord.Member | discord.User] = None,
+) -> Tuple[Optional[str], Optional[int], Optional[int]]:
+    row = await _ticket_row(channel_id)
+    url, msg_id, ch_id = _row_transcript_payload(row)
+    if url or msg_id or ch_id:
+        return url, msg_id, ch_id
+    return None, None, None
+
+
 def _transcript_summary_embed(
     *,
     ticket_channel: discord.TextChannel,
@@ -697,9 +771,13 @@ def _transcript_summary_embed(
     embed.add_field(name="Deleted/Finished By", value=f"`{deleted_by_text}`", inline=False)
     embed.add_field(name="Reason", value=f"`{_truncate_for_discord(reason_text, 900)}`", inline=False)
     embed.add_field(name="Topic", value=f"`{_truncate_for_discord(topic_text, 900)}`", inline=False)
-    embed.set_footer(text=f"Generated at {_utc_iso(now_utc()) or ''}")
+    embed.set_footer(text=f"{_TRANSCRIPT_MARKER} • Generated at {_utc_iso(now_utc()) or ''}")
     return embed
 
+
+# ============================================================
+# Transcript posting
+# ============================================================
 
 async def post_transcript_to_channel(
     *,
@@ -725,6 +803,7 @@ async def post_transcript_to_channel(
             return None, None
 
         txt_file, html_file, message_count = await generate_transcript_files(ticket_channel)
+        row_before = await _ticket_row(ticket_channel.id)
         embed = _transcript_summary_embed(
             ticket_channel=ticket_channel,
             deleted_by=deleted_by,
@@ -735,28 +814,30 @@ async def post_transcript_to_channel(
 
         try:
             posted = await transcript_channel.send(
+                content=_TRANSCRIPT_MARKER,
                 embed=embed,
                 files=[txt_file, html_file],
                 allowed_mentions=discord.AllowedMentions.none(),
             )
             jump_url = getattr(posted, "jump_url", None)
 
-            try:
-                await attach_transcript_to_ticket(
-                    channel_id=ticket_channel.id,
-                    transcript_url=jump_url,
-                    transcript_message_id=posted.id,
-                    transcript_channel_id=posted.channel.id,
-                    actor=deleted_by,
-                )
-            except Exception as e:
-                print("⚠️ Failed attaching transcript metadata during post:", repr(e))
+            await _attach_transcript_metadata_once(
+                channel_id=int(ticket_channel.id),
+                transcript_url=jump_url,
+                transcript_message_id=int(getattr(posted, "id", 0) or 0) or None,
+                transcript_channel_id=int(getattr(getattr(posted, "channel", None), "id", 0) or 0) or None,
+                actor=deleted_by,
+            )
 
             return posted, jump_url
         except Exception as e:
             print("❌ Failed posting transcript:", repr(e))
             return None, None
 
+
+# ============================================================
+# Delete flow
+# ============================================================
 
 async def delete_ticket_with_optional_transcript(
     *,
@@ -791,6 +872,7 @@ async def delete_ticket_with_optional_transcript(
         row_before = await _ticket_row(channel.id)
         already_had_transcript = _row_has_transcript(row_before)
         existing_url, existing_message_id, existing_channel_id = _row_transcript_payload(row_before)
+        status_before = _row_status(row_before)
 
         if already_had_transcript:
             transcript_url = existing_url
@@ -817,6 +899,7 @@ async def delete_ticket_with_optional_transcript(
                     "transcript_url": None,
                     "transcript_message_id": None,
                     "transcript_channel_id": None,
+                    "status_before": status_before,
                     "reason": "Transcript failed to post; ticket not deleted.",
                 }
 
@@ -831,16 +914,22 @@ async def delete_ticket_with_optional_transcript(
                 except Exception:
                     transcript_channel_id = None
 
-                try:
-                    await attach_transcript_to_ticket(
-                        channel_id=channel.id,
-                        transcript_url=transcript_url,
-                        transcript_message_id=transcript_message_id,
-                        transcript_channel_id=transcript_channel_id,
-                        actor=deleted_by,
-                    )
-                except Exception as e:
-                    print("⚠️ Failed attaching transcript metadata:", repr(e))
+                await _attach_transcript_metadata_once(
+                    channel_id=int(channel.id),
+                    transcript_url=transcript_url,
+                    transcript_message_id=transcript_message_id,
+                    transcript_channel_id=transcript_channel_id,
+                    actor=deleted_by,
+                )
+
+        if should_post_transcript and not transcript_url and not transcript_message_id and not transcript_channel_id:
+            healed_url, healed_message_id, healed_channel_id = await _heal_existing_transcript_metadata_if_missing(
+                channel_id=int(channel.id),
+                actor=deleted_by,
+            )
+            transcript_url = transcript_url or healed_url
+            transcript_message_id = transcript_message_id or healed_message_id
+            transcript_channel_id = transcript_channel_id or healed_channel_id
 
         db_marked_deleted = False
         try:
@@ -860,11 +949,12 @@ async def delete_ticket_with_optional_transcript(
                 "deleted": True,
                 "db_marked_deleted": bool(db_marked_deleted),
                 "transcript_required": bool(should_post_transcript),
-                "transcript_posted": transcript_message is not None or already_had_transcript,
+                "transcript_posted": bool(transcript_message is not None or already_had_transcript or transcript_url),
                 "transcript_already_existed": bool(already_had_transcript),
                 "transcript_url": transcript_url,
                 "transcript_message_id": transcript_message_id,
                 "transcript_channel_id": transcript_channel_id,
+                "status_before": status_before,
                 "reason": None,
             }
         except Exception as e:
@@ -874,11 +964,12 @@ async def delete_ticket_with_optional_transcript(
                 "deleted": False,
                 "db_marked_deleted": bool(db_marked_deleted),
                 "transcript_required": bool(should_post_transcript),
-                "transcript_posted": transcript_message is not None or already_had_transcript,
+                "transcript_posted": bool(transcript_message is not None or already_had_transcript or transcript_url),
                 "transcript_already_existed": bool(already_had_transcript),
                 "transcript_url": transcript_url,
                 "transcript_message_id": transcript_message_id,
                 "transcript_channel_id": transcript_channel_id,
+                "status_before": status_before,
                 "reason": repr(e),
             }
 
@@ -892,7 +983,31 @@ async def staff_delete_closed_ticket(
 ) -> Dict[str, Any]:
     """
     Use this when staff press the final Delete button inside a closed ticket.
+
+    Hard guard:
+    - refuses deletion if the ticket is no longer closed
+    - blocks stale closed-panel clicks after a reopen
     """
+    row = await _ticket_row(channel.id)
+    status = _row_status(row)
+    channel_name = _safe_text(getattr(channel, "name", "")).lower()
+
+    looks_closed = bool(status == "closed" or channel_name.startswith("closed-"))
+    if not looks_closed:
+        return {
+            "ok": False,
+            "deleted": False,
+            "db_marked_deleted": False,
+            "transcript_required": True,
+            "transcript_posted": _row_has_transcript(row),
+            "transcript_already_existed": _row_has_transcript(row),
+            "transcript_url": _row_transcript_payload(row)[0],
+            "transcript_message_id": _row_transcript_payload(row)[1],
+            "transcript_channel_id": _row_transcript_payload(row)[2],
+            "status_before": status,
+            "reason": "Ticket is not closed anymore. Refusing stale closed-ticket delete action.",
+        }
+
     return await delete_ticket_with_optional_transcript(
         channel=channel,
         deleted_by=staff_member,
