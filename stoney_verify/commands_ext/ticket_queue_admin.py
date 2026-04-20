@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import asyncio
 from datetime import datetime, timezone
@@ -21,13 +21,27 @@ from .common import _staff_check, reply_once
 try:
     from ..tickets_new.repository import (
         get_ticket_by_number,
+        get_ticket_by_any_channel_id as repo_get_ticket_by_any_channel_id,
         list_tickets_for_owner,
         list_ticket_activity_events,
     )
 except Exception:
     get_ticket_by_number = None  # type: ignore
+    repo_get_ticket_by_any_channel_id = None  # type: ignore
     list_tickets_for_owner = None  # type: ignore
     list_ticket_activity_events = None  # type: ignore
+
+
+# ============================================================
+# ticket_queue_admin.py
+# ------------------------------------------------------------
+# Hardening goals:
+# - make queue/history surfaces reflect real repository state
+# - avoid raw channel-only lookups drifting from thread-aware rows
+# - normalize recent-closed / overdue reads
+# - prevent deleted tickets from polluting active/admin views
+# - make owner history / activity views consistent with schema lock
+# ============================================================
 
 
 def _safe_int(value: Any, default: int = 0) -> int:
@@ -80,6 +94,38 @@ def _discord_ts(value: Any) -> str:
         return _safe_str(value, "unknown")
 
 
+def _normalize_ticket_status(value: Any) -> str:
+    raw = _safe_str(value, "unknown").lower()
+    if raw in {"open", "claimed", "closed", "deleted"}:
+        return raw
+    if raw in {"reopened", "active"}:
+        return "open"
+    return "unknown"
+
+
+def _normalize_ticket_priority(value: Any) -> str:
+    raw = _safe_str(value, "medium").lower()
+    if raw in {"low", "medium", "high", "urgent"}:
+        return raw
+    return "medium"
+
+
+def _normalize_ticket_row(row: Dict[str, Any]) -> Dict[str, Any]:
+    out = dict(row or {})
+    out["status"] = _normalize_ticket_status(out.get("status"))
+    out["priority"] = _normalize_ticket_priority(out.get("priority"))
+
+    user_id = _safe_str(out.get("user_id"))
+    out["owner_id"] = _safe_str(out.get("owner_id") or user_id)
+    out["requester_id"] = _safe_str(out.get("requester_id") or user_id)
+
+    if out["status"] == "open":
+        if _safe_int(out.get("assigned_to") or out.get("claimed_by"), 0) > 0:
+            out["status"] = "claimed"
+
+    return out
+
+
 def _member_ref(guild: discord.Guild, user_id: Any, fallback: str = "Unknown") -> str:
     uid = _safe_int(user_id, 0)
     if uid <= 0:
@@ -91,14 +137,19 @@ def _member_ref(guild: discord.Guild, user_id: Any, fallback: str = "Unknown") -
 
 
 def _ticket_line(guild: discord.Guild, row: Dict[str, Any]) -> str:
+    row = _normalize_ticket_row(row)
+
     channel_id = _safe_int(row.get("channel_id") or row.get("discord_thread_id"), 0)
     owner_id = _safe_int(row.get("owner_id") or row.get("user_id"), 0)
-    assigned_to = _safe_int(row.get("assigned_to"), 0)
+    assigned_to = _safe_int(row.get("assigned_to") or row.get("claimed_by"), 0)
     priority = _safe_str(row.get("priority"), "medium")
     status = _safe_str(row.get("status"), "unknown")
     ticket_number = _safe_str(row.get("ticket_number"))
-    channel_ref = f"<#{channel_id}>" if channel_id > 0 else f"`{_safe_str(row.get('channel_name') or row.get('title') or 'ticket')}`"
+    channel_name = _safe_str(row.get("channel_name") or row.get("title") or "ticket")
+
+    channel_ref = f"<#{channel_id}>" if channel_id > 0 else f"`{channel_name}`"
     num = f"#{ticket_number} " if ticket_number else ""
+
     return (
         f"• {num}{channel_ref} • owner={_member_ref(guild, owner_id)} "
         f"• assignee={_member_ref(guild, assigned_to, 'Unassigned')} "
@@ -106,44 +157,17 @@ def _ticket_line(guild: discord.Guild, row: Dict[str, Any]) -> str:
     )
 
 
-def _ticket_row_sync(channel_id: int) -> Optional[Dict[str, Any]]:
-    sb = get_supabase()
-    if not sb:
+async def _ticket_row_for_channel(channel: discord.TextChannel) -> Optional[Dict[str, Any]]:
+    if repo_get_ticket_by_any_channel_id is None:
         return None
 
     try:
-        res = (
-            sb.table("tickets")
-            .select("*")
-            .eq("channel_id", str(int(channel_id)))
-            .limit(1)
-            .execute()
-        )
-        rows = getattr(res, "data", None) or []
-        if rows:
-            return dict(rows[0])
+        row = await repo_get_ticket_by_any_channel_id(int(channel.id))
+        if isinstance(row, dict):
+            return _normalize_ticket_row(row)
     except Exception:
         pass
-
-    try:
-        res = (
-            sb.table("tickets")
-            .select("*")
-            .eq("discord_thread_id", str(int(channel_id)))
-            .limit(1)
-            .execute()
-        )
-        rows = getattr(res, "data", None) or []
-        if rows:
-            return dict(rows[0])
-    except Exception:
-        pass
-
     return None
-
-
-async def _ticket_row_for_channel(channel: discord.TextChannel) -> Optional[Dict[str, Any]]:
-    return await _run_blocking(_ticket_row_sync, int(channel.id))
 
 
 def _is_ticket_channel(channel: discord.TextChannel, row: Optional[Dict[str, Any]]) -> bool:
@@ -158,7 +182,7 @@ def _is_ticket_channel(channel: discord.TextChannel, row: Optional[Dict[str, Any
 async def _ensure_ticket_context(
     interaction: discord.Interaction,
     channel: Optional[discord.TextChannel] = None,
-) -> tuple[Optional[discord.TextChannel], Optional[Dict[str, Any]]]:
+) -> Tuple[Optional[discord.TextChannel], Optional[Dict[str, Any]]]:
     ch = channel or interaction.channel
     if not isinstance(ch, discord.TextChannel):
         await reply_once(interaction, {"content": "❌ Must be used in a ticket text channel.", "ephemeral": True})
@@ -211,7 +235,15 @@ def _fetch_recent_closed_sync(guild_id: int, limit: int = 15) -> List[Dict[str, 
             .execute()
         )
         rows = getattr(res, "data", None) or []
-        return [dict(x) for x in rows if isinstance(x, dict)]
+        out: List[Dict[str, Any]] = []
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            norm = _normalize_ticket_row(row)
+            if norm.get("status") != "closed":
+                continue
+            out.append(norm)
+        return out
     except Exception:
         return []
 
@@ -222,6 +254,7 @@ def _fetch_overdue_sync(guild_id: int, limit: int = 15) -> List[Dict[str, Any]]:
         return []
 
     now_iso = now_utc().isoformat()
+
     try:
         res = (
             sb.table("tickets")
@@ -234,9 +267,40 @@ def _fetch_overdue_sync(guild_id: int, limit: int = 15) -> List[Dict[str, Any]]:
             .execute()
         )
         rows = getattr(res, "data", None) or []
-        return [dict(x) for x in rows if isinstance(x, dict)]
+        out: List[Dict[str, Any]] = []
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            norm = _normalize_ticket_row(row)
+            if norm.get("status") not in {"open", "claimed"}:
+                continue
+            if not _safe_str(norm.get("sla_deadline")):
+                continue
+            out.append(norm)
+        return out
     except Exception:
         return []
+
+
+def _history_embed(
+    *,
+    title: str,
+    description: Optional[str],
+    color: discord.Color,
+    lines: List[str],
+    footer: Optional[str] = None,
+) -> discord.Embed:
+    embed = discord.Embed(
+        title=title,
+        description=description,
+        color=color,
+        timestamp=now_utc(),
+    )
+    if lines:
+        embed.add_field(name="Results", value="\n".join(lines)[:1024], inline=False)
+    if footer:
+        embed.set_footer(text=footer)
+    return embed
 
 
 def register_ticket_queue_admin_commands(bot, tree) -> None:
@@ -268,10 +332,14 @@ def register_ticket_queue_admin_commands(bot, tree) -> None:
         for row in rows[:15]:
             base = _ticket_line(guild, row)
             closed_at = _discord_ts(row.get("closed_at"))
-            lines.append(f"{base} • closed={closed_at}")
+            transcript = _safe_str(row.get("transcript_url"))
+            line = f"{base} • closed={closed_at}"
+            if transcript:
+                line += " • has transcript"
+            lines.append(line)
 
         embed.description = "\n".join(lines)[:4000]
-        embed.set_footer(text=f"Showing {min(len(rows), 15)} ticket(s)")
+        embed.set_footer(text=f"Showing {min(len(rows), 15)} closed ticket(s)")
         await reply_once(interaction, {"embed": embed, "ephemeral": True})
 
     @tree.command(
@@ -302,10 +370,11 @@ def register_ticket_queue_admin_commands(bot, tree) -> None:
         for row in rows[:15]:
             base = _ticket_line(guild, row)
             deadline = _discord_ts(row.get("sla_deadline"))
-            lines.append(f"{base} • sla={deadline}")
+            last_activity = _discord_ts(row.get("last_activity_at"))
+            lines.append(f"{base} • sla={deadline} • last_activity={last_activity}")
 
         embed.description = "\n".join(lines)[:4000]
-        embed.set_footer(text=f"Showing {min(len(rows), 15)} ticket(s)")
+        embed.set_footer(text=f"Showing {min(len(rows), 15)} overdue ticket(s)")
         await reply_once(interaction, {"embed": embed, "ephemeral": True})
 
     @tree.command(
@@ -328,6 +397,8 @@ def register_ticket_queue_admin_commands(bot, tree) -> None:
         if not row:
             return await reply_once(interaction, {"content": f"❌ No ticket found for `#{ticket_number}`.", "ephemeral": True})
 
+        row = _normalize_ticket_row(row)
+
         embed = discord.Embed(
             title=f"🎫 Ticket #{ticket_number}",
             color=discord.Color.blurple(),
@@ -338,6 +409,9 @@ def register_ticket_queue_admin_commands(bot, tree) -> None:
         embed.add_field(name="Closed", value=_discord_ts(row.get("closed_at")), inline=True)
         embed.add_field(name="SLA", value=_discord_ts(row.get("sla_deadline")), inline=True)
         embed.add_field(name="Transcript", value=_safe_str(row.get("transcript_url"), "—"), inline=False)
+        embed.add_field(name="Decision", value=_safe_str(row.get("decision"), "—"), inline=True)
+        embed.add_field(name="Category", value=f"`{_safe_str(row.get('category'), 'unknown')}`", inline=True)
+        embed.add_field(name="Priority", value=f"`{_safe_str(row.get('priority'), 'medium')}`", inline=True)
         await reply_once(interaction, {"embed": embed, "ephemeral": True})
 
     @tree.command(
@@ -357,6 +431,7 @@ def register_ticket_queue_admin_commands(bot, tree) -> None:
             return await reply_once(interaction, {"content": "❌ Ticket history service is unavailable.", "ephemeral": True})
 
         rows = await list_tickets_for_owner(guild_id=guild.id, owner_id=member.id, limit=15)
+        rows = [_normalize_ticket_row(row) for row in rows if isinstance(row, dict)]
 
         embed = discord.Embed(
             title="👤 User Ticket History",
@@ -369,11 +444,9 @@ def register_ticket_queue_admin_commands(bot, tree) -> None:
             embed.add_field(name="History", value="No tickets found for this user.", inline=False)
             return await reply_once(interaction, {"embed": embed, "ephemeral": True})
 
-        embed.add_field(
-            name="Tickets",
-            value="\n".join([_ticket_line(guild, row) for row in rows[:15]])[:1024],
-            inline=False,
-        )
+        lines = [_ticket_line(guild, row) for row in rows[:15]]
+        embed.add_field(name="Tickets", value="\n".join(lines)[:1024], inline=False)
+        embed.set_footer(text=f"Showing {min(len(rows), 15)} ticket(s)")
         await reply_once(interaction, {"embed": embed, "ephemeral": True})
 
     @tree.command(
@@ -401,6 +474,7 @@ def register_ticket_queue_admin_commands(bot, tree) -> None:
             return await reply_once(interaction, {"content": "❌ Could not resolve the ticket owner.", "ephemeral": True})
 
         rows = await list_tickets_for_owner(guild_id=ch.guild.id, owner_id=owner_id, limit=15)
+        rows = [_normalize_ticket_row(item) for item in rows if isinstance(item, dict)]
 
         embed = discord.Embed(
             title="🧾 Ticket Owner History",
@@ -417,11 +491,9 @@ def register_ticket_queue_admin_commands(bot, tree) -> None:
             embed.add_field(name="History", value="No tickets found for this owner.", inline=False)
             return await reply_once(interaction, {"embed": embed, "ephemeral": True})
 
-        embed.add_field(
-            name="Tickets",
-            value="\n".join([_ticket_line(ch.guild, item) for item in rows[:15]])[:1024],
-            inline=False,
-        )
+        lines = [_ticket_line(ch.guild, item) for item in rows[:15]]
+        embed.add_field(name="Tickets", value="\n".join(lines)[:1024], inline=False)
+        embed.set_footer(text=f"Showing {min(len(rows), 15)} ticket(s)")
         await reply_once(interaction, {"embed": embed, "ephemeral": True})
 
     @tree.command(
@@ -443,7 +515,17 @@ def register_ticket_queue_admin_commands(bot, tree) -> None:
         if ch is None:
             return
 
-        events = await list_ticket_activity_events(guild_id=ch.guild.id, channel_id=ch.id, limit=10)
+        ticket_id = _safe_str((row or {}).get("id"))
+        events: List[Dict[str, Any]] = []
+
+        try:
+            # Prefer ticket_id when available to avoid channel/thread drift.
+            if ticket_id:
+                events = await list_ticket_activity_events(guild_id=ch.guild.id, ticket_id=ticket_id, limit=10)
+            if not events:
+                events = await list_ticket_activity_events(guild_id=ch.guild.id, channel_id=ch.id, limit=10)
+        except Exception:
+            events = []
 
         embed = discord.Embed(
             title="📜 Ticket Activity",
