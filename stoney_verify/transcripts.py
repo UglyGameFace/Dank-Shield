@@ -39,14 +39,6 @@ except Exception:
 
 # ============================================================
 # Lazy service imports
-# ------------------------------------------------------------
-# IMPORTANT:
-# Do NOT import verification_new.service at module load time.
-# That created a circular import:
-# transcripts.py -> verification_new.service -> transcripts.py
-#
-# We resolve that by importing those service functions only
-# when the buttons are actually pressed.
 # ============================================================
 
 async def _approve_verification_service(*args, **kwargs) -> Dict[str, Any]:
@@ -110,7 +102,7 @@ _STAFF_CLOSED_MARKER = "stoney_verify:staff_closed:v6"
 _CLOSE_REOPENED_MARKER = "stoney_verify:ticket_reopened:v5"
 _STAFF_REVIEW_PANEL_MARKER = "stoney_verify:staff_review_panel:v4"
 _TRANSCRIPT_POSTED_MARKER = "stoney_verify:transcript_posted:v3"
-_OPEN_CONTROLS_MARKER = "stoney_verify:open_controls:v1"
+_OPEN_CONTROLS_MARKER = "stoney_verify:open_controls:v2"
 
 _CLOSE_PROMPT_LOCKS: Dict[int, asyncio.Lock] = {}
 _STAFF_REVIEW_PANEL_LOCKS: Dict[int, asyncio.Lock] = {}
@@ -461,6 +453,20 @@ async def _freeze_message_controls(
             pass
 
 
+async def _detect_is_ghost_ticket(channel: discord.TextChannel) -> bool:
+    try:
+        row = await _ticket_row(channel.id)
+        if row:
+            return _safe_bool(row.get("is_ghost"), False)
+    except Exception:
+        pass
+
+    try:
+        return "ghost" in str(channel.name or "").lower()
+    except Exception:
+        return False
+
+
 # ============================================================
 # Close prompt / open controls / staff closed panel helpers
 # ============================================================
@@ -493,7 +499,7 @@ async def _find_open_controls_message(channel: discord.TextChannel, limit: int =
                 for row in comps:
                     for child in (getattr(row, "children", None) or []):
                         cid = str(getattr(child, "custom_id", "") or "")
-                        if cid == "sv:ticket:close":
+                        if cid in {"sv:ticket:close", "sv:ticket:delete_open"}:
                             return msg
             except Exception:
                 pass
@@ -649,7 +655,7 @@ async def post_or_replace_open_ticket_controls(
             title="🟢 Ticket Open",
             description=(
                 f"{owner.mention if isinstance(owner, discord.Member) else 'The ticket owner'} can close this ticket when finished.\n"
-                "Staff can also close it."
+                "Staff can also close it or delete it."
             ),
             color=discord.Color.green(),
             timestamp=now_utc(),  # type: ignore[name-defined]
@@ -685,12 +691,6 @@ async def build_html_transcript(
     channel: discord.TextChannel,
     limit: int = 2000,
 ) -> Tuple[str, Dict[str, int], Dict[int, int], Dict[int, int]]:
-    """
-    Compatibility wrapper.
-
-    Old code expected HTML + count maps from this module.
-    New transcript generation lives in tickets_new.transcript_service.
-    """
     counts_label: Dict[str, int] = {}
     counts_uid: Dict[int, int] = {}
     mentions_uid: Dict[int, int] = {}
@@ -753,12 +753,6 @@ async def send_tickettool_style_transcript(
     closed_by: Optional[discord.Member] = None,
     decision: Optional[str] = None,
 ):
-    """
-    Wrapper around tickets_new.transcript_service.post_transcript_to_channel.
-
-    Keeps the old public function name so existing callers do not break.
-    Prevents duplicate transcript posts for the same ticket row.
-    """
     lock = _lock_for(_TRANSCRIPT_POST_LOCKS, channel.id)
 
     async with lock:
@@ -804,10 +798,6 @@ async def auto_close_after_decision(
     closer: Optional[discord.Member] = None,
     decision: Optional[str] = None,
 ):
-    """
-    Auto-close wrapper that fully delegates transcript/delete execution
-    to tickets_new.transcript_service.
-    """
     try:
         if int(AUTO_DELETE_TICKET_SECONDS or 0) <= 0:  # type: ignore[name-defined]
             return
@@ -1247,6 +1237,54 @@ class TicketOpenActionsView(discord.ui.View):
                 "❌ Only the ticket owner or staff can close this ticket.",
             )
 
+        # Staff should close immediately — this is the TicketTool-style behavior
+        # you were expecting when pressing the button.
+        if isinstance(interaction.user, discord.Member) and _is_staff_member(interaction.user):
+            lock = _lock_for(_CLOSE_ACTION_LOCKS, channel.id)
+            async with lock:
+                try:
+                    if not interaction.response.is_done():
+                        await interaction.response.defer(ephemeral=True)
+                except Exception:
+                    pass
+
+                if await _ticket_is_deleted(channel):
+                    return await _reply_ephemeral(interaction, "❌ Ticket is already deleted.")
+
+                if await _ticket_is_closed(channel):
+                    return await _reply_ephemeral(interaction, "ℹ️ Ticket is already closed.")
+
+                try:
+                    closed = await mark_ticket_closed(
+                        channel=channel,
+                        closed_by=interaction.user,
+                        reason="Closed from ticket open controls",
+                    )
+                except Exception as e:
+                    print("⚠️ mark_ticket_closed failed from open controls:", e)
+                    closed = False
+
+                if not closed:
+                    return await _reply_ephemeral(interaction, "❌ Failed to close ticket.")
+
+                try:
+                    await _freeze_message_controls(
+                        interaction.message,
+                        content_suffix=f"🔒 Closed by {interaction.user.mention}.",
+                    )
+                except Exception:
+                    pass
+
+                try:
+                    await interaction.followup.send(
+                        f"✅ Closed {channel.mention}.",
+                        ephemeral=True,
+                    )
+                except Exception:
+                    pass
+                return
+
+        # Owner path keeps confirmation.
         prompt = await prompt_ticket_close_confirmation(
             channel,
             requested_by=interaction.user if isinstance(interaction.user, discord.Member) else None,
@@ -1255,6 +1293,62 @@ class TicketOpenActionsView(discord.ui.View):
             return await _reply_ephemeral(interaction, "❌ Failed to post the close confirmation.")
 
         await _reply_ephemeral(interaction, "⚠️ Close confirmation posted.")
+
+    @discord.ui.button(
+        label="Delete Ticket",
+        style=discord.ButtonStyle.secondary,
+        emoji="🗑️",
+        custom_id="sv:ticket:delete_open",
+        row=0,
+    )
+    async def delete_open_ticket(
+        self,
+        interaction: discord.Interaction,
+        button: discord.ui.Button,
+    ):
+        if not isinstance(interaction.user, discord.Member) or not _is_staff_member(interaction.user):
+            return await _reply_ephemeral(interaction, "❌ Staff only.")
+
+        channel = interaction.channel
+        if not isinstance(channel, discord.TextChannel):
+            return await _reply_ephemeral(interaction, "❌ Invalid channel.")
+
+        if await _ticket_is_deleted(channel):
+            return await _reply_ephemeral(interaction, "❌ Ticket is already deleted.")
+
+        lock = _lock_for(_DELETE_ACTION_LOCKS, channel.id)
+        async with lock:
+            try:
+                if not interaction.response.is_done():
+                    await interaction.response.defer(ephemeral=True)
+            except Exception:
+                pass
+
+            is_ghost = await _detect_is_ghost_ticket(channel)
+
+            try:
+                result = await delete_ticket_with_optional_transcript(
+                    channel=channel,
+                    deleted_by=interaction.user,
+                    is_ghost=is_ghost,
+                    force_transcript_for_ghost=False,
+                    reason="Deleted by staff from open ticket controls",
+                )
+            except Exception as e:
+                print("⚠️ delete_ticket_with_optional_transcript failed:", e)
+                return await _reply_ephemeral(interaction, f"❌ Failed to delete ticket: {e}")
+
+            if bool(result.get("deleted")):
+                try:
+                    RUNTIME_STATS["tickets_closed"] = int(RUNTIME_STATS.get("tickets_closed", 0) or 0) + 1
+                except Exception:
+                    pass
+                return
+
+            await _reply_ephemeral(
+                interaction,
+                f"❌ Failed to delete ticket: {result.get('reason') or 'Unknown error'}",
+            )
 
 
 # ============================================================
@@ -1478,7 +1572,7 @@ class ConfirmCloseTicketView(discord.ui.View):
                 closed = await mark_ticket_closed(
                     channel=channel,
                     closed_by=interaction.user if isinstance(interaction.user, (discord.Member, discord.User)) else None,
-                    reason="Closed from ticket UI",
+                    reason="Closed from ticket confirmation UI",
                 )
             except Exception as e:
                 print("⚠️ mark_ticket_closed failed:", e)
@@ -1541,12 +1635,6 @@ class ConfirmCloseTicketView(discord.ui.View):
 # ============================================================
 
 def build_verify_ui_view(*, token: str | None = None) -> discord.ui.View:
-    """
-    Compatibility shim.
-
-    The real verify UI lives in verify_ui.py now.
-    We intentionally mirror the same custom IDs so old callers keep working.
-    """
     view = discord.ui.View(timeout=None)
 
     view.add_item(
