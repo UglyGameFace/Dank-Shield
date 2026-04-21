@@ -44,7 +44,7 @@ from .globals import *  # noqa: F401,F403
 
 GUILD_SECURITY_SETTINGS_TABLE = "guild_security_settings"
 
-SPAM_PANEL_FOOTER_BASE = "stoney_verify:spam_guard_panel:v4"
+SPAM_PANEL_FOOTER_BASE = "stoney_verify:spam_guard_panel:v5"
 SPAM_PANEL_FOOTER_PREFIX = "stoney_verify:spam_guard_panel:"
 SPAM_PANEL_PAGES = ("overview", "detection", "enforcement", "access")
 
@@ -357,20 +357,6 @@ def _page_title(page: str) -> str:
         "access": "Access",
     }
     return mapping.get(page, "Overview")
-
-
-def _current_panel_page_from_message(message: Optional[discord.Message]) -> str:
-    try:
-        if message and message.embeds:
-            footer = _safe_str(getattr(getattr(message.embeds[0], "footer", None), "text", ""))
-            m = re.search(r"page=([a-z_]+)", footer)
-            if m:
-                page = m.group(1).strip().lower()
-                if page in SPAM_PANEL_PAGES:
-                    return page
-    except Exception:
-        pass
-    return "overview"
 
 
 def _bool_chip(value: bool) -> str:
@@ -797,7 +783,7 @@ def _build_panel_embed(
             inline=False,
         )
 
-    else:  # access
+    else:
         embed.description = (
             "Manage who is allowed to bypass parts of the guard.\n"
             "Use the role pickers below, then use the buttons for channels, users, and invite codes."
@@ -862,13 +848,13 @@ async def _rerender_panel_message(
         page=page,
         persisted_hint=persisted_hint,
     )
-    view = SpamGuardPanelView(page=page)
+    view = SpamGuardPanelView.build(page=page, settings=settings)
 
     try:
         msg = await channel.fetch_message(int(message_id))
         await msg.edit(embed=embed, view=view)
-    except Exception:
-        pass
+    except Exception as e:
+        _debug(f"rerender failed guild={guild.id} page={page} message={message_id} error={repr(e)}")
 
 
 async def _save_patch_and_rerender(
@@ -891,8 +877,8 @@ async def _save_patch_and_rerender(
     try:
         if not interaction.response.is_done():
             await interaction.response.defer(ephemeral=True)
-    except Exception:
-        pass
+    except Exception as e:
+        _debug(f"save defer failed guild={getattr(guild, 'id', 0)} page={page} error={repr(e)}")
 
     _, persisted = await save_spam_settings(
         guild.id,
@@ -928,20 +914,37 @@ async def _switch_panel_page(interaction: discord.Interaction, *, page: str) -> 
     if guild is None or not isinstance(channel, discord.TextChannel) or message is None:
         return await _reply_ephemeral(interaction, "Invalid context.")
 
-    settings = await get_spam_settings(guild.id)
-    embed = _build_panel_embed(guild, settings, page=page, persisted_hint=None)
-    view = SpamGuardPanelView(page=page)
+    clean_page = page if page in SPAM_PANEL_PAGES else "overview"
 
     try:
         if not interaction.response.is_done():
-            await interaction.response.edit_message(embed=embed, view=view)
-        else:
-            await message.edit(embed=embed, view=view)
+            await interaction.response.defer()
+    except Exception as e:
+        _debug(f"panel switch defer failed guild={guild.id} page={clean_page} error={repr(e)}")
+
+    try:
+        settings = await get_spam_settings(guild.id)
+        embed = _build_panel_embed(
+            guild,
+            settings,
+            page=clean_page,
+            persisted_hint=None,
+        )
+        view = SpamGuardPanelView.build(page=clean_page, settings=settings)
+
+        await message.edit(embed=embed, view=view)
+        _debug(f"panel switch success guild={guild.id} page={clean_page} message={message.id}")
+        return
+    except Exception as e:
+        _debug(f"panel switch failed guild={guild.id} page={clean_page} error={repr(e)}")
+
+    try:
+        await interaction.followup.send(
+            "❌ Failed to switch spam guard section.",
+            ephemeral=True,
+        )
     except Exception:
-        try:
-            await message.edit(embed=embed, view=view)
-        except Exception as e:
-            await _reply_ephemeral(interaction, f"❌ Failed to switch panel page: {e}")
+        pass
 
 
 # ============================================================
@@ -1319,8 +1322,6 @@ async def handle_incoming_spam_message(message: discord.Message) -> bool:
             should_fire = False
             reasons: List[str] = []
 
-            # Invite-specific rules.
-            # Invite-allowed roles and allowed channels bypass invite-link enforcement only.
             if not invite_role_bypass and not channel_bypass:
                 if len(blocked_invite_codes) >= int(settings["multi_invite_immediate"]):
                     should_fire = True
@@ -1338,7 +1339,6 @@ async def handle_incoming_spam_message(message: discord.Message) -> bool:
                         f"`{recent_count}` messages inside `{int(settings['window_seconds'])}s` and current message contained a blocked invite"
                     )
 
-            # Generic hacked-account behavior
             if duplicate_count >= int(settings["duplicate_threshold"]) and recent_count >= 3:
                 should_fire = True
                 reasons.append(
@@ -1462,8 +1462,8 @@ class SpamThresholdsModal(discord.ui.Modal, title="Spam Guard • Detection Thre
         try:
             if not interaction.response.is_done():
                 await interaction.response.defer(ephemeral=True)
-        except Exception:
-            pass
+        except Exception as e:
+            _debug(f"threshold modal defer failed guild={guild.id} error={repr(e)}")
 
         try:
             _, persisted = await save_spam_settings(
@@ -1556,8 +1556,8 @@ class SpamActionSettingsModal(discord.ui.Modal, title="Spam Guard • Actions + 
         try:
             if not interaction.response.is_done():
                 await interaction.response.defer(ephemeral=True)
-        except Exception:
-            pass
+        except Exception as e:
+            _debug(f"actions modal defer failed guild={guild.id} error={repr(e)}")
 
         try:
             _, persisted = await save_spam_settings(
@@ -1630,8 +1630,8 @@ class SpamListsModal(discord.ui.Modal, title="Spam Guard • Channels + Exempt U
         try:
             if not interaction.response.is_done():
                 await interaction.response.defer(ephemeral=True)
-        except Exception:
-            pass
+        except Exception as e:
+            _debug(f"lists modal defer failed guild={guild.id} error={repr(e)}")
 
         try:
             _, persisted = await save_spam_settings(
@@ -1817,14 +1817,6 @@ class RefreshPanelButton(discord.ui.Button):
     async def callback(self, interaction: discord.Interaction) -> None:
         if not await _ensure_staff_panel_access(interaction):
             return
-
-        guild = interaction.guild
-        channel = interaction.channel
-        message = interaction.message
-
-        if guild is None or not isinstance(channel, discord.TextChannel) or message is None:
-            return await _reply_ephemeral(interaction, "Invalid context.")
-
         await _switch_panel_page(interaction, page=self.page)
         try:
             if interaction.response.is_done():
@@ -2003,31 +1995,20 @@ class SpamGuardPanelView(discord.ui.View):
         super().__init__(timeout=None)
         self.page = page if page in SPAM_PANEL_PAGES else "overview"
 
-        # Common row
-        # Enabled label/style is populated from current settings when view is built.
-        # It is okay to fetch synchronously from runtime cache fallback; actual message uses fresh values.
-        fake_settings = _RUNTIME_SETTINGS.get(0, {})
-        _ = fake_settings
-
     @classmethod
     def build(cls, *, page: str, settings: Dict[str, Any]) -> "SpamGuardPanelView":
         view = cls(page=page)
 
-        # Row 0
         view.add_item(ToggleEnabledButton(page, bool(settings["enabled"])))
         view.add_item(RefreshPanelButton(page))
-
-        # Row 1
         view.add_item(SpamSectionSelect(page))
 
         if page == "access":
-            # Access page: focus on allowlists / exemptions
             view.add_item(SpamInviteAllowedRolesSelect(page))
             view.add_item(SpamExemptRolesSelect(page))
             view.add_item(ActionsModalButton(page))
             view.add_item(ListsModalButton(page))
         else:
-            # General pages: focus on detection / enforcement controls
             view.add_item(SpamModeSelect(page, _normalize_mode(settings.get("mode"), "timeout")))
             view.add_item(ThresholdsModalButton(page))
             view.add_item(ActionsModalButton(page))
@@ -2042,11 +2023,6 @@ class SpamGuardPanelView(discord.ui.View):
 # ============================================================
 # Commands / listeners
 # ============================================================
-
-async def _panel_view_for_guild_page(guild_id: int, page: str) -> SpamGuardPanelView:
-    settings = await get_spam_settings(guild_id)
-    return SpamGuardPanelView.build(page=page, settings=settings)
-
 
 def _register_spam_guard_commands() -> None:
     global _SPAM_GUARD_COMMANDS_REGISTERED
@@ -2125,39 +2101,12 @@ async def _register_spam_guard_views():
         return
 
     try:
-        # Register one persistent view for each page since custom_ids are page-specific.
         for page in SPAM_PANEL_PAGES:
-            settings = _default_settings(0)
-            bot.add_view(SpamGuardPanelView.build(page=page, settings=settings))
+            bot.add_view(SpamGuardPanelView.build(page=page, settings=_default_settings(0)))
         _SPAM_GUARD_VIEWS_REGISTERED = True
         print("✅ spam_guard: compact multi-page persistent views registered")
     except Exception as e:
         print(f"⚠️ spam_guard: failed to register persistent views: {e}")
-
-
-# Monkey-patch the rerender helper to use page-aware view factory
-async def _rerender_panel_message(
-    *,
-    guild: discord.Guild,
-    channel: discord.TextChannel,
-    message_id: int,
-    page: str,
-    persisted_hint: Optional[bool] = None,
-) -> None:
-    settings = await get_spam_settings(guild.id)
-    embed = _build_panel_embed(
-        guild,
-        settings,
-        page=page,
-        persisted_hint=persisted_hint,
-    )
-    view = SpamGuardPanelView.build(page=page, settings=settings)
-
-    try:
-        msg = await channel.fetch_message(int(message_id))
-        await msg.edit(embed=embed, view=view)
-    except Exception:
-        pass
 
 
 _register_spam_guard_commands()
