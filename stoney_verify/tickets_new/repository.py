@@ -149,10 +149,10 @@ _PRESERVE_ALWAYS_KEYS: Tuple[str, ...] = (
     "transcript_message_url",
 )
 
+
 # ============================================================
 # Small helpers
 # ============================================================
-
 
 def _repo_debug(msg: str) -> None:
     try:
@@ -291,24 +291,24 @@ def _normalize_message_text(value: Any, limit: int = 6000) -> str:
         return ""
 
 
-def _normalize_ticket_status(value: Any) -> str:
-    raw = (_clean_text(value) or "open").lower()
+def _normalize_ticket_status(value: Any, default: str = "open") -> str:
+    raw = (_clean_text(value) or default).lower()
     if raw in _VALID_TICKET_STATUSES:
         return raw
     if raw in {"reopened", "active"}:
         return "open"
-    return "open"
+    return default
 
 
-def _normalize_ticket_priority(value: Any) -> str:
-    raw = (_clean_text(value) or "medium").lower()
+def _normalize_ticket_priority(value: Any, default: str = "medium") -> str:
+    raw = (_clean_text(value) or default).lower()
     if raw in _VALID_TICKET_PRIORITIES:
         return raw
-    return "medium"
+    return default
 
 
-def _normalize_ticket_category(value: Any) -> str:
-    return (_clean_text(value) or "verification_issue").lower()
+def _normalize_ticket_category(value: Any, default: str = "verification_issue") -> str:
+    return (_clean_text(value) or default).lower()
 
 
 def _sb():
@@ -330,7 +330,7 @@ def _ticket_status(row: Optional[Dict[str, Any]]) -> str:
     if not isinstance(row, dict):
         return "unknown"
     try:
-        raw = _normalize_ticket_status(row.get("status"))
+        raw = _normalize_ticket_status(row.get("status"), "unknown")
         return raw if raw in _VALID_TICKET_STATUSES else "unknown"
     except Exception:
         return "unknown"
@@ -364,9 +364,9 @@ def _normalize_ticket_row(row: Any) -> Optional[Dict[str, Any]]:
         out["owner_name"] = _clean_text(out.get("owner_name")) or username
         out["requester_name"] = _clean_text(out.get("requester_name")) or username
 
-        out["status"] = _normalize_ticket_status(out.get("status"))
-        out["priority"] = _normalize_ticket_priority(out.get("priority"))
-        out["category"] = _normalize_ticket_category(out.get("category"))
+        out["status"] = _normalize_ticket_status(out.get("status"), "open")
+        out["priority"] = _normalize_ticket_priority(out.get("priority"), "medium")
+        out["category"] = _normalize_ticket_category(out.get("category"), "verification_issue")
 
         if out["status"] == "open":
             if _as_str_id(out.get("assigned_to")) or _as_str_id(out.get("claimed_by")):
@@ -507,11 +507,11 @@ def _clean_ticket_payload(
         out[key] = value
 
     if "status" in out:
-        out["status"] = _normalize_ticket_status(out.get("status"))
+        out["status"] = _normalize_ticket_status(out.get("status"), "open")
     if "priority" in out:
-        out["priority"] = _normalize_ticket_priority(out.get("priority"))
+        out["priority"] = _normalize_ticket_priority(out.get("priority"), "medium")
     if "category" in out and out.get("category") is not None:
-        out["category"] = _normalize_ticket_category(out.get("category"))
+        out["category"] = _normalize_ticket_category(out.get("category"), "verification_issue")
 
     return out
 
@@ -579,7 +579,6 @@ def _title_for_ticket(owner: discord.abc.User, category: str, is_ghost: bool) ->
 # Transition guards
 # ============================================================
 
-
 def _merge_backfill_identity_fields(existing: Dict[str, Any], patch: Dict[str, Any]) -> Dict[str, Any]:
     out = dict(patch)
 
@@ -636,7 +635,7 @@ def _prepare_ticket_update(
 
     existing_status = _ticket_status(existing)
     requested_status = (
-        _normalize_ticket_status(patch.get("status"))
+        _normalize_ticket_status(patch.get("status"), existing_status if existing_status != "unknown" else "open")
         if "status" in patch
         else existing_status
     )
@@ -780,7 +779,6 @@ def _prepare_ticket_update(
 # Retry / DB execution helpers
 # ============================================================
 
-
 def _is_retryable_db_error(error: Exception) -> bool:
     text = repr(error).lower()
     markers = (
@@ -843,7 +841,6 @@ async def _run_db_op(op_name: str, executor, max_attempts: int = 5):
 # ============================================================
 # Raw sync DB functions
 # ============================================================
-
 
 def _insert_ticket_sync(payload: Dict[str, Any]):
     sb = _sb()
@@ -1067,7 +1064,6 @@ def _delete_ticket_row_by_id_sync(ticket_id: str):
 # Async wrappers
 # ============================================================
 
-
 async def _insert_ticket_async(payload: Dict[str, Any]):
     return await _run_db_op("insert ticket row", lambda: _insert_ticket_sync(payload))
 
@@ -1167,7 +1163,6 @@ async def _delete_ticket_row_by_id_async(ticket_id: str):
 # Public payload builders
 # ============================================================
 
-
 def build_ticket_payload(
     *,
     guild_id: int | str,
@@ -1238,7 +1233,7 @@ def build_ticket_payload(
     clean_close_reason = _clean_text(close_reason) or clean_closed_reason
     clean_delete_reason = _clean_text(delete_reason)
 
-    normalized_status = _normalize_ticket_status(status)
+    normalized_status = _normalize_ticket_status(status, "open")
     if normalized_status == "open" and (clean_claimed_by or clean_assigned_to):
         normalized_status = "claimed"
 
@@ -1247,9 +1242,9 @@ def build_ticket_payload(
         "user_id": clean_owner_id,
         "username": clean_username,
         "title": _clean_text(title),
-        "category": _normalize_ticket_category(category),
+        "category": _normalize_ticket_category(category, "verification_issue"),
         "status": normalized_status,
-        "priority": _normalize_ticket_priority(priority),
+        "priority": _normalize_ticket_priority(priority, "medium"),
         "claimed_by": clean_claimed_by,
         "closed_by": _as_str_id(closed_by),
         "closed_reason": clean_closed_reason,
@@ -1384,7 +1379,6 @@ def build_ticket_payload_from_channel(
 # ============================================================
 # Public fetch helpers
 # ============================================================
-
 
 async def get_ticket_by_id(ticket_id: int | str) -> Optional[Dict[str, Any]]:
     tid = _as_str_id(ticket_id)
@@ -1530,7 +1524,6 @@ async def list_tickets_for_owner(
 # ============================================================
 # Public write helpers
 # ============================================================
-
 
 async def insert_ticket(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     try:
@@ -2149,12 +2142,12 @@ async def set_ticket_priority(
     if not clean_priority:
         return False
 
-    normalized_priority = _normalize_ticket_priority(clean_priority)
+    normalized_priority = _normalize_ticket_priority(clean_priority, "medium")
     existing = await get_ticket_by_any_channel_id(channel_id)
     if existing:
         if _ticket_status(existing) == "deleted":
             return False
-        if _clean_text(existing.get("priority")) == normalized_priority:
+        if _normalize_ticket_priority(existing.get("priority"), "medium") == normalized_priority:
             return True
 
     row = await update_ticket_by_channel_id(
@@ -2185,7 +2178,6 @@ async def delete_ticket_row(channel_id: int | str) -> bool:
 # Ticket notes helpers
 # Canonical backend: ticket_notes
 # ============================================================
-
 
 async def add_internal_note(
     *,
@@ -2285,7 +2277,6 @@ async def list_internal_notes(
 # ============================================================
 # Ticket messages helpers
 # ============================================================
-
 
 async def add_ticket_message(
     *,
@@ -2389,7 +2380,6 @@ async def list_ticket_messages(
 # Ticket activity-feed helpers
 # Canonical write: send both meta and metadata to keep parity
 # ============================================================
-
 
 async def insert_activity_event(
     *,
@@ -2532,7 +2522,6 @@ async def get_latest_ticket_activity(
 # Member joins helpers
 # ============================================================
 
-
 async def insert_member_join(
     *,
     guild_id: int | str,
@@ -2573,7 +2562,6 @@ async def insert_member_join(
 # ============================================================
 # Diagnostics
 # ============================================================
-
 
 async def repository_healthcheck() -> Dict[str, Any]:
     out: Dict[str, Any] = {
