@@ -80,6 +80,9 @@ _TICKET_CREATION_LOCKS: Dict[Tuple[int, int], asyncio.Lock] = {}
 _TICKET_NUMBER_LOCKS: Dict[int, asyncio.Lock] = {}
 _TICKET_MUTATION_LOCKS: Dict[str, asyncio.Lock] = {}
 _TRANSCRIPT_ATTACH_LOCKS: Dict[str, asyncio.Lock] = {}
+_LOCK_LAST_USED: Dict[str, float] = {}
+_LOCK_CLEANUP_INTERVAL_SECONDS = 600
+_LAST_LOCK_CLEANUP_AT = 0.0
 
 TICKET_NUM_RE = re.compile(r"^(?:ticket|closed)-(\d+)$", re.I)
 
@@ -94,35 +97,96 @@ def _service_debug(msg: str) -> None:
         pass
 
 
+def _touch_lock_key(key: str) -> None:
+    try:
+        _LOCK_LAST_USED[str(key)] = time.monotonic()
+    except Exception:
+        pass
+
+
+def _cleanup_stale_locks_if_needed() -> None:
+    global _LAST_LOCK_CLEANUP_AT
+
+    now_mono = time.monotonic()
+    if (now_mono - _LAST_LOCK_CLEANUP_AT) < _LOCK_CLEANUP_INTERVAL_SECONDS:
+        return
+
+    _LAST_LOCK_CLEANUP_AT = now_mono
+
+    try:
+        for gid, lock in list(_TICKET_NUMBER_LOCKS.items()):
+            key = f"number:{gid}"
+            if lock.locked():
+                continue
+            last_used = float(_LOCK_LAST_USED.get(key, 0.0) or 0.0)
+            if last_used > 0.0 and (now_mono - last_used) > _LOCK_CLEANUP_INTERVAL_SECONDS:
+                _TICKET_NUMBER_LOCKS.pop(gid, None)
+                _LOCK_LAST_USED.pop(key, None)
+
+        for pair, lock in list(_TICKET_CREATION_LOCKS.items()):
+            key = f"create:{pair[0]}:{pair[1]}"
+            if lock.locked():
+                continue
+            last_used = float(_LOCK_LAST_USED.get(key, 0.0) or 0.0)
+            if last_used > 0.0 and (now_mono - last_used) > _LOCK_CLEANUP_INTERVAL_SECONDS:
+                _TICKET_CREATION_LOCKS.pop(pair, None)
+                _LOCK_LAST_USED.pop(key, None)
+
+        for bucket_name, bucket in (
+            ("mutate", _TICKET_MUTATION_LOCKS),
+            ("transcript", _TRANSCRIPT_ATTACH_LOCKS),
+        ):
+            for channel_key, lock in list(bucket.items()):
+                key = f"{bucket_name}:{channel_key}"
+                if lock.locked():
+                    continue
+                last_used = float(_LOCK_LAST_USED.get(key, 0.0) or 0.0)
+                if last_used > 0.0 and (now_mono - last_used) > _LOCK_CLEANUP_INTERVAL_SECONDS:
+                    bucket.pop(channel_key, None)
+                    _LOCK_LAST_USED.pop(key, None)
+    except Exception:
+        pass
+
+
 def _ticket_number_lock(guild_id: int) -> asyncio.Lock:
+    _cleanup_stale_locks_if_needed()
     gid = int(guild_id)
     lock = _TICKET_NUMBER_LOCKS.get(gid)
     if lock is None:
         lock = asyncio.Lock()
         _TICKET_NUMBER_LOCKS[gid] = lock
+    _touch_lock_key(f"number:{gid}")
     return lock
 
 
 def _guild_user_ticket_creation_lock(guild_id: int, user_id: int) -> asyncio.Lock:
+    _cleanup_stale_locks_if_needed()
     key = (int(guild_id), int(user_id))
     lock = _TICKET_CREATION_LOCKS.get(key)
     if lock is None:
         lock = asyncio.Lock()
         _TICKET_CREATION_LOCKS[key] = lock
+    _touch_lock_key(f"create:{key[0]}:{key[1]}")
     return lock
 
 
-def _channel_lock(bucket: Dict[str, asyncio.Lock], channel_id: int | str) -> asyncio.Lock:
+def _channel_lock(bucket: Dict[str, asyncio.Lock], bucket_name: str, channel_id: int | str) -> asyncio.Lock:
+    _cleanup_stale_locks_if_needed()
     key = str(channel_id)
     lock = bucket.get(key)
     if lock is None:
         lock = asyncio.Lock()
         bucket[key] = lock
+    _touch_lock_key(f"{bucket_name}:{key}")
     return lock
 
 
 def _ticket_mutation_lock(channel_id: int | str) -> asyncio.Lock:
-    return _channel_lock(_TICKET_MUTATION_LOCKS, channel_id)
+    return _channel_lock(_TICKET_MUTATION_LOCKS, "mutate", channel_id)
+
+
+def _transcript_attach_lock(channel_id: int | str) -> asyncio.Lock:
+    return _channel_lock(_TRANSCRIPT_ATTACH_LOCKS, "transcript", channel_id)
 
 
 def _counter_table_name() -> str:
@@ -183,6 +247,21 @@ def _safe_opt_int(value: Any) -> Optional[int]:
         return int(str(value).strip())
     except Exception:
         return None
+
+
+def _normalize_ticket_priority(value: Any, default: str = "medium") -> str:
+    text = _safe_str(value).strip().lower()
+    return text if text in _VALID_TICKET_PRIORITIES else default
+
+
+def _normalize_ticket_status(value: Any, default: str = "open") -> str:
+    text = _safe_str(value).strip().lower()
+    aliases = {
+        "active": "open",
+        "reopened": "open",
+    }
+    text = aliases.get(text, text)
+    return text if text in _VALID_TICKET_STATUSES else default
 
 
 def _sb() -> Any:
@@ -338,8 +417,7 @@ def _ticket_status(row: Optional[Dict[str, Any]]) -> str:
     if not isinstance(row, dict):
         return "unknown"
     try:
-        status = str(row.get("status") or "").strip().lower()
-        return status if status in _VALID_TICKET_STATUSES else "unknown"
+        return _normalize_ticket_status(row.get("status"), "unknown")
     except Exception:
         return "unknown"
 
@@ -1202,6 +1280,7 @@ def _channel_name_exists(
     *,
     channel_name: str,
     parent: Optional[discord.CategoryChannel] = None,
+    exclude_channel_id: Optional[int] = None,
 ) -> bool:
     try:
         channels = list(parent.channels) if parent else list(guild.channels)
@@ -1210,6 +1289,8 @@ def _channel_name_exists(
 
     for ch in channels:
         try:
+            if exclude_channel_id and int(getattr(ch, "id", 0) or 0) == int(exclude_channel_id):
+                continue
             if isinstance(ch, discord.TextChannel) and str(ch.name).lower() == str(channel_name).lower():
                 return True
         except Exception:
@@ -1266,6 +1347,7 @@ async def _ensure_channel_identity(
             channel.guild,
             channel_name=desired_name,
             parent=channel.category,
+            exclude_channel_id=channel.id,
         ):
             edits["name"] = desired_name
         if edits:
@@ -1422,9 +1504,7 @@ async def create_ticket_channel(
     category_id: Optional[str] = None,
 ) -> Optional[discord.TextChannel]:
     user_lock = _guild_user_ticket_creation_lock(guild.id, owner.id)
-    clean_priority = _safe_str(priority).strip().lower()
-    if clean_priority not in _VALID_TICKET_PRIORITIES:
-        clean_priority = "medium"
+    clean_priority = _normalize_ticket_priority(priority, "medium")
 
     category_meta = _category_metadata_payload(
         matched_category_id=matched_category_id,
@@ -1463,7 +1543,7 @@ async def create_ticket_channel(
                     category=_safe_str(existing_row.get("category") or category),
                     source=_safe_str(existing_row.get("source") or source),
                     is_ghost=_safe_bool(existing_row.get("is_ghost"), is_ghost),
-                    clean_priority=_safe_str(existing_row.get("priority") or clean_priority) or clean_priority,
+                    clean_priority=_normalize_ticket_priority(existing_row.get("priority"), clean_priority),
                     category_meta={
                         "matched_category_id": _safe_opt_text(existing_row.get("matched_category_id")) or category_meta["matched_category_id"],
                         "matched_category_name": _safe_opt_text(existing_row.get("matched_category_name")) or category_meta["matched_category_name"],
@@ -1674,9 +1754,8 @@ async def sync_existing_ticket_channel(
             ticket_number=ticket_number,
         )
 
-    clean_priority = _safe_str(priority).strip().lower()
-    if clean_priority not in _VALID_TICKET_PRIORITIES:
-        clean_priority = "medium"
+    clean_priority = _normalize_ticket_priority(priority, "medium")
+    clean_status = _normalize_ticket_status(status, "open")
 
     category_meta = _category_metadata_payload(
         matched_category_id=matched_category_id,
@@ -1696,7 +1775,7 @@ async def sync_existing_ticket_channel(
             username=str(owner_for_row),
             title=_title_for_ticket(owner_for_row, category, is_ghost),
             category=_canonical_ticket_category(category, is_ghost),
-            status=status,
+            status=clean_status,
             priority=clean_priority,
             initial_message=initial_message or "",
             ticket_number=ticket_number,
@@ -1781,7 +1860,12 @@ async def mark_ticket_closed(
         if ticket_number is not None:
             new_name = _format_ticket_channel_name(ticket_number, closed=True)
             try:
-                if channel.name != new_name:
+                if channel.name != new_name and not _channel_name_exists(
+                    channel.guild,
+                    channel_name=new_name,
+                    parent=channel.category,
+                    exclude_channel_id=channel.id,
+                ):
                     await channel.edit(name=new_name, reason="Ticket closed")
             except Exception as e:
                 print(f"⚠️ Failed renaming channel to {new_name}: {repr(e)}")
@@ -1926,7 +2010,7 @@ async def attach_transcript_to_ticket(
     transcript_channel_id: Optional[int | str],
     actor: Optional[discord.Member | discord.User] = None,
 ) -> bool:
-    lock = _channel_lock(_TRANSCRIPT_ATTACH_LOCKS, channel_id)
+    lock = _transcript_attach_lock(channel_id)
 
     async with lock:
         row_before = await _ticket_row_for_channel_id(channel_id)
@@ -2222,9 +2306,9 @@ async def set_ticket_priority(
     priority: str,
     actor: Optional[discord.Member | discord.User] = None,
 ) -> bool:
-    clean_priority = _safe_str(priority).strip().lower()
+    clean_priority = _normalize_ticket_priority(priority, "")
     if clean_priority not in _VALID_TICKET_PRIORITIES:
-        _service_debug(f"set-priority rejected channel={channel_id} priority={clean_priority!r}")
+        _service_debug(f"set-priority rejected channel={channel_id} priority={_safe_str(priority)!r}")
         return False
 
     lock = _ticket_mutation_lock(channel_id)
@@ -2235,7 +2319,7 @@ async def set_ticket_priority(
             _service_debug(f"set-priority rejected channel={channel_id} reason=deleted")
             return False
 
-        if row_before and _safe_str(row_before.get("priority")).strip().lower() == clean_priority:
+        if row_before and _normalize_ticket_priority(row_before.get("priority"), "medium") == clean_priority:
             return True
 
         ok = await repo_set_ticket_priority(
@@ -2488,7 +2572,12 @@ async def reopen_ticket_channel(
         if ticket_number is not None:
             new_name = _format_ticket_channel_name(ticket_number, closed=False)
             try:
-                if channel.name != new_name:
+                if channel.name != new_name and not _channel_name_exists(
+                    channel.guild,
+                    channel_name=new_name,
+                    parent=channel.category,
+                    exclude_channel_id=channel.id,
+                ):
                     await channel.edit(name=new_name, reason="Ticket reopened")
             except Exception as e:
                 print(f"⚠️ Failed renaming reopened ticket to {new_name}: {repr(e)}")
