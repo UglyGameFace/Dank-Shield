@@ -1461,6 +1461,66 @@ def _priority_from_row(row: Optional[Dict[str, Any]]) -> str:
     return value if value in VALID_PRIORITIES else "medium"
 
 
+def _owner_id_from_row(row: Optional[Dict[str, Any]]) -> int:
+    if not isinstance(row, dict):
+        return 0
+    for key in ("owner_id", "ticket_owner_id", "user_id", "member_id", "created_by"):
+        value = _safe_int(row.get(key), 0)
+        if value > 0:
+            return value
+    return 0
+
+
+def _ticket_number_from_row(row: Optional[Dict[str, Any]]) -> int:
+    if not isinstance(row, dict):
+        return 0
+    for key in ("ticket_number", "number"):
+        value = _safe_int(row.get(key), 0)
+        if value > 0:
+            return value
+    return 0
+
+
+def _ticket_category_name_from_row(row: Optional[Dict[str, Any]]) -> str:
+    if not isinstance(row, dict):
+        return "Unknown"
+    for key in ("matched_category_name", "category_name", "category"):
+        value = str(row.get(key) or "").strip()
+        if value:
+            return value
+    return "Unknown"
+
+
+def _ticket_summary_text(channel: discord.TextChannel, row: Optional[Dict[str, Any]]) -> str:
+    status = _ticket_status_from_row(row)
+    claimed_by = _claimed_by_id_from_row(row)
+    owner_id = _owner_id_from_row(row)
+    ticket_number = _ticket_number_from_row(row)
+    priority = _priority_from_row(row)
+    category_name = _ticket_category_name_from_row(row)
+
+    owner_text = f"<@{owner_id}>" if owner_id > 0 else "Unknown"
+    claimed_text = f"<@{claimed_by}>" if claimed_by > 0 else "Nobody"
+    panel_state = "Open controls" if _ticket_is_open_like(channel, row) else "Closed / stale controls"
+
+    lines = [
+        f"**Ticket Channel:** {channel.mention}",
+        f"**Ticket Number:** `{ticket_number}`" if ticket_number > 0 else "**Ticket Number:** `Unknown`",
+        f"**Status:** `{status}`",
+        f"**Category:** `{category_name}`",
+        f"**Priority:** `{priority}`",
+        f"**Owner:** {owner_text}",
+        f"**Claimed By:** {claimed_text}",
+        f"**Panel State:** `{panel_state}`",
+    ]
+
+    matched_slug = str((row or {}).get("matched_category_slug") or "").strip()
+    if matched_slug:
+        lines.append(f"**Matched Category Slug:** `{matched_slug}`")
+
+    return "\n".join(lines)
+
+
 def _format_notes_for_display(notes: List[Dict[str, Any]], limit: int = 8) -> str:
     if not notes:
         return "No internal notes found."
@@ -1913,7 +1973,7 @@ class MacroSelect(discord.ui.Select):
             if _ticket_is_deleted(row):
                 return await _safe_followup(interaction, "❌ This ticket is deleted.")
             if _ticket_is_closed_or_stale_closed(channel, row):
-                return await _safe_followup(interaction, "❌ These are stale open-ticket controls. Closed tickets cannot send macros.")
+                return await _safe_followup(interaction, "❌ Closed tickets cannot send macros.")
 
             slug = str(self.values[0] if self.values else "").strip()
             if not slug or slug == "__none__":
@@ -1980,12 +2040,448 @@ class MacroPickerView(discord.ui.View):
         )
 
 
+async def _action_claim(interaction: discord.Interaction) -> None:
+    channel = interaction.channel
+    if not isinstance(channel, discord.TextChannel):
+        return await _safe_followup(interaction, "Invalid ticket channel.")
+
+    member = _resolve_member(interaction)
+    if member is None:
+        return await _safe_followup(interaction, "This can only be used inside the server.")
+
+    if not _is_staff_member(member):
+        _debug(
+            f"claim denied non-staff guild={member.guild.id if member.guild else 0} "
+            f"user={member.id} channel={channel.id}"
+        )
+        return await _safe_followup(interaction, "Only staff can claim tickets.")
+
+    await _safe_defer(interaction)
+
+    row = await _ticket_row_for_channel(channel)
+    if not _ticket_is_open_like(channel, row):
+        return await _safe_followup(interaction, _open_panel_state_error(channel, row))
+
+    claimed_by_id = _claimed_by_id_from_row(row)
+
+    _debug(
+        f"claim click guild={member.guild.id if member.guild else 0} "
+        f"user={member.id} channel={channel.id} existing_claimed_by={claimed_by_id}"
+    )
+
+    if claimed_by_id == int(member.id):
+        return await _safe_followup(interaction, "You already claimed this ticket.")
+
+    if claimed_by_id > 0 and claimed_by_id != int(member.id):
+        return await _safe_followup(interaction, f"This ticket is already claimed by <@{claimed_by_id}>.")
+
+    ok = await assign_ticket(
+        channel_id=channel.id,
+        staff_member=member,
+    )
+
+    if not ok:
+        _debug(
+            f"claim failed guild={member.guild.id if member.guild else 0} "
+            f"user={member.id} channel={channel.id}"
+        )
+        return await _safe_followup(interaction, "Failed to claim this ticket.")
+
+    _debug(
+        f"claim success guild={member.guild.id if member.guild else 0} "
+        f"user={member.id} channel={channel.id}"
+    )
+
+    await _safe_channel_send(channel, f"🎯 Ticket claimed by {member.mention}.")
+    await _safe_followup(interaction, "Ticket claimed.")
+
+
+async def _action_unclaim(interaction: discord.Interaction) -> None:
+    channel = interaction.channel
+    if not isinstance(channel, discord.TextChannel):
+        return await _safe_followup(interaction, "Invalid ticket channel.")
+
+    member = _resolve_member(interaction)
+    if member is None:
+        return await _safe_followup(interaction, "This can only be used inside the server.")
+
+    if not _is_staff_member(member):
+        return await _safe_followup(interaction, "Only staff can unclaim tickets.")
+
+    await _safe_defer(interaction)
+
+    row = await _ticket_row_for_channel(channel)
+    if not _ticket_is_open_like(channel, row):
+        return await _safe_followup(interaction, _open_panel_state_error(channel, row))
+
+    claimed_by_id = _claimed_by_id_from_row(row)
+
+    _debug(
+        f"unclaim click guild={member.guild.id if member.guild else 0} "
+        f"user={member.id} channel={channel.id} claimed_by={claimed_by_id}"
+    )
+
+    if claimed_by_id <= 0:
+        return await _safe_followup(interaction, "This ticket is not currently claimed.")
+
+    ok = await unclaim_ticket(
+        channel_id=channel.id,
+        actor=member,
+    )
+    if not ok:
+        return await _safe_followup(interaction, "Failed to unclaim this ticket.")
+
+    await _safe_channel_send(channel, f"↩️ Ticket unclaimed by {member.mention}.")
+    await _safe_followup(interaction, "Ticket unclaimed.")
+
+
+async def _action_transfer(interaction: discord.Interaction) -> None:
+    channel = interaction.channel
+    if not isinstance(channel, discord.TextChannel):
+        return await _safe_followup(interaction, "Invalid ticket channel.")
+
+    member = _resolve_member(interaction)
+    if member is None:
+        return await _safe_followup(interaction, "This can only be used inside the server.")
+
+    if not _is_staff_member(member):
+        return await _safe_followup(interaction, "Only staff can transfer tickets.")
+
+    row = await _ticket_row_for_channel(channel)
+    if not _ticket_is_open_like(channel, row):
+        return await _safe_followup(interaction, _open_panel_state_error(channel, row))
+
+    _debug(
+        f"transfer modal-open guild={member.guild.id if member.guild else 0} "
+        f"user={member.id} channel={channel.id}"
+    )
+
+    try:
+        await interaction.response.send_modal(TransferTicketModal(channel.id))
+    except Exception as e:
+        _debug(f"transfer modal-open failed channel={channel.id} error={repr(e)}")
+        await _safe_followup(interaction, "Failed to open transfer form.")
+
+
+async def _action_set_priority(interaction: discord.Interaction) -> None:
+    channel = interaction.channel
+    if not isinstance(channel, discord.TextChannel):
+        return await _safe_followup(interaction, "Invalid ticket channel.")
+
+    member = _resolve_member(interaction)
+    if member is None:
+        return await _safe_followup(interaction, "This can only be used inside the server.")
+
+    if not _is_staff_member(member):
+        return await _safe_followup(interaction, "Only staff can change ticket priority.")
+
+    row = await _ticket_row_for_channel(channel)
+    if not _ticket_is_open_like(channel, row):
+        return await _safe_followup(interaction, _open_panel_state_error(channel, row))
+
+    current_priority = _priority_from_row(row)
+
+    _debug(
+        f"priority modal-open guild={member.guild.id if member.guild else 0} "
+        f"user={member.id} channel={channel.id} current={current_priority}"
+    )
+
+    try:
+        await interaction.response.send_modal(SetPriorityModal(channel.id, current_priority))
+    except Exception as e:
+        _debug(f"priority modal-open failed channel={channel.id} error={repr(e)}")
+        await _safe_followup(interaction, "Failed to open priority form.")
+
+
+async def _action_add_note(interaction: discord.Interaction) -> None:
+    channel = interaction.channel
+    if not isinstance(channel, discord.TextChannel):
+        return await _safe_followup(interaction, "Invalid ticket channel.")
+
+    member = _resolve_member(interaction)
+    if member is None:
+        return await _safe_followup(interaction, "This can only be used inside the server.")
+
+    if not _is_staff_member(member):
+        return await _safe_followup(interaction, "Only staff can add internal notes.")
+
+    row = await _ticket_row_for_channel(channel)
+    if _ticket_is_deleted(row):
+        return await _safe_followup(interaction, "❌ This ticket is deleted.")
+
+    _debug(
+        f"note modal-open guild={member.guild.id if member.guild else 0} "
+        f"user={member.id} channel={channel.id}"
+    )
+
+    try:
+        await interaction.response.send_modal(AddInternalNoteModal(channel.id))
+    except Exception as e:
+        _debug(f"note modal-open failed channel={channel.id} error={repr(e)}")
+        await _safe_followup(interaction, "Failed to open note form.")
+
+
+async def _action_view_notes(interaction: discord.Interaction) -> None:
+    channel = interaction.channel
+    if not isinstance(channel, discord.TextChannel):
+        return await _safe_followup(interaction, "Invalid ticket channel.")
+
+    member = _resolve_member(interaction)
+    if member is None:
+        return await _safe_followup(interaction, "This can only be used inside the server.")
+
+    if not _is_staff_member(member):
+        return await _safe_followup(interaction, "Only staff can view internal notes.")
+
+    await _safe_defer(interaction)
+
+    row = await _ticket_row_for_channel(channel)
+    if _ticket_is_deleted(row):
+        return await _safe_followup(interaction, "❌ This ticket is deleted.")
+
+    notes = await list_internal_notes(channel_id=channel.id, limit=8)
+    content = _format_notes_for_display(notes)
+
+    _debug(
+        f"view-notes guild={member.guild.id if member.guild else 0} "
+        f"user={member.id} channel={channel.id} count={len(notes)}"
+    )
+
+    await _safe_followup(interaction, content)
+
+
+async def _action_list_macros(interaction: discord.Interaction) -> None:
+    channel = interaction.channel
+    if not isinstance(channel, discord.TextChannel):
+        return await _safe_followup(interaction, "Invalid ticket channel.")
+
+    member = _resolve_member(interaction)
+    if member is None:
+        return await _safe_followup(interaction, "This can only be used inside the server.")
+
+    if not _is_staff_member(member):
+        return await _safe_followup(interaction, "Only staff can view ticket macros.")
+
+    await _safe_defer(interaction)
+
+    row = await _ticket_row_for_channel(channel)
+    if _ticket_is_deleted(row):
+        return await _safe_followup(interaction, "❌ This ticket is deleted.")
+
+    content = await format_available_macros_for_ticket(
+        channel=channel,
+        limit=_MACRO_OPTION_LIMIT,
+    )
+
+    _debug(
+        f"list-macros guild={member.guild.id if member.guild else 0} "
+        f"user={member.id} channel={channel.id}"
+    )
+
+    await _safe_followup(interaction, content)
+
+
+async def _action_use_macro(interaction: discord.Interaction) -> None:
+    channel = interaction.channel
+    if not isinstance(channel, discord.TextChannel):
+        return await _safe_followup(interaction, "Invalid ticket channel.")
+
+    member = _resolve_member(interaction)
+    if member is None:
+        return await _safe_followup(interaction, "This can only be used inside the server.")
+
+    if not _is_staff_member(member):
+        return await _safe_followup(interaction, "Only staff can use ticket macros.")
+
+    row = await _ticket_row_for_channel(channel)
+    if not _ticket_is_open_like(channel, row):
+        return await _safe_followup(interaction, _open_panel_state_error(channel, row))
+
+    try:
+        macro_rows = await list_available_macros_for_ticket(channel=channel)
+    except Exception as e:
+        _debug(f"macro picker load failed channel={channel.id} error={repr(e)}")
+        macro_rows = []
+
+    if not macro_rows:
+        return await _safe_followup(interaction, "No macros are available for this ticket.")
+
+    view = MacroPickerView(
+        channel_id=channel.id,
+        actor_id=member.id,
+        macro_rows=macro_rows,
+    )
+
+    _debug(
+        f"macro-picker open guild={member.guild.id if member.guild else 0} "
+        f"user={member.id} channel={channel.id} count={len(macro_rows)}"
+    )
+
+    try:
+        await interaction.response.send_message(
+            "Choose a macro to send into this ticket:",
+            ephemeral=True,
+            view=view,
+            allowed_mentions=discord.AllowedMentions.none(),
+        )
+    except Exception as e:
+        _debug(f"macro picker open failed channel={channel.id} error={repr(e)}")
+        await _safe_followup(interaction, "Failed to open macro picker.")
+
+
+async def _action_close(interaction: discord.Interaction) -> None:
+    channel = interaction.channel
+    if not isinstance(channel, discord.TextChannel):
+        return await _safe_followup(interaction, "Invalid ticket channel.")
+
+    member = _resolve_member(interaction)
+    if member is None:
+        return await _safe_followup(interaction, "This can only be used inside the server.")
+
+    _debug(
+        f"close-click guild={member.guild.id if member.guild else 0} "
+        f"user={member.id} channel={getattr(channel, 'id', 0)}"
+    )
+
+    allowed = False
+
+    if _is_staff_member(member):
+        allowed = True
+    else:
+        try:
+            from ..tickets import find_ticket_owner_retry
+            ticket_owner = await find_ticket_owner_retry(channel)
+            if ticket_owner and int(ticket_owner.id) == int(member.id):
+                allowed = True
+        except Exception:
+            pass
+
+    if not allowed:
+        _debug(
+            f"close-click denied guild={member.guild.id if member.guild else 0} "
+            f"user={member.id} channel={getattr(channel, 'id', 0)}"
+        )
+        return await _safe_followup(
+            interaction,
+            "Only the ticket owner or staff can close this ticket.",
+        )
+
+    await _safe_defer(interaction)
+
+    row = await _ticket_row_for_channel(channel)
+    if not _ticket_is_open_like(channel, row):
+        return await _safe_followup(interaction, _open_panel_state_error(channel, row))
+
+    try:
+        await prompt_ticket_close_confirmation(
+            channel,
+            requested_by=member,
+        )
+        _debug(
+            f"close-confirmation posted guild={member.guild.id if member.guild else 0} "
+            f"user={member.id} channel={channel.id}"
+        )
+        await _safe_followup(interaction, "Close confirmation posted.")
+    except Exception as e:
+        print("❌ Failed to post close confirmation:", repr(e))
+        await _safe_followup(
+            interaction,
+            "Failed to start close confirmation.",
+        )
+
+
+async def _action_ticket_info(interaction: discord.Interaction) -> None:
+    channel = interaction.channel
+    if not isinstance(channel, discord.TextChannel):
+        return await _safe_followup(interaction, "Invalid ticket channel.")
+
+    member = _resolve_member(interaction)
+    if member is None:
+        return await _safe_followup(interaction, "This can only be used inside the server.")
+
+    if not _is_staff_member(member):
+        return await _safe_followup(interaction, "Only staff can view ticket details here.")
+
+    await _safe_defer(interaction)
+    row = await _ticket_row_for_channel(channel)
+    await _safe_followup(interaction, _ticket_summary_text(channel, row))
+
+
+class TicketActionSelect(discord.ui.Select):
+    def __init__(self):
+        options = [
+            discord.SelectOption(
+                label="Transfer Ticket",
+                value="transfer",
+                description="Move this ticket to another staff member",
+                emoji="🔁",
+            ),
+            discord.SelectOption(
+                label="Set Priority",
+                value="priority",
+                description="Change the urgency level",
+                emoji="🚦",
+            ),
+            discord.SelectOption(
+                label="Add Internal Note",
+                value="add_note",
+                description="Save a staff-only note",
+                emoji="📝",
+            ),
+            discord.SelectOption(
+                label="View Internal Notes",
+                value="view_notes",
+                description="Read staff-only notes for this ticket",
+                emoji="📚",
+            ),
+            discord.SelectOption(
+                label="List Macros",
+                value="list_macros",
+                description="See available saved replies",
+                emoji="📋",
+            ),
+            discord.SelectOption(
+                label="Send Macro",
+                value="use_macro",
+                description="Pick and send a saved reply",
+                emoji="⚡",
+            ),
+        ]
+        super().__init__(
+            placeholder="More ticket actions…",
+            min_values=1,
+            max_values=1,
+            options=options,
+            custom_id="ticket_actions_more_select",
+            row=1,
+        )
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        action = str(self.values[0] if self.values else "").strip()
+
+        if action == "transfer":
+            return await _action_transfer(interaction)
+        if action == "priority":
+            return await _action_set_priority(interaction)
+        if action == "add_note":
+            return await _action_add_note(interaction)
+        if action == "view_notes":
+            return await _action_view_notes(interaction)
+        if action == "list_macros":
+            return await _action_list_macros(interaction)
+        if action == "use_macro":
+            return await _action_use_macro(interaction)
+
+        return await _safe_followup(interaction, "That ticket action is not available.")
+
+
 class TicketChannelActionsView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
+        self.add_item(TicketActionSelect())
 
     @discord.ui.button(
-        label="Claim Ticket",
+        label="Claim",
         style=discord.ButtonStyle.primary,
         custom_id="ticket_claim_request",
         emoji="🎯",
@@ -1996,74 +2492,10 @@ class TicketChannelActionsView(discord.ui.View):
         interaction: discord.Interaction,
         button: discord.ui.Button,
     ):
-        channel = interaction.channel
-        if not isinstance(channel, discord.TextChannel):
-            return await _safe_followup(interaction, "Invalid ticket channel.")
-
-        member = _resolve_member(interaction)
-        if member is None:
-            return await _safe_followup(interaction, "This can only be used inside the server.")
-
-        if not _is_staff_member(member):
-            _debug(
-                f"claim denied non-staff guild={member.guild.id if member.guild else 0} "
-                f"user={member.id} channel={channel.id}"
-            )
-            return await _safe_followup(
-                interaction,
-                "Only staff can claim tickets.",
-            )
-
-        await _safe_defer(interaction)
-
-        row = await _ticket_row_for_channel(channel)
-        if not _ticket_is_open_like(channel, row):
-            return await _safe_followup(interaction, _open_panel_state_error(channel, row))
-
-        claimed_by_id = _claimed_by_id_from_row(row)
-
-        _debug(
-            f"claim click guild={member.guild.id if member.guild else 0} "
-            f"user={member.id} channel={channel.id} existing_claimed_by={claimed_by_id}"
-        )
-
-        if claimed_by_id == int(member.id):
-            return await _safe_followup(
-                interaction,
-                "You already claimed this ticket.",
-            )
-
-        if claimed_by_id > 0 and claimed_by_id != int(member.id):
-            return await _safe_followup(
-                interaction,
-                f"This ticket is already claimed by <@{claimed_by_id}>.",
-            )
-
-        ok = await assign_ticket(
-            channel_id=channel.id,
-            staff_member=member,
-        )
-
-        if not ok:
-            _debug(
-                f"claim failed guild={member.guild.id if member.guild else 0} "
-                f"user={member.id} channel={channel.id}"
-            )
-            return await _safe_followup(
-                interaction,
-                "Failed to claim this ticket.",
-            )
-
-        _debug(
-            f"claim success guild={member.guild.id if member.guild else 0} "
-            f"user={member.id} channel={channel.id}"
-        )
-
-        await _safe_channel_send(channel, f"🎯 Ticket claimed by {member.mention}.")
-        await _safe_followup(interaction, "Ticket claimed.")
+        await _action_claim(interaction)
 
     @discord.ui.button(
-        label="Unclaim Ticket",
+        label="Unclaim",
         style=discord.ButtonStyle.secondary,
         custom_id="ticket_unclaim_request",
         emoji="↩️",
@@ -2074,42 +2506,40 @@ class TicketChannelActionsView(discord.ui.View):
         interaction: discord.Interaction,
         button: discord.ui.Button,
     ):
-        channel = interaction.channel
-        if not isinstance(channel, discord.TextChannel):
-            return await _safe_followup(interaction, "Invalid ticket channel.")
+        await _action_unclaim(interaction)
 
-        member = _resolve_member(interaction)
-        if member is None:
-            return await _safe_followup(interaction, "This can only be used inside the server.")
+    @discord.ui.button(
+        label="Ticket Info",
+        style=discord.ButtonStyle.secondary,
+        custom_id="ticket_info_request",
+        emoji="ℹ️",
+        row=0,
+    )
+    async def ticket_info_button(
+        self,
+        interaction: discord.Interaction,
+        button: discord.ui.Button,
+    ):
+        await _action_ticket_info(interaction)
 
-        if not _is_staff_member(member):
-            return await _safe_followup(interaction, "Only staff can unclaim tickets.")
+    @discord.ui.button(
+        label="Close",
+        style=discord.ButtonStyle.danger,
+        custom_id="ticket_close_request",
+        emoji="🔒",
+        row=0,
+    )
+    async def close_ticket(
+        self,
+        interaction: discord.Interaction,
+        button: discord.ui.Button,
+    ):
+        await _action_close(interaction)
 
-        await _safe_defer(interaction)
 
-        row = await _ticket_row_for_channel(channel)
-        if not _ticket_is_open_like(channel, row):
-            return await _safe_followup(interaction, _open_panel_state_error(channel, row))
-
-        claimed_by_id = _claimed_by_id_from_row(row)
-
-        _debug(
-            f"unclaim click guild={member.guild.id if member.guild else 0} "
-            f"user={member.id} channel={channel.id} claimed_by={claimed_by_id}"
-        )
-
-        if claimed_by_id <= 0:
-            return await _safe_followup(interaction, "This ticket is not currently claimed.")
-
-        ok = await unclaim_ticket(
-            channel_id=channel.id,
-            actor=member,
-        )
-        if not ok:
-            return await _safe_followup(interaction, "Failed to unclaim this ticket.")
-
-        await _safe_channel_send(channel, f"↩️ Ticket unclaimed by {member.mention}.")
-        await _safe_followup(interaction, "Ticket unclaimed.")
+class LegacyTicketChannelCompatibilityView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=None)
 
     @discord.ui.button(
         label="Transfer Ticket",
@@ -2123,71 +2553,21 @@ class TicketChannelActionsView(discord.ui.View):
         interaction: discord.Interaction,
         button: discord.ui.Button,
     ):
-        channel = interaction.channel
-        if not isinstance(channel, discord.TextChannel):
-            return await _safe_followup(interaction, "Invalid ticket channel.")
-
-        member = _resolve_member(interaction)
-        if member is None:
-            return await _safe_followup(interaction, "This can only be used inside the server.")
-
-        if not _is_staff_member(member):
-            return await _safe_followup(interaction, "Only staff can transfer tickets.")
-
-        row = await _ticket_row_for_channel(channel)
-        if not _ticket_is_open_like(channel, row):
-            return await _safe_followup(interaction, _open_panel_state_error(channel, row))
-
-        _debug(
-            f"transfer modal-open guild={member.guild.id if member.guild else 0} "
-            f"user={member.id} channel={channel.id}"
-        )
-
-        try:
-            await interaction.response.send_modal(TransferTicketModal(channel.id))
-        except Exception as e:
-            _debug(f"transfer modal-open failed channel={channel.id} error={repr(e)}")
-            await _safe_followup(interaction, "Failed to open transfer form.")
+        await _action_transfer(interaction)
 
     @discord.ui.button(
         label="Set Priority",
         style=discord.ButtonStyle.secondary,
         custom_id="ticket_set_priority_request",
         emoji="🚦",
-        row=1,
+        row=0,
     )
     async def set_priority_button(
         self,
         interaction: discord.Interaction,
         button: discord.ui.Button,
     ):
-        channel = interaction.channel
-        if not isinstance(channel, discord.TextChannel):
-            return await _safe_followup(interaction, "Invalid ticket channel.")
-
-        member = _resolve_member(interaction)
-        if member is None:
-            return await _safe_followup(interaction, "This can only be used inside the server.")
-
-        if not _is_staff_member(member):
-            return await _safe_followup(interaction, "Only staff can change ticket priority.")
-
-        row = await _ticket_row_for_channel(channel)
-        if not _ticket_is_open_like(channel, row):
-            return await _safe_followup(interaction, _open_panel_state_error(channel, row))
-
-        current_priority = _priority_from_row(row)
-
-        _debug(
-            f"priority modal-open guild={member.guild.id if member.guild else 0} "
-            f"user={member.id} channel={channel.id} current={current_priority}"
-        )
-
-        try:
-            await interaction.response.send_modal(SetPriorityModal(channel.id, current_priority))
-        except Exception as e:
-            _debug(f"priority modal-open failed channel={channel.id} error={repr(e)}")
-            await _safe_followup(interaction, "Failed to open priority form.")
+        await _action_set_priority(interaction)
 
     @discord.ui.button(
         label="Add Note",
@@ -2201,31 +2581,7 @@ class TicketChannelActionsView(discord.ui.View):
         interaction: discord.Interaction,
         button: discord.ui.Button,
     ):
-        channel = interaction.channel
-        if not isinstance(channel, discord.TextChannel):
-            return await _safe_followup(interaction, "Invalid ticket channel.")
-
-        member = _resolve_member(interaction)
-        if member is None:
-            return await _safe_followup(interaction, "This can only be used inside the server.")
-
-        if not _is_staff_member(member):
-            return await _safe_followup(interaction, "Only staff can add internal notes.")
-
-        row = await _ticket_row_for_channel(channel)
-        if _ticket_is_deleted(row):
-            return await _safe_followup(interaction, "❌ This ticket is deleted.")
-
-        _debug(
-            f"note modal-open guild={member.guild.id if member.guild else 0} "
-            f"user={member.id} channel={channel.id}"
-        )
-
-        try:
-            await interaction.response.send_modal(AddInternalNoteModal(channel.id))
-        except Exception as e:
-            _debug(f"note modal-open failed channel={channel.id} error={repr(e)}")
-            await _safe_followup(interaction, "Failed to open note form.")
+        await _action_add_note(interaction)
 
     @discord.ui.button(
         label="View Notes",
@@ -2239,32 +2595,7 @@ class TicketChannelActionsView(discord.ui.View):
         interaction: discord.Interaction,
         button: discord.ui.Button,
     ):
-        channel = interaction.channel
-        if not isinstance(channel, discord.TextChannel):
-            return await _safe_followup(interaction, "Invalid ticket channel.")
-
-        member = _resolve_member(interaction)
-        if member is None:
-            return await _safe_followup(interaction, "This can only be used inside the server.")
-
-        if not _is_staff_member(member):
-            return await _safe_followup(interaction, "Only staff can view internal notes.")
-
-        await _safe_defer(interaction)
-
-        row = await _ticket_row_for_channel(channel)
-        if _ticket_is_deleted(row):
-            return await _safe_followup(interaction, "❌ This ticket is deleted.")
-
-        notes = await list_internal_notes(channel_id=channel.id, limit=8)
-        content = _format_notes_for_display(notes)
-
-        _debug(
-            f"view-notes guild={member.guild.id if member.guild else 0} "
-            f"user={member.id} channel={channel.id} count={len(notes)}"
-        )
-
-        await _safe_followup(interaction, content)
+        await _action_view_notes(interaction)
 
     @discord.ui.button(
         label="List Macros",
@@ -2278,34 +2609,7 @@ class TicketChannelActionsView(discord.ui.View):
         interaction: discord.Interaction,
         button: discord.ui.Button,
     ):
-        channel = interaction.channel
-        if not isinstance(channel, discord.TextChannel):
-            return await _safe_followup(interaction, "Invalid ticket channel.")
-
-        member = _resolve_member(interaction)
-        if member is None:
-            return await _safe_followup(interaction, "This can only be used inside the server.")
-
-        if not _is_staff_member(member):
-            return await _safe_followup(interaction, "Only staff can view ticket macros.")
-
-        await _safe_defer(interaction)
-
-        row = await _ticket_row_for_channel(channel)
-        if _ticket_is_deleted(row):
-            return await _safe_followup(interaction, "❌ This ticket is deleted.")
-
-        content = await format_available_macros_for_ticket(
-            channel=channel,
-            limit=_MACRO_OPTION_LIMIT,
-        )
-
-        _debug(
-            f"list-macros guild={member.guild.id if member.guild else 0} "
-            f"user={member.id} channel={channel.id}"
-        )
-
-        await _safe_followup(interaction, content)
+        await _action_list_macros(interaction)
 
     @discord.ui.button(
         label="Use Macro",
@@ -2319,122 +2623,7 @@ class TicketChannelActionsView(discord.ui.View):
         interaction: discord.Interaction,
         button: discord.ui.Button,
     ):
-        channel = interaction.channel
-        if not isinstance(channel, discord.TextChannel):
-            return await _safe_followup(interaction, "Invalid ticket channel.")
-
-        member = _resolve_member(interaction)
-        if member is None:
-            return await _safe_followup(interaction, "This can only be used inside the server.")
-
-        if not _is_staff_member(member):
-            return await _safe_followup(interaction, "Only staff can use ticket macros.")
-
-        row = await _ticket_row_for_channel(channel)
-        if not _ticket_is_open_like(channel, row):
-            return await _safe_followup(interaction, _open_panel_state_error(channel, row))
-
-        try:
-            macro_rows = await list_available_macros_for_ticket(channel=channel)
-        except Exception as e:
-            _debug(f"macro picker load failed channel={channel.id} error={repr(e)}")
-            macro_rows = []
-
-        if not macro_rows:
-            return await _safe_followup(interaction, "No macros are available for this ticket.")
-
-        view = MacroPickerView(
-            channel_id=channel.id,
-            actor_id=member.id,
-            macro_rows=macro_rows,
-        )
-
-        _debug(
-            f"macro-picker open guild={member.guild.id if member.guild else 0} "
-            f"user={member.id} channel={channel.id} count={len(macro_rows)}"
-        )
-
-        try:
-            await interaction.response.send_message(
-                "Choose a macro to send into this ticket:",
-                ephemeral=True,
-                view=view,
-                allowed_mentions=discord.AllowedMentions.none(),
-            )
-        except Exception as e:
-            _debug(f"macro picker open failed channel={channel.id} error={repr(e)}")
-            await _safe_followup(interaction, "Failed to open macro picker.")
-
-    @discord.ui.button(
-        label="Close Ticket",
-        style=discord.ButtonStyle.danger,
-        custom_id="ticket_close_request",
-        emoji="🔒",
-        row=2,
-    )
-    async def close_ticket(
-        self,
-        interaction: discord.Interaction,
-        button: discord.ui.Button,
-    ):
-        channel = interaction.channel
-        if not isinstance(channel, discord.TextChannel):
-            return await _safe_followup(interaction, "Invalid ticket channel.")
-
-        member = _resolve_member(interaction)
-        if member is None:
-            return await _safe_followup(interaction, "This can only be used inside the server.")
-
-        _debug(
-            f"close-click guild={member.guild.id if member.guild else 0} "
-            f"user={member.id} channel={getattr(channel, 'id', 0)}"
-        )
-
-        allowed = False
-
-        if _is_staff_member(member):
-            allowed = True
-        else:
-            try:
-                from ..tickets import find_ticket_owner_retry
-                ticket_owner = await find_ticket_owner_retry(channel)
-                if ticket_owner and int(ticket_owner.id) == int(member.id):
-                    allowed = True
-            except Exception:
-                pass
-
-        if not allowed:
-            _debug(
-                f"close-click denied guild={member.guild.id if member.guild else 0} "
-                f"user={member.id} channel={getattr(channel, 'id', 0)}"
-            )
-            return await _safe_followup(
-                interaction,
-                "Only the ticket owner or staff can close this ticket.",
-            )
-
-        await _safe_defer(interaction)
-
-        row = await _ticket_row_for_channel(channel)
-        if not _ticket_is_open_like(channel, row):
-            return await _safe_followup(interaction, _open_panel_state_error(channel, row))
-
-        try:
-            await prompt_ticket_close_confirmation(
-                channel,
-                requested_by=member,
-            )
-            _debug(
-                f"close-confirmation posted guild={member.guild.id if member.guild else 0} "
-                f"user={member.id} channel={channel.id}"
-            )
-            await _safe_followup(interaction, "Close confirmation posted.")
-        except Exception as e:
-            print("❌ Failed to post close confirmation:", repr(e))
-            await _safe_followup(
-                interaction,
-                "Failed to start close confirmation.",
-            )
+        await _action_use_macro(interaction)
 
 
 class TicketPanelView(discord.ui.View):
@@ -2622,11 +2811,20 @@ async def send_ticket_panel(channel: discord.TextChannel):
     embed = discord.Embed(
         title="Support Tickets",
         description=(
-            "Press **Create Ticket** to open a ticket.\n\n"
-            "Unverified users go straight into verification.\n"
-            "Everyone else can describe their issue and the bot will use the dashboard ticket category setup."
+            "Press **Create Ticket** to open a support ticket.\n\n"
+            "**Unverified members** go straight to verification help.\n"
+            "**Verified members** can describe the problem and the bot will choose the best dashboard category."
         ),
         color=discord.Color.green(),
+    )
+    embed.add_field(
+        name="How it works",
+        value=(
+            "1. Press the button\n"
+            "2. Explain the issue\n"
+            "3. The bot opens the right type of ticket"
+        ),
+        inline=False,
     )
     embed.set_footer(text="Stoney Verify Ticket System")
 
@@ -2644,9 +2842,9 @@ async def send_staff_ghost_ticket_panel(channel: discord.TextChannel):
         title="Ghost Ticket Test Panel",
         description=(
             "This panel is for staff/testing only.\n\n"
-            "**Quick Ghost Ticket** creates a fast internal ghost ticket.\n"
-            "**Ghost Ticket With Reason** opens a modal, uses dashboard category inference, "
-            "and still creates the ticket with ghost mode enabled."
+            "**Quick Ghost Ticket** makes a fast internal test ticket.\n"
+            "**Ghost Ticket With Reason** opens a form, runs category inference, "
+            "and still creates the ticket as ghost mode."
         ),
         color=discord.Color.dark_grey(),
     )
@@ -2688,6 +2886,12 @@ async def register_ticket_panel():
     except Exception as e:
         print("⚠️ Failed to register ticket channel actions view:", repr(e))
 
+    try:
+        bot.add_view(LegacyTicketChannelCompatibilityView())
+        _debug("registered LegacyTicketChannelCompatibilityView")
+    except Exception as e:
+        print("⚠️ Failed to register legacy ticket action compatibility view:", repr(e))
+
     print("✅ Ticket panel buttons registered.")
 
 
@@ -2699,7 +2903,9 @@ __all__ = [
     "AddInternalNoteModal",
     "MacroSelect",
     "MacroPickerView",
+    "TicketActionSelect",
     "TicketChannelActionsView",
+    "LegacyTicketChannelCompatibilityView",
     "TicketPanelView",
     "StaffGhostTicketView",
     "send_ticket_panel",
