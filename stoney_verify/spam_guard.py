@@ -9,24 +9,17 @@ from typing import Any, Deque, Dict, List, Optional, Set, Tuple
 
 import discord
 from discord import app_commands
+from discord.ext import tasks
 
 from .globals import *  # noqa: F401,F403
 
 # ============================================================
 # Spam / hacked-account guard with compact multi-page control UI
-# ------------------------------------------------------------
-# Goals:
-# - mobile friendly
-# - clear plain-language wording
-# - section-based navigation
-# - robust interactions (no slow modal-open failures)
-# - fully featured invite-spam / hacked-account protection
-# - DB persistence when available, runtime fallback when not
 # ============================================================
 
 GUILD_SECURITY_SETTINGS_TABLE = "guild_security_settings"
 
-SPAM_PANEL_FOOTER_BASE = "stoney_verify:spam_guard_panel:v6"
+SPAM_PANEL_FOOTER_BASE = "stoney_verify:spam_guard_panel:v7"
 SPAM_PANEL_FOOTER_PREFIX = "stoney_verify:spam_guard_panel:"
 SPAM_PANEL_PAGES = ("overview", "detection", "enforcement", "access")
 
@@ -38,6 +31,18 @@ URL_RE = re.compile(r"https?://\S+", re.IGNORECASE)
 
 VALID_MODES = {"log_only", "delete_only", "timeout", "quarantine", "kick", "ban"}
 
+# Production cleanup / anti-leak tuning
+STALE_WINDOW_TTL_SECONDS = 900
+STALE_LOCK_TTL_SECONDS = 900
+STALE_INVITE_CACHE_TTL_SECONDS = 1800
+
+# Rapid URL flood protections for likely compromised accounts.
+# This targets non-invite URLs so hijacked accounts dropping phishing links
+# do not rely only on the duplicate-message rule.
+UNVERIFIED_SINGLE_MESSAGE_URL_TRIGGER = 2
+UNVERIFIED_URL_MESSAGE_THRESHOLD = 2
+UNVERIFIED_URL_CHANNEL_THRESHOLD = 2
+
 _SETTINGS_TABLE_AVAILABLE: Optional[bool] = None
 _SPAM_GUARD_COMMANDS_REGISTERED = False
 _SPAM_GUARD_VIEWS_REGISTERED = False
@@ -45,6 +50,7 @@ _SPAM_GUARD_VIEWS_REGISTERED = False
 _RUNTIME_SETTINGS: Dict[int, Dict[str, Any]] = {}
 _MESSAGE_WINDOWS: Dict[Tuple[int, int], Dict[str, Any]] = {}
 _LOCKS: Dict[str, asyncio.Lock] = {}
+_LOCK_LAST_USED: Dict[str, float] = {}
 _GUILD_INVITE_CACHE: Dict[int, Dict[str, Any]] = {}
 
 
@@ -58,7 +64,13 @@ def _lock(key: str) -> asyncio.Lock:
     if found is None:
         found = asyncio.Lock()
         _LOCKS[clean] = found
+    _LOCK_LAST_USED[clean] = time.monotonic()
     return found
+
+
+def _touch_lock(key: str) -> None:
+    clean = str(key or "").strip() or "default"
+    _LOCK_LAST_USED[clean] = time.monotonic()
 
 
 def _now_utc() -> datetime:
@@ -317,6 +329,26 @@ def _extract_invite_codes(content: str) -> List[str]:
         return list(dict.fromkeys([code.strip().lower() for code in INVITE_RE.findall(content or "") if code.strip()]))
     except Exception:
         return []
+
+
+def _extract_urls(content: str) -> List[str]:
+    try:
+        raw = [u.strip() for u in URL_RE.findall(content or "") if u.strip()]
+        return list(dict.fromkeys(raw))
+    except Exception:
+        return []
+
+
+def _is_discord_invite_url(url: str) -> bool:
+    try:
+        return bool(INVITE_RE.search(url or ""))
+    except Exception:
+        return False
+
+
+def _extract_non_invite_urls(content: str) -> List[str]:
+    urls = _extract_urls(content)
+    return [u for u in urls if not _is_discord_invite_url(u)]
 
 
 def _message_mentions_everyone(message: discord.Message) -> bool:
@@ -713,11 +745,11 @@ def _build_panel_embed(
             name="Burst rules",
             value=(
                 f"**Window:** `{int(settings['window_seconds'])}s`\n"
-                f"Time range used for checking spam bursts.\n\n"
+                "Time range used for checking spam bursts.\n\n"
                 f"**Message threshold:** `{int(settings['message_threshold'])}`\n"
-                f"How many messages in that time window can trigger a spam hit.\n\n"
+                "How many messages in that time window can trigger a spam hit.\n\n"
                 f"**Duplicate threshold:** `{int(settings['duplicate_threshold'])}`\n"
-                f"How many repeated copies of the same message can trigger a hit."
+                "How many repeated copies of the same message can trigger a hit."
             ),
             inline=False,
         )
@@ -725,17 +757,17 @@ def _build_panel_embed(
             name="Invite rules",
             value=(
                 f"**Invite-message threshold:** `{int(settings['invite_threshold'])}`\n"
-                f"How many messages containing blocked invites can trigger a hit.\n\n"
+                "How many messages containing blocked invites can trigger a hit.\n\n"
                 f"**Immediate multi-invite trigger:** `{int(settings['multi_invite_immediate'])}`\n"
-                f"How many blocked invite links in one message instantly trigger a hit."
+                "How many blocked invite links in one message instantly trigger a hit."
             ),
             inline=False,
         )
         embed.add_field(
-            name="Important note",
+            name="Built-in URL flood protection",
             value=(
-                "Invite-allowed roles and allowed channels only bypass invite-link rules.\n"
-                "Fully exempt roles and fully exempt users bypass the guard completely."
+                "For non-verified users, rapid posting of normal URLs across channels can also trigger protection.\n"
+                "This helps catch likely compromised accounts dropping phishing links."
             ),
             inline=False,
         )
@@ -760,7 +792,7 @@ def _build_panel_embed(
                 "`log_only` = record it only\n"
                 "`delete_only` = remove spam messages only\n"
                 "`timeout` = remove spam and timeout the user\n"
-                "`quarantine` = remove spam and add a quarantine role\n"
+                "`quarantine` = remove spam and add quarantine role\n"
                 "`kick` = remove spam and kick the user\n"
                 "`ban` = remove spam and ban the user"
             ),
@@ -801,9 +833,9 @@ def _build_panel_embed(
             name="Allowed channels / exempt users",
             value=(
                 f"**Allowed channels:** {_format_channel_list(guild, list(settings.get('allowed_channel_ids') or []))}\n"
-                f"Invite-link rules do not fire there.\n\n"
+                "Invite-link rules do not fire there.\n\n"
                 f"**Exempt users:** {_format_user_list(guild, list(settings.get('exempt_user_ids') or []))}\n"
-                f"These users bypass the guard completely."
+                "These users bypass the guard completely."
             ),
             inline=False,
         )
@@ -1010,6 +1042,57 @@ def _cleanup_state(state: Dict[str, Any], *, now_mono: float, keep_seconds: int)
 
 
 # ============================================================
+# Background memory cleanup
+# ============================================================
+
+@tasks.loop(minutes=5)
+async def cleanup_stale_memory() -> None:
+    now_mono = time.monotonic()
+
+    # Sweep message windows
+    for key, state in list(_MESSAGE_WINDOWS.items()):
+        try:
+            _cleanup_state(state, now_mono=now_mono, keep_seconds=STALE_WINDOW_TTL_SECONDS)
+            messages = state.get("messages")
+            last_action_at = float(state.get("last_action_at", 0.0) or 0.0)
+            is_empty = not messages if isinstance(messages, deque) else True
+            if is_empty and (now_mono - last_action_at) > STALE_WINDOW_TTL_SECONDS:
+                _MESSAGE_WINDOWS.pop(key, None)
+        except Exception:
+            continue
+
+    # Sweep idle locks
+    for key, lock in list(_LOCKS.items()):
+        try:
+            last_used = float(_LOCK_LAST_USED.get(key, 0.0) or 0.0)
+            if lock.locked():
+                continue
+            if (now_mono - last_used) > STALE_LOCK_TTL_SECONDS:
+                _LOCKS.pop(key, None)
+                _LOCK_LAST_USED.pop(key, None)
+        except Exception:
+            continue
+
+    # Sweep invite cache
+    for gid, payload in list(_GUILD_INVITE_CACHE.items()):
+        try:
+            expires_at = float(payload.get("expires_at", 0.0) or 0.0)
+            if expires_at <= 0.0 or (now_mono - expires_at) > STALE_INVITE_CACHE_TTL_SECONDS:
+                _GUILD_INVITE_CACHE.pop(gid, None)
+        except Exception:
+            continue
+
+    _debug(
+        f"memory cleanup windows={len(_MESSAGE_WINDOWS)} locks={len(_LOCKS)} invite_cache={len(_GUILD_INVITE_CACHE)}"
+    )
+
+
+@cleanup_stale_memory.before_loop
+async def _before_cleanup_stale_memory() -> None:
+    await bot.wait_until_ready()
+
+
+# ============================================================
 # Enforcement
 # ============================================================
 
@@ -1020,9 +1103,10 @@ async def _delete_recent_messages(
     reason: str,
 ) -> int:
     deleted = 0
+    grouped: Dict[int, List[int]] = {}
     seen: Set[Tuple[int, int]] = set()
 
-    for row in sorted(refs, key=lambda x: float(x.get("ts", 0.0) or 0.0), reverse=True):
+    for row in refs:
         channel_id = _safe_int(row.get("channel_id"), 0)
         message_id = _safe_int(row.get("message_id"), 0)
         if channel_id <= 0 or message_id <= 0:
@@ -1033,6 +1117,9 @@ async def _delete_recent_messages(
             continue
         seen.add(key)
 
+        grouped.setdefault(channel_id, []).append(message_id)
+
+    for channel_id, message_ids in grouped.items():
         channel = guild.get_channel(channel_id)
         if channel is None:
             try:
@@ -1043,12 +1130,29 @@ async def _delete_recent_messages(
         if not isinstance(channel, discord.TextChannel):
             continue
 
+        # Bulk delete first to reduce rate-limit pressure.
         try:
-            msg = await channel.fetch_message(message_id)
-            await msg.delete(reason=reason)
-            deleted += 1
-        except Exception:
+            unique_ids = list(dict.fromkeys(message_ids))
+            partials = [channel.get_partial_message(mid) for mid in unique_ids]
+
+            if len(partials) == 1:
+                await partials[0].delete(reason=reason)
+                deleted += 1
+                continue
+
+            await channel.delete_messages(partials, reason=reason)
+            deleted += len(partials)
             continue
+        except Exception:
+            pass
+
+        # Fallback path if bulk delete fails for any reason.
+        for mid in list(dict.fromkeys(message_ids)):
+            try:
+                await channel.get_partial_message(mid).delete(reason=reason)
+                deleted += 1
+            except Exception:
+                continue
 
     return deleted
 
@@ -1158,11 +1262,12 @@ async def _log_trigger(
     recent_count: int,
     duplicate_count: int,
     blocked_invite_count: int,
+    url_message_count: int,
     channel_count: int,
 ) -> None:
     embed = discord.Embed(
         title="🛡️ Spam Guard Triggered",
-        description="Probable hacked-account or invite spam burst was blocked.",
+        description="Probable hacked-account or spam burst was blocked.",
         color=discord.Color.red(),
         timestamp=_now_utc(),
     )
@@ -1192,6 +1297,7 @@ async def _log_trigger(
             f"messages=`{recent_count}` • "
             f"duplicates=`{duplicate_count}` • "
             f"blocked_invites=`{blocked_invite_count}` • "
+            f"url_msgs=`{url_message_count}` • "
             f"channels=`{channel_count}`"
         ),
         inline=False,
@@ -1230,7 +1336,8 @@ async def handle_incoming_spam_message(message: discord.Message) -> bool:
         if not bool(settings.get("enabled")):
             return False
 
-        if not bool(settings.get("apply_to_verified_users", True)) and _is_verifiedish(member):
+        member_is_verified = _is_verifiedish(member)
+        if not bool(settings.get("apply_to_verified_users", True)) and member_is_verified:
             return False
 
         exempt_user_ids = list(settings.get("exempt_user_ids") or [])
@@ -1249,6 +1356,7 @@ async def handle_incoming_spam_message(message: discord.Message) -> bool:
         channel_bypass = str(message.channel.id) in allowed_channel_ids
 
         invite_codes = _extract_invite_codes(message.content or "")
+        non_invite_urls = _extract_non_invite_urls(message.content or "")
         guild_invite_codes: Set[str] = set()
 
         if bool(settings.get("allow_server_invites", True)) and invite_codes:
@@ -1273,6 +1381,8 @@ async def handle_incoming_spam_message(message: discord.Message) -> bool:
         state_key = f"spam:{guild.id}:{member.id}"
 
         async with _lock(state_key):
+            _touch_lock(state_key)
+
             state = _state_for_user(guild.id, member.id)
             _cleanup_state(
                 state,
@@ -1291,6 +1401,7 @@ async def handle_incoming_spam_message(message: discord.Message) -> bool:
                     "norm": content_norm,
                     "blocked_invites": len(blocked_invite_codes),
                     "invite_count": len(invite_codes),
+                    "non_invite_url_count": len(non_invite_urls),
                     "mention_everyone": _message_mentions_everyone(message),
                 }
             )
@@ -1314,6 +1425,20 @@ async def handle_incoming_spam_message(message: discord.Message) -> bool:
                 if int(row.get("blocked_invites", 0) or 0) > 0
             )
             total_blocked_invites = sum(int(row.get("blocked_invites", 0) or 0) for row in recent_messages)
+
+            url_message_recent_count = sum(
+                1 for row in recent_messages
+                if int(row.get("non_invite_url_count", 0) or 0) > 0
+            )
+            total_non_invite_urls = sum(int(row.get("non_invite_url_count", 0) or 0) for row in recent_messages)
+            url_channel_count = len(
+                {
+                    int(row.get("channel_id", 0) or 0)
+                    for row in recent_messages
+                    if int(row.get("channel_id", 0) or 0) > 0 and int(row.get("non_invite_url_count", 0) or 0) > 0
+                }
+            )
+
             channel_count = len(
                 {
                     int(row.get("channel_id", 0) or 0)
@@ -1326,6 +1451,7 @@ async def handle_incoming_spam_message(message: discord.Message) -> bool:
             should_fire = False
             reasons: List[str] = []
 
+            # Invite-specific rules
             if not invite_role_bypass and not channel_bypass:
                 if len(blocked_invite_codes) >= int(settings["multi_invite_immediate"]):
                     should_fire = True
@@ -1343,6 +1469,7 @@ async def handle_incoming_spam_message(message: discord.Message) -> bool:
                         f"`{recent_count}` messages inside `{int(settings['window_seconds'])}s` and current message contained a blocked invite"
                     )
 
+            # Generic repeated-message / channel flood behavior
             if duplicate_count >= int(settings["duplicate_threshold"]) and recent_count >= 3:
                 should_fire = True
                 reasons.append(
@@ -1356,6 +1483,23 @@ async def handle_incoming_spam_message(message: discord.Message) -> bool:
             if mention_everyone_count >= 2:
                 should_fire = True
                 reasons.append("repeated @everyone/@here behavior")
+
+            # Rapid non-invite URL flood protection for likely compromised, not-yet-verified accounts
+            if not member_is_verified:
+                if len(non_invite_urls) >= UNVERIFIED_SINGLE_MESSAGE_URL_TRIGGER:
+                    should_fire = True
+                    reasons.append(
+                        f"single message contained `{len(non_invite_urls)}` non-invite URLs from an unverified member"
+                    )
+
+                if (
+                    url_message_recent_count >= UNVERIFIED_URL_MESSAGE_THRESHOLD
+                    and url_channel_count >= UNVERIFIED_URL_CHANNEL_THRESHOLD
+                ):
+                    should_fire = True
+                    reasons.append(
+                        f"rapid non-invite URL posting across `{url_channel_count}` channels by an unverified member"
+                    )
 
             last_action_at = float(state.get("last_action_at", 0.0) or 0.0)
             if should_fire and (now_mono - last_action_at) < float(settings["cooldown_seconds"]):
@@ -1378,7 +1522,7 @@ async def handle_incoming_spam_message(message: discord.Message) -> bool:
                 guild=guild,
                 member=member,
                 settings=settings,
-                reason="Spam guard: probable hacked-account invite spam burst",
+                reason="Spam guard: probable hacked-account spam burst",
             )
 
             await _log_trigger(
@@ -1391,11 +1535,15 @@ async def handle_incoming_spam_message(message: discord.Message) -> bool:
                 recent_count=recent_count,
                 duplicate_count=duplicate_count,
                 blocked_invite_count=total_blocked_invites,
+                url_message_count=url_message_recent_count,
                 channel_count=channel_count,
             )
 
             try:
                 RUNTIME_STATS["spam_guard_hits"] = int(RUNTIME_STATS.get("spam_guard_hits", 0) or 0) + 1
+                RUNTIME_STATS["spam_guard_non_invite_urls_seen"] = int(
+                    RUNTIME_STATS.get("spam_guard_non_invite_urls_seen", 0) or 0
+                ) + int(total_non_invite_urls)
             except Exception:
                 pass
 
@@ -1970,8 +2118,6 @@ class ActionsModalButton(discord.ui.Button):
         if guild is None or not isinstance(channel, discord.TextChannel) or message is None:
             return await _reply_ephemeral(interaction, "Invalid context.")
 
-        # IMPORTANT:
-        # use fast local snapshot here so modal opens immediately and never waits on DB
         settings = _fast_settings_for_ui(guild.id)
         await interaction.response.send_modal(
             SpamActionSettingsModal(
@@ -2137,6 +2283,13 @@ async def _spam_guard_on_message(message: discord.Message):
 @bot.listen("on_ready")
 async def _register_spam_guard_views():
     global _SPAM_GUARD_VIEWS_REGISTERED
+
+    if not cleanup_stale_memory.is_running():
+        try:
+            cleanup_stale_memory.start()
+            _debug("started stale memory cleanup loop")
+        except Exception as e:
+            _debug(f"failed starting stale memory cleanup loop error={repr(e)}")
 
     if _SPAM_GUARD_VIEWS_REGISTERED:
         return
