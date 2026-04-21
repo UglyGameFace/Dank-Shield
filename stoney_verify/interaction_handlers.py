@@ -867,7 +867,6 @@ async def _legacy_request_resubmission(
         return {"ok": False, "message": f"Failed to post resubmission UI: {e}"}
 
     try:
-        # Keep old behavior only in fallback path.
         sb_set_used(token, True)
     except Exception:
         pass
@@ -1022,8 +1021,10 @@ async def _legacy_approve_verification(
 # ============================================================
 # Persistent-view routing guard
 # ------------------------------------------------------------
-# transcripts.py now owns sv:ticket:* and sv:verify:staff:* via
-# registered persistent Views. This file must not swallow them.
+# transcripts.py owns sv:ticket:* and sv:verify:staff:*.
+# ticket_panel.py owns ticket_* / ghost_ticket_* / ticket_macro_select:*.
+# spam_guard.py owns spamguard:*.
+# This file must not swallow any of those.
 # ============================================================
 
 def _is_persistent_view_managed_custom_id(custom_id: str) -> bool:
@@ -1034,6 +1035,21 @@ def _is_persistent_view_managed_custom_id(custom_id: str) -> bool:
         cid.startswith("sv:ticket:")
         or cid.startswith("sv:verify:staff:")
     )
+
+
+def _is_other_view_managed_custom_id(custom_id: str) -> bool:
+    cid = _safe_str(custom_id)
+    if not cid:
+        return False
+
+    managed_prefixes = (
+        "ticket_",
+        "ghost_ticket_",
+        "ticket_macro_select:",
+        "spamguard:",
+        "spamguard:incident:",
+    )
+    return cid.startswith(managed_prefixes)
 
 
 # ============================================================
@@ -1969,6 +1985,8 @@ async def handle_component_interaction(interaction: discord.Interaction) -> None
 
     data = interaction.data or {}
     custom_id = (data.get("custom_id", "") or "").strip()
+    if not custom_id:
+        return
 
     try:
         if isinstance(interaction.channel, discord.TextChannel):
@@ -1984,6 +2002,9 @@ async def handle_component_interaction(interaction: discord.Interaction) -> None
         pass
 
     if _is_persistent_view_managed_custom_id(custom_id):
+        return
+
+    if _is_other_view_managed_custom_id(custom_id):
         return
 
     try:
@@ -2081,9 +2102,15 @@ def register_interaction_handlers(bot_instance: Any) -> None:
             pass
         return
 
-    @bot_instance.event
-    async def on_interaction(interaction: discord.Interaction):
-        await handle_component_interaction(interaction)
+    @bot_instance.listen("on_interaction")
+    async def _stoney_verify_on_interaction(interaction: discord.Interaction):
+        try:
+            await handle_component_interaction(interaction)
+        except Exception as e:
+            try:
+                print(f"❌ interaction_handlers unhandled error: {repr(e)}")
+            except Exception:
+                pass
 
     _INTERACTION_HANDLERS_REGISTERED = True
 
