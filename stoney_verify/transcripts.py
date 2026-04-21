@@ -98,8 +98,8 @@ except Exception:
 # ============================================================
 
 _CLOSE_PROMPT_MARKER = "stoney_verify:close_prompt:v8"
-_STAFF_CLOSED_MARKER = "stoney_verify:staff_closed:v8"
-_CLOSE_REOPENED_MARKER = "stoney_verify:ticket_reopened:v7"
+_STAFF_CLOSED_MARKER = "stoney_verify:staff_closed:v9"
+_CLOSE_REOPENED_MARKER = "stoney_verify:ticket_reopened:v8"
 _STAFF_REVIEW_PANEL_MARKER = "stoney_verify:staff_review_panel:v5"
 _TRANSCRIPT_POSTED_MARKER = "stoney_verify:transcript_posted:v4"
 _OPEN_CONTROLS_MARKER = "stoney_verify:open_controls:v4"
@@ -170,6 +170,139 @@ def _vc_channel_id() -> int:
     except Exception:
         pass
     return 0
+
+
+def _ticket_parent_category_id() -> int:
+    try:
+        return int(globals().get("TICKET_CATEGORY_ID", 0) or 0)
+    except Exception:
+        return 0
+
+
+def _ticket_archive_category_id() -> int:
+    for key in (
+        "TICKET_ARCHIVE_CATEGORY_ID",
+        "TICKET_ARCHIVED_CATEGORY_ID",
+        "ARCHIVED_TICKET_CATEGORY_ID",
+        "ARCHIVE_TICKET_CATEGORY_ID",
+    ):
+        try:
+            value = int(globals().get(key, 0) or 0)
+            if value > 0:
+                return value
+        except Exception:
+            continue
+    return 0
+
+
+def _looks_like_archive_category_name(name: str) -> bool:
+    text = str(name or "").strip().lower()
+    if not text:
+        return False
+
+    markers = (
+        "archive",
+        "archived",
+        "ticket archive",
+        "tickets archive",
+        "archived tickets",
+        "closed tickets",
+    )
+    return any(marker in text for marker in markers)
+
+
+def _resolve_ticket_category_by_id(
+    guild: discord.Guild,
+    category_id: int,
+) -> Optional[discord.CategoryChannel]:
+    try:
+        if category_id <= 0:
+            return None
+        channel = guild.get_channel(int(category_id))
+        if isinstance(channel, discord.CategoryChannel):
+            return channel
+    except Exception:
+        pass
+    return None
+
+
+def _resolve_archive_category(guild: discord.Guild) -> Optional[discord.CategoryChannel]:
+    explicit_id = _ticket_archive_category_id()
+    if explicit_id > 0:
+        explicit = _resolve_ticket_category_by_id(guild, explicit_id)
+        if explicit is not None:
+            return explicit
+
+    try:
+        for category in guild.categories:
+            if _looks_like_archive_category_name(category.name):
+                return category
+    except Exception:
+        pass
+
+    return None
+
+
+def _resolve_active_ticket_category(guild: discord.Guild) -> Optional[discord.CategoryChannel]:
+    active_id = _ticket_parent_category_id()
+    if active_id > 0:
+        active = _resolve_ticket_category_by_id(guild, active_id)
+        if active is not None:
+            return active
+
+    return None
+
+
+def _channel_is_in_category(
+    channel: discord.TextChannel,
+    category: Optional[discord.CategoryChannel],
+) -> bool:
+    try:
+        if category is None:
+            return False
+        return int(getattr(channel.category, "id", 0) or 0) == int(category.id)
+    except Exception:
+        return False
+
+
+async def _move_ticket_to_archive_if_configured(channel: discord.TextChannel) -> bool:
+    archive_category = _resolve_archive_category(channel.guild)
+    if archive_category is None:
+        return False
+
+    if _channel_is_in_category(channel, archive_category):
+        return True
+
+    try:
+        await channel.edit(
+            category=archive_category,
+            sync_permissions=False,
+            reason="Ticket closed -> move to archive category",
+        )
+        return True
+    except Exception as e:
+        print(f"⚠️ Failed moving closed ticket {channel.id} to archive category: {e}")
+        return False
+
+
+async def _move_ticket_to_active_if_configured(channel: discord.TextChannel) -> bool:
+    active_category = _resolve_active_ticket_category(channel.guild)
+    if active_category is None:
+        return False
+
+    if _channel_is_in_category(channel, active_category):
+        return True
+
+    try:
+        await channel.edit(
+            category=active_category,
+            sync_permissions=False,
+            reason="Ticket reopened -> move back to active ticket category",
+        )
+        return True
+    except Exception as e:
+        print(f"⚠️ Failed moving reopened ticket {channel.id} to active category: {e}")
+        return False
 
 
 def _ticket_number_from_name(name: str) -> str:
@@ -338,6 +471,20 @@ async def _ticket_has_transcript(channel_id: int | str) -> bool:
 
 
 async def _user_can_close_ticket(interaction: discord.Interaction, channel: discord.TextChannel) -> bool:
+    if not isinstance(interaction.user, discord.Member):
+        return False
+
+    if _is_staff_member(interaction.user):
+        return True
+
+    owner = await _resolve_ticket_owner(channel)
+    if owner and int(owner.id) == int(interaction.user.id):
+        return True
+
+    return False
+
+
+async def _user_can_reopen_ticket(interaction: discord.Interaction, channel: discord.TextChannel) -> bool:
     if not isinstance(interaction.user, discord.Member):
         return False
 
@@ -620,11 +767,19 @@ async def _find_staff_closed_message(channel: discord.TextChannel, limit: int = 
 async def _post_staff_closed_message(channel: discord.TextChannel, closed_by: discord.abc.User) -> None:
     lock = _lock_for(_STAFF_CLOSED_LOCKS, channel.id)
     async with lock:
+        archive_category = _resolve_archive_category(channel.guild)
+        archive_hint = ""
+        if archive_category is not None:
+            archive_hint = f"\nThis ticket was moved to **{archive_category.name}** to keep tickets organized."
+
         embed = discord.Embed(
             title="🔒 Ticket Closed",
             description=(
                 f"This ticket was closed by {closed_by.mention}.\n"
-                "The ticket owner is now locked from replying until staff reopens it or deletes it."
+                "The ticket owner is locked from replying right now."
+                f"{archive_hint}\n\n"
+                "Need more help? Use **Reopen Ticket** below.\n"
+                "Staff can also post a transcript or delete the ticket."
             ),
             color=discord.Color.orange(),
             timestamp=now_utc(),
@@ -1321,6 +1476,8 @@ async def post_or_replace_verification_staff_panel(
                 if not msg.embeds:
                     continue
 
+                    # unreachable but harmless if left; keeping logic below
+
                 try:
                     footer_text = str(
                         getattr(getattr(msg.embeds[0], "footer", None), "text", "") or ""
@@ -1414,6 +1571,11 @@ class TicketOpenActionsView(discord.ui.View):
                         return await _reply_ephemeral(interaction, "❌ Failed to close ticket.")
 
                 try:
+                    await _move_ticket_to_archive_if_configured(channel)
+                except Exception:
+                    pass
+
+                try:
                     await _freeze_message_controls(
                         interaction.message,
                         content_suffix=f"🔒 Closed by {interaction.user.mention}.",
@@ -1475,15 +1637,12 @@ class TicketOpenActionsView(discord.ui.View):
             try:
                 if not interaction.response.is_done():
                     await interaction.response.defer(ephemeral=True)
-            except Exception:
-                pass
+                except Exception:
+                    pass
 
             if await _ticket_is_deleted(channel):
                 return await _reply_ephemeral(interaction, "❌ Ticket is already deleted.")
 
-            # Canonical lifecycle:
-            # open -> closed -> deleted
-            # This prevents open-ticket delete corruption.
             if await _ticket_is_open_like(channel):
                 try:
                     closed_ok = await mark_ticket_closed(
@@ -1507,6 +1666,11 @@ class TicketOpenActionsView(discord.ui.View):
                             interaction,
                             "❌ Failed to move ticket into closed state before delete.",
                         )
+
+                try:
+                    await _move_ticket_to_archive_if_configured(channel)
+                except Exception:
+                    pass
 
                 try:
                     await _freeze_message_controls(
@@ -1577,12 +1741,16 @@ class StaffClosedTicketView(discord.ui.View):
         button: discord.ui.Button,
     ):
         _ = button
-        if not await self._ensure_staff(interaction):
-            return
 
         channel = interaction.channel
         if not isinstance(channel, discord.TextChannel):
             return await _reply_ephemeral(interaction, "❌ Invalid channel.")
+
+        if not await _user_can_reopen_ticket(interaction, channel):
+            return await _reply_ephemeral(
+                interaction,
+                "❌ Only the ticket owner or staff can reopen this ticket.",
+            )
 
         lock = _lock_for(_REOPEN_ACTION_LOCKS, channel.id)
         async with lock:
@@ -1623,7 +1791,7 @@ class StaffClosedTicketView(discord.ui.View):
                 reopened = await reopen_ticket_channel(
                     channel=channel,
                     owner=owner,
-                    actor=interaction.user,
+                    actor=interaction.user if isinstance(interaction.user, (discord.Member, discord.User)) else None,
                     reason="Reopened from Discord ticket controls",
                 )
             except Exception as e:
@@ -1632,6 +1800,11 @@ class StaffClosedTicketView(discord.ui.View):
 
             if not reopened:
                 return await _reply_ephemeral(interaction, "❌ Failed to reopen ticket.")
+
+            try:
+                await _move_ticket_to_active_if_configured(channel)
+            except Exception:
+                pass
 
             try:
                 await _freeze_message_controls(
@@ -1842,6 +2015,11 @@ class ConfirmCloseTicketView(discord.ui.View):
 
                 if not actually_closed:
                     return await _reply_ephemeral(interaction, "❌ Failed to close ticket.")
+
+            try:
+                await _move_ticket_to_archive_if_configured(channel)
+            except Exception:
+                pass
 
             try:
                 await _freeze_message_controls(
