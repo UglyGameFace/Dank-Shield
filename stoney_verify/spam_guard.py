@@ -13,29 +13,40 @@ from discord import app_commands
 from .globals import *  # noqa: F401,F403
 
 # ============================================================
-# Spam / hacked-account guard with staff control panel
+# Spam / hacked-account guard with compact multi-page control UI
 # ------------------------------------------------------------
-# Features:
-# - /spam_guard opens a full control panel
-# - toggle on/off
+# UX goals:
+# - mobile-friendly
+# - compact dashboard instead of one giant embed
+# - section-based navigation like a real control center
+# - fully featured and persistent when DB schema supports it
+#
+# Feature set:
+# - /spam_guard posts or refreshes the control panel
+# - /spam_guard_status shows compact ephemeral status
+# - pages: overview / detection / enforcement / access
 # - mode select: log_only / delete_only / timeout / quarantine / kick / ban
 # - invite-allowed roles
 # - fully exempt roles
 # - exempt users
 # - allowed channels
 # - allowed invite codes
-# - external-invites-only toggle
-# - allow-server-invites toggle
+# - external-only blocking toggle
+# - allow-own-server-invites toggle
 # - apply-to-verified toggle
 # - thresholds modal
-# - action/settings modal
-# - list modal
+# - actions + codes modal
+# - users + channels modal
+# - persistent views (page-specific custom_ids)
 # - runtime works immediately
-# - DB persistence is best-effort (falls back to runtime if table/schema missing)
+# - DB persistence is best-effort and falls back to runtime when schema is missing
 # ============================================================
 
 GUILD_SECURITY_SETTINGS_TABLE = "guild_security_settings"
-SPAM_PANEL_FOOTER = "stoney_verify:spam_guard_panel:v3"
+
+SPAM_PANEL_FOOTER_BASE = "stoney_verify:spam_guard_panel:v4"
+SPAM_PANEL_FOOTER_PREFIX = "stoney_verify:spam_guard_panel:"
+SPAM_PANEL_PAGES = ("overview", "detection", "enforcement", "access")
 
 INVITE_RE = re.compile(
     r"(?:https?://)?(?:www\.)?(?:discord(?:app)?\.com/invite|discord\.gg)/([A-Za-z0-9-]+)",
@@ -179,7 +190,6 @@ def _is_verifiedish(member: Optional[discord.Member]) -> bool:
 def _normalize_id_list(values: Any, *, limit: int = 50) -> List[str]:
     out: List[str] = []
     try:
-        source: List[Any]
         if isinstance(values, list):
             source = list(values)
         elif values is None:
@@ -203,7 +213,6 @@ def _normalize_id_list(values: Any, *, limit: int = 50) -> List[str]:
 def _normalize_code_list(values: Any, *, limit: int = 50) -> List[str]:
     out: List[str] = []
     try:
-        source: List[Any]
         if isinstance(values, list):
             source = list(values)
         elif values is None:
@@ -254,7 +263,7 @@ def _parse_csvish_codes(text: str, *, limit: int = 50) -> List[str]:
     return out
 
 
-def _format_role_list(guild: discord.Guild, ids: List[str], *, max_items: int = 8) -> str:
+def _format_role_list(guild: discord.Guild, ids: List[str], *, max_items: int = 6) -> str:
     items: List[str] = []
     for rid in ids[:max_items]:
         try:
@@ -268,7 +277,7 @@ def _format_role_list(guild: discord.Guild, ids: List[str], *, max_items: int = 
     return ", ".join(items) + extra
 
 
-def _format_channel_list(guild: discord.Guild, ids: List[str], *, max_items: int = 8) -> str:
+def _format_channel_list(guild: discord.Guild, ids: List[str], *, max_items: int = 6) -> str:
     items: List[str] = []
     for cid in ids[:max_items]:
         try:
@@ -282,7 +291,7 @@ def _format_channel_list(guild: discord.Guild, ids: List[str], *, max_items: int
     return ", ".join(items) + extra
 
 
-def _format_user_list(guild: discord.Guild, ids: List[str], *, max_items: int = 8) -> str:
+def _format_user_list(guild: discord.Guild, ids: List[str], *, max_items: int = 6) -> str:
     items: List[str] = []
     for uid in ids[:max_items]:
         try:
@@ -333,6 +342,51 @@ def _message_mentions_everyone(message: discord.Message) -> bool:
         return bool(message.mention_everyone)
     except Exception:
         return False
+
+
+def _panel_footer(page: str) -> str:
+    clean_page = page if page in SPAM_PANEL_PAGES else "overview"
+    return f"{SPAM_PANEL_FOOTER_BASE} • page={clean_page}"
+
+
+def _page_title(page: str) -> str:
+    mapping = {
+        "overview": "Overview",
+        "detection": "Detection",
+        "enforcement": "Enforcement",
+        "access": "Access",
+    }
+    return mapping.get(page, "Overview")
+
+
+def _current_panel_page_from_message(message: Optional[discord.Message]) -> str:
+    try:
+        if message and message.embeds:
+            footer = _safe_str(getattr(getattr(message.embeds[0], "footer", None), "text", ""))
+            m = re.search(r"page=([a-z_]+)", footer)
+            if m:
+                page = m.group(1).strip().lower()
+                if page in SPAM_PANEL_PAGES:
+                    return page
+    except Exception:
+        pass
+    return "overview"
+
+
+def _bool_chip(value: bool) -> str:
+    return "✅ On" if value else "❌ Off"
+
+
+def _compact_count(label: str, items: List[Any]) -> str:
+    return f"**{label}:** `{len(items)}`"
+
+
+def _quarantine_role_text(guild: discord.Guild, settings: Dict[str, Any]) -> str:
+    qrid = _safe_str(settings.get("quarantine_role_id"))
+    if not qrid.isdigit():
+        return "—"
+    role = guild.get_role(int(qrid))
+    return role.mention if isinstance(role, discord.Role) else f"`{qrid}`"
 
 
 async def _reply_ephemeral(interaction: discord.Interaction, content: str) -> None:
@@ -535,7 +589,6 @@ def _upsert_settings_sync(payload: Dict[str, Any]) -> bool:
             _SETTINGS_TABLE_AVAILABLE = False
             return False
 
-        # If the table exists but columns are missing, fall back to runtime-only
         _SETTINGS_TABLE_AVAILABLE = False
         _debug(f"settings upsert runtime fallback error={repr(e)}")
         return False
@@ -598,8 +651,10 @@ def _build_panel_embed(
     guild: discord.Guild,
     settings: Dict[str, Any],
     *,
+    page: str,
     persisted_hint: Optional[bool] = None,
 ) -> discord.Embed:
+    clean_page = page if page in SPAM_PANEL_PAGES else "overview"
     enabled = bool(settings["enabled"])
     mode = _safe_str(settings["mode"])
     persistence = (
@@ -610,129 +665,283 @@ def _build_panel_embed(
         else "Runtime/DB auto"
     )
 
+    title = f"🛡️ Spam Guard • {_page_title(clean_page)}"
     embed = discord.Embed(
-        title="🛡️ Spam Guard Control Panel",
-        description=(
-            "Use the controls below to tune hacked-account and invite spam protection.\n"
-            "This panel is staff-only."
-        ),
+        title=title,
         color=discord.Color.green() if enabled else discord.Color.orange(),
         timestamp=_now_utc(),
     )
 
-    embed.add_field(
-        name="Status",
-        value=(
-            f"enabled=`{enabled}`\n"
-            f"mode=`{mode}`\n"
-            f"persistence=`{persistence}`"
-        ),
-        inline=True,
-    )
-    embed.add_field(
-        name="Core Toggles",
-        value=(
-            f"external_only=`{bool(settings['block_external_invites_only'])}`\n"
-            f"allow_server_invites=`{bool(settings['allow_server_invites'])}`\n"
-            f"apply_to_verified=`{bool(settings['apply_to_verified_users'])}`"
-        ),
-        inline=True,
-    )
-    embed.add_field(
-        name="Action Controls",
-        value=(
-            f"timeout=`{int(settings['timeout_minutes'])}m`\n"
-            f"delete_history=`{int(settings['delete_history'])}`\n"
-            f"cooldown=`{int(settings['cooldown_seconds'])}s`"
-        ),
-        inline=True,
-    )
+    if clean_page == "overview":
+        embed.description = (
+            "Compact control center for hacked-account and invite spam protection.\n"
+            "Use the **section menu** below to jump into what you want to edit."
+        )
+        embed.add_field(
+            name="System",
+            value=(
+                f"**Enabled:** {_bool_chip(bool(settings['enabled']))}\n"
+                f"**Mode:** `{mode}`\n"
+                f"**Persistence:** `{persistence}`"
+            ),
+            inline=False,
+        )
+        embed.add_field(
+            name="Protection Scope",
+            value=(
+                f"**External-only:** {_bool_chip(bool(settings['block_external_invites_only']))}\n"
+                f"**Allow this server's invites:** {_bool_chip(bool(settings['allow_server_invites']))}\n"
+                f"**Watch verified users:** {_bool_chip(bool(settings['apply_to_verified_users']))}"
+            ),
+            inline=False,
+        )
+        embed.add_field(
+            name="Quick Detection Summary",
+            value=(
+                f"window=`{int(settings['window_seconds'])}s` • "
+                f"messages=`{int(settings['message_threshold'])}` • "
+                f"duplicates=`{int(settings['duplicate_threshold'])}`\n"
+                f"invite_msgs=`{int(settings['invite_threshold'])}` • "
+                f"multi_invite=`{int(settings['multi_invite_immediate'])}`"
+            ),
+            inline=False,
+        )
+        embed.add_field(
+            name="Quick Access Summary",
+            value=(
+                f"{_compact_count('Invite roles', list(settings.get('invite_allowed_role_ids') or []))}\n"
+                f"{_compact_count('Exempt roles', list(settings.get('exempt_role_ids') or []))}\n"
+                f"{_compact_count('Allowed channels', list(settings.get('allowed_channel_ids') or []))}\n"
+                f"{_compact_count('Exempt users', list(settings.get('exempt_user_ids') or []))}\n"
+                f"{_compact_count('Allowed codes', list(settings.get('allowed_invite_codes') or []))}"
+            ),
+            inline=False,
+        )
 
-    quarantine_role = "—"
-    qrid = _safe_str(settings.get("quarantine_role_id"))
-    if qrid.isdigit():
-        role = guild.get_role(int(qrid))
-        quarantine_role = role.mention if isinstance(role, discord.Role) else f"`{qrid}`"
+    elif clean_page == "detection":
+        embed.description = (
+            "Tune what counts as suspicious behavior.\n"
+            "This page is for the rules that decide when the guard fires."
+        )
+        embed.add_field(
+            name="Burst Rules",
+            value=(
+                f"**Window:** `{int(settings['window_seconds'])}s`\n"
+                f"**Message threshold:** `{int(settings['message_threshold'])}`\n"
+                f"**Duplicate threshold:** `{int(settings['duplicate_threshold'])}`"
+            ),
+            inline=False,
+        )
+        embed.add_field(
+            name="Invite Rules",
+            value=(
+                f"**Invite-message threshold:** `{int(settings['invite_threshold'])}`\n"
+                f"**Immediate multi-invite trigger:** `{int(settings['multi_invite_immediate'])}`\n"
+                f"**External-only blocking:** {_bool_chip(bool(settings['block_external_invites_only']))}"
+            ),
+            inline=False,
+        )
+        embed.add_field(
+            name="Scope Toggles",
+            value=(
+                f"**Allow this server's invites:** {_bool_chip(bool(settings['allow_server_invites']))}\n"
+                f"**Apply to verified users:** {_bool_chip(bool(settings['apply_to_verified_users']))}"
+            ),
+            inline=False,
+        )
+        embed.add_field(
+            name="Operational Notes",
+            value=(
+                "• Invite-allowed roles bypass **invite-link rules only**\n"
+                "• Allowed channels bypass **invite-link rules only**\n"
+                "• Fully exempt roles/users bypass the guard entirely"
+            ),
+            inline=False,
+        )
 
-    embed.add_field(
-        name="Thresholds",
-        value=(
-            f"window=`{int(settings['window_seconds'])}s`\n"
-            f"messages=`{int(settings['message_threshold'])}`\n"
-            f"duplicates=`{int(settings['duplicate_threshold'])}`\n"
-            f"invite_msgs=`{int(settings['invite_threshold'])}`\n"
-            f"multi_invite=`{int(settings['multi_invite_immediate'])}`"
-        ),
-        inline=False,
-    )
-    embed.add_field(
-        name="Invite Allowed Roles",
-        value=_format_role_list(guild, list(settings.get("invite_allowed_role_ids") or [])),
-        inline=False,
-    )
-    embed.add_field(
-        name="Exempt Roles",
-        value=_format_role_list(guild, list(settings.get("exempt_role_ids") or [])),
-        inline=False,
-    )
-    embed.add_field(
-        name="Allowed Channels",
-        value=_format_channel_list(guild, list(settings.get("allowed_channel_ids") or [])),
-        inline=False,
-    )
-    embed.add_field(
-        name="Exempt Users",
-        value=_format_user_list(guild, list(settings.get("exempt_user_ids") or [])),
-        inline=False,
-    )
-    embed.add_field(
-        name="Allowed Invite Codes",
-        value=", ".join(f"`{x}`" for x in list(settings.get("allowed_invite_codes") or [])[:12]) or "—",
-        inline=False,
-    )
-    embed.add_field(
-        name="Quarantine Role",
-        value=quarantine_role,
-        inline=False,
-    )
+    elif clean_page == "enforcement":
+        embed.description = (
+            "Control what happens after spam is detected.\n"
+            "This page is for response severity and cleanup behavior."
+        )
+        embed.add_field(
+            name="Response Mode",
+            value=f"**Mode:** `{mode}`",
+            inline=False,
+        )
+        embed.add_field(
+            name="Cleanup",
+            value=(
+                f"**Delete recent messages:** `{int(settings['delete_history'])}`\n"
+                f"**Action cooldown:** `{int(settings['cooldown_seconds'])}s`"
+            ),
+            inline=False,
+        )
+        embed.add_field(
+            name="Moderation Action",
+            value=(
+                f"**Timeout length:** `{int(settings['timeout_minutes'])}m`\n"
+                f"**Quarantine role:** {_quarantine_role_text(guild, settings)}"
+            ),
+            inline=False,
+        )
+        embed.add_field(
+            name="Behavior by Mode",
+            value=(
+                "• `log_only` = just record it\n"
+                "• `delete_only` = clean messages\n"
+                "• `timeout` = clean + timeout\n"
+                "• `quarantine` = clean + quarantine role\n"
+                "• `kick` / `ban` = strongest actions"
+            ),
+            inline=False,
+        )
 
-    embed.set_footer(text=SPAM_PANEL_FOOTER)
+    else:  # access
+        embed.description = (
+            "Manage who is allowed to bypass parts of the guard.\n"
+            "Use the role pickers below, then use the buttons for channels, users, and invite codes."
+        )
+        embed.add_field(
+            name="Invite-Allowed Roles",
+            value=_format_role_list(guild, list(settings.get("invite_allowed_role_ids") or [])),
+            inline=False,
+        )
+        embed.add_field(
+            name="Fully Exempt Roles",
+            value=_format_role_list(guild, list(settings.get("exempt_role_ids") or [])),
+            inline=False,
+        )
+        embed.add_field(
+            name="Allowed Channels / Exempt Users",
+            value=(
+                f"**Channels:** {_format_channel_list(guild, list(settings.get('allowed_channel_ids') or []))}\n"
+                f"**Users:** {_format_user_list(guild, list(settings.get('exempt_user_ids') or []))}"
+            ),
+            inline=False,
+        )
+        embed.add_field(
+            name="Allowed Invite Codes",
+            value=", ".join(f"`{x}`" for x in list(settings.get("allowed_invite_codes") or [])[:12]) or "—",
+            inline=False,
+        )
+
+    embed.set_footer(text=_panel_footer(clean_page))
     return embed
 
 
 async def _find_existing_panel(channel: discord.TextChannel) -> Optional[discord.Message]:
     try:
         me_id = int(getattr(getattr(bot, "user", None), "id", 0) or 0)
-        async for msg in channel.history(limit=60):
+        async for msg in channel.history(limit=80):
             if int(getattr(getattr(msg, "author", None), "id", 0) or 0) != me_id:
                 continue
             if not msg.embeds:
                 continue
             for emb in (msg.embeds or []):
                 footer = _safe_str(getattr(getattr(emb, "footer", None), "text", ""))
-                if SPAM_PANEL_FOOTER in footer:
+                if SPAM_PANEL_FOOTER_PREFIX in footer or SPAM_PANEL_FOOTER_BASE in footer:
                     return msg
     except Exception:
         pass
     return None
 
 
-async def _refresh_panel_message(
+async def _rerender_panel_message(
     *,
     guild: discord.Guild,
     channel: discord.TextChannel,
     message_id: int,
+    page: str,
     persisted_hint: Optional[bool] = None,
 ) -> None:
     settings = await get_spam_settings(guild.id)
-    embed = _build_panel_embed(guild, settings, persisted_hint=persisted_hint)
-    view = SpamGuardPanelView()
+    embed = _build_panel_embed(
+        guild,
+        settings,
+        page=page,
+        persisted_hint=persisted_hint,
+    )
+    view = SpamGuardPanelView(page=page)
 
     try:
         msg = await channel.fetch_message(int(message_id))
         await msg.edit(embed=embed, view=view)
     except Exception:
         pass
+
+
+async def _save_patch_and_rerender(
+    interaction: discord.Interaction,
+    *,
+    patch: Dict[str, Any],
+    page: str,
+    success_text: str,
+) -> None:
+    if not await _ensure_staff_panel_access(interaction):
+        return
+
+    guild = interaction.guild
+    channel = interaction.channel
+    message = interaction.message
+
+    if guild is None or not isinstance(channel, discord.TextChannel) or message is None:
+        return await _reply_ephemeral(interaction, "Invalid context.")
+
+    try:
+        if not interaction.response.is_done():
+            await interaction.response.defer(ephemeral=True)
+    except Exception:
+        pass
+
+    _, persisted = await save_spam_settings(
+        guild.id,
+        patch,
+        updated_by=interaction.user if isinstance(interaction.user, discord.Member) else None,
+    )
+
+    await _rerender_panel_message(
+        guild=guild,
+        channel=channel,
+        message_id=message.id,
+        page=page,
+        persisted_hint=persisted,
+    )
+
+    try:
+        await interaction.followup.send(
+            f"✅ {success_text}\nPersistence: `{'DB-backed' if persisted else 'runtime only'}`",
+            ephemeral=True,
+        )
+    except Exception:
+        pass
+
+
+async def _switch_panel_page(interaction: discord.Interaction, *, page: str) -> None:
+    if not await _ensure_staff_panel_access(interaction):
+        return
+
+    guild = interaction.guild
+    channel = interaction.channel
+    message = interaction.message
+
+    if guild is None or not isinstance(channel, discord.TextChannel) or message is None:
+        return await _reply_ephemeral(interaction, "Invalid context.")
+
+    settings = await get_spam_settings(guild.id)
+    embed = _build_panel_embed(guild, settings, page=page, persisted_hint=None)
+    view = SpamGuardPanelView(page=page)
+
+    try:
+        if not interaction.response.is_done():
+            await interaction.response.edit_message(embed=embed, view=view)
+        else:
+            await message.edit(embed=embed, view=view)
+    except Exception:
+        try:
+            await message.edit(embed=embed, view=view)
+        except Exception as e:
+            await _reply_ephemeral(interaction, f"❌ Failed to switch panel page: {e}")
 
 
 # ============================================================
@@ -1110,8 +1319,8 @@ async def handle_incoming_spam_message(message: discord.Message) -> bool:
             should_fire = False
             reasons: List[str] = []
 
-            # Invite-specific rules. Invite-allowed roles and allowed channels
-            # bypass invite-link enforcement only, not generic spam floods.
+            # Invite-specific rules.
+            # Invite-allowed roles and allowed channels bypass invite-link enforcement only.
             if not invite_role_bypass and not channel_bypass:
                 if len(blocked_invite_codes) >= int(settings["multi_invite_immediate"]):
                     should_fire = True
@@ -1129,7 +1338,7 @@ async def handle_incoming_spam_message(message: discord.Message) -> bool:
                         f"`{recent_count}` messages inside `{int(settings['window_seconds'])}s` and current message contained a blocked invite"
                     )
 
-            # Generic hacked-account style flood behavior
+            # Generic hacked-account behavior
             if duplicate_count >= int(settings["duplicate_threshold"]) and recent_count >= 3:
                 should_fire = True
                 reasons.append(
@@ -1194,15 +1403,16 @@ async def handle_incoming_spam_message(message: discord.Message) -> bool:
 
 
 # ============================================================
-# Panel modals
+# Modals
 # ============================================================
 
-class SpamThresholdsModal(discord.ui.Modal, title="Spam Guard Thresholds"):
-    def __init__(self, guild_id: int, channel_id: int, message_id: int, settings: Dict[str, Any]):
+class SpamThresholdsModal(discord.ui.Modal, title="Spam Guard • Detection Thresholds"):
+    def __init__(self, guild_id: int, channel_id: int, message_id: int, return_page: str, settings: Dict[str, Any]):
         super().__init__(timeout=300)
         self.guild_id = int(guild_id)
         self.channel_id = int(channel_id)
         self.message_id = int(message_id)
+        self.return_page = return_page if return_page in SPAM_PANEL_PAGES else "detection"
 
         self.window_seconds = discord.ui.TextInput(
             label="Window Seconds",
@@ -1223,7 +1433,7 @@ class SpamThresholdsModal(discord.ui.Modal, title="Spam Guard Thresholds"):
             max_length=3,
         )
         self.invite_threshold = discord.ui.TextInput(
-            label="Invite Message Threshold",
+            label="Invite-Message Threshold",
             default=str(int(settings["invite_threshold"])),
             required=True,
             max_length=3,
@@ -1245,8 +1455,18 @@ class SpamThresholdsModal(discord.ui.Modal, title="Spam Guard Thresholds"):
         if not await _ensure_staff_panel_access(interaction):
             return
 
+        guild = interaction.guild
+        if guild is None:
+            return await _reply_ephemeral(interaction, "Invalid context.")
+
         try:
-            settings, persisted = await save_spam_settings(
+            if not interaction.response.is_done():
+                await interaction.response.defer(ephemeral=True)
+        except Exception:
+            pass
+
+        try:
+            _, persisted = await save_spam_settings(
                 self.guild_id,
                 {
                     "window_seconds": int(_safe_str(self.window_seconds.value)),
@@ -1257,28 +1477,35 @@ class SpamThresholdsModal(discord.ui.Modal, title="Spam Guard Thresholds"):
                 },
                 updated_by=interaction.user if isinstance(interaction.user, discord.Member) else None,
             )
-            _ = settings
-            guild = interaction.guild
-            if guild is not None:
-                ch = guild.get_channel(self.channel_id)
-                if isinstance(ch, discord.TextChannel):
-                    await _refresh_panel_message(
-                        guild=guild,
-                        channel=ch,
-                        message_id=self.message_id,
-                        persisted_hint=persisted,
-                    )
-            await _reply_ephemeral(interaction, f"✅ Thresholds updated. Persistence: `{'DB-backed' if persisted else 'runtime only'}`")
         except Exception as e:
-            await _reply_ephemeral(interaction, f"❌ Failed to save thresholds: {e}")
+            return await _reply_ephemeral(interaction, f"❌ Failed to save thresholds: {e}")
+
+        ch = guild.get_channel(self.channel_id)
+        if isinstance(ch, discord.TextChannel):
+            await _rerender_panel_message(
+                guild=guild,
+                channel=ch,
+                message_id=self.message_id,
+                page=self.return_page,
+                persisted_hint=persisted,
+            )
+
+        try:
+            await interaction.followup.send(
+                f"✅ Detection thresholds updated.\nPersistence: `{'DB-backed' if persisted else 'runtime only'}`",
+                ephemeral=True,
+            )
+        except Exception:
+            pass
 
 
-class SpamActionSettingsModal(discord.ui.Modal, title="Spam Guard Action Settings"):
-    def __init__(self, guild_id: int, channel_id: int, message_id: int, settings: Dict[str, Any]):
+class SpamActionSettingsModal(discord.ui.Modal, title="Spam Guard • Actions + Invite Codes"):
+    def __init__(self, guild_id: int, channel_id: int, message_id: int, return_page: str, settings: Dict[str, Any]):
         super().__init__(timeout=300)
         self.guild_id = int(guild_id)
         self.channel_id = int(channel_id)
         self.message_id = int(message_id)
+        self.return_page = return_page if return_page in SPAM_PANEL_PAGES else "enforcement"
 
         self.timeout_minutes = discord.ui.TextInput(
             label="Timeout Minutes",
@@ -1322,8 +1549,18 @@ class SpamActionSettingsModal(discord.ui.Modal, title="Spam Guard Action Setting
         if not await _ensure_staff_panel_access(interaction):
             return
 
+        guild = interaction.guild
+        if guild is None:
+            return await _reply_ephemeral(interaction, "Invalid context.")
+
         try:
-            settings, persisted = await save_spam_settings(
+            if not interaction.response.is_done():
+                await interaction.response.defer(ephemeral=True)
+        except Exception:
+            pass
+
+        try:
+            _, persisted = await save_spam_settings(
                 self.guild_id,
                 {
                     "timeout_minutes": int(_safe_str(self.timeout_minutes.value)),
@@ -1334,28 +1571,35 @@ class SpamActionSettingsModal(discord.ui.Modal, title="Spam Guard Action Setting
                 },
                 updated_by=interaction.user if isinstance(interaction.user, discord.Member) else None,
             )
-            _ = settings
-            guild = interaction.guild
-            if guild is not None:
-                ch = guild.get_channel(self.channel_id)
-                if isinstance(ch, discord.TextChannel):
-                    await _refresh_panel_message(
-                        guild=guild,
-                        channel=ch,
-                        message_id=self.message_id,
-                        persisted_hint=persisted,
-                    )
-            await _reply_ephemeral(interaction, f"✅ Action settings updated. Persistence: `{'DB-backed' if persisted else 'runtime only'}`")
         except Exception as e:
-            await _reply_ephemeral(interaction, f"❌ Failed to save action settings: {e}")
+            return await _reply_ephemeral(interaction, f"❌ Failed to save action settings: {e}")
+
+        ch = guild.get_channel(self.channel_id)
+        if isinstance(ch, discord.TextChannel):
+            await _rerender_panel_message(
+                guild=guild,
+                channel=ch,
+                message_id=self.message_id,
+                page=self.return_page,
+                persisted_hint=persisted,
+            )
+
+        try:
+            await interaction.followup.send(
+                f"✅ Action settings updated.\nPersistence: `{'DB-backed' if persisted else 'runtime only'}`",
+                ephemeral=True,
+            )
+        except Exception:
+            pass
 
 
-class SpamListsModal(discord.ui.Modal, title="Spam Guard Lists"):
-    def __init__(self, guild_id: int, channel_id: int, message_id: int, settings: Dict[str, Any]):
+class SpamListsModal(discord.ui.Modal, title="Spam Guard • Channels + Exempt Users"):
+    def __init__(self, guild_id: int, channel_id: int, message_id: int, return_page: str, settings: Dict[str, Any]):
         super().__init__(timeout=300)
         self.guild_id = int(guild_id)
         self.channel_id = int(channel_id)
         self.message_id = int(message_id)
+        self.return_page = return_page if return_page in SPAM_PANEL_PAGES else "access"
 
         self.allowed_channel_ids = discord.ui.TextInput(
             label="Allowed Channel IDs",
@@ -1379,8 +1623,18 @@ class SpamListsModal(discord.ui.Modal, title="Spam Guard Lists"):
         if not await _ensure_staff_panel_access(interaction):
             return
 
+        guild = interaction.guild
+        if guild is None:
+            return await _reply_ephemeral(interaction, "Invalid context.")
+
         try:
-            settings, persisted = await save_spam_settings(
+            if not interaction.response.is_done():
+                await interaction.response.defer(ephemeral=True)
+        except Exception:
+            pass
+
+        try:
+            _, persisted = await save_spam_settings(
                 self.guild_id,
                 {
                     "allowed_channel_ids": _parse_csvish_ids(_safe_str(self.allowed_channel_ids.value)),
@@ -1388,339 +1642,411 @@ class SpamListsModal(discord.ui.Modal, title="Spam Guard Lists"):
                 },
                 updated_by=interaction.user if isinstance(interaction.user, discord.Member) else None,
             )
-            _ = settings
-            guild = interaction.guild
-            if guild is not None:
-                ch = guild.get_channel(self.channel_id)
-                if isinstance(ch, discord.TextChannel):
-                    await _refresh_panel_message(
-                        guild=guild,
-                        channel=ch,
-                        message_id=self.message_id,
-                        persisted_hint=persisted,
-                    )
-            await _reply_ephemeral(interaction, f"✅ Lists updated. Persistence: `{'DB-backed' if persisted else 'runtime only'}`")
         except Exception as e:
-            await _reply_ephemeral(interaction, f"❌ Failed to save list settings: {e}")
+            return await _reply_ephemeral(interaction, f"❌ Failed to save channels/users: {e}")
+
+        ch = guild.get_channel(self.channel_id)
+        if isinstance(ch, discord.TextChannel):
+            await _rerender_panel_message(
+                guild=guild,
+                channel=ch,
+                message_id=self.message_id,
+                page=self.return_page,
+                persisted_hint=persisted,
+            )
+
+        try:
+            await interaction.followup.send(
+                f"✅ Channels and exempt users updated.\nPersistence: `{'DB-backed' if persisted else 'runtime only'}`",
+                ephemeral=True,
+            )
+        except Exception:
+            pass
 
 
 # ============================================================
-# Panel components
+# Panel items
 # ============================================================
 
-class SpamModeSelect(discord.ui.Select):
-    def __init__(self):
+class SpamSectionSelect(discord.ui.Select):
+    def __init__(self, current_page: str):
         options = [
-            discord.SelectOption(label="Log Only", value="log_only", description="Only log incidents"),
-            discord.SelectOption(label="Delete Only", value="delete_only", description="Delete spam only"),
-            discord.SelectOption(label="Timeout", value="timeout", description="Delete spam and timeout"),
-            discord.SelectOption(label="Quarantine", value="quarantine", description="Delete spam and add quarantine role"),
-            discord.SelectOption(label="Kick", value="kick", description="Delete spam and kick"),
-            discord.SelectOption(label="Ban", value="ban", description="Delete spam and ban"),
+            discord.SelectOption(
+                label="Overview",
+                value="overview",
+                description="Compact summary and quick controls",
+                default=current_page == "overview",
+            ),
+            discord.SelectOption(
+                label="Detection",
+                value="detection",
+                description="Thresholds and trigger logic",
+                default=current_page == "detection",
+            ),
+            discord.SelectOption(
+                label="Enforcement",
+                value="enforcement",
+                description="Response mode, cleanup, quarantine",
+                default=current_page == "enforcement",
+            ),
+            discord.SelectOption(
+                label="Access",
+                value="access",
+                description="Invite roles, exemptions, channels, users",
+                default=current_page == "access",
+            ),
         ]
         super().__init__(
-            placeholder="Choose enforcement mode",
+            placeholder="Open a spam guard section…",
             min_values=1,
             max_values=1,
             options=options,
-            custom_id="spamguard:mode",
+            custom_id=f"spamguard:{current_page}:section",
             row=1,
         )
 
     async def callback(self, interaction: discord.Interaction) -> None:
-        if not await _ensure_staff_panel_access(interaction):
-            return
-        if interaction.guild is None or not isinstance(interaction.channel, discord.TextChannel) or interaction.message is None:
-            return await _reply_ephemeral(interaction, "Invalid context.")
+        target_page = self.values[0] if self.values and self.values[0] in SPAM_PANEL_PAGES else "overview"
+        await _switch_panel_page(interaction, page=target_page)
 
+
+class SpamModeSelect(discord.ui.Select):
+    def __init__(self, current_page: str, current_mode: str):
+        options = [
+            discord.SelectOption(label="Log Only", value="log_only", description="Just log incidents", default=current_mode == "log_only"),
+            discord.SelectOption(label="Delete Only", value="delete_only", description="Delete spam only", default=current_mode == "delete_only"),
+            discord.SelectOption(label="Timeout", value="timeout", description="Delete spam and timeout", default=current_mode == "timeout"),
+            discord.SelectOption(label="Quarantine", value="quarantine", description="Delete spam and add quarantine role", default=current_mode == "quarantine"),
+            discord.SelectOption(label="Kick", value="kick", description="Delete spam and kick", default=current_mode == "kick"),
+            discord.SelectOption(label="Ban", value="ban", description="Delete spam and ban", default=current_mode == "ban"),
+        ]
+        super().__init__(
+            placeholder="Choose enforcement mode…",
+            min_values=1,
+            max_values=1,
+            options=options,
+            custom_id=f"spamguard:{current_page}:mode",
+            row=2,
+        )
+        self.current_page = current_page
+
+    async def callback(self, interaction: discord.Interaction) -> None:
         new_mode = _normalize_mode(self.values[0], "timeout")
-        _, persisted = await save_spam_settings(
-            interaction.guild.id,
-            {"mode": new_mode},
-            updated_by=interaction.user if isinstance(interaction.user, discord.Member) else None,
+        await _save_patch_and_rerender(
+            interaction,
+            patch={"mode": new_mode},
+            page=self.current_page,
+            success_text=f"Spam guard mode set to `{new_mode}`.",
         )
-        await _refresh_panel_message(
-            guild=interaction.guild,
-            channel=interaction.channel,
-            message_id=interaction.message.id,
-            persisted_hint=persisted,
-        )
-        await _reply_ephemeral(interaction, f"✅ Spam guard mode set to `{new_mode}`.")
 
 
 class SpamInviteAllowedRolesSelect(discord.ui.RoleSelect):
-    def __init__(self):
+    def __init__(self, current_page: str):
         super().__init__(
             placeholder="Invite-allowed roles",
             min_values=0,
             max_values=10,
-            custom_id="spamguard:invite_roles",
-            row=3,
+            custom_id=f"spamguard:{current_page}:invite_roles",
+            row=2,
         )
+        self.current_page = current_page
 
     async def callback(self, interaction: discord.Interaction) -> None:
-        if not await _ensure_staff_panel_access(interaction):
-            return
-        if interaction.guild is None or not isinstance(interaction.channel, discord.TextChannel) or interaction.message is None:
-            return await _reply_ephemeral(interaction, "Invalid context.")
-
-        _, persisted = await save_spam_settings(
-            interaction.guild.id,
-            {"invite_allowed_role_ids": [str(role.id) for role in self.values]},
-            updated_by=interaction.user if isinstance(interaction.user, discord.Member) else None,
+        await _save_patch_and_rerender(
+            interaction,
+            patch={"invite_allowed_role_ids": [str(role.id) for role in self.values]},
+            page=self.current_page,
+            success_text="Invite-allowed roles updated.",
         )
-        await _refresh_panel_message(
-            guild=interaction.guild,
-            channel=interaction.channel,
-            message_id=interaction.message.id,
-            persisted_hint=persisted,
-        )
-        await _reply_ephemeral(interaction, "✅ Invite-allowed roles updated.")
 
 
 class SpamExemptRolesSelect(discord.ui.RoleSelect):
-    def __init__(self):
+    def __init__(self, current_page: str):
         super().__init__(
             placeholder="Fully exempt roles",
             min_values=0,
             max_values=10,
-            custom_id="spamguard:exempt_roles",
-            row=4,
+            custom_id=f"spamguard:{current_page}:exempt_roles",
+            row=3,
         )
+        self.current_page = current_page
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        await _save_patch_and_rerender(
+            interaction,
+            patch={"exempt_role_ids": [str(role.id) for role in self.values]},
+            page=self.current_page,
+            success_text="Fully exempt roles updated.",
+        )
+
+
+class ToggleEnabledButton(discord.ui.Button):
+    def __init__(self, page: str, enabled: bool):
+        super().__init__(
+            label="Disable Guard" if enabled else "Enable Guard",
+            style=discord.ButtonStyle.danger if enabled else discord.ButtonStyle.success,
+            custom_id=f"spamguard:{page}:toggle_enabled",
+            row=0,
+        )
+        self.page = page
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        guild = interaction.guild
+        if guild is None:
+            return await _reply_ephemeral(interaction, "Invalid context.")
+        current = await get_spam_settings(guild.id)
+        new_value = not bool(current["enabled"])
+        await _save_patch_and_rerender(
+            interaction,
+            patch={"enabled": new_value},
+            page=self.page,
+            success_text=f"Spam guard {'enabled' if new_value else 'disabled'}.",
+        )
+
+
+class RefreshPanelButton(discord.ui.Button):
+    def __init__(self, page: str):
+        super().__init__(
+            label="Refresh",
+            style=discord.ButtonStyle.primary,
+            custom_id=f"spamguard:{page}:refresh",
+            row=0,
+        )
+        self.page = page
 
     async def callback(self, interaction: discord.Interaction) -> None:
         if not await _ensure_staff_panel_access(interaction):
             return
-        if interaction.guild is None or not isinstance(interaction.channel, discord.TextChannel) or interaction.message is None:
+
+        guild = interaction.guild
+        channel = interaction.channel
+        message = interaction.message
+
+        if guild is None or not isinstance(channel, discord.TextChannel) or message is None:
             return await _reply_ephemeral(interaction, "Invalid context.")
 
-        _, persisted = await save_spam_settings(
-            interaction.guild.id,
-            {"exempt_role_ids": [str(role.id) for role in self.values]},
-            updated_by=interaction.user if isinstance(interaction.user, discord.Member) else None,
+        await _switch_panel_page(interaction, page=self.page)
+        try:
+            if interaction.response.is_done():
+                await interaction.followup.send("✅ Panel refreshed.", ephemeral=True)
+        except Exception:
+            pass
+
+
+class ToggleExternalOnlyButton(discord.ui.Button):
+    def __init__(self, page: str, enabled: bool):
+        super().__init__(
+            label="External Only",
+            style=discord.ButtonStyle.success if enabled else discord.ButtonStyle.secondary,
+            custom_id=f"spamguard:{page}:toggle_external_only",
+            row=4,
         )
-        await _refresh_panel_message(
-            guild=interaction.guild,
-            channel=interaction.channel,
-            message_id=interaction.message.id,
-            persisted_hint=persisted,
+        self.page = page
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        guild = interaction.guild
+        if guild is None:
+            return await _reply_ephemeral(interaction, "Invalid context.")
+        current = await get_spam_settings(guild.id)
+        new_value = not bool(current["block_external_invites_only"])
+        await _save_patch_and_rerender(
+            interaction,
+            patch={"block_external_invites_only": new_value},
+            page=self.page,
+            success_text=f"External-only invite blocking set to `{new_value}`.",
         )
-        await _reply_ephemeral(interaction, "✅ Exempt roles updated.")
+
+
+class ToggleAllowServerInvitesButton(discord.ui.Button):
+    def __init__(self, page: str, enabled: bool):
+        super().__init__(
+            label="Allow Own Invites",
+            style=discord.ButtonStyle.success if enabled else discord.ButtonStyle.secondary,
+            custom_id=f"spamguard:{page}:toggle_server_invites",
+            row=4,
+        )
+        self.page = page
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        guild = interaction.guild
+        if guild is None:
+            return await _reply_ephemeral(interaction, "Invalid context.")
+        current = await get_spam_settings(guild.id)
+        new_value = not bool(current["allow_server_invites"])
+        await _save_patch_and_rerender(
+            interaction,
+            patch={"allow_server_invites": new_value},
+            page=self.page,
+            success_text=f"Allow-this-server's-invites set to `{new_value}`.",
+        )
+
+
+class ToggleVerifiedUsersButton(discord.ui.Button):
+    def __init__(self, page: str, enabled: bool):
+        super().__init__(
+            label="Watch Verified",
+            style=discord.ButtonStyle.success if enabled else discord.ButtonStyle.secondary,
+            custom_id=f"spamguard:{page}:toggle_verified",
+            row=4,
+        )
+        self.page = page
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        guild = interaction.guild
+        if guild is None:
+            return await _reply_ephemeral(interaction, "Invalid context.")
+        current = await get_spam_settings(guild.id)
+        new_value = not bool(current["apply_to_verified_users"])
+        await _save_patch_and_rerender(
+            interaction,
+            patch={"apply_to_verified_users": new_value},
+            page=self.page,
+            success_text=f"Apply-to-verified-users set to `{new_value}`.",
+        )
+
+
+class ThresholdsModalButton(discord.ui.Button):
+    def __init__(self, page: str):
+        super().__init__(
+            label="Detection Rules",
+            style=discord.ButtonStyle.secondary,
+            custom_id=f"spamguard:{page}:thresholds",
+            row=3,
+        )
+        self.page = page
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        if not await _ensure_staff_panel_access(interaction):
+            return
+        guild = interaction.guild
+        channel = interaction.channel
+        message = interaction.message
+        if guild is None or not isinstance(channel, discord.TextChannel) or message is None:
+            return await _reply_ephemeral(interaction, "Invalid context.")
+
+        settings = await get_spam_settings(guild.id)
+        await interaction.response.send_modal(
+            SpamThresholdsModal(
+                guild.id,
+                channel.id,
+                message.id,
+                self.page,
+                settings,
+            )
+        )
+
+
+class ActionsModalButton(discord.ui.Button):
+    def __init__(self, page: str):
+        super().__init__(
+            label="Actions + Codes",
+            style=discord.ButtonStyle.secondary,
+            custom_id=f"spamguard:{page}:actions",
+            row=3 if page != "access" else 4,
+        )
+        self.page = page
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        if not await _ensure_staff_panel_access(interaction):
+            return
+        guild = interaction.guild
+        channel = interaction.channel
+        message = interaction.message
+        if guild is None or not isinstance(channel, discord.TextChannel) or message is None:
+            return await _reply_ephemeral(interaction, "Invalid context.")
+
+        settings = await get_spam_settings(guild.id)
+        await interaction.response.send_modal(
+            SpamActionSettingsModal(
+                guild.id,
+                channel.id,
+                message.id,
+                self.page,
+                settings,
+            )
+        )
+
+
+class ListsModalButton(discord.ui.Button):
+    def __init__(self, page: str):
+        super().__init__(
+            label="Channels + Users",
+            style=discord.ButtonStyle.secondary,
+            custom_id=f"spamguard:{page}:lists",
+            row=3 if page != "access" else 4,
+        )
+        self.page = page
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        if not await _ensure_staff_panel_access(interaction):
+            return
+        guild = interaction.guild
+        channel = interaction.channel
+        message = interaction.message
+        if guild is None or not isinstance(channel, discord.TextChannel) or message is None:
+            return await _reply_ephemeral(interaction, "Invalid context.")
+
+        settings = await get_spam_settings(guild.id)
+        await interaction.response.send_modal(
+            SpamListsModal(
+                guild.id,
+                channel.id,
+                message.id,
+                self.page,
+                settings,
+            )
+        )
 
 
 class SpamGuardPanelView(discord.ui.View):
-    def __init__(self):
+    def __init__(self, *, page: str):
         super().__init__(timeout=None)
-        self.add_item(SpamModeSelect())
-        self.add_item(SpamInviteAllowedRolesSelect())
-        self.add_item(SpamExemptRolesSelect())
+        self.page = page if page in SPAM_PANEL_PAGES else "overview"
 
-    @discord.ui.button(
-        label="Toggle Enabled",
-        style=discord.ButtonStyle.success,
-        custom_id="spamguard:toggle_enabled",
-        row=0,
-    )
-    async def toggle_enabled(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        _ = button
-        if not await _ensure_staff_panel_access(interaction):
-            return
-        if interaction.guild is None or not isinstance(interaction.channel, discord.TextChannel) or interaction.message is None:
-            return await _reply_ephemeral(interaction, "Invalid context.")
+        # Common row
+        # Enabled label/style is populated from current settings when view is built.
+        # It is okay to fetch synchronously from runtime cache fallback; actual message uses fresh values.
+        fake_settings = _RUNTIME_SETTINGS.get(0, {})
+        _ = fake_settings
 
-        current = await get_spam_settings(interaction.guild.id)
-        new_value = not bool(current["enabled"])
-        _, persisted = await save_spam_settings(
-            interaction.guild.id,
-            {"enabled": new_value},
-            updated_by=interaction.user if isinstance(interaction.user, discord.Member) else None,
-        )
-        await _refresh_panel_message(
-            guild=interaction.guild,
-            channel=interaction.channel,
-            message_id=interaction.message.id,
-            persisted_hint=persisted,
-        )
-        await _reply_ephemeral(interaction, f"✅ Spam guard {'enabled' if new_value else 'disabled'}.")
+    @classmethod
+    def build(cls, *, page: str, settings: Dict[str, Any]) -> "SpamGuardPanelView":
+        view = cls(page=page)
 
-    @discord.ui.button(
-        label="Toggle External-Only",
-        style=discord.ButtonStyle.secondary,
-        custom_id="spamguard:toggle_external_only",
-        row=0,
-    )
-    async def toggle_external_only(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        _ = button
-        if not await _ensure_staff_panel_access(interaction):
-            return
-        if interaction.guild is None or not isinstance(interaction.channel, discord.TextChannel) or interaction.message is None:
-            return await _reply_ephemeral(interaction, "Invalid context.")
+        # Row 0
+        view.add_item(ToggleEnabledButton(page, bool(settings["enabled"])))
+        view.add_item(RefreshPanelButton(page))
 
-        current = await get_spam_settings(interaction.guild.id)
-        new_value = not bool(current["block_external_invites_only"])
-        _, persisted = await save_spam_settings(
-            interaction.guild.id,
-            {"block_external_invites_only": new_value},
-            updated_by=interaction.user if isinstance(interaction.user, discord.Member) else None,
-        )
-        await _refresh_panel_message(
-            guild=interaction.guild,
-            channel=interaction.channel,
-            message_id=interaction.message.id,
-            persisted_hint=persisted,
-        )
-        await _reply_ephemeral(interaction, f"✅ External-only invite blocking set to `{new_value}`.")
+        # Row 1
+        view.add_item(SpamSectionSelect(page))
 
-    @discord.ui.button(
-        label="Toggle Allow Server Invites",
-        style=discord.ButtonStyle.secondary,
-        custom_id="spamguard:toggle_server_invites",
-        row=0,
-    )
-    async def toggle_server_invites(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        _ = button
-        if not await _ensure_staff_panel_access(interaction):
-            return
-        if interaction.guild is None or not isinstance(interaction.channel, discord.TextChannel) or interaction.message is None:
-            return await _reply_ephemeral(interaction, "Invalid context.")
+        if page == "access":
+            # Access page: focus on allowlists / exemptions
+            view.add_item(SpamInviteAllowedRolesSelect(page))
+            view.add_item(SpamExemptRolesSelect(page))
+            view.add_item(ActionsModalButton(page))
+            view.add_item(ListsModalButton(page))
+        else:
+            # General pages: focus on detection / enforcement controls
+            view.add_item(SpamModeSelect(page, _normalize_mode(settings.get("mode"), "timeout")))
+            view.add_item(ThresholdsModalButton(page))
+            view.add_item(ActionsModalButton(page))
+            view.add_item(ListsModalButton(page))
+            view.add_item(ToggleExternalOnlyButton(page, bool(settings["block_external_invites_only"])))
+            view.add_item(ToggleAllowServerInvitesButton(page, bool(settings["allow_server_invites"])))
+            view.add_item(ToggleVerifiedUsersButton(page, bool(settings["apply_to_verified_users"])))
 
-        current = await get_spam_settings(interaction.guild.id)
-        new_value = not bool(current["allow_server_invites"])
-        _, persisted = await save_spam_settings(
-            interaction.guild.id,
-            {"allow_server_invites": new_value},
-            updated_by=interaction.user if isinstance(interaction.user, discord.Member) else None,
-        )
-        await _refresh_panel_message(
-            guild=interaction.guild,
-            channel=interaction.channel,
-            message_id=interaction.message.id,
-            persisted_hint=persisted,
-        )
-        await _reply_ephemeral(interaction, f"✅ Allow-server-invites set to `{new_value}`.")
-
-    @discord.ui.button(
-        label="Toggle Verified Users",
-        style=discord.ButtonStyle.secondary,
-        custom_id="spamguard:toggle_verified",
-        row=0,
-    )
-    async def toggle_verified(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        _ = button
-        if not await _ensure_staff_panel_access(interaction):
-            return
-        if interaction.guild is None or not isinstance(interaction.channel, discord.TextChannel) or interaction.message is None:
-            return await _reply_ephemeral(interaction, "Invalid context.")
-
-        current = await get_spam_settings(interaction.guild.id)
-        new_value = not bool(current["apply_to_verified_users"])
-        _, persisted = await save_spam_settings(
-            interaction.guild.id,
-            {"apply_to_verified_users": new_value},
-            updated_by=interaction.user if isinstance(interaction.user, discord.Member) else None,
-        )
-        await _refresh_panel_message(
-            guild=interaction.guild,
-            channel=interaction.channel,
-            message_id=interaction.message.id,
-            persisted_hint=persisted,
-        )
-        await _reply_ephemeral(interaction, f"✅ Apply-to-verified-users set to `{new_value}`.")
-
-    @discord.ui.button(
-        label="Refresh",
-        style=discord.ButtonStyle.primary,
-        custom_id="spamguard:refresh",
-        row=0,
-    )
-    async def refresh(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        _ = button
-        if not await _ensure_staff_panel_access(interaction):
-            return
-        if interaction.guild is None or not isinstance(interaction.channel, discord.TextChannel) or interaction.message is None:
-            return await _reply_ephemeral(interaction, "Invalid context.")
-
-        await _refresh_panel_message(
-            guild=interaction.guild,
-            channel=interaction.channel,
-            message_id=interaction.message.id,
-            persisted_hint=None,
-        )
-        await _reply_ephemeral(interaction, "✅ Panel refreshed.")
-
-    @discord.ui.button(
-        label="Thresholds",
-        style=discord.ButtonStyle.secondary,
-        custom_id="spamguard:edit_thresholds",
-        row=2,
-    )
-    async def edit_thresholds(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        _ = button
-        if not await _ensure_staff_panel_access(interaction):
-            return
-        if interaction.guild is None or not isinstance(interaction.channel, discord.TextChannel) or interaction.message is None:
-            return await _reply_ephemeral(interaction, "Invalid context.")
-
-        settings = await get_spam_settings(interaction.guild.id)
-        await interaction.response.send_modal(
-            SpamThresholdsModal(
-                interaction.guild.id,
-                interaction.channel.id,
-                interaction.message.id,
-                settings,
-            )
-        )
-
-    @discord.ui.button(
-        label="Action Settings",
-        style=discord.ButtonStyle.secondary,
-        custom_id="spamguard:edit_actions",
-        row=2,
-    )
-    async def edit_actions(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        _ = button
-        if not await _ensure_staff_panel_access(interaction):
-            return
-        if interaction.guild is None or not isinstance(interaction.channel, discord.TextChannel) or interaction.message is None:
-            return await _reply_ephemeral(interaction, "Invalid context.")
-
-        settings = await get_spam_settings(interaction.guild.id)
-        await interaction.response.send_modal(
-            SpamActionSettingsModal(
-                interaction.guild.id,
-                interaction.channel.id,
-                interaction.message.id,
-                settings,
-            )
-        )
-
-    @discord.ui.button(
-        label="Lists",
-        style=discord.ButtonStyle.secondary,
-        custom_id="spamguard:edit_lists",
-        row=2,
-    )
-    async def edit_lists(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        _ = button
-        if not await _ensure_staff_panel_access(interaction):
-            return
-        if interaction.guild is None or not isinstance(interaction.channel, discord.TextChannel) or interaction.message is None:
-            return await _reply_ephemeral(interaction, "Invalid context.")
-
-        settings = await get_spam_settings(interaction.guild.id)
-        await interaction.response.send_modal(
-            SpamListsModal(
-                interaction.guild.id,
-                interaction.channel.id,
-                interaction.message.id,
-                settings,
-            )
-        )
+        return view
 
 
 # ============================================================
 # Commands / listeners
 # ============================================================
+
+async def _panel_view_for_guild_page(guild_id: int, page: str) -> SpamGuardPanelView:
+    settings = await get_spam_settings(guild_id)
+    return SpamGuardPanelView.build(page=page, settings=settings)
+
 
 def _register_spam_guard_commands() -> None:
     global _SPAM_GUARD_COMMANDS_REGISTERED
@@ -1746,8 +2072,8 @@ def _register_spam_guard_commands() -> None:
                 return await _reply_ephemeral(interaction, "You do not have permission to use this command.")
 
             settings = await get_spam_settings(guild.id)
-            embed = _build_panel_embed(guild, settings)
-            view = SpamGuardPanelView()
+            embed = _build_panel_embed(guild, settings, page="overview")
+            view = SpamGuardPanelView.build(page="overview", settings=settings)
 
             existing = await _find_existing_panel(channel)
             if existing is not None:
@@ -1780,7 +2106,7 @@ def _register_spam_guard_commands() -> None:
                 return await _reply_ephemeral(interaction, "You do not have permission to use this command.")
 
             settings = await get_spam_settings(guild.id)
-            embed = _build_panel_embed(guild, settings)
+            embed = _build_panel_embed(guild, settings, page="overview")
             await interaction.response.send_message(embed=embed, ephemeral=True)
 
     _SPAM_GUARD_COMMANDS_REGISTERED = True
@@ -1799,11 +2125,39 @@ async def _register_spam_guard_views():
         return
 
     try:
-        bot.add_view(SpamGuardPanelView())
+        # Register one persistent view for each page since custom_ids are page-specific.
+        for page in SPAM_PANEL_PAGES:
+            settings = _default_settings(0)
+            bot.add_view(SpamGuardPanelView.build(page=page, settings=settings))
         _SPAM_GUARD_VIEWS_REGISTERED = True
-        print("✅ spam_guard: persistent panel view registered")
+        print("✅ spam_guard: compact multi-page persistent views registered")
     except Exception as e:
-        print(f"⚠️ spam_guard: failed to register persistent view: {e}")
+        print(f"⚠️ spam_guard: failed to register persistent views: {e}")
+
+
+# Monkey-patch the rerender helper to use page-aware view factory
+async def _rerender_panel_message(
+    *,
+    guild: discord.Guild,
+    channel: discord.TextChannel,
+    message_id: int,
+    page: str,
+    persisted_hint: Optional[bool] = None,
+) -> None:
+    settings = await get_spam_settings(guild.id)
+    embed = _build_panel_embed(
+        guild,
+        settings,
+        page=page,
+        persisted_hint=persisted_hint,
+    )
+    view = SpamGuardPanelView.build(page=page, settings=settings)
+
+    try:
+        msg = await channel.fetch_message(int(message_id))
+        await msg.edit(embed=embed, view=view)
+    except Exception:
+        pass
 
 
 _register_spam_guard_commands()
