@@ -102,6 +102,8 @@ def _normalize_status(value: Any, default: str = OPEN_STATUS) -> str:
         text = str(value or "").strip().lower()
         if text in VALID_STATUSES:
             return text
+        if text in {"active", "reopened"}:
+            return OPEN_STATUS
     except Exception:
         pass
     return default
@@ -128,6 +130,84 @@ def _prefer_newer_iso(a: Any, b: Any) -> Optional[str]:
     if db:
         return _utc_iso(db)
     return None
+
+
+def _ticket_archive_category_id() -> int:
+    for key in (
+        "TICKET_ARCHIVE_CATEGORY_ID",
+        "TICKET_ARCHIVED_CATEGORY_ID",
+        "ARCHIVED_TICKET_CATEGORY_ID",
+        "ARCHIVE_TICKET_CATEGORY_ID",
+    ):
+        try:
+            value = int(globals().get(key, 0) or 0)
+            if value > 0:
+                return value
+        except Exception:
+            continue
+    return 0
+
+
+def _looks_like_archive_category_name(name: str) -> bool:
+    text = str(name or "").strip().lower()
+    if not text:
+        return False
+
+    markers = (
+        "archive",
+        "archived",
+        "ticket archive",
+        "tickets archive",
+        "archived tickets",
+        "closed tickets",
+    )
+    return any(marker in text for marker in markers)
+
+
+def _resolve_archive_category(guild: discord.Guild) -> Optional[discord.CategoryChannel]:
+    explicit_id = _ticket_archive_category_id()
+    if explicit_id > 0:
+        try:
+            ch = guild.get_channel(int(explicit_id))
+            if isinstance(ch, discord.CategoryChannel):
+                return ch
+        except Exception:
+            pass
+
+    try:
+        for category in guild.categories:
+            if _looks_like_archive_category_name(category.name):
+                return category
+    except Exception:
+        pass
+
+    return None
+
+
+def _channel_in_archive_category(channel: discord.TextChannel) -> bool:
+    try:
+        category = channel.category
+        if not isinstance(category, discord.CategoryChannel):
+            return False
+
+        explicit_archive = _resolve_archive_category(channel.guild)
+        if explicit_archive is not None and int(category.id) == int(explicit_archive.id):
+            return True
+
+        return _looks_like_archive_category_name(category.name)
+    except Exception:
+        return False
+
+
+def _channel_lifecycle_location(channel: discord.TextChannel) -> str:
+    try:
+        if _channel_in_archive_category(channel):
+            return f"archive:{channel.category.name if channel.category else 'unknown'}"
+        if channel.category is not None:
+            return f"category:{channel.category.name}"
+    except Exception:
+        pass
+    return "uncategorized"
 
 
 def _guess_category_from_channel(channel: discord.TextChannel) -> str:
@@ -178,6 +258,8 @@ def _channel_looks_closed(channel: discord.TextChannel) -> bool:
 
 
 def _guess_status_from_channel(channel: discord.TextChannel) -> str:
+    if _channel_in_archive_category(channel):
+        return CLOSED_STATUS
     if _channel_looks_closed(channel):
         return CLOSED_STATUS
     return OPEN_STATUS
@@ -344,6 +426,9 @@ def _is_ticket_channel(channel: discord.TextChannel) -> bool:
     if TICKET_NAME_RE.match(name):
         return True
 
+    if _channel_in_archive_category(channel) and ("owner_id=" in topic or "ticket_number=" in topic):
+        return True
+
     if "owner_id=" in topic and "ticket_number=" in topic:
         return True
 
@@ -358,23 +443,38 @@ def _is_ticket_channel(channel: discord.TextChannel) -> bool:
 
 def _discover_ticket_categories(guild: discord.Guild) -> List[discord.CategoryChannel]:
     categories: List[discord.CategoryChannel] = []
+    seen: Set[int] = set()
 
     if TICKET_CATEGORY_ID:
         try:
             ch = guild.get_channel(int(TICKET_CATEGORY_ID))
             if isinstance(ch, discord.CategoryChannel):
                 categories.append(ch)
+                seen.add(int(ch.id))
         except Exception:
             pass
 
+    archive_category = _resolve_archive_category(guild)
+    if archive_category is not None and int(archive_category.id) not in seen:
+        categories.append(archive_category)
+        seen.add(int(archive_category.id))
+
     try:
         for cat in guild.categories:
-            if cat in categories:
+            if int(cat.id) in seen:
                 continue
 
             name = str(cat.name or "").lower()
-            if "ticket" in name or "verify" in name or "support" in name:
+            if (
+                "ticket" in name
+                or "verify" in name
+                or "support" in name
+                or "archive" in name
+                or "archived" in name
+                or "closed" in name
+            ):
                 categories.append(cat)
+                seen.add(int(cat.id))
     except Exception:
         pass
 
@@ -565,8 +665,19 @@ def _build_core_ticket_payload(
     last_activity_at, last_message_id = _extract_last_activity(messages)
     now_iso = _utc_iso(now_utc())
 
-    owner_id = str(owner.id) if owner else str(_parse_owner_id_from_topic(channel) or "")
     existing_dict = existing if isinstance(existing, dict) else {}
+
+    owner_id = (
+        str(owner.id)
+        if owner is not None
+        else str(
+            _parse_owner_id_from_topic(channel)
+            or existing_dict.get("user_id")
+            or existing_dict.get("owner_id")
+            or existing_dict.get("requester_id")
+            or ""
+        )
+    ).strip()
 
     username = (
         _safe_str(owner)
@@ -600,6 +711,8 @@ def _build_core_ticket_payload(
     )
     assigned_to_name = claimed_by_name or str(existing_dict.get("assigned_to_name") or "").strip() or None
 
+    clean_initial_message = initial_message or str(existing_dict.get("initial_message") or "").strip()
+
     payload: Dict[str, Any] = {
         "guild_id": str(guild.id),
         "user_id": owner_id or "",
@@ -618,7 +731,7 @@ def _build_core_ticket_payload(
         "assigned_to_name": assigned_to_name,
         "closed_by": None,
         "closed_reason": None,
-        "initial_message": initial_message,
+        "initial_message": clean_initial_message,
         "ai_category_confidence": 0,
         "mod_suggestion": None,
         "mod_suggestion_confidence": 0,
@@ -626,7 +739,7 @@ def _build_core_ticket_payload(
         "discord_thread_id": str(channel.id),
         "channel_id": str(channel.id),
         "channel_name": channel.name,
-        "ticket_number": int(ticket_number) if ticket_number is not None else None,
+        "ticket_number": int(ticket_number) if ticket_number is not None else existing_dict.get("ticket_number"),
         "reopened_at": None,
         "sla_deadline": None,
         "is_ghost": bool(is_ghost),
@@ -885,6 +998,7 @@ async def _sync_channel_internal(
         "status": core_payload.get("status"),
         "user_id": core_payload.get("user_id"),
         "ticket_number": core_payload.get("ticket_number"),
+        "lifecycle_location": _channel_lifecycle_location(channel),
         "action": "unchanged",
     }
 
@@ -1026,6 +1140,7 @@ async def sync_active_ticket_channels_for_guild(
                 {
                     "channel_id": str(channel.id),
                     "channel_name": channel.name,
+                    "lifecycle_location": _channel_lifecycle_location(channel),
                     "action": "skipped",
                     "reason": "not_ticket_channel",
                 }
@@ -1039,6 +1154,7 @@ async def sync_active_ticket_channels_for_guild(
                 {
                     "channel_id": str(channel.id),
                     "channel_name": channel.name,
+                    "lifecycle_location": _channel_lifecycle_location(channel),
                     "action": "skipped",
                     "reason": "closed_filtered_out",
                 }
@@ -1071,6 +1187,7 @@ async def sync_active_ticket_channels_for_guild(
                 {
                     "channel_id": str(channel.id),
                     "channel_name": channel.name,
+                    "lifecycle_location": _channel_lifecycle_location(channel),
                     "action": "error",
                     "error": repr(e),
                 }
@@ -1102,6 +1219,7 @@ async def sync_one_ticket_channel(
                 {
                     "channel_id": str(channel.id),
                     "channel_name": channel.name,
+                    "lifecycle_location": _channel_lifecycle_location(channel),
                     "action": "skipped",
                     "reason": "not_ticket_channel",
                 }
@@ -1157,6 +1275,7 @@ async def sync_one_ticket_channel(
                 {
                     "channel_id": str(channel.id),
                     "channel_name": channel.name,
+                    "lifecycle_location": _channel_lifecycle_location(channel),
                     "action": "error",
                     "error": repr(e),
                 }
