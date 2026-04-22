@@ -72,9 +72,6 @@ _GUILD_INVITE_CACHE: Dict[int, Dict[str, Any]] = {}
 _QUARANTINE_CASES: Dict[str, Dict[str, Any]] = {}
 
 
-# ============================================================
-# Small helpers
-# ============================================================
 def _lock(key: str) -> asyncio.Lock:
     clean = str(key or "").strip() or "default"
     found = _LOCKS.get(clean)
@@ -804,9 +801,6 @@ async def save_quarantine_case(case: Dict[str, Any]) -> Tuple[Optional[Dict[str,
     return normalized, persisted
 
 
-# ============================================================
-# Settings defaults / normalization
-# ============================================================
 def _default_settings(guild_id: int) -> Dict[str, Any]:
     return {
         "guild_id": str(guild_id),
@@ -929,9 +923,6 @@ def _settings_payload_for_db(settings: Dict[str, Any], *, updated_by: Optional[d
     }
 
 
-# ============================================================
-# Settings persistence
-# ============================================================
 def _fetch_settings_sync(guild_id: int) -> Tuple[str, Optional[Dict[str, Any]]]:
     global _SETTINGS_TABLE_AVAILABLE
 
@@ -1063,9 +1054,6 @@ async def save_spam_settings(
     return normalized, persisted
 
 
-# ============================================================
-# Panel rendering
-# ============================================================
 def _build_panel_embed(
     guild: discord.Guild,
     settings: Dict[str, Any],
@@ -1395,9 +1383,6 @@ async def _switch_panel_page(interaction: discord.Interaction, *, page: str) -> 
         pass
 
 
-# ============================================================
-# Invite allow helpers
-# ============================================================
 async def _fetch_guild_invite_codes(guild: discord.Guild) -> Set[str]:
     gid = int(guild.id)
     now_mono = time.monotonic()
@@ -1424,9 +1409,6 @@ async def _fetch_guild_invite_codes(guild: discord.Guild) -> Set[str]:
     return codes
 
 
-# ============================================================
-# Detection state
-# ============================================================
 def _state_for_user(guild_id: int, user_id: int) -> Dict[str, Any]:
     key = (int(guild_id), int(user_id))
     found = _MESSAGE_WINDOWS.get(key)
@@ -1451,12 +1433,14 @@ def _cleanup_state(state: Dict[str, Any], *, now_mono: float, keep_seconds: int)
         messages.popleft()
 
 
-# ============================================================
-# Background memory cleanup
-# ============================================================
 @tasks.loop(minutes=5)
 async def cleanup_stale_memory() -> None:
     now_mono = time.monotonic()
+
+    windows_removed = 0
+    locks_removed = 0
+    invite_cache_removed = 0
+    restored_cases_removed = 0
 
     for key, state in list(_MESSAGE_WINDOWS.items()):
         try:
@@ -1466,6 +1450,7 @@ async def cleanup_stale_memory() -> None:
             is_empty = not messages if isinstance(messages, deque) else True
             if is_empty and (now_mono - last_action_at) > STALE_WINDOW_TTL_SECONDS:
                 _MESSAGE_WINDOWS.pop(key, None)
+                windows_removed += 1
         except Exception:
             continue
 
@@ -1477,6 +1462,7 @@ async def cleanup_stale_memory() -> None:
             if (now_mono - last_used) > STALE_LOCK_TTL_SECONDS:
                 _LOCKS.pop(key, None)
                 _LOCK_LAST_USED.pop(key, None)
+                locks_removed += 1
         except Exception:
             continue
 
@@ -1485,6 +1471,7 @@ async def cleanup_stale_memory() -> None:
             expires_at = float(payload.get("expires_at", 0.0) or 0.0)
             if expires_at <= 0.0 or (now_mono - expires_at) > STALE_INVITE_CACHE_TTL_SECONDS:
                 _GUILD_INVITE_CACHE.pop(gid, None)
+                invite_cache_removed += 1
         except Exception:
             continue
 
@@ -1498,12 +1485,18 @@ async def cleanup_stale_memory() -> None:
             restored_ts = datetime.fromisoformat(restored_at.replace("Z", "+00:00")).timestamp()
             if (time.time() - restored_ts) > RESTORED_CASE_RETENTION_SECONDS:
                 _QUARANTINE_CASES.pop(case_id, None)
+                restored_cases_removed += 1
         except Exception:
             continue
 
-    _debug(
-        f"memory cleanup windows={len(_MESSAGE_WINDOWS)} locks={len(_LOCKS)} invite_cache={len(_GUILD_INVITE_CACHE)} quarantine_cases={len(_QUARANTINE_CASES)}"
-    )
+    if any((windows_removed, locks_removed, invite_cache_removed, restored_cases_removed)):
+        _debug(
+            "memory cleanup removed "
+            f"windows={windows_removed} "
+            f"locks={locks_removed} "
+            f"invite_cache={invite_cache_removed} "
+            f"restored_cases={restored_cases_removed}"
+        )
 
 
 @cleanup_stale_memory.before_loop
@@ -1511,9 +1504,6 @@ async def _before_cleanup_stale_memory() -> None:
     await bot.wait_until_ready()
 
 
-# ============================================================
-# Enforcement helpers
-# ============================================================
 async def _delete_recent_messages(
     *,
     guild: discord.Guild,
@@ -2055,9 +2045,6 @@ async def _log_trigger(
         await save_quarantine_case(quarantine_case)
 
 
-# ============================================================
-# Main detector
-# ============================================================
 async def handle_incoming_spam_message(message: discord.Message) -> bool:
     try:
         if message.guild is None:
@@ -2382,9 +2369,6 @@ async def handle_incoming_spam_message(message: discord.Message) -> bool:
         return False
 
 
-# ============================================================
-# Modals
-# ============================================================
 class SpamThresholdsModal(discord.ui.Modal, title="Spam Guard • Detection Rules"):
     def __init__(self, guild_id: int, channel_id: int, message_id: int, return_page: str, settings: Dict[str, Any]):
         super().__init__(timeout=300)
@@ -2662,9 +2646,6 @@ class SpamListsModal(discord.ui.Modal, title="Spam Guard • Channels + Users"):
             pass
 
 
-# ============================================================
-# Panel items
-# ============================================================
 class SpamSectionSelect(discord.ui.Select):
     def __init__(self, current_page: str):
         options = [
@@ -3017,9 +2998,6 @@ class SpamGuardPanelView(discord.ui.View):
         return view
 
 
-# ============================================================
-# Commands / listeners
-# ============================================================
 def _register_spam_guard_commands() -> None:
     global _SPAM_GUARD_COMMANDS_REGISTERED
 
@@ -3107,30 +3085,57 @@ async def _spam_guard_on_message(message: discord.Message):
 
 @bot.listen("on_ready")
 async def _spam_guard_warm_settings_cache():
+    if not claim_startup_flag("spam-guard-warm-settings"):
+        return
+
     try:
-        for guild in list(bot.guilds):
+        guilds = list(bot.guilds)
+        enabled_guild_ids: List[int] = []
+        runtime_only_enabled_guild_ids: List[int] = []
+
+        for guild in guilds:
             settings = await get_spam_settings(guild.id)
             cached = _cached_runtime_settings(guild.id) or {}
+            enabled = bool(settings.get("enabled"))
+            persisted = bool(cached.get("__meta_persisted"))
+
+            if enabled:
+                enabled_guild_ids.append(int(guild.id))
+                if not persisted:
+                    runtime_only_enabled_guild_ids.append(int(guild.id))
+
+        _debug(
+            "startup settings "
+            f"guilds={len(guilds)} "
+            f"enabled={len(enabled_guild_ids)} "
+            f"runtime_only_enabled={len(runtime_only_enabled_guild_ids)}"
+        )
+
+        if runtime_only_enabled_guild_ids:
             _debug(
-                f"warm settings guild={guild.id} enabled={bool(settings.get('enabled'))} "
-                f"persisted={bool(cached.get('__meta_persisted'))}"
+                "startup settings runtime_only_guild_ids="
+                + ",".join(str(gid) for gid in runtime_only_enabled_guild_ids[:20])
             )
     except Exception as e:
-        _debug(f"warm settings cache failed error={repr(e)}")
+        _debug(f"startup settings warm failed error={repr(e)}")
 
 
 @bot.listen("on_ready")
 async def _register_spam_guard_views():
     global _SPAM_GUARD_VIEWS_REGISTERED
 
+    cleanup_started = False
+
     if not cleanup_stale_memory.is_running():
         try:
             cleanup_stale_memory.start()
-            _debug("started stale memory cleanup loop")
+            cleanup_started = True
         except Exception as e:
-            _debug(f"failed starting stale memory cleanup loop error={repr(e)}")
+            _debug(f"startup cleanup loop failed error={repr(e)}")
 
     if _SPAM_GUARD_VIEWS_REGISTERED:
+        if cleanup_started:
+            _debug("startup cleanup loop started")
         return
 
     try:
@@ -3139,9 +3144,17 @@ async def _register_spam_guard_views():
         bot.add_view(SpamIncidentRestoreView(restored=False))
         bot.add_view(SpamIncidentRestoreView(restored=True))
         _SPAM_GUARD_VIEWS_REGISTERED = True
-        print("✅ spam_guard: persistent views registered")
+
+        parts = []
+        if cleanup_started:
+            parts.append("cleanup_loop=started")
+        else:
+            parts.append(f"cleanup_loop={'running' if cleanup_stale_memory.is_running() else 'stopped'}")
+        parts.append("persistent_views=ready")
+        parts.append(f"pages={len(SPAM_PANEL_PAGES)}")
+        _debug("startup " + " ".join(parts))
     except Exception as e:
-        print(f"⚠️ spam_guard: failed to register persistent views: {e}")
+        _debug(f"startup persistent views failed error={repr(e)}")
 
 
 _register_spam_guard_commands()
