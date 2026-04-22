@@ -97,12 +97,12 @@ except Exception:
 # Markers / locks
 # ============================================================
 
-_CLOSE_PROMPT_MARKER = "stoney_verify:close_prompt:v8"
-_STAFF_CLOSED_MARKER = "stoney_verify:staff_closed:v9"
-_CLOSE_REOPENED_MARKER = "stoney_verify:ticket_reopened:v8"
-_STAFF_REVIEW_PANEL_MARKER = "stoney_verify:staff_review_panel:v5"
-_TRANSCRIPT_POSTED_MARKER = "stoney_verify:transcript_posted:v4"
-_OPEN_CONTROLS_MARKER = "stoney_verify:open_controls:v4"
+_CLOSE_PROMPT_MARKER = "stoney_verify:close_prompt:v10"
+_STAFF_CLOSED_MARKER = "stoney_verify:staff_closed:v10"
+_CLOSE_REOPENED_MARKER = "stoney_verify:ticket_reopened:v9"
+_STAFF_REVIEW_PANEL_MARKER = "stoney_verify:staff_review_panel:v6"
+_TRANSCRIPT_POSTED_MARKER = "stoney_verify:transcript_posted:v6"
+_OPEN_CONTROLS_MARKER = "stoney_verify:open_controls:v5"
 
 _CLOSE_PROMPT_LOCKS: Dict[int, asyncio.Lock] = {}
 _STAFF_REVIEW_PANEL_LOCKS: Dict[int, asyncio.Lock] = {}
@@ -249,7 +249,6 @@ def _resolve_active_ticket_category(guild: discord.Guild) -> Optional[discord.Ca
         active = _resolve_ticket_category_by_id(guild, active_id)
         if active is not None:
             return active
-
     return None
 
 
@@ -263,6 +262,32 @@ def _channel_is_in_category(
         return int(getattr(channel.category, "id", 0) or 0) == int(category.id)
     except Exception:
         return False
+
+
+def _channel_is_in_archive_category(channel: discord.TextChannel) -> bool:
+    try:
+        category = channel.category
+        if not isinstance(category, discord.CategoryChannel):
+            return False
+
+        explicit_archive = _resolve_archive_category(channel.guild)
+        if explicit_archive is not None and int(category.id) == int(explicit_archive.id):
+            return True
+
+        return _looks_like_archive_category_name(category.name)
+    except Exception:
+        return False
+
+
+def _channel_lifecycle_location(channel: discord.TextChannel) -> str:
+    try:
+        if _channel_is_in_archive_category(channel):
+            return f"archive:{channel.category.name if channel.category else 'unknown'}"
+        if channel.category is not None:
+            return f"category:{channel.category.name}"
+    except Exception:
+        pass
+    return "uncategorized"
 
 
 async def _move_ticket_to_archive_if_configured(channel: discord.TextChannel) -> bool:
@@ -385,6 +410,14 @@ async def _reply_ephemeral(interaction: discord.Interaction, content: str) -> No
             pass
 
 
+async def _safe_defer_ephemeral(interaction: discord.Interaction) -> None:
+    try:
+        if not interaction.response.is_done():
+            await interaction.response.defer(ephemeral=True)
+    except Exception:
+        pass
+
+
 async def _resolve_ticket_owner(channel: discord.TextChannel) -> Optional[discord.Member]:
     try:
         return await find_ticket_owner_retry(channel)
@@ -404,7 +437,12 @@ async def _ticket_row(channel_id: int | str) -> Optional[Dict[str, Any]]:
 
 def _row_status(row: Optional[Dict[str, Any]]) -> str:
     try:
-        return str((row or {}).get("status") or "").strip().lower()
+        raw = str((row or {}).get("status") or "").strip().lower()
+        if raw in {"open", "claimed", "closed", "deleted"}:
+            return raw
+        if raw in {"active", "reopened"}:
+            return "open"
+        return raw
     except Exception:
         return ""
 
@@ -427,7 +465,11 @@ def _channel_looks_closed(channel: discord.TextChannel) -> bool:
 async def _ticket_is_closed(channel: discord.TextChannel) -> bool:
     try:
         row = await _ticket_row(channel.id)
+        if row and _row_is_deleted(row):
+            return True
         if row and _row_is_closed(row):
+            return True
+        if _channel_is_in_archive_category(channel):
             return True
         if _channel_looks_closed(channel):
             return True
@@ -449,7 +491,7 @@ async def _ticket_is_deleted(channel: discord.TextChannel) -> bool:
 async def _ticket_is_open_like(channel: discord.TextChannel) -> bool:
     try:
         row = await _ticket_row(channel.id)
-        if row and _row_status(row) in {"open", "claimed"} and not _channel_looks_closed(channel):
+        if row and _row_status(row) in {"open", "claimed"} and not _channel_is_in_archive_category(channel) and not _channel_looks_closed(channel):
             return True
     except Exception:
         pass
@@ -687,9 +729,8 @@ async def _freeze_message_controls(
 
     try:
         content = message.content or ""
-        if content_suffix:
-            if content_suffix not in content:
-                content = f"{content}\n{content_suffix}" if content else content_suffix
+        if content_suffix and content_suffix not in content:
+            content = f"{content}\n{content_suffix}" if content else content_suffix
 
         frozen_view = _disabled_view_from_existing_message(message)
         await message.edit(content=content, view=frozen_view)
@@ -712,6 +753,34 @@ async def _detect_is_ghost_ticket(channel: discord.TextChannel) -> bool:
         return "ghost" in str(channel.name or "").lower()
     except Exception:
         return False
+
+
+def _open_ticket_embed_description(owner: Optional[discord.Member]) -> str:
+    owner_ref = owner.mention if isinstance(owner, discord.Member) else "The ticket owner"
+    return (
+        f"{owner_ref} can close this ticket when they are done.\n\n"
+        "Staff can also close it.\n"
+        "Delete should only be used when you truly want the ticket removed."
+    )
+
+
+def _closed_ticket_embed_description(
+    *,
+    closed_by: discord.abc.User,
+    archive_category: Optional[discord.CategoryChannel],
+) -> str:
+    archive_hint = ""
+    if archive_category is not None:
+        archive_hint = f"\nThis ticket was moved to **{archive_category.name}** to keep things organized."
+
+    return (
+        f"This ticket was closed by {closed_by.mention}.\n\n"
+        "The ticket owner can still read the ticket, but cannot reply right now."
+        f"{archive_hint}\n\n"
+        "Use **Reopen Ticket** if the issue is not finished yet.\n"
+        "Use **Post Transcript** to save a copy first.\n"
+        "Use **Delete Ticket** only when the ticket is truly done."
+    )
 
 
 # ============================================================
@@ -768,18 +837,12 @@ async def _post_staff_closed_message(channel: discord.TextChannel, closed_by: di
     lock = _lock_for(_STAFF_CLOSED_LOCKS, channel.id)
     async with lock:
         archive_category = _resolve_archive_category(channel.guild)
-        archive_hint = ""
-        if archive_category is not None:
-            archive_hint = f"\nThis ticket was moved to **{archive_category.name}** to keep tickets organized."
 
         embed = discord.Embed(
             title="🔒 Ticket Closed",
-            description=(
-                f"This ticket was closed by {closed_by.mention}.\n"
-                "The ticket owner is locked from replying right now."
-                f"{archive_hint}\n\n"
-                "Need more help? Use **Reopen Ticket** below.\n"
-                "Staff can also post a transcript or delete the ticket."
+            description=_closed_ticket_embed_description(
+                closed_by=closed_by,
+                archive_category=archive_category,
             ),
             color=discord.Color.orange(),
             timestamp=now_utc(),
@@ -900,10 +963,7 @@ async def post_or_replace_open_ticket_controls(
 
         embed = discord.Embed(
             title="🟢 Ticket Open",
-            description=(
-                f"{owner.mention if isinstance(owner, discord.Member) else 'The ticket owner'} can close this ticket when finished.\n"
-                "Staff can also close it or delete it."
-            ),
+            description=_open_ticket_embed_description(owner),
             color=discord.Color.green(),
             timestamp=now_utc(),
         )
@@ -1434,7 +1494,10 @@ async def post_or_replace_verification_staff_panel(
 
         embed = discord.Embed(
             title="🛡️ Verification Staff Review",
-            description="A verification submission was received and is ready for staff review in this same ticket.",
+            description=(
+                "A verification submission was received and is ready for staff review in this same ticket.\n\n"
+                "Use the buttons below for a clear next step."
+            ),
             color=discord.Color.blurple(),
             timestamp=now_utc(),
         )
@@ -1456,8 +1519,10 @@ async def post_or_replace_verification_staff_panel(
         embed.add_field(
             name="Review Actions",
             value=(
-                "Approve, deny, or remove the unverified role "
-                "from this same verification ticket flow."
+                "Approve = verify the member.\n"
+                "Deny = reject the submission.\n"
+                "Remove Unverified = remove the role only.\n"
+                "Repost Member Verify UI = show the member panel again."
             ),
             inline=False,
         )
@@ -1475,8 +1540,6 @@ async def post_or_replace_verification_staff_panel(
                     continue
                 if not msg.embeds:
                     continue
-
-                    # unreachable but harmless if left; keeping logic below
 
                 try:
                     footer_text = str(
@@ -1538,11 +1601,7 @@ class TicketOpenActionsView(discord.ui.View):
         if isinstance(interaction.user, discord.Member) and _is_staff_member(interaction.user):
             lock = _lock_for(_CLOSE_ACTION_LOCKS, channel.id)
             async with lock:
-                try:
-                    if not interaction.response.is_done():
-                        await interaction.response.defer(ephemeral=True)
-                except Exception:
-                    pass
+                await _safe_defer_ephemeral(interaction)
 
                 if await _ticket_is_deleted(channel):
                     return await _reply_ephemeral(interaction, "❌ Ticket is already deleted.")
@@ -1571,6 +1630,17 @@ class TicketOpenActionsView(discord.ui.View):
                         return await _reply_ephemeral(interaction, "❌ Failed to close ticket.")
 
                 try:
+                    await _rename_channel_closed(channel)
+                except Exception:
+                    pass
+
+                try:
+                    owner = await _resolve_ticket_owner(channel)
+                    await _lock_ticket_for_owner(channel, owner)
+                except Exception:
+                    pass
+
+                try:
                     await _move_ticket_to_archive_if_configured(channel)
                 except Exception:
                     pass
@@ -1588,6 +1658,11 @@ class TicketOpenActionsView(discord.ui.View):
                         channel,
                         suffix=f"🔒 Closed by {interaction.user.mention}.",
                     )
+                except Exception:
+                    pass
+
+                try:
+                    await _post_staff_closed_message(channel, interaction.user)
                 except Exception:
                     pass
 
@@ -1634,11 +1709,7 @@ class TicketOpenActionsView(discord.ui.View):
 
         lock = _lock_for(_DELETE_ACTION_LOCKS, channel.id)
         async with lock:
-            try:
-                if not interaction.response.is_done():
-                    await interaction.response.defer(ephemeral=True)
-                except Exception:
-                    pass
+            await _safe_defer_ephemeral(interaction)
 
             if await _ticket_is_deleted(channel):
                 return await _reply_ephemeral(interaction, "❌ Ticket is already deleted.")
@@ -1668,6 +1739,17 @@ class TicketOpenActionsView(discord.ui.View):
                         )
 
                 try:
+                    await _rename_channel_closed(channel)
+                except Exception:
+                    pass
+
+                try:
+                    owner = await _resolve_ticket_owner(channel)
+                    await _lock_ticket_for_owner(channel, owner)
+                except Exception:
+                    pass
+
+                try:
                     await _move_ticket_to_archive_if_configured(channel)
                 except Exception:
                     pass
@@ -1685,6 +1767,11 @@ class TicketOpenActionsView(discord.ui.View):
                         channel,
                         suffix=f"🗑️ Delete started by {interaction.user.mention}.",
                     )
+                except Exception:
+                    pass
+
+                try:
+                    await _post_staff_closed_message(channel, interaction.user)
                 except Exception:
                     pass
 
@@ -1754,11 +1841,7 @@ class StaffClosedTicketView(discord.ui.View):
 
         lock = _lock_for(_REOPEN_ACTION_LOCKS, channel.id)
         async with lock:
-            try:
-                if not interaction.response.is_done():
-                    await interaction.response.defer(ephemeral=True)
-            except Exception:
-                pass
+            await _safe_defer_ephemeral(interaction)
 
             if await _ticket_is_deleted(channel):
                 return await _reply_ephemeral(interaction, "❌ Ticket is already deleted.")
@@ -1800,6 +1883,16 @@ class StaffClosedTicketView(discord.ui.View):
 
             if not reopened:
                 return await _reply_ephemeral(interaction, "❌ Failed to reopen ticket.")
+
+            try:
+                await _rename_channel_open(channel)
+            except Exception:
+                pass
+
+            try:
+                await _unlock_ticket_for_owner(channel, owner)
+            except Exception:
+                pass
 
             try:
                 await _move_ticket_to_active_if_configured(channel)
@@ -1907,6 +2000,8 @@ class StaffClosedTicketView(discord.ui.View):
 
         lock = _lock_for(_DELETE_ACTION_LOCKS, channel.id)
         async with lock:
+            await _safe_defer_ephemeral(interaction)
+
             if await _ticket_is_deleted(channel):
                 return await _reply_ephemeral(interaction, "❌ Ticket is already deleted.")
 
@@ -1977,11 +2072,7 @@ class ConfirmCloseTicketView(discord.ui.View):
 
         lock = _lock_for(_CLOSE_ACTION_LOCKS, channel.id)
         async with lock:
-            try:
-                if not interaction.response.is_done():
-                    await interaction.response.defer(ephemeral=True)
-            except Exception:
-                pass
+            await _safe_defer_ephemeral(interaction)
 
             if await _ticket_is_deleted(channel):
                 return await _reply_ephemeral(interaction, "❌ Ticket is already deleted.")
@@ -2017,6 +2108,17 @@ class ConfirmCloseTicketView(discord.ui.View):
                     return await _reply_ephemeral(interaction, "❌ Failed to close ticket.")
 
             try:
+                await _rename_channel_closed(channel)
+            except Exception:
+                pass
+
+            try:
+                owner = await _resolve_ticket_owner(channel)
+                await _lock_ticket_for_owner(channel, owner)
+            except Exception:
+                pass
+
+            try:
                 await _move_ticket_to_archive_if_configured(channel)
             except Exception:
                 pass
@@ -2034,6 +2136,12 @@ class ConfirmCloseTicketView(discord.ui.View):
                     channel,
                     suffix="🔒 Ticket close confirmed.",
                 )
+            except Exception:
+                pass
+
+            try:
+                if isinstance(interaction.user, (discord.Member, discord.User)):
+                    await _post_staff_closed_message(channel, interaction.user)
             except Exception:
                 pass
 
