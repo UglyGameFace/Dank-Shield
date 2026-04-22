@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import hmac
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from aiohttp import web
 
@@ -13,8 +13,10 @@ from ..globals import (
     BOT_API_PORT,
     BOT_API_REQUIRE_AUTH,
     BOT_API_SHARED_SECRET,
+    TICKET_CATEGORY_ID,
     bot,
 )
+from ..tickets import find_ticket_owner_retry
 from ..tickets_new.service import (
     assign_ticket,
     create_ticket_channel,
@@ -25,6 +27,7 @@ from ..tickets_new.service import (
     list_unclaimed_tickets,
     mark_ticket_closed,
     reopen_ticket,
+    reopen_ticket_channel,
 )
 
 try:
@@ -33,7 +36,16 @@ except Exception:
     unclaim_ticket = None  # type: ignore
     transfer_ticket = None  # type: ignore
 
-from ..tickets_new.transcript_service import delete_ticket_with_optional_transcript
+try:
+    from ..tickets_new.repository import get_ticket_by_any_channel_id as repo_get_ticket_by_any_channel_id
+except Exception:
+    async def repo_get_ticket_by_any_channel_id(channel_id: int | str):  # type: ignore
+        return None
+
+from ..tickets_new.transcript_service import (
+    delete_ticket_with_optional_transcript,
+    post_transcript_to_channel,
+)
 from ..tickets_new.sync_service import (
     sync_active_ticket_channels_for_guild,
     sync_one_ticket_channel,
@@ -85,6 +97,168 @@ def _safe_bool(value: Any, default: bool = False) -> bool:
     return default
 
 
+def _ticket_status(row: Optional[Dict[str, Any]]) -> str:
+    try:
+        raw = _safe_str((row or {}).get("status")).strip().lower()
+        aliases = {
+            "active": "open",
+            "reopened": "open",
+        }
+        raw = aliases.get(raw, raw)
+        if raw in {"open", "claimed", "closed", "deleted"}:
+            return raw
+    except Exception:
+        pass
+    return "unknown"
+
+
+def _ticket_archive_category_id() -> int:
+    for key in (
+        "TICKET_ARCHIVE_CATEGORY_ID",
+        "TICKET_ARCHIVED_CATEGORY_ID",
+        "ARCHIVED_TICKET_CATEGORY_ID",
+        "ARCHIVE_TICKET_CATEGORY_ID",
+    ):
+        try:
+            value = int(globals().get(key, 0) or 0)
+            if value > 0:
+                return value
+        except Exception:
+            continue
+    return 0
+
+
+def _ticket_active_category_id() -> int:
+    try:
+        value = int(TICKET_CATEGORY_ID or 0)
+        if value > 0:
+            return value
+    except Exception:
+        pass
+    return 0
+
+
+def _looks_like_archive_category_name(name: str) -> bool:
+    text = _safe_str(name).strip().lower()
+    if not text:
+        return False
+
+    markers = (
+        "archive",
+        "archived",
+        "ticket archive",
+        "tickets archive",
+        "archived tickets",
+        "closed tickets",
+    )
+    return any(marker in text for marker in markers)
+
+
+def _resolve_category_by_id(
+    guild: discord.Guild,
+    category_id: int,
+) -> Optional[discord.CategoryChannel]:
+    try:
+        if category_id <= 0:
+            return None
+        channel = guild.get_channel(int(category_id))
+        if isinstance(channel, discord.CategoryChannel):
+            return channel
+    except Exception:
+        pass
+    return None
+
+
+def _resolve_archive_category(guild: discord.Guild) -> Optional[discord.CategoryChannel]:
+    explicit_id = _ticket_archive_category_id()
+    if explicit_id > 0:
+        explicit = _resolve_category_by_id(guild, explicit_id)
+        if explicit is not None:
+            return explicit
+
+    try:
+        for category in guild.categories:
+            if _looks_like_archive_category_name(category.name):
+                return category
+    except Exception:
+        pass
+
+    return None
+
+
+def _resolve_active_ticket_category(guild: discord.Guild) -> Optional[discord.CategoryChannel]:
+    explicit_id = _ticket_active_category_id()
+    if explicit_id > 0:
+        explicit = _resolve_category_by_id(guild, explicit_id)
+        if explicit is not None:
+            return explicit
+    return None
+
+
+def _channel_is_in_category(
+    channel: discord.TextChannel,
+    category: Optional[discord.CategoryChannel],
+) -> bool:
+    try:
+        if category is None:
+            return False
+        return int(getattr(channel.category, "id", 0) or 0) == int(category.id)
+    except Exception:
+        return False
+
+
+async def _move_ticket_to_archive_if_configured(channel: discord.TextChannel) -> bool:
+    archive_category = _resolve_archive_category(channel.guild)
+    if archive_category is None:
+        return False
+
+    if _channel_is_in_category(channel, archive_category):
+        return True
+
+    try:
+        await channel.edit(
+            category=archive_category,
+            sync_permissions=False,
+            reason="Ticket closed -> move to archive category",
+        )
+        return True
+    except Exception:
+        return False
+
+
+async def _move_ticket_to_active_if_configured(channel: discord.TextChannel) -> bool:
+    active_category = _resolve_active_ticket_category(channel.guild)
+    if active_category is None:
+        return False
+
+    if _channel_is_in_category(channel, active_category):
+        return True
+
+    try:
+        await channel.edit(
+            category=active_category,
+            sync_permissions=False,
+            reason="Ticket reopened -> move back to active ticket category",
+        )
+        return True
+    except Exception:
+        return False
+
+
+def _channel_looks_closed(channel: discord.TextChannel) -> bool:
+    try:
+        return _safe_str(channel.name).lower().startswith("closed-")
+    except Exception:
+        return False
+
+
+def _channel_looks_open(channel: discord.TextChannel) -> bool:
+    try:
+        return _safe_str(channel.name).lower().startswith("ticket-")
+    except Exception:
+        return False
+
+
 def _queue_row_payload(row: Dict[str, Any]) -> Dict[str, Any]:
     return {
         "id": row.get("id"),
@@ -109,6 +283,7 @@ def _queue_row_payload(row: Dict[str, Any]) -> Dict[str, Any]:
         "updated_at": row.get("updated_at"),
         "closed_at": row.get("closed_at"),
         "deleted_at": row.get("deleted_at"),
+        "transcript_url": row.get("transcript_url"),
     }
 
 
@@ -121,6 +296,91 @@ def _channel_to_payload(channel: discord.TextChannel) -> Dict[str, Any]:
         "category_id": str(channel.category.id) if channel.category else None,
         "category_name": channel.category.name if channel.category else None,
     }
+
+
+async def _ticket_row_for_channel(channel: discord.TextChannel) -> Optional[Dict[str, Any]]:
+    try:
+        row = await repo_get_ticket_by_any_channel_id(channel.id)
+        if isinstance(row, dict):
+            return row
+    except Exception:
+        pass
+    return None
+
+
+async def _owner_for_ticket(
+    channel: discord.TextChannel,
+    row: Optional[Dict[str, Any]],
+) -> Optional[discord.Member]:
+    owner_id = 0
+    try:
+        owner_id = _safe_int((row or {}).get("owner_id") or (row or {}).get("user_id"), 0)
+    except Exception:
+        owner_id = 0
+
+    if owner_id > 0:
+        try:
+            member = channel.guild.get_member(owner_id)
+            if member:
+                return member
+        except Exception:
+            pass
+
+        try:
+            fetched = await channel.guild.fetch_member(owner_id)
+            if isinstance(fetched, discord.Member):
+                return fetched
+        except Exception:
+            pass
+
+    try:
+        owner = await find_ticket_owner_retry(channel)
+        if isinstance(owner, discord.Member):
+            return owner
+    except Exception:
+        pass
+
+    return None
+
+
+def _ticket_state_payload(
+    *,
+    channel: discord.TextChannel,
+    row: Optional[Dict[str, Any]],
+) -> Dict[str, Any]:
+    archive_category = _resolve_archive_category(channel.guild)
+    active_category = _resolve_active_ticket_category(channel.guild)
+
+    in_archive = _channel_is_in_category(channel, archive_category)
+    in_active = _channel_is_in_category(channel, active_category)
+
+    if in_archive and archive_category is not None:
+        lifecycle_location = f"archived:{archive_category.name}"
+    elif in_active and active_category is not None:
+        lifecycle_location = f"active:{active_category.name}"
+    elif channel.category is not None:
+        lifecycle_location = f"category:{channel.category.name}"
+    else:
+        lifecycle_location = "uncategorized"
+
+    payload: Dict[str, Any] = {
+        "channel": _channel_to_payload(channel),
+        "db_status": _ticket_status(row),
+        "channel_looks_closed": _channel_looks_closed(channel),
+        "channel_looks_open": _channel_looks_open(channel),
+        "lifecycle_location": lifecycle_location,
+        "in_archive_category": in_archive,
+        "in_active_category": in_active,
+        "archive_category_id": str(archive_category.id) if archive_category else None,
+        "archive_category_name": archive_category.name if archive_category else None,
+        "active_category_id": str(active_category.id) if active_category else None,
+        "active_category_name": active_category.name if active_category else None,
+    }
+
+    if isinstance(row, dict):
+        payload["ticket"] = _queue_row_payload(row)
+
+    return payload
 
 
 def _api_bind_host() -> str:
@@ -397,6 +657,22 @@ async def _reopen_ticket_via_service(
     actor: Optional[discord.Member],
     reason: Optional[str],
 ) -> bool:
+    owner = await _owner_for_ticket(channel, await _ticket_row_for_channel(channel))
+
+    try:
+        return bool(
+            await reopen_ticket_channel(
+                channel=channel,
+                owner=owner,
+                actor=actor,
+                reason=reason,
+            )
+        )
+    except TypeError:
+        pass
+    except Exception:
+        raise
+
     try:
         return bool(
             await reopen_ticket(
@@ -493,6 +769,23 @@ async def _transfer_ticket_via_service(
         return False
 
 
+async def _post_transcript_for_close(
+    *,
+    channel: discord.TextChannel,
+    actor: Optional[discord.Member],
+    reason: str,
+) -> Tuple[bool, Optional[str]]:
+    try:
+        _posted, transcript_url = await post_transcript_to_channel(
+            ticket_channel=channel,
+            deleted_by=actor,
+            reason=reason,
+        )
+        return True, transcript_url
+    except Exception:
+        return False, None
+
+
 async def create_ticket(request: web.Request):
     data = await _request_data(request)
     if request.can_read_body and not isinstance(data, dict):
@@ -558,10 +851,13 @@ async def create_ticket(request: web.Request):
     if channel is None:
         return _json_error("Failed to create ticket", 500)
 
+    row = await _ticket_row_for_channel(channel)
+
     return _json_ok(
         created=True,
         duplicate=False,
         ticket=_channel_to_payload(channel),
+        state=_ticket_state_payload(channel=channel, row=row),
     )
 
 
@@ -580,7 +876,27 @@ async def close_ticket(request: web.Request):
     if staff_id:
         closed_by, _ = await _get_member_from_guild(channel.guild, staff_id)
 
+    row_before = await _ticket_row_for_channel(channel)
+    status_before = _ticket_status(row_before)
+
+    if status_before == "deleted":
+        return _json_error("Deleted tickets cannot be closed", 409)
+
     reason = _safe_str(data.get("reason")).strip() or None
+    post_transcript = _safe_bool(data.get("post_transcript"), False)
+
+    if status_before == "closed" and _channel_looks_closed(channel):
+        moved_to_archive = await _move_ticket_to_archive_if_configured(channel)
+        row_after = await _ticket_row_for_channel(channel)
+        return _json_ok(
+            closed=True,
+            already_closed=True,
+            moved_to_archive=moved_to_archive,
+            channel_id=str(channel.id),
+            closed_by=str(closed_by.id) if closed_by else None,
+            state=_ticket_state_payload(channel=channel, row=row_after),
+        )
+
     ok = await _close_ticket_via_service(
         channel=channel,
         closed_by=closed_by,
@@ -590,10 +906,28 @@ async def close_ticket(request: web.Request):
     if not ok:
         return _json_error("Failed to mark ticket closed", 500)
 
+    moved_to_archive = await _move_ticket_to_archive_if_configured(channel)
+
+    transcript_ok = False
+    transcript_url: Optional[str] = None
+    if post_transcript:
+        transcript_ok, transcript_url = await _post_transcript_for_close(
+            channel=channel,
+            actor=closed_by,
+            reason=reason or "API ticket close",
+        )
+
+    row_after = await _ticket_row_for_channel(channel)
+
     return _json_ok(
         closed=True,
+        already_closed=False,
+        moved_to_archive=moved_to_archive,
+        transcript_posted=transcript_ok,
+        transcript_url=transcript_url,
         channel_id=str(channel.id),
         closed_by=str(closed_by.id) if closed_by else None,
+        state=_ticket_state_payload(channel=channel, row=row_after),
     )
 
 
@@ -612,6 +946,24 @@ async def reopen_ticket_endpoint(request: web.Request):
     if actor_id:
         actor, _ = await _get_member_from_guild(channel.guild, actor_id)
 
+    row_before = await _ticket_row_for_channel(channel)
+    status_before = _ticket_status(row_before)
+
+    if status_before == "deleted":
+        return _json_error("Deleted tickets cannot be reopened", 409)
+
+    if status_before in {"open", "claimed"} and _channel_looks_open(channel):
+        moved_to_active = await _move_ticket_to_active_if_configured(channel)
+        row_after = await _ticket_row_for_channel(channel)
+        return _json_ok(
+            reopened=True,
+            already_open=True,
+            moved_to_active=moved_to_active,
+            channel_id=str(channel.id),
+            actor_id=str(actor.id) if actor else None,
+            state=_ticket_state_payload(channel=channel, row=row_after),
+        )
+
     ok = await _reopen_ticket_via_service(
         channel=channel,
         actor=actor,
@@ -620,10 +972,16 @@ async def reopen_ticket_endpoint(request: web.Request):
     if not ok:
         return _json_error("Failed to reopen ticket", 500)
 
+    moved_to_active = await _move_ticket_to_active_if_configured(channel)
+    row_after = await _ticket_row_for_channel(channel)
+
     return _json_ok(
         reopened=True,
+        already_open=False,
+        moved_to_active=moved_to_active,
         channel_id=str(channel.id),
         actor_id=str(actor.id) if actor else None,
+        state=_ticket_state_payload(channel=channel, row=row_after),
     )
 
 
@@ -645,6 +1003,11 @@ async def assign_ticket_endpoint(request: web.Request):
         return err
     assert channel is not None
 
+    row = await _ticket_row_for_channel(channel)
+    status = _ticket_status(row)
+    if status in {"closed", "deleted"}:
+        return _json_error("Only open tickets can be assigned", 409)
+
     staff, err = await _get_member_from_guild(channel.guild, staff_id)
     if err:
         return err
@@ -654,11 +1017,14 @@ async def assign_ticket_endpoint(request: web.Request):
     if not ok:
         return _json_error("Failed to assign ticket", 500)
 
+    row_after = await _ticket_row_for_channel(channel)
+
     return _json_ok(
         assigned=True,
         channel_id=str(channel.id),
         staff_id=str(staff.id),
         staff_name=str(staff),
+        state=_ticket_state_payload(channel=channel, row=row_after),
     )
 
 
@@ -675,13 +1041,21 @@ async def unclaim_ticket_endpoint(request: web.Request):
         return err
     assert channel is not None
 
+    row = await _ticket_row_for_channel(channel)
+    status = _ticket_status(row)
+    if status in {"closed", "deleted"}:
+        return _json_error("Only open tickets can be unclaimed", 409)
+
     ok = await _unclaim_ticket_via_service(channel=channel)
     if not ok:
         return _json_error("Failed to unclaim ticket", 500)
 
+    row_after = await _ticket_row_for_channel(channel)
+
     return _json_ok(
         unclaimed=True,
         channel_id=str(channel.id),
+        state=_ticket_state_payload(channel=channel, row=row_after),
     )
 
 
@@ -697,6 +1071,11 @@ async def transfer_ticket_endpoint(request: web.Request):
     if err:
         return err
     assert channel is not None
+
+    row = await _ticket_row_for_channel(channel)
+    status = _ticket_status(row)
+    if status in {"closed", "deleted"}:
+        return _json_error("Only open tickets can be transferred", 409)
 
     target_staff_id = data.get("to_staff_id") or data.get("staff_id")
     if not target_staff_id:
@@ -714,11 +1093,14 @@ async def transfer_ticket_endpoint(request: web.Request):
     if not ok:
         return _json_error("Failed to transfer ticket", 500)
 
+    row_after = await _ticket_row_for_channel(channel)
+
     return _json_ok(
         transferred=True,
         channel_id=str(channel.id),
         to_staff_id=str(to_staff.id),
         to_staff_name=str(to_staff),
+        state=_ticket_state_payload(channel=channel, row=row_after),
     )
 
 
@@ -731,6 +1113,23 @@ async def delete_ticket(request: web.Request):
     if err:
         return err
     assert channel is not None
+
+    row = await _ticket_row_for_channel(channel)
+    status = _ticket_status(row)
+
+    if status == "deleted":
+        return _json_ok(
+            deleted=True,
+            already_deleted=True,
+            channel_id=str(channel.id),
+        )
+
+    if status != "closed" and not _channel_looks_closed(channel):
+        return _json_error(
+            "Ticket must be closed before deletion",
+            409,
+            state=_ticket_state_payload(channel=channel, row=row),
+        )
 
     ghost = _safe_bool(data.get("ghost"), False)
     force_transcript = _safe_bool(data.get("force_transcript"), False)
