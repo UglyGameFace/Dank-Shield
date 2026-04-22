@@ -30,12 +30,13 @@ except Exception:
 # - Mark ticket deleted in DB before final delete
 # - Avoid duplicate concurrent transcript/delete flows
 # - Prevent stale closed-ticket delete controls from deleting a reopened ticket
+# - Respect archive-category closed tickets, not just closed-* naming
 # ============================================================
 
 _DELETE_LOCKS: Dict[str, asyncio.Lock] = {}
 _TRANSCRIPT_POST_LOCKS: Dict[str, asyncio.Lock] = {}
 
-_TRANSCRIPT_MARKER = "stoney_verify:transcript_posted:v5"
+_TRANSCRIPT_MARKER = "stoney_verify:transcript_posted:v6"
 
 
 # ============================================================
@@ -235,6 +236,170 @@ def _jump_url_from_ids(*, guild_id: int, channel_id: Optional[int], message_id: 
         return None
 
 
+def _ticket_archive_category_id() -> int:
+    for key in (
+        "TICKET_ARCHIVE_CATEGORY_ID",
+        "TICKET_ARCHIVED_CATEGORY_ID",
+        "ARCHIVED_TICKET_CATEGORY_ID",
+        "ARCHIVE_TICKET_CATEGORY_ID",
+    ):
+        try:
+            value = int(globals().get(key, 0) or 0)
+            if value > 0:
+                return value
+        except Exception:
+            continue
+    return 0
+
+
+def _looks_like_archive_category_name(name: str) -> bool:
+    text = _safe_text(name).strip().lower()
+    if not text:
+        return False
+
+    markers = (
+        "archive",
+        "archived",
+        "ticket archive",
+        "tickets archive",
+        "archived tickets",
+        "closed tickets",
+    )
+    return any(marker in text for marker in markers)
+
+
+def _resolve_archive_category(guild: discord.Guild) -> Optional[discord.CategoryChannel]:
+    explicit_id = _ticket_archive_category_id()
+    if explicit_id > 0:
+        try:
+            maybe = guild.get_channel(int(explicit_id))
+            if isinstance(maybe, discord.CategoryChannel):
+                return maybe
+        except Exception:
+            pass
+
+    try:
+        for category in guild.categories:
+            if _looks_like_archive_category_name(category.name):
+                return category
+    except Exception:
+        pass
+
+    return None
+
+
+def _channel_is_in_archive_category(channel: discord.TextChannel) -> bool:
+    try:
+        category = channel.category
+        if not isinstance(category, discord.CategoryChannel):
+            return False
+
+        archive = _resolve_archive_category(channel.guild)
+        if archive is not None and int(category.id) == int(archive.id):
+            return True
+
+        return _looks_like_archive_category_name(category.name)
+    except Exception:
+        return False
+
+
+def _row_status(row: Optional[Dict[str, Any]]) -> str:
+    try:
+        raw = str((row or {}).get("status") or "").strip().lower()
+        if raw in {"open", "claimed", "closed", "deleted"}:
+            return raw
+        if raw in {"active", "reopened"}:
+            return "open"
+        return raw
+    except Exception:
+        return ""
+
+
+def _row_has_transcript(row: Optional[Dict[str, Any]]) -> bool:
+    if not isinstance(row, dict):
+        return False
+    try:
+        return bool(
+            str(row.get("transcript_url") or "").strip()
+            or str(row.get("transcript_message_id") or "").strip()
+            or str(row.get("transcript_channel_id") or "").strip()
+        )
+    except Exception:
+        return False
+
+
+def _row_transcript_payload(
+    row: Optional[Dict[str, Any]],
+    *,
+    guild_id: Optional[int] = None,
+) -> Tuple[Optional[str], Optional[int], Optional[int]]:
+    if not isinstance(row, dict):
+        return None, None, None
+
+    try:
+        url = _safe_text(row.get("transcript_url") or "").strip() or None
+    except Exception:
+        url = None
+
+    try:
+        message_id = _safe_int(row.get("transcript_message_id"), 0) or None
+    except Exception:
+        message_id = None
+
+    try:
+        channel_id = _safe_int(row.get("transcript_channel_id"), 0) or None
+    except Exception:
+        channel_id = None
+
+    if not url and guild_id and channel_id and message_id:
+        url = _jump_url_from_ids(guild_id=int(guild_id), channel_id=channel_id, message_id=message_id)
+
+    return url, message_id, channel_id
+
+
+def _channel_looks_closed(channel: discord.TextChannel) -> bool:
+    try:
+        return _safe_text(getattr(channel, "name", "")).strip().lower().startswith("closed-")
+    except Exception:
+        return False
+
+
+def _channel_lifecycle_location(channel: discord.TextChannel) -> str:
+    try:
+        if _channel_is_in_archive_category(channel):
+            return f"archive:{channel.category.name if channel.category else 'unknown'}"
+        if channel.category is not None:
+            return f"category:{channel.category.name}"
+    except Exception:
+        pass
+    return "uncategorized"
+
+
+def _channel_effectively_closed(
+    *,
+    channel: discord.TextChannel,
+    row: Optional[Dict[str, Any]],
+) -> bool:
+    status = _row_status(row)
+
+    if status in {"open", "claimed"}:
+        return False
+
+    if status == "closed":
+        return True
+
+    if status == "deleted":
+        return True
+
+    if _channel_is_in_archive_category(channel):
+        return True
+
+    if _channel_looks_closed(channel):
+        return True
+
+    return False
+
+
 # ============================================================
 # Message collection / rendering
 # ============================================================
@@ -418,11 +583,26 @@ def _render_html_message(msg: discord.Message) -> str:
 def _build_html_transcript(
     channel: discord.TextChannel,
     messages: List[discord.Message],
+    ticket_row: Optional[Dict[str, Any]] = None,
 ) -> bytes:
     channel_name = html.escape(channel.name)
     guild_name = html.escape(channel.guild.name)
     topic = html.escape(_safe_topic_text(channel.topic))
     generated_at = html.escape(_utc_iso(now_utc()) or "")
+    lifecycle_location = html.escape(_channel_lifecycle_location(channel))
+
+    status = html.escape(_safe_text((ticket_row or {}).get("status") or "unknown"))
+    category = html.escape(_safe_text((ticket_row or {}).get("category") or "unknown"))
+    priority = html.escape(_safe_text((ticket_row or {}).get("priority") or "unknown"))
+    ticket_number = html.escape(_safe_text((ticket_row or {}).get("ticket_number") or "unknown"))
+    owner_id = html.escape(
+        _safe_text(
+            (ticket_row or {}).get("user_id")
+            or (ticket_row or {}).get("owner_id")
+            or (ticket_row or {}).get("requester_id")
+            or "unknown"
+        )
+    )
 
     rendered: List[str] = []
     for msg in messages:
@@ -583,6 +763,12 @@ def _build_html_transcript(
     <div class="header">
       <div class="title">Transcript for #{channel_name}</div>
       <div class="sub">Guild: {guild_name}</div>
+      <div class="sub">Ticket #: {ticket_number}</div>
+      <div class="sub">Owner ID: {owner_id}</div>
+      <div class="sub">Status: {status}</div>
+      <div class="sub">Category: {category}</div>
+      <div class="sub">Priority: {priority}</div>
+      <div class="sub">Lifecycle: {lifecycle_location}</div>
       <div class="sub">Topic: {topic}</div>
       <div class="sub">Generated At: {generated_at}</div>
     </div>
@@ -602,7 +788,7 @@ async def generate_transcript_files(
     safe = _safe_filename(_transcript_basename(channel, row))
 
     txt_bytes = _build_text_transcript(messages)
-    html_bytes = _build_html_transcript(channel, messages)
+    html_bytes = _build_html_transcript(channel, messages, row)
 
     txt_file = discord.File(
         io.BytesIO(txt_bytes),
@@ -659,57 +845,63 @@ async def _ticket_row(channel_id: int | str) -> Optional[Dict[str, Any]]:
     return None
 
 
-def _row_status(row: Optional[Dict[str, Any]]) -> str:
-    try:
-        raw = str((row or {}).get("status") or "").strip().lower()
-        if raw in {"open", "claimed", "closed", "deleted"}:
-            return raw
-        return raw
-    except Exception:
-        return ""
-
-
-def _row_has_transcript(row: Optional[Dict[str, Any]]) -> bool:
-    if not isinstance(row, dict):
-        return False
-    try:
-        return bool(
-            str(row.get("transcript_url") or "").strip()
-            or str(row.get("transcript_message_id") or "").strip()
-            or str(row.get("transcript_channel_id") or "").strip()
-        )
-    except Exception:
-        return False
-
-
-def _row_transcript_payload(
-    row: Optional[Dict[str, Any]],
+def _transcript_summary_embed(
     *,
-    guild_id: Optional[int] = None,
-) -> Tuple[Optional[str], Optional[int], Optional[int]]:
-    if not isinstance(row, dict):
-        return None, None, None
+    ticket_channel: discord.TextChannel,
+    deleted_by: Optional[discord.Member | discord.User],
+    reason: Optional[str],
+    message_count: int,
+    ticket_row: Optional[Dict[str, Any]] = None,
+) -> discord.Embed:
+    deleted_by_text = _safe_text(deleted_by) if deleted_by else "Unknown"
+    reason_text = reason or "Ticket deleted"
+    topic_text = _safe_topic_text(ticket_channel.topic, max_len=1000)
+    lifecycle_location = _channel_lifecycle_location(ticket_channel)
 
-    try:
-        url = _safe_text(row.get("transcript_url") or "").strip() or None
-    except Exception:
-        url = None
+    ticket_number = None
+    owner_id = None
+    status = None
+    category = None
+    priority = None
 
-    try:
-        message_id = _safe_int(row.get("transcript_message_id"), 0) or None
-    except Exception:
-        message_id = None
+    if isinstance(ticket_row, dict):
+        ticket_number = ticket_row.get("ticket_number")
+        owner_id = ticket_row.get("user_id") or ticket_row.get("owner_id") or ticket_row.get("requester_id")
+        status = ticket_row.get("status")
+        category = ticket_row.get("category")
+        priority = ticket_row.get("priority")
 
-    try:
-        channel_id = _safe_int(row.get("transcript_channel_id"), 0) or None
-    except Exception:
-        channel_id = None
+    embed = discord.Embed(
+        title=f"🧾 Transcript for #{ticket_channel.name}",
+        color=discord.Color.blurple(),
+        timestamp=now_utc(),
+    )
+    embed.add_field(name="Channel ID", value=f"`{ticket_channel.id}`", inline=True)
+    embed.add_field(name="Guild ID", value=f"`{ticket_channel.guild.id}`", inline=True)
+    embed.add_field(name="Messages", value=f"`{message_count}`", inline=True)
 
-    if not url and guild_id and channel_id and message_id:
-        url = _jump_url_from_ids(guild_id=int(guild_id), channel_id=channel_id, message_id=message_id)
+    if ticket_number is not None:
+        embed.add_field(name="Ticket #", value=f"`{ticket_number}`", inline=True)
+    if owner_id:
+        embed.add_field(name="Owner ID", value=f"`{owner_id}`", inline=True)
+    if status:
+        embed.add_field(name="Status", value=f"`{status}`", inline=True)
+    if category:
+        embed.add_field(name="Category", value=f"`{_truncate_for_discord(_safe_text(category), 200)}`", inline=True)
+    if priority:
+        embed.add_field(name="Priority", value=f"`{_truncate_for_discord(_safe_text(priority), 60)}`", inline=True)
 
-    return url, message_id, channel_id
+    embed.add_field(name="Lifecycle", value=f"`{_truncate_for_discord(lifecycle_location, 200)}`", inline=False)
+    embed.add_field(name="Deleted/Finished By", value=f"`{deleted_by_text}`", inline=False)
+    embed.add_field(name="Reason", value=f"`{_truncate_for_discord(reason_text, 900)}`", inline=False)
+    embed.add_field(name="Topic", value=f"`{_truncate_for_discord(topic_text, 900)}`", inline=False)
+    embed.set_footer(text=f"{_TRANSCRIPT_MARKER} • Generated at {_utc_iso(now_utc()) or ''}")
+    return embed
 
+
+# ============================================================
+# Transcript posting
+# ============================================================
 
 async def _attach_transcript_metadata_once(
     *,
@@ -753,62 +945,6 @@ async def _heal_existing_transcript_metadata_if_missing(
         return url, msg_id, ch_id
     return None, None, None
 
-
-def _transcript_summary_embed(
-    *,
-    ticket_channel: discord.TextChannel,
-    deleted_by: Optional[discord.Member | discord.User],
-    reason: Optional[str],
-    message_count: int,
-    ticket_row: Optional[Dict[str, Any]] = None,
-) -> discord.Embed:
-    deleted_by_text = _safe_text(deleted_by) if deleted_by else "Unknown"
-    reason_text = reason or "Ticket deleted"
-    topic_text = _safe_topic_text(ticket_channel.topic, max_len=1000)
-
-    ticket_number = None
-    owner_id = None
-    status = None
-    category = None
-    priority = None
-
-    if isinstance(ticket_row, dict):
-        ticket_number = ticket_row.get("ticket_number")
-        owner_id = ticket_row.get("user_id") or ticket_row.get("owner_id") or ticket_row.get("requester_id")
-        status = ticket_row.get("status")
-        category = ticket_row.get("category")
-        priority = ticket_row.get("priority")
-
-    embed = discord.Embed(
-        title=f"🧾 Transcript for #{ticket_channel.name}",
-        color=discord.Color.blurple(),
-        timestamp=now_utc(),
-    )
-    embed.add_field(name="Channel ID", value=f"`{ticket_channel.id}`", inline=True)
-    embed.add_field(name="Guild ID", value=f"`{ticket_channel.guild.id}`", inline=True)
-    embed.add_field(name="Messages", value=f"`{message_count}`", inline=True)
-
-    if ticket_number is not None:
-        embed.add_field(name="Ticket #", value=f"`{ticket_number}`", inline=True)
-    if owner_id:
-        embed.add_field(name="Owner ID", value=f"`{owner_id}`", inline=True)
-    if status:
-        embed.add_field(name="Status", value=f"`{status}`", inline=True)
-    if category:
-        embed.add_field(name="Category", value=f"`{_truncate_for_discord(_safe_text(category), 200)}`", inline=True)
-    if priority:
-        embed.add_field(name="Priority", value=f"`{_truncate_for_discord(_safe_text(priority), 60)}`", inline=True)
-
-    embed.add_field(name="Deleted/Finished By", value=f"`{deleted_by_text}`", inline=False)
-    embed.add_field(name="Reason", value=f"`{_truncate_for_discord(reason_text, 900)}`", inline=False)
-    embed.add_field(name="Topic", value=f"`{_truncate_for_discord(topic_text, 900)}`", inline=False)
-    embed.set_footer(text=f"{_TRANSCRIPT_MARKER} • Generated at {_utc_iso(now_utc()) or ''}")
-    return embed
-
-
-# ============================================================
-# Transcript posting
-# ============================================================
 
 async def post_transcript_to_channel(
     *,
@@ -894,6 +1030,7 @@ async def delete_ticket_with_optional_transcript(
     - idempotent lock per channel
     - transcript is not reposted if one is already attached
     - DB is marked deleted before final channel delete
+    - refuses deletion if ticket is not effectively closed
     """
     lock = _channel_lock(_DELETE_LOCKS, channel.id)
 
@@ -905,6 +1042,7 @@ async def delete_ticket_with_optional_transcript(
 
         row_before = await _ticket_row(channel.id)
         status_before = _row_status(row_before)
+        lifecycle_location = _channel_lifecycle_location(channel)
 
         if status_before == "deleted":
             existing_url, existing_message_id, existing_channel_id = _row_transcript_payload(
@@ -922,7 +1060,28 @@ async def delete_ticket_with_optional_transcript(
                 "transcript_message_id": existing_message_id,
                 "transcript_channel_id": existing_channel_id,
                 "status_before": status_before,
+                "lifecycle_location": lifecycle_location,
                 "reason": "Ticket is already marked deleted.",
+            }
+
+        if not _channel_effectively_closed(channel=channel, row=row_before):
+            existing_url, existing_message_id, existing_channel_id = _row_transcript_payload(
+                row_before,
+                guild_id=channel.guild.id,
+            )
+            return {
+                "ok": False,
+                "deleted": False,
+                "db_marked_deleted": False,
+                "transcript_required": False,
+                "transcript_posted": bool(existing_url or existing_message_id or existing_channel_id),
+                "transcript_already_existed": bool(existing_url or existing_message_id or existing_channel_id),
+                "transcript_url": existing_url,
+                "transcript_message_id": existing_message_id,
+                "transcript_channel_id": existing_channel_id,
+                "status_before": status_before,
+                "lifecycle_location": lifecycle_location,
+                "reason": "Ticket is not closed. Refusing delete.",
             }
 
         already_had_transcript = _row_has_transcript(row_before)
@@ -957,6 +1116,7 @@ async def delete_ticket_with_optional_transcript(
                     "transcript_message_id": None,
                     "transcript_channel_id": None,
                     "status_before": status_before,
+                    "lifecycle_location": lifecycle_location,
                     "reason": "Transcript failed to post; ticket not deleted.",
                 }
 
@@ -1004,6 +1164,7 @@ async def delete_ticket_with_optional_transcript(
                 "transcript_message_id": transcript_message_id,
                 "transcript_channel_id": transcript_channel_id,
                 "status_before": status_before,
+                "lifecycle_location": lifecycle_location,
                 "reason": None,
             }
         except discord.NotFound:
@@ -1018,6 +1179,7 @@ async def delete_ticket_with_optional_transcript(
                 "transcript_message_id": transcript_message_id,
                 "transcript_channel_id": transcript_channel_id,
                 "status_before": status_before,
+                "lifecycle_location": lifecycle_location,
                 "reason": None,
             }
         except Exception as e:
@@ -1033,6 +1195,7 @@ async def delete_ticket_with_optional_transcript(
                 "transcript_message_id": transcript_message_id,
                 "transcript_channel_id": transcript_channel_id,
                 "status_before": status_before,
+                "lifecycle_location": lifecycle_location,
                 "reason": repr(e),
             }
 
@@ -1050,10 +1213,11 @@ async def staff_delete_closed_ticket(
     Hard guard:
     - refuses deletion if the ticket is no longer closed
     - blocks stale closed-panel clicks after a reopen
+    - recognizes archive-category closed tickets too
     """
     row = await _ticket_row(channel.id)
     status = _row_status(row)
-    channel_name = _safe_text(getattr(channel, "name", "")).lower()
+    lifecycle_location = _channel_lifecycle_location(channel)
 
     if status == "deleted":
         existing_url, existing_message_id, existing_channel_id = _row_transcript_payload(
@@ -1071,11 +1235,11 @@ async def staff_delete_closed_ticket(
             "transcript_message_id": existing_message_id,
             "transcript_channel_id": existing_channel_id,
             "status_before": status,
+            "lifecycle_location": lifecycle_location,
             "reason": "Ticket is already deleted.",
         }
 
-    looks_closed = bool(status == "closed" or channel_name.startswith("closed-"))
-    if not looks_closed:
+    if not _channel_effectively_closed(channel=channel, row=row):
         existing_url, existing_message_id, existing_channel_id = _row_transcript_payload(
             row,
             guild_id=channel.guild.id,
@@ -1091,6 +1255,7 @@ async def staff_delete_closed_ticket(
             "transcript_message_id": existing_message_id,
             "transcript_channel_id": existing_channel_id,
             "status_before": status,
+            "lifecycle_location": lifecycle_location,
             "reason": "Ticket is not closed anymore. Refusing stale closed-ticket delete action.",
         }
 
