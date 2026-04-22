@@ -6,6 +6,7 @@ import discord
 from discord import app_commands
 
 from ..globals import *  # noqa: F401,F403
+from ..globals import now_utc
 
 from ..tickets import (
     is_verification_ticket_channel,
@@ -72,11 +73,20 @@ def _safe_str(value: Any, default: str = "") -> str:
         return default
 
 
+def _truncate(text: Any, limit: int = 220) -> str:
+    raw = _safe_str(text)
+    if len(raw) <= limit:
+        return raw
+    return raw[: max(0, limit - 1)] + "…"
+
+
 def _ticket_status(row: Optional[Dict[str, Any]]) -> str:
     try:
         raw = _safe_str((row or {}).get("status"), "unknown").lower()
         if raw in {"open", "claimed", "closed", "deleted"}:
             return raw
+        if raw in {"active", "reopened"}:
+            return "open"
     except Exception:
         pass
     return "unknown"
@@ -92,6 +102,196 @@ def _channel_looks_closed(channel: discord.TextChannel) -> bool:
 def _channel_looks_open(channel: discord.TextChannel) -> bool:
     try:
         return _safe_str(channel.name).lower().startswith("ticket-")
+    except Exception:
+        return False
+
+
+def _ticket_archive_category_id() -> int:
+    for key in (
+        "TICKET_ARCHIVE_CATEGORY_ID",
+        "TICKET_ARCHIVED_CATEGORY_ID",
+        "ARCHIVED_TICKET_CATEGORY_ID",
+        "ARCHIVE_TICKET_CATEGORY_ID",
+    ):
+        try:
+            value = int(globals().get(key, 0) or 0)
+            if value > 0:
+                return value
+        except Exception:
+            continue
+    return 0
+
+
+def _ticket_active_category_id() -> int:
+    try:
+        return int(globals().get("TICKET_CATEGORY_ID", 0) or 0)
+    except Exception:
+        return 0
+
+
+def _looks_like_archive_category_name(name: str) -> bool:
+    text = _safe_str(name).lower()
+    if not text:
+        return False
+
+    markers = (
+        "archive",
+        "archived",
+        "ticket archive",
+        "tickets archive",
+        "archived tickets",
+        "closed tickets",
+    )
+    return any(marker in text for marker in markers)
+
+
+def _resolve_category_by_id(
+    guild: discord.Guild,
+    category_id: int,
+) -> Optional[discord.CategoryChannel]:
+    try:
+        if category_id <= 0:
+            return None
+        channel = guild.get_channel(int(category_id))
+        if isinstance(channel, discord.CategoryChannel):
+            return channel
+    except Exception:
+        pass
+    return None
+
+
+def _resolve_archive_category(guild: discord.Guild) -> Optional[discord.CategoryChannel]:
+    explicit_id = _ticket_archive_category_id()
+    if explicit_id > 0:
+        explicit = _resolve_category_by_id(guild, explicit_id)
+        if explicit is not None:
+            return explicit
+
+    try:
+        for category in guild.categories:
+            if _looks_like_archive_category_name(category.name):
+                return category
+    except Exception:
+        pass
+
+    return None
+
+
+def _resolve_active_ticket_category(guild: discord.Guild) -> Optional[discord.CategoryChannel]:
+    active_id = _ticket_active_category_id()
+    if active_id > 0:
+        active = _resolve_category_by_id(guild, active_id)
+        if active is not None:
+            return active
+    return None
+
+
+def _channel_is_in_category(
+    channel: discord.TextChannel,
+    category: Optional[discord.CategoryChannel],
+) -> bool:
+    try:
+        if category is None:
+            return False
+        return int(getattr(channel.category, "id", 0) or 0) == int(category.id)
+    except Exception:
+        return False
+
+
+def _channel_is_in_archive_category(channel: discord.TextChannel) -> bool:
+    archive_category = _resolve_archive_category(channel.guild)
+    if archive_category and _channel_is_in_category(channel, archive_category):
+        return True
+    try:
+        if channel.category and _looks_like_archive_category_name(channel.category.name):
+            return True
+    except Exception:
+        pass
+    return False
+
+
+def _channel_is_in_active_category(channel: discord.TextChannel) -> bool:
+    active_category = _resolve_active_ticket_category(channel.guild)
+    if active_category and _channel_is_in_category(channel, active_category):
+        return True
+    return False
+
+
+def _ticket_effectively_closed(
+    *,
+    channel: discord.TextChannel,
+    row: Optional[Dict[str, Any]],
+) -> bool:
+    status = _ticket_status(row)
+    if status in {"closed", "deleted"}:
+        return True
+    if _channel_looks_closed(channel):
+        return True
+    if _channel_is_in_archive_category(channel):
+        return True
+    return False
+
+
+def _ticket_effectively_open(
+    *,
+    channel: discord.TextChannel,
+    row: Optional[Dict[str, Any]],
+) -> bool:
+    status = _ticket_status(row)
+    if status in {"open", "claimed"} and not _ticket_effectively_closed(channel=channel, row=row):
+        return True
+    if _channel_looks_open(channel) and not _channel_is_in_archive_category(channel):
+        return True
+    return False
+
+
+def _location_label(channel: discord.TextChannel) -> str:
+    archive_category = _resolve_archive_category(channel.guild)
+    active_category = _resolve_active_ticket_category(channel.guild)
+
+    if archive_category and _channel_is_in_category(channel, archive_category):
+        return f"Archived in **{archive_category.name}**"
+    if active_category and _channel_is_in_category(channel, active_category):
+        return f"Active in **{active_category.name}**"
+    if channel.category:
+        return f"In **{channel.category.name}**"
+    return "No category"
+
+
+async def _move_ticket_to_archive_if_configured(channel: discord.TextChannel) -> bool:
+    archive_category = _resolve_archive_category(channel.guild)
+    if archive_category is None:
+        return False
+
+    if _channel_is_in_category(channel, archive_category):
+        return True
+
+    try:
+        await channel.edit(
+            category=archive_category,
+            sync_permissions=False,
+            reason="Ticket resolved -> move to archive category",
+        )
+        return True
+    except Exception:
+        return False
+
+
+async def _move_ticket_to_active_if_configured(channel: discord.TextChannel) -> bool:
+    active_category = _resolve_active_ticket_category(channel.guild)
+    if active_category is None:
+        return False
+
+    if _channel_is_in_category(channel, active_category):
+        return True
+
+    try:
+        await channel.edit(
+            category=active_category,
+            sync_permissions=False,
+            reason="Ticket reopened -> move back to active ticket category",
+        )
+        return True
     except Exception:
         return False
 
@@ -200,6 +400,36 @@ async def _refresh_ticket_row(channel: discord.TextChannel) -> Optional[Dict[str
     return await _ticket_row_for_channel(channel)
 
 
+def _transcript_url_from_row(
+    row: Optional[Dict[str, Any]],
+    *,
+    guild_id: int,
+) -> Optional[str]:
+    if not isinstance(row, dict):
+        return None
+
+    direct = _safe_str(row.get("transcript_url"))
+    if direct:
+        return direct
+
+    transcript_channel_id = _safe_int(row.get("transcript_channel_id"), 0)
+    transcript_message_id = _safe_int(row.get("transcript_message_id"), 0)
+    if transcript_channel_id > 0 and transcript_message_id > 0:
+        return f"https://discord.com/channels/{guild_id}/{transcript_channel_id}/{transcript_message_id}"
+
+    return None
+
+
+def _ticket_has_transcript(row: Optional[Dict[str, Any]]) -> bool:
+    if not isinstance(row, dict):
+        return False
+    return bool(
+        _safe_str(row.get("transcript_url"))
+        or _safe_str(row.get("transcript_message_id"))
+        or _safe_str(row.get("transcript_channel_id"))
+    )
+
+
 async def _repair_closed_drift_for_resolve(
     *,
     channel: discord.TextChannel,
@@ -207,14 +437,14 @@ async def _repair_closed_drift_for_resolve(
     actor: Optional[discord.Member | discord.User],
 ) -> Optional[Dict[str, Any]]:
     """
-    Older broken flows can leave the channel visibly closed while the DB still
-    says open/claimed. Resolve should treat that as already closed.
+    Older broken flows can leave the channel visibly closed/archive-moved while
+    the DB still says open/claimed. Resolve should treat that as already closed.
     """
     status = _ticket_status(row)
     if status == "deleted":
         return row
 
-    if _channel_looks_closed(channel) and status in {"open", "claimed", "unknown"}:
+    if _ticket_effectively_closed(channel=channel, row=row) and status in {"open", "claimed", "unknown"}:
         if service_mark_ticket_closed is None:
             return row
         try:
@@ -237,14 +467,14 @@ async def _repair_open_drift_for_reopen(
     actor: Optional[discord.Member | discord.User],
 ) -> Optional[Dict[str, Any]]:
     """
-    Older broken flows can leave the channel visibly open while the DB still
-    says closed. Reopen should not pretend this is still closed.
+    Older broken flows can leave the channel visibly active while the DB still
+    says closed. Reopen should not pretend it is still closed.
     """
     status = _ticket_status(row)
     if status == "deleted":
         return row
 
-    if _channel_looks_open(channel) and status == "closed":
+    if _ticket_effectively_open(channel=channel, row=row) and status == "closed":
         if service_reopen_ticket_channel is None:
             return row
 
@@ -272,7 +502,12 @@ async def _post_ticket_transcript(
     owner: Optional[discord.Member | discord.User],
     actor: Optional[discord.Member | discord.User],
     reason: str,
+    row: Optional[Dict[str, Any]] = None,
 ) -> Tuple[bool, Optional[str]]:
+    existing_url = _transcript_url_from_row(row, guild_id=channel.guild.id)
+    if existing_url:
+        return True, existing_url
+
     if callable(transcript_post_to_channel):
         try:
             _msg, jump_url = await transcript_post_to_channel(
@@ -282,7 +517,8 @@ async def _post_ticket_transcript(
             )
             if jump_url:
                 return True, jump_url
-            return True, None
+            refreshed = await _refresh_ticket_row(channel)
+            return True, _transcript_url_from_row(refreshed, guild_id=channel.guild.id)
         except Exception:
             pass
 
@@ -293,7 +529,8 @@ async def _post_ticket_transcript(
             closed_by=actor,
             decision=reason,
         )
-        return True, None
+        refreshed = await _refresh_ticket_row(channel)
+        return True, _transcript_url_from_row(refreshed, guild_id=channel.guild.id)
     except Exception:
         return False, None
 
@@ -373,9 +610,12 @@ def register_ticket_resolution_admin_commands(bot, tree) -> None:
                 ephemeral=True,
             )
 
-        if status == "closed" or _channel_looks_closed(ch):
+        if _ticket_effectively_closed(channel=ch, row=row):
+            archive_note = ""
+            if _channel_is_in_archive_category(ch):
+                archive_note = f"\n📦 {_location_label(ch)}"
             return await interaction.followup.send(
-                f"ℹ️ {ch.mention} is already closed.",
+                f"ℹ️ {ch.mention} is already closed.{archive_note}",
                 ephemeral=True,
             )
 
@@ -398,7 +638,14 @@ def register_ticket_resolution_admin_commands(bot, tree) -> None:
             owner=owner,
             actor=actor_member,
             reason=clean_reason,
+            row=row,
         )
+
+        if not transcript_ok:
+            return await interaction.followup.send(
+                "❌ Transcript generation failed, so the ticket was not resolved yet.",
+                ephemeral=True,
+            )
 
         try:
             ok = await service_mark_ticket_closed(
@@ -418,12 +665,18 @@ def register_ticket_resolution_admin_commands(bot, tree) -> None:
                 ephemeral=True,
             )
 
+        moved_to_archive = await _move_ticket_to_archive_if_configured(ch)
+
         try:
-            await ch.send(
-                f"✅ Ticket resolved by {interaction.user.mention}.\n"
-                f"**Reason:** {clean_reason}\n"
-                "Use `/ticket_reopen_reason` if this needs to be reopened."
-            )
+            lines = [
+                f"✅ Ticket resolved by {interaction.user.mention}.",
+                f"**Reason:** {clean_reason}",
+                "The ticket owner can still view this ticket, but they cannot reply while it is resolved/closed.",
+                "Use `/ticket_reopen_reason` if this needs to be reopened.",
+            ]
+            if moved_to_archive and ch.category is not None:
+                lines.append(f"📦 Moved to archive category: **{ch.category.name}**")
+            await ch.send("\n".join(lines))
         except Exception:
             pass
 
@@ -432,12 +685,18 @@ def register_ticket_resolution_admin_commands(bot, tree) -> None:
         except Exception:
             pass
 
-        msg = f"✅ Resolved {ch.mention}."
-        if transcript_ok and transcript_url:
-            msg += f"\n🧾 Transcript: {transcript_url}"
-        elif not transcript_ok:
-            msg += "\n⚠️ Transcript generation failed."
-        await interaction.followup.send(msg, ephemeral=True)
+        msg_lines = [f"✅ Resolved {ch.mention}."]
+        if moved_to_archive and ch.category is not None:
+            msg_lines.append(f"📦 Moved to archive category: **{ch.category.name}**")
+        elif _resolve_archive_category(ch.guild) is None:
+            msg_lines.append("ℹ️ No archive category is configured, so the ticket stayed in its current category.")
+
+        if transcript_url:
+            msg_lines.append(f"🧾 Transcript: {transcript_url}")
+        else:
+            msg_lines.append("🧾 Transcript was generated, but no direct jump link was returned.")
+
+        await interaction.followup.send("\n".join(msg_lines), ephemeral=True)
 
     @tree.command(
         name="ticket_reopen_reason",
@@ -487,9 +746,12 @@ def register_ticket_resolution_admin_commands(bot, tree) -> None:
                 ephemeral=True,
             )
 
-        if status in {"open", "claimed"} and _channel_looks_open(ch):
+        if _ticket_effectively_open(channel=ch, row=row) and status in {"open", "claimed"}:
+            active_note = ""
+            if _channel_is_in_active_category(ch):
+                active_note = f"\n📂 {_location_label(ch)}"
             return await interaction.followup.send(
-                f"ℹ️ {ch.mention} is already open.",
+                f"ℹ️ {ch.mention} is already open.{active_note}",
                 ephemeral=True,
             )
 
@@ -508,6 +770,8 @@ def register_ticket_resolution_admin_commands(bot, tree) -> None:
                 ephemeral=True,
             )
 
+        moved_to_active = await _move_ticket_to_active_if_configured(ch)
+
         try:
             await _add_resolution_note(
                 ch.id,
@@ -518,10 +782,14 @@ def register_ticket_resolution_admin_commands(bot, tree) -> None:
             pass
 
         try:
-            await ch.send(
-                f"♻️ Ticket reopened by {interaction.user.mention}.\n"
-                f"**Reason:** {clean_reason}"
-            )
+            lines = [
+                f"♻️ Ticket reopened by {interaction.user.mention}.",
+                f"**Reason:** {clean_reason}",
+                "The ticket owner can reply again.",
+            ]
+            if moved_to_active and ch.category is not None:
+                lines.append(f"📂 Moved back to active ticket category: **{ch.category.name}**")
+            await ch.send("\n".join(lines))
         except Exception:
             pass
 
@@ -530,7 +798,12 @@ def register_ticket_resolution_admin_commands(bot, tree) -> None:
         except Exception:
             pass
 
-        await interaction.followup.send(f"✅ Reopened {ch.mention}.", ephemeral=True)
+        msg_lines = [f"✅ Reopened {ch.mention}."]
+        if moved_to_active and ch.category is not None:
+            msg_lines.append(f"📂 Moved back to active ticket category: **{ch.category.name}**")
+        elif _resolve_active_ticket_category(ch.guild) is None:
+            msg_lines.append("ℹ️ No active ticket category is configured, so the ticket stayed in its current category.")
+        await interaction.followup.send("\n".join(msg_lines), ephemeral=True)
 
     @tree.command(
         name="ticket_nudge_owner",
@@ -564,6 +837,9 @@ def register_ticket_resolution_admin_commands(bot, tree) -> None:
             return await reply_once(interaction, {"content": "❌ Could not resolve the ticket owner.", "ephemeral": True})
 
         body = _safe_str(message, "Staff is waiting on your response.")
+        if _ticket_effectively_closed(channel=ch, row=row):
+            body = f"{body}\n\nℹ️ This ticket is currently closed, so this is just an informational ping until it is reopened."
+
         try:
             await ch.send(f"{getattr(owner, 'mention', '')} ⏰ {body}")
             mark_ticket_activity(ch.id)
@@ -593,7 +869,13 @@ def register_ticket_resolution_admin_commands(bot, tree) -> None:
             return
 
         status = _ticket_status(row)
-        if status in {"deleted", "closed"}:
+        if status == "deleted":
+            return await reply_once(
+                interaction,
+                {"content": "❌ Deleted tickets cannot nudge an assignee.", "ephemeral": True},
+            )
+
+        if not _ticket_effectively_open(channel=ch, row=row):
             return await reply_once(
                 interaction,
                 {"content": "❌ Only active tickets can nudge an assignee.", "ephemeral": True},
