@@ -1,16 +1,17 @@
+
 from __future__ import annotations
 
 import os
 import threading
-from typing import Optional, Dict, List
 from datetime import datetime, timezone
+from typing import Dict, List, Optional
 from urllib.parse import urlparse
 
 from dotenv import load_dotenv
 
 import discord
 from discord.ext import commands
-from supabase import create_client, Client
+from supabase import Client, create_client
 
 
 # ============================================================
@@ -25,27 +26,27 @@ load_dotenv()
 # ============================================================
 
 def _env_str(key: str, default: str = "") -> str:
-    v = os.getenv(key)
-    if v is None:
+    value = os.getenv(key)
+    if value is None:
         return default
-    return v.strip()
+    return value.strip()
 
 
 def _env_int(key: str, default: int = 0) -> int:
-    v = _env_str(key)
-    if not v:
+    value = _env_str(key)
+    if not value:
         return default
     try:
-        return int(v)
+        return int(value)
     except Exception:
         return default
 
 
 def _env_bool(key: str, default: bool = False) -> bool:
-    v = _env_str(key).lower()
-    if not v:
+    value = _env_str(key).lower()
+    if not value:
         return default
-    return v in ("1", "true", "yes", "y", "on")
+    return value in {"1", "true", "yes", "y", "on"}
 
 
 def _log_info(message: str) -> None:
@@ -105,6 +106,17 @@ _SUPABASE_RESET_EPOCH = 0
 _STARTUP_FLAGS: set[str] = set()
 _STARTUP_FLAGS_LOCK = threading.Lock()
 
+_SUPABASE_STATUS_LOCK = threading.Lock()
+_SUPABASE_STATUS: Dict[str, object] = {
+    "url_present": bool(SUPABASE_URL),
+    "service_role_present": bool(SUPABASE_SERVICE_ROLE_KEY),
+    "service_role_len": _safe_len(SUPABASE_SERVICE_ROLE_KEY),
+    "host": _supabase_url_host(),
+    "client_state": "uninitialized",
+    "client_reason": "not_attempted",
+    "last_log_fingerprint": "",
+}
+
 
 def claim_startup_flag(name: str) -> bool:
     clean = str(name or "").strip().lower()
@@ -133,38 +145,61 @@ def clear_startup_flag(name: str) -> None:
         _STARTUP_FLAGS.discard(clean)
 
 
-def _emit_supabase_env_status_once() -> None:
-    if not claim_startup_flag("supabase-env-status"):
-        return
+def _refresh_supabase_env_snapshot() -> None:
+    with _SUPABASE_STATUS_LOCK:
+        _SUPABASE_STATUS["url_present"] = bool(SUPABASE_URL)
+        _SUPABASE_STATUS["service_role_present"] = bool(SUPABASE_SERVICE_ROLE_KEY)
+        _SUPABASE_STATUS["service_role_len"] = _safe_len(SUPABASE_SERVICE_ROLE_KEY)
+        _SUPABASE_STATUS["host"] = _supabase_url_host()
 
-    url_present = bool(SUPABASE_URL)
-    key_present = bool(SUPABASE_SERVICE_ROLE_KEY)
-    host = _supabase_url_host() or "(missing)"
-    key_len = _safe_len(SUPABASE_SERVICE_ROLE_KEY)
 
-    _log_info(
-        "Supabase env check: "
+def _set_supabase_status(state: str, reason: str) -> None:
+    _refresh_supabase_env_snapshot()
+    with _SUPABASE_STATUS_LOCK:
+        _SUPABASE_STATUS["client_state"] = str(state or "unknown")
+        _SUPABASE_STATUS["client_reason"] = str(reason or "")
+
+
+def _supabase_status_fingerprint() -> str:
+    with _SUPABASE_STATUS_LOCK:
+        state = str(_SUPABASE_STATUS.get("client_state") or "")
+        reason = str(_SUPABASE_STATUS.get("client_reason") or "")
+        host = str(_SUPABASE_STATUS.get("host") or "")
+        url_present = bool(_SUPABASE_STATUS.get("url_present"))
+        key_present = bool(_SUPABASE_STATUS.get("service_role_present"))
+        return f"{state}|{reason}|{host}|{url_present}|{key_present}"
+
+
+def _log_supabase_status_once_per_change(*, force: bool = False) -> None:
+    fingerprint = _supabase_status_fingerprint()
+    with _SUPABASE_STATUS_LOCK:
+        last = str(_SUPABASE_STATUS.get("last_log_fingerprint") or "")
+        if not force and fingerprint == last:
+            return
+        _SUPABASE_STATUS["last_log_fingerprint"] = fingerprint
+
+        state = str(_SUPABASE_STATUS.get("client_state") or "unknown")
+        reason = str(_SUPABASE_STATUS.get("client_reason") or "")
+        host = str(_SUPABASE_STATUS.get("host") or "")
+        url_present = bool(_SUPABASE_STATUS.get("url_present"))
+        key_present = bool(_SUPABASE_STATUS.get("service_role_present"))
+        key_len = int(_SUPABASE_STATUS.get("service_role_len") or 0)
+
+    message = (
+        "supabase status: "
+        f"state={state} "
+        f"host={host or '(missing)'} "
         f"url_present={url_present} "
         f"service_role_present={key_present} "
-        f"service_role_len={key_len} "
-        f"host={host}"
+        f"service_role_len={key_len}"
     )
+    if reason:
+        message += f" reason={reason}"
 
-
-def _emit_supabase_client_ok_once(source: str) -> None:
-    if not claim_startup_flag("supabase-client-ok"):
-        return
-    _log_info(
-        "Supabase client ready: "
-        f"source={source} "
-        f"host={_supabase_url_host() or '(unknown)'}"
-    )
-
-
-def _emit_supabase_client_fail_once(reason: str) -> None:
-    if not claim_startup_flag("supabase-client-fail"):
-        return
-    _log_warn(f"Supabase client unavailable: {reason}")
+    if state == "ready":
+        _log_info(message)
+    else:
+        _log_warn(message)
 
 
 def reset_supabase() -> None:
@@ -186,27 +221,28 @@ def reset_supabase() -> None:
     except Exception:
         pass
 
-    if claim_startup_flag(f"supabase-reset-epoch-{_SUPABASE_RESET_EPOCH}"):
-        _log_warn(f"Supabase client reset requested. epoch={_SUPABASE_RESET_EPOCH}")
+    _set_supabase_status("reset", f"epoch={_SUPABASE_RESET_EPOCH}")
+    _log_supabase_status_once_per_change(force=True)
 
 
 def _create_supabase_client() -> Optional[Client]:
-    _emit_supabase_env_status_once()
+    _refresh_supabase_env_snapshot()
 
     if not SUPABASE_URL or not SUPABASE_SERVICE_ROLE_KEY:
-        _emit_supabase_client_fail_once(
-            "missing required env vars "
-            f"(url_present={bool(SUPABASE_URL)} service_role_present={bool(SUPABASE_SERVICE_ROLE_KEY)})"
+        _set_supabase_status(
+            "missing_env",
+            f"url_present={bool(SUPABASE_URL)} service_role_present={bool(SUPABASE_SERVICE_ROLE_KEY)}",
         )
         return None
 
     try:
         client = create_client(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
-        _emit_supabase_client_ok_once("create_client")
+        _set_supabase_status("ready", "create_client")
         return client
     except Exception as e:
-        _emit_supabase_client_fail_once(
-            f"create_client failed with {type(e).__name__}: {repr(e)}"
+        _set_supabase_status(
+            "create_failed",
+            f"{type(e).__name__}: {repr(e)}",
         )
         return None
 
@@ -220,11 +256,15 @@ def get_supabase(*, force_new: bool = False) -> Optional[Client]:
         with _SUPABASE_LOCK:
             if force_new:
                 _SUPABASE_CLIENT = None
+
             if _SUPABASE_CLIENT is None:
                 _SUPABASE_CLIENT = _create_supabase_client()
-            if _SUPABASE_CLIENT is None:
-                _emit_supabase_client_fail_once("main-thread get_supabase returned None")
-            return _SUPABASE_CLIENT
+
+            client = _SUPABASE_CLIENT
+
+        if client is None:
+            _log_supabase_status_once_per_change()
+        return client
 
     local_client = getattr(_SUPABASE_THREAD_LOCAL, "client", None)
     local_epoch = getattr(_SUPABASE_THREAD_LOCAL, "epoch", None)
@@ -238,25 +278,37 @@ def get_supabase(*, force_new: bool = False) -> Optional[Client]:
             pass
 
     if local_client is None:
-        _emit_supabase_client_fail_once(
-            f"thread-local get_supabase returned None (thread={threading.current_thread().name})"
-        )
+        _log_supabase_status_once_per_change()
 
     return local_client
 
 
-def supabase_diagnostics() -> dict:
+def supabase_diagnostics(*, ensure_client: bool = False) -> dict:
+    if ensure_client:
+        try:
+            get_supabase()
+        except Exception:
+            pass
+
+    _refresh_supabase_env_snapshot()
+    with _SUPABASE_STATUS_LOCK:
+        payload = dict(_SUPABASE_STATUS)
+
     client_available = False
     try:
-        client_available = get_supabase() is not None
+        client_available = get_supabase() is not None if ensure_client else (
+            _SUPABASE_CLIENT is not None or getattr(_SUPABASE_THREAD_LOCAL, "client", None) is not None
+        )
     except Exception:
         client_available = False
 
     return {
-        "url_present": bool(SUPABASE_URL),
-        "service_role_present": bool(SUPABASE_SERVICE_ROLE_KEY),
-        "service_role_len": _safe_len(SUPABASE_SERVICE_ROLE_KEY),
-        "host": _supabase_url_host(),
+        "url_present": bool(payload.get("url_present")),
+        "service_role_present": bool(payload.get("service_role_present")),
+        "service_role_len": int(payload.get("service_role_len") or 0),
+        "host": str(payload.get("host") or ""),
+        "client_state": str(payload.get("client_state") or ""),
+        "client_reason": str(payload.get("client_reason") or ""),
         "client_available": client_available,
         "reset_epoch": _SUPABASE_RESET_EPOCH,
     }
@@ -581,28 +633,6 @@ bot = commands.Bot(
 )
 
 
-@bot.listen("on_ready")
-async def _globals_log_startup_once() -> None:
-    if not claim_startup_flag("globals-on-ready-summary"):
-        return
-
-    try:
-        summary = config_summary()
-        _log_info(f"config summary: {summary}")
-    except Exception as e:
-        _log_warn(f"failed to build config summary: {repr(e)}")
-
-    try:
-        diag = supabase_diagnostics()
-        _log_info(f"supabase diagnostics: {diag}")
-    except Exception as e:
-        _log_warn(f"failed to build supabase diagnostics: {repr(e)}")
-
-
-# ============================================================
-# Debug Summary
-# ============================================================
-
 def config_summary() -> dict:
     return {
         "guild": GUILD_ID,
@@ -618,5 +648,23 @@ def config_summary() -> dict:
         "bot_api_bind_host": BOT_API_BIND_HOST,
         "bot_api_port": BOT_API_PORT,
         "bot_api_require_auth": BOT_API_REQUIRE_AUTH,
-        "supabase": bool(SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY),
+        "supabase_env_present": bool(SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY),
     }
+
+
+@bot.listen("on_ready")
+async def _globals_log_startup_once() -> None:
+    if not claim_startup_flag("globals-on-ready-summary"):
+        return
+
+    try:
+        summary = config_summary()
+        _log_info(f"startup summary: {summary}")
+    except Exception as e:
+        _log_warn(f"failed to build startup summary: {repr(e)}")
+
+    try:
+        get_supabase()
+        _log_supabase_status_once_per_change(force=True)
+    except Exception as e:
+        _log_warn(f"failed to initialize supabase diagnostics: {repr(e)}")
