@@ -40,6 +40,9 @@ INCIDENT_FOOTER_RE = re.compile(
 
 VALID_MODES = {"log_only", "delete_only", "timeout", "quarantine", "kick", "ban"}
 
+# Settings cache
+SETTINGS_CACHE_TTL_SECONDS = 180
+
 # Production cleanup / anti-leak tuning
 STALE_WINDOW_TTL_SECONDS = 900
 STALE_LOCK_TTL_SECONDS = 900
@@ -403,9 +406,69 @@ def _quarantine_role_text(guild: discord.Guild, settings: Dict[str, Any]) -> str
     return role.mention if isinstance(role, discord.Role) else f"`{qrid}`"
 
 
+def _cache_runtime_settings(
+    guild_id: int,
+    settings: Dict[str, Any],
+    *,
+    source: str,
+    persisted: bool,
+) -> Dict[str, Any]:
+    gid = int(guild_id)
+    payload = dict(_normalize_settings(gid, settings))
+    payload["__meta_loaded_at"] = float(time.monotonic())
+    payload["__meta_source"] = str(source or "runtime")
+    payload["__meta_persisted"] = bool(persisted)
+    _RUNTIME_SETTINGS[gid] = payload
+    return dict(payload)
+
+
+def _cached_runtime_settings(guild_id: int) -> Optional[Dict[str, Any]]:
+    payload = _RUNTIME_SETTINGS.get(int(guild_id))
+    if isinstance(payload, dict):
+        return dict(payload)
+    return None
+
+
+def _cache_age_seconds(payload: Dict[str, Any]) -> float:
+    try:
+        loaded_at = float(payload.get("__meta_loaded_at", 0.0) or 0.0)
+        if loaded_at <= 0.0:
+            return 999999.0
+        return max(0.0, time.monotonic() - loaded_at)
+    except Exception:
+        return 999999.0
+
+
+def _cache_is_fresh(payload: Dict[str, Any]) -> bool:
+    return _cache_age_seconds(payload) <= float(SETTINGS_CACHE_TTL_SECONDS)
+
+
+def _cache_persisted(payload: Dict[str, Any]) -> bool:
+    try:
+        return bool(payload.get("__meta_persisted"))
+    except Exception:
+        return False
+
+
+def _build_persistence_label(
+    guild_id: int,
+    persisted_hint: Optional[bool] = None,
+) -> str:
+    if persisted_hint is True:
+        return "DB-backed"
+    if persisted_hint is False:
+        return "Runtime only (resets on restart)"
+
+    cached = _cached_runtime_settings(guild_id)
+    if isinstance(cached, dict) and _cache_persisted(cached):
+        return "DB-backed"
+
+    return "Runtime only (resets on restart)"
+
+
 def _fast_settings_for_ui(guild_id: int) -> Dict[str, Any]:
     gid = int(guild_id)
-    cached = _RUNTIME_SETTINGS.get(gid)
+    cached = _cached_runtime_settings(gid)
     if isinstance(cached, dict):
         return _normalize_settings(gid, cached)
     return _default_settings(gid)
@@ -869,12 +932,12 @@ def _settings_payload_for_db(settings: Dict[str, Any], *, updated_by: Optional[d
 # ============================================================
 # Settings persistence
 # ============================================================
-def _fetch_settings_sync(guild_id: int) -> Optional[Dict[str, Any]]:
+def _fetch_settings_sync(guild_id: int) -> Tuple[str, Optional[Dict[str, Any]]]:
     global _SETTINGS_TABLE_AVAILABLE
 
     sb = _sb()
     if sb is None:
-        return None
+        return "unavailable", None
 
     try:
         res = (
@@ -886,14 +949,18 @@ def _fetch_settings_sync(guild_id: int) -> Optional[Dict[str, Any]]:
         )
         rows = getattr(res, "data", None) or []
         _SETTINGS_TABLE_AVAILABLE = True
+
         if rows:
-            return dict(rows[0])
-        return None
+            return "ok", dict(rows[0])
+
+        return "ok", {}
     except Exception as e:
         if _is_table_missing_error(e, GUILD_SECURITY_SETTINGS_TABLE):
             _SETTINGS_TABLE_AVAILABLE = False
-            return None
-        raise
+            return "missing_table", None
+
+        _debug(f"settings fetch transient failure guild={guild_id} error={repr(e)}")
+        return "unavailable", None
 
 
 def _upsert_settings_sync(payload: Dict[str, Any]) -> bool:
@@ -915,28 +982,50 @@ def _upsert_settings_sync(payload: Dict[str, Any]) -> bool:
             _SETTINGS_TABLE_AVAILABLE = False
             return False
 
-        _SETTINGS_TABLE_AVAILABLE = False
-        _debug(f"settings upsert runtime fallback error={repr(e)}")
+        _debug(f"settings upsert transient failure guild={payload.get('guild_id')} error={repr(e)}")
         return False
 
 
 async def get_spam_settings(guild_id: int) -> Dict[str, Any]:
     gid = int(guild_id)
 
-    runtime = _RUNTIME_SETTINGS.get(gid)
-    if isinstance(runtime, dict):
-        return _normalize_settings(gid, runtime)
+    cached = _cached_runtime_settings(gid)
+    if isinstance(cached, dict) and _cache_is_fresh(cached):
+        return _normalize_settings(gid, cached)
 
     if _SETTINGS_TABLE_AVAILABLE is False:
+        if isinstance(cached, dict):
+            return _normalize_settings(gid, cached)
         return _default_settings(gid)
 
     try:
-        row = await asyncio.to_thread(_fetch_settings_sync, gid)
-        normalized = _normalize_settings(gid, row)
-        _RUNTIME_SETTINGS[gid] = dict(normalized)
-        return normalized
+        status, row = await asyncio.to_thread(_fetch_settings_sync, gid)
+
+        if status == "ok":
+            normalized = _normalize_settings(gid, row or {})
+            _cache_runtime_settings(
+                gid,
+                normalized,
+                source="db" if row else "db-empty",
+                persisted=bool(row),
+            )
+            return normalized
+
+        if status == "missing_table":
+            if isinstance(cached, dict):
+                return _normalize_settings(gid, cached)
+            return _default_settings(gid)
+
+        if isinstance(cached, dict):
+            return _normalize_settings(gid, cached)
+
+        return _default_settings(gid)
     except Exception as e:
         _debug(f"settings fetch failed guild={gid} error={repr(e)}")
+
+        if isinstance(cached, dict):
+            return _normalize_settings(gid, cached)
+
         return _default_settings(gid)
 
 
@@ -953,8 +1042,6 @@ async def save_spam_settings(
     merged.update(dict(patch or {}))
     normalized = _normalize_settings(gid, merged)
 
-    _RUNTIME_SETTINGS[gid] = dict(normalized)
-
     persisted = False
     if _SETTINGS_TABLE_AVAILABLE is not False:
         try:
@@ -965,6 +1052,13 @@ async def save_spam_settings(
         except Exception as e:
             _debug(f"settings save failed guild={gid} error={repr(e)}")
             persisted = False
+
+    _cache_runtime_settings(
+        gid,
+        normalized,
+        source="db" if persisted else "runtime",
+        persisted=persisted,
+    )
 
     return normalized, persisted
 
@@ -982,13 +1076,7 @@ def _build_panel_embed(
     clean_page = page if page in SPAM_PANEL_PAGES else "overview"
     enabled = bool(settings["enabled"])
     mode = _safe_str(settings["mode"])
-    persistence = (
-        "DB-backed"
-        if persisted_hint is True
-        else "Runtime only"
-        if persisted_hint is False
-        else "Runtime/DB auto"
-    )
+    persistence = _build_persistence_label(guild.id, persisted_hint)
 
     title = f"🛡️ Spam Guard • {_page_title(clean_page)}"
     embed = discord.Embed(
@@ -1256,7 +1344,7 @@ async def _save_patch_and_rerender(
 
     try:
         await interaction.followup.send(
-            f"✅ {success_text}\nPersistence: `{'DB-backed' if persisted else 'runtime only'}`",
+            f"✅ {success_text}\nPersistence: `{_build_persistence_label(guild.id, persisted)}`",
             ephemeral=True,
         )
     except Exception:
@@ -2154,9 +2242,6 @@ async def handle_incoming_spam_message(message: discord.Message) -> bool:
                         f"`{recent_count}` messages inside `{int(settings['window_seconds'])}s` and current message contained a blocked invite"
                     )
 
-                # IMPORTANT FIX:
-                # Even if invite codes are individually allowed (own-server invite / allowlisted code),
-                # rapid invite flooding should still trigger as likely hacked-account behavior.
                 if len(invite_codes) >= int(settings["multi_invite_immediate"]):
                     should_fire = True
                     fired_invite_rule = True
@@ -2392,7 +2477,7 @@ class SpamThresholdsModal(discord.ui.Modal, title="Spam Guard • Detection Rule
 
         try:
             await interaction.followup.send(
-                f"✅ Detection rules updated.\nPersistence: `{'DB-backed' if persisted else 'runtime only'}`",
+                f"✅ Detection rules updated.\nPersistence: `{_build_persistence_label(self.guild_id, persisted)}`",
                 ephemeral=True,
             )
         except Exception:
@@ -2496,7 +2581,7 @@ class SpamActionSettingsModal(discord.ui.Modal, title="Spam Guard • Actions + 
 
         try:
             await interaction.followup.send(
-                f"✅ Actions and allowed invite codes updated.\nPersistence: `{'DB-backed' if persisted else 'runtime only'}`",
+                f"✅ Actions and allowed invite codes updated.\nPersistence: `{_build_persistence_label(self.guild_id, persisted)}`",
                 ephemeral=True,
             )
         except Exception:
@@ -2570,7 +2655,7 @@ class SpamListsModal(discord.ui.Modal, title="Spam Guard • Channels + Users"):
 
         try:
             await interaction.followup.send(
-                f"✅ Channels and exempt users updated.\nPersistence: `{'DB-backed' if persisted else 'runtime only'}`",
+                f"✅ Channels and exempt users updated.\nPersistence: `{_build_persistence_label(self.guild_id, persisted)}`",
                 ephemeral=True,
             )
         except Exception:
@@ -3018,6 +3103,20 @@ def _register_spam_guard_commands() -> None:
 @bot.listen("on_message")
 async def _spam_guard_on_message(message: discord.Message):
     await handle_incoming_spam_message(message)
+
+
+@bot.listen("on_ready")
+async def _spam_guard_warm_settings_cache():
+    try:
+        for guild in list(bot.guilds):
+            settings = await get_spam_settings(guild.id)
+            cached = _cached_runtime_settings(guild.id) or {}
+            _debug(
+                f"warm settings guild={guild.id} enabled={bool(settings.get('enabled'))} "
+                f"persisted={bool(cached.get('__meta_persisted'))}"
+            )
+    except Exception as e:
+        _debug(f"warm settings cache failed error={repr(e)}")
 
 
 @bot.listen("on_ready")
