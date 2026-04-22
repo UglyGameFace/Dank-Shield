@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 import asyncio
 import discord
@@ -42,8 +42,12 @@ except Exception:
 
 _VALID_BOOL_TRUE = {"1", "true", "yes", "y", "on"}
 _VALID_BOOL_FALSE = {"0", "false", "no", "n", "off"}
-
 _VALID_TICKET_STATUSES = {"open", "claimed", "closed", "deleted"}
+_MAX_MACRO_BODY = 4000
+_MAX_MACRO_SLUG = 80
+_MAX_MACRO_NAME = 120
+_MAX_MACRO_CATEGORY = 80
+_MAX_MACRO_LIST = 40
 
 
 def _safe_int(value: Any, default: int = 0) -> int:
@@ -85,21 +89,23 @@ def _truncate(text: Any, limit: int = 300) -> str:
 def _normalize_slug(value: Any) -> str:
     text = _safe_str(value).strip().lower()
     text = text.replace("&", " and ")
-    out = []
+    out: List[str] = []
     prev_dash = False
+
     for ch in text:
         if ch.isalnum():
             out.append(ch)
             prev_dash = False
-        elif ch in {" ", "-", "_"}:
+        elif ch in {" ", "-", "_", "/"}:
             if not prev_dash:
                 out.append("-")
                 prev_dash = True
+
     slug = "".join(out).strip("-")
-    return slug[:80]
+    return slug[:_MAX_MACRO_SLUG]
 
 
-def _clean_body(value: Any, limit: int = 4000) -> str:
+def _clean_body(value: Any, limit: int = _MAX_MACRO_BODY) -> str:
     try:
         text = str(value or "").replace("\r\n", "\n").replace("\r", "\n").strip()
         return text[:limit]
@@ -112,9 +118,99 @@ def _ticket_status(row: Optional[Dict[str, Any]]) -> str:
         raw = _safe_str((row or {}).get("status"), "unknown").lower()
         if raw in _VALID_TICKET_STATUSES:
             return raw
+        if raw in {"active", "reopened"}:
+            return "open"
     except Exception:
         pass
     return "unknown"
+
+
+def _ticket_archive_category_id() -> int:
+    for key in (
+        "TICKET_ARCHIVE_CATEGORY_ID",
+        "TICKET_ARCHIVED_CATEGORY_ID",
+        "ARCHIVED_TICKET_CATEGORY_ID",
+        "ARCHIVE_TICKET_CATEGORY_ID",
+    ):
+        try:
+            value = int(globals().get(key, 0) or 0)
+            if value > 0:
+                return value
+        except Exception:
+            continue
+    return 0
+
+
+def _looks_like_archive_category_name(name: str) -> bool:
+    text = _safe_str(name).lower()
+    if not text:
+        return False
+
+    markers = (
+        "archive",
+        "archived",
+        "ticket archive",
+        "tickets archive",
+        "archived tickets",
+        "closed tickets",
+    )
+    return any(marker in text for marker in markers)
+
+
+def _resolve_category_by_id(
+    guild: discord.Guild,
+    category_id: int,
+) -> Optional[discord.CategoryChannel]:
+    try:
+        if category_id <= 0:
+            return None
+        channel = guild.get_channel(int(category_id))
+        if isinstance(channel, discord.CategoryChannel):
+            return channel
+    except Exception:
+        pass
+    return None
+
+
+def _resolve_archive_category(guild: discord.Guild) -> Optional[discord.CategoryChannel]:
+    explicit_id = _ticket_archive_category_id()
+    if explicit_id > 0:
+        explicit = _resolve_category_by_id(guild, explicit_id)
+        if explicit is not None:
+            return explicit
+
+    try:
+        for category in guild.categories:
+            if _looks_like_archive_category_name(category.name):
+                return category
+    except Exception:
+        pass
+
+    return None
+
+
+def _channel_is_in_category(
+    channel: discord.TextChannel,
+    category: Optional[discord.CategoryChannel],
+) -> bool:
+    try:
+        if category is None:
+            return False
+        return int(getattr(channel.category, "id", 0) or 0) == int(category.id)
+    except Exception:
+        return False
+
+
+def _channel_is_in_archive_category(channel: discord.TextChannel) -> bool:
+    archive_category = _resolve_archive_category(channel.guild)
+    if archive_category and _channel_is_in_category(channel, archive_category):
+        return True
+    try:
+        if channel.category and _looks_like_archive_category_name(channel.category.name):
+            return True
+    except Exception:
+        pass
+    return False
 
 
 def _channel_looks_closed(channel: discord.TextChannel) -> bool:
@@ -122,6 +218,21 @@ def _channel_looks_closed(channel: discord.TextChannel) -> bool:
         return _safe_str(channel.name).lower().startswith("closed-")
     except Exception:
         return False
+
+
+def _ticket_effectively_closed(
+    *,
+    channel: discord.TextChannel,
+    row: Optional[Dict[str, Any]],
+) -> bool:
+    status = _ticket_status(row)
+    if status in {"closed", "deleted"}:
+        return True
+    if _channel_looks_closed(channel):
+        return True
+    if _channel_is_in_archive_category(channel):
+        return True
+    return False
 
 
 async def _run_blocking(fn, *args, **kwargs):
@@ -283,6 +394,14 @@ async def _delete_macro(guild_id: int, slug: str) -> bool:
     return await _run_blocking(_delete_macro_sync, guild_id, slug)
 
 
+def _macro_source_value(row: Dict[str, Any]) -> str:
+    return _safe_str(row.get("_source"), "db")
+
+
+def _macro_is_active(row: Dict[str, Any]) -> bool:
+    return _safe_bool(row.get("active", row.get("is_active", True)), True)
+
+
 def _macro_embed(row: Dict[str, Any], *, title: str = "🔎 Ticket Macro") -> discord.Embed:
     embed = discord.Embed(
         title=title,
@@ -299,7 +418,7 @@ def _macro_embed(row: Dict[str, Any], *, title: str = "🔎 Ticket Macro") -> di
     )
     embed.add_field(
         name="Source",
-        value=f"`{_safe_str(row.get('_source'), 'db')}`",
+        value=f"`{_macro_source_value(row)}`",
         inline=True,
     )
     embed.add_field(
@@ -314,21 +433,106 @@ def _macro_embed(row: Dict[str, Any], *, title: str = "🔎 Ticket Macro") -> di
     )
     embed.add_field(
         name="Active",
-        value="Yes" if _safe_bool(row.get("active", row.get("is_active", True)), True) else "No",
+        value="Yes" if _macro_is_active(row) else "No",
         inline=True,
     )
 
     aliases = row.get("aliases") or []
     if aliases:
+        alias_values = ", ".join([f"`{_safe_str(x)}`" for x in aliases[:10]])
         embed.add_field(
             name="Aliases",
-            value=", ".join([f"`{_safe_str(x)}`" for x in aliases[:10]])[:1024],
+            value=alias_values[:1024],
             inline=False,
         )
 
     body = _clean_body(row.get("body") or row.get("content"))
     embed.add_field(name="Body", value=_truncate(body, 4000) or "—", inline=False)
     return embed
+
+
+def _macro_list_line(row: Dict[str, Any]) -> str:
+    row_slug = _safe_str(row.get("slug"), "unknown")
+    row_name = _truncate(row.get("name"), 60) or row_slug
+    row_category = _safe_str(row.get("category"), "all") or "all"
+    row_source = _macro_source_value(row)
+
+    note_flag = " • note" if _safe_bool(row.get("send_as_note"), False) else ""
+    inactive_flag = " • inactive" if not _macro_is_active(row) else ""
+
+    return f"• `{row_slug}` — {row_name} • `{row_category}` • `{row_source}`{note_flag}{inactive_flag}"
+
+
+def _chunk_lines(lines: Sequence[str], limit: int = 3500) -> List[str]:
+    chunks: List[str] = []
+    current: List[str] = []
+    current_len = 0
+
+    for line in lines:
+        add_len = len(line) + 1
+        if current and (current_len + add_len) > limit:
+            chunks.append("\n".join(current))
+            current = []
+            current_len = 0
+
+        current.append(line)
+        current_len += add_len
+
+    if current:
+        chunks.append("\n".join(current))
+
+    return chunks or []
+
+
+async def _send_paginated_macro_embeds(
+    interaction: discord.Interaction,
+    *,
+    title: str,
+    description: Optional[str],
+    color: discord.Color,
+    chunks: List[str],
+    footer_prefix: str,
+) -> None:
+    if not chunks:
+        embed = discord.Embed(
+            title=title,
+            description=description or "No results found.",
+            color=color,
+            timestamp=now_utc(),
+        )
+        return await reply_once(interaction, {"embed": embed, "ephemeral": True})
+
+    embeds: List[discord.Embed] = []
+    total = len(chunks)
+
+    for index, chunk in enumerate(chunks, start=1):
+        embed = discord.Embed(
+            title=title if index == 1 else f"{title} (cont.)",
+            description=chunk if not description or index != 1 else f"{description}\n\n{chunk}",
+            color=color,
+            timestamp=now_utc(),
+        )
+        embed.set_footer(text=f"{footer_prefix} • Page {index}/{total}")
+        embeds.append(embed)
+
+    await reply_once(interaction, {"embed": embeds[0], "ephemeral": True})
+    for embed in embeds[1:]:
+        try:
+            await interaction.followup.send(embed=embed, ephemeral=True)
+        except Exception:
+            break
+
+
+def _category_hint_from_ticket_row(row: Optional[Dict[str, Any]]) -> Optional[str]:
+    if not isinstance(row, dict):
+        return None
+
+    for key in ("category", "matched_category_slug", "matched_category_name"):
+        value = _normalize_slug(row.get(key))
+        if value:
+            return value
+
+    return None
 
 
 def register_ticket_macro_admin_commands(bot, tree) -> None:
@@ -364,8 +568,8 @@ def register_ticket_macro_admin_commands(bot, tree) -> None:
 
         clean_slug = _normalize_slug(slug)
         clean_body = _clean_body(body)
-        clean_name = _safe_str(name) or clean_slug.replace("-", " ").title()
-        clean_category = _normalize_slug(category) if category else None
+        clean_name = (_safe_str(name) or clean_slug.replace("-", " ").title())[:_MAX_MACRO_NAME]
+        clean_category = _normalize_slug(category)[:_MAX_MACRO_CATEGORY] if category else None
         clean_sort = max(0, _safe_int(sort_order, 100))
         clean_active = bool(active)
         clean_send_as_note = bool(send_as_note)
@@ -466,43 +670,21 @@ def register_ticket_macro_admin_commands(bot, tree) -> None:
             include_defaults=True,
         )
 
-        embed = discord.Embed(
+        filtered_rows = [row for row in rows if isinstance(row, dict)]
+        filtered_rows = filtered_rows[:_MAX_MACRO_LIST]
+
+        lines = [_macro_list_line(row) for row in filtered_rows]
+        chunks = _chunk_lines(lines)
+
+        description = f"Category filter: `{clean_category}`" if clean_category else None
+        await _send_paginated_macro_embeds(
+            interaction,
             title="📚 Ticket Macros",
+            description=description,
             color=discord.Color.blurple(),
-            timestamp=now_utc(),
+            chunks=chunks,
+            footer_prefix=f"Showing {len(filtered_rows)} macro(s)",
         )
-
-        if clean_category:
-            embed.description = f"Category filter: `{clean_category}`"
-
-        if not rows:
-            if clean_category:
-                embed.description = f"No ticket macros found for category `{clean_category}`."
-            else:
-                embed.description = "No ticket macros found."
-            return await reply_once(interaction, {"embed": embed, "ephemeral": True})
-
-        lines = []
-        for row in rows[:20]:
-            row_slug = _safe_str(row.get("slug"), "unknown")
-            row_name = _truncate(row.get("name"), 60) or row_slug
-            row_category = _safe_str(row.get("category"), "all") or "all"
-            row_source = _safe_str(row.get("_source"), "unknown")
-            note_flag = " • note" if _safe_bool(row.get("send_as_note"), False) else ""
-            inactive_flag = ""
-            if not _safe_bool(row.get("active", row.get("is_active", True)), True):
-                inactive_flag = " • inactive"
-            lines.append(
-                f"• `{row_slug}` — {row_name} • `{row_category}` • `{row_source}`{note_flag}{inactive_flag}"
-            )
-
-        embed.add_field(
-            name="Macros",
-            value="\n".join(lines)[:4000],
-            inline=False,
-        )
-        embed.set_footer(text=f"Showing {min(len(rows), 20)} macro(s)")
-        await reply_once(interaction, {"embed": embed, "ephemeral": True})
 
     @tree.command(
         name="ticket_macro_show",
@@ -584,6 +766,7 @@ def register_ticket_macro_admin_commands(bot, tree) -> None:
 
         macro = preview.get("macro") or {}
         rendered = _clean_body(preview.get("content"), limit=3500)
+        category_hint = _category_hint_from_ticket_row(row)
 
         embed = discord.Embed(
             title="👀 Ticket Macro Preview",
@@ -593,11 +776,20 @@ def register_ticket_macro_admin_commands(bot, tree) -> None:
         embed.add_field(name="Slug", value=f"`{_safe_str(macro.get('slug'), clean_slug)}`", inline=True)
         embed.add_field(name="Channel", value=ch.mention, inline=True)
         embed.add_field(
-            name="Category",
-            value=f"`{_safe_str((row or {}).get('category'), 'unknown')}`",
+            name="Ticket Category",
+            value=f"`{category_hint or 'unknown'}`",
             inline=True,
         )
-        embed.add_field(name="Rendered Output", value=rendered or "—", inline=False)
+        embed.add_field(
+            name="Ticket State",
+            value="Closed / archived" if _ticket_effectively_closed(channel=ch, row=row) else "Active",
+            inline=True,
+        )
+        embed.add_field(
+            name="Rendered Output",
+            value=rendered or "—",
+            inline=False,
+        )
         await reply_once(interaction, {"embed": embed, "ephemeral": True})
 
     @tree.command(
@@ -630,9 +822,12 @@ def register_ticket_macro_admin_commands(bot, tree) -> None:
         if status == "deleted":
             return await interaction.followup.send("❌ Deleted tickets cannot send macros.", ephemeral=True)
 
-        if status == "closed" or _channel_looks_closed(ch):
+        if _ticket_effectively_closed(channel=ch, row=row):
+            location_hint = "This ticket is closed/archived."
+            if _channel_is_in_archive_category(ch):
+                location_hint += f" It is currently in **{ch.category.name}**."
             return await interaction.followup.send(
-                "❌ Closed tickets cannot send macros. Reopen the ticket first.",
+                f"❌ Closed tickets cannot send macros. Reopen the ticket first.\n{location_hint}",
                 ephemeral=True,
             )
 
@@ -654,8 +849,10 @@ def register_ticket_macro_admin_commands(bot, tree) -> None:
 
         macro = result.get("macro") or {}
         macro_name = _safe_str(macro.get("name"), clean_slug)
+
         if _safe_bool(result.get("send_as_note"), False):
             msg = f"✅ Saved macro **{macro_name}** as an internal note in {ch.mention}."
         else:
             msg = f"✅ Sent macro **{macro_name}** in {ch.mention}."
+
         await interaction.followup.send(msg, ephemeral=True)
