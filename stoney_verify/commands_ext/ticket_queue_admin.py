@@ -31,6 +31,17 @@ except Exception:
     list_tickets_for_owner = None  # type: ignore
     list_ticket_activity_events = None  # type: ignore
 
+try:
+    from ..tickets_new.service import (
+        list_open_ticket_queue,
+        list_unclaimed_tickets,
+        list_tickets_claimed_by_staff,
+    )
+except Exception:
+    list_open_ticket_queue = None  # type: ignore
+    list_unclaimed_tickets = None  # type: ignore
+    list_tickets_claimed_by_staff = None  # type: ignore
+
 
 # ============================================================
 # ticket_queue_admin.py
@@ -40,7 +51,9 @@ except Exception:
 # - avoid raw channel-only lookups drifting from thread-aware rows
 # - normalize recent-closed / overdue reads
 # - prevent deleted tickets from polluting active/admin views
-# - make owner history / activity views consistent with schema lock
+# - add the missing queue/admin slash commands:
+#   tickets_mine / tickets_open / tickets_unassigned
+# - keep output readable for staff
 # ============================================================
 
 
@@ -110,6 +123,16 @@ def _normalize_ticket_priority(value: Any) -> str:
     return "medium"
 
 
+def _priority_rank(value: Any) -> int:
+    normalized = _normalize_ticket_priority(value)
+    return {
+        "urgent": 0,
+        "high": 1,
+        "medium": 2,
+        "low": 3,
+    }.get(normalized, 2)
+
+
 def _normalize_ticket_row(row: Dict[str, Any]) -> Dict[str, Any]:
     out = dict(row or {})
     out["status"] = _normalize_ticket_status(out.get("status"))
@@ -123,6 +146,11 @@ def _normalize_ticket_row(row: Dict[str, Any]) -> Dict[str, Any]:
         if _safe_int(out.get("assigned_to") or out.get("claimed_by"), 0) > 0:
             out["status"] = "claimed"
 
+    out["claimed_by_id"] = _safe_int(out.get("assigned_to") or out.get("claimed_by"), 0)
+    out["owner_user_id"] = _safe_int(out.get("owner_id") or out.get("user_id"), 0)
+    out["is_unclaimed"] = bool(out["status"] == "open" and out["claimed_by_id"] <= 0)
+    out["is_claimed"] = bool(out["status"] == "claimed" and out["claimed_by_id"] > 0)
+    out["priority_rank"] = _priority_rank(out.get("priority"))
     return out
 
 
@@ -136,25 +164,88 @@ def _member_ref(guild: discord.Guild, user_id: Any, fallback: str = "Unknown") -
     return f"`{uid}`"
 
 
+def _ticket_number_ref(row: Dict[str, Any]) -> str:
+    ticket_number = _safe_str(row.get("ticket_number"))
+    return f"#{ticket_number}" if ticket_number else "—"
+
+
+def _channel_ref_from_row(guild: discord.Guild, row: Dict[str, Any]) -> str:
+    channel_id = _safe_int(row.get("channel_id") or row.get("discord_thread_id"), 0)
+    channel_name = _safe_str(row.get("channel_name") or row.get("title") or "ticket")
+    if channel_id > 0:
+        ch = guild.get_channel(channel_id)
+        if isinstance(ch, discord.TextChannel):
+            return ch.mention
+        return f"<#{channel_id}>"
+    return f"`{channel_name}`"
+
+
 def _ticket_line(guild: discord.Guild, row: Dict[str, Any]) -> str:
     row = _normalize_ticket_row(row)
 
-    channel_id = _safe_int(row.get("channel_id") or row.get("discord_thread_id"), 0)
     owner_id = _safe_int(row.get("owner_id") or row.get("user_id"), 0)
     assigned_to = _safe_int(row.get("assigned_to") or row.get("claimed_by"), 0)
     priority = _safe_str(row.get("priority"), "medium")
     status = _safe_str(row.get("status"), "unknown")
-    ticket_number = _safe_str(row.get("ticket_number"))
-    channel_name = _safe_str(row.get("channel_name") or row.get("title") or "ticket")
-
-    channel_ref = f"<#{channel_id}>" if channel_id > 0 else f"`{channel_name}`"
-    num = f"#{ticket_number} " if ticket_number else ""
+    channel_ref = _channel_ref_from_row(guild, row)
+    num = _ticket_number_ref(row)
 
     return (
-        f"• {num}{channel_ref} • owner={_member_ref(guild, owner_id)} "
+        f"• {num} {channel_ref} "
+        f"• owner={_member_ref(guild, owner_id)} "
         f"• assignee={_member_ref(guild, assigned_to, 'Unassigned')} "
         f"• `{status}` • `{priority}`"
     )
+
+
+def _ticket_queue_line(guild: discord.Guild, row: Dict[str, Any]) -> str:
+    row = _normalize_ticket_row(row)
+
+    channel_ref = _channel_ref_from_row(guild, row)
+    num = _ticket_number_ref(row)
+    owner_ref = _member_ref(guild, row.get("owner_id") or row.get("user_id"))
+    assignee_ref = _member_ref(
+        guild,
+        row.get("assigned_to") or row.get("claimed_by"),
+        "Unassigned",
+    )
+    status = _safe_str(row.get("status"), "unknown")
+    priority = _safe_str(row.get("priority"), "medium")
+    created = _discord_ts(row.get("created_at"))
+    last_activity = _discord_ts(row.get("last_activity_at"))
+
+    return (
+        f"• {num} {channel_ref}\n"
+        f"  Owner: {owner_ref}\n"
+        f"  Assignee: {assignee_ref}\n"
+        f"  Status: `{status}` • Priority: `{priority}`\n"
+        f"  Created: {created} • Last activity: {last_activity}"
+    )
+
+
+def _rows_to_chunks(guild: discord.Guild, rows: List[Dict[str, Any]], *, queue_style: bool = False, chunk_limit: int = 3800) -> List[str]:
+    builder = _ticket_queue_line if queue_style else _ticket_line
+
+    chunks: List[str] = []
+    current: List[str] = []
+    current_len = 0
+
+    for row in rows:
+        line = builder(guild, row)
+        line_len = len(line) + 1
+
+        if current and (current_len + line_len) > chunk_limit:
+            chunks.append("\n\n".join(current) if queue_style else "\n".join(current))
+            current = []
+            current_len = 0
+
+        current.append(line)
+        current_len += line_len
+
+    if current:
+        chunks.append("\n\n".join(current) if queue_style else "\n".join(current))
+
+    return chunks or []
 
 
 async def _ticket_row_for_channel(channel: discord.TextChannel) -> Optional[Dict[str, Any]]:
@@ -282,28 +373,166 @@ def _fetch_overdue_sync(guild_id: int, limit: int = 15) -> List[Dict[str, Any]]:
         return []
 
 
-def _history_embed(
+async def _queue_rows_for_guild(guild_id: int | str) -> List[Dict[str, Any]]:
+    if list_open_ticket_queue is None:
+        return []
+
+    try:
+        rows = await list_open_ticket_queue(guild_id=guild_id)
+        return [_normalize_ticket_row(row) for row in rows if isinstance(row, dict)]
+    except Exception:
+        return []
+
+
+async def _unclaimed_rows_for_guild(guild_id: int | str) -> List[Dict[str, Any]]:
+    if list_unclaimed_tickets is None:
+        return []
+
+    try:
+        rows = await list_unclaimed_tickets(guild_id=guild_id)
+        return [_normalize_ticket_row(row) for row in rows if isinstance(row, dict)]
+    except Exception:
+        return []
+
+
+async def _claimed_rows_for_staff(guild_id: int | str, staff_id: int | str) -> List[Dict[str, Any]]:
+    if list_tickets_claimed_by_staff is None:
+        return []
+
+    try:
+        rows = await list_tickets_claimed_by_staff(guild_id=guild_id, staff_id=staff_id)
+        return [_normalize_ticket_row(row) for row in rows if isinstance(row, dict)]
+    except Exception:
+        return []
+
+
+async def _send_paginated_embeds(
+    interaction: discord.Interaction,
     *,
     title: str,
-    description: Optional[str],
     color: discord.Color,
-    lines: List[str],
-    footer: Optional[str] = None,
-) -> discord.Embed:
-    embed = discord.Embed(
-        title=title,
-        description=description,
-        color=color,
-        timestamp=now_utc(),
-    )
-    if lines:
-        embed.add_field(name="Results", value="\n".join(lines)[:1024], inline=False)
-    if footer:
-        embed.set_footer(text=footer)
-    return embed
+    chunks: List[str],
+    footer_prefix: str,
+) -> None:
+    if not chunks:
+        embed = discord.Embed(
+            title=title,
+            description="No results found.",
+            color=color,
+            timestamp=now_utc(),
+        )
+        return await reply_once(interaction, {"embed": embed, "ephemeral": True})
+
+    embeds: List[discord.Embed] = []
+    total = len(chunks)
+    for index, chunk in enumerate(chunks, start=1):
+        embed = discord.Embed(
+            title=title if index == 1 else f"{title} (cont.)",
+            description=chunk,
+            color=color,
+            timestamp=now_utc(),
+        )
+        embed.set_footer(text=f"{footer_prefix} • Page {index}/{total}")
+        embeds.append(embed)
+
+    first = embeds[0]
+    rest = embeds[1:]
+
+    try:
+        await reply_once(interaction, {"embed": first, "ephemeral": True})
+    except Exception:
+        return
+
+    for embed in rest:
+        try:
+            await interaction.followup.send(embed=embed, ephemeral=True)
+        except Exception:
+            break
 
 
 def register_ticket_queue_admin_commands(bot, tree) -> None:
+    @tree.command(
+        name="tickets_open",
+        description="List active tickets in queue order.",
+    )
+    async def tickets_open(interaction: discord.Interaction):
+        if not _staff_check(interaction):
+            return await reply_once(interaction, {"content": "❌ Staff only.", "ephemeral": True})
+
+        guild = interaction.guild
+        if guild is None:
+            return await reply_once(interaction, {"content": "❌ Guild only.", "ephemeral": True})
+
+        if list_open_ticket_queue is None:
+            return await reply_once(interaction, {"content": "❌ Ticket queue service is unavailable.", "ephemeral": True})
+
+        rows = await _queue_rows_for_guild(guild.id)
+        rows = [row for row in rows if _normalize_ticket_status(row.get("status")) in {"open", "claimed"}]
+
+        chunks = _rows_to_chunks(guild, rows[:40], queue_style=True)
+        await _send_paginated_embeds(
+            interaction,
+            title="🎫 Active Ticket Queue",
+            color=discord.Color.blurple(),
+            chunks=chunks,
+            footer_prefix=f"Showing {min(len(rows), 40)} active ticket(s)",
+        )
+
+    @tree.command(
+        name="tickets_unassigned",
+        description="List unclaimed tickets waiting for staff.",
+    )
+    async def tickets_unassigned(interaction: discord.Interaction):
+        if not _staff_check(interaction):
+            return await reply_once(interaction, {"content": "❌ Staff only.", "ephemeral": True})
+
+        guild = interaction.guild
+        if guild is None:
+            return await reply_once(interaction, {"content": "❌ Guild only.", "ephemeral": True})
+
+        if list_unclaimed_tickets is None:
+            return await reply_once(interaction, {"content": "❌ Ticket queue service is unavailable.", "ephemeral": True})
+
+        rows = await _unclaimed_rows_for_guild(guild.id)
+        rows = [row for row in rows if bool(row.get("is_unclaimed"))]
+
+        chunks = _rows_to_chunks(guild, rows[:40], queue_style=True)
+        await _send_paginated_embeds(
+            interaction,
+            title="📭 Unassigned Tickets",
+            color=discord.Color.orange(),
+            chunks=chunks,
+            footer_prefix=f"Showing {min(len(rows), 40)} unassigned ticket(s)",
+        )
+
+    @tree.command(
+        name="tickets_mine",
+        description="List tickets currently claimed by you.",
+    )
+    async def tickets_mine(interaction: discord.Interaction):
+        if not _staff_check(interaction):
+            return await reply_once(interaction, {"content": "❌ Staff only.", "ephemeral": True})
+
+        guild = interaction.guild
+        member = interaction.user if isinstance(interaction.user, discord.Member) else None
+        if guild is None or member is None:
+            return await reply_once(interaction, {"content": "❌ Guild only.", "ephemeral": True})
+
+        if list_tickets_claimed_by_staff is None:
+            return await reply_once(interaction, {"content": "❌ Ticket queue service is unavailable.", "ephemeral": True})
+
+        rows = await _claimed_rows_for_staff(guild.id, member.id)
+        rows = [row for row in rows if int(row.get("claimed_by_id") or 0) == int(member.id)]
+
+        chunks = _rows_to_chunks(guild, rows[:40], queue_style=True)
+        await _send_paginated_embeds(
+            interaction,
+            title="🧑‍💼 Tickets Claimed By You",
+            color=discord.Color.green(),
+            chunks=chunks,
+            footer_prefix=f"Showing {min(len(rows), 40)} claimed ticket(s)",
+        )
+
     @tree.command(
         name="tickets_recent_closed",
         description="List the most recently closed tickets.",
@@ -412,6 +641,7 @@ def register_ticket_queue_admin_commands(bot, tree) -> None:
         embed.add_field(name="Decision", value=_safe_str(row.get("decision"), "—"), inline=True)
         embed.add_field(name="Category", value=f"`{_safe_str(row.get('category'), 'unknown')}`", inline=True)
         embed.add_field(name="Priority", value=f"`{_safe_str(row.get('priority'), 'medium')}`", inline=True)
+        embed.add_field(name="Matched Category", value=_safe_str(row.get("matched_category_name") or row.get("matched_category_slug"), "—"), inline=False)
         await reply_once(interaction, {"embed": embed, "ephemeral": True})
 
     @tree.command(
@@ -519,7 +749,6 @@ def register_ticket_queue_admin_commands(bot, tree) -> None:
         events: List[Dict[str, Any]] = []
 
         try:
-            # Prefer ticket_id when available to avoid channel/thread drift.
             if ticket_id:
                 events = await list_ticket_activity_events(guild_id=ch.guild.id, ticket_id=ticket_id, limit=10)
             if not events:
@@ -543,7 +772,7 @@ def register_ticket_queue_admin_commands(bot, tree) -> None:
             title = _safe_str(event.get("title") or event.get("event_type") or "event")
             actor = _safe_str(event.get("actor_name") or event.get("actor_user_id") or "unknown")
             created = _discord_ts(event.get("created_at"))
-            desc = _truncate(event.get("description") or event.get("reason") or "", 120)
+            desc = _truncate(event.get("description") or event.get("reason") or "", 140)
             line = f"• **{title}** — `{actor}` — {created}"
             if desc:
                 line += f"\n  {desc}"
