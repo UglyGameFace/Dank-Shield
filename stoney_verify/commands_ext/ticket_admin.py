@@ -81,9 +81,6 @@ try:
         reopen_ticket_channel as service_reopen_ticket_channel,
         mark_ticket_deleted as service_mark_ticket_deleted,
         mark_ticket_closed as service_mark_ticket_closed,
-        list_open_ticket_queue as service_list_open_ticket_queue,
-        list_unclaimed_tickets as service_list_unclaimed_tickets,
-        list_tickets_claimed_by_staff as service_list_tickets_claimed_by_staff,
     )
 except Exception:
     service_assign_ticket = None  # type: ignore
@@ -95,9 +92,6 @@ except Exception:
     service_reopen_ticket_channel = None  # type: ignore
     service_mark_ticket_deleted = None  # type: ignore
     service_mark_ticket_closed = None  # type: ignore
-    service_list_open_ticket_queue = None  # type: ignore
-    service_list_unclaimed_tickets = None  # type: ignore
-    service_list_tickets_claimed_by_staff = None  # type: ignore
 
 
 _VALID_PRIORITIES = {"low", "medium", "high", "urgent"}
@@ -123,6 +117,8 @@ def _ticket_status(row: Optional[Dict[str, Any]]) -> str:
         raw = _safe_str((row or {}).get("status"), "unknown").lower()
         if raw in {"open", "claimed", "closed", "deleted"}:
             return raw
+        if raw in {"active", "reopened"}:
+            return "open"
     except Exception:
         pass
     return "unknown"
@@ -232,6 +228,53 @@ def _channel_is_in_category(
         return int(getattr(channel.category, "id", 0) or 0) == int(category.id)
     except Exception:
         return False
+
+
+def _channel_is_in_archive_category(channel: discord.TextChannel) -> bool:
+    archive_category = _resolve_archive_category(channel.guild)
+    if archive_category and _channel_is_in_category(channel, archive_category):
+        return True
+    try:
+        if channel.category and _looks_like_archive_category_name(channel.category.name):
+            return True
+    except Exception:
+        pass
+    return False
+
+
+def _channel_is_in_active_category(channel: discord.TextChannel) -> bool:
+    active_category = _resolve_active_ticket_category(channel.guild)
+    if active_category and _channel_is_in_category(channel, active_category):
+        return True
+    return False
+
+
+def _ticket_effectively_closed(
+    *,
+    channel: discord.TextChannel,
+    row: Optional[Dict[str, Any]],
+) -> bool:
+    status = _ticket_status(row)
+    if status in {"closed", "deleted"}:
+        return True
+    if _channel_looks_closed(channel):
+        return True
+    if _channel_is_in_archive_category(channel):
+        return True
+    return False
+
+
+def _ticket_effectively_open(
+    *,
+    channel: discord.TextChannel,
+    row: Optional[Dict[str, Any]],
+) -> bool:
+    status = _ticket_status(row)
+    if status in {"open", "claimed"} and not _channel_looks_closed(channel) and not _channel_is_in_archive_category(channel):
+        return True
+    if _channel_looks_open(channel) and not _channel_is_in_archive_category(channel):
+        return True
+    return False
 
 
 async def _move_ticket_to_archive_if_configured(channel: discord.TextChannel) -> bool:
@@ -369,33 +412,6 @@ def _member_label(guild: discord.Guild, user_id: Any, fallback: str = "Unassigne
     return f"`{uid}`"
 
 
-def _ticket_summary_line(guild: discord.Guild, row: Dict[str, Any]) -> str:
-    channel_id = _safe_int(row.get("channel_id") or row.get("discord_thread_id"), 0)
-    owner_id = _safe_int(row.get("owner_id") or row.get("user_id"), 0)
-    assigned_to = _safe_int(row.get("assigned_to") or row.get("claimed_by"), 0)
-    priority = _safe_str(row.get("priority"), "medium")
-    status = _safe_str(row.get("status"), "open")
-    number = _safe_str(row.get("ticket_number"))
-    title = _safe_str(row.get("title")) or _safe_str(row.get("channel_name")) or "ticket"
-    number_prefix = f"#{number} " if number else ""
-    channel_ref = f"<#{channel_id}>" if channel_id > 0 else f"`{title}`"
-    owner_ref = _member_label(guild, owner_id, "Unknown owner")
-    assignee_ref = _member_label(guild, assigned_to, "Unassigned")
-    return f"• {number_prefix}{channel_ref} • owner={owner_ref} • assignee={assignee_ref} • `{status}` • `{priority}`"
-
-
-def _queue_embed(title: str, guild: discord.Guild, rows: List[Dict[str, Any]], empty_text: str) -> discord.Embed:
-    embed = discord.Embed(title=title, color=discord.Color.blurple(), timestamp=now_utc())
-    if not rows:
-        embed.description = empty_text
-        return embed
-
-    lines = [_ticket_summary_line(guild, row) for row in rows[:15]]
-    embed.description = "\n".join(lines)[:4000]
-    embed.set_footer(text=f"Showing {min(len(rows), 15)} ticket(s)")
-    return embed
-
-
 def _actor_member(guild: Optional[discord.Guild], user: discord.abc.User) -> Optional[discord.Member]:
     if guild is None:
         return None
@@ -467,20 +483,17 @@ async def _repair_closed_drift_for_delete(
     if status == "deleted":
         return row
 
-    if _channel_looks_closed(channel) and status in {"open", "claimed", "unknown"}:
-        if service_mark_ticket_closed is None:
-            return row
-
-        try:
-            await service_mark_ticket_closed(
-                channel=channel,
-                closed_by=actor,
-                reason="State repaired before delete",
-            )
-        except Exception:
-            return row
-
-        return await _refresh_ticket_row(channel)
+    if _ticket_effectively_closed(channel=channel, row=row):
+        if status in {"open", "claimed", "unknown"} and service_mark_ticket_closed is not None:
+            try:
+                await service_mark_ticket_closed(
+                    channel=channel,
+                    closed_by=actor,
+                    reason="State repaired before delete",
+                )
+                return await _refresh_ticket_row(channel)
+            except Exception:
+                return row
 
     return row
 
@@ -496,7 +509,7 @@ async def _repair_open_drift_for_reopen(
     if status == "deleted":
         return row
 
-    if _channel_looks_open(channel) and status == "closed":
+    if _ticket_effectively_open(channel=channel, row=row) and status == "closed":
         if service_reopen_ticket_channel is None:
             return row
 
@@ -510,12 +523,71 @@ async def _repair_open_drift_for_reopen(
                 actor=actor,
                 reason="State repaired before reopen check",
             )
+            return await _refresh_ticket_row(channel)
         except Exception:
             return row
 
-        return await _refresh_ticket_row(channel)
-
     return row
+
+
+def _ticket_info_embed(
+    *,
+    channel: discord.TextChannel,
+    row: Dict[str, Any],
+    owner: Optional[discord.Member | discord.User],
+    notes: List[Dict[str, Any]],
+) -> discord.Embed:
+    archive_category = _resolve_archive_category(channel.guild)
+    active_category = _resolve_active_ticket_category(channel.guild)
+
+    if archive_category and _channel_is_in_category(channel, archive_category):
+        lifecycle_location = f"Archived in **{archive_category.name}**"
+    elif active_category and _channel_is_in_category(channel, active_category):
+        lifecycle_location = f"Active in **{active_category.name}**"
+    elif channel.category:
+        lifecycle_location = f"In **{channel.category.name}**"
+    else:
+        lifecycle_location = "No category"
+
+    embed = discord.Embed(
+        title="🎫 Ticket Info",
+        color=discord.Color.blurple(),
+        timestamp=now_utc(),
+    )
+    embed.add_field(name="Channel", value=f"{channel.mention}\n`{channel.id}`", inline=False)
+    embed.add_field(
+        name="Owner",
+        value=(
+            owner.mention
+            if isinstance(owner, discord.Member)
+            else _member_label(channel.guild, row.get("owner_id") or row.get("user_id"), "Unknown")
+        ),
+        inline=True,
+    )
+    embed.add_field(name="Assigned", value=_member_label(channel.guild, row.get("assigned_to"), "Unassigned"), inline=True)
+    embed.add_field(name="Status", value=f"`{_safe_str(row.get('status'), 'unknown')}`", inline=True)
+    embed.add_field(name="Priority", value=f"`{_safe_str(row.get('priority'), 'medium')}`", inline=True)
+    embed.add_field(name="Category", value=f"`{_safe_str(row.get('category'), 'unknown')}`", inline=True)
+    embed.add_field(name="Ticket Number", value=f"`{_safe_str(row.get('ticket_number'), 'n/a')}`", inline=True)
+    embed.add_field(name="Location", value=lifecycle_location, inline=False)
+    embed.add_field(name="Source", value=f"`{_safe_str(row.get('source'), 'unknown')}`", inline=True)
+    embed.add_field(name="Created At", value=f"`{_safe_str(row.get('created_at'), 'unknown')}`", inline=True)
+    embed.add_field(name="Transcript", value=_safe_str(row.get("transcript_url"), "—"), inline=False)
+    embed.add_field(
+        name="Matched Category",
+        value=_safe_str(row.get("matched_category_name") or row.get("matched_category_slug"), "—"),
+        inline=False,
+    )
+
+    if notes:
+        lines = []
+        for note in notes[:3]:
+            preview = _safe_str(note.get("note_body"))[:120]
+            author = _safe_str(note.get("author_name"), "unknown")
+            lines.append(f"• `{author}` — {preview}")
+        embed.add_field(name="Recent Notes", value="\n".join(lines)[:1024], inline=False)
+
+    return embed
 
 
 def register_ticket_admin_commands(bot, tree) -> None:
@@ -687,9 +759,13 @@ def register_ticket_admin_commands(bot, tree) -> None:
                 ephemeral=True,
             )
 
-        if status == "closed" and _channel_looks_closed(ch):
+        if _ticket_effectively_closed(channel=ch, row=row) and status == "closed":
             archive_category = _resolve_archive_category(ch.guild)
-            extra = f"\n📦 Archive category: **{archive_category.name}**" if archive_category and _channel_is_in_category(ch, archive_category) else ""
+            extra = (
+                f"\n📦 Archive category: **{archive_category.name}**"
+                if archive_category and _channel_is_in_category(ch, archive_category)
+                else ""
+            )
             return await interaction.followup.send(
                 f"ℹ️ {ch.mention} is already closed.{extra}",
                 ephemeral=True,
@@ -785,7 +861,7 @@ def register_ticket_admin_commands(bot, tree) -> None:
             return await reply_once(interaction, {"content": "❌ Ticket claim service is unavailable.", "ephemeral": True})
 
         status = _ticket_status(row)
-        if status in {"closed", "deleted"}:
+        if status in {"closed", "deleted"} or _ticket_effectively_closed(channel=ch, row=row):
             return await reply_once(
                 interaction,
                 {"content": "❌ You cannot claim a closed or deleted ticket.", "ephemeral": True},
@@ -821,7 +897,7 @@ def register_ticket_admin_commands(bot, tree) -> None:
             return await reply_once(interaction, {"content": "❌ Ticket unclaim service is unavailable.", "ephemeral": True})
 
         status = _ticket_status(row)
-        if status in {"closed", "deleted"}:
+        if status in {"closed", "deleted"} or _ticket_effectively_closed(channel=ch, row=row):
             return await reply_once(
                 interaction,
                 {"content": "❌ You cannot unclaim a closed or deleted ticket.", "ephemeral": True},
@@ -861,7 +937,7 @@ def register_ticket_admin_commands(bot, tree) -> None:
             return await reply_once(interaction, {"content": "❌ Ticket transfer service is unavailable.", "ephemeral": True})
 
         status = _ticket_status(row)
-        if status in {"closed", "deleted"}:
+        if status in {"closed", "deleted"} or _ticket_effectively_closed(channel=ch, row=row):
             return await reply_once(
                 interaction,
                 {"content": "❌ You cannot transfer a closed or deleted ticket.", "ephemeral": True},
@@ -928,9 +1004,13 @@ def register_ticket_admin_commands(bot, tree) -> None:
                 ephemeral=True,
             )
 
-        if status in {"open", "claimed"} and _channel_looks_open(ch):
+        if _ticket_effectively_open(channel=ch, row=row) and status in {"open", "claimed"}:
             active_category = _resolve_active_ticket_category(ch.guild)
-            extra = f"\n📂 Active ticket category: **{active_category.name}**" if active_category and _channel_is_in_category(ch, active_category) else ""
+            extra = (
+                f"\n📂 Active ticket category: **{active_category.name}**"
+                if active_category and _channel_is_in_category(ch, active_category)
+                else ""
+            )
             return await interaction.followup.send(
                 f"ℹ️ {ch.mention} is already open.{extra}",
                 ephemeral=True,
@@ -1001,7 +1081,7 @@ def register_ticket_admin_commands(bot, tree) -> None:
         if status == "deleted":
             return await interaction.followup.send("ℹ️ This ticket is already deleted.", ephemeral=True)
 
-        if status != "closed" and not _channel_looks_closed(ch):
+        if not _ticket_effectively_closed(channel=ch, row=row):
             return await interaction.followup.send(
                 "❌ Ticket must be closed before deletion. Close it first, then delete it.",
                 ephemeral=True,
@@ -1013,7 +1093,7 @@ def register_ticket_admin_commands(bot, tree) -> None:
         if status == "deleted":
             return await interaction.followup.send("ℹ️ This ticket is already deleted.", ephemeral=True)
 
-        if status != "closed" and not _channel_looks_closed(ch):
+        if not _ticket_effectively_closed(channel=ch, row=row):
             return await interaction.followup.send(
                 "❌ Ticket is not in a valid closed state for deletion.",
                 ephemeral=True,
@@ -1223,50 +1303,12 @@ def register_ticket_admin_commands(bot, tree) -> None:
             except Exception:
                 notes = []
 
-        archive_category = _resolve_archive_category(ch.guild)
-        active_category = _resolve_active_ticket_category(ch.guild)
-        if archive_category and _channel_is_in_category(ch, archive_category):
-            lifecycle_location = f"Archived in **{archive_category.name}**"
-        elif active_category and _channel_is_in_category(ch, active_category):
-            lifecycle_location = f"Active in **{active_category.name}**"
-        elif ch.category:
-            lifecycle_location = f"In **{ch.category.name}**"
-        else:
-            lifecycle_location = "No category"
-
-        embed = discord.Embed(
-            title="🎫 Ticket Info",
-            color=discord.Color.blurple(),
-            timestamp=now_utc(),
+        embed = _ticket_info_embed(
+            channel=ch,
+            row=row,
+            owner=owner,
+            notes=notes,
         )
-        embed.add_field(name="Channel", value=f"{ch.mention}\n`{ch.id}`", inline=False)
-        embed.add_field(
-            name="Owner",
-            value=(
-                owner.mention
-                if isinstance(owner, discord.Member)
-                else _member_label(ch.guild, row.get("owner_id") or row.get("user_id"), "Unknown")
-            ),
-            inline=True,
-        )
-        embed.add_field(name="Assigned", value=_member_label(ch.guild, row.get("assigned_to"), "Unassigned"), inline=True)
-        embed.add_field(name="Status", value=f"`{_safe_str(row.get('status'), 'unknown')}`", inline=True)
-        embed.add_field(name="Priority", value=f"`{_safe_str(row.get('priority'), 'medium')}`", inline=True)
-        embed.add_field(name="Category", value=f"`{_safe_str(row.get('category'), 'unknown')}`", inline=True)
-        embed.add_field(name="Ticket Number", value=f"`{_safe_str(row.get('ticket_number'), 'n/a')}`", inline=True)
-        embed.add_field(name="Location", value=lifecycle_location, inline=False)
-        embed.add_field(name="Source", value=f"`{_safe_str(row.get('source'), 'unknown')}`", inline=True)
-        embed.add_field(name="Created At", value=f"`{_safe_str(row.get('created_at'), 'unknown')}`", inline=True)
-        embed.add_field(name="Transcript", value=_safe_str(row.get("transcript_url"), "—"), inline=False)
-
-        if notes:
-            lines = []
-            for note in notes[:3]:
-                preview = _safe_str(note.get("note_body"))[:120]
-                author = _safe_str(note.get("author_name"), "unknown")
-                lines.append(f"• `{author}` — {preview}")
-            embed.add_field(name="Recent Notes", value="\n".join(lines)[:1024], inline=False)
-
         await reply_once(interaction, {"embed": embed, "ephemeral": True})
 
     @tree.command(
@@ -1293,6 +1335,9 @@ def register_ticket_admin_commands(bot, tree) -> None:
 
         if service_add_internal_note is None:
             return await reply_once(interaction, {"content": "❌ Ticket notes service is unavailable.", "ephemeral": True})
+
+        if _ticket_status(row) == "deleted":
+            return await reply_once(interaction, {"content": "❌ Cannot add a note to a deleted ticket.", "ephemeral": True})
 
         clean_note = _safe_str(note)
         if not clean_note:
@@ -1325,6 +1370,8 @@ def register_ticket_admin_commands(bot, tree) -> None:
         if ch is None:
             return
 
+        _ = row
+
         if service_list_internal_notes is None:
             return await reply_once(interaction, {"content": "❌ Ticket notes service is unavailable.", "ephemeral": True})
 
@@ -1346,73 +1393,4 @@ def register_ticket_admin_commands(bot, tree) -> None:
             pin_tag = "📌 " if bool(note_row.get("is_pinned")) else ""
             lines.append(f"{pin_tag}`{author}` • `{created_at}`\n{body}")
         embed.add_field(name="Recent Notes", value="\n\n".join(lines)[:1024], inline=False)
-        await reply_once(interaction, {"embed": embed, "ephemeral": True})
-
-    @tree.command(
-        name="tickets_mine",
-        description="List open/claimed tickets currently assigned to you.",
-    )
-    async def tickets_mine(interaction: discord.Interaction):
-        if not _staff_check(interaction):
-            return await reply_once(interaction, {"content": "❌ Staff only.", "ephemeral": True})
-
-        guild = interaction.guild
-        if guild is None:
-            return await reply_once(interaction, {"content": "❌ Guild only.", "ephemeral": True})
-
-        if service_list_tickets_claimed_by_staff is None:
-            return await reply_once(
-                interaction,
-                {"content": "❌ Ticket queue service is unavailable.", "ephemeral": True},
-            )
-
-        rows = await service_list_tickets_claimed_by_staff(
-            guild_id=guild.id,
-            staff_id=interaction.user.id,
-        )
-        embed = _queue_embed("🎫 My Claimed Tickets", guild, rows, "You have no claimed tickets.")
-        await reply_once(interaction, {"embed": embed, "ephemeral": True})
-
-    @tree.command(
-        name="tickets_open",
-        description="List the current open ticket queue.",
-    )
-    async def tickets_open(interaction: discord.Interaction):
-        if not _staff_check(interaction):
-            return await reply_once(interaction, {"content": "❌ Staff only.", "ephemeral": True})
-
-        guild = interaction.guild
-        if guild is None:
-            return await reply_once(interaction, {"content": "❌ Guild only.", "ephemeral": True})
-
-        if service_list_open_ticket_queue is None:
-            return await reply_once(
-                interaction,
-                {"content": "❌ Ticket queue service is unavailable.", "ephemeral": True},
-            )
-
-        rows = await service_list_open_ticket_queue(guild_id=guild.id)
-        embed = _queue_embed("📂 Open Ticket Queue", guild, rows, "No open or claimed tickets found.")
-        await reply_once(interaction, {"embed": embed, "ephemeral": True})
-
-    @tree.command(
-        name="tickets_unassigned",
-        description="List open tickets with no assignee.",
-    )
-    async def tickets_unassigned(interaction: discord.Interaction):
-        if not _staff_check(interaction):
-            return await reply_once(interaction, {"content": "❌ Staff only.", "ephemeral": True})
-
-        guild = interaction.guild
-        if guild is None:
-            return await reply_once(interaction, {"content": "❌ Guild only.", "ephemeral": True})
-
-        if service_list_unclaimed_tickets is None:
-            return await reply_once(
-                interaction,
-                {"content": "❌ Ticket queue service is unavailable.", "ephemeral": True},
-            )
-
-        rows = await service_list_unclaimed_tickets(guild_id=guild.id)
-        embed = _queue_embed("📭 Unassigned Tickets", guild, rows, "No unassigned open tickets found.")
         await reply_once(interaction, {"embed": embed, "ephemeral": True})
