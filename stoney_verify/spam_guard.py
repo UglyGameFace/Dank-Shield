@@ -71,6 +71,9 @@ _LOCK_LAST_USED: Dict[str, float] = {}
 _GUILD_INVITE_CACHE: Dict[int, Dict[str, Any]] = {}
 _QUARANTINE_CASES: Dict[str, Dict[str, Any]] = {}
 
+_SETTINGS_LAST_DIAG_BY_GUILD: Dict[int, Dict[str, Any]] = {}
+_SETTINGS_DIAG_THROTTLE: Dict[str, float] = {}
+
 
 def _lock(key: str) -> asyncio.Lock:
     clean = str(key or "").strip() or "default"
@@ -461,6 +464,82 @@ def _build_persistence_label(
         return "DB-backed"
 
     return "Runtime only (resets on restart)"
+
+
+def _settings_row_exists(row: Optional[Dict[str, Any]]) -> bool:
+    return isinstance(row, dict) and bool(row)
+
+
+def _settings_row_enabled_value(row: Optional[Dict[str, Any]]) -> Optional[bool]:
+    if not _settings_row_exists(row):
+        return None
+    return _safe_bool((row or {}).get("spam_blocker_enabled", (row or {}).get("enabled")), False)
+
+
+def _settings_row_mode_value(row: Optional[Dict[str, Any]]) -> Optional[str]:
+    if not _settings_row_exists(row):
+        return None
+    return _normalize_mode((row or {}).get("spam_mode", (row or {}).get("mode")), "timeout")
+
+
+def _settings_diag_reason_short(reason: Any) -> str:
+    text = _safe_str(reason)
+    if not text:
+        return "unknown"
+    if len(text) <= 120:
+        return text
+    return text[:117] + "..."
+
+
+def _settings_debug_throttled(key: str, msg: str, ttl: int = 120) -> None:
+    now_mono = time.monotonic()
+    last = float(_SETTINGS_DIAG_THROTTLE.get(key, 0.0) or 0.0)
+    if (now_mono - last) < float(ttl):
+        return
+    _SETTINGS_DIAG_THROTTLE[key] = now_mono
+    _debug(msg)
+
+
+def _record_settings_diag(guild_id: int, **fields: Any) -> Dict[str, Any]:
+    gid = int(guild_id)
+    payload = dict(_SETTINGS_LAST_DIAG_BY_GUILD.get(gid) or {})
+    payload.update(fields)
+    payload["ts"] = _now_utc().isoformat()
+    _SETTINGS_LAST_DIAG_BY_GUILD[gid] = payload
+    return dict(payload)
+
+
+def _settings_diag_brief(guild_id: int) -> str:
+    diag = _SETTINGS_LAST_DIAG_BY_GUILD.get(int(guild_id)) or {}
+    if not diag:
+        return "no_diag"
+
+    bits: List[str] = []
+    action = _safe_str(diag.get("action"))
+    if action:
+        bits.append(f"action={action}")
+
+    status = _safe_str(diag.get("status"))
+    if status:
+        bits.append(f"status={status}")
+
+    persisted = diag.get("persisted")
+    if isinstance(persisted, bool):
+        bits.append(f"persisted={persisted}")
+
+    row_found = diag.get("row_found")
+    if isinstance(row_found, bool):
+        bits.append(f"row_found={row_found}")
+
+    readback_status = _safe_str(diag.get("readback_status"))
+    if readback_status:
+        bits.append(f"readback={readback_status}")
+
+    reason = _settings_diag_reason_short(diag.get("reason") or diag.get("persist_reason") or diag.get("readback_reason"))
+    if reason and reason != "unknown":
+        bits.append(f"reason={reason}")
+
+    return "; ".join(bits[:6]) or "no_diag"
 
 
 def _fast_settings_for_ui(guild_id: int) -> Dict[str, Any]:
@@ -923,12 +1002,12 @@ def _settings_payload_for_db(settings: Dict[str, Any], *, updated_by: Optional[d
     }
 
 
-def _fetch_settings_sync(guild_id: int) -> Tuple[str, Optional[Dict[str, Any]]]:
+def _fetch_settings_sync(guild_id: int) -> Tuple[str, Optional[Dict[str, Any]], str]:
     global _SETTINGS_TABLE_AVAILABLE
 
     sb = _sb()
     if sb is None:
-        return "unavailable", None
+        return "unavailable", None, "supabase_none"
 
     try:
         res = (
@@ -942,24 +1021,24 @@ def _fetch_settings_sync(guild_id: int) -> Tuple[str, Optional[Dict[str, Any]]]:
         _SETTINGS_TABLE_AVAILABLE = True
 
         if rows:
-            return "ok", dict(rows[0])
+            return "ok", dict(rows[0]), "row_found"
 
-        return "ok", {}
+        return "ok", {}, "row_missing"
     except Exception as e:
         if _is_table_missing_error(e, GUILD_SECURITY_SETTINGS_TABLE):
             _SETTINGS_TABLE_AVAILABLE = False
-            return "missing_table", None
+            return "missing_table", None, "missing_table"
 
         _debug(f"settings fetch transient failure guild={guild_id} error={repr(e)}")
-        return "unavailable", None
+        return "unavailable", None, f"fetch_error:{type(e).__name__}"
 
 
-def _upsert_settings_sync(payload: Dict[str, Any]) -> bool:
+def _upsert_settings_sync(payload: Dict[str, Any]) -> Tuple[bool, str]:
     global _SETTINGS_TABLE_AVAILABLE
 
     sb = _sb()
     if sb is None:
-        return False
+        return False, "supabase_none"
 
     try:
         sb.table(GUILD_SECURITY_SETTINGS_TABLE).upsert(
@@ -967,14 +1046,18 @@ def _upsert_settings_sync(payload: Dict[str, Any]) -> bool:
             on_conflict="guild_id",
         ).execute()
         _SETTINGS_TABLE_AVAILABLE = True
-        return True
+        return True, "upsert_ok"
     except Exception as e:
         if _is_table_missing_error(e, GUILD_SECURITY_SETTINGS_TABLE):
             _SETTINGS_TABLE_AVAILABLE = False
-            return False
+            return False, "missing_table"
 
         _debug(f"settings upsert transient failure guild={payload.get('guild_id')} error={repr(e)}")
-        return False
+        return False, f"upsert_error:{type(e).__name__}"
+
+
+def _readback_settings_sync(guild_id: int) -> Tuple[str, Optional[Dict[str, Any]], str]:
+    return _fetch_settings_sync(guild_id)
 
 
 async def get_spam_settings(guild_id: int) -> Dict[str, Any]:
@@ -982,42 +1065,184 @@ async def get_spam_settings(guild_id: int) -> Dict[str, Any]:
 
     cached = _cached_runtime_settings(gid)
     if isinstance(cached, dict) and _cache_is_fresh(cached):
-        return _normalize_settings(gid, cached)
+        normalized_cached = _normalize_settings(gid, cached)
+        return normalized_cached
 
     if _SETTINGS_TABLE_AVAILABLE is False:
         if isinstance(cached, dict):
-            return _normalize_settings(gid, cached)
-        return _default_settings(gid)
+            normalized_cached = _normalize_settings(gid, cached)
+            _record_settings_diag(
+                gid,
+                action="load",
+                status="missing_table",
+                reason="settings_table_marked_unavailable",
+                row_found=False,
+                source="cache",
+                effective_enabled=bool(normalized_cached.get("enabled")),
+                effective_mode=str(normalized_cached.get("mode")),
+            )
+            _settings_debug_throttled(
+                f"settings-load-missing-table-cache:{gid}",
+                f"settings load guild={gid} status=missing_table fallback=cache enabled={bool(normalized_cached.get('enabled'))} mode={normalized_cached.get('mode')}",
+            )
+            return normalized_cached
+
+        normalized_default = _default_settings(gid)
+        _record_settings_diag(
+            gid,
+            action="load",
+            status="missing_table",
+            reason="settings_table_marked_unavailable",
+            row_found=False,
+            source="defaults",
+            effective_enabled=bool(normalized_default.get("enabled")),
+            effective_mode=str(normalized_default.get("mode")),
+        )
+        _settings_debug_throttled(
+            f"settings-load-missing-table-default:{gid}",
+            f"settings load guild={gid} status=missing_table fallback=defaults enabled={bool(normalized_default.get('enabled'))} mode={normalized_default.get('mode')}",
+        )
+        return normalized_default
 
     try:
-        status, row = await asyncio.to_thread(_fetch_settings_sync, gid)
+        status, row, reason = await asyncio.to_thread(_fetch_settings_sync, gid)
 
         if status == "ok":
+            row_found = _settings_row_exists(row)
             normalized = _normalize_settings(gid, row or {})
+            source = "db" if row_found else "db-empty"
             _cache_runtime_settings(
                 gid,
                 normalized,
-                source="db" if row else "db-empty",
-                persisted=bool(row),
+                source=source,
+                persisted=row_found,
             )
+            _record_settings_diag(
+                gid,
+                action="load",
+                status="ok",
+                reason=reason,
+                row_found=row_found,
+                source=source,
+                row_enabled=_settings_row_enabled_value(row),
+                row_mode=_settings_row_mode_value(row),
+                effective_enabled=bool(normalized.get("enabled")),
+                effective_mode=str(normalized.get("mode")),
+            )
+            if not row_found:
+                _settings_debug_throttled(
+                    f"settings-load-row-missing:{gid}",
+                    f"settings load guild={gid} status=ok row_found=False fallback=defaults enabled={bool(normalized.get('enabled'))} mode={normalized.get('mode')} reason={reason}",
+                )
             return normalized
 
         if status == "missing_table":
             if isinstance(cached, dict):
-                return _normalize_settings(gid, cached)
-            return _default_settings(gid)
+                normalized_cached = _normalize_settings(gid, cached)
+                _record_settings_diag(
+                    gid,
+                    action="load",
+                    status="missing_table",
+                    reason=reason,
+                    row_found=False,
+                    source="cache",
+                    effective_enabled=bool(normalized_cached.get("enabled")),
+                    effective_mode=str(normalized_cached.get("mode")),
+                )
+                _settings_debug_throttled(
+                    f"settings-load-missing-table-cache2:{gid}",
+                    f"settings load guild={gid} status=missing_table fallback=cache enabled={bool(normalized_cached.get('enabled'))} mode={normalized_cached.get('mode')} reason={reason}",
+                )
+                return normalized_cached
+
+            normalized_default = _default_settings(gid)
+            _record_settings_diag(
+                gid,
+                action="load",
+                status="missing_table",
+                reason=reason,
+                row_found=False,
+                source="defaults",
+                effective_enabled=bool(normalized_default.get("enabled")),
+                effective_mode=str(normalized_default.get("mode")),
+            )
+            _settings_debug_throttled(
+                f"settings-load-missing-table-default2:{gid}",
+                f"settings load guild={gid} status=missing_table fallback=defaults enabled={bool(normalized_default.get('enabled'))} mode={normalized_default.get('mode')} reason={reason}",
+            )
+            return normalized_default
 
         if isinstance(cached, dict):
-            return _normalize_settings(gid, cached)
+            normalized_cached = _normalize_settings(gid, cached)
+            _record_settings_diag(
+                gid,
+                action="load",
+                status="unavailable",
+                reason=reason,
+                row_found=False,
+                source="cache",
+                effective_enabled=bool(normalized_cached.get("enabled")),
+                effective_mode=str(normalized_cached.get("mode")),
+            )
+            _settings_debug_throttled(
+                f"settings-load-unavailable-cache:{gid}",
+                f"settings load guild={gid} status=unavailable fallback=cache enabled={bool(normalized_cached.get('enabled'))} mode={normalized_cached.get('mode')} reason={reason}",
+            )
+            return normalized_cached
 
-        return _default_settings(gid)
+        normalized_default = _default_settings(gid)
+        _record_settings_diag(
+            gid,
+            action="load",
+            status="unavailable",
+            reason=reason,
+            row_found=False,
+            source="defaults",
+            effective_enabled=bool(normalized_default.get("enabled")),
+            effective_mode=str(normalized_default.get("mode")),
+        )
+        _settings_debug_throttled(
+            f"settings-load-unavailable-default:{gid}",
+            f"settings load guild={gid} status=unavailable fallback=defaults enabled={bool(normalized_default.get('enabled'))} mode={normalized_default.get('mode')} reason={reason}",
+        )
+        return normalized_default
     except Exception as e:
         _debug(f"settings fetch failed guild={gid} error={repr(e)}")
 
         if isinstance(cached, dict):
-            return _normalize_settings(gid, cached)
+            normalized_cached = _normalize_settings(gid, cached)
+            _record_settings_diag(
+                gid,
+                action="load",
+                status="exception",
+                reason=f"exception:{type(e).__name__}",
+                row_found=False,
+                source="cache",
+                effective_enabled=bool(normalized_cached.get("enabled")),
+                effective_mode=str(normalized_cached.get("mode")),
+            )
+            _settings_debug_throttled(
+                f"settings-load-exception-cache:{gid}",
+                f"settings load guild={gid} status=exception fallback=cache enabled={bool(normalized_cached.get('enabled'))} mode={normalized_cached.get('mode')} reason={type(e).__name__}",
+            )
+            return normalized_cached
 
-        return _default_settings(gid)
+        normalized_default = _default_settings(gid)
+        _record_settings_diag(
+            gid,
+            action="load",
+            status="exception",
+            reason=f"exception:{type(e).__name__}",
+            row_found=False,
+            source="defaults",
+            effective_enabled=bool(normalized_default.get("enabled")),
+            effective_mode=str(normalized_default.get("mode")),
+        )
+        _settings_debug_throttled(
+            f"settings-load-exception-default:{gid}",
+            f"settings load guild={gid} status=exception fallback=defaults enabled={bool(normalized_default.get('enabled'))} mode={normalized_default.get('mode')} reason={type(e).__name__}",
+        )
+        return normalized_default
 
 
 async def save_spam_settings(
@@ -1033,22 +1258,75 @@ async def save_spam_settings(
     merged.update(dict(patch or {}))
     normalized = _normalize_settings(gid, merged)
 
+    patch_keys = sorted(str(k) for k in dict(patch or {}).keys())
     persisted = False
+    persist_reason = "settings_table_unavailable" if _SETTINGS_TABLE_AVAILABLE is False else "not_attempted"
+
     if _SETTINGS_TABLE_AVAILABLE is not False:
         try:
-            persisted = await asyncio.to_thread(
+            persisted, persist_reason = await asyncio.to_thread(
                 _upsert_settings_sync,
                 _settings_payload_for_db(normalized, updated_by=updated_by),
             )
         except Exception as e:
             _debug(f"settings save failed guild={gid} error={repr(e)}")
             persisted = False
+            persist_reason = f"save_exception:{type(e).__name__}"
+
+    readback_status = "skipped"
+    readback_reason = "skipped"
+    readback_row: Optional[Dict[str, Any]] = None
+    try:
+        if _sb() is not None:
+            readback_status, readback_row, readback_reason = await asyncio.to_thread(_readback_settings_sync, gid)
+    except Exception as e:
+        readback_status = "exception"
+        readback_reason = f"readback_exception:{type(e).__name__}"
+        readback_row = None
+
+    readback_found = _settings_row_exists(readback_row)
+    readback_enabled = _settings_row_enabled_value(readback_row)
+    readback_mode = _settings_row_mode_value(readback_row)
+
+    if (
+        not persisted
+        and readback_status == "ok"
+        and readback_found
+        and readback_enabled == bool(normalized.get("enabled"))
+        and readback_mode == str(normalized.get("mode"))
+    ):
+        persisted = True
+        persist_reason = f"readback_confirmed:{persist_reason}"
 
     _cache_runtime_settings(
         gid,
         normalized,
         source="db" if persisted else "runtime",
         persisted=persisted,
+    )
+
+    _record_settings_diag(
+        gid,
+        action="save",
+        status="ok" if persisted else "not_persisted",
+        patch_keys=patch_keys,
+        persisted=persisted,
+        persist_reason=persist_reason,
+        row_found=readback_found,
+        row_enabled=readback_enabled,
+        row_mode=readback_mode,
+        readback_status=readback_status,
+        readback_reason=readback_reason,
+        effective_enabled=bool(normalized.get("enabled")),
+        effective_mode=str(normalized.get("mode")),
+    )
+
+    _debug(
+        "settings save "
+        f"guild={gid} patch_keys={patch_keys} persisted={persisted} persist_reason={persist_reason} "
+        f"readback_status={readback_status} row_found={readback_found} row_enabled={readback_enabled} "
+        f"row_mode={readback_mode} effective_enabled={bool(normalized.get('enabled'))} "
+        f"effective_mode={normalized.get('mode')}"
     )
 
     return normalized, persisted
@@ -1330,9 +1608,14 @@ async def _save_patch_and_rerender(
         persisted_hint=persisted,
     )
 
+    diag_brief = _settings_diag_brief(guild.id)
+
     try:
+        message_text = f"✅ {success_text}\nPersistence: `{_build_persistence_label(guild.id, persisted)}`"
+        if diag_brief and diag_brief != "no_diag":
+            message_text += f"\nDiag: `{diag_brief}`"
         await interaction.followup.send(
-            f"✅ {success_text}\nPersistence: `{_build_persistence_label(guild.id, persisted)}`",
+            message_text,
             ephemeral=True,
         )
     except Exception:
@@ -1437,11 +1720,6 @@ def _cleanup_state(state: Dict[str, Any], *, now_mono: float, keep_seconds: int)
 async def cleanup_stale_memory() -> None:
     now_mono = time.monotonic()
 
-    windows_removed = 0
-    locks_removed = 0
-    invite_cache_removed = 0
-    restored_cases_removed = 0
-
     for key, state in list(_MESSAGE_WINDOWS.items()):
         try:
             _cleanup_state(state, now_mono=now_mono, keep_seconds=STALE_WINDOW_TTL_SECONDS)
@@ -1450,7 +1728,6 @@ async def cleanup_stale_memory() -> None:
             is_empty = not messages if isinstance(messages, deque) else True
             if is_empty and (now_mono - last_action_at) > STALE_WINDOW_TTL_SECONDS:
                 _MESSAGE_WINDOWS.pop(key, None)
-                windows_removed += 1
         except Exception:
             continue
 
@@ -1462,7 +1739,6 @@ async def cleanup_stale_memory() -> None:
             if (now_mono - last_used) > STALE_LOCK_TTL_SECONDS:
                 _LOCKS.pop(key, None)
                 _LOCK_LAST_USED.pop(key, None)
-                locks_removed += 1
         except Exception:
             continue
 
@@ -1471,7 +1747,6 @@ async def cleanup_stale_memory() -> None:
             expires_at = float(payload.get("expires_at", 0.0) or 0.0)
             if expires_at <= 0.0 or (now_mono - expires_at) > STALE_INVITE_CACHE_TTL_SECONDS:
                 _GUILD_INVITE_CACHE.pop(gid, None)
-                invite_cache_removed += 1
         except Exception:
             continue
 
@@ -1485,18 +1760,12 @@ async def cleanup_stale_memory() -> None:
             restored_ts = datetime.fromisoformat(restored_at.replace("Z", "+00:00")).timestamp()
             if (time.time() - restored_ts) > RESTORED_CASE_RETENTION_SECONDS:
                 _QUARANTINE_CASES.pop(case_id, None)
-                restored_cases_removed += 1
         except Exception:
             continue
 
-    if any((windows_removed, locks_removed, invite_cache_removed, restored_cases_removed)):
-        _debug(
-            "memory cleanup removed "
-            f"windows={windows_removed} "
-            f"locks={locks_removed} "
-            f"invite_cache={invite_cache_removed} "
-            f"restored_cases={restored_cases_removed}"
-        )
+    _debug(
+        f"memory cleanup windows={len(_MESSAGE_WINDOWS)} locks={len(_LOCKS)} invite_cache={len(_GUILD_INVITE_CACHE)} quarantine_cases={len(_QUARANTINE_CASES)}"
+    )
 
 
 @cleanup_stale_memory.before_loop
@@ -3085,57 +3354,48 @@ async def _spam_guard_on_message(message: discord.Message):
 
 @bot.listen("on_ready")
 async def _spam_guard_warm_settings_cache():
-    if not claim_startup_flag("spam-guard-warm-settings"):
-        return
-
     try:
         guilds = list(bot.guilds)
-        enabled_guild_ids: List[int] = []
-        runtime_only_enabled_guild_ids: List[int] = []
+        enabled_count = 0
+        runtime_only_enabled = 0
 
         for guild in guilds:
             settings = await get_spam_settings(guild.id)
             cached = _cached_runtime_settings(guild.id) or {}
-            enabled = bool(settings.get("enabled"))
             persisted = bool(cached.get("__meta_persisted"))
-
+            enabled = bool(settings.get("enabled"))
             if enabled:
-                enabled_guild_ids.append(int(guild.id))
+                enabled_count += 1
                 if not persisted:
-                    runtime_only_enabled_guild_ids.append(int(guild.id))
+                    runtime_only_enabled += 1
+
+            diag_payload = _SETTINGS_LAST_DIAG_BY_GUILD.get(int(guild.id)) or {}
+            diag = _settings_diag_brief(guild.id)
+            row_found = bool(diag_payload.get("row_found"))
+            if (not persisted) or (not row_found):
+                _debug(
+                    f"startup settings issue guild={guild.id} enabled={enabled} persisted={persisted} row_found={row_found} diag={diag}"
+                )
 
         _debug(
-            "startup settings "
-            f"guilds={len(guilds)} "
-            f"enabled={len(enabled_guild_ids)} "
-            f"runtime_only_enabled={len(runtime_only_enabled_guild_ids)}"
+            f"startup settings guilds={len(guilds)} enabled={enabled_count} runtime_only_enabled={runtime_only_enabled}"
         )
-
-        if runtime_only_enabled_guild_ids:
-            _debug(
-                "startup settings runtime_only_guild_ids="
-                + ",".join(str(gid) for gid in runtime_only_enabled_guild_ids[:20])
-            )
     except Exception as e:
-        _debug(f"startup settings warm failed error={repr(e)}")
+        _debug(f"warm settings cache failed error={repr(e)}")
 
 
 @bot.listen("on_ready")
 async def _register_spam_guard_views():
     global _SPAM_GUARD_VIEWS_REGISTERED
 
-    cleanup_started = False
-
     if not cleanup_stale_memory.is_running():
         try:
             cleanup_stale_memory.start()
-            cleanup_started = True
+            _debug("started stale memory cleanup loop")
         except Exception as e:
-            _debug(f"startup cleanup loop failed error={repr(e)}")
+            _debug(f"failed starting stale memory cleanup loop error={repr(e)}")
 
     if _SPAM_GUARD_VIEWS_REGISTERED:
-        if cleanup_started:
-            _debug("startup cleanup loop started")
         return
 
     try:
@@ -3144,17 +3404,9 @@ async def _register_spam_guard_views():
         bot.add_view(SpamIncidentRestoreView(restored=False))
         bot.add_view(SpamIncidentRestoreView(restored=True))
         _SPAM_GUARD_VIEWS_REGISTERED = True
-
-        parts = []
-        if cleanup_started:
-            parts.append("cleanup_loop=started")
-        else:
-            parts.append(f"cleanup_loop={'running' if cleanup_stale_memory.is_running() else 'stopped'}")
-        parts.append("persistent_views=ready")
-        parts.append(f"pages={len(SPAM_PANEL_PAGES)}")
-        _debug("startup " + " ".join(parts))
+        print("✅ spam_guard: persistent views registered")
     except Exception as e:
-        _debug(f"startup persistent views failed error={repr(e)}")
+        print(f"⚠️ spam_guard: failed to register persistent views: {e}")
 
 
 _register_spam_guard_commands()
