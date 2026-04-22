@@ -340,6 +340,26 @@ async def _ticket_row_for_channel_id(channel_id: int | str) -> Optional[Dict[str
     return None
 
 
+async def _readback_ticket_state(channel_id: int | str) -> Tuple[Optional[Dict[str, Any]], str]:
+    row = await _ticket_row_for_channel_id(channel_id)
+    return row, _ticket_status(row)
+
+
+async def _sync_channel_name_in_db(
+    channel: discord.TextChannel,
+    *,
+    ticket_number: Optional[int] = None,
+) -> None:
+    payload: Dict[str, Any] = {"channel_name": channel.name}
+    if ticket_number is not None:
+        payload["ticket_number"] = int(ticket_number)
+
+    try:
+        await repo_safe_optional_update_by_channel_id(channel.id, payload)
+    except Exception:
+        pass
+
+
 async def _resolve_text_channel_from_row(
     guild: discord.Guild,
     row: Optional[Dict[str, Any]],
@@ -1515,17 +1535,7 @@ async def _ensure_channel_identity(
     except Exception as e:
         print(f"⚠️ Failed normalizing ticket channel identity for {channel.id}: {repr(e)}")
 
-    try:
-        await repo_safe_optional_update_by_channel_id(
-            channel.id,
-            {
-                "channel_name": channel.name,
-                "ticket_number": resolved_number,
-            },
-        )
-    except Exception:
-        pass
-
+    await _sync_channel_name_in_db(channel, ticket_number=resolved_number)
     return resolved_number
 
 
@@ -1833,7 +1843,33 @@ async def create_ticket_channel(
         )
 
         if inserted is None:
-            print("⚠️ Ticket channel created but DB insert/upsert failed.")
+            try:
+                inserted = await repo_sync_ticket_record_from_channel(
+                    channel=channel,
+                    owner_id=owner.id,
+                    username=str(owner),
+                    title=_title_for_ticket(owner, category, is_ghost),
+                    category=_canonical_ticket_category(category, is_ghost),
+                    status="open",
+                    priority=clean_priority,
+                    initial_message=intro_message,
+                    ticket_number=ticket_number,
+                    is_ghost=is_ghost,
+                    source=source,
+                    matched_category_id=category_meta["matched_category_id"],
+                    matched_category_name=category_meta["matched_category_name"],
+                    matched_category_slug=category_meta["matched_category_slug"],
+                    matched_intake_type=category_meta["matched_intake_type"],
+                    matched_category_reason=category_meta["matched_category_reason"],
+                    matched_category_score=category_meta["matched_category_score"],
+                    category_override=bool(category_meta["category_override"]),
+                    category_id=category_meta["category_id"],
+                )
+            except Exception as e:
+                print(f"⚠️ Ticket fallback sync failed for {channel.id}: {repr(e)}")
+
+        if inserted is None:
+            print("⚠️ Ticket channel created but DB insert/sync failed.")
         else:
             print(
                 f"✅ Ticket row inserted/upserted → #{channel.name} ({channel.id}) "
@@ -1847,16 +1883,7 @@ async def create_ticket_channel(
         if ticket_row is None:
             ticket_row = await _ticket_row_for_channel_id(channel.id)
 
-        try:
-            await repo_safe_optional_update_by_channel_id(
-                channel.id,
-                {
-                    "channel_name": channel.name,
-                    "ticket_number": ticket_number,
-                },
-            )
-        except Exception:
-            pass
+        await _sync_channel_name_in_db(channel, ticket_number=ticket_number)
 
         await _safe_log_created(
             guild_id=guild.id,
@@ -2000,6 +2027,8 @@ async def sync_existing_ticket_channel(
         except Exception:
             pass
 
+        await _sync_channel_name_in_db(channel, ticket_number=ticket_number)
+
         print(
             f"✅ Existing ticket row synced → #{channel.name} ({channel.id}) "
             f"category={category!r} matched_slug={category_meta['matched_category_slug']!r}"
@@ -2070,13 +2099,7 @@ async def mark_ticket_closed(
         except Exception:
             moved_to_archive = False
 
-        try:
-            await repo_safe_optional_update_by_channel_id(
-                channel.id,
-                {"channel_name": channel.name},
-            )
-        except Exception:
-            pass
+        await _sync_channel_name_in_db(channel, ticket_number=ticket_number)
 
         try:
             await _freeze_open_ticket_controls_safe(channel, closed_by=closed_by)
@@ -2088,14 +2111,7 @@ async def mark_ticket_closed(
         except Exception:
             pass
 
-        final_row = None
-        final_status = "unknown"
-        try:
-            final_row = await _ticket_row_for_channel_id(channel.id)
-            final_status = _ticket_status(final_row)
-        except Exception:
-            final_row = None
-            final_status = "unknown"
+        final_row, final_status = await _readback_ticket_state(channel.id)
 
         channel_looks_closed = False
         try:
@@ -2172,12 +2188,14 @@ async def mark_ticket_deleted(
             reason=reason or "Deleted",
         )
 
-        if ok:
+        final_row, final_status = await _readback_ticket_state(channel_id)
+        final_ok = bool(ok or final_status == "deleted")
+
+        if final_ok:
             try:
-                ticket_row = await _ticket_row_for_channel_id(channel_id)
                 guild_id = (
-                    int(str(ticket_row.get("guild_id") or "0"))
-                    if isinstance(ticket_row, dict) and ticket_row.get("guild_id")
+                    int(str(final_row.get("guild_id") or "0"))
+                    if isinstance(final_row, dict) and final_row.get("guild_id")
                     else None
                 )
                 if guild_id:
@@ -2187,14 +2205,16 @@ async def mark_ticket_deleted(
                         actor_name=_actor_name(deleted_by),
                         channel_id=channel_id,
                         reason=reason or "Deleted",
-                        ticket_row=ticket_row,
+                        ticket_row=final_row,
                     )
             except Exception as e:
                 print(f"⚠️ Failed logging ticket_deleted for {channel_id}: {repr(e)}")
 
             print(f"✅ Ticket marked deleted → {channel_id}")
+            return True
 
-        return ok
+        _service_debug(f"delete failed channel={channel_id} final_status={final_status}")
+        return False
 
 
 async def attach_transcript_to_ticket(
@@ -2224,12 +2244,24 @@ async def attach_transcript_to_ticket(
                 transcript_channel_id=transcript_channel_id,
                 actor=actor,
             )
-            if ok:
+
+            final_row = await _ticket_row_for_channel_id(channel_id)
+            row_url = _safe_str((final_row or {}).get("transcript_url"))
+            row_msg = _safe_str((final_row or {}).get("transcript_message_id"))
+            row_ch = _safe_str((final_row or {}).get("transcript_channel_id"))
+            final_ok = bool(
+                ok or (
+                    row_url == _safe_str(transcript_url)
+                    and row_msg == _safe_str(transcript_message_id)
+                    and row_ch == _safe_str(transcript_channel_id)
+                )
+            )
+
+            if final_ok:
                 try:
-                    ticket_row = await _ticket_row_for_channel_id(channel_id)
                     guild_id = (
-                        int(str(ticket_row.get("guild_id") or "0"))
-                        if isinstance(ticket_row, dict) and ticket_row.get("guild_id")
+                        int(str(final_row.get("guild_id") or "0"))
+                        if isinstance(final_row, dict) and final_row.get("guild_id")
                         else None
                     )
                     if guild_id:
@@ -2241,15 +2273,16 @@ async def attach_transcript_to_ticket(
                             transcript_url=transcript_url,
                             transcript_message_id=transcript_message_id,
                             transcript_channel_id=transcript_channel_id,
-                            ticket_row=ticket_row,
+                            ticket_row=final_row,
                         )
                 except Exception as e:
                     print(f"⚠️ Failed logging transcript attach for {channel_id}: {repr(e)}")
 
                 print(f"✅ Transcript metadata attached → {channel_id}")
-            else:
-                print(f"⚠️ Transcript metadata skipped → {channel_id}")
-            return ok
+                return True
+
+            print(f"⚠️ Transcript metadata skipped → {channel_id}")
+            return False
         except Exception as e:
             print(f"⚠️ Transcript metadata attach failed for {channel_id}: {repr(e)}")
             return False
@@ -2690,12 +2723,15 @@ async def reopen_ticket(
             reopened_by_name=_actor_name(actor),
             reason=reason,
         )
-        if ok:
+
+        final_row, final_status = await _readback_ticket_state(channel_id)
+        final_ok = bool(ok or final_status in {"open", "claimed"})
+
+        if final_ok:
             try:
-                ticket_row = await _ticket_row_for_channel_id(channel_id)
                 guild_id = (
-                    int(str(ticket_row.get("guild_id") or "0"))
-                    if isinstance(ticket_row, dict) and ticket_row.get("guild_id")
+                    int(str(final_row.get("guild_id") or "0"))
+                    if isinstance(final_row, dict) and final_row.get("guild_id")
                     else None
                 )
                 if guild_id:
@@ -2705,13 +2741,16 @@ async def reopen_ticket(
                         actor_name=_actor_name(actor),
                         channel_id=channel_id,
                         reason=reason,
-                        ticket_row=ticket_row,
+                        ticket_row=final_row,
                     )
             except Exception as e:
                 print(f"⚠️ Failed logging ticket_reopened for {channel_id}: {repr(e)}")
 
             print(f"✅ Ticket reopened → {channel_id}")
-        return ok
+            return True
+
+        _service_debug(f"reopen failed channel={channel_id} final_status={final_status}")
+        return False
 
 
 async def reopen_ticket_channel(
@@ -2805,13 +2844,7 @@ async def reopen_ticket_channel(
         except Exception:
             moved_to_active = False
 
-        try:
-            await repo_safe_optional_update_by_channel_id(
-                channel.id,
-                {"channel_name": channel.name},
-            )
-        except Exception:
-            pass
+        await _sync_channel_name_in_db(channel, ticket_number=ticket_number)
 
         try:
             await _freeze_staff_closed_message_safe(channel, reopened_by=actor)
@@ -2827,10 +2860,15 @@ async def reopen_ticket_channel(
         except Exception:
             pass
 
+        final_row, final_status = await _readback_ticket_state(channel.id)
+        channel_looks_open = not str(channel.name or "").lower().startswith("closed-")
+        final_ok = bool(ok and (final_status in {"open", "claimed"} or channel_looks_open))
+
         _service_debug(
-            f"reopen-channel success channel={channel.id} moved_to_active={moved_to_active} location={_channel_lifecycle_location(channel)}"
+            f"reopen-channel success channel={channel.id} moved_to_active={moved_to_active} "
+            f"location={_channel_lifecycle_location(channel)} final_status={final_status}"
         )
-        return ok
+        return final_ok
 
 
 __all__ = [
