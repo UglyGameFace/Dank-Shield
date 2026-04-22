@@ -502,7 +502,11 @@ def _settings_debug_throttled(key: str, msg: str, ttl: int = 120) -> None:
 
 def _record_settings_diag(guild_id: int, **fields: Any) -> Dict[str, Any]:
     gid = int(guild_id)
-    payload = dict(_SETTINGS_LAST_DIAG_BY_GUILD.get(gid) or {})
+    # IMPORTANT: record each diagnostic event as a fresh payload.
+    # Do not merge with the previous event, or stale fields like a prior
+    # load reason (for example "row_missing") can leak into a later save
+    # event and make the diagnostics lie.
+    payload: Dict[str, Any] = {"guild_id": gid}
     payload.update(fields)
     payload["ts"] = _now_utc().isoformat()
     _SETTINGS_LAST_DIAG_BY_GUILD[gid] = payload
@@ -1309,6 +1313,7 @@ async def save_spam_settings(
         gid,
         action="save",
         status="ok" if persisted else "not_persisted",
+        reason=(persist_reason if persisted else persist_reason),
         patch_keys=patch_keys,
         persisted=persisted,
         persist_reason=persist_reason,
