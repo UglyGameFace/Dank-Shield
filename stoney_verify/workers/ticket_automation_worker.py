@@ -116,6 +116,9 @@ def _is_retryable_db_error(error: Exception) -> bool:
         "connection refused",
         "httpcore",
         "httpx",
+        "broken pipe",
+        "connection pool",
+        "stream closed",
     )
     return any(marker in text for marker in markers)
 
@@ -162,6 +165,7 @@ def _state_table():
 def _normalize_settings(row: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     src = dict(row or {})
     out = dict(_DEFAULT_SETTINGS)
+
     out["enabled"] = _safe_bool(src.get("enabled"), _DEFAULT_SETTINGS["enabled"])
     out["sla_breach_alerts_enabled"] = _safe_bool(
         src.get("sla_breach_alerts_enabled"),
@@ -310,14 +314,105 @@ def _row_status(row: Dict[str, Any]) -> str:
         raw = _safe_str(row.get("status")).lower()
         if raw in {"open", "claimed", "closed", "deleted"}:
             return raw
+        if raw in {"active", "reopened"}:
+            return "open"
     except Exception:
         pass
     return "unknown"
 
 
+def _ticket_archive_category_id() -> int:
+    for key in (
+        "TICKET_ARCHIVE_CATEGORY_ID",
+        "TICKET_ARCHIVED_CATEGORY_ID",
+        "ARCHIVED_TICKET_CATEGORY_ID",
+        "ARCHIVE_TICKET_CATEGORY_ID",
+    ):
+        try:
+            value = int(globals().get(key, 0) or 0)
+            if value > 0:
+                return value
+        except Exception:
+            continue
+    return 0
+
+
+def _looks_like_archive_category_name(name: str) -> bool:
+    text = _safe_str(name).lower()
+    if not text:
+        return False
+    markers = (
+        "archive",
+        "archived",
+        "ticket archive",
+        "tickets archive",
+        "archived tickets",
+        "closed tickets",
+    )
+    return any(marker in text for marker in markers)
+
+
+def _resolve_archive_category(guild: discord.Guild) -> Optional[discord.CategoryChannel]:
+    explicit_id = _ticket_archive_category_id()
+    if explicit_id > 0:
+        try:
+            maybe = guild.get_channel(explicit_id)
+            if isinstance(maybe, discord.CategoryChannel):
+                return maybe
+        except Exception:
+            pass
+
+    try:
+        for category in guild.categories:
+            if _looks_like_archive_category_name(category.name):
+                return category
+    except Exception:
+        pass
+
+    return None
+
+
 def _channel_looks_closed(channel: discord.abc.GuildChannel) -> bool:
     try:
         return _safe_str(getattr(channel, "name", "")).lower().startswith("closed-")
+    except Exception:
+        return False
+
+
+def _channel_is_in_archive_category(channel: discord.abc.GuildChannel) -> bool:
+    try:
+        guild = getattr(channel, "guild", None)
+        category = getattr(channel, "category", None)
+        if guild is None or category is None or not isinstance(category, discord.CategoryChannel):
+            return False
+
+        archive = _resolve_archive_category(guild)
+        if archive is not None and int(category.id) == int(archive.id):
+            return True
+
+        return _looks_like_archive_category_name(category.name)
+    except Exception:
+        return False
+
+
+def _ticket_effectively_closed(channel: discord.abc.GuildChannel, row: Dict[str, Any]) -> bool:
+    status = _row_status(row)
+    if status in {"closed", "deleted"}:
+        return True
+    if _channel_looks_closed(channel):
+        return True
+    if _channel_is_in_archive_category(channel):
+        return True
+    return False
+
+
+def _ticket_has_transcript(row: Dict[str, Any]) -> bool:
+    try:
+        return bool(
+            _safe_str(row.get("transcript_url"))
+            or _safe_str(row.get("transcript_message_id"))
+            or _safe_str(row.get("transcript_channel_id"))
+        )
     except Exception:
         return False
 
@@ -425,6 +520,7 @@ async def _send_staff_alert(guild: discord.Guild, settings: Dict[str, Any], cont
     channel_id = _safe_int(settings.get("staff_alert_channel_id"), 0)
     if channel_id <= 0:
         return False
+
     try:
         ch = guild.get_channel(channel_id)
         if ch is None:
@@ -456,9 +552,11 @@ async def _send_sla_breach_alert(
         f"Assignee: {assignee.mention if assignee else 'unassigned'}\n"
         f"Due: {_discord_ts(due)}"
     )
+
     sent_main = False
     if isinstance(channel, (discord.TextChannel, discord.Thread)):
         sent_main = await _safe_send_message(channel, msg)
+
     sent_staff = await _send_staff_alert(guild, settings, msg)
     return sent_main or sent_staff
 
@@ -472,6 +570,7 @@ async def _send_inactivity_reminder(
 ) -> bool:
     owner = await _resolve_owner(guild, row)
     assignee = await _resolve_assignee(guild, row)
+
     mentions = []
     if owner is not None:
         mentions.append(owner.mention)
@@ -486,6 +585,7 @@ async def _send_inactivity_reminder(
         f"{prefix}⏰ This ticket has been inactive for about **{minutes_idle} minute(s)**.\n"
         f"Please respond before it is auto-closed."
     )
+
     sent_main = False
     if isinstance(channel, (discord.TextChannel, discord.Thread)):
         sent_main = await _safe_send_message(channel, msg)
@@ -509,7 +609,7 @@ async def _repair_stale_closed_drift(
         return False
     if service_mark_ticket_closed is None:
         return False
-    if not _channel_looks_closed(channel):
+    if not _ticket_effectively_closed(channel, row):
         return False
     if _row_status(row) not in {"open", "claimed", "unknown"}:
         return False
@@ -526,6 +626,29 @@ async def _repair_stale_closed_drift(
         return False
 
 
+async def _move_ticket_to_archive_if_configured(channel: discord.TextChannel) -> bool:
+    archive_category = _resolve_archive_category(channel.guild)
+    if archive_category is None:
+        return False
+
+    try:
+        if channel.category and int(channel.category.id) == int(archive_category.id):
+            return True
+    except Exception:
+        pass
+
+    try:
+        await channel.edit(
+            category=archive_category,
+            sync_permissions=False,
+            reason="Ticket auto-closed -> move to archive category",
+        )
+        return True
+    except Exception as e:
+        print("⚠️ Ticket automation archive move failed:", repr(e))
+        return False
+
+
 async def _auto_close_ticket(
     guild: discord.Guild,
     channel: discord.abc.GuildChannel,
@@ -539,12 +662,11 @@ async def _auto_close_ticket(
         return False
 
     reason = f"Auto-closed after {minutes_idle} minute(s) of inactivity."
-
     owner = await _resolve_owner(guild, row)
     actor = guild.me if getattr(guild, "me", None) else None
 
     transcript_url: Optional[str] = None
-    if callable(transcript_post_to_channel):
+    if callable(transcript_post_to_channel) and not _ticket_has_transcript(row):
         try:
             _msg, transcript_url = await transcript_post_to_channel(
                 ticket_channel=channel,
@@ -567,10 +689,17 @@ async def _auto_close_ticket(
     if not closed_ok:
         return False
 
+    moved_to_archive = await _move_ticket_to_archive_if_configured(channel)
+
     try:
         transcript_line = f"\n🧾 Transcript: {transcript_url}" if transcript_url else ""
+        archive_line = (
+            f"\n📦 Moved to archive category: **{channel.category.name}**"
+            if moved_to_archive and channel.category is not None
+            else ""
+        )
         owner_line = f"{owner.mention} " if owner is not None else ""
-        await _safe_send_message(channel, f"🧹 {owner_line}{reason}{transcript_line}")
+        await _safe_send_message(channel, f"🧹 {owner_line}{reason}{archive_line}{transcript_line}")
     except Exception:
         pass
 
@@ -594,6 +723,9 @@ async def _process_ticket(guild: discord.Guild, row: Dict[str, Any], settings: D
         "sla_breach_alerts": 0,
         "inactivity_reminders": 0,
         "auto_closed": 0,
+        "state_repairs": 0,
+        "missing_channels": 0,
+        "skipped_closed_drift": 0,
     }
 
     if _row_status(row) not in {"open", "claimed"}:
@@ -601,17 +733,21 @@ async def _process_ticket(guild: discord.Guild, row: Dict[str, Any], settings: D
 
     channel = await _resolve_ticket_channel(guild, row)
     if channel is None:
+        summary["missing_channels"] += 1
         return summary
 
     channel_id = _safe_int(row.get("channel_id") or row.get("discord_thread_id"), 0)
     if channel_id <= 0:
+        summary["missing_channels"] += 1
         return summary
 
     repaired = await _repair_stale_closed_drift(guild, channel, row)
     if repaired:
+        summary["state_repairs"] += 1
         return summary
 
-    if _channel_looks_closed(channel):
+    if _ticket_effectively_closed(channel, row):
+        summary["skipped_closed_drift"] += 1
         return summary
 
     state = await asyncio.to_thread(_get_ticket_state_sync, guild.id, channel_id)
@@ -703,6 +839,9 @@ async def run_ticket_automation_pass(*, guild_id: Optional[int] = None) -> Dict[
         "sla_breach_alerts": 0,
         "inactivity_reminders": 0,
         "auto_closed": 0,
+        "state_repairs": 0,
+        "missing_channels": 0,
+        "skipped_closed_drift": 0,
     }
 
     for guild in guilds:
@@ -719,6 +858,9 @@ async def run_ticket_automation_pass(*, guild_id: Optional[int] = None) -> Dict[
             "sla_breach_alerts": 0,
             "inactivity_reminders": 0,
             "auto_closed": 0,
+            "state_repairs": 0,
+            "missing_channels": 0,
+            "skipped_closed_drift": 0,
         }
 
         for row in rows:
@@ -728,6 +870,9 @@ async def run_ticket_automation_pass(*, guild_id: Optional[int] = None) -> Dict[
                 guild_summary["sla_breach_alerts"] += result.get("sla_breach_alerts", 0)
                 guild_summary["inactivity_reminders"] += result.get("inactivity_reminders", 0)
                 guild_summary["auto_closed"] += result.get("auto_closed", 0)
+                guild_summary["state_repairs"] += result.get("state_repairs", 0)
+                guild_summary["missing_channels"] += result.get("missing_channels", 0)
+                guild_summary["skipped_closed_drift"] += result.get("skipped_closed_drift", 0)
             except Exception as e:
                 print("⚠️ Ticket automation process error:", repr(e))
 
@@ -736,6 +881,9 @@ async def run_ticket_automation_pass(*, guild_id: Optional[int] = None) -> Dict[
         overall["sla_breach_alerts"] += guild_summary["sla_breach_alerts"]
         overall["inactivity_reminders"] += guild_summary["inactivity_reminders"]
         overall["auto_closed"] += guild_summary["auto_closed"]
+        overall["state_repairs"] += guild_summary["state_repairs"]
+        overall["missing_channels"] += guild_summary["missing_channels"]
+        overall["skipped_closed_drift"] += guild_summary["skipped_closed_drift"]
 
         print(
             "🤖 ticket_automation:",
@@ -744,6 +892,8 @@ async def run_ticket_automation_pass(*, guild_id: Optional[int] = None) -> Dict[
             f"sla_alerts={guild_summary['sla_breach_alerts']}",
             f"reminders={guild_summary['inactivity_reminders']}",
             f"auto_closed={guild_summary['auto_closed']}",
+            f"state_repairs={guild_summary['state_repairs']}",
+            f"missing_channels={guild_summary['missing_channels']}",
         )
 
     _LAST_AUTOMATION_RUN_AT = now_utc()
