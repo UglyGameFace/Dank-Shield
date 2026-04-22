@@ -490,6 +490,160 @@ def _actor_is_elevated_staff(actor: Optional[discord.Member | discord.User]) -> 
     return False
 
 
+def _ticket_archive_category_id() -> int:
+    for key in (
+        "TICKET_ARCHIVE_CATEGORY_ID",
+        "TICKET_ARCHIVED_CATEGORY_ID",
+        "ARCHIVED_TICKET_CATEGORY_ID",
+        "ARCHIVE_TICKET_CATEGORY_ID",
+    ):
+        try:
+            value = _safe_int(globals().get(key), 0)
+            if value > 0:
+                return value
+        except Exception:
+            continue
+    return 0
+
+
+def _ticket_active_category_id() -> int:
+    try:
+        return _safe_int(globals().get("TICKET_CATEGORY_ID"), 0)
+    except Exception:
+        return 0
+
+
+def _looks_like_archive_category_name(name: str) -> bool:
+    text = _safe_str(name).strip().lower()
+    if not text:
+        return False
+
+    markers = (
+        "archive",
+        "archived",
+        "ticket archive",
+        "tickets archive",
+        "archived tickets",
+        "closed tickets",
+    )
+    return any(marker in text for marker in markers)
+
+
+def _resolve_category_by_id(
+    guild: discord.Guild,
+    category_id: int,
+) -> Optional[discord.CategoryChannel]:
+    try:
+        if category_id <= 0:
+            return None
+        ch = guild.get_channel(int(category_id))
+        if isinstance(ch, discord.CategoryChannel):
+            return ch
+    except Exception:
+        pass
+    return None
+
+
+def _resolve_archive_category(guild: discord.Guild) -> Optional[discord.CategoryChannel]:
+    explicit_id = _ticket_archive_category_id()
+    if explicit_id > 0:
+        explicit = _resolve_category_by_id(guild, explicit_id)
+        if explicit is not None:
+            return explicit
+
+    try:
+        for category in guild.categories:
+            if _looks_like_archive_category_name(category.name):
+                return category
+    except Exception:
+        pass
+
+    return None
+
+
+def _resolve_active_ticket_category(guild: discord.Guild) -> Optional[discord.CategoryChannel]:
+    explicit_id = _ticket_active_category_id()
+    if explicit_id > 0:
+        explicit = _resolve_category_by_id(guild, explicit_id)
+        if explicit is not None:
+            return explicit
+    return None
+
+
+def _channel_is_in_category(
+    channel: discord.TextChannel,
+    category: Optional[discord.CategoryChannel],
+) -> bool:
+    try:
+        if category is None:
+            return False
+        return int(getattr(channel.category, "id", 0) or 0) == int(category.id)
+    except Exception:
+        return False
+
+
+async def _move_ticket_to_archive_if_configured(channel: discord.TextChannel) -> bool:
+    archive_category = _resolve_archive_category(channel.guild)
+    if archive_category is None:
+        return False
+
+    if _channel_is_in_category(channel, archive_category):
+        return True
+
+    try:
+        await channel.edit(
+            category=archive_category,
+            sync_permissions=False,
+            reason="Ticket closed -> move to archive category",
+        )
+        return True
+    except Exception as e:
+        print(f"⚠️ Failed moving ticket {channel.id} to archive category: {repr(e)}")
+        return False
+
+
+async def _move_ticket_to_active_if_configured(channel: discord.TextChannel) -> bool:
+    active_category = _resolve_active_ticket_category(channel.guild)
+    if active_category is None:
+        return False
+
+    if _channel_is_in_category(channel, active_category):
+        return True
+
+    try:
+        await channel.edit(
+            category=active_category,
+            sync_permissions=False,
+            reason="Ticket reopened -> move to active category",
+        )
+        return True
+    except Exception as e:
+        print(f"⚠️ Failed moving ticket {channel.id} to active category: {repr(e)}")
+        return False
+
+
+def _channel_lifecycle_location(channel: discord.TextChannel) -> str:
+    try:
+        if _channel_is_in_category(channel, _resolve_archive_category(channel.guild)):
+            return f"archive:{channel.category.name if channel.category else 'unknown'}"
+        if channel.category is not None:
+            return f"category:{channel.category.name}"
+    except Exception:
+        pass
+    return "uncategorized"
+
+
+def _priority_rank(value: Any) -> int:
+    normalized = _normalize_ticket_priority(value, "medium")
+    ranks = {
+        "urgent": 0,
+        "high": 1,
+        "medium": 2,
+        "low": 3,
+    }
+    return ranks.get(normalized, 2)
+
+
 def _normalize_queue_row(row: Dict[str, Any]) -> Dict[str, Any]:
     out = dict(row)
 
@@ -517,6 +671,11 @@ def _normalize_queue_row(row: Dict[str, Any]) -> Dict[str, Any]:
         out["is_claimed"] = bool(out["ticket_status"] == "claimed" and out["claimed_by_id"] > 0)
     except Exception:
         out["is_claimed"] = False
+
+    try:
+        out["priority_rank"] = _priority_rank(out.get("priority"))
+    except Exception:
+        out["priority_rank"] = 2
 
     return out
 
@@ -695,7 +854,7 @@ def _ticket_number_missing_error(exc: Exception) -> bool:
             "pgrst204" in text
             or "schema cache" in text
             or "column" in text
-            or "does not exist" in text
+            or "does not exist"
         )
     )
 
@@ -1324,6 +1483,7 @@ async def _ensure_channel_identity(
     category: str,
     is_ghost: bool,
     ticket_number: Optional[int],
+    closed: bool = False,
 ) -> int:
     resolved_number = ticket_number or _extract_ticket_number_from_name(channel.name) or _parse_ticket_number_from_topic(channel) or 0
 
@@ -1337,7 +1497,7 @@ async def _ensure_channel_identity(
         ticket_number=resolved_number,
     )
 
-    desired_name = _format_ticket_channel_name(resolved_number, closed=False)
+    desired_name = _format_ticket_channel_name(resolved_number, closed=closed)
 
     try:
         edits: Dict[str, Any] = {}
@@ -1391,6 +1551,7 @@ async def _sync_existing_open_ticket_channel(
         category=category,
         is_ghost=is_ghost,
         ticket_number=_extract_ticket_number_from_name(channel.name) or _parse_ticket_number_from_topic(channel),
+        closed=False,
     )
 
     try:
@@ -1399,6 +1560,11 @@ async def _sync_existing_open_ticket_channel(
             owner,
             staff_role_ids=_default_staff_role_ids(),
         )
+    except Exception:
+        pass
+
+    try:
+        await _move_ticket_to_active_if_configured(channel)
     except Exception:
         pass
 
@@ -1442,6 +1608,7 @@ async def _safe_log_created(
     is_ghost: bool,
     clean_priority: str,
     category_meta: Dict[str, Any],
+    lifecycle_location: Optional[str] = None,
 ) -> None:
     try:
         await log_ticket_created(
@@ -1464,6 +1631,7 @@ async def _safe_log_created(
                 "matched_category_score": category_meta["matched_category_score"],
                 "category_override": bool(category_meta["category_override"]),
                 "category_id": category_meta["category_id"],
+                "lifecycle_location": lifecycle_location,
             },
         )
     except Exception as e:
@@ -1701,6 +1869,7 @@ async def create_ticket_channel(
             is_ghost=is_ghost,
             clean_priority=clean_priority,
             category_meta=category_meta,
+            lifecycle_location=_channel_lifecycle_location(channel),
         )
 
         await _refresh_open_ticket_ui(
@@ -1745,6 +1914,9 @@ async def sync_existing_ticket_channel(
     if ticket_number is None:
         ticket_number = _parse_ticket_number_from_topic(channel)
 
+    clean_priority = _normalize_ticket_priority(priority, "medium")
+    clean_status = _normalize_ticket_status(status, "open")
+
     if isinstance(owner_for_row, discord.Member):
         ticket_number = await _ensure_channel_identity(
             channel=channel,
@@ -1752,10 +1924,8 @@ async def sync_existing_ticket_channel(
             category=category,
             is_ghost=is_ghost,
             ticket_number=ticket_number,
+            closed=(clean_status == "closed"),
         )
-
-    clean_priority = _normalize_ticket_priority(priority, "medium")
-    clean_status = _normalize_ticket_status(status, "open")
 
     category_meta = _category_metadata_payload(
         matched_category_id=matched_category_id,
@@ -1805,17 +1975,31 @@ async def sync_existing_ticket_channel(
     except Exception:
         pass
 
-    if ok and _ticket_status(await _ticket_row_for_channel_id(channel.id)) in {"open", "claimed"}:
+    if ok:
         try:
-            await _refresh_open_ticket_ui(
-                channel=channel,
-                owner=owner if isinstance(owner, discord.Member) else None,
-                is_ghost=is_ghost,
-            )
+            owner_member = owner if isinstance(owner, discord.Member) else None
+            if clean_status in {"open", "claimed"}:
+                await _apply_open_permissions(
+                    channel,
+                    owner_member,
+                    staff_role_ids=_default_staff_role_ids(),
+                )
+                await _move_ticket_to_active_if_configured(channel)
+                await _refresh_open_ticket_ui(
+                    channel=channel,
+                    owner=owner_member,
+                    is_ghost=is_ghost,
+                )
+            elif clean_status == "closed":
+                await _apply_closed_permissions(
+                    channel,
+                    owner_member,
+                    staff_role_ids=_default_staff_role_ids(),
+                )
+                await _move_ticket_to_archive_if_configured(channel)
         except Exception:
             pass
 
-    if ok:
         print(
             f"✅ Existing ticket row synced → #{channel.name} ({channel.id}) "
             f"category={category!r} matched_slug={category_meta['matched_category_slug']!r}"
@@ -1840,6 +2024,7 @@ async def mark_ticket_closed(
             _service_debug(f"close rejected channel={channel.id} reason=already-deleted")
             return False
 
+        owner_member = await _resolve_owner_member_from_channel_or_row(channel, row_before)
         ticket_number = _extract_ticket_number_from_name(channel.name)
         if ticket_number is None:
             ticket_number = _parse_ticket_number_from_topic(channel)
@@ -1870,12 +2055,20 @@ async def mark_ticket_closed(
             except Exception as e:
                 print(f"⚠️ Failed renaming channel to {new_name}: {repr(e)}")
 
-        owner_member = await _resolve_owner_member_from_channel_or_row(channel, row_before)
-
         try:
-            await _apply_closed_permissions(channel, owner_member)
+            await _apply_closed_permissions(
+                channel,
+                owner_member,
+                staff_role_ids=_default_staff_role_ids(),
+            )
         except Exception as e:
             print(f"⚠️ Failed applying closed permissions for {channel.id}: {repr(e)}")
+
+        moved_to_archive = False
+        try:
+            moved_to_archive = await _move_ticket_to_archive_if_configured(channel)
+        except Exception:
+            moved_to_archive = False
 
         try:
             await repo_safe_optional_update_by_channel_id(
@@ -1930,6 +2123,8 @@ async def mark_ticket_closed(
                         "repo_close_ok": bool(repo_close_ok),
                         "final_status": final_status,
                         "channel_looks_closed": bool(channel_looks_closed),
+                        "moved_to_archive": bool(moved_to_archive),
+                        "lifecycle_location": _channel_lifecycle_location(channel),
                     },
                 )
             except Exception as e:
@@ -1937,7 +2132,7 @@ async def mark_ticket_closed(
 
             print(
                 f"✅ Ticket marked closed → #{channel.name} ({channel.id}) "
-                f"[repo_close_ok={repo_close_ok} final_status={final_status}]"
+                f"[repo_close_ok={repo_close_ok} final_status={final_status} archive={moved_to_archive}]"
             )
             return True
 
@@ -2431,6 +2626,7 @@ async def list_open_ticket_queue(
     normalized.sort(
         key=lambda r: (
             0 if bool(r.get("is_unclaimed")) else 1,
+            int(r.get("priority_rank") or 2),
             str(r.get("created_at") or ""),
         )
     )
@@ -2561,15 +2757,30 @@ async def reopen_ticket_channel(
                             channel_id=channel.id,
                             reason=reason,
                             ticket_row=ticket_row,
+                            metadata={
+                                "lifecycle_location_before_refresh": _channel_lifecycle_location(channel),
+                            },
                         )
                 except Exception as e:
                     print(f"⚠️ Failed logging ticket_reopened for {channel.id}: {repr(e)}")
+
+        if owner is None:
+            owner = await _resolve_owner_member_from_channel_or_row(channel, row_before)
 
         ticket_number = _extract_ticket_number_from_name(channel.name)
         if ticket_number is None:
             ticket_number = _parse_ticket_number_from_topic(channel)
 
-        if ticket_number is not None:
+        if owner is not None:
+            ticket_number = await _ensure_channel_identity(
+                channel=channel,
+                owner=owner,
+                category=_safe_str((row_before or {}).get("category") or "support"),
+                is_ghost=_row_is_ghost(row_before, False),
+                ticket_number=ticket_number,
+                closed=False,
+            )
+        elif ticket_number is not None:
             new_name = _format_ticket_channel_name(ticket_number, closed=False)
             try:
                 if channel.name != new_name and not _channel_name_exists(
@@ -2582,14 +2793,17 @@ async def reopen_ticket_channel(
             except Exception as e:
                 print(f"⚠️ Failed renaming reopened ticket to {new_name}: {repr(e)}")
 
-        if owner is None:
-            owner = await _resolve_owner_member_from_channel_or_row(channel, row_before)
-
         await _apply_open_permissions(
             channel,
             owner,
             staff_role_ids=staff_role_ids or _default_staff_role_ids(),
         )
+
+        moved_to_active = False
+        try:
+            moved_to_active = await _move_ticket_to_active_if_configured(channel)
+        except Exception:
+            moved_to_active = False
 
         try:
             await repo_safe_optional_update_by_channel_id(
@@ -2613,6 +2827,9 @@ async def reopen_ticket_channel(
         except Exception:
             pass
 
+        _service_debug(
+            f"reopen-channel success channel={channel.id} moved_to_active={moved_to_active} location={_channel_lifecycle_location(channel)}"
+        )
         return ok
 
 
