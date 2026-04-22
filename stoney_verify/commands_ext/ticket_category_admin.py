@@ -14,6 +14,17 @@ from ..globals import get_supabase, now_utc
 from .common import _staff_check, reply_once
 
 
+# ============================================================
+# ticket_category_admin.py
+# ------------------------------------------------------------
+# Hardening goals:
+# - keep category CRUD governance-safe
+# - preserve one valid default at all times
+# - allow the intake types the project actually uses
+# - prevent destructive edits that leave routing in a broken state
+# - make warnings obvious to staff before category drift becomes a bug
+# ============================================================
+
 _ALLOWED_INTAKE_TYPES = {
     "general",
     "support",
@@ -23,7 +34,19 @@ _ALLOWED_INTAKE_TYPES = {
     "partnership",
     "question",
     "ghost",
+    "account",
+    "purchase",
+    "bug",
+    "custom",
 }
+
+_MAX_NAME_LEN = 120
+_MAX_DESC_LEN = 500
+_MAX_SLUG_LEN = 80
+_MAX_KEYWORD_LEN = 80
+_MAX_KEYWORDS = 25
+_MIN_SORT_ORDER = -9999
+_MAX_SORT_ORDER = 9999
 
 
 def _safe_int(value: Any, default: int = 0) -> int:
@@ -55,7 +78,23 @@ def _slugify(value: str) -> str:
         text = re.sub(r"[^a-z0-9\s\-_]+", "", text)
         text = re.sub(r"[\s_]+", "-", text)
         text = re.sub(r"-{2,}", "-", text)
-        return text.strip("-")[:80]
+        return text.strip("-")[:_MAX_SLUG_LEN]
+    except Exception:
+        return ""
+
+
+def _normalize_name(value: Any) -> str:
+    try:
+        text = re.sub(r"\s+", " ", str(value or "")).strip()
+        return text[:_MAX_NAME_LEN]
+    except Exception:
+        return ""
+
+
+def _normalize_description(value: Any) -> str:
+    try:
+        text = re.sub(r"\s+", " ", str(value or "")).strip()
+        return text[:_MAX_DESC_LEN]
     except Exception:
         return ""
 
@@ -74,12 +113,13 @@ def _normalize_keywords(value: Any) -> List[str]:
             item = re.sub(r"\s+", " ", item)
             if not item:
                 continue
+            item = item[:_MAX_KEYWORD_LEN]
             if item not in out:
-                out.append(item[:80])
+                out.append(item)
     except Exception:
         pass
 
-    return out[:25]
+    return out[:_MAX_KEYWORDS]
 
 
 async def _run_blocking(fn, *args, **kwargs):
@@ -190,7 +230,13 @@ def _update_category_sync(guild_id: int, slug: str, patch: Dict[str, Any]) -> bo
     if not sb:
         return False
     try:
-        sb.table("ticket_categories").update(patch).eq("guild_id", str(int(guild_id))).eq("slug", str(slug).lower()).execute()
+        (
+            sb.table("ticket_categories")
+            .update(patch)
+            .eq("guild_id", str(int(guild_id)))
+            .eq("slug", str(slug).lower())
+            .execute()
+        )
         return True
     except Exception:
         return False
@@ -205,7 +251,13 @@ def _delete_category_sync(guild_id: int, slug: str) -> bool:
     if not sb:
         return False
     try:
-        sb.table("ticket_categories").delete().eq("guild_id", str(int(guild_id))).eq("slug", str(slug).lower()).execute()
+        (
+            sb.table("ticket_categories")
+            .delete()
+            .eq("guild_id", str(int(guild_id)))
+            .eq("slug", str(slug).lower())
+            .execute()
+        )
         return True
     except Exception:
         return False
@@ -245,8 +297,13 @@ def _set_default_sync(guild_id: int, slug: str) -> bool:
         return False
 
     try:
-        # Set target first so we never end up with zero defaults if cleanup fails.
-        sb.table("ticket_categories").update({"is_default": True}).eq("guild_id", str(int(guild_id))).eq("slug", str(slug).lower()).execute()
+        (
+            sb.table("ticket_categories")
+            .update({"is_default": True})
+            .eq("guild_id", str(int(guild_id)))
+            .eq("slug", str(slug).lower())
+            .execute()
+        )
         _clear_default_except_sync(guild_id, keep_slug=slug)
         return True
     except Exception:
@@ -269,6 +326,24 @@ def _duplicate_slugs(rows: List[Dict[str, Any]]) -> List[str]:
 
 def _default_categories(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     return [row for row in rows if bool(row.get("is_default"))]
+
+
+def _verification_like_categories(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    out: List[Dict[str, Any]] = []
+    for row in rows:
+        slug = _safe_str(row.get("slug")).lower()
+        name = _safe_str(row.get("name")).lower()
+        intake_type = _safe_str(row.get("intake_type")).lower()
+        if intake_type == "verification":
+            out.append(row)
+            continue
+        if slug in {"verification", "verification-issue", "verification_issue"}:
+            out.append(row)
+            continue
+        if "verification" in name:
+            out.append(row)
+            continue
+    return out
 
 
 def _choose_replacement_default(rows: List[Dict[str, Any]], deleted_slug: str) -> Optional[Dict[str, Any]]:
@@ -296,10 +371,22 @@ def _category_embed(title: str, row: Dict[str, Any]) -> discord.Embed:
     embed.add_field(name="Sort Order", value=f"`{row.get('sort_order')}`", inline=True)
     embed.add_field(
         name="Keywords",
-        value=(", ".join([f"`{_truncate(x, 40)}`" for x in (row.get("match_keywords") or [])]) or "—")[:1024],
+        value=((", ".join([f"`{_truncate(x, 40)}`" for x in (row.get("match_keywords") or [])])) or "—")[:1024],
         inline=False,
     )
-    embed.add_field(name="Description", value=_truncate(row.get("description") or "No description.", 1024), inline=False)
+    embed.add_field(
+        name="Description",
+        value=_truncate(row.get("description") or "No description.", 1024),
+        inline=False,
+    )
+    embed.add_field(
+        name="Staff Note",
+        value=(
+            "Keyword routing should be specific enough that staff can predict why this category wins.\n"
+            "Keep names, descriptions, and keywords clear."
+        )[:1024],
+        inline=False,
+    )
     return embed
 
 
@@ -316,6 +403,12 @@ def _governance_warnings(rows: List[Dict[str, Any]]) -> List[str]:
     elif len(defaults) > 1:
         warnings.append(f"Multiple default categories detected: `{len(defaults)}`")
 
+    verification_rows = _verification_like_categories(rows)
+    if len(verification_rows) == 0:
+        warnings.append("No verification-like category detected.")
+    elif len(verification_rows) > 1:
+        warnings.append(f"Multiple verification-like categories detected: `{len(verification_rows)}`")
+
     return warnings
 
 
@@ -326,9 +419,13 @@ def _validated_sort_order(value: Optional[int]) -> Optional[int]:
         num = int(value)
     except Exception:
         return None
-    if num < -9999 or num > 9999:
+    if num < _MIN_SORT_ORDER or num > _MAX_SORT_ORDER:
         return None
     return num
+
+
+def _human_intake_types() -> str:
+    return ", ".join(sorted(_ALLOWED_INTAKE_TYPES))
 
 
 def register_ticket_category_admin_commands(bot, tree) -> None:
@@ -339,7 +436,7 @@ def register_ticket_category_admin_commands(bot, tree) -> None:
     @app_commands.describe(
         name="Display name for the category",
         slug="URL-style slug, like support or verification-issue",
-        intake_type="Type: general, support, verification, appeal, report, partnership, question, ghost",
+        intake_type="Type used by routing logic",
         description="Optional category description",
         keywords="Comma-separated match keywords",
         is_default="Whether this should be the default category",
@@ -366,7 +463,7 @@ def register_ticket_category_admin_commands(bot, tree) -> None:
         if not slug_clean:
             return await reply_once(interaction, {"content": "❌ Invalid slug.", "ephemeral": True})
 
-        name_clean = _safe_str(name)[:120]
+        name_clean = _normalize_name(name)
         if not name_clean:
             return await reply_once(interaction, {"content": "❌ Category name cannot be empty.", "ephemeral": True})
 
@@ -374,14 +471,14 @@ def register_ticket_category_admin_commands(bot, tree) -> None:
         if type_clean not in _ALLOWED_INTAKE_TYPES:
             return await reply_once(
                 interaction,
-                {"content": f"❌ Invalid intake type. Use one of: {', '.join(sorted(_ALLOWED_INTAKE_TYPES))}", "ephemeral": True},
+                {"content": f"❌ Invalid intake type. Use one of: {_human_intake_types()}", "ephemeral": True},
             )
 
         sort_clean = _validated_sort_order(sort_order)
         if sort_order is not None and sort_clean is None:
             return await reply_once(
                 interaction,
-                {"content": "❌ Sort order must be between `-9999` and `9999`.", "ephemeral": True},
+                {"content": f"❌ Sort order must be between `{_MIN_SORT_ORDER}` and `{_MAX_SORT_ORDER}`.", "ephemeral": True},
             )
 
         existing = await _fetch_category_by_slug(guild.id, slug_clean)
@@ -392,7 +489,7 @@ def register_ticket_category_admin_commands(bot, tree) -> None:
             "guild_id": str(guild.id),
             "slug": slug_clean,
             "name": name_clean,
-            "description": _safe_str(description)[:500],
+            "description": _normalize_description(description),
             "intake_type": type_clean,
             "match_keywords": _normalize_keywords(_safe_str(keywords)),
             "is_default": bool(is_default),
@@ -412,7 +509,11 @@ def register_ticket_category_admin_commands(bot, tree) -> None:
         rows = await _fetch_categories(guild.id)
         warnings = _governance_warnings(rows)
         if warnings:
-            embed.add_field(name="Governance Warnings", value="\n".join([f"• {w}" for w in warnings])[:1024], inline=False)
+            embed.add_field(
+                name="Governance Warnings",
+                value="\n".join([f"• {w}" for w in warnings])[:1024],
+                inline=False,
+            )
 
         await reply_once(interaction, {"embed": embed, "ephemeral": True})
 
@@ -454,7 +555,7 @@ def register_ticket_category_admin_commands(bot, tree) -> None:
         patch: Dict[str, Any] = {}
 
         if name is not None:
-            name_clean = _safe_str(name)[:120]
+            name_clean = _normalize_name(name)
             if not name_clean:
                 return await reply_once(interaction, {"content": "❌ Category name cannot be empty.", "ephemeral": True})
             patch["name"] = name_clean
@@ -464,12 +565,12 @@ def register_ticket_category_admin_commands(bot, tree) -> None:
             if type_clean not in _ALLOWED_INTAKE_TYPES:
                 return await reply_once(
                     interaction,
-                    {"content": f"❌ Invalid intake type. Use one of: {', '.join(sorted(_ALLOWED_INTAKE_TYPES))}", "ephemeral": True},
+                    {"content": f"❌ Invalid intake type. Use one of: {_human_intake_types()}", "ephemeral": True},
                 )
             patch["intake_type"] = type_clean
 
         if description is not None:
-            patch["description"] = _safe_str(description)[:500]
+            patch["description"] = _normalize_description(description)
 
         if keywords is not None:
             patch["match_keywords"] = _normalize_keywords(_safe_str(keywords))
@@ -479,7 +580,7 @@ def register_ticket_category_admin_commands(bot, tree) -> None:
             if sort_clean is None:
                 return await reply_once(
                     interaction,
-                    {"content": "❌ Sort order must be between `-9999` and `9999`.", "ephemeral": True},
+                    {"content": f"❌ Sort order must be between `{_MIN_SORT_ORDER}` and `{_MAX_SORT_ORDER}`.", "ephemeral": True},
                 )
             patch["sort_order"] = sort_clean
 
@@ -496,13 +597,11 @@ def register_ticket_category_admin_commands(bot, tree) -> None:
         if is_default is True:
             await _set_default(guild.id, slug_clean)
         elif is_default is False and bool(row.get("is_default")):
-            # Prevent a no-default state: move default to another category if possible.
             rows_after = await _fetch_categories(guild.id)
             replacement = _choose_replacement_default(rows_after, slug_clean)
             if replacement is not None:
                 await _set_default(guild.id, _safe_str(replacement.get("slug")))
             else:
-                # Only category left: keep it default.
                 await _set_default(guild.id, slug_clean)
 
         updated = await _fetch_category_by_slug(guild.id, slug_clean) or {**row, **patch}
@@ -511,7 +610,11 @@ def register_ticket_category_admin_commands(bot, tree) -> None:
         rows = await _fetch_categories(guild.id)
         warnings = _governance_warnings(rows)
         if warnings:
-            embed.add_field(name="Governance Warnings", value="\n".join([f"• {w}" for w in warnings])[:1024], inline=False)
+            embed.add_field(
+                name="Governance Warnings",
+                value="\n".join([f"• {w}" for w in warnings])[:1024],
+                inline=False,
+            )
 
         await reply_once(interaction, {"embed": embed, "ephemeral": True})
 
@@ -541,6 +644,22 @@ def register_ticket_category_admin_commands(bot, tree) -> None:
                     "content": (
                         "❌ You cannot delete the only remaining ticket category.\n"
                         "Create another category first so routing always has at least one valid target."
+                    ),
+                    "ephemeral": True,
+                },
+            )
+
+        verification_rows = _verification_like_categories(rows_before)
+        deleting_verification_like = any(
+            _safe_str(x.get("slug")).lower() == slug_clean for x in verification_rows
+        )
+        if deleting_verification_like and len(verification_rows) <= 1:
+            return await reply_once(
+                interaction,
+                {
+                    "content": (
+                        "❌ You cannot delete the only verification-like category.\n"
+                        "Create another verification category first so unverified users still have a clear routing target."
                     ),
                     "ephemeral": True,
                 },
@@ -594,7 +713,11 @@ def register_ticket_category_admin_commands(bot, tree) -> None:
         rows = await _fetch_categories(guild.id)
         warnings = _governance_warnings(rows)
         if warnings:
-            embed.add_field(name="Governance Warnings", value="\n".join([f"• {w}" for w in warnings])[:1024], inline=False)
+            embed.add_field(
+                name="Governance Warnings",
+                value="\n".join([f"• {w}" for w in warnings])[:1024],
+                inline=False,
+            )
 
         await reply_once(interaction, {"embed": embed, "ephemeral": True})
 
@@ -627,7 +750,7 @@ def register_ticket_category_admin_commands(bot, tree) -> None:
         if sort_clean is None:
             return await reply_once(
                 interaction,
-                {"content": "❌ Sort order must be between `-9999` and `9999`.", "ephemeral": True},
+                {"content": f"❌ Sort order must be between `{_MIN_SORT_ORDER}` and `{_MAX_SORT_ORDER}`.", "ephemeral": True},
             )
 
         ok = await _update_category(guild.id, slug_clean, {"sort_order": sort_clean})
