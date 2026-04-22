@@ -34,8 +34,9 @@ except Exception:
 # - deterministic category listing / default selection
 # - transparent category routing preview with reasons
 # - duplicate slug / multiple-default detection
-# - only post staff action panels in real, non-deleted ticket channels
-# - avoid raw confusing fallback behavior
+# - only post staff action panels in real, active ticket channels
+# - archive-aware ticket lifecycle checks (not just DB status)
+# - clearer staff messaging for real-world moderation use
 # ============================================================
 
 
@@ -327,6 +328,141 @@ def _infer_category(categories: List[Dict[str, Any]], reason: str) -> Tuple[str,
     return "support", "Support", 0, "No positive match. Falling back to `support`.", scored[:5]
 
 
+def _ticket_status(row: Optional[Dict[str, Any]]) -> str:
+    try:
+        raw = _safe_str((row or {}).get("status"), "unknown").lower()
+        if raw in {"open", "claimed", "closed", "deleted"}:
+            return raw
+        if raw in {"active", "reopened"}:
+            return "open"
+    except Exception:
+        pass
+    return "unknown"
+
+
+def _ticket_archive_category_id() -> int:
+    for key in (
+        "TICKET_ARCHIVE_CATEGORY_ID",
+        "TICKET_ARCHIVED_CATEGORY_ID",
+        "ARCHIVED_TICKET_CATEGORY_ID",
+        "ARCHIVE_TICKET_CATEGORY_ID",
+    ):
+        try:
+            value = int(globals().get(key, 0) or 0)
+            if value > 0:
+                return value
+        except Exception:
+            continue
+    return 0
+
+
+def _resolve_category_by_id(
+    guild: discord.Guild,
+    category_id: int,
+) -> Optional[discord.CategoryChannel]:
+    try:
+        if category_id <= 0:
+            return None
+        maybe = guild.get_channel(int(category_id))
+        if isinstance(maybe, discord.CategoryChannel):
+            return maybe
+    except Exception:
+        pass
+    return None
+
+
+def _looks_like_archive_category_name(name: str) -> bool:
+    text = _safe_str(name).lower()
+    if not text:
+        return False
+    markers = (
+        "archive",
+        "archived",
+        "ticket archive",
+        "tickets archive",
+        "archived tickets",
+        "closed tickets",
+    )
+    return any(marker in text for marker in markers)
+
+
+def _resolve_archive_category(guild: discord.Guild) -> Optional[discord.CategoryChannel]:
+    explicit_id = _ticket_archive_category_id()
+    if explicit_id > 0:
+        explicit = _resolve_category_by_id(guild, explicit_id)
+        if explicit is not None:
+            return explicit
+
+    try:
+        for category in guild.categories:
+            if _looks_like_archive_category_name(category.name):
+                return category
+    except Exception:
+        pass
+
+    return None
+
+
+def _channel_is_in_archive_category(channel: discord.TextChannel) -> bool:
+    try:
+        category = channel.category
+        if not isinstance(category, discord.CategoryChannel):
+            return False
+
+        archive = _resolve_archive_category(channel.guild)
+        if archive is not None and int(category.id) == int(archive.id):
+            return True
+
+        return _looks_like_archive_category_name(category.name)
+    except Exception:
+        return False
+
+
+def _channel_looks_closed(channel: discord.TextChannel) -> bool:
+    try:
+        return _safe_str(channel.name).lower().startswith("closed-")
+    except Exception:
+        return False
+
+
+def _ticket_effectively_closed(
+    *,
+    channel: discord.TextChannel,
+    row: Optional[Dict[str, Any]],
+) -> bool:
+    status = _ticket_status(row)
+    if status in {"closed", "deleted"}:
+        return True
+    if _channel_looks_closed(channel):
+        return True
+    if _channel_is_in_archive_category(channel):
+        return True
+    return False
+
+
+def _ticket_lifecycle_label(channel: discord.TextChannel, row: Optional[Dict[str, Any]]) -> str:
+    if _ticket_effectively_closed(channel=channel, row=row):
+        if _channel_is_in_archive_category(channel):
+            return f"Closed / archived in **{channel.category.name if channel.category else 'archive'}**"
+        return "Closed"
+    return "Active"
+
+
+async def _send_paginated_embeds(
+    interaction: discord.Interaction,
+    embeds: List[discord.Embed],
+) -> None:
+    if not embeds:
+        return
+
+    await reply_once(interaction, {"embed": embeds[0], "ephemeral": True})
+    for embed in embeds[1:]:
+        try:
+            await interaction.followup.send(embed=embed, ephemeral=True)
+        except Exception:
+            break
+
+
 async def _ticket_context_for_actions(
     interaction: discord.Interaction,
     channel: Optional[discord.TextChannel] = None,
@@ -355,11 +491,25 @@ async def _ticket_context_for_actions(
         )
         return None, None
 
-    status = _safe_str((row or {}).get("status"), "unknown").lower()
+    status = _ticket_status(row)
     if status == "deleted":
         await reply_once(
             interaction,
             {"content": "❌ You cannot post a staff actions panel into a deleted ticket.", "ephemeral": True},
+        )
+        return None, None
+
+    if _ticket_effectively_closed(channel=ch, row=row):
+        await reply_once(
+            interaction,
+            {
+                "content": (
+                    "❌ This ticket is closed or archived.\n"
+                    "Do not post the active staff actions panel here.\n"
+                    "Use the closed-ticket controls for closed tickets."
+                ),
+                "ephemeral": True,
+            },
         )
         return None, None
 
@@ -381,14 +531,13 @@ def register_ticket_intake_admin_commands(bot, tree) -> None:
 
         rows = await _fetch_ticket_categories(guild.id)
 
-        embed = discord.Embed(
-            title="🗂️ Ticket Categories",
-            color=discord.Color.blurple(),
-            timestamp=now_utc(),
-        )
-
         if not rows:
-            embed.description = "No dashboard ticket categories were found for this server."
+            embed = discord.Embed(
+                title="🗂️ Ticket Categories",
+                description="No dashboard ticket categories were found for this server.",
+                color=discord.Color.blurple(),
+                timestamp=now_utc(),
+            )
             return await reply_once(interaction, {"embed": embed, "ephemeral": True})
 
         default_slug = _find_default_category_slug(rows)
@@ -396,31 +545,52 @@ def register_ticket_intake_admin_commands(bot, tree) -> None:
         duplicate_slugs = _duplicate_slugs(rows)
         default_count = len(_default_categories(rows))
 
-        summary = [
+        summary_lines = [
             f"Configured categories: **{len(rows)}**",
             f"Default category: `{default_slug}`",
             f"Verification category: `{verification_slug}`",
         ]
         if duplicate_slugs:
-            summary.append(f"⚠️ Duplicate slugs: {', '.join([f'`{s}`' for s in duplicate_slugs[:6]])}")
+            summary_lines.append(
+                f"⚠️ Duplicate slugs: {', '.join([f'`{s}`' for s in duplicate_slugs[:6]])}"
+            )
         if default_count > 1:
-            summary.append(f"⚠️ Multiple defaults detected: `{default_count}`")
+            summary_lines.append(f"⚠️ Multiple defaults detected: `{default_count}`")
+        if default_count == 0:
+            summary_lines.append("ℹ️ No explicit default detected. Fallback behavior will use `support` when needed.")
 
-        embed.description = "\n".join(summary)
+        embeds: List[discord.Embed] = []
+        chunk_size = 8
+        total_pages = (len(rows) + chunk_size - 1) // chunk_size
 
-        for row in rows[:10]:
-            slug = _safe_str(row.get("slug"), "unknown")
-            name = _safe_str(row.get("name"), slug)
-            intake_type = _safe_str(row.get("intake_type"), "general")
-            default_tag = " • DEFAULT" if bool(row.get("is_default")) else ""
-            keywords = row.get("match_keywords") or []
-            kw_text = ", ".join([f"`{_truncate(k, 30)}`" for k in keywords[:6]]) if keywords else "—"
-            desc = _truncate(row.get("description") or "No description.", 180)
-            value = f"Type: `{intake_type}`{default_tag}\nKeywords: {kw_text}\n{desc}"
-            embed.add_field(name=f"{name} (`{slug}`)", value=value[:1024], inline=False)
+        for page_index in range(total_pages):
+            chunk = rows[page_index * chunk_size : (page_index + 1) * chunk_size]
+            embed = discord.Embed(
+                title="🗂️ Ticket Categories" if page_index == 0 else "🗂️ Ticket Categories (cont.)",
+                description="\n".join(summary_lines) if page_index == 0 else None,
+                color=discord.Color.blurple(),
+                timestamp=now_utc(),
+            )
 
-        embed.set_footer(text="Showing up to 10 categories")
-        await reply_once(interaction, {"embed": embed, "ephemeral": True})
+            for row in chunk:
+                slug = _safe_str(row.get("slug"), "unknown")
+                name = _safe_str(row.get("name"), slug)
+                intake_type = _safe_str(row.get("intake_type"), "general")
+                default_tag = " • DEFAULT" if bool(row.get("is_default")) else ""
+                keywords = row.get("match_keywords") or []
+                kw_text = ", ".join([f"`{_truncate(k, 30)}`" for k in keywords[:6]]) if keywords else "—"
+                desc = _truncate(row.get("description") or "No description.", 180)
+                value = (
+                    f"Type: `{intake_type}`{default_tag}\n"
+                    f"Keywords: {kw_text}\n"
+                    f"{desc}"
+                )
+                embed.add_field(name=f"{name} (`{slug}`)", value=value[:1024], inline=False)
+
+            embed.set_footer(text=f"Page {page_index + 1}/{total_pages}")
+            embeds.append(embed)
+
+        await _send_paginated_embeds(interaction, embeds)
 
     @tree.command(
         name="ticket_category_match",
@@ -441,7 +611,6 @@ def register_ticket_intake_admin_commands(bot, tree) -> None:
 
         rows = await _fetch_ticket_categories(guild.id)
         slug, label, score, why, top_matches = _infer_category(rows, clean_reason)
-
         matched = _find_category_by_slug(rows, slug)
 
         embed = discord.Embed(
@@ -453,12 +622,20 @@ def register_ticket_intake_admin_commands(bot, tree) -> None:
         embed.add_field(name="Matched Category", value=f"**{label}**\n`{slug}`", inline=True)
         embed.add_field(name="Match Score", value=f"`{score}`", inline=True)
         embed.add_field(name="Default Category", value=f"`{_find_default_category_slug(rows)}`", inline=True)
+        embed.add_field(
+            name="Plain-Language Explanation",
+            value=(
+                "This is the category the current routing logic would most likely choose.\n"
+                "If the score is low or the explanation looks weak, your category keywords may need tuning."
+            )[:1024],
+            inline=False,
+        )
         embed.add_field(name="Why It Matched", value=_truncate(why, 1024), inline=False)
 
         if matched:
             keywords = matched.get("match_keywords") or []
             embed.add_field(
-                name="Category Details",
+                name="Matched Category Details",
                 value=(
                     f"Type: `{_safe_str(matched.get('intake_type'), 'general')}`\n"
                     f"Keywords: {', '.join([f'`{_truncate(k, 25)}`' for k in keywords[:8]]) if keywords else '—'}"
@@ -469,7 +646,9 @@ def register_ticket_intake_admin_commands(bot, tree) -> None:
         if top_matches:
             lines = []
             for cat, cat_score in top_matches[:5]:
-                lines.append(f"• `{_safe_str(cat.get('slug'), 'unknown')}` — score `{cat_score}`")
+                lines.append(
+                    f"• `{_safe_str(cat.get('slug'), 'unknown')}` — score `{cat_score}`"
+                )
             embed.add_field(name="Top Candidates", value="\n".join(lines)[:1024], inline=False)
 
         if not rows:
@@ -496,6 +675,8 @@ def register_ticket_intake_admin_commands(bot, tree) -> None:
         ticket_parent_id = _safe_int(globals().get("TICKET_CATEGORY_ID"), 0)
         ticket_parent = guild.get_channel(ticket_parent_id) if ticket_parent_id > 0 else None
 
+        archive_parent = _resolve_archive_category(guild)
+
         staff_role_id = _safe_int(globals().get("STAFF_ROLE_ID"), 0)
         staff_role = guild.get_role(staff_role_id) if staff_role_id > 0 else None
 
@@ -511,8 +692,13 @@ def register_ticket_intake_admin_commands(bot, tree) -> None:
         embed.add_field(name="Default Category", value=f"`{default_slug}`", inline=True)
         embed.add_field(name="Verification Category", value=f"`{verification_slug}`", inline=True)
         embed.add_field(
-            name="Ticket Parent Category",
+            name="Active Ticket Category",
             value=(f"{ticket_parent.mention}\n`{ticket_parent.id}`" if ticket_parent else "Not configured / not found"),
+            inline=False,
+        )
+        embed.add_field(
+            name="Archive Ticket Category",
+            value=(f"{archive_parent.mention}\n`{archive_parent.id}`" if archive_parent else "Not configured / not found"),
             inline=False,
         )
         embed.add_field(
@@ -523,6 +709,14 @@ def register_ticket_intake_admin_commands(bot, tree) -> None:
         embed.add_field(name="Public Ticket Panel Command", value="`/post_ticket_panel`", inline=True)
         embed.add_field(name="Ghost Ticket Panel Command", value="`/post_ghost_ticket_panel`", inline=True)
         embed.add_field(name="Ticket Actions Panel Command", value="`/ticket_post_actions`", inline=True)
+        embed.add_field(
+            name="Staff Note",
+            value=(
+                "Use `/ticket_post_actions` only in active tickets.\n"
+                "Closed or archived tickets should use the closed-ticket controls instead."
+            )[:1024],
+            inline=False,
+        )
 
         warnings: List[str] = []
         if not rows:
@@ -532,9 +726,11 @@ def register_ticket_intake_admin_commands(bot, tree) -> None:
         if default_count > 1:
             warnings.append(f"Multiple default categories detected: {default_count}")
         if ticket_parent is None:
-            warnings.append("Ticket parent category is missing or not reachable.")
+            warnings.append("Active ticket category is missing or not reachable.")
         if staff_role is None:
             warnings.append("Staff role is missing or not reachable.")
+        if archive_parent is None:
+            warnings.append("Archive ticket category is not configured or not detectable.")
 
         if warnings:
             embed.add_field(
@@ -577,12 +773,24 @@ def register_ticket_intake_admin_commands(bot, tree) -> None:
         embed.add_field(name="Type", value=f"`{_safe_str(row.get('intake_type'), 'general')}`", inline=True)
         embed.add_field(name="Default", value="Yes" if bool(row.get("is_default")) else "No", inline=True)
         embed.add_field(name="Sort Order", value=f"`{row.get('sort_order')}`", inline=True)
-        embed.add_field(name="Description", value=_truncate(row.get("description") or "No description.", 1024), inline=False)
+        embed.add_field(
+            name="Description",
+            value=_truncate(row.get("description") or "No description.", 1024),
+            inline=False,
+        )
 
         keywords = row.get("match_keywords") or []
         embed.add_field(
             name="Keywords",
-            value=(", ".join([f"`{_truncate(k, 40)}`" for k in keywords]) if keywords else "—")[:1024],
+            value=((", ".join([f"`{_truncate(k, 40)}`" for k in keywords])) if keywords else "—")[:1024],
+            inline=False,
+        )
+        embed.add_field(
+            name="Plain-Language Note",
+            value=(
+                "This category can be selected by direct user choice or by automatic routing.\n"
+                "If it is not matching correctly, adjust its keywords and description."
+            )[:1024],
             inline=False,
         )
 
@@ -607,31 +815,31 @@ def register_ticket_intake_admin_commands(bot, tree) -> None:
         if TicketChannelActionsView is None:
             return await reply_once(interaction, {"content": "❌ Ticket actions view is unavailable.", "ephemeral": True})
 
-        status = _safe_str((row or {}).get("status"), "unknown").lower()
-        if status == "closed":
-            return await reply_once(
-                interaction,
-                {
-                    "content": (
-                        "❌ Do not post the open-ticket actions panel into a closed ticket.\n"
-                        "Use the closed-ticket controls created by the ticket service instead."
-                    ),
-                    "ephemeral": True,
-                },
-            )
+        status = _ticket_status(row)
+        lifecycle = _ticket_lifecycle_label(ch, row)
 
         embed = discord.Embed(
             title="🛠️ Ticket Staff Actions",
             description=(
                 "Use the buttons below for faster staff workflow.\n\n"
-                "Includes claim, unclaim, transfer, priority, notes, macros, and close."
+                "This panel is for **active tickets only**.\n"
+                "It includes claim, unclaim, transfer, priority, notes, macros, and close."
             ),
             color=discord.Color.blurple(),
             timestamp=now_utc(),
         )
         embed.add_field(name="Channel", value=f"{ch.mention}\n`{ch.id}`", inline=False)
         embed.add_field(name="Status", value=f"`{status}`", inline=True)
+        embed.add_field(name="Lifecycle", value=lifecycle[:100], inline=True)
         embed.add_field(name="Category", value=f"`{_safe_str((row or {}).get('category'), 'unknown')}`", inline=True)
+        embed.add_field(
+            name="Staff Note",
+            value=(
+                "If this ticket later gets closed or archived, do **not** keep using this panel.\n"
+                "Use the closed-ticket controls instead."
+            )[:1024],
+            inline=False,
+        )
         embed.set_footer(text="Stoney Verify Ticket System")
 
         try:
@@ -641,7 +849,10 @@ def register_ticket_intake_admin_commands(bot, tree) -> None:
                 allowed_mentions=discord.AllowedMentions.none(),
             )
         except Exception as e:
-            return await reply_once(interaction, {"content": f"❌ Failed to post ticket actions panel: {e}", "ephemeral": True})
+            return await reply_once(
+                interaction,
+                {"content": f"❌ Failed to post ticket actions panel: {e}", "ephemeral": True},
+            )
 
         try:
             from .common import mark_ticket_activity
