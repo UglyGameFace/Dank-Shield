@@ -14,10 +14,21 @@ from .repository import (
 )
 
 try:
-    from .event_service import emit_ticket_event
+    from .event_service import (
+        log_ticket_event,
+        log_ticket_closed,
+    )
 except Exception:
-    async def emit_ticket_event(*args, **kwargs):  # type: ignore
-        return None
+    async def log_ticket_event(*args, **kwargs):  # type: ignore
+        return False
+
+    async def log_ticket_closed(*args, **kwargs):  # type: ignore
+        return False
+
+try:
+    from .service import mark_ticket_closed as service_mark_ticket_closed
+except Exception:
+    service_mark_ticket_closed = None  # type: ignore
 
 
 # ============================================================
@@ -30,6 +41,8 @@ except Exception:
 # - keep slash-command macros and panel macros on one shared path
 # - block macro sends into closed/deleted tickets at the service layer
 # - avoid duplicate send races when staff spam-click macro actions
+# - respect archive-category closed state, not just closed-* names
+# - optionally support close_after_send on the shared service path
 # ============================================================
 
 MACROS_TABLE = "ticket_macros"
@@ -316,23 +329,121 @@ def _ticket_status_from_row(row: Optional[Dict[str, Any]]) -> str:
         raw = _safe_str((row or {}).get("status")).strip().lower()
         if raw in _VALID_TICKET_STATUSES:
             return raw
+        if raw in {"active", "reopened"}:
+            return "open"
     except Exception:
         pass
     return "unknown"
 
 
-def _ticket_is_closed_like(channel: discord.TextChannel, row: Optional[Dict[str, Any]]) -> bool:
-    status = _ticket_status_from_row(row)
-    if status == "closed":
-        return True
+def _ticket_archive_category_id() -> int:
+    for key in (
+        "TICKET_ARCHIVE_CATEGORY_ID",
+        "TICKET_ARCHIVED_CATEGORY_ID",
+        "ARCHIVED_TICKET_CATEGORY_ID",
+        "ARCHIVE_TICKET_CATEGORY_ID",
+    ):
+        try:
+            value = int(globals().get(key, 0) or 0)
+            if value > 0:
+                return value
+        except Exception:
+            continue
+    return 0
+
+
+def _looks_like_archive_category_name(name: str) -> bool:
+    text = _safe_str(name).lower()
+    if not text:
+        return False
+
+    markers = (
+        "archive",
+        "archived",
+        "ticket archive",
+        "tickets archive",
+        "archived tickets",
+        "closed tickets",
+    )
+    return any(marker in text for marker in markers)
+
+
+def _resolve_archive_category(guild: discord.Guild) -> Optional[discord.CategoryChannel]:
+    explicit_id = _ticket_archive_category_id()
+    if explicit_id > 0:
+        try:
+            maybe = guild.get_channel(explicit_id)
+            if isinstance(maybe, discord.CategoryChannel):
+                return maybe
+        except Exception:
+            pass
+
+    try:
+        for category in guild.categories:
+            if _looks_like_archive_category_name(category.name):
+                return category
+    except Exception:
+        pass
+
+    return None
+
+
+def _channel_looks_closed(channel: discord.TextChannel) -> bool:
     try:
         return _safe_str(channel.name).lower().startswith("closed-")
     except Exception:
         return False
 
 
+def _channel_is_in_archive_category(channel: discord.TextChannel) -> bool:
+    try:
+        archive = _resolve_archive_category(channel.guild)
+        if archive is not None and channel.category is not None:
+            if int(channel.category.id) == int(archive.id):
+                return True
+        if channel.category is not None:
+            return _looks_like_archive_category_name(channel.category.name)
+    except Exception:
+        pass
+    return False
+
+
+def _ticket_is_closed_like(channel: discord.TextChannel, row: Optional[Dict[str, Any]]) -> bool:
+    status = _ticket_status_from_row(row)
+    if status == "closed":
+        return True
+    if _channel_looks_closed(channel):
+        return True
+    if _channel_is_in_archive_category(channel):
+        return True
+    return False
+
+
 def _ticket_is_deleted(row: Optional[Dict[str, Any]]) -> bool:
     return _ticket_status_from_row(row) == "deleted"
+
+
+async def _move_ticket_to_archive_if_configured(channel: discord.TextChannel) -> bool:
+    archive_category = _resolve_archive_category(channel.guild)
+    if archive_category is None:
+        return False
+
+    try:
+        if channel.category is not None and int(channel.category.id) == int(archive_category.id):
+            return True
+    except Exception:
+        pass
+
+    try:
+        await channel.edit(
+            category=archive_category,
+            sync_permissions=False,
+            reason="Macro close_after_send -> move to archive category",
+        )
+        return True
+    except Exception as e:
+        _macro_debug(f"archive move failed channel={channel.id} error={repr(e)}")
+        return False
 
 
 def _channel_send_lock(channel_id: int | str) -> asyncio.Lock:
@@ -870,7 +981,11 @@ async def send_ticket_macro(
 
         macro = dict(preview.get("macro") or {})
         content = _clean_text(preview.get("content"), limit=4000)
-        row = preview.get("ticket_row") if isinstance(preview.get("ticket_row"), dict) else await get_ticket_by_any_channel_id(channel.id)
+        row = (
+            preview.get("ticket_row")
+            if isinstance(preview.get("ticket_row"), dict)
+            else await get_ticket_by_any_channel_id(channel.id)
+        )
 
         if not row:
             return {
@@ -913,6 +1028,8 @@ async def send_ticket_macro(
 
         sent_message: Optional[discord.Message] = None
         note_saved = False
+        moved_to_archive = False
+        ticket_closed = False
 
         if send_as_note:
             note_saved = await repo_add_internal_note(
@@ -956,15 +1073,15 @@ async def send_ticket_macro(
                 }
 
         try:
-            await emit_ticket_event(
+            await log_ticket_event(
                 guild_id=channel.guild.id,
-                channel_id=channel.id,
-                ticket_id=row.get("id"),
+                event_type="ticket_macro_used",
                 actor_user_id=getattr(actor, "id", None),
                 actor_name=_safe_str(actor),
-                event_type="ticket_macro_used",
-                title=f"Macro used: {macro.get('name') or macro.get('slug')}",
-                description=content[:1000],
+                channel_id=channel.id,
+                ticket_id=row.get("id"),
+                ticket_message_id=getattr(sent_message, "id", None),
+                source="ticket_macros_service",
                 metadata={
                     "macro_slug": macro.get("slug"),
                     "macro_name": macro.get("name"),
@@ -973,19 +1090,89 @@ async def send_ticket_macro(
                     "close_after_send": close_after_send,
                     "message_id": getattr(sent_message, "id", None),
                 },
+                ticket_row=row,
             )
         except Exception:
             pass
 
+        if close_after_send:
+            if service_mark_ticket_closed is None:
+                return {
+                    "ok": False,
+                    "message": "Macro was sent, but close_after_send is configured and the close service is unavailable.",
+                    "macro": macro,
+                    "content": content,
+                    "sent_message_id": getattr(sent_message, "id", None),
+                    "note_saved": note_saved,
+                    "send_as_note": send_as_note,
+                    "close_after_send": True,
+                    "ticket_closed": False,
+                    "moved_to_archive": False,
+                }
+
+            try:
+                ticket_closed = await service_mark_ticket_closed(
+                    channel=channel,
+                    closed_by=actor,
+                    reason=f"Macro close_after_send: {macro.get('slug')}",
+                )
+            except Exception as e:
+                return {
+                    "ok": False,
+                    "message": f"Macro was sent, but closing the ticket failed: {e}",
+                    "macro": macro,
+                    "content": content,
+                    "sent_message_id": getattr(sent_message, "id", None),
+                    "note_saved": note_saved,
+                    "send_as_note": send_as_note,
+                    "close_after_send": True,
+                    "ticket_closed": False,
+                    "moved_to_archive": False,
+                }
+
+            if ticket_closed:
+                moved_to_archive = await _move_ticket_to_archive_if_configured(channel)
+
+                try:
+                    await log_ticket_closed(
+                        guild_id=channel.guild.id,
+                        actor_user_id=getattr(actor, "id", None),
+                        actor_name=_safe_str(actor),
+                        channel_id=channel.id,
+                        reason=f"Macro close_after_send: {macro.get('slug')}",
+                        source="ticket_macros_service",
+                        metadata={
+                            "macro_slug": macro.get("slug"),
+                            "macro_name": macro.get("name"),
+                            "macro_source": macro.get("_source"),
+                            "close_after_send": True,
+                            "moved_to_archive": moved_to_archive,
+                            "channel_name_after_close": getattr(channel, "name", None),
+                        },
+                        ticket_row=row,
+                    )
+                except Exception:
+                    pass
+
+        result_message = (
+            "Macro sent."
+            if not send_as_note
+            else "Macro saved as internal note."
+        )
+        if close_after_send and ticket_closed:
+            result_message += " Ticket was then closed."
+
         return {
             "ok": True,
-            "message": "Macro sent." if not send_as_note else "Macro saved as internal note.",
+            "message": result_message,
             "macro": macro,
             "content": content,
             "sent_message_id": getattr(sent_message, "id", None),
             "note_saved": note_saved,
             "send_as_note": send_as_note,
             "close_after_send": close_after_send,
+            "ticket_closed": ticket_closed,
+            "moved_to_archive": moved_to_archive,
         }
 
 
