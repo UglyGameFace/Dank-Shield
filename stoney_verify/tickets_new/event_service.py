@@ -28,6 +28,7 @@ except Exception:
 # - build strong search_text for dashboard filtering/history
 # - provide ticket-specific wrappers for common actions
 # - suppress duplicate burst logs so dashboard history stays clean
+# - preserve lifecycle context (open / archive / deleted) for UI timelines
 # ============================================================
 
 ACTIVITY_FEED_TABLE = "activity_feed_events"
@@ -187,6 +188,67 @@ def _result_rows(resp: Any) -> List[Dict[str, Any]]:
         return [r for r in rows if isinstance(r, dict)]
     except Exception:
         return []
+
+
+def _normalize_ticket_status(value: Any, default: str = "unknown") -> str:
+    try:
+        text = str(value or "").strip().lower()
+        if text in {"open", "claimed", "closed", "deleted"}:
+            return text
+        if text in {"active", "reopened"}:
+            return "open"
+    except Exception:
+        pass
+    return default
+
+
+def _normalize_ticket_priority(value: Any, default: str = "medium") -> str:
+    try:
+        text = str(value or "").strip().lower()
+        if text in {"low", "medium", "high", "urgent"}:
+            return text
+    except Exception:
+        pass
+    return default
+
+
+def _ticket_channel_state(row: Optional[Dict[str, Any]]) -> str:
+    if not isinstance(row, dict):
+        return "unknown"
+
+    status = _normalize_ticket_status(row.get("status"), "unknown")
+    channel_name = str(row.get("channel_name") or "").strip().lower()
+    lifecycle_location = str(
+        row.get("lifecycle_location")
+        or row.get("channel_lifecycle_location")
+        or row.get("location")
+        or ""
+    ).strip().lower()
+
+    if status == "deleted":
+        return "deleted"
+    if status == "closed":
+        return "archived" if lifecycle_location.startswith("archive:") or channel_name.startswith("closed-") else "closed"
+    if lifecycle_location.startswith("archive:"):
+        return "archived"
+    if channel_name.startswith("closed-"):
+        return "archived"
+    if status in {"open", "claimed"}:
+        return "active"
+    return "unknown"
+
+
+def _ticket_lifecycle_location(row: Optional[Dict[str, Any]]) -> Optional[str]:
+    if not isinstance(row, dict):
+        return None
+    for key in ("lifecycle_location", "channel_lifecycle_location", "location"):
+        value = _clean_text(row.get(key), 200)
+        if value:
+            return value
+    channel_name = _clean_text(row.get("channel_name"), 200)
+    if channel_name and channel_name.lower().startswith("closed-"):
+        return "archive:named_closed"
+    return None
 
 
 # ============================================================
@@ -371,11 +433,19 @@ def _event_signature(payload: Dict[str, Any]) -> str:
         "ticket_number": meta.get("ticket_number"),
         "new_priority": meta.get("new_priority"),
         "transfer_target_user_id": meta.get("transfer_target_user_id"),
+        "transfer_target_name": meta.get("transfer_target_name"),
         "transcript_message_id": meta.get("transcript_message_id"),
         "transcript_channel_id": meta.get("transcript_channel_id"),
         "note_preview": meta.get("note_preview"),
         "is_pinned": meta.get("is_pinned"),
         "previous_claimed_by": meta.get("previous_claimed_by"),
+        "lifecycle_location": meta.get("lifecycle_location"),
+        "ticket_channel_state": meta.get("ticket_channel_state"),
+        "moved_to_archive": meta.get("moved_to_archive"),
+        "moved_to_active": meta.get("moved_to_active"),
+        "channel_name_after_close": meta.get("channel_name_after_close"),
+        "channel_name_after_reopen": meta.get("channel_name_after_reopen"),
+        "matched_category_slug": meta.get("matched_category_slug"),
     }
 
     signature_blob = {
@@ -433,6 +503,25 @@ def _build_search_text(parts: Sequence[Any], metadata: Optional[Dict[str, Any]] 
         if meta_text:
             blobs.append(meta_text)
 
+        for key in (
+            "ticket_status",
+            "ticket_category",
+            "ticket_priority",
+            "ticket_number",
+            "matched_category_name",
+            "matched_category_slug",
+            "lifecycle_location",
+            "ticket_channel_state",
+            "owner_name",
+            "claimed_by_name",
+            "assigned_to_name",
+            "channel_name_after_close",
+            "channel_name_after_reopen",
+        ):
+            text = _clean_text(metadata.get(key), 1000)
+            if text:
+                blobs.append(text)
+
     joined = " ".join(blobs)
     joined = re.sub(r"\s+", " ", joined).strip()
     return joined[:8000]
@@ -469,6 +558,12 @@ def _description_for_ticket_event(
     note_preview = _clean_text(meta.get("note_preview"), 120)
     is_pinned = bool(meta.get("is_pinned"))
     transcript_url = _clean_text(meta.get("transcript_url"), 240)
+    lifecycle_location = _clean_text(meta.get("lifecycle_location"), 160)
+    channel_state = _clean_text(meta.get("ticket_channel_state"), 80)
+    moved_to_archive = bool(meta.get("moved_to_archive"))
+    moved_to_active = bool(meta.get("moved_to_active"))
+    matched_category_name = _clean_text(meta.get("matched_category_name"), 120)
+    matched_category_slug = _clean_text(meta.get("matched_category_slug"), 120)
 
     event_key = _normalize_slugish(event_type)
 
@@ -494,9 +589,15 @@ def _description_for_ticket_event(
             + ("a pinned internal note." if is_pinned else "an internal note.")
         )
     elif event_key == "ticket closed":
-        base = f"{actor} closed {target}'s ticket."
+        if moved_to_archive:
+            base = f"{actor} closed {target}'s ticket and moved it to archive."
+        else:
+            base = f"{actor} closed {target}'s ticket."
     elif event_key == "ticket reopened":
-        base = f"{actor} reopened {target}'s ticket."
+        if moved_to_active:
+            base = f"{actor} reopened {target}'s ticket and moved it back to the active queue."
+        else:
+            base = f"{actor} reopened {target}'s ticket."
     elif event_key == "ticket deleted":
         base = f"{actor} deleted {target}'s ticket."
     elif event_key == "ticket transcript attached":
@@ -511,6 +612,12 @@ def _description_for_ticket_event(
         extras.append(f"Priority: {priority_text}")
     if channel_text:
         extras.append(f"Channel: {channel_text}")
+    if matched_category_name or matched_category_slug:
+        extras.append(f"Matched: {matched_category_name or matched_category_slug}")
+    if channel_state:
+        extras.append(f"State: {channel_state}")
+    if lifecycle_location:
+        extras.append(f"Location: {lifecycle_location}")
     if note_preview:
         extras.append(f"Note: {note_preview}")
     if transcript_url:
@@ -587,9 +694,9 @@ def _enrich_ticket_metadata(
     meta = _safe_dict(metadata)
 
     if row:
-        meta.setdefault("ticket_status", row.get("status"))
+        meta.setdefault("ticket_status", _normalize_ticket_status(row.get("status"), "unknown"))
         meta.setdefault("ticket_category", row.get("category"))
-        meta.setdefault("ticket_priority", row.get("priority"))
+        meta.setdefault("ticket_priority", _normalize_ticket_priority(row.get("priority"), "medium"))
         meta.setdefault("ticket_number", row.get("ticket_number"))
         meta.setdefault("is_ghost", row.get("is_ghost"))
         meta.setdefault("claimed_by", row.get("claimed_by"))
@@ -598,6 +705,20 @@ def _enrich_ticket_metadata(
         meta.setdefault("assigned_to_name", row.get("assigned_to_name"))
         meta.setdefault("owner_user_id", _ticket_owner_user_id(row))
         meta.setdefault("owner_name", _ticket_owner_name(row))
+        meta.setdefault("matched_category_id", row.get("matched_category_id"))
+        meta.setdefault("matched_category_name", row.get("matched_category_name"))
+        meta.setdefault("matched_category_slug", row.get("matched_category_slug"))
+        meta.setdefault("matched_intake_type", row.get("matched_intake_type"))
+        meta.setdefault("matched_category_score", row.get("matched_category_score"))
+        meta.setdefault("category_override", row.get("category_override"))
+        meta.setdefault("category_id", row.get("category_id"))
+        meta.setdefault("transcript_url", row.get("transcript_url"))
+        meta.setdefault("transcript_message_id", row.get("transcript_message_id"))
+        meta.setdefault("transcript_channel_id", row.get("transcript_channel_id"))
+        meta.setdefault("last_activity_at", row.get("last_activity_at"))
+        meta.setdefault("last_message_id", row.get("last_message_id"))
+        meta.setdefault("ticket_channel_state", _ticket_channel_state(row))
+        meta.setdefault("lifecycle_location", _ticket_lifecycle_location(row))
         meta.setdefault("source_ticket_row", "repository_lookup")
 
     return meta
