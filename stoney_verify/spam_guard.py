@@ -21,7 +21,7 @@ from .globals import *  # noqa: F401,F403
 GUILD_SECURITY_SETTINGS_TABLE = "guild_security_settings"
 QUARANTINE_CASES_TABLE = "guild_security_quarantine_cases"
 
-SPAM_PANEL_FOOTER_BASE = "stoney_verify:spam_guard_panel:v10"
+SPAM_PANEL_FOOTER_BASE = "stoney_verify:spam_guard_panel:v11"
 SPAM_PANEL_FOOTER_PREFIX = "stoney_verify:spam_guard_panel:"
 SPAM_PANEL_PAGES = ("overview", "detection", "enforcement", "access")
 
@@ -51,6 +51,7 @@ UNVERIFIED_SINGLE_MESSAGE_URL_TRIGGER = 2
 UNVERIFIED_URL_MESSAGE_THRESHOLD = 2
 UNVERIFIED_URL_CHANNEL_THRESHOLD = 2
 
+EVIDENCE_ANY_INVITE = "invite_url"
 EVIDENCE_BLOCKED_INVITE = "blocked_invite"
 EVIDENCE_NON_INVITE_URL = "non_invite_url"
 EVIDENCE_EVERYONE_PING = "everyone_ping"
@@ -71,7 +72,6 @@ _QUARANTINE_CASES: Dict[str, Dict[str, Any]] = {}
 # ============================================================
 # Small helpers
 # ============================================================
-
 def _lock(key: str) -> asyncio.Lock:
     clean = str(key or "").strip() or "default"
     found = _LOCKS.get(clean)
@@ -443,11 +443,14 @@ def _row_has_evidence(row: Dict[str, Any], tag: str) -> bool:
 
 def _build_message_evidence(
     *,
+    invite_count: int,
     blocked_invite_count: int,
     non_invite_url_count: int,
     mentions_everyone: bool,
 ) -> List[str]:
     evidence: List[str] = []
+    if invite_count > 0:
+        evidence.append(EVIDENCE_ANY_INVITE)
     if blocked_invite_count > 0:
         evidence.append(EVIDENCE_BLOCKED_INVITE)
     if non_invite_url_count > 0:
@@ -492,6 +495,15 @@ def _select_cleanup_refs(
 
     if fired_invite_rule:
         add_rows([r for r in ordered if _row_has_evidence(r, EVIDENCE_BLOCKED_INVITE)])
+
+    if fired_invite_rule and len(selected) < delete_limit:
+        add_rows(
+            [
+                r
+                for r in ordered
+                if _row_has_evidence(r, EVIDENCE_ANY_INVITE) or int(r.get("invite_count", 0) or 0) > 0
+            ]
+        )
 
     if len(selected) < delete_limit and fired_url_rule:
         add_rows([r for r in ordered if _row_has_evidence(r, EVIDENCE_NON_INVITE_URL)])
@@ -732,7 +744,6 @@ async def save_quarantine_case(case: Dict[str, Any]) -> Tuple[Optional[Dict[str,
 # ============================================================
 # Settings defaults / normalization
 # ============================================================
-
 def _default_settings(guild_id: int) -> Dict[str, Any]:
     return {
         "guild_id": str(guild_id),
@@ -858,7 +869,6 @@ def _settings_payload_for_db(settings: Dict[str, Any], *, updated_by: Optional[d
 # ============================================================
 # Settings persistence
 # ============================================================
-
 def _fetch_settings_sync(guild_id: int) -> Optional[Dict[str, Any]]:
     global _SETTINGS_TABLE_AVAILABLE
 
@@ -957,10 +967,11 @@ async def save_spam_settings(
             persisted = False
 
     return normalized, persisted
-    # ============================================================
+
+
+# ============================================================
 # Panel rendering
 # ============================================================
-
 def _build_panel_embed(
     guild: discord.Guild,
     settings: Dict[str, Any],
@@ -1053,9 +1064,9 @@ def _build_panel_embed(
             name="Invite rules",
             value=(
                 f"**Invite-message threshold:** `{int(settings['invite_threshold'])}`\n"
-                "How many messages containing blocked invites can trigger a hit.\n\n"
+                "How many messages containing invite links can contribute to a trigger.\n\n"
                 f"**Immediate multi-invite trigger:** `{int(settings['multi_invite_immediate'])}`\n"
-                "How many blocked invite links in one message instantly trigger a hit."
+                "How many invite links in one message instantly trigger a hit."
             ),
             inline=False,
         )
@@ -1064,6 +1075,14 @@ def _build_panel_embed(
             value=(
                 "For non-verified users, rapid posting of normal URLs across channels can also trigger protection.\n"
                 "This helps catch likely compromised accounts dropping phishing links."
+            ),
+            inline=False,
+        )
+        embed.add_field(
+            name="Important invite note",
+            value=(
+                "Allowed invite codes and this-server invites are allowed individually.\n"
+                "But rapid invite flooding still counts as spam and can now trigger protection."
             ),
             inline=False,
         )
@@ -1291,7 +1310,6 @@ async def _switch_panel_page(interaction: discord.Interaction, *, page: str) -> 
 # ============================================================
 # Invite allow helpers
 # ============================================================
-
 async def _fetch_guild_invite_codes(guild: discord.Guild) -> Set[str]:
     gid = int(guild.id)
     now_mono = time.monotonic()
@@ -1321,7 +1339,6 @@ async def _fetch_guild_invite_codes(guild: discord.Guild) -> Set[str]:
 # ============================================================
 # Detection state
 # ============================================================
-
 def _state_for_user(guild_id: int, user_id: int) -> Dict[str, Any]:
     key = (int(guild_id), int(user_id))
     found = _MESSAGE_WINDOWS.get(key)
@@ -1349,7 +1366,6 @@ def _cleanup_state(state: Dict[str, Any], *, now_mono: float, keep_seconds: int)
 # ============================================================
 # Background memory cleanup
 # ============================================================
-
 @tasks.loop(minutes=5)
 async def cleanup_stale_memory() -> None:
     now_mono = time.monotonic()
@@ -1410,7 +1426,6 @@ async def _before_cleanup_stale_memory() -> None:
 # ============================================================
 # Enforcement helpers
 # ============================================================
-
 async def _delete_recent_messages(
     *,
     guild: discord.Guild,
@@ -1860,6 +1875,8 @@ async def _log_trigger(
     recent_count: int,
     duplicate_count: int,
     blocked_invite_count: int,
+    invite_message_count: int,
+    total_invite_count: int,
     url_message_count: int,
     channel_count: int,
     cleanup_refs: List[Dict[str, Any]],
@@ -1900,6 +1917,8 @@ async def _log_trigger(
         value=(
             f"messages=`{recent_count}` • "
             f"duplicates=`{duplicate_count}` • "
+            f"invite_msgs=`{invite_message_count}` • "
+            f"invite_links=`{total_invite_count}` • "
             f"blocked_invites=`{blocked_invite_count}` • "
             f"url_msgs=`{url_message_count}` • "
             f"channels=`{channel_count}`"
@@ -1951,7 +1970,6 @@ async def _log_trigger(
 # ============================================================
 # Main detector
 # ============================================================
-
 async def handle_incoming_spam_message(message: discord.Message) -> bool:
     try:
         if message.guild is None:
@@ -2000,6 +2018,7 @@ async def handle_incoming_spam_message(message: discord.Message) -> bool:
             guild_invite_codes = await _fetch_guild_invite_codes(guild)
 
         blocked_invite_codes: List[str] = []
+        allowed_invite_count = 0
         for code in invite_codes:
             allowed = False
             if code in allowed_invite_codes:
@@ -2007,12 +2026,10 @@ async def handle_incoming_spam_message(message: discord.Message) -> bool:
             if bool(settings.get("allow_server_invites", True)) and code in guild_invite_codes:
                 allowed = True
 
-            if bool(settings.get("block_external_invites_only", True)):
-                if not allowed:
-                    blocked_invite_codes.append(code)
+            if allowed:
+                allowed_invite_count += 1
             else:
-                if not allowed:
-                    blocked_invite_codes.append(code)
+                blocked_invite_codes.append(code)
 
         now_mono = time.monotonic()
         state_key = f"spam:{guild.id}:{member.id}"
@@ -2032,6 +2049,7 @@ async def handle_incoming_spam_message(message: discord.Message) -> bool:
             mentions_everyone = _message_mentions_everyone(message)
             content_norm = _normalize_message_content(message.content or "")
             message_evidence = _build_message_evidence(
+                invite_count=len(invite_codes),
                 blocked_invite_count=len(blocked_invite_codes),
                 non_invite_url_count=len(non_invite_urls),
                 mentions_everyone=mentions_everyone,
@@ -2044,6 +2062,7 @@ async def handle_incoming_spam_message(message: discord.Message) -> bool:
                     "message_id": int(message.id),
                     "norm": content_norm,
                     "blocked_invites": len(blocked_invite_codes),
+                    "allowed_invites": int(allowed_invite_count),
                     "invite_count": len(invite_codes),
                     "non_invite_url_count": len(non_invite_urls),
                     "mention_everyone": mentions_everyone,
@@ -2070,6 +2089,19 @@ async def handle_incoming_spam_message(message: discord.Message) -> bool:
                 if int(row.get("blocked_invites", 0) or 0) > 0
             )
             total_blocked_invites = sum(int(row.get("blocked_invites", 0) or 0) for row in recent_messages)
+
+            invite_message_recent_count = sum(
+                1 for row in recent_messages
+                if int(row.get("invite_count", 0) or 0) > 0
+            )
+            total_invites_recent = sum(int(row.get("invite_count", 0) or 0) for row in recent_messages)
+            invite_channel_count = len(
+                {
+                    int(row.get("channel_id", 0) or 0)
+                    for row in recent_messages
+                    if int(row.get("channel_id", 0) or 0) > 0 and int(row.get("invite_count", 0) or 0) > 0
+                }
+            )
 
             url_message_recent_count = sum(
                 1 for row in recent_messages
@@ -2112,7 +2144,7 @@ async def handle_incoming_spam_message(message: discord.Message) -> bool:
                     should_fire = True
                     fired_invite_rule = True
                     reasons.append(
-                        f"`{blocked_invite_recent_count}` invite-link messages inside `{int(settings['window_seconds'])}s`"
+                        f"`{blocked_invite_recent_count}` blocked-invite messages inside `{int(settings['window_seconds'])}s`"
                     )
 
                 if recent_count >= int(settings["message_threshold"]) and len(blocked_invite_codes) > 0:
@@ -2121,6 +2153,45 @@ async def handle_incoming_spam_message(message: discord.Message) -> bool:
                     reasons.append(
                         f"`{recent_count}` messages inside `{int(settings['window_seconds'])}s` and current message contained a blocked invite"
                     )
+
+                # IMPORTANT FIX:
+                # Even if invite codes are individually allowed (own-server invite / allowlisted code),
+                # rapid invite flooding should still trigger as likely hacked-account behavior.
+                if len(invite_codes) >= int(settings["multi_invite_immediate"]):
+                    should_fire = True
+                    fired_invite_rule = True
+                    if len(blocked_invite_codes) > 0:
+                        reasons.append(
+                            f"single message contained `{len(invite_codes)}` invite links (`{len(blocked_invite_codes)}` blocked)"
+                        )
+                    else:
+                        reasons.append(
+                            f"single message contained `{len(invite_codes)}` invite links, which looks like invite flooding even though they may be individually allowed"
+                        )
+
+                if invite_message_recent_count >= int(settings["invite_threshold"]) and invite_channel_count >= 2:
+                    should_fire = True
+                    fired_invite_rule = True
+                    if total_blocked_invites > 0:
+                        reasons.append(
+                            f"rapid invite posting across `{invite_channel_count}` channels (`{invite_message_recent_count}` invite messages, some blocked)"
+                        )
+                    else:
+                        reasons.append(
+                            f"rapid invite posting across `{invite_channel_count}` channels (`{invite_message_recent_count}` invite messages) even though the codes may be individually allowed"
+                        )
+
+                if invite_message_recent_count >= int(settings["invite_threshold"]) and recent_count >= int(settings["message_threshold"]):
+                    should_fire = True
+                    fired_invite_rule = True
+                    if total_blocked_invites > 0:
+                        reasons.append(
+                            f"`{invite_message_recent_count}` invite-link messages during a broader `{recent_count}` message burst"
+                        )
+                    else:
+                        reasons.append(
+                            f"`{invite_message_recent_count}` invite-link messages during a broader `{recent_count}` message burst, which looks like hacked-account spam"
+                        )
 
             if duplicate_count >= int(settings["duplicate_threshold"]) and recent_count >= 3:
                 should_fire = True
@@ -2203,6 +2274,8 @@ async def handle_incoming_spam_message(message: discord.Message) -> bool:
                 recent_count=recent_count,
                 duplicate_count=duplicate_count,
                 blocked_invite_count=total_blocked_invites,
+                invite_message_count=invite_message_recent_count,
+                total_invite_count=total_invites_recent,
                 url_message_count=url_message_recent_count,
                 channel_count=channel_count,
                 cleanup_refs=cleanup_refs,
@@ -2227,7 +2300,6 @@ async def handle_incoming_spam_message(message: discord.Message) -> bool:
 # ============================================================
 # Modals
 # ============================================================
-
 class SpamThresholdsModal(discord.ui.Modal, title="Spam Guard • Detection Rules"):
     def __init__(self, guild_id: int, channel_id: int, message_id: int, return_page: str, settings: Dict[str, Any]):
         super().__init__(timeout=300)
@@ -2259,14 +2331,14 @@ class SpamThresholdsModal(discord.ui.Modal, title="Spam Guard • Detection Rule
         )
         self.invite_threshold = discord.ui.TextInput(
             label="Invite-Message Threshold",
-            placeholder="How many messages with blocked invites should trigger",
+            placeholder="How many messages with invite links should contribute to a trigger",
             default=str(int(settings["invite_threshold"])),
             required=True,
             max_length=3,
         )
         self.multi_invite_immediate = discord.ui.TextInput(
             label="Immediate Multi-Invite Trigger",
-            placeholder="How many blocked invite links in one message should instantly trigger",
+            placeholder="How many invite links in one message should instantly trigger",
             default=str(int(settings["multi_invite_immediate"])),
             required=True,
             max_length=3,
@@ -2508,7 +2580,6 @@ class SpamListsModal(discord.ui.Modal, title="Spam Guard • Channels + Users"):
 # ============================================================
 # Panel items
 # ============================================================
-
 class SpamSectionSelect(discord.ui.Select):
     def __init__(self, current_page: str):
         options = [
@@ -2864,7 +2935,6 @@ class SpamGuardPanelView(discord.ui.View):
 # ============================================================
 # Commands / listeners
 # ============================================================
-
 def _register_spam_guard_commands() -> None:
     global _SPAM_GUARD_COMMANDS_REGISTERED
 
