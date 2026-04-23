@@ -8,6 +8,7 @@ from discord import app_commands
 
 from ..globals import *  # noqa: F401,F403
 from ..globals import now_utc
+from .. import globals as _g
 
 from ..tickets import (
     is_verification_ticket_channel,
@@ -118,7 +119,7 @@ def _ticket_archive_category_id() -> int:
         "ARCHIVE_TICKET_CATEGORY_ID",
     ):
         try:
-            value = int(globals().get(key, 0) or 0)
+            value = int(getattr(_g, key, 0) or 0)
             if value > 0:
                 return value
         except Exception:
@@ -128,7 +129,7 @@ def _ticket_archive_category_id() -> int:
 
 def _ticket_active_category_id() -> int:
     try:
-        return int(globals().get("TICKET_CATEGORY_ID", 0) or 0)
+        return int(getattr(_g, "TICKET_CATEGORY_ID", 0) or 0)
     except Exception:
         return 0
 
@@ -345,7 +346,7 @@ def _member_is_staff_like(member: discord.Member) -> bool:
         pass
 
     try:
-        staff_role_id = _safe_int(globals().get("STAFF_ROLE_ID"), 0)
+        staff_role_id = _safe_int(getattr(_g, "STAFF_ROLE_ID", 0), 0)
         if staff_role_id > 0:
             return any(int(role.id) == staff_role_id for role in member.roles)
     except Exception:
@@ -844,3 +845,11 @@ def register_ticket_channel_admin_commands(bot, tree) -> None:
         )
 
         await reply_once(interaction, {"embed": embed, "ephemeral": True})
+
+    try:
+        print("✅ commands_ext.ticket_channel_admin: registered ticket channel admin commands")
+    except Exception:
+        pass
+
+
+__all__ = ["register_ticket_channel_admin_commands"]
