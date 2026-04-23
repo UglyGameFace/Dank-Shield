@@ -1,16 +1,24 @@
+
 from __future__ import annotations
 
 import asyncio
 import html
 import io
 import re
+import time
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
 import discord
 
+from .. import globals as app_globals
 from ..globals import TRANSCRIPTS_CHANNEL_ID, now_utc
 from .service import attach_transcript_to_ticket, mark_ticket_deleted
+
+try:
+    from .service import _ticket_mutation_lock as shared_ticket_mutation_lock  # type: ignore
+except Exception:  # pragma: no cover
+    shared_ticket_mutation_lock = None  # type: ignore
 
 try:
     from .repository import get_ticket_by_any_channel_id
@@ -35,21 +43,89 @@ except Exception:
 
 _DELETE_LOCKS: Dict[str, asyncio.Lock] = {}
 _TRANSCRIPT_POST_LOCKS: Dict[str, asyncio.Lock] = {}
+_LOCAL_MUTATION_LOCKS: Dict[str, asyncio.Lock] = {}
+_LOCK_LAST_USED: Dict[str, float] = {}
+_LOCK_CLEANUP_INTERVAL_SECONDS = 600.0
+_LAST_LOCK_CLEANUP_AT = 0.0
 
-_TRANSCRIPT_MARKER = "stoney_verify:transcript_posted:v6"
+_TRANSCRIPT_MARKER = "stoney_verify:transcript_posted:v7"
 
 
 # ============================================================
 # Small helpers
 # ============================================================
 
-def _channel_lock(bucket: Dict[str, asyncio.Lock], channel_id: int | str) -> asyncio.Lock:
+def _debug(msg: str) -> None:
+    try:
+        print(f"🧾 transcript_service {msg}")
+    except Exception:
+        pass
+
+
+def _touch_lock_key(key: str) -> None:
+    try:
+        _LOCK_LAST_USED[str(key)] = time.monotonic()
+    except Exception:
+        pass
+
+
+def _cleanup_stale_locks_if_needed() -> None:
+    global _LAST_LOCK_CLEANUP_AT
+
+    now_mono = time.monotonic()
+    if (now_mono - _LAST_LOCK_CLEANUP_AT) < _LOCK_CLEANUP_INTERVAL_SECONDS:
+        return
+
+    _LAST_LOCK_CLEANUP_AT = now_mono
+
+    try:
+        for bucket_name, bucket in (
+            ("delete", _DELETE_LOCKS),
+            ("transcript", _TRANSCRIPT_POST_LOCKS),
+            ("local-mutate", _LOCAL_MUTATION_LOCKS),
+        ):
+            for channel_key, lock in list(bucket.items()):
+                key = f"{bucket_name}:{channel_key}"
+                if lock.locked():
+                    continue
+                last_used = float(_LOCK_LAST_USED.get(key, 0.0) or 0.0)
+                if last_used > 0.0 and (now_mono - last_used) > _LOCK_CLEANUP_INTERVAL_SECONDS:
+                    bucket.pop(channel_key, None)
+                    _LOCK_LAST_USED.pop(key, None)
+    except Exception:
+        pass
+
+
+def _channel_lock(bucket: Dict[str, asyncio.Lock], channel_id: int | str, bucket_name: str) -> asyncio.Lock:
+    _cleanup_stale_locks_if_needed()
     key = str(channel_id)
     lock = bucket.get(key)
     if lock is None:
         lock = asyncio.Lock()
         bucket[key] = lock
+    _touch_lock_key(f"{bucket_name}:{key}")
     return lock
+
+
+def _delete_lock(channel_id: int | str) -> asyncio.Lock:
+    return _channel_lock(_DELETE_LOCKS, channel_id, "delete")
+
+
+def _transcript_post_lock(channel_id: int | str) -> asyncio.Lock:
+    return _channel_lock(_TRANSCRIPT_POST_LOCKS, channel_id, "transcript")
+
+
+def _fallback_mutation_lock(channel_id: int | str) -> asyncio.Lock:
+    return _channel_lock(_LOCAL_MUTATION_LOCKS, channel_id, "local-mutate")
+
+
+def _ticket_mutation_lock(channel_id: int | str) -> asyncio.Lock:
+    try:
+        if callable(shared_ticket_mutation_lock):
+            return shared_ticket_mutation_lock(channel_id)  # type: ignore[misc]
+    except Exception:
+        pass
+    return _fallback_mutation_lock(channel_id)
 
 
 def _utc_iso(dt: Optional[datetime]) -> Optional[str]:
@@ -244,7 +320,7 @@ def _ticket_archive_category_id() -> int:
         "ARCHIVE_TICKET_CATEGORY_ID",
     ):
         try:
-            value = int(globals().get(key, 0) or 0)
+            value = int(getattr(app_globals, key, 0) or 0)
             if value > 0:
                 return value
         except Exception:
@@ -845,6 +921,16 @@ async def _ticket_row(channel_id: int | str) -> Optional[Dict[str, Any]]:
     return None
 
 
+async def _transcript_readback(
+    *,
+    channel_id: int,
+    guild_id: int,
+) -> Tuple[Optional[Dict[str, Any]], Optional[str], Optional[int], Optional[int]]:
+    row = await _ticket_row(channel_id)
+    url, msg_id, ch_id = _row_transcript_payload(row, guild_id=guild_id)
+    return row, url, msg_id, ch_id
+
+
 def _transcript_summary_embed(
     *,
     ticket_channel: discord.TextChannel,
@@ -906,32 +992,43 @@ def _transcript_summary_embed(
 async def _attach_transcript_metadata_once(
     *,
     channel_id: int,
+    guild_id: int,
     transcript_url: Optional[str],
     transcript_message_id: Optional[int],
     transcript_channel_id: Optional[int],
     actor: Optional[discord.Member | discord.User] = None,
-) -> bool:
+) -> Tuple[bool, Optional[str], Optional[int], Optional[int]]:
     row_before = await _ticket_row(channel_id)
     existing_url, existing_message_id, existing_channel_id = _row_transcript_payload(
         row_before,
-        guild_id=None,
+        guild_id=guild_id,
     )
 
     if existing_url or existing_message_id or existing_channel_id:
-        return True
+        return True, existing_url, existing_message_id, existing_channel_id
 
+    attached = False
     try:
-        await attach_transcript_to_ticket(
-            channel_id=channel_id,
-            transcript_url=transcript_url,
-            transcript_message_id=transcript_message_id,
-            transcript_channel_id=transcript_channel_id,
-            actor=actor,
+        attached = bool(
+            await attach_transcript_to_ticket(
+                channel_id=channel_id,
+                transcript_url=transcript_url,
+                transcript_message_id=transcript_message_id,
+                transcript_channel_id=transcript_channel_id,
+                actor=actor,
+            )
         )
-        return True
     except Exception as e:
         print("⚠️ Failed attaching transcript metadata:", repr(e))
-        return False
+        attached = False
+
+    row_after, final_url, final_message_id, final_channel_id = await _transcript_readback(
+        channel_id=channel_id,
+        guild_id=guild_id,
+    )
+
+    final_ok = bool(attached or _row_has_transcript(row_after))
+    return final_ok, final_url, final_message_id, final_channel_id
 
 
 async def _heal_existing_transcript_metadata_if_missing(
@@ -952,17 +1049,16 @@ async def post_transcript_to_channel(
     deleted_by: Optional[discord.Member | discord.User] = None,
     reason: Optional[str] = None,
 ) -> Tuple[Optional[discord.Message], Optional[str]]:
-    lock = _channel_lock(_TRANSCRIPT_POST_LOCKS, ticket_channel.id)
+    lock = _transcript_post_lock(ticket_channel.id)
 
     async with lock:
-        row_before = await _ticket_row(ticket_channel.id)
+        row_before, existing_url, existing_message_id, existing_channel_id = await _transcript_readback(
+            channel_id=int(ticket_channel.id),
+            guild_id=int(ticket_channel.guild.id),
+        )
         if _row_has_transcript(row_before):
-            existing_url, existing_message_id, existing_channel_id = _row_transcript_payload(
-                row_before,
-                guild_id=ticket_channel.guild.id,
-            )
-            print(
-                f"ℹ️ Transcript already attached for channel={ticket_channel.id} "
+            _debug(
+                f"reuse channel={ticket_channel.id} "
                 f"url={existing_url!r} msg={existing_message_id!r} ch={existing_channel_id!r}"
             )
             return None, existing_url
@@ -973,7 +1069,6 @@ async def post_transcript_to_channel(
             return None, None
 
         txt_file, html_file, message_count = await generate_transcript_files(ticket_channel)
-        row_before = await _ticket_row(ticket_channel.id)
         embed = _transcript_summary_embed(
             ticket_channel=ticket_channel,
             deleted_by=deleted_by,
@@ -991,15 +1086,27 @@ async def post_transcript_to_channel(
             )
             jump_url = getattr(posted, "jump_url", None)
 
-            await _attach_transcript_metadata_once(
+            metadata_ok, final_url, final_message_id, final_channel_id = await _attach_transcript_metadata_once(
                 channel_id=int(ticket_channel.id),
+                guild_id=int(ticket_channel.guild.id),
                 transcript_url=jump_url,
                 transcript_message_id=int(getattr(posted, "id", 0) or 0) or None,
                 transcript_channel_id=int(getattr(getattr(posted, "channel", None), "id", 0) or 0) or None,
                 actor=deleted_by,
             )
 
-            return posted, jump_url
+            if not metadata_ok:
+                _debug(
+                    f"post metadata-readback-missing channel={ticket_channel.id} "
+                    f"posted_message={getattr(posted, 'id', None)}"
+                )
+            else:
+                _debug(
+                    f"post success channel={ticket_channel.id} "
+                    f"posted_message={final_message_id or getattr(posted, 'id', None)}"
+                )
+
+            return posted, final_url or jump_url
         except Exception as e:
             print("❌ Failed posting transcript:", repr(e))
             return None, None
@@ -1032,172 +1139,230 @@ async def delete_ticket_with_optional_transcript(
     - DB is marked deleted before final channel delete
     - refuses deletion if ticket is not effectively closed
     """
-    lock = _channel_lock(_DELETE_LOCKS, channel.id)
+    lock = _delete_lock(channel.id)
 
     async with lock:
-        transcript_message: Optional[discord.Message] = None
-        transcript_url: Optional[str] = None
-        transcript_channel_id: Optional[int] = None
-        transcript_message_id: Optional[int] = None
+        mutation_lock = _ticket_mutation_lock(channel.id)
 
-        row_before = await _ticket_row(channel.id)
-        status_before = _row_status(row_before)
-        lifecycle_location = _channel_lifecycle_location(channel)
+        async with mutation_lock:
+            transcript_message: Optional[discord.Message] = None
+            transcript_url: Optional[str] = None
+            transcript_channel_id: Optional[int] = None
+            transcript_message_id: Optional[int] = None
 
-        if status_before == "deleted":
-            existing_url, existing_message_id, existing_channel_id = _row_transcript_payload(
-                row_before,
-                guild_id=channel.guild.id,
-            )
-            return {
-                "ok": False,
-                "deleted": False,
-                "db_marked_deleted": True,
-                "transcript_required": False,
-                "transcript_posted": bool(existing_url or existing_message_id or existing_channel_id),
-                "transcript_already_existed": bool(existing_url or existing_message_id or existing_channel_id),
-                "transcript_url": existing_url,
-                "transcript_message_id": existing_message_id,
-                "transcript_channel_id": existing_channel_id,
-                "status_before": status_before,
-                "lifecycle_location": lifecycle_location,
-                "reason": "Ticket is already marked deleted.",
-            }
+            row_before = await _ticket_row(channel.id)
+            status_before = _row_status(row_before)
+            lifecycle_location = _channel_lifecycle_location(channel)
 
-        if not _channel_effectively_closed(channel=channel, row=row_before):
-            existing_url, existing_message_id, existing_channel_id = _row_transcript_payload(
-                row_before,
-                guild_id=channel.guild.id,
-            )
-            return {
-                "ok": False,
-                "deleted": False,
-                "db_marked_deleted": False,
-                "transcript_required": False,
-                "transcript_posted": bool(existing_url or existing_message_id or existing_channel_id),
-                "transcript_already_existed": bool(existing_url or existing_message_id or existing_channel_id),
-                "transcript_url": existing_url,
-                "transcript_message_id": existing_message_id,
-                "transcript_channel_id": existing_channel_id,
-                "status_before": status_before,
-                "lifecycle_location": lifecycle_location,
-                "reason": "Ticket is not closed. Refusing delete.",
-            }
+            if status_before == "deleted":
+                existing_url, existing_message_id, existing_channel_id = _row_transcript_payload(
+                    row_before,
+                    guild_id=channel.guild.id,
+                )
+                return {
+                    "ok": False,
+                    "deleted": False,
+                    "db_marked_deleted": True,
+                    "transcript_required": False,
+                    "transcript_posted": bool(existing_url or existing_message_id or existing_channel_id),
+                    "transcript_already_existed": bool(existing_url or existing_message_id or existing_channel_id),
+                    "transcript_url": existing_url,
+                    "transcript_message_id": existing_message_id,
+                    "transcript_channel_id": existing_channel_id,
+                    "status_before": status_before,
+                    "lifecycle_location": lifecycle_location,
+                    "reason": "Ticket is already marked deleted.",
+                }
 
-        already_had_transcript = _row_has_transcript(row_before)
-        existing_url, existing_message_id, existing_channel_id = _row_transcript_payload(
-            row_before,
-            guild_id=channel.guild.id,
-        )
-
-        if already_had_transcript:
-            transcript_url = existing_url
-            transcript_message_id = existing_message_id
-            transcript_channel_id = existing_channel_id
-
-        should_post_transcript = (not is_ghost) or force_transcript_for_ghost
-
-        if should_post_transcript and not already_had_transcript:
-            transcript_message, transcript_url = await post_transcript_to_channel(
-                ticket_channel=channel,
-                deleted_by=deleted_by,
-                reason=reason,
-            )
-
-            if transcript_message is None and not transcript_url and not is_ghost:
+            if not _channel_effectively_closed(channel=channel, row=row_before):
+                existing_url, existing_message_id, existing_channel_id = _row_transcript_payload(
+                    row_before,
+                    guild_id=channel.guild.id,
+                )
                 return {
                     "ok": False,
                     "deleted": False,
                     "db_marked_deleted": False,
-                    "transcript_required": True,
-                    "transcript_posted": False,
-                    "transcript_already_existed": False,
-                    "transcript_url": None,
-                    "transcript_message_id": None,
-                    "transcript_channel_id": None,
+                    "transcript_required": False,
+                    "transcript_posted": bool(existing_url or existing_message_id or existing_channel_id),
+                    "transcript_already_existed": bool(existing_url or existing_message_id or existing_channel_id),
+                    "transcript_url": existing_url,
+                    "transcript_message_id": existing_message_id,
+                    "transcript_channel_id": existing_channel_id,
                     "status_before": status_before,
                     "lifecycle_location": lifecycle_location,
-                    "reason": "Transcript failed to post; ticket not deleted.",
+                    "reason": "Ticket is not closed. Refusing delete.",
                 }
 
-            if transcript_message is not None:
-                try:
-                    transcript_message_id = int(transcript_message.id)
-                except Exception:
-                    transcript_message_id = None
-
-                try:
-                    transcript_channel_id = int(transcript_message.channel.id)
-                except Exception:
-                    transcript_channel_id = None
-
-        if should_post_transcript and not transcript_url and not transcript_message_id and not transcript_channel_id:
-            healed_url, healed_message_id, healed_channel_id = await _heal_existing_transcript_metadata_if_missing(
-                channel_id=int(channel.id),
-                guild_id=int(channel.guild.id),
+            already_had_transcript = _row_has_transcript(row_before)
+            existing_url, existing_message_id, existing_channel_id = _row_transcript_payload(
+                row_before,
+                guild_id=channel.guild.id,
             )
-            transcript_url = transcript_url or healed_url
-            transcript_message_id = transcript_message_id or healed_message_id
-            transcript_channel_id = transcript_channel_id or healed_channel_id
 
-        db_marked_deleted = False
-        try:
-            db_marked_deleted = await mark_ticket_deleted(
-                channel_id=channel.id,
-                deleted_by=deleted_by,
-                reason=reason or "Deleted",
-            )
-        except Exception as e:
-            print("⚠️ Failed marking ticket deleted in DB before channel delete:", repr(e))
+            if already_had_transcript:
+                transcript_url = existing_url
+                transcript_message_id = existing_message_id
+                transcript_channel_id = existing_channel_id
+
+            should_post_transcript = (not is_ghost) or force_transcript_for_ghost
+
+            if should_post_transcript and not already_had_transcript:
+                transcript_message, transcript_url = await post_transcript_to_channel(
+                    ticket_channel=channel,
+                    deleted_by=deleted_by,
+                    reason=reason,
+                )
+
+                if transcript_message is None and not transcript_url and not is_ghost:
+                    return {
+                        "ok": False,
+                        "deleted": False,
+                        "db_marked_deleted": False,
+                        "transcript_required": True,
+                        "transcript_posted": False,
+                        "transcript_already_existed": False,
+                        "transcript_url": None,
+                        "transcript_message_id": None,
+                        "transcript_channel_id": None,
+                        "status_before": status_before,
+                        "lifecycle_location": lifecycle_location,
+                        "reason": "Transcript failed to post; ticket not deleted.",
+                    }
+
+                if transcript_message is not None:
+                    try:
+                        transcript_message_id = int(transcript_message.id)
+                    except Exception:
+                        transcript_message_id = None
+
+                    try:
+                        transcript_channel_id = int(transcript_message.channel.id)
+                    except Exception:
+                        transcript_channel_id = None
+
+            if should_post_transcript and not transcript_url and not transcript_message_id and not transcript_channel_id:
+                healed_url, healed_message_id, healed_channel_id = await _heal_existing_transcript_metadata_if_missing(
+                    channel_id=int(channel.id),
+                    guild_id=int(channel.guild.id),
+                )
+                transcript_url = transcript_url or healed_url
+                transcript_message_id = transcript_message_id or healed_message_id
+                transcript_channel_id = transcript_channel_id or healed_channel_id
+
+            row_pre_delete = await _ticket_row(channel.id)
+            lifecycle_location = _channel_lifecycle_location(channel)
+            if not _channel_effectively_closed(channel=channel, row=row_pre_delete):
+                existing_url, existing_message_id, existing_channel_id = _row_transcript_payload(
+                    row_pre_delete,
+                    guild_id=channel.guild.id,
+                )
+                return {
+                    "ok": False,
+                    "deleted": False,
+                    "db_marked_deleted": False,
+                    "transcript_required": bool(should_post_transcript),
+                    "transcript_posted": bool(
+                        transcript_message is not None
+                        or already_had_transcript
+                        or transcript_url
+                        or existing_url
+                        or existing_message_id
+                        or existing_channel_id
+                    ),
+                    "transcript_already_existed": bool(already_had_transcript),
+                    "transcript_url": transcript_url or existing_url,
+                    "transcript_message_id": transcript_message_id or existing_message_id,
+                    "transcript_channel_id": transcript_channel_id or existing_channel_id,
+                    "status_before": _row_status(row_pre_delete),
+                    "lifecycle_location": lifecycle_location,
+                    "reason": "Ticket was reopened before delete finalized.",
+                }
+
             db_marked_deleted = False
+            try:
+                db_marked_deleted = await mark_ticket_deleted(
+                    channel_id=channel.id,
+                    deleted_by=deleted_by,
+                    reason=reason or "Deleted",
+                )
+            except Exception as e:
+                print("⚠️ Failed marking ticket deleted in DB before channel delete:", repr(e))
+                db_marked_deleted = False
 
-        try:
-            await channel.delete(reason=reason or "Ticket deleted")
-            return {
-                "ok": True,
-                "deleted": True,
-                "db_marked_deleted": bool(db_marked_deleted),
-                "transcript_required": bool(should_post_transcript),
-                "transcript_posted": bool(transcript_message is not None or already_had_transcript or transcript_url),
-                "transcript_already_existed": bool(already_had_transcript),
-                "transcript_url": transcript_url,
-                "transcript_message_id": transcript_message_id,
-                "transcript_channel_id": transcript_channel_id,
-                "status_before": status_before,
-                "lifecycle_location": lifecycle_location,
-                "reason": None,
-            }
-        except discord.NotFound:
-            return {
-                "ok": True,
-                "deleted": True,
-                "db_marked_deleted": bool(db_marked_deleted),
-                "transcript_required": bool(should_post_transcript),
-                "transcript_posted": bool(transcript_message is not None or already_had_transcript or transcript_url),
-                "transcript_already_existed": bool(already_had_transcript),
-                "transcript_url": transcript_url,
-                "transcript_message_id": transcript_message_id,
-                "transcript_channel_id": transcript_channel_id,
-                "status_before": status_before,
-                "lifecycle_location": lifecycle_location,
-                "reason": None,
-            }
-        except Exception as e:
-            print("❌ Failed deleting ticket channel:", repr(e))
-            return {
-                "ok": False,
-                "deleted": False,
-                "db_marked_deleted": bool(db_marked_deleted),
-                "transcript_required": bool(should_post_transcript),
-                "transcript_posted": bool(transcript_message is not None or already_had_transcript or transcript_url),
-                "transcript_already_existed": bool(already_had_transcript),
-                "transcript_url": transcript_url,
-                "transcript_message_id": transcript_message_id,
-                "transcript_channel_id": transcript_channel_id,
-                "status_before": status_before,
-                "lifecycle_location": lifecycle_location,
-                "reason": repr(e),
-            }
+            row_after_delete_mark = await _ticket_row(channel.id)
+            confirmed_deleted_in_db = bool(
+                db_marked_deleted
+                and _row_status(row_after_delete_mark) == "deleted"
+            )
+
+            if not confirmed_deleted_in_db:
+                return {
+                    "ok": False,
+                    "deleted": False,
+                    "db_marked_deleted": bool(db_marked_deleted),
+                    "transcript_required": bool(should_post_transcript),
+                    "transcript_posted": bool(transcript_message is not None or already_had_transcript or transcript_url),
+                    "transcript_already_existed": bool(already_had_transcript),
+                    "transcript_url": transcript_url,
+                    "transcript_message_id": transcript_message_id,
+                    "transcript_channel_id": transcript_channel_id,
+                    "status_before": status_before,
+                    "lifecycle_location": lifecycle_location,
+                    "reason": "DB delete mark failed or could not be verified; channel not deleted.",
+                }
+
+            try:
+                await channel.delete(reason=reason or "Ticket deleted")
+                _debug(
+                    f"delete success channel={channel.id} "
+                    f"transcript_msg={transcript_message_id} transcript_ch={transcript_channel_id}"
+                )
+                return {
+                    "ok": True,
+                    "deleted": True,
+                    "db_marked_deleted": True,
+                    "transcript_required": bool(should_post_transcript),
+                    "transcript_posted": bool(transcript_message is not None or already_had_transcript or transcript_url),
+                    "transcript_already_existed": bool(already_had_transcript),
+                    "transcript_url": transcript_url,
+                    "transcript_message_id": transcript_message_id,
+                    "transcript_channel_id": transcript_channel_id,
+                    "status_before": status_before,
+                    "lifecycle_location": lifecycle_location,
+                    "reason": None,
+                }
+            except discord.NotFound:
+                return {
+                    "ok": True,
+                    "deleted": True,
+                    "db_marked_deleted": True,
+                    "transcript_required": bool(should_post_transcript),
+                    "transcript_posted": bool(transcript_message is not None or already_had_transcript or transcript_url),
+                    "transcript_already_existed": bool(already_had_transcript),
+                    "transcript_url": transcript_url,
+                    "transcript_message_id": transcript_message_id,
+                    "transcript_channel_id": transcript_channel_id,
+                    "status_before": status_before,
+                    "lifecycle_location": lifecycle_location,
+                    "reason": None,
+                }
+            except Exception as e:
+                print("❌ Failed deleting ticket channel:", repr(e))
+                return {
+                    "ok": False,
+                    "deleted": False,
+                    "db_marked_deleted": True,
+                    "transcript_required": bool(should_post_transcript),
+                    "transcript_posted": bool(transcript_message is not None or already_had_transcript or transcript_url),
+                    "transcript_already_existed": bool(already_had_transcript),
+                    "transcript_url": transcript_url,
+                    "transcript_message_id": transcript_message_id,
+                    "transcript_channel_id": transcript_channel_id,
+                    "status_before": status_before,
+                    "lifecycle_location": lifecycle_location,
+                    "reason": repr(e),
+                }
 
 
 async def staff_delete_closed_ticket(
