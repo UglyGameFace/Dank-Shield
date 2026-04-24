@@ -1,4 +1,3 @@
-
 from __future__ import annotations
 
 import asyncio
@@ -7,18 +6,13 @@ import io
 import re
 import time
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 import discord
 
 from .. import globals as app_globals
 from ..globals import TRANSCRIPTS_CHANNEL_ID, now_utc
 from .service import attach_transcript_to_ticket, mark_ticket_deleted
-
-try:
-    from .service import _ticket_mutation_lock as shared_ticket_mutation_lock  # type: ignore
-except Exception:  # pragma: no cover
-    shared_ticket_mutation_lock = None  # type: ignore
 
 try:
     from .repository import get_ticket_by_any_channel_id
@@ -28,31 +22,36 @@ except Exception:
 
 
 # ============================================================
-# transcript_service.py
+# tickets_new/transcript_service.py
 # ------------------------------------------------------------
-# Purpose:
-# - Generate .txt + .html transcripts
-# - Post transcripts to TRANSCRIPTS_CHANNEL_ID
-# - Keep transcript metadata attached exactly once
-# - Let staff finish deletion safely
-# - Mark ticket deleted in DB before final delete
-# - Avoid duplicate concurrent transcript/delete flows
-# - Prevent stale closed-ticket delete controls from deleting a reopened ticket
-# - Respect archive-category closed tickets, not just closed-* naming
+# P0 hardening goals:
+# - no delete/transcript service can hang forever
+# - every lock acquisition has a timeout
+# - transcript posting has a timeout
+# - DB metadata writes cannot block channel deletion forever
+# - channel.delete() is always attempted unless Discord blocks it
+# - every public service returns a dict/tuple instead of silently dying
 # ============================================================
 
 _DELETE_LOCKS: Dict[str, asyncio.Lock] = {}
 _TRANSCRIPT_POST_LOCKS: Dict[str, asyncio.Lock] = {}
-_LOCAL_MUTATION_LOCKS: Dict[str, asyncio.Lock] = {}
 _LOCK_LAST_USED: Dict[str, float] = {}
 _LOCK_CLEANUP_INTERVAL_SECONDS = 600.0
 _LAST_LOCK_CLEANUP_AT = 0.0
 
-_TRANSCRIPT_MARKER = "stoney_verify:transcript_posted:v7"
+_TRANSCRIPT_MARKER = "stoney_verify:transcript_posted:v8"
+
+DEFAULT_LOCK_TIMEOUT_SECONDS = 3.0
+DEFAULT_HISTORY_TIMEOUT_SECONDS = 15.0
+DEFAULT_TRANSCRIPT_POST_TIMEOUT_SECONDS = 18.0
+DEFAULT_DB_WRITE_TIMEOUT_SECONDS = 6.0
+DEFAULT_CHANNEL_DELETE_TIMEOUT_SECONDS = 8.0
+
+DEFAULT_TRANSCRIPT_MESSAGE_LIMIT = 2500
 
 
 # ============================================================
-# Small helpers
+# Logging / safe helpers
 # ============================================================
 
 def _debug(msg: str) -> None:
@@ -61,6 +60,186 @@ def _debug(msg: str) -> None:
     except Exception:
         pass
 
+
+def _warn(msg: str) -> None:
+    try:
+        print(f"⚠️ transcript_service {msg}")
+    except Exception:
+        pass
+
+
+def _error(msg: str) -> None:
+    try:
+        print(f"❌ transcript_service {msg}")
+    except Exception:
+        pass
+
+
+def _safe_text(value: Any) -> str:
+    try:
+        return str(value)
+    except Exception:
+        return ""
+
+
+def _safe_int(value: Any, default: int = 0) -> int:
+    try:
+        return int(str(value).strip())
+    except Exception:
+        return default
+
+
+def _safe_bool(value: Any, default: bool = False) -> bool:
+    try:
+        if isinstance(value, bool):
+            return value
+        text = str(value).strip().lower()
+        if text in {"1", "true", "yes", "y", "on"}:
+            return True
+        if text in {"0", "false", "no", "n", "off"}:
+            return False
+        return default
+    except Exception:
+        return default
+
+
+def _utc_iso(dt: Optional[datetime]) -> Optional[str]:
+    if dt is None:
+        return None
+    try:
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt.astimezone(timezone.utc).isoformat()
+    except Exception:
+        try:
+            return dt.isoformat()
+        except Exception:
+            return None
+
+
+def _safe_filename(name: str) -> str:
+    cleaned: List[str] = []
+    for ch in _safe_text(name):
+        if ch.isalnum() or ch in {"-", "_", "."}:
+            cleaned.append(ch)
+        else:
+            cleaned.append("-")
+    out = "".join(cleaned).strip("-")
+    return out[:90] if out else "transcript"
+
+
+def _truncate_for_discord(text: str, limit: int = 1900) -> str:
+    safe = _safe_text(text)
+    if len(safe) <= limit:
+        return safe
+    return safe[: max(0, limit - 3)] + "..."
+
+
+def _env_int(name: str, default: int = 0) -> int:
+    try:
+        value = getattr(app_globals, name, None)
+        if value is None:
+            value = globals().get(name)
+        return _safe_int(value, default)
+    except Exception:
+        return default
+
+
+def _actor_id(actor: Optional[discord.abc.User]) -> Optional[int]:
+    try:
+        return int(actor.id) if actor is not None else None
+    except Exception:
+        return None
+
+
+def _actor_name(actor: Optional[discord.abc.User]) -> Optional[str]:
+    try:
+        return str(actor) if actor is not None else None
+    except Exception:
+        return None
+
+
+def _message_author_label(message: discord.Message) -> str:
+    try:
+        author = message.author
+        display = getattr(author, "display_name", None) or getattr(author, "name", None) or str(author)
+        return f"{display} ({getattr(author, 'id', 'unknown')})"
+    except Exception:
+        return "Unknown"
+
+
+def _collect_attachment_urls(message: discord.Message) -> List[str]:
+    urls: List[str] = []
+    try:
+        for attachment in message.attachments:
+            try:
+                if attachment.url:
+                    urls.append(str(attachment.url))
+            except Exception:
+                continue
+    except Exception:
+        pass
+    return urls
+
+
+def _collect_sticker_names(message: discord.Message) -> List[str]:
+    names: List[str] = []
+    try:
+        for sticker in getattr(message, "stickers", []) or []:
+            try:
+                name = _safe_text(getattr(sticker, "name", "")).strip()
+                if name:
+                    names.append(name)
+            except Exception:
+                continue
+    except Exception:
+        pass
+    return names
+
+
+def _render_embed_summary_text(message: discord.Message) -> str:
+    try:
+        embeds = getattr(message, "embeds", None) or []
+        if not embeds:
+            return ""
+
+        chunks: List[str] = []
+        for index, embed in enumerate(embeds, start=1):
+            section: List[str] = [f"[embed {index}]"]
+
+            try:
+                title = _safe_text(getattr(embed, "title", "") or "").strip()
+                description = _safe_text(getattr(embed, "description", "") or "").strip()
+                url = _safe_text(getattr(embed, "url", "") or "").strip()
+
+                if title:
+                    section.append(f"title={title}")
+                if description:
+                    section.append(f"description={description}")
+                if url:
+                    section.append(f"url={url}")
+
+                for field in getattr(embed, "fields", []) or []:
+                    try:
+                        fname = _safe_text(getattr(field, "name", "") or "").strip()
+                        fvalue = _safe_text(getattr(field, "value", "") or "").strip()
+                        if fname or fvalue:
+                            section.append(f"field={fname}: {fvalue}")
+                    except Exception:
+                        continue
+            except Exception:
+                pass
+
+            chunks.append("\n".join(section))
+
+        return "\n".join(chunks)
+    except Exception:
+        return ""
+
+
+# ============================================================
+# Lock helpers
+# ============================================================
 
 def _touch_lock_key(key: str) -> None:
     try:
@@ -82,7 +261,6 @@ def _cleanup_stale_locks_if_needed() -> None:
         for bucket_name, bucket in (
             ("delete", _DELETE_LOCKS),
             ("transcript", _TRANSCRIPT_POST_LOCKS),
-            ("local-mutate", _LOCAL_MUTATION_LOCKS),
         ):
             for channel_key, lock in list(bucket.items()):
                 key = f"{bucket_name}:{channel_key}"
@@ -115,165 +293,111 @@ def _transcript_post_lock(channel_id: int | str) -> asyncio.Lock:
     return _channel_lock(_TRANSCRIPT_POST_LOCKS, channel_id, "transcript")
 
 
-def _fallback_mutation_lock(channel_id: int | str) -> asyncio.Lock:
-    return _channel_lock(_LOCAL_MUTATION_LOCKS, channel_id, "local-mutate")
-
-
-def _ticket_mutation_lock(channel_id: int | str) -> asyncio.Lock:
+async def _acquire_lock_with_timeout(
+    lock: asyncio.Lock,
+    *,
+    timeout: float,
+    label: str,
+    channel_id: int | str,
+) -> bool:
     try:
-        if callable(shared_ticket_mutation_lock):
-            return shared_ticket_mutation_lock(channel_id)  # type: ignore[misc]
-    except Exception:
-        pass
-    return _fallback_mutation_lock(channel_id)
+        await asyncio.wait_for(lock.acquire(), timeout=timeout)
+        return True
+    except asyncio.TimeoutError:
+        _warn(f"{label} lock timeout channel={channel_id} timeout={timeout}s")
+        return False
+    except Exception as e:
+        _warn(f"{label} lock acquire failed channel={channel_id} error={repr(e)}")
+        return False
 
 
-def _utc_iso(dt: Optional[datetime]) -> Optional[str]:
-    if dt is None:
-        return None
+# ============================================================
+# Ticket row / archive helpers
+# ============================================================
+
+async def _ticket_row(channel_id: int | str) -> Optional[Dict[str, Any]]:
     try:
-        if dt.tzinfo is None:
-            dt = dt.replace(tzinfo=timezone.utc)
-        return dt.astimezone(timezone.utc).isoformat()
+        row = await asyncio.wait_for(
+            get_ticket_by_any_channel_id(channel_id),
+            timeout=DEFAULT_DB_WRITE_TIMEOUT_SECONDS,
+        )
+        if isinstance(row, dict):
+            return row
+    except asyncio.TimeoutError:
+        _warn(f"ticket row lookup timeout channel={channel_id}")
+    except Exception as e:
+        _warn(f"ticket row lookup failed channel={channel_id} error={repr(e)}")
+    return None
+
+
+def _row_status(row: Optional[Dict[str, Any]]) -> str:
+    try:
+        raw = str((row or {}).get("status") or "").strip().lower()
+        if raw in {"open", "claimed", "closed", "deleted"}:
+            return raw
+        if raw in {"active", "reopened"}:
+            return "open"
+        return raw
     except Exception:
-        try:
-            return dt.isoformat()
-        except Exception:
+        return ""
+
+
+def _row_has_transcript(row: Optional[Dict[str, Any]]) -> bool:
+    if not isinstance(row, dict):
+        return False
+    try:
+        return bool(
+            str(row.get("transcript_url") or "").strip()
+            or str(row.get("transcript_message_id") or "").strip()
+            or str(row.get("transcript_channel_id") or "").strip()
+        )
+    except Exception:
+        return False
+
+
+def _jump_url_from_ids(*, guild_id: int, channel_id: Optional[int], message_id: Optional[int]) -> Optional[str]:
+    try:
+        gid = int(guild_id or 0)
+        cid = int(channel_id or 0)
+        mid = int(message_id or 0)
+        if gid <= 0 or cid <= 0 or mid <= 0:
             return None
-
-
-def _safe_filename(name: str) -> str:
-    cleaned: List[str] = []
-    for ch in (name or ""):
-        if ch.isalnum() or ch in ("-", "_", "."):
-            cleaned.append(ch)
-        else:
-            cleaned.append("-")
-    out = "".join(cleaned).strip("-")
-    return out[:90] if out else "transcript"
-
-
-def _safe_text(value: Any) -> str:
-    try:
-        return str(value)
+        return f"https://discord.com/channels/{gid}/{cid}/{mid}"
     except Exception:
-        return ""
+        return None
 
 
-def _safe_int(value: Any, default: int = 0) -> int:
+def _row_transcript_payload(
+    row: Optional[Dict[str, Any]],
+    *,
+    guild_id: Optional[int] = None,
+) -> Tuple[Optional[str], Optional[int], Optional[int]]:
+    if not isinstance(row, dict):
+        return None, None, None
+
+    url: Optional[str]
+    msg_id: Optional[int]
+    ch_id: Optional[int]
+
     try:
-        return int(str(value).strip())
+        url = _safe_text(row.get("transcript_url") or "").strip() or None
     except Exception:
-        return default
+        url = None
 
-
-def _safe_topic_text(value: Any, max_len: int = 800) -> str:
-    text = _safe_text(value or "").strip()
-    if not text:
-        return "No topic"
-    if len(text) > max_len:
-        return text[: max_len - 3] + "..."
-    return text
-
-
-def _truncate_for_discord(text: str, limit: int = 1900) -> str:
-    safe = _safe_text(text)
-    if len(safe) <= limit:
-        return safe
-    return safe[: limit - 3] + "..."
-
-
-def _safe_avatar_url(msg: discord.Message) -> str:
     try:
-        return _safe_text(msg.author.display_avatar.url)
+        msg_id = _safe_int(row.get("transcript_message_id"), 0) or None
     except Exception:
-        return ""
+        msg_id = None
 
-
-def _collect_attachment_urls(msg: discord.Message) -> List[str]:
-    urls: List[str] = []
     try:
-        for a in msg.attachments:
-            try:
-                if a.url:
-                    urls.append(a.url)
-            except Exception:
-                continue
+        ch_id = _safe_int(row.get("transcript_channel_id"), 0) or None
     except Exception:
-        pass
-    return urls
+        ch_id = None
 
+    if not url and guild_id and ch_id and msg_id:
+        url = _jump_url_from_ids(guild_id=int(guild_id), channel_id=ch_id, message_id=msg_id)
 
-def _collect_attachment_rows(msg: discord.Message) -> List[Dict[str, Any]]:
-    rows: List[Dict[str, Any]] = []
-    try:
-        for a in msg.attachments:
-            try:
-                rows.append(
-                    {
-                        "url": _safe_text(getattr(a, "url", "") or ""),
-                        "filename": _safe_text(getattr(a, "filename", "") or ""),
-                        "size": getattr(a, "size", None),
-                        "content_type": _safe_text(getattr(a, "content_type", "") or ""),
-                    }
-                )
-            except Exception:
-                continue
-    except Exception:
-        pass
-    return rows
-
-
-def _collect_sticker_names(msg: discord.Message) -> List[str]:
-    names: List[str] = []
-    try:
-        for s in getattr(msg, "stickers", []) or []:
-            try:
-                names.append(_safe_text(getattr(s, "name", "")))
-            except Exception:
-                continue
-    except Exception:
-        pass
-    return [n for n in names if n]
-
-
-def _render_embed_summary_text(msg: discord.Message) -> str:
-    try:
-        embeds = getattr(msg, "embeds", None) or []
-        if not embeds:
-            return ""
-        parts: List[str] = []
-        for index, embed in enumerate(embeds, start=1):
-            try:
-                section: List[str] = [f"[embed {index}]"]
-                title = _safe_text(getattr(embed, "title", "")).strip()
-                description = _safe_text(getattr(embed, "description", "")).strip()
-                url = _safe_text(getattr(embed, "url", "")).strip()
-
-                if title:
-                    section.append(f"title={title}")
-                if description:
-                    section.append(f"description={description}")
-                if url:
-                    section.append(f"url={url}")
-
-                fields = getattr(embed, "fields", None) or []
-                if fields:
-                    for f in fields:
-                        try:
-                            fname = _safe_text(getattr(f, "name", "")).strip()
-                            fvalue = _safe_text(getattr(f, "value", "")).strip()
-                            section.append(f"field={fname}: {fvalue}")
-                        except Exception:
-                            continue
-
-                parts.append("\n".join(section))
-            except Exception:
-                parts.append(f"[embed {index}]")
-
-        return "\n".join(parts)
-    except Exception:
-        return ""
+    return url, msg_id, ch_id
 
 
 def _detect_ticket_number(name: str) -> Optional[str]:
@@ -300,18 +424,6 @@ def _transcript_basename(channel: discord.TextChannel, ticket_row: Optional[Dict
     return _safe_filename(channel.name)
 
 
-def _jump_url_from_ids(*, guild_id: int, channel_id: Optional[int], message_id: Optional[int]) -> Optional[str]:
-    try:
-        cid = int(channel_id or 0)
-        mid = int(message_id or 0)
-        gid = int(guild_id or 0)
-        if gid <= 0 or cid <= 0 or mid <= 0:
-            return None
-        return f"https://discord.com/channels/{gid}/{cid}/{mid}"
-    except Exception:
-        return None
-
-
 def _ticket_archive_category_id() -> int:
     for key in (
         "TICKET_ARCHIVE_CATEGORY_ID",
@@ -319,12 +431,9 @@ def _ticket_archive_category_id() -> int:
         "ARCHIVED_TICKET_CATEGORY_ID",
         "ARCHIVE_TICKET_CATEGORY_ID",
     ):
-        try:
-            value = int(getattr(app_globals, key, 0) or 0)
-            if value > 0:
-                return value
-        except Exception:
-            continue
+        value = _env_int(key, 0)
+        if value > 0:
+            return value
     return 0
 
 
@@ -332,16 +441,17 @@ def _looks_like_archive_category_name(name: str) -> bool:
     text = _safe_text(name).strip().lower()
     if not text:
         return False
-
-    markers = (
-        "archive",
-        "archived",
-        "ticket archive",
-        "tickets archive",
-        "archived tickets",
-        "closed tickets",
+    return any(
+        marker in text
+        for marker in (
+            "archive",
+            "archived",
+            "ticket archive",
+            "tickets archive",
+            "archived tickets",
+            "closed tickets",
+        )
     )
-    return any(marker in text for marker in markers)
 
 
 def _resolve_archive_category(guild: discord.Guild) -> Optional[discord.CategoryChannel]:
@@ -379,67 +489,6 @@ def _channel_is_in_archive_category(channel: discord.TextChannel) -> bool:
         return False
 
 
-def _row_status(row: Optional[Dict[str, Any]]) -> str:
-    try:
-        raw = str((row or {}).get("status") or "").strip().lower()
-        if raw in {"open", "claimed", "closed", "deleted"}:
-            return raw
-        if raw in {"active", "reopened"}:
-            return "open"
-        return raw
-    except Exception:
-        return ""
-
-
-def _row_has_transcript(row: Optional[Dict[str, Any]]) -> bool:
-    if not isinstance(row, dict):
-        return False
-    try:
-        return bool(
-            str(row.get("transcript_url") or "").strip()
-            or str(row.get("transcript_message_id") or "").strip()
-            or str(row.get("transcript_channel_id") or "").strip()
-        )
-    except Exception:
-        return False
-
-
-def _row_transcript_payload(
-    row: Optional[Dict[str, Any]],
-    *,
-    guild_id: Optional[int] = None,
-) -> Tuple[Optional[str], Optional[int], Optional[int]]:
-    if not isinstance(row, dict):
-        return None, None, None
-
-    try:
-        url = _safe_text(row.get("transcript_url") or "").strip() or None
-    except Exception:
-        url = None
-
-    try:
-        message_id = _safe_int(row.get("transcript_message_id"), 0) or None
-    except Exception:
-        message_id = None
-
-    try:
-        channel_id = _safe_int(row.get("transcript_channel_id"), 0) or None
-    except Exception:
-        channel_id = None
-
-    if not url and guild_id and channel_id and message_id:
-        url = _jump_url_from_ids(guild_id=int(guild_id), channel_id=channel_id, message_id=message_id)
-
-    return url, message_id, channel_id
-
-
-def _channel_looks_closed(channel: discord.TextChannel) -> bool:
-    try:
-        return _safe_text(getattr(channel, "name", "")).strip().lower().startswith("closed-")
-    except Exception:
-        return False
-
-
 def _channel_lifecycle_location(channel: discord.TextChannel) -> str:
     try:
         if _channel_is_in_archive_category(channel):
@@ -457,61 +506,94 @@ def _channel_effectively_closed(
     row: Optional[Dict[str, Any]],
 ) -> bool:
     status = _row_status(row)
-
     if status in {"open", "claimed"}:
         return False
-
-    if status == "closed":
+    if status in {"closed", "deleted"}:
         return True
-
-    if status == "deleted":
-        return True
-
     if _channel_is_in_archive_category(channel):
         return True
+    try:
+        return str(channel.name or "").lower().startswith("closed-")
+    except Exception:
+        return False
 
-    if _channel_looks_closed(channel):
+
+async def _channel_still_exists(guild: discord.Guild, channel_id: int | str) -> bool:
+    try:
+        cached = guild.get_channel(int(channel_id))
+        if cached is not None:
+            return True
+    except Exception:
+        pass
+
+    try:
+        fetched = await asyncio.wait_for(
+            guild.fetch_channel(int(channel_id)),
+            timeout=DEFAULT_CHANNEL_DELETE_TIMEOUT_SECONDS,
+        )
+        return fetched is not None
+    except discord.NotFound:
+        return False
+    except asyncio.TimeoutError:
+        # Timeout means we cannot prove deletion.
+        return True
+    except Exception:
         return True
 
-    return False
-
 
 # ============================================================
-# Message collection / rendering
+# Message collection / transcript rendering
 # ============================================================
 
-async def _collect_messages(channel: discord.TextChannel) -> List[discord.Message]:
-    msgs: List[discord.Message] = []
+async def _collect_messages(
+    channel: discord.TextChannel,
+    *,
+    limit: Optional[int] = None,
+) -> List[discord.Message]:
+    max_limit = limit
+    if max_limit is None:
+        max_limit = _env_int("TRANSCRIPT_MAX_MESSAGES", DEFAULT_TRANSCRIPT_MESSAGE_LIMIT)
+        if max_limit <= 0:
+            max_limit = DEFAULT_TRANSCRIPT_MESSAGE_LIMIT
+
+    async def _inner() -> List[discord.Message]:
+        messages: List[discord.Message] = []
+        async for msg in channel.history(limit=max_limit, oldest_first=True):
+            messages.append(msg)
+        return messages
+
     try:
-        async for msg in channel.history(limit=None, oldest_first=True):
-            msgs.append(msg)
+        return await asyncio.wait_for(_inner(), timeout=DEFAULT_HISTORY_TIMEOUT_SECONDS)
+    except asyncio.TimeoutError:
+        _warn(f"history collection timeout channel={channel.id} limit={max_limit}")
+        return []
     except Exception as e:
-        print("⚠️ Failed collecting transcript messages:", repr(e))
-    return msgs
+        _warn(f"history collection failed channel={channel.id} error={repr(e)}")
+        return []
 
 
-def _message_to_text_line(msg: discord.Message) -> str:
-    created = _utc_iso(getattr(msg, "created_at", None)) or ""
-    edited = _utc_iso(getattr(msg, "edited_at", None)) or ""
-    author = _safe_text(getattr(msg, "author", "Unknown"))
-    content = msg.content or ""
+def _message_to_text_block(message: discord.Message) -> str:
+    created = _utc_iso(getattr(message, "created_at", None)) or ""
+    edited = _utc_iso(getattr(message, "edited_at", None)) or ""
+    author = _message_author_label(message)
+    content = message.content or ""
 
-    lines: List[str] = [f"[{created}] {author}: {content}"]
+    lines = [f"[{created}] {author}: {content}"]
 
     if edited:
         lines.append(f"[edited_at] {edited}")
 
-    attachments = _collect_attachment_urls(msg)
+    attachments = _collect_attachment_urls(message)
     if attachments:
         lines.append("[attachments]")
         lines.extend(attachments)
 
-    stickers = _collect_sticker_names(msg)
+    stickers = _collect_sticker_names(message)
     if stickers:
         lines.append("[stickers]")
         lines.extend(stickers)
 
-    embed_text = _render_embed_summary_text(msg)
+    embed_text = _render_embed_summary_text(message)
     if embed_text:
         lines.append(embed_text)
 
@@ -519,128 +601,95 @@ def _message_to_text_line(msg: discord.Message) -> str:
 
 
 def _build_text_transcript(messages: List[discord.Message]) -> bytes:
-    lines: List[str] = []
-
+    blocks: List[str] = []
     for msg in messages:
         try:
-            lines.append(_message_to_text_line(msg))
+            blocks.append(_message_to_text_block(msg))
         except Exception as e:
-            lines.append(
-                f"[ERROR RENDERING MESSAGE {getattr(msg, 'id', 'unknown')}] {repr(e)}"
-            )
-
-    return "\n\n".join(lines).encode("utf-8", errors="replace")
+            blocks.append(f"[ERROR RENDERING MESSAGE {getattr(msg, 'id', 'unknown')}] {repr(e)}")
+    return "\n\n".join(blocks).encode("utf-8", errors="replace")
 
 
-def _render_embed_html(msg: discord.Message) -> str:
+def _safe_avatar_url(message: discord.Message) -> str:
     try:
-        embeds = getattr(msg, "embeds", None) or []
-        if not embeds:
-            return ""
-
-        blocks: List[str] = []
-        for embed in embeds:
-            try:
-                title = html.escape(_safe_text(getattr(embed, "title", "")))
-                description = html.escape(
-                    _safe_text(getattr(embed, "description", ""))
-                ).replace("\n", "<br>")
-                url = html.escape(_safe_text(getattr(embed, "url", "")))
-                fields = getattr(embed, "fields", None) or []
-
-                fields_html: List[str] = []
-                for field in fields:
-                    try:
-                        fname = html.escape(_safe_text(getattr(field, "name", "")))
-                        fvalue = html.escape(
-                            _safe_text(getattr(field, "value", ""))
-                        ).replace("\n", "<br>")
-                        fields_html.append(
-                            f'<div class="embed-field"><div class="embed-field-name">{fname}</div><div class="embed-field-value">{fvalue}</div></div>'
-                        )
-                    except Exception:
-                        continue
-
-                title_html = f'<div class="embed-title">{title}</div>' if title else ""
-                desc_html = (
-                    f'<div class="embed-description">{description}</div>'
-                    if description
-                    else ""
-                )
-                url_html = (
-                    f'<div class="embed-url"><a href="{url}" target="_blank" rel="noopener noreferrer">{url}</a></div>'
-                    if url
-                    else ""
-                )
-
-                blocks.append(
-                    f'<div class="embed-block">{title_html}{desc_html}{url_html}{"".join(fields_html)}</div>'
-                )
-            except Exception:
-                blocks.append('<div class="embed-block">Failed to render embed.</div>')
-
-        return "".join(blocks)
+        return _safe_text(message.author.display_avatar.url)
     except Exception:
         return ""
 
 
-def _render_avatar_html(msg: discord.Message) -> str:
-    avatar = html.escape(_safe_avatar_url(msg))
-    author = html.escape(_safe_text(getattr(msg, "author", "Unknown"))[:1] or "?")
+def _render_html_message(message: discord.Message) -> str:
+    created = html.escape(_utc_iso(getattr(message, "created_at", None)) or "")
+    edited_at = html.escape(_utc_iso(getattr(message, "edited_at", None)) or "")
+    author = html.escape(_message_author_label(message))
+    content = html.escape(message.content or "").replace("\n", "<br>")
 
+    avatar = html.escape(_safe_avatar_url(message))
+    fallback = html.escape((author[:1] or "?").upper())
     if avatar:
-        return f'<img class="avatar" src="{avatar}" alt="avatar">'
-
-    return f'<div class="avatar avatar-fallback" aria-label="avatar-fallback">{author.upper()}</div>'
-
-
-def _render_html_message(msg: discord.Message) -> str:
-    created = html.escape(_utc_iso(getattr(msg, "created_at", None)) or "")
-    edited_at = html.escape(_utc_iso(getattr(msg, "edited_at", None)) or "")
-    author = html.escape(_safe_text(getattr(msg, "author", "Unknown")))
-    content = html.escape(msg.content or "").replace("\n", "<br>")
+        avatar_html = f'<img class="avatar" src="{avatar}" alt="avatar">'
+    else:
+        avatar_html = f'<div class="avatar avatar-fallback">{fallback}</div>'
 
     edited_html = f'<span class="edited">(edited {edited_at})</span>' if edited_at else ""
 
-    attachment_html = ""
-    attachments = _collect_attachment_rows(msg)
-    if attachments:
-        parts: List[str] = []
-        for a in attachments:
-            try:
-                url = html.escape(_safe_text(a.get("url") or ""))
-                filename = html.escape(_safe_text(a.get("filename") or "attachment"))
-                size = a.get("size")
-                ctype = html.escape(_safe_text(a.get("content_type") or ""))
-                meta_bits: List[str] = []
-                if size is not None:
-                    meta_bits.append(f"{size} bytes")
-                if ctype:
-                    meta_bits.append(ctype)
-                meta = f" ({html.escape(' • '.join(meta_bits))})" if meta_bits else ""
-                parts.append(
+    attachment_html_parts: List[str] = []
+    try:
+        for attachment in message.attachments:
+            url = html.escape(_safe_text(getattr(attachment, "url", "") or ""))
+            filename = html.escape(_safe_text(getattr(attachment, "filename", "") or "attachment"))
+            size = getattr(attachment, "size", None)
+            content_type = html.escape(_safe_text(getattr(attachment, "content_type", "") or ""))
+            meta_bits = []
+            if size is not None:
+                meta_bits.append(f"{size} bytes")
+            if content_type:
+                meta_bits.append(content_type)
+            meta = f" ({html.escape(' • '.join(meta_bits))})" if meta_bits else ""
+            if url:
+                attachment_html_parts.append(
                     f'<div class="attachment"><a href="{url}" target="_blank" rel="noopener noreferrer">{filename}</a>{meta}</div>'
                 )
-            except Exception:
-                continue
-        attachment_html = "".join(parts)
+    except Exception:
+        pass
 
-    sticker_html = ""
-    sticker_names = _collect_sticker_names(msg)
-    if sticker_names:
-        sticker_html = "".join(
-            f'<div class="sticker-note">Sticker: {html.escape(name)}</div>'
-            for name in sticker_names
-        )
+    sticker_html = "".join(
+        f'<div class="sticker-note">Sticker: {html.escape(name)}</div>'
+        for name in _collect_sticker_names(message)
+    )
 
-    embed_html = _render_embed_html(msg)
-    avatar_html = _render_avatar_html(msg)
+    embed_html = ""
+    try:
+        for index, embed in enumerate(getattr(message, "embeds", []) or [], start=1):
+            title = html.escape(_safe_text(getattr(embed, "title", "") or ""))
+            description = html.escape(_safe_text(getattr(embed, "description", "") or "")).replace("\n", "<br>")
+            url = html.escape(_safe_text(getattr(embed, "url", "") or ""))
+
+            title_html = f'<div class="embed-title">{title}</div>' if title else ""
+            desc_html = f'<div class="embed-description">{description}</div>' if description else ""
+            url_html = (
+                f'<div class="embed-url"><a href="{url}" target="_blank" rel="noopener noreferrer">{url}</a></div>'
+                if url
+                else ""
+            )
+
+            field_parts: List[str] = []
+            for field in getattr(embed, "fields", []) or []:
+                try:
+                    fname = html.escape(_safe_text(getattr(field, "name", "") or ""))
+                    fvalue = html.escape(_safe_text(getattr(field, "value", "") or "")).replace("\n", "<br>")
+                    field_parts.append(
+                        f'<div class="embed-field"><div class="embed-field-name">{fname}</div><div class="embed-field-value">{fvalue}</div></div>'
+                    )
+                except Exception:
+                    continue
+
+            embed_html += f'<div class="embed-block" data-index="{index}">{title_html}{desc_html}{url_html}{"".join(field_parts)}</div>'
+    except Exception:
+        pass
 
     return f"""
     <div class="message">
-      <div class="avatar-wrap">
-        {avatar_html}
-      </div>
+      <div class="avatar-wrap">{avatar_html}</div>
       <div class="body">
         <div class="meta">
           <span class="author">{author}</span>
@@ -648,7 +697,7 @@ def _render_html_message(msg: discord.Message) -> str:
           {edited_html}
         </div>
         <div class="content">{content}</div>
-        {attachment_html}
+        {"".join(attachment_html_parts)}
         {sticker_html}
         {embed_html}
       </div>
@@ -659,13 +708,13 @@ def _render_html_message(msg: discord.Message) -> str:
 def _build_html_transcript(
     channel: discord.TextChannel,
     messages: List[discord.Message],
-    ticket_row: Optional[Dict[str, Any]] = None,
+    ticket_row: Optional[Dict[str, Any]],
 ) -> bytes:
     channel_name = html.escape(channel.name)
     guild_name = html.escape(channel.guild.name)
-    topic = html.escape(_safe_topic_text(channel.topic))
+    topic = html.escape(_safe_text(channel.topic or "No topic"))
     generated_at = html.escape(_utc_iso(now_utc()) or "")
-    lifecycle_location = html.escape(_channel_lifecycle_location(channel))
+    lifecycle = html.escape(_channel_lifecycle_location(channel))
 
     status = html.escape(_safe_text((ticket_row or {}).get("status") or "unknown"))
     category = html.escape(_safe_text((ticket_row or {}).get("category") or "unknown"))
@@ -680,12 +729,12 @@ def _build_html_transcript(
         )
     )
 
-    rendered: List[str] = []
+    rendered_messages: List[str] = []
     for msg in messages:
         try:
-            rendered.append(_render_html_message(msg))
+            rendered_messages.append(_render_html_message(msg))
         except Exception as e:
-            rendered.append(
+            rendered_messages.append(
                 f'<div class="message error">Failed to render message {html.escape(str(getattr(msg, "id", "unknown")))}: {html.escape(repr(e))}</div>'
             )
 
@@ -696,142 +745,128 @@ def _build_html_transcript(
 <title>Transcript - #{channel_name}</title>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <style>
-  body {{
-    margin: 0;
-    padding: 0;
-    background: #0b1020;
-    color: #e8edf8;
-    font-family: Arial, Helvetica, sans-serif;
-  }}
-  .wrap {{
-    max-width: 980px;
-    margin: 0 auto;
-    padding: 20px;
-  }}
-  .header {{
-    background: #121a2f;
-    border: 1px solid #24304d;
-    border-radius: 16px;
-    padding: 18px;
-    margin-bottom: 18px;
-  }}
-  .title {{
-    font-size: 28px;
-    font-weight: 700;
-    margin-bottom: 6px;
-  }}
-  .sub {{
-    color: #9fb0d1;
-    font-size: 14px;
-    margin-bottom: 4px;
-  }}
-  .message {{
-    display: flex;
-    gap: 12px;
-    padding: 14px;
-    margin-bottom: 10px;
-    background: #10172b;
-    border: 1px solid #1f2a46;
-    border-radius: 14px;
-  }}
-  .avatar-wrap {{
-    flex: 0 0 44px;
-  }}
-  .avatar {{
-    width: 44px;
-    height: 44px;
-    border-radius: 999px;
-    object-fit: cover;
-    background: #1b2540;
-    display: block;
-  }}
-  .avatar-fallback {{
-    width: 44px;
-    height: 44px;
-    border-radius: 999px;
-    background: #1b2540;
-    color: #dfe7fb;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    font-weight: 700;
-    font-size: 18px;
-  }}
-  .body {{
-    flex: 1;
-    min-width: 0;
-  }}
-  .meta {{
-    display: flex;
-    flex-wrap: wrap;
-    gap: 10px;
-    align-items: baseline;
-    margin-bottom: 6px;
-  }}
-  .author {{
-    font-weight: 700;
-    color: #ffffff;
-  }}
-  .time, .edited {{
-    color: #91a2c7;
-    font-size: 12px;
-  }}
-  .content {{
-    line-height: 1.45;
-    word-wrap: break-word;
-    white-space: normal;
-  }}
-  .attachment {{
-    margin-top: 8px;
-  }}
-  .attachment a {{
-    color: #77b2ff;
-    text-decoration: none;
-  }}
-  .sticker-note {{
-    margin-top: 8px;
-    color: #b0c4f5;
-    font-size: 13px;
-  }}
-  .embed-block {{
-    margin-top: 10px;
-    padding: 10px 12px;
-    border-left: 4px solid #5b7fff;
-    background: #0d1528;
-    border-radius: 10px;
-  }}
-  .embed-title {{
-    font-weight: 700;
-    margin-bottom: 4px;
-  }}
-  .embed-description {{
-    color: #d7e2ff;
-    line-height: 1.4;
-  }}
-  .embed-url {{
-    margin-top: 6px;
-    font-size: 12px;
-  }}
-  .embed-url a {{
-    color: #77b2ff;
-    text-decoration: none;
-  }}
-  .embed-field {{
-    margin-top: 8px;
-    padding-top: 8px;
-    border-top: 1px solid #22304f;
-  }}
-  .embed-field-name {{
-    font-weight: 700;
-    margin-bottom: 3px;
-  }}
-  .embed-field-value {{
-    color: #d7e2ff;
-    line-height: 1.4;
-  }}
-  .error {{
-    color: #ffb1b1;
-  }}
+body {{
+  margin: 0;
+  padding: 0;
+  background: #0b1020;
+  color: #e8edf8;
+  font-family: Arial, Helvetica, sans-serif;
+}}
+.wrap {{
+  max-width: 980px;
+  margin: 0 auto;
+  padding: 20px;
+}}
+.header {{
+  background: #121a2f;
+  border: 1px solid #24304d;
+  border-radius: 16px;
+  padding: 18px;
+  margin-bottom: 18px;
+}}
+.title {{
+  font-size: 28px;
+  font-weight: 700;
+  margin-bottom: 6px;
+}}
+.sub {{
+  color: #9fb0d1;
+  font-size: 14px;
+  margin-bottom: 4px;
+}}
+.message {{
+  display: flex;
+  gap: 12px;
+  padding: 14px;
+  margin-bottom: 10px;
+  background: #10172b;
+  border: 1px solid #1f2a46;
+  border-radius: 14px;
+}}
+.avatar-wrap {{
+  flex: 0 0 44px;
+}}
+.avatar {{
+  width: 44px;
+  height: 44px;
+  border-radius: 999px;
+  object-fit: cover;
+  background: #1b2540;
+  display: block;
+}}
+.avatar-fallback {{
+  width: 44px;
+  height: 44px;
+  border-radius: 999px;
+  background: #1b2540;
+  color: #dfe7fb;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 700;
+}}
+.body {{
+  flex: 1;
+  min-width: 0;
+}}
+.meta {{
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: baseline;
+  margin-bottom: 6px;
+}}
+.author {{
+  font-weight: 700;
+  color: #ffffff;
+}}
+.time, .edited {{
+  color: #91a2c7;
+  font-size: 12px;
+}}
+.content {{
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}}
+.attachment {{
+  margin-top: 8px;
+}}
+.attachment a, .embed-url a {{
+  color: #77b2ff;
+  text-decoration: none;
+}}
+.sticker-note {{
+  margin-top: 8px;
+  color: #b0c4f5;
+  font-size: 13px;
+}}
+.embed-block {{
+  margin-top: 10px;
+  padding: 10px 12px;
+  border-left: 4px solid #5b7fff;
+  background: #0d1528;
+  border-radius: 10px;
+}}
+.embed-title {{
+  font-weight: 700;
+  margin-bottom: 4px;
+}}
+.embed-description, .embed-field-value {{
+  color: #d7e2ff;
+  line-height: 1.4;
+}}
+.embed-field {{
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid #22304f;
+}}
+.embed-field-name {{
+  font-weight: 700;
+  margin-bottom: 3px;
+}}
+.error {{
+  color: #ffb1b1;
+}}
 </style>
 </head>
 <body>
@@ -844,11 +879,12 @@ def _build_html_transcript(
       <div class="sub">Status: {status}</div>
       <div class="sub">Category: {category}</div>
       <div class="sub">Priority: {priority}</div>
-      <div class="sub">Lifecycle: {lifecycle_location}</div>
+      <div class="sub">Lifecycle: {lifecycle}</div>
       <div class="sub">Topic: {topic}</div>
       <div class="sub">Generated At: {generated_at}</div>
+      <div class="sub">Messages Captured: {len(messages)}</div>
     </div>
-    {"".join(rendered)}
+    {"".join(rendered_messages)}
   </div>
 </body>
 </html>
@@ -859,39 +895,33 @@ def _build_html_transcript(
 async def generate_transcript_files(
     channel: discord.TextChannel,
 ) -> Tuple[discord.File, discord.File, int]:
-    messages = await _collect_messages(channel)
     row = await _ticket_row(channel.id)
-    safe = _safe_filename(_transcript_basename(channel, row))
+    messages = await _collect_messages(channel)
 
+    basename = _safe_filename(_transcript_basename(channel, row))
     txt_bytes = _build_text_transcript(messages)
     html_bytes = _build_html_transcript(channel, messages, row)
 
     txt_file = discord.File(
         io.BytesIO(txt_bytes),
-        filename=f"{safe}-{channel.id}.txt",
+        filename=f"{basename}-{channel.id}.txt",
     )
     html_file = discord.File(
         io.BytesIO(html_bytes),
-        filename=f"{safe}-{channel.id}.html",
+        filename=f"{basename}-{channel.id}.html",
     )
 
     return txt_file, html_file, len(messages)
 
 
 # ============================================================
-# Channel / DB helpers
+# Transcript posting
 # ============================================================
 
-async def _get_transcripts_channel(
-    guild: discord.Guild,
-) -> Optional[discord.TextChannel]:
-    try:
-        cid = int(str(TRANSCRIPTS_CHANNEL_ID or "0") or 0)
-    except Exception:
-        cid = 0
-
-    if not cid:
-        print("⚠️ TRANSCRIPTS_CHANNEL_ID missing.")
+async def _get_transcripts_channel(guild: discord.Guild) -> Optional[discord.TextChannel]:
+    cid = _safe_int(TRANSCRIPTS_CHANNEL_ID, 0)
+    if cid <= 0:
+        _warn("TRANSCRIPTS_CHANNEL_ID missing")
         return None
 
     try:
@@ -902,60 +932,28 @@ async def _get_transcripts_channel(
         pass
 
     try:
-        fetched = await guild.fetch_channel(cid)
+        fetched = await asyncio.wait_for(
+            guild.fetch_channel(cid),
+            timeout=DEFAULT_CHANNEL_DELETE_TIMEOUT_SECONDS,
+        )
         if isinstance(fetched, discord.TextChannel):
             return fetched
     except Exception as e:
-        print("⚠️ Failed to fetch transcripts channel:", repr(e))
+        _warn(f"failed to fetch transcripts channel id={cid} error={repr(e)}")
 
     return None
-
-
-async def _ticket_row(channel_id: int | str) -> Optional[Dict[str, Any]]:
-    try:
-        row = await get_ticket_by_any_channel_id(channel_id)
-        if isinstance(row, dict):
-            return row
-    except Exception as e:
-        print("⚠️ Failed loading ticket row for transcript flow:", repr(e))
-    return None
-
-
-async def _transcript_readback(
-    *,
-    channel_id: int,
-    guild_id: int,
-) -> Tuple[Optional[Dict[str, Any]], Optional[str], Optional[int], Optional[int]]:
-    row = await _ticket_row(channel_id)
-    url, msg_id, ch_id = _row_transcript_payload(row, guild_id=guild_id)
-    return row, url, msg_id, ch_id
 
 
 def _transcript_summary_embed(
     *,
     ticket_channel: discord.TextChannel,
-    deleted_by: Optional[discord.Member | discord.User],
+    deleted_by: Optional[discord.abc.User],
     reason: Optional[str],
     message_count: int,
-    ticket_row: Optional[Dict[str, Any]] = None,
+    ticket_row: Optional[Dict[str, Any]],
 ) -> discord.Embed:
-    deleted_by_text = _safe_text(deleted_by) if deleted_by else "Unknown"
-    reason_text = reason or "Ticket deleted"
-    topic_text = _safe_topic_text(ticket_channel.topic, max_len=1000)
-    lifecycle_location = _channel_lifecycle_location(ticket_channel)
-
-    ticket_number = None
-    owner_id = None
-    status = None
-    category = None
-    priority = None
-
-    if isinstance(ticket_row, dict):
-        ticket_number = ticket_row.get("ticket_number")
-        owner_id = ticket_row.get("user_id") or ticket_row.get("owner_id") or ticket_row.get("requester_id")
-        status = ticket_row.get("status")
-        category = ticket_row.get("category")
-        priority = ticket_row.get("priority")
+    actor_text = _safe_text(deleted_by) if deleted_by else "Unknown"
+    reason_text = reason or "Ticket transcript requested"
 
     embed = discord.Embed(
         title=f"🧾 Transcript for #{ticket_channel.name}",
@@ -965,159 +963,312 @@ def _transcript_summary_embed(
     embed.add_field(name="Channel ID", value=f"`{ticket_channel.id}`", inline=True)
     embed.add_field(name="Guild ID", value=f"`{ticket_channel.guild.id}`", inline=True)
     embed.add_field(name="Messages", value=f"`{message_count}`", inline=True)
+    embed.add_field(name="Lifecycle", value=f"`{_channel_lifecycle_location(ticket_channel)}`", inline=False)
 
-    if ticket_number is not None:
-        embed.add_field(name="Ticket #", value=f"`{ticket_number}`", inline=True)
-    if owner_id:
-        embed.add_field(name="Owner ID", value=f"`{owner_id}`", inline=True)
-    if status:
+    if isinstance(ticket_row, dict):
+        ticket_number = ticket_row.get("ticket_number")
+        owner_id = (
+            ticket_row.get("user_id")
+            or ticket_row.get("owner_id")
+            or ticket_row.get("requester_id")
+        )
+        status = ticket_row.get("status") or "unknown"
+        category = ticket_row.get("category") or "unknown"
+        priority = ticket_row.get("priority") or "unknown"
+
+        embed.add_field(name="Ticket #", value=f"`{ticket_number or 'unknown'}`", inline=True)
+        embed.add_field(name="Owner ID", value=f"`{owner_id or 'unknown'}`", inline=True)
         embed.add_field(name="Status", value=f"`{status}`", inline=True)
-    if category:
-        embed.add_field(name="Category", value=f"`{_truncate_for_discord(_safe_text(category), 200)}`", inline=True)
-    if priority:
-        embed.add_field(name="Priority", value=f"`{_truncate_for_discord(_safe_text(priority), 60)}`", inline=True)
+        embed.add_field(name="Category", value=f"`{category}`", inline=True)
+        embed.add_field(name="Priority", value=f"`{priority}`", inline=True)
 
-    embed.add_field(name="Lifecycle", value=f"`{_truncate_for_discord(lifecycle_location, 200)}`", inline=False)
-    embed.add_field(name="Deleted/Finished By", value=f"`{deleted_by_text}`", inline=False)
-    embed.add_field(name="Reason", value=f"`{_truncate_for_discord(reason_text, 900)}`", inline=False)
-    embed.add_field(name="Topic", value=f"`{_truncate_for_discord(topic_text, 900)}`", inline=False)
-    embed.set_footer(text=f"{_TRANSCRIPT_MARKER} • Generated at {_utc_iso(now_utc()) or ''}")
+    embed.add_field(name="Actor", value=_truncate_for_discord(actor_text, 256), inline=True)
+    embed.add_field(name="Reason", value=_truncate_for_discord(reason_text, 1024), inline=False)
+    embed.set_footer(text=_TRANSCRIPT_MARKER)
     return embed
 
 
-# ============================================================
-# Transcript posting
-# ============================================================
-
-async def _attach_transcript_metadata_once(
+async def _attach_transcript_best_effort(
     *,
     channel_id: int,
-    guild_id: int,
     transcript_url: Optional[str],
     transcript_message_id: Optional[int],
     transcript_channel_id: Optional[int],
-    actor: Optional[discord.Member | discord.User] = None,
-) -> Tuple[bool, Optional[str], Optional[int], Optional[int]]:
-    row_before = await _ticket_row(channel_id)
-    existing_url, existing_message_id, existing_channel_id = _row_transcript_payload(
-        row_before,
-        guild_id=guild_id,
-    )
+    actor: Optional[discord.abc.User],
+) -> bool:
+    attempts = [
+        {
+            "channel_id": channel_id,
+            "transcript_url": transcript_url,
+            "transcript_message_id": transcript_message_id,
+            "transcript_channel_id": transcript_channel_id,
+            "actor": actor,
+        },
+        {
+            "channel_id": channel_id,
+            "transcript_url": transcript_url,
+            "transcript_message_id": transcript_message_id,
+            "transcript_channel_id": transcript_channel_id,
+            "actor_id": _actor_id(actor),
+            "actor_name": _actor_name(actor),
+        },
+        {
+            "channel_id": channel_id,
+            "transcript_url": transcript_url,
+            "transcript_message_id": transcript_message_id,
+            "transcript_channel_id": transcript_channel_id,
+        },
+    ]
 
-    if existing_url or existing_message_id or existing_channel_id:
-        return True, existing_url, existing_message_id, existing_channel_id
-
-    attached = False
-    try:
-        attached = bool(
-            await attach_transcript_to_ticket(
-                channel_id=channel_id,
-                transcript_url=transcript_url,
-                transcript_message_id=transcript_message_id,
-                transcript_channel_id=transcript_channel_id,
-                actor=actor,
+    for kwargs in attempts:
+        try:
+            await asyncio.wait_for(
+                attach_transcript_to_ticket(**kwargs),
+                timeout=DEFAULT_DB_WRITE_TIMEOUT_SECONDS,
             )
-        )
-    except Exception as e:
-        print("⚠️ Failed attaching transcript metadata:", repr(e))
-        attached = False
+            _debug(f"transcript metadata attached channel={channel_id} message={transcript_message_id}")
+            return True
+        except TypeError:
+            continue
+        except asyncio.TimeoutError:
+            _warn(f"attach transcript metadata timeout channel={channel_id}")
+            return False
+        except Exception as e:
+            _warn(f"attach transcript metadata failed channel={channel_id} error={repr(e)}")
+            return False
 
-    row_after, final_url, final_message_id, final_channel_id = await _transcript_readback(
-        channel_id=channel_id,
-        guild_id=guild_id,
-    )
-
-    final_ok = bool(attached or _row_has_transcript(row_after))
-    return final_ok, final_url, final_message_id, final_channel_id
-
-
-async def _heal_existing_transcript_metadata_if_missing(
-    *,
-    channel_id: int,
-    guild_id: int,
-) -> Tuple[Optional[str], Optional[int], Optional[int]]:
-    row = await _ticket_row(channel_id)
-    url, msg_id, ch_id = _row_transcript_payload(row, guild_id=guild_id)
-    if url or msg_id or ch_id:
-        return url, msg_id, ch_id
-    return None, None, None
+    return False
 
 
 async def post_transcript_to_channel(
-    *,
     ticket_channel: discord.TextChannel,
     deleted_by: Optional[discord.Member | discord.User] = None,
     reason: Optional[str] = None,
 ) -> Tuple[Optional[discord.Message], Optional[str]]:
-    lock = _transcript_post_lock(ticket_channel.id)
+    """
+    Post transcript files to the configured transcript channel exactly once.
 
-    async with lock:
-        row_before, existing_url, existing_message_id, existing_channel_id = await _transcript_readback(
-            channel_id=int(ticket_channel.id),
-            guild_id=int(ticket_channel.guild.id),
-        )
-        if _row_has_transcript(row_before):
-            _debug(
-                f"reuse channel={ticket_channel.id} "
-                f"url={existing_url!r} msg={existing_message_id!r} ch={existing_channel_id!r}"
-            )
-            return None, existing_url
+    Returns:
+        (posted_message, transcript_url)
+    """
+    channel_id = int(ticket_channel.id)
+    lock = _transcript_post_lock(channel_id)
+
+    acquired = await _acquire_lock_with_timeout(
+        lock,
+        timeout=DEFAULT_LOCK_TIMEOUT_SECONDS,
+        label="transcript-post",
+        channel_id=channel_id,
+    )
+    if not acquired:
+        row = await _ticket_row(channel_id)
+        transcript_url, _msg_id, _ch_id = _row_transcript_payload(row, guild_id=ticket_channel.guild.id)
+        return None, transcript_url
+
+    try:
+        row = await _ticket_row(channel_id)
+        if _row_has_transcript(row):
+            transcript_url, msg_id, ch_id = _row_transcript_payload(row, guild_id=ticket_channel.guild.id)
+            _debug(f"transcript already exists channel={channel_id} message={msg_id} transcript_channel={ch_id}")
+            return None, transcript_url
 
         transcript_channel = await _get_transcripts_channel(ticket_channel.guild)
         if transcript_channel is None:
-            print("⚠️ Transcript post skipped: transcripts channel unavailable.")
+            _warn(f"cannot post transcript; transcript channel unavailable ticket_channel={channel_id}")
             return None, None
 
-        txt_file, html_file, message_count = await generate_transcript_files(ticket_channel)
+        try:
+            txt_file, html_file, message_count = await asyncio.wait_for(
+                generate_transcript_files(ticket_channel),
+                timeout=DEFAULT_TRANSCRIPT_POST_TIMEOUT_SECONDS,
+            )
+        except asyncio.TimeoutError:
+            _warn(f"generate transcript files timeout channel={channel_id}; posting timeout marker only")
+            txt_file = discord.File(
+                io.BytesIO(b"Transcript generation timed out before messages could be collected.\n"),
+                filename=f"ticket-{channel_id}-timeout.txt",
+            )
+            html_file = discord.File(
+                io.BytesIO(b"<!doctype html><html><body><h1>Transcript generation timed out.</h1></body></html>"),
+                filename=f"ticket-{channel_id}-timeout.html",
+            )
+            message_count = 0
+        except Exception as e:
+            _warn(f"generate transcript files failed channel={channel_id} error={repr(e)}")
+            txt_file = discord.File(
+                io.BytesIO(f"Transcript generation failed: {repr(e)}\n".encode("utf-8", errors="replace")),
+                filename=f"ticket-{channel_id}-error.txt",
+            )
+            html_file = discord.File(
+                io.BytesIO(
+                    f"<!doctype html><html><body><h1>Transcript generation failed</h1><pre>{html.escape(repr(e))}</pre></body></html>".encode(
+                        "utf-8",
+                        errors="replace",
+                    )
+                ),
+                filename=f"ticket-{channel_id}-error.html",
+            )
+            message_count = 0
+
+        row = row or await _ticket_row(channel_id)
+
         embed = _transcript_summary_embed(
             ticket_channel=ticket_channel,
             deleted_by=deleted_by,
             reason=reason,
             message_count=message_count,
-            ticket_row=row_before,
+            ticket_row=row,
+        )
+
+        content = (
+            f"{_TRANSCRIPT_MARKER}\n"
+            f"Transcript saved for `#{ticket_channel.name}` (`{ticket_channel.id}`)."
         )
 
         try:
-            posted = await transcript_channel.send(
-                content=_TRANSCRIPT_MARKER,
-                embed=embed,
-                files=[txt_file, html_file],
-                allowed_mentions=discord.AllowedMentions.none(),
+            posted = await asyncio.wait_for(
+                transcript_channel.send(
+                    content=content,
+                    embed=embed,
+                    files=[txt_file, html_file],
+                    allowed_mentions=discord.AllowedMentions.none(),
+                ),
+                timeout=DEFAULT_TRANSCRIPT_POST_TIMEOUT_SECONDS,
             )
-            jump_url = getattr(posted, "jump_url", None)
-
-            metadata_ok, final_url, final_message_id, final_channel_id = await _attach_transcript_metadata_once(
-                channel_id=int(ticket_channel.id),
-                guild_id=int(ticket_channel.guild.id),
-                transcript_url=jump_url,
-                transcript_message_id=int(getattr(posted, "id", 0) or 0) or None,
-                transcript_channel_id=int(getattr(getattr(posted, "channel", None), "id", 0) or 0) or None,
-                actor=deleted_by,
-            )
-
-            if not metadata_ok:
-                _debug(
-                    f"post metadata-readback-missing channel={ticket_channel.id} "
-                    f"posted_message={getattr(posted, 'id', None)}"
-                )
-            else:
-                _debug(
-                    f"post success channel={ticket_channel.id} "
-                    f"posted_message={final_message_id or getattr(posted, 'id', None)}"
-                )
-
-            return posted, final_url or jump_url
-        except Exception as e:
-            print("❌ Failed posting transcript:", repr(e))
+        except asyncio.TimeoutError:
+            _warn(f"transcript channel.send timeout ticket_channel={channel_id}")
             return None, None
+        except Exception as e:
+            _warn(f"transcript channel.send failed ticket_channel={channel_id} error={repr(e)}")
+            return None, None
+
+        transcript_url = getattr(posted, "jump_url", None)
+
+        await _attach_transcript_best_effort(
+            channel_id=channel_id,
+            transcript_url=transcript_url,
+            transcript_message_id=int(posted.id),
+            transcript_channel_id=int(posted.channel.id),
+            actor=deleted_by,
+        )
+
+        _debug(
+            f"post success channel={channel_id} posted_message={posted.id} transcript_channel={posted.channel.id}"
+        )
+        return posted, transcript_url
+
+    finally:
+        try:
+            lock.release()
+        except RuntimeError:
+            pass
+        except Exception:
+            pass
 
 
 # ============================================================
 # Delete flow
 # ============================================================
 
-async def delete_ticket_with_optional_transcript(
+async def _mark_ticket_deleted_best_effort(
     *,
+    channel: discord.TextChannel,
+    actor: Optional[discord.abc.User],
+    reason: str,
+) -> bool:
+    attempts = [
+        {
+            "channel_id": channel.id,
+            "deleted_by": actor,
+            "reason": reason,
+        },
+        {
+            "channel_id": channel.id,
+            "actor": actor,
+            "reason": reason,
+        },
+        {
+            "channel_id": channel.id,
+            "deleted_by_id": _actor_id(actor),
+            "deleted_by_name": _actor_name(actor),
+            "reason": reason,
+        },
+        {
+            "channel_id": channel.id,
+            "reason": reason,
+        },
+    ]
+
+    for kwargs in attempts:
+        try:
+            await asyncio.wait_for(
+                mark_ticket_deleted(**kwargs),
+                timeout=DEFAULT_DB_WRITE_TIMEOUT_SECONDS,
+            )
+            _debug(f"db mark deleted success channel={channel.id}")
+            return True
+        except TypeError:
+            continue
+        except asyncio.TimeoutError:
+            _warn(f"db mark deleted timeout channel={channel.id}")
+            return False
+        except Exception as e:
+            _warn(f"db mark deleted failed channel={channel.id} error={repr(e)}")
+            return False
+
+    return False
+
+
+async def _delete_discord_channel(
+    *,
+    channel: discord.TextChannel,
+    reason: str,
+) -> Dict[str, Any]:
+    try:
+        _debug(f"discord channel.delete starting channel={channel.id} name={channel.name}")
+        await asyncio.wait_for(
+            channel.delete(reason=reason[:512]),
+            timeout=DEFAULT_CHANNEL_DELETE_TIMEOUT_SECONDS,
+        )
+        _debug(f"discord channel.delete success channel={channel.id}")
+        return {"deleted": True, "channel_deleted": True, "reason": "channel.delete success"}
+    except asyncio.TimeoutError:
+        _error(f"discord channel.delete timeout channel={channel.id}")
+        return {
+            "deleted": False,
+            "channel_deleted": False,
+            "reason": "Discord channel.delete timed out.",
+        }
+    except discord.NotFound:
+        _debug(f"discord channel.delete already gone channel={channel.id}")
+        return {"deleted": True, "channel_deleted": True, "reason": "channel already gone"}
+    except discord.Forbidden as e:
+        _error(f"discord channel.delete forbidden channel={channel.id} error={repr(e)}")
+        return {
+            "deleted": False,
+            "channel_deleted": False,
+            "reason": "Discord denied channel deletion. Check Manage Channels and channel permissions.",
+            "error": repr(e),
+        }
+    except discord.HTTPException as e:
+        _error(f"discord channel.delete HTTPException channel={channel.id} error={repr(e)}")
+        return {
+            "deleted": False,
+            "channel_deleted": False,
+            "reason": f"Discord HTTP error while deleting channel: {e}",
+            "error": repr(e),
+        }
+    except Exception as e:
+        _error(f"discord channel.delete unexpected channel={channel.id} error={repr(e)}")
+        return {
+            "deleted": False,
+            "channel_deleted": False,
+            "reason": f"Unexpected channel delete error: {e}",
+            "error": repr(e),
+        }
+
+
+async def delete_ticket_with_optional_transcript(
     channel: discord.TextChannel,
     deleted_by: Optional[discord.Member | discord.User] = None,
     is_ghost: bool = False,
@@ -1125,312 +1276,206 @@ async def delete_ticket_with_optional_transcript(
     reason: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
-    Main deletion flow.
+    Canonical hardened ticket delete.
 
-    Normal tickets:
-      transcript MUST exist before delete
-
-    Ghost tickets:
-      transcript optional unless force_transcript_for_ghost=True
-
-    Guarantees:
-    - idempotent lock per channel
-    - transcript is not reposted if one is already attached
-    - DB is marked deleted before final channel delete
-    - refuses deletion if ticket is not effectively closed
+    This function intentionally avoids shared mutation locks because the old
+    delete path could deadlock when transcript + DB lifecycle code nested locks.
     """
-    lock = _delete_lock(channel.id)
+    if not isinstance(channel, discord.TextChannel):
+        return {"deleted": False, "reason": "Invalid channel type."}
 
-    async with lock:
-        mutation_lock = _ticket_mutation_lock(channel.id)
+    channel_id = int(channel.id)
+    delete_reason = reason or "Ticket deleted"
 
-        async with mutation_lock:
-            transcript_message: Optional[discord.Message] = None
-            transcript_url: Optional[str] = None
-            transcript_channel_id: Optional[int] = None
-            transcript_message_id: Optional[int] = None
+    lock = _delete_lock(channel_id)
+    acquired = await _acquire_lock_with_timeout(
+        lock,
+        timeout=DEFAULT_LOCK_TIMEOUT_SECONDS,
+        label="delete",
+        channel_id=channel_id,
+    )
+    if not acquired:
+        return {
+            "deleted": False,
+            "channel_deleted": False,
+            "reason": "Delete is already running for this ticket.",
+            "locked": True,
+        }
 
-            row_before = await _ticket_row(channel.id)
-            status_before = _row_status(row_before)
-            lifecycle_location = _channel_lifecycle_location(channel)
+    started_at = time.monotonic()
+    transcript_posted = False
+    transcript_url: Optional[str] = None
+    db_marked_deleted = False
 
-            if status_before == "deleted":
-                existing_url, existing_message_id, existing_channel_id = _row_transcript_payload(
-                    row_before,
-                    guild_id=channel.guild.id,
-                )
+    try:
+        row = await _ticket_row(channel_id)
+
+        if _row_status(row) == "deleted":
+            still_exists = await _channel_still_exists(channel.guild, channel_id)
+            if not still_exists:
                 return {
-                    "ok": False,
-                    "deleted": False,
-                    "db_marked_deleted": True,
-                    "transcript_required": False,
-                    "transcript_posted": bool(existing_url or existing_message_id or existing_channel_id),
-                    "transcript_already_existed": bool(existing_url or existing_message_id or existing_channel_id),
-                    "transcript_url": existing_url,
-                    "transcript_message_id": existing_message_id,
-                    "transcript_channel_id": existing_channel_id,
-                    "status_before": status_before,
-                    "lifecycle_location": lifecycle_location,
-                    "reason": "Ticket is already marked deleted.",
+                    "deleted": True,
+                    "channel_deleted": True,
+                    "reason": "Ticket was already deleted.",
+                    "already_deleted": True,
                 }
 
-            if not _channel_effectively_closed(channel=channel, row=row_before):
-                existing_url, existing_message_id, existing_channel_id = _row_transcript_payload(
-                    row_before,
-                    guild_id=channel.guild.id,
-                )
-                return {
-                    "ok": False,
-                    "deleted": False,
-                    "db_marked_deleted": False,
-                    "transcript_required": False,
-                    "transcript_posted": bool(existing_url or existing_message_id or existing_channel_id),
-                    "transcript_already_existed": bool(existing_url or existing_message_id or existing_channel_id),
-                    "transcript_url": existing_url,
-                    "transcript_message_id": existing_message_id,
-                    "transcript_channel_id": existing_channel_id,
-                    "status_before": status_before,
-                    "lifecycle_location": lifecycle_location,
-                    "reason": "Ticket is not closed. Refusing delete.",
-                }
-
-            already_had_transcript = _row_has_transcript(row_before)
-            existing_url, existing_message_id, existing_channel_id = _row_transcript_payload(
-                row_before,
-                guild_id=channel.guild.id,
+        if not _channel_effectively_closed(channel=channel, row=row):
+            _warn(
+                f"delete requested for open-like channel={channel_id} "
+                f"status={_row_status(row)!r} lifecycle={_channel_lifecycle_location(channel)!r}"
             )
 
-            if already_had_transcript:
-                transcript_url = existing_url
-                transcript_message_id = existing_message_id
-                transcript_channel_id = existing_channel_id
+        should_post_transcript = True
+        if is_ghost and not force_transcript_for_ghost:
+            should_post_transcript = False
 
-            should_post_transcript = (not is_ghost) or force_transcript_for_ghost
-
-            if should_post_transcript and not already_had_transcript:
-                transcript_message, transcript_url = await post_transcript_to_channel(
-                    ticket_channel=channel,
-                    deleted_by=deleted_by,
-                    reason=reason,
-                )
-
-                if transcript_message is None and not transcript_url and not is_ghost:
-                    return {
-                        "ok": False,
-                        "deleted": False,
-                        "db_marked_deleted": False,
-                        "transcript_required": True,
-                        "transcript_posted": False,
-                        "transcript_already_existed": False,
-                        "transcript_url": None,
-                        "transcript_message_id": None,
-                        "transcript_channel_id": None,
-                        "status_before": status_before,
-                        "lifecycle_location": lifecycle_location,
-                        "reason": "Transcript failed to post; ticket not deleted.",
-                    }
-
-                if transcript_message is not None:
-                    try:
-                        transcript_message_id = int(transcript_message.id)
-                    except Exception:
-                        transcript_message_id = None
-
-                    try:
-                        transcript_channel_id = int(transcript_message.channel.id)
-                    except Exception:
-                        transcript_channel_id = None
-
-            if should_post_transcript and not transcript_url and not transcript_message_id and not transcript_channel_id:
-                healed_url, healed_message_id, healed_channel_id = await _heal_existing_transcript_metadata_if_missing(
-                    channel_id=int(channel.id),
-                    guild_id=int(channel.guild.id),
-                )
-                transcript_url = transcript_url or healed_url
-                transcript_message_id = transcript_message_id or healed_message_id
-                transcript_channel_id = transcript_channel_id or healed_channel_id
-
-            row_pre_delete = await _ticket_row(channel.id)
-            lifecycle_location = _channel_lifecycle_location(channel)
-            if not _channel_effectively_closed(channel=channel, row=row_pre_delete):
-                existing_url, existing_message_id, existing_channel_id = _row_transcript_payload(
-                    row_pre_delete,
-                    guild_id=channel.guild.id,
-                )
-                return {
-                    "ok": False,
-                    "deleted": False,
-                    "db_marked_deleted": False,
-                    "transcript_required": bool(should_post_transcript),
-                    "transcript_posted": bool(
-                        transcript_message is not None
-                        or already_had_transcript
-                        or transcript_url
-                        or existing_url
-                        or existing_message_id
-                        or existing_channel_id
+        if _row_has_transcript(row):
+            transcript_url, _msg_id, _ch_id = _row_transcript_payload(row, guild_id=channel.guild.id)
+            transcript_posted = bool(transcript_url)
+            _debug(f"delete flow transcript already present channel={channel_id}")
+        elif should_post_transcript:
+            try:
+                posted, transcript_url = await asyncio.wait_for(
+                    post_transcript_to_channel(
+                        ticket_channel=channel,
+                        deleted_by=deleted_by,
+                        reason=delete_reason,
                     ),
-                    "transcript_already_existed": bool(already_had_transcript),
-                    "transcript_url": transcript_url or existing_url,
-                    "transcript_message_id": transcript_message_id or existing_message_id,
-                    "transcript_channel_id": transcript_channel_id or existing_channel_id,
-                    "status_before": _row_status(row_pre_delete),
-                    "lifecycle_location": lifecycle_location,
-                    "reason": "Ticket was reopened before delete finalized.",
-                }
-
-            db_marked_deleted = False
-            try:
-                db_marked_deleted = await mark_ticket_deleted(
-                    channel_id=channel.id,
-                    deleted_by=deleted_by,
-                    reason=reason or "Deleted",
+                    timeout=DEFAULT_TRANSCRIPT_POST_TIMEOUT_SECONDS + 4.0,
                 )
+                transcript_posted = posted is not None or bool(transcript_url)
+            except asyncio.TimeoutError:
+                _warn(f"delete flow transcript post timeout channel={channel_id}; continuing to delete")
             except Exception as e:
-                print("⚠️ Failed marking ticket deleted in DB before channel delete:", repr(e))
-                db_marked_deleted = False
+                _warn(f"delete flow transcript post failed channel={channel_id} error={repr(e)}; continuing to delete")
+        else:
+            _debug(f"delete flow skipping transcript channel={channel_id} ghost={is_ghost}")
 
-            row_after_delete_mark = await _ticket_row(channel.id)
-            confirmed_deleted_in_db = bool(
-                db_marked_deleted
-                and _row_status(row_after_delete_mark) == "deleted"
+        db_marked_deleted = await _mark_ticket_deleted_best_effort(
+            channel=channel,
+            actor=deleted_by,
+            reason=delete_reason,
+        )
+
+        delete_result = await _delete_discord_channel(
+            channel=channel,
+            reason=delete_reason,
+        )
+
+        elapsed_ms = int((time.monotonic() - started_at) * 1000)
+
+        result = {
+            **delete_result,
+            "transcript_posted": transcript_posted,
+            "transcript_url": transcript_url,
+            "db_marked_deleted": db_marked_deleted,
+            "elapsed_ms": elapsed_ms,
+            "channel_id": channel_id,
+        }
+
+        if result.get("deleted"):
+            _debug(
+                f"delete complete channel={channel_id} transcript={transcript_posted} "
+                f"db={db_marked_deleted} elapsed_ms={elapsed_ms}"
             )
+        else:
+            _warn(f"delete incomplete channel={channel_id} result={result!r}")
 
-            if not confirmed_deleted_in_db:
-                return {
-                    "ok": False,
-                    "deleted": False,
-                    "db_marked_deleted": bool(db_marked_deleted),
-                    "transcript_required": bool(should_post_transcript),
-                    "transcript_posted": bool(transcript_message is not None or already_had_transcript or transcript_url),
-                    "transcript_already_existed": bool(already_had_transcript),
-                    "transcript_url": transcript_url,
-                    "transcript_message_id": transcript_message_id,
-                    "transcript_channel_id": transcript_channel_id,
-                    "status_before": status_before,
-                    "lifecycle_location": lifecycle_location,
-                    "reason": "DB delete mark failed or could not be verified; channel not deleted.",
-                }
+        return result
 
-            try:
-                await channel.delete(reason=reason or "Ticket deleted")
-                _debug(
-                    f"delete success channel={channel.id} "
-                    f"transcript_msg={transcript_message_id} transcript_ch={transcript_channel_id}"
-                )
-                return {
-                    "ok": True,
-                    "deleted": True,
-                    "db_marked_deleted": True,
-                    "transcript_required": bool(should_post_transcript),
-                    "transcript_posted": bool(transcript_message is not None or already_had_transcript or transcript_url),
-                    "transcript_already_existed": bool(already_had_transcript),
-                    "transcript_url": transcript_url,
-                    "transcript_message_id": transcript_message_id,
-                    "transcript_channel_id": transcript_channel_id,
-                    "status_before": status_before,
-                    "lifecycle_location": lifecycle_location,
-                    "reason": None,
-                }
-            except discord.NotFound:
-                return {
-                    "ok": True,
-                    "deleted": True,
-                    "db_marked_deleted": True,
-                    "transcript_required": bool(should_post_transcript),
-                    "transcript_posted": bool(transcript_message is not None or already_had_transcript or transcript_url),
-                    "transcript_already_existed": bool(already_had_transcript),
-                    "transcript_url": transcript_url,
-                    "transcript_message_id": transcript_message_id,
-                    "transcript_channel_id": transcript_channel_id,
-                    "status_before": status_before,
-                    "lifecycle_location": lifecycle_location,
-                    "reason": None,
-                }
-            except Exception as e:
-                print("❌ Failed deleting ticket channel:", repr(e))
-                return {
-                    "ok": False,
-                    "deleted": False,
-                    "db_marked_deleted": True,
-                    "transcript_required": bool(should_post_transcript),
-                    "transcript_posted": bool(transcript_message is not None or already_had_transcript or transcript_url),
-                    "transcript_already_existed": bool(already_had_transcript),
-                    "transcript_url": transcript_url,
-                    "transcript_message_id": transcript_message_id,
-                    "transcript_channel_id": transcript_channel_id,
-                    "status_before": status_before,
-                    "lifecycle_location": lifecycle_location,
-                    "reason": repr(e),
-                }
+    except Exception as e:
+        _error(f"delete flow unexpected channel={channel_id} error={repr(e)}")
+        return {
+            "deleted": False,
+            "channel_deleted": False,
+            "reason": f"Unexpected delete flow error: {e}",
+            "error": repr(e),
+            "transcript_posted": transcript_posted,
+            "transcript_url": transcript_url,
+            "db_marked_deleted": db_marked_deleted,
+            "channel_id": channel_id,
+        }
+    finally:
+        try:
+            lock.release()
+        except RuntimeError:
+            pass
+        except Exception:
+            pass
 
 
 async def staff_delete_closed_ticket(
-    *,
     channel: discord.TextChannel,
-    staff_member: discord.Member | discord.User,
+    staff_member: discord.Member,
     is_ghost: bool = False,
-    reason: Optional[str] = None,
+    reason: str = "Deleted by staff",
 ) -> Dict[str, Any]:
     """
-    Use this when staff press the final Delete button inside a closed ticket.
+    Staff-facing delete wrapper.
 
-    Hard guard:
-    - refuses deletion if the ticket is no longer closed
-    - blocks stale closed-panel clicks after a reopen
-    - recognizes archive-category closed tickets too
+    This must always return quickly enough for interaction callbacks. The caller
+    may still wrap it in wait_for, but this function also internally timeboxes
+    every expensive operation.
     """
-    row = await _ticket_row(channel.id)
-    status = _row_status(row)
-    lifecycle_location = _channel_lifecycle_location(channel)
+    if not isinstance(channel, discord.TextChannel):
+        return {"deleted": False, "reason": "Invalid channel."}
 
-    if status == "deleted":
-        existing_url, existing_message_id, existing_channel_id = _row_transcript_payload(
-            row,
-            guild_id=channel.guild.id,
-        )
-        return {
-            "ok": False,
-            "deleted": False,
-            "db_marked_deleted": True,
-            "transcript_required": False,
-            "transcript_posted": bool(existing_url or existing_message_id or existing_channel_id),
-            "transcript_already_existed": bool(existing_url or existing_message_id or existing_channel_id),
-            "transcript_url": existing_url,
-            "transcript_message_id": existing_message_id,
-            "transcript_channel_id": existing_channel_id,
-            "status_before": status,
-            "lifecycle_location": lifecycle_location,
-            "reason": "Ticket is already deleted.",
-        }
+    if not isinstance(staff_member, discord.Member):
+        return {"deleted": False, "reason": "Staff member could not be resolved."}
 
-    if not _channel_effectively_closed(channel=channel, row=row):
-        existing_url, existing_message_id, existing_channel_id = _row_transcript_payload(
-            row,
-            guild_id=channel.guild.id,
-        )
-        return {
-            "ok": False,
-            "deleted": False,
-            "db_marked_deleted": False,
-            "transcript_required": True,
-            "transcript_posted": _row_has_transcript(row),
-            "transcript_already_existed": _row_has_transcript(row),
-            "transcript_url": existing_url,
-            "transcript_message_id": existing_message_id,
-            "transcript_channel_id": existing_channel_id,
-            "status_before": status,
-            "lifecycle_location": lifecycle_location,
-            "reason": "Ticket is not closed anymore. Refusing stale closed-ticket delete action.",
-        }
+    try:
+        if not (
+            staff_member.guild_permissions.manage_channels
+            or staff_member.guild_permissions.manage_messages
+            or staff_member.guild_permissions.administrator
+        ):
+            return {"deleted": False, "reason": "Staff only."}
+    except Exception:
+        return {"deleted": False, "reason": "Staff permission check failed."}
 
-    return await delete_ticket_with_optional_transcript(
-        channel=channel,
-        deleted_by=staff_member,
-        is_ghost=is_ghost,
-        force_transcript_for_ghost=False,
-        reason=reason or f"Deleted by staff: {staff_member}",
+    _debug(
+        f"staff delete start channel={channel.id} staff={staff_member.id} "
+        f"ghost={is_ghost} reason={reason!r}"
     )
+
+    try:
+        return await asyncio.wait_for(
+            delete_ticket_with_optional_transcript(
+                channel=channel,
+                deleted_by=staff_member,
+                is_ghost=is_ghost,
+                force_transcript_for_ghost=False,
+                reason=reason,
+            ),
+            timeout=DEFAULT_TRANSCRIPT_POST_TIMEOUT_SECONDS
+            + DEFAULT_DB_WRITE_TIMEOUT_SECONDS
+            + DEFAULT_CHANNEL_DELETE_TIMEOUT_SECONDS
+            + 8.0,
+        )
+    except asyncio.TimeoutError:
+        _error(f"staff delete wrapper timeout channel={channel.id}; attempting direct channel.delete fallback")
+
+        db_marked_deleted = await _mark_ticket_deleted_best_effort(
+            channel=channel,
+            actor=staff_member,
+            reason=f"{reason} (timeout fallback)",
+        )
+        delete_result = await _delete_discord_channel(
+            channel=channel,
+            reason=f"{reason} (timeout fallback)",
+        )
+        delete_result["db_marked_deleted"] = db_marked_deleted
+        delete_result["timeout_fallback"] = True
+        return delete_result
+    except Exception as e:
+        _error(f"staff delete wrapper unexpected channel={channel.id} error={repr(e)}")
+        return {
+            "deleted": False,
+            "channel_deleted": False,
+            "reason": f"Unexpected staff delete error: {e}",
+            "error": repr(e),
+        }
 
 
 __all__ = [
