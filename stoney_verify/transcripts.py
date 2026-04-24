@@ -21,6 +21,7 @@ from .verify_ui import (
 from .tickets_new.service import (
     attach_transcript_to_ticket,
     mark_ticket_closed,
+    mark_ticket_deleted,
     reopen_ticket_channel,
 )
 from .tickets_new.transcript_service import (
@@ -154,6 +155,207 @@ def _safe_bool(value: Any, default: bool = False) -> bool:
         return default
     except Exception:
         return default
+
+
+# ============================================================
+# Hardened delete helpers
+# ============================================================
+
+def _ticket_delete_log(message: str) -> None:
+    try:
+        print(f"🗑️ ticket_delete {message}")
+    except Exception:
+        pass
+
+
+def _delete_result_deleted(result: Any) -> bool:
+    try:
+        if isinstance(result, dict):
+            return bool(
+                result.get("deleted")
+                or (result.get("ok") is True and result.get("channel_deleted"))
+            )
+        return bool(getattr(result, "deleted", False))
+    except Exception:
+        return False
+
+
+async def _channel_still_exists(guild: discord.Guild, channel_id: int) -> bool:
+    try:
+        cached = guild.get_channel(int(channel_id))
+        if cached is not None:
+            return True
+    except Exception:
+        pass
+
+    try:
+        fetched = await guild.fetch_channel(int(channel_id))
+        return fetched is not None
+    except discord.NotFound:
+        return False
+    except discord.Forbidden:
+        return True
+    except Exception:
+        return True
+
+
+async def _mark_ticket_deleted_best_effort(
+    channel: discord.TextChannel,
+    *,
+    deleted_by: Optional[discord.abc.User],
+    reason: str,
+) -> None:
+    try:
+        await mark_ticket_deleted(
+            channel_id=channel.id,
+            deleted_by=deleted_by,
+            reason=reason,
+        )
+        _ticket_delete_log(f"db mark deleted success channel={channel.id}")
+        return
+    except TypeError:
+        try:
+            await mark_ticket_deleted(
+                channel_id=channel.id,
+                actor=deleted_by,
+                reason=reason,
+            )
+            _ticket_delete_log(f"db mark deleted success channel={channel.id}")
+            return
+        except Exception as e:
+            print(f"⚠️ mark_ticket_deleted fallback failed channel={channel.id}: {repr(e)}")
+    except Exception as e:
+        print(f"⚠️ mark_ticket_deleted failed channel={channel.id}: {repr(e)}")
+
+
+async def _force_delete_ticket_channel_after_transcript(
+    channel: discord.TextChannel,
+    *,
+    deleted_by: Optional[discord.abc.User],
+    reason: str,
+) -> Dict[str, Any]:
+    try:
+        if not await _ticket_has_transcript(channel.id):
+            owner = await _resolve_ticket_owner(channel)
+            await send_tickettool_style_transcript(
+                channel,
+                owner,
+                closed_by=deleted_by if isinstance(deleted_by, discord.Member) else None,
+                decision=reason,
+            )
+        else:
+            _ticket_delete_log(f"transcript already attached channel={channel.id}")
+    except Exception as e:
+        print(f"⚠️ transcript ensure before force delete failed channel={channel.id}: {repr(e)}")
+
+    await _mark_ticket_deleted_best_effort(
+        channel,
+        deleted_by=deleted_by,
+        reason=reason,
+    )
+
+    try:
+        _ticket_delete_log(f"discord channel.delete starting channel={channel.id} name={channel.name}")
+        await channel.delete(reason=reason[:512])
+        _ticket_delete_log(f"discord channel.delete success channel={channel.id}")
+        return {"deleted": True, "forced": True, "reason": "channel.delete success"}
+    except discord.NotFound:
+        _ticket_delete_log(f"discord channel.delete already gone channel={channel.id}")
+        return {"deleted": True, "forced": True, "reason": "channel already gone"}
+    except discord.Forbidden as e:
+        print(f"❌ discord channel.delete forbidden channel={channel.id}: {repr(e)}")
+        return {
+            "deleted": False,
+            "forced": True,
+            "reason": "Discord denied channel deletion. Check Manage Channels and role hierarchy.",
+            "error": repr(e),
+        }
+    except discord.HTTPException as e:
+        print(f"❌ discord channel.delete HTTPException channel={channel.id}: {repr(e)}")
+        return {
+            "deleted": False,
+            "forced": True,
+            "reason": f"Discord HTTP error while deleting channel: {e}",
+            "error": repr(e),
+        }
+    except Exception as e:
+        print(f"❌ discord channel.delete unexpected channel={channel.id}: {repr(e)}")
+        return {
+            "deleted": False,
+            "forced": True,
+            "reason": f"Unexpected channel delete error: {e}",
+            "error": repr(e),
+        }
+
+
+async def _staff_delete_closed_ticket_verified(
+    *,
+    channel: discord.TextChannel,
+    staff_member: discord.Member,
+    is_ghost: bool,
+    reason: str,
+) -> Dict[str, Any]:
+    """
+    Canonical delete service + verification + direct fallback.
+
+    This fixes the case where staff_delete_closed_ticket posts transcript metadata,
+    but the Discord channel is still present afterward.
+    """
+    _ticket_delete_log(
+        f"service delete start channel={channel.id} name={channel.name} "
+        f"staff={staff_member.id} ghost={is_ghost} reason={reason!r}"
+    )
+
+    result: Dict[str, Any] = {}
+    service_error: Optional[str] = None
+
+    try:
+        raw_result = await staff_delete_closed_ticket(
+            channel=channel,
+            staff_member=staff_member,
+            is_ghost=is_ghost,
+            reason=reason,
+        )
+        if isinstance(raw_result, dict):
+            result = raw_result
+        else:
+            result = {"deleted": bool(raw_result), "raw_result": repr(raw_result)}
+        _ticket_delete_log(f"service delete result channel={channel.id} result={result!r}")
+    except Exception as e:
+        service_error = repr(e)
+        print(f"⚠️ staff_delete_closed_ticket raised channel={channel.id}: {repr(e)}")
+        result = {"deleted": False, "reason": str(e), "service_error": repr(e)}
+
+    try:
+        await asyncio.sleep(0.75)
+        still_exists = await _channel_still_exists(channel.guild, channel.id)
+    except Exception:
+        still_exists = True
+
+    if _delete_result_deleted(result) and not still_exists:
+        _ticket_delete_log(f"service delete verified gone channel={channel.id}")
+        return result
+
+    if not still_exists:
+        _ticket_delete_log(f"channel gone despite service result channel={channel.id} result={result!r}")
+        result["deleted"] = True
+        result["verified_gone"] = True
+        return result
+
+    _ticket_delete_log(
+        f"service did not remove channel; forcing delete channel={channel.id} "
+        f"service_result={result!r} service_error={service_error!r}"
+    )
+
+    forced = await _force_delete_ticket_channel_after_transcript(
+        channel,
+        deleted_by=staff_member,
+        reason=reason,
+    )
+    if service_error and not forced.get("service_error"):
+        forced["service_error"] = service_error
+    forced["service_result"] = result
+    return forced
 
 
 def _vc_channel_id() -> int:
@@ -1026,6 +1228,7 @@ async def _ensure_open_ticket_controls_after_reopen(
     return last_msg
 
 
+
 # ============================================================
 # Transcript wrapper helpers
 # ============================================================
@@ -1389,6 +1592,7 @@ class VerificationStaffReviewView(discord.ui.View):
             status_line=f"❌ Denied by {interaction.user.mention}.",
         )
         await _reply_ephemeral(interaction, "❌ Member denied.")
+
 
     @discord.ui.button(
         label="Remove Unverified",
@@ -1777,16 +1981,17 @@ class TicketOpenActionsView(discord.ui.View):
 
             is_ghost = await _detect_is_ghost_ticket(channel)
 
-            try:
-                result = await staff_delete_closed_ticket(
-                    channel=channel,
-                    staff_member=interaction.user,
-                    is_ghost=is_ghost,
-                    reason="Deleted by staff from open ticket controls",
-                )
-            except Exception as e:
-                print("⚠️ staff_delete_closed_ticket failed from open delete:", e)
-                return await _reply_ephemeral(interaction, f"❌ Failed to delete ticket: {e}")
+            _ticket_delete_log(
+                f"open delete button pressed channel={channel.id} "
+                f"staff={interaction.user.id} custom_id=sv:ticket:delete_open"
+            )
+
+            result = await _staff_delete_closed_ticket_verified(
+                channel=channel,
+                staff_member=interaction.user,
+                is_ghost=is_ghost,
+                reason="Deleted by staff from open ticket controls",
+            )
 
             if bool(result.get("deleted")):
                 try:
@@ -1797,8 +2002,9 @@ class TicketOpenActionsView(discord.ui.View):
 
             await _reply_ephemeral(
                 interaction,
-                f"❌ Failed to delete ticket: {result.get('reason') or 'Unknown error'}",
+                f"❌ Failed to delete ticket: {result.get('reason') or result.get('error') or 'Unknown error'}",
             )
+
 
 
 # ============================================================
@@ -2015,28 +2221,29 @@ class StaffClosedTicketView(discord.ui.View):
             except Exception:
                 is_ghost = False
 
-            try:
-                result = await staff_delete_closed_ticket(
-                    channel=channel,
-                    staff_member=interaction.user,
-                    is_ghost=is_ghost,
-                    reason="Deleted by staff",
-                )
+            _ticket_delete_log(
+                f"closed delete button pressed channel={channel.id} "
+                f"staff={interaction.user.id} custom_id=sv:ticket:delete"
+            )
 
-                if bool(result.get("deleted")):
-                    try:
-                        RUNTIME_STATS["tickets_closed"] = int(RUNTIME_STATS.get("tickets_closed", 0) or 0) + 1
-                    except Exception:
-                        pass
-                    return
+            result = await _staff_delete_closed_ticket_verified(
+                channel=channel,
+                staff_member=interaction.user,
+                is_ghost=is_ghost,
+                reason="Deleted by staff",
+            )
 
-                await _reply_ephemeral(
-                    interaction,
-                    f"❌ Failed to delete ticket: {result.get('reason') or 'Unknown error'}",
-                )
-            except Exception as e:
-                print("⚠️ staff_delete_closed_ticket failed:", e)
-                await _reply_ephemeral(interaction, f"❌ Failed to delete ticket: {e}")
+            if bool(result.get("deleted")):
+                try:
+                    RUNTIME_STATS["tickets_closed"] = int(RUNTIME_STATS.get("tickets_closed", 0) or 0) + 1
+                except Exception:
+                    pass
+                return
+
+            await _reply_ephemeral(
+                interaction,
+                f"❌ Failed to delete ticket: {result.get('reason') or result.get('error') or 'Unknown error'}",
+            )
 
 
 # ============================================================
@@ -2257,6 +2464,7 @@ def build_verify_ui_view(*, token: str | None = None) -> discord.ui.View:
         pass
 
     return view
+
 
 
 def _is_current_verify_ui_embed(embed: Optional[discord.Embed]) -> bool:
