@@ -237,11 +237,14 @@ async def _force_delete_ticket_channel_after_transcript(
     try:
         if not await _ticket_has_transcript(channel.id):
             owner = await _resolve_ticket_owner(channel)
-            await send_tickettool_style_transcript(
-                channel,
-                owner,
-                closed_by=deleted_by if isinstance(deleted_by, discord.Member) else None,
-                decision=reason,
+            await asyncio.wait_for(
+                send_tickettool_style_transcript(
+                    channel,
+                    owner,
+                    closed_by=deleted_by if isinstance(deleted_by, discord.Member) else None,
+                    decision=reason,
+                ),
+                timeout=10.0,
             )
         else:
             _ticket_delete_log(f"transcript already attached channel={channel.id}")
@@ -310,17 +313,24 @@ async def _staff_delete_closed_ticket_verified(
     service_error: Optional[str] = None
 
     try:
-        raw_result = await staff_delete_closed_ticket(
-            channel=channel,
-            staff_member=staff_member,
-            is_ghost=is_ghost,
-            reason=reason,
+        raw_result = await asyncio.wait_for(
+            staff_delete_closed_ticket(
+                channel=channel,
+                staff_member=staff_member,
+                is_ghost=is_ghost,
+                reason=reason,
+            ),
+            timeout=8.0,
         )
         if isinstance(raw_result, dict):
             result = raw_result
         else:
             result = {"deleted": bool(raw_result), "raw_result": repr(raw_result)}
         _ticket_delete_log(f"service delete result channel={channel.id} result={result!r}")
+    except asyncio.TimeoutError:
+        service_error = "staff_delete_closed_ticket timed out after 8 seconds"
+        print(f"⏱️ staff_delete_closed_ticket timeout channel={channel.id}; falling back to direct channel.delete")
+        result = {"deleted": False, "reason": service_error, "service_error": service_error}
     except Exception as e:
         service_error = repr(e)
         print(f"⚠️ staff_delete_closed_ticket raised channel={channel.id}: {repr(e)}")
@@ -616,8 +626,22 @@ async def _safe_defer_ephemeral(interaction: discord.Interaction) -> None:
     try:
         if not interaction.response.is_done():
             await interaction.response.defer(ephemeral=True)
-    except Exception:
-        pass
+            return
+    except discord.NotFound as e:
+        try:
+            print(f"⚠️ interaction defer failed: interaction expired/not found id={getattr(interaction, 'id', 'unknown')} error={repr(e)}")
+        except Exception:
+            pass
+    except discord.HTTPException as e:
+        try:
+            print(f"⚠️ interaction defer HTTPException id={getattr(interaction, 'id', 'unknown')} error={repr(e)}")
+        except Exception:
+            pass
+    except Exception as e:
+        try:
+            print(f"⚠️ interaction defer unexpected id={getattr(interaction, 'id', 'unknown')} error={repr(e)}")
+        except Exception:
+            pass
 
 
 async def _resolve_ticket_owner(channel: discord.TextChannel) -> Optional[discord.Member]:
@@ -1911,10 +1935,17 @@ class TicketOpenActionsView(discord.ui.View):
         if await _ticket_is_deleted(channel):
             return await _reply_ephemeral(interaction, "❌ Ticket is already deleted.")
 
-        lock = _lock_for(_DELETE_ACTION_LOCKS, channel.id)
-        async with lock:
-            await _safe_defer_ephemeral(interaction)
+        await _safe_defer_ephemeral(interaction)
 
+        lock = _lock_for(_DELETE_ACTION_LOCKS, channel.id)
+        if lock.locked():
+            try:
+                await interaction.followup.send("⏳ Delete is already running for this ticket. Try again in a few seconds.", ephemeral=True)
+            except Exception:
+                pass
+            return
+
+        async with lock:
             if await _ticket_is_deleted(channel):
                 return await _reply_ephemeral(interaction, "❌ Ticket is already deleted.")
 
@@ -2204,10 +2235,17 @@ class StaffClosedTicketView(discord.ui.View):
         if not isinstance(channel, discord.TextChannel):
             return await _reply_ephemeral(interaction, "❌ Invalid channel.")
 
-        lock = _lock_for(_DELETE_ACTION_LOCKS, channel.id)
-        async with lock:
-            await _safe_defer_ephemeral(interaction)
+        await _safe_defer_ephemeral(interaction)
 
+        lock = _lock_for(_DELETE_ACTION_LOCKS, channel.id)
+        if lock.locked():
+            try:
+                await interaction.followup.send("⏳ Delete is already running for this ticket. Try again in a few seconds.", ephemeral=True)
+            except Exception:
+                pass
+            return
+
+        async with lock:
             if await _ticket_is_deleted(channel):
                 return await _reply_ephemeral(interaction, "❌ Ticket is already deleted.")
 
