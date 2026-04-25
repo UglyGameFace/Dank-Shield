@@ -18,9 +18,18 @@ This does not add or rename commands. It only prevents command-limit exceptions
 from killing the process and reports command budget pressure.
 """
 
-import asyncio
 import time
 from typing import Any
+
+# Load the env-gated AutoShardedBot switch before stoney_verify.globals creates
+# the shared bot instance. Disabled unless DISCORD_AUTO_SHARD=true.
+try:
+    import runtime_auto_shard_guard  # noqa: F401
+except Exception as e:
+    try:
+        print(f"⚠️ runtime_command_safety failed to import runtime_auto_shard_guard: {e!r}")
+    except Exception:
+        pass
 
 _PATCHED = False
 _SKIPPED_COMMANDS: list[dict[str, Any]] = []
