@@ -10,6 +10,7 @@ Why this exists:
   gateway session can be invalidated.
 - Ticket creation also used DB-heavy ticket-number/counter/event-log paths before and after
   channel creation. Those must be timeboxed so Discord channel creation stays responsive.
+- Voice-state modlog must never run dashboard/risk context work long enough to block the bot.
 
 This file is intentionally surgical. main.py force-imports this before stoney_verify.app.
 """
@@ -92,6 +93,36 @@ def _cache_store_raidguard_context(module: Any, guild_id: int, user_id: int, val
         pass
 
 
+def _lightweight_member_context_snapshot(guild: Any, target: Any) -> Dict[str, Any]:
+    try:
+        roles = []
+        try:
+            roles = [
+                {"id": str(getattr(role, "id", "")), "name": str(getattr(role, "name", ""))}
+                for role in (getattr(target, "roles", None) or [])
+                if str(getattr(role, "name", "")) != "@everyone"
+            ]
+        except Exception:
+            roles = []
+
+        return {
+            "runtime_safety_fallback": True,
+            "guild_id": str(getattr(guild, "id", "") or ""),
+            "user_id": str(getattr(target, "id", "") or ""),
+            "username": str(target) if target is not None else "Unknown",
+            "display_name": str(getattr(target, "display_name", "") or ""),
+            "bot": bool(getattr(target, "bot", False)),
+            "joined_at": str(getattr(target, "joined_at", "") or ""),
+            "created_at": str(getattr(target, "created_at", "") or ""),
+            "role_count": len(roles),
+            "roles": roles[:25],
+            "risk_profile": {},
+            "identity_context": {},
+        }
+    except Exception:
+        return {"runtime_safety_fallback": True}
+
+
 def _patch_raidguard(module: Any) -> None:
     module_name = getattr(module, "__name__", "")
     patch_key = f"{module_name}:raidguard"
@@ -171,14 +202,11 @@ def _patch_identity_proof_service(module: Any) -> None:
 
 
 def _patch_ticket_service(module: Any) -> None:
-    """Harden ticket creation internals without replacing the full service module."""
     module_name = getattr(module, "__name__", "")
     patch_key = f"{module_name}:ticket_service_p0"
     if patch_key in _PATCHED_MODULES:
         return
 
-    # 1) Fast ticket-number reservation. The original path may touch Supabase counters.
-    # We keep the per-guild lock, but timebox DB max lookup and fall back to channel scan.
     original_reserve = getattr(module, "_reserve_next_ticket_number", None)
     if callable(original_reserve):
         async def _safe_reserve_next_ticket_number(guild: Any, parent: Any = None, *, max_retries: int = 20) -> int:
@@ -238,8 +266,6 @@ def _patch_ticket_service(module: Any) -> None:
 
         setattr(module, "_reserve_next_ticket_number", _safe_reserve_next_ticket_number)
 
-    # 2) Timebox repo writes used by create flow. If DB is slow, channel creation should
-    # still complete and startup sync/backfill can repair metadata.
     def _wrap_async_timeout(name: str, timeout: float, default: Any) -> None:
         original = getattr(module, name, None)
         if not callable(original) or getattr(original, "_runtime_safety_wrapped", False):
@@ -280,7 +306,6 @@ def _patch_ticket_service(module: Any) -> None:
     ):
         _wrap_async_timeout(event_name, 3.0, False)
 
-    # 3) Instrument create_ticket_channel so we can see timing without changing return shape.
     original_create = getattr(module, "create_ticket_channel", None)
     if callable(original_create) and not getattr(original_create, "_runtime_safety_wrapped", False):
         async def _instrumented_create_ticket_channel(*args: Any, **kwargs: Any) -> Any:
@@ -314,6 +339,94 @@ def _patch_ticket_service(module: Any) -> None:
     _log(f"patched {module_name} ticket creation timing/DB guards")
 
 
+def _patch_modlog(module: Any) -> None:
+    module_name = getattr(module, "__name__", "")
+    patch_key = f"{module_name}:modlog_voice_p0"
+    if patch_key in _PATCHED_MODULES:
+        return
+
+    original_context = getattr(module, "_fetch_member_context_snapshot", None)
+    if callable(original_context) and not getattr(original_context, "_runtime_safety_wrapped", False):
+        async def _safe_fetch_member_context_snapshot(guild: Any, target: Any) -> Dict[str, Any]:
+            started = time.monotonic()
+            try:
+                result = await asyncio.wait_for(original_context(guild, target), timeout=2.75)
+                elapsed_ms = int((time.monotonic() - started) * 1000)
+                if elapsed_ms > 1500:
+                    _warn(
+                        f"member context snapshot slow guild={getattr(guild, 'id', None)} "
+                        f"target={getattr(target, 'id', None)} elapsed_ms={elapsed_ms}"
+                    )
+                return result if isinstance(result, dict) else {}
+            except asyncio.TimeoutError:
+                _warn(
+                    f"member context snapshot timeout guild={getattr(guild, 'id', None)} "
+                    f"target={getattr(target, 'id', None)}; using lightweight fallback"
+                )
+                return _lightweight_member_context_snapshot(guild, target)
+            except Exception as e:
+                _warn(
+                    f"member context snapshot failed guild={getattr(guild, 'id', None)} "
+                    f"target={getattr(target, 'id', None)} error={repr(e)}"
+                )
+                return _lightweight_member_context_snapshot(guild, target)
+
+        try:
+            setattr(_safe_fetch_member_context_snapshot, "_runtime_safety_wrapped", True)
+        except Exception:
+            pass
+        setattr(module, "_fetch_member_context_snapshot", _safe_fetch_member_context_snapshot)
+
+    original_dashboard_log = getattr(module, "post_dashboard_mod_action_log", None)
+    if callable(original_dashboard_log) and not getattr(original_dashboard_log, "_runtime_safety_wrapped", False):
+        async def _safe_post_dashboard_mod_action_log(*args: Any, **kwargs: Any) -> Any:
+            started = time.monotonic()
+            try:
+                result = await asyncio.wait_for(original_dashboard_log(*args, **kwargs), timeout=4.0)
+                elapsed_ms = int((time.monotonic() - started) * 1000)
+                if elapsed_ms > 2500:
+                    _warn(f"dashboard mod action log slow elapsed_ms={elapsed_ms}")
+                return result
+            except asyncio.TimeoutError:
+                _warn("dashboard mod action log timeout; skipped to protect Discord heartbeat")
+                return False
+            except Exception as e:
+                _warn(f"dashboard mod action log failed safely: {repr(e)}")
+                return False
+
+        try:
+            setattr(_safe_post_dashboard_mod_action_log, "_runtime_safety_wrapped", True)
+        except Exception:
+            pass
+        setattr(module, "post_dashboard_mod_action_log", _safe_post_dashboard_mod_action_log)
+
+    original_voice = getattr(module, "maybe_log_voice_state_update", None)
+    if callable(original_voice) and not getattr(original_voice, "_runtime_safety_wrapped", False):
+        async def _safe_maybe_log_voice_state_update(*args: Any, **kwargs: Any) -> Any:
+            started = time.monotonic()
+            try:
+                result = await asyncio.wait_for(original_voice(*args, **kwargs), timeout=4.5)
+                elapsed_ms = int((time.monotonic() - started) * 1000)
+                if elapsed_ms > 2500:
+                    _warn(f"voice state modlog slow elapsed_ms={elapsed_ms}")
+                return result
+            except asyncio.TimeoutError:
+                _warn("voice state modlog timeout; skipped to protect Discord heartbeat")
+                return False
+            except Exception as e:
+                _warn(f"voice state modlog failed safely: {repr(e)}")
+                return False
+
+        try:
+            setattr(_safe_maybe_log_voice_state_update, "_runtime_safety_wrapped", True)
+        except Exception:
+            pass
+        setattr(module, "maybe_log_voice_state_update", _safe_maybe_log_voice_state_update)
+
+    _PATCHED_MODULES.add(patch_key)
+    _log(f"patched {module_name} voice/dashboard modlog timeouts")
+
+
 def _maybe_patch_loaded_modules() -> None:
     try:
         raidguard = sys.modules.get("stoney_verify.raidguard")
@@ -336,6 +449,13 @@ def _maybe_patch_loaded_modules() -> None:
     except Exception as e:
         _warn(f"ticket service patch failed: {repr(e)}")
 
+    try:
+        modlog = sys.modules.get("stoney_verify.modlog")
+        if modlog is not None:
+            _patch_modlog(modlog)
+    except Exception as e:
+        _warn(f"modlog patch failed: {repr(e)}")
+
 
 def _safe_import(name: str, globals: Any = None, locals: Any = None, fromlist: Any = (), level: int = 0) -> Any:
     module = _ORIGINAL_IMPORT(name, globals, locals, fromlist, level)
@@ -356,6 +476,11 @@ def _safe_import(name: str, globals: Any = None, locals: Any = None, fromlist: A
             if target is not None:
                 _patch_ticket_service(target)
 
+        if name == "stoney_verify.modlog" or name.endswith(".modlog"):
+            target = sys.modules.get("stoney_verify.modlog") or sys.modules.get(name)
+            if target is not None:
+                _patch_modlog(target)
+
         _maybe_patch_loaded_modules()
     except Exception as e:
         _warn(f"post-import patch failed for {name}: {repr(e)}")
@@ -365,4 +490,4 @@ def _safe_import(name: str, globals: Any = None, locals: Any = None, fromlist: A
 
 builtins.__import__ = _safe_import
 _maybe_patch_loaded_modules()
-_log("sitecustomize loaded; event-loop DB guard + ticket creation guard active")
+_log("sitecustomize loaded; event-loop DB guard + ticket creation guard + modlog guard active")
