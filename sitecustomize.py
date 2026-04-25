@@ -3,16 +3,15 @@ from __future__ import annotations
 """
 Runtime safety patch for Stoney Verify.
 
-Why this exists:
-- Some sync Supabase/PostgREST lookups still exist inside risk-profile code.
-- When sync HTTP calls happen inside Discord's asyncio event loop, the whole bot can freeze.
-- Discord then reports heartbeat blocked, interactions lag, tickets create slowly, and the
-  gateway session can be invalidated.
-- Ticket creation also used DB-heavy ticket-number/counter/event-log paths before and after
-  channel creation. Those must be timeboxed so Discord channel creation stays responsive.
-- Voice-state modlog must never run dashboard/risk context work long enough to block the bot.
+This file is force-imported by main.py before stoney_verify.app.
 
-This file is intentionally surgical. main.py force-imports this before stoney_verify.app.
+Purpose:
+- prevent sync Supabase/PostgREST risk lookups from blocking Discord's event loop
+- keep ticket creation responsive when DB/event-log paths are slow
+- route noisy voice/dashboard modlog work through a bounded per-guild queue
+
+This is a production safety layer while the underlying modules are being refactored
+into permanent async/queued code.
 """
 
 import asyncio
@@ -136,10 +135,7 @@ def _patch_raidguard(module: Any) -> None:
     if callable(original_query_proof):
         def _safe_query_identity_proof_matches_sync(guild_id: int, user_id: int) -> List[Dict[str, Any]]:
             if _running_event_loop_in_this_thread():
-                _warn(
-                    "blocked sync identity_proof_matches lookup on event loop; "
-                    f"guild={guild_id} user={user_id}"
-                )
+                _warn(f"blocked sync identity_proof_matches lookup on event loop; guild={guild_id} user={user_id}")
                 return []
             return original_query_proof(guild_id, user_id)
 
@@ -148,10 +144,7 @@ def _patch_raidguard(module: Any) -> None:
     if callable(original_query_manual):
         def _safe_query_manual_alt_links_sync(guild_id: int, user_id: int) -> List[Dict[str, Any]]:
             if _running_event_loop_in_this_thread():
-                _warn(
-                    "blocked sync manual_alt_links lookup on event loop; "
-                    f"guild={guild_id} user={user_id}"
-                )
+                _warn(f"blocked sync manual_alt_links lookup on event loop; guild={guild_id} user={user_id}")
                 return []
             return original_query_manual(guild_id, user_id)
 
@@ -166,10 +159,7 @@ def _patch_raidguard(module: Any) -> None:
             if _running_event_loop_in_this_thread():
                 context = _empty_hard_identity_context()
                 _cache_store_raidguard_context(module, int(guild_id), int(user_id), context)
-                _warn(
-                    "skipped hard identity context sync DB load on event loop; "
-                    f"guild={guild_id} user={user_id}"
-                )
+                _warn(f"skipped hard identity context sync DB load on event loop; guild={guild_id} user={user_id}")
                 return context
 
             return original_load_context(guild_id, user_id)
@@ -238,13 +228,7 @@ def _patch_ticket_service(module: Any) -> None:
                 try:
                     db_reader = getattr(module, "_db_max_ticket_number", None)
                     if callable(db_reader):
-                        db_max = int(
-                            await asyncio.wait_for(
-                                asyncio.to_thread(db_reader, guild_id),
-                                timeout=1.75,
-                            )
-                            or 0
-                        )
+                        db_max = int(await asyncio.wait_for(asyncio.to_thread(db_reader, guild_id), timeout=1.75) or 0)
                 except asyncio.TimeoutError:
                     _warn(f"ticket number DB max timeout guild={guild_id}; using channel scan only")
                 except Exception as e:
@@ -252,10 +236,7 @@ def _patch_ticket_service(module: Any) -> None:
 
                 next_number = max(channel_max, db_max) + 1
                 elapsed_ms = int((time.monotonic() - started) * 1000)
-                _log(
-                    f"reserved ticket number guild={guild_id} number={next_number} "
-                    f"channel_max={channel_max} db_max={db_max} elapsed_ms={elapsed_ms}"
-                )
+                _log(f"reserved ticket number guild={guild_id} number={next_number} channel_max={channel_max} db_max={db_max} elapsed_ms={elapsed_ms}")
                 return int(next_number)
             finally:
                 if acquired and lock is not None:
@@ -316,17 +297,11 @@ def _patch_ticket_service(module: Any) -> None:
                 result = await original_create(*args, **kwargs)
                 elapsed_ms = int((time.monotonic() - started) * 1000)
                 channel_id = getattr(result, "id", None)
-                _log(
-                    f"create_ticket_channel complete guild={guild_id} owner={owner_id} "
-                    f"channel={channel_id} elapsed_ms={elapsed_ms}"
-                )
+                _log(f"create_ticket_channel complete guild={guild_id} owner={owner_id} channel={channel_id} elapsed_ms={elapsed_ms}")
                 return result
             except Exception as e:
                 elapsed_ms = int((time.monotonic() - started) * 1000)
-                _warn(
-                    f"create_ticket_channel failed guild={guild_id} owner={owner_id} "
-                    f"elapsed_ms={elapsed_ms} error={repr(e)}"
-                )
+                _warn(f"create_ticket_channel failed guild={guild_id} owner={owner_id} elapsed_ms={elapsed_ms} error={repr(e)}")
                 raise
 
         try:
@@ -341,7 +316,7 @@ def _patch_ticket_service(module: Any) -> None:
 
 def _patch_modlog(module: Any) -> None:
     module_name = getattr(module, "__name__", "")
-    patch_key = f"{module_name}:modlog_voice_p0"
+    patch_key = f"{module_name}:modlog_voice_queue_p0"
     if patch_key in _PATCHED_MODULES:
         return
 
@@ -353,22 +328,13 @@ def _patch_modlog(module: Any) -> None:
                 result = await asyncio.wait_for(original_context(guild, target), timeout=2.75)
                 elapsed_ms = int((time.monotonic() - started) * 1000)
                 if elapsed_ms > 1500:
-                    _warn(
-                        f"member context snapshot slow guild={getattr(guild, 'id', None)} "
-                        f"target={getattr(target, 'id', None)} elapsed_ms={elapsed_ms}"
-                    )
+                    _warn(f"member context snapshot slow guild={getattr(guild, 'id', None)} target={getattr(target, 'id', None)} elapsed_ms={elapsed_ms}")
                 return result if isinstance(result, dict) else {}
             except asyncio.TimeoutError:
-                _warn(
-                    f"member context snapshot timeout guild={getattr(guild, 'id', None)} "
-                    f"target={getattr(target, 'id', None)}; using lightweight fallback"
-                )
+                _warn(f"member context snapshot timeout guild={getattr(guild, 'id', None)} target={getattr(target, 'id', None)}; using lightweight fallback")
                 return _lightweight_member_context_snapshot(guild, target)
             except Exception as e:
-                _warn(
-                    f"member context snapshot failed guild={getattr(guild, 'id', None)} "
-                    f"target={getattr(target, 'id', None)} error={repr(e)}"
-                )
+                _warn(f"member context snapshot failed guild={getattr(guild, 'id', None)} target={getattr(target, 'id', None)} error={repr(e)}")
                 return _lightweight_member_context_snapshot(guild, target)
 
         try:
@@ -402,85 +368,77 @@ def _patch_modlog(module: Any) -> None:
 
     original_voice = getattr(module, "maybe_log_voice_state_update", None)
     if callable(original_voice) and not getattr(original_voice, "_runtime_safety_wrapped", False):
-        async def _safe_maybe_log_voice_state_update(*args: Any, **kwargs: Any) -> Any:
-            started = time.monotonic()
+        async def _queued_maybe_log_voice_state_update(*args: Any, **kwargs: Any) -> Any:
+            guild = args[0] if len(args) >= 1 else kwargs.get("guild")
+            member = args[1] if len(args) >= 2 else kwargs.get("member")
+            guild_id = getattr(guild, "id", None)
+            member_id = getattr(member, "id", None)
+
             try:
-                result = await asyncio.wait_for(original_voice(*args, **kwargs), timeout=4.5)
-                elapsed_ms = int((time.monotonic() - started) * 1000)
-                if elapsed_ms > 2500:
-                    _warn(f"voice state modlog slow elapsed_ms={elapsed_ms}")
-                return result
-            except asyncio.TimeoutError:
-                _warn("voice state modlog timeout; skipped to protect Discord heartbeat")
-                return False
+                from stoney_verify.runtime_jobs import enqueue_runtime_job
             except Exception as e:
-                _warn(f"voice state modlog failed safely: {repr(e)}")
-                return False
+                _warn(f"runtime_jobs import failed; falling back to direct voice modlog timeout: {e!r}")
+                try:
+                    return await asyncio.wait_for(original_voice(*args, **kwargs), timeout=4.5)
+                except Exception as inner:
+                    _warn(f"voice state modlog fallback failed safely: {inner!r}")
+                    return False
+
+            async def _job() -> object:
+                return await original_voice(*args, **kwargs)
+
+            queued = await enqueue_runtime_job(
+                kind="voice_modlog",
+                guild_id=guild_id,
+                label=f"voice_state member={member_id}",
+                factory=_job,
+                timeout=5.0,
+                max_queue=250,
+            )
+            if not queued:
+                _warn(f"voice state modlog dropped guild={guild_id} member={member_id}; queue full")
+            return queued
 
         try:
-            setattr(_safe_maybe_log_voice_state_update, "_runtime_safety_wrapped", True)
+            setattr(_queued_maybe_log_voice_state_update, "_runtime_safety_wrapped", True)
         except Exception:
             pass
-        setattr(module, "maybe_log_voice_state_update", _safe_maybe_log_voice_state_update)
+        setattr(module, "maybe_log_voice_state_update", _queued_maybe_log_voice_state_update)
 
     _PATCHED_MODULES.add(patch_key)
-    _log(f"patched {module_name} voice/dashboard modlog timeouts")
+    _log(f"patched {module_name} voice/dashboard modlog queue + timeouts")
 
 
 def _maybe_patch_loaded_modules() -> None:
-    try:
-        raidguard = sys.modules.get("stoney_verify.raidguard")
-        if raidguard is not None:
-            _patch_raidguard(raidguard)
-    except Exception as e:
-        _warn(f"raidguard patch failed: {repr(e)}")
-
-    try:
-        identity = sys.modules.get("stoney_verify.identity_proof_service")
-        if identity is not None:
-            _patch_identity_proof_service(identity)
-    except Exception as e:
-        _warn(f"identity_proof_service patch failed: {repr(e)}")
-
-    try:
-        service = sys.modules.get("stoney_verify.tickets_new.service")
-        if service is not None:
-            _patch_ticket_service(service)
-    except Exception as e:
-        _warn(f"ticket service patch failed: {repr(e)}")
-
-    try:
-        modlog = sys.modules.get("stoney_verify.modlog")
-        if modlog is not None:
-            _patch_modlog(modlog)
-    except Exception as e:
-        _warn(f"modlog patch failed: {repr(e)}")
+    for module_name, patcher in (
+        ("stoney_verify.raidguard", _patch_raidguard),
+        ("stoney_verify.identity_proof_service", _patch_identity_proof_service),
+        ("stoney_verify.tickets_new.service", _patch_ticket_service),
+        ("stoney_verify.modlog", _patch_modlog),
+    ):
+        try:
+            module = sys.modules.get(module_name)
+            if module is not None:
+                patcher(module)
+        except Exception as e:
+            _warn(f"{module_name} patch failed: {repr(e)}")
 
 
 def _safe_import(name: str, globals: Any = None, locals: Any = None, fromlist: Any = (), level: int = 0) -> Any:
     module = _ORIGINAL_IMPORT(name, globals, locals, fromlist, level)
 
     try:
-        if name == "stoney_verify.raidguard" or name.endswith(".raidguard"):
-            target = sys.modules.get("stoney_verify.raidguard") or sys.modules.get(name)
-            if target is not None:
-                _patch_raidguard(target)
-
-        if name == "stoney_verify.identity_proof_service" or name.endswith(".identity_proof_service"):
-            target = sys.modules.get("stoney_verify.identity_proof_service") or sys.modules.get(name)
-            if target is not None:
-                _patch_identity_proof_service(target)
-
-        if name == "stoney_verify.tickets_new.service" or name.endswith(".tickets_new.service") or name.endswith("tickets_new.service"):
-            target = sys.modules.get("stoney_verify.tickets_new.service") or sys.modules.get(name)
-            if target is not None:
-                _patch_ticket_service(target)
-
-        if name == "stoney_verify.modlog" or name.endswith(".modlog"):
-            target = sys.modules.get("stoney_verify.modlog") or sys.modules.get(name)
-            if target is not None:
-                _patch_modlog(target)
-
+        target_map = {
+            "stoney_verify.raidguard": _patch_raidguard,
+            "stoney_verify.identity_proof_service": _patch_identity_proof_service,
+            "stoney_verify.tickets_new.service": _patch_ticket_service,
+            "stoney_verify.modlog": _patch_modlog,
+        }
+        for module_name, patcher in target_map.items():
+            if name == module_name or name.endswith(module_name.split("stoney_verify", 1)[-1]):
+                target = sys.modules.get(module_name) or sys.modules.get(name)
+                if target is not None:
+                    patcher(target)
         _maybe_patch_loaded_modules()
     except Exception as e:
         _warn(f"post-import patch failed for {name}: {repr(e)}")
@@ -490,4 +448,4 @@ def _safe_import(name: str, globals: Any = None, locals: Any = None, fromlist: A
 
 builtins.__import__ = _safe_import
 _maybe_patch_loaded_modules()
-_log("sitecustomize loaded; event-loop DB guard + ticket creation guard + modlog guard active")
+_log("sitecustomize loaded; event-loop DB guard + ticket creation guard + queued modlog guard active")
