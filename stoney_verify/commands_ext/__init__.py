@@ -298,6 +298,23 @@ def register_all_commands(bot: Any, tree: Any) -> None:
         except Exception:
             pass
 
+    # ------------------------------------------------------------
+    # Runtime job / scale observability admin
+    # ------------------------------------------------------------
+    try:
+        from .runtime_jobs_admin import register_runtime_jobs_admin_commands
+        register_runtime_jobs_admin_commands(bot, tree)
+        try:
+            print("✅ commands_ext: registered runtime job admin commands")
+        except Exception:
+            pass
+    except Exception as e:
+        errors.append(f"runtime_jobs_admin: {repr(e)}")
+        try:
+            print(f"⚠️ commands_ext: failed registering runtime job admin commands: {repr(e)}")
+        except Exception:
+            pass
+
     _COMMANDS_EXT_REGISTERED = True
 
     try:
