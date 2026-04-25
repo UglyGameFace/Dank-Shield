@@ -9,6 +9,7 @@ Purpose:
 - prevent sync Supabase/PostgREST risk lookups from blocking Discord's event loop
 - keep ticket creation responsive when DB/event-log paths are slow
 - route noisy voice/dashboard modlog work through a bounded per-guild queue
+- route startup maintenance/backfill work through a bounded per-guild queue
 
 This is a production safety layer while the underlying modules are being refactored
 into permanent async/queued code.
@@ -409,12 +410,92 @@ def _patch_modlog(module: Any) -> None:
     _log(f"patched {module_name} voice/dashboard modlog queue + timeouts")
 
 
+def _patch_app_startup(module: Any) -> None:
+    module_name = getattr(module, "__name__", "")
+    patch_key = f"{module_name}:startup_queue_p0"
+    if patch_key in _PATCHED_MODULES:
+        return
+
+    original_runner = getattr(module, "_startup_background_runner", None)
+    if not callable(original_runner) or getattr(original_runner, "_runtime_safety_wrapped", False):
+        return
+
+    async def _queued_startup_background_runner() -> None:
+        try:
+            await asyncio.sleep(5.0)
+
+            try:
+                from stoney_verify.runtime_jobs import (
+                    enqueue_runtime_job,
+                    start_runtime_job_summary_logger,
+                )
+                start_runtime_job_summary_logger(interval_seconds=300)
+            except Exception as e:
+                _warn(f"runtime_jobs import failed for startup queue; using original startup runner: {e!r}")
+                try:
+                    await asyncio.wait_for(original_runner(), timeout=180.0)
+                except asyncio.TimeoutError:
+                    _warn("original startup background runner timed out after 180s")
+                return
+
+            guild_id = None
+            try:
+                guild = await asyncio.wait_for(module._resolve_runtime_guild(), timeout=8.0)
+                guild_id = getattr(guild, "id", None)
+            except Exception:
+                guild = None
+
+            async def _departed_job() -> object:
+                return await module._maybe_run_departed_reconcile_once()
+
+            async def _ticket_sync_job() -> object:
+                await asyncio.sleep(2.0)
+                return await module._maybe_run_ticket_sync_once()
+
+            queued_departed = await enqueue_runtime_job(
+                kind="startup_maintenance",
+                guild_id=guild_id,
+                label="departed_member_reconciliation",
+                factory=_departed_job,
+                timeout=120.0,
+                max_queue=20,
+            )
+
+            queued_ticket_sync = await enqueue_runtime_job(
+                kind="startup_maintenance",
+                guild_id=guild_id,
+                label="startup_ticket_sync_backfill",
+                factory=_ticket_sync_job,
+                timeout=120.0,
+                max_queue=20,
+            )
+
+            _log(
+                f"queued startup maintenance guild={guild_id} "
+                f"departed={queued_departed} ticket_sync={queued_ticket_sync}"
+            )
+        except asyncio.CancelledError:
+            return
+        except Exception as e:
+            _warn(f"queued startup background runner failed safely: {e!r}")
+
+    try:
+        setattr(_queued_startup_background_runner, "_runtime_safety_wrapped", True)
+    except Exception:
+        pass
+
+    setattr(module, "_startup_background_runner", _queued_startup_background_runner)
+    _PATCHED_MODULES.add(patch_key)
+    _log(f"patched {module_name} startup maintenance queue")
+
+
 def _maybe_patch_loaded_modules() -> None:
     for module_name, patcher in (
         ("stoney_verify.raidguard", _patch_raidguard),
         ("stoney_verify.identity_proof_service", _patch_identity_proof_service),
         ("stoney_verify.tickets_new.service", _patch_ticket_service),
         ("stoney_verify.modlog", _patch_modlog),
+        ("stoney_verify.app", _patch_app_startup),
     ):
         try:
             module = sys.modules.get(module_name)
@@ -433,6 +514,7 @@ def _safe_import(name: str, globals: Any = None, locals: Any = None, fromlist: A
             "stoney_verify.identity_proof_service": _patch_identity_proof_service,
             "stoney_verify.tickets_new.service": _patch_ticket_service,
             "stoney_verify.modlog": _patch_modlog,
+            "stoney_verify.app": _patch_app_startup,
         }
         for module_name, patcher in target_map.items():
             if name == module_name or name.endswith(module_name.split("stoney_verify", 1)[-1]):
@@ -448,4 +530,4 @@ def _safe_import(name: str, globals: Any = None, locals: Any = None, fromlist: A
 
 builtins.__import__ = _safe_import
 _maybe_patch_loaded_modules()
-_log("sitecustomize loaded; event-loop DB guard + ticket creation guard + queued modlog guard active")
+_log("sitecustomize loaded; event-loop DB guard + ticket creation guard + queued modlog/startup guard active")
