@@ -52,8 +52,6 @@ def _infer_dedupe_key(*, kind: Any, guild_id: Any, label: Any) -> str:
     safe_guild = str(guild_id or "global").strip()[:80] or "global"
     safe_label = _normalize_label(label)
 
-    # High-volume known paths. Keep exact label identity because labels already
-    # include important dimensions like member id or startup task name.
     if safe_kind in {
         "voice_modlog",
         "member_sync",
@@ -62,8 +60,6 @@ def _infer_dedupe_key(*, kind: Any, guild_id: Any, label: Any) -> str:
     }:
         return f"auto:{safe_kind}:{safe_guild}:{safe_label}"
 
-    # Safe default: exact same kind + guild + label coalesces while pending/running.
-    # Different labels still queue independently.
     return f"auto:{safe_kind}:{safe_guild}:{safe_label}"
 
 
@@ -131,4 +127,10 @@ def _safe_import(name: str, globals: Any = None, locals: Any = None, fromlist: A
 
 builtins.__import__ = _safe_import
 _maybe_patch_loaded_modules()
+
+try:
+    import runtime_shard_safety  # noqa: F401
+except Exception as e:
+    _warn(f"failed to import runtime_shard_safety: {e!r}")
+
 _log("loaded; automatic runtime job dedupe guard active")
