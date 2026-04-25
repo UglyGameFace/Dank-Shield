@@ -12,16 +12,27 @@ Design goals:
 - Bound memory with max queue size.
 - Per-guild keys so one noisy guild does not starve everyone else.
 - Timebox every background job.
+- Cap global job concurrency so 100+ guild queues cannot stampede Supabase/Discord.
 - Emit simple logs/stats for observability.
 - Provide health summaries without needing another slash command.
 """
 
 import asyncio
+import os
 import time
 from dataclasses import dataclass, field
 from typing import Awaitable, Callable, Dict, Optional
 
 JobFactory = Callable[[], Awaitable[object]]
+
+
+def _env_int(name: str, default: int, *, minimum: int = 1, maximum: int = 128) -> int:
+    try:
+        raw = str(os.getenv(name, "") or "").strip()
+        value = int(raw) if raw else int(default)
+    except Exception:
+        value = int(default)
+    return max(int(minimum), min(int(maximum), int(value)))
 
 
 @dataclass
@@ -32,9 +43,11 @@ class RuntimeJobStats:
     timed_out: int = 0
     dropped: int = 0
     running: int = 0
+    waiting_global_slot: int = 0
     last_error: str = ""
     last_label: str = ""
     last_elapsed_ms: int = 0
+    last_wait_ms: int = 0
     last_updated_monotonic: float = field(default_factory=time.monotonic)
 
 
@@ -55,6 +68,36 @@ class RuntimeJobManager:
         self._summary_task: Optional[asyncio.Task[None]] = None
         self._last_summary_monotonic: float = 0.0
 
+        # Global backpressure. Per-guild queues prevent one server from starving
+        # another; this cap prevents 100+ guild workers from stampeding upstreams.
+        self._max_concurrent_jobs = _env_int(
+            "STONEY_RUNTIME_JOBS_MAX_CONCURRENT",
+            8,
+            minimum=1,
+            maximum=64,
+        )
+        self._global_semaphore: Optional[asyncio.Semaphore] = None
+        self._global_semaphore_loop: Optional[asyncio.AbstractEventLoop] = None
+        self._global_running: int = 0
+        self._global_waiting: int = 0
+
+    def _get_global_semaphore(self) -> asyncio.Semaphore:
+        loop = asyncio.get_running_loop()
+        if self._global_semaphore is None or self._global_semaphore_loop is not loop:
+            self._global_semaphore = asyncio.Semaphore(self._max_concurrent_jobs)
+            self._global_semaphore_loop = loop
+            self._global_running = 0
+            self._global_waiting = 0
+            try:
+                print(
+                    "📊 runtime_jobs global concurrency cap active "
+                    f"max_concurrent={self._max_concurrent_jobs} "
+                    "env=STONEY_RUNTIME_JOBS_MAX_CONCURRENT"
+                )
+            except Exception:
+                pass
+        return self._global_semaphore
+
     def snapshot(self) -> Dict[str, dict]:
         out: Dict[str, dict] = {}
         for key, stats in list(self._stats.items()):
@@ -70,9 +113,11 @@ class RuntimeJobManager:
                 "timed_out": stats.timed_out,
                 "dropped": stats.dropped,
                 "running": stats.running,
+                "waiting_global_slot": stats.waiting_global_slot,
                 "last_error": stats.last_error,
                 "last_label": stats.last_label,
                 "last_elapsed_ms": stats.last_elapsed_ms,
+                "last_wait_ms": stats.last_wait_ms,
                 "last_updated_seconds_ago": max(0, int(time.monotonic() - float(stats.last_updated_monotonic or 0))),
             }
         return out
@@ -83,6 +128,7 @@ class RuntimeJobManager:
             "queues": len(snapshot),
             "queued": 0,
             "running": 0,
+            "waiting_global_slot": 0,
             "enqueued": 0,
             "completed": 0,
             "failed": 0,
@@ -95,6 +141,7 @@ class RuntimeJobManager:
             for total_key, stat_key in (
                 ("queued", "queue_size"),
                 ("running", "running"),
+                ("waiting_global_slot", "waiting_global_slot"),
                 ("enqueued", "enqueued"),
                 ("completed", "completed"),
                 ("failed", "failed"),
@@ -111,6 +158,7 @@ class RuntimeJobManager:
                     int(stats.get("dropped", 0) or 0) * 1000
                     + int(stats.get("timed_out", 0) or 0) * 100
                     + int(stats.get("failed", 0) or 0) * 50
+                    + int(stats.get("waiting_global_slot", 0) or 0) * 10
                     + int(stats.get("queue_size", 0) or 0)
                 )
             except Exception:
@@ -125,12 +173,19 @@ class RuntimeJobManager:
             status = "degraded"
         elif totals["timed_out"] > 0 or totals["failed"] > 0:
             status = "warning"
+        elif totals["waiting_global_slot"] > 0:
+            status = "busy"
         else:
             status = "ok"
 
         return {
             "status": status,
             "totals": totals,
+            "global": {
+                "max_concurrent_jobs": self._max_concurrent_jobs,
+                "running": self._global_running,
+                "waiting": self._global_waiting,
+            },
             "hot_queues": hot[:10],
         }
 
@@ -200,10 +255,49 @@ class RuntimeJobManager:
 
         while True:
             job = await queue.get()
-            started = time.monotonic()
-            stats.running += 1
+            sem = self._get_global_semaphore()
+            wait_started = time.monotonic()
+            acquired = False
+
             stats.last_label = job.label
+            stats.last_updated_monotonic = wait_started
+
+            try:
+                stats.waiting_global_slot += 1
+                self._global_waiting += 1
+                await sem.acquire()
+                acquired = True
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:
+                stats.failed += 1
+                stats.last_error = f"global semaphore acquire failed: {e!r}"
+                try:
+                    print(f"⚠️ runtime_jobs failed acquiring global slot key={key} label={job.label} error={e!r}")
+                except Exception:
+                    pass
+                queue.task_done()
+                continue
+            finally:
+                stats.waiting_global_slot = max(0, stats.waiting_global_slot - 1)
+                self._global_waiting = max(0, self._global_waiting - 1)
+
+            started = time.monotonic()
+            wait_ms = int((started - wait_started) * 1000)
+            stats.last_wait_ms = wait_ms
+            stats.running += 1
+            self._global_running += 1
             stats.last_updated_monotonic = started
+
+            if wait_ms > 1000:
+                try:
+                    print(
+                        f"📊 runtime_jobs waited_for_global_slot key={key} "
+                        f"label={job.label} wait_ms={wait_ms} "
+                        f"running={self._global_running}/{self._max_concurrent_jobs}"
+                    )
+                except Exception:
+                    pass
 
             try:
                 await asyncio.wait_for(job.factory(), timeout=job.timeout)
@@ -229,7 +323,13 @@ class RuntimeJobManager:
                 elapsed_ms = int((time.monotonic() - started) * 1000)
                 stats.last_elapsed_ms = elapsed_ms
                 stats.running = max(0, stats.running - 1)
+                self._global_running = max(0, self._global_running - 1)
                 stats.last_updated_monotonic = time.monotonic()
+                if acquired:
+                    try:
+                        sem.release()
+                    except Exception:
+                        pass
                 queue.task_done()
 
     async def _summary_logger(self, interval_seconds: int) -> None:
@@ -238,6 +338,7 @@ class RuntimeJobManager:
             try:
                 summary = self.health_summary()
                 totals = dict(summary.get("totals") or {})
+                global_state = dict(summary.get("global") or {})
                 hot = list(summary.get("hot_queues") or [])
 
                 if not totals.get("queues"):
@@ -247,6 +348,7 @@ class RuntimeJobManager:
                 if (
                     int(totals.get("queued", 0) or 0) <= 0
                     and int(totals.get("running", 0) or 0) <= 0
+                    and int(totals.get("waiting_global_slot", 0) or 0) <= 0
                     and int(totals.get("failed", 0) or 0) <= 0
                     and int(totals.get("timed_out", 0) or 0) <= 0
                     and int(totals.get("dropped", 0) or 0) <= 0
@@ -257,13 +359,16 @@ class RuntimeJobManager:
                 for row in hot[:3]:
                     hot_bits.append(
                         f"{row.get('key')} q={row.get('queue_size')} "
+                        f"wait={row.get('waiting_global_slot')} "
                         f"to={row.get('timed_out')} fail={row.get('failed')} drop={row.get('dropped')}"
                     )
 
                 print(
                     "📊 runtime_jobs summary "
                     f"status={summary.get('status')} "
-                    f"queues={totals.get('queues')} queued={totals.get('queued')} running={totals.get('running')} "
+                    f"queues={totals.get('queues')} queued={totals.get('queued')} "
+                    f"running={totals.get('running')} waiting={totals.get('waiting_global_slot')} "
+                    f"global={global_state.get('running')}/{global_state.get('max_concurrent_jobs')} "
                     f"done={totals.get('completed')} timeout={totals.get('timed_out')} "
                     f"failed={totals.get('failed')} dropped={totals.get('dropped')} "
                     f"hot={' | '.join(hot_bits) if hot_bits else 'none'}"
