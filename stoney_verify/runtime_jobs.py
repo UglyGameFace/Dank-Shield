@@ -13,6 +13,7 @@ Design goals:
 - Per-guild keys so one noisy guild does not starve everyone else.
 - Timebox every background job.
 - Cap global job concurrency so 100+ guild queues cannot stampede Supabase/Discord.
+- Coalesce duplicate queued/running work when a dedupe key is supplied.
 - Emit simple logs/stats for observability.
 - Provide health summaries without needing another slash command.
 """
@@ -42,10 +43,12 @@ class RuntimeJobStats:
     failed: int = 0
     timed_out: int = 0
     dropped: int = 0
+    coalesced: int = 0
     running: int = 0
     waiting_global_slot: int = 0
     last_error: str = ""
     last_label: str = ""
+    last_dedupe_key: str = ""
     last_elapsed_ms: int = 0
     last_wait_ms: int = 0
     last_updated_monotonic: float = field(default_factory=time.monotonic)
@@ -56,6 +59,7 @@ class RuntimeJob:
     label: str
     factory: JobFactory
     timeout: float
+    dedupe_key: str = ""
     created_monotonic: float = field(default_factory=time.monotonic)
 
 
@@ -64,6 +68,7 @@ class RuntimeJobManager:
         self._queues: Dict[str, asyncio.Queue[RuntimeJob]] = {}
         self._workers: Dict[str, asyncio.Task[None]] = {}
         self._stats: Dict[str, RuntimeJobStats] = {}
+        self._active_dedupe: set[str] = set()
         self._lock = asyncio.Lock()
         self._summary_task: Optional[asyncio.Task[None]] = None
         self._last_summary_monotonic: float = 0.0
@@ -112,10 +117,12 @@ class RuntimeJobManager:
                 "failed": stats.failed,
                 "timed_out": stats.timed_out,
                 "dropped": stats.dropped,
+                "coalesced": stats.coalesced,
                 "running": stats.running,
                 "waiting_global_slot": stats.waiting_global_slot,
                 "last_error": stats.last_error,
                 "last_label": stats.last_label,
+                "last_dedupe_key": stats.last_dedupe_key,
                 "last_elapsed_ms": stats.last_elapsed_ms,
                 "last_wait_ms": stats.last_wait_ms,
                 "last_updated_seconds_ago": max(0, int(time.monotonic() - float(stats.last_updated_monotonic or 0))),
@@ -134,6 +141,7 @@ class RuntimeJobManager:
             "failed": 0,
             "timed_out": 0,
             "dropped": 0,
+            "coalesced": 0,
         }
 
         hot: list[dict] = []
@@ -147,6 +155,7 @@ class RuntimeJobManager:
                 ("failed", "failed"),
                 ("timed_out", "timed_out"),
                 ("dropped", "dropped"),
+                ("coalesced", "coalesced"),
             ):
                 try:
                     totals[total_key] += int(stats.get(stat_key, 0) or 0)
@@ -185,6 +194,7 @@ class RuntimeJobManager:
                 "max_concurrent_jobs": self._max_concurrent_jobs,
                 "running": self._global_running,
                 "waiting": self._global_waiting,
+                "active_dedupe_keys": len(self._active_dedupe),
             },
             "hot_queues": hot[:10],
         }
@@ -211,9 +221,11 @@ class RuntimeJobManager:
         factory: JobFactory,
         timeout: float = 5.0,
         max_queue: int = 100,
+        dedupe_key: str = "",
     ) -> bool:
         safe_key = str(key or "global")
         safe_label = str(label or "runtime-job")[:160]
+        safe_dedupe_key = str(dedupe_key or "").strip()[:220]
         timeout = max(0.25, float(timeout or 5.0))
         max_queue = max(1, int(max_queue or 100))
 
@@ -227,6 +239,14 @@ class RuntimeJobManager:
 
             stats = self._stats.setdefault(safe_key, RuntimeJobStats())
 
+            if safe_dedupe_key and safe_dedupe_key in self._active_dedupe:
+                stats.coalesced += 1
+                stats.last_label = safe_label
+                stats.last_dedupe_key = safe_dedupe_key
+                stats.last_error = "coalesced duplicate job"
+                stats.last_updated_monotonic = time.monotonic()
+                return True
+
             worker = self._workers.get(safe_key)
             if worker is None or worker.done():
                 worker = asyncio.create_task(self._worker(safe_key), name=f"runtime-job-worker:{safe_key}")
@@ -235,6 +255,7 @@ class RuntimeJobManager:
             if queue.full():
                 stats.dropped += 1
                 stats.last_label = safe_label
+                stats.last_dedupe_key = safe_dedupe_key
                 stats.last_error = "queue full"
                 stats.last_updated_monotonic = time.monotonic()
                 try:
@@ -243,9 +264,13 @@ class RuntimeJobManager:
                     pass
                 return False
 
-            queue.put_nowait(RuntimeJob(label=safe_label, factory=factory, timeout=timeout))
+            if safe_dedupe_key:
+                self._active_dedupe.add(safe_dedupe_key)
+
+            queue.put_nowait(RuntimeJob(label=safe_label, factory=factory, timeout=timeout, dedupe_key=safe_dedupe_key))
             stats.enqueued += 1
             stats.last_label = safe_label
+            stats.last_dedupe_key = safe_dedupe_key
             stats.last_updated_monotonic = time.monotonic()
             return True
 
@@ -260,6 +285,7 @@ class RuntimeJobManager:
             acquired = False
 
             stats.last_label = job.label
+            stats.last_dedupe_key = job.dedupe_key
             stats.last_updated_monotonic = wait_started
 
             try:
@@ -276,6 +302,8 @@ class RuntimeJobManager:
                     print(f"⚠️ runtime_jobs failed acquiring global slot key={key} label={job.label} error={e!r}")
                 except Exception:
                     pass
+                if job.dedupe_key:
+                    self._active_dedupe.discard(job.dedupe_key)
                 queue.task_done()
                 continue
             finally:
@@ -325,6 +353,8 @@ class RuntimeJobManager:
                 stats.running = max(0, stats.running - 1)
                 self._global_running = max(0, self._global_running - 1)
                 stats.last_updated_monotonic = time.monotonic()
+                if job.dedupe_key:
+                    self._active_dedupe.discard(job.dedupe_key)
                 if acquired:
                     try:
                         sem.release()
@@ -360,7 +390,7 @@ class RuntimeJobManager:
                     hot_bits.append(
                         f"{row.get('key')} q={row.get('queue_size')} "
                         f"wait={row.get('waiting_global_slot')} "
-                        f"to={row.get('timed_out')} fail={row.get('failed')} drop={row.get('dropped')}"
+                        f"to={row.get('timed_out')} fail={row.get('failed')} drop={row.get('dropped')} coal={row.get('coalesced')}"
                     )
 
                 print(
@@ -369,8 +399,9 @@ class RuntimeJobManager:
                     f"queues={totals.get('queues')} queued={totals.get('queued')} "
                     f"running={totals.get('running')} waiting={totals.get('waiting_global_slot')} "
                     f"global={global_state.get('running')}/{global_state.get('max_concurrent_jobs')} "
+                    f"active_dedupe={global_state.get('active_dedupe_keys')} "
                     f"done={totals.get('completed')} timeout={totals.get('timed_out')} "
-                    f"failed={totals.get('failed')} dropped={totals.get('dropped')} "
+                    f"failed={totals.get('failed')} dropped={totals.get('dropped')} coalesced={totals.get('coalesced')} "
                     f"hot={' | '.join(hot_bits) if hot_bits else 'none'}"
                 )
             except asyncio.CancelledError:
@@ -405,15 +436,23 @@ async def enqueue_runtime_job(
     factory: JobFactory,
     timeout: float = 5.0,
     max_queue: int = 100,
+    dedupe_key: str = "",
 ) -> bool:
     gid = str(guild_id or "global")
     key = f"{kind}:{gid}"
+    safe_dedupe_key = str(dedupe_key or "").strip()
+    if safe_dedupe_key:
+        full_dedupe_key = f"{key}:{safe_dedupe_key}"
+    else:
+        full_dedupe_key = ""
+
     return await _MANAGER.enqueue(
         key=key,
         label=label,
         factory=factory,
         timeout=timeout,
         max_queue=max_queue,
+        dedupe_key=full_dedupe_key,
     )
 
 
