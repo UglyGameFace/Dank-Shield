@@ -31,6 +31,15 @@ except Exception as e:
     except Exception:
         pass
 
+# Guard against accidentally syncing the full dev/admin command surface globally.
+try:
+    import runtime_global_command_sync_guard  # noqa: F401
+except Exception as e:
+    try:
+        print(f"⚠️ runtime_command_safety failed to import runtime_global_command_sync_guard: {e!r}")
+    except Exception:
+        pass
+
 _PATCHED = False
 _SKIPPED_COMMANDS: list[dict[str, Any]] = []
 _LAST_BUDGET_LOG_MONOTONIC = 0.0
