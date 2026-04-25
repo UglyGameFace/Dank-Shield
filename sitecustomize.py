@@ -4,23 +4,20 @@ from __future__ import annotations
 Runtime safety patch for Stoney Verify.
 
 Why this exists:
-- The bot currently has some sync Supabase/PostgREST lookups inside risk-profile code.
-- When those sync HTTP calls happen inside Discord's asyncio event loop, the whole bot can freeze.
-- Discord then reports heartbeat blocked, interactions lag, tickets appear to create extremely slowly,
-  and the gateway session can be invalidated.
+- Some sync Supabase/PostgREST lookups still exist inside risk-profile code.
+- When sync HTTP calls happen inside Discord's asyncio event loop, the whole bot can freeze.
+- Discord then reports heartbeat blocked, interactions lag, tickets create slowly, and the
+  gateway session can be invalidated.
+- Ticket creation also used DB-heavy ticket-number/counter/event-log paths before and after
+  channel creation. Those must be timeboxed so Discord channel creation stays responsive.
 
-This file is intentionally surgical. Python automatically imports `sitecustomize`
-when it is on sys.path, which is true when the bot starts from the repo root.
-
-Important:
-- The old temporary ticket schema-strip guard was removed after the TicketTool parity
-  ticket metadata columns were added to Supabase.
-- This file now only guards event-loop blocking identity/risk lookups.
+This file is intentionally surgical. main.py force-imports this before stoney_verify.app.
 """
 
 import asyncio
 import builtins
 import sys
+import time
 from datetime import datetime, timezone
 from typing import Any, Dict, List
 
@@ -97,7 +94,8 @@ def _cache_store_raidguard_context(module: Any, guild_id: int, user_id: int, val
 
 def _patch_raidguard(module: Any) -> None:
     module_name = getattr(module, "__name__", "")
-    if module_name in _PATCHED_MODULES:
+    patch_key = f"{module_name}:raidguard"
+    if patch_key in _PATCHED_MODULES:
         return
 
     original_query_proof = getattr(module, "_query_identity_proof_matches_sync", None)
@@ -147,13 +145,14 @@ def _patch_raidguard(module: Any) -> None:
 
         setattr(module, "_load_hard_identity_context", _safe_load_hard_identity_context)
 
-    _PATCHED_MODULES.add(module_name)
+    _PATCHED_MODULES.add(patch_key)
     _log(f"patched {module_name} hard identity sync lookups")
 
 
 def _patch_identity_proof_service(module: Any) -> None:
     module_name = getattr(module, "__name__", "")
-    if module_name in _PATCHED_MODULES:
+    patch_key = f"{module_name}:identity"
+    if patch_key in _PATCHED_MODULES:
         return
 
     original_get_truth = getattr(module, "get_identity_truth_context", None)
@@ -167,8 +166,152 @@ def _patch_identity_proof_service(module: Any) -> None:
         return original_get_truth(*args, **kwargs)
 
     setattr(module, "get_identity_truth_context", _safe_get_identity_truth_context)
-    _PATCHED_MODULES.add(module_name)
+    _PATCHED_MODULES.add(patch_key)
     _log(f"patched {module_name} event-loop sync truth lookup")
+
+
+def _patch_ticket_service(module: Any) -> None:
+    """Harden ticket creation internals without replacing the full service module."""
+    module_name = getattr(module, "__name__", "")
+    patch_key = f"{module_name}:ticket_service_p0"
+    if patch_key in _PATCHED_MODULES:
+        return
+
+    # 1) Fast ticket-number reservation. The original path may touch Supabase counters.
+    # We keep the per-guild lock, but timebox DB max lookup and fall back to channel scan.
+    original_reserve = getattr(module, "_reserve_next_ticket_number", None)
+    if callable(original_reserve):
+        async def _safe_reserve_next_ticket_number(guild: Any, parent: Any = None, *, max_retries: int = 20) -> int:
+            guild_id = int(getattr(guild, "id", 0) or 0)
+            lock = None
+            acquired = False
+            started = time.monotonic()
+
+            try:
+                lock_getter = getattr(module, "_ticket_number_lock", None)
+                if callable(lock_getter):
+                    lock = lock_getter(guild_id)
+                    await asyncio.wait_for(lock.acquire(), timeout=2.0)
+                    acquired = True
+            except Exception:
+                _warn(f"ticket number lock timeout/bypass guild={guild_id}; using best-effort scan")
+
+            try:
+                channel_max = 0
+                db_max = 0
+
+                try:
+                    scanner = getattr(module, "_channel_scan_max_ticket_number", None)
+                    if callable(scanner):
+                        channel_max = int(scanner(guild, parent=parent) or 0)
+                except Exception as e:
+                    _warn(f"ticket number channel scan failed guild={guild_id}: {repr(e)}")
+
+                try:
+                    db_reader = getattr(module, "_db_max_ticket_number", None)
+                    if callable(db_reader):
+                        db_max = int(
+                            await asyncio.wait_for(
+                                asyncio.to_thread(db_reader, guild_id),
+                                timeout=1.75,
+                            )
+                            or 0
+                        )
+                except asyncio.TimeoutError:
+                    _warn(f"ticket number DB max timeout guild={guild_id}; using channel scan only")
+                except Exception as e:
+                    _warn(f"ticket number DB max failed guild={guild_id}: {repr(e)}")
+
+                next_number = max(channel_max, db_max) + 1
+                elapsed_ms = int((time.monotonic() - started) * 1000)
+                _log(
+                    f"reserved ticket number guild={guild_id} number={next_number} "
+                    f"channel_max={channel_max} db_max={db_max} elapsed_ms={elapsed_ms}"
+                )
+                return int(next_number)
+            finally:
+                if acquired and lock is not None:
+                    try:
+                        lock.release()
+                    except Exception:
+                        pass
+
+        setattr(module, "_reserve_next_ticket_number", _safe_reserve_next_ticket_number)
+
+    # 2) Timebox repo writes used by create flow. If DB is slow, channel creation should
+    # still complete and startup sync/backfill can repair metadata.
+    def _wrap_async_timeout(name: str, timeout: float, default: Any) -> None:
+        original = getattr(module, name, None)
+        if not callable(original) or getattr(original, "_runtime_safety_wrapped", False):
+            return
+
+        async def _wrapped(*args: Any, **kwargs: Any) -> Any:
+            try:
+                return await asyncio.wait_for(original(*args, **kwargs), timeout=timeout)
+            except asyncio.TimeoutError:
+                _warn(f"{module_name}.{name} timed out after {timeout}s; continuing safely")
+                return default
+
+        try:
+            setattr(_wrapped, "_runtime_safety_wrapped", True)
+        except Exception:
+            pass
+        setattr(module, name, _wrapped)
+
+    for repo_name, default in (
+        ("repo_find_open_ticket_for_owner", None),
+        ("repo_create_ticket_record", None),
+        ("repo_sync_ticket_record_from_channel", None),
+        ("repo_safe_optional_update_by_channel_id", None),
+    ):
+        _wrap_async_timeout(repo_name, 6.0, default)
+
+    for event_name in (
+        "log_ticket_created",
+        "log_ticket_claimed",
+        "log_ticket_unclaimed",
+        "log_ticket_transferred",
+        "log_ticket_priority_updated",
+        "log_ticket_note_added",
+        "log_ticket_closed",
+        "log_ticket_reopened",
+        "log_ticket_deleted",
+        "log_ticket_transcript_attached",
+    ):
+        _wrap_async_timeout(event_name, 3.0, False)
+
+    # 3) Instrument create_ticket_channel so we can see timing without changing return shape.
+    original_create = getattr(module, "create_ticket_channel", None)
+    if callable(original_create) and not getattr(original_create, "_runtime_safety_wrapped", False):
+        async def _instrumented_create_ticket_channel(*args: Any, **kwargs: Any) -> Any:
+            started = time.monotonic()
+            guild_id = getattr(kwargs.get("guild"), "id", None)
+            owner_id = getattr(kwargs.get("owner"), "id", None)
+            try:
+                result = await original_create(*args, **kwargs)
+                elapsed_ms = int((time.monotonic() - started) * 1000)
+                channel_id = getattr(result, "id", None)
+                _log(
+                    f"create_ticket_channel complete guild={guild_id} owner={owner_id} "
+                    f"channel={channel_id} elapsed_ms={elapsed_ms}"
+                )
+                return result
+            except Exception as e:
+                elapsed_ms = int((time.monotonic() - started) * 1000)
+                _warn(
+                    f"create_ticket_channel failed guild={guild_id} owner={owner_id} "
+                    f"elapsed_ms={elapsed_ms} error={repr(e)}"
+                )
+                raise
+
+        try:
+            setattr(_instrumented_create_ticket_channel, "_runtime_safety_wrapped", True)
+        except Exception:
+            pass
+        setattr(module, "create_ticket_channel", _instrumented_create_ticket_channel)
+
+    _PATCHED_MODULES.add(patch_key)
+    _log(f"patched {module_name} ticket creation timing/DB guards")
 
 
 def _maybe_patch_loaded_modules() -> None:
@@ -186,13 +329,18 @@ def _maybe_patch_loaded_modules() -> None:
     except Exception as e:
         _warn(f"identity_proof_service patch failed: {repr(e)}")
 
+    try:
+        service = sys.modules.get("stoney_verify.tickets_new.service")
+        if service is not None:
+            _patch_ticket_service(service)
+    except Exception as e:
+        _warn(f"ticket service patch failed: {repr(e)}")
+
 
 def _safe_import(name: str, globals: Any = None, locals: Any = None, fromlist: Any = (), level: int = 0) -> Any:
     module = _ORIGINAL_IMPORT(name, globals, locals, fromlist, level)
 
     try:
-        # Patch after imports so `from .raidguard import build_member_risk_profile`
-        # receives functions whose globals point at the patched helpers.
         if name == "stoney_verify.raidguard" or name.endswith(".raidguard"):
             target = sys.modules.get("stoney_verify.raidguard") or sys.modules.get(name)
             if target is not None:
@@ -203,6 +351,11 @@ def _safe_import(name: str, globals: Any = None, locals: Any = None, fromlist: A
             if target is not None:
                 _patch_identity_proof_service(target)
 
+        if name == "stoney_verify.tickets_new.service" or name.endswith(".tickets_new.service") or name.endswith("tickets_new.service"):
+            target = sys.modules.get("stoney_verify.tickets_new.service") or sys.modules.get(name)
+            if target is not None:
+                _patch_ticket_service(target)
+
         _maybe_patch_loaded_modules()
     except Exception as e:
         _warn(f"post-import patch failed for {name}: {repr(e)}")
@@ -212,4 +365,4 @@ def _safe_import(name: str, globals: Any = None, locals: Any = None, fromlist: A
 
 builtins.__import__ = _safe_import
 _maybe_patch_loaded_modules()
-_log("sitecustomize loaded; event-loop blocking DB guard active")
+_log("sitecustomize loaded; event-loop DB guard + ticket creation guard active")
