@@ -11,6 +11,16 @@ except Exception as e:
     except Exception:
         pass
 
+# Force-load event helper queue guard. This keeps member sync / startup event
+# maintenance helpers from running inline in Discord gateway/startup paths.
+try:
+    import runtime_event_safety  # noqa: F401
+except Exception as e:
+    try:
+        print(f"⚠️ main.py failed to import runtime_event_safety guard: {e!r}")
+    except Exception:
+        pass
+
 from stoney_verify.app import run
 
 
