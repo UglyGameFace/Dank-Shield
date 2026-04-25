@@ -31,6 +31,16 @@ except Exception as e:
     except Exception:
         pass
 
+# Force-load automatic runtime job dedupe. This makes queued work coalesce by
+# default, even if a producer forgets to provide a dedupe key.
+try:
+    import runtime_job_dedupe_safety  # noqa: F401
+except Exception as e:
+    try:
+        print(f"⚠️ main.py failed to import runtime_job_dedupe_safety guard: {e!r}")
+    except Exception:
+        pass
+
 from stoney_verify.app import run
 
 
