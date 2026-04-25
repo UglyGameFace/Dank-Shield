@@ -298,22 +298,11 @@ def register_all_commands(bot: Any, tree: Any) -> None:
         except Exception:
             pass
 
-    # ------------------------------------------------------------
-    # Runtime job / scale observability admin
-    # ------------------------------------------------------------
-    try:
-        from .runtime_jobs_admin import register_runtime_jobs_admin_commands
-        register_runtime_jobs_admin_commands(bot, tree)
-        try:
-            print("✅ commands_ext: registered runtime job admin commands")
-        except Exception:
-            pass
-    except Exception as e:
-        errors.append(f"runtime_jobs_admin: {repr(e)}")
-        try:
-            print(f"⚠️ commands_ext: failed registering runtime job admin commands: {repr(e)}")
-        except Exception:
-            pass
+    # NOTE:
+    # Do not register runtime_jobs_admin here yet.
+    # The bot is already at Discord's 100 global slash-command limit, and adding
+    # runtime_jobs_status globally crashes startup with CommandLimitReached.
+    # We will expose runtime queue stats through an existing command group later.
 
     _COMMANDS_EXT_REGISTERED = True
 
