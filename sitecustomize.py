@@ -8,13 +8,12 @@ Why this exists:
 - When those sync HTTP calls happen inside Discord's asyncio event loop, the whole bot can freeze.
 - Discord then reports heartbeat blocked, interactions lag, tickets appear to create extremely slowly,
   and the gateway session can be invalidated.
+- Some optional TicketTool-parity metadata columns may not exist yet in Supabase. When the repo sends
+  those missing columns, PostgREST returns PGRST204 and ticket DB insert/sync fails even after the
+  Discord channel was created.
 
-This file is intentionally small and surgical. Python automatically imports `sitecustomize`
+This file is intentionally surgical. Python automatically imports `sitecustomize`
 when it is on sys.path, which is true when the bot starts from the repo root.
-
-The patch does NOT change normal background/thread behavior. It only prevents the
-hard identity proof lookups from doing sync network I/O while the current thread is
-already running an asyncio event loop.
 """
 
 import asyncio
@@ -25,6 +24,27 @@ from typing import Any, Dict, List
 
 _ORIGINAL_IMPORT = builtins.__import__
 _PATCHED_MODULES: set[str] = set()
+
+# Optional/rich metadata columns. These are nice to have, but ticket creation must
+# never fail if the Supabase schema has not been migrated yet.
+_RUNTIME_STRIP_TICKET_COLUMNS: set[str] = {
+    "panel_message_id",
+    "webhook_url",
+    "webhook_id",
+    "reopened_by",
+    "reopened_by_name",
+    "reopen_reason",
+    "close_reason",
+    "delete_reason",
+    "owner_id",
+    "owner_name",
+    "requester_id",
+    "requester_name",
+    "claimed_by_name",
+    "assigned_to_name",
+    "closed_by_name",
+    "deleted_by_name",
+}
 
 
 def _log(message: str) -> None:
@@ -170,6 +190,51 @@ def _patch_identity_proof_service(module: Any) -> None:
     _log(f"patched {module_name} event-loop sync truth lookup")
 
 
+def _strip_ticket_schema_columns(payload: Dict[str, Any]) -> Dict[str, Any]:
+    try:
+        if not isinstance(payload, dict):
+            return payload
+        return {k: v for k, v in payload.items() if k not in _RUNTIME_STRIP_TICKET_COLUMNS}
+    except Exception:
+        return payload
+
+
+def _patch_tickets_repository(module: Any) -> None:
+    module_name = getattr(module, "__name__", "")
+    if module_name in _PATCHED_MODULES:
+        return
+
+    try:
+        for set_name in ("_EXTENDED_TICKET_WRITE_COLUMNS", "_ALLOWED_TICKET_WRITE_COLUMNS"):
+            colset = getattr(module, set_name, None)
+            if isinstance(colset, set):
+                for column in _RUNTIME_STRIP_TICKET_COLUMNS:
+                    colset.discard(column)
+    except Exception as e:
+        _warn(f"ticket repository column-set patch failed: {repr(e)}")
+
+    original_clean = getattr(module, "_clean_ticket_payload", None)
+    if callable(original_clean):
+        def _safe_clean_ticket_payload(payload: Dict[str, Any], *, include_created_at: bool = False) -> Dict[str, Any]:
+            cleaned = original_clean(payload, include_created_at=include_created_at)
+            return _strip_ticket_schema_columns(cleaned)
+
+        setattr(module, "_clean_ticket_payload", _safe_clean_ticket_payload)
+
+    original_patch_payload = getattr(module, "_ticket_patch_payload", None)
+    if callable(original_patch_payload):
+        def _safe_ticket_patch_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
+            patched = original_patch_payload(payload)
+            return _strip_ticket_schema_columns(patched)
+
+        setattr(module, "_ticket_patch_payload", _safe_ticket_patch_payload)
+
+    _PATCHED_MODULES.add(module_name)
+    _log(
+        f"patched {module_name} to strip optional ticket columns missing from current Supabase schema"
+    )
+
+
 def _maybe_patch_loaded_modules() -> None:
     try:
         raidguard = sys.modules.get("stoney_verify.raidguard")
@@ -184,6 +249,13 @@ def _maybe_patch_loaded_modules() -> None:
             _patch_identity_proof_service(identity)
     except Exception as e:
         _warn(f"identity_proof_service patch failed: {repr(e)}")
+
+    try:
+        repo = sys.modules.get("stoney_verify.tickets_new.repository")
+        if repo is not None:
+            _patch_tickets_repository(repo)
+    except Exception as e:
+        _warn(f"tickets repository patch failed: {repr(e)}")
 
 
 def _safe_import(name: str, globals: Any = None, locals: Any = None, fromlist: Any = (), level: int = 0) -> Any:
@@ -202,6 +274,11 @@ def _safe_import(name: str, globals: Any = None, locals: Any = None, fromlist: A
             if target is not None:
                 _patch_identity_proof_service(target)
 
+        if name == "stoney_verify.tickets_new.repository" or name.endswith(".tickets_new.repository") or name.endswith("tickets_new.repository"):
+            target = sys.modules.get("stoney_verify.tickets_new.repository") or sys.modules.get(name)
+            if target is not None:
+                _patch_tickets_repository(target)
+
         _maybe_patch_loaded_modules()
     except Exception as e:
         _warn(f"post-import patch failed for {name}: {repr(e)}")
@@ -211,4 +288,4 @@ def _safe_import(name: str, globals: Any = None, locals: Any = None, fromlist: A
 
 builtins.__import__ = _safe_import
 _maybe_patch_loaded_modules()
-_log("sitecustomize loaded; event-loop blocking DB guard active")
+_log("sitecustomize loaded; event-loop blocking DB guard + ticket schema guard active")
