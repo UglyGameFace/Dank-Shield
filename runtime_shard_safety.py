@@ -9,11 +9,8 @@ This does not change the bot class yet. It adds shard/guild pressure logging and
 warnings so the bot tells us when the current single-process/non-sharded shape is
 getting dangerous.
 
-Why this matters for 500-1000+ servers:
-- Gateway load increases with guild count, member events, voice events, and slash sync.
-- Startup jobs must be shard-aware before multi-process sharding.
-- The codebase currently creates a regular commands.Bot, not AutoShardedBot.
-- We need visibility and safe thresholds before flipping architecture.
+Healthy periodic snapshots are intentionally quiet by default to avoid log spam.
+Warnings still print immediately when guild/shard pressure gets risky.
 """
 
 import asyncio
@@ -26,6 +23,7 @@ from typing import Any
 _ORIGINAL_IMPORT = builtins.__import__
 _PATCHED_MODULES: set[str] = set()
 _LAST_LOG_MONOTONIC = 0.0
+_LAST_OK_LOG_MONOTONIC = 0.0
 
 
 def _env_int(name: str, default: int) -> int:
@@ -115,12 +113,11 @@ def shard_scale_snapshot() -> dict[str, Any]:
 
 
 def _log_snapshot(bot: Any, *, reason: str, force: bool = False) -> None:
-    global _LAST_LOG_MONOTONIC
+    global _LAST_LOG_MONOTONIC, _LAST_OK_LOG_MONOTONIC
 
     now = time.monotonic()
     if not force and (now - _LAST_LOG_MONOTONIC) < 300.0:
         return
-    _LAST_LOG_MONOTONIC = now
 
     snap = _bot_shard_snapshot(bot)
     guild_count = int(snap.get("guild_count", 0) or 0)
@@ -137,17 +134,25 @@ def _log_snapshot(bot: Any, *, reason: str, force: bool = False) -> None:
     )
 
     if guild_count >= critical_at:
+        _LAST_LOG_MONOTONIC = now
         _warn(
             message
             + " status=critical; migrate to AutoShardedBot/multi-process shards before adding more servers"
         )
     elif guild_count >= warn_at:
+        _LAST_LOG_MONOTONIC = now
         _warn(
             message
             + " status=warning; start AutoShardedBot testing and command consolidation now"
         )
     else:
-        _log(message + " status=ok")
+        # Healthy snapshots are useful on boot, but noisy every 5 minutes forever.
+        # Print on_ready and then only once per configured long interval.
+        ok_interval = max(900, _env_int("STONEY_SHARD_OK_LOG_INTERVAL_SECONDS", 3600))
+        if force or _env_bool("STONEY_SHARD_LOG_HEALTHY_PERIODIC", False) or (now - _LAST_OK_LOG_MONOTONIC) >= ok_interval:
+            _LAST_OK_LOG_MONOTONIC = now
+            _LAST_LOG_MONOTONIC = now
+            _log(message + " status=ok")
 
     if bot_class == "Bot" and guild_count >= warn_at:
         _warn(
