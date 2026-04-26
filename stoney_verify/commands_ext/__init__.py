@@ -19,7 +19,7 @@ _COMMANDS_EXT_REGISTERED = False
 #   STONEY_COMMAND_PROFILE=public
 #
 # Optional explicit controls:
-#   STONEY_COMMAND_MODULES=public_ticket_group,moderation
+#   STONEY_COMMAND_MODULES=public_ticket_group,public_tickets_group,moderation
 #   STONEY_COMMAND_MODULES_SKIP=ticket_macro_admin,ticket_automation_admin
 # ============================================================
 
@@ -29,6 +29,7 @@ CommandModuleSpec = Tuple[str, str, str]
 
 COMMAND_MODULES: List[CommandModuleSpec] = [
     ("public_ticket_group", "register_public_ticket_group_commands", "public grouped /ticket commands"),
+    ("public_tickets_group", "register_public_tickets_group_commands", "public grouped /tickets commands"),
     ("kick_timers", "register_kick_timer_commands", "kick timer commands"),
     ("vc_flow", "register_vc_flow_commands", "VC flow commands"),
     ("ticket_admin", "register_ticket_admin_commands", "ticket admin commands"),
@@ -53,22 +54,23 @@ _LEGACY_MODULES: Tuple[str, ...] = tuple(
 
 # Profiles are intentionally conservative.
 # - full/dev: current behavior; all legacy command modules, no duplicate public groups.
-# - public: grouped /ticket plus a smaller legacy admin surface.
+# - public: grouped ticket/tickets plus a smaller legacy admin surface.
 # - minimal: emergency/lightweight profile that keeps only grouped tickets + essentials.
 COMMAND_PROFILES: Dict[str, Sequence[str]] = {
     "full": _LEGACY_MODULES,
     "dev": _LEGACY_MODULES,
     "public": (
         "public_ticket_group",
+        "public_tickets_group",
         "ticket_channel_admin",
         "ticket_intake_admin",
-        "ticket_queue_admin",
         "moderation",
         "role_admin",
         "channel_cleanup_admin",
     ),
     "minimal": (
         "public_ticket_group",
+        "public_tickets_group",
         "moderation",
         "role_admin",
     ),
