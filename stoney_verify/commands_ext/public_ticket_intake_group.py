@@ -30,6 +30,10 @@ async def _guild_only(interaction: discord.Interaction) -> Optional[discord.Guil
     return guild
 
 
+def _legacy_config_int(name: str, default: int = 0) -> int:
+    return legacy._safe_int(getattr(legacy, name, default), default)
+
+
 def _category_summary_lines(rows: List[Dict[str, Any]]) -> List[str]:
     default_slug = legacy._find_default_category_slug(rows)
     verification_slug = legacy._find_verification_category_slug(rows)
@@ -190,12 +194,12 @@ async def intake_status(interaction: discord.Interaction):
     default_slug = legacy._find_default_category_slug(rows)
     verification_slug = legacy._find_verification_category_slug(rows)
 
-    ticket_parent_id = legacy._safe_int(legacy.globals().get("TICKET_CATEGORY_ID"), 0)
+    ticket_parent_id = _legacy_config_int("TICKET_CATEGORY_ID", 0)
     ticket_parent = guild.get_channel(ticket_parent_id) if ticket_parent_id > 0 else None
 
     archive_parent = legacy._resolve_archive_category(guild)
 
-    staff_role_id = legacy._safe_int(legacy.globals().get("STAFF_ROLE_ID"), 0)
+    staff_role_id = _legacy_config_int("STAFF_ROLE_ID", 0)
     staff_role = guild.get_role(staff_role_id) if staff_role_id > 0 else None
 
     duplicate_slugs = legacy._duplicate_slugs(rows)
