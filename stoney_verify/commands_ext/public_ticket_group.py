@@ -8,9 +8,10 @@ from discord import app_commands
 from .common import _staff_check, reply_once, safe_defer, mark_ticket_activity, RUNTIME_STATS
 
 # Reuse the hardened ticket-admin helper/service layer without registering the
-# legacy top-level ticket_* commands. Importing ticket_admin is safe; commands
-# are only registered when register_ticket_admin_commands(...) is called.
+# legacy top-level ticket_* commands. Importing these modules is safe; commands
+# are only registered when their register_* functions are called.
 from . import ticket_admin as legacy
+from . import ticket_channel_admin as channel_legacy
 
 
 _PRIORITIES = {
@@ -33,6 +34,10 @@ async def _staff_only(interaction: discord.Interaction) -> bool:
         return False
     return True
 
+
+# ============================================================
+# Core ticket lifecycle/actions
+# ============================================================
 
 @ticket_group.command(
     name="info",
@@ -435,6 +440,402 @@ async def ticket_transcript(
         lines.append(f"🧾 {transcript_url}")
     await interaction.followup.send("\n".join(lines), ephemeral=True)
 
+
+# ============================================================
+# Channel access/management commands
+# ============================================================
+
+@ticket_group.command(
+    name="add",
+    description="Grant a member access to a ticket.",
+)
+@app_commands.describe(
+    member="Member to add to the ticket.",
+    channel="Ticket channel to update. Leave empty to use the current channel.",
+)
+async def ticket_add(
+    interaction: discord.Interaction,
+    member: discord.Member,
+    channel: Optional[discord.TextChannel] = None,
+):
+    if not await _staff_only(interaction):
+        return
+
+    ch, row = await channel_legacy._ensure_ticket_context(interaction, channel)
+    if ch is None:
+        return
+
+    status = channel_legacy._ticket_status(row)
+    effectively_closed = channel_legacy._ticket_effectively_closed(channel=ch, row=row)
+
+    if status == "deleted":
+        return await reply_once(interaction, {"content": "❌ Cannot modify access on a deleted ticket.", "ephemeral": True})
+
+    if member.bot:
+        return await reply_once(interaction, {"content": "❌ Adding bots to tickets this way is not supported.", "ephemeral": True})
+
+    if channel_legacy._member_is_ticket_owner(member, row):
+        return await reply_once(interaction, {"content": "ℹ️ That member is already the ticket owner.", "ephemeral": True})
+
+    try:
+        existing = ch.overwrites_for(member)
+        overwrite = channel_legacy._build_member_overwrite(existing, can_view=True, can_send=(not effectively_closed))
+        await ch.set_permissions(
+            member,
+            overwrite=overwrite,
+            reason=f"Ticket access granted by {interaction.user}",
+        )
+    except Exception as e:
+        return await reply_once(interaction, {"content": f"❌ Failed adding member to ticket: {e}", "ephemeral": True})
+
+    try:
+        if effectively_closed:
+            await ch.send(
+                f"➕ {member.mention} was added to the ticket by {interaction.user.mention}. "
+                "They can view it, but the ticket is currently closed."
+            )
+        else:
+            await ch.send(f"➕ {member.mention} was added to the ticket by {interaction.user.mention}.")
+    except Exception:
+        pass
+
+    await channel_legacy._touch_ticket_channel(ch)
+    await reply_once(interaction, {"content": f"✅ Added {member.mention} to {ch.mention}.", "ephemeral": True})
+
+
+@ticket_group.command(
+    name="remove",
+    description="Remove a member's access from a ticket.",
+)
+@app_commands.describe(
+    member="Member to remove from the ticket.",
+    channel="Ticket channel to update. Leave empty to use the current channel.",
+)
+async def ticket_remove(
+    interaction: discord.Interaction,
+    member: discord.Member,
+    channel: Optional[discord.TextChannel] = None,
+):
+    if not await _staff_only(interaction):
+        return
+
+    ch, row = await channel_legacy._ensure_ticket_context(interaction, channel)
+    if ch is None:
+        return
+
+    status = channel_legacy._ticket_status(row)
+    if status == "deleted":
+        return await reply_once(interaction, {"content": "❌ Cannot modify access on a deleted ticket.", "ephemeral": True})
+
+    if channel_legacy._member_is_ticket_owner(member, row):
+        return await reply_once(
+            interaction,
+            {"content": "❌ You cannot remove the ticket owner. Transfer ownership first if needed.", "ephemeral": True},
+        )
+
+    if channel_legacy._member_is_staff_like(member):
+        return await reply_once(
+            interaction,
+            {
+                "content": "❌ This member has staff-level access. Remove their staff access separately if that is what you want.",
+                "ephemeral": True,
+            },
+        )
+
+    try:
+        await ch.set_permissions(
+            member,
+            overwrite=None,
+            reason=f"Ticket access removed by {interaction.user}",
+        )
+    except Exception as e:
+        return await reply_once(interaction, {"content": f"❌ Failed removing member from ticket: {e}", "ephemeral": True})
+
+    try:
+        await ch.send(f"➖ {member.mention} was removed from the ticket by {interaction.user.mention}.")
+    except Exception:
+        pass
+
+    await channel_legacy._touch_ticket_channel(ch)
+    await reply_once(interaction, {"content": f"✅ Removed {member.mention} from {ch.mention}.", "ephemeral": True})
+
+
+@ticket_group.command(
+    name="rename",
+    description="Rename a non-numbered ticket channel.",
+)
+@app_commands.describe(
+    name="New ticket channel name.",
+    channel="Ticket channel to rename. Leave empty to use the current channel.",
+)
+async def ticket_rename(
+    interaction: discord.Interaction,
+    name: str,
+    channel: Optional[discord.TextChannel] = None,
+):
+    if not await _staff_only(interaction):
+        return
+
+    ch, row = await channel_legacy._ensure_ticket_context(interaction, channel)
+    if ch is None:
+        return
+
+    ticket_num = channel_legacy._ticket_number(row, ch)
+    if ticket_num > 0 or channel_legacy._is_canonical_ticket_name(ch.name):
+        return await reply_once(
+            interaction,
+            {
+                "content": (
+                    "❌ Manual renaming is disabled for numbered tickets.\n"
+                    "This bot keeps canonical names like `ticket-0032` / `closed-0032` so close/reopen/delete state stays reliable."
+                ),
+                "ephemeral": True,
+            },
+        )
+
+    new_name = channel_legacy._safe_str(name).lower().replace(" ", "-")
+    if not new_name:
+        return await reply_once(interaction, {"content": "❌ New channel name cannot be empty.", "ephemeral": True})
+
+    try:
+        await ch.edit(name=new_name, reason=f"Ticket renamed by {interaction.user}")
+        await channel_legacy._persist_channel_name(ch)
+    except Exception as e:
+        return await reply_once(interaction, {"content": f"❌ Failed renaming ticket: {e}", "ephemeral": True})
+
+    try:
+        await ch.send(f"✏️ Ticket renamed to `{new_name}` by {interaction.user.mention}.")
+    except Exception:
+        pass
+
+    await channel_legacy._touch_ticket_channel(ch)
+    await reply_once(interaction, {"content": f"✅ Renamed ticket to `{new_name}`.", "ephemeral": True})
+
+
+@ticket_group.command(
+    name="lock",
+    description="Lock the ticket so the owner cannot reply.",
+)
+@app_commands.describe(channel="Ticket channel to lock. Leave empty to use the current channel.")
+async def ticket_lock(
+    interaction: discord.Interaction,
+    channel: Optional[discord.TextChannel] = None,
+):
+    if not await _staff_only(interaction):
+        return
+
+    ch, row = await channel_legacy._ensure_ticket_context(interaction, channel)
+    if ch is None:
+        return
+
+    status = channel_legacy._ticket_status(row)
+    if status == "deleted":
+        return await reply_once(interaction, {"content": "❌ Deleted tickets cannot be locked.", "ephemeral": True})
+
+    if channel_legacy._ticket_effectively_closed(channel=ch, row=row):
+        return await reply_once(
+            interaction,
+            {
+                "content": (
+                    "ℹ️ This ticket is already closed/archived, so the owner should already be reply-locked.\n"
+                    "Use `/ticket reopen` if you want the owner to speak again."
+                ),
+                "ephemeral": True,
+            },
+        )
+
+    owner = await channel_legacy._ticket_owner(ch, row)
+    if owner is None or not isinstance(owner, discord.Member):
+        return await reply_once(interaction, {"content": "❌ Could not resolve the ticket owner for this channel.", "ephemeral": True})
+
+    try:
+        existing = ch.overwrites_for(owner)
+        overwrite = channel_legacy._build_member_overwrite(existing, can_view=True, can_send=False)
+        await ch.set_permissions(owner, overwrite=overwrite, reason=f"Ticket locked by {interaction.user}")
+    except Exception as e:
+        return await reply_once(interaction, {"content": f"❌ Failed locking ticket: {e}", "ephemeral": True})
+
+    try:
+        await ch.send(f"🔒 Ticket locked by {interaction.user.mention}. {owner.mention} can no longer reply.")
+    except Exception:
+        pass
+
+    await channel_legacy._touch_ticket_channel(ch)
+    await reply_once(interaction, {"content": f"✅ Locked {ch.mention}.", "ephemeral": True})
+
+
+@ticket_group.command(
+    name="unlock",
+    description="Unlock the ticket so the owner can reply again.",
+)
+@app_commands.describe(channel="Ticket channel to unlock. Leave empty to use the current channel.")
+async def ticket_unlock(
+    interaction: discord.Interaction,
+    channel: Optional[discord.TextChannel] = None,
+):
+    if not await _staff_only(interaction):
+        return
+
+    ch, row = await channel_legacy._ensure_ticket_context(interaction, channel)
+    if ch is None:
+        return
+
+    status = channel_legacy._ticket_status(row)
+    if status == "deleted":
+        return await reply_once(interaction, {"content": "❌ Deleted tickets cannot be unlocked.", "ephemeral": True})
+
+    if channel_legacy._ticket_effectively_closed(channel=ch, row=row):
+        return await reply_once(
+            interaction,
+            {
+                "content": (
+                    "❌ Closed/archived tickets should stay reply-locked.\n"
+                    "Use `/ticket reopen` if you want the owner to speak again."
+                ),
+                "ephemeral": True,
+            },
+        )
+
+    owner = await channel_legacy._ticket_owner(ch, row)
+    if owner is None or not isinstance(owner, discord.Member):
+        return await reply_once(interaction, {"content": "❌ Could not resolve the ticket owner for this channel.", "ephemeral": True})
+
+    try:
+        existing = ch.overwrites_for(owner)
+        overwrite = channel_legacy._build_member_overwrite(existing, can_view=True, can_send=True)
+        await ch.set_permissions(owner, overwrite=overwrite, reason=f"Ticket unlocked by {interaction.user}")
+    except Exception as e:
+        return await reply_once(interaction, {"content": f"❌ Failed unlocking ticket: {e}", "ephemeral": True})
+
+    try:
+        await ch.send(f"🔓 Ticket unlocked by {interaction.user.mention}. {owner.mention} can reply again.")
+    except Exception:
+        pass
+
+    await channel_legacy._touch_ticket_channel(ch)
+    await reply_once(interaction, {"content": f"✅ Unlocked {ch.mention}.", "ephemeral": True})
+
+
+@ticket_group.command(
+    name="owner",
+    description="Show the owner of a ticket.",
+)
+@app_commands.describe(channel="Ticket channel to inspect. Leave empty to use the current channel.")
+async def ticket_owner(
+    interaction: discord.Interaction,
+    channel: Optional[discord.TextChannel] = None,
+):
+    if not await _staff_only(interaction):
+        return
+
+    ch, row = await channel_legacy._ensure_ticket_context(interaction, channel)
+    if ch is None:
+        return
+
+    owner = await channel_legacy._ticket_owner(ch, row)
+    if owner is None:
+        return await reply_once(interaction, {"content": "❌ Could not resolve the ticket owner.", "ephemeral": True})
+
+    row = row or {}
+    embed = discord.Embed(
+        title="🎫 Ticket Owner",
+        color=discord.Color.blurple(),
+        timestamp=channel_legacy.now_utc(),
+    )
+    embed.add_field(name="Channel", value=f"{ch.mention}\n`{ch.id}`", inline=False)
+    embed.add_field(name="Owner", value=channel_legacy._ticket_owner_value(owner, ch.guild, row), inline=False)
+    embed.add_field(name="Status", value=f"`{channel_legacy._safe_str(row.get('status'), 'unknown')}`", inline=True)
+    embed.add_field(name="Category", value=f"`{channel_legacy._safe_str(row.get('category'), 'unknown')}`", inline=True)
+    embed.add_field(name="Location", value=channel_legacy._ticket_location_label(ch), inline=False)
+
+    ticket_num = channel_legacy._ticket_number(row, ch)
+    if ticket_num > 0:
+        embed.add_field(name="Ticket Number", value=f"`{ticket_num}`", inline=True)
+
+    matched = channel_legacy._safe_str(row.get("matched_category_name") or row.get("matched_category_slug"))
+    if matched:
+        embed.add_field(name="Matched Category", value=matched, inline=True)
+
+    await reply_once(interaction, {"embed": embed, "ephemeral": True})
+
+
+@ticket_group.command(
+    name="access",
+    description="Show explicit access overrides on a ticket.",
+)
+@app_commands.describe(channel="Ticket channel to inspect. Leave empty to use the current channel.")
+async def ticket_access(
+    interaction: discord.Interaction,
+    channel: Optional[discord.TextChannel] = None,
+):
+    if not await _staff_only(interaction):
+        return
+
+    ch, row = await channel_legacy._ensure_ticket_context(interaction, channel)
+    if ch is None:
+        return
+
+    row = row or {}
+    owner_id = channel_legacy._safe_int(row.get("owner_id") or row.get("user_id"), 0)
+
+    member_lines = []
+    role_lines = []
+
+    try:
+        for target, overwrite in ch.overwrites.items():
+            if isinstance(target, discord.Member):
+                bits = []
+                if overwrite.view_channel is not None:
+                    bits.append(f"view={overwrite.view_channel}")
+                if overwrite.send_messages is not None:
+                    bits.append(f"send={overwrite.send_messages}")
+                if overwrite.attach_files is not None:
+                    bits.append(f"files={overwrite.attach_files}")
+                if overwrite.embed_links is not None:
+                    bits.append(f"embeds={overwrite.embed_links}")
+
+                prefix = "👑 " if int(target.id) == owner_id else "• "
+                member_lines.append(f"{prefix}{target.mention} (`{target.id}`) — {', '.join(bits) if bits else 'custom overwrite'}")
+
+            elif isinstance(target, discord.Role):
+                bits = []
+                if overwrite.view_channel is not None:
+                    bits.append(f"view={overwrite.view_channel}")
+                if overwrite.send_messages is not None:
+                    bits.append(f"send={overwrite.send_messages}")
+                if overwrite.attach_files is not None:
+                    bits.append(f"files={overwrite.attach_files}")
+                if overwrite.embed_links is not None:
+                    bits.append(f"embeds={overwrite.embed_links}")
+
+                role_lines.append(f"• @{target.name} (`{target.id}`) — {', '.join(bits) if bits else 'custom overwrite'}")
+    except Exception:
+        pass
+
+    embed = discord.Embed(
+        title="🔐 Ticket Access",
+        description=f"{ch.mention}\n{channel_legacy._ticket_location_label(ch)}",
+        color=discord.Color.blurple(),
+        timestamp=channel_legacy.now_utc(),
+    )
+
+    embed.add_field(
+        name="Members",
+        value=channel_legacy._truncate("\n".join(member_lines), 1024) if member_lines else "No explicit member overwrites found.",
+        inline=False,
+    )
+    embed.add_field(
+        name="Roles",
+        value=channel_legacy._truncate("\n".join(role_lines), 1024) if role_lines else "No explicit role overwrites found.",
+        inline=False,
+    )
+
+    await reply_once(interaction, {"embed": embed, "ephemeral": True})
+
+
+# ============================================================
+# Registration
+# ============================================================
 
 def register_public_ticket_group_commands(bot, tree) -> None:
     _ = bot
