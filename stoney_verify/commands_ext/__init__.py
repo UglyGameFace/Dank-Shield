@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import os
-from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tuple
+from typing import Any, Callable, Dict, List, Sequence, Tuple
 
 
 _COMMANDS_EXT_REGISTERED = False
@@ -19,7 +19,7 @@ _COMMANDS_EXT_REGISTERED = False
 #   STONEY_COMMAND_PROFILE=public
 #
 # Optional explicit controls:
-#   STONEY_COMMAND_MODULES=ticket_admin,moderation
+#   STONEY_COMMAND_MODULES=public_ticket_group,moderation
 #   STONEY_COMMAND_MODULES_SKIP=ticket_macro_admin,ticket_automation_admin
 # ============================================================
 
@@ -28,6 +28,7 @@ CommandModuleSpec = Tuple[str, str, str]
 
 
 COMMAND_MODULES: List[CommandModuleSpec] = [
+    ("public_ticket_group", "register_public_ticket_group_commands", "public grouped /ticket commands"),
     ("kick_timers", "register_kick_timer_commands", "kick timer commands"),
     ("vc_flow", "register_vc_flow_commands", "VC flow commands"),
     ("ticket_admin", "register_ticket_admin_commands", "ticket admin commands"),
@@ -46,15 +47,19 @@ COMMAND_MODULES: List[CommandModuleSpec] = [
     ("channel_cleanup_admin", "register_channel_cleanup_admin_commands", "channel cleanup admin commands"),
 ]
 
+_LEGACY_MODULES: Tuple[str, ...] = tuple(
+    name for name, _fn, _label in COMMAND_MODULES if not name.startswith("public_")
+)
+
 # Profiles are intentionally conservative.
-# - full: current behavior; all command modules.
-# - public: reduced surface meant for future public/multi-server testing.
-# - minimal: emergency/lightweight profile that keeps only core support controls.
+# - full/dev: current behavior; all legacy command modules, no duplicate public groups.
+# - public: grouped /ticket plus a smaller legacy admin surface.
+# - minimal: emergency/lightweight profile that keeps only grouped tickets + essentials.
 COMMAND_PROFILES: Dict[str, Sequence[str]] = {
-    "full": tuple(name for name, _fn, _label in COMMAND_MODULES),
-    "dev": tuple(name for name, _fn, _label in COMMAND_MODULES),
+    "full": _LEGACY_MODULES,
+    "dev": _LEGACY_MODULES,
     "public": (
-        "ticket_admin",
+        "public_ticket_group",
         "ticket_channel_admin",
         "ticket_intake_admin",
         "ticket_queue_admin",
@@ -63,8 +68,7 @@ COMMAND_PROFILES: Dict[str, Sequence[str]] = {
         "channel_cleanup_admin",
     ),
     "minimal": (
-        "ticket_admin",
-        "ticket_channel_admin",
+        "public_ticket_group",
         "moderation",
         "role_admin",
     ),
