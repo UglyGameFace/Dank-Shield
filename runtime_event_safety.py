@@ -23,6 +23,9 @@ from typing import Any
 _ORIGINAL_IMPORT = builtins.__import__
 _PATCHED_MODULES: set[str] = set()
 _RETRY_TASK_STARTED = False
+_NOT_READY_LOGGED: set[str] = set()
+
+_TARGET_EVENTS_MODULE = "stoney_verify.events"
 
 _EVENT_HELPERS = (
     "_new_sync_member_safe",
@@ -71,7 +74,7 @@ def _guild_id_from_args(args: tuple[Any, ...], kwargs: dict[str, Any]) -> int | 
             pass
 
     try:
-        events = sys.modules.get("stoney_verify.events")
+        events = sys.modules.get(_TARGET_EVENTS_MODULE)
         bot = getattr(events, "bot", None)
         guilds = list(getattr(bot, "guilds", []) or [])
         if guilds:
@@ -90,15 +93,6 @@ def _member_id_from_args(args: tuple[Any, ...], kwargs: dict[str, Any]) -> int |
         except Exception:
             pass
     return None
-
-
-def _helper_exists_unwrapped(module: Any, name: str) -> bool:
-    fn = getattr(module, name, None)
-    return bool(
-        callable(fn)
-        and inspect.iscoroutinefunction(fn)
-        and not getattr(fn, "_runtime_event_safety_wrapped", False)
-    )
 
 
 def _wrap_async_with_queue(
@@ -168,6 +162,8 @@ def _wrap_async_with_queue(
 
 def _patch_events(module: Any, *, final_attempt: bool = False) -> int:
     module_name = str(getattr(module, "__name__", "") or "")
+    if module_name != _TARGET_EVENTS_MODULE:
+        return 0
     if module_name in _PATCHED_MODULES:
         return 0
 
@@ -213,14 +209,14 @@ def _patch_events(module: Any, *, final_attempt: bool = False) -> int:
         _log(f"patched {module_name} queued helpers: {', '.join(wrapped)}")
         return len(wrapped)
 
-    # Do not mark as patched if no helpers exist yet. events.py may still be importing.
     if final_attempt:
         existing = [name for name in _EVENT_HELPERS if hasattr(module, name)]
         _warn(
             f"final retry found no unwrapped coroutine helpers in {module_name}; "
             f"existing_matching_names={existing or 'none'}"
         )
-    else:
+    elif module_name not in _NOT_READY_LOGGED:
+        _NOT_READY_LOGGED.add(module_name)
         _log(f"{module_name} not ready yet; event helper patch will retry")
     return 0
 
@@ -230,7 +226,7 @@ async def _retry_patch_events_later() -> None:
     for index, delay in enumerate(delays):
         await asyncio.sleep(delay)
         try:
-            events = sys.modules.get("stoney_verify.events")
+            events = sys.modules.get(_TARGET_EVENTS_MODULE)
             if events is None:
                 continue
             if _patch_events(events, final_attempt=(index == len(delays) - 1)) > 0:
@@ -257,10 +253,10 @@ def _ensure_retry_task() -> None:
 
 def _maybe_patch_loaded_modules() -> None:
     try:
-        events = sys.modules.get("stoney_verify.events")
+        events = sys.modules.get(_TARGET_EVENTS_MODULE)
         if events is not None:
             wrapped = _patch_events(events)
-            if wrapped <= 0:
+            if wrapped <= 0 and _TARGET_EVENTS_MODULE not in _PATCHED_MODULES:
                 _ensure_retry_task()
     except Exception as e:
         _warn(f"events patch failed: {e!r}")
@@ -270,11 +266,11 @@ def _safe_import(name: str, globals: Any = None, locals: Any = None, fromlist: A
     module = _ORIGINAL_IMPORT(name, globals, locals, fromlist, level)
 
     try:
-        if name == "stoney_verify.events" or name.endswith(".events"):
-            target = sys.modules.get("stoney_verify.events") or sys.modules.get(name)
+        if name == _TARGET_EVENTS_MODULE:
+            target = sys.modules.get(_TARGET_EVENTS_MODULE)
             if target is not None:
                 wrapped = _patch_events(target)
-                if wrapped <= 0:
+                if wrapped <= 0 and _TARGET_EVENTS_MODULE not in _PATCHED_MODULES:
                     _ensure_retry_task()
         _maybe_patch_loaded_modules()
     except Exception as e:
