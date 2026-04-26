@@ -62,7 +62,6 @@ COMMAND_PROFILES: Dict[str, Sequence[str]] = {
     "public": (
         "public_ticket_group",
         "public_tickets_group",
-        "ticket_channel_admin",
         "ticket_intake_admin",
         "moderation",
         "role_admin",
