@@ -8,16 +8,35 @@ Imported by main.py before stoney_verify.app.
 This does not add slash commands. It only patches expensive event/startup sync
 helpers so they are queued through stoney_verify.runtime_jobs instead of running
 inline inside Discord gateway/startup paths.
+
+Important: this module may see stoney_verify.events while it is still importing.
+So it retries patching until the real helper functions exist instead of marking
+the module patched too early.
 """
 
 import asyncio
 import builtins
 import inspect
 import sys
-from typing import Any, Callable
+from typing import Any
 
 _ORIGINAL_IMPORT = builtins.__import__
 _PATCHED_MODULES: set[str] = set()
+_RETRY_TASK_STARTED = False
+
+_EVENT_HELPERS = (
+    "_new_sync_member_safe",
+    "_new_mark_member_left_safe",
+    "_reconcile_stale_open_verification_tickets",
+    "_run_initial_member_sync_once",
+    "_maybe_run_initial_member_sync_once",
+    "_initial_member_sync_once",
+    "_warm_invite_cache_once",
+    "_maybe_warm_invite_cache_once",
+    "_warm_invite_cache",
+    "_run_invite_cache_warmup",
+    "_resume_member_wait_timers_once",
+)
 
 
 def _log(message: str) -> None:
@@ -35,7 +54,6 @@ def _warn(message: str) -> None:
 
 
 def _guild_id_from_args(args: tuple[Any, ...], kwargs: dict[str, Any]) -> int | str | None:
-    # Member-style calls: first arg is usually discord.Member.
     for value in list(args) + list(kwargs.values()):
         try:
             guild = getattr(value, "guild", None)
@@ -47,8 +65,6 @@ def _guild_id_from_args(args: tuple[Any, ...], kwargs: dict[str, Any]) -> int | 
 
         try:
             gid = getattr(value, "id", None)
-            # Avoid accidentally treating a user/member id as a guild id unless the
-            # object at least looks guild-like.
             if gid and hasattr(value, "members") and hasattr(value, "channels"):
                 return gid
         except Exception:
@@ -69,12 +85,20 @@ def _guild_id_from_args(args: tuple[Any, ...], kwargs: dict[str, Any]) -> int | 
 def _member_id_from_args(args: tuple[Any, ...], kwargs: dict[str, Any]) -> int | str | None:
     for value in list(args) + list(kwargs.values()):
         try:
-            # Member-like object has guild + id.
             if getattr(value, "guild", None) is not None and getattr(value, "id", None):
                 return getattr(value, "id", None)
         except Exception:
             pass
     return None
+
+
+def _helper_exists_unwrapped(module: Any, name: str) -> bool:
+    fn = getattr(module, name, None)
+    return bool(
+        callable(fn)
+        and inspect.iscoroutinefunction(fn)
+        and not getattr(fn, "_runtime_event_safety_wrapped", False)
+    )
 
 
 def _wrap_async_with_queue(
@@ -124,12 +148,12 @@ def _wrap_async_with_queue(
             factory=_job,
             timeout=timeout,
             max_queue=max_queue,
+            dedupe_key=f"{name}:{member_id or 'guild'}",
         )
 
         if not queued:
             _warn(f"dropped queued event helper kind={kind} guild={guild_id} label={label}")
 
-        # These helpers are side-effect helpers; callers generally do not use return values.
         return queued
 
     try:
@@ -142,14 +166,13 @@ def _wrap_async_with_queue(
     return True
 
 
-def _patch_events(module: Any) -> None:
+def _patch_events(module: Any, *, final_attempt: bool = False) -> int:
     module_name = str(getattr(module, "__name__", "") or "")
     if module_name in _PATCHED_MODULES:
-        return
+        return 0
 
     wrapped: list[str] = []
 
-    # Per-member DB sync helpers. These can fire from member join/leave/update paths.
     for name in (
         "_new_sync_member_safe",
         "_new_mark_member_left_safe",
@@ -164,7 +187,6 @@ def _patch_events(module: Any) -> None:
         ):
             wrapped.append(name)
 
-    # Startup / maintenance helpers that can get expensive across many guilds.
     for name in (
         "_reconcile_stale_open_verification_tickets",
         "_run_initial_member_sync_once",
@@ -186,18 +208,60 @@ def _patch_events(module: Any) -> None:
         ):
             wrapped.append(name)
 
-    _PATCHED_MODULES.add(module_name)
     if wrapped:
+        _PATCHED_MODULES.add(module_name)
         _log(f"patched {module_name} queued helpers: {', '.join(wrapped)}")
+        return len(wrapped)
+
+    # Do not mark as patched if no helpers exist yet. events.py may still be importing.
+    if final_attempt:
+        existing = [name for name in _EVENT_HELPERS if hasattr(module, name)]
+        _warn(
+            f"final retry found no unwrapped coroutine helpers in {module_name}; "
+            f"existing_matching_names={existing or 'none'}"
+        )
     else:
-        _log(f"patched {module_name}; no matching event helpers found yet")
+        _log(f"{module_name} not ready yet; event helper patch will retry")
+    return 0
+
+
+async def _retry_patch_events_later() -> None:
+    delays = (0.25, 0.75, 1.5, 3.0, 6.0, 12.0)
+    for index, delay in enumerate(delays):
+        await asyncio.sleep(delay)
+        try:
+            events = sys.modules.get("stoney_verify.events")
+            if events is None:
+                continue
+            if _patch_events(events, final_attempt=(index == len(delays) - 1)) > 0:
+                return
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            _warn(f"delayed events patch failed: {e!r}")
+
+
+def _ensure_retry_task() -> None:
+    global _RETRY_TASK_STARTED
+    if _RETRY_TASK_STARTED:
+        return
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        return
+    except Exception:
+        return
+    _RETRY_TASK_STARTED = True
+    loop.create_task(_retry_patch_events_later(), name="runtime-event-safety-retry")
 
 
 def _maybe_patch_loaded_modules() -> None:
     try:
         events = sys.modules.get("stoney_verify.events")
         if events is not None:
-            _patch_events(events)
+            wrapped = _patch_events(events)
+            if wrapped <= 0:
+                _ensure_retry_task()
     except Exception as e:
         _warn(f"events patch failed: {e!r}")
 
@@ -209,7 +273,9 @@ def _safe_import(name: str, globals: Any = None, locals: Any = None, fromlist: A
         if name == "stoney_verify.events" or name.endswith(".events"):
             target = sys.modules.get("stoney_verify.events") or sys.modules.get(name)
             if target is not None:
-                _patch_events(target)
+                wrapped = _patch_events(target)
+                if wrapped <= 0:
+                    _ensure_retry_task()
         _maybe_patch_loaded_modules()
     except Exception as e:
         _warn(f"post-import patch failed for {name}: {e!r}")
