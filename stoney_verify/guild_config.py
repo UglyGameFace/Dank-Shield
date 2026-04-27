@@ -44,15 +44,17 @@ from .globals import (
 # Public-scale per-guild configuration resolver.
 #
 # Why this exists:
-# - globals.py is still the safe env fallback for your dev/beta server.
+# - globals.py is still the safe env fallback for dev/beta.
 # - public bots cannot depend on one GUILD_ID / one set of channel ids.
-# - every runtime path should eventually resolve config by guild_id.
+# - every runtime path should resolve config by guild_id.
 #
-# This module is intentionally defensive:
+# Production rules:
 # - Supabase calls run off the Discord event loop via asyncio.to_thread.
 # - missing DB/table/columns fall back to env config instead of crashing.
 # - config is cached per guild with a short TTL.
 # - rows may use either flat columns or a JSON settings/config column.
+# - verify_channel_id is a text-channel config and must NOT fall back to the
+#   VC verification channel. Health/setup validation owns type checking.
 # ============================================================
 
 
@@ -213,7 +215,9 @@ class GuildRuntimeConfig:
 
     @property
     def effective_verify_channel_id(self) -> int:
-        return int(self.verify_channel_id or self.vc_verify_channel_id or 0)
+        # Production-safe: this is intentionally NOT `verify or vc_verify`.
+        # A voice channel must never satisfy the text-channel verification config.
+        return int(self.verify_channel_id or 0)
 
     @property
     def effective_vc_staff_role_id(self) -> int:
@@ -223,11 +227,19 @@ class GuildRuntimeConfig:
     def effective_ticket_archive_category_id(self) -> int:
         return int(self.ticket_archive_category_id or 0)
 
+    @property
+    def effective_raidlog_channel_id(self) -> int:
+        return int(self.raidlog_channel_id or self.modlog_channel_id or 0)
+
+    @property
+    def effective_force_verify_log_channel_id(self) -> int:
+        return int(self.force_verify_log_channel_id or self.modlog_channel_id or 0)
+
     def as_startup_summary(self) -> dict[str, object]:
         return {
             "guild": self.guild_id,
             "source": self.source,
-            "verify_channel": self.effective_verify_channel_id,
+            "verify_channel": self.verify_channel_id,
             "vc_verify_channel": self.vc_verify_channel_id,
             "vc_verify_queue_channel": self.vc_verify_queue_channel_id,
             "ticket_category": self.ticket_category_id,
@@ -237,6 +249,9 @@ class GuildRuntimeConfig:
             "verified_role": self.verified_role_id,
             "staff_role": self.staff_role_id,
             "transcripts_channel": self.transcripts_channel_id,
+            "join_log_channel": self.join_log_channel_id,
+            "modlog_channel": self.modlog_channel_id,
+            "raidlog_channel": self.raidlog_channel_id,
             "verify_kick_hours": self.verify_kick_hours,
         }
 
@@ -308,7 +323,7 @@ def _apply_row_to_config(base: GuildRuntimeConfig, row: Mapping[str, Any]) -> Gu
 
     return replace(
         base,
-        verify_channel_id=verify_channel_id or vc_verify_channel_id,
+        verify_channel_id=verify_channel_id,
         vc_verify_channel_id=vc_verify_channel_id,
         vc_verify_queue_channel_id=_to_int(
             _pick(data, "vc_verify_queue_channel_id", "voice_verify_queue_channel_id"),
@@ -344,7 +359,20 @@ def _apply_row_to_config(base: GuildRuntimeConfig, row: Mapping[str, Any]) -> Gu
             base.transcript_panel_name or "Support",
         ),
         single_panel_mode=_truthy(_pick(data, "single_panel_mode"), base.single_panel_mode),
-        join_log_channel_id=_to_int(_pick(data, "join_log_channel_id"), base.join_log_channel_id),
+        join_log_channel_id=_to_int(
+            _pick(
+                data,
+                "join_log_channel_id",
+                "join_log_id",
+                "member_log_channel_id",
+                "member_join_log_channel_id",
+                "member_leave_log_channel_id",
+                "welcome_exit_channel_id",
+                "welcome_channel_id",
+                "leave_log_channel_id",
+            ),
+            base.join_log_channel_id,
+        ),
         token_ttl_minutes=_to_int(_pick(data, "token_ttl_minutes"), base.token_ttl_minutes),
         vc_request_ttl_minutes=_to_int(_pick(data, "vc_request_ttl_minutes"), base.vc_request_ttl_minutes),
         verify_kick_hours=_to_int(_pick(data, "verify_kick_hours"), base.verify_kick_hours),
@@ -360,9 +388,12 @@ def _apply_row_to_config(base: GuildRuntimeConfig, row: Mapping[str, Any]) -> Gu
         staff_role_id=staff_role_id,
         vc_staff_role_id=vc_staff_role_id or staff_role_id,
         modlog_channel_id=_to_int(_pick(data, "modlog_channel_id", "mod_log_channel_id"), base.modlog_channel_id),
-        raidlog_channel_id=_to_int(_pick(data, "raidlog_channel_id", "raid_log_channel_id"), base.raidlog_channel_id),
+        raidlog_channel_id=_to_int(
+            _pick(data, "raidlog_channel_id", "raid_log_channel_id", "security_log_channel_id", "spam_log_channel_id"),
+            base.raidlog_channel_id,
+        ),
         force_verify_log_channel_id=_to_int(
-            _pick(data, "force_verify_log_channel_id"),
+            _pick(data, "force_verify_log_channel_id", "force_verify_channel_id"),
             base.force_verify_log_channel_id,
         ),
         enable_optional_role_prompt=_truthy(
@@ -484,6 +515,11 @@ def guild_config_cache_snapshot() -> dict[str, object]:
                 "ticket_category": cfg.ticket_category_id,
                 "ticket_archive_category": cfg.effective_ticket_archive_category_id,
                 "staff_role": cfg.staff_role_id,
+                "verify_channel": cfg.verify_channel_id,
+                "vc_verify_channel": cfg.vc_verify_channel_id,
+                "modlog_channel": cfg.modlog_channel_id,
+                "raidlog_channel": cfg.raidlog_channel_id,
+                "join_log_channel": cfg.join_log_channel_id,
             }
             for gid, (loaded_at, cfg) in _CONFIG_CACHE.items()
         },
