@@ -5,6 +5,7 @@ from typing import Any, Dict, Optional
 import discord
 
 from .common import safe_defer
+from .public_setup_config_writer import apply_public_setup_writer_patch, upsert_guild_config
 from .public_setup_group import (
     _channel_value,
     _config_embed,
@@ -13,7 +14,6 @@ from .public_setup_group import (
     _role_value,
     _safe_int,
     _send_blocked_setup,
-    _upsert_config,
     _utc_iso,
     _validate_verify_setup,
     invalidate_guild_config,
@@ -168,7 +168,7 @@ async def _setup_verify_ids_callback(
     }
 
     try:
-        await _upsert_config(guild.id, updates)
+        await upsert_guild_config(guild.id, updates)
         invalidate_guild_config(guild.id)
         cfg = await get_guild_config(guild.id, refresh=True)
     except Exception as e:
@@ -205,15 +205,17 @@ def _attach_verify_ids_command() -> None:
     _VERIFY_IDS_COMMAND_ATTACHED = True
 
 
+apply_public_setup_writer_patch()
 _attach_verify_ids_command()
 
 
 def register_public_setup_by_id_commands(bot, tree) -> None:
     _ = bot
     _ = tree
+    apply_public_setup_writer_patch()
     _attach_verify_ids_command()
     try:
-        print("✅ public_setup_by_id: attached /stoney setup-verify-ids command")
+        print("✅ public_setup_by_id: attached /stoney setup-verify-ids command + durable config writer")
     except Exception:
         pass
 
