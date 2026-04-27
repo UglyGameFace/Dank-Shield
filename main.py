@@ -21,6 +21,17 @@ except Exception as e:
     except Exception:
         pass
 
+# Force-load a hard raidguard DB stop before app.py imports events/modlog.
+# This prevents sync Supabase/PostgREST identity lookups from blocking Discord
+# heartbeat inside voice-state modlog paths.
+try:
+    import runtime_raidguard_hard_stop  # noqa: F401
+except Exception as e:
+    try:
+        print(f"⚠️ main.py failed to import runtime_raidguard_hard_stop guard: {e!r}")
+    except Exception:
+        pass
+
 # Force-load event helper queue guard. This keeps member sync / startup event
 # maintenance helpers from running inline in Discord gateway/startup paths.
 try:
