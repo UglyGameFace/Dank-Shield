@@ -28,7 +28,7 @@ _COMMANDS_EXT_REGISTERED = False
 #   STONEY_EXPECTED_PUBLIC_GUILDS=100    -> warns when sharding is off
 #
 # Optional explicit controls:
-#   STONEY_COMMAND_MODULES=public_setup_group,public_ticket_group,public_tickets_group,public_ticket_intake_group,public_ticket_category_group,moderation
+#   STONEY_COMMAND_MODULES=public_setup_group,public_setup_review,public_ticket_group,public_tickets_group,public_ticket_intake_group,public_ticket_category_group,moderation
 #   STONEY_COMMAND_MODULES_SKIP=ticket_macro_admin,ticket_automation_admin
 # ============================================================
 
@@ -39,6 +39,7 @@ CommandModuleSpec = Tuple[str, str, str]
 
 
 COMMAND_MODULES: List[CommandModuleSpec] = [
+    ("public_setup_review", "register_public_setup_review_commands", "public grouped /stoney setup review command"),
     ("public_setup_group", "register_public_setup_group_commands", "public grouped /stoney setup commands"),
     ("public_ticket_group", "register_public_ticket_group_commands", "public grouped /ticket commands"),
     ("public_tickets_group", "register_public_tickets_group_commands", "public grouped /tickets commands"),
@@ -72,6 +73,7 @@ _LEGACY_MODULES: Tuple[str, ...] = tuple(
 # - full/dev: old single-server behavior; all legacy command modules, no duplicate public groups.
 COMMAND_PROFILES: Dict[str, Sequence[str]] = {
     "public": (
+        "public_setup_review",
         "public_setup_group",
         "public_ticket_group",
         "public_tickets_group",
@@ -82,6 +84,7 @@ COMMAND_PROFILES: Dict[str, Sequence[str]] = {
         "channel_cleanup_admin",
     ),
     "minimal": (
+        "public_setup_review",
         "public_setup_group",
         "public_ticket_group",
         "public_tickets_group",
