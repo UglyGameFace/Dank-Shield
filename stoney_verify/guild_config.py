@@ -86,6 +86,20 @@ def _env_float(key: str, default: float) -> float:
         return float(default)
 
 
+def _env_first_int(*keys: str, default: int = 0) -> int:
+    for key in keys:
+        raw = _env_str(key)
+        if not raw:
+            continue
+        try:
+            value = int(raw)
+            if value > 0:
+                return value
+        except Exception:
+            continue
+    return int(default)
+
+
 def _truthy(value: object, default: bool = False) -> bool:
     if value is None:
         return bool(default)
@@ -166,6 +180,7 @@ class GuildRuntimeConfig:
     vc_verify_queue_channel_id: int = 0
 
     ticket_category_id: int = 0
+    ticket_archive_category_id: int = 0
     ticket_prefix: str = "ticket"
     auto_delete_ticket_seconds: int = 0
     transcripts_channel_id: int = 0
@@ -204,6 +219,10 @@ class GuildRuntimeConfig:
     def effective_vc_staff_role_id(self) -> int:
         return int(self.vc_staff_role_id or self.staff_role_id or 0)
 
+    @property
+    def effective_ticket_archive_category_id(self) -> int:
+        return int(self.ticket_archive_category_id or 0)
+
     def as_startup_summary(self) -> dict[str, object]:
         return {
             "guild": self.guild_id,
@@ -212,6 +231,7 @@ class GuildRuntimeConfig:
             "vc_verify_channel": self.vc_verify_channel_id,
             "vc_verify_queue_channel": self.vc_verify_queue_channel_id,
             "ticket_category": self.ticket_category_id,
+            "ticket_archive_category": self.effective_ticket_archive_category_id,
             "ticket_prefix": self.ticket_prefix,
             "unverified_role": self.unverified_role_id,
             "verified_role": self.verified_role_id,
@@ -223,12 +243,21 @@ class GuildRuntimeConfig:
 
 def env_fallback_config(guild_id: int | str | None = None) -> GuildRuntimeConfig:
     gid = _to_int(guild_id, GUILD_ID)
+    archive_category_id = _env_first_int(
+        "TICKET_ARCHIVE_CATEGORY_ID",
+        "TICKET_ARCHIVED_CATEGORY_ID",
+        "ARCHIVED_TICKET_CATEGORY_ID",
+        "ARCHIVE_TICKET_CATEGORY_ID",
+        "CLOSED_TICKET_CATEGORY_ID",
+        default=0,
+    )
     return GuildRuntimeConfig(
         guild_id=gid,
         verify_channel_id=VERIFY_CHANNEL_ID,
         vc_verify_channel_id=VC_VERIFY_CHANNEL_ID,
         vc_verify_queue_channel_id=VC_VERIFY_QUEUE_CHANNEL_ID,
         ticket_category_id=TICKET_CATEGORY_ID,
+        ticket_archive_category_id=archive_category_id,
         ticket_prefix=TICKET_PREFIX or "ticket",
         auto_delete_ticket_seconds=AUTO_DELETE_TICKET_SECONDS,
         transcripts_channel_id=TRANSCRIPTS_CHANNEL_ID,
@@ -288,6 +317,18 @@ def _apply_row_to_config(base: GuildRuntimeConfig, row: Mapping[str, Any]) -> Gu
         ticket_category_id=_to_int(
             _pick(data, "ticket_category_id", "tickets_category_id", "support_category_id"),
             base.ticket_category_id,
+        ),
+        ticket_archive_category_id=_to_int(
+            _pick(
+                data,
+                "ticket_archive_category_id",
+                "ticket_archived_category_id",
+                "archived_ticket_category_id",
+                "archive_ticket_category_id",
+                "closed_ticket_category_id",
+                "closed_tickets_category_id",
+            ),
+            base.ticket_archive_category_id,
         ),
         ticket_prefix=_to_str(_pick(data, "ticket_prefix", "ticket_channel_prefix"), base.ticket_prefix or "ticket"),
         auto_delete_ticket_seconds=_to_int(
@@ -441,6 +482,7 @@ def guild_config_cache_snapshot() -> dict[str, object]:
                 "source": cfg.source,
                 "age_seconds": round(now - loaded_at, 3),
                 "ticket_category": cfg.ticket_category_id,
+                "ticket_archive_category": cfg.effective_ticket_archive_category_id,
                 "staff_role": cfg.staff_role_id,
             }
             for gid, (loaded_at, cfg) in _CONFIG_CACHE.items()
