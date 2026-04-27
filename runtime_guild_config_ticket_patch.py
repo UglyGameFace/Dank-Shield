@@ -6,6 +6,7 @@ Runtime per-guild ticket configuration patch.
 Purpose:
 - keep public/beta deployments from relying on one env-only TICKET_CATEGORY_ID / STAFF_ROLE_ID
 - make ticket creation prefer guild_configs for category/staff/transcript settings
+- make close/reopen lifecycle movement prefer guild_configs for active/archive categories
 - keep the old env values as a safe local fallback
 
 This is intentionally defensive and import-hook based because several legacy modules
@@ -123,6 +124,14 @@ def _cfg_int(cfg: Any, name: str, default: int = 0) -> int:
     return _safe_int(getattr(cfg, name, default), default)
 
 
+def _cfg_first_int(cfg: Any, *names: str, default: int = 0) -> int:
+    for name in names:
+        value = _cfg_int(cfg, name, 0)
+        if value > 0:
+            return value
+    return int(default)
+
+
 def _cfg_str(cfg: Any, name: str, default: str = "") -> str:
     return _safe_str(getattr(cfg, name, default), default)
 
@@ -163,7 +172,7 @@ def _maybe_set_kwarg(original: Any, kwargs: dict[str, Any], name: str, value: An
 
 def _patch_ticket_service(module: Any) -> None:
     module_name = getattr(module, "__name__", "")
-    patch_key = f"{module_name}:guild_config_ticket_patch_v1"
+    patch_key = f"{module_name}:guild_config_ticket_patch_v2"
     if patch_key in _PATCHED_MODULES:
         return
 
@@ -212,6 +221,32 @@ def _patch_ticket_service(module: Any) -> None:
             pass
         setattr(module, "_resolve_active_ticket_category", _resolve_active_ticket_category)
 
+    original_resolve_archive = getattr(module, "_resolve_archive_category", None)
+    if callable(original_resolve_archive) and not getattr(original_resolve_archive, "_guild_config_wrapped", False):
+        def _resolve_archive_category(guild: Any) -> Any:
+            cfg = _cached_config_for_guild_id(_safe_int(getattr(guild, "id", 0), 0))
+            cfg_archive_id = _cfg_first_int(
+                cfg,
+                "ticket_archive_category_id",
+                "ticket_archived_category_id",
+                "archived_ticket_category_id",
+                "archive_ticket_category_id",
+                "closed_ticket_category_id",
+                "closed_tickets_category_id",
+                default=0,
+            )
+            if cfg_archive_id > 0:
+                configured = _resolve_category_by_id(guild, cfg_archive_id)
+                if configured is not None:
+                    return configured
+            return original_resolve_archive(guild)
+
+        try:
+            setattr(_resolve_archive_category, "_guild_config_wrapped", True)
+        except Exception:
+            pass
+        setattr(module, "_resolve_archive_category", _resolve_archive_category)
+
     original_staff_check = getattr(module, "_actor_is_elevated_staff", None)
     if callable(original_staff_check) and not getattr(original_staff_check, "_guild_config_wrapped", False):
         def _actor_is_elevated_staff(actor: Any) -> bool:
@@ -251,6 +286,7 @@ def _patch_ticket_service(module: Any) -> None:
 
             if cfg is not None:
                 category_id = _cfg_int(cfg, "ticket_category_id", 0)
+                archive_category_id = _cfg_int(cfg, "ticket_archive_category_id", 0)
                 staff_role_id = _cfg_int(cfg, "staff_role_id", 0)
                 transcripts_channel_id = _cfg_int(cfg, "transcripts_channel_id", 0)
                 ticket_prefix = _cfg_str(cfg, "ticket_prefix", "ticket") or "ticket"
@@ -261,6 +297,11 @@ def _patch_ticket_service(module: Any) -> None:
                     _maybe_set_kwarg(original_create, kwargs, "parent_category_id", category_id)
                     _maybe_set_kwarg(original_create, kwargs, "explicit_parent_category_id", category_id)
                     _maybe_set_kwarg(original_create, kwargs, "ticket_category_id", category_id)
+
+                if archive_category_id > 0:
+                    _maybe_set_kwarg(original_create, kwargs, "ticket_archive_category_id", archive_category_id)
+                    _maybe_set_kwarg(original_create, kwargs, "archive_category_id", archive_category_id)
+                    _maybe_set_kwarg(original_create, kwargs, "closed_ticket_category_id", archive_category_id)
 
                 if staff_role_id > 0:
                     _maybe_set_kwarg(original_create, kwargs, "staff_role_ids", [staff_role_id])
@@ -281,6 +322,7 @@ def _patch_ticket_service(module: Any) -> None:
                         "ticket create used per-guild config "
                         f"guild={guild_id} source={getattr(cfg, 'source', 'unknown')} "
                         f"category={_cfg_int(cfg, 'ticket_category_id', 0)} "
+                        f"archive={_cfg_int(cfg, 'ticket_archive_category_id', 0)} "
                         f"staff_role={_cfg_int(cfg, 'staff_role_id', 0)} "
                         f"elapsed_ms={elapsed_ms}"
                     )
@@ -295,6 +337,9 @@ def _patch_ticket_service(module: Any) -> None:
                     "parent_category_id",
                     "explicit_parent_category_id",
                     "ticket_category_id",
+                    "ticket_archive_category_id",
+                    "archive_category_id",
+                    "closed_ticket_category_id",
                     "staff_role_ids",
                     "staff_role_id",
                     "transcripts_channel_id",
@@ -309,7 +354,7 @@ def _patch_ticket_service(module: Any) -> None:
         setattr(module, "create_ticket_channel", _create_ticket_channel_with_guild_config)
 
     _PATCHED_MODULES.add(patch_key)
-    _log(f"patched {module_name}; ticket creation now prefers guild_configs")
+    _log(f"patched {module_name}; ticket creation + close/reopen categories now prefer guild_configs")
 
 
 def _maybe_patch_loaded_modules() -> None:
@@ -336,4 +381,4 @@ def _safe_import(name: str, globals: Any = None, locals: Any = None, fromlist: A
 
 builtins.__import__ = _safe_import
 _maybe_patch_loaded_modules()
-_log("loaded; per-guild ticket category/staff config guard active")
+_log("loaded; per-guild ticket category/staff/archive config guard active")
