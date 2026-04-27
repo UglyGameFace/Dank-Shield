@@ -32,6 +32,17 @@ except Exception as e:
     except Exception:
         pass
 
+# Force-load per-guild ticket config guard before tickets_new.service is imported.
+# Public/beta bots must resolve ticket category/staff/transcript settings from
+# guild_configs instead of one env-only guild.
+try:
+    import runtime_guild_config_ticket_patch  # noqa: F401
+except Exception as e:
+    try:
+        print(f"⚠️ main.py failed to import runtime_guild_config_ticket_patch guard: {e!r}")
+    except Exception:
+        pass
+
 # Force-load event helper queue guard. This keeps member sync / startup event
 # maintenance helpers from running inline in Discord gateway/startup paths.
 try:
