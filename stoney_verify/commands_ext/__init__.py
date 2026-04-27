@@ -28,7 +28,7 @@ _COMMANDS_EXT_REGISTERED = False
 #   STONEY_EXPECTED_PUBLIC_GUILDS=100    -> warns when sharding is off
 #
 # Optional explicit controls:
-#   STONEY_COMMAND_MODULES=public_setup_group,public_setup_review,public_setup_by_id,public_setup_picker,public_ticket_group,public_tickets_group,public_ticket_intake_group,public_ticket_category_group,moderation
+#   STONEY_COMMAND_MODULES=public_setup_group,public_setup_review,public_setup_by_id,public_setup_picker,public_setup_find,public_ticket_group,public_tickets_group,public_ticket_intake_group,public_ticket_category_group,moderation
 #   STONEY_COMMAND_MODULES_SKIP=ticket_macro_admin,ticket_automation_admin
 # ============================================================
 
@@ -42,6 +42,7 @@ COMMAND_MODULES: List[CommandModuleSpec] = [
     ("public_setup_review", "register_public_setup_review_commands", "public grouped /stoney setup review command"),
     ("public_setup_by_id", "register_public_setup_by_id_commands", "public grouped /stoney setup by ID fallback command"),
     ("public_setup_picker", "register_public_setup_picker_commands", "public grouped /stoney interactive setup picker"),
+    ("public_setup_find", "register_public_setup_find_commands", "public grouped /stoney setup search fallback command"),
     ("public_setup_group", "register_public_setup_group_commands", "public grouped /stoney setup commands"),
     ("public_ticket_group", "register_public_ticket_group_commands", "public grouped /ticket commands"),
     ("public_tickets_group", "register_public_tickets_group_commands", "public grouped /tickets commands"),
@@ -74,6 +75,7 @@ COMMAND_PROFILES: Dict[str, Sequence[str]] = {
         "public_setup_review",
         "public_setup_by_id",
         "public_setup_picker",
+        "public_setup_find",
         "public_setup_group",
         "public_ticket_group",
         "public_tickets_group",
@@ -87,6 +89,7 @@ COMMAND_PROFILES: Dict[str, Sequence[str]] = {
         "public_setup_review",
         "public_setup_by_id",
         "public_setup_picker",
+        "public_setup_find",
         "public_setup_group",
         "public_ticket_group",
         "public_tickets_group",
