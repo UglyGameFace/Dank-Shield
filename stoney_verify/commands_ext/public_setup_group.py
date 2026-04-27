@@ -22,7 +22,8 @@ from ..globals import get_supabase, now_utc
 # - no cross-server config reads or writes
 # - no token/secret values are shown or accepted in Discord commands
 # - text-channel fields and voice-channel fields stay separate
-# - omitted optional log channels fall back to modlog in a predictable way
+# - hard blockers refuse to save known-broken setup
+# - warning-level choices are allowed but surfaced clearly
 # ============================================================
 
 
@@ -254,16 +255,243 @@ def _channel_line(guild: discord.Guild, channel_id: int) -> str:
     return f"Missing/unknown channel (`{cid}`)"
 
 
-def _is_text_channel(channel: Optional[discord.abc.GuildChannel]) -> bool:
-    return isinstance(channel, discord.TextChannel)
-
-
 def _is_voice_channel(channel: Optional[discord.abc.GuildChannel]) -> bool:
     voice_types: list[type] = [discord.VoiceChannel]
     stage_type = getattr(discord, "StageChannel", None)
     if stage_type is not None:
         voice_types.append(stage_type)
     return isinstance(channel, tuple(voice_types))
+
+
+def _text_channel_missing_perms(channel: discord.TextChannel, bot_member: discord.Member, *, need_files: bool = False) -> list[str]:
+    perms = channel.permissions_for(bot_member)
+    missing: list[str] = []
+    if not perms.view_channel:
+        missing.append("View Channel")
+    if not perms.send_messages:
+        missing.append("Send Messages")
+    if not perms.read_message_history:
+        missing.append("Read Message History")
+    if not perms.embed_links:
+        missing.append("Embed Links")
+    if need_files and not perms.attach_files:
+        missing.append("Attach Files")
+    return missing
+
+
+def _category_missing_perms(category: discord.CategoryChannel, bot_member: discord.Member) -> list[str]:
+    perms = category.permissions_for(bot_member)
+    missing: list[str] = []
+    if not perms.view_channel:
+        missing.append("View Channels")
+    if not perms.manage_channels:
+        missing.append("Manage Channels")
+    if not perms.send_messages:
+        missing.append("Send Messages")
+    if not perms.read_message_history:
+        missing.append("Read Message History")
+    return missing
+
+
+def _can_manage_role(guild: discord.Guild, bot_member: Optional[discord.Member], role: discord.Role) -> tuple[bool, str]:
+    if bot_member is None:
+        return False, "Bot member object is unavailable, so role hierarchy could not be checked."
+    if not bot_member.guild_permissions.manage_roles:
+        return False, "Bot is missing **Manage Roles**."
+    try:
+        if role >= bot_member.top_role and guild.owner_id != bot_member.id:
+            return False, f"{role.mention} is above or equal to the bot's top role. Move the bot role above it."
+    except Exception:
+        return False, f"Could not verify role hierarchy for {role.mention}."
+    return True, ""
+
+
+def _validation_embed(title: str, blockers: list[str], warnings: list[str], ok: list[str]) -> discord.Embed:
+    blocked = bool(blockers)
+    embed = discord.Embed(
+        title=title,
+        description=(
+            "❌ **Setup was not saved. Fix the blockers below.**"
+            if blocked
+            else "✅ **Setup can be saved. Review any warnings below.**"
+        ),
+        color=discord.Color.red() if blocked else discord.Color.gold() if warnings else discord.Color.green(),
+    )
+    embed.add_field(name="Blockers", value=_field_text(blockers, empty="✅ None"), inline=False)
+    embed.add_field(name="Warnings", value=_field_text(warnings, empty="✅ None"), inline=False)
+    embed.add_field(name="Passing Checks", value=_field_text(ok, empty="No passing checks reported."), inline=False)
+    return embed
+
+
+def _add_validation_summary(embed: discord.Embed, warnings: list[str], ok: list[str]) -> None:
+    if warnings:
+        embed.add_field(name="Saved With Warnings", value=_field_text(warnings, empty="✅ None"), inline=False)
+    if ok:
+        embed.add_field(name="Pre-save Checks", value=_field_text(ok, empty="✅ Passed"), inline=False)
+
+
+async def _send_blocked_setup(interaction: discord.Interaction, title: str, blockers: list[str], warnings: list[str], ok: list[str]) -> None:
+    await interaction.followup.send(embed=_validation_embed(title, blockers, warnings, ok), ephemeral=True)
+
+
+def _validate_ticket_setup(
+    guild: discord.Guild,
+    ticket_category: discord.CategoryChannel,
+    staff_role: discord.Role,
+    archive_category: Optional[discord.CategoryChannel],
+    transcripts_channel: Optional[discord.TextChannel],
+) -> tuple[list[str], list[str], list[str]]:
+    blockers: list[str] = []
+    warnings: list[str] = []
+    ok: list[str] = []
+    bot_member = _bot_member(guild)
+
+    if bot_member is None:
+        blockers.append("Bot member could not be resolved in this guild.")
+        return blockers, warnings, ok
+
+    missing = _category_missing_perms(ticket_category, bot_member)
+    if missing:
+        blockers.append(f"Open ticket category {ticket_category.mention} is missing bot permissions: {', '.join(missing)}.")
+    else:
+        ok.append(f"Open ticket category is usable: {ticket_category.mention}.")
+
+    if archive_category is None:
+        warnings.append("Archive category was not set. Closed tickets may remain in the open ticket category until archive config is added.")
+    else:
+        archive_missing = _category_missing_perms(archive_category, bot_member)
+        if archive_missing:
+            blockers.append(f"Archive category {archive_category.mention} is missing bot permissions: {', '.join(archive_missing)}.")
+        else:
+            ok.append(f"Archive category is usable: {archive_category.mention}.")
+
+    if staff_role is None:
+        blockers.append("Ticket staff role is required.")
+    elif staff_role.is_default():
+        blockers.append("Ticket staff role cannot be @everyone.")
+    else:
+        ok.append(f"Ticket staff role is set: {staff_role.mention}.")
+
+    if transcripts_channel is None:
+        warnings.append("Transcript channel was not set. Transcript posting will be limited until it is configured.")
+    else:
+        transcript_missing = _text_channel_missing_perms(transcripts_channel, bot_member, need_files=True)
+        if transcript_missing:
+            blockers.append(f"Transcript channel {transcripts_channel.mention} is missing bot permissions: {', '.join(transcript_missing)}.")
+        else:
+            ok.append(f"Transcript channel is writable: {transcripts_channel.mention}.")
+
+    return blockers, warnings, ok
+
+
+def _validate_verify_setup(
+    guild: discord.Guild,
+    verify_channel: discord.TextChannel,
+    unverified_role: discord.Role,
+    verified_role: discord.Role,
+    resident_role: Optional[discord.Role],
+    vc_verify_channel: Optional[discord.VoiceChannel],
+    vc_queue_channel: Optional[discord.TextChannel],
+) -> tuple[list[str], list[str], list[str]]:
+    blockers: list[str] = []
+    warnings: list[str] = []
+    ok: list[str] = []
+    bot_member = _bot_member(guild)
+
+    if bot_member is None:
+        blockers.append("Bot member could not be resolved in this guild.")
+        return blockers, warnings, ok
+
+    verify_missing = _text_channel_missing_perms(verify_channel, bot_member)
+    if verify_missing:
+        blockers.append(f"Verify text channel {verify_channel.mention} is missing bot permissions: {', '.join(verify_missing)}.")
+    else:
+        ok.append(f"Verify text channel is writable: {verify_channel.mention}.")
+
+    for label, role, required in (
+        ("Unverified", unverified_role, True),
+        ("Verified", verified_role, True),
+        ("Resident", resident_role, False),
+    ):
+        if role is None:
+            if required:
+                blockers.append(f"{label} role is required.")
+            continue
+        if role.is_default():
+            blockers.append(f"{label} role cannot be @everyone.")
+            continue
+        manageable, reason = _can_manage_role(guild, bot_member, role)
+        if not manageable:
+            blockers.append(f"Bot cannot manage {label} role {role.mention}: {reason}")
+        else:
+            ok.append(f"Bot can manage {label} role {role.mention}.")
+
+    if vc_verify_channel is None:
+        warnings.append("VC verify channel was not set. Voice verification can stay disabled, but VC verification will not be ready.")
+    elif _is_voice_channel(vc_verify_channel):
+        ok.append(f"VC verify channel is set: {vc_verify_channel.mention}.")
+    else:
+        blockers.append(f"VC verify channel must be a voice/stage channel, got {vc_verify_channel.mention}.")
+
+    if vc_queue_channel is None:
+        warnings.append("VC queue/status text channel was not set. VC verify status messaging may be limited.")
+    else:
+        queue_missing = _text_channel_missing_perms(vc_queue_channel, bot_member)
+        if queue_missing:
+            blockers.append(f"VC queue/status channel {vc_queue_channel.mention} is missing bot permissions: {', '.join(queue_missing)}.")
+        else:
+            ok.append(f"VC queue/status channel is writable: {vc_queue_channel.mention}.")
+
+    return blockers, warnings, ok
+
+
+def _validate_log_setup(
+    guild: discord.Guild,
+    modlog_channel: discord.TextChannel,
+    raidlog_channel: Optional[discord.TextChannel],
+    join_log_channel: Optional[discord.TextChannel],
+    force_verify_log_channel: Optional[discord.TextChannel],
+) -> tuple[list[str], list[str], list[str]]:
+    blockers: list[str] = []
+    warnings: list[str] = []
+    ok: list[str] = []
+    bot_member = _bot_member(guild)
+
+    if bot_member is None:
+        blockers.append("Bot member could not be resolved in this guild.")
+        return blockers, warnings, ok
+
+    seen: set[int] = set()
+
+    def check_log_channel(label: str, channel: discord.TextChannel) -> None:
+        if int(channel.id) in seen:
+            ok.append(f"{label} reuses already validated channel {channel.mention}.")
+            return
+        seen.add(int(channel.id))
+        missing = _text_channel_missing_perms(channel, bot_member)
+        if missing:
+            blockers.append(f"{label} channel {channel.mention} is missing bot permissions: {', '.join(missing)}.")
+        else:
+            ok.append(f"{label} channel is writable: {channel.mention}.")
+
+    check_log_channel("Modlog", modlog_channel)
+
+    if raidlog_channel is None:
+        warnings.append("Raid/security log channel was not set. It will fall back to the modlog channel.")
+    else:
+        check_log_channel("Raid/security log", raidlog_channel)
+
+    if join_log_channel is None:
+        warnings.append("Join/exit log channel was not set. It will fall back to the modlog channel. Use #welcome-exit here when ready.")
+    else:
+        check_log_channel("Join/exit log", join_log_channel)
+
+    if force_verify_log_channel is None:
+        warnings.append("Forced verification log channel was not set. It will fall back to the modlog channel.")
+    else:
+        check_log_channel("Forced verification log", force_verify_log_channel)
+
+    return blockers, warnings, ok
 
 
 def _config_embed(guild: discord.Guild, cfg: Any, *, title: str = "🧭 Stoney Server Config") -> discord.Embed:
@@ -313,27 +541,14 @@ def _check_category(*, guild: discord.Guild, bot_member: Optional[discord.Member
     if cid <= 0:
         (blockers if required else warnings).append(f"{label} category is not set. Run `/stoney setup-tickets`.")
         return
-
     channel = guild.get_channel(cid)
     if not isinstance(channel, discord.CategoryChannel):
         blockers.append(f"{label} category is missing or is not a category: `{cid}`.")
         return
-
     if bot_member is None:
         blockers.append("Bot member object is unavailable, so category permissions could not be checked.")
         return
-
-    perms = channel.permissions_for(bot_member)
-    missing: list[str] = []
-    if not perms.view_channel:
-        missing.append("View Channels")
-    if not perms.manage_channels:
-        missing.append("Manage Channels")
-    if not perms.send_messages:
-        missing.append("Send Messages")
-    if not perms.read_message_history:
-        missing.append("Read Message History")
-
+    missing = _category_missing_perms(channel, bot_member)
     if missing:
         blockers.append(f"{label} category {channel.mention} is missing bot permissions: {', '.join(missing)}.")
     else:
@@ -345,29 +560,14 @@ def _check_text_channel(*, guild: discord.Guild, bot_member: Optional[discord.Me
     if cid <= 0:
         (blockers if required else warnings).append(f"{label} channel is not set.")
         return
-
     channel = guild.get_channel(cid)
     if not isinstance(channel, discord.TextChannel):
         blockers.append(f"{label} channel is missing or is not a text channel: `{cid}`.")
         return
-
     if bot_member is None:
         blockers.append("Bot member object is unavailable, so text-channel permissions could not be checked.")
         return
-
-    perms = channel.permissions_for(bot_member)
-    missing: list[str] = []
-    if not perms.view_channel:
-        missing.append("View Channel")
-    if not perms.send_messages:
-        missing.append("Send Messages")
-    if not perms.read_message_history:
-        missing.append("Read Message History")
-    if not perms.embed_links:
-        missing.append("Embed Links")
-    if need_files and not perms.attach_files:
-        missing.append("Attach Files")
-
+    missing = _text_channel_missing_perms(channel, bot_member, need_files=need_files)
     if missing:
         blockers.append(f"{label} channel {channel.mention} is missing bot permissions: {', '.join(missing)}.")
     else:
@@ -392,12 +592,10 @@ def _check_role_exists(*, guild: discord.Guild, role_id: int, label: str, requir
     if rid <= 0:
         (blockers if required else warnings).append(f"{label} role is not set.")
         return None
-
     role = guild.get_role(rid)
     if role is None:
         blockers.append(f"{label} role is missing: `{rid}`.")
         return None
-
     ok.append(f"{label} role exists: {role.mention}.")
     return role
 
@@ -405,20 +603,11 @@ def _check_role_exists(*, guild: discord.Guild, role_id: int, label: str, requir
 def _check_manageable_role(*, guild: discord.Guild, bot_member: Optional[discord.Member], role: Optional[discord.Role], label: str, blockers: List[str], ok: List[str]) -> None:
     if role is None:
         return
-    if bot_member is None:
-        blockers.append(f"Could not check hierarchy for {label} role because bot member object is unavailable.")
-        return
-    if not bot_member.guild_permissions.manage_roles:
-        blockers.append("Bot is missing **Manage Roles**, so verification roles cannot be assigned/removed.")
-        return
-    try:
-        if role >= bot_member.top_role and guild.owner_id != bot_member.id:
-            blockers.append(f"{label} role {role.mention} is above or equal to the bot's top role. Move the bot role above it.")
-            return
-    except Exception:
-        blockers.append(f"Could not verify bot role hierarchy for {label} role {role.mention}.")
-        return
-    ok.append(f"Bot can manage {label} role {role.mention}.")
+    manageable, reason = _can_manage_role(guild, bot_member, role)
+    if not manageable:
+        blockers.append(f"Bot cannot manage {label} role {role.mention}: {reason}")
+    else:
+        ok.append(f"Bot can manage {label} role {role.mention}.")
 
 
 def _build_setup_health(guild: discord.Guild, cfg: Any) -> Tuple[List[str], List[str], List[str]]:
@@ -469,7 +658,6 @@ def _build_setup_health(guild: discord.Guild, cfg: Any) -> Tuple[List[str], List
 def _health_embed(guild: discord.Guild, cfg: Any) -> discord.Embed:
     blockers, warnings, ok = _build_setup_health(guild, cfg)
     ready = not blockers
-
     embed = discord.Embed(
         title="🩺 Stoney Setup Health",
         description="✅ **Ready for beta testing**" if ready else "🚫 **Needs fixes before public/beta use**",
@@ -491,6 +679,10 @@ async def setup_tickets(interaction: discord.Interaction, ticket_category: disco
     guild = interaction.guild
     assert guild is not None
 
+    blockers, warnings, ok = _validate_ticket_setup(guild, ticket_category, staff_role, archive_category, transcripts_channel)
+    if blockers:
+        return await _send_blocked_setup(interaction, "🚫 Ticket Setup Blocked", blockers, warnings, ok)
+
     updates: Dict[str, Any] = {
         "ticket_category_id": _channel_value(ticket_category),
         "ticket_archive_category_id": _channel_value(archive_category),
@@ -509,7 +701,10 @@ async def setup_tickets(interaction: discord.Interaction, ticket_category: disco
         cfg = await get_guild_config(guild.id, refresh=True)
     except Exception as e:
         return await interaction.followup.send(f"❌ Failed saving ticket setup: `{e}`", ephemeral=True)
-    await interaction.followup.send(embed=_config_embed(guild, cfg, title="✅ Ticket Setup Saved"), ephemeral=True)
+
+    embed = _config_embed(guild, cfg, title="✅ Ticket Setup Saved")
+    _add_validation_summary(embed, warnings, ok)
+    await interaction.followup.send(embed=embed, ephemeral=True)
 
 
 @stoney_group.command(name="setup-verify", description="Configure verification channels and roles for this server.")
@@ -520,6 +715,10 @@ async def setup_verify(interaction: discord.Interaction, verify_channel: discord
     await safe_defer(interaction, ephemeral=True)
     guild = interaction.guild
     assert guild is not None
+
+    blockers, warnings, ok = _validate_verify_setup(guild, verify_channel, unverified_role, verified_role, resident_role, vc_verify_channel, vc_queue_channel)
+    if blockers:
+        return await _send_blocked_setup(interaction, "🚫 Verification Setup Blocked", blockers, warnings, ok)
 
     updates: Dict[str, Any] = {
         "verify_channel_id": _channel_value(verify_channel),
@@ -539,7 +738,10 @@ async def setup_verify(interaction: discord.Interaction, verify_channel: discord
         cfg = await get_guild_config(guild.id, refresh=True)
     except Exception as e:
         return await interaction.followup.send(f"❌ Failed saving verification setup: `{e}`", ephemeral=True)
-    await interaction.followup.send(embed=_config_embed(guild, cfg, title="✅ Verification Setup Saved"), ephemeral=True)
+
+    embed = _config_embed(guild, cfg, title="✅ Verification Setup Saved")
+    _add_validation_summary(embed, warnings, ok)
+    await interaction.followup.send(embed=embed, ephemeral=True)
 
 
 @stoney_group.command(name="setup-logs", description="Configure modlog, raid/security log, and member join/exit log channels.")
@@ -550,6 +752,10 @@ async def setup_logs(interaction: discord.Interaction, modlog_channel: discord.T
     await safe_defer(interaction, ephemeral=True)
     guild = interaction.guild
     assert guild is not None
+
+    blockers, warnings, ok = _validate_log_setup(guild, modlog_channel, raidlog_channel, join_log_channel, force_verify_log_channel)
+    if blockers:
+        return await _send_blocked_setup(interaction, "🚫 Log Setup Blocked", blockers, warnings, ok)
 
     effective_raidlog = raidlog_channel or modlog_channel
     effective_join_log = join_log_channel or modlog_channel
@@ -571,7 +777,10 @@ async def setup_logs(interaction: discord.Interaction, modlog_channel: discord.T
         cfg = await get_guild_config(guild.id, refresh=True)
     except Exception as e:
         return await interaction.followup.send(f"❌ Failed saving log setup: `{e}`", ephemeral=True)
-    await interaction.followup.send(embed=_config_embed(guild, cfg, title="✅ Log Setup Saved"), ephemeral=True)
+
+    embed = _config_embed(guild, cfg, title="✅ Log Setup Saved")
+    _add_validation_summary(embed, warnings, ok)
+    await interaction.followup.send(embed=embed, ephemeral=True)
 
 
 @stoney_group.command(name="config", description="Show this server's current Stoney Verify configuration.")
@@ -609,7 +818,19 @@ async def cache_status(interaction: discord.Interaction):
     snapshot = guild_config_cache_snapshot()
     guild_id = str(interaction.guild.id) if interaction.guild else "0"
     guild_info = (snapshot.get("guilds") or {}).get(guild_id, {}) if isinstance(snapshot.get("guilds"), dict) else {}
-    await reply_once(interaction, {"content": ("🧭 **Guild Config Cache**\n" f"Table: `{snapshot.get('table')}`\n" f"TTL: `{snapshot.get('ttl_seconds')}` seconds\n" f"Cached guilds: `{snapshot.get('cached_guilds')}`\n" f"This guild: `{guild_info or 'not cached'}`"), "ephemeral": True})
+    await reply_once(
+        interaction,
+        {
+            "content": (
+                "🧭 **Guild Config Cache**\n"
+                f"Table: `{snapshot.get('table')}`\n"
+                f"TTL: `{snapshot.get('ttl_seconds')}` seconds\n"
+                f"Cached guilds: `{snapshot.get('cached_guilds')}`\n"
+                f"This guild: `{guild_info or 'not cached'}`"
+            ),
+            "ephemeral": True,
+        },
+    )
 
 
 @stoney_group.command(name="refresh-config", description="Reload this server's config from the database.")
