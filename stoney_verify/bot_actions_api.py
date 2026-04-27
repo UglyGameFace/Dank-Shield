@@ -67,12 +67,16 @@ def create_app(bot: discord.Client) -> web.Application:
     return app
 
 
-async def start_bot_actions_server(bot: discord.Client) -> None:
+async def start_bot_actions_server(bot: discord.Client) -> bool:
     """
     Legacy Bot Actions API startup shim.
 
     Public-safe default: disabled.
     The secured structured Bot API is the supported path now.
+
+    Returns:
+      False -> intentionally disabled; no listener was started.
+      True  -> compatibility health-only listener was started.
 
     To expose a temporary compatibility health-only listener, set:
       BOT_ACTIONS_COMPAT_HEALTH_ONLY=true
@@ -86,7 +90,7 @@ async def start_bot_actions_server(bot: discord.Client) -> None:
             "🧯 Legacy Bot Actions API disabled "
             f"(deployment={mode}; secured structured API should be used instead)"
         )
-        return
+        return False
 
     host = _env("BOT_ACTIONS_HOST", "127.0.0.1")
     port = int(_env("BOT_ACTIONS_PORT", "8080") or "8080")
@@ -101,6 +105,7 @@ async def start_bot_actions_server(bot: discord.Client) -> None:
         "🧯 Legacy Bot Actions compatibility listener started in health-only mode "
         f"at http://{host}:{port}/health"
     )
+    return True
 
 
 __all__ = ["create_app", "start_bot_actions_server"]
