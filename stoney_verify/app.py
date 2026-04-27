@@ -582,8 +582,11 @@ async def _start_legacy_actions_api_once() -> None:
         return
 
     try:
-        await start_bot_actions_server(bot)
-        print("🌐 Legacy Bot Actions API started")
+        legacy_started = await start_bot_actions_server(bot)
+        if legacy_started:
+            print("🌐 Legacy Bot Actions API started")
+        else:
+            print("🧯 Legacy Bot Actions API skipped; secured structured API is the active path")
     except Exception as e:
         print("⚠️ Legacy API failed:", repr(e))
 
