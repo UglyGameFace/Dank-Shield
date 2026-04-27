@@ -12,6 +12,7 @@ _COMMANDS_EXT_REGISTERED = False
 # Discord has a hard 100 global slash-command cap. Public bots should not
 # expose every admin tool as a top-level command. The public profile keeps the
 # top-level surface small by using grouped commands:
+#   /stoney
 #   /ticket
 #   /tickets
 #   /ticket-intake
@@ -27,7 +28,7 @@ _COMMANDS_EXT_REGISTERED = False
 #   STONEY_EXPECTED_PUBLIC_GUILDS=100    -> warns when sharding is off
 #
 # Optional explicit controls:
-#   STONEY_COMMAND_MODULES=public_ticket_group,public_tickets_group,public_ticket_intake_group,public_ticket_category_group,moderation
+#   STONEY_COMMAND_MODULES=public_setup_group,public_ticket_group,public_tickets_group,public_ticket_intake_group,public_ticket_category_group,moderation
 #   STONEY_COMMAND_MODULES_SKIP=ticket_macro_admin,ticket_automation_admin
 # ============================================================
 
@@ -38,6 +39,7 @@ CommandModuleSpec = Tuple[str, str, str]
 
 
 COMMAND_MODULES: List[CommandModuleSpec] = [
+    ("public_setup_group", "register_public_setup_group_commands", "public grouped /stoney setup commands"),
     ("public_ticket_group", "register_public_ticket_group_commands", "public grouped /ticket commands"),
     ("public_tickets_group", "register_public_tickets_group_commands", "public grouped /tickets commands"),
     ("public_ticket_intake_group", "register_public_ticket_intake_group_commands", "public grouped /ticket-intake commands"),
@@ -65,11 +67,12 @@ _LEGACY_MODULES: Tuple[str, ...] = tuple(
 )
 
 # Profiles are intentionally conservative.
-# - public: grouped ticket/tickets/intake/category plus a smaller legacy admin surface.
-# - minimal: emergency/lightweight profile that keeps only grouped tickets + essentials.
+# - public: grouped setup/ticket/tickets/intake/category plus a smaller legacy admin surface.
+# - minimal: emergency/lightweight profile that keeps only grouped setup/tickets + essentials.
 # - full/dev: old single-server behavior; all legacy command modules, no duplicate public groups.
 COMMAND_PROFILES: Dict[str, Sequence[str]] = {
     "public": (
+        "public_setup_group",
         "public_ticket_group",
         "public_tickets_group",
         "public_ticket_intake_group",
@@ -79,6 +82,7 @@ COMMAND_PROFILES: Dict[str, Sequence[str]] = {
         "channel_cleanup_admin",
     ),
     "minimal": (
+        "public_setup_group",
         "public_ticket_group",
         "public_tickets_group",
         "public_ticket_intake_group",
