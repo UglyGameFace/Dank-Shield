@@ -43,6 +43,17 @@ except Exception as e:
     except Exception:
         pass
 
+# Force-load structured API per-guild config guard before api_new.server is imported.
+# This makes dashboard/API lifecycle actions use each guild's configured ticket
+# categories instead of one env-only category.
+try:
+    import runtime_api_guild_config_patch  # noqa: F401
+except Exception as e:
+    try:
+        print(f"⚠️ main.py failed to import runtime_api_guild_config_patch guard: {e!r}")
+    except Exception:
+        pass
+
 # Force-load event helper queue guard. This keeps member sync / startup event
 # maintenance helpers from running inline in Discord gateway/startup paths.
 try:
