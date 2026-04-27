@@ -237,7 +237,8 @@ def _config_embed(guild: discord.Guild, cfg: Any, *, title: str = "🧭 Stoney S
     embed.add_field(
         name="Tickets",
         value=(
-            f"Category: {ch_line(getattr(cfg, 'ticket_category_id', 0))}\n"
+            f"Open category: {ch_line(getattr(cfg, 'ticket_category_id', 0))}\n"
+            f"Archive category: {ch_line(getattr(cfg, 'ticket_archive_category_id', 0))}\n"
             f"Staff role: {role_line(getattr(cfg, 'staff_role_id', 0))}\n"
             f"Transcripts: {ch_line(getattr(cfg, 'transcripts_channel_id', 0))}\n"
             f"Prefix: `{_safe_str(getattr(cfg, 'ticket_prefix', 'ticket'), 'ticket')}`"
@@ -269,11 +270,12 @@ def _config_embed(guild: discord.Guild, cfg: Any, *, title: str = "🧭 Stoney S
 
 @stoney_group.command(
     name="setup-tickets",
-    description="Configure ticket category, staff role, transcripts, and prefix for this server.",
+    description="Configure ticket categories, staff role, transcripts, and prefix for this server.",
 )
 @app_commands.describe(
     ticket_category="Category where open ticket channels should be created.",
     staff_role="Role that can manage/support tickets.",
+    archive_category="Optional category where closed tickets should be moved.",
     transcripts_channel="Channel where ticket transcripts should be posted.",
     ticket_prefix="Ticket channel prefix. Example: ticket",
 )
@@ -281,6 +283,7 @@ async def setup_tickets(
     interaction: discord.Interaction,
     ticket_category: discord.CategoryChannel,
     staff_role: discord.Role,
+    archive_category: Optional[discord.CategoryChannel] = None,
     transcripts_channel: Optional[discord.TextChannel] = None,
     ticket_prefix: Optional[str] = "ticket",
 ):
@@ -294,6 +297,7 @@ async def setup_tickets(
 
     updates: Dict[str, Any] = {
         "ticket_category_id": _channel_value(ticket_category),
+        "ticket_archive_category_id": _channel_value(archive_category),
         "staff_role_id": _role_value(staff_role),
         "vc_staff_role_id": _role_value(staff_role),
         "transcripts_channel_id": _channel_value(transcripts_channel),
