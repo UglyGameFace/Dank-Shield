@@ -54,6 +54,16 @@ except Exception as e:
     except Exception:
         pass
 
+# Public startup scope guard: sync public commands globally and run startup
+# maintenance only for guilds with saved guild_configs rows.
+try:
+    import runtime_public_startup_scope_patch  # noqa: F401
+except Exception as e:
+    try:
+        print(f"⚠️ main.py failed to import runtime_public_startup_scope_patch guard: {e!r}")
+    except Exception:
+        pass
+
 # Force-load structured API per-guild config guard before api_new.server is imported.
 # This makes dashboard/API lifecycle actions use each guild's configured ticket
 # categories instead of one env-only category.
