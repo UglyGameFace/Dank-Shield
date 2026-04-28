@@ -17,6 +17,12 @@ Safety rules:
 - startup maintenance loops over cached guilds, but in public mode it only runs
   for guilds whose config source is supabase:guild_configs. This prevents env
   fallback IDs from being accidentally applied to another server.
+
+Important implementation detail:
+- app.py registers its on_ready listener with discord.py during import. Replacing
+  module globals is not enough once the function object is already registered in
+  bot.extra_events. This guard therefore also replaces the registered app.py
+  on_ready listener with a public-scope-safe equivalent before bot.run().
 """
 
 import asyncio
@@ -29,6 +35,7 @@ import discord
 
 _ORIGINAL_IMPORT = builtins.__import__
 _PATCHED = False
+_LISTENER_PATCHED = False
 _SKIPPED_UNCONFIGURED_GUILDS: set[int] = set()
 
 
@@ -86,16 +93,6 @@ def _public_scope_enabled() -> bool:
         else:
             deployment = "development"
     return profile in {"public", "minimal"} or deployment in {"public", "prod", "production"}
-
-
-def _safe_int(value: Any, default: int = 0) -> int:
-    try:
-        if value is None or isinstance(value, bool):
-            return int(default)
-        text = str(value).strip()
-        return int(text) if text else int(default)
-    except Exception:
-        return int(default)
 
 
 def _unique_guilds(guilds: list[Any]) -> list[discord.Guild]:
@@ -196,8 +193,6 @@ async def _sync_beta_guild_commands_if_requested(module: Any, guild_id: int) -> 
 
 def _patch_app(module: Any) -> None:
     global _PATCHED
-    if _PATCHED:
-        return
 
     bot = getattr(module, "bot", None)
     if bot is None:
@@ -307,8 +302,84 @@ def _patch_app(module: Any) -> None:
     setattr(module, "_maybe_run_departed_reconcile_once", _maybe_run_departed_reconcile_once)
     setattr(module, "_maybe_run_ticket_sync_once", _maybe_run_ticket_sync_once)
 
-    _PATCHED = True
-    _log("patched stoney_verify.app startup scope: global commands + configured multi-guild maintenance")
+    _replace_app_on_ready_listener(module)
+
+    if not _PATCHED:
+        _PATCHED = True
+        _log("patched stoney_verify.app startup scope: global commands + configured multi-guild maintenance")
+
+
+def _make_public_on_ready(module: Any) -> Any:
+    async def _public_on_ready() -> None:
+        try:
+            bot = getattr(module, "bot", None)
+            print(f"🤖 Bot ready: {getattr(bot, 'user', None)}")
+
+            await module._run_slash_maintenance_once()
+            await module._maybe_resume_kick_timers_once()
+            await module._start_legacy_actions_api_once()
+            await module._start_new_api_once()
+            await module._start_workers_once()
+            await module._run_permission_self_check_once()
+
+            module._ensure_startup_background_runner()
+        except Exception as e:
+            print("❌ public startup-scope on_ready listener failed:", repr(e))
+            try:
+                traceback = _ORIGINAL_IMPORT("traceback")
+                traceback.print_exc()
+            except Exception:
+                pass
+
+    try:
+        _public_on_ready.__name__ = "on_ready"
+        _public_on_ready.__qualname__ = "on_ready"
+        _public_on_ready.__module__ = getattr(module, "__name__", "stoney_verify.app")
+    except Exception:
+        pass
+    return _public_on_ready
+
+
+def _replace_app_on_ready_listener(module: Any) -> None:
+    global _LISTENER_PATCHED
+    if _LISTENER_PATCHED:
+        return
+
+    bot = getattr(module, "bot", None)
+    if bot is None:
+        return
+
+    try:
+        public_listener = _make_public_on_ready(module)
+        replaced = 0
+
+        extra_events = getattr(bot, "extra_events", None)
+        if isinstance(extra_events, dict):
+            listeners = list(extra_events.get("on_ready") or [])
+            new_listeners: list[Any] = []
+            for listener in listeners:
+                listener_module = str(getattr(listener, "__module__", "") or "")
+                listener_name = str(getattr(listener, "__name__", "") or "")
+                if listener_module == getattr(module, "__name__", "stoney_verify.app") and listener_name == "on_ready":
+                    new_listeners.append(public_listener)
+                    replaced += 1
+                else:
+                    new_listeners.append(listener)
+
+            if replaced:
+                extra_events["on_ready"] = new_listeners
+            else:
+                try:
+                    bot.listen("on_ready")(public_listener)
+                    replaced = 1
+                except Exception as e:
+                    _warn(f"could not append public on_ready listener: {e!r}")
+
+        setattr(module, "on_ready", public_listener)
+        _LISTENER_PATCHED = True
+        _log(f"replaced registered app on_ready listener for public startup scope replaced={replaced}")
+    except Exception as e:
+        _warn(f"failed to replace app on_ready listener: {e!r}")
 
 
 def _maybe_patch_loaded() -> None:
