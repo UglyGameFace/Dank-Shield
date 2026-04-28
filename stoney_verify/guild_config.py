@@ -44,15 +44,18 @@ from .globals import (
 # Public-scale per-guild configuration resolver.
 #
 # Why this exists:
-# - globals.py is still the safe env fallback for dev/beta.
+# - globals.py is still the safe env fallback for local dev and one beta guild.
 # - public bots cannot depend on one GUILD_ID / one set of channel ids.
 # - every runtime path should resolve config by guild_id.
 #
-# Production rules:
-# - Supabase calls run off the Discord event loop via asyncio.to_thread.
-# - missing DB/table/columns fall back to env config instead of crashing.
-# - config is cached per guild with a short TTL.
-# - rows may use either flat columns or a JSON settings/config column.
+# Production isolation rules:
+# - In public/minimal/production mode, server-specific env IDs are allowed only
+#   for explicitly allowed fallback guilds, usually the beta guild from GUILD_ID.
+# - Any other guild with no guild_configs row is returned as unconfigured with
+#   zero channel/role IDs. This prevents your private server IDs from leaking
+#   into another customer's setup.
+# - A partially configured DB row is completed from neutral defaults, not from
+#   your beta env IDs, unless the guild is explicitly allowed to use env fallback.
 # - verify_channel_id is a text-channel config and must NOT fall back to the
 #   VC verification channel. Health/setup validation owns type checking.
 # ============================================================
@@ -173,6 +176,61 @@ def _nested_settings(row: Mapping[str, Any]) -> dict[str, Any]:
     return merged
 
 
+def _csv_ints(value: str) -> set[int]:
+    out: set[int] = set()
+    for part in str(value or "").replace(";", ",").split(","):
+        item = _to_int(part, 0)
+        if item > 0:
+            out.add(item)
+    return out
+
+
+def _deployment_mode() -> str:
+    raw = _env_str("STONEY_DEPLOYMENT_MODE", "").lower()
+    if raw:
+        return raw
+    if _truthy(_env_str("STONEY_PRODUCTION_MODE"), False):
+        return "production"
+    if _truthy(_env_str("STONEY_PUBLIC_MODE"), False):
+        return "public"
+    return "development"
+
+
+def _command_profile() -> str:
+    return _env_str("STONEY_COMMAND_PROFILE", "public").lower()
+
+
+def public_config_isolation_enabled() -> bool:
+    """True when missing/partial DB configs must not inherit beta env IDs."""
+    explicit = _env_str("STONEY_REQUIRE_GUILD_CONFIG", "")
+    if explicit:
+        return _truthy(explicit, True)
+    profile = _command_profile()
+    deployment = _deployment_mode()
+    return profile in {"public", "minimal"} or deployment in {"public", "prod", "production"}
+
+
+def env_fallback_guild_ids() -> set[int]:
+    """Guilds that may still use env IDs in public mode.
+
+    Default behavior keeps the single beta guild working while preventing every
+    other guild from inheriting that beta server's channels/roles.
+    """
+    explicit = _env_str("STONEY_ENV_FALLBACK_GUILD_IDS", "")
+    if explicit:
+        return _csv_ints(explicit)
+    return {int(GUILD_ID)} if int(GUILD_ID or 0) > 0 else set()
+
+
+def env_fallback_allowed_for_guild(guild_id: int | str | None) -> bool:
+    gid = _to_int(guild_id, 0)
+    if gid <= 0:
+        return not public_config_isolation_enabled()
+    if not public_config_isolation_enabled():
+        return True
+    return gid in env_fallback_guild_ids()
+
+
 @dataclass(frozen=True)
 class GuildRuntimeConfig:
     guild_id: int
@@ -235,6 +293,18 @@ class GuildRuntimeConfig:
     def effective_force_verify_log_channel_id(self) -> int:
         return int(self.force_verify_log_channel_id or self.modlog_channel_id or 0)
 
+    @property
+    def is_configured_from_db(self) -> bool:
+        return str(self.source or "").startswith("supabase:")
+
+    @property
+    def is_unconfigured(self) -> bool:
+        return str(self.source or "").startswith("unconfigured:")
+
+    @property
+    def uses_env_fallback(self) -> bool:
+        return str(self.source or "") == "env"
+
     def as_startup_summary(self) -> dict[str, object]:
         return {
             "guild": self.guild_id,
@@ -254,6 +324,30 @@ class GuildRuntimeConfig:
             "raidlog_channel": self.raidlog_channel_id,
             "verify_kick_hours": self.verify_kick_hours,
         }
+
+
+def unconfigured_guild_config(guild_id: int | str | None = None, *, source: str = "unconfigured:requires_setup") -> GuildRuntimeConfig:
+    """Neutral config for a guild that has not completed setup.
+
+    Channel/role IDs stay zero on purpose. This is the isolation boundary that
+    keeps one server's IDs from appearing in another server.
+    """
+    gid = _to_int(guild_id, 0)
+    return GuildRuntimeConfig(
+        guild_id=gid,
+        ticket_prefix=TICKET_PREFIX or "ticket",
+        auto_delete_ticket_seconds=0,
+        transcript_panel_name=TRANSCRIPT_PANEL_NAME or "Support",
+        single_panel_mode=bool(SINGLE_PANEL_MODE),
+        token_ttl_minutes=TOKEN_TTL_MINUTES or 240,
+        vc_request_ttl_minutes=VC_REQUEST_TTL_MINUTES or 240,
+        verify_kick_hours=VERIFY_KICK_HOURS or 24,
+        vc_request_cooldown_seconds=VC_REQUEST_COOLDOWN_SECONDS or 60,
+        enable_optional_role_prompt=bool(ENABLE_OPTIONAL_ROLE_PROMPT),
+        optional_role_auto_close_seconds=OPTIONAL_ROLE_AUTO_CLOSE_SECONDS,
+        source=source,
+        loaded_at_monotonic=time.monotonic(),
+    )
 
 
 def env_fallback_config(guild_id: int | str | None = None) -> GuildRuntimeConfig:
@@ -298,6 +392,12 @@ def env_fallback_config(guild_id: int | str | None = None) -> GuildRuntimeConfig
         source="env",
         loaded_at_monotonic=time.monotonic(),
     )
+
+
+def _base_config_for_guild(guild_id: int) -> GuildRuntimeConfig:
+    if env_fallback_allowed_for_guild(guild_id):
+        return env_fallback_config(guild_id)
+    return unconfigured_guild_config(guild_id, source="unconfigured:requires_setup")
 
 
 def _apply_row_to_config(base: GuildRuntimeConfig, row: Mapping[str, Any]) -> GuildRuntimeConfig:
@@ -442,6 +542,8 @@ async def _lock_for_guild(guild_id: int) -> asyncio.Lock:
 async def get_guild_config(guild_id: int | str | None, *, refresh: bool = False) -> GuildRuntimeConfig:
     gid = _to_int(guild_id, GUILD_ID)
     if gid <= 0:
+        if public_config_isolation_enabled():
+            return unconfigured_guild_config(gid, source="unconfigured:missing_guild_id")
         return env_fallback_config(gid)
 
     now = time.monotonic()
@@ -462,25 +564,38 @@ async def get_guild_config(guild_id: int | str | None, *, refresh: bool = False)
             if now - loaded_at <= ttl:
                 return cfg
 
-        base = env_fallback_config(gid)
+        base = _base_config_for_guild(gid)
 
         try:
             row = await asyncio.to_thread(_fetch_config_row_sync, gid)
         except Exception as e:
-            _warn_once(
-                f"guild-config-fetch:{gid}",
-                f"⚠️ guild_config: using env fallback for guild={gid}; DB config fetch failed: {repr(e)}",
-            )
-            cfg = base
+            if base.uses_env_fallback:
+                _warn_once(
+                    f"guild-config-fetch:{gid}",
+                    f"⚠️ guild_config: using env fallback for allowed guild={gid}; DB config fetch failed: {repr(e)}",
+                )
+                cfg = base
+            else:
+                _warn_once(
+                    f"guild-config-fetch:{gid}",
+                    f"⚠️ guild_config: DB config fetch failed for guild={gid}; refusing env fallback because public config isolation is enabled: {repr(e)}",
+                )
+                cfg = replace(base, source="unconfigured:db_fetch_failed", loaded_at_monotonic=time.monotonic())
         else:
             if row:
                 cfg = _apply_row_to_config(base, row)
+            elif base.uses_env_fallback:
+                _warn_once(
+                    f"guild-config-missing:{gid}",
+                    f"ℹ️ guild_config: no DB config row for allowed fallback guild={gid}; using env fallback.",
+                )
+                cfg = base
             else:
                 _warn_once(
                     f"guild-config-missing:{gid}",
-                    f"ℹ️ guild_config: no DB config row for guild={gid}; using env fallback.",
+                    f"ℹ️ guild_config: no DB config row for guild={gid}; marked unconfigured and did not use beta env IDs.",
                 )
-                cfg = base
+                cfg = replace(base, source="unconfigured:missing_db_row", loaded_at_monotonic=time.monotonic())
 
         _CONFIG_CACHE[gid] = (time.monotonic(), cfg)
         return cfg
@@ -491,7 +606,9 @@ def get_cached_guild_config(guild_id: int | str | None) -> GuildRuntimeConfig:
     cached = _CONFIG_CACHE.get(gid)
     if cached:
         return cached[1]
-    return env_fallback_config(gid)
+    if gid <= 0 and public_config_isolation_enabled():
+        return unconfigured_guild_config(gid, source="unconfigured:missing_guild_id")
+    return _base_config_for_guild(gid)
 
 
 def invalidate_guild_config(guild_id: int | str | None = None) -> None:
@@ -507,6 +624,8 @@ def guild_config_cache_snapshot() -> dict[str, object]:
     return {
         "table": _table_name(),
         "ttl_seconds": _cache_ttl(),
+        "public_config_isolation": public_config_isolation_enabled(),
+        "env_fallback_guild_ids": sorted(env_fallback_guild_ids()),
         "cached_guilds": len(_CONFIG_CACHE),
         "guilds": {
             str(gid): {
@@ -529,8 +648,12 @@ def guild_config_cache_snapshot() -> dict[str, object]:
 __all__ = [
     "GuildRuntimeConfig",
     "env_fallback_config",
+    "unconfigured_guild_config",
     "get_guild_config",
     "get_cached_guild_config",
     "invalidate_guild_config",
     "guild_config_cache_snapshot",
+    "public_config_isolation_enabled",
+    "env_fallback_guild_ids",
+    "env_fallback_allowed_for_guild",
 ]
