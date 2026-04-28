@@ -28,7 +28,7 @@ _COMMANDS_EXT_REGISTERED = False
 #   STONEY_EXPECTED_PUBLIC_GUILDS=100    -> warns when sharding is off
 #
 # Optional explicit controls:
-#   STONEY_COMMAND_MODULES=public_setup_group,public_setup_review,public_setup_by_id,public_setup_picker,public_setup_find,public_archive_backfill,public_permission_check,public_ticket_group,public_tickets_group,public_ticket_intake_group,public_ticket_category_group,moderation
+#   STONEY_COMMAND_MODULES=public_setup_group,public_setup_review,public_setup_logs,public_setup_by_id,public_setup_picker,public_setup_find,public_archive_backfill,public_permission_check,public_ticket_group,public_tickets_group,public_ticket_intake_group,public_ticket_category_group,moderation
 #   STONEY_COMMAND_MODULES_SKIP=ticket_macro_admin,ticket_automation_admin
 # ============================================================
 
@@ -40,6 +40,7 @@ CommandModuleSpec = Tuple[str, str, str]
 
 COMMAND_MODULES: List[CommandModuleSpec] = [
     ("public_setup_review", "register_public_setup_review_commands", "public grouped /stoney setup review command"),
+    ("public_setup_logs", "register_public_setup_logs_commands", "public grouped /stoney log channel setup command"),
     ("public_setup_by_id", "register_public_setup_by_id_commands", "public grouped /stoney setup by ID fallback command"),
     ("public_setup_picker", "register_public_setup_picker_commands", "public grouped /stoney interactive setup picker"),
     ("public_setup_find", "register_public_setup_find_commands", "public grouped /stoney setup search fallback command"),
@@ -75,6 +76,7 @@ _LEGACY_MODULES: Tuple[str, ...] = tuple(
 COMMAND_PROFILES: Dict[str, Sequence[str]] = {
     "public": (
         "public_setup_review",
+        "public_setup_logs",
         "public_setup_by_id",
         "public_setup_picker",
         "public_setup_find",
@@ -91,6 +93,7 @@ COMMAND_PROFILES: Dict[str, Sequence[str]] = {
     ),
     "minimal": (
         "public_setup_review",
+        "public_setup_logs",
         "public_setup_by_id",
         "public_setup_picker",
         "public_setup_find",
