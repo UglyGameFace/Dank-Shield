@@ -528,6 +528,22 @@ def _safe_import(name: str, globals: Any = None, locals: Any = None, fromlist: A
     return module
 
 
+def _load_public_startup_scope_guard() -> None:
+    """
+    Secondary load path for the public startup-scope guard.
+
+    main.py imports this guard too, but keeping it here prevents stale host
+    launchers or alternate entrypoints from silently falling back to env-only
+    single-guild startup behavior.
+    """
+    try:
+        _ORIGINAL_IMPORT("runtime_public_startup_scope_patch")
+        _log("verified public startup scope guard import")
+    except Exception as e:
+        _warn(f"public startup scope guard import failed: {e!r}")
+
+
 builtins.__import__ = _safe_import
 _maybe_patch_loaded_modules()
+_load_public_startup_scope_guard()
 _log("sitecustomize loaded; event-loop DB guard + ticket creation guard + queued modlog/startup guard active")
