@@ -1,28 +1,17 @@
 from __future__ import annotations
 
 """
-Runtime public startup-scope guard.
+Runtime public startup-scope fallback guard.
 
-Why this exists:
-- app.py was originally written for one beta guild and uses GUILD_ID for slash
-  command sync, departed-member reconciliation, and startup ticket sync.
-- public/beta production needs global slash commands plus per-guild startup
-  maintenance that only touches servers with a saved guild_configs row.
+This guard remains as a compatibility fallback for stale deployments or alternate
+entrypoints. The native implementation now lives in stoney_verify.app.
 
-Safety rules:
-- public/minimal/production profiles sync global commands so invited servers can
-  actually see /stoney, /ticket, /tickets, etc.
-- if GUILD_ID is still set for beta convenience, the guard may also sync that
-  guild for immediate command updates.
-- startup maintenance loops over cached guilds, but in public mode it only runs
-  for guilds whose config source is supabase:guild_configs. This prevents env
-  fallback IDs from being accidentally applied to another server.
-
-Important implementation detail:
-- app.py registers its on_ready listener with discord.py during import. Replacing
-  module globals is not enough once the function object is already registered in
-  bot.extra_events. This guard therefore also replaces the registered app.py
-  on_ready listener with a public-scope-safe equivalent before bot.run().
+Behavior:
+- If app.py exposes _NATIVE_PUBLIC_STARTUP_SCOPE=True, this guard logs that native
+  startup scope is active and does not monkey-patch app.py.
+- If an older app.py is deployed, this guard still patches startup scope so public
+  mode syncs global slash commands and limits startup maintenance to configured
+  guilds.
 """
 
 import asyncio
@@ -191,8 +180,21 @@ async def _sync_beta_guild_commands_if_requested(module: Any, guild_id: int) -> 
         _warn(f"beta guild slash sync failed guild={guild_id}: {e!r}")
 
 
+def _native_app_scope_active(module: Any) -> bool:
+    try:
+        return bool(getattr(module, "_NATIVE_PUBLIC_STARTUP_SCOPE", False))
+    except Exception:
+        return False
+
+
 def _patch_app(module: Any) -> None:
     global _PATCHED
+
+    if _native_app_scope_active(module):
+        if not _PATCHED:
+            _PATCHED = True
+            _log("native app public startup scope detected; fallback monkey patch disabled")
+        return
 
     bot = getattr(module, "bot", None)
     if bot is None:
@@ -321,9 +323,6 @@ def _make_public_on_ready(module: Any) -> Any:
             await module._start_new_api_once()
             await module._start_workers_once()
 
-            # Do not run app.py's legacy env-based permission self-check in
-            # public scope. public_permission_check.py owns the per-guild,
-            # guild_configs-backed runtime setup health check.
             if not _public_scope_enabled():
                 await module._run_permission_self_check_once()
 
@@ -348,6 +347,10 @@ def _make_public_on_ready(module: Any) -> Any:
 def _replace_app_on_ready_listener(module: Any) -> None:
     global _LISTENER_PATCHED
     if _LISTENER_PATCHED:
+        return
+
+    if _native_app_scope_active(module):
+        _LISTENER_PATCHED = True
         return
 
     bot = getattr(module, "bot", None)
@@ -412,4 +415,4 @@ def _safe_import(name: str, globals: Any = None, locals: Any = None, fromlist: A
 
 builtins.__import__ = _safe_import
 _maybe_patch_loaded()
-_log("loaded; public startup scope guard active")
+_log("loaded; fallback guard active")
