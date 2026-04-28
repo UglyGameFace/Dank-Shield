@@ -30,6 +30,7 @@ from ..guild_config import get_guild_config, invalidate_guild_config
 #   modlog, but every chosen channel is permission-validated before saving
 # - join/exit intentionally maps to join_log_channel_id so existing runtime code
 #   and the newer welcome-exit use case share one durable setting
+# - registering this module also enables per-guild join/exit log listeners
 # ============================================================
 
 
@@ -152,10 +153,21 @@ def _attach_setup_logs_command() -> None:
 _attach_setup_logs_command()
 
 
+def _register_member_lifecycle_listeners(bot, tree) -> None:
+    try:
+        from .public_member_lifecycle_logs import register_public_member_lifecycle_log_listeners
+
+        register_public_member_lifecycle_log_listeners(bot, tree)
+    except Exception as e:
+        try:
+            print(f"⚠️ public_setup_logs: failed registering join/exit log listeners: {repr(e)}")
+        except Exception:
+            pass
+
+
 def register_public_setup_logs_commands(bot, tree) -> None:
-    _ = bot
-    _ = tree
     _attach_setup_logs_command()
+    _register_member_lifecycle_listeners(bot, tree)
     try:
         print("✅ public_setup_logs: attached /stoney setup-logs command")
     except Exception:
