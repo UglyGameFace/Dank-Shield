@@ -1,17 +1,20 @@
 from __future__ import annotations
 
 """
-Runtime public startup-scope fallback guard.
+Runtime public startup-scope guard.
 
-This guard remains as a compatibility fallback for stale deployments or alternate
-entrypoints. The native implementation now lives in stoney_verify.app.
+This guard is intentionally still loaded from sitecustomize/main for stale hosts
+and alternate entrypoints. The native implementation lives in stoney_verify.app,
+but this patch still corrects one important production behavior:
 
-Behavior:
-- If app.py exposes _NATIVE_PUBLIC_STARTUP_SCOPE=True, this guard logs that native
-  startup scope is active and does not monkey-patch app.py.
-- If an older app.py is deployed, this guard still patches startup scope so public
-  mode syncs global slash commands and limits startup maintenance to configured
-  guilds.
+- Public/global commands must not also be synced as guild commands by default.
+  Discord will show duplicate slash commands when the same command exists both
+  globally and as a guild-scoped command.
+- For beta/dev speed, guild command sync can still be enabled explicitly with:
+      STONEY_SYNC_BETA_GUILD_COMMANDS=true
+- When guild sync is disabled, stale beta guild commands are cleared once by
+  default so duplicate commands disappear after restart:
+      STONEY_CLEAR_BETA_GUILD_COMMANDS_ON_BOOT=true
 """
 
 import asyncio
@@ -23,9 +26,10 @@ from typing import Any
 import discord
 
 _ORIGINAL_IMPORT = builtins.__import__
-_PATCHED = False
+_PATCHED_MODULE_IDS: set[int] = set()
 _LISTENER_PATCHED = False
 _SKIPPED_UNCONFIGURED_GUILDS: set[int] = set()
+_CLEARED_BETA_GUILDS: set[int] = set()
 
 
 def _log(message: str) -> None:
@@ -84,6 +88,22 @@ def _public_scope_enabled() -> bool:
     return profile in {"public", "minimal"} or deployment in {"public", "prod", "production"}
 
 
+def _sync_beta_guild_commands_enabled() -> bool:
+    # Production-safe default: false. Guild-scoped copies cause duplicate slash
+    # commands once global commands are also synced.
+    return _env_bool("STONEY_SYNC_BETA_GUILD_COMMANDS", False)
+
+
+def _clear_beta_guild_commands_enabled() -> bool:
+    # Enabled by default because old beta guild commands are exactly what causes
+    # duplicate slash commands after switching to the public/global command path.
+    return _env_bool("STONEY_CLEAR_BETA_GUILD_COMMANDS_ON_BOOT", True)
+
+
+def _guild_object(guild_id: int) -> discord.Object:
+    return discord.Object(id=int(guild_id))
+
+
 def _unique_guilds(guilds: list[Any]) -> list[discord.Guild]:
     out: list[discord.Guild] = []
     seen: set[int] = set()
@@ -99,24 +119,6 @@ def _unique_guilds(guilds: list[Any]) -> list[discord.Guild]:
     return sorted(out, key=lambda g: int(getattr(g, "id", 0) or 0))
 
 
-async def _resolve_env_guild(bot: Any) -> discord.Guild | None:
-    guild_id = _env_int("GUILD_ID", 0)
-    if guild_id <= 0:
-        return None
-    try:
-        guild = bot.get_guild(guild_id)
-        if guild is not None:
-            return guild
-    except Exception:
-        pass
-    try:
-        await bot.fetch_guild(guild_id)
-        return bot.get_guild(guild_id)
-    except Exception as e:
-        _warn(f"could not resolve env GUILD_ID={guild_id}: {e!r}")
-        return None
-
-
 async def _guild_config_source(guild_id: int, *, refresh: bool = False) -> str:
     try:
         from stoney_verify.guild_config import get_guild_config
@@ -129,13 +131,11 @@ async def _guild_config_source(guild_id: int, *, refresh: bool = False) -> str:
 
 
 async def _configured_startup_guilds(bot: Any) -> list[discord.Guild]:
-    public_scope = _public_scope_enabled()
     max_guilds = max(1, _env_int("STONEY_STARTUP_MAX_GUILDS", 50))
 
-    if public_scope:
-        cached = _unique_guilds(list(getattr(bot, "guilds", []) or []))[:max_guilds]
+    if _public_scope_enabled():
         configured: list[discord.Guild] = []
-        for guild in cached:
+        for guild in _unique_guilds(list(getattr(bot, "guilds", []) or []))[:max_guilds]:
             gid = int(getattr(guild, "id", 0) or 0)
             source = await _guild_config_source(gid, refresh=False)
             if source.startswith("supabase:"):
@@ -145,25 +145,61 @@ async def _configured_startup_guilds(bot: Any) -> list[discord.Guild]:
                 _log(f"skipping startup maintenance for unconfigured guild={gid} source={source or 'unknown'}")
         return configured
 
-    env_guild = await _resolve_env_guild(bot)
-    if env_guild is not None:
-        return [env_guild]
-
+    guild_id = _env_int("GUILD_ID", 0)
+    if guild_id > 0:
+        try:
+            guild = bot.get_guild(guild_id)
+            if guild is not None:
+                return [guild]
+        except Exception:
+            pass
     return _unique_guilds(list(getattr(bot, "guilds", []) or []))[:max_guilds]
 
 
-def _guild_object(guild_id: int) -> discord.Object:
-    return discord.Object(id=int(guild_id))
+async def _clear_stale_beta_guild_commands(module: Any, guild_id: int) -> None:
+    if guild_id <= 0:
+        return
+    if guild_id in _CLEARED_BETA_GUILDS:
+        return
+    if not _public_scope_enabled():
+        return
+    if _sync_beta_guild_commands_enabled():
+        return
+    if not _clear_beta_guild_commands_enabled():
+        return
+
+    bot = getattr(module, "bot", None)
+    if bot is None:
+        return
+
+    guild_obj = _guild_object(guild_id)
+    _CLEARED_BETA_GUILDS.add(guild_id)
+
+    try:
+        bot.tree.clear_commands(guild=guild_obj)
+        synced = await bot.tree.sync(guild=guild_obj)
+        _log(
+            "cleared stale beta guild slash commands to prevent duplicate commands "
+            f"guild={guild_id} remaining={len(synced)}"
+        )
+    except Exception as e:
+        _warn(f"failed clearing stale beta guild slash commands guild={guild_id}: {e!r}")
 
 
 async def _sync_beta_guild_commands_if_requested(module: Any, guild_id: int) -> None:
     if guild_id <= 0:
         return
-    if not _env_bool("STONEY_SYNC_BETA_GUILD_COMMANDS", True):
-        return
 
     bot = getattr(module, "bot", None)
     if bot is None:
+        return
+
+    if not _sync_beta_guild_commands_enabled():
+        await _clear_stale_beta_guild_commands(module, guild_id)
+        _log(
+            "beta guild slash sync skipped; using global commands only "
+            f"guild={guild_id} set STONEY_SYNC_BETA_GUILD_COMMANDS=true for dev-only instant guild sync"
+        )
         return
 
     guild_obj = _guild_object(guild_id)
@@ -187,14 +223,18 @@ def _native_app_scope_active(module: Any) -> bool:
         return False
 
 
-def _patch_app(module: Any) -> None:
-    global _PATCHED
+def _patch_native_app(module: Any) -> None:
+    """Patch only the beta guild command sync behavior on modern app.py."""
+    async def _native_sync_beta_guild_commands_if_requested(guild_id_int: int) -> None:
+        await _sync_beta_guild_commands_if_requested(module, int(guild_id_int or 0))
 
-    if _native_app_scope_active(module):
-        if not _PATCHED:
-            _PATCHED = True
-            _log("native app public startup scope detected; fallback monkey patch disabled")
-        return
+    setattr(module, "_sync_beta_guild_commands_if_requested", _native_sync_beta_guild_commands_if_requested)
+    _log("native app public startup scope detected; beta guild duplicate-command guard active")
+
+
+def _patch_legacy_app(module: Any) -> None:
+    """Fallback for older app.py versions that do not include native public scope."""
+    global _LISTENER_PATCHED
 
     bot = getattr(module, "bot", None)
     if bot is None:
@@ -216,24 +256,10 @@ def _patch_app(module: Any) -> None:
         setattr(module, "_DID_SLASH_MAINTENANCE", True)
 
         try:
-            try:
-                print("🧩 local global commands:", [c.name for c in bot.tree.get_commands()])
-            except Exception:
-                pass
-
             public_scope = _public_scope_enabled()
             guild_id = _env_int("GUILD_ID", 0)
 
             if public_scope:
-                if _env_bool("CLEAR_GLOBAL_COMMANDS_ON_BOOT", False) and not bool(getattr(module, "_DID_GLOBAL_COMMAND_CLEANUP", False)):
-                    setattr(module, "_DID_GLOBAL_COMMAND_CLEANUP", True)
-                    try:
-                        bot.tree.clear_commands(guild=None)
-                        await bot.tree.sync()
-                        _log("cleared old global Discord application commands")
-                    except Exception as e:
-                        _warn(f"global command cleanup failed: {e!r}")
-
                 synced_global = await bot.tree.sync()
                 _log(f"global slash sync complete commands={len(synced_global)} mode=public")
                 await _sync_beta_guild_commands_if_requested(module, guild_id)
@@ -251,22 +277,14 @@ def _patch_app(module: Any) -> None:
         if bool(getattr(module, "_DID_DEPARTED_RECONCILE", False)):
             return
         setattr(module, "_DID_DEPARTED_RECONCILE", True)
-
         helper = getattr(module, "_run_departed_reconciliation_for_guild", None)
         if helper is None:
             print("⚠️ Departed reconcile helper unavailable; skipping.")
             return
-
-        guilds = await _resolve_runtime_guilds()
-        if not guilds:
-            print("⚠️ Skipping departed reconcile: no configured guilds resolved.")
-            return
-
-        for guild in guilds:
+        for guild in await _resolve_runtime_guilds():
             try:
                 print(f"🧹 Running departed-member reconciliation guild={guild.id}...")
-                summary_departed = await helper(guild)
-                print("✅ Departed reconciliation complete:", summary_departed)
+                print("✅ Departed reconciliation complete:", await helper(guild))
             except Exception as e:
                 print(f"❌ Departed reconcile failed guild={getattr(guild, 'id', 'unknown')}:", repr(e))
 
@@ -274,18 +292,11 @@ def _patch_app(module: Any) -> None:
         if bool(getattr(module, "_DID_TICKET_SYNC", False)):
             return
         setattr(module, "_DID_TICKET_SYNC", True)
-
         sync_fn = getattr(module, "_sync_active_ticket_channels_for_guild", None)
         if sync_fn is None:
             print("⚠️ Ticket sync helper unavailable; skipping startup ticket sync.")
             return
-
-        guilds = await _resolve_runtime_guilds()
-        if not guilds:
-            print("⚠️ Skipping startup ticket sync: no configured guilds resolved.")
-            return
-
-        for guild in guilds:
+        for guild in await _resolve_runtime_guilds():
             try:
                 print(f"🎫 Running startup ticket sync/backfill guild={guild.id}...")
                 summary = await sync_fn(
@@ -304,36 +315,20 @@ def _patch_app(module: Any) -> None:
     setattr(module, "_maybe_run_departed_reconcile_once", _maybe_run_departed_reconcile_once)
     setattr(module, "_maybe_run_ticket_sync_once", _maybe_run_ticket_sync_once)
 
-    _replace_app_on_ready_listener(module)
+    if _LISTENER_PATCHED:
+        return
 
-    if not _PATCHED:
-        _PATCHED = True
-        _log("patched stoney_verify.app startup scope: global commands + configured multi-guild maintenance")
-
-
-def _make_public_on_ready(module: Any) -> Any:
     async def _public_on_ready() -> None:
         try:
-            bot = getattr(module, "bot", None)
             _log(f"public startup maintenance ready bot={getattr(bot, 'user', None)}")
-
             await module._run_slash_maintenance_once()
             await module._maybe_resume_kick_timers_once()
             await module._start_legacy_actions_api_once()
             await module._start_new_api_once()
             await module._start_workers_once()
-
-            if not _public_scope_enabled():
-                await module._run_permission_self_check_once()
-
             module._ensure_startup_background_runner()
         except Exception as e:
             print("❌ public startup-scope on_ready listener failed:", repr(e))
-            try:
-                traceback = _ORIGINAL_IMPORT("traceback")
-                traceback.print_exc()
-            except Exception:
-                pass
 
     try:
         _public_on_ready.__name__ = "on_ready"
@@ -341,27 +336,10 @@ def _make_public_on_ready(module: Any) -> Any:
         _public_on_ready.__module__ = getattr(module, "__name__", "stoney_verify.app")
     except Exception:
         pass
-    return _public_on_ready
-
-
-def _replace_app_on_ready_listener(module: Any) -> None:
-    global _LISTENER_PATCHED
-    if _LISTENER_PATCHED:
-        return
-
-    if _native_app_scope_active(module):
-        _LISTENER_PATCHED = True
-        return
-
-    bot = getattr(module, "bot", None)
-    if bot is None:
-        return
 
     try:
-        public_listener = _make_public_on_ready(module)
-        replaced = 0
-
         extra_events = getattr(bot, "extra_events", None)
+        replaced = 0
         if isinstance(extra_events, dict):
             listeners = list(extra_events.get("on_ready") or [])
             new_listeners: list[Any] = []
@@ -369,25 +347,34 @@ def _replace_app_on_ready_listener(module: Any) -> None:
                 listener_module = str(getattr(listener, "__module__", "") or "")
                 listener_name = str(getattr(listener, "__name__", "") or "")
                 if listener_module == getattr(module, "__name__", "stoney_verify.app") and listener_name == "on_ready":
-                    new_listeners.append(public_listener)
+                    new_listeners.append(_public_on_ready)
                     replaced += 1
                 else:
                     new_listeners.append(listener)
-
             if replaced:
                 extra_events["on_ready"] = new_listeners
             else:
-                try:
-                    bot.listen("on_ready")(public_listener)
-                    replaced = 1
-                except Exception as e:
-                    _warn(f"could not append public on_ready listener: {e!r}")
-
-        setattr(module, "on_ready", public_listener)
+                bot.listen("on_ready")(_public_on_ready)
+                replaced = 1
+        setattr(module, "on_ready", _public_on_ready)
         _LISTENER_PATCHED = True
         _log(f"replaced registered app on_ready listener for public startup scope replaced={replaced}")
     except Exception as e:
         _warn(f"failed to replace app on_ready listener: {e!r}")
+
+
+def _patch_app(module: Any) -> None:
+    module_id = id(module)
+    if module_id in _PATCHED_MODULE_IDS:
+        return
+
+    if _native_app_scope_active(module):
+        _patch_native_app(module)
+    else:
+        _patch_legacy_app(module)
+
+    _PATCHED_MODULE_IDS.add(module_id)
+    _log("loaded; public startup scope guard active")
 
 
 def _maybe_patch_loaded() -> None:
