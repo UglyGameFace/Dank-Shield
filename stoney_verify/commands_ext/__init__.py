@@ -11,9 +11,10 @@ CommandRegistrar = Callable[[Any, Any], None]
 CommandModuleSpec = Tuple[str, str, str]
 
 
-# Keep public modules first. Several attach subcommands to grouped commands, so
-# the group-owning modules must be imported before modules that extend them.
+# Keep public guard modules first. They patch/normalize shared helpers before
+# command modules import those helpers.
 COMMAND_MODULES: List[CommandModuleSpec] = [
+    ("public_staff_scope", "register_public_staff_scope", "public per-guild staff permission isolation"),
     ("public_setup_review", "register_public_setup_review_commands", "public grouped /stoney setup review command"),
     ("public_setup_logs", "register_public_setup_logs_commands", "public grouped /stoney log channel setup command"),
     ("public_modlog_coverage", "register_public_modlog_coverage_listeners", "public supplemental modlog coverage listeners"),
@@ -49,6 +50,7 @@ COMMAND_MODULES: List[CommandModuleSpec] = [
 _LEGACY_MODULES: Tuple[str, ...] = tuple(name for name, _fn, _label in COMMAND_MODULES if not name.startswith("public_"))
 
 _PUBLIC_MODULES: Tuple[str, ...] = (
+    "public_staff_scope",
     "public_setup_review",
     "public_setup_logs",
     "public_modlog_coverage",
