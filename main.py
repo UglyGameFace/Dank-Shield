@@ -43,6 +43,17 @@ except Exception as e:
     except Exception:
         pass
 
+# Keep stoney_verify.app's startup ticket-sync alias pointed at the current
+# patched sync_service function. Without this, app.py can keep a stale function
+# reference captured before runtime_guild_config_ticket_patch wraps sync_service.
+try:
+    import runtime_ticket_sync_alias_patch  # noqa: F401
+except Exception as e:
+    try:
+        print(f"⚠️ main.py failed to import runtime_ticket_sync_alias_patch guard: {e!r}")
+    except Exception:
+        pass
+
 # Force-load structured API per-guild config guard before api_new.server is imported.
 # This makes dashboard/API lifecycle actions use each guild's configured ticket
 # categories instead of one env-only category.
