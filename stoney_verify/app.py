@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import os
 import traceback
+from typing import Any
 
 import discord
 from discord.ext import commands as ext_commands
@@ -101,6 +102,10 @@ from .workers.metrics_sync_worker import start_metrics_worker
 from .workers.ticket_automation_worker import start_ticket_automation_worker
 
 
+# Native public startup scope marker. Runtime fallback guards can detect this and
+# avoid monkey-patching app.py's on_ready listener once the native path is active.
+_NATIVE_PUBLIC_STARTUP_SCOPE = True
+
 _STARTED_LEGACY_ACTIONS_API = False
 _STARTED_NEW_ACTIONS_API = False
 _STARTED_WORKERS = False
@@ -113,6 +118,7 @@ _DID_TICKET_EVENTS_SETUP = False
 _DID_PERMISSION_SELF_CHECK = False
 
 _STARTUP_BACKGROUND_TASK: asyncio.Task | None = None
+_SKIPPED_UNCONFIGURED_STARTUP_GUILDS: set[int] = set()
 
 # Foreign prefix commands owned by other bots in the same server.
 _IGNORED_FOREIGN_PREFIX_COMMANDS = {
@@ -128,6 +134,53 @@ def _env_true(name: str, default: bool = False) -> bool:
         return str(raw).strip().lower() in {"1", "true", "yes", "y", "on"}
     except Exception:
         return bool(default)
+
+
+def _env_str(name: str, default: str = "") -> str:
+    try:
+        raw = os.getenv(name)
+        if raw is None:
+            return default
+        text = str(raw).strip()
+        return text if text else default
+    except Exception:
+        return default
+
+
+def _env_int(name: str, default: int = 0) -> int:
+    try:
+        raw = _env_str(name, "")
+        return int(raw) if raw else int(default)
+    except Exception:
+        return int(default)
+
+
+def _public_scope_enabled() -> bool:
+    profile = _env_str("STONEY_COMMAND_PROFILE", "public").lower()
+    deployment = _env_str("STONEY_DEPLOYMENT_MODE", "").lower()
+    if not deployment:
+        if _env_true("STONEY_PRODUCTION_MODE", False):
+            deployment = "production"
+        elif _env_true("STONEY_PUBLIC_MODE", False):
+            deployment = "public"
+        else:
+            deployment = "development"
+    return profile in {"public", "minimal"} or deployment in {"public", "prod", "production"}
+
+
+def _unique_guilds(guilds: list[Any]) -> list[discord.Guild]:
+    out: list[discord.Guild] = []
+    seen: set[int] = set()
+    for guild in guilds:
+        try:
+            gid = int(getattr(guild, "id", 0) or 0)
+            if gid <= 0 or gid in seen:
+                continue
+            seen.add(gid)
+            out.append(guild)
+        except Exception:
+            continue
+    return sorted(out, key=lambda g: int(getattr(g, "id", 0) or 0))
 
 
 def _track_background_task(task: asyncio.Task, *, label: str = "") -> None:
@@ -173,14 +226,24 @@ def _setup_ticket_events_once() -> None:
         print("❌ ticket_events.setup(bot) failed:", repr(e))
 
 
-async def _resolve_runtime_guild() -> discord.Guild | None:
+async def _guild_config_source(guild_id: int, *, refresh: bool = False) -> str:
+    try:
+        from .guild_config import get_guild_config
+
+        cfg = await asyncio.wait_for(get_guild_config(int(guild_id), refresh=refresh), timeout=4.0)
+        return str(getattr(cfg, "source", "") or "")
+    except Exception as e:
+        print(f"⚠️ Runtime guild config source check failed guild={guild_id}: {repr(e)}")
+        return ""
+
+
+async def _resolve_env_guild() -> discord.Guild | None:
     try:
         guild_id_int = int(str(GUILD_ID or "0") or 0)
     except Exception:
         guild_id_int = 0
 
     if not guild_id_int:
-        print("⚠️ GUILD_ID missing or invalid.")
         return None
 
     guild = bot.get_guild(guild_id_int)
@@ -199,8 +262,49 @@ async def _resolve_runtime_guild() -> discord.Guild | None:
         )
         return None
     except Exception as e:
-        print("⚠️ Could not resolve guild:", repr(e))
+        print("⚠️ Could not resolve env guild:", repr(e))
         return None
+
+
+async def _resolve_runtime_guilds() -> list[discord.Guild]:
+    """
+    Resolve startup-maintenance scope.
+
+    Public/production mode is intentionally config-first: only guilds with a
+    saved Supabase guild_configs row are eligible for startup maintenance. This
+    prevents one beta env GUILD_ID from leaking ticket/member maintenance into
+    another server after public invite.
+    """
+    if _public_scope_enabled():
+        max_guilds = max(1, _env_int("STONEY_STARTUP_MAX_GUILDS", 50))
+        guilds = _unique_guilds(list(getattr(bot, "guilds", []) or []))[:max_guilds]
+        configured: list[discord.Guild] = []
+
+        for guild in guilds:
+            gid = int(getattr(guild, "id", 0) or 0)
+            source = await _guild_config_source(gid, refresh=False)
+            if source.startswith("supabase:"):
+                configured.append(guild)
+                continue
+
+            if gid not in _SKIPPED_UNCONFIGURED_STARTUP_GUILDS:
+                _SKIPPED_UNCONFIGURED_STARTUP_GUILDS.add(gid)
+                print(
+                    "🌐 Public startup scope skipping unconfigured guild "
+                    f"guild={gid} source={source or 'unknown'}"
+                )
+
+        if not configured:
+            print("⚠️ Public startup scope found no configured guilds for startup maintenance.")
+        return configured
+
+    env_guild = await _resolve_env_guild()
+    return [env_guild] if env_guild is not None else []
+
+
+async def _resolve_runtime_guild() -> discord.Guild | None:
+    guilds = await _resolve_runtime_guilds()
+    return guilds[0] if guilds else None
 
 
 def _role_check_line(
@@ -247,6 +351,11 @@ async def _run_permission_self_check_once() -> None:
     if _DID_PERMISSION_SELF_CHECK:
         return
 
+    if _public_scope_enabled():
+        _DID_PERMISSION_SELF_CHECK = True
+        print("ℹ️ Legacy env startup permission self-check skipped in public scope; per-guild runtime check owns setup health.")
+        return
+
     if not claim_startup_flag("permission_self_check"):
         _DID_PERMISSION_SELF_CHECK = True
         print("ℹ️ Startup permission self-check already claimed elsewhere; skipping here.")
@@ -254,7 +363,7 @@ async def _run_permission_self_check_once() -> None:
 
     _DID_PERMISSION_SELF_CHECK = True
 
-    guild = await _resolve_runtime_guild()
+    guild = await _resolve_env_guild()
     if guild is None:
         print("⚠️ Permission self-check skipped: guild could not be resolved.")
         return
@@ -461,17 +570,18 @@ async def _maybe_run_departed_reconcile_once() -> None:
         print("⚠️ Departed reconcile helper unavailable; skipping.")
         return
 
-    guild = await _resolve_runtime_guild()
-    if guild is None:
-        print("⚠️ Skipping departed reconcile: guild could not be resolved from cache.")
+    guilds = await _resolve_runtime_guilds()
+    if not guilds:
+        print("⚠️ Skipping departed reconcile: no configured guilds resolved.")
         return
 
-    try:
-        print("🧹 Running departed-member reconciliation...")
-        summary_departed = await _run_departed_reconciliation_for_guild(guild)
-        print("✅ Departed reconciliation complete:", summary_departed)
-    except Exception as e:
-        print("❌ Departed reconcile failed:", repr(e))
+    for guild in guilds:
+        try:
+            print(f"🧹 Running departed-member reconciliation guild={guild.id}...")
+            summary_departed = await _run_departed_reconciliation_for_guild(guild)
+            print("✅ Departed reconciliation complete:", summary_departed)
+        except Exception as e:
+            print(f"❌ Departed reconcile failed guild={getattr(guild, 'id', 'unknown')}:", repr(e))
 
 
 async def _maybe_run_ticket_sync_once() -> None:
@@ -486,22 +596,46 @@ async def _maybe_run_ticket_sync_once() -> None:
         print("⚠️ Ticket sync helper unavailable; skipping startup ticket sync.")
         return
 
-    guild = await _resolve_runtime_guild()
-    if guild is None:
-        print("⚠️ Skipping startup ticket sync: guild could not be resolved.")
+    guilds = await _resolve_runtime_guilds()
+    if not guilds:
+        print("⚠️ Skipping startup ticket sync: no configured guilds resolved.")
         return
 
+    for guild in guilds:
+        try:
+            print(f"🎫 Running startup ticket sync/backfill guild={guild.id}...")
+            summary = await _sync_active_ticket_channels_for_guild(
+                guild,
+                source="startup_ticket_sync",
+                include_closed_visible_channels=True,
+                dry_run=False,
+            )
+            print("✅ Startup ticket sync complete:", summary)
+        except Exception as e:
+            print(f"❌ Startup ticket sync failed guild={getattr(guild, 'id', 'unknown')}:", repr(e))
+
+
+async def _sync_beta_guild_commands_if_requested(guild_id_int: int) -> None:
+    if guild_id_int <= 0:
+        return
+    if not _env_true("STONEY_SYNC_BETA_GUILD_COMMANDS", True):
+        return
+
+    guild_obj = discord.Object(id=int(guild_id_int))
     try:
-        print("🎫 Running startup ticket sync/backfill...")
-        summary = await _sync_active_ticket_channels_for_guild(
-            guild,
-            source="startup_ticket_sync",
-            include_closed_visible_channels=True,
-            dry_run=False,
-        )
-        print("✅ Startup ticket sync complete:", summary)
+        bot.tree.copy_global_to(guild=guild_obj)
+        print(f"🌐 Public startup scope copied global commands to beta guild tree guild={guild_id_int}")
     except Exception as e:
-        print("❌ Startup ticket sync failed:", repr(e))
+        print(f"⚠️ Public startup scope copy_global_to beta guild failed guild={guild_id_int}:", repr(e))
+
+    try:
+        synced_guild = await bot.tree.sync(guild=guild_obj)
+        print(
+            "🌐 Public startup scope beta guild slash sync complete "
+            f"guild={guild_id_int} commands={len(synced_guild)}"
+        )
+    except Exception as e:
+        print(f"⚠️ Public startup scope beta guild slash sync failed guild={guild_id_int}:", repr(e))
 
 
 async def _run_slash_maintenance_once() -> None:
@@ -519,46 +653,56 @@ async def _run_slash_maintenance_once() -> None:
         except Exception:
             pass
 
-        if GUILD_ID:
-            try:
-                guild_id_int = int(str(GUILD_ID))
-                guild_obj = discord.Object(id=guild_id_int)
+        public_scope = _public_scope_enabled()
+        guild_id_int = _env_int("GUILD_ID", 0)
 
+        if public_scope:
+            if _env_true("CLEAR_GLOBAL_COMMANDS_ON_BOOT", default=False) and not _DID_GLOBAL_COMMAND_CLEANUP:
+                _DID_GLOBAL_COMMAND_CLEANUP = True
                 try:
-                    bot.tree.copy_global_to(guild=guild_obj)
-                    print("✅ Copied global commands to guild tree.")
+                    bot.tree.clear_commands(guild=None)
+                    await bot.tree.sync()
+                    print("🧹 Cleared old global Discord application commands.")
                 except Exception as e:
-                    print("⚠️ copy_global_to failed:", repr(e))
+                    print("⚠️ Global command cleanup failed:", repr(e))
 
-                if _env_true("CLEAR_GLOBAL_COMMANDS_ON_BOOT", default=False) and not _DID_GLOBAL_COMMAND_CLEANUP:
-                    _DID_GLOBAL_COMMAND_CLEANUP = True
-                    try:
-                        bot.tree.clear_commands(guild=None)
-                        await bot.tree.sync()
-                        print("🧹 Cleared old global Discord application commands.")
-                    except Exception as e:
-                        print("⚠️ Global command cleanup failed:", repr(e))
+            synced_global = await bot.tree.sync()
+            print(f"🌐 Public startup scope global slash sync complete commands={len(synced_global)} mode=public")
+            await _sync_beta_guild_commands_if_requested(guild_id_int)
+            return
 
-                synced_guild = await bot.tree.sync(guild=guild_obj)
-                print(
-                    f"✅ Guild slash sync complete: {len(synced_guild)} "
-                    f"command(s) for guild {guild_id_int}."
-                )
+        if guild_id_int:
+            guild_obj = discord.Object(id=guild_id_int)
 
-                try:
-                    guild_commands = bot.tree.get_commands(guild=guild_obj)
-                    print("🧩 local guild commands:", [c.name for c in guild_commands])
-                except Exception:
-                    pass
-
-            except Exception as e:
-                print("⚠️ Guild slash sync failed:", repr(e))
-        else:
             try:
-                synced_global = await bot.tree.sync()
-                print(f"✅ Global slash sync complete: {len(synced_global)} command(s).")
+                bot.tree.copy_global_to(guild=guild_obj)
+                print("✅ Copied global commands to guild tree.")
             except Exception as e:
-                print("⚠️ Global slash sync failed:", repr(e))
+                print("⚠️ copy_global_to failed:", repr(e))
+
+            if _env_true("CLEAR_GLOBAL_COMMANDS_ON_BOOT", default=False) and not _DID_GLOBAL_COMMAND_CLEANUP:
+                _DID_GLOBAL_COMMAND_CLEANUP = True
+                try:
+                    bot.tree.clear_commands(guild=None)
+                    await bot.tree.sync()
+                    print("🧹 Cleared old global Discord application commands.")
+                except Exception as e:
+                    print("⚠️ Global command cleanup failed:", repr(e))
+
+            synced_guild = await bot.tree.sync(guild=guild_obj)
+            print(
+                f"✅ Guild slash sync complete: {len(synced_guild)} "
+                f"command(s) for guild {guild_id_int}."
+            )
+
+            try:
+                guild_commands = bot.tree.get_commands(guild=guild_obj)
+                print("🧩 local guild commands:", [c.name for c in guild_commands])
+            except Exception:
+                pass
+        else:
+            synced_global = await bot.tree.sync()
+            print(f"✅ Global slash sync complete: {len(synced_global)} command(s).")
 
     except Exception as e:
         print("❌ Slash maintenance failed:", repr(e))
@@ -736,7 +880,10 @@ _setup_ticket_events_once()
 @bot.listen("on_ready")
 async def on_ready() -> None:
     try:
-        print(f"🤖 Bot ready: {bot.user}")
+        if _public_scope_enabled():
+            print(f"🌐 Public startup maintenance ready: {bot.user}")
+        else:
+            print(f"🤖 Bot ready: {bot.user}")
 
         await _run_slash_maintenance_once()
         await _maybe_resume_kick_timers_once()
