@@ -5,39 +5,14 @@ from typing import Any, Callable, Dict, List, Sequence, Tuple
 
 
 _COMMANDS_EXT_REGISTERED = False
-
-# ============================================================
-# Command module profiles
-# ------------------------------------------------------------
-# Discord has a hard 100 global slash-command cap. Public bots should not
-# expose every admin tool as a top-level command. The public profile keeps the
-# top-level surface small by using grouped commands:
-#   /stoney
-#   /ticket
-#   /tickets
-#   /ticket-intake
-#   /ticket-category
-#
-# Default is PUBLIC now because the project is being hardened for public beta.
-# If you need the old one-server/dev layout, set:
-#   STONEY_COMMAND_PROFILE=full
-#
-# Public/beta safety knobs:
-#   STONEY_PRODUCTION_MODE=true          -> hard fail on unsafe public config
-#   STONEY_STRICT_PUBLIC_GUARD=true      -> hard fail on unsafe public config
-#   STONEY_EXPECTED_PUBLIC_GUILDS=100    -> warns when sharding is off
-#
-# Optional explicit controls:
-#   STONEY_COMMAND_MODULES=public_setup_group,public_setup_review,public_setup_logs,public_setup_by_id,public_setup_picker,public_setup_find,public_archive_backfill,public_permission_check,public_ticket_group,public_tickets_group,public_ticket_intake_group,public_ticket_category_group,moderation
-#   STONEY_COMMAND_MODULES_SKIP=ticket_macro_admin,ticket_automation_admin
-# ============================================================
-
 DEFAULT_COMMAND_PROFILE = "public"
 
 CommandRegistrar = Callable[[Any, Any], None]
 CommandModuleSpec = Tuple[str, str, str]
 
 
+# Keep public modules first. Several attach subcommands to grouped commands, so
+# the group-owning modules must be imported before modules that extend them.
 COMMAND_MODULES: List[CommandModuleSpec] = [
     ("public_setup_review", "register_public_setup_review_commands", "public grouped /stoney setup review command"),
     ("public_setup_logs", "register_public_setup_logs_commands", "public grouped /stoney log channel setup command"),
@@ -48,6 +23,7 @@ COMMAND_MODULES: List[CommandModuleSpec] = [
     ("public_permission_check", "register_public_permission_check_commands", "public grouped /stoney runtime permission check command"),
     ("public_setup_group", "register_public_setup_group_commands", "public grouped /stoney setup commands"),
     ("public_ticket_group", "register_public_ticket_group_commands", "public grouped /ticket commands"),
+    ("public_ticket_delete", "register_public_ticket_delete_commands", "public grouped /ticket delete command"),
     ("public_tickets_group", "register_public_tickets_group_commands", "public grouped /tickets commands"),
     ("public_ticket_intake_group", "register_public_ticket_intake_group_commands", "public grouped /ticket-intake commands"),
     ("public_ticket_category_group", "register_public_ticket_category_group_commands", "public grouped /ticket-category commands"),
@@ -69,56 +45,37 @@ COMMAND_MODULES: List[CommandModuleSpec] = [
     ("channel_cleanup_admin", "register_channel_cleanup_admin_commands", "channel cleanup admin commands"),
 ]
 
-_LEGACY_MODULES: Tuple[str, ...] = tuple(
-    name for name, _fn, _label in COMMAND_MODULES if not name.startswith("public_")
+_LEGACY_MODULES: Tuple[str, ...] = tuple(name for name, _fn, _label in COMMAND_MODULES if not name.startswith("public_"))
+
+_PUBLIC_MODULES: Tuple[str, ...] = (
+    "public_setup_review",
+    "public_setup_logs",
+    "public_setup_by_id",
+    "public_setup_picker",
+    "public_setup_find",
+    "public_archive_backfill",
+    "public_permission_check",
+    "public_setup_group",
+    "public_ticket_group",
+    "public_ticket_delete",
+    "public_tickets_group",
+    "public_ticket_intake_group",
+    "public_ticket_category_group",
+    "moderation",
+    "role_admin",
+    "channel_cleanup_admin",
 )
 
 COMMAND_PROFILES: Dict[str, Sequence[str]] = {
-    "public": (
-        "public_setup_review",
-        "public_setup_logs",
-        "public_setup_by_id",
-        "public_setup_picker",
-        "public_setup_find",
-        "public_archive_backfill",
-        "public_permission_check",
-        "public_setup_group",
-        "public_ticket_group",
-        "public_tickets_group",
-        "public_ticket_intake_group",
-        "public_ticket_category_group",
-        "moderation",
-        "role_admin",
-        "channel_cleanup_admin",
-    ),
-    "minimal": (
-        "public_setup_review",
-        "public_setup_logs",
-        "public_setup_by_id",
-        "public_setup_picker",
-        "public_setup_find",
-        "public_archive_backfill",
-        "public_permission_check",
-        "public_setup_group",
-        "public_ticket_group",
-        "public_tickets_group",
-        "public_ticket_intake_group",
-        "public_ticket_category_group",
-        "moderation",
-        "role_admin",
-    ),
+    "public": _PUBLIC_MODULES,
+    "minimal": tuple(name for name in _PUBLIC_MODULES if name != "channel_cleanup_admin"),
     "full": _LEGACY_MODULES,
     "dev": _LEGACY_MODULES,
 }
 
 
 def _csv_set(value: str) -> set[str]:
-    out: set[str] = set()
-    for part in str(value or "").split(","):
-        item = part.strip().lower()
-        if item:
-            out.add(item)
-    return out
+    return {part.strip().lower() for part in str(value or "").split(",") if part.strip()}
 
 
 def _env_csv_set(name: str) -> set[str]:
@@ -141,9 +98,7 @@ def _env_bool(name: str, default: bool = False) -> bool:
 def _env_int(name: str, default: int = 0) -> int:
     try:
         raw = str(os.getenv(name, "") or "").strip()
-        if not raw:
-            return int(default)
-        return int(raw)
+        return int(raw) if raw else int(default)
     except Exception:
         return int(default)
 
@@ -151,19 +106,14 @@ def _env_int(name: str, default: int = 0) -> int:
 def _env_str(name: str, default: str = "") -> str:
     try:
         value = os.getenv(name)
-        if value is None:
-            return default
-        return str(value).strip()
+        return str(value).strip() if value is not None and str(value).strip() else default
     except Exception:
         return default
 
 
 def _command_profile() -> str:
-    try:
-        profile = _env_str("STONEY_COMMAND_PROFILE", DEFAULT_COMMAND_PROFILE).strip().lower()
-        return profile or DEFAULT_COMMAND_PROFILE
-    except Exception:
-        return DEFAULT_COMMAND_PROFILE
+    profile = _env_str("STONEY_COMMAND_PROFILE", DEFAULT_COMMAND_PROFILE).lower()
+    return profile or DEFAULT_COMMAND_PROFILE
 
 
 def _deployment_mode() -> str:
@@ -191,26 +141,16 @@ def _selected_command_modules() -> List[CommandModuleSpec]:
         selected_names = {name for name in explicit if name in known_names}
         unknown = sorted(explicit - known_names)
         if unknown:
-            try:
-                print(f"⚠️ commands_ext: unknown STONEY_COMMAND_MODULES ignored: {unknown}")
-            except Exception:
-                pass
+            print(f"⚠️ commands_ext: unknown STONEY_COMMAND_MODULES ignored: {unknown}")
     else:
-        selected_names = set(COMMAND_PROFILES.get(profile, COMMAND_PROFILES[DEFAULT_COMMAND_PROFILE]))
         if profile not in COMMAND_PROFILES:
-            try:
-                print(f"⚠️ commands_ext: unknown STONEY_COMMAND_PROFILE={profile!r}; falling back to {DEFAULT_COMMAND_PROFILE}")
-            except Exception:
-                pass
-            selected_names = set(COMMAND_PROFILES[DEFAULT_COMMAND_PROFILE])
+            print(f"⚠️ commands_ext: unknown STONEY_COMMAND_PROFILE={profile!r}; falling back to {DEFAULT_COMMAND_PROFILE}")
+        selected_names = set(COMMAND_PROFILES.get(profile, COMMAND_PROFILES[DEFAULT_COMMAND_PROFILE]))
 
     if skip:
         unknown_skip = sorted(skip - known_names)
         if unknown_skip:
-            try:
-                print(f"⚠️ commands_ext: unknown STONEY_COMMAND_MODULES_SKIP ignored: {unknown_skip}")
-            except Exception:
-                pass
+            print(f"⚠️ commands_ext: unknown STONEY_COMMAND_MODULES_SKIP ignored: {unknown_skip}")
         selected_names -= known_names.intersection(skip)
 
     return [spec for spec in COMMAND_MODULES if spec[0] in selected_names]
@@ -224,8 +164,7 @@ def _tree_command_counts(tree: Any) -> tuple[int, int]:
     except Exception:
         try:
             commands = getattr(tree, "_global_commands", {}) or {}
-            if isinstance(commands, dict):
-                global_count = len(commands)
+            global_count = len(commands) if isinstance(commands, dict) else 0
         except Exception:
             global_count = 0
 
@@ -256,20 +195,14 @@ def _register_one_module(*, bot: Any, tree: Any, module_name: str, function_name
         registrar = _import_registrar(module_name, function_name)
         registrar(bot, tree)
         after_global, after_guild = _tree_command_counts(tree)
-        try:
-            print(
-                f"✅ commands_ext: registered {label} module={module_name} "
-                f"global_delta={after_global - before_global} global_total={after_global} "
-                f"guild_delta={after_guild - before_guild} guild_total={after_guild}"
-            )
-        except Exception:
-            pass
+        print(
+            f"✅ commands_ext: registered {label} module={module_name} "
+            f"global_delta={after_global - before_global} global_total={after_global} "
+            f"guild_delta={after_guild - before_guild} guild_total={after_guild}"
+        )
     except Exception as e:
         errors.append(f"{module_name}: {repr(e)}")
-        try:
-            print(f"⚠️ commands_ext: failed registering {label}: {repr(e)}")
-        except Exception:
-            pass
+        print(f"⚠️ commands_ext: failed registering {label}: {repr(e)}")
 
 
 def _masked_secret_state(value: str) -> str:
@@ -293,41 +226,27 @@ def _public_guard_findings(profile: str) -> tuple[list[str], list[str]]:
 
     if profile in {"full", "dev"}:
         msg = f"STONEY_COMMAND_PROFILE={profile!r} exposes the old top-level command surface. Use public/minimal before beta/public rollout."
-        if deployment_mode in {"public", "prod", "production"}:
-            blockers.append(msg)
-        else:
-            warnings.append(msg)
+        (blockers if deployment_mode in {"public", "prod", "production"} else warnings).append(msg)
 
     if not require_auth:
         msg = "BOT_API_REQUIRE_AUTH=false leaves the structured bot API unauthenticated."
-        if deployment_mode in {"public", "prod", "production"}:
-            blockers.append(msg)
-        else:
-            warnings.append(msg)
+        (blockers if deployment_mode in {"public", "prod", "production"} else warnings).append(msg)
 
     if allow_insecure:
         msg = "BOT_API_ALLOW_INSECURE=true is local-dev only and must be false for public use."
-        if deployment_mode in {"public", "prod", "production"}:
-            blockers.append(msg)
-        else:
-            warnings.append(msg)
+        (blockers if deployment_mode in {"public", "prod", "production"} else warnings).append(msg)
 
     if require_auth and len(shared_secret) < 32:
         msg = f"BOT_API_SHARED_SECRET should be a strong random secret with at least 32 characters ({_masked_secret_state(shared_secret)})."
-        if deployment_mode in {"public", "prod", "production"}:
-            blockers.append(msg)
-        else:
-            warnings.append(msg)
+        (blockers if deployment_mode in {"public", "prod", "production"} else warnings).append(msg)
 
     if bind_host in {"0.0.0.0", "::"} and not require_auth:
         blockers.append("BOT_API_BIND_HOST is public-facing while API auth is disabled.")
 
     if expected_guilds >= 100 and not auto_shard:
         warnings.append("STONEY_EXPECTED_PUBLIC_GUILDS is 100+ but DISCORD_AUTO_SHARD is not enabled. Enable AutoShardedBot before serious public scaling.")
-
     if _env_bool("CLEAR_GLOBAL_COMMANDS_ON_BOOT", False):
         warnings.append("CLEAR_GLOBAL_COMMANDS_ON_BOOT=true is a migration lever. Turn it back off after old global commands are cleared.")
-
     if _env_str("GUILD_ID", ""):
         warnings.append("GUILD_ID is still set. That is fine for beta, but production logic must rely on per-guild DB config, not one env guild.")
 
@@ -338,14 +257,11 @@ def _run_public_startup_guard(profile: str) -> None:
     blockers, warnings = _public_guard_findings(profile)
     deployment_mode = _deployment_mode()
     strict = _strict_public_guard_enabled()
-    try:
-        print(f"🧯 public_startup_guard deployment={deployment_mode} profile={profile} strict={strict} blockers={len(blockers)} warnings={len(warnings)}")
-        for item in blockers:
-            print(f"🚫 public_startup_guard blocker: {item}")
-        for item in warnings:
-            print(f"⚠️ public_startup_guard warning: {item}")
-    except Exception:
-        pass
+    print(f"🧯 public_startup_guard deployment={deployment_mode} profile={profile} strict={strict} blockers={len(blockers)} warnings={len(warnings)}")
+    for item in blockers:
+        print(f"🚫 public_startup_guard blocker: {item}")
+    for item in warnings:
+        print(f"⚠️ public_startup_guard warning: {item}")
     if strict and blockers:
         raise RuntimeError(f"Public startup guard blocked unsafe deployment: {' | '.join(blockers)}")
 
@@ -353,10 +269,7 @@ def _run_public_startup_guard(profile: str) -> None:
 def register_all_commands(bot: Any, tree: Any) -> None:
     global _COMMANDS_EXT_REGISTERED
     if _COMMANDS_EXT_REGISTERED:
-        try:
-            print("ℹ️ commands_ext.register_all_commands already ran; skipping duplicate registration.")
-        except Exception:
-            pass
+        print("ℹ️ commands_ext.register_all_commands already ran; skipping duplicate registration.")
         return
 
     errors: list[str] = []
@@ -366,29 +279,23 @@ def register_all_commands(bot: Any, tree: Any) -> None:
     selected_names = [name for name, _fn, _label in selected_modules]
     skipped_names = [name for name, _fn, _label in COMMAND_MODULES if name not in set(selected_names)]
 
-    try:
-        before_global, before_guild = _tree_command_counts(tree)
-        print(f"🧩 commands_ext profile profile={profile} selected={selected_names} skipped={skipped_names} initial_global={before_global} initial_guild={before_guild}")
-    except Exception:
-        pass
+    before_global, before_guild = _tree_command_counts(tree)
+    print(f"🧩 commands_ext profile profile={profile} selected={selected_names} skipped={skipped_names} initial_global={before_global} initial_guild={before_guild}")
 
     for module_name, function_name, label in selected_modules:
         _register_one_module(bot=bot, tree=tree, module_name=module_name, function_name=function_name, label=label, errors=errors)
 
     _COMMANDS_EXT_REGISTERED = True
 
-    try:
-        final_global, final_guild = _tree_command_counts(tree)
-        if final_global >= 95:
-            print(f"⚠️ commands_ext command budget high: global={final_global}/100. Use STONEY_COMMAND_PROFILE=public or minimal before public rollout.")
-        if errors:
-            print(f"⚠️ commands_ext registration completed with errors final_global={final_global} final_guild={final_guild}:")
-            for item in errors:
-                print(f"   - {item}")
-        else:
-            print(f"✅ commands_ext registration complete. final_global={final_global} final_guild={final_guild} profile={profile}")
-    except Exception:
-        pass
+    final_global, final_guild = _tree_command_counts(tree)
+    if final_global >= 95:
+        print(f"⚠️ commands_ext command budget high: global={final_global}/100. Use STONEY_COMMAND_PROFILE=public or minimal before public rollout.")
+    if errors:
+        print(f"⚠️ commands_ext registration completed with errors final_global={final_global} final_guild={final_guild}:")
+        for item in errors:
+            print(f"   - {item}")
+    else:
+        print(f"✅ commands_ext registration complete. final_global={final_global} final_guild={final_guild} profile={profile}")
 
 
 __all__ = ["register_all_commands", "COMMAND_MODULES", "COMMAND_PROFILES", "DEFAULT_COMMAND_PROFILE"]
