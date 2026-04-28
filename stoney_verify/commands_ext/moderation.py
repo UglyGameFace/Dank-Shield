@@ -1,13 +1,14 @@
 from __future__ import annotations
 
-from typing import Optional
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
+from typing import Any, Optional
 
 import discord
 from discord import app_commands
 
 from ..globals import *  # noqa: F401,F403
 from ..globals import now_utc
+from ..guild_config import get_guild_config
 
 from .common import (
     _staff_check,
@@ -17,6 +18,131 @@ from .common import (
     safe_defer,
     safe_followup,
 )
+
+
+# ============================================================
+# Per-guild slash moderation logging
+# ------------------------------------------------------------
+# Discord audit-log listeners are useful, but moderation actions triggered by
+# this bot should log themselves immediately to the guild's configured modlog.
+# This gives staff TicketTool-style confidence without relying on delayed audit
+# log lookups or any beta-server env IDs.
+# ============================================================
+
+
+def _safe_text(value: Any, default: str = "") -> str:
+    try:
+        text = str(value or "").strip()
+        return text if text else default
+    except Exception:
+        return default
+
+
+def _utc_now() -> datetime:
+    try:
+        value = now_utc()
+        if value.tzinfo is None:
+            return value.replace(tzinfo=timezone.utc)
+        return value.astimezone(timezone.utc)
+    except Exception:
+        return datetime.now(timezone.utc)
+
+
+def _user_line(user: discord.abc.User | discord.Member | None) -> str:
+    if user is None:
+        return "Unknown"
+    try:
+        mention = getattr(user, "mention", None)
+        uid = getattr(user, "id", None)
+        name = (
+            getattr(user, "display_name", None)
+            or getattr(user, "global_name", None)
+            or getattr(user, "name", None)
+            or str(user)
+        )
+        if mention and uid:
+            return f"{mention} `{uid}`"
+        if uid:
+            return f"{name} `{uid}`"
+        return str(name)
+    except Exception:
+        return "Unknown"
+
+
+def _created_line(user: discord.abc.User | discord.Member | None) -> str:
+    try:
+        created_at = getattr(user, "created_at", None)
+        if not created_at:
+            return "Unknown"
+        if created_at.tzinfo is None:
+            created_at = created_at.replace(tzinfo=timezone.utc)
+        ts = int(created_at.astimezone(timezone.utc).timestamp())
+        return f"<t:{ts}:F> • <t:{ts}:R>"
+    except Exception:
+        return "Unknown"
+
+
+async def _configured_modlog_channel(guild: discord.Guild) -> Optional[discord.TextChannel]:
+    try:
+        cfg = await get_guild_config(guild.id)
+        channel_id = int(getattr(cfg, "modlog_channel_id", 0) or 0)
+        if channel_id <= 0:
+            return None
+        channel = guild.get_channel(channel_id)
+        if not isinstance(channel, discord.TextChannel):
+            return None
+
+        me = guild.me
+        if me is not None:
+            perms = channel.permissions_for(me)
+            if not perms.view_channel or not perms.send_messages or not perms.embed_links:
+                return None
+        return channel
+    except Exception:
+        return None
+
+
+async def _log_slash_mod_action(
+    *,
+    guild: discord.Guild,
+    action: str,
+    actor: discord.abc.User | discord.Member,
+    target: discord.abc.User | discord.Member,
+    reason: Optional[str],
+    extra: Optional[str] = None,
+    color: Optional[discord.Color] = None,
+) -> bool:
+    channel = await _configured_modlog_channel(guild)
+    if channel is None:
+        return False
+
+    action_clean = _safe_text(action, "Moderation Action")
+    embed = discord.Embed(
+        title=f"🛡️ {action_clean}",
+        color=color or discord.Color.orange(),
+        timestamp=_utc_now(),
+    )
+    embed.add_field(name="Target", value=_user_line(target), inline=False)
+    embed.add_field(name="Moderator", value=_user_line(actor), inline=False)
+    embed.add_field(name="Reason", value=_safe_text(reason, "No reason provided.")[:1024], inline=False)
+    if extra:
+        embed.add_field(name="Details", value=str(extra)[:1024], inline=False)
+    embed.add_field(name="Target Account Created", value=_created_line(target), inline=False)
+    embed.set_footer(text=f"Guild {guild.id} • source: slash command")
+
+    try:
+        await channel.send(embed=embed, allowed_mentions=discord.AllowedMentions.none())
+        return True
+    except Exception as e:
+        try:
+            print(f"⚠️ slash moderation modlog failed guild={guild.id} action={action_clean}: {repr(e)}")
+        except Exception:
+            pass
+        return False
+
+
+def _modlog_suffix(logged: bool) -> str:
+    return "" if logged else "\n⚠️ Action succeeded, but I could not post to the configured modlog."
 
 
 def register_moderation_commands(bot, tree) -> None:
@@ -88,19 +214,27 @@ def register_moderation_commands(bot, tree) -> None:
         except Exception:
             pass
 
+        action_reason = reason or f"Kick by {interaction.user} ({interaction.user.id})"
+
         try:
-            await guild.kick(
-                target,
-                reason=reason or f"Kick by {interaction.user} ({interaction.user.id})",
-            )
+            await guild.kick(target, reason=action_reason)
             try:
                 RUNTIME_STATS["mod_actions"] = int(RUNTIME_STATS.get("mod_actions", 0)) + 1
             except Exception:
                 pass
 
+            logged = await _log_slash_mod_action(
+                guild=guild,
+                action="Member Kicked",
+                actor=interaction.user,
+                target=target,
+                reason=action_reason,
+                color=discord.Color.orange(),
+            )
+
             return await safe_followup(
                 interaction,
-                f"👢 Kicked {target.mention}.",
+                f"👢 Kicked {target.mention}.{_modlog_suffix(logged)}",
                 ephemeral=True,
             )
 
@@ -189,11 +323,12 @@ def register_moderation_commands(bot, tree) -> None:
 
         dmd = int(delete_message_days or 0)
         dmd = max(0, min(7, dmd))
+        action_reason = reason or f"Ban by {interaction.user} ({interaction.user.id})"
 
         try:
             await guild.ban(
                 target,
-                reason=reason or f"Ban by {interaction.user} ({interaction.user.id})",
+                reason=action_reason,
                 delete_message_days=dmd,
             )
             try:
@@ -201,9 +336,19 @@ def register_moderation_commands(bot, tree) -> None:
             except Exception:
                 pass
 
+            logged = await _log_slash_mod_action(
+                guild=guild,
+                action="Member Banned",
+                actor=interaction.user,
+                target=target,
+                reason=action_reason,
+                extra=f"Deleted message history: `{dmd}` day(s)",
+                color=discord.Color.red(),
+            )
+
             return await safe_followup(
                 interaction,
-                f"🔨 Banned {target.mention}.",
+                f"🔨 Banned {target.mention}.{_modlog_suffix(logged)}",
                 ephemeral=True,
             )
 
@@ -294,20 +439,34 @@ def register_moderation_commands(bot, tree) -> None:
             pass
 
         until = now_utc() + timedelta(minutes=mins)
+        action_reason = reason or f"Timeout by {interaction.user} ({interaction.user.id})"
 
         try:
-            await target.timeout(
-                until,
-                reason=reason or f"Timeout by {interaction.user} ({interaction.user.id})",
-            )
+            await target.timeout(until, reason=action_reason)
             try:
                 RUNTIME_STATS["mod_actions"] = int(RUNTIME_STATS.get("mod_actions", 0)) + 1
             except Exception:
                 pass
 
+            try:
+                until_ts = int(until.timestamp())
+                detail = f"Duration: `{mins}` minute(s)\nExpires: <t:{until_ts}:F> • <t:{until_ts}:R>"
+            except Exception:
+                detail = f"Duration: `{mins}` minute(s)"
+
+            logged = await _log_slash_mod_action(
+                guild=guild,
+                action="Member Timed Out",
+                actor=interaction.user,
+                target=target,
+                reason=action_reason,
+                extra=detail,
+                color=discord.Color.gold(),
+            )
+
             return await safe_followup(
                 interaction,
-                f"⏳ Timed out {target.mention} for {mins} minutes.",
+                f"⏳ Timed out {target.mention} for {mins} minutes.{_modlog_suffix(logged)}",
                 ephemeral=True,
             )
 
