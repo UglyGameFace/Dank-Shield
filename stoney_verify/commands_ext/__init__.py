@@ -11,8 +11,9 @@ CommandRegistrar = Callable[[Any, Any], None]
 CommandModuleSpec = Tuple[str, str, str]
 
 
-# Keep public guard modules first. They patch/normalize shared helpers before
-# command modules import those helpers.
+# Keep public guard modules first. Staff scope must run before modules import
+# _staff_check. Setup gate runs after grouped public ticket modules exist so it
+# can wrap their shared runtime helpers.
 COMMAND_MODULES: List[CommandModuleSpec] = [
     ("public_staff_scope", "register_public_staff_scope", "public per-guild staff permission isolation"),
     ("public_setup_review", "register_public_setup_review_commands", "public grouped /stoney setup review command"),
@@ -29,6 +30,7 @@ COMMAND_MODULES: List[CommandModuleSpec] = [
     ("public_tickets_group", "register_public_tickets_group_commands", "public grouped /tickets commands"),
     ("public_ticket_intake_group", "register_public_ticket_intake_group_commands", "public grouped /ticket-intake commands"),
     ("public_ticket_category_group", "register_public_ticket_category_group_commands", "public grouped /ticket-category commands"),
+    ("public_setup_gate", "register_public_setup_gate", "public setup readiness gate for ticket commands"),
     ("kick_timers", "register_kick_timer_commands", "kick timer commands"),
     ("vc_flow", "register_vc_flow_commands", "VC flow commands"),
     ("ticket_admin", "register_ticket_admin_commands", "ticket admin commands"),
@@ -39,7 +41,7 @@ COMMAND_MODULES: List[CommandModuleSpec] = [
     ("ticket_governance_admin", "register_ticket_governance_admin_commands", "ticket governance admin commands"),
     ("ticket_sla_admin", "register_ticket_sla_admin_commands", "ticket SLA admin commands"),
     ("ticket_resolution_admin", "register_ticket_resolution_admin_commands", "ticket resolution admin commands"),
-    ("ticket_macro_admin", "register_ticket_macro_admin_commands", "ticket macro admin commands"),
+    ("ticket_macro_admin", "register_ticket_macro_admin_commands", "ticket macro commands"),
     ("ticket_automation_admin", "register_ticket_automation_admin_commands", "ticket automation commands"),
     ("moderation", "register_moderation_commands", "moderation commands"),
     ("role_admin", "register_role_admin_commands", "role admin commands"),
@@ -65,6 +67,7 @@ _PUBLIC_MODULES: Tuple[str, ...] = (
     "public_tickets_group",
     "public_ticket_intake_group",
     "public_ticket_category_group",
+    "public_setup_gate",
     "moderation",
     "role_admin",
     "channel_cleanup_admin",
