@@ -16,6 +16,7 @@ CommandModuleSpec = Tuple[str, str, str]
 COMMAND_MODULES: List[CommandModuleSpec] = [
     ("public_setup_review", "register_public_setup_review_commands", "public grouped /stoney setup review command"),
     ("public_setup_logs", "register_public_setup_logs_commands", "public grouped /stoney log channel setup command"),
+    ("public_modlog_coverage", "register_public_modlog_coverage_listeners", "public supplemental modlog coverage listeners"),
     ("public_setup_by_id", "register_public_setup_by_id_commands", "public grouped /stoney setup by ID fallback command"),
     ("public_setup_picker", "register_public_setup_picker_commands", "public grouped /stoney interactive setup picker"),
     ("public_setup_find", "register_public_setup_find_commands", "public grouped /stoney setup search fallback command"),
@@ -50,6 +51,7 @@ _LEGACY_MODULES: Tuple[str, ...] = tuple(name for name, _fn, _label in COMMAND_M
 _PUBLIC_MODULES: Tuple[str, ...] = (
     "public_setup_review",
     "public_setup_logs",
+    "public_modlog_coverage",
     "public_setup_by_id",
     "public_setup_picker",
     "public_setup_find",
