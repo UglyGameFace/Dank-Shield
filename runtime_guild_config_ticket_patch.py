@@ -7,6 +7,7 @@ Purpose:
 - keep public/beta deployments from relying on one env-only TICKET_CATEGORY_ID / STAFF_ROLE_ID
 - make ticket creation prefer guild_configs for category/staff/transcript settings
 - make close/reopen lifecycle movement prefer guild_configs for active/archive categories
+- make startup ticket sync/backfill prefer guild_configs for active/archive categories
 - keep the old env values as a safe local fallback
 
 This is intentionally defensive and import-hook based because several legacy modules
@@ -17,6 +18,7 @@ per-guild configuration.
 import asyncio
 import builtins
 import inspect
+import re
 import sys
 import time
 from typing import Any, Optional
@@ -73,7 +75,6 @@ def _guild_from_any(*values: Any) -> Any:
             guild = getattr(value, "guild", None)
             if guild is not None and hasattr(guild, "id"):
                 return guild
-            # interaction namespace may hide guild under .guild
             if hasattr(value, "channel"):
                 channel = getattr(value, "channel", None)
                 guild = getattr(channel, "guild", None)
@@ -150,6 +151,41 @@ def _resolve_category_by_id(guild: Any, category_id: int) -> Optional[Any]:
     return None
 
 
+def _configured_active_category(guild: Any) -> Optional[Any]:
+    cfg = _cached_config_for_guild_id(_safe_int(getattr(guild, "id", 0), 0))
+    cfg_category_id = _cfg_int(cfg, "ticket_category_id", 0)
+    if cfg_category_id > 0:
+        return _resolve_category_by_id(guild, cfg_category_id)
+    return None
+
+
+def _configured_archive_category(guild: Any) -> Optional[Any]:
+    cfg = _cached_config_for_guild_id(_safe_int(getattr(guild, "id", 0), 0))
+    cfg_archive_id = _cfg_first_int(
+        cfg,
+        "ticket_archive_category_id",
+        "ticket_archived_category_id",
+        "archived_ticket_category_id",
+        "archive_ticket_category_id",
+        "closed_ticket_category_id",
+        "closed_tickets_category_id",
+        default=0,
+    )
+    if cfg_archive_id > 0:
+        return _resolve_category_by_id(guild, cfg_archive_id)
+    return None
+
+
+def _configured_transcript_channel_id(guild: Any) -> int:
+    cfg = _cached_config_for_guild_id(_safe_int(getattr(guild, "id", 0), 0))
+    return _cfg_int(cfg, "transcripts_channel_id", 0)
+
+
+def _configured_ticket_prefix(guild: Any) -> str:
+    cfg = _cached_config_for_guild_id(_safe_int(getattr(guild, "id", 0), 0))
+    return (_cfg_str(cfg, "ticket_prefix", "ticket") or "ticket").strip().lower()
+
+
 def _signature_accepts(original: Any, name: str) -> bool:
     try:
         sig = inspect.signature(original)
@@ -189,12 +225,9 @@ def _patch_ticket_service(module: Any) -> None:
                 if explicit is not None:
                     return explicit
 
-            cfg = _cached_config_for_guild_id(_safe_int(getattr(guild, "id", 0), 0))
-            cfg_category_id = _cfg_int(cfg, "ticket_category_id", 0)
-            if cfg_category_id > 0:
-                configured = _resolve_category_by_id(guild, cfg_category_id)
-                if configured is not None:
-                    return configured
+            configured = _configured_active_category(guild)
+            if configured is not None:
+                return configured
 
             return original_resolve_parent(guild, explicit_parent_category_id)
 
@@ -207,12 +240,9 @@ def _patch_ticket_service(module: Any) -> None:
     original_resolve_active = getattr(module, "_resolve_active_ticket_category", None)
     if callable(original_resolve_active) and not getattr(original_resolve_active, "_guild_config_wrapped", False):
         def _resolve_active_ticket_category(guild: Any) -> Any:
-            cfg = _cached_config_for_guild_id(_safe_int(getattr(guild, "id", 0), 0))
-            cfg_category_id = _cfg_int(cfg, "ticket_category_id", 0)
-            if cfg_category_id > 0:
-                configured = _resolve_category_by_id(guild, cfg_category_id)
-                if configured is not None:
-                    return configured
+            configured = _configured_active_category(guild)
+            if configured is not None:
+                return configured
             return original_resolve_active(guild)
 
         try:
@@ -224,21 +254,9 @@ def _patch_ticket_service(module: Any) -> None:
     original_resolve_archive = getattr(module, "_resolve_archive_category", None)
     if callable(original_resolve_archive) and not getattr(original_resolve_archive, "_guild_config_wrapped", False):
         def _resolve_archive_category(guild: Any) -> Any:
-            cfg = _cached_config_for_guild_id(_safe_int(getattr(guild, "id", 0), 0))
-            cfg_archive_id = _cfg_first_int(
-                cfg,
-                "ticket_archive_category_id",
-                "ticket_archived_category_id",
-                "archived_ticket_category_id",
-                "archive_ticket_category_id",
-                "closed_ticket_category_id",
-                "closed_tickets_category_id",
-                default=0,
-            )
-            if cfg_archive_id > 0:
-                configured = _resolve_category_by_id(guild, cfg_archive_id)
-                if configured is not None:
-                    return configured
+            configured = _configured_archive_category(guild)
+            if configured is not None:
+                return configured
             return original_resolve_archive(guild)
 
         try:
@@ -357,13 +375,177 @@ def _patch_ticket_service(module: Any) -> None:
     _log(f"patched {module_name}; ticket creation + close/reopen categories now prefer guild_configs")
 
 
+def _patch_ticket_sync_service(module: Any) -> None:
+    module_name = getattr(module, "__name__", "")
+    patch_key = f"{module_name}:guild_config_ticket_sync_patch_v1"
+    if patch_key in _PATCHED_MODULES:
+        return
+
+    original_resolve_archive = getattr(module, "_resolve_archive_category", None)
+    if callable(original_resolve_archive) and not getattr(original_resolve_archive, "_guild_config_wrapped", False):
+        def _resolve_archive_category(guild: Any) -> Any:
+            configured = _configured_archive_category(guild)
+            if configured is not None:
+                return configured
+            return original_resolve_archive(guild)
+
+        try:
+            setattr(_resolve_archive_category, "_guild_config_wrapped", True)
+        except Exception:
+            pass
+        setattr(module, "_resolve_archive_category", _resolve_archive_category)
+
+    original_discover = getattr(module, "_discover_ticket_categories", None)
+    if callable(original_discover) and not getattr(original_discover, "_guild_config_wrapped", False):
+        def _discover_ticket_categories(guild: Any) -> list[Any]:
+            categories: list[Any] = []
+            seen: set[int] = set()
+
+            for configured in (_configured_active_category(guild), _configured_archive_category(guild)):
+                try:
+                    if configured is None:
+                        continue
+                    cid = int(getattr(configured, "id", 0) or 0)
+                    if cid > 0 and cid not in seen:
+                        categories.append(configured)
+                        seen.add(cid)
+                except Exception:
+                    continue
+
+            try:
+                for category in list(original_discover(guild) or []):
+                    cid = int(getattr(category, "id", 0) or 0)
+                    if cid > 0 and cid not in seen:
+                        categories.append(category)
+                        seen.add(cid)
+            except Exception as e:
+                _warn(f"ticket sync category fallback discovery failed guild={getattr(guild, 'id', None)}: {e!r}")
+
+            return categories
+
+        try:
+            setattr(_discover_ticket_categories, "_guild_config_wrapped", True)
+        except Exception:
+            pass
+        setattr(module, "_discover_ticket_categories", _discover_ticket_categories)
+
+    original_is_ticket_channel = getattr(module, "_is_ticket_channel", None)
+    if callable(original_is_ticket_channel) and not getattr(original_is_ticket_channel, "_guild_config_wrapped", False):
+        def _is_ticket_channel(channel: Any) -> bool:
+            try:
+                transcript_id = _configured_transcript_channel_id(getattr(channel, "guild", None))
+                if transcript_id > 0 and int(getattr(channel, "id", 0) or 0) == transcript_id:
+                    return False
+            except Exception:
+                pass
+
+            try:
+                if original_is_ticket_channel(channel):
+                    return True
+            except Exception:
+                pass
+
+            try:
+                guild = getattr(channel, "guild", None)
+                prefix = re.escape(_configured_ticket_prefix(guild) or "ticket")
+                name = str(getattr(channel, "name", "") or "").strip().lower()
+                topic = str(getattr(channel, "topic", "") or "").strip().lower()
+                if re.match(rf"^({prefix}|closed)-(\d+)$", name, re.I):
+                    return True
+                if "owner_id=" in topic and ("ticket_number=" in topic or "category=" in topic):
+                    return True
+                if "requester_id=" in topic and "ticket_number=" in topic:
+                    return True
+            except Exception:
+                pass
+
+            return False
+
+        try:
+            setattr(_is_ticket_channel, "_guild_config_wrapped", True)
+        except Exception:
+            pass
+        setattr(module, "_is_ticket_channel", _is_ticket_channel)
+
+    original_candidates = getattr(module, "_candidate_ticket_channels", None)
+    if callable(original_candidates) and not getattr(original_candidates, "_guild_config_wrapped", False):
+        def _candidate_ticket_channels(guild: Any) -> list[Any]:
+            out: list[Any] = []
+            seen: set[int] = set()
+            transcript_id = _configured_transcript_channel_id(guild)
+
+            try:
+                categories = getattr(module, "_discover_ticket_categories", original_discover)(guild)
+                for category in list(categories or []):
+                    for channel in list(getattr(category, "text_channels", []) or []):
+                        cid = int(getattr(channel, "id", 0) or 0)
+                        if cid <= 0 or cid in seen:
+                            continue
+                        if transcript_id > 0 and cid == transcript_id:
+                            continue
+                        seen.add(cid)
+                        out.append(channel)
+            except Exception as e:
+                _warn(f"ticket sync configured category channel scan failed guild={getattr(guild, 'id', None)}: {e!r}")
+
+            try:
+                for channel in list(original_candidates(guild) or []):
+                    cid = int(getattr(channel, "id", 0) or 0)
+                    if cid <= 0 or cid in seen:
+                        continue
+                    if transcript_id > 0 and cid == transcript_id:
+                        continue
+                    seen.add(cid)
+                    out.append(channel)
+            except Exception as e:
+                _warn(f"ticket sync legacy candidate fallback failed guild={getattr(guild, 'id', None)}: {e!r}")
+
+            return out
+
+        try:
+            setattr(_candidate_ticket_channels, "_guild_config_wrapped", True)
+        except Exception:
+            pass
+        setattr(module, "_candidate_ticket_channels", _candidate_ticket_channels)
+
+    original_sync = getattr(module, "sync_active_ticket_channels_for_guild", None)
+    if callable(original_sync) and not getattr(original_sync, "_guild_config_wrapped", False):
+        async def _sync_active_ticket_channels_for_guild_with_config(guild: Any, *args: Any, **kwargs: Any) -> Any:
+            cfg = await _config_for_guild(guild) if _safe_int(getattr(guild, "id", 0), 0) > 0 else None
+            if cfg is not None:
+                _log(
+                    "ticket sync using per-guild config "
+                    f"guild={getattr(guild, 'id', None)} source={getattr(cfg, 'source', 'unknown')} "
+                    f"active_category={_cfg_int(cfg, 'ticket_category_id', 0)} "
+                    f"archive_category={_cfg_int(cfg, 'ticket_archive_category_id', 0)} "
+                    f"transcripts={_cfg_int(cfg, 'transcripts_channel_id', 0)}"
+                )
+            return await original_sync(guild, *args, **kwargs)
+
+        try:
+            setattr(_sync_active_ticket_channels_for_guild_with_config, "_guild_config_wrapped", True)
+        except Exception:
+            pass
+        setattr(module, "sync_active_ticket_channels_for_guild", _sync_active_ticket_channels_for_guild_with_config)
+
+    _PATCHED_MODULES.add(patch_key)
+    _log(f"patched {module_name}; startup ticket sync now prefers guild_configs")
+
+
 def _maybe_patch_loaded_modules() -> None:
     try:
         module = sys.modules.get("stoney_verify.tickets_new.service")
         if module is not None:
             _patch_ticket_service(module)
     except Exception as e:
-        _warn(f"loaded-module patch failed: {e!r}")
+        _warn(f"loaded ticket service patch failed: {e!r}")
+
+    try:
+        module = sys.modules.get("stoney_verify.tickets_new.sync_service")
+        if module is not None:
+            _patch_ticket_sync_service(module)
+    except Exception as e:
+        _warn(f"loaded ticket sync patch failed: {e!r}")
 
 
 def _safe_import(name: str, globals: Any = None, locals: Any = None, fromlist: Any = (), level: int = 0) -> Any:
@@ -373,6 +555,12 @@ def _safe_import(name: str, globals: Any = None, locals: Any = None, fromlist: A
             target = sys.modules.get("stoney_verify.tickets_new.service") or sys.modules.get(name)
             if target is not None:
                 _patch_ticket_service(target)
+
+        if name == "stoney_verify.tickets_new.sync_service" or name.endswith("tickets_new.sync_service"):
+            target = sys.modules.get("stoney_verify.tickets_new.sync_service") or sys.modules.get(name)
+            if target is not None:
+                _patch_ticket_sync_service(target)
+
         _maybe_patch_loaded_modules()
     except Exception as e:
         _warn(f"post-import patch failed for {name}: {e!r}")
