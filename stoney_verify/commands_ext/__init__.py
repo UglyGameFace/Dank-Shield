@@ -17,6 +17,7 @@ CommandModuleSpec = Tuple[str, str, str]
 COMMAND_MODULES: List[CommandModuleSpec] = [
     ("public_staff_scope", "register_public_staff_scope", "public per-guild staff permission isolation"),
     ("public_onboarding", "register_public_onboarding_listeners", "public isolated guild onboarding lifecycle"),
+    ("public_spam_cleanup_hardening", "register_public_spam_cleanup_hardening", "public spam guard burst cleanup hardening"),
     ("public_setup_review", "register_public_setup_review_commands", "public grouped /stoney setup review command"),
     ("public_setup_logs", "register_public_setup_logs_commands", "public grouped /stoney log channel setup command"),
     ("public_modlog_coverage", "register_public_modlog_coverage_listeners", "public supplemental modlog coverage listeners"),
@@ -56,6 +57,7 @@ _LEGACY_MODULES: Tuple[str, ...] = tuple(name for name, _fn, _label in COMMAND_M
 _PUBLIC_MODULES: Tuple[str, ...] = (
     "public_staff_scope",
     "public_onboarding",
+    "public_spam_cleanup_hardening",
     "public_setup_review",
     "public_setup_logs",
     "public_modlog_coverage",
