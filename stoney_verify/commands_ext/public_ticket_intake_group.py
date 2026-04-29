@@ -228,14 +228,13 @@ async def intake_status(interaction: discord.Interaction):
         value=(f"{staff_role.mention}\n`{staff_role.id}`" if staff_role else "Not configured / not found"),
         inline=False,
     )
-    embed.add_field(name="Public Ticket Panel", value="`/post_ticket_panel`", inline=True)
-    embed.add_field(name="Ghost Ticket Panel", value="`/post_ghost_ticket_panel`", inline=True)
+    embed.add_field(name="Public Ticket Panel", value="`/ticket-panel` or `/ticket-intake post-panel`", inline=True)
     embed.add_field(name="Actions Panel", value="`/ticket-intake post-actions`", inline=True)
     embed.add_field(
         name="Staff Note",
         value=(
-            "Use `/ticket-intake post-actions` only in active tickets.\n"
-            "Closed or archived tickets should use the closed-ticket controls instead."
+            "Use `/ticket-panel` to post the public **Create Ticket** button for users.\n"
+            "Use `/ticket-intake post-actions` only inside an active ticket channel for staff controls."
         )[:1024],
         inline=False,
     )
@@ -334,7 +333,16 @@ async def intake_post_actions(
 
     ch, row = await legacy._ticket_context_for_actions(interaction, channel)
     if ch is None:
-        return
+        return await reply_once(
+            interaction,
+            {
+                "content": (
+                    "❌ This is the **staff actions** command, not the public Create Ticket button.\n"
+                    "Use `/ticket-panel` or `/ticket-intake post-panel` in your support channel to post the user-facing Create Ticket button."
+                ),
+                "ephemeral": True,
+            },
+        )
 
     if legacy.TicketChannelActionsView is None:
         return await reply_once(interaction, {"content": "❌ Ticket actions view is unavailable.", "ephemeral": True})
