@@ -1,11 +1,11 @@
 from __future__ import annotations
 
 """
-Startup patch for /mod_ban explicit Ban/Unban action selector.
+Startup patch for the clear /ban_unban moderation command.
 
 This wraps commands_ext.moderation.register_moderation_commands so the existing
 moderation module can still register /mod_kick, /mod_timeout, and /debug_intents,
-then replaces only /mod_ban with the clearer action-selector version.
+then removes the confusing ban command names and registers only /ban_unban.
 """
 
 import builtins
@@ -29,29 +29,29 @@ def _patch_moderation_module(module: Any) -> None:
         return
 
     original = getattr(module, "register_moderation_commands", None)
-    if not callable(original) or getattr(original, "_explicit_mod_ban_wrapped", False):
+    if not callable(original) or getattr(original, "_ban_unban_wrapped", False):
         return
 
     def register_moderation_commands_patched(bot: Any, tree: Any) -> None:
         original(bot, tree)
         try:
-            from stoney_verify.commands_ext.public_mod_ban_toggle_patch import register_public_mod_ban_toggle_patch
+            from stoney_verify.commands_ext.public_ban_unban_patch import register_public_ban_unban_patch
 
-            register_public_mod_ban_toggle_patch(bot, tree)
+            register_public_ban_unban_patch(bot, tree)
         except Exception as e:
             try:
-                print(f"⚠️ runtime_public_mod_ban_toggle_startup failed replacing /mod_ban: {e!r}")
+                print(f"⚠️ runtime_public_mod_ban_toggle_startup failed replacing ban command: {e!r}")
             except Exception:
                 pass
 
     try:
-        setattr(register_moderation_commands_patched, "_explicit_mod_ban_wrapped", True)
+        setattr(register_moderation_commands_patched, "_ban_unban_wrapped", True)
     except Exception:
         pass
 
     setattr(module, "register_moderation_commands", register_moderation_commands_patched)
     _PATCHED = True
-    _log("patched commands_ext.moderation.register_moderation_commands to replace /mod_ban after base moderation registration")
+    _log("patched commands_ext.moderation.register_moderation_commands to register /ban_unban after base moderation registration")
 
 
 def _maybe_patch_loaded() -> None:
@@ -79,4 +79,4 @@ def _safe_import(name: str, globals: Any = None, locals: Any = None, fromlist: A
 
 builtins.__import__ = _safe_import
 _maybe_patch_loaded()
-_log("loaded; /mod_ban explicit action selector startup patch active")
+_log("loaded; /ban_unban startup patch active")
