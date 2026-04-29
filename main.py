@@ -76,6 +76,16 @@ except Exception as e:
     except Exception:
         pass
 
+# Force-load clearer /mod_ban command shape before commands_ext imports.
+# It keeps the same command name but makes Ban/Unban an obvious required action.
+try:
+    import runtime_public_mod_ban_toggle_startup_patch  # noqa: F401
+except Exception as e:
+    try:
+        print(f"⚠️ main.py failed to import runtime_public_mod_ban_toggle_startup_patch guard: {e!r}")
+    except Exception:
+        pass
+
 # Force-load per-guild ticket config guard before tickets_new.service is imported.
 # Public/beta bots must resolve ticket category/staff/transcript settings from
 # guild_configs instead of one env-only guild.
