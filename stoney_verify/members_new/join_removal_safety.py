@@ -5,13 +5,14 @@ Native fresh-join removal safety helpers.
 
 Public/listing-site servers can receive noisy-looking joins. Stoney must not
 instantly kick/ban a brand-new human member unless the server owner explicitly
-enables that behavior or a future staff-confirmed flow adds a clear override.
+enables that behavior or a staff-confirmed moderation flow opts into it.
 
 This module owns the real business rules so runtime patches do not keep carrying
 production logic forever.
 """
 
 import asyncio
+import contextvars
 import os
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -26,6 +27,11 @@ FRESH_JOIN_OVERRIDE_MARKERS: tuple[str, ...] = (
     "confirmed_staff_override:fresh_join_removal",
 )
 
+_ALLOW_FRESH_JOIN_REMOVAL_CONTEXT: contextvars.ContextVar[bool] = contextvars.ContextVar(
+    "stoney_allow_fresh_join_removal_context",
+    default=False,
+)
+
 
 @dataclass(frozen=True)
 class FreshJoinRemovalDecision:
@@ -37,6 +43,7 @@ class FreshJoinRemovalDecision:
     join_age_seconds: Optional[float]
     protection_minutes: int
     allow_env_enabled: bool
+    staff_confirmed: bool
 
 
 def _log(message: str) -> None:
@@ -99,9 +106,20 @@ def fresh_join_protection_minutes() -> int:
     return 10
 
 
+def staff_confirmed_removal_context_active() -> bool:
+    try:
+        return bool(_ALLOW_FRESH_JOIN_REMOVAL_CONTEXT.get(False))
+    except Exception:
+        return False
+
+
 def bot_fresh_join_removal_allowed() -> bool:
-    # Default is intentionally false for public/listing-site traffic.
-    return safe_bool(os.getenv("ALLOW_BOT_FRESH_JOIN_REMOVAL"), False)
+    # Default is intentionally false for public/listing-site traffic. The
+    # context var is only set around explicit staff-confirmed command runners.
+    return bool(
+        safe_bool(os.getenv("ALLOW_BOT_FRESH_JOIN_REMOVAL"), False)
+        or staff_confirmed_removal_context_active()
+    )
 
 
 def member_join_age_seconds(member: discord.Member) -> Optional[float]:
@@ -143,9 +161,9 @@ def should_block_bot_fresh_join_removal(member: Any, *, reason: Any = None) -> b
     return True
 
 
-def removal_decision(member: Any, *, action: str, reason: Any = None) -> FreshJoinRemovalDecision:
+def removal_decision(member: Any, *, action: str, reason: Any = None, staff_confirmed: bool = False) -> FreshJoinRemovalDecision:
     guild = getattr(member, "guild", None)
-    blocked = should_block_bot_fresh_join_removal(member, reason=reason)
+    blocked = False if staff_confirmed else should_block_bot_fresh_join_removal(member, reason=reason)
     return FreshJoinRemovalDecision(
         blocked=blocked,
         action=safe_str(action, "remove").lower(),
@@ -154,7 +172,8 @@ def removal_decision(member: Any, *, action: str, reason: Any = None) -> FreshJo
         guild_id=safe_int(getattr(guild, "id", 0), 0),
         join_age_seconds=member_join_age_seconds(member) if isinstance(member, discord.Member) else None,
         protection_minutes=fresh_join_protection_minutes(),
-        allow_env_enabled=bot_fresh_join_removal_allowed(),
+        allow_env_enabled=safe_bool(os.getenv("ALLOW_BOT_FRESH_JOIN_REMOVAL"), False),
+        staff_confirmed=bool(staff_confirmed),
     )
 
 
@@ -242,6 +261,7 @@ def build_fresh_join_removal_embed(
     action: str,
     reason: Any,
     prevented: bool,
+    staff_confirmed: bool = False,
 ) -> discord.Embed:
     age = member_join_age_seconds(member)
     age_text = "unknown" if age is None else f"{int(age)}s"
@@ -257,6 +277,7 @@ def build_fresh_join_removal_embed(
     embed.add_field(name="Bot Action", value=clean_action.upper(), inline=True)
     embed.add_field(name="Joined Age", value=age_text, inline=True)
     embed.add_field(name="Protection Window", value=f"{fresh_join_protection_minutes()} minute(s)", inline=True)
+    embed.add_field(name="Staff Confirmed", value="yes" if staff_confirmed else "no", inline=True)
     embed.add_field(name="Reason", value=safe_str(reason, "No reason provided")[:1024], inline=False)
     embed.add_field(
         name="Result",
@@ -278,6 +299,7 @@ async def post_fresh_join_removal_log(
     action: str,
     reason: Any,
     prevented: bool,
+    staff_confirmed: bool = False,
 ) -> None:
     try:
         embed = build_fresh_join_removal_embed(
@@ -286,6 +308,7 @@ async def post_fresh_join_removal_log(
             action=action,
             reason=reason,
             prevented=prevented,
+            staff_confirmed=staff_confirmed,
         )
         sent = False
         for channel in await configured_fresh_join_safety_log_channels(guild):
@@ -310,22 +333,52 @@ async def block_or_run_bot_removal(
     member: discord.Member,
     reason: Any,
     runner: Callable[[], Awaitable[Any]],
+    staff_confirmed: bool = False,
 ) -> Any:
-    decision = removal_decision(member, action=action, reason=reason)
+    decision = removal_decision(member, action=action, reason=reason, staff_confirmed=staff_confirmed)
     if decision.blocked:
         await clear_persisted_member_wait_timers(guild.id, member.id, reason=f"blocked fresh join bot {action}")
         _warn(
             f"blocked fresh-join bot {action} guild={guild.id} user={member.id} "
             f"age={decision.join_age_seconds} reason={reason!r}"
         )
-        await post_fresh_join_removal_log(guild, member, action=action, reason=reason, prevented=True)
+        await post_fresh_join_removal_log(
+            guild,
+            member,
+            action=action,
+            reason=reason,
+            prevented=True,
+            staff_confirmed=staff_confirmed,
+        )
         return None
 
-    result = await runner()
+    token = None
+    if staff_confirmed:
+        try:
+            token = _ALLOW_FRESH_JOIN_REMOVAL_CONTEXT.set(True)
+        except Exception:
+            token = None
+
+    try:
+        result = await runner()
+    finally:
+        if token is not None:
+            try:
+                _ALLOW_FRESH_JOIN_REMOVAL_CONTEXT.reset(token)
+            except Exception:
+                pass
+
     try:
         age = member_join_age_seconds(member)
         if age is not None and age <= (fresh_join_protection_minutes() * 60):
-            await post_fresh_join_removal_log(guild, member, action=action, reason=reason, prevented=False)
+            await post_fresh_join_removal_log(
+                guild,
+                member,
+                action=action,
+                reason=reason,
+                prevented=False,
+                staff_confirmed=staff_confirmed,
+            )
     except Exception:
         pass
     return result
@@ -351,4 +404,5 @@ __all__ = [
     "safe_int",
     "safe_str",
     "should_block_bot_fresh_join_removal",
+    "staff_confirmed_removal_context_active",
 ]
