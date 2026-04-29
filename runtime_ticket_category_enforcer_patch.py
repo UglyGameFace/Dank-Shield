@@ -3,16 +3,14 @@ from __future__ import annotations
 """
 Ticket category enforcer.
 
-Fixes the public-ticket path where a ticket channel can be created successfully
-but land outside the configured Active Tickets category.
+Emergency repair net for open ticket channels that somehow end up outside the
+configured Active Tickets category.
 
-Guarantees:
-- after create_ticket_channel returns, locate the created ticket channel and move
-  it to guild_configs.ticket_category_id if it is not already there
-- on_ready/startup, sweep existing open-looking `ticket-0001` style channels and
-  move them into the configured active ticket category
-- never moves `closed-####` channels or non-ticket channels
-- uses sync_permissions=False so ticket-specific overwrites remain private
+The real category-resolution rules live in:
+    stoney_verify.tickets_new.category_resolver
+
+This guard should become less important as ticket creation/close/reopen flows are
+folded natively into tickets_new.service.
 """
 
 import asyncio
@@ -74,28 +72,22 @@ def _guild_from_any(*values: Any) -> Optional[discord.Guild]:
 
 
 def _guild_from_call(args: tuple[Any, ...], kwargs: dict[str, Any]) -> Optional[discord.Guild]:
-    values = [
+    return _guild_from_any(
         kwargs.get("guild"),
         kwargs.get("owner"),
         kwargs.get("member"),
         kwargs.get("interaction"),
         kwargs.get("channel"),
         *list(args),
-    ]
-    return _guild_from_any(*values)
+    )
 
 
 async def _active_category_for_guild(guild: discord.Guild) -> Optional[discord.CategoryChannel]:
     try:
-        from stoney_verify.guild_config import get_guild_config
+        from stoney_verify.tickets_new.category_resolver import resolve_active_ticket_category
 
-        cfg = await asyncio.wait_for(get_guild_config(guild.id, refresh=True), timeout=4.0)
-        category_id = _safe_int(getattr(cfg, "ticket_category_id", 0), 0)
-        if category_id <= 0:
-            return None
-        channel = guild.get_channel(category_id)
-        if isinstance(channel, discord.CategoryChannel):
-            return channel
+        resolved = await resolve_active_ticket_category(guild, refresh=True, require_manage_channels=True)
+        return resolved.category
     except Exception as e:
         _warn(f"active category lookup failed guild={getattr(guild, 'id', None)}: {e!r}")
     return None
@@ -110,9 +102,14 @@ def _is_open_ticket_channel(channel: Any) -> bool:
 
 def _channel_in_category(channel: discord.TextChannel, category: discord.CategoryChannel) -> bool:
     try:
-        return int(getattr(channel.category, "id", 0) or 0) == int(category.id)
+        from stoney_verify.tickets_new.category_resolver import channel_is_in_category
+
+        return bool(channel_is_in_category(channel, category))
     except Exception:
-        return False
+        try:
+            return int(getattr(channel.category, "id", 0) or 0) == int(category.id)
+        except Exception:
+            return False
 
 
 async def _move_ticket_channel_to_active(channel: discord.TextChannel, *, reason_suffix: str) -> bool:
@@ -182,8 +179,6 @@ def _newest_open_ticket_channel(guild: discord.Guild, *, started_at: float) -> O
                 continue
             created_at = getattr(channel, "created_at", None)
             created_ts = created_at.timestamp() if created_at else 0.0
-            # Discord timestamps can be slightly behind local monotonic/wall
-            # conversions, so allow a small window.
             if created_ts and created_ts < (time.time() - 120):
                 continue
             if created_ts >= newest_ts:
@@ -300,7 +295,7 @@ def _maybe_attach_bot() -> None:
 
 def _patch_ticket_service(module: Any) -> None:
     module_name = getattr(module, "__name__", "")
-    patch_key = f"{module_name}:ticket_category_enforcer_v1"
+    patch_key = f"{module_name}:ticket_category_enforcer_v2"
     if patch_key in _PATCHED_MODULES:
         return
 
@@ -323,7 +318,7 @@ def _patch_ticket_service(module: Any) -> None:
         setattr(module, "create_ticket_channel", _create_ticket_channel_category_enforced)
 
     _PATCHED_MODULES.add(patch_key)
-    _log(f"patched {module_name}; created/open tickets are forced into configured active category")
+    _log(f"patched {module_name}; emergency open-ticket category repair uses native resolver")
 
 
 def _patch_loaded() -> None:
@@ -354,4 +349,4 @@ def _safe_import(name: str, globals: Any = None, locals: Any = None, fromlist: A
 
 builtins.__import__ = _safe_import
 _patch_loaded()
-_log("loaded; active ticket category enforcement active")
+_log("loaded; active ticket category emergency repair active")
