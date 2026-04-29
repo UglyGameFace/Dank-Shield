@@ -98,6 +98,17 @@ except Exception as e:
     except Exception:
         pass
 
+# Force-load public ticket panel command before grouped commands import.
+# Public profile skips legacy /post_ticket_panel, so this adds
+# /ticket-intake post-panel for the user-facing Create Ticket button.
+try:
+    import runtime_public_ticket_panel_command_patch  # noqa: F401
+except Exception as e:
+    try:
+        print(f"⚠️ main.py failed to import runtime_public_ticket_panel_command_patch guard: {e!r}")
+    except Exception:
+        pass
+
 # Force-load clearer /mod_ban command shape before commands_ext imports.
 # It keeps the same command name but makes Ban/Unban an obvious required action.
 try:
