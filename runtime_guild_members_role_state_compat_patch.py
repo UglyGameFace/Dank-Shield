@@ -3,13 +3,16 @@ from __future__ import annotations
 """
 guild_members.role_state compatibility guard.
 
-Some deployed Supabase schemas still have an older CHECK constraint for
-`guild_members.role_state` and do not allow the newer `cosmetic_only` value.
-The app can still preserve the useful signal through `has_cosmetic_only=true`
-and `role_state_reason`, but the stored role_state must remain compatible.
+Best permanent fix:
+Run the migration that relaxes guild_members_role_state_check to allow short
+snake_case role-state labels. After that, future states like `cosmetic_only` do
+not need more Supabase edits.
 
-This patch prevents noisy 23514 check-constraint failures without requiring an
-immediate database migration.
+Runtime fallback:
+If an older database still rejects a new role_state with SQLSTATE 23514, retry
+that single write with a backward-compatible state while preserving the original
+state in role_state_raw / role_state_reason. This avoids noisy startup failures
+without hiding what the bot actually computed.
 """
 
 import builtins
@@ -39,7 +42,17 @@ def _safe_str(value: Any, default: str = "") -> str:
         return default
 
 
-def _sanitize_payload(payload: Any) -> Any:
+def _is_role_state_constraint_error(exc: BaseException) -> bool:
+    blob = ""
+    try:
+        blob = f"{type(exc).__name__} {exc!r} {str(exc)}"
+    except Exception:
+        blob = ""
+    blob_l = blob.lower()
+    return "23514" in blob_l and "guild_members_role_state_check" in blob_l
+
+
+def _compat_payload(payload: Any) -> Any:
     if not isinstance(payload, dict):
         return payload
 
@@ -47,10 +60,12 @@ def _sanitize_payload(payload: Any) -> Any:
     state = _safe_str(out.get("role_state"), "")
     mapped = _COMPAT_ROLE_STATE_MAP.get(state)
     if mapped:
+        out["role_state_raw"] = state
         out["role_state"] = mapped
-        out["has_cosmetic_only"] = bool(out.get("has_cosmetic_only", True))
+        if state == "cosmetic_only":
+            out["has_cosmetic_only"] = bool(out.get("has_cosmetic_only", True))
         reason = _safe_str(out.get("role_state_reason"), "")
-        marker = f"Original computed role_state was `{state}`; stored as `{mapped}` for database compatibility."
+        marker = f"Original computed role_state was `{state}`; retried as `{mapped}` for database compatibility."
         if marker not in reason:
             out["role_state_reason"] = f"{reason} {marker}".strip() if reason else marker
     return out
@@ -60,58 +75,52 @@ def _patch_sync_service(module: Any) -> None:
     module_name = getattr(module, "__name__", "")
     if not module_name:
         return
-    patch_key = f"{module_name}:role_state_compat"
+    patch_key = f"{module_name}:role_state_compat_retry"
     if patch_key in _PATCHED_MODULES:
         return
 
-    original_snapshot = getattr(module, "_member_role_snapshot", None)
-    if callable(original_snapshot) and not getattr(original_snapshot, "_role_state_compat_wrapped", False):
-        def _member_role_snapshot_patched(member: Any) -> Dict[str, Any]:
-            snap = original_snapshot(member)
-            return _sanitize_payload(snap)
-
-        try:
-            setattr(_member_role_snapshot_patched, "_role_state_compat_wrapped", True)
-        except Exception:
-            pass
-        setattr(module, "_member_role_snapshot", _member_role_snapshot_patched)
-
-    original_minimal = getattr(module, "_minimal_member_payload", None)
-    if callable(original_minimal) and not getattr(original_minimal, "_role_state_compat_wrapped", False):
-        def _minimal_member_payload_patched(member: Any, in_guild: bool = True) -> Dict[str, Any]:
-            payload = original_minimal(member, in_guild)
-            return _sanitize_payload(payload)
-
-        try:
-            setattr(_minimal_member_payload_patched, "_role_state_compat_wrapped", True)
-        except Exception:
-            pass
-        setattr(module, "_minimal_member_payload", _minimal_member_payload_patched)
-
     original_upsert = getattr(module, "_guild_members_upsert_safe_async", None)
-    if callable(original_upsert) and not getattr(original_upsert, "_role_state_compat_wrapped", False):
+    if callable(original_upsert) and not getattr(original_upsert, "_role_state_compat_retry_wrapped", False):
         async def _guild_members_upsert_safe_async_patched(sb: Any, payload: Dict[str, Any]) -> None:
-            return await original_upsert(sb, _sanitize_payload(payload))
+            try:
+                return await original_upsert(sb, payload)
+            except Exception as e:
+                if not _is_role_state_constraint_error(e):
+                    raise
+                compat = _compat_payload(payload)
+                if compat == payload:
+                    raise
+                _log(f"role_state={payload.get('role_state')!r} rejected by old DB constraint; retrying compat write")
+                return await original_upsert(sb, compat)
 
         try:
-            setattr(_guild_members_upsert_safe_async_patched, "_role_state_compat_wrapped", True)
+            setattr(_guild_members_upsert_safe_async_patched, "_role_state_compat_retry_wrapped", True)
         except Exception:
             pass
         setattr(module, "_guild_members_upsert_safe_async", _guild_members_upsert_safe_async_patched)
 
     original_update = getattr(module, "_guild_members_update_safe_async", None)
-    if callable(original_update) and not getattr(original_update, "_role_state_compat_wrapped", False):
+    if callable(original_update) and not getattr(original_update, "_role_state_compat_retry_wrapped", False):
         async def _guild_members_update_safe_async_patched(sb: Any, guild_id: str, user_id: str, payload: Dict[str, Any]) -> None:
-            return await original_update(sb, guild_id, user_id, _sanitize_payload(payload))
+            try:
+                return await original_update(sb, guild_id, user_id, payload)
+            except Exception as e:
+                if not _is_role_state_constraint_error(e):
+                    raise
+                compat = _compat_payload(payload)
+                if compat == payload:
+                    raise
+                _log(f"role_state={payload.get('role_state')!r} rejected by old DB constraint during update; retrying compat write")
+                return await original_update(sb, guild_id, user_id, compat)
 
         try:
-            setattr(_guild_members_update_safe_async_patched, "_role_state_compat_wrapped", True)
+            setattr(_guild_members_update_safe_async_patched, "_role_state_compat_retry_wrapped", True)
         except Exception:
             pass
         setattr(module, "_guild_members_update_safe_async", _guild_members_update_safe_async_patched)
 
     _PATCHED_MODULES.add(patch_key)
-    _log(f"patched {module_name}; cosmetic_only stores as missing_unverified while preserving has_cosmetic_only")
+    _log(f"patched {module_name}; future role_state values pass through, old DBs retry compat on 23514")
 
 
 def _maybe_patch_loaded() -> None:
@@ -139,4 +148,4 @@ def _safe_import(name: str, globals: Any = None, locals: Any = None, fromlist: A
 
 builtins.__import__ = _safe_import
 _maybe_patch_loaded()
-_log("loaded; guild_members role_state compatibility guard active")
+_log("loaded; guild_members role_state compatibility retry guard active")
