@@ -9,6 +9,7 @@ from discord import app_commands
 from ..globals import *  # noqa: F401,F403
 from ..globals import now_utc
 from ..guild_config import get_guild_config
+from ..members_new.join_removal_safety import block_or_run_bot_removal
 
 from .common import (
     _staff_check,
@@ -29,6 +30,11 @@ from .common import (
 # this bot should log themselves immediately to the guild's configured modlog.
 # This gives staff TicketTool-style confidence without relying on delayed audit
 # log lookups or any beta-server env IDs.
+#
+# Fresh-join safety note:
+# - automatic/bot-driven fresh join kick/ban remains blocked by default
+# - slash moderation commands are explicit staff-confirmed actions, so they call
+#   the native fresh-join helper with staff_confirmed=True and log that context
 # ============================================================
 
 
@@ -118,7 +124,7 @@ async def _resolve_ban_toggle_target(
     raw_target: str,
 ) -> tuple[int, Optional[discord.Member], Optional[Any]]:
     """
-    Resolve a target for /mod_ban toggle mode.
+    Resolve a target for /ban_unban toggle mode.
 
     Returns:
         (user_id, current_member_if_present, ban_entry_if_currently_banned)
@@ -214,6 +220,50 @@ def _modlog_suffix(logged: bool) -> str:
     return "" if logged else "\n⚠️ Action succeeded, but I could not post to the configured modlog."
 
 
+def _staff_confirmed_extra(command_name: str, extra: Optional[str] = None) -> str:
+    base = f"Command: `/{command_name}`\nFresh-join context: `staff-confirmed`"
+    if extra:
+        return f"{base}\n{extra}"
+    return base
+
+
+async def _staff_confirmed_kick(
+    *,
+    guild: discord.Guild,
+    target: discord.Member,
+    reason: str,
+) -> None:
+    await block_or_run_bot_removal(
+        action="kick",
+        guild=guild,
+        member=target,
+        reason=reason,
+        staff_confirmed=True,
+        runner=lambda: guild.kick(target, reason=reason),
+    )
+
+
+async def _staff_confirmed_ban_member(
+    *,
+    guild: discord.Guild,
+    target: discord.Member,
+    reason: str,
+    delete_message_days: int,
+) -> None:
+    await block_or_run_bot_removal(
+        action="ban",
+        guild=guild,
+        member=target,
+        reason=reason,
+        staff_confirmed=True,
+        runner=lambda: guild.ban(
+            target,
+            reason=reason,
+            delete_message_days=delete_message_days,
+        ),
+    )
+
+
 def register_moderation_commands(bot, tree) -> None:
     # ============================================================
     # /mod_kick
@@ -286,7 +336,7 @@ def register_moderation_commands(bot, tree) -> None:
         action_reason = reason or f"Kick by {interaction.user} ({interaction.user.id})"
 
         try:
-            await guild.kick(target, reason=action_reason)
+            await _staff_confirmed_kick(guild=guild, target=target, reason=action_reason)
             try:
                 RUNTIME_STATS["mod_actions"] = int(RUNTIME_STATS.get("mod_actions", 0)) + 1
             except Exception:
@@ -298,6 +348,7 @@ def register_moderation_commands(bot, tree) -> None:
                 actor=interaction.user,
                 target=target,
                 reason=action_reason,
+                extra=_staff_confirmed_extra("mod_kick"),
                 color=discord.Color.orange(),
             )
 
@@ -323,7 +374,8 @@ def register_moderation_commands(bot, tree) -> None:
     # ============================================================
     # /mod_ban toggle
     # ------------------------------------------------------------
-    # Same slash command now handles ban + unban:
+    # Runtime public patch exposes this as /ban_unban and removes stale /mod_ban.
+    # Same handler supports ban + unban:
     # - mode=auto/default: banned user -> unban, unbanned user -> ban
     # - mode=ban: force ban
     # - mode=unban: force unban
@@ -418,7 +470,7 @@ def register_moderation_commands(bot, tree) -> None:
                     actor=interaction.user,
                     target=banned_user,
                     reason=action_reason,
-                    extra=f"/mod_ban toggle mode: `{action_mode}`",
+                    extra=f"/ban_unban toggle mode: `{action_mode}`",
                     color=discord.Color.green(),
                 )
 
@@ -491,11 +543,19 @@ def register_moderation_commands(bot, tree) -> None:
             action_reason = reason or f"Ban by {interaction.user} ({interaction.user.id})"
 
             try:
-                await guild.ban(
-                    target_for_ban,
-                    reason=action_reason,
-                    delete_message_days=dmd,
-                )
+                if isinstance(target_for_ban, discord.Member):
+                    await _staff_confirmed_ban_member(
+                        guild=guild,
+                        target=target_for_ban,
+                        reason=action_reason,
+                        delete_message_days=dmd,
+                    )
+                else:
+                    await guild.ban(
+                        target_for_ban,
+                        reason=action_reason,
+                        delete_message_days=dmd,
+                    )
                 try:
                     RUNTIME_STATS["mod_actions"] = int(RUNTIME_STATS.get("mod_actions", 0)) + 1
                 except Exception:
@@ -507,7 +567,10 @@ def register_moderation_commands(bot, tree) -> None:
                     actor=interaction.user,
                     target=target_for_ban,
                     reason=action_reason,
-                    extra=f"Deleted message history: `{dmd}` day(s)\n/mod_ban toggle mode: `{action_mode}`",
+                    extra=_staff_confirmed_extra(
+                        "ban_unban",
+                        f"Deleted message history: `{dmd}` day(s)\nToggle mode: `{action_mode}`",
+                    ),
                     color=discord.Color.red(),
                 )
 
