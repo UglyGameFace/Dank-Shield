@@ -44,8 +44,6 @@ except Exception as e:
         pass
 
 # Force-load disposable/bot-pattern raidguard heuristic hardening.
-# This keeps obvious human-name + long numeric suffix accounts from staying
-# misleadingly LOW/CLEAR when the account looks bot-farm/disposable.
 try:
     import runtime_raidguard_bot_heuristics_patch  # noqa: F401
 except Exception as e:
@@ -55,8 +53,6 @@ except Exception as e:
         pass
 
 # Force-load Risk Engine v2 after heuristic hardening.
-# Public listing sites like Disboard/Discodus/Discordfy/Discadia are treated as
-# expected growth sources, not as suspicious by themselves.
 try:
     import runtime_raidguard_risk_engine_v2_patch  # noqa: F401
 except Exception as e:
@@ -66,8 +62,6 @@ except Exception as e:
         pass
 
 # Force-load alt-link safety after Risk Engine v2.
-# This removes self-matches, dedupes cluster members, and separates known alt ties
-# from weak possible-related-account matches.
 try:
     import runtime_alt_identity_link_safety_patch  # noqa: F401
 except Exception as e:
@@ -76,9 +70,16 @@ except Exception as e:
     except Exception:
         pass
 
+# Clear stale verification timers before events/kick timers can act on fresh joins.
+try:
+    import runtime_member_join_kick_safety_patch  # noqa: F401
+except Exception as e:
+    try:
+        print(f"⚠️ main.py failed to import runtime_member_join_kick_safety_patch guard: {e!r}")
+    except Exception:
+        pass
+
 # Force-load guild_members schema compatibility before member sync imports.
-# Older DB constraints do not allow role_state='cosmetic_only', so the guard
-# stores it compatibly while preserving has_cosmetic_only=true.
 try:
     import runtime_guild_members_role_state_compat_patch  # noqa: F401
 except Exception as e:
@@ -88,8 +89,6 @@ except Exception as e:
         pass
 
 # Force-load Discord setup role preset safety before setup modules import.
-# This catches roles created through Discord's Cosmetic/Member/Moderator/Manager
-# presets and warns/blocks when a verification role is accidentally overpowered.
 try:
     import runtime_setup_role_safety_patch  # noqa: F401
 except Exception as e:
@@ -99,8 +98,6 @@ except Exception as e:
         pass
 
 # Force-load public ticket panel command before grouped commands import.
-# Public profile skips legacy /post_ticket_panel, so this adds
-# /ticket-intake post-panel for the user-facing Create Ticket button.
 try:
     import runtime_public_ticket_panel_command_patch  # noqa: F401
 except Exception as e:
@@ -109,8 +106,7 @@ except Exception as e:
     except Exception:
         pass
 
-# Force-load clearer /mod_ban command shape before commands_ext imports.
-# It keeps the same command name but makes Ban/Unban an obvious required action.
+# Force-load clearer Ban/Unban command replacement before commands_ext imports.
 try:
     import runtime_public_mod_ban_toggle_startup_patch  # noqa: F401
 except Exception as e:
@@ -120,8 +116,6 @@ except Exception as e:
         pass
 
 # Force-load per-guild ticket config guard before tickets_new.service is imported.
-# Public/beta bots must resolve ticket category/staff/transcript settings from
-# guild_configs instead of one env-only guild.
 try:
     import runtime_guild_config_ticket_patch  # noqa: F401
 except Exception as e:
@@ -130,8 +124,16 @@ except Exception as e:
     except Exception:
         pass
 
-# Force tickets that are created/open but misplaced into the configured Active
-# Tickets category, and repair any misplaced open ticket channels at startup.
+# Native source fix: create ticket channels directly inside the configured Active Tickets category.
+try:
+    import runtime_ticket_creation_native_category_patch  # noqa: F401
+except Exception as e:
+    try:
+        print(f"⚠️ main.py failed to import runtime_ticket_creation_native_category_patch guard: {e!r}")
+    except Exception:
+        pass
+
+# Emergency repair net only: move already-misplaced open tickets back into Active Tickets.
 try:
     import runtime_ticket_category_enforcer_patch  # noqa: F401
 except Exception as e:
@@ -140,9 +142,7 @@ except Exception as e:
     except Exception:
         pass
 
-# Keep stoney_verify.app's startup ticket-sync alias pointed at the current
-# patched sync_service function. Without this, app.py can keep a stale function
-# reference captured before runtime_guild_config_ticket_patch wraps sync_service.
+# Keep stoney_verify.app's startup ticket-sync alias pointed at the current patched sync_service function.
 try:
     import runtime_ticket_sync_alias_patch  # noqa: F401
 except Exception as e:
@@ -151,8 +151,7 @@ except Exception as e:
     except Exception:
         pass
 
-# Public startup scope guard: sync public commands globally and run startup
-# maintenance only for guilds with saved guild_configs rows.
+# Public startup scope guard.
 try:
     import runtime_public_startup_scope_patch  # noqa: F401
 except Exception as e:
@@ -161,9 +160,7 @@ except Exception as e:
     except Exception:
         pass
 
-# Force-load structured API per-guild config guard before api_new.server is imported.
-# This makes dashboard/API lifecycle actions use each guild's configured ticket
-# categories instead of one env-only category.
+# Structured API per-guild config guard.
 try:
     import runtime_api_guild_config_patch  # noqa: F401
 except Exception as e:
@@ -172,8 +169,7 @@ except Exception as e:
     except Exception:
         pass
 
-# Force-load event helper queue guard. This keeps member sync / startup event
-# maintenance helpers from running inline in Discord gateway/startup paths.
+# Event helper queue guard.
 try:
     import runtime_event_safety  # noqa: F401
 except Exception as e:
@@ -182,8 +178,7 @@ except Exception as e:
     except Exception:
         pass
 
-# Force-load automatic runtime job dedupe. This makes queued work coalesce by
-# default, even if a producer forgets to provide a dedupe key.
+# Automatic runtime job dedupe.
 try:
     import runtime_job_dedupe_safety  # noqa: F401
 except Exception as e:
@@ -193,9 +188,7 @@ except Exception as e:
         pass
 
 try:
-    import asyncio
     import runtime_process_health_guard as _process_health_guard
-
     try:
         _process_health_guard.install_loop_exception_handler()
     except Exception:
