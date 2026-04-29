@@ -54,6 +54,17 @@ except Exception as e:
     except Exception:
         pass
 
+# Force-load alt-link safety after Risk Engine v2.
+# This removes self-matches, dedupes cluster members, and separates known alt ties
+# from weak possible-related-account matches.
+try:
+    import runtime_alt_identity_link_safety_patch  # noqa: F401
+except Exception as e:
+    try:
+        print(f"⚠️ main.py failed to import runtime_alt_identity_link_safety_patch guard: {e!r}")
+    except Exception:
+        pass
+
 # Force-load per-guild ticket config guard before tickets_new.service is imported.
 # Public/beta bots must resolve ticket category/staff/transcript settings from
 # guild_configs instead of one env-only guild.
