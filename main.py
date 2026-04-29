@@ -130,6 +130,16 @@ except Exception as e:
     except Exception:
         pass
 
+# Force tickets that are created/open but misplaced into the configured Active
+# Tickets category, and repair any misplaced open ticket channels at startup.
+try:
+    import runtime_ticket_category_enforcer_patch  # noqa: F401
+except Exception as e:
+    try:
+        print(f"⚠️ main.py failed to import runtime_ticket_category_enforcer_patch guard: {e!r}")
+    except Exception:
+        pass
+
 # Keep stoney_verify.app's startup ticket-sync alias pointed at the current
 # patched sync_service function. Without this, app.py can keep a stale function
 # reference captured before runtime_guild_config_ticket_patch wraps sync_service.
