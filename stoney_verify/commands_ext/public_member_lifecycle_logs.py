@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
 import discord
@@ -16,11 +16,11 @@ from ..guild_config import get_guild_config
 #
 # Production rules:
 # - never hardcode a channel id
-# - only sends when join_log_channel_id is configured and writable
+# - only sends when configured channels are writable
 # - never pings users/roles from generated logs
-# - join logs are immediate
-# - leave logs wait briefly and resolve Discord audit logs so staff can see
-#   whether the member left, was kicked, or was banned
+# - join logs are public-safe and go to join_log_channel_id
+# - simple leave logs are public-safe and go to join_log_channel_id
+# - detailed kick/ban/audit evidence is staff-only and goes to modlog_channel_id
 # ============================================================
 
 
@@ -277,32 +277,49 @@ async def _resolve_member_remove_cause(member: discord.Member) -> Dict[str, Any]
         )
 
 
-async def _resolve_join_log_channel(guild: discord.Guild) -> Optional[discord.TextChannel]:
+async def _resolve_configured_channel(guild: discord.Guild, *field_names: str) -> Optional[discord.TextChannel]:
     try:
         cfg = await get_guild_config(guild.id)
-        channel_id = int(getattr(cfg, "join_log_channel_id", 0) or 0)
-        if channel_id <= 0:
-            return None
-        channel = guild.get_channel(channel_id)
-        if channel is None:
+        for field_name in field_names:
+            channel_id = int(getattr(cfg, field_name, 0) or 0)
+            if channel_id <= 0:
+                continue
+            channel = guild.get_channel(channel_id)
+            if channel is None:
+                try:
+                    fetched = await guild.fetch_channel(channel_id)
+                except Exception:
+                    fetched = None
+                channel = fetched  # type: ignore[assignment]
+            if _is_writable_text_channel(channel, guild):
+                return channel  # type: ignore[return-value]
             try:
-                fetched = await guild.fetch_channel(channel_id)
+                print(f"⚠️ member_lifecycle_logs configured channel not writable guild={guild.id} field={field_name} channel={channel_id}")
             except Exception:
-                fetched = None
-            channel = fetched  # type: ignore[assignment]
-        if _is_writable_text_channel(channel, guild):
-            return channel  # type: ignore[return-value]
-        try:
-            print(f"⚠️ member_lifecycle_logs join log channel not writable guild={guild.id} channel={channel_id}")
-        except Exception:
-            pass
+                pass
         return None
     except Exception as e:
         try:
-            print(f"⚠️ member_lifecycle_logs failed resolving join log channel guild={guild.id}: {repr(e)}")
+            print(f"⚠️ member_lifecycle_logs failed resolving configured channel guild={guild.id}: {repr(e)}")
         except Exception:
             pass
         return None
+
+
+async def _resolve_join_log_channel(guild: discord.Guild) -> Optional[discord.TextChannel]:
+    return await _resolve_configured_channel(guild, "join_log_channel_id")
+
+
+async def _resolve_staff_modlog_channel(guild: discord.Guild) -> Optional[discord.TextChannel]:
+    # Detailed kick/ban/audit evidence belongs in staff-only logs, not public
+    # welcome/exit channels. Use modlog first, then force/raid log as staff-ish
+    # fallbacks, and intentionally do not fall back to join_log_channel_id.
+    return await _resolve_configured_channel(
+        guild,
+        "modlog_channel_id",
+        "force_verify_log_channel_id",
+        "raidlog_channel_id",
+    )
 
 
 def _member_join_embed(member: discord.Member) -> discord.Embed:
@@ -333,7 +350,33 @@ def _member_join_embed(member: discord.Member) -> discord.Embed:
     return embed
 
 
-def _member_leave_embed(member: discord.Member, removal_info: Optional[Dict[str, Any]] = None) -> discord.Embed:
+def _member_public_leave_embed(member: discord.Member) -> discord.Embed:
+    embed = discord.Embed(
+        title="🍂 Member Left",
+        description=(
+            f"{member.mention} left the server.\n"
+            f"`{_safe_user_tag(member)}` • `{member.id}`"
+        ),
+        color=discord.Color.orange(),
+        timestamp=_utc_now(),
+    )
+    embed.add_field(
+        name="Account Created",
+        value=f"{_discord_time(getattr(member, 'created_at', None), 'F')}\n{_discord_time(getattr(member, 'created_at', None), 'R')}",
+        inline=False,
+    )
+    try:
+        embed.set_thumbnail(url=str(member.display_avatar.url))
+    except Exception:
+        pass
+    try:
+        embed.set_footer(text=f"Guild {member.guild.id} • Members: {member.guild.member_count or 'unknown'}")
+    except Exception:
+        embed.set_footer(text=f"Guild {member.guild.id}")
+    return embed
+
+
+def _member_staff_leave_embed(member: discord.Member, removal_info: Optional[Dict[str, Any]] = None) -> discord.Embed:
     info = removal_info or _removal_info_default(
         "unknown",
         "Left or Removed",
@@ -407,27 +450,41 @@ def _member_leave_embed(member: discord.Member, removal_info: Optional[Dict[str,
     return embed
 
 
-async def _send_member_log(guild: discord.Guild, embed: discord.Embed) -> None:
-    channel = await _resolve_join_log_channel(guild)
+async def _send_to_channel(channel: Optional[discord.TextChannel], embed: discord.Embed, *, label: str) -> None:
     if channel is None:
         return
     try:
         await channel.send(embed=embed, allowed_mentions=discord.AllowedMentions.none())
     except discord.Forbidden:
         try:
-            print(f"⚠️ member_lifecycle_logs missing send permission guild={guild.id} channel={channel.id}")
+            print(f"⚠️ member_lifecycle_logs missing send permission channel={channel.id} label={label}")
         except Exception:
             pass
     except Exception as e:
         try:
-            print(f"⚠️ member_lifecycle_logs failed sending guild={guild.id}: {repr(e)}")
+            print(f"⚠️ member_lifecycle_logs failed sending channel={channel.id} label={label}: {repr(e)}")
         except Exception:
             pass
 
 
+async def _send_public_member_log(guild: discord.Guild, embed: discord.Embed) -> None:
+    await _send_to_channel(await _resolve_join_log_channel(guild), embed, label="public_join_exit")
+
+
+async def _send_staff_member_log(guild: discord.Guild, embed: discord.Embed) -> None:
+    channel = await _resolve_staff_modlog_channel(guild)
+    if channel is None:
+        try:
+            print(f"⚠️ member_lifecycle_logs staff removal log skipped guild={guild.id}; modlog/raidlog not configured or not writable")
+        except Exception:
+            pass
+        return
+    await _send_to_channel(channel, embed, label="staff_modlog_removal")
+
+
 async def _on_member_join(member: discord.Member) -> None:
     try:
-        await _send_member_log(member.guild, _member_join_embed(member))
+        await _send_public_member_log(member.guild, _member_join_embed(member))
     except Exception as e:
         try:
             print(f"⚠️ member_lifecycle_logs on_member_join failed guild={getattr(getattr(member, 'guild', None), 'id', 'unknown')} user={getattr(member, 'id', 'unknown')}: {repr(e)}")
@@ -438,7 +495,12 @@ async def _on_member_join(member: discord.Member) -> None:
 async def _on_member_remove(member: discord.Member) -> None:
     try:
         removal_info = await _resolve_member_remove_cause(member)
-        await _send_member_log(member.guild, _member_leave_embed(member, removal_info))
+
+        # Public/welcome-exit channel gets only a simple non-sensitive leave card.
+        await _send_public_member_log(member.guild, _member_public_leave_embed(member))
+
+        # Staff modlog gets the detailed audit evidence, actor, reason, and roles.
+        await _send_staff_member_log(member.guild, _member_staff_leave_embed(member, removal_info))
     except Exception as e:
         try:
             print(f"⚠️ member_lifecycle_logs on_member_remove failed guild={getattr(getattr(member, 'guild', None), 'id', 'unknown')} user={getattr(member, 'id', 'unknown')}: {repr(e)}")
@@ -457,7 +519,7 @@ def register_public_member_lifecycle_log_listeners(bot, tree) -> None:
     _LISTENERS_REGISTERED = True
 
     try:
-        print("✅ public_member_lifecycle_logs: registered join/exit log listeners with audit-log removal resolver")
+        print("✅ public_member_lifecycle_logs: registered public join/exit + staff-only audit removal listeners")
     except Exception:
         pass
 
