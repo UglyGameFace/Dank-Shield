@@ -33,8 +33,6 @@ except Exception as e:
         pass
 
 # Force-load a hard raidguard DB stop before app.py imports events/modlog.
-# This prevents sync Supabase/PostgREST identity lookups from blocking Discord
-# heartbeat inside voice-state modlog paths.
 try:
     import runtime_raidguard_hard_stop  # noqa: F401
 except Exception as e:
@@ -130,6 +128,15 @@ try:
 except Exception as e:
     try:
         print(f"⚠️ main.py failed to import runtime_ticket_creation_native_category_patch guard: {e!r}")
+    except Exception:
+        pass
+
+# Native source wiring: close/reopen ticket category movement uses lifecycle helpers.
+try:
+    import runtime_ticket_lifecycle_native_patch  # noqa: F401
+except Exception as e:
+    try:
+        print(f"⚠️ main.py failed to import runtime_ticket_lifecycle_native_patch guard: {e!r}")
     except Exception:
         pass
 
