@@ -7,6 +7,7 @@ Public launch readiness command.
 before relying on Stoney in a real server. It combines:
 
 - per-guild setup health
+- raw DB config completeness checks
 - public isolation/config-source checks
 - command sync/duplicate-command risk
 - structured API security checks
@@ -15,8 +16,9 @@ before relying on Stoney in a real server. It combines:
 It is read-only and never changes server config.
 """
 
+import asyncio
 import os
-from typing import Any
+from typing import Any, Mapping, Optional
 
 import discord
 
@@ -30,10 +32,52 @@ from .public_setup_group import (
     stoney_group,
 )
 from ..guild_config import get_guild_config
+from ..globals import get_supabase
 
 
 _LAUNCH_CHECK_ATTACHED = False
 _TREE: Any = None
+
+_JSON_CONFIG_KEYS = {"settings", "config", "metadata", "meta"}
+
+_REQUIRED_DB_FIELDS: tuple[tuple[str, tuple[str, ...], str], ...] = (
+    ("Open ticket category", ("ticket_category_id", "tickets_category_id", "support_category_id"), "/stoney setup-tickets"),
+    ("Ticket staff role", ("staff_role_id", "support_role_id", "mod_role_id"), "/stoney setup-tickets"),
+    ("Verify text channel", ("verify_channel_id", "verification_channel_id", "verify_channel"), "/stoney setup-verify"),
+    ("Unverified role", ("unverified_role_id",), "/stoney setup-verify"),
+    ("Verified role", ("verified_role_id",), "/stoney setup-verify"),
+)
+
+_RECOMMENDED_DB_FIELDS: tuple[tuple[str, tuple[str, ...], str], ...] = (
+    (
+        "Archive/closed ticket category",
+        (
+            "ticket_archive_category_id",
+            "ticket_archived_category_id",
+            "archived_ticket_category_id",
+            "archive_ticket_category_id",
+            "closed_ticket_category_id",
+            "closed_tickets_category_id",
+        ),
+        "/stoney setup-tickets",
+    ),
+    ("Transcript channel", ("transcripts_channel_id", "transcript_channel_id"), "/stoney setup-tickets"),
+    ("Modlog channel", ("modlog_channel_id", "mod_log_channel_id"), "/stoney setup-logs"),
+    (
+        "Join/exit log channel",
+        (
+            "join_log_channel_id",
+            "join_log_id",
+            "member_log_channel_id",
+            "member_join_log_channel_id",
+            "member_leave_log_channel_id",
+            "welcome_exit_channel_id",
+            "welcome_channel_id",
+            "leave_log_channel_id",
+        ),
+        "/stoney setup-logs",
+    ),
+)
 
 
 def _env_str(name: str, default: str = "") -> str:
@@ -88,6 +132,10 @@ def _command_profile() -> str:
     return _env_str("STONEY_COMMAND_PROFILE", "public").lower() or "public"
 
 
+def _config_table_name() -> str:
+    return _env_str("STONEY_GUILD_CONFIG_TABLE", "guild_configs") or "guild_configs"
+
+
 def _tree_counts_for_guild(guild_id: int) -> tuple[int, int]:
     tree = _TREE
     global_count = 0
@@ -107,6 +155,95 @@ def _tree_counts_for_guild(guild_id: int) -> tuple[int, int]:
         guild_count = 0
 
     return int(global_count), int(guild_count)
+
+
+def _raw_value_present(value: Any) -> bool:
+    if value is None or isinstance(value, bool):
+        return False
+    text = str(value).strip()
+    if not text:
+        return False
+    return text.lower() not in {"0", "none", "null", "false"}
+
+
+def _fetch_raw_config_row_sync(guild_id: int) -> Optional[dict[str, Any]]:
+    sb = get_supabase()
+    if sb is None:
+        return None
+    response = (
+        sb.table(_config_table_name())
+        .select("*")
+        .eq("guild_id", str(int(guild_id)))
+        .limit(1)
+        .execute()
+    )
+    rows = getattr(response, "data", None) or []
+    if not rows:
+        return None
+    row = rows[0]
+    return dict(row) if isinstance(row, Mapping) else None
+
+
+def _merged_raw_config(row: Mapping[str, Any]) -> dict[str, Any]:
+    merged: dict[str, Any] = {}
+    try:
+        for key, value in row.items():
+            if key not in _JSON_CONFIG_KEYS and value is not None:
+                merged[str(key)] = value
+        for key in ("settings", "config", "metadata", "meta"):
+            value = row.get(key)
+            if isinstance(value, Mapping):
+                for nested_key, nested_value in value.items():
+                    if nested_value is not None:
+                        merged[str(nested_key)] = nested_value
+    except Exception:
+        return {}
+    return merged
+
+
+def _has_raw_any(data: Mapping[str, Any], aliases: tuple[str, ...]) -> bool:
+    try:
+        for key in aliases:
+            if _raw_value_present(data.get(key)):
+                return True
+    except Exception:
+        return False
+    return False
+
+
+async def _raw_db_config_checks(guild_id: int) -> tuple[list[str], list[str], list[str]]:
+    blockers: list[str] = []
+    warnings: list[str] = []
+    ok: list[str] = []
+
+    try:
+        row = await asyncio.to_thread(_fetch_raw_config_row_sync, int(guild_id))
+    except Exception as e:
+        blockers.append(f"Could not read raw guild config row from `{_config_table_name()}`: `{repr(e)[:220]}`")
+        return blockers, warnings, ok
+
+    if not row:
+        blockers.append(f"No raw guild config row exists in `{_config_table_name()}` for this server. Run `/stoney setup-picker` or `/stoney setup-tickets` first.")
+        return blockers, warnings, ok
+
+    data = _merged_raw_config(row)
+    if not data:
+        blockers.append("Raw guild config row exists, but no usable config payload could be read from flat columns/settings/config.")
+        return blockers, warnings, ok
+
+    for label, aliases, command_name in _REQUIRED_DB_FIELDS:
+        if _has_raw_any(data, aliases):
+            ok.append(f"Raw DB config contains {label}.")
+        else:
+            blockers.append(f"Raw DB config is missing {label}. Run `{command_name}` so production does not depend on old env fallback IDs.")
+
+    for label, aliases, command_name in _RECOMMENDED_DB_FIELDS:
+        if _has_raw_any(data, aliases):
+            ok.append(f"Raw DB config contains {label}.")
+        else:
+            warnings.append(f"Raw DB config is missing {label}. Run `{command_name}` before full public rollout.")
+
+    return blockers, warnings, ok
 
 
 def _runtime_checks(guild: discord.Guild, cfg: Any) -> tuple[list[str], list[str], list[str]]:
@@ -250,6 +387,10 @@ async def _launch_check_callback(interaction: discord.Interaction) -> None:
         cfg = await get_guild_config(guild.id, refresh=True)
         setup_blockers, setup_warnings, setup_ok = _build_setup_health(guild, cfg)
         runtime_blockers, runtime_warnings, runtime_ok = _runtime_checks(guild, cfg)
+        raw_blockers, raw_warnings, raw_ok = await _raw_db_config_checks(guild.id)
+        runtime_blockers.extend(raw_blockers)
+        runtime_warnings.extend(raw_warnings)
+        runtime_ok.extend(raw_ok)
         await interaction.followup.send(
             embeds=[
                 _launch_embed(guild, cfg, setup_blockers, setup_warnings, setup_ok, runtime_blockers, runtime_warnings, runtime_ok),
