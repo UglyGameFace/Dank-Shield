@@ -43,6 +43,17 @@ except Exception as e:
     except Exception:
         pass
 
+# Force-load Risk Engine v2 after heuristic hardening.
+# Public listing sites like Disboard/Discodus/Discordfy/Discadia are treated as
+# expected growth sources, not as suspicious by themselves.
+try:
+    import runtime_raidguard_risk_engine_v2_patch  # noqa: F401
+except Exception as e:
+    try:
+        print(f"⚠️ main.py failed to import runtime_raidguard_risk_engine_v2_patch guard: {e!r}")
+    except Exception:
+        pass
+
 # Force-load per-guild ticket config guard before tickets_new.service is imported.
 # Public/beta bots must resolve ticket category/staff/transcript settings from
 # guild_configs instead of one env-only guild.
