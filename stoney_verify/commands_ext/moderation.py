@@ -266,18 +266,18 @@ async def _staff_confirmed_ban_member(
 
 def register_moderation_commands(bot, tree) -> None:
     # ============================================================
-    # /mod_kick
+    # /kick_member
     # ============================================================
     @tree.command(
-        name="mod_kick",
-        description="(Staff) Kick a member.",
+        name="kick_member",
+        description="(Staff) Kick a member from the server.",
     )
     @app_commands.describe(
         member="Mention, ID, username, or display name of the member to kick",
-        reason="Reason (optional)",
+        reason="Reason saved to the audit log and modlog",
     )
     @app_commands.autocomplete(member=member_autocomplete)
-    async def mod_kick_slash(
+    async def kick_member_slash(
         interaction: discord.Interaction,
         member: str,
         reason: Optional[str] = None,
@@ -348,7 +348,7 @@ def register_moderation_commands(bot, tree) -> None:
                 actor=interaction.user,
                 target=target,
                 reason=action_reason,
-                extra=_staff_confirmed_extra("mod_kick"),
+                extra=_staff_confirmed_extra("kick_member"),
                 color=discord.Color.orange(),
             )
 
@@ -596,19 +596,19 @@ def register_moderation_commands(bot, tree) -> None:
         return await safe_followup(interaction, "❌ Invalid ban toggle state.", ephemeral=True)
 
     # ============================================================
-    # /mod_timeout
+    # /timeout_member
     # ============================================================
     @tree.command(
-        name="mod_timeout",
-        description="(Staff) Timeout a member.",
+        name="timeout_member",
+        description="(Staff) Timeout a member for a set number of minutes.",
     )
     @app_commands.describe(
         member="Mention, ID, username, or display name of the member to timeout",
-        minutes="Minutes (default MOD_TIMEOUT_MINUTES)",
-        reason="Reason (optional)",
+        minutes="How many minutes to timeout this member",
+        reason="Reason saved to the audit log and modlog",
     )
     @app_commands.autocomplete(member=member_autocomplete)
-    async def mod_timeout_slash(
+    async def timeout_member_slash(
         interaction: discord.Interaction,
         member: str,
         minutes: Optional[int] = None,
@@ -690,7 +690,7 @@ def register_moderation_commands(bot, tree) -> None:
                 actor=interaction.user,
                 target=target,
                 reason=action_reason,
-                extra=detail,
+                extra=f"Command: `/timeout_member`\n{detail}",
                 color=discord.Color.gold(),
             )
 
