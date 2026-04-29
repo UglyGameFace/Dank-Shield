@@ -1,7 +1,8 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
-from typing import Optional
+import asyncio
+from datetime import datetime, timedelta, timezone
+from typing import Any, Dict, Optional
 
 import discord
 
@@ -13,20 +14,19 @@ from ..guild_config import get_guild_config
 # ------------------------------------------------------------
 # Public-safe join/exit logging for configured guilds.
 #
-# Why this lives in commands_ext:
-# - it can register listeners through the existing startup module system
-# - it does not add another top-level slash command
-# - it keeps per-guild setup behavior tied to guild_configs, not env globals
-#
 # Production rules:
 # - never hardcode a channel id
 # - only sends when join_log_channel_id is configured and writable
 # - never pings users/roles from generated logs
-# - listener registration is idempotent per process
+# - join logs are immediate
+# - leave logs wait briefly and resolve Discord audit logs so staff can see
+#   whether the member left, was kicked, or was banned
 # ============================================================
 
 
 _LISTENERS_REGISTERED = False
+_AUDIT_LOOKBACK_SECONDS = 45
+_AUDIT_SETTLE_DELAY_SECONDS = 2.5
 
 
 def _utc_now() -> datetime:
@@ -76,7 +76,7 @@ def _safe_display_name(member: discord.Member) -> str:
         return str(getattr(member, "id", "unknown"))
 
 
-def _trim(text: str, limit: int = 1024) -> str:
+def _trim(text: Any, limit: int = 1024) -> str:
     value = str(text or "").strip()
     if len(value) <= limit:
         return value
@@ -110,6 +110,171 @@ def _is_writable_text_channel(channel: object, guild: discord.Guild) -> bool:
         return bool(perms.view_channel and perms.send_messages and perms.embed_links and perms.read_message_history)
     except Exception:
         return False
+
+
+def _can_view_audit_log(guild: discord.Guild) -> bool:
+    try:
+        me = guild.me
+        if me is None:
+            return False
+        return bool(me.guild_permissions.view_audit_log)
+    except Exception:
+        return False
+
+
+def _display_actor(user: Optional[discord.abc.User]) -> str:
+    if user is None:
+        return "Unknown"
+    try:
+        mention = getattr(user, "mention", None)
+        uid = getattr(user, "id", None)
+        tag = _safe_user_tag(user)
+        if mention and uid:
+            return f"{mention}\n`{tag}` • `{uid}`"
+        if uid:
+            return f"`{tag}` • `{uid}`"
+        return f"`{tag}`"
+    except Exception:
+        return "Unknown"
+
+
+def _entry_created_at(entry: discord.AuditLogEntry) -> Optional[datetime]:
+    try:
+        created_at = getattr(entry, "created_at", None)
+        if created_at is None:
+            return None
+        if created_at.tzinfo is None:
+            created_at = created_at.replace(tzinfo=timezone.utc)
+        return created_at.astimezone(timezone.utc)
+    except Exception:
+        return None
+
+
+def _entry_age_seconds(entry: discord.AuditLogEntry) -> Optional[float]:
+    created_at = _entry_created_at(entry)
+    if created_at is None:
+        return None
+    try:
+        return max(0.0, (_utc_now() - created_at).total_seconds())
+    except Exception:
+        return None
+
+
+def _target_matches_member(entry: discord.AuditLogEntry, member: discord.Member) -> bool:
+    try:
+        target = getattr(entry, "target", None)
+        return int(getattr(target, "id", 0) or 0) == int(member.id)
+    except Exception:
+        return False
+
+
+def _is_stoney_actor(guild: discord.Guild, actor: Optional[discord.abc.User]) -> bool:
+    try:
+        return bool(actor is not None and guild.me is not None and int(actor.id) == int(guild.me.id))
+    except Exception:
+        return False
+
+
+def _removal_info_default(status: str, label: str, detail: str) -> Dict[str, Any]:
+    return {
+        "status": status,
+        "label": label,
+        "detail": detail,
+        "source": "join/leave event",
+        "actor": None,
+        "reason": None,
+        "audit_age_seconds": None,
+        "confidence": "not_confirmed_by_audit_log",
+        "stoney_actor": False,
+    }
+
+
+async def _find_matching_audit_entry(
+    guild: discord.Guild,
+    member: discord.Member,
+    action: discord.AuditLogAction,
+    *,
+    limit: int = 8,
+) -> Optional[discord.AuditLogEntry]:
+    try:
+        async for entry in guild.audit_logs(limit=limit, action=action):
+            if not _target_matches_member(entry, member):
+                continue
+            age = _entry_age_seconds(entry)
+            if age is None or age <= _AUDIT_LOOKBACK_SECONDS:
+                return entry
+    except discord.Forbidden:
+        raise
+    except Exception as e:
+        try:
+            print(f"⚠️ member_lifecycle_logs audit lookup failed guild={guild.id} user={member.id} action={action}: {repr(e)}")
+        except Exception:
+            pass
+    return None
+
+
+async def _resolve_member_remove_cause(member: discord.Member) -> Dict[str, Any]:
+    guild = member.guild
+
+    if not _can_view_audit_log(guild):
+        return _removal_info_default(
+            "audit_unavailable",
+            "Left or Removed — Audit Log Unavailable",
+            "I do not have **View Audit Log**, so I cannot prove whether this was a voluntary leave, kick, or ban.",
+        )
+
+    try:
+        # Discord audit log entries can appear shortly after the gateway
+        # member-remove event. Waiting prevents false "left" labels.
+        await asyncio.sleep(_AUDIT_SETTLE_DELAY_SECONDS)
+
+        banned = await _find_matching_audit_entry(guild, member, discord.AuditLogAction.ban)
+        if banned is not None:
+            actor = getattr(banned, "user", None)
+            return {
+                "status": "banned",
+                "label": "Banned",
+                "detail": "Discord audit log has an exact recent ban entry for this user.",
+                "source": "Discord audit log",
+                "actor": actor,
+                "reason": getattr(banned, "reason", None),
+                "audit_age_seconds": _entry_age_seconds(banned),
+                "confidence": "exact_recent_audit_match",
+                "stoney_actor": _is_stoney_actor(guild, actor),
+            }
+
+        kicked = await _find_matching_audit_entry(guild, member, discord.AuditLogAction.kick)
+        if kicked is not None:
+            actor = getattr(kicked, "user", None)
+            return {
+                "status": "kicked",
+                "label": "Kicked",
+                "detail": "Discord audit log has an exact recent kick entry for this user.",
+                "source": "Discord audit log",
+                "actor": actor,
+                "reason": getattr(kicked, "reason", None),
+                "audit_age_seconds": _entry_age_seconds(kicked),
+                "confidence": "exact_recent_audit_match",
+                "stoney_actor": _is_stoney_actor(guild, actor),
+            }
+
+        return _removal_info_default(
+            "left_or_unknown",
+            "Left Voluntarily / No Recent Kick-Ban Audit Match",
+            "No exact recent kick or ban audit-log entry matched this user. That usually means the member left voluntarily, or Discord did not expose a matching audit entry.",
+        )
+    except discord.Forbidden:
+        return _removal_info_default(
+            "audit_forbidden",
+            "Left or Removed — Missing Audit Permission",
+            "I need **View Audit Log** to prove whether this was a voluntary leave, kick, or ban.",
+        )
+    except Exception as e:
+        return _removal_info_default(
+            "audit_error",
+            "Left or Removed — Audit Lookup Error",
+            f"Audit lookup failed: {type(e).__name__}: {e}",
+        )
 
 
 async def _resolve_join_log_channel(guild: discord.Guild) -> Optional[discord.TextChannel]:
@@ -168,16 +333,58 @@ def _member_join_embed(member: discord.Member) -> discord.Embed:
     return embed
 
 
-def _member_leave_embed(member: discord.Member) -> discord.Embed:
+def _member_leave_embed(member: discord.Member, removal_info: Optional[Dict[str, Any]] = None) -> discord.Embed:
+    info = removal_info or _removal_info_default(
+        "unknown",
+        "Left or Removed",
+        "Removal cause was not resolved.",
+    )
+
+    status = str(info.get("status") or "unknown")
+    color = discord.Color.orange()
+    title = "🍂 Member Left"
+    if status == "kicked":
+        title = "👢 Member Kicked"
+        color = discord.Color.red() if bool(info.get("stoney_actor")) else discord.Color.orange()
+    elif status == "banned":
+        title = "🔨 Member Banned"
+        color = discord.Color.red()
+    elif status in {"audit_unavailable", "audit_forbidden", "audit_error"}:
+        title = "🍂 Member Left / Removed"
+        color = discord.Color.gold()
+
     embed = discord.Embed(
-        title="🍂 Member Left",
+        title=title,
         description=(
-            f"{member.mention} left or was removed from the server.\n"
+            f"{member.mention} is no longer in the server.\n"
             f"`{_safe_user_tag(member)}` • `{member.id}`"
         ),
-        color=discord.Color.orange(),
+        color=color,
         timestamp=_utc_now(),
     )
+    embed.add_field(name="Exit Classification", value=f"**{_trim(info.get('label'), 180)}**", inline=False)
+    embed.add_field(name="Evidence", value=_trim(info.get("detail"), 1024), inline=False)
+    embed.add_field(name="Source", value=f"`{_trim(info.get('source'), 128)}`", inline=True)
+    embed.add_field(name="Confidence", value=f"`{_trim(info.get('confidence'), 128)}`", inline=True)
+
+    audit_age = info.get("audit_age_seconds")
+    if audit_age is not None:
+        try:
+            embed.add_field(name="Audit Entry Age", value=f"`{int(float(audit_age))}s ago`", inline=True)
+        except Exception:
+            pass
+
+    actor = info.get("actor")
+    if actor is not None:
+        actor_title = "Actor"
+        if bool(info.get("stoney_actor")):
+            actor_title = "Actor — Stoney Verify"
+        embed.add_field(name=actor_title, value=_display_actor(actor), inline=False)
+
+    reason = info.get("reason")
+    if reason:
+        embed.add_field(name="Audit Reason", value=_trim(reason, 1024), inline=False)
+
     embed.add_field(
         name="Account Created",
         value=f"{_discord_time(getattr(member, 'created_at', None), 'F')}\n{_discord_time(getattr(member, 'created_at', None), 'R')}",
@@ -230,7 +437,8 @@ async def _on_member_join(member: discord.Member) -> None:
 
 async def _on_member_remove(member: discord.Member) -> None:
     try:
-        await _send_member_log(member.guild, _member_leave_embed(member))
+        removal_info = await _resolve_member_remove_cause(member)
+        await _send_member_log(member.guild, _member_leave_embed(member, removal_info))
     except Exception as e:
         try:
             print(f"⚠️ member_lifecycle_logs on_member_remove failed guild={getattr(getattr(member, 'guild', None), 'id', 'unknown')} user={getattr(member, 'id', 'unknown')}: {repr(e)}")
@@ -249,7 +457,7 @@ def register_public_member_lifecycle_log_listeners(bot, tree) -> None:
     _LISTENERS_REGISTERED = True
 
     try:
-        print("✅ public_member_lifecycle_logs: registered join/exit log listeners")
+        print("✅ public_member_lifecycle_logs: registered join/exit log listeners with audit-log removal resolver")
     except Exception:
         pass
 
