@@ -27,6 +27,7 @@ import discord
 
 _ORIGINAL_IMPORT = builtins.__import__
 _PATCHED_MODULE_IDS: set[int] = set()
+_NATIVE_PATCHED_MODULE_IDS: set[int] = set()
 _LISTENER_PATCHED = False
 _SKIPPED_UNCONFIGURED_GUILDS: set[int] = set()
 _CLEARED_BETA_GUILDS: set[int] = set()
@@ -224,11 +225,29 @@ def _native_app_scope_active(module: Any) -> bool:
 
 
 def _patch_native_app(module: Any) -> None:
-    """Patch only the beta guild command sync behavior on modern app.py."""
+    """Patch only the beta guild command sync behavior on modern app.py.
+
+    Important: app.py can exist in sys.modules while it is still importing.
+    Earlier versions of this guard marked the module as patched before app.py set
+    _NATIVE_PUBLIC_STARTUP_SCOPE, which let the native default keep copying
+    global commands into the beta guild. That causes duplicate slash commands.
+    This function is therefore allowed to run later even if the module already
+    received a legacy/partial patch during import.
+    """
+    module_id = id(module)
+    if module_id in _NATIVE_PATCHED_MODULE_IDS:
+        return
+
     async def _native_sync_beta_guild_commands_if_requested(guild_id_int: int) -> None:
         await _sync_beta_guild_commands_if_requested(module, int(guild_id_int or 0))
 
+    try:
+        setattr(_native_sync_beta_guild_commands_if_requested, "_runtime_public_startup_scope_patch", True)
+    except Exception:
+        pass
+
     setattr(module, "_sync_beta_guild_commands_if_requested", _native_sync_beta_guild_commands_if_requested)
+    _NATIVE_PATCHED_MODULE_IDS.add(module_id)
     _log("native app public startup scope detected; beta guild duplicate-command guard active")
 
 
@@ -365,14 +384,17 @@ def _patch_legacy_app(module: Any) -> None:
 
 def _patch_app(module: Any) -> None:
     module_id = id(module)
-    if module_id in _PATCHED_MODULE_IDS:
-        return
 
     if _native_app_scope_active(module):
         _patch_native_app(module)
-    else:
-        _patch_legacy_app(module)
+        _PATCHED_MODULE_IDS.add(module_id)
+        _log("loaded; public startup scope guard active")
+        return
 
+    if module_id in _PATCHED_MODULE_IDS:
+        return
+
+    _patch_legacy_app(module)
     _PATCHED_MODULE_IDS.add(module_id)
     _log("loaded; public startup scope guard active")
 
