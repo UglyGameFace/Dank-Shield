@@ -1,21 +1,23 @@
 from __future__ import annotations
 
 """
-Member join / verification-kick safety guard.
+Fresh-join removal safety guard.
 
-Fixes a dangerous production behavior:
-A returning/new member can be removed immediately if an old persisted verification
-wait timer is still around from a previous join. The member appears as Joined ->
-Left with no useful explanation.
+This guard exists because public/listing-site traffic can look noisy and a bot
+must not remove a brand-new member instantly without a clear staff-visible reason.
 
 Guarantees:
-- every member join clears stale persisted verification timers for that user
-- verification-timer kicks cannot remove a member during the fresh-join safety
-  window
-- prevented/executed verification kicks are posted to the server's configured
-  modlog/join-log when possible
-- normal staff moderation kicks are not blocked unless their reason clearly looks
-  like an automatic verification timer
+- every member join clears stale persisted verification wait timers
+- bot-driven kick/ban calls are blocked during the fresh-join protection window
+  unless explicitly allowed by env
+- both discord.Guild.kick(...) and discord.Member.kick(...) paths are covered
+- both discord.Guild.ban(...) and discord.Member.ban(...) paths are covered
+- blocked/executed actions are logged to configured modlog/join-log channels
+
+Important:
+This does not weaken Discord-native server security or staff manual Discord UI
+kicks. It only prevents this bot from instantly kicking/banning fresh joins due
+to over-tight invite/risk/timer automation.
 """
 
 import asyncio
@@ -31,7 +33,13 @@ _ORIGINAL_IMPORT = builtins.__import__
 _PATCHED_MODULES: set[str] = set()
 _READY_LISTENER_ATTACHED = False
 _GUILD_KICK_PATCHED = False
+_MEMBER_KICK_PATCHED = False
+_GUILD_BAN_PATCHED = False
+_MEMBER_BAN_PATCHED = False
 _ORIGINAL_GUILD_KICK = None
+_ORIGINAL_MEMBER_KICK = None
+_ORIGINAL_GUILD_BAN = None
+_ORIGINAL_MEMBER_BAN = None
 
 _TIMER_TYPES = ("join_grace", "member_no_ticket")
 
@@ -60,6 +68,22 @@ def _safe_int(value: Any, default: int = 0) -> int:
         return int(default)
 
 
+def _safe_bool(value: Any, default: bool = False) -> bool:
+    try:
+        if isinstance(value, bool):
+            return value
+        if value is None:
+            return default
+        text = str(value).strip().lower()
+        if text in {"1", "true", "yes", "y", "on"}:
+            return True
+        if text in {"0", "false", "no", "n", "off"}:
+            return False
+    except Exception:
+        pass
+    return default
+
+
 def _safe_str(value: Any, default: str = "") -> str:
     try:
         text = str(value or "").strip()
@@ -69,11 +93,17 @@ def _safe_str(value: Any, default: str = "") -> str:
 
 
 def _fresh_join_safety_minutes() -> int:
-    for key in ("VERIFY_FRESH_JOIN_KICK_PROTECTION_MINUTES", "JOIN_KICK_PROTECTION_MINUTES"):
+    for key in ("FRESH_JOIN_REMOVAL_PROTECTION_MINUTES", "VERIFY_FRESH_JOIN_KICK_PROTECTION_MINUTES", "JOIN_KICK_PROTECTION_MINUTES"):
         value = _safe_int(os.getenv(key), 0)
         if value > 0:
             return value
     return 10
+
+
+def _bot_fresh_join_removal_allowed() -> bool:
+    # Keep false by default. Public listing-site servers should not have the bot
+    # removing brand-new joins instantly. Staff can still use Discord native UI.
+    return _safe_bool(os.getenv("ALLOW_BOT_FRESH_JOIN_REMOVAL"), False)
 
 
 def _member_join_age_seconds(member: discord.Member) -> Optional[float]:
@@ -91,26 +121,32 @@ def _member_join_age_seconds(member: discord.Member) -> Optional[float]:
 def _is_fresh_join(member: discord.Member) -> bool:
     age = _member_join_age_seconds(member)
     if age is None:
-        return False
+        # If Discord did not give joined_at, do not assume safe to remove.
+        return True
     return age < (_fresh_join_safety_minutes() * 60)
 
 
-def _looks_like_auto_verification_kick(reason: Any) -> bool:
-    text = _safe_str(reason, "").lower()
-    if not text:
+def _removal_should_be_blocked(member: Any, *, reason: Any) -> bool:
+    if _bot_fresh_join_removal_allowed():
         return False
-    verification_markers = ("verification", "verify", "unverified")
-    timer_markers = (
-        "timer",
-        "expired",
-        "no-response",
-        "no response",
-        "no ticket",
-        "no verification progress",
-        "failed to respond",
-        "wait time",
+    if not isinstance(member, discord.Member):
+        return False
+    if getattr(member, "bot", False):
+        return False
+    if not _is_fresh_join(member):
+        return False
+
+    # Explicit internal override for future staff-command code if we add a
+    # confirmation flow. Existing automation will not contain these markers.
+    reason_text = _safe_str(reason, "").lower()
+    override_markers = (
+        "manual_override:fresh_join_removal",
+        "confirmed_staff_override:fresh_join_removal",
     )
-    return any(m in text for m in verification_markers) and any(m in text for m in timer_markers)
+    if any(marker in reason_text for marker in override_markers):
+        return False
+
+    return True
 
 
 async def _get_cfg(guild: discord.Guild) -> Any:
@@ -129,10 +165,10 @@ async def _configured_log_channels(guild: discord.Guild) -> list[discord.TextCha
 
     for attr in (
         "modlog_channel_id",
+        "raid_log_channel_id",
         "join_log_channel_id",
         "join_exit_log_channel_id",
         "member_log_channel_id",
-        "raid_log_channel_id",
     ):
         cid = _safe_int(getattr(cfg, attr, 0), 0) if cfg is not None else 0
         if cid <= 0 or cid in seen:
@@ -145,48 +181,58 @@ async def _configured_log_channels(guild: discord.Guild) -> list[discord.TextCha
         except Exception:
             continue
 
-    return channels[:2]
+    return channels[:3]
 
 
-async def _post_kick_safety_log(
+async def _post_removal_safety_log(
     guild: discord.Guild,
     member: discord.Member,
     *,
-    title: str,
+    action: str,
     reason: Any,
     prevented: bool,
 ) -> None:
     try:
         age = _member_join_age_seconds(member)
         age_text = "unknown" if age is None else f"{int(age)}s"
+        title = f"🛡️ Fresh Join {action.title()} Blocked" if prevented else f"👢 Fresh Join {action.title()} Executed"
         embed = discord.Embed(
             title=title,
             color=discord.Color.gold() if prevented else discord.Color.orange(),
             timestamp=datetime.now(timezone.utc),
         )
         embed.add_field(name="User", value=f"{member.mention}\n`{member}`\n`{member.id}`", inline=False)
-        embed.add_field(name="Reason", value=_safe_str(reason, "No reason provided")[:1024], inline=False)
+        embed.add_field(name="Bot Action", value=action.upper(), inline=True)
         embed.add_field(name="Joined Age", value=age_text, inline=True)
-        embed.add_field(name="Fresh-Join Protection", value=f"{_fresh_join_safety_minutes()} minute(s)", inline=True)
+        embed.add_field(name="Protection Window", value=f"{_fresh_join_safety_minutes()} minute(s)", inline=True)
+        embed.add_field(name="Reason", value=_safe_str(reason, "No reason provided")[:1024], inline=False)
         embed.add_field(
             name="Result",
             value=(
-                "Kick blocked because this looked like an old/stale verification timer."
+                "Blocked. This bot is not allowed to instantly remove fresh joins. This protects public invite/listing-site traffic from over-tight automation."
                 if prevented
-                else "Kick executed after passing safety checks."
+                else "Executed after protection checks."
             ),
             inline=False,
         )
-        embed.set_footer(text=f"Guild {guild.id} • verification kick safety")
+        embed.set_footer(text=f"Guild {guild.id} • fresh join removal safety")
 
+        sent = False
         for channel in await _configured_log_channels(guild):
             try:
                 perms = channel.permissions_for(guild.me) if guild.me else None
                 if perms is not None and (not perms.view_channel or not perms.send_messages or not perms.embed_links):
                     continue
                 await channel.send(embed=embed, allowed_mentions=discord.AllowedMentions.none())
+                sent = True
             except Exception:
                 continue
+
+        if not sent:
+            _warn(
+                f"fresh join {action} {'blocked' if prevented else 'executed'} but no writable log channel "
+                f"guild={guild.id} user={member.id} reason={reason!r}"
+            )
     except Exception:
         pass
 
@@ -195,7 +241,6 @@ async def _clear_persisted_member_wait_timers(guild_id: int, user_id: int, *, re
     try:
         from stoney_verify.commands_ext import kick_timers
 
-        # Cancel in-memory tasks first.
         try:
             cancel_all = getattr(kick_timers, "cancel_verification_wait_timers_for_member", None)
             if callable(cancel_all):
@@ -203,8 +248,6 @@ async def _clear_persisted_member_wait_timers(guild_id: int, user_id: int, *, re
         except Exception:
             pass
 
-        # Then remove persisted rows by type. This handles old timers from a
-        # previous join that could otherwise fire immediately after a rejoin.
         delete_fn = getattr(kick_timers, "member_wait_timer_persist_delete", None)
         if callable(delete_fn):
             for timer_type in _TIMER_TYPES:
@@ -231,65 +274,148 @@ async def _on_member_join_clear_stale_timers(member: discord.Member) -> None:
         _warn(f"join timer cleanup failed guild={getattr(getattr(member, 'guild', None), 'id', None)} user={getattr(member, 'id', None)}: {e!r}")
 
 
+async def _block_or_run_removal(
+    *,
+    action: str,
+    guild: discord.Guild,
+    member: discord.Member,
+    reason: Any,
+    runner,
+) -> Any:
+    if _removal_should_be_blocked(member, reason=reason):
+        await _clear_persisted_member_wait_timers(guild.id, member.id, reason=f"blocked fresh join bot {action}")
+        _warn(
+            f"blocked fresh-join bot {action} guild={guild.id} user={member.id} "
+            f"age={_member_join_age_seconds(member)} reason={reason!r}"
+        )
+        await _post_removal_safety_log(guild, member, action=action, reason=reason, prevented=True)
+        return None
+
+    result = await runner()
+    try:
+        if isinstance(member, discord.Member) and _member_join_age_seconds(member) is not None and _member_join_age_seconds(member) <= (_fresh_join_safety_minutes() * 60):
+            await _post_removal_safety_log(guild, member, action=action, reason=reason, prevented=False)
+    except Exception:
+        pass
+    return result
+
+
 def _patch_discord_guild_kick() -> None:
     global _GUILD_KICK_PATCHED, _ORIGINAL_GUILD_KICK
     if _GUILD_KICK_PATCHED:
         return
-
     original = getattr(discord.Guild, "kick", None)
     if not callable(original):
         return
-
     _ORIGINAL_GUILD_KICK = original
 
     async def _kick_with_fresh_join_guard(self: discord.Guild, user: Any, *, reason: Optional[str] = None) -> Any:
-        if isinstance(user, discord.Member) and _looks_like_auto_verification_kick(reason):
-            if _is_fresh_join(user):
-                await _clear_persisted_member_wait_timers(self.id, user.id, reason="blocked stale verification kick")
-                _warn(
-                    f"blocked fresh-join verification kick guild={self.id} user={user.id} "
-                    f"age={_member_join_age_seconds(user)} reason={reason!r}"
-                )
-                await _post_kick_safety_log(
-                    self,
-                    user,
-                    title="🛡️ Verification Kick Blocked",
-                    reason=reason,
-                    prevented=True,
-                )
-                return None
-
-            result = await original(self, user, reason=reason)
-            try:
-                await _post_kick_safety_log(
-                    self,
-                    user,
-                    title="👢 Verification Kick Executed",
-                    reason=reason,
-                    prevented=False,
-                )
-            except Exception:
-                pass
-            return result
-
+        if isinstance(user, discord.Member):
+            return await _block_or_run_removal(
+                action="kick",
+                guild=self,
+                member=user,
+                reason=reason,
+                runner=lambda: original(self, user, reason=reason),
+            )
         return await original(self, user, reason=reason)
 
     try:
         discord.Guild.kick = _kick_with_fresh_join_guard  # type: ignore[method-assign]
         _GUILD_KICK_PATCHED = True
-        _log("patched discord.Guild.kick with fresh-join verification timer guard")
+        _log("patched discord.Guild.kick with fresh-join removal guard")
     except Exception as e:
         _warn(f"failed patching discord.Guild.kick: {e!r}")
 
 
+def _patch_discord_member_kick() -> None:
+    global _MEMBER_KICK_PATCHED, _ORIGINAL_MEMBER_KICK
+    if _MEMBER_KICK_PATCHED:
+        return
+    original = getattr(discord.Member, "kick", None)
+    if not callable(original):
+        return
+    _ORIGINAL_MEMBER_KICK = original
+
+    async def _member_kick_with_fresh_join_guard(self: discord.Member, *, reason: Optional[str] = None) -> Any:
+        return await _block_or_run_removal(
+            action="kick",
+            guild=self.guild,
+            member=self,
+            reason=reason,
+            runner=lambda: original(self, reason=reason),
+        )
+
+    try:
+        discord.Member.kick = _member_kick_with_fresh_join_guard  # type: ignore[method-assign]
+        _MEMBER_KICK_PATCHED = True
+        _log("patched discord.Member.kick with fresh-join removal guard")
+    except Exception as e:
+        _warn(f"failed patching discord.Member.kick: {e!r}")
+
+
+def _patch_discord_guild_ban() -> None:
+    global _GUILD_BAN_PATCHED, _ORIGINAL_GUILD_BAN
+    if _GUILD_BAN_PATCHED:
+        return
+    original = getattr(discord.Guild, "ban", None)
+    if not callable(original):
+        return
+    _ORIGINAL_GUILD_BAN = original
+
+    async def _ban_with_fresh_join_guard(self: discord.Guild, user: Any, *, reason: Optional[str] = None, **kwargs: Any) -> Any:
+        if isinstance(user, discord.Member):
+            return await _block_or_run_removal(
+                action="ban",
+                guild=self,
+                member=user,
+                reason=reason,
+                runner=lambda: original(self, user, reason=reason, **kwargs),
+            )
+        return await original(self, user, reason=reason, **kwargs)
+
+    try:
+        discord.Guild.ban = _ban_with_fresh_join_guard  # type: ignore[method-assign]
+        _GUILD_BAN_PATCHED = True
+        _log("patched discord.Guild.ban with fresh-join removal guard")
+    except Exception as e:
+        _warn(f"failed patching discord.Guild.ban: {e!r}")
+
+
+def _patch_discord_member_ban() -> None:
+    global _MEMBER_BAN_PATCHED, _ORIGINAL_MEMBER_BAN
+    if _MEMBER_BAN_PATCHED:
+        return
+    original = getattr(discord.Member, "ban", None)
+    if not callable(original):
+        return
+    _ORIGINAL_MEMBER_BAN = original
+
+    async def _member_ban_with_fresh_join_guard(self: discord.Member, *, reason: Optional[str] = None, **kwargs: Any) -> Any:
+        return await _block_or_run_removal(
+            action="ban",
+            guild=self.guild,
+            member=self,
+            reason=reason,
+            runner=lambda: original(self, reason=reason, **kwargs),
+        )
+
+    try:
+        discord.Member.ban = _member_ban_with_fresh_join_guard  # type: ignore[method-assign]
+        _MEMBER_BAN_PATCHED = True
+        _log("patched discord.Member.ban with fresh-join removal guard")
+    except Exception as e:
+        _warn(f"failed patching discord.Member.ban: {e!r}")
+
+
 def _patch_kick_timers(module: Any) -> None:
     module_name = getattr(module, "__name__", "")
-    key = f"{module_name}:member_join_kick_safety_v1"
+    key = f"{module_name}:member_join_kick_safety_v2"
     if key in _PATCHED_MODULES:
         return
 
     original_start = getattr(module, "start_join_grace_then_kick_timer_for_member", None)
-    if callable(original_start) and not getattr(original_start, "_fresh_join_safety_wrapped", False):
+    if callable(original_start) and not getattr(original_start, "_fresh_join_safety_wrapped_v2", False):
         async def _start_join_grace_then_kick_timer_for_member_patched(member: discord.Member, *args: Any, **kwargs: Any) -> Any:
             try:
                 if not getattr(member, "bot", False):
@@ -299,7 +425,7 @@ def _patch_kick_timers(module: Any) -> None:
             return await original_start(member, *args, **kwargs)
 
         try:
-            setattr(_start_join_grace_then_kick_timer_for_member_patched, "_fresh_join_safety_wrapped", True)
+            setattr(_start_join_grace_then_kick_timer_for_member_patched, "_fresh_join_safety_wrapped_v2", True)
         except Exception:
             pass
         setattr(module, "start_join_grace_then_kick_timer_for_member", _start_join_grace_then_kick_timer_for_member_patched)
@@ -350,6 +476,9 @@ def _maybe_attach_bot() -> None:
 
 def _patch_loaded() -> None:
     _patch_discord_guild_kick()
+    _patch_discord_member_kick()
+    _patch_discord_guild_ban()
+    _patch_discord_member_ban()
     try:
         module = sys.modules.get("stoney_verify.commands_ext.kick_timers")
         if module is not None:
@@ -378,8 +507,7 @@ def _safe_import(name: str, globals: Any = None, locals: Any = None, fromlist: A
                 _patch_events_module(target)
         elif name in {"stoney_verify.globals", "stoney_verify.app"} or name.endswith("stoney_verify.globals") or name.endswith("stoney_verify.app"):
             _maybe_attach_bot()
-        else:
-            _patch_loaded()
+        _patch_loaded()
     except Exception as e:
         _warn(f"post-import patch failed for {name}: {e!r}")
     return module
@@ -387,4 +515,4 @@ def _safe_import(name: str, globals: Any = None, locals: Any = None, fromlist: A
 
 builtins.__import__ = _safe_import
 _patch_loaded()
-_log("loaded; member join stale-timer kick safety active")
+_log("loaded; fresh-join bot kick/ban protection active")
