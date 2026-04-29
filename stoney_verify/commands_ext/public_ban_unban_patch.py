@@ -9,8 +9,11 @@ lowercase, so the closest clear command to "Ban/Unban" is:
 /ban_unban
 
 This replaces the confusing /mod_ban and /mod_ban_toggle local registrations.
+It also performs a best-effort remote cleanup on startup so stale global
+commands are deleted from Discord, not just removed from the local command tree.
 """
 
+import asyncio
 from datetime import datetime, timezone
 from typing import Any, Optional
 
@@ -33,6 +36,10 @@ from .public_mod_ban_toggle_patch import (
     _target_reply_label,
     _user_line,
 )
+
+_CLEANUP_LISTENER_ATTACHED = False
+_CLEANUP_RAN = False
+_STALE_BAN_COMMAND_NAMES = {"mod_ban", "mod_ban_toggle"}
 
 
 def _safe_text(value: Any, default: str = "") -> str:
@@ -238,8 +245,104 @@ def _remove_existing_global_command(tree: app_commands.CommandTree, name: str) -
             pass
 
 
+async def _delete_app_command(command: Any) -> bool:
+    try:
+        delete = getattr(command, "delete", None)
+        if callable(delete):
+            await delete()
+            return True
+    except Exception:
+        pass
+    return False
+
+
+async def _remote_delete_stale_ban_commands(bot: Any, tree: app_commands.CommandTree) -> None:
+    """Best-effort remote delete so /mod_ban disappears instead of only being hidden locally."""
+    global _CLEANUP_RAN
+    if _CLEANUP_RAN:
+        return
+    _CLEANUP_RAN = True
+
+    try:
+        await asyncio.sleep(5)
+    except Exception:
+        pass
+
+    deleted: list[str] = []
+    errors: list[str] = []
+
+    # 1) Preferred: fetch global app commands and call delete on stale names.
+    try:
+        commands = await tree.fetch_commands(guild=None)
+        for command in commands:
+            name = str(getattr(command, "name", "") or "")
+            if name not in _STALE_BAN_COMMAND_NAMES:
+                continue
+            try:
+                if await _delete_app_command(command):
+                    deleted.append(name)
+                    continue
+            except Exception as e:
+                errors.append(f"{name}: {type(e).__name__}")
+    except Exception as e:
+        errors.append(f"fetch_commands: {type(e).__name__}")
+
+    # 2) Fallback: use discord.py HTTPClient delete_global_command if available.
+    try:
+        app_id = int(getattr(bot, "application_id", 0) or getattr(getattr(bot, "user", None), "id", 0) or 0)
+        http = getattr(bot, "http", None)
+        if app_id and http is not None:
+            commands = await tree.fetch_commands(guild=None)
+            for command in commands:
+                name = str(getattr(command, "name", "") or "")
+                command_id = int(getattr(command, "id", 0) or 0)
+                if name not in _STALE_BAN_COMMAND_NAMES or not command_id:
+                    continue
+                try:
+                    delete_global = getattr(http, "delete_global_command", None)
+                    if callable(delete_global):
+                        await delete_global(app_id, command_id)
+                        deleted.append(name)
+                except Exception as e:
+                    errors.append(f"http:{name}: {type(e).__name__}")
+    except Exception as e:
+        errors.append(f"http_fallback: {type(e).__name__}")
+
+    try:
+        if deleted:
+            print(f"🧹 public_ban_unban_patch deleted stale global command(s): {sorted(set(deleted))}")
+        else:
+            print("🧹 public_ban_unban_patch no stale global /mod_ban command found to delete")
+        if errors:
+            print(f"⚠️ public_ban_unban_patch stale command cleanup notes: {errors[:5]}")
+    except Exception:
+        pass
+
+
+async def _deprecated_command_cleanup_on_ready(bot: Any, tree: app_commands.CommandTree) -> None:
+    await _remote_delete_stale_ban_commands(bot, tree)
+
+
+def _attach_cleanup_listener(bot: Any, tree: app_commands.CommandTree) -> None:
+    global _CLEANUP_LISTENER_ATTACHED
+    if _CLEANUP_LISTENER_ATTACHED:
+        return
+    _CLEANUP_LISTENER_ATTACHED = True
+
+    async def _on_ready_cleanup() -> None:
+        await _deprecated_command_cleanup_on_ready(bot, tree)
+
+    try:
+        bot.add_listener(_on_ready_cleanup, "on_ready")
+        print("✅ public_ban_unban_patch: stale /mod_ban remote cleanup listener attached")
+    except Exception as e:
+        try:
+            print(f"⚠️ public_ban_unban_patch failed attaching stale command cleanup listener: {e!r}")
+        except Exception:
+            pass
+
+
 def register_public_ban_unban_patch(bot: Any, tree: app_commands.CommandTree) -> None:
-    _ = bot
     for name in ("mod_ban", "mod_ban_toggle", "ban_unban"):
         _remove_existing_global_command(tree, name)
     command = app_commands.Command(
@@ -248,6 +351,7 @@ def register_public_ban_unban_patch(bot: Any, tree: app_commands.CommandTree) ->
         callback=_ban_unban_command,
     )
     tree.add_command(command)
+    _attach_cleanup_listener(bot, tree)
     try:
         print("✅ public_ban_unban_patch: replaced /mod_ban and /mod_ban_toggle with /ban_unban")
     except Exception:
