@@ -8,11 +8,13 @@ create_ticket_channel now receives a resolved configured active category before
 creating the channel. If the configured category is missing/unusable, ticket
 creation fails loudly instead of creating ticket-#### in the wrong place.
 
-It also updates tickets_new.panel.create_ticket_channel because that module
-imports the function directly at import time.
+The real category-resolution rules now live in:
+    stoney_verify.tickets_new.category_resolver
+
+This runtime shim remains temporarily so existing imported direct references are
+protected while we fold the logic into tickets_new.service/panel natively.
 """
 
-import asyncio
 import builtins
 import inspect
 import sys
@@ -87,33 +89,10 @@ def _signature_accepts(fn: Any, name: str) -> bool:
 
 
 async def _configured_active_category(guild: discord.Guild) -> discord.CategoryChannel:
-    try:
-        from stoney_verify.guild_config import get_guild_config
+    from stoney_verify.tickets_new.category_resolver import resolve_active_ticket_category
 
-        cfg = await asyncio.wait_for(get_guild_config(guild.id, refresh=True), timeout=5.0)
-    except Exception as e:
-        raise RuntimeError(f"Could not load this server's saved ticket setup: {type(e).__name__}: {e}")
-
-    category_id = _safe_int(getattr(cfg, "ticket_category_id", 0), 0)
-    if category_id <= 0:
-        raise RuntimeError("Open ticket category is not configured. Run `/stoney setup-tickets` or `/stoney setup-defaults`.")
-
-    channel = guild.get_channel(category_id)
-    if not isinstance(channel, discord.CategoryChannel):
-        raise RuntimeError(f"Configured open ticket category `{category_id}` no longer exists or is not a category.")
-
-    me = guild.me
-    if me is not None:
-        perms = channel.permissions_for(me)
-        missing: list[str] = []
-        if not perms.view_channel:
-            missing.append("View Channel")
-        if not perms.manage_channels:
-            missing.append("Manage Channels")
-        if missing:
-            raise RuntimeError(f"I cannot create tickets in {channel.name}. Missing: {', '.join(missing)}.")
-
-    return channel
+    resolved = await resolve_active_ticket_category(guild, refresh=True, require_manage_channels=True)
+    return resolved.category
 
 
 def _set_category_kwargs(fn: Any, kwargs: dict[str, Any], category: discord.CategoryChannel) -> None:
@@ -151,7 +130,7 @@ def _patch_service(module: Any) -> None:
 
         result = await original(*args, **kwargs)
 
-        # Verify the source behavior. This is not the normal placement mechanism;
+        # Verify source behavior. This is not the normal placement mechanism;
         # it is a strict sanity check so bad creation paths are visible.
         try:
             channel = None
@@ -174,7 +153,9 @@ def _patch_service(module: Any) -> None:
                             channel = maybe
                             break
             if isinstance(channel, discord.TextChannel) and int(getattr(channel.category, "id", 0) or 0) != int(category.id):
-                raise RuntimeError(
+                from stoney_verify.tickets_new.category_resolver import TicketCategoryResolutionError
+
+                raise TicketCategoryResolutionError(
                     f"Ticket channel {channel.name} was created outside configured category {category.name}; source placement failed."
                 )
         except RuntimeError:
