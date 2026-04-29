@@ -87,6 +87,17 @@ except Exception as e:
     except Exception:
         pass
 
+# Force-load Discord setup role preset safety before setup modules import.
+# This catches roles created through Discord's Cosmetic/Member/Moderator/Manager
+# presets and warns/blocks when a verification role is accidentally overpowered.
+try:
+    import runtime_setup_role_safety_patch  # noqa: F401
+except Exception as e:
+    try:
+        print(f"⚠️ main.py failed to import runtime_setup_role_safety_patch guard: {e!r}")
+    except Exception:
+        pass
+
 # Force-load clearer /mod_ban command shape before commands_ext imports.
 # It keeps the same command name but makes Ban/Unban an obvious required action.
 try:
