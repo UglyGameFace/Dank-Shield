@@ -65,6 +65,17 @@ except Exception as e:
     except Exception:
         pass
 
+# Force-load guild_members schema compatibility before member sync imports.
+# Older DB constraints do not allow role_state='cosmetic_only', so the guard
+# stores it compatibly while preserving has_cosmetic_only=true.
+try:
+    import runtime_guild_members_role_state_compat_patch  # noqa: F401
+except Exception as e:
+    try:
+        print(f"⚠️ main.py failed to import runtime_guild_members_role_state_compat_patch guard: {e!r}")
+    except Exception:
+        pass
+
 # Force-load per-guild ticket config guard before tickets_new.service is imported.
 # Public/beta bots must resolve ticket category/staff/transcript settings from
 # guild_configs instead of one env-only guild.
