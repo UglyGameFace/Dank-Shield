@@ -7,12 +7,14 @@ Why this exists:
 The public profile intentionally skips legacy top-level ticket admin commands to
 keep global slash commands clean. That also means old commands like
 /post_ticket_panel are not registered. Users still need an obvious way to post
-the public "Create Ticket" button, so this patch adds:
+the public "Create Ticket" button.
 
-/ticket-intake post-panel
+This patch adds BOTH:
+- /ticket-panel                  <- obvious direct command
+- /ticket-intake post-panel      <- grouped command near intake tools
 
-It posts the existing TicketPanelView into the configured support/ticket-panel
-channel, or into a selected/current channel.
+It also leaves /ticket-intake post-actions alone because that is the staff action
+panel for INSIDE an active ticket, not the public user-facing Create Ticket panel.
 """
 
 import builtins
@@ -23,7 +25,9 @@ import discord
 from discord import app_commands
 
 _ORIGINAL_IMPORT = builtins.__import__
-_PATCHED = False
+_GROUP_PATCHED = False
+_REGISTER_PATCHED = False
+_TOP_LEVEL_COMMAND_NAME = "ticket-panel"
 
 
 def _log(message: str) -> None:
@@ -53,9 +57,17 @@ def _truncate(value: Any, limit: int = 300) -> str:
 async def _reply_once(interaction: discord.Interaction, content: str, *, ephemeral: bool = True) -> None:
     try:
         if not interaction.response.is_done():
-            await interaction.response.send_message(content, ephemeral=ephemeral, allowed_mentions=discord.AllowedMentions.none())
+            await interaction.response.send_message(
+                content,
+                ephemeral=ephemeral,
+                allowed_mentions=discord.AllowedMentions.none(),
+            )
         else:
-            await interaction.followup.send(content, ephemeral=ephemeral, allowed_mentions=discord.AllowedMentions.none())
+            await interaction.followup.send(
+                content,
+                ephemeral=ephemeral,
+                allowed_mentions=discord.AllowedMentions.none(),
+            )
     except Exception:
         pass
 
@@ -176,12 +188,18 @@ async def _post_ticket_panel_command(
     try:
         view = TicketPanelView()
     except Exception as e:
-        return await _reply_once(interaction, f"❌ Could not build the Create Ticket button view: `{type(e).__name__}: {_truncate(e, 180)}`")
+        return await _reply_once(
+            interaction,
+            f"❌ Could not build the Create Ticket button view: `{type(e).__name__}: {_truncate(e, 180)}`",
+        )
 
     try:
         msg = await target.send(embed=_panel_embed(guild), view=view, allowed_mentions=discord.AllowedMentions.none())
     except Exception as e:
-        return await _reply_once(interaction, f"❌ Failed posting ticket panel in {target.mention}: `{type(e).__name__}: {_truncate(e, 180)}`")
+        return await _reply_once(
+            interaction,
+            f"❌ Failed posting ticket panel in {target.mention}: `{type(e).__name__}: {_truncate(e, 180)}`",
+        )
 
     try:
         from stoney_verify.commands_ext.public_setup_config_writer import upsert_guild_config
@@ -201,9 +219,21 @@ async def _post_ticket_panel_command(
     return await _reply_once(interaction, f"✅ Posted the **Create Ticket** panel in {target.mention}.")
 
 
-def _attach_to_public_ticket_intake_group(module: Any) -> None:
-    global _PATCHED
-    if _PATCHED:
+@app_commands.command(
+    name=_TOP_LEVEL_COMMAND_NAME,
+    description="Post the public Create Ticket button panel for users.",
+)
+@app_commands.describe(channel="Optional channel. Defaults to configured support/ticket-panel channel, then current channel.")
+async def ticket_panel_top_level_command(
+    interaction: discord.Interaction,
+    channel: Optional[discord.TextChannel] = None,
+) -> None:
+    await _post_ticket_panel_command(interaction, channel)
+
+
+def _attach_group_command(module: Any) -> None:
+    global _GROUP_PATCHED
+    if _GROUP_PATCHED:
         return
 
     group = getattr(module, "ticket_intake_group", None)
@@ -215,7 +245,7 @@ def _attach_to_public_ticket_intake_group(module: Any) -> None:
     except Exception:
         existing = None
     if existing is not None:
-        _PATCHED = True
+        _GROUP_PATCHED = True
         return
 
     try:
@@ -225,21 +255,67 @@ def _attach_to_public_ticket_intake_group(module: Any) -> None:
             callback=_post_ticket_panel_command,
         )
         try:
-            command._params["channel"].description = "Optional text channel. Defaults to configured support/ticket panel channel."
+            command._params["channel"].description = "Optional channel. Defaults to configured support/ticket-panel channel."
         except Exception:
             pass
         group.add_command(command)
-        _PATCHED = True
+        _GROUP_PATCHED = True
         _log("attached /ticket-intake post-panel command for the user-facing Create Ticket button")
     except Exception as e:
         _log(f"failed attaching /ticket-intake post-panel: {e!r}")
+
+
+def _tree_has_command(tree: Any, name: str) -> bool:
+    try:
+        return tree.get_command(name, guild=None) is not None
+    except Exception:
+        return False
+
+
+def _add_top_level_command(tree: Any) -> None:
+    if _tree_has_command(tree, _TOP_LEVEL_COMMAND_NAME):
+        return
+    try:
+        tree.add_command(ticket_panel_top_level_command)
+        _log("registered /ticket-panel direct command for the user-facing Create Ticket button")
+    except Exception as e:
+        _log(f"failed registering /ticket-panel direct command: {e!r}")
+
+
+def _patch_register_function(module: Any) -> None:
+    global _REGISTER_PATCHED
+    if _REGISTER_PATCHED:
+        return
+
+    original = getattr(module, "register_public_ticket_intake_group_commands", None)
+    if not callable(original):
+        return
+    if getattr(original, "_ticket_panel_command_wrapped", False):
+        _REGISTER_PATCHED = True
+        return
+
+    def register_public_ticket_intake_group_commands_patched(bot: Any, tree: Any) -> None:
+        _attach_group_command(module)
+        try:
+            original(bot, tree)
+        finally:
+            _add_top_level_command(tree)
+
+    try:
+        setattr(register_public_ticket_intake_group_commands_patched, "_ticket_panel_command_wrapped", True)
+    except Exception:
+        pass
+    setattr(module, "register_public_ticket_intake_group_commands", register_public_ticket_intake_group_commands_patched)
+    _REGISTER_PATCHED = True
+    _log("patched intake registration to include /ticket-panel direct command")
 
 
 def _patch_loaded() -> None:
     try:
         module = sys.modules.get("stoney_verify.commands_ext.public_ticket_intake_group")
         if module is not None:
-            _attach_to_public_ticket_intake_group(module)
+            _attach_group_command(module)
+            _patch_register_function(module)
     except Exception:
         pass
 
@@ -250,7 +326,8 @@ def _safe_import(name: str, globals: Any = None, locals: Any = None, fromlist: A
         if name == "stoney_verify.commands_ext.public_ticket_intake_group" or name.endswith("commands_ext.public_ticket_intake_group"):
             target = sys.modules.get("stoney_verify.commands_ext.public_ticket_intake_group") or sys.modules.get(name)
             if target is not None:
-                _attach_to_public_ticket_intake_group(target)
+                _attach_group_command(target)
+                _patch_register_function(target)
         else:
             _patch_loaded()
     except Exception:
