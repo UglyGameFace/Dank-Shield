@@ -11,11 +11,12 @@ CommandRegistrar = Callable[[Any, Any], None]
 CommandModuleSpec = Tuple[str, str, str]
 
 
-# Keep public guard modules first. Staff scope must run before modules import
-# _staff_check. Setup gate runs after grouped public ticket modules exist so it
-# can wrap their shared runtime helpers.
+# Keep public guard modules first. Staff/access scope must run before modules
+# import _staff_check or _require_setup_permission. Setup gate runs after grouped
+# public ticket modules exist so it can wrap their shared runtime helpers.
 COMMAND_MODULES: List[CommandModuleSpec] = [
     ("public_staff_scope", "register_public_staff_scope", "public per-guild staff permission isolation"),
+    ("public_access_control", "register_public_access_control", "public server-control and staff role split"),
     ("public_onboarding", "register_public_onboarding_listeners", "public isolated guild onboarding lifecycle"),
     ("public_spam_cleanup_hardening", "register_public_spam_cleanup_hardening", "public spam guard burst cleanup hardening"),
     ("public_setup_review", "register_public_setup_review_commands", "public grouped /stoney setup review command"),
@@ -45,11 +46,11 @@ COMMAND_MODULES: List[CommandModuleSpec] = [
     ("ticket_governance_admin", "register_ticket_governance_admin_commands", "ticket governance admin commands"),
     ("ticket_sla_admin", "register_ticket_sla_admin_commands", "ticket SLA admin commands"),
     ("ticket_resolution_admin", "register_ticket_resolution_admin_commands", "ticket resolution admin commands"),
-    ("ticket_macro_admin", "register_ticket_macro_admin_commands", "ticket macro commands"),
+    ("ticket_macro_admin", "register_ticket_macro_commands", "ticket macro commands"),
     ("ticket_automation_admin", "register_ticket_automation_admin_commands", "ticket automation commands"),
     ("moderation", "register_moderation_commands", "moderation commands"),
     ("role_admin", "register_role_admin_commands", "role admin commands"),
-    ("identity_admin", "register_identity_admin_commands", "identity truth admin commands"),
+    ("identity_admin", "register_identity_truth_admin_commands", "identity truth admin commands"),
     ("channel_cleanup_admin", "register_channel_cleanup_admin_commands", "channel cleanup admin commands"),
 ]
 
@@ -57,6 +58,7 @@ _LEGACY_MODULES: Tuple[str, ...] = tuple(name for name, _fn, _label in COMMAND_M
 
 _PUBLIC_MODULES: Tuple[str, ...] = (
     "public_staff_scope",
+    "public_access_control",
     "public_onboarding",
     "public_spam_cleanup_hardening",
     "public_setup_review",
