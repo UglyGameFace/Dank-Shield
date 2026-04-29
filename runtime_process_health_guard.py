@@ -3,21 +3,23 @@ from __future__ import annotations
 """
 Process health / crash visibility guard.
 
-This does not pretend to magically prevent host-level restarts. It makes the
-next shutdown obvious by logging:
+This guard helps identify why the bot appears to go down:
 - boot counter and time since last boot
 - unhandled sync exceptions
 - unhandled asyncio task exceptions
 - SIGTERM/SIGINT received from the host
 - process exit through atexit
-- periodic memory/heartbeat snapshots
+- periodic memory/task heartbeat snapshots
 
-If Discloud kills the process without Python cleanup, you will see no atexit or
-signal line, which usually means host/container kill, OOM, or deployment restart.
+Important:
+The previous version logged SIGTERM/SIGINT but did not exit afterward. That can
+make hosts force-kill the container. This version logs the signal and then exits
+cleanly so Discloud/container shutdowns do not hang.
 """
 
 import atexit
 import asyncio
+import builtins
 import os
 import signal
 import sys
@@ -30,7 +32,9 @@ _BOOT_TS = time.time()
 _BOOT_STATE_PATH = Path(os.getenv("STONEY_PROCESS_BOOT_STATE", "/tmp/stoney_process_boot_state.txt"))
 _HEALTH_INTERVAL_SECONDS = int(os.getenv("STONEY_PROCESS_HEALTH_INTERVAL_SECONDS", "120") or "120")
 _HEALTH_TASK_STARTED = False
+_READY_LISTENER_ATTACHED = False
 _PREVIOUS_EXCEPTHOOK = sys.excepthook
+_ORIGINAL_IMPORT = builtins.__import__
 
 
 def _log(message: str) -> None:
@@ -73,8 +77,6 @@ def _memory_snapshot() -> str:
         import resource
 
         rss_kb = int(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss or 0)
-        # Linux reports KB; macOS reports bytes. Discloud is Linux, but keep a
-        # defensive readable fallback.
         if rss_kb > 10_000_000:
             mb = rss_kb / (1024 * 1024)
         else:
@@ -127,7 +129,11 @@ def _signal_handler(signum: int, frame: Any) -> None:
     except Exception:
         name = str(signum)
     uptime = time.time() - _BOOT_TS
-    _log(f"SIGNAL_RECEIVED signal={name} uptime={uptime:.1f}s {_memory_snapshot()}")
+    _log(f"SIGNAL_RECEIVED signal={name} uptime={uptime:.1f}s {_memory_snapshot()} exiting_cleanly=true")
+
+    # Do not swallow host shutdown signals. Exit so atexit runs and the host does
+    # not have to SIGKILL the process after its grace window.
+    raise SystemExit(128 + int(signum))
 
 
 def _atexit() -> None:
@@ -164,18 +170,69 @@ def start_health_loop() -> None:
     _HEALTH_TASK_STARTED = True
     try:
         loop = asyncio.get_running_loop()
+        install_loop_exception_handler(loop)
         loop.create_task(_health_loop(), name="runtime_process_health_loop")
         _log("heartbeat loop started")
     except RuntimeError:
-        # No running loop yet. main.py/on_ready can call this again later.
         _HEALTH_TASK_STARTED = False
     except Exception as e:
         _HEALTH_TASK_STARTED = False
         _log(f"failed starting heartbeat loop: {e!r}")
 
 
+def _attach_ready_listener(bot: Any) -> None:
+    global _READY_LISTENER_ATTACHED
+    if _READY_LISTENER_ATTACHED or bot is None:
+        return
+    _READY_LISTENER_ATTACHED = True
+
+    async def _process_health_on_ready() -> None:
+        try:
+            start_health_loop()
+            user = getattr(bot, "user", None)
+            guilds = len(getattr(bot, "guilds", []) or [])
+            uptime = time.time() - _BOOT_TS
+            _log(f"on_ready health attached user={user} guilds={guilds} uptime={uptime:.1f}s {_memory_snapshot()}")
+        except Exception as e:
+            _log(f"on_ready health attach failed: {e!r}")
+
+    try:
+        bot.add_listener(_process_health_on_ready, "on_ready")
+        _log("on_ready heartbeat listener attached")
+    except Exception as e:
+        _READY_LISTENER_ATTACHED = False
+        _log(f"failed attaching on_ready heartbeat listener: {e!r}")
+
+
+def _maybe_attach_loaded_bot() -> None:
+    try:
+        for module_name in ("stoney_verify.app", "stoney_verify.globals"):
+            module = sys.modules.get(module_name)
+            if module is None:
+                continue
+            bot = getattr(module, "bot", None)
+            if bot is not None:
+                _attach_ready_listener(bot)
+                return
+    except Exception:
+        pass
+
+
+def _safe_import(name: str, globals: Any = None, locals: Any = None, fromlist: Any = (), level: int = 0) -> Any:
+    module = _ORIGINAL_IMPORT(name, globals, locals, fromlist, level)
+    try:
+        if name in {"stoney_verify.app", "stoney_verify.globals"} or name.endswith("stoney_verify.app") or name.endswith("stoney_verify.globals"):
+            _maybe_attach_loaded_bot()
+        else:
+            _maybe_attach_loaded_bot()
+    except Exception:
+        pass
+    return module
+
+
 def install() -> None:
     sys.excepthook = _sync_excepthook
+    builtins.__import__ = _safe_import
 
     for sig_name in ("SIGTERM", "SIGINT"):
         try:
@@ -198,6 +255,8 @@ def install() -> None:
         _log(f"BOOT count={count} seconds_since_previous_boot={since:.1f} pid={os.getpid()} {_memory_snapshot()}")
     else:
         _log(f"BOOT count={count} first_recorded_boot pid={os.getpid()} {_memory_snapshot()}")
+
+    _maybe_attach_loaded_bot()
 
 
 install()
