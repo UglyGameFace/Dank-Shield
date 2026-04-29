@@ -1,11 +1,17 @@
 from __future__ import annotations
 
 """
-Startup patch for the clear /ban_unban moderation command.
+Startup patch for clean public moderation command names.
 
-This wraps commands_ext.moderation.register_moderation_commands so the existing
-moderation module can still register /mod_kick, /mod_timeout, and /debug_intents,
-then removes the confusing ban command names and registers only /ban_unban.
+The moderation module now registers:
+- /kick_member
+- /timeout_member
+
+The public ban patch registers:
+- /ban_unban
+
+This startup shim still removes confusing old command names from the local tree
+and best-effort deletes stale global commands from Discord.
 """
 
 import builtins
@@ -23,17 +29,34 @@ def _log(message: str) -> None:
         pass
 
 
+def _remove_existing_global_command(tree: Any, name: str) -> None:
+    try:
+        tree.remove_command(name, guild=None)
+    except Exception:
+        try:
+            commands = getattr(tree, "_global_commands", None)
+            if isinstance(commands, dict):
+                commands.pop(name, None)
+        except Exception:
+            pass
+
+
 def _patch_moderation_module(module: Any) -> None:
     global _PATCHED
     if _PATCHED:
         return
 
     original = getattr(module, "register_moderation_commands", None)
-    if not callable(original) or getattr(original, "_ban_unban_wrapped", False):
+    if not callable(original) or getattr(original, "_clean_public_moderation_wrapped", False):
         return
 
     def register_moderation_commands_patched(bot: Any, tree: Any) -> None:
         original(bot, tree)
+
+        # Remove old confusing local registrations after base moderation registers.
+        for stale_name in ("mod_ban", "mod_ban_toggle", "mod_kick", "mod_timeout"):
+            _remove_existing_global_command(tree, stale_name)
+
         try:
             from stoney_verify.commands_ext.public_ban_unban_patch import register_public_ban_unban_patch
 
@@ -45,13 +68,13 @@ def _patch_moderation_module(module: Any) -> None:
                 pass
 
     try:
-        setattr(register_moderation_commands_patched, "_ban_unban_wrapped", True)
+        setattr(register_moderation_commands_patched, "_clean_public_moderation_wrapped", True)
     except Exception:
         pass
 
     setattr(module, "register_moderation_commands", register_moderation_commands_patched)
     _PATCHED = True
-    _log("patched commands_ext.moderation.register_moderation_commands to register /ban_unban after base moderation registration")
+    _log("patched commands_ext.moderation.register_moderation_commands for clean public moderation commands")
 
 
 def _maybe_patch_loaded() -> None:
@@ -79,4 +102,4 @@ def _safe_import(name: str, globals: Any = None, locals: Any = None, fromlist: A
 
 builtins.__import__ = _safe_import
 _maybe_patch_loaded()
-_log("loaded; /ban_unban startup patch active")
+_log("loaded; clean public moderation command startup patch active")
