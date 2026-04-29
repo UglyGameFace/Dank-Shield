@@ -1,17 +1,16 @@
 from __future__ import annotations
 
 """
-Replace the public /mod_ban command with a clearer ban/unban action selector.
+Replace the old public /mod_ban command with a clearer /mod_ban_toggle command.
 
 Why:
-Discord clients can make optional choice fields easy to miss, especially on
-mobile. The old toggle used `mode` as an optional parameter, so staff could miss
-that unban was available. This replacement keeps the same command name but makes
-`action` explicit and required:
+Discord mobile can hide optional choices and staff can miss that unban exists.
+The command name now makes the behavior obvious:
 
-/mod_ban member:<id or member> action:Ban|Unban|Auto toggle
+/mod_ban_toggle member:<id or member> action:Ban|Unban|Auto toggle
 
-No extra slash command is added.
+The old /mod_ban command is removed from the local command tree so the next
+slash sync deletes it globally instead of leaving two confusing commands.
 """
 
 from datetime import datetime, timezone
@@ -145,14 +144,14 @@ async def _log_slash_mod_action(
     if extra:
         embed.add_field(name="Command Details", value=str(extra)[:1024], inline=False)
     embed.add_field(name="Target Account Created", value=_created_line(target), inline=False)
-    embed.set_footer(text=f"Guild {guild.id} • source: /mod_ban")
+    embed.set_footer(text=f"Guild {guild.id} • source: /mod_ban_toggle")
 
     try:
         await channel.send(embed=embed, allowed_mentions=discord.AllowedMentions.none())
         return True
     except Exception as e:
         try:
-            print(f"⚠️ /mod_ban action modlog failed guild={guild.id} action={action}: {repr(e)}")
+            print(f"⚠️ /mod_ban_toggle action modlog failed guild={guild.id} action={action}: {repr(e)}")
         except Exception:
             pass
         return False
@@ -213,7 +212,7 @@ async def _resolve_ban_target(guild: discord.Guild, raw_target: str) -> tuple[in
     ]
 )
 @app_commands.autocomplete(member=member_autocomplete)
-async def _mod_ban_replacement(
+async def _mod_ban_toggle_command(
     interaction: discord.Interaction,
     member: str,
     action: app_commands.Choice[str],
@@ -270,7 +269,7 @@ async def _mod_ban_replacement(
                 actor=interaction.user,
                 target=banned_user,
                 reason=action_reason,
-                extra=f"Command: `/mod_ban`\nAction selected: `{selected}`\nResolved state before action: `banned`",
+                extra=f"Command: `/mod_ban_toggle`\nAction selected: `{selected}`\nResolved state before action: `banned`",
                 color=discord.Color.green(),
             )
             return await safe_followup(interaction, f"✅ Unbanned {_target_reply_label(banned_user, user_id)}.{_modlog_suffix(logged)}", ephemeral=True)
@@ -315,7 +314,7 @@ async def _mod_ban_replacement(
                 target=target_for_ban,
                 reason=action_reason,
                 extra=(
-                    f"Command: `/mod_ban`\n"
+                    f"Command: `/mod_ban_toggle`\n"
                     f"Action selected: `{selected}`\n"
                     f"Resolved state before action: `not banned`\n"
                     f"Deleted message history: `{dmd}` day(s)"
@@ -328,15 +327,13 @@ async def _mod_ban_replacement(
         except Exception as e:
             return await safe_followup(interaction, f"❌ Error while banning: {e}", ephemeral=True)
 
-    return await safe_followup(interaction, "❌ Invalid /mod_ban action state.", ephemeral=True)
+    return await safe_followup(interaction, "❌ Invalid /mod_ban_toggle action state.", ephemeral=True)
 
 
 def _remove_existing_global_command(tree: app_commands.CommandTree, name: str) -> None:
     try:
         tree.remove_command(name, guild=None)
     except Exception:
-        # Fallback for discord.py internals if remove_command is unavailable or
-        # older command registration left a stale global entry.
         try:
             commands = getattr(tree, "_global_commands", None)
             if isinstance(commands, dict):
@@ -348,14 +345,15 @@ def _remove_existing_global_command(tree: app_commands.CommandTree, name: str) -
 def register_public_mod_ban_toggle_patch(bot: Any, tree: app_commands.CommandTree) -> None:
     _ = bot
     _remove_existing_global_command(tree, "mod_ban")
+    _remove_existing_global_command(tree, "mod_ban_toggle")
     command = app_commands.Command(
-        name="mod_ban",
-        description="(Staff) Ban or unban a user with an explicit action selector.",
-        callback=_mod_ban_replacement,
+        name="mod_ban_toggle",
+        description="(Staff) Ban or unban a user. The action selector makes the toggle obvious.",
+        callback=_mod_ban_toggle_command,
     )
     tree.add_command(command)
     try:
-        print("✅ public_mod_ban_toggle_patch: replaced /mod_ban with explicit Ban/Unban action selector")
+        print("✅ public_mod_ban_toggle_patch: replaced /mod_ban with /mod_ban_toggle explicit Ban/Unban action selector")
     except Exception:
         pass
 
