@@ -14,7 +14,9 @@ from .common import (
     _staff_check,
     RUNTIME_STATS,
     member_autocomplete,
+    parse_member_id_from_target,
     require_target_member,
+    resolve_member_from_target,
     safe_defer,
     safe_followup,
 )
@@ -80,6 +82,73 @@ def _created_line(user: discord.abc.User | discord.Member | None) -> str:
         return f"<t:{ts}:F> • <t:{ts}:R>"
     except Exception:
         return "Unknown"
+
+
+def _target_reply_label(user: Any, fallback_id: int = 0) -> str:
+    try:
+        mention = getattr(user, "mention", None)
+        if mention:
+            return str(mention)
+    except Exception:
+        pass
+    try:
+        uid = int(getattr(user, "id", None) or fallback_id or 0)
+        if uid > 0:
+            return f"`{uid}`"
+    except Exception:
+        pass
+    return "that user"
+
+
+async def _fetch_ban_entry_by_id(guild: discord.Guild, user_id: int) -> Optional[Any]:
+    """Fetch a ban entry by raw user ID. Returns None when not banned."""
+    try:
+        snowflake = discord.Object(id=int(user_id))
+        return await guild.fetch_ban(snowflake)
+    except discord.NotFound:
+        return None
+    except discord.Forbidden:
+        raise
+    except Exception:
+        return None
+
+
+async def _resolve_ban_toggle_target(
+    guild: discord.Guild,
+    raw_target: str,
+) -> tuple[int, Optional[discord.Member], Optional[Any]]:
+    """
+    Resolve a target for /mod_ban toggle mode.
+
+    Returns:
+        (user_id, current_member_if_present, ban_entry_if_currently_banned)
+
+    For unbanning, a raw ID or mention is the safest because banned users are no
+    longer guild members and cannot always be resolved by display name.
+    """
+    user_id = parse_member_id_from_target(raw_target)
+    target_member: Optional[discord.Member] = None
+
+    if user_id > 0:
+        try:
+            target_member = guild.get_member(int(user_id))
+        except Exception:
+            target_member = None
+        if target_member is None:
+            try:
+                target_member = await guild.fetch_member(int(user_id))
+            except Exception:
+                target_member = None
+    else:
+        target_member = await resolve_member_from_target(guild, raw_target)
+        if target_member is not None:
+            try:
+                user_id = int(target_member.id)
+            except Exception:
+                user_id = 0
+
+    ban_entry = await _fetch_ban_entry_by_id(guild, user_id) if user_id > 0 else None
+    return int(user_id or 0), target_member, ban_entry
 
 
 async def _configured_modlog_channel(guild: discord.Guild) -> Optional[discord.TextChannel]:
@@ -252,16 +321,29 @@ def register_moderation_commands(bot, tree) -> None:
             )
 
     # ============================================================
-    # /mod_ban
+    # /mod_ban toggle
+    # ------------------------------------------------------------
+    # Same slash command now handles ban + unban:
+    # - mode=auto/default: banned user -> unban, unbanned user -> ban
+    # - mode=ban: force ban
+    # - mode=unban: force unban
     # ============================================================
     @tree.command(
         name="mod_ban",
-        description="(Staff) Ban a member.",
+        description="(Staff) Toggle ban/unban for a user.",
     )
     @app_commands.describe(
-        member="Mention, ID, username, or display name of the member to ban",
+        member="Mention, ID, username, or display name. For unban, raw user ID is safest.",
         reason="Reason (optional)",
-        delete_message_days="Delete message days (0-7)",
+        delete_message_days="Delete message days when banning (0-7)",
+        mode="Auto toggles: banned users are unbanned, unbanned users are banned.",
+    )
+    @app_commands.choices(
+        mode=[
+            app_commands.Choice(name="Auto toggle", value="auto"),
+            app_commands.Choice(name="Ban", value="ban"),
+            app_commands.Choice(name="Unban", value="unban"),
+        ]
     )
     @app_commands.autocomplete(member=member_autocomplete)
     async def mod_ban_slash(
@@ -269,6 +351,7 @@ def register_moderation_commands(bot, tree) -> None:
         member: str,
         reason: Optional[str] = None,
         delete_message_days: Optional[int] = 0,
+        mode: Optional[str] = "auto",
     ):
         if not _staff_check(interaction):
             return await interaction.response.send_message("❌ Staff only.", ephemeral=True)
@@ -279,10 +362,6 @@ def register_moderation_commands(bot, tree) -> None:
         if not guild or not guild.me:
             return await safe_followup(interaction, "❌ Invalid context.", ephemeral=True)
 
-        target = await require_target_member(interaction, member)
-        if target is None:
-            return
-
         me = guild.me
         if not me.guild_permissions.ban_members:
             return await safe_followup(
@@ -291,79 +370,167 @@ def register_moderation_commands(bot, tree) -> None:
                 ephemeral=True,
             )
 
-        try:
-            if int(target.id) == int(interaction.user.id):
-                return await safe_followup(
-                    interaction,
-                    "❌ You can’t use this command on yourself.",
-                    ephemeral=True,
-                )
-        except Exception:
-            pass
+        action_mode = _safe_text(mode, "auto").lower()
+        if action_mode not in {"auto", "ban", "unban"}:
+            action_mode = "auto"
 
         try:
-            if int(target.id) == int(me.id):
-                return await safe_followup(
-                    interaction,
-                    "❌ I can’t ban myself.",
-                    ephemeral=True,
-                )
-        except Exception:
-            pass
-
-        try:
-            if me.top_role <= target.top_role and not me.guild_permissions.administrator:
-                return await safe_followup(
-                    interaction,
-                    "❌ I can’t ban that member (role hierarchy).",
-                    ephemeral=True,
-                )
-        except Exception:
-            pass
-
-        dmd = int(delete_message_days or 0)
-        dmd = max(0, min(7, dmd))
-        action_reason = reason or f"Ban by {interaction.user} ({interaction.user.id})"
-
-        try:
-            await guild.ban(
-                target,
-                reason=action_reason,
-                delete_message_days=dmd,
-            )
-            try:
-                RUNTIME_STATS["mod_actions"] = int(RUNTIME_STATS.get("mod_actions", 0)) + 1
-            except Exception:
-                pass
-
-            logged = await _log_slash_mod_action(
-                guild=guild,
-                action="Member Banned",
-                actor=interaction.user,
-                target=target,
-                reason=action_reason,
-                extra=f"Deleted message history: `{dmd}` day(s)",
-                color=discord.Color.red(),
-            )
-
-            return await safe_followup(
-                interaction,
-                f"🔨 Banned {target.mention}.{_modlog_suffix(logged)}",
-                ephemeral=True,
-            )
-
+            user_id, target_member, ban_entry = await _resolve_ban_toggle_target(guild, member)
         except discord.Forbidden:
             return await safe_followup(
                 interaction,
-                "❌ Forbidden (permissions/hierarchy).",
+                "❌ I could not check the ban list. I need **Ban Members** permission.",
                 ephemeral=True,
             )
-        except Exception as e:
+
+        if user_id <= 0:
             return await safe_followup(
                 interaction,
-                f"❌ Error: {e}",
+                "❌ I could not resolve that user. For unban/toggle, use the raw Discord user ID when the user is already banned.",
                 ephemeral=True,
             )
+
+        is_banned = ban_entry is not None
+        should_unban = action_mode == "unban" or (action_mode == "auto" and is_banned)
+        should_ban = action_mode == "ban" or (action_mode == "auto" and not is_banned)
+
+        if should_unban:
+            if not is_banned:
+                return await safe_followup(
+                    interaction,
+                    f"ℹ️ `{user_id}` is not currently banned. Nothing to unban.",
+                    ephemeral=True,
+                )
+
+            banned_user = getattr(ban_entry, "user", None) or discord.Object(id=int(user_id))
+            action_reason = reason or f"Unban by {interaction.user} ({interaction.user.id})"
+
+            try:
+                await guild.unban(banned_user, reason=action_reason)
+                try:
+                    RUNTIME_STATS["mod_actions"] = int(RUNTIME_STATS.get("mod_actions", 0)) + 1
+                except Exception:
+                    pass
+
+                logged = await _log_slash_mod_action(
+                    guild=guild,
+                    action="Member Unbanned",
+                    actor=interaction.user,
+                    target=banned_user,
+                    reason=action_reason,
+                    extra=f"/mod_ban toggle mode: `{action_mode}`",
+                    color=discord.Color.green(),
+                )
+
+                return await safe_followup(
+                    interaction,
+                    f"✅ Unbanned {_target_reply_label(banned_user, user_id)}.{_modlog_suffix(logged)}",
+                    ephemeral=True,
+                )
+            except discord.NotFound:
+                return await safe_followup(
+                    interaction,
+                    f"ℹ️ `{user_id}` is not currently banned. Nothing to unban.",
+                    ephemeral=True,
+                )
+            except discord.Forbidden:
+                return await safe_followup(
+                    interaction,
+                    "❌ Forbidden (missing Ban Members permission).",
+                    ephemeral=True,
+                )
+            except Exception as e:
+                return await safe_followup(
+                    interaction,
+                    f"❌ Error while unbanning: {e}",
+                    ephemeral=True,
+                )
+
+        if should_ban:
+            if is_banned:
+                return await safe_followup(
+                    interaction,
+                    f"ℹ️ `{user_id}` is already banned. Use mode **Unban** or Auto toggle to unban.",
+                    ephemeral=True,
+                )
+
+            target_for_ban: Any = target_member or discord.Object(id=int(user_id))
+
+            try:
+                if int(user_id) == int(interaction.user.id):
+                    return await safe_followup(
+                        interaction,
+                        "❌ You can’t use this command on yourself.",
+                        ephemeral=True,
+                    )
+            except Exception:
+                pass
+
+            try:
+                if int(user_id) == int(me.id):
+                    return await safe_followup(
+                        interaction,
+                        "❌ I can’t ban myself.",
+                        ephemeral=True,
+                    )
+            except Exception:
+                pass
+
+            try:
+                if target_member is not None and me.top_role <= target_member.top_role and not me.guild_permissions.administrator:
+                    return await safe_followup(
+                        interaction,
+                        "❌ I can’t ban that member (role hierarchy).",
+                        ephemeral=True,
+                    )
+            except Exception:
+                pass
+
+            dmd = int(delete_message_days or 0)
+            dmd = max(0, min(7, dmd))
+            action_reason = reason or f"Ban by {interaction.user} ({interaction.user.id})"
+
+            try:
+                await guild.ban(
+                    target_for_ban,
+                    reason=action_reason,
+                    delete_message_days=dmd,
+                )
+                try:
+                    RUNTIME_STATS["mod_actions"] = int(RUNTIME_STATS.get("mod_actions", 0)) + 1
+                except Exception:
+                    pass
+
+                logged = await _log_slash_mod_action(
+                    guild=guild,
+                    action="Member Banned",
+                    actor=interaction.user,
+                    target=target_for_ban,
+                    reason=action_reason,
+                    extra=f"Deleted message history: `{dmd}` day(s)\n/mod_ban toggle mode: `{action_mode}`",
+                    color=discord.Color.red(),
+                )
+
+                return await safe_followup(
+                    interaction,
+                    f"🔨 Banned {_target_reply_label(target_for_ban, user_id)}.{_modlog_suffix(logged)}",
+                    ephemeral=True,
+                )
+
+            except discord.Forbidden:
+                return await safe_followup(
+                    interaction,
+                    "❌ Forbidden (permissions/hierarchy).",
+                    ephemeral=True,
+                )
+            except Exception as e:
+                return await safe_followup(
+                    interaction,
+                    f"❌ Error while banning: {e}",
+                    ephemeral=True,
+                )
+
+        return await safe_followup(interaction, "❌ Invalid ban toggle state.", ephemeral=True)
 
     # ============================================================
     # /mod_timeout
