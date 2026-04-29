@@ -8,9 +8,9 @@ lowercase, so the closest clear command to "Ban/Unban" is:
 
 /ban_unban
 
-This replaces the confusing /mod_ban and /mod_ban_toggle local registrations.
-It also performs a best-effort remote cleanup on startup so stale global
-commands are deleted from Discord, not just removed from the local command tree.
+This replaces confusing old moderation command names and performs a best-effort
+remote cleanup on startup so stale global commands are deleted from Discord,
+not just removed from the local command tree.
 """
 
 import asyncio
@@ -39,7 +39,7 @@ from .public_mod_ban_toggle_patch import (
 
 _CLEANUP_LISTENER_ATTACHED = False
 _CLEANUP_RAN = False
-_STALE_BAN_COMMAND_NAMES = {"mod_ban", "mod_ban_toggle"}
+_STALE_MODERATION_COMMAND_NAMES = {"mod_ban", "mod_ban_toggle", "mod_kick", "mod_timeout"}
 
 
 def _safe_text(value: Any, default: str = "") -> str:
@@ -256,8 +256,8 @@ async def _delete_app_command(command: Any) -> bool:
     return False
 
 
-async def _remote_delete_stale_ban_commands(bot: Any, tree: app_commands.CommandTree) -> None:
-    """Best-effort remote delete so /mod_ban disappears instead of only being hidden locally."""
+async def _remote_delete_stale_moderation_commands(bot: Any, tree: app_commands.CommandTree) -> None:
+    """Best-effort remote delete so old /mod_* names disappear from Discord."""
     global _CLEANUP_RAN
     if _CLEANUP_RAN:
         return
@@ -276,7 +276,7 @@ async def _remote_delete_stale_ban_commands(bot: Any, tree: app_commands.Command
         commands = await tree.fetch_commands(guild=None)
         for command in commands:
             name = str(getattr(command, "name", "") or "")
-            if name not in _STALE_BAN_COMMAND_NAMES:
+            if name not in _STALE_MODERATION_COMMAND_NAMES:
                 continue
             try:
                 if await _delete_app_command(command):
@@ -296,7 +296,7 @@ async def _remote_delete_stale_ban_commands(bot: Any, tree: app_commands.Command
             for command in commands:
                 name = str(getattr(command, "name", "") or "")
                 command_id = int(getattr(command, "id", 0) or 0)
-                if name not in _STALE_BAN_COMMAND_NAMES or not command_id:
+                if name not in _STALE_MODERATION_COMMAND_NAMES or not command_id:
                     continue
                 try:
                     delete_global = getattr(http, "delete_global_command", None)
@@ -310,9 +310,9 @@ async def _remote_delete_stale_ban_commands(bot: Any, tree: app_commands.Command
 
     try:
         if deleted:
-            print(f"🧹 public_ban_unban_patch deleted stale global command(s): {sorted(set(deleted))}")
+            print(f"🧹 public_ban_unban_patch deleted stale global moderation command(s): {sorted(set(deleted))}")
         else:
-            print("🧹 public_ban_unban_patch no stale global /mod_ban command found to delete")
+            print("🧹 public_ban_unban_patch no stale global /mod_* moderation commands found to delete")
         if errors:
             print(f"⚠️ public_ban_unban_patch stale command cleanup notes: {errors[:5]}")
     except Exception:
@@ -320,7 +320,7 @@ async def _remote_delete_stale_ban_commands(bot: Any, tree: app_commands.Command
 
 
 async def _deprecated_command_cleanup_on_ready(bot: Any, tree: app_commands.CommandTree) -> None:
-    await _remote_delete_stale_ban_commands(bot, tree)
+    await _remote_delete_stale_moderation_commands(bot, tree)
 
 
 def _attach_cleanup_listener(bot: Any, tree: app_commands.CommandTree) -> None:
@@ -334,7 +334,7 @@ def _attach_cleanup_listener(bot: Any, tree: app_commands.CommandTree) -> None:
 
     try:
         bot.add_listener(_on_ready_cleanup, "on_ready")
-        print("✅ public_ban_unban_patch: stale /mod_ban remote cleanup listener attached")
+        print("✅ public_ban_unban_patch: stale /mod_* remote cleanup listener attached")
     except Exception as e:
         try:
             print(f"⚠️ public_ban_unban_patch failed attaching stale command cleanup listener: {e!r}")
@@ -343,7 +343,7 @@ def _attach_cleanup_listener(bot: Any, tree: app_commands.CommandTree) -> None:
 
 
 def register_public_ban_unban_patch(bot: Any, tree: app_commands.CommandTree) -> None:
-    for name in ("mod_ban", "mod_ban_toggle", "ban_unban"):
+    for name in (*_STALE_MODERATION_COMMAND_NAMES, "ban_unban"):
         _remove_existing_global_command(tree, name)
     command = app_commands.Command(
         name="ban_unban",
@@ -353,7 +353,7 @@ def register_public_ban_unban_patch(bot: Any, tree: app_commands.CommandTree) ->
     tree.add_command(command)
     _attach_cleanup_listener(bot, tree)
     try:
-        print("✅ public_ban_unban_patch: replaced /mod_ban and /mod_ban_toggle with /ban_unban")
+        print("✅ public_ban_unban_patch: replaced stale /mod_* names with /ban_unban")
     except Exception:
         pass
 
