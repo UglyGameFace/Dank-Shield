@@ -224,19 +224,15 @@ def _native_app_scope_active(module: Any) -> bool:
         return False
 
 
-def _patch_native_app(module: Any) -> None:
+def _patch_native_app(module: Any) -> bool:
     """Patch only the beta guild command sync behavior on modern app.py.
 
-    Important: app.py can exist in sys.modules while it is still importing.
-    Earlier versions of this guard marked the module as patched before app.py set
-    _NATIVE_PUBLIC_STARTUP_SCOPE, which let the native default keep copying
-    global commands into the beta guild. That causes duplicate slash commands.
-    This function is therefore allowed to run later even if the module already
-    received a legacy/partial patch during import.
+    Returns True only when a new patch was applied. That keeps import-hook
+    activity from spamming the logs every time Python imports another module.
     """
     module_id = id(module)
     if module_id in _NATIVE_PATCHED_MODULE_IDS:
-        return
+        return False
 
     async def _native_sync_beta_guild_commands_if_requested(guild_id_int: int) -> None:
         await _sync_beta_guild_commands_if_requested(module, int(guild_id_int or 0))
@@ -249,15 +245,16 @@ def _patch_native_app(module: Any) -> None:
     setattr(module, "_sync_beta_guild_commands_if_requested", _native_sync_beta_guild_commands_if_requested)
     _NATIVE_PATCHED_MODULE_IDS.add(module_id)
     _log("native app public startup scope detected; beta guild duplicate-command guard active")
+    return True
 
 
-def _patch_legacy_app(module: Any) -> None:
+def _patch_legacy_app(module: Any) -> bool:
     """Fallback for older app.py versions that do not include native public scope."""
     global _LISTENER_PATCHED
 
     bot = getattr(module, "bot", None)
     if bot is None:
-        return
+        return False
 
     async def _resolve_runtime_guilds() -> list[discord.Guild]:
         guilds = await _configured_startup_guilds(bot)
@@ -335,7 +332,7 @@ def _patch_legacy_app(module: Any) -> None:
     setattr(module, "_maybe_run_ticket_sync_once", _maybe_run_ticket_sync_once)
 
     if _LISTENER_PATCHED:
-        return
+        return True
 
     async def _public_on_ready() -> None:
         try:
@@ -381,22 +378,32 @@ def _patch_legacy_app(module: Any) -> None:
     except Exception as e:
         _warn(f"failed to replace app on_ready listener: {e!r}")
 
+    return True
+
 
 def _patch_app(module: Any) -> None:
     module_id = id(module)
 
+    # Modern/native app.py can appear in sys.modules while still importing.
+    # Keep checking until native scope appears, but log only on first successful
+    # native patch and first active-load mark.
     if _native_app_scope_active(module):
-        _patch_native_app(module)
-        _PATCHED_MODULE_IDS.add(module_id)
-        _log("loaded; public startup scope guard active")
+        did_patch = _patch_native_app(module)
+        if module_id not in _PATCHED_MODULE_IDS:
+            _PATCHED_MODULE_IDS.add(module_id)
+            _log("loaded; public startup scope guard active")
+        elif did_patch:
+            # The native patch message already logged. Do not repeat the generic
+            # loaded line during normal import-hook traffic.
+            pass
         return
 
     if module_id in _PATCHED_MODULE_IDS:
         return
 
-    _patch_legacy_app(module)
-    _PATCHED_MODULE_IDS.add(module_id)
-    _log("loaded; public startup scope guard active")
+    if _patch_legacy_app(module):
+        _PATCHED_MODULE_IDS.add(module_id)
+        _log("loaded; public startup scope guard active")
 
 
 def _maybe_patch_loaded() -> None:
