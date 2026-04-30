@@ -131,6 +131,15 @@ except Exception as e:
     except Exception:
         pass
 
+# Ticket channel panel repair now lives inside stoney_verify/tickets_new instead of root runtime patches.
+try:
+    from stoney_verify.tickets_new import channel_panel_repair  # noqa: F401
+except Exception as e:
+    try:
+        print(f"⚠️ main.py failed to import tickets_new.channel_panel_repair: {e!r}")
+    except Exception:
+        pass
+
 # Native source wiring: startup ticket sync/backfill uses sync category helpers.
 try:
     import runtime_ticket_sync_native_patch  # noqa: F401
@@ -146,15 +155,6 @@ try:
 except Exception as e:
     try:
         print(f"⚠️ main.py failed to import runtime_ticket_category_enforcer_patch guard: {e!r}")
-    except Exception:
-        pass
-
-# Repair missing in-ticket control panels after broken creation/move flows.
-try:
-    import runtime_ticket_channel_panel_repair_patch  # noqa: F401
-except Exception as e:
-    try:
-        print(f"⚠️ main.py failed to import runtime_ticket_channel_panel_repair_patch guard: {e!r}")
     except Exception:
         pass
 
