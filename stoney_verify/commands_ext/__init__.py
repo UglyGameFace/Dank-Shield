@@ -34,6 +34,7 @@ COMMAND_MODULES: List[CommandModuleSpec] = [
     ("public_production_audit", "register_public_production_audit_commands", "public brutal production readiness audit command"),
     ("public_setup_group", "register_public_setup_group_commands", "public grouped /stoney setup commands"),
     ("public_cleanup_group", "register_public_cleanup_group_commands", "public grouped /stoney cleanup commands"),
+    ("public_spam_group", "register_public_spam_group_commands", "public grouped /stoney spam commands"),
     ("public_mod_group", "register_public_mod_group_commands", "public grouped /mod moderation commands"),
     ("public_ticket_group_clean", "register_public_ticket_group_clean_commands", "public grouped /ticket commands with native lifecycle handling"),
     ("public_ticket_delete", "register_public_ticket_delete_commands", "public grouped /ticket delete command"),
@@ -48,7 +49,7 @@ COMMAND_MODULES: List[CommandModuleSpec] = [
     # default public profile because Discord hard-limits public bots to 100 global
     # commands and this deployment also has a safer 25-command sync guard.
     # Enable only while actively doing admin work:
-    # STONEY_COMMAND_MODULES_EXTRA=ticket_panel_admin_safe,panel_bootstrap_admin,channel_cleanup_admin
+    # STONEY_COMMAND_MODULES_EXTRA=ticket_panel_admin_safe,panel_bootstrap_admin
     ("ticket_panel_admin_safe", "register_ticket_panel_admin_commands", "ticket panel setup/config commands"),
     ("panel_bootstrap_admin", "register_panel_bootstrap_admin_commands", "panel bootstrap/self-heal admin commands"),
     ("role_admin", "register_role_admin_commands", "legacy top-level role admin commands"),
@@ -97,6 +98,7 @@ _PUBLIC_CORE_MODULES: Tuple[str, ...] = (
     "public_production_audit",
     "public_setup_group",
     "public_cleanup_group",
+    "public_spam_group",
     "public_mod_group",
     "public_ticket_group_clean",
     "public_ticket_delete",
@@ -120,6 +122,38 @@ COMMAND_PROFILES: Dict[str, Sequence[str]] = {
     "full": _LEGACY_MODULES,
     "dev": _LEGACY_MODULES,
 }
+
+_STALE_TOP_LEVEL_COMMANDS: Tuple[str, ...] = (
+    "spam_guard",
+    "spam_guard_status",
+    "fix_unverified",
+    "set_verified",
+    "set_resident",
+    "grant_vr",
+    "verify_diagnose",
+    "fix_unverified_member",
+    "verify_status",
+    "channel_cleanup_status",
+    "run_channel_cleanup",
+    "purge_channel_messages",
+    "ticket_setup_status",
+    "ticket_setup_discover",
+    "ticket_setup_save_discovered",
+    "ticket_setup_set_channel",
+    "ticket_setup_set_role",
+    "ticket_panel_list",
+    "ticket_panel_show",
+    "ticket_panel_bind_categories",
+    "ticket_panel_rules",
+    "ticket_panel_rules_set",
+    "ticket_panel_runtime",
+    "ticket_panel_bootstrap_status",
+    "ticket_panel_bootstrap_run",
+    "ticket_panel_bootstrap_all",
+    "ticket_panel_bootstrap_start",
+    "ticket_panel_bootstrap_once",
+    "ticket_panel_bootstrap_stop",
+)
 
 
 def _csv_set(value: str) -> set[str]:
@@ -235,6 +269,23 @@ def _tree_command_counts(tree: Any) -> tuple[int, int]:
     return int(global_count), int(guild_count)
 
 
+def _remove_stale_top_level_commands(tree: Any, *, reason: str) -> list[str]:
+    removed: list[str] = []
+    for name in _STALE_TOP_LEVEL_COMMANDS:
+        try:
+            if tree.get_command(name, guild=None) is not None:
+                tree.remove_command(name, guild=None)
+                removed.append(name)
+        except Exception:
+            continue
+    if removed:
+        try:
+            print(f"🧹 commands_ext removed stale top-level commands reason={reason}: {removed}")
+        except Exception:
+            pass
+    return removed
+
+
 def _import_registrar(module_name: str, function_name: str) -> CommandRegistrar:
     module = __import__(f"{__name__}.{module_name}", fromlist=[function_name])
     registrar = getattr(module, function_name)
@@ -324,6 +375,8 @@ def register_all_commands(bot: Any, tree: Any) -> None:
     profile = _command_profile()
     _run_public_startup_guard(profile)
 
+    _remove_stale_top_level_commands(tree, reason="before_module_registration")
+
     selected_modules = _selected_command_modules()
     selected_names = [name for name, _fn, _label in selected_modules]
     skipped_names = [name for name, _fn, _label in COMMAND_MODULES if name not in set(selected_names)]
@@ -332,6 +385,8 @@ def register_all_commands(bot: Any, tree: Any) -> None:
 
     for module_name, function_name, label in selected_modules:
         _register_one_module(bot=bot, tree=tree, module_name=module_name, function_name=function_name, label=label, errors=errors)
+
+    _remove_stale_top_level_commands(tree, reason="after_module_registration")
 
     _COMMANDS_EXT_REGISTERED = True
     final_global, final_guild = _tree_command_counts(tree)
