@@ -158,6 +158,15 @@ except Exception as e:
     except Exception:
         pass
 
+# Repair missing in-ticket control panels after broken creation/move flows.
+try:
+    import runtime_ticket_channel_panel_repair_patch  # noqa: F401
+except Exception as e:
+    try:
+        print(f"⚠️ main.py failed to import runtime_ticket_channel_panel_repair_patch guard: {e!r}")
+    except Exception:
+        pass
+
 # Keep stoney_verify.app's startup ticket-sync alias pointed at the current patched sync_service function.
 try:
     import runtime_ticket_sync_alias_patch  # noqa: F401
