@@ -57,12 +57,12 @@ except Exception as e:
     except Exception:
         pass
 
-# Force-load alt-link safety after Risk Engine v2.
+# Alt-link safety now lives inside startup_guards instead of root runtime patches.
 try:
-    import runtime_alt_identity_link_safety_patch  # noqa: F401
+    from stoney_verify.startup_guards import alt_identity_link_safety  # noqa: F401
 except Exception as e:
     try:
-        print(f"⚠️ main.py failed to import runtime_alt_identity_link_safety_patch guard: {e!r}")
+        print(f"⚠️ main.py failed to import startup_guards.alt_identity_link_safety: {e!r}")
     except Exception:
         pass
 
