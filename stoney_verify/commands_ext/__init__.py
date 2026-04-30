@@ -33,6 +33,7 @@ COMMAND_MODULES: List[CommandModuleSpec] = [
     ("public_tickettool_check", "register_public_tickettool_check_commands", "public grouped /stoney TicketTool parity check command"),
     ("public_production_audit", "register_public_production_audit_commands", "public brutal production readiness audit command"),
     ("public_setup_group", "register_public_setup_group_commands", "public grouped /stoney setup commands"),
+    ("public_cleanup_group", "register_public_cleanup_group_commands", "public grouped /stoney cleanup commands"),
     ("public_mod_group", "register_public_mod_group_commands", "public grouped /mod moderation commands"),
     ("public_ticket_group_clean", "register_public_ticket_group_clean_commands", "public grouped /ticket commands with native lifecycle handling"),
     ("public_ticket_delete", "register_public_ticket_delete_commands", "public grouped /ticket delete command"),
@@ -47,11 +48,11 @@ COMMAND_MODULES: List[CommandModuleSpec] = [
     # default public profile because Discord hard-limits public bots to 100 global
     # commands and this deployment also has a safer 25-command sync guard.
     # Enable only while actively doing admin work:
-    # STONEY_COMMAND_MODULES_EXTRA=ticket_panel_admin_safe,panel_bootstrap_admin,role_admin,channel_cleanup_admin
+    # STONEY_COMMAND_MODULES_EXTRA=ticket_panel_admin_safe,panel_bootstrap_admin,channel_cleanup_admin
     ("ticket_panel_admin_safe", "register_ticket_panel_admin_commands", "ticket panel setup/config commands"),
     ("panel_bootstrap_admin", "register_panel_bootstrap_admin_commands", "panel bootstrap/self-heal admin commands"),
     ("role_admin", "register_role_admin_commands", "legacy top-level role admin commands"),
-    ("channel_cleanup_admin", "register_channel_cleanup_admin_commands", "channel cleanup admin commands"),
+    ("channel_cleanup_admin", "register_channel_cleanup_admin_commands", "legacy top-level channel cleanup admin commands"),
 
     # Legacy / full profile modules.
     ("kick_timers", "register_kick_timer_commands", "kick timer commands"),
@@ -95,6 +96,7 @@ _PUBLIC_CORE_MODULES: Tuple[str, ...] = (
     "public_tickettool_check",
     "public_production_audit",
     "public_setup_group",
+    "public_cleanup_group",
     "public_mod_group",
     "public_ticket_group_clean",
     "public_ticket_delete",
@@ -109,7 +111,6 @@ _PUBLIC_CORE_MODULES: Tuple[str, ...] = (
 _PUBLIC_ADMIN_EXTRA_MODULES: Tuple[str, ...] = (
     "ticket_panel_admin_safe",
     "panel_bootstrap_admin",
-    "channel_cleanup_admin",
 )
 
 COMMAND_PROFILES: Dict[str, Sequence[str]] = {
