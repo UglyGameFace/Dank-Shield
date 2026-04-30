@@ -194,12 +194,21 @@ except Exception as e:
     except Exception:
         pass
 
-# Automatic runtime job dedupe.
+# Shard/scale readiness guard now lives inside stoney_verify/startup_guards instead of root runtime patches.
 try:
-    import runtime_job_dedupe_safety  # noqa: F401
+    from stoney_verify.startup_guards import shard_safety  # noqa: F401
 except Exception as e:
     try:
-        print(f"⚠️ main.py failed to import runtime_job_dedupe_safety guard: {e!r}")
+        print(f"⚠️ main.py failed to import startup_guards.shard_safety: {e!r}")
+    except Exception:
+        pass
+
+# Automatic runtime job dedupe now lives inside stoney_verify/startup_guards instead of root runtime patches.
+try:
+    from stoney_verify.startup_guards import job_dedupe  # noqa: F401
+except Exception as e:
+    try:
+        print(f"⚠️ main.py failed to import startup_guards.job_dedupe: {e!r}")
     except Exception:
         pass
 
