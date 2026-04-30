@@ -3,12 +3,12 @@ from __future__ import annotations
 """
 Fresh-join removal safety guard.
 
-The real business rules now live in:
+The real business rules live in:
     stoney_verify.members_new.join_removal_safety
 
-This runtime shim patches Discord kick/ban call paths and existing timer hooks to
-use those native helpers while we fold the behavior into events/kick_timers and
-moderation commands cleanly.
+This runtime shim only patches the exact modules/calls it owns. It intentionally
+does not scan on every import because that creates ugly log spam and import-hook
+storms on Discloud.
 """
 
 import builtins
@@ -24,6 +24,8 @@ _GUILD_KICK_PATCHED = False
 _MEMBER_KICK_PATCHED = False
 _GUILD_BAN_PATCHED = False
 _MEMBER_BAN_PATCHED = False
+_EVENTS_REFERENCE_UPDATED = False
+_PATCHING = False
 _ORIGINAL_GUILD_KICK = None
 _ORIGINAL_MEMBER_KICK = None
 _ORIGINAL_GUILD_BAN = None
@@ -42,15 +44,6 @@ def _warn(message: str) -> None:
         print(f"⚠️ runtime_member_join_kick_safety {message}")
     except Exception:
         pass
-
-
-async def _clear_persisted_member_wait_timers(guild_id: int, user_id: int, *, reason: str) -> None:
-    try:
-        from stoney_verify.members_new.join_removal_safety import clear_persisted_member_wait_timers
-
-        await clear_persisted_member_wait_timers(guild_id, user_id, reason=reason)
-    except Exception as e:
-        _warn(f"failed clearing stale verification timers guild={guild_id} user={user_id}: {e!r}")
 
 
 async def _on_member_join_clear_stale_timers(member: discord.Member) -> None:
@@ -191,7 +184,7 @@ def _patch_discord_member_ban() -> None:
 
 def _patch_kick_timers(module: Any) -> None:
     module_name = getattr(module, "__name__", "")
-    key = f"{module_name}:native_member_join_kick_safety_v1"
+    key = f"{module_name}:native_member_join_kick_safety_v2"
     if key in _PATCHED_MODULES:
         return
 
@@ -211,18 +204,24 @@ def _patch_kick_timers(module: Any) -> None:
         except Exception:
             pass
         setattr(module, "start_join_grace_then_kick_timer_for_member", _start_join_grace_then_kick_timer_for_member_patched)
+        _log(f"patched {module_name}; stale verification timers clear through native helper")
 
     _PATCHED_MODULES.add(key)
-    _log(f"patched {module_name}; stale verification timers clear through native helper")
 
 
 def _patch_events_module(module: Any) -> None:
+    global _EVENTS_REFERENCE_UPDATED
+    if _EVENTS_REFERENCE_UPDATED:
+        return
     try:
         from stoney_verify.commands_ext import kick_timers
 
         patched_start = getattr(kick_timers, "start_join_grace_then_kick_timer_for_member", None)
         if callable(patched_start):
-            setattr(module, "start_join_grace_then_kick_timer_for_member", patched_start)
+            current = getattr(module, "start_join_grace_then_kick_timer_for_member", None)
+            if current is not patched_start:
+                setattr(module, "start_join_grace_then_kick_timer_for_member", patched_start)
+            _EVENTS_REFERENCE_UPDATED = True
             _log("updated events.start_join_grace_then_kick_timer_for_member reference")
     except Exception:
         pass
@@ -256,11 +255,23 @@ def _maybe_attach_bot() -> None:
         pass
 
 
-def _patch_loaded() -> None:
-    _patch_discord_guild_kick()
-    _patch_discord_member_kick()
-    _patch_discord_guild_ban()
-    _patch_discord_member_ban()
+def _patch_core_once() -> None:
+    global _PATCHING
+    if _PATCHING:
+        return
+    _PATCHING = True
+    try:
+        _patch_discord_guild_kick()
+        _patch_discord_member_kick()
+        _patch_discord_guild_ban()
+        _patch_discord_member_ban()
+        _maybe_attach_bot()
+    finally:
+        _PATCHING = False
+
+
+def _patch_loaded_once() -> None:
+    _patch_core_once()
     try:
         module = sys.modules.get("stoney_verify.commands_ext.kick_timers")
         if module is not None:
@@ -273,12 +284,12 @@ def _patch_loaded() -> None:
             _patch_events_module(module)
     except Exception:
         pass
-    _maybe_attach_bot()
 
 
 def _safe_import(name: str, globals: Any = None, locals: Any = None, fromlist: Any = (), level: int = 0) -> Any:
     module = _ORIGINAL_IMPORT(name, globals, locals, fromlist, level)
     try:
+        # Only react to modules this shim owns. No more _patch_loaded on every import.
         if name == "stoney_verify.commands_ext.kick_timers" or name.endswith("commands_ext.kick_timers"):
             target = sys.modules.get("stoney_verify.commands_ext.kick_timers") or sys.modules.get(name)
             if target is not None:
@@ -289,12 +300,11 @@ def _safe_import(name: str, globals: Any = None, locals: Any = None, fromlist: A
                 _patch_events_module(target)
         elif name in {"stoney_verify.globals", "stoney_verify.app"} or name.endswith("stoney_verify.globals") or name.endswith("stoney_verify.app"):
             _maybe_attach_bot()
-        _patch_loaded()
     except Exception as e:
         _warn(f"post-import patch failed for {name}: {e!r}")
     return module
 
 
 builtins.__import__ = _safe_import
-_patch_loaded()
+_patch_loaded_once()
 _log("loaded; native fresh-join bot kick/ban protection active")
