@@ -131,15 +131,6 @@ except Exception as e:
     except Exception:
         pass
 
-# Native source wiring: close/reopen ticket category movement uses lifecycle helpers.
-try:
-    import runtime_ticket_lifecycle_native_patch  # noqa: F401
-except Exception as e:
-    try:
-        print(f"⚠️ main.py failed to import runtime_ticket_lifecycle_native_patch guard: {e!r}")
-    except Exception:
-        pass
-
 # Native source wiring: startup ticket sync/backfill uses sync category helpers.
 try:
     import runtime_ticket_sync_native_patch  # noqa: F401
