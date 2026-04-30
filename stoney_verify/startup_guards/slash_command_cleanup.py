@@ -1,0 +1,206 @@
+from __future__ import annotations
+
+"""Slash command cleanup guard.
+
+Why this exists:
+- During the TicketTool-style command consolidation, old top-level commands like
+  /spam_guard, /grant_vr, /ticket_panel_rules_set, etc. were replaced by grouped
+  commands such as /stoney spam, /verify grant-vr, /ticket-panel rules set.
+- Discord keeps previously synced global commands until the next successful sync.
+- This guard strips stale top-level aliases from the local CommandTree right
+  before sync so the next successful sync removes them from Discord too.
+- It also prevents the old CLEAR_GLOBAL_COMMANDS_ON_BOOT env from accidentally
+  wiping the full public command surface. A dangerous emergency wipe still exists
+  behind STONEY_DANGEROUS_CLEAR_ALL_GLOBAL_COMMANDS_ON_BOOT=true.
+"""
+
+import os
+from typing import Any, Optional
+
+from discord import app_commands
+
+
+_PATCHED = False
+_ORIGINAL_SYNC = None
+_ORIGINAL_CLEAR_COMMANDS = None
+
+STALE_TOP_LEVEL_COMMANDS = {
+    "spam_guard",
+    "spam_guard_status",
+    "fix_unverified",
+    "set_verified",
+    "set_resident",
+    "grant_vr",
+    "verify_diagnose",
+    "fix_unverified_member",
+    "verify_status",
+    "channel_cleanup_status",
+    "run_channel_cleanup",
+    "purge_channel_messages",
+    "ticket_setup_status",
+    "ticket_setup_discover",
+    "ticket_setup_save_discovered",
+    "ticket_setup_set_channel",
+    "ticket_setup_set_role",
+    "ticket_panel_list",
+    "ticket_panel_show",
+    "ticket_panel_bind_categories",
+    "ticket_panel_rules",
+    "ticket_panel_rules_set",
+    "ticket_panel_runtime",
+    "ticket_panel_bootstrap_status",
+    "ticket_panel_bootstrap_run",
+    "ticket_panel_bootstrap_all",
+    "ticket_panel_bootstrap_start",
+    "ticket_panel_bootstrap_once",
+    "ticket_panel_bootstrap_stop",
+}
+
+
+def _env_true(name: str, default: bool = False) -> bool:
+    try:
+        raw = os.getenv(name, "")
+        if not raw:
+            return bool(default)
+        return str(raw).strip().lower() in {"1", "true", "yes", "y", "on"}
+    except Exception:
+        return bool(default)
+
+
+def _env_str(name: str, default: str = "") -> str:
+    try:
+        raw = os.getenv(name)
+        if raw is None:
+            return default
+        text = str(raw).strip()
+        return text if text else default
+    except Exception:
+        return default
+
+
+def _public_scope_enabled() -> bool:
+    profile = _env_str("STONEY_COMMAND_PROFILE", "public").lower()
+    deployment = _env_str("STONEY_DEPLOYMENT_MODE", "").lower()
+    if not deployment:
+        if _env_true("STONEY_PRODUCTION_MODE", False):
+            deployment = "production"
+        elif _env_true("STONEY_PUBLIC_MODE", False):
+            deployment = "public"
+        else:
+            deployment = "development"
+    return profile in {"public", "minimal", "public-admin"} or deployment in {"public", "prod", "production"}
+
+
+def _guild_from_sync_args(args: tuple[Any, ...], kwargs: dict[str, Any]) -> Optional[Any]:
+    try:
+        if "guild" in kwargs:
+            return kwargs.get("guild")
+        # CommandTree.sync signature is sync(*, guild=None). This fallback is
+        # defensive only in case a wrapper passes it positionally.
+        if args:
+            return args[0]
+    except Exception:
+        pass
+    return None
+
+
+def _safe_command_names(tree: app_commands.CommandTree[Any]) -> list[str]:
+    try:
+        return [str(cmd.name) for cmd in tree.get_commands(guild=None)]
+    except Exception:
+        try:
+            return [str(cmd.name) for cmd in tree.get_commands()]
+        except Exception:
+            return []
+
+
+def remove_stale_top_level_commands(tree: app_commands.CommandTree[Any], *, reason: str = "manual") -> list[str]:
+    removed: list[str] = []
+
+    for name in sorted(STALE_TOP_LEVEL_COMMANDS):
+        try:
+            existing = tree.get_command(name, guild=None)
+        except Exception:
+            existing = None
+
+        if existing is None:
+            continue
+
+        try:
+            tree.remove_command(name, guild=None)
+            removed.append(name)
+        except Exception:
+            continue
+
+    if removed:
+        try:
+            print(f"🧹 slash_command_cleanup removed stale top-level commands reason={reason}: {removed}")
+        except Exception:
+            pass
+
+    return removed
+
+
+def _should_block_global_clear(guild: Optional[Any]) -> bool:
+    if guild is not None:
+        return False
+    if not _public_scope_enabled():
+        return False
+    if not _env_true("CLEAR_GLOBAL_COMMANDS_ON_BOOT", False):
+        return False
+    if _env_true("STONEY_DANGEROUS_CLEAR_ALL_GLOBAL_COMMANDS_ON_BOOT", False):
+        return False
+    return True
+
+
+def install_slash_command_cleanup_guard() -> None:
+    global _PATCHED, _ORIGINAL_SYNC, _ORIGINAL_CLEAR_COMMANDS
+
+    if _PATCHED:
+        return
+
+    _ORIGINAL_SYNC = app_commands.CommandTree.sync
+    _ORIGINAL_CLEAR_COMMANDS = app_commands.CommandTree.clear_commands
+
+    async def _patched_sync(self: app_commands.CommandTree[Any], *args: Any, **kwargs: Any):
+        guild = _guild_from_sync_args(args, kwargs)
+        if guild is None:
+            remove_stale_top_level_commands(self, reason="pre_global_sync")
+            try:
+                names = _safe_command_names(self)
+                print(f"🧹 slash_command_cleanup pre-sync global command count={len(names)} names={names}")
+            except Exception:
+                pass
+        return await _ORIGINAL_SYNC(self, *args, **kwargs)  # type: ignore[misc]
+
+    def _patched_clear_commands(self: app_commands.CommandTree[Any], *args: Any, **kwargs: Any):
+        guild = kwargs.get("guild", None)
+        if _should_block_global_clear(guild):
+            try:
+                print(
+                    "🛑 slash_command_cleanup blocked CLEAR_GLOBAL_COMMANDS_ON_BOOT in public scope. "
+                    "Use STONEY_DANGEROUS_CLEAR_ALL_GLOBAL_COMMANDS_ON_BOOT=true for an intentional one-time wipe."
+                )
+            except Exception:
+                pass
+            return None
+        return _ORIGINAL_CLEAR_COMMANDS(self, *args, **kwargs)  # type: ignore[misc]
+
+    app_commands.CommandTree.sync = _patched_sync  # type: ignore[assignment]
+    app_commands.CommandTree.clear_commands = _patched_clear_commands  # type: ignore[assignment]
+
+    _PATCHED = True
+    try:
+        print("🧹 slash_command_cleanup loaded; stale alias cleanup + safe global-clear guard active")
+    except Exception:
+        pass
+
+
+install_slash_command_cleanup_guard()
+
+
+__all__ = [
+    "STALE_TOP_LEVEL_COMMANDS",
+    "install_slash_command_cleanup_guard",
+    "remove_stale_top_level_commands",
+]
