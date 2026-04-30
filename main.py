@@ -176,12 +176,12 @@ except Exception as e:
     except Exception:
         pass
 
-# Public startup scope guard.
+# Public startup scope guard now lives inside stoney_verify/startup_guards instead of root runtime patches.
 try:
-    import runtime_public_startup_scope_patch  # noqa: F401
+    from stoney_verify.startup_guards import public_startup_scope  # noqa: F401
 except Exception as e:
     try:
-        print(f"⚠️ main.py failed to import runtime_public_startup_scope_patch guard: {e!r}")
+        print(f"⚠️ main.py failed to import startup_guards.public_startup_scope: {e!r}")
     except Exception:
         pass
 
