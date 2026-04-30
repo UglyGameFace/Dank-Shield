@@ -20,6 +20,7 @@ _ERRORS: Dict[str, BaseException] = {}
 _STARTUP_GUARDS: Tuple[str, ...] = (
     "stoney_verify.startup_guards.process_health",
     "stoney_verify.startup_guards.command_safety",
+    "stoney_verify.startup_guards.slash_command_cleanup",
 
     # Broad event-loop DB/modlog/ticket safety layer.
     # sitecustomize.py remains as a tiny host fallback, but main startup loads
