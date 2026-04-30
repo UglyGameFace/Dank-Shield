@@ -34,6 +34,7 @@ _HEARTBEAT_TASK: asyncio.Task | None = None
 _LAST_REPORT_BY_GUILD: dict[int, float] = {}
 
 _STATUS_TABLE = "bot_status_heartbeats"
+
 _STATUS_CHANNEL_KEYS: tuple[str, ...] = (
     "status_channel_id",
     "bot_status_channel_id",
@@ -44,6 +45,10 @@ _STATUS_CHANNEL_KEYS: tuple[str, ...] = (
     "join_log_channel_id",
 )
 
+
+# ============================================================
+# Env helpers
+# ============================================================
 
 def _env_bool(name: str, default: bool = False) -> bool:
     try:
@@ -91,23 +96,35 @@ def _heartbeat_interval_seconds() -> int:
 
 
 def _startup_report_delay_seconds() -> int:
-    return max(3, _env_int("STONEY_STATUS_STARTUP_REPORT_DELAY_SECONDS", 12))
+    # Give guild_config bootstrap/runtime discovery a little room before
+    # the status snapshot posts.
+    return max(8, _env_int("STONEY_STATUS_STARTUP_REPORT_DELAY_SECONDS", 20))
 
 
 def _report_cooldown_seconds() -> int:
     return max(60, _env_int("STONEY_STATUS_REPORT_COOLDOWN_SECONDS", 600))
 
 
+def _auto_save_discovered_config_enabled() -> bool:
+    return _env_bool("STONEY_STATUS_AUTO_SAVE_DISCOVERED_CONFIG", True)
+
+
+def _treat_env_fallback_as_ok() -> bool:
+    return _env_bool("STONEY_STATUS_TREAT_ENV_FALLBACK_OK", False)
+
+
 def _bot_status_id(bot: Any) -> str:
     explicit = _env_str("STONEY_STATUS_BOT_ID", "")
     if explicit:
         return explicit
+
     try:
         user = getattr(bot, "user", None)
         if user is not None and getattr(user, "id", None):
             return str(int(user.id))
     except Exception:
         pass
+
     return "stoney-verify-helper"
 
 
@@ -137,14 +154,47 @@ def _safe_str(value: Any, default: str = "") -> str:
         return default
 
 
-def _table_name() -> str:
-    return _env_str("STONEY_GUILD_CONFIG_TABLE", "guild_configs") or "guild_configs"
+def _safe_bool(value: Any, default: bool = False) -> bool:
+    try:
+        if isinstance(value, bool):
+            return value
+        raw = str(value or "").strip().lower()
+        if raw in {"1", "true", "yes", "y", "on"}:
+            return True
+        if raw in {"0", "false", "no", "n", "off"}:
+            return False
+        return default
+    except Exception:
+        return default
+
+
+def _cfg_get(cfg: Any, key: str, default: Any = None) -> Any:
+    if isinstance(cfg, Mapping):
+        return cfg.get(key, default)
+    return getattr(cfg, key, default)
+
+
+def _primary_config_table_name() -> str:
+    return _env_str("STONEY_GUILD_CONFIG_TABLE", "guild_config") or "guild_config"
+
+
+def _config_table_names() -> tuple[str, ...]:
+    primary = _primary_config_table_name()
+    names: list[str] = []
+
+    for name in (primary, "guild_config", "guild_configs"):
+        clean = _safe_str(name)
+        if clean and clean not in names:
+            names.append(clean)
+
+    return tuple(names)
 
 
 def _nested_settings(row: Mapping[str, Any]) -> dict[str, Any]:
     merged: dict[str, Any] = {}
+
     try:
-        for key in ("settings", "config", "metadata", "meta"):
+        for key in ("settings", "config", "metadata", "meta", "raw"):
             value = row.get(key)
             if isinstance(value, Mapping):
                 merged.update(dict(value))
@@ -154,18 +204,24 @@ def _nested_settings(row: Mapping[str, Any]) -> dict[str, Any]:
             merged.update(dict(row))
         except Exception:
             pass
+
     return merged
 
 
-def _fetch_config_row_sync(guild_id: int) -> Optional[dict[str, Any]]:
+# ============================================================
+# Guild config / status channel lookup
+# ============================================================
+
+def _fetch_config_row_from_table_sync(table_name: str, guild_id: int) -> Optional[dict[str, Any]]:
     try:
         from ..globals import get_supabase
 
         sb = get_supabase()
         if sb is None:
             return None
+
         response = (
-            sb.table(_table_name())
+            sb.table(table_name)
             .select("*")
             .eq("guild_id", str(int(guild_id)))
             .limit(1)
@@ -174,10 +230,24 @@ def _fetch_config_row_sync(guild_id: int) -> Optional[dict[str, Any]]:
         rows = getattr(response, "data", None) or []
         if not rows:
             return None
+
         first = rows[0]
-        return dict(first) if isinstance(first, Mapping) else None
+        if isinstance(first, Mapping):
+            row = dict(first)
+            row["_source_table"] = table_name
+            return row
+
+        return None
     except Exception:
         return None
+
+
+def _fetch_config_row_sync(guild_id: int) -> Optional[dict[str, Any]]:
+    for table_name in _config_table_names():
+        row = _fetch_config_row_from_table_sync(table_name, guild_id)
+        if row:
+            return row
+    return None
 
 
 async def _fetch_config_row(guild_id: int) -> Optional[dict[str, Any]]:
@@ -187,11 +257,14 @@ async def _fetch_config_row(guild_id: int) -> Optional[dict[str, Any]]:
 def _extract_status_channel_id(row: Optional[Mapping[str, Any]]) -> int:
     if not row:
         return 0
+
     data = _nested_settings(row)
+
     for key in _STATUS_CHANNEL_KEYS:
         cid = _safe_int(data.get(key), 0)
         if cid > 0:
             return cid
+
     return 0
 
 
@@ -208,11 +281,19 @@ async def _resolve_status_channel(guild: discord.Guild) -> Optional[discord.Text
         try:
             from ..guild_config import get_guild_config
 
-            cfg = await asyncio.wait_for(get_guild_config(int(guild.id), refresh=False), timeout=4.0)
+            cfg = await asyncio.wait_for(
+                get_guild_config(int(guild.id), refresh=False),
+                timeout=4.0,
+            )
+
             channel_id = int(
-                getattr(cfg, "modlog_channel_id", 0)
-                or getattr(cfg, "raidlog_channel_id", 0)
-                or getattr(cfg, "join_log_channel_id", 0)
+                _cfg_get(cfg, "status_channel_id", 0)
+                or _cfg_get(cfg, "bot_status_channel_id", 0)
+                or _cfg_get(cfg, "uptime_channel_id", 0)
+                or _cfg_get(cfg, "health_channel_id", 0)
+                or _cfg_get(cfg, "modlog_channel_id", 0)
+                or _cfg_get(cfg, "raidlog_channel_id", 0)
+                or _cfg_get(cfg, "join_log_channel_id", 0)
                 or 0
             )
         except Exception:
@@ -243,6 +324,10 @@ async def _resolve_status_channel(guild: discord.Guild) -> Optional[discord.Text
     return channel
 
 
+# ============================================================
+# Probes
+# ============================================================
+
 def _service_line(name: str, ok: bool, detail: str = "") -> str:
     icon = "✅" if ok else "⚠️"
     return f"{icon} **{name}:** {detail or ('available' if ok else 'degraded')}"
@@ -256,33 +341,93 @@ async def _probe_supabase() -> tuple[bool, str]:
         if sb is None:
             return False, "Supabase client unavailable"
 
-        def _probe() -> None:
+        last_error = ""
+
+        def _probe_table(table_name: str) -> None:
             (
-                sb.table(_table_name())
+                sb.table(table_name)
                 .select("guild_id")
                 .limit(1)
                 .execute()
             )
 
-        await asyncio.wait_for(asyncio.to_thread(_probe), timeout=6.0)
-        return True, "database reachable"
+        for table_name in _config_table_names():
+            try:
+                await asyncio.wait_for(
+                    asyncio.to_thread(_probe_table, table_name),
+                    timeout=6.0,
+                )
+                return True, f"database reachable (`{table_name}`)"
+            except asyncio.TimeoutError:
+                last_error = "database probe timed out"
+            except Exception as e:
+                last_error = f"database probe failed on `{table_name}`: {type(e).__name__}"
+                continue
+
+        return False, last_error or "database probe failed"
     except asyncio.TimeoutError:
         return False, "database probe timed out"
     except Exception as e:
         return False, f"database probe failed: {type(e).__name__}"
 
 
+async def _maybe_auto_save_discovered_config(guild: discord.Guild) -> None:
+    if not _auto_save_discovered_config_enabled():
+        return
+
+    try:
+        from ..guild_config import save_runtime_discovered_config
+
+        await asyncio.wait_for(
+            save_runtime_discovered_config(guild),
+            timeout=8.0,
+        )
+    except Exception:
+        pass
+
+
 async def _probe_guild_config(guild: discord.Guild) -> tuple[bool, str]:
     try:
         from ..guild_config import get_guild_config
 
-        cfg = await asyncio.wait_for(get_guild_config(int(guild.id), refresh=True), timeout=6.0)
-        source = _safe_str(getattr(cfg, "source", "unknown"), "unknown")
+        await _maybe_auto_save_discovered_config(guild)
+
+        cfg = await asyncio.wait_for(
+            get_guild_config(int(guild.id), refresh=True),
+            timeout=6.0,
+        )
+
+        source = _safe_str(_cfg_get(cfg, "source", "unknown"), "unknown")
+        use_env_fallbacks = _safe_bool(_cfg_get(cfg, "use_env_fallbacks", True), True)
+        allow_runtime_discovery = _safe_bool(_cfg_get(cfg, "allow_runtime_discovery", True), True)
+
         if source.startswith("supabase:"):
             return True, f"loaded from `{source}`"
+
         if source.startswith("unconfigured:"):
             return False, f"server setup incomplete (`{source}`)"
-        return False, f"using fallback config (`{source}`)"
+
+        if source.startswith("env_fallback"):
+            if _treat_env_fallback_as_ok():
+                return True, f"using configured fallback (`{source}`)"
+            return False, (
+                f"using fallback config (`{source}`); "
+                "run setup/discovery to save DB config"
+            )
+
+        if "runtime_discovery" in source:
+            return False, (
+                f"using runtime discovery (`{source}`); "
+                "save discovery to DB for stable config"
+            )
+
+        detail = f"`{source}`"
+        if use_env_fallbacks:
+            detail += ", env fallback enabled"
+        if allow_runtime_discovery:
+            detail += ", runtime discovery enabled"
+
+        return False, f"config source unclear ({detail})"
     except asyncio.TimeoutError:
         return False, "config load timed out"
     except Exception as e:
@@ -294,8 +439,10 @@ def _probe_permissions(guild: discord.Guild) -> tuple[bool, str]:
         me = guild.me
         if me is None:
             return False, "bot member not resolved"
+
         perms = me.guild_permissions
         missing: list[str] = []
+
         for attr, label in (
             ("view_channel", "View Channels"),
             ("send_messages", "Send Messages"),
@@ -306,8 +453,10 @@ def _probe_permissions(guild: discord.Guild) -> tuple[bool, str]:
         ):
             if not bool(getattr(perms, attr, False)):
                 missing.append(label)
+
         if missing:
             return False, "missing " + ", ".join(missing[:6])
+
         return True, "required baseline permissions present"
     except Exception as e:
         return False, f"permission probe failed: {type(e).__name__}"
@@ -338,8 +487,13 @@ async def _build_service_status_lines(bot: Any, guild: discord.Guild) -> tuple[l
         _service_line("Slash commands", True, "registered with Discord if this message posted"),
         _service_line("Status heartbeat", _heartbeat_enabled(), "enabled" if _heartbeat_enabled() else "disabled by env"),
     ]
+
     return lines, bool(gateway_ok and db_ok and cfg_ok and perm_ok)
 
+
+# ============================================================
+# Status reports
+# ============================================================
 
 async def _send_status_report(bot: Any, guild: discord.Guild, *, event: str, force: bool = False) -> bool:
     if not _enabled():
@@ -347,6 +501,7 @@ async def _send_status_report(bot: Any, guild: discord.Guild, *, event: str, for
 
     now = time.monotonic()
     gid = int(guild.id)
+
     if not force:
         last = _LAST_REPORT_BY_GUILD.get(gid, 0.0)
         if now - last < _report_cooldown_seconds():
@@ -371,10 +526,12 @@ async def _send_status_report(bot: Any, guild: discord.Guild, *, event: str, for
         color=discord.Color.green() if all_ok else discord.Color.gold(),
         timestamp=discord.utils.utcnow(),
     )
+
     try:
         embed.add_field(name="Server", value=f"`{guild.name}` (`{guild.id}`)", inline=False)
     except Exception:
         pass
+
     embed.add_field(name="Service Availability", value="\n".join(lines)[:1024], inline=False)
     embed.add_field(
         name="Important",
@@ -393,6 +550,10 @@ async def _send_status_report(bot: Any, guild: discord.Guild, *, event: str, for
     except Exception:
         return False
 
+
+# ============================================================
+# Heartbeat
+# ============================================================
 
 def _write_heartbeat_sync(bot_id: str, guild_count: int) -> bool:
     try:
@@ -414,6 +575,7 @@ def _write_heartbeat_sync(bot_id: str, guild_count: int) -> bool:
             sb.table(_STATUS_TABLE).upsert(payload, on_conflict="bot_id").execute()
         except TypeError:
             sb.table(_STATUS_TABLE).upsert(payload).execute()
+
         return True
     except Exception:
         return False
@@ -424,6 +586,7 @@ async def _heartbeat_loop(bot: Any) -> None:
         return
 
     bot_id = _bot_status_id(bot)
+
     while True:
         try:
             guild_count = len(list(getattr(bot, "guilds", []) or []))
@@ -452,6 +615,7 @@ async def _startup_report_all_guilds(bot: Any) -> None:
 
     sent = 0
     skipped = 0
+
     for guild in list(getattr(bot, "guilds", []) or []):
         try:
             ok = await _send_status_report(bot, guild, event="startup", force=False)
@@ -470,21 +634,75 @@ async def _startup_report_all_guilds(bot: Any) -> None:
         pass
 
 
-async def _setup_status_callback(interaction: discord.Interaction, status_channel: discord.TextChannel) -> None:
-    try:
-        from .public_setup_group import _config_embed, _upsert_config, _utc_iso
-        from .public_setup_group import _require_setup_permission
-        from ..guild_config import get_guild_config, invalidate_guild_config
-    except Exception as e:
-        return await interaction.response.send_message(
-            f"❌ Status setup dependencies are unavailable: `{e}`",
-            ephemeral=True,
-        )
+# ============================================================
+# /stoney setup-status command
+# ============================================================
 
-    if not await _require_setup_permission(interaction):
+async def _require_status_setup_permission(interaction: discord.Interaction) -> bool:
+    try:
+        from .public_setup_group import _require_setup_permission
+
+        return bool(await _require_setup_permission(interaction))
+    except Exception:
+        pass
+
+    try:
+        user = interaction.user
+        if isinstance(user, discord.Member):
+            perms = user.guild_permissions
+            return bool(perms.administrator or perms.manage_guild)
+    except Exception:
+        pass
+
+    try:
+        if interaction.response.is_done():
+            await interaction.followup.send("❌ You need Manage Server to use this.", ephemeral=True)
+        else:
+            await interaction.response.send_message("❌ You need Manage Server to use this.", ephemeral=True)
+    except Exception:
+        pass
+
+    return False
+
+
+async def _save_status_channel(guild_id: int, status_channel_id: int, interaction: discord.Interaction) -> None:
+    """
+    Save status channel using existing public setup config when available.
+    Fallback writes to guild_config if that resolver supports the key.
+    """
+    updates = {
+        "status_channel_id": str(int(status_channel_id)),
+        "configured_by_id": str(interaction.user.id),
+        "configured_by_name": str(interaction.user),
+        "configured_at": _utc_iso(),
+    }
+
+    try:
+        from .public_setup_group import _upsert_config
+
+        await _upsert_config(guild_id, updates)
+    except Exception:
+        try:
+            from ..guild_config import upsert_guild_config
+
+            await upsert_guild_config(guild_id, updates)
+        except Exception:
+            raise
+
+    try:
+        from ..guild_config import clear_guild_config_cache
+
+        clear_guild_config_cache(guild_id)
+    except Exception:
+        pass
+
+
+async def _setup_status_callback(interaction: discord.Interaction, status_channel: discord.TextChannel) -> None:
+    if not await _require_status_setup_permission(interaction):
         return
 
     await safe_defer(interaction, ephemeral=True)
+
     guild = interaction.guild
     if guild is None:
         return await interaction.followup.send("❌ This command must be used inside a server.", ephemeral=True)
@@ -493,6 +711,7 @@ async def _setup_status_callback(interaction: discord.Interaction, status_channe
     if bot_member is not None:
         perms = status_channel.permissions_for(bot_member)
         missing: list[str] = []
+
         if not perms.view_channel:
             missing.append("View Channel")
         if not perms.send_messages:
@@ -501,27 +720,24 @@ async def _setup_status_callback(interaction: discord.Interaction, status_channe
             missing.append("Embed Links")
         if not perms.read_message_history:
             missing.append("Read Message History")
+
         if missing:
             return await interaction.followup.send(
                 f"🚫 Status channel {status_channel.mention} is missing bot permissions: {', '.join(missing)}.",
                 ephemeral=True,
             )
 
-    updates = {
-        "status_channel_id": str(int(status_channel.id)),
-        "configured_by_id": str(interaction.user.id),
-        "configured_by_name": str(interaction.user),
-        "configured_at": _utc_iso(),
-    }
-
     try:
-        await _upsert_config(guild.id, updates)
-        invalidate_guild_config(guild.id)
-        cfg = await get_guild_config(guild.id, refresh=True)
+        await _save_status_channel(int(guild.id), int(status_channel.id), interaction)
     except Exception as e:
         return await interaction.followup.send(f"❌ Failed saving status setup: `{e}`", ephemeral=True)
 
-    embed = _config_embed(guild, cfg, title="✅ Status Reporting Saved")
+    embed = discord.Embed(
+        title="✅ Status Reporting Saved",
+        color=discord.Color.green(),
+        timestamp=discord.utils.utcnow(),
+    )
+    embed.add_field(name="Server", value=f"`{guild.name}` (`{guild.id}`)", inline=False)
     embed.add_field(
         name="Status Reports",
         value=(
@@ -530,6 +746,15 @@ async def _setup_status_callback(interaction: discord.Interaction, status_channe
         ),
         inline=False,
     )
+    embed.add_field(
+        name="Note",
+        value=(
+            "This does not replace a true external uptime watchdog. "
+            "The bot cannot send Discord alerts while its own process is offline."
+        ),
+        inline=False,
+    )
+
     await interaction.followup.send(embed=embed, ephemeral=True)
 
     try:
@@ -572,6 +797,10 @@ def _attach_setup_status_command() -> None:
             pass
 
 
+# ============================================================
+# Listener registration
+# ============================================================
+
 def _ensure_tasks(bot: Any) -> None:
     global _REPORT_TASK, _HEARTBEAT_TASK
 
@@ -601,6 +830,7 @@ def register_public_status_reporter(bot, tree) -> None:
 
     if _REGISTERED:
         return
+
     _REGISTERED = True
 
     @bot.listen("on_ready")
@@ -613,6 +843,7 @@ def register_public_status_reporter(bot, tree) -> None:
     async def _stoney_status_on_resumed() -> None:
         if not _enabled():
             return
+
         for guild in list(getattr(bot, "guilds", []) or []):
             try:
                 await _send_status_report(bot, guild, event="resumed", force=False)
