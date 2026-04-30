@@ -149,12 +149,12 @@ except Exception as e:
     except Exception:
         pass
 
-# Native source wiring: startup ticket sync/backfill uses sync category helpers.
+# Ticket sync/backfill category guard now lives inside stoney_verify/tickets_new instead of root runtime patches.
 try:
-    import runtime_ticket_sync_native_patch  # noqa: F401
+    from stoney_verify.tickets_new import sync_native_guard  # noqa: F401
 except Exception as e:
     try:
-        print(f"⚠️ main.py failed to import runtime_ticket_sync_native_patch guard: {e!r}")
+        print(f"⚠️ main.py failed to import tickets_new.sync_native_guard: {e!r}")
     except Exception:
         pass
 
