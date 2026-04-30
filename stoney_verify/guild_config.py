@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import random
 import time
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
 import discord
@@ -43,6 +43,7 @@ from .globals import (
 # - Discord runtime discovery is used when useful.
 # - .env values are FALLBACK ONLY.
 # - Missing config should not crash public servers.
+# - Backward compatible with callers using refresh=...
 #
 # This lets Stoney Verify run across many servers without
 # requiring every server owner to edit your deployment .env.
@@ -247,6 +248,7 @@ def env_fallback_guild_config(guild_id: Any = None) -> Dict[str, Any]:
         "allow_runtime_discovery": True,
         "created_at": None,
         "updated_at": None,
+        "raw": {},
     }
 
 
@@ -269,9 +271,13 @@ def _normalize_config_row(row: Optional[Dict[str, Any]], guild_id: Any = None) -
     if gid <= 0:
         gid = _fallback_guild_id(guild_id)
 
+    # app.py currently checks source.startswith("supabase:") for configured
+    # public startup scope. Keep that compatibility.
+    source = f"supabase:{GUILD_CONFIG_TABLE}" if src else "env_fallback"
+
     return {
         "guild_id": str(gid) if gid > 0 else "",
-        "source": "db" if src else "env_fallback",
+        "source": source,
 
         "verify_channel_id": pick_id("verify_channel_id"),
         "vc_verify_channel_id": pick_id("vc_verify_channel_id"),
@@ -328,7 +334,24 @@ def _db_get_guild_config_sync(guild_id: Any) -> Dict[str, Any]:
     return env_fallback_guild_config(gid)
 
 
-async def get_guild_config(guild_id: Any, *, force_refresh: bool = False) -> Dict[str, Any]:
+async def get_guild_config(
+    guild_id: Any,
+    *,
+    force_refresh: bool = False,
+    refresh: Optional[bool] = None,
+) -> Dict[str, Any]:
+    """
+    Get effective guild config.
+
+    Supports both:
+    - force_refresh=True
+    - refresh=True
+
+    The refresh alias exists because app.py/startup guards already call it.
+    """
+    if refresh is not None:
+        force_refresh = bool(refresh)
+
     gid = _fallback_guild_id(guild_id)
     key = _cache_key(gid)
 
@@ -410,6 +433,7 @@ async def upsert_guild_config(guild_id: Any, patch: Dict[str, Any]) -> Dict[str,
         f"upsert guild config async guild={gid}",
         lambda: _db_upsert_guild_config_sync(gid, patch),
     )
+
     clear_guild_config_cache(gid)
     _CONFIG_CACHE[_cache_key(gid)] = dict(config)
     _CONFIG_CACHE_TS[_cache_key(gid)] = _now()
@@ -427,6 +451,7 @@ def _find_role_by_names(guild: discord.Guild, names: list[str]) -> Optional[disc
             role_name = str(role.name or "").lower().strip()
             if role_name in wanted:
                 return role
+
         for role in guild.roles:
             role_name = str(role.name or "").lower().strip()
             if any(w in role_name for w in wanted):
@@ -443,6 +468,7 @@ def _find_text_channel_by_names(guild: discord.Guild, names: list[str]) -> Optio
             ch_name = str(ch.name or "").lower().strip()
             if ch_name in wanted:
                 return ch
+
         for ch in guild.text_channels:
             ch_name = str(ch.name or "").lower().strip()
             if any(w in ch_name for w in wanted):
@@ -459,6 +485,7 @@ def _find_category_by_names(guild: discord.Guild, names: list[str]) -> Optional[
             cat_name = str(cat.name or "").lower().strip()
             if cat_name in wanted:
                 return cat
+
         for cat in guild.categories:
             cat_name = str(cat.name or "").lower().strip()
             if any(w in cat_name for w in wanted):
@@ -482,7 +509,7 @@ async def discover_runtime_guild_config(guild: discord.Guild) -> Dict[str, Any]:
     discovered: Dict[str, Any] = {}
 
     if not config.get("staff_role_id"):
-        role = _find_role_by_names(guild, ["staff", "mod", "moderator", "admin", "support"])
+        role = _find_role_by_names(guild, ["staff", "ticket staff", "mod", "moderator", "admin", "support"])
         if role:
             discovered["staff_role_id"] = str(role.id)
 
@@ -492,7 +519,7 @@ async def discover_runtime_guild_config(guild: discord.Guild) -> Dict[str, Any]:
             discovered["verified_role_id"] = str(role.id)
 
     if not config.get("unverified_role_id"):
-        role = _find_role_by_names(guild, ["unverified", "not verified"])
+        role = _find_role_by_names(guild, ["unverified", "not verified", "pending"])
         if role:
             discovered["unverified_role_id"] = str(role.id)
 
@@ -502,12 +529,12 @@ async def discover_runtime_guild_config(guild: discord.Guild) -> Dict[str, Any]:
             discovered["resident_role_id"] = str(role.id)
 
     if not config.get("modlog_channel_id"):
-        ch = _find_text_channel_by_names(guild, ["mod-log", "modlog", "logs", "staff-log"])
+        ch = _find_text_channel_by_names(guild, ["mod-log", "modlog", "logs", "staff-log", "staff-logs"])
         if ch:
             discovered["modlog_channel_id"] = str(ch.id)
 
     if not config.get("transcripts_channel_id"):
-        ch = _find_text_channel_by_names(guild, ["transcripts", "ticket-transcripts"])
+        ch = _find_text_channel_by_names(guild, ["transcripts", "ticket-transcripts", "ticket-logs"])
         if ch:
             discovered["transcripts_channel_id"] = str(ch.id)
 
@@ -577,6 +604,10 @@ async def get_vc_verify_channel_id(guild_id: Any) -> int:
     return await get_config_id(guild_id, "vc_verify_channel_id")
 
 
+async def get_vc_verify_queue_channel_id(guild_id: Any) -> int:
+    return await get_config_id(guild_id, "vc_verify_queue_channel_id")
+
+
 async def get_ticket_category_id(guild_id: Any) -> int:
     return await get_config_id(guild_id, "ticket_category_id")
 
@@ -589,8 +620,24 @@ async def get_modlog_channel_id(guild_id: Any) -> int:
     return await get_config_id(guild_id, "modlog_channel_id")
 
 
+async def get_raidlog_channel_id(guild_id: Any) -> int:
+    return await get_config_id(guild_id, "raidlog_channel_id")
+
+
+async def get_join_log_channel_id(guild_id: Any) -> int:
+    return await get_config_id(guild_id, "join_log_channel_id")
+
+
+async def get_force_verify_log_channel_id(guild_id: Any) -> int:
+    return await get_config_id(guild_id, "force_verify_log_channel_id")
+
+
 async def get_staff_role_id(guild_id: Any) -> int:
     return await get_config_id(guild_id, "staff_role_id")
+
+
+async def get_vc_staff_role_id(guild_id: Any) -> int:
+    return await get_config_id(guild_id, "vc_staff_role_id")
 
 
 async def get_verified_role_id(guild_id: Any) -> int:
@@ -616,12 +663,20 @@ async def config_summary_for_guild(guild: discord.Guild) -> Dict[str, Any]:
         "allow_runtime_discovery": _safe_bool(config.get("allow_runtime_discovery"), True),
 
         "verify_channel_id": config.get("verify_channel_id"),
+        "vc_verify_channel_id": config.get("vc_verify_channel_id"),
+        "vc_verify_queue_channel_id": config.get("vc_verify_queue_channel_id"),
+
         "ticket_category_id": config.get("ticket_category_id"),
         "transcripts_channel_id": config.get("transcripts_channel_id"),
+
         "modlog_channel_id": config.get("modlog_channel_id"),
+        "raidlog_channel_id": config.get("raidlog_channel_id"),
+        "join_log_channel_id": config.get("join_log_channel_id"),
+        "force_verify_log_channel_id": config.get("force_verify_log_channel_id"),
 
         "unverified_role_id": config.get("unverified_role_id"),
         "verified_role_id": config.get("verified_role_id"),
         "resident_role_id": config.get("resident_role_id"),
         "staff_role_id": config.get("staff_role_id"),
+        "vc_staff_role_id": config.get("vc_staff_role_id"),
     }
