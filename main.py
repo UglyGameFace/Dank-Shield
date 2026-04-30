@@ -140,21 +140,21 @@ except Exception as e:
     except Exception:
         pass
 
+# Active ticket category enforcer now lives inside stoney_verify/tickets_new instead of root runtime patches.
+try:
+    from stoney_verify.tickets_new import category_enforcer  # noqa: F401
+except Exception as e:
+    try:
+        print(f"⚠️ main.py failed to import tickets_new.category_enforcer: {e!r}")
+    except Exception:
+        pass
+
 # Native source wiring: startup ticket sync/backfill uses sync category helpers.
 try:
     import runtime_ticket_sync_native_patch  # noqa: F401
 except Exception as e:
     try:
         print(f"⚠️ main.py failed to import runtime_ticket_sync_native_patch guard: {e!r}")
-    except Exception:
-        pass
-
-# Emergency repair net only: move already-misplaced open tickets back into Active Tickets.
-try:
-    import runtime_ticket_category_enforcer_patch  # noqa: F401
-except Exception as e:
-    try:
-        print(f"⚠️ main.py failed to import runtime_ticket_category_enforcer_patch guard: {e!r}")
     except Exception:
         pass
 
