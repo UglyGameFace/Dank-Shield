@@ -11,6 +11,9 @@ The real category-resolution rules live in:
 
 This guard should become less important as ticket creation/close/reopen flows are
 folded natively into tickets_new.service.
+
+Important safety detail:
+Only react to modules this shim owns. Do not patch-scan on every import.
 """
 
 import asyncio
@@ -26,6 +29,7 @@ _ORIGINAL_IMPORT = builtins.__import__
 _PATCHED_MODULES: set[str] = set()
 _READY_LISTENER_ATTACHED = False
 _STARTUP_SWEEP_RAN = False
+_PATCHING = False
 
 _TICKET_OPEN_RE = re.compile(r"^ticket-\d{1,8}$", re.I)
 
@@ -112,6 +116,30 @@ def _channel_in_category(channel: discord.TextChannel, category: discord.Categor
             return False
 
 
+def _permission_snapshot(channel: discord.TextChannel) -> str:
+    try:
+        me = channel.guild.me
+        if me is None:
+            return "bot member unavailable"
+        perms = channel.permissions_for(me)
+        missing: list[str] = []
+        checks = [
+            ("View Channel", getattr(perms, "view_channel", False)),
+            ("Read Message History", getattr(perms, "read_message_history", False)),
+            ("Send Messages", getattr(perms, "send_messages", False)),
+            ("Manage Channels", getattr(perms, "manage_channels", False)),
+            ("Manage Permissions", getattr(perms, "manage_permissions", False)),
+        ]
+        for label, ok in checks:
+            if not ok:
+                missing.append(label)
+        if not missing:
+            return "channel perms look OK from cache"
+        return "missing on current ticket channel: " + ", ".join(missing)
+    except Exception as e:
+        return f"permission snapshot failed: {type(e).__name__}"
+
+
 async def _move_ticket_channel_to_active(channel: discord.TextChannel, *, reason_suffix: str) -> bool:
     category = await _active_category_for_guild(channel.guild)
     if category is None:
@@ -129,6 +157,15 @@ async def _move_ticket_channel_to_active(channel: discord.TextChannel, *, reason
         )
         _log(f"moved {channel.mention} ({channel.id}) into active category {category.name} ({category.id})")
         return True
+    except discord.Forbidden as e:
+        _warn(
+            "cannot repair orphan ticket channel automatically "
+            f"guild={channel.guild.id} channel={channel.id} name={channel.name!r} "
+            f"target_category={category.id} reason=Missing Access; {_permission_snapshot(channel)}. "
+            "Fix by granting the bot View Channel + Manage Channels on that ticket/channel or delete/recreate the stale ticket. "
+            f"raw={e!r}"
+        )
+        return False
     except Exception as e:
         _warn(f"failed moving ticket channel={channel.id} into active category={category.id}: {e!r}")
         return False
@@ -294,34 +331,39 @@ def _maybe_attach_bot() -> None:
 
 
 def _patch_ticket_service(module: Any) -> None:
+    global _PATCHING
     module_name = getattr(module, "__name__", "")
-    patch_key = f"{module_name}:ticket_category_enforcer_v2"
-    if patch_key in _PATCHED_MODULES:
+    patch_key = f"{module_name}:ticket_category_enforcer_v3"
+    if patch_key in _PATCHED_MODULES or _PATCHING:
         return
 
-    original_create = getattr(module, "create_ticket_channel", None)
-    if callable(original_create) and not getattr(original_create, "_category_enforcer_wrapped", False):
-        async def _create_ticket_channel_category_enforced(*args: Any, **kwargs: Any) -> Any:
-            started_at = time.monotonic()
-            guild = _guild_from_call(args, kwargs)
-            result = await original_create(*args, **kwargs)
+    _PATCHING = True
+    try:
+        original_create = getattr(module, "create_ticket_channel", None)
+        if callable(original_create) and not getattr(original_create, "_category_enforcer_wrapped", False):
+            async def _create_ticket_channel_category_enforced(*args: Any, **kwargs: Any) -> Any:
+                started_at = time.monotonic()
+                guild = _guild_from_call(args, kwargs)
+                result = await original_create(*args, **kwargs)
+                try:
+                    await _enforce_after_create(guild, result, started_at=started_at)
+                except Exception as e:
+                    _warn(f"post-create category enforcement failed guild={getattr(guild, 'id', None)}: {e!r}")
+                return result
+
             try:
-                await _enforce_after_create(guild, result, started_at=started_at)
-            except Exception as e:
-                _warn(f"post-create category enforcement failed guild={getattr(guild, 'id', None)}: {e!r}")
-            return result
+                setattr(_create_ticket_channel_category_enforced, "_category_enforcer_wrapped", True)
+            except Exception:
+                pass
+            setattr(module, "create_ticket_channel", _create_ticket_channel_category_enforced)
 
-        try:
-            setattr(_create_ticket_channel_category_enforced, "_category_enforcer_wrapped", True)
-        except Exception:
-            pass
-        setattr(module, "create_ticket_channel", _create_ticket_channel_category_enforced)
-
-    _PATCHED_MODULES.add(patch_key)
-    _log(f"patched {module_name}; emergency open-ticket category repair uses native resolver")
+        _PATCHED_MODULES.add(patch_key)
+        _log(f"patched {module_name}; emergency open-ticket category repair uses native resolver")
+    finally:
+        _PATCHING = False
 
 
-def _patch_loaded() -> None:
+def _patch_loaded_once() -> None:
     try:
         module = sys.modules.get("stoney_verify.tickets_new.service")
         if module is not None:
@@ -334,19 +376,18 @@ def _patch_loaded() -> None:
 def _safe_import(name: str, globals: Any = None, locals: Any = None, fromlist: Any = (), level: int = 0) -> Any:
     module = _ORIGINAL_IMPORT(name, globals, locals, fromlist, level)
     try:
+        # Only react to modules this shim owns. No broad patch scans.
         if name == "stoney_verify.tickets_new.service" or name.endswith("tickets_new.service"):
             target = sys.modules.get("stoney_verify.tickets_new.service") or sys.modules.get(name)
             if target is not None:
                 _patch_ticket_service(target)
         elif name in {"stoney_verify.app", "stoney_verify.globals"} or name.endswith("stoney_verify.app") or name.endswith("stoney_verify.globals"):
             _maybe_attach_bot()
-        else:
-            _patch_loaded()
     except Exception as e:
         _warn(f"post-import patch failed for {name}: {e!r}")
     return module
 
 
 builtins.__import__ = _safe_import
-_patch_loaded()
+_patch_loaded_once()
 _log("loaded; active ticket category emergency repair active")
