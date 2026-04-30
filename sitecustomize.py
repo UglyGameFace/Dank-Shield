@@ -537,7 +537,7 @@ def _load_public_startup_scope_guard() -> None:
     single-guild startup behavior.
     """
     try:
-        _ORIGINAL_IMPORT("runtime_public_startup_scope_patch")
+        _ORIGINAL_IMPORT("stoney_verify.startup_guards.public_startup_scope", fromlist=["public_startup_scope"])
         _log("verified public startup scope guard import")
     except Exception as e:
         _warn(f"public startup scope guard import failed: {e!r}")
