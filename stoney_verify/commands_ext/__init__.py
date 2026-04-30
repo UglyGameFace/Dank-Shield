@@ -33,6 +33,7 @@ COMMAND_MODULES: List[CommandModuleSpec] = [
     ("public_tickettool_check", "register_public_tickettool_check_commands", "public grouped /stoney TicketTool parity check command"),
     ("public_production_audit", "register_public_production_audit_commands", "public brutal production readiness audit command"),
     ("public_setup_group", "register_public_setup_group_commands", "public grouped /stoney setup commands"),
+    ("public_help_group", "register_public_help_group_commands", "public grouped /stoney help command catalog"),
     ("public_cleanup_group", "register_public_cleanup_group_commands", "public grouped /stoney cleanup commands"),
     ("public_spam_group", "register_public_spam_group_commands", "public grouped /stoney spam commands"),
     ("public_mod_group", "register_public_mod_group_commands", "public grouped /mod moderation commands"),
@@ -97,6 +98,7 @@ _PUBLIC_CORE_MODULES: Tuple[str, ...] = (
     "public_tickettool_check",
     "public_production_audit",
     "public_setup_group",
+    "public_help_group",
     "public_cleanup_group",
     "public_spam_group",
     "public_mod_group",
@@ -346,7 +348,7 @@ def _public_guard_findings(profile: str) -> tuple[list[str], list[str]]:
     if expected_guilds >= 100 and not auto_shard:
         warnings.append("STONEY_EXPECTED_PUBLIC_GUILDS is 100+ but DISCORD_AUTO_SHARD is not enabled. Enable AutoShardedBot before serious public scaling.")
     if _env_bool("CLEAR_GLOBAL_COMMANDS_ON_BOOT", False):
-        warnings.append("CLEAR_GLOBAL_COMMANDS_ON_BOOT=true is a migration lever. Turn it back off after old global commands are cleared.")
+        warnings.append("CLEAR_GLOBAL_COMMANDS_ON_BOOT=true is legacy and ignored in public mode. Use STONEY_DANGEROUS_CLEAR_ALL_GLOBAL_COMMANDS_ON_BOOT=true only for an intentional one-time wipe.")
     if _env_str("GUILD_ID", ""):
         warnings.append("GUILD_ID is still set. That is fine for beta or fallback mode, but production behavior should rely on per-guild DB config.")
     return blockers, warnings
