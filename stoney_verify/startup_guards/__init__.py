@@ -22,6 +22,12 @@ _STARTUP_GUARDS: Tuple[str, ...] = (
     "stoney_verify.startup_guards.command_safety",
     "stoney_verify.startup_guards.slash_command_cleanup",
 
+    # Top-level TicketTool-style command catalog/audit fallback.
+    # Preferred path remains /stoney help and /stoney commands, but /commands
+    # gives server owners an obvious fallback while Discord global propagation
+    # catches up or the /stoney grouped menu is crowded.
+    "stoney_verify.startup_guards.top_level_commands_alias",
+
     # Broad event-loop DB/modlog/ticket safety layer.
     # sitecustomize.py remains as a tiny host fallback, but main startup loads
     # the real package module directly.
