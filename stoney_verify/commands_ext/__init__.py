@@ -50,6 +50,7 @@ COMMAND_MODULES: List[CommandModuleSpec] = [
     ("vc_flow", "register_vc_flow_commands", "VC flow commands"),
     ("ticket_admin", "register_ticket_admin_commands", "ticket admin commands"),
     ("ticket_panel_admin", "register_ticket_panel_admin_commands", "ticket panel setup/config commands"),
+    ("panel_bootstrap_admin", "register_panel_bootstrap_admin_commands", "panel bootstrap/self-heal admin commands"),
     ("ticket_channel_admin", "register_ticket_channel_admin_commands", "ticket channel admin commands"),
     ("ticket_intake_admin", "register_ticket_intake_admin_commands", "ticket intake admin commands"),
     ("ticket_queue_admin", "register_ticket_queue_admin_commands", "ticket queue admin commands"),
@@ -104,13 +105,20 @@ _PUBLIC_MODULES: Tuple[str, ...] = (
     # These are guild-scoped and DB-backed, so server owners can configure
     # panels without editing deployment .env values.
     "ticket_panel_admin",
+    "panel_bootstrap_admin",
     "role_admin",
     "channel_cleanup_admin",
 )
 
 COMMAND_PROFILES: Dict[str, Sequence[str]] = {
     "public": _PUBLIC_MODULES,
-    "minimal": tuple(name for name in _PUBLIC_MODULES if name != "channel_cleanup_admin"),
+    "minimal": tuple(
+        name
+        for name in _PUBLIC_MODULES
+        if name not in {
+            "channel_cleanup_admin",
+        }
+    ),
     "full": _LEGACY_MODULES,
     "dev": _LEGACY_MODULES,
 }
