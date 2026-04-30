@@ -7,6 +7,7 @@ from typing import Any, Dict, Optional, Sequence
 import discord
 
 from ..globals import get_supabase
+from ..guild_config import discover_runtime_guild_config
 from .panel_repository import (
     DEFAULT_PANEL_RULES,
     build_panel_runtime_config,
@@ -31,15 +32,24 @@ except Exception:
 # ------------------------------------------------------------
 # Runtime rules layer for panel creation/access decisions.
 #
-# Design goal for portability:
-# - DO NOT rely on per-server .env role/channel IDs
-# - prefer DB-backed guild member role_state when present
-# - fall back to Discord permissions + role names
-# - allow a safe "unknown member" path so new servers do not break
+# Portability design:
+# - DB guild_config is preferred.
+# - Runtime Discord discovery is allowed when configured.
+# - .env values are fallback only through guild_config.
+# - Missing server-specific config never crashes the bot.
+#
+# Legal / privacy posture:
+# - no hidden cross-guild config sharing
+# - no role/channel guessing writes to DB from this file
+# - no extra user profiling here beyond server role-state checks
+# - server owners remain responsible for informing users about
+#   ticket logs/transcripts according to their server rules
 # ============================================================
 
 
 DEFAULT_RULE_OVERRIDES: Dict[str, Any] = {
+    # Public-server friendly default:
+    # if a server has not configured roles yet, do not hard-break ticket intake.
     "allow_unknown_members": True,
 }
 
@@ -81,8 +91,9 @@ def _safe_str(value: Any, default: str = "") -> str:
 
 def _slugify(value: Any, limit: int = 120) -> str:
     raw = _safe_str(value).lower()
-    out = []
+    out: list[str] = []
     prev_dash = False
+
     for ch in raw:
         if ch.isalnum():
             out.append(ch)
@@ -91,22 +102,30 @@ def _slugify(value: Any, limit: int = 120) -> str:
             if not prev_dash:
                 out.append("-")
                 prev_dash = True
+
     return "".join(out).strip("-")[:limit]
-
-
-def _safe_json_dict(value: Any) -> Dict[str, Any]:
-    if isinstance(value, dict):
-        return dict(value)
-    return {}
 
 
 def _normalized_category_list(values: Sequence[Any]) -> list[str]:
     out: list[str] = []
+
     for value in values or []:
         slug = _slugify(value)
         if slug and slug not in out:
             out.append(slug)
+
     return out
+
+
+def _member_has_role_id(member: discord.Member, role_id: Any) -> bool:
+    rid = _safe_int(role_id, 0)
+    if rid <= 0:
+        return False
+
+    try:
+        return any(int(getattr(role, "id", 0) or 0) == rid for role in (member.roles or []))
+    except Exception:
+        return False
 
 
 # ============================================================
@@ -169,6 +188,7 @@ def _is_staff_by_permissions(member: discord.Member) -> bool:
 
 def _role_names(member: discord.Member) -> list[str]:
     out: list[str] = []
+
     try:
         for role in member.roles or []:
             name = _safe_str(getattr(role, "name", "")).lower()
@@ -176,16 +196,26 @@ def _role_names(member: discord.Member) -> list[str]:
                 out.append(name)
     except Exception:
         return out
+
     return out
 
 
 def _role_state_from_names(member: discord.Member) -> str:
     names = _role_names(member)
 
-    staff_markers = {"staff", "mod", "moderator", "admin", "administrator", "helper", "support"}
+    staff_markers = {
+        "staff",
+        "mod",
+        "moderator",
+        "admin",
+        "administrator",
+        "helper",
+        "support",
+        "ticket staff",
+    }
     resident_markers = {"resident"}
     verified_markers = {"verified"}
-    unverified_markers = {"unverified", "un-verified", "not verified"}
+    unverified_markers = {"unverified", "un-verified", "not verified", "pending"}
 
     for name in names:
         if any(marker in name for marker in staff_markers):
@@ -206,11 +236,49 @@ def _role_state_from_names(member: discord.Member) -> str:
     return "unknown"
 
 
+async def _role_state_from_guild_config(member: discord.Member) -> str:
+    """
+    Prefer per-server guild_config.
+
+    guild_config may itself use .env as fallback if the server owner/deployer
+    allows it, but this file does not directly rely on .env role IDs.
+    """
+    try:
+        config = await discover_runtime_guild_config(member.guild)
+
+        staff_role_id = config.get("staff_role_id")
+        resident_role_id = config.get("resident_role_id")
+        verified_role_id = config.get("verified_role_id")
+        unverified_role_id = config.get("unverified_role_id")
+
+        if _member_has_role_id(member, staff_role_id):
+            return "staff"
+        if _member_has_role_id(member, resident_role_id):
+            return "resident"
+        if _member_has_role_id(member, verified_role_id):
+            return "verified"
+        if _member_has_role_id(member, unverified_role_id):
+            return "unverified"
+    except Exception:
+        pass
+
+    return "unknown"
+
+
 async def resolve_member_role_state(member: discord.Member) -> str:
+    """
+    Resolve member role-state without requiring per-server .env setup.
+
+    Order:
+    1. Discord permissions for staff safety.
+    2. DB guild_members.role_state if your sync pipeline maintains it.
+    3. DB/runtime guild_config role IDs, with .env fallback only if enabled there.
+    4. Role-name fallback for new public servers.
+    5. unknown.
+    """
     if _is_staff_by_permissions(member):
         return "staff"
 
-    # Prefer durable DB-tracked role state if your sync pipeline maintains it.
     try:
         row = await _guild_member_row(int(member.guild.id), int(member.id))
         db_state = _safe_str(row.get("role_state")).lower()
@@ -219,7 +287,10 @@ async def resolve_member_role_state(member: discord.Member) -> str:
     except Exception:
         pass
 
-    # Fallback to role names so new servers are not blocked by missing env config.
+    config_state = await _role_state_from_guild_config(member)
+    if config_state in {"staff", "resident", "verified", "unverified"}:
+        return config_state
+
     fallback_state = _role_state_from_names(member)
     if fallback_state in {"staff", "resident", "verified", "unverified"}:
         return fallback_state
@@ -236,36 +307,74 @@ def _merge_rules(panel_rules: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     merged.update(DEFAULT_RULE_OVERRIDES)
     merged.update(dict(panel_rules or {}))
 
-    merged["cooldown_seconds"] = max(0, _safe_int(merged.get("cooldown_seconds"), DEFAULT_PANEL_RULES["cooldown_seconds"]))
-    merged["max_tickets_per_window"] = max(0, _safe_int(merged.get("max_tickets_per_window"), DEFAULT_PANEL_RULES["max_tickets_per_window"]))
-    merged["window_minutes"] = max(0, _safe_int(merged.get("window_minutes"), DEFAULT_PANEL_RULES["window_minutes"]))
-    merged["auto_close_enabled"] = _safe_bool(merged.get("auto_close_enabled"), DEFAULT_PANEL_RULES["auto_close_enabled"])
-    merged["auto_close_minutes"] = max(5, _safe_int(merged.get("auto_close_minutes"), DEFAULT_PANEL_RULES["auto_close_minutes"]))
+    merged["cooldown_seconds"] = max(
+        0,
+        _safe_int(merged.get("cooldown_seconds"), DEFAULT_PANEL_RULES["cooldown_seconds"]),
+    )
+    merged["max_tickets_per_window"] = max(
+        0,
+        _safe_int(merged.get("max_tickets_per_window"), DEFAULT_PANEL_RULES["max_tickets_per_window"]),
+    )
+    merged["window_minutes"] = max(
+        0,
+        _safe_int(merged.get("window_minutes"), DEFAULT_PANEL_RULES["window_minutes"]),
+    )
+    merged["auto_close_enabled"] = _safe_bool(
+        merged.get("auto_close_enabled"),
+        DEFAULT_PANEL_RULES["auto_close_enabled"],
+    )
+    merged["auto_close_minutes"] = max(
+        5,
+        _safe_int(merged.get("auto_close_minutes"), DEFAULT_PANEL_RULES["auto_close_minutes"]),
+    )
     merged["inactivity_reminders_enabled"] = _safe_bool(
         merged.get("inactivity_reminders_enabled"),
         DEFAULT_PANEL_RULES["inactivity_reminders_enabled"],
     )
     merged["inactivity_reminder_minutes"] = max(
         1,
-        _safe_int(merged.get("inactivity_reminder_minutes"), DEFAULT_PANEL_RULES["inactivity_reminder_minutes"]),
+        _safe_int(
+            merged.get("inactivity_reminder_minutes"),
+            DEFAULT_PANEL_RULES["inactivity_reminder_minutes"],
+        ),
     )
     merged["staff_alert_channel_id"] = _safe_str(merged.get("staff_alert_channel_id")) or None
-    merged["allow_unverified"] = _safe_bool(merged.get("allow_unverified"), DEFAULT_PANEL_RULES["allow_unverified"])
-    merged["allow_verified"] = _safe_bool(merged.get("allow_verified"), DEFAULT_PANEL_RULES["allow_verified"])
-    merged["allow_resident"] = _safe_bool(merged.get("allow_resident"), DEFAULT_PANEL_RULES["allow_resident"])
-    merged["allow_staff"] = _safe_bool(merged.get("allow_staff"), DEFAULT_PANEL_RULES["allow_staff"])
+
+    merged["allow_unverified"] = _safe_bool(
+        merged.get("allow_unverified"),
+        DEFAULT_PANEL_RULES["allow_unverified"],
+    )
+    merged["allow_verified"] = _safe_bool(
+        merged.get("allow_verified"),
+        DEFAULT_PANEL_RULES["allow_verified"],
+    )
+    merged["allow_resident"] = _safe_bool(
+        merged.get("allow_resident"),
+        DEFAULT_PANEL_RULES["allow_resident"],
+    )
+    merged["allow_staff"] = _safe_bool(
+        merged.get("allow_staff"),
+        DEFAULT_PANEL_RULES["allow_staff"],
+    )
     merged["allow_unknown_members"] = _safe_bool(
         merged.get("allow_unknown_members"),
         DEFAULT_RULE_OVERRIDES["allow_unknown_members"],
     )
-    merged["ghost_allowed"] = _safe_bool(merged.get("ghost_allowed"), DEFAULT_PANEL_RULES["ghost_allowed"])
+
+    merged["ghost_allowed"] = _safe_bool(
+        merged.get("ghost_allowed"),
+        DEFAULT_PANEL_RULES["ghost_allowed"],
+    )
     merged["close_confirmation_required"] = _safe_bool(
         merged.get("close_confirmation_required"),
         DEFAULT_PANEL_RULES["close_confirmation_required"],
     )
     merged["per_owner_open_limit"] = max(
         1,
-        _safe_int(merged.get("per_owner_open_limit"), DEFAULT_PANEL_RULES["per_owner_open_limit"]),
+        _safe_int(
+            merged.get("per_owner_open_limit"),
+            DEFAULT_PANEL_RULES["per_owner_open_limit"],
+        ),
     )
     merged["transcript_mode"] = _safe_str(
         merged.get("transcript_mode"),
@@ -273,11 +382,6 @@ def _merge_rules(panel_rules: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     ).lower()
 
     return merged
-
-
-def _panel_enabled(panel_bundle: Dict[str, Any]) -> bool:
-    panel = dict(panel_bundle.get("panel") or {})
-    return _safe_bool(panel.get("is_enabled"), True)
 
 
 def _panel_category_allowed(panel_bundle: Dict[str, Any], category_slug: Optional[str]) -> bool:
@@ -288,6 +392,7 @@ def _panel_category_allowed(panel_bundle: Dict[str, Any], category_slug: Optiona
     slug = _slugify(category_slug)
     if not slug:
         return False
+
     return slug in categories
 
 
@@ -295,22 +400,42 @@ def _member_allowed_by_rules(role_state: str, rules: Dict[str, Any]) -> tuple[bo
     state = _safe_str(role_state).lower()
 
     if state == "staff":
-        return (_safe_bool(rules.get("allow_staff"), True), "Staff are not allowed to use this panel.")
-    if state == "resident":
-        return (_safe_bool(rules.get("allow_resident"), True), "Residents are not allowed to use this panel.")
-    if state == "verified":
-        return (_safe_bool(rules.get("allow_verified"), True), "Verified members are not allowed to use this panel.")
-    if state == "unverified":
-        return (_safe_bool(rules.get("allow_unverified"), True), "Unverified members are not allowed to use this panel.")
+        return (
+            _safe_bool(rules.get("allow_staff"), True),
+            "Staff are not allowed to use this panel.",
+        )
 
-    return (_safe_bool(rules.get("allow_unknown_members"), True), "Your current role state is not allowed to use this panel.")
+    if state == "resident":
+        return (
+            _safe_bool(rules.get("allow_resident"), True),
+            "Residents are not allowed to use this panel.",
+        )
+
+    if state == "verified":
+        return (
+            _safe_bool(rules.get("allow_verified"), True),
+            "Verified members are not allowed to use this panel.",
+        )
+
+    if state == "unverified":
+        return (
+            _safe_bool(rules.get("allow_unverified"), True),
+            "Unverified members are not allowed to use this panel.",
+        )
+
+    return (
+        _safe_bool(rules.get("allow_unknown_members"), True),
+        "Your current role state is not allowed to use this panel.",
+    )
 
 
 def _ghost_allowed(rules: Dict[str, Any], is_ghost: bool) -> tuple[bool, str]:
     if not is_ghost:
         return (True, "")
+
     if _safe_bool(rules.get("ghost_allowed"), False):
         return (True, "")
+
     return (False, "Ghost ticket creation is not allowed for this panel.")
 
 
@@ -331,7 +456,10 @@ def _panel_runtime_summary(panel_bundle: Dict[str, Any]) -> Dict[str, Any]:
         "rules": rules,
         "preset_key": _safe_str(panel.get("preset_key") or preset.get("preset_key")),
         "prompt_title": _safe_str(panel.get("prompt_title") or preset.get("default_prompt_title")),
-        "prompt_description": _safe_str(panel.get("prompt_description") or preset.get("default_prompt_description")),
+        "prompt_description": _safe_str(
+            panel.get("prompt_description")
+            or preset.get("default_prompt_description")
+        ),
     }
 
 
@@ -357,7 +485,11 @@ async def get_panel_access_snapshot(
     category_slug: Optional[str] = None,
     is_ghost: bool = False,
 ) -> Dict[str, Any]:
-    runtime = await get_effective_panel_runtime(guild_id=member.guild.id, panel_key=panel_key)
+    runtime = await get_effective_panel_runtime(
+        guild_id=member.guild.id,
+        panel_key=panel_key,
+    )
+
     if runtime is None:
         return {
             "ok": False,
@@ -455,6 +587,7 @@ async def evaluate_panel_creation_request(
         category_slug=category_slug,
         is_ghost=is_ghost,
     )
+
     if not access.get("ok"):
         return access
 
@@ -462,10 +595,14 @@ async def evaluate_panel_creation_request(
         guild_id=int(member.guild.id),
         user_id=int(member.id),
     )
+
     if not _safe_bool(global_guard.get("ok"), True):
         return {
             "ok": False,
-            "reason": _safe_str(global_guard.get("reason"), "You cannot create a ticket right now."),
+            "reason": _safe_str(
+                global_guard.get("reason"),
+                "You cannot create a ticket right now.",
+            ),
             "source": _safe_str(global_guard.get("source"), "guardrails"),
             "panel": access.get("panel"),
             "rules": access.get("rules"),
@@ -474,6 +611,7 @@ async def evaluate_panel_creation_request(
         }
 
     rules = dict(access.get("rules") or {})
+
     return {
         "ok": True,
         "reason": "",
@@ -502,6 +640,7 @@ async def panel_creation_guard(
         panel_key=panel_key,
         semaphore_limit=semaphore_limit,
     )
+
     async with sem:
         async with lock:
             yield
@@ -541,7 +680,11 @@ async def panel_runtime_from_message_binding(
 ) -> Optional[Dict[str, Any]]:
     if not panel_key:
         return None
-    return await get_effective_panel_runtime(guild_id=guild_id, panel_key=panel_key)
+
+    return await get_effective_panel_runtime(
+        guild_id=guild_id,
+        panel_key=panel_key,
+    )
 
 
 def panel_allows_role_state(runtime: Optional[Dict[str, Any]], role_state: str) -> bool:
@@ -566,7 +709,12 @@ async def panel_is_category_enabled(
     panel_key: Any,
     category_slug: Any,
 ) -> bool:
-    runtime = await get_effective_panel_runtime(guild_id=guild_id, panel_key=panel_key)
+    runtime = await get_effective_panel_runtime(
+        guild_id=guild_id,
+        panel_key=panel_key,
+    )
+
     if runtime is None:
         return False
+
     return _panel_category_allowed(runtime, _slugify(category_slug))
