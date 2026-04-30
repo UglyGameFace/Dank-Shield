@@ -167,21 +167,21 @@ except Exception as e:
     except Exception:
         pass
 
+# Structured API guild-config guard now lives inside stoney_verify/api_new instead of root runtime patches.
+try:
+    from stoney_verify.api_new import guild_config_guard  # noqa: F401
+except Exception as e:
+    try:
+        print(f"⚠️ main.py failed to import api_new.guild_config_guard: {e!r}")
+    except Exception:
+        pass
+
 # Public startup scope guard.
 try:
     import runtime_public_startup_scope_patch  # noqa: F401
 except Exception as e:
     try:
         print(f"⚠️ main.py failed to import runtime_public_startup_scope_patch guard: {e!r}")
-    except Exception:
-        pass
-
-# Structured API per-guild config guard.
-try:
-    import runtime_api_guild_config_patch  # noqa: F401
-except Exception as e:
-    try:
-        print(f"⚠️ main.py failed to import runtime_api_guild_config_patch guard: {e!r}")
     except Exception:
         pass
 
