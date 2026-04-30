@@ -75,12 +75,12 @@ except Exception as e:
     except Exception:
         pass
 
-# Force-load guild_members schema compatibility before member sync imports.
+# Guild member role-state compatibility now lives inside members_new instead of root runtime patches.
 try:
-    import runtime_guild_members_role_state_compat_patch  # noqa: F401
+    from stoney_verify.members_new import role_state_compat_guard  # noqa: F401
 except Exception as e:
     try:
-        print(f"⚠️ main.py failed to import runtime_guild_members_role_state_compat_patch guard: {e!r}")
+        print(f"⚠️ main.py failed to import members_new.role_state_compat_guard: {e!r}")
     except Exception:
         pass
 
