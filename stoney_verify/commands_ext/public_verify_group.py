@@ -18,7 +18,7 @@ from discord import app_commands
 from ..globals import now_utc
 from ..guild_config import get_guild_config
 from ..tickets_new.service import find_open_ticket_for_owner
-from ..tickets import find_ticket_owner_retry, is_verification_ticket_channel
+from ..tickets import is_verification_ticket_channel
 from ..transcripts import ensure_verify_ui_present
 from .common import _staff_check, require_target_member, reply_once, safe_defer, safe_followup
 
@@ -312,9 +312,9 @@ async def verify_set_resident(interaction: discord.Interaction, user: str, enabl
     await _apply_role_change(interaction=interaction, member=member, role=role, enable=enable, reason=f"/verify set-resident by {interaction.user} ({interaction.user.id})")
 
 
-@verify_group.command(name="grant", description="Grant Verified + Resident and remove Unverified.")
+@verify_group.command(name="grant-vr", description="Grant Verified + Resident and remove Unverified.")
 @app_commands.describe(user="Mention, ID, username, or display name")
-async def verify_grant(interaction: discord.Interaction, user: str) -> None:
+async def verify_grant_vr(interaction: discord.Interaction, user: str) -> None:
     if not await _staff_only(interaction):
         return
     guild = await _guild_or_reply(interaction)
@@ -351,11 +351,11 @@ async def verify_grant(interaction: discord.Interaction, user: str) -> None:
     try:
         to_add = [role for role in (verified, resident) if role is not None and role not in member.roles]
         if to_add:
-            await member.add_roles(*to_add, reason=f"/verify grant by {interaction.user} ({interaction.user.id})")
+            await member.add_roles(*to_add, reason=f"/verify grant-vr by {interaction.user} ({interaction.user.id})")
             added.extend(to_add)
 
         if unverified is not None and unverified in member.roles:
-            await member.remove_roles(unverified, reason=f"/verify grant cleanup by {interaction.user} ({interaction.user.id})")
+            await member.remove_roles(unverified, reason=f"/verify grant-vr cleanup by {interaction.user} ({interaction.user.id})")
             removed.append(unverified)
 
         ticket_ch = await _maybe_repair_verify_ui_for_member(guild, member)
@@ -515,6 +515,25 @@ def register_public_verify_group_commands(bot: Any, tree: Any) -> None:
     if _REGISTERED:
         return
 
+    # Remove old top-level command aliases from the local tree so they stop
+    # showing after sync. These were replaced by grouped /verify subcommands.
+    removed: list[str] = []
+    for old_name in (
+        "fix_unverified",
+        "set_verified",
+        "set_resident",
+        "grant_vr",
+        "verify_diagnose",
+        "fix_unverified_member",
+        "verify_status",
+    ):
+        try:
+            if tree.get_command(old_name, guild=None) is not None:
+                tree.remove_command(old_name, guild=None)
+                removed.append(old_name)
+        except Exception:
+            pass
+
     try:
         existing = tree.get_command("verify", guild=None)
     except Exception:
@@ -524,14 +543,16 @@ def register_public_verify_group_commands(bot: Any, tree: Any) -> None:
         tree.add_command(verify_group)
         _REGISTERED = True
         try:
-            print("✅ public_verify_group: registered /verify grouped commands")
+            suffix = f" removed_legacy={removed}" if removed else ""
+            print(f"✅ public_verify_group: registered /verify grouped commands{suffix}")
         except Exception:
             pass
         return
 
     _REGISTERED = True
     try:
-        print("✅ public_verify_group: /verify already registered")
+        suffix = f" removed_legacy={removed}" if removed else ""
+        print(f"✅ public_verify_group: /verify already registered{suffix}")
     except Exception:
         pass
 
