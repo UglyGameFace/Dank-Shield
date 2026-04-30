@@ -9,9 +9,11 @@ real Discord lifecycle work did not finish:
 - channel did not move to the configured category
 - channel did not rename to closed-XXXX / ticket-XXXX
 
-That is unacceptable for a production ticket bot. This runtime patch replaces the
-callbacks on the grouped /ticket close and /ticket reopen command objects with
-strict versions that report partial failure honestly.
+Also fixes lifecycle drift:
+If a ticket is already marked closed/open in the database but the Discord channel
+is still in the wrong category/name, running /ticket close or /ticket reopen now
+repairs the Discord lifecycle instead of stopping early with a misleading
+"already closed/open" message.
 """
 
 import builtins
@@ -69,13 +71,20 @@ def _category_label(channel: discord.TextChannel) -> str:
     return "No category"
 
 
+def _channel_name_label(channel: discord.TextChannel) -> str:
+    try:
+        return f"`#{channel.name}`"
+    except Exception:
+        return "unknown"
+
+
 async def _move_archive_strict(channel: discord.TextChannel) -> tuple[bool, str]:
     try:
         from stoney_verify.tickets_new.lifecycle_categories import move_ticket_to_archive_category
 
         result = await move_ticket_to_archive_category(channel)
         if result.already_correct:
-            return True, f"Already archived in **{result.target_category_name}**."
+            return True, f"Already archived/named correctly in **{result.target_category_name}**."
         return True, f"Moved/renamed into archive category **{result.target_category_name}**."
     except Exception as e:
         return False, f"{type(e).__name__}: {e}"
@@ -87,7 +96,7 @@ async def _move_active_strict(channel: discord.TextChannel) -> tuple[bool, str]:
 
         result = await move_ticket_to_active_category(channel)
         if result.already_correct:
-            return True, f"Already active in **{result.target_category_name}**."
+            return True, f"Already active/named correctly in **{result.target_category_name}**."
         return True, f"Moved/renamed into active category **{result.target_category_name}**."
     except Exception as e:
         return False, f"{type(e).__name__}: {e}"
@@ -118,9 +127,30 @@ async def _strict_ticket_close(
     if status == "deleted":
         return await interaction.followup.send("❌ This ticket is already marked deleted and cannot be closed.", ephemeral=True)
 
+    # Critical drift repair: DB says closed, but Discord channel may still be in
+    # ACTIVE TICKETS and named ticket-XXXX. Do not stop early; repair lifecycle.
     if legacy._ticket_effectively_closed(channel=ch, row=row) and status == "closed":
+        lifecycle_ok, lifecycle_detail = await _move_archive_strict(ch)
+        if lifecycle_ok:
+            try:
+                await ch.send(f"🧰 Closed ticket lifecycle repaired by {interaction.user.mention}.\n📦 {lifecycle_detail}")
+            except Exception:
+                pass
+            return await interaction.followup.send(
+                "✅ This ticket was already marked closed, so I repaired/verified its Discord lifecycle.\n"
+                f"📦 {lifecycle_detail}\n"
+                f"Current channel: {_channel_name_label(ch)}\n"
+                f"Current location: {_category_label(ch)}",
+                ephemeral=True,
+            )
+
         return await interaction.followup.send(
-            f"ℹ️ {ch.mention} is already closed.\nCurrent location: {_category_label(ch)}",
+            "⚠️ This ticket is marked closed in the database, but I could not repair its Discord lifecycle.\n"
+            "It is still not fully archived/renamed.\n"
+            f"Current channel: {_channel_name_label(ch)}\n"
+            f"Current location: {_category_label(ch)}\n"
+            f"Missing channel permissions from bot view: `{_permission_snapshot(ch)}`\n"
+            f"Error: `{lifecycle_detail[:900]}`",
             ephemeral=True,
         )
 
@@ -174,11 +204,17 @@ async def _strict_ticket_close(
         pass
 
     if lifecycle_ok:
-        lines = [f"✅ Closed {ch.mention}.", f"📦 {lifecycle_detail}", f"Current location: {_category_label(ch)}"]
+        lines = [
+            f"✅ Closed {ch.mention}.",
+            f"📦 {lifecycle_detail}",
+            f"Current channel: {_channel_name_label(ch)}",
+            f"Current location: {_category_label(ch)}",
+        ]
     else:
         lines = [
             f"⚠️ Ticket state was closed for {ch.mention}, but lifecycle failed.",
             "The channel was **not fully archived/renamed**.",
+            f"Current channel: {_channel_name_label(ch)}",
             f"Current location: {_category_label(ch)}",
             f"Missing channel permissions from bot view: `{_permission_snapshot(ch)}`",
             f"Error: `{lifecycle_detail[:900]}`",
@@ -217,9 +253,30 @@ async def _strict_ticket_reopen(
     if status == "deleted":
         return await interaction.followup.send("❌ This ticket is deleted and cannot be reopened.", ephemeral=True)
 
+    # Critical drift repair: DB says open, but Discord channel may still be in
+    # archive and/or named closed-XXXX. Do not stop early; repair lifecycle.
     if legacy._ticket_effectively_open(channel=ch, row=row) and status in {"open", "claimed"}:
+        lifecycle_ok, lifecycle_detail = await _move_active_strict(ch)
+        if lifecycle_ok:
+            try:
+                await ch.send(f"🧰 Open ticket lifecycle repaired by {interaction.user.mention}.\n📂 {lifecycle_detail}")
+            except Exception:
+                pass
+            return await interaction.followup.send(
+                "✅ This ticket was already marked open, so I repaired/verified its Discord lifecycle.\n"
+                f"📂 {lifecycle_detail}\n"
+                f"Current channel: {_channel_name_label(ch)}\n"
+                f"Current location: {_category_label(ch)}",
+                ephemeral=True,
+            )
+
         return await interaction.followup.send(
-            f"ℹ️ {ch.mention} is already open.\nCurrent location: {_category_label(ch)}",
+            "⚠️ This ticket is marked open in the database, but I could not repair its Discord lifecycle.\n"
+            "It is still not fully moved/renamed back to active.\n"
+            f"Current channel: {_channel_name_label(ch)}\n"
+            f"Current location: {_category_label(ch)}\n"
+            f"Missing channel permissions from bot view: `{_permission_snapshot(ch)}`\n"
+            f"Error: `{lifecycle_detail[:900]}`",
             ephemeral=True,
         )
 
@@ -260,11 +317,17 @@ async def _strict_ticket_reopen(
         pass
 
     if lifecycle_ok:
-        lines = [f"✅ Reopened {ch.mention}.", f"📂 {lifecycle_detail}", f"Current location: {_category_label(ch)}"]
+        lines = [
+            f"✅ Reopened {ch.mention}.",
+            f"📂 {lifecycle_detail}",
+            f"Current channel: {_channel_name_label(ch)}",
+            f"Current location: {_category_label(ch)}",
+        ]
     else:
         lines = [
             f"⚠️ Ticket state was reopened for {ch.mention}, but lifecycle failed.",
             "The channel was **not fully moved/renamed back to active**.",
+            f"Current channel: {_channel_name_label(ch)}",
             f"Current location: {_category_label(ch)}",
             f"Missing channel permissions from bot view: `{_permission_snapshot(ch)}`",
             f"Error: `{lifecycle_detail[:900]}`",
@@ -307,7 +370,7 @@ def _patch_public_ticket_group(module: Any) -> None:
 
     if "close" in patched and "reopen" in patched:
         _PATCHED = True
-        _log("patched /ticket close and /ticket reopen callbacks with truthful lifecycle checks")
+        _log("patched /ticket close and /ticket reopen callbacks with truthful lifecycle checks + drift repair")
     elif patched:
         _PATCHED = True
         _warn(f"partially patched public ticket lifecycle callbacks: {patched}")
@@ -340,4 +403,4 @@ def _safe_import(name: str, globals: Any = None, locals: Any = None, fromlist: A
 
 builtins.__import__ = _safe_import
 _patch_loaded()
-_log("loaded; truthful ticket lifecycle command responses active")
+_log("loaded; truthful ticket lifecycle command responses + drift repair active")
