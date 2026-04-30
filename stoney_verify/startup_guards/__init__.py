@@ -24,6 +24,7 @@ _STARTUP_GUARDS: Tuple[str, ...] = (
     # sitecustomize.py remains as a tiny host fallback, but main startup loads
     # the real package module directly.
     "stoney_verify.startup_guards.runtime_safety",
+    "stoney_verify.startup_guards.invite_intent_safety",
     "stoney_verify.startup_guards.raidguard_hard_stop",
     "stoney_verify.startup_guards.raidguard_bot_heuristics",
     "stoney_verify.startup_guards.raidguard_risk_engine_v2",
