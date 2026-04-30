@@ -1,13 +1,11 @@
 from __future__ import annotations
 
-# Force-load process health visibility first. If the host restarts/kills the bot,
-# this makes the next log show boot count, signals, atexit, memory, and async
-# exception details instead of leaving us guessing.
+# Process health now lives inside stoney_verify/startup_guards instead of root runtime patches.
 try:
-    import runtime_process_health_guard  # noqa: F401
+    from stoney_verify.startup_guards import process_health  # noqa: F401
 except Exception as e:
     try:
-        print(f"⚠️ main.py failed to import runtime_process_health_guard: {e!r}")
+        print(f"⚠️ main.py failed to import startup_guards.process_health: {e!r}")
     except Exception:
         pass
 
@@ -212,22 +210,12 @@ except Exception as e:
     except Exception:
         pass
 
-try:
-    import runtime_process_health_guard as _process_health_guard
-    try:
-        _process_health_guard.install_loop_exception_handler()
-    except Exception:
-        pass
-except Exception:
-    pass
-
 from stoney_verify.app import run
 
 
 if __name__ == "__main__":
     try:
-        import runtime_process_health_guard as _process_health_guard
-        _process_health_guard.start_health_loop()
+        process_health.start_health_loop()
     except Exception:
         pass
     run()
