@@ -41,7 +41,8 @@ from .globals import (
 #
 # Critical compatibility goals:
 # - Old public setup modules import GuildRuntimeConfig,
-#   invalidate_guild_config, and guild_config_cache_snapshot.
+#   invalidate_guild_config, guild_config_cache_snapshot, and
+#   public_config_isolation_enabled.
 # - Existing installs may already use public.guild_configs.
 # - Newer panel code may try public.guild_config.
 # - DB config remains authoritative, .env remains fallback only.
@@ -72,12 +73,7 @@ _CONFIG_CACHE_TS: Dict[str, datetime] = {}
 # ============================================================
 
 class GuildRuntimeConfig(dict):
-    """Dict-backed runtime config with attribute access.
-
-    Older modules use ``cfg.staff_role_id`` while newer modules use
-    ``cfg["staff_role_id"]`` / ``cfg.get(...)``. This supports both without
-    forcing another risky refactor across every command module.
-    """
+    """Dict-backed runtime config with attribute access."""
 
     def __getattr__(self, key: str):
         try:
@@ -161,6 +157,34 @@ def _cache_key(guild_id: Any) -> str:
     return str(_safe_int(guild_id, 0))
 
 
+def public_config_isolation_enabled() -> bool:
+    """Return whether public per-guild config isolation is active.
+
+    Production/public mode must not let random servers inherit private/beta
+    server IDs from deployment .env. We still allow .env as a controlled
+    fallback for the configured home guild and for dev, but public audits need
+    this stable helper.
+    """
+    try:
+        explicit = os.getenv("STONEY_PUBLIC_CONFIG_ISOLATION")
+        if explicit is not None and str(explicit).strip():
+            return _safe_bool(explicit, True)
+
+        deployment = str(os.getenv("STONEY_DEPLOYMENT_MODE") or "").strip().lower()
+        if deployment in {"public", "prod", "production"}:
+            return True
+
+        if _safe_bool(os.getenv("STONEY_PUBLIC_MODE"), False):
+            return True
+        if _safe_bool(os.getenv("STONEY_PRODUCTION_MODE"), False):
+            return True
+
+        # Safe default: isolate unless someone explicitly disables it.
+        return not _safe_bool(os.getenv("STONEY_DISABLE_PUBLIC_CONFIG_ISOLATION"), False)
+    except Exception:
+        return True
+
+
 def clear_guild_config_cache(guild_id: Optional[Any] = None) -> None:
     if guild_id is None:
         _CONFIG_CACHE.clear()
@@ -182,14 +206,25 @@ def invalidate_config_cache(guild_id: Optional[Any] = None) -> None:
 
 def guild_config_cache_snapshot() -> Dict[str, Any]:
     try:
+        keys = sorted(_CONFIG_CACHE.keys())
         return {
             "size": len(_CONFIG_CACHE),
-            "keys": sorted(_CONFIG_CACHE.keys()),
+            "keys": keys,
+            "cached_guilds": len(keys),
             "ttl_seconds": _CACHE_TTL_SECONDS,
+            "table": GUILD_CONFIG_TABLE,
             "table_order": list(GUILD_CONFIG_TABLE_FALLBACKS),
+            "public_config_isolation": public_config_isolation_enabled(),
         }
     except Exception:
-        return {"size": 0, "keys": [], "ttl_seconds": _CACHE_TTL_SECONDS}
+        return {
+            "size": 0,
+            "keys": [],
+            "cached_guilds": 0,
+            "ttl_seconds": _CACHE_TTL_SECONDS,
+            "table": GUILD_CONFIG_TABLE,
+            "public_config_isolation": True,
+        }
 
 
 def _cache_valid(guild_id: Any) -> bool:
@@ -208,6 +243,22 @@ def _fallback_guild_id(guild_id: Any = None) -> int:
     if explicit > 0:
         return explicit
     return _safe_int(GUILD_ID, 0)
+
+
+def _allow_env_fallback_for_guild(guild_id: Any) -> bool:
+    """Prevent public servers from inheriting another server's .env IDs."""
+    if not public_config_isolation_enabled():
+        return True
+
+    gid = _safe_int(guild_id, 0)
+    home_gid = _safe_int(GUILD_ID, 0)
+
+    # If no home guild is configured, env fallback values are generic fallback
+    # only and should not be used as a cross-server source of truth.
+    if home_gid <= 0:
+        return False
+
+    return gid == home_gid
 
 
 def _is_retryable_db_error(error: Exception) -> bool:
@@ -357,17 +408,13 @@ def env_fallback_guild_config(guild_id: Any = None) -> GuildRuntimeConfig:
     )
 
 
-def _normalize_config_row(
-    row: Optional[Mapping[str, Any]],
-    guild_id: Any = None,
-    *,
-    table_name: Optional[str] = None,
-) -> GuildRuntimeConfig:
+def _normalize_config_row(row: Optional[Mapping[str, Any]], guild_id: Any = None, *, table_name: Optional[str] = None) -> GuildRuntimeConfig:
     fallback = env_fallback_guild_config(guild_id)
     raw = _mapping_dict(row)
     src = _merge_row_settings(raw)
 
-    use_env_fallbacks = _safe_bool(src.get("use_env_fallbacks"), True)
+    db_allows_env = _safe_bool(src.get("use_env_fallbacks"), True)
+    use_env_fallbacks = bool(db_allows_env and _allow_env_fallback_for_guild(guild_id))
     allow_runtime_discovery = _safe_bool(src.get("allow_runtime_discovery"), True)
 
     def pick_id(key: str) -> Optional[str]:
@@ -382,7 +429,7 @@ def _normalize_config_row(
         text = _safe_str(src.get(key), "")
         if text:
             return text
-        return _safe_str(fallback.get(key), default)
+        return _safe_str(fallback.get(key), default) if use_env_fallbacks else default
 
     gid = _safe_int(src.get("guild_id"), _fallback_guild_id(guild_id))
     if gid <= 0:
@@ -429,7 +476,6 @@ def _normalize_config_row(
         }
     )
 
-    # Preserve extra saved setup fields so old/new commands do not lose data.
     for key, value in src.items():
         if key not in cfg and value is not None:
             cfg[key] = value
@@ -466,15 +512,19 @@ def _db_get_guild_config_sync(guild_id: Any) -> GuildRuntimeConfig:
                 _debug(f"DB config read failed table={table_name} guild={gid}: {repr(e)}")
             continue
 
-    return env_fallback_guild_config(gid)
+    if _allow_env_fallback_for_guild(gid):
+        return env_fallback_guild_config(gid)
+
+    cfg = env_fallback_guild_config(gid)
+    for key in list(cfg.keys()):
+        if key.endswith("_id"):
+            cfg[key] = None
+    cfg["source"] = "unconfigured:isolated_public_fallback"
+    cfg["use_env_fallbacks"] = False
+    return cfg
 
 
-async def get_guild_config(
-    guild_id: Any,
-    *,
-    force_refresh: bool = False,
-    refresh: Optional[bool] = None,
-) -> GuildRuntimeConfig:
+async def get_guild_config(guild_id: Any, *, force_refresh: bool = False, refresh: Optional[bool] = None) -> GuildRuntimeConfig:
     if refresh is not None:
         force_refresh = bool(refresh)
 
@@ -486,10 +536,7 @@ async def get_guild_config(
         if cached:
             return GuildRuntimeConfig(cached)
 
-    config = await _run_db(
-        f"get guild config async guild={gid}",
-        lambda: _db_get_guild_config_sync(gid),
-    )
+    config = await _run_db(f"get guild config async guild={gid}", lambda: _db_get_guild_config_sync(gid))
 
     _CONFIG_CACHE[key] = dict(config)
     _CONFIG_CACHE_TS[key] = _now()
@@ -503,16 +550,10 @@ def _candidate_write_payloads(guild_id: int, updates: Mapping[str, Any], existin
         if value is not None:
             settings[str(key)] = value
 
-    base = {
-        "guild_id": str(int(guild_id)),
-        "updated_at": _now().isoformat(),
-    }
-
+    base = {"guild_id": str(int(guild_id)), "updated_at": _now().isoformat()}
     direct = {**base, **{str(k): v for k, v in dict(updates or {}).items() if v is not None}}
     settings_payload = {**base, "settings": settings}
     config_payload = {**base, "config": settings}
-
-    # Most current public setup code writes `settings`; keep that first.
     return [settings_payload, config_payload, direct]
 
 
@@ -522,13 +563,7 @@ def _fetch_existing_row_sync(table_name: str, guild_id: int) -> Optional[Dict[st
         return None
 
     def _read():
-        return (
-            sb.table(table_name)
-            .select("*")
-            .eq("guild_id", str(int(guild_id)))
-            .limit(1)
-            .execute()
-        )
+        return sb.table(table_name).select("*").eq("guild_id", str(int(guild_id))).limit(1).execute()
 
     res = _execute_db_op(f"fetch existing {table_name} guild={guild_id}", _read)
     rows = getattr(res, "data", None) or []
@@ -562,12 +597,7 @@ def _db_upsert_guild_config_sync(guild_id: Any, patch: Mapping[str, Any]) -> Gui
 
             def _write(table_name: str = table_name, clean_payload: Dict[str, Any] = clean_payload, existing: Optional[Mapping[str, Any]] = existing):
                 if existing:
-                    return (
-                        sb.table(table_name)
-                        .update(clean_payload)
-                        .eq("guild_id", str(gid))
-                        .execute()
-                    )
+                    return sb.table(table_name).update(clean_payload).eq("guild_id", str(gid)).execute()
                 try:
                     return sb.table(table_name).upsert(clean_payload, on_conflict="guild_id").execute()
                 except TypeError:
@@ -594,11 +624,7 @@ def _db_upsert_guild_config_sync(guild_id: Any, patch: Mapping[str, Any]) -> Gui
 
 async def upsert_guild_config(guild_id: Any, patch: Mapping[str, Any]) -> GuildRuntimeConfig:
     gid = _fallback_guild_id(guild_id)
-    config = await _run_db(
-        f"upsert guild config async guild={gid}",
-        lambda: _db_upsert_guild_config_sync(gid, patch),
-    )
-
+    config = await _run_db(f"upsert guild config async guild={gid}", lambda: _db_upsert_guild_config_sync(gid, patch))
     clear_guild_config_cache(gid)
     _CONFIG_CACHE[_cache_key(gid)] = dict(config)
     _CONFIG_CACHE_TS[_cache_key(gid)] = _now()
@@ -616,7 +642,6 @@ def _find_role_by_names(guild: discord.Guild, names: list[str]) -> Optional[disc
             role_name = str(role.name or "").lower().strip()
             if role_name in wanted:
                 return role
-
         for role in guild.roles:
             role_name = str(role.name or "").lower().strip()
             if any(w in role_name for w in wanted):
@@ -633,7 +658,6 @@ def _find_text_channel_by_names(guild: discord.Guild, names: list[str]) -> Optio
             ch_name = str(ch.name or "").lower().strip()
             if ch_name in wanted:
                 return ch
-
         for ch in guild.text_channels:
             ch_name = str(ch.name or "").lower().strip()
             if any(w in ch_name for w in wanted):
@@ -650,7 +674,6 @@ def _find_category_by_names(guild: discord.Guild, names: list[str]) -> Optional[
             cat_name = str(cat.name or "").lower().strip()
             if cat_name in wanted:
                 return cat
-
         for cat in guild.categories:
             cat_name = str(cat.name or "").lower().strip()
             if any(w in cat_name for w in wanted):
@@ -719,7 +742,6 @@ async def discover_runtime_guild_config(guild: discord.Guild) -> GuildRuntimeCon
 
 async def save_runtime_discovered_config(guild: discord.Guild) -> GuildRuntimeConfig:
     discovered = await discover_runtime_guild_config(guild)
-
     patch = {
         key: discovered.get(key)
         for key in (
@@ -746,10 +768,8 @@ async def save_runtime_discovered_config(guild: discord.Guild) -> GuildRuntimeCo
         )
         if discovered.get(key)
     }
-
     if not patch:
         return discovered
-
     return await upsert_guild_config(guild.id, patch)
 
 
@@ -824,32 +844,26 @@ async def get_resident_role_id(guild_id: Any) -> int:
 
 async def config_summary_for_guild(guild: discord.Guild) -> Dict[str, Any]:
     config = await discover_runtime_guild_config(guild)
-
     return {
         "guild_id": str(guild.id),
         "guild_name": guild.name,
         "source": config.get("source"),
         "use_env_fallbacks": _safe_bool(config.get("use_env_fallbacks"), True),
         "allow_runtime_discovery": _safe_bool(config.get("allow_runtime_discovery"), True),
-
         "verify_channel_id": config.get("verify_channel_id"),
         "vc_verify_channel_id": config.get("vc_verify_channel_id"),
         "vc_verify_queue_channel_id": config.get("vc_verify_queue_channel_id"),
-
         "ticket_category_id": config.get("ticket_category_id"),
         "ticket_archive_category_id": config.get("ticket_archive_category_id"),
         "transcripts_channel_id": config.get("transcripts_channel_id"),
-
         "status_channel_id": config.get("status_channel_id"),
         "bot_status_channel_id": config.get("bot_status_channel_id"),
         "uptime_channel_id": config.get("uptime_channel_id"),
         "health_channel_id": config.get("health_channel_id"),
-
         "modlog_channel_id": config.get("modlog_channel_id"),
         "raidlog_channel_id": config.get("raidlog_channel_id"),
         "join_log_channel_id": config.get("join_log_channel_id"),
         "force_verify_log_channel_id": config.get("force_verify_log_channel_id"),
-
         "unverified_role_id": config.get("unverified_role_id"),
         "verified_role_id": config.get("verified_role_id"),
         "resident_role_id": config.get("resident_role_id"),
@@ -862,6 +876,7 @@ __all__ = [
     "GuildRuntimeConfig",
     "GUILD_CONFIG_TABLE",
     "GUILD_CONFIG_TABLE_FALLBACKS",
+    "public_config_isolation_enabled",
     "clear_guild_config_cache",
     "invalidate_guild_config",
     "invalidate_config_cache",
