@@ -140,15 +140,6 @@ except Exception as e:
     except Exception:
         pass
 
-# Truthful lifecycle command responses: /ticket close/reopen must not say clean success if move/rename failed.
-try:
-    import runtime_ticket_lifecycle_command_truth_patch  # noqa: F401
-except Exception as e:
-    try:
-        print(f"⚠️ main.py failed to import runtime_ticket_lifecycle_command_truth_patch guard: {e!r}")
-    except Exception:
-        pass
-
 # Native source wiring: startup ticket sync/backfill uses sync category helpers.
 try:
     import runtime_ticket_sync_native_patch  # noqa: F401
