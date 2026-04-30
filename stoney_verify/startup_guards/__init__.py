@@ -20,9 +20,10 @@ _ERRORS: Dict[str, BaseException] = {}
 _STARTUP_GUARDS: Tuple[str, ...] = (
     "stoney_verify.startup_guards.process_health",
     "stoney_verify.startup_guards.command_safety",
-    # sitecustomize is still the broad event-loop DB/modlog/ticket safety layer.
-    # It remains root-level because Python hosts may auto-import it by convention.
-    "sitecustomize",
+    # Broad event-loop DB/modlog/ticket safety layer.
+    # sitecustomize.py remains as a tiny host fallback, but main startup loads
+    # the real package module directly.
+    "stoney_verify.startup_guards.runtime_safety",
     "stoney_verify.startup_guards.raidguard_hard_stop",
     "stoney_verify.startup_guards.raidguard_bot_heuristics",
     "stoney_verify.startup_guards.raidguard_risk_engine_v2",
