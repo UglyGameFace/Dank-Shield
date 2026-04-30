@@ -1,13 +1,13 @@
 from __future__ import annotations
 
-"""Public /stoney help command.
+"""Public /stoney help and /stoney commands catalog.
 
 TicketTool-style command discovery without adding a new top-level /help command.
 This keeps the public slash surface boring and small while still making the
 feature set easy to understand.
 """
 
-from typing import Any, Optional
+from typing import Any, Iterable, Optional
 
 import discord
 from discord import app_commands
@@ -29,6 +29,49 @@ HELP_SECTION_CHOICES = [
     app_commands.Choice(name="Utilities", value="utilities"),
 ]
 
+STALE_TOP_LEVEL_MOVES = {
+    "spam_guard": "/stoney spam panel",
+    "spam_guard_status": "/stoney spam status",
+    "fix_unverified": "/verify repair-unverified",
+    "set_verified": "/verify set-verified",
+    "set_resident": "/verify set-resident",
+    "grant_vr": "/verify grant-vr",
+    "verify_diagnose": "/verify diagnose",
+    "fix_unverified_member": "/verify fix-member",
+    "verify_status": "/verify status",
+    "channel_cleanup_status": "/stoney cleanup status",
+    "run_channel_cleanup": "/stoney cleanup run",
+    "purge_channel_messages": "/stoney cleanup purge",
+    "ticket_setup_status": "/stoney setup-review",
+    "ticket_setup_discover": "/stoney setup-find",
+    "ticket_setup_save_discovered": "/stoney setup-picker",
+    "ticket_setup_set_channel": "/stoney setup-tickets or /stoney setup-verify",
+    "ticket_setup_set_role": "/stoney setup-tickets or /stoney setup-verify",
+    "ticket_panel_list": "/ticket-panel list",
+    "ticket_panel_show": "/ticket-panel show",
+    "ticket_panel_bind_categories": "/ticket-panel bind-categories",
+    "ticket_panel_rules": "/ticket-panel rules view",
+    "ticket_panel_rules_set": "/ticket-panel rules set",
+    "ticket_panel_runtime": "/ticket-panel runtime",
+    "ticket_panel_bootstrap_status": "/ticket-panel bootstrap status",
+    "ticket_panel_bootstrap_run": "/ticket-panel bootstrap run",
+    "ticket_panel_bootstrap_all": "/ticket-panel bootstrap all",
+    "ticket_panel_bootstrap_start": "/ticket-panel bootstrap start",
+    "ticket_panel_bootstrap_once": "/ticket-panel bootstrap once",
+    "ticket_panel_bootstrap_stop": "/ticket-panel bootstrap stop",
+}
+
+BORING_PUBLIC_TARGET = {
+    "stoney",
+    "mod",
+    "ticket",
+    "tickets",
+    "ticket-intake",
+    "ticket-category",
+    "ticket-panel",
+    "verify",
+}
+
 
 def _safe_str(value: Any, default: str = "") -> str:
     try:
@@ -36,6 +79,13 @@ def _safe_str(value: Any, default: str = "") -> str:
         return text if text else default
     except Exception:
         return default
+
+
+def _truncate(value: Any, limit: int = 1000) -> str:
+    text = _safe_str(value)
+    if len(text) <= limit:
+        return text
+    return text[: max(0, limit - 1)] + "…"
 
 
 def _is_staff_or_admin(interaction: discord.Interaction) -> bool:
@@ -88,7 +138,7 @@ def _overview_embed() -> discord.Embed:
     _add_field(
         embed,
         "Top-level command families",
-        "`/stoney` setup, help, health, cleanup, spam\n"
+        "`/stoney` setup, help, command audit, cleanup, spam\n"
         "`/ticket` close/reopen/delete and current-ticket actions\n"
         "`/tickets` queues, lists, searching, history\n"
         "`/ticket-panel` panel posting/config/rules/bootstrap\n"
@@ -106,6 +156,11 @@ def _overview_embed() -> discord.Embed:
         "`/fix_unverified` → `/verify repair-unverified`\n"
         "`/ticket_panel_*` → `/ticket-panel ...`\n"
         "`/channel_cleanup_*` → `/stoney cleanup ...`",
+    )
+    _add_field(
+        embed,
+        "Command audit",
+        "Run `/stoney commands` to see the current top-level command count and stale alias status.",
     )
     return embed
 
@@ -238,7 +293,8 @@ def _utilities_embed() -> discord.Embed:
         "`/stoney db-check` — DB/config diagnostics\n"
         "`/stoney archive-backfill` — repair/archive ticket history\n"
         "`/stoney setup-review` — config review\n"
-        "`/stoney help` — this command catalog",
+        "`/stoney commands` — command surface audit\n"
+        "`/stoney help` — command catalog",
     )
     return embed
 
@@ -260,6 +316,86 @@ def _embed_for_section(section: Optional[str]) -> discord.Embed:
     return _overview_embed()
 
 
+def _command_name(command: Any) -> str:
+    return _safe_str(getattr(command, "name", ""))
+
+
+def _iter_subcommands(command: Any) -> Iterable[str]:
+    try:
+        for child in list(getattr(command, "commands", []) or []):
+            child_name = _command_name(child)
+            if not child_name:
+                continue
+            grandchildren = list(getattr(child, "commands", []) or [])
+            if grandchildren:
+                for grandchild in grandchildren:
+                    grand_name = _command_name(grandchild)
+                    if grand_name:
+                        yield f"{child_name} {grand_name}"
+            else:
+                yield child_name
+    except Exception:
+        return
+
+
+def _local_top_level_commands(interaction: discord.Interaction) -> list[Any]:
+    try:
+        tree = interaction.client.tree
+        return list(tree.get_commands(guild=None) or [])
+    except Exception:
+        return []
+
+
+def _command_surface_embed(interaction: discord.Interaction) -> discord.Embed:
+    commands = _local_top_level_commands(interaction)
+    names = sorted(_command_name(cmd) for cmd in commands if _command_name(cmd))
+    stale_present = [name for name in names if name in STALE_TOP_LEVEL_MOVES]
+    unexpected = [name for name in names if name not in BORING_PUBLIC_TARGET]
+    missing_target = [name for name in sorted(BORING_PUBLIC_TARGET) if name not in names]
+
+    count = len(names)
+    color = discord.Color.green() if count <= 15 and not stale_present else discord.Color.gold() if count <= 25 else discord.Color.red()
+    embed = discord.Embed(
+        title="🧾 Stoney Command Surface Audit",
+        color=color,
+        timestamp=now_utc(),
+        description=(
+            f"Top-level global commands currently loaded locally: **{count}**\n"
+            "Target style: boring TicketTool-style grouped commands."
+        ),
+    )
+
+    _add_field(embed, "Top-level Commands", _truncate("\n".join(f"• `/{name}`" for name in names), 1024) or "None")
+
+    if stale_present:
+        moved_lines = [f"• `/{name}` → `{STALE_TOP_LEVEL_MOVES.get(name, 'grouped command')}`" for name in stale_present]
+        _add_field(embed, "⚠️ Stale Top-level Aliases Still Present", _truncate("\n".join(moved_lines), 1024))
+    else:
+        _add_field(embed, "Stale Alias Status", "✅ No known stale top-level aliases are loaded locally.")
+
+    if unexpected:
+        _add_field(embed, "Unexpected Top-level Commands", _truncate("\n".join(f"• `/{name}`" for name in unexpected), 1024))
+    else:
+        _add_field(embed, "Unexpected Top-level Commands", "✅ None outside the expected boring public surface.")
+
+    if missing_target:
+        _add_field(embed, "Missing Expected Families", _truncate("\n".join(f"• `/{name}`" for name in missing_target), 1024))
+
+    grouped_lines: list[str] = []
+    for cmd in commands:
+        name = _command_name(cmd)
+        if not name:
+            continue
+        children = list(_iter_subcommands(cmd))
+        if children:
+            grouped_lines.append(f"`/{name}` → {len(children)} visible subcommand path(s)")
+    if grouped_lines:
+        _add_field(embed, "Grouped Command Depth", _truncate("\n".join(grouped_lines), 1024))
+
+    embed.set_footer(text="If stale commands still show in Discord UI, wait for the next successful global sync/propagation.")
+    return embed
+
+
 @app_commands.describe(section="Optional help category to view.")
 @app_commands.choices(section=HELP_SECTION_CHOICES)
 async def stoney_help_callback(interaction: discord.Interaction, section: Optional[app_commands.Choice[str]] = None) -> None:
@@ -270,26 +406,37 @@ async def stoney_help_callback(interaction: discord.Interaction, section: Option
     await reply_once(interaction, {"embed": embed, "ephemeral": True})
 
 
+async def stoney_commands_callback(interaction: discord.Interaction) -> None:
+    if not _is_staff_or_admin(interaction):
+        return await reply_once(interaction, {"content": "❌ Staff only.", "ephemeral": True})
+    await reply_once(interaction, {"embed": _command_surface_embed(interaction), "ephemeral": True})
+
+
+def _attach_command_once(name: str, description: str, callback: Any) -> bool:
+    try:
+        if stoney_group.get_command(name) is not None:
+            return False
+        stoney_group.add_command(app_commands.Command(name=name, description=description, callback=callback))
+        return True
+    except Exception:
+        raise
+
+
 def register_public_help_group_commands(bot: Any, tree: Any) -> None:
     global _REGISTERED
     _ = bot, tree
     if _REGISTERED:
         return
 
+    added: list[str] = []
     try:
-        if stoney_group.get_command("help") is None:
-            stoney_group.add_command(
-                app_commands.Command(
-                    name="help",
-                    description="Show the Stoney command catalog.",
-                    callback=stoney_help_callback,
-                )
-            )
-            print("✅ public_help_group: attached /stoney help command catalog")
-        else:
-            print("✅ public_help_group: /stoney help already attached")
+        if _attach_command_once("help", "Show the Stoney command catalog.", stoney_help_callback):
+            added.append("/stoney help")
+        if _attach_command_once("commands", "Audit the current top-level slash command surface.", stoney_commands_callback):
+            added.append("/stoney commands")
+        print("✅ public_help_group: attached " + (", ".join(added) if added else "existing help/catalog commands"))
     except Exception as e:
-        print(f"⚠️ public_help_group failed attaching /stoney help: {repr(e)}")
+        print(f"⚠️ public_help_group failed attaching help/catalog commands: {repr(e)}")
         raise
 
     _REGISTERED = True
