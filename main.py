@@ -39,12 +39,12 @@ except Exception as e:
     except Exception:
         pass
 
-# Force-load disposable/bot-pattern raidguard heuristic hardening.
+# Raidguard bot-pattern heuristics now live inside startup_guards instead of root runtime patches.
 try:
-    import runtime_raidguard_bot_heuristics_patch  # noqa: F401
+    from stoney_verify.startup_guards import raidguard_bot_heuristics  # noqa: F401
 except Exception as e:
     try:
-        print(f"⚠️ main.py failed to import runtime_raidguard_bot_heuristics_patch guard: {e!r}")
+        print(f"⚠️ main.py failed to import startup_guards.raidguard_bot_heuristics: {e!r}")
     except Exception:
         pass
 
