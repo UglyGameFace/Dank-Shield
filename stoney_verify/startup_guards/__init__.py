@@ -53,6 +53,10 @@ _STARTUP_GUARDS: Tuple[str, ...] = (
     # panel.py flow calls create_ticket_channel directly.
     "stoney_verify.tickets_new.panel_creation_guard_runtime",
 
+    # Route unverified users from the public Create Ticket button directly into
+    # the verification ticket flow instead of asking for a generic support reason.
+    "stoney_verify.startup_guards.unverified_ticket_panel_flow",
+
     # DB-backed panel/config bootstrap runtime.
     # This self-registers on_ready/on_guild_join listeners and starts the
     # panel bootstrap worker after the bot is ready. It does not create roles,
