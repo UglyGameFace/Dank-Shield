@@ -3,16 +3,13 @@ from __future__ import annotations
 """
 Native ticket creation category patch.
 
-The post-create enforcer is only a safety net. This patch fixes the source path:
-create_ticket_channel now receives a resolved configured active category before
-creating the channel. If the configured category is missing/unusable, ticket
-creation fails loudly instead of creating ticket-#### in the wrong place.
+This shim keeps old direct imports protected while ticket creation is being folded
+into tickets_new.service natively.
 
-The real category-resolution rules now live in:
-    stoney_verify.tickets_new.category_resolver
-
-This runtime shim remains temporarily so existing imported direct references are
-protected while we fold the logic into tickets_new.service/panel natively.
+Important safety detail:
+Do not patch-scan on every import. That creates ugly log spam and can cause
+import-hook recursion on hosts like Discloud. Only react when the target ticket
+modules import, and only log reference refreshes once.
 """
 
 import builtins
@@ -24,6 +21,7 @@ import discord
 
 _ORIGINAL_IMPORT = builtins.__import__
 _PATCHED: set[str] = set()
+_PATCHING = False
 
 
 def _log(message: str) -> None:
@@ -100,17 +98,17 @@ def _set_category_kwargs(fn: Any, kwargs: dict[str, Any], category: discord.Cate
     for name in ("parent_category", "category"):
         if _signature_accepts(fn, name) and not kwargs.get(name):
             kwargs[name] = category
-    for name in ("parent",):
-        if _signature_accepts(fn, name) and not kwargs.get(name):
-            kwargs[name] = category
+    if _signature_accepts(fn, "parent") and not kwargs.get("parent"):
+        kwargs["parent"] = category
     for name in ("parent_category_id", "explicit_parent_category_id", "ticket_category_id"):
         if _signature_accepts(fn, name) and not kwargs.get(name):
             kwargs[name] = cid
 
 
 def _patch_service(module: Any) -> None:
+    global _PATCHING
     key = "service:create_ticket_native_category"
-    if key in _PATCHED:
+    if key in _PATCHED or _PATCHING:
         return
 
     original = getattr(module, "create_ticket_channel", None)
@@ -120,80 +118,83 @@ def _patch_service(module: Any) -> None:
         _PATCHED.add(key)
         return
 
-    async def create_ticket_channel_native_category(*args: Any, **kwargs: Any) -> Any:
-        guild = _guild_from_call(args, kwargs)
-        if guild is None:
-            return await original(*args, **kwargs)
-
-        category = await _configured_active_category(guild)
-        _set_category_kwargs(original, kwargs, category)
-
-        result = await original(*args, **kwargs)
-
-        # Verify source behavior. This is not the normal placement mechanism;
-        # it is a strict sanity check so bad creation paths are visible.
-        try:
-            channel = None
-            if isinstance(result, discord.TextChannel):
-                channel = result
-            elif isinstance(result, dict):
-                cid = _safe_int(result.get("channel_id") or result.get("discord_thread_id"), 0)
-                maybe = guild.get_channel(cid) if cid > 0 else None
-                if isinstance(maybe, discord.TextChannel):
-                    channel = maybe
-            elif isinstance(result, (tuple, list)):
-                for item in result:
-                    if isinstance(item, discord.TextChannel):
-                        channel = item
-                        break
-                    if isinstance(item, dict):
-                        cid = _safe_int(item.get("channel_id") or item.get("discord_thread_id"), 0)
-                        maybe = guild.get_channel(cid) if cid > 0 else None
-                        if isinstance(maybe, discord.TextChannel):
-                            channel = maybe
-                            break
-            if isinstance(channel, discord.TextChannel) and int(getattr(channel.category, "id", 0) or 0) != int(category.id):
-                from stoney_verify.tickets_new.category_resolver import TicketCategoryResolutionError
-
-                raise TicketCategoryResolutionError(
-                    f"Ticket channel {channel.name} was created outside configured category {category.name}; source placement failed."
-                )
-        except RuntimeError:
-            raise
-        except Exception:
-            pass
-
-        _log(f"ticket create native category source enforced guild={guild.id} category={category.id}")
-        return result
-
+    _PATCHING = True
     try:
-        setattr(create_ticket_channel_native_category, "_native_category_wrapped", True)
-    except Exception:
-        pass
-    setattr(module, "create_ticket_channel", create_ticket_channel_native_category)
-    _PATCHED.add(key)
-    _log("patched tickets_new.service.create_ticket_channel to require configured category before create")
+        async def create_ticket_channel_native_category(*args: Any, **kwargs: Any) -> Any:
+            guild = _guild_from_call(args, kwargs)
+            if guild is None:
+                return await original(*args, **kwargs)
 
-    panel = sys.modules.get("stoney_verify.tickets_new.panel")
-    if panel is not None:
+            category = await _configured_active_category(guild)
+            _set_category_kwargs(original, kwargs, category)
+
+            result = await original(*args, **kwargs)
+
+            # Strict sanity check so bad creation paths are visible.
+            try:
+                channel = None
+                if isinstance(result, discord.TextChannel):
+                    channel = result
+                elif isinstance(result, dict):
+                    cid = _safe_int(result.get("channel_id") or result.get("discord_thread_id"), 0)
+                    maybe = guild.get_channel(cid) if cid > 0 else None
+                    if isinstance(maybe, discord.TextChannel):
+                        channel = maybe
+                elif isinstance(result, (tuple, list)):
+                    for item in result:
+                        if isinstance(item, discord.TextChannel):
+                            channel = item
+                            break
+                        if isinstance(item, dict):
+                            cid = _safe_int(item.get("channel_id") or item.get("discord_thread_id"), 0)
+                            maybe = guild.get_channel(cid) if cid > 0 else None
+                            if isinstance(maybe, discord.TextChannel):
+                                channel = maybe
+                                break
+                if isinstance(channel, discord.TextChannel) and int(getattr(channel.category, "id", 0) or 0) != int(category.id):
+                    from stoney_verify.tickets_new.category_resolver import TicketCategoryResolutionError
+
+                    raise TicketCategoryResolutionError(
+                        f"Ticket channel {channel.name} was created outside configured category {category.name}; source placement failed."
+                    )
+            except RuntimeError:
+                raise
+            except Exception:
+                pass
+
+            _log(f"ticket create native category source enforced guild={guild.id} category={category.id}")
+            return result
+
         try:
-            setattr(panel, "create_ticket_channel", create_ticket_channel_native_category)
-            _log("updated tickets_new.panel.create_ticket_channel direct reference")
+            setattr(create_ticket_channel_native_category, "_native_category_wrapped", True)
         except Exception:
             pass
+        setattr(module, "create_ticket_channel", create_ticket_channel_native_category)
+        _PATCHED.add(key)
+        _log("patched tickets_new.service.create_ticket_channel to require configured category before create")
+
+        panel = sys.modules.get("stoney_verify.tickets_new.panel")
+        if panel is not None:
+            _patch_panel(panel)
+    finally:
+        _PATCHING = False
 
 
 def _patch_panel(module: Any) -> None:
+    key = "panel:create_ticket_channel_reference"
+    if key in _PATCHED:
+        return
     try:
         service = sys.modules.get("stoney_verify.tickets_new.service")
         if service is not None and callable(getattr(service, "create_ticket_channel", None)):
             setattr(module, "create_ticket_channel", getattr(service, "create_ticket_channel"))
-            _log("refreshed panel create_ticket_channel reference")
+            _PATCHED.add(key)
+            _log("updated tickets_new.panel.create_ticket_channel direct reference")
     except Exception:
         pass
 
 
-def _patch_loaded() -> None:
+def _patch_loaded_once() -> None:
     try:
         service = sys.modules.get("stoney_verify.tickets_new.service")
         if service is not None:
@@ -211,6 +212,8 @@ def _patch_loaded() -> None:
 def _safe_import(name: str, globals: Any = None, locals: Any = None, fromlist: Any = (), level: int = 0) -> Any:
     module = _ORIGINAL_IMPORT(name, globals, locals, fromlist, level)
     try:
+        # Only react to the two modules this shim owns. Do not run _patch_loaded
+        # on every import; that was the source of the console spam.
         if name == "stoney_verify.tickets_new.service" or name.endswith("tickets_new.service"):
             target = sys.modules.get("stoney_verify.tickets_new.service") or sys.modules.get(name)
             if target is not None:
@@ -219,13 +222,11 @@ def _safe_import(name: str, globals: Any = None, locals: Any = None, fromlist: A
             target = sys.modules.get("stoney_verify.tickets_new.panel") or sys.modules.get(name)
             if target is not None:
                 _patch_panel(target)
-        else:
-            _patch_loaded()
     except Exception as e:
         _warn(f"post-import patch failed for {name}: {e!r}")
     return module
 
 
 builtins.__import__ = _safe_import
-_patch_loaded()
+_patch_loaded_once()
 _log("loaded; native ticket category creation enforcement active")
