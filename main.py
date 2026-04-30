@@ -158,12 +158,12 @@ except Exception as e:
     except Exception:
         pass
 
-# Keep stoney_verify.app's startup ticket-sync alias pointed at the current patched sync_service function.
+# Ticket sync alias guard now lives inside stoney_verify/tickets_new instead of root runtime patches.
 try:
-    import runtime_ticket_sync_alias_patch  # noqa: F401
+    from stoney_verify.tickets_new import sync_alias_guard  # noqa: F401
 except Exception as e:
     try:
-        print(f"⚠️ main.py failed to import runtime_ticket_sync_alias_patch guard: {e!r}")
+        print(f"⚠️ main.py failed to import tickets_new.sync_alias_guard: {e!r}")
     except Exception:
         pass
 
