@@ -47,6 +47,12 @@ _STARTUP_GUARDS: Tuple[str, ...] = (
     "stoney_verify.tickets_new.sync_alias_guard",
     "stoney_verify.api_new.guild_config_guard",
 
+    # DB-backed panel creation enforcement.
+    # This wraps tickets_new.service.create_ticket_channel so panel rules,
+    # per-owner limits, and concurrency protection apply even when the huge
+    # panel.py flow calls create_ticket_channel directly.
+    "stoney_verify.tickets_new.panel_creation_guard_runtime",
+
     # DB-backed panel/config bootstrap runtime.
     # This self-registers on_ready/on_guild_join listeners and starts the
     # panel bootstrap worker after the bot is ready. It does not create roles,
@@ -72,6 +78,19 @@ def _warn(message: str) -> None:
         print(f"⚠️ startup_guards {message}")
     except Exception:
         pass
+
+
+def _refresh_late_runtime_patches() -> None:
+    try:
+        guard = _LOADED.get("stoney_verify.tickets_new.panel_creation_guard_runtime")
+        if guard is None:
+            return
+
+        refresher = getattr(guard, "refresh_panel_creation_guard_patch_targets", None)
+        if callable(refresher):
+            refresher()
+    except Exception as e:
+        _warn(f"late runtime patch refresh failed: {e!r}")
 
 
 def load_startup_guard(module_name: str) -> ModuleType | None:
@@ -105,6 +124,8 @@ def load_all_startup_guards(extra_guards: Iterable[str] | None = None) -> Dict[s
 
     for module_name in ordered:
         load_startup_guard(module_name)
+
+    _refresh_late_runtime_patches()
 
     _log(f"loaded={len(_LOADED)} failed={len(_ERRORS)}")
     return dict(_LOADED)
