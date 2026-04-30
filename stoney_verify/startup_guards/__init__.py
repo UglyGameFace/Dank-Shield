@@ -36,6 +36,7 @@ _STARTUP_GUARDS: Tuple[str, ...] = (
     "stoney_verify.commands_ext.public_ticket_panel_command_guard",
     "stoney_verify.commands_ext.public_moderation_command_guard",
     "stoney_verify.startup_guards.member_update_modlog",
+    "stoney_verify.startup_guards.resource_modlog_coverage",
     "stoney_verify.tickets_new.guild_config_ticket_guard",
     "stoney_verify.tickets_new.creation_category_guard",
     "stoney_verify.tickets_new.channel_panel_repair",
