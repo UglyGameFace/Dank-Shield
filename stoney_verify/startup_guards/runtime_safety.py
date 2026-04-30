@@ -20,8 +20,12 @@ import time
 from datetime import datetime, timezone
 from typing import Any, Dict, List
 
-_ORIGINAL_IMPORT = builtins.__import__
+if not hasattr(builtins, "_stoney_true_original_import"):
+    setattr(builtins, "_stoney_true_original_import", builtins.__import__)
+
+_ORIGINAL_IMPORT = getattr(builtins, "_stoney_true_original_import")
 _PATCHED_MODULES: set[str] = set()
+_INSTALLED = False
 
 
 def _log(message: str) -> None:
@@ -528,6 +532,13 @@ def _safe_import(name: str, globals: Any = None, locals: Any = None, fromlist: A
 
 def load_runtime_safety() -> None:
     """Install runtime safety import hooks and patch already-loaded modules."""
+    global _INSTALLED
+
+    if _INSTALLED and builtins.__import__ is _safe_import:
+        _maybe_patch_loaded_modules()
+        return
+
+    _INSTALLED = True
     builtins.__import__ = _safe_import
     _maybe_patch_loaded_modules()
 
