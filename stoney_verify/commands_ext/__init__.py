@@ -40,6 +40,7 @@ COMMAND_MODULES: List[CommandModuleSpec] = [
     ("public_ticket_intake_group", "register_public_ticket_intake_group_commands", "public grouped /ticket-intake commands"),
     ("public_ticket_category_group", "register_public_ticket_category_group_commands", "public grouped /ticket-category commands"),
     ("public_tickettool_parity_polish", "register_public_tickettool_parity_polish", "public TicketTool parity polish aliases"),
+    ("public_verify_group", "register_public_verify_group_commands", "public grouped /verify role repair commands"),
     ("public_setup_gate", "register_public_setup_gate", "public setup readiness gate for ticket commands"),
 
     # Optional advanced public-safe modules. They are intentionally NOT in the
@@ -49,7 +50,7 @@ COMMAND_MODULES: List[CommandModuleSpec] = [
     # STONEY_COMMAND_MODULES_EXTRA=ticket_panel_admin_safe,panel_bootstrap_admin,role_admin,channel_cleanup_admin
     ("ticket_panel_admin_safe", "register_ticket_panel_admin_commands", "ticket panel setup/config commands"),
     ("panel_bootstrap_admin", "register_panel_bootstrap_admin_commands", "panel bootstrap/self-heal admin commands"),
-    ("role_admin", "register_role_admin_commands", "role admin commands"),
+    ("role_admin", "register_role_admin_commands", "legacy top-level role admin commands"),
     ("channel_cleanup_admin", "register_channel_cleanup_admin_commands", "channel cleanup admin commands"),
 
     # Legacy / full profile modules.
@@ -101,13 +102,13 @@ _PUBLIC_CORE_MODULES: Tuple[str, ...] = (
     "public_ticket_intake_group",
     "public_ticket_category_group",
     "public_tickettool_parity_polish",
+    "public_verify_group",
     "public_setup_gate",
 )
 
 _PUBLIC_ADMIN_EXTRA_MODULES: Tuple[str, ...] = (
     "ticket_panel_admin_safe",
     "panel_bootstrap_admin",
-    "role_admin",
     "channel_cleanup_admin",
 )
 
