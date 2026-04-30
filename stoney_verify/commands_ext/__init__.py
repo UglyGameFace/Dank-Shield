@@ -44,9 +44,12 @@ COMMAND_MODULES: List[CommandModuleSpec] = [
     ("public_ticket_category_group", "register_public_ticket_category_group_commands", "public grouped /ticket-category commands"),
     ("public_tickettool_parity_polish", "register_public_tickettool_parity_polish", "public TicketTool parity polish aliases"),
     ("public_setup_gate", "register_public_setup_gate", "public setup readiness gate for ticket commands"),
+
+    # Legacy / advanced command modules.
     ("kick_timers", "register_kick_timer_commands", "kick timer commands"),
     ("vc_flow", "register_vc_flow_commands", "VC flow commands"),
     ("ticket_admin", "register_ticket_admin_commands", "ticket admin commands"),
+    ("ticket_panel_admin", "register_ticket_panel_admin_commands", "ticket panel setup/config commands"),
     ("ticket_channel_admin", "register_ticket_channel_admin_commands", "ticket channel admin commands"),
     ("ticket_intake_admin", "register_ticket_intake_admin_commands", "ticket intake admin commands"),
     ("ticket_queue_admin", "register_ticket_queue_admin_commands", "ticket queue admin commands"),
@@ -62,7 +65,9 @@ COMMAND_MODULES: List[CommandModuleSpec] = [
     ("channel_cleanup_admin", "register_channel_cleanup_admin_commands", "channel cleanup admin commands"),
 ]
 
-_LEGACY_MODULES: Tuple[str, ...] = tuple(name for name, _fn, _label in COMMAND_MODULES if not name.startswith("public_"))
+_LEGACY_MODULES: Tuple[str, ...] = tuple(
+    name for name, _fn, _label in COMMAND_MODULES if not name.startswith("public_")
+)
 
 _PUBLIC_MODULES: Tuple[str, ...] = (
     "public_staff_scope",
@@ -94,6 +99,11 @@ _PUBLIC_MODULES: Tuple[str, ...] = (
     "public_ticket_category_group",
     "public_tickettool_parity_polish",
     "public_setup_gate",
+
+    # Public-safe advanced setup/admin modules.
+    # These are guild-scoped and DB-backed, so server owners can configure
+    # panels without editing deployment .env values.
+    "ticket_panel_admin",
     "role_admin",
     "channel_cleanup_admin",
 )
@@ -176,7 +186,10 @@ def _selected_command_modules() -> List[CommandModuleSpec]:
             print(f"⚠️ commands_ext: unknown STONEY_COMMAND_MODULES ignored: {unknown}")
     else:
         if profile not in COMMAND_PROFILES:
-            print(f"⚠️ commands_ext: unknown STONEY_COMMAND_PROFILE={profile!r}; falling back to {DEFAULT_COMMAND_PROFILE}")
+            print(
+                f"⚠️ commands_ext: unknown STONEY_COMMAND_PROFILE={profile!r}; "
+                f"falling back to {DEFAULT_COMMAND_PROFILE}"
+            )
         selected_names = set(COMMAND_PROFILES.get(profile, COMMAND_PROFILES[DEFAULT_COMMAND_PROFILE]))
 
     if skip:
@@ -191,6 +204,7 @@ def _selected_command_modules() -> List[CommandModuleSpec]:
 def _tree_command_counts(tree: Any) -> tuple[int, int]:
     global_count = 0
     guild_count = 0
+
     try:
         global_count = len(list(tree.get_commands(guild=None) or []))
     except Exception:
@@ -210,6 +224,7 @@ def _tree_command_counts(tree: Any) -> tuple[int, int]:
                     pass
     except Exception:
         guild_count = 0
+
     return int(global_count), int(guild_count)
 
 
@@ -221,11 +236,21 @@ def _import_registrar(module_name: str, function_name: str) -> CommandRegistrar:
     return registrar
 
 
-def _register_one_module(*, bot: Any, tree: Any, module_name: str, function_name: str, label: str, errors: List[str]) -> None:
+def _register_one_module(
+    *,
+    bot: Any,
+    tree: Any,
+    module_name: str,
+    function_name: str,
+    label: str,
+    errors: List[str],
+) -> None:
     before_global, before_guild = _tree_command_counts(tree)
+
     try:
         registrar = _import_registrar(module_name, function_name)
         registrar(bot, tree)
+
         after_global, after_guild = _tree_command_counts(tree)
         print(
             f"✅ commands_ext: registered {label} module={module_name} "
@@ -248,6 +273,7 @@ def _masked_secret_state(value: str) -> str:
 def _public_guard_findings(profile: str) -> tuple[list[str], list[str]]:
     blockers: list[str] = []
     warnings: list[str] = []
+
     deployment_mode = _deployment_mode()
     require_auth = _env_bool("BOT_API_REQUIRE_AUTH", True)
     allow_insecure = _env_bool("BOT_API_ALLOW_INSECURE", False)
@@ -257,7 +283,10 @@ def _public_guard_findings(profile: str) -> tuple[list[str], list[str]]:
     auto_shard = _env_bool("DISCORD_AUTO_SHARD", False)
 
     if profile in {"full", "dev"}:
-        msg = f"STONEY_COMMAND_PROFILE={profile!r} exposes the old top-level command surface. Use public/minimal before beta/public rollout."
+        msg = (
+            f"STONEY_COMMAND_PROFILE={profile!r} exposes the old top-level command surface. "
+            "Use public/minimal before beta/public rollout."
+        )
         (blockers if deployment_mode in {"public", "prod", "production"} else warnings).append(msg)
 
     if not require_auth:
@@ -269,18 +298,32 @@ def _public_guard_findings(profile: str) -> tuple[list[str], list[str]]:
         (blockers if deployment_mode in {"public", "prod", "production"} else warnings).append(msg)
 
     if require_auth and len(shared_secret) < 32:
-        msg = f"BOT_API_SHARED_SECRET should be a strong random secret with at least 32 characters ({_masked_secret_state(shared_secret)})."
+        msg = (
+            "BOT_API_SHARED_SECRET should be a strong random secret with at least 32 characters "
+            f"({_masked_secret_state(shared_secret)})."
+        )
         (blockers if deployment_mode in {"public", "prod", "production"} else warnings).append(msg)
 
     if bind_host in {"0.0.0.0", "::"} and not require_auth:
         blockers.append("BOT_API_BIND_HOST is public-facing while API auth is disabled.")
 
     if expected_guilds >= 100 and not auto_shard:
-        warnings.append("STONEY_EXPECTED_PUBLIC_GUILDS is 100+ but DISCORD_AUTO_SHARD is not enabled. Enable AutoShardedBot before serious public scaling.")
+        warnings.append(
+            "STONEY_EXPECTED_PUBLIC_GUILDS is 100+ but DISCORD_AUTO_SHARD is not enabled. "
+            "Enable AutoShardedBot before serious public scaling."
+        )
+
     if _env_bool("CLEAR_GLOBAL_COMMANDS_ON_BOOT", False):
-        warnings.append("CLEAR_GLOBAL_COMMANDS_ON_BOOT=true is a migration lever. Turn it back off after old global commands are cleared.")
+        warnings.append(
+            "CLEAR_GLOBAL_COMMANDS_ON_BOOT=true is a migration lever. "
+            "Turn it back off after old global commands are cleared."
+        )
+
     if _env_str("GUILD_ID", ""):
-        warnings.append("GUILD_ID is still set. That is fine for beta, but production logic must rely on per-guild DB config, not one env guild.")
+        warnings.append(
+            "GUILD_ID is still set. That is fine for beta or fallback mode, "
+            "but production behavior should rely on per-guild DB config."
+        )
 
     return blockers, warnings
 
@@ -289,45 +332,82 @@ def _run_public_startup_guard(profile: str) -> None:
     blockers, warnings = _public_guard_findings(profile)
     deployment_mode = _deployment_mode()
     strict = _strict_public_guard_enabled()
-    print(f"🧯 public_startup_guard deployment={deployment_mode} profile={profile} strict={strict} blockers={len(blockers)} warnings={len(warnings)}")
+
+    print(
+        f"🧯 public_startup_guard deployment={deployment_mode} "
+        f"profile={profile} strict={strict} blockers={len(blockers)} warnings={len(warnings)}"
+    )
+
     for item in blockers:
         print(f"🚫 public_startup_guard blocker: {item}")
+
     for item in warnings:
         print(f"⚠️ public_startup_guard warning: {item}")
+
     if strict and blockers:
         raise RuntimeError(f"Public startup guard blocked unsafe deployment: {' | '.join(blockers)}")
 
 
 def register_all_commands(bot: Any, tree: Any) -> None:
     global _COMMANDS_EXT_REGISTERED
+
     if _COMMANDS_EXT_REGISTERED:
         print("ℹ️ commands_ext.register_all_commands already ran; skipping duplicate registration.")
         return
 
     errors: list[str] = []
     profile = _command_profile()
+
     _run_public_startup_guard(profile)
+
     selected_modules = _selected_command_modules()
     selected_names = [name for name, _fn, _label in selected_modules]
     skipped_names = [name for name, _fn, _label in COMMAND_MODULES if name not in set(selected_names)]
 
     before_global, before_guild = _tree_command_counts(tree)
-    print(f"🧩 commands_ext profile profile={profile} selected={selected_names} skipped={skipped_names} initial_global={before_global} initial_guild={before_guild}")
+    print(
+        f"🧩 commands_ext profile profile={profile} "
+        f"selected={selected_names} skipped={skipped_names} "
+        f"initial_global={before_global} initial_guild={before_guild}"
+    )
 
     for module_name, function_name, label in selected_modules:
-        _register_one_module(bot=bot, tree=tree, module_name=module_name, function_name=function_name, label=label, errors=errors)
+        _register_one_module(
+            bot=bot,
+            tree=tree,
+            module_name=module_name,
+            function_name=function_name,
+            label=label,
+            errors=errors,
+        )
 
     _COMMANDS_EXT_REGISTERED = True
 
     final_global, final_guild = _tree_command_counts(tree)
+
     if final_global >= 95:
-        print(f"⚠️ commands_ext command budget high: global={final_global}/100. Use STONEY_COMMAND_PROFILE=public or minimal before public rollout.")
+        print(
+            f"⚠️ commands_ext command budget high: global={final_global}/100. "
+            "Use STONEY_COMMAND_PROFILE=public or minimal before public rollout."
+        )
+
     if errors:
-        print(f"⚠️ commands_ext registration completed with errors final_global={final_global} final_guild={final_guild}:")
+        print(
+            f"⚠️ commands_ext registration completed with errors "
+            f"final_global={final_global} final_guild={final_guild}:"
+        )
         for item in errors:
             print(f"   - {item}")
     else:
-        print(f"✅ commands_ext registration complete. final_global={final_global} final_guild={final_guild} profile={profile}")
+        print(
+            f"✅ commands_ext registration complete. "
+            f"final_global={final_global} final_guild={final_guild} profile={profile}"
+        )
 
 
-__all__ = ["register_all_commands", "COMMAND_MODULES", "COMMAND_PROFILES", "DEFAULT_COMMAND_PROFILE"]
+__all__ = [
+    "register_all_commands",
+    "COMMAND_MODULES",
+    "COMMAND_PROFILES",
+    "DEFAULT_COMMAND_PROFILE",
+]
