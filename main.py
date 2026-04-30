@@ -48,12 +48,12 @@ except Exception as e:
     except Exception:
         pass
 
-# Force-load Risk Engine v2 after heuristic hardening.
+# Raidguard Risk Engine v2 now lives inside startup_guards instead of root runtime patches.
 try:
-    import runtime_raidguard_risk_engine_v2_patch  # noqa: F401
+    from stoney_verify.startup_guards import raidguard_risk_engine_v2  # noqa: F401
 except Exception as e:
     try:
-        print(f"⚠️ main.py failed to import runtime_raidguard_risk_engine_v2_patch guard: {e!r}")
+        print(f"⚠️ main.py failed to import startup_guards.raidguard_risk_engine_v2: {e!r}")
     except Exception:
         pass
 
