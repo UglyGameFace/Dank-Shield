@@ -93,12 +93,12 @@ except Exception as e:
     except Exception:
         pass
 
-# Force-load public ticket panel command before grouped commands import.
+# Public ticket panel command guard now lives inside commands_ext instead of root runtime patches.
 try:
-    import runtime_public_ticket_panel_command_patch  # noqa: F401
+    from stoney_verify.commands_ext import public_ticket_panel_command_guard  # noqa: F401
 except Exception as e:
     try:
-        print(f"⚠️ main.py failed to import runtime_public_ticket_panel_command_patch guard: {e!r}")
+        print(f"⚠️ main.py failed to import commands_ext.public_ticket_panel_command_guard: {e!r}")
     except Exception:
         pass
 
