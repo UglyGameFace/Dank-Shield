@@ -102,12 +102,12 @@ except Exception as e:
     except Exception:
         pass
 
-# Force-load clearer Ban/Unban command replacement before commands_ext imports.
+# Clean public moderation command guard now lives inside commands_ext instead of root runtime patches.
 try:
-    import runtime_public_mod_ban_toggle_startup_patch  # noqa: F401
+    from stoney_verify.commands_ext import public_moderation_command_guard  # noqa: F401
 except Exception as e:
     try:
-        print(f"⚠️ main.py failed to import runtime_public_mod_ban_toggle_startup_patch guard: {e!r}")
+        print(f"⚠️ main.py failed to import commands_ext.public_moderation_command_guard: {e!r}")
     except Exception:
         pass
 
