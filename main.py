@@ -30,12 +30,12 @@ except Exception as e:
     except Exception:
         pass
 
-# Force-load a hard raidguard DB stop before app.py imports events/modlog.
+# Raidguard hard-stop now lives inside startup_guards instead of root runtime patches.
 try:
-    import runtime_raidguard_hard_stop  # noqa: F401
+    from stoney_verify.startup_guards import raidguard_hard_stop  # noqa: F401
 except Exception as e:
     try:
-        print(f"⚠️ main.py failed to import runtime_raidguard_hard_stop guard: {e!r}")
+        print(f"⚠️ main.py failed to import startup_guards.raidguard_hard_stop: {e!r}")
     except Exception:
         pass
 
