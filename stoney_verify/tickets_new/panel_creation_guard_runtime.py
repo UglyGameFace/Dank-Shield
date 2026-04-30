@@ -8,6 +8,7 @@ from typing import Any, Dict, Optional, Tuple
 
 import discord
 
+from ..globals import bot
 from .panel_runtime import (
     DEFAULT_PANEL_KEY,
     attach_panel_metadata_to_payload,
@@ -37,6 +38,7 @@ from .panel_repository import panel_creation_guard_scope
 # - per-guild creation semaphore
 # - per-owner open ticket limit through panel_runtime
 # - panel metadata snapshot attached to payload/meta/metadata
+# - friendly denial handling for buttons/modals/commands
 #
 # Public-server posture:
 # - no server-specific .env role/channel IDs required here
@@ -51,18 +53,33 @@ from .panel_repository import panel_creation_guard_scope
 
 
 _PATCHED = False
+_ERROR_PATCHED = False
 _ORIGINAL_CREATE_TICKET_CHANNEL = None
-_CREATE_LOCK = asyncio.Lock()
+_ORIGINAL_VIEW_ON_ERROR = None
+_ORIGINAL_MODAL_ON_ERROR = None
+_ORIGINAL_TREE_ON_ERROR = None
 
+_CREATE_LOCK = asyncio.Lock()
 _PATCHED_MODULE_ATTRS: set[Tuple[str, str]] = set()
 
 
 class PanelTicketDenied(RuntimeError):
-    def __init__(self, message: str, decision: Optional[Dict[str, Any]] = None):
+    def __init__(
+        self,
+        message: str,
+        decision: Optional[Dict[str, Any]] = None,
+        *,
+        interaction_responded: bool = False,
+    ):
         super().__init__(message)
         self.message = str(message or "Ticket creation denied by panel rules.")
         self.decision = dict(decision or {})
+        self.interaction_responded = bool(interaction_responded)
 
+
+# ============================================================
+# Small helpers
+# ============================================================
 
 def _debug(message: str) -> None:
     try:
@@ -122,14 +139,115 @@ def _is_discord_guild(value: Any) -> bool:
         return False
 
 
-def _is_discord_text_channel(value: Any) -> bool:
+def _is_discord_interaction(value: Any) -> bool:
     try:
-        return isinstance(value, discord.TextChannel)
+        return isinstance(value, discord.Interaction)
     except Exception:
         return False
 
 
-def _extract_kwargs_from_signature(func: Any, args: Tuple[Any, ...], kwargs: Dict[str, Any]) -> Dict[str, Any]:
+def _unwrap_panel_denial(error: BaseException) -> Optional[PanelTicketDenied]:
+    cur: Optional[BaseException] = error
+
+    for _ in range(8):
+        if cur is None:
+            return None
+        if isinstance(cur, PanelTicketDenied):
+            return cur
+
+        cause = getattr(cur, "__cause__", None)
+        context = getattr(cur, "__context__", None)
+
+        if isinstance(cause, BaseException):
+            cur = cause
+            continue
+
+        if isinstance(context, BaseException):
+            cur = context
+            continue
+
+        return None
+
+    return None
+
+
+# ============================================================
+# Interaction denial helpers
+# ============================================================
+
+async def _send_interaction_denial(
+    interaction: Optional[discord.Interaction],
+    message: str,
+) -> bool:
+    if interaction is None:
+        return False
+
+    content = _safe_str(message, "❌ You cannot open this ticket right now.")
+
+    try:
+        allowed = discord.AllowedMentions.none()
+
+        if interaction.response.is_done():
+            await interaction.followup.send(
+                content,
+                ephemeral=True,
+                allowed_mentions=allowed,
+            )
+        else:
+            await interaction.response.send_message(
+                content,
+                ephemeral=True,
+                allowed_mentions=allowed,
+            )
+
+        return True
+    except Exception as e:
+        _debug(f"failed sending panel denial response: {repr(e)}")
+        return False
+
+
+def _extract_interaction_from_call(
+    args: Tuple[Any, ...],
+    kwargs: Dict[str, Any],
+    mapped: Optional[Dict[str, Any]] = None,
+) -> Optional[discord.Interaction]:
+    try:
+        for key in (
+            "interaction",
+            "ctx",
+            "context",
+            "source_interaction",
+            "origin_interaction",
+        ):
+            if mapped and _is_discord_interaction(mapped.get(key)):
+                return mapped.get(key)
+
+            if _is_discord_interaction(kwargs.get(key)):
+                return kwargs.get(key)
+
+        for value in list(args) + list(kwargs.values()):
+            if _is_discord_interaction(value):
+                return value
+
+        if mapped:
+            for value in mapped.values():
+                if _is_discord_interaction(value):
+                    return value
+    except Exception:
+        pass
+
+    return None
+
+
+# ============================================================
+# Call signature helpers
+# ============================================================
+
+def _extract_kwargs_from_signature(
+    func: Any,
+    args: Tuple[Any, ...],
+    kwargs: Dict[str, Any],
+) -> Dict[str, Any]:
     """
     Best-effort mapping of positional args to parameter names.
 
@@ -165,6 +283,7 @@ def _extract_guild_owner_from_call(
         or mapped.get("user")
         or mapped.get("requester")
         or mapped.get("target")
+        or mapped.get("ticket_owner")
     )
 
     if not _is_discord_guild(guild):
@@ -307,6 +426,10 @@ def _call_should_bypass_guard(mapped: Dict[str, Any]) -> bool:
     return False
 
 
+# ============================================================
+# Metadata injection
+# ============================================================
+
 def _inject_metadata_into_kwargs(
     *,
     original_func: Any,
@@ -321,8 +444,8 @@ def _inject_metadata_into_kwargs(
     Add panel metadata in the safest compatible way.
 
     Most code paths pass ticket metadata through metadata/meta kwargs.
-    If the current signature does not support those names, we still preserve
-    kwargs unless the original function would reject them.
+    If the current signature does not support those names, we only add
+    them when **kwargs exists.
     """
     out_kwargs = dict(kwargs or {})
 
@@ -368,6 +491,10 @@ def _inject_metadata_into_kwargs(
     return args, out_kwargs
 
 
+# ============================================================
+# Module patch helpers
+# ============================================================
+
 def _patch_module_attr(module_name: str, attr_name: str, wrapper: Any, original: Any) -> bool:
     try:
         module = sys.modules.get(module_name)
@@ -378,8 +505,6 @@ def _patch_module_attr(module_name: str, attr_name: str, wrapper: Any, original:
         if current is None:
             return False
 
-        # Patch if it points to the original function or if it is already our
-        # wrapper target from an earlier import cycle.
         if current is original or getattr(current, "__name__", "") == getattr(original, "__name__", ""):
             setattr(module, attr_name, wrapper)
             _PATCHED_MODULE_ATTRS.add((module_name, attr_name))
@@ -390,18 +515,125 @@ def _patch_module_attr(module_name: str, attr_name: str, wrapper: Any, original:
     return False
 
 
+# ============================================================
+# Error handling patches
+# ============================================================
+
+async def _handle_panel_denial_error(
+    interaction: Optional[discord.Interaction],
+    error: BaseException,
+) -> bool:
+    denial = _unwrap_panel_denial(error)
+    if denial is None:
+        return False
+
+    if not denial.interaction_responded:
+        sent = await _send_interaction_denial(interaction, denial.message)
+        denial.interaction_responded = sent
+
+    _debug(
+        "suppressed panel denial error "
+        f"responded={denial.interaction_responded} "
+        f"source={denial.decision.get('source') if denial.decision else ''}"
+    )
+    return True
+
+
+def install_panel_creation_error_handlers() -> bool:
+    global _ERROR_PATCHED
+    global _ORIGINAL_VIEW_ON_ERROR
+    global _ORIGINAL_MODAL_ON_ERROR
+    global _ORIGINAL_TREE_ON_ERROR
+
+    if _ERROR_PATCHED:
+        return True
+
+    try:
+        _ORIGINAL_VIEW_ON_ERROR = getattr(discord.ui.View, "on_error", None)
+        _ORIGINAL_MODAL_ON_ERROR = getattr(discord.ui.Modal, "on_error", None)
+
+        async def _sv_view_on_error(self, interaction: discord.Interaction, error: Exception, item: discord.ui.Item[Any]) -> None:
+            if await _handle_panel_denial_error(interaction, error):
+                return
+
+            original = _ORIGINAL_VIEW_ON_ERROR
+            if callable(original):
+                return await original(self, interaction, error, item)
+
+            try:
+                traceback.print_exception(type(error), error, error.__traceback__)
+            except Exception:
+                pass
+
+        async def _sv_modal_on_error(self, interaction: discord.Interaction, error: Exception) -> None:
+            if await _handle_panel_denial_error(interaction, error):
+                return
+
+            original = _ORIGINAL_MODAL_ON_ERROR
+            if callable(original):
+                return await original(self, interaction, error)
+
+            try:
+                traceback.print_exception(type(error), error, error.__traceback__)
+            except Exception:
+                pass
+
+        discord.ui.View.on_error = _sv_view_on_error
+        discord.ui.Modal.on_error = _sv_modal_on_error
+
+        tree = getattr(bot, "tree", None)
+        if tree is not None:
+            _ORIGINAL_TREE_ON_ERROR = getattr(tree, "on_error", None)
+
+            async def _sv_tree_on_error(interaction: discord.Interaction, error: app_commands.AppCommandError):  # type: ignore[name-defined]
+                if await _handle_panel_denial_error(interaction, error):
+                    return
+
+                original = _ORIGINAL_TREE_ON_ERROR
+                if callable(original):
+                    return await original(interaction, error)
+
+                try:
+                    traceback.print_exception(type(error), error, error.__traceback__)
+                except Exception:
+                    pass
+
+            try:
+                from discord import app_commands  # noqa: F401
+                tree.on_error = _sv_tree_on_error
+            except Exception:
+                pass
+
+        _ERROR_PATCHED = True
+        _debug("panel denial error handlers installed")
+        return True
+    except Exception as e:
+        print("⚠️ Failed installing panel creation error handlers:", repr(e))
+        try:
+            traceback.print_exc()
+        except Exception:
+            pass
+        return False
+
+
+# ============================================================
+# Guarded create_ticket_channel wrapper
+# ============================================================
+
 async def _guarded_create_ticket_channel(*args: Any, **kwargs: Any):
     global _ORIGINAL_CREATE_TICKET_CHANNEL
 
     original = _ORIGINAL_CREATE_TICKET_CHANNEL
     if original is None:
         from . import service as service_mod
+
         original = getattr(service_mod, "_sv_original_create_ticket_channel", None)
         if original is None:
             original = getattr(service_mod, "create_ticket_channel")
         _ORIGINAL_CREATE_TICKET_CHANNEL = original
 
     guild, owner, mapped = _extract_guild_owner_from_call(original, args, kwargs)
+    interaction = _extract_interaction_from_call(args, kwargs, mapped)
 
     if _call_should_bypass_guard(mapped):
         return await original(*args, **kwargs)
@@ -436,13 +668,21 @@ async def _guarded_create_ticket_channel(*args: Any, **kwargs: Any):
 
             if not _safe_bool(decision.get("ok"), False):
                 message = build_panel_denial_message(decision)
+
+                sent = await _send_interaction_denial(interaction, message)
+
                 _debug(
                     "blocked ticket creation "
                     f"guild={guild.id} owner={owner.id} panel={panel_key} "
                     f"category={category_slug} source={decision.get('source')} "
-                    f"reason={decision.get('reason')}"
+                    f"sent={sent} reason={decision.get('reason')}"
                 )
-                raise PanelTicketDenied(message, decision=decision)
+
+                raise PanelTicketDenied(
+                    message,
+                    decision=decision,
+                    interaction_responded=sent,
+                )
 
             patched_args, patched_kwargs = _inject_metadata_into_kwargs(
                 original_func=original,
@@ -457,6 +697,10 @@ async def _guarded_create_ticket_channel(*args: Any, **kwargs: Any):
             return await original(*patched_args, **patched_kwargs)
 
 
+# ============================================================
+# Install / refresh
+# ============================================================
+
 def install_panel_creation_guard_runtime() -> bool:
     """
     Install the ticket creation wrapper.
@@ -464,11 +708,15 @@ def install_panel_creation_guard_runtime() -> bool:
     Safe to call repeatedly. Patches:
     - tickets_new.service.create_ticket_channel
     - tickets_new.panel.create_ticket_channel if panel.py already imported it
+    - View/Modal/app-command error handlers for friendly denials
     """
     global _PATCHED
     global _ORIGINAL_CREATE_TICKET_CHANNEL
 
+    install_panel_creation_error_handlers()
+
     if _PATCHED:
+        refresh_panel_creation_guard_patch_targets()
         return True
 
     try:
@@ -481,6 +729,7 @@ def install_panel_creation_guard_runtime() -> bool:
 
         if getattr(current, "_sv_panel_creation_guard", False):
             _PATCHED = True
+            refresh_panel_creation_guard_patch_targets()
             return True
 
         _ORIGINAL_CREATE_TICKET_CHANNEL = current
@@ -497,14 +746,7 @@ def install_panel_creation_guard_runtime() -> bool:
         setattr(service_mod, "create_ticket_channel", _wrapper)
         _PATCHED_MODULE_ATTRS.add(("stoney_verify.tickets_new.service", "create_ticket_channel"))
 
-        # If panel.py has already imported create_ticket_channel directly,
-        # update that module-level reference too.
-        _patch_module_attr(
-            "stoney_verify.tickets_new.panel",
-            "create_ticket_channel",
-            _wrapper,
-            current,
-        )
+        refresh_panel_creation_guard_patch_targets()
 
         _PATCHED = True
         _debug("ticket creation guard installed")
@@ -550,6 +792,7 @@ def refresh_panel_creation_guard_patch_targets() -> None:
 def panel_creation_guard_runtime_status() -> Dict[str, Any]:
     return {
         "patched": bool(_PATCHED),
+        "error_handlers_patched": bool(_ERROR_PATCHED),
         "original_present": _ORIGINAL_CREATE_TICKET_CHANNEL is not None,
         "patched_module_attrs": sorted([f"{m}.{a}" for m, a in _PATCHED_MODULE_ATTRS]),
     }
