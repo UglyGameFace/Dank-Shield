@@ -3,22 +3,28 @@ from __future__ import annotations
 """
 Temporary native ticket sync/backfill wiring patch.
 
-The clean sync/backfill helpers now live in:
+The clean sync/backfill helpers live in:
     stoney_verify.tickets_new.sync_categories
 
-This shim wires the existing sync_service module through those helpers while the
-large sync_service.py file is refactored safely in smaller native steps.
+Important safety detail:
+This module patches builtins.__import__ because sync_service may be imported
+after startup guards load. Do NOT import sync_categories while inside the import
+hook. That caused recursive import-hook loops on Discloud. Native helpers are
+loaded lazily only when the patched sync functions actually run.
 """
 
 import asyncio
 import builtins
+import importlib
 import sys
-from typing import Any
+from typing import Any, Optional
 
 import discord
 
 _ORIGINAL_IMPORT = builtins.__import__
 _PATCHED: set[str] = set()
+_PATCHING = False
+_NATIVE_IMPORT_FAILED = False
 
 
 def _log(message: str) -> None:
@@ -35,6 +41,28 @@ def _warn(message: str) -> None:
         pass
 
 
+def _native_sync_categories() -> Optional[Any]:
+    """Return native sync_categories lazily without patch-time recursion."""
+    global _NATIVE_IMPORT_FAILED
+
+    module = sys.modules.get("stoney_verify.tickets_new.sync_categories")
+    if module is not None:
+        return module
+
+    if _NATIVE_IMPORT_FAILED:
+        return None
+
+    try:
+        return importlib.import_module("stoney_verify.tickets_new.sync_categories")
+    except RecursionError as e:
+        _NATIVE_IMPORT_FAILED = True
+        _warn(f"native sync_categories import hit recursion and was disabled for this boot: {e!r}")
+    except Exception as e:
+        _NATIVE_IMPORT_FAILED = True
+        _warn(f"native sync_categories import failed and was disabled for this boot: {e!r}")
+    return None
+
+
 async def _warm_guild_config(guild: Any) -> None:
     try:
         guild_id = int(getattr(guild, "id", 0) or 0)
@@ -48,173 +76,196 @@ async def _warm_guild_config(guild: Any) -> None:
 
 
 def _patch_sync_service(module: Any) -> None:
+    global _PATCHING
+
     module_name = getattr(module, "__name__", "")
-    key = f"{module_name}:native_sync_categories_v1"
-    if key in _PATCHED:
+    key = f"{module_name}:native_sync_categories_v2"
+    if key in _PATCHED or _PATCHING:
         return
 
+    _PATCHING = True
     try:
-        from stoney_verify.tickets_new import sync_categories as native
-    except Exception as e:
-        _warn(f"cannot import native sync_categories: {e!r}")
-        return
+        patched_any = False
 
-    patched_any = False
+        original_resolve_archive = getattr(module, "_resolve_archive_category", None)
+        if callable(original_resolve_archive) and not getattr(original_resolve_archive, "_native_sync_wrapped", False):
+            def _resolve_archive_category_native(guild: discord.Guild) -> Any:
+                native = _native_sync_categories()
+                if native is not None:
+                    try:
+                        configured = native.archive_category_from_cache(guild)
+                        if configured is not None:
+                            return configured
+                    except Exception:
+                        pass
+                try:
+                    return original_resolve_archive(guild)
+                except Exception:
+                    return None
 
-    original_resolve_archive = getattr(module, "_resolve_archive_category", None)
-    if callable(original_resolve_archive) and not getattr(original_resolve_archive, "_native_sync_wrapped", False):
-        def _resolve_archive_category_native(guild: discord.Guild) -> Any:
-            configured = native.archive_category_from_cache(guild)
-            if configured is not None:
-                return configured
             try:
-                return original_resolve_archive(guild)
-            except Exception:
-                return None
-
-        try:
-            setattr(_resolve_archive_category_native, "_native_sync_wrapped", True)
-        except Exception:
-            pass
-        setattr(module, "_resolve_archive_category", _resolve_archive_category_native)
-        patched_any = True
-
-    original_channel_in_archive = getattr(module, "_channel_in_archive_category", None)
-    if callable(original_channel_in_archive) and not getattr(original_channel_in_archive, "_native_sync_wrapped", False):
-        def _channel_in_archive_category_native(channel: discord.TextChannel) -> bool:
-            try:
-                if native.channel_is_in_configured_archive(channel):
-                    return True
+                setattr(_resolve_archive_category_native, "_native_sync_wrapped", True)
             except Exception:
                 pass
-            try:
-                return bool(original_channel_in_archive(channel))
-            except Exception:
-                return False
+            setattr(module, "_resolve_archive_category", _resolve_archive_category_native)
+            patched_any = True
 
-        try:
-            setattr(_channel_in_archive_category_native, "_native_sync_wrapped", True)
-        except Exception:
-            pass
-        setattr(module, "_channel_in_archive_category", _channel_in_archive_category_native)
-        patched_any = True
+        original_channel_in_archive = getattr(module, "_channel_in_archive_category", None)
+        if callable(original_channel_in_archive) and not getattr(original_channel_in_archive, "_native_sync_wrapped", False):
+            def _channel_in_archive_category_native(channel: discord.TextChannel) -> bool:
+                native = _native_sync_categories()
+                if native is not None:
+                    try:
+                        if native.channel_is_in_configured_archive(channel):
+                            return True
+                    except Exception:
+                        pass
+                try:
+                    return bool(original_channel_in_archive(channel))
+                except Exception:
+                    return False
 
-    original_lifecycle_location = getattr(module, "_channel_lifecycle_location", None)
-    if callable(original_lifecycle_location) and not getattr(original_lifecycle_location, "_native_sync_wrapped", False):
-        def _channel_lifecycle_location_native(channel: discord.TextChannel) -> str:
             try:
-                return native.channel_lifecycle_location(channel)
+                setattr(_channel_in_archive_category_native, "_native_sync_wrapped", True)
             except Exception:
+                pass
+            setattr(module, "_channel_in_archive_category", _channel_in_archive_category_native)
+            patched_any = True
+
+        original_lifecycle_location = getattr(module, "_channel_lifecycle_location", None)
+        if callable(original_lifecycle_location) and not getattr(original_lifecycle_location, "_native_sync_wrapped", False):
+            def _channel_lifecycle_location_native(channel: discord.TextChannel) -> str:
+                native = _native_sync_categories()
+                if native is not None:
+                    try:
+                        return str(native.channel_lifecycle_location(channel))
+                    except Exception:
+                        pass
                 try:
                     return str(original_lifecycle_location(channel))
                 except Exception:
                     return "uncategorized"
 
-        try:
-            setattr(_channel_lifecycle_location_native, "_native_sync_wrapped", True)
-        except Exception:
-            pass
-        setattr(module, "_channel_lifecycle_location", _channel_lifecycle_location_native)
-        patched_any = True
+            try:
+                setattr(_channel_lifecycle_location_native, "_native_sync_wrapped", True)
+            except Exception:
+                pass
+            setattr(module, "_channel_lifecycle_location", _channel_lifecycle_location_native)
+            patched_any = True
 
-    original_discover = getattr(module, "_discover_ticket_categories", None)
-    if callable(original_discover) and not getattr(original_discover, "_native_sync_wrapped", False):
-        def _discover_ticket_categories_native(guild: discord.Guild) -> list[discord.CategoryChannel]:
-            legacy_categories: list[Any] = []
-            try:
-                legacy_categories = list(original_discover(guild) or [])
-            except Exception as e:
-                _warn(f"legacy category discovery failed guild={getattr(guild, 'id', None)}: {e!r}")
-            try:
-                return native.merge_unique_categories(guild, legacy_categories)
-            except Exception as e:
-                _warn(f"native category merge failed guild={getattr(guild, 'id', None)}: {e!r}")
+        original_discover = getattr(module, "_discover_ticket_categories", None)
+        if callable(original_discover) and not getattr(original_discover, "_native_sync_wrapped", False):
+            def _discover_ticket_categories_native(guild: discord.Guild) -> list[discord.CategoryChannel]:
+                legacy_categories: list[Any] = []
+                try:
+                    legacy_categories = list(original_discover(guild) or [])
+                except Exception as e:
+                    _warn(f"legacy category discovery failed guild={getattr(guild, 'id', None)}: {e!r}")
+
+                native = _native_sync_categories()
+                if native is not None:
+                    try:
+                        return native.merge_unique_categories(guild, legacy_categories)
+                    except Exception as e:
+                        _warn(f"native category merge failed guild={getattr(guild, 'id', None)}: {e!r}")
+
                 return [c for c in legacy_categories if isinstance(c, discord.CategoryChannel)]
 
-        try:
-            setattr(_discover_ticket_categories_native, "_native_sync_wrapped", True)
-        except Exception:
-            pass
-        setattr(module, "_discover_ticket_categories", _discover_ticket_categories_native)
-        patched_any = True
-
-    original_is_ticket_channel = getattr(module, "_is_ticket_channel", None)
-    if callable(original_is_ticket_channel) and not getattr(original_is_ticket_channel, "_native_sync_wrapped", False):
-        def _is_ticket_channel_native(channel: discord.TextChannel) -> bool:
             try:
-                if native.is_transcript_channel(channel):
-                    return False
-                if native.channel_looks_like_ticket(channel):
-                    return True
+                setattr(_discover_ticket_categories_native, "_native_sync_wrapped", True)
             except Exception:
                 pass
-            try:
-                return bool(original_is_ticket_channel(channel))
-            except Exception:
-                return False
+            setattr(module, "_discover_ticket_categories", _discover_ticket_categories_native)
+            patched_any = True
 
-        try:
-            setattr(_is_ticket_channel_native, "_native_sync_wrapped", True)
-        except Exception:
-            pass
-        setattr(module, "_is_ticket_channel", _is_ticket_channel_native)
-        patched_any = True
+        original_is_ticket_channel = getattr(module, "_is_ticket_channel", None)
+        if callable(original_is_ticket_channel) and not getattr(original_is_ticket_channel, "_native_sync_wrapped", False):
+            def _is_ticket_channel_native(channel: discord.TextChannel) -> bool:
+                native = _native_sync_categories()
+                if native is not None:
+                    try:
+                        if native.is_transcript_channel(channel):
+                            return False
+                        if native.channel_looks_like_ticket(channel):
+                            return True
+                    except Exception:
+                        pass
+                try:
+                    return bool(original_is_ticket_channel(channel))
+                except Exception:
+                    return False
 
-    original_candidates = getattr(module, "_candidate_ticket_channels", None)
-    if callable(original_candidates) and not getattr(original_candidates, "_native_sync_wrapped", False):
-        def _candidate_ticket_channels_native(guild: discord.Guild) -> list[discord.TextChannel]:
-            legacy_categories: list[Any] = []
-            legacy_channels: list[Any] = []
             try:
-                legacy_categories = list(getattr(module, "_discover_ticket_categories", original_discover)(guild) or [])
+                setattr(_is_ticket_channel_native, "_native_sync_wrapped", True)
             except Exception:
-                legacy_categories = []
-            try:
-                legacy_channels = list(original_candidates(guild) or [])
-            except Exception as e:
-                _warn(f"legacy candidate fallback failed guild={getattr(guild, 'id', None)}: {e!r}")
-            try:
-                return native.candidate_ticket_channels(
-                    guild,
-                    extra_categories=legacy_categories,
-                    extra_channels=legacy_channels,
-                )
-            except Exception as e:
-                _warn(f"native candidate discovery failed guild={getattr(guild, 'id', None)}: {e!r}")
+                pass
+            setattr(module, "_is_ticket_channel", _is_ticket_channel_native)
+            patched_any = True
+
+        original_candidates = getattr(module, "_candidate_ticket_channels", None)
+        if callable(original_candidates) and not getattr(original_candidates, "_native_sync_wrapped", False):
+            def _candidate_ticket_channels_native(guild: discord.Guild) -> list[discord.TextChannel]:
+                legacy_categories: list[Any] = []
+                legacy_channels: list[Any] = []
+                try:
+                    discover_fn = getattr(module, "_discover_ticket_categories", original_discover)
+                    legacy_categories = list(discover_fn(guild) or []) if callable(discover_fn) else []
+                except Exception:
+                    legacy_categories = []
+                try:
+                    legacy_channels = list(original_candidates(guild) or [])
+                except Exception as e:
+                    _warn(f"legacy candidate fallback failed guild={getattr(guild, 'id', None)}: {e!r}")
+
+                native = _native_sync_categories()
+                if native is not None:
+                    try:
+                        return native.candidate_ticket_channels(
+                            guild,
+                            extra_categories=legacy_categories,
+                            extra_channels=legacy_channels,
+                        )
+                    except Exception as e:
+                        _warn(f"native candidate discovery failed guild={getattr(guild, 'id', None)}: {e!r}")
+
                 return [c for c in legacy_channels if isinstance(c, discord.TextChannel)]
 
-        try:
-            setattr(_candidate_ticket_channels_native, "_native_sync_wrapped", True)
-        except Exception:
-            pass
-        setattr(module, "_candidate_ticket_channels", _candidate_ticket_channels_native)
-        patched_any = True
-
-    original_sync = getattr(module, "sync_active_ticket_channels_for_guild", None)
-    if callable(original_sync) and not getattr(original_sync, "_native_sync_wrapped", False):
-        async def _sync_active_ticket_channels_for_guild_native(guild: discord.Guild, *args: Any, **kwargs: Any) -> Any:
-            await _warm_guild_config(guild)
             try:
-                cfg = native.sync_category_config_from_cache(guild)
-                _log(
-                    "startup sync using native category discovery "
-                    f"guild={cfg.guild_id} active={cfg.active_category_id} archive={cfg.archive_category_id} "
-                    f"transcripts={cfg.transcripts_channel_id} source={cfg.source}"
-                )
+                setattr(_candidate_ticket_channels_native, "_native_sync_wrapped", True)
             except Exception:
                 pass
-            return await original_sync(guild, *args, **kwargs)
+            setattr(module, "_candidate_ticket_channels", _candidate_ticket_channels_native)
+            patched_any = True
 
-        try:
-            setattr(_sync_active_ticket_channels_for_guild_native, "_native_sync_wrapped", True)
-        except Exception:
-            pass
-        setattr(module, "sync_active_ticket_channels_for_guild", _sync_active_ticket_channels_for_guild_native)
-        patched_any = True
+        original_sync = getattr(module, "sync_active_ticket_channels_for_guild", None)
+        if callable(original_sync) and not getattr(original_sync, "_native_sync_wrapped", False):
+            async def _sync_active_ticket_channels_for_guild_native(guild: discord.Guild, *args: Any, **kwargs: Any) -> Any:
+                await _warm_guild_config(guild)
+                native = _native_sync_categories()
+                if native is not None:
+                    try:
+                        cfg = native.sync_category_config_from_cache(guild)
+                        _log(
+                            "startup sync using native category discovery "
+                            f"guild={cfg.guild_id} active={cfg.active_category_id} archive={cfg.archive_category_id} "
+                            f"transcripts={cfg.transcripts_channel_id} source={cfg.source}"
+                        )
+                    except Exception:
+                        pass
+                return await original_sync(guild, *args, **kwargs)
 
-    if patched_any:
-        _PATCHED.add(key)
-        _log(f"patched {module_name}; startup ticket sync/backfill now uses native sync category helpers")
+            try:
+                setattr(_sync_active_ticket_channels_for_guild_native, "_native_sync_wrapped", True)
+            except Exception:
+                pass
+            setattr(module, "sync_active_ticket_channels_for_guild", _sync_active_ticket_channels_for_guild_native)
+            patched_any = True
+
+        if patched_any:
+            _PATCHED.add(key)
+            _log(f"patched {module_name}; startup ticket sync/backfill now uses lazy native sync category helpers")
+    finally:
+        _PATCHING = False
 
 
 def _patch_loaded() -> None:
@@ -229,12 +280,12 @@ def _patch_loaded() -> None:
 def _safe_import(name: str, globals: Any = None, locals: Any = None, fromlist: Any = (), level: int = 0) -> Any:
     module = _ORIGINAL_IMPORT(name, globals, locals, fromlist, level)
     try:
+        # Only react to the target module. Do not run patch scanning on every
+        # unrelated import; that is what created the recursive storm.
         if name == "stoney_verify.tickets_new.sync_service" or name.endswith("tickets_new.sync_service"):
             target = sys.modules.get("stoney_verify.tickets_new.sync_service") or sys.modules.get(name)
             if target is not None:
                 _patch_sync_service(target)
-        else:
-            _patch_loaded()
     except Exception as e:
         _warn(f"post-import patch failed for {name}: {e!r}")
     return module
@@ -242,4 +293,4 @@ def _safe_import(name: str, globals: Any = None, locals: Any = None, fromlist: A
 
 builtins.__import__ = _safe_import
 _patch_loaded()
-_log("loaded; native ticket sync/backfill wiring active")
+_log("loaded; lazy native ticket sync/backfill wiring active")
