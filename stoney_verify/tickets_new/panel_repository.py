@@ -19,6 +19,11 @@ from ..globals import get_supabase, now_utc, reset_supabase
 # - supports per-panel rules, category bindings, and presets
 # - exposes process-local locks/semaphores to prevent command storms
 # - keeps guilds isolated under high concurrent load
+#
+# Public-server setup posture:
+# - no server-specific .env IDs are required for panels
+# - .env values remain fallback-only through guild_config.py
+# - every row is scoped by guild_id
 # ============================================================
 
 TICKET_PANELS_TABLE = "ticket_panels"
@@ -56,6 +61,7 @@ DEFAULT_PANEL_RULES: Dict[str, Any] = {
     "allow_verified": True,
     "allow_resident": True,
     "allow_staff": True,
+    "allow_unknown_members": True,
     "ghost_allowed": False,
     "transcript_mode": DEFAULT_TRANSCRIPT_MODE,
     "close_confirmation_required": True,
@@ -154,6 +160,7 @@ def _slugify(value: Any, limit: int = 80) -> str:
     raw = _safe_str(value).lower().replace("&", " and ")
     out: List[str] = []
     prev_dash = False
+
     for ch in raw:
         if ch.isalnum():
             out.append(ch)
@@ -162,6 +169,7 @@ def _slugify(value: Any, limit: int = 80) -> str:
             if not prev_dash:
                 out.append("-")
                 prev_dash = True
+
     text = "".join(out).strip("-")
     if not text:
         return ""
@@ -186,6 +194,7 @@ def _normalize_channel_id(value: Any) -> Optional[str]:
     text = _safe_str(value)
     if not text:
         return None
+
     digits = "".join(ch for ch in text if ch.isdigit())
     return digits or None
 
@@ -247,6 +256,7 @@ def _sleep_backoff(attempt: int) -> None:
 
 def _execute_db_op(op_name: str, executor, max_attempts: int = _DB_MAX_ATTEMPTS):
     last_error = None
+
     for attempt in range(1, max_attempts + 1):
         try:
             return executor()
@@ -264,6 +274,7 @@ def _execute_db_op(op_name: str, executor, max_attempts: int = _DB_MAX_ATTEMPTS)
                 _sleep_backoff(attempt)
                 continue
             raise
+
     raise last_error
 
 
@@ -285,28 +296,34 @@ def panel_mutation_lock_key(*, guild_id: Any, panel_key: Any) -> str:
 
 def get_panel_creation_lock(*, guild_id: Any, owner_id: Any, panel_key: Any) -> asyncio.Lock:
     key = panel_creation_lock_key(guild_id=guild_id, owner_id=owner_id, panel_key=panel_key)
+
     lock = _PANEL_CREATION_LOCKS.get(key)
     if lock is None:
         lock = asyncio.Lock()
         _PANEL_CREATION_LOCKS[key] = lock
+
     return lock
 
 
 def get_panel_mutation_lock(*, guild_id: Any, panel_key: Any) -> asyncio.Lock:
     key = panel_mutation_lock_key(guild_id=guild_id, panel_key=panel_key)
+
     lock = _PANEL_MUTATION_LOCKS.get(key)
     if lock is None:
         lock = asyncio.Lock()
         _PANEL_MUTATION_LOCKS[key] = lock
+
     return lock
 
 
 def get_guild_panel_semaphore(guild_id: Any, limit: int = 8) -> asyncio.Semaphore:
     key = _safe_str(guild_id)
+
     sem = _GUILD_PANEL_SEMAPHORES.get(key)
     if sem is None:
         sem = asyncio.Semaphore(max(1, int(limit)))
         _GUILD_PANEL_SEMAPHORES[key] = sem
+
     return sem
 
 
@@ -340,26 +357,83 @@ def _normalize_panel_row(row: Dict[str, Any]) -> Dict[str, Any]:
 
 def _normalize_panel_rule_row(row: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     src = dict(row or {})
+
     return {
         "id": src.get("id"),
         "guild_id": _safe_str(src.get("guild_id")),
         "panel_key": _normalize_panel_key(src.get("panel_key")),
-        "cooldown_seconds": max(0, _safe_int(src.get("cooldown_seconds"), DEFAULT_PANEL_RULES["cooldown_seconds"])),
-        "max_tickets_per_window": max(0, _safe_int(src.get("max_tickets_per_window"), DEFAULT_PANEL_RULES["max_tickets_per_window"])),
-        "window_minutes": max(0, _safe_int(src.get("window_minutes"), DEFAULT_PANEL_RULES["window_minutes"])),
-        "auto_close_enabled": _normalize_bool_flag(src.get("auto_close_enabled"), DEFAULT_PANEL_RULES["auto_close_enabled"]),
-        "auto_close_minutes": max(5, _safe_int(src.get("auto_close_minutes"), DEFAULT_PANEL_RULES["auto_close_minutes"])),
-        "inactivity_reminders_enabled": _normalize_bool_flag(src.get("inactivity_reminders_enabled"), DEFAULT_PANEL_RULES["inactivity_reminders_enabled"]),
-        "inactivity_reminder_minutes": max(1, _safe_int(src.get("inactivity_reminder_minutes"), DEFAULT_PANEL_RULES["inactivity_reminder_minutes"])),
+
+        "cooldown_seconds": max(
+            0,
+            _safe_int(src.get("cooldown_seconds"), DEFAULT_PANEL_RULES["cooldown_seconds"]),
+        ),
+        "max_tickets_per_window": max(
+            0,
+            _safe_int(src.get("max_tickets_per_window"), DEFAULT_PANEL_RULES["max_tickets_per_window"]),
+        ),
+        "window_minutes": max(
+            0,
+            _safe_int(src.get("window_minutes"), DEFAULT_PANEL_RULES["window_minutes"]),
+        ),
+
+        "auto_close_enabled": _normalize_bool_flag(
+            src.get("auto_close_enabled"),
+            DEFAULT_PANEL_RULES["auto_close_enabled"],
+        ),
+        "auto_close_minutes": max(
+            5,
+            _safe_int(src.get("auto_close_minutes"), DEFAULT_PANEL_RULES["auto_close_minutes"]),
+        ),
+
+        "inactivity_reminders_enabled": _normalize_bool_flag(
+            src.get("inactivity_reminders_enabled"),
+            DEFAULT_PANEL_RULES["inactivity_reminders_enabled"],
+        ),
+        "inactivity_reminder_minutes": max(
+            1,
+            _safe_int(
+                src.get("inactivity_reminder_minutes"),
+                DEFAULT_PANEL_RULES["inactivity_reminder_minutes"],
+            ),
+        ),
+
         "staff_alert_channel_id": _normalize_channel_id(src.get("staff_alert_channel_id")),
-        "allow_unverified": _normalize_bool_flag(src.get("allow_unverified"), DEFAULT_PANEL_RULES["allow_unverified"]),
-        "allow_verified": _normalize_bool_flag(src.get("allow_verified"), DEFAULT_PANEL_RULES["allow_verified"]),
-        "allow_resident": _normalize_bool_flag(src.get("allow_resident"), DEFAULT_PANEL_RULES["allow_resident"]),
-        "allow_staff": _normalize_bool_flag(src.get("allow_staff"), DEFAULT_PANEL_RULES["allow_staff"]),
-        "ghost_allowed": _normalize_bool_flag(src.get("ghost_allowed"), DEFAULT_PANEL_RULES["ghost_allowed"]),
+
+        "allow_unverified": _normalize_bool_flag(
+            src.get("allow_unverified"),
+            DEFAULT_PANEL_RULES["allow_unverified"],
+        ),
+        "allow_verified": _normalize_bool_flag(
+            src.get("allow_verified"),
+            DEFAULT_PANEL_RULES["allow_verified"],
+        ),
+        "allow_resident": _normalize_bool_flag(
+            src.get("allow_resident"),
+            DEFAULT_PANEL_RULES["allow_resident"],
+        ),
+        "allow_staff": _normalize_bool_flag(
+            src.get("allow_staff"),
+            DEFAULT_PANEL_RULES["allow_staff"],
+        ),
+        "allow_unknown_members": _normalize_bool_flag(
+            src.get("allow_unknown_members"),
+            DEFAULT_PANEL_RULES["allow_unknown_members"],
+        ),
+
+        "ghost_allowed": _normalize_bool_flag(
+            src.get("ghost_allowed"),
+            DEFAULT_PANEL_RULES["ghost_allowed"],
+        ),
         "transcript_mode": _normalize_transcript_mode(src.get("transcript_mode")),
-        "close_confirmation_required": _normalize_bool_flag(src.get("close_confirmation_required"), DEFAULT_PANEL_RULES["close_confirmation_required"]),
-        "per_owner_open_limit": max(1, _safe_int(src.get("per_owner_open_limit"), DEFAULT_PANEL_RULES["per_owner_open_limit"])),
+        "close_confirmation_required": _normalize_bool_flag(
+            src.get("close_confirmation_required"),
+            DEFAULT_PANEL_RULES["close_confirmation_required"],
+        ),
+        "per_owner_open_limit": max(
+            1,
+            _safe_int(src.get("per_owner_open_limit"), DEFAULT_PANEL_RULES["per_owner_open_limit"]),
+        ),
+
         "created_at": src.get("created_at"),
         "updated_at": src.get("updated_at"),
         "raw": dict(src),
@@ -382,6 +456,7 @@ def _normalize_panel_category_row(row: Dict[str, Any]) -> Dict[str, Any]:
 
 def _normalize_panel_preset_row(row: Dict[str, Any]) -> Dict[str, Any]:
     defaults = _safe_json_dict(row.get("default_rules_json"))
+
     return {
         "id": row.get("id"),
         "guild_id": _safe_str(row.get("guild_id")),
@@ -502,6 +577,7 @@ def _get_panel_sync(guild_id: Any, panel_key: Any) -> Optional[Dict[str, Any]]:
     rows = _result_rows(_execute_db_op(f"get panel ({guild_id}/{key})", _read))
     if not rows:
         return None
+
     return _normalize_panel_row(rows[0])
 
 
@@ -529,6 +605,7 @@ def _get_panel_by_message_sync(guild_id: Any, channel_id: Any, message_id: Any) 
     rows = _result_rows(_execute_db_op(f"get panel by message ({guild_id}/{ch}/{msg})", _read))
     if not rows:
         return None
+
     return _normalize_panel_row(rows[0])
 
 
@@ -618,10 +695,12 @@ def _replace_panel_categories_sync(guild_id: Any, panel_key: Any, category_slugs
 
     normalized: List[Dict[str, Any]] = []
     seen: set[str] = set()
+
     for index, slug in enumerate(category_slugs or []):
         cleaned = _slugify(slug, limit=120)
         if not cleaned or cleaned in seen:
             continue
+
         seen.add(cleaned)
         normalized.append(
             _normalize_panel_category_payload(
@@ -675,6 +754,7 @@ def _get_panel_rules_sync(guild_id: Any, panel_key: Any) -> Dict[str, Any]:
     rows = _result_rows(_execute_db_op(f"get panel rules ({gid}/{key})", _read))
     if not rows:
         return _normalize_panel_rule_row({"guild_id": gid, "panel_key": key})
+
     return _normalize_panel_rule_row(rows[0])
 
 
@@ -743,6 +823,7 @@ def _get_panel_preset_sync(guild_id: Any, preset_key: Any) -> Optional[Dict[str,
     rows = _result_rows(_execute_db_op(f"get panel preset ({gid}/{key})", _read))
     if not rows:
         return None
+
     return _normalize_panel_preset_row(rows[0])
 
 
@@ -792,11 +873,17 @@ def _delete_panel_preset_sync(guild_id: Any, preset_key: Any) -> bool:
 # ============================================================
 
 async def list_ticket_panels(guild_id: Any) -> List[Dict[str, Any]]:
-    return await _run_db_op(f"list ticket panels async ({guild_id})", lambda: _list_panels_sync(guild_id))
+    return await _run_db_op(
+        f"list ticket panels async ({guild_id})",
+        lambda: _list_panels_sync(guild_id),
+    )
 
 
 async def get_ticket_panel(guild_id: Any, panel_key: Any) -> Optional[Dict[str, Any]]:
-    return await _run_db_op(f"get ticket panel async ({guild_id}/{panel_key})", lambda: _get_panel_sync(guild_id, panel_key))
+    return await _run_db_op(
+        f"get ticket panel async ({guild_id}/{panel_key})",
+        lambda: _get_panel_sync(guild_id, panel_key),
+    )
 
 
 async def get_ticket_panel_by_message(
@@ -813,6 +900,7 @@ async def get_ticket_panel_by_message(
 async def upsert_ticket_panel(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     gid = _safe_str(payload.get("guild_id"))
     key = _normalize_panel_key(payload.get("panel_key"))
+
     lock = get_panel_mutation_lock(guild_id=gid, panel_key=key or "unknown")
     async with lock:
         return await _run_db_op(
@@ -823,6 +911,7 @@ async def upsert_ticket_panel(payload: Dict[str, Any]) -> Optional[Dict[str, Any
 
 async def delete_ticket_panel(guild_id: Any, panel_key: Any) -> bool:
     lock = get_panel_mutation_lock(guild_id=guild_id, panel_key=panel_key)
+
     async with lock:
         return await _run_db_op(
             f"delete ticket panel async ({guild_id}/{panel_key})",
@@ -843,6 +932,7 @@ async def replace_ticket_panel_categories(
     category_slugs: Sequence[Any],
 ) -> List[Dict[str, Any]]:
     lock = get_panel_mutation_lock(guild_id=guild_id, panel_key=panel_key)
+
     async with lock:
         return await _run_db_op(
             f"replace ticket panel categories async ({guild_id}/{panel_key})",
@@ -860,6 +950,7 @@ async def get_ticket_panel_rules(guild_id: Any, panel_key: Any) -> Dict[str, Any
 async def upsert_ticket_panel_rules(payload: Dict[str, Any]) -> Dict[str, Any]:
     gid = _safe_str(payload.get("guild_id"))
     key = _normalize_panel_key(payload.get("panel_key"))
+
     lock = get_panel_mutation_lock(guild_id=gid, panel_key=key or "unknown")
     async with lock:
         return await _run_db_op(
@@ -885,6 +976,7 @@ async def get_ticket_panel_preset(guild_id: Any, preset_key: Any) -> Optional[Di
 async def upsert_ticket_panel_preset(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     gid = _safe_str(payload.get("guild_id"))
     key = _normalize_preset_key(payload.get("preset_key"))
+
     return await _run_db_op(
         f"upsert ticket panel preset async ({gid}/{key})",
         lambda: _upsert_panel_preset_sync(payload),
@@ -973,6 +1065,7 @@ async def apply_panel_preset_to_panel(
 
     if updated_panel is None:
         return None
+
     return await get_ticket_panel_bundle(guild_id, panel_key)
 
 
@@ -1062,11 +1155,13 @@ async def build_panel_runtime_config(guild_id: Any, panel_key: Any) -> Optional[
         return None
 
     panel = dict(bundle["panel"])
+
     rules = dict(DEFAULT_PANEL_RULES)
     rules.update(bundle.get("rules") or {})
 
     preset = bundle.get("preset") or {}
     preset_rules = _safe_json_dict(preset.get("default_rules_json"))
+
     merged_rules = dict(DEFAULT_PANEL_RULES)
     merged_rules.update(preset_rules)
     merged_rules.update(rules)
