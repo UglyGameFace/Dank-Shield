@@ -185,12 +185,12 @@ except Exception as e:
     except Exception:
         pass
 
-# Event helper queue guard.
+# Event helper queue guard now lives inside stoney_verify/startup_guards instead of root runtime patches.
 try:
-    import runtime_event_safety  # noqa: F401
+    from stoney_verify.startup_guards import event_safety  # noqa: F401
 except Exception as e:
     try:
-        print(f"⚠️ main.py failed to import runtime_event_safety guard: {e!r}")
+        print(f"⚠️ main.py failed to import startup_guards.event_safety: {e!r}")
     except Exception:
         pass
 
