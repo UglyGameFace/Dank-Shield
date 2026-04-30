@@ -1,659 +1,627 @@
 from __future__ import annotations
 
 import asyncio
-import os
+import random
 import time
-from dataclasses import dataclass, replace
-from typing import Any, Mapping, Optional
+from datetime import datetime, timedelta, timezone
+from typing import Any, Dict, Optional
+
+import discord
 
 from .globals import (
+    get_supabase,
+    reset_supabase,
+    now_utc,
+
+    # Safe fallback values only.
     GUILD_ID,
     VERIFY_CHANNEL_ID,
     VC_VERIFY_CHANNEL_ID,
     VC_VERIFY_QUEUE_CHANNEL_ID,
     TICKET_CATEGORY_ID,
-    TICKET_PREFIX,
-    AUTO_DELETE_TICKET_SECONDS,
     TRANSCRIPTS_CHANNEL_ID,
+    MODLOG_CHANNEL_ID,
+    RAIDLOG_CHANNEL_ID,
     JOIN_LOG_CHANNEL_ID,
-    TOKEN_TTL_MINUTES,
-    VC_REQUEST_TTL_MINUTES,
-    VERIFY_KICK_HOURS,
-    VC_REQUEST_COOLDOWN_SECONDS,
+    FORCE_VERIFY_LOG_CHANNEL_ID,
+
     UNVERIFIED_ROLE_ID,
     VERIFIED_ROLE_ID,
     RESIDENT_ROLE_ID,
-    STONER_ROLE_ID,
-    DRUNKEN_ROLE_ID,
     STAFF_ROLE_ID,
     VC_STAFF_ROLE_ID,
-    MODLOG_CHANNEL_ID,
-    RAIDLOG_CHANNEL_ID,
-    FORCE_VERIFY_LOG_CHANNEL_ID,
-    ENABLE_OPTIONAL_ROLE_PROMPT,
-    OPTIONAL_ROLE_AUTO_CLOSE_SECONDS,
-    SINGLE_PANEL_MODE,
-    TRANSCRIPT_PANEL_NAME,
-    get_supabase,
 )
 
 
 # ============================================================
 # guild_config.py
 # ------------------------------------------------------------
-# Public-scale per-guild configuration resolver.
+# Per-server config resolver.
 #
-# Why this exists:
-# - globals.py is still the safe env fallback for local dev and one beta guild.
-# - public bots cannot depend on one GUILD_ID / one set of channel ids.
-# - every runtime path should resolve config by guild_id.
+# Design:
+# - DB per-guild config is authoritative.
+# - Discord runtime discovery is used when useful.
+# - .env values are FALLBACK ONLY.
+# - Missing config should not crash public servers.
 #
-# Production isolation rules:
-# - In public/minimal/production mode, server-specific env IDs are allowed only
-#   for explicitly allowed fallback guilds, usually the beta guild from GUILD_ID.
-# - Any other guild with no guild_configs row is returned as unconfigured with
-#   zero channel/role IDs. This prevents your private server IDs from leaking
-#   into another customer's setup.
-# - A partially configured DB row is completed from neutral defaults, not from
-#   your beta env IDs, unless the guild is explicitly allowed to use env fallback.
-# - verify_channel_id is a text-channel config and must NOT fall back to the
-#   VC verification channel. Health/setup validation owns type checking.
+# This lets Stoney Verify run across many servers without
+# requiring every server owner to edit your deployment .env.
 # ============================================================
 
+GUILD_CONFIG_TABLE = "guild_config"
 
-DEFAULT_CONFIG_TABLE = "guild_configs"
-DEFAULT_CACHE_TTL_SECONDS = 60.0
+_CACHE_TTL_SECONDS = 60
+_DB_MAX_ATTEMPTS = 5
 
-_WARNED_KEYS: set[str] = set()
-_CONFIG_CACHE: dict[int, tuple[float, "GuildRuntimeConfig"]] = {}
-_CONFIG_LOCKS: dict[int, asyncio.Lock] = {}
-_CONFIG_LOCKS_GUARD = asyncio.Lock()
+_CONFIG_CACHE: Dict[str, Dict[str, Any]] = {}
+_CONFIG_CACHE_TS: Dict[str, datetime] = {}
 
 
-def _env_str(key: str, default: str = "") -> str:
+# ============================================================
+# Helpers
+# ============================================================
+
+def _debug(message: str) -> None:
     try:
-        value = os.getenv(key)
-        if value is None:
-            return default
-        value = str(value).strip()
-        return value if value else default
-    except Exception:
-        return default
-
-
-def _env_float(key: str, default: float) -> float:
-    raw = _env_str(key)
-    if not raw:
-        return float(default)
-    try:
-        return float(raw)
-    except Exception:
-        return float(default)
-
-
-def _env_first_int(*keys: str, default: int = 0) -> int:
-    for key in keys:
-        raw = _env_str(key)
-        if not raw:
-            continue
-        try:
-            value = int(raw)
-            if value > 0:
-                return value
-        except Exception:
-            continue
-    return int(default)
-
-
-def _truthy(value: object, default: bool = False) -> bool:
-    if value is None:
-        return bool(default)
-    if isinstance(value, bool):
-        return value
-    text = str(value).strip().lower()
-    if not text:
-        return bool(default)
-    return text in {"1", "true", "yes", "y", "on"}
-
-
-def _to_int(value: object, default: int = 0) -> int:
-    if value is None:
-        return int(default)
-    try:
-        if isinstance(value, bool):
-            return int(default)
-        text = str(value).strip()
-        if not text:
-            return int(default)
-        return int(text)
-    except Exception:
-        return int(default)
-
-
-def _to_str(value: object, default: str = "") -> str:
-    if value is None:
-        return str(default or "")
-    try:
-        text = str(value).strip()
-        return text if text else str(default or "")
-    except Exception:
-        return str(default or "")
-
-
-def _warn_once(key: str, message: str) -> None:
-    try:
-        clean = str(key or "").strip().lower()
-        if clean in _WARNED_KEYS:
-            return
-        _WARNED_KEYS.add(clean)
-        print(message)
+        print(f"🧩 guild_config {message}")
     except Exception:
         pass
 
 
-def _table_name() -> str:
-    return _env_str("STONEY_GUILD_CONFIG_TABLE", DEFAULT_CONFIG_TABLE)
+def _safe_int(value: Any, default: int = 0) -> int:
+    try:
+        if value is None or isinstance(value, bool):
+            return default
+        return int(str(value).strip())
+    except Exception:
+        return default
 
 
-def _cache_ttl() -> float:
-    return max(5.0, _env_float("STONEY_GUILD_CONFIG_CACHE_TTL_SECONDS", DEFAULT_CACHE_TTL_SECONDS))
+def _safe_bool(value: Any, default: bool = False) -> bool:
+    try:
+        if isinstance(value, bool):
+            return value
+        raw = str(value or "").strip().lower()
+        if raw in {"1", "true", "yes", "y", "on"}:
+            return True
+        if raw in {"0", "false", "no", "n", "off"}:
+            return False
+        return default
+    except Exception:
+        return default
 
 
-def _pick(mapping: Mapping[str, Any], *keys: str, default: Any = None) -> Any:
-    for key in keys:
-        if key in mapping and mapping.get(key) is not None:
-            return mapping.get(key)
-    return default
+def _safe_str(value: Any, default: str = "") -> str:
+    try:
+        text = str(value or "").strip()
+        return text if text else default
+    except Exception:
+        return default
 
 
-def _nested_settings(row: Mapping[str, Any]) -> dict[str, Any]:
-    merged: dict[str, Any] = {}
-    for key in ("settings", "config", "metadata", "meta"):
-        value = row.get(key)
-        if isinstance(value, Mapping):
-            merged.update(dict(value))
-    merged.update(dict(row))
-    return merged
-
-
-def _csv_ints(value: str) -> set[int]:
-    out: set[int] = set()
-    for part in str(value or "").replace(";", ",").split(","):
-        item = _to_int(part, 0)
-        if item > 0:
-            out.add(item)
-    return out
-
-
-def _deployment_mode() -> str:
-    raw = _env_str("STONEY_DEPLOYMENT_MODE", "").lower()
-    if raw:
-        return raw
-    if _truthy(_env_str("STONEY_PRODUCTION_MODE"), False):
-        return "production"
-    if _truthy(_env_str("STONEY_PUBLIC_MODE"), False):
-        return "public"
-    return "development"
-
-
-def _command_profile() -> str:
-    return _env_str("STONEY_COMMAND_PROFILE", "public").lower()
-
-
-def public_config_isolation_enabled() -> bool:
-    """True when missing/partial DB configs must not inherit beta env IDs."""
-    explicit = _env_str("STONEY_REQUIRE_GUILD_CONFIG", "")
-    if explicit:
-        return _truthy(explicit, True)
-    profile = _command_profile()
-    deployment = _deployment_mode()
-    return profile in {"public", "minimal"} or deployment in {"public", "prod", "production"}
-
-
-def env_fallback_guild_ids() -> set[int]:
-    """Guilds that may still use env IDs in public mode.
-
-    Default behavior keeps the single beta guild working while preventing every
-    other guild from inheriting that beta server's channels/roles.
-    """
-    explicit = _env_str("STONEY_ENV_FALLBACK_GUILD_IDS", "")
-    if explicit:
-        return _csv_ints(explicit)
-    return {int(GUILD_ID)} if int(GUILD_ID or 0) > 0 else set()
-
-
-def env_fallback_allowed_for_guild(guild_id: int | str | None) -> bool:
-    gid = _to_int(guild_id, 0)
-    if gid <= 0:
-        return not public_config_isolation_enabled()
-    if not public_config_isolation_enabled():
-        return True
-    return gid in env_fallback_guild_ids()
-
-
-@dataclass(frozen=True)
-class GuildRuntimeConfig:
-    guild_id: int
-
-    verify_channel_id: int = 0
-    vc_verify_channel_id: int = 0
-    vc_verify_queue_channel_id: int = 0
-
-    ticket_category_id: int = 0
-    ticket_archive_category_id: int = 0
-    ticket_prefix: str = "ticket"
-    auto_delete_ticket_seconds: int = 0
-    transcripts_channel_id: int = 0
-    transcript_panel_name: str = "Support"
-    single_panel_mode: bool = True
-    join_log_channel_id: int = 0
-
-    token_ttl_minutes: int = 240
-    vc_request_ttl_minutes: int = 240
-    verify_kick_hours: int = 24
-    vc_request_cooldown_seconds: int = 60
-
-    unverified_role_id: int = 0
-    verified_role_id: int = 0
-    resident_role_id: int = 0
-    stoner_role_id: int = 0
-    drunken_role_id: int = 0
-    staff_role_id: int = 0
-    vc_staff_role_id: int = 0
-
-    modlog_channel_id: int = 0
-    raidlog_channel_id: int = 0
-    force_verify_log_channel_id: int = 0
-
-    enable_optional_role_prompt: bool = True
-    optional_role_auto_close_seconds: int = 0
-
-    source: str = "env"
-    loaded_at_monotonic: float = 0.0
-
-    @property
-    def effective_verify_channel_id(self) -> int:
-        # Production-safe: this is intentionally NOT `verify or vc_verify`.
-        # A voice channel must never satisfy the text-channel verification config.
-        return int(self.verify_channel_id or 0)
-
-    @property
-    def effective_vc_staff_role_id(self) -> int:
-        return int(self.vc_staff_role_id or self.staff_role_id or 0)
-
-    @property
-    def effective_ticket_archive_category_id(self) -> int:
-        return int(self.ticket_archive_category_id or 0)
-
-    @property
-    def effective_raidlog_channel_id(self) -> int:
-        return int(self.raidlog_channel_id or self.modlog_channel_id or 0)
-
-    @property
-    def effective_force_verify_log_channel_id(self) -> int:
-        return int(self.force_verify_log_channel_id or self.modlog_channel_id or 0)
-
-    @property
-    def is_configured_from_db(self) -> bool:
-        return str(self.source or "").startswith("supabase:")
-
-    @property
-    def is_unconfigured(self) -> bool:
-        return str(self.source or "").startswith("unconfigured:")
-
-    @property
-    def uses_env_fallback(self) -> bool:
-        return str(self.source or "") == "env"
-
-    def as_startup_summary(self) -> dict[str, object]:
-        return {
-            "guild": self.guild_id,
-            "source": self.source,
-            "verify_channel": self.verify_channel_id,
-            "vc_verify_channel": self.vc_verify_channel_id,
-            "vc_verify_queue_channel": self.vc_verify_queue_channel_id,
-            "ticket_category": self.ticket_category_id,
-            "ticket_archive_category": self.effective_ticket_archive_category_id,
-            "ticket_prefix": self.ticket_prefix,
-            "unverified_role": self.unverified_role_id,
-            "verified_role": self.verified_role_id,
-            "staff_role": self.staff_role_id,
-            "transcripts_channel": self.transcripts_channel_id,
-            "join_log_channel": self.join_log_channel_id,
-            "modlog_channel": self.modlog_channel_id,
-            "raidlog_channel": self.raidlog_channel_id,
-            "verify_kick_hours": self.verify_kick_hours,
-        }
-
-
-def unconfigured_guild_config(guild_id: int | str | None = None, *, source: str = "unconfigured:requires_setup") -> GuildRuntimeConfig:
-    """Neutral config for a guild that has not completed setup.
-
-    Channel/role IDs stay zero on purpose. This is the isolation boundary that
-    keeps one server's IDs from appearing in another server.
-    """
-    gid = _to_int(guild_id, 0)
-    return GuildRuntimeConfig(
-        guild_id=gid,
-        ticket_prefix=TICKET_PREFIX or "ticket",
-        auto_delete_ticket_seconds=0,
-        transcript_panel_name=TRANSCRIPT_PANEL_NAME or "Support",
-        single_panel_mode=bool(SINGLE_PANEL_MODE),
-        token_ttl_minutes=TOKEN_TTL_MINUTES or 240,
-        vc_request_ttl_minutes=VC_REQUEST_TTL_MINUTES or 240,
-        verify_kick_hours=VERIFY_KICK_HOURS or 24,
-        vc_request_cooldown_seconds=VC_REQUEST_COOLDOWN_SECONDS or 60,
-        enable_optional_role_prompt=bool(ENABLE_OPTIONAL_ROLE_PROMPT),
-        optional_role_auto_close_seconds=OPTIONAL_ROLE_AUTO_CLOSE_SECONDS,
-        source=source,
-        loaded_at_monotonic=time.monotonic(),
-    )
-
-
-def env_fallback_config(guild_id: int | str | None = None) -> GuildRuntimeConfig:
-    gid = _to_int(guild_id, GUILD_ID)
-    archive_category_id = _env_first_int(
-        "TICKET_ARCHIVE_CATEGORY_ID",
-        "TICKET_ARCHIVED_CATEGORY_ID",
-        "ARCHIVED_TICKET_CATEGORY_ID",
-        "ARCHIVE_TICKET_CATEGORY_ID",
-        "CLOSED_TICKET_CATEGORY_ID",
-        default=0,
-    )
-    return GuildRuntimeConfig(
-        guild_id=gid,
-        verify_channel_id=VERIFY_CHANNEL_ID,
-        vc_verify_channel_id=VC_VERIFY_CHANNEL_ID,
-        vc_verify_queue_channel_id=VC_VERIFY_QUEUE_CHANNEL_ID,
-        ticket_category_id=TICKET_CATEGORY_ID,
-        ticket_archive_category_id=archive_category_id,
-        ticket_prefix=TICKET_PREFIX or "ticket",
-        auto_delete_ticket_seconds=AUTO_DELETE_TICKET_SECONDS,
-        transcripts_channel_id=TRANSCRIPTS_CHANNEL_ID,
-        transcript_panel_name=TRANSCRIPT_PANEL_NAME or "Support",
-        single_panel_mode=bool(SINGLE_PANEL_MODE),
-        join_log_channel_id=JOIN_LOG_CHANNEL_ID,
-        token_ttl_minutes=TOKEN_TTL_MINUTES,
-        vc_request_ttl_minutes=VC_REQUEST_TTL_MINUTES,
-        verify_kick_hours=VERIFY_KICK_HOURS,
-        vc_request_cooldown_seconds=VC_REQUEST_COOLDOWN_SECONDS,
-        unverified_role_id=UNVERIFIED_ROLE_ID,
-        verified_role_id=VERIFIED_ROLE_ID,
-        resident_role_id=RESIDENT_ROLE_ID,
-        stoner_role_id=STONER_ROLE_ID,
-        drunken_role_id=DRUNKEN_ROLE_ID,
-        staff_role_id=STAFF_ROLE_ID,
-        vc_staff_role_id=VC_STAFF_ROLE_ID or STAFF_ROLE_ID,
-        modlog_channel_id=MODLOG_CHANNEL_ID,
-        raidlog_channel_id=RAIDLOG_CHANNEL_ID,
-        force_verify_log_channel_id=FORCE_VERIFY_LOG_CHANNEL_ID,
-        enable_optional_role_prompt=bool(ENABLE_OPTIONAL_ROLE_PROMPT),
-        optional_role_auto_close_seconds=OPTIONAL_ROLE_AUTO_CLOSE_SECONDS,
-        source="env",
-        loaded_at_monotonic=time.monotonic(),
-    )
-
-
-def _base_config_for_guild(guild_id: int) -> GuildRuntimeConfig:
-    if env_fallback_allowed_for_guild(guild_id):
-        return env_fallback_config(guild_id)
-    return unconfigured_guild_config(guild_id, source="unconfigured:requires_setup")
-
-
-def _apply_row_to_config(base: GuildRuntimeConfig, row: Mapping[str, Any]) -> GuildRuntimeConfig:
-    data = _nested_settings(row)
-
-    staff_role_id = _to_int(
-        _pick(data, "staff_role_id", "support_role_id", "mod_role_id"),
-        base.staff_role_id,
-    )
-    vc_staff_role_id = _to_int(
-        _pick(data, "vc_staff_role_id", "voice_staff_role_id"),
-        base.vc_staff_role_id or staff_role_id,
-    )
-
-    verify_channel_id = _to_int(
-        _pick(data, "verify_channel_id", "verification_channel_id", "verify_channel"),
-        base.verify_channel_id,
-    )
-    vc_verify_channel_id = _to_int(
-        _pick(data, "vc_verify_channel_id", "voice_verify_channel_id", "vc_channel_id"),
-        base.vc_verify_channel_id,
-    )
-
-    return replace(
-        base,
-        verify_channel_id=verify_channel_id,
-        vc_verify_channel_id=vc_verify_channel_id,
-        vc_verify_queue_channel_id=_to_int(
-            _pick(data, "vc_verify_queue_channel_id", "voice_verify_queue_channel_id"),
-            base.vc_verify_queue_channel_id,
-        ),
-        ticket_category_id=_to_int(
-            _pick(data, "ticket_category_id", "tickets_category_id", "support_category_id"),
-            base.ticket_category_id,
-        ),
-        ticket_archive_category_id=_to_int(
-            _pick(
-                data,
-                "ticket_archive_category_id",
-                "ticket_archived_category_id",
-                "archived_ticket_category_id",
-                "archive_ticket_category_id",
-                "closed_ticket_category_id",
-                "closed_tickets_category_id",
-            ),
-            base.ticket_archive_category_id,
-        ),
-        ticket_prefix=_to_str(_pick(data, "ticket_prefix", "ticket_channel_prefix"), base.ticket_prefix or "ticket"),
-        auto_delete_ticket_seconds=_to_int(
-            _pick(data, "auto_delete_ticket_seconds", "ticket_auto_delete_seconds"),
-            base.auto_delete_ticket_seconds,
-        ),
-        transcripts_channel_id=_to_int(
-            _pick(data, "transcripts_channel_id", "transcript_channel_id"),
-            base.transcripts_channel_id,
-        ),
-        transcript_panel_name=_to_str(
-            _pick(data, "transcript_panel_name", "panel_name"),
-            base.transcript_panel_name or "Support",
-        ),
-        single_panel_mode=_truthy(_pick(data, "single_panel_mode"), base.single_panel_mode),
-        join_log_channel_id=_to_int(
-            _pick(
-                data,
-                "join_log_channel_id",
-                "join_log_id",
-                "member_log_channel_id",
-                "member_join_log_channel_id",
-                "member_leave_log_channel_id",
-                "welcome_exit_channel_id",
-                "welcome_channel_id",
-                "leave_log_channel_id",
-            ),
-            base.join_log_channel_id,
-        ),
-        token_ttl_minutes=_to_int(_pick(data, "token_ttl_minutes"), base.token_ttl_minutes),
-        vc_request_ttl_minutes=_to_int(_pick(data, "vc_request_ttl_minutes"), base.vc_request_ttl_minutes),
-        verify_kick_hours=_to_int(_pick(data, "verify_kick_hours"), base.verify_kick_hours),
-        vc_request_cooldown_seconds=_to_int(
-            _pick(data, "vc_request_cooldown_seconds"),
-            base.vc_request_cooldown_seconds,
-        ),
-        unverified_role_id=_to_int(_pick(data, "unverified_role_id"), base.unverified_role_id),
-        verified_role_id=_to_int(_pick(data, "verified_role_id"), base.verified_role_id),
-        resident_role_id=_to_int(_pick(data, "resident_role_id"), base.resident_role_id),
-        stoner_role_id=_to_int(_pick(data, "stoner_role_id"), base.stoner_role_id),
-        drunken_role_id=_to_int(_pick(data, "drunken_role_id"), base.drunken_role_id),
-        staff_role_id=staff_role_id,
-        vc_staff_role_id=vc_staff_role_id or staff_role_id,
-        modlog_channel_id=_to_int(_pick(data, "modlog_channel_id", "mod_log_channel_id"), base.modlog_channel_id),
-        raidlog_channel_id=_to_int(
-            _pick(data, "raidlog_channel_id", "raid_log_channel_id", "security_log_channel_id", "spam_log_channel_id"),
-            base.raidlog_channel_id,
-        ),
-        force_verify_log_channel_id=_to_int(
-            _pick(data, "force_verify_log_channel_id", "force_verify_channel_id"),
-            base.force_verify_log_channel_id,
-        ),
-        enable_optional_role_prompt=_truthy(
-            _pick(data, "enable_optional_role_prompt", "optional_role_prompt_enabled"),
-            base.enable_optional_role_prompt,
-        ),
-        optional_role_auto_close_seconds=_to_int(
-            _pick(data, "optional_role_auto_close_seconds"),
-            base.optional_role_auto_close_seconds,
-        ),
-        source=f"supabase:{_table_name()}",
-        loaded_at_monotonic=time.monotonic(),
-    )
-
-
-def _fetch_config_row_sync(guild_id: int) -> Optional[dict[str, Any]]:
-    supabase = get_supabase()
-    if supabase is None:
+def _snowflake_str(value: Any) -> Optional[str]:
+    num = _safe_int(value, 0)
+    if num <= 0:
         return None
-
-    table = _table_name()
-    response = (
-        supabase.table(table)
-        .select("*")
-        .eq("guild_id", str(guild_id))
-        .limit(1)
-        .execute()
-    )
-
-    rows = getattr(response, "data", None) or []
-    if not rows:
-        return None
-    first = rows[0]
-    return dict(first) if isinstance(first, Mapping) else None
+    return str(num)
 
 
-async def _lock_for_guild(guild_id: int) -> asyncio.Lock:
-    async with _CONFIG_LOCKS_GUARD:
-        lock = _CONFIG_LOCKS.get(guild_id)
-        if lock is None:
-            lock = asyncio.Lock()
-            _CONFIG_LOCKS[guild_id] = lock
-        return lock
+def _now() -> datetime:
+    try:
+        return now_utc()
+    except Exception:
+        return datetime.now(timezone.utc)
 
 
-async def get_guild_config(guild_id: int | str | None, *, refresh: bool = False) -> GuildRuntimeConfig:
-    gid = _to_int(guild_id, GUILD_ID)
-    if gid <= 0:
-        if public_config_isolation_enabled():
-            return unconfigured_guild_config(gid, source="unconfigured:missing_guild_id")
-        return env_fallback_config(gid)
-
-    now = time.monotonic()
-    ttl = _cache_ttl()
-
-    cached = _CONFIG_CACHE.get(gid)
-    if cached and not refresh:
-        loaded_at, cfg = cached
-        if now - loaded_at <= ttl:
-            return cfg
-
-    lock = await _lock_for_guild(gid)
-    async with lock:
-        cached = _CONFIG_CACHE.get(gid)
-        now = time.monotonic()
-        if cached and not refresh:
-            loaded_at, cfg = cached
-            if now - loaded_at <= ttl:
-                return cfg
-
-        base = _base_config_for_guild(gid)
-
-        try:
-            row = await asyncio.to_thread(_fetch_config_row_sync, gid)
-        except Exception as e:
-            if base.uses_env_fallback:
-                _warn_once(
-                    f"guild-config-fetch:{gid}",
-                    f"⚠️ guild_config: using env fallback for allowed guild={gid}; DB config fetch failed: {repr(e)}",
-                )
-                cfg = base
-            else:
-                _warn_once(
-                    f"guild-config-fetch:{gid}",
-                    f"⚠️ guild_config: DB config fetch failed for guild={gid}; refusing env fallback because public config isolation is enabled: {repr(e)}",
-                )
-                cfg = replace(base, source="unconfigured:db_fetch_failed", loaded_at_monotonic=time.monotonic())
-        else:
-            if row:
-                cfg = _apply_row_to_config(base, row)
-            elif base.uses_env_fallback:
-                _warn_once(
-                    f"guild-config-missing:{gid}",
-                    f"ℹ️ guild_config: no DB config row for allowed fallback guild={gid}; using env fallback.",
-                )
-                cfg = base
-            else:
-                _warn_once(
-                    f"guild-config-missing:{gid}",
-                    f"ℹ️ guild_config: no DB config row for guild={gid}; marked unconfigured and did not use beta env IDs.",
-                )
-                cfg = replace(base, source="unconfigured:missing_db_row", loaded_at_monotonic=time.monotonic())
-
-        _CONFIG_CACHE[gid] = (time.monotonic(), cfg)
-        return cfg
+def _cache_key(guild_id: Any) -> str:
+    return str(_safe_int(guild_id, 0))
 
 
-def get_cached_guild_config(guild_id: int | str | None) -> GuildRuntimeConfig:
-    gid = _to_int(guild_id, GUILD_ID)
-    cached = _CONFIG_CACHE.get(gid)
-    if cached:
-        return cached[1]
-    if gid <= 0 and public_config_isolation_enabled():
-        return unconfigured_guild_config(gid, source="unconfigured:missing_guild_id")
-    return _base_config_for_guild(gid)
-
-
-def invalidate_guild_config(guild_id: int | str | None = None) -> None:
-    gid = _to_int(guild_id, 0)
-    if gid > 0:
-        _CONFIG_CACHE.pop(gid, None)
+def clear_guild_config_cache(guild_id: Optional[Any] = None) -> None:
+    if guild_id is None:
+        _CONFIG_CACHE.clear()
+        _CONFIG_CACHE_TS.clear()
         return
-    _CONFIG_CACHE.clear()
+
+    key = _cache_key(guild_id)
+    _CONFIG_CACHE.pop(key, None)
+    _CONFIG_CACHE_TS.pop(key, None)
 
 
-def guild_config_cache_snapshot() -> dict[str, object]:
-    now = time.monotonic()
+def _cache_valid(guild_id: Any) -> bool:
+    key = _cache_key(guild_id)
+    ts = _CONFIG_CACHE_TS.get(key)
+    if ts is None:
+        return False
+    try:
+        return (_now() - ts).total_seconds() <= _CACHE_TTL_SECONDS
+    except Exception:
+        return False
+
+
+def _fallback_guild_id(guild_id: Any = None) -> int:
+    explicit = _safe_int(guild_id, 0)
+    if explicit > 0:
+        return explicit
+    return _safe_int(GUILD_ID, 0)
+
+
+def _is_retryable_db_error(error: Exception) -> bool:
+    text = repr(error).lower()
+    markers = (
+        "remoteprotocolerror",
+        "server disconnected",
+        "connection reset",
+        "connection aborted",
+        "temporarily unavailable",
+        "timeout",
+        "timed out",
+        "eof",
+        "network",
+        "closed connection",
+        "connection refused",
+        "connection terminated",
+        "httpcore",
+        "httpx",
+        "broken pipe",
+        "connection pool",
+        "stream closed",
+        "try again",
+    )
+    return any(marker in text for marker in markers)
+
+
+def _sleep_backoff(attempt: int) -> None:
+    base = min(0.35 * (2 ** max(0, attempt - 1)), 3.0)
+    jitter = random.uniform(0.05, 0.25)
+    time.sleep(base + jitter)
+
+
+def _execute_db_op(op_name: str, executor, max_attempts: int = _DB_MAX_ATTEMPTS):
+    last_error: Optional[Exception] = None
+
+    for attempt in range(1, max_attempts + 1):
+        try:
+            return executor()
+        except Exception as e:
+            last_error = e
+            if _is_retryable_db_error(e) and attempt < max_attempts:
+                try:
+                    reset_supabase()
+                except Exception:
+                    pass
+                print(
+                    f"⚠️ guild_config {op_name}: transient DB error "
+                    f"{attempt}/{max_attempts}: {repr(e)}"
+                )
+                _sleep_backoff(attempt)
+                continue
+            raise
+
+    if last_error is not None:
+        raise last_error
+    return None
+
+
+async def _run_db(op_name: str, executor):
+    return await asyncio.to_thread(_execute_db_op, op_name, executor)
+
+
+# ============================================================
+# Default / fallback config
+# ============================================================
+
+def env_fallback_guild_config(guild_id: Any = None) -> Dict[str, Any]:
+    """
+    Build fallback config from .env globals.
+
+    IMPORTANT:
+    These are fallback values only. They should not be treated as
+    authoritative for public multi-server installs.
+    """
+    gid = _fallback_guild_id(guild_id)
+
     return {
-        "table": _table_name(),
-        "ttl_seconds": _cache_ttl(),
-        "public_config_isolation": public_config_isolation_enabled(),
-        "env_fallback_guild_ids": sorted(env_fallback_guild_ids()),
-        "cached_guilds": len(_CONFIG_CACHE),
-        "guilds": {
-            str(gid): {
-                "source": cfg.source,
-                "age_seconds": round(now - loaded_at, 3),
-                "ticket_category": cfg.ticket_category_id,
-                "ticket_archive_category": cfg.effective_ticket_archive_category_id,
-                "staff_role": cfg.staff_role_id,
-                "verify_channel": cfg.verify_channel_id,
-                "vc_verify_channel": cfg.vc_verify_channel_id,
-                "modlog_channel": cfg.modlog_channel_id,
-                "raidlog_channel": cfg.raidlog_channel_id,
-                "join_log_channel": cfg.join_log_channel_id,
-            }
-            for gid, (loaded_at, cfg) in _CONFIG_CACHE.items()
-        },
+        "guild_id": str(gid) if gid > 0 else "",
+        "source": "env_fallback",
+
+        "verify_channel_id": _snowflake_str(VERIFY_CHANNEL_ID),
+        "vc_verify_channel_id": _snowflake_str(VC_VERIFY_CHANNEL_ID),
+        "vc_verify_queue_channel_id": _snowflake_str(VC_VERIFY_QUEUE_CHANNEL_ID),
+
+        "ticket_category_id": _snowflake_str(TICKET_CATEGORY_ID),
+        "transcripts_channel_id": _snowflake_str(TRANSCRIPTS_CHANNEL_ID),
+
+        "modlog_channel_id": _snowflake_str(MODLOG_CHANNEL_ID),
+        "raidlog_channel_id": _snowflake_str(RAIDLOG_CHANNEL_ID),
+        "join_log_channel_id": _snowflake_str(JOIN_LOG_CHANNEL_ID),
+        "force_verify_log_channel_id": _snowflake_str(FORCE_VERIFY_LOG_CHANNEL_ID),
+
+        "unverified_role_id": _snowflake_str(UNVERIFIED_ROLE_ID),
+        "verified_role_id": _snowflake_str(VERIFIED_ROLE_ID),
+        "resident_role_id": _snowflake_str(RESIDENT_ROLE_ID),
+        "staff_role_id": _snowflake_str(STAFF_ROLE_ID),
+        "vc_staff_role_id": _snowflake_str(VC_STAFF_ROLE_ID),
+
+        "use_env_fallbacks": True,
+        "allow_runtime_discovery": True,
+        "created_at": None,
+        "updated_at": None,
     }
 
 
-__all__ = [
-    "GuildRuntimeConfig",
-    "env_fallback_config",
-    "unconfigured_guild_config",
-    "get_guild_config",
-    "get_cached_guild_config",
-    "invalidate_guild_config",
-    "guild_config_cache_snapshot",
-    "public_config_isolation_enabled",
-    "env_fallback_guild_ids",
-    "env_fallback_allowed_for_guild",
-]
+def _normalize_config_row(row: Optional[Dict[str, Any]], guild_id: Any = None) -> Dict[str, Any]:
+    fallback = env_fallback_guild_config(guild_id)
+    src = dict(row or {})
+
+    use_env_fallbacks = _safe_bool(src.get("use_env_fallbacks"), True)
+    allow_runtime_discovery = _safe_bool(src.get("allow_runtime_discovery"), True)
+
+    def pick_id(key: str) -> Optional[str]:
+        db_value = _snowflake_str(src.get(key))
+        if db_value:
+            return db_value
+        if use_env_fallbacks:
+            return fallback.get(key)
+        return None
+
+    gid = _safe_int(src.get("guild_id"), _fallback_guild_id(guild_id))
+    if gid <= 0:
+        gid = _fallback_guild_id(guild_id)
+
+    return {
+        "guild_id": str(gid) if gid > 0 else "",
+        "source": "db" if src else "env_fallback",
+
+        "verify_channel_id": pick_id("verify_channel_id"),
+        "vc_verify_channel_id": pick_id("vc_verify_channel_id"),
+        "vc_verify_queue_channel_id": pick_id("vc_verify_queue_channel_id"),
+
+        "ticket_category_id": pick_id("ticket_category_id"),
+        "transcripts_channel_id": pick_id("transcripts_channel_id"),
+
+        "modlog_channel_id": pick_id("modlog_channel_id"),
+        "raidlog_channel_id": pick_id("raidlog_channel_id"),
+        "join_log_channel_id": pick_id("join_log_channel_id"),
+        "force_verify_log_channel_id": pick_id("force_verify_log_channel_id"),
+
+        "unverified_role_id": pick_id("unverified_role_id"),
+        "verified_role_id": pick_id("verified_role_id"),
+        "resident_role_id": pick_id("resident_role_id"),
+        "staff_role_id": pick_id("staff_role_id"),
+        "vc_staff_role_id": pick_id("vc_staff_role_id"),
+
+        "use_env_fallbacks": use_env_fallbacks,
+        "allow_runtime_discovery": allow_runtime_discovery,
+        "created_at": src.get("created_at"),
+        "updated_at": src.get("updated_at"),
+        "raw": src,
+    }
+
+
+def _db_get_guild_config_sync(guild_id: Any) -> Dict[str, Any]:
+    gid = _fallback_guild_id(guild_id)
+    if gid <= 0:
+        return env_fallback_guild_config(guild_id)
+
+    sb = get_supabase()
+    if sb is None:
+        return env_fallback_guild_config(gid)
+
+    def _read():
+        return (
+            sb.table(GUILD_CONFIG_TABLE)
+            .select("*")
+            .eq("guild_id", str(gid))
+            .limit(1)
+            .execute()
+        )
+
+    try:
+        res = _execute_db_op(f"read guild_config guild={gid}", _read)
+        rows = getattr(res, "data", None) or []
+        if rows and isinstance(rows[0], dict):
+            return _normalize_config_row(dict(rows[0]), gid)
+    except Exception as e:
+        _debug(f"DB config read failed guild={gid}: {repr(e)}")
+
+    return env_fallback_guild_config(gid)
+
+
+async def get_guild_config(guild_id: Any, *, force_refresh: bool = False) -> Dict[str, Any]:
+    gid = _fallback_guild_id(guild_id)
+    key = _cache_key(gid)
+
+    if not force_refresh and _cache_valid(gid):
+        cached = _CONFIG_CACHE.get(key)
+        if cached:
+            return dict(cached)
+
+    config = await _run_db(
+        f"get guild config async guild={gid}",
+        lambda: _db_get_guild_config_sync(gid),
+    )
+
+    _CONFIG_CACHE[key] = dict(config)
+    _CONFIG_CACHE_TS[key] = _now()
+    return dict(config)
+
+
+def _db_upsert_guild_config_sync(guild_id: Any, patch: Dict[str, Any]) -> Dict[str, Any]:
+    gid = _fallback_guild_id(guild_id)
+    if gid <= 0:
+        return env_fallback_guild_config(guild_id)
+
+    sb = get_supabase()
+    if sb is None:
+        return env_fallback_guild_config(gid)
+
+    allowed_keys = {
+        "verify_channel_id",
+        "vc_verify_channel_id",
+        "vc_verify_queue_channel_id",
+        "ticket_category_id",
+        "transcripts_channel_id",
+        "modlog_channel_id",
+        "raidlog_channel_id",
+        "join_log_channel_id",
+        "force_verify_log_channel_id",
+        "unverified_role_id",
+        "verified_role_id",
+        "resident_role_id",
+        "staff_role_id",
+        "vc_staff_role_id",
+        "use_env_fallbacks",
+        "allow_runtime_discovery",
+    }
+
+    payload: Dict[str, Any] = {
+        "guild_id": str(gid),
+        "updated_at": _now().isoformat(),
+    }
+
+    for key, value in dict(patch or {}).items():
+        if key not in allowed_keys:
+            continue
+
+        if key in {"use_env_fallbacks", "allow_runtime_discovery"}:
+            payload[key] = _safe_bool(value, True)
+        else:
+            payload[key] = _snowflake_str(value)
+
+    def _write():
+        return (
+            sb.table(GUILD_CONFIG_TABLE)
+            .upsert(payload, on_conflict="guild_id")
+            .execute()
+        )
+
+    try:
+        _execute_db_op(f"upsert guild_config guild={gid}", _write)
+    except Exception as e:
+        _debug(f"DB config upsert failed guild={gid}: {repr(e)}")
+
+    return _db_get_guild_config_sync(gid)
+
+
+async def upsert_guild_config(guild_id: Any, patch: Dict[str, Any]) -> Dict[str, Any]:
+    gid = _fallback_guild_id(guild_id)
+    config = await _run_db(
+        f"upsert guild config async guild={gid}",
+        lambda: _db_upsert_guild_config_sync(gid, patch),
+    )
+    clear_guild_config_cache(gid)
+    _CONFIG_CACHE[_cache_key(gid)] = dict(config)
+    _CONFIG_CACHE_TS[_cache_key(gid)] = _now()
+    return dict(config)
+
+
+# ============================================================
+# Discord runtime discovery helpers
+# ============================================================
+
+def _find_role_by_names(guild: discord.Guild, names: list[str]) -> Optional[discord.Role]:
+    wanted = [n.lower().strip() for n in names if n.strip()]
+    try:
+        for role in guild.roles:
+            role_name = str(role.name or "").lower().strip()
+            if role_name in wanted:
+                return role
+        for role in guild.roles:
+            role_name = str(role.name or "").lower().strip()
+            if any(w in role_name for w in wanted):
+                return role
+    except Exception:
+        return None
+    return None
+
+
+def _find_text_channel_by_names(guild: discord.Guild, names: list[str]) -> Optional[discord.TextChannel]:
+    wanted = [n.lower().strip() for n in names if n.strip()]
+    try:
+        for ch in guild.text_channels:
+            ch_name = str(ch.name or "").lower().strip()
+            if ch_name in wanted:
+                return ch
+        for ch in guild.text_channels:
+            ch_name = str(ch.name or "").lower().strip()
+            if any(w in ch_name for w in wanted):
+                return ch
+    except Exception:
+        return None
+    return None
+
+
+def _find_category_by_names(guild: discord.Guild, names: list[str]) -> Optional[discord.CategoryChannel]:
+    wanted = [n.lower().strip() for n in names if n.strip()]
+    try:
+        for cat in guild.categories:
+            cat_name = str(cat.name or "").lower().strip()
+            if cat_name in wanted:
+                return cat
+        for cat in guild.categories:
+            cat_name = str(cat.name or "").lower().strip()
+            if any(w in cat_name for w in wanted):
+                return cat
+    except Exception:
+        return None
+    return None
+
+
+async def discover_runtime_guild_config(guild: discord.Guild) -> Dict[str, Any]:
+    """
+    Best-effort runtime discovery.
+
+    This does NOT create roles/channels. It only discovers obvious existing ones.
+    Setup commands can save the result into guild_config if server owners want.
+    """
+    config = await get_guild_config(guild.id)
+    if not _safe_bool(config.get("allow_runtime_discovery"), True):
+        return config
+
+    discovered: Dict[str, Any] = {}
+
+    if not config.get("staff_role_id"):
+        role = _find_role_by_names(guild, ["staff", "mod", "moderator", "admin", "support"])
+        if role:
+            discovered["staff_role_id"] = str(role.id)
+
+    if not config.get("verified_role_id"):
+        role = _find_role_by_names(guild, ["verified"])
+        if role:
+            discovered["verified_role_id"] = str(role.id)
+
+    if not config.get("unverified_role_id"):
+        role = _find_role_by_names(guild, ["unverified", "not verified"])
+        if role:
+            discovered["unverified_role_id"] = str(role.id)
+
+    if not config.get("resident_role_id"):
+        role = _find_role_by_names(guild, ["resident"])
+        if role:
+            discovered["resident_role_id"] = str(role.id)
+
+    if not config.get("modlog_channel_id"):
+        ch = _find_text_channel_by_names(guild, ["mod-log", "modlog", "logs", "staff-log"])
+        if ch:
+            discovered["modlog_channel_id"] = str(ch.id)
+
+    if not config.get("transcripts_channel_id"):
+        ch = _find_text_channel_by_names(guild, ["transcripts", "ticket-transcripts"])
+        if ch:
+            discovered["transcripts_channel_id"] = str(ch.id)
+
+    if not config.get("verify_channel_id"):
+        ch = _find_text_channel_by_names(guild, ["verify", "verification", "vc-verify"])
+        if ch:
+            discovered["verify_channel_id"] = str(ch.id)
+
+    if not config.get("ticket_category_id"):
+        cat = _find_category_by_names(guild, ["tickets", "support", "verification tickets"])
+        if cat:
+            discovered["ticket_category_id"] = str(cat.id)
+
+    if not discovered:
+        return config
+
+    merged = dict(config)
+    merged.update({k: v for k, v in discovered.items() if v})
+    merged["source"] = f"{config.get('source', 'unknown')}+runtime_discovery"
+    return merged
+
+
+async def save_runtime_discovered_config(guild: discord.Guild) -> Dict[str, Any]:
+    discovered = await discover_runtime_guild_config(guild)
+
+    patch = {
+        key: discovered.get(key)
+        for key in (
+            "verify_channel_id",
+            "vc_verify_channel_id",
+            "vc_verify_queue_channel_id",
+            "ticket_category_id",
+            "transcripts_channel_id",
+            "modlog_channel_id",
+            "raidlog_channel_id",
+            "join_log_channel_id",
+            "force_verify_log_channel_id",
+            "unverified_role_id",
+            "verified_role_id",
+            "resident_role_id",
+            "staff_role_id",
+            "vc_staff_role_id",
+        )
+        if discovered.get(key)
+    }
+
+    if not patch:
+        return discovered
+
+    return await upsert_guild_config(guild.id, patch)
+
+
+# ============================================================
+# Convenience getters
+# ============================================================
+
+async def get_config_id(guild_id: Any, key: str, *, default: int = 0) -> int:
+    config = await get_guild_config(guild_id)
+    return _safe_int(config.get(key), default)
+
+
+async def get_verify_channel_id(guild_id: Any) -> int:
+    return await get_config_id(guild_id, "verify_channel_id")
+
+
+async def get_vc_verify_channel_id(guild_id: Any) -> int:
+    return await get_config_id(guild_id, "vc_verify_channel_id")
+
+
+async def get_ticket_category_id(guild_id: Any) -> int:
+    return await get_config_id(guild_id, "ticket_category_id")
+
+
+async def get_transcripts_channel_id(guild_id: Any) -> int:
+    return await get_config_id(guild_id, "transcripts_channel_id")
+
+
+async def get_modlog_channel_id(guild_id: Any) -> int:
+    return await get_config_id(guild_id, "modlog_channel_id")
+
+
+async def get_staff_role_id(guild_id: Any) -> int:
+    return await get_config_id(guild_id, "staff_role_id")
+
+
+async def get_verified_role_id(guild_id: Any) -> int:
+    return await get_config_id(guild_id, "verified_role_id")
+
+
+async def get_unverified_role_id(guild_id: Any) -> int:
+    return await get_config_id(guild_id, "unverified_role_id")
+
+
+async def get_resident_role_id(guild_id: Any) -> int:
+    return await get_config_id(guild_id, "resident_role_id")
+
+
+async def config_summary_for_guild(guild: discord.Guild) -> Dict[str, Any]:
+    config = await discover_runtime_guild_config(guild)
+
+    return {
+        "guild_id": str(guild.id),
+        "guild_name": guild.name,
+        "source": config.get("source"),
+        "use_env_fallbacks": _safe_bool(config.get("use_env_fallbacks"), True),
+        "allow_runtime_discovery": _safe_bool(config.get("allow_runtime_discovery"), True),
+
+        "verify_channel_id": config.get("verify_channel_id"),
+        "ticket_category_id": config.get("ticket_category_id"),
+        "transcripts_channel_id": config.get("transcripts_channel_id"),
+        "modlog_channel_id": config.get("modlog_channel_id"),
+
+        "unverified_role_id": config.get("unverified_role_id"),
+        "verified_role_id": config.get("verified_role_id"),
+        "resident_role_id": config.get("resident_role_id"),
+        "staff_role_id": config.get("staff_role_id"),
+    }
