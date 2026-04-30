@@ -20,10 +20,12 @@ _ERRORS: Dict[str, BaseException] = {}
 _STARTUP_GUARDS: Tuple[str, ...] = (
     "stoney_verify.startup_guards.process_health",
     "stoney_verify.startup_guards.command_safety",
+
     # Broad event-loop DB/modlog/ticket safety layer.
     # sitecustomize.py remains as a tiny host fallback, but main startup loads
     # the real package module directly.
     "stoney_verify.startup_guards.runtime_safety",
+
     "stoney_verify.startup_guards.invite_intent_safety",
     "stoney_verify.startup_guards.raidguard_hard_stop",
     "stoney_verify.startup_guards.raidguard_bot_heuristics",
@@ -44,6 +46,13 @@ _STARTUP_GUARDS: Tuple[str, ...] = (
     "stoney_verify.tickets_new.sync_native_guard",
     "stoney_verify.tickets_new.sync_alias_guard",
     "stoney_verify.api_new.guild_config_guard",
+
+    # DB-backed panel/config bootstrap runtime.
+    # This self-registers on_ready/on_guild_join listeners and starts the
+    # panel bootstrap worker after the bot is ready. It does not create roles,
+    # channels, or post panels automatically.
+    "stoney_verify.panel_bootstrap_runtime",
+
     "stoney_verify.startup_guards.public_startup_scope",
     "stoney_verify.startup_guards.event_safety",
     "stoney_verify.startup_guards.shard_safety",
@@ -111,6 +120,7 @@ def start_process_health_loop() -> None:
     module = _LOADED.get("stoney_verify.startup_guards.process_health")
     if module is None:
         module = load_startup_guard("stoney_verify.startup_guards.process_health")
+
     try:
         starter = getattr(module, "start_health_loop", None)
         if callable(starter):
