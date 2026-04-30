@@ -2,9 +2,10 @@ from __future__ import annotations
 
 """Small public TicketTool parity polish layer.
 
-This module is not a root runtime patch. It attaches missing public command aliases
-and exposes the current ticket staff action view to the parity checker so the
-readiness audit reflects the real public ticket surface.
+This module is not a root runtime patch. It attaches missing public command aliases,
+registers the public Create Ticket panel commands through the normal command
+surface, and tightens the parity checker so it cannot pass when the real user
+panel command is missing.
 """
 
 from typing import Any, Dict, Optional
@@ -19,6 +20,7 @@ from . import public_ticket_category_group as category_group_module
 from .public_ticket_category_group import ticket_category_group, _add_governance_warnings
 
 _ATTACHED = False
+_CHECKER_PATCHED = False
 
 
 def _log(message: str) -> None:
@@ -179,10 +181,65 @@ def _expose_staff_action_view_for_parity_check() -> None:
         _warn(f"could not expose TicketChannelActionsView: {e!r}")
 
 
+def _register_first_class_ticket_panel_commands(bot: Any, tree: Any) -> None:
+    try:
+        from .public_ticket_panel_commands import register_public_ticket_panel_commands
+
+        register_public_ticket_panel_commands(bot, tree)
+    except Exception as e:
+        _warn(f"could not register first-class ticket panel commands: {e!r}")
+
+
+def _patch_tickettool_checker_strictness(tree: Any) -> None:
+    """Make /stoney tickettool-check fail if the user-facing panel command is missing."""
+    global _CHECKER_PATCHED
+    if _CHECKER_PATCHED:
+        return
+
+    try:
+        from . import public_tickettool_check as checker
+
+        try:
+            checker._REQUIRED_INTAKE_COMMANDS.add("post-panel")
+        except Exception:
+            pass
+
+        original = getattr(checker, "_command_surface_checks", None)
+        if not callable(original) or getattr(original, "_panel_strict_wrapped", False):
+            _CHECKER_PATCHED = True
+            return
+
+        def _strict_command_surface_checks():
+            blockers, warnings, ok = original()
+
+            has_top_level = False
+            try:
+                has_top_level = tree.get_command("ticket-panel", guild=None) is not None
+            except Exception:
+                has_top_level = False
+
+            if has_top_level:
+                ok.append("`/ticket-panel` public Create Ticket panel command is registered.")
+            else:
+                blockers.append("Missing top-level `/ticket-panel` command for posting the public Create Ticket button.")
+
+            return blockers, warnings, ok
+
+        try:
+            setattr(_strict_command_surface_checks, "_panel_strict_wrapped", True)
+        except Exception:
+            pass
+        setattr(checker, "_command_surface_checks", _strict_command_surface_checks)
+        _CHECKER_PATCHED = True
+        _log("tightened TicketTool checker to require /ticket-panel and /ticket-intake post-panel")
+    except Exception as e:
+        _warn(f"could not patch TicketTool checker strictness: {e!r}")
+
+
 def register_public_tickettool_parity_polish(bot: Any, tree: Any) -> None:
     global _ATTACHED
-    _ = bot
-    _ = tree
+
+    _register_first_class_ticket_panel_commands(bot, tree)
 
     if not _ATTACHED:
         added: list[str] = []
@@ -195,6 +252,7 @@ def register_public_tickettool_parity_polish(bot: Any, tree: Any) -> None:
             _log(f"attached /ticket-category aliases: {', '.join(added)}")
 
     _expose_staff_action_view_for_parity_check()
+    _patch_tickettool_checker_strictness(tree)
 
 
 __all__ = ["register_public_tickettool_parity_polish"]
