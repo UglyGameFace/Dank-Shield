@@ -66,12 +66,12 @@ except Exception as e:
     except Exception:
         pass
 
-# Clear stale verification timers before events/kick timers can act on fresh joins.
+# Fresh-join removal safety now lives inside startup_guards instead of root runtime patches.
 try:
-    import runtime_member_join_kick_safety_patch  # noqa: F401
+    from stoney_verify.startup_guards import member_join_removal_safety  # noqa: F401
 except Exception as e:
     try:
-        print(f"⚠️ main.py failed to import runtime_member_join_kick_safety_patch guard: {e!r}")
+        print(f"⚠️ main.py failed to import startup_guards.member_join_removal_safety: {e!r}")
     except Exception:
         pass
 
