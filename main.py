@@ -84,12 +84,12 @@ except Exception as e:
     except Exception:
         pass
 
-# Force-load Discord setup role preset safety before setup modules import.
+# Setup role safety now lives inside startup_guards instead of root runtime patches.
 try:
-    import runtime_setup_role_safety_patch  # noqa: F401
+    from stoney_verify.startup_guards import setup_role_safety  # noqa: F401
 except Exception as e:
     try:
-        print(f"⚠️ main.py failed to import runtime_setup_role_safety_patch guard: {e!r}")
+        print(f"⚠️ main.py failed to import startup_guards.setup_role_safety: {e!r}")
     except Exception:
         pass
 
