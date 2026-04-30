@@ -111,12 +111,12 @@ except Exception as e:
     except Exception:
         pass
 
-# Force-load per-guild ticket config guard before tickets_new.service is imported.
+# Per-guild ticket config guard now lives inside tickets_new instead of root runtime patches.
 try:
-    import runtime_guild_config_ticket_patch  # noqa: F401
+    from stoney_verify.tickets_new import guild_config_ticket_guard  # noqa: F401
 except Exception as e:
     try:
-        print(f"⚠️ main.py failed to import runtime_guild_config_ticket_patch guard: {e!r}")
+        print(f"⚠️ main.py failed to import tickets_new.guild_config_ticket_guard: {e!r}")
     except Exception:
         pass
 
