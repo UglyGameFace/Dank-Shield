@@ -122,12 +122,12 @@ except Exception as e:
     except Exception:
         pass
 
-# Native source fix: create ticket channels directly inside the configured Active Tickets category.
+# Ticket creation category guard now lives inside stoney_verify/tickets_new instead of root runtime patches.
 try:
-    import runtime_ticket_creation_native_category_patch  # noqa: F401
+    from stoney_verify.tickets_new import creation_category_guard  # noqa: F401
 except Exception as e:
     try:
-        print(f"⚠️ main.py failed to import runtime_ticket_creation_native_category_patch guard: {e!r}")
+        print(f"⚠️ main.py failed to import tickets_new.creation_category_guard: {e!r}")
     except Exception:
         pass
 
