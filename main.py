@@ -11,13 +11,13 @@ except Exception as e:
     except Exception:
         pass
 
-# Force-load command registration safety first so Discord's 100 global slash
-# command limit can never crash startup again.
+# Command safety now lives inside stoney_verify/startup_guards instead of root runtime patches.
+# It also loads the package-local auto_shard and global_command_sync guards first.
 try:
-    import runtime_command_safety  # noqa: F401
+    from stoney_verify.startup_guards import command_safety  # noqa: F401
 except Exception as e:
     try:
-        print(f"⚠️ main.py failed to import runtime_command_safety guard: {e!r}")
+        print(f"⚠️ main.py failed to import startup_guards.command_safety: {e!r}")
     except Exception:
         pass
 
