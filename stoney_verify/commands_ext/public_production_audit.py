@@ -72,6 +72,29 @@ _REQUIRED_PUBLIC_ENV: tuple[str, ...] = (
     "BOT_API_SHARED_SECRET",
 )
 
+_REQUIRED_GLOBAL_COMMANDS: tuple[str, ...] = (
+    "stoney",
+    "mod",
+    "ticket",
+    "tickets",
+    "ticket-intake",
+    "ticket-category",
+    "ticket-panel",
+)
+
+_REQUIRED_GROUP_SUBCOMMANDS: tuple[tuple[str, str], ...] = (
+    ("ticket-intake", "post-panel"),
+    ("ticket-intake", "post-actions"),
+    ("ticket", "close"),
+    ("ticket", "reopen"),
+    ("ticket", "claim"),
+    ("ticket", "transfer"),
+    ("ticket", "transcript"),
+    ("ticket", "delete"),
+    ("ticket-category", "list"),
+    ("ticket-category", "update"),
+)
+
 
 def _env_str(name: str, default: str = "") -> str:
     try:
@@ -128,6 +151,29 @@ def _tree_command_counts() -> tuple[int, int]:
         guild_count = 0
 
     return int(global_count), int(guild_count)
+
+
+def _tree_global_command(name: str) -> Any:
+    tree = _TREE
+    if tree is None:
+        return None
+    try:
+        return tree.get_command(name, guild=None)
+    except Exception:
+        return None
+
+
+def _group_has_subcommand(group_name: str, subcommand_name: str) -> bool:
+    group = _tree_global_command(group_name)
+    if group is None:
+        return False
+    try:
+        return group.get_command(subcommand_name) is not None
+    except Exception:
+        try:
+            return any(getattr(cmd, "name", None) == subcommand_name for cmd in (getattr(group, "commands", None) or []))
+        except Exception:
+            return False
 
 
 def _channel_label(guild: discord.Guild, channel_id: int) -> str:
@@ -261,9 +307,30 @@ def _append_patch_audit(warnings: list[str], ok: list[str]) -> None:
         ok.append("No known runtime patch modules are loaded.")
 
 
-def _append_command_audit(warnings: list[str], ok: list[str]) -> None:
+def _append_command_audit(blockers: list[str], warnings: list[str], ok: list[str]) -> None:
     global_count, guild_count = _tree_command_counts()
     ok.append(f"Command count snapshot: global `{global_count}`, guild-scoped `{guild_count}`.")
+
+    if _TREE is None:
+        blockers.append("Production audit cannot inspect the live slash command tree.")
+        return
+
+    missing_global = [name for name in _REQUIRED_GLOBAL_COMMANDS if _tree_global_command(name) is None]
+    if missing_global:
+        blockers.append("Missing required public slash commands: " + ", ".join(f"`/{name}`" for name in missing_global) + ".")
+    else:
+        ok.append("Required public slash commands are present, including `/ticket-panel`.")
+
+    missing_sub = [(group, sub) for group, sub in _REQUIRED_GROUP_SUBCOMMANDS if not _group_has_subcommand(group, sub)]
+    if missing_sub:
+        blockers.append(
+            "Missing required public subcommands: "
+            + ", ".join(f"`/{group} {sub}`" for group, sub in missing_sub)
+            + "."
+        )
+    else:
+        ok.append("Required ticket workflow subcommands are present, including `/ticket-intake post-panel` and `/ticket-intake post-actions`.")
+
     if global_count >= 90:
         warnings.append(f"Global command count is high: `{global_count}/100`. Public bots should keep this lower and cleaner.")
     if guild_count > 0:
@@ -442,7 +509,7 @@ async def _production_audit_callback(interaction: discord.Interaction) -> None:
         _append_bot_permission_audit(guild, blockers, warnings, ok)
         _append_env_audit(blockers, warnings, ok)
         _append_db_audit(blockers, warnings, ok)
-        _append_command_audit(warnings, ok)
+        _append_command_audit(blockers, warnings, ok)
         _append_patch_audit(warnings, ok)
 
         await interaction.followup.send(embed=_make_embed(guild, blockers, warnings, ok), ephemeral=True)
