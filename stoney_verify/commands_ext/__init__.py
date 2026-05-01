@@ -18,15 +18,15 @@ COMMAND_MODULES: List[CommandModuleSpec] = [
     ("public_join_removal_safety", "register_public_join_removal_safety", "public fresh-join stale timer cleanup listener"),
     ("public_spam_cleanup_hardening", "register_public_spam_cleanup_hardening", "public spam guard burst cleanup hardening"),
     ("public_setup_start", "register_public_setup_start_commands", "public obvious /stoney setup quick-start command"),
-    ("public_setup_review", "register_public_setup_review_commands", "public grouped /stoney setup review command"),
-    ("public_setup_logs", "register_public_setup_logs_commands", "public grouped /stoney log channel setup command"),
-    ("public_setup_defaults", "register_public_setup_defaults_commands", "public one-click default server setup command"),
-    ("public_setup_assistant", "register_public_setup_assistant_commands", "public interactive setup assistant command"),
+    ("public_setup_review", "register_public_setup_review_commands", "public legacy /stoney setup-review compatibility alias"),
+    ("public_setup_logs", "register_public_setup_logs_commands", "public legacy /stoney setup-logs compatibility alias"),
+    ("public_setup_defaults", "register_public_setup_defaults_commands", "public legacy /stoney setup-defaults compatibility alias"),
+    ("public_setup_assistant", "register_public_setup_assistant_commands", "public legacy /stoney setup-assistant compatibility alias"),
     ("public_status_reporter", "register_public_status_reporter", "public bot status reports and heartbeat"),
     ("public_modlog_coverage", "register_public_modlog_coverage_listeners", "public supplemental modlog coverage listeners"),
-    ("public_setup_by_id", "register_public_setup_by_id_commands", "public grouped /stoney setup by ID fallback command"),
-    ("public_setup_picker", "register_public_setup_picker_commands", "public grouped /stoney interactive setup picker"),
-    ("public_setup_find", "register_public_setup_find_commands", "public grouped /stoney setup search fallback command"),
+    ("public_setup_by_id", "register_public_setup_by_id_commands", "public legacy /stoney setup by ID compatibility alias"),
+    ("public_setup_picker", "register_public_setup_picker_commands", "public legacy /stoney setup-picker compatibility alias"),
+    ("public_setup_find", "register_public_setup_find_commands", "public legacy /stoney setup-find compatibility alias"),
     ("public_archive_backfill", "register_public_archive_backfill_commands", "public grouped /stoney ticket archive backfill command"),
     ("public_permission_check", "register_public_permission_check_commands", "public grouped /stoney runtime permission check command"),
     ("public_launch_check", "register_public_launch_check_commands", "public grouped /stoney production launch check command"),
@@ -75,7 +75,10 @@ COMMAND_MODULES: List[CommandModuleSpec] = [
 
 _LEGACY_MODULES: Tuple[str, ...] = tuple(name for name, _fn, _label in COMMAND_MODULES if not name.startswith("public_"))
 
-# Default public profile stays below the 25-command sync guard.
+# Default public profile stays below the 25-command sync guard at the top-level
+# command-family layer. Setup helper aliases remain registered for now so stale
+# Discord clients do not fail while /stoney setup becomes the obvious single
+# setup entrypoint.
 _PUBLIC_CORE_MODULES: Tuple[str, ...] = (
     "public_staff_scope",
     "public_access_control",
@@ -156,32 +159,6 @@ _STALE_TOP_LEVEL_COMMANDS: Tuple[str, ...] = (
     "ticket_panel_bootstrap_once",
     "ticket_panel_bootstrap_stop",
 )
-
-# Direct /stoney children that should be nested before sync. Keep /stoney setup
-# as the single obvious quick-start command. Advanced setup/config commands are
-# moved under /stoney config ..., and readiness checks are moved under
-# /stoney audit ... . This is the TicketTool-style surface: one obvious setup
-# command, with deeper controls tucked away.
-_STONEY_CONFIG_RENAMES: Dict[str, str] = {
-    "setup-tickets": "tickets",
-    "setup-verify": "verify",
-    "setup-logs": "logs",
-    "setup-defaults": "defaults",
-    "setup-assistant": "assistant",
-    "setup-review": "review",
-    "db-check": "db-check",
-    "setup-verify-ids": "verify-ids",
-    "setup-picker": "picker",
-    "setup-find": "find",
-}
-
-_STONEY_AUDIT_RENAMES: Dict[str, str] = {
-    "permission-check": "permissions",
-    "launch-check": "launch",
-    "tickettool-check": "tickettool",
-    "production-audit": "production",
-    "archive-backfill": "archive-backfill",
-}
 
 
 def _csv_set(value: str) -> set[str]:
@@ -338,146 +315,25 @@ def _register_one_module(*, bot: Any, tree: Any, module_name: str, function_name
         print(f"⚠️ commands_ext: failed registering {label}: {repr(e)}")
 
 
-def _set_command_name(command: Any, new_name: str) -> bool:
-    try:
-        if getattr(command, "name", None) == new_name:
-            return True
-        setattr(command, "name", str(new_name))
-        return getattr(command, "name", None) == new_name
-    except Exception:
-        return False
-
-
-def _ensure_stoney_child_group(stoney_group: Any, *, name: str, description: str) -> Any:
-    from discord import app_commands
-
-    existing = None
-    try:
-        existing = stoney_group.get_command(name)
-    except Exception:
-        existing = None
-
-    if existing is not None and isinstance(existing, app_commands.Group):
-        return existing
-
-    if existing is not None:
-        try:
-            stoney_group.remove_command(name)
-        except Exception:
-            pass
-
-    group = app_commands.Group(name=name, description=description)
-    stoney_group.add_command(group)
-    return group
-
-
-def _move_stoney_command(stoney_group: Any, target_group: Any, old_name: str, new_name: str) -> bool:
-    try:
-        command = stoney_group.get_command(old_name)
-    except Exception:
-        command = None
-
-    if command is None:
-        return False
-
-    # Do not move an already-grouped target group into itself.
-    if old_name in {"config", "audit"} and hasattr(command, "commands"):
-        return False
-
-    try:
-        stoney_group.remove_command(old_name)
-    except Exception:
-        return False
-
-    renamed = _set_command_name(command, new_name)
-    if not renamed:
-        # Discord.py command names are usually mutable, but if a future version
-        # locks them down, keep the command under the old name instead of losing it.
-        new_name = old_name
-
-    try:
-        if target_group.get_command(new_name) is None:
-            target_group.add_command(command)
-            return True
-    except Exception:
-        pass
-
-    # Roll back if insertion failed.
-    try:
-        if stoney_group.get_command(old_name) is None:
-            _set_command_name(command, old_name)
-            stoney_group.add_command(command)
-    except Exception:
-        pass
-    return False
-
-
-def _stoney_direct_child_names(stoney_group: Any) -> list[str]:
-    try:
-        return sorted(str(getattr(cmd, "name", "")) for cmd in getattr(stoney_group, "commands", []) if getattr(cmd, "name", None))
-    except Exception:
-        return []
-
-
-def _consolidate_stoney_command_surface() -> None:
-    """Nest crowded /stoney commands into config/audit groups.
-
-    This is intentionally centralized here instead of rewriting every public
-    setup module. Older modules can keep registering their direct commands; the
-    loader then normalizes the surface right before sync. This keeps the public
-    command UI stable and prevents /stoney from hitting Discord's child limit.
-
-    Important: /stoney setup remains a direct, single quick-start command.
-    """
+def _log_stoney_setup_surface() -> None:
     try:
         from .public_setup_group import stoney_group
-    except Exception as e:
-        print(f"⚠️ commands_ext could not load /stoney group for consolidation: {repr(e)}")
-        return
 
-    try:
-        before = _stoney_direct_child_names(stoney_group)
-
-        config_group = _ensure_stoney_child_group(
-            stoney_group,
-            name="config",
-            description="Advanced setup, config, and database checks.",
+        child_names = sorted(
+            str(getattr(cmd, "name", ""))
+            for cmd in getattr(stoney_group, "commands", [])
+            if getattr(cmd, "name", None)
         )
-        audit_group = _ensure_stoney_child_group(
-            stoney_group,
-            name="audit",
-            description="Readiness, parity, and safety audits.",
-        )
-
-        moved: list[str] = []
-        for old_name, new_name in _STONEY_CONFIG_RENAMES.items():
-            if _move_stoney_command(stoney_group, config_group, old_name, new_name):
-                moved.append(f"{old_name}->config {new_name}")
-
-        for old_name, new_name in _STONEY_AUDIT_RENAMES.items():
-            if _move_stoney_command(stoney_group, audit_group, old_name, new_name):
-                moved.append(f"{old_name}->audit {new_name}")
-
-        # Leave these directly visible because they are the obvious public entrypoints.
-        keep_direct = {"setup", "help", "commands", "config", "audit", "cleanup", "spam"}
-        remaining = set(_stoney_direct_child_names(stoney_group))
-        crowded = sorted(name for name in remaining if name not in keep_direct)
-
-        after = _stoney_direct_child_names(stoney_group)
+        setup_present = "setup" in child_names
+        setup_aliases = [name for name in child_names if name.startswith("setup-")]
         print(
-            "🧭 commands_ext consolidated /stoney surface "
-            f"before={before} after={after} moved={moved} crowded_remaining={crowded}"
+            "🧭 commands_ext /stoney setup surface "
+            f"setup_present={setup_present} legacy_aliases={setup_aliases} direct_children={child_names}"
         )
-
-        # Defensive hard stop for public mode: if /stoney is still too crowded,
-        # log loudly before sync instead of letting Discord silently hide entries.
-        if len(after) > 20:
-            print(
-                "⚠️ commands_ext /stoney still has many direct children "
-                f"count={len(after)} names={after}. More nesting is needed before public rollout."
-            )
+        if not setup_present:
+            print("⚠️ commands_ext /stoney setup is missing; the one-command setup entrypoint did not register.")
     except Exception as e:
-        print(f"⚠️ commands_ext /stoney consolidation failed: {repr(e)}")
+        print(f"⚠️ commands_ext could not inspect /stoney setup surface: {repr(e)}")
 
 
 def _masked_secret_state(value: str) -> str:
@@ -556,7 +412,12 @@ def register_all_commands(bot: Any, tree: Any) -> None:
     for module_name, function_name, label in selected_modules:
         _register_one_module(bot=bot, tree=tree, module_name=module_name, function_name=function_name, label=label, errors=errors)
 
-    _consolidate_stoney_command_surface()
+    # Do NOT rename or move live /stoney setup-* commands during startup.
+    # Discord clients can keep stale slash commands cached for a while, and
+    # moving them locally before a clean sync makes those visible stale commands
+    # fail with "The application did not respond". The public happy path remains
+    # /stoney setup; the setup-* paths are temporary compatibility aliases.
+    _log_stoney_setup_surface()
     _remove_stale_top_level_commands(tree, reason="after_module_registration")
 
     _COMMANDS_EXT_REGISTERED = True
