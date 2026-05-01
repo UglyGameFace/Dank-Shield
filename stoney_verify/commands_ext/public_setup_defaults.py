@@ -6,8 +6,8 @@ One-click default setup for fresh public guilds.
 Design rule:
 The public/default setup must create clean, professional, generic server items.
 It must never copy the owner's private server naming style, role names, custom
-channels, or guild-specific culture. Custom servers can still pass their own
-roles/channels through the normal setup commands.
+channels, or guild-specific culture. Custom servers can still choose existing
+roles/channels through /stoney setup.
 
 Out-of-box defaults are friendly and clear, with light emoji labels for channels
 and categories. Roles stay professional/plain so permission hierarchies look
@@ -32,8 +32,6 @@ from ..guild_config import get_guild_config, invalidate_guild_config
 
 _ATTACHED = False
 
-# Professional public defaults. These are intentionally generic and safe for
-# normal communities, support servers, gaming servers, fresh test servers, etc.
 DEFAULT_CONTROL_ROLE_NAME = "Bot Manager"
 DEFAULT_STAFF_ROLE_NAME = "Support Team"
 DEFAULT_UNVERIFIED_ROLE_NAME = "Unverified"
@@ -183,11 +181,7 @@ def _public_read_only_overwrites(
     unverified_role: Optional[discord.Role] = None,
 ) -> dict[Any, discord.PermissionOverwrite]:
     overwrites: dict[Any, discord.PermissionOverwrite] = {
-        guild.default_role: discord.PermissionOverwrite(
-            view_channel=True,
-            send_messages=False,
-            read_message_history=True,
-        )
+        guild.default_role: discord.PermissionOverwrite(view_channel=True, send_messages=False, read_message_history=True)
     }
 
     me = _bot_member(guild)
@@ -202,11 +196,7 @@ def _public_read_only_overwrites(
         )
 
     if unverified_role is not None and not unverified_role.is_default():
-        overwrites[unverified_role] = discord.PermissionOverwrite(
-            view_channel=True,
-            send_messages=False,
-            read_message_history=True,
-        )
+        overwrites[unverified_role] = discord.PermissionOverwrite(view_channel=True, send_messages=False, read_message_history=True)
 
     for role in (staff_role, control_role):
         if role is not None and not role.is_default():
@@ -228,9 +218,7 @@ def _staff_private_overwrites(
     staff_role: Optional[discord.Role],
     control_role: Optional[discord.Role],
 ) -> dict[Any, discord.PermissionOverwrite]:
-    overwrites: dict[Any, discord.PermissionOverwrite] = {
-        guild.default_role: discord.PermissionOverwrite(view_channel=False),
-    }
+    overwrites: dict[Any, discord.PermissionOverwrite] = {guild.default_role: discord.PermissionOverwrite(view_channel=False)}
 
     me = _bot_member(guild)
     if me is not None:
@@ -272,11 +260,7 @@ def _voice_verify_overwrites(
     unverified_role: Optional[discord.Role],
 ) -> dict[Any, discord.PermissionOverwrite]:
     overwrites: dict[Any, discord.PermissionOverwrite] = {
-        guild.default_role: discord.PermissionOverwrite(
-            view_channel=True,
-            connect=True,
-            speak=False,
-        )
+        guild.default_role: discord.PermissionOverwrite(view_channel=True, connect=True, speak=False)
     }
 
     me = _bot_member(guild)
@@ -290,20 +274,11 @@ def _voice_verify_overwrites(
         )
 
     if unverified_role is not None and not unverified_role.is_default():
-        overwrites[unverified_role] = discord.PermissionOverwrite(
-            view_channel=True,
-            connect=True,
-            speak=False,
-        )
+        overwrites[unverified_role] = discord.PermissionOverwrite(view_channel=True, connect=True, speak=False)
 
     for role in (staff_role, control_role):
         if role is not None and not role.is_default():
-            overwrites[role] = discord.PermissionOverwrite(
-                view_channel=True,
-                connect=True,
-                speak=True,
-                move_members=True,
-            )
+            overwrites[role] = discord.PermissionOverwrite(view_channel=True, connect=True, speak=True, move_members=True)
 
     return overwrites
 
@@ -334,11 +309,7 @@ async def _ensure_category(
         return None
 
     try:
-        category = await guild.create_category(
-            name=name,
-            overwrites=overwrites,
-            reason="Default bot setup",
-        )
+        category = await guild.create_category(name=name, overwrites=overwrites, reason="Default bot setup")
         created.append(f"Category: `{category.name}`")
         return category
     except Exception as e:
@@ -427,12 +398,7 @@ async def _ensure_voice_channel(
         return None
 
     try:
-        channel = await guild.create_voice_channel(
-            name=name,
-            category=category,
-            overwrites=overwrites,
-            reason="Default bot setup",
-        )
+        channel = await guild.create_voice_channel(name=name, category=category, overwrites=overwrites, reason="Default bot setup")
         created.append(f"Voice: {channel.mention}")
         return channel
     except Exception as e:
@@ -530,14 +496,7 @@ async def _setup_defaults_callback(
             reused.append(f"Server-control role: {control_role.mention}")
 
     if control_role is None:
-        control_role = await _ensure_role(
-            guild,
-            DEFAULT_CONTROL_ROLE_NAME,
-            create_missing_roles=create_missing_roles,
-            notes=notes,
-            created=created,
-            reused=reused,
-        )
+        control_role = await _ensure_role(guild, DEFAULT_CONTROL_ROLE_NAME, create_missing_roles=create_missing_roles, notes=notes, created=created, reused=reused)
 
     if staff_role is None:
         existing_staff_id = _safe_int(getattr(cfg_before, "staff_role_id", 0), 0) if cfg_before is not None else 0
@@ -547,191 +506,32 @@ async def _setup_defaults_callback(
                 reused.append(f"Ticket staff role: {staff_role.mention}")
 
     if staff_role is None:
-        staff_role = await _ensure_role(
-            guild,
-            DEFAULT_STAFF_ROLE_NAME,
-            create_missing_roles=create_missing_roles,
-            notes=notes,
-            created=created,
-            reused=reused,
-        )
+        staff_role = await _ensure_role(guild, DEFAULT_STAFF_ROLE_NAME, create_missing_roles=create_missing_roles, notes=notes, created=created, reused=reused)
 
-    unverified_role = await _ensure_role(
-        guild,
-        DEFAULT_UNVERIFIED_ROLE_NAME,
-        create_missing_roles=create_missing_roles,
-        notes=notes,
-        created=created,
-        reused=reused,
-    )
-    verified_role = await _ensure_role(
-        guild,
-        DEFAULT_VERIFIED_ROLE_NAME,
-        create_missing_roles=create_missing_roles,
-        notes=notes,
-        created=created,
-        reused=reused,
-    )
-    member_role = await _ensure_role(
-        guild,
-        DEFAULT_MEMBER_ROLE_NAME,
-        create_missing_roles=create_missing_roles,
-        notes=notes,
-        created=created,
-        reused=reused,
-    )
+    unverified_role = await _ensure_role(guild, DEFAULT_UNVERIFIED_ROLE_NAME, create_missing_roles=create_missing_roles, notes=notes, created=created, reused=reused)
+    verified_role = await _ensure_role(guild, DEFAULT_VERIFIED_ROLE_NAME, create_missing_roles=create_missing_roles, notes=notes, created=created, reused=reused)
+    member_role = await _ensure_role(guild, DEFAULT_MEMBER_ROLE_NAME, create_missing_roles=create_missing_roles, notes=notes, created=created, reused=reused)
 
     await _assign_control_role_to_runner(interaction, control_role, notes=notes, ok=ok)
 
     staff_overwrites = _staff_private_overwrites(guild, staff_role=staff_role, control_role=control_role)
-    public_overwrites = _public_read_only_overwrites(
-        guild,
-        staff_role=staff_role,
-        control_role=control_role,
-        unverified_role=unverified_role,
-    )
-    voice_overwrites = _voice_verify_overwrites(
-        guild,
-        staff_role=staff_role,
-        control_role=control_role,
-        unverified_role=unverified_role,
-    )
+    public_overwrites = _public_read_only_overwrites(guild, staff_role=staff_role, control_role=control_role, unverified_role=unverified_role)
+    voice_overwrites = _voice_verify_overwrites(guild, staff_role=staff_role, control_role=control_role, unverified_role=unverified_role)
 
-    start_category = await _ensure_category(
-        guild,
-        START_CATEGORY_NAME,
-        overwrites=public_overwrites,
-        apply_channel_permissions=apply_channel_permissions,
-        notes=notes,
-        created=created,
-        reused=reused,
-    )
-    ticket_category = await _ensure_category(
-        guild,
-        TICKET_CATEGORY_NAME,
-        overwrites=staff_overwrites,
-        apply_channel_permissions=apply_channel_permissions,
-        notes=notes,
-        created=created,
-        reused=reused,
-    )
-    archive_category = await _ensure_category(
-        guild,
-        ARCHIVE_CATEGORY_NAME,
-        overwrites=staff_overwrites,
-        apply_channel_permissions=apply_channel_permissions,
-        notes=notes,
-        created=created,
-        reused=reused,
-    )
-    management_category = await _ensure_category(
-        guild,
-        MANAGEMENT_CATEGORY_NAME,
-        overwrites=staff_overwrites,
-        apply_channel_permissions=apply_channel_permissions,
-        notes=notes,
-        created=created,
-        reused=reused,
-    )
+    start_category = await _ensure_category(guild, START_CATEGORY_NAME, overwrites=public_overwrites, apply_channel_permissions=apply_channel_permissions, notes=notes, created=created, reused=reused)
+    ticket_category = await _ensure_category(guild, TICKET_CATEGORY_NAME, overwrites=staff_overwrites, apply_channel_permissions=apply_channel_permissions, notes=notes, created=created, reused=reused)
+    archive_category = await _ensure_category(guild, ARCHIVE_CATEGORY_NAME, overwrites=staff_overwrites, apply_channel_permissions=apply_channel_permissions, notes=notes, created=created, reused=reused)
+    management_category = await _ensure_category(guild, MANAGEMENT_CATEGORY_NAME, overwrites=staff_overwrites, apply_channel_permissions=apply_channel_permissions, notes=notes, created=created, reused=reused)
 
-    welcome_channel = await _ensure_text_channel(
-        guild,
-        WELCOME_CHANNEL_NAME,
-        category=start_category,
-        overwrites=public_overwrites,
-        topic="Welcome information for new members.",
-        apply_channel_permissions=apply_channel_permissions,
-        notes=notes,
-        created=created,
-        reused=reused,
-    )
-    verify_channel = await _ensure_text_channel(
-        guild,
-        VERIFY_CHANNEL_NAME,
-        category=start_category,
-        overwrites=public_overwrites,
-        topic="Start server verification here.",
-        apply_channel_permissions=apply_channel_permissions,
-        notes=notes,
-        created=created,
-        reused=reused,
-    )
-    ticket_panel_channel = await _ensure_text_channel(
-        guild,
-        TICKET_PANEL_CHANNEL_NAME,
-        category=start_category,
-        overwrites=public_overwrites,
-        topic="Open a private support ticket here.",
-        apply_channel_permissions=apply_channel_permissions,
-        notes=notes,
-        created=created,
-        reused=reused,
-    )
-    vc_verify_channel = await _ensure_voice_channel(
-        guild,
-        VC_VERIFY_CHANNEL_NAME,
-        category=start_category,
-        overwrites=voice_overwrites,
-        apply_channel_permissions=apply_channel_permissions,
-        notes=notes,
-        created=created,
-        reused=reused,
-    )
-    vc_queue_channel = await _ensure_text_channel(
-        guild,
-        VC_QUEUE_CHANNEL_NAME,
-        category=management_category,
-        overwrites=staff_overwrites,
-        topic="Staff queue and status channel for voice verification requests.",
-        apply_channel_permissions=apply_channel_permissions,
-        notes=notes,
-        created=created,
-        reused=reused,
-    )
-    transcripts_channel = await _ensure_text_channel(
-        guild,
-        TRANSCRIPTS_CHANNEL_NAME,
-        category=management_category,
-        overwrites=staff_overwrites,
-        topic="Ticket transcripts are posted here.",
-        apply_channel_permissions=apply_channel_permissions,
-        notes=notes,
-        created=created,
-        reused=reused,
-    )
-    modlog_channel = await _ensure_text_channel(
-        guild,
-        MODLOG_CHANNEL_NAME,
-        category=management_category,
-        overwrites=staff_overwrites,
-        topic="Moderation, ticket, and security logs are posted here.",
-        apply_channel_permissions=apply_channel_permissions,
-        notes=notes,
-        created=created,
-        reused=reused,
-    )
-    join_leave_channel = await _ensure_text_channel(
-        guild,
-        JOIN_LEAVE_CHANNEL_NAME,
-        category=management_category,
-        overwrites=staff_overwrites,
-        topic="Join and leave events are posted here.",
-        apply_channel_permissions=apply_channel_permissions,
-        notes=notes,
-        created=created,
-        reused=reused,
-    )
-    status_channel = await _ensure_text_channel(
-        guild,
-        STATUS_CHANNEL_NAME,
-        category=management_category,
-        overwrites=staff_overwrites,
-        topic="Bot status and restored-service notices are posted here.",
-        apply_channel_permissions=apply_channel_permissions,
-        notes=notes,
-        created=created,
-        reused=reused,
-    )
+    welcome_channel = await _ensure_text_channel(guild, WELCOME_CHANNEL_NAME, category=start_category, overwrites=public_overwrites, topic="Welcome information for new members.", apply_channel_permissions=apply_channel_permissions, notes=notes, created=created, reused=reused)
+    verify_channel = await _ensure_text_channel(guild, VERIFY_CHANNEL_NAME, category=start_category, overwrites=public_overwrites, topic="Start server verification here.", apply_channel_permissions=apply_channel_permissions, notes=notes, created=created, reused=reused)
+    ticket_panel_channel = await _ensure_text_channel(guild, TICKET_PANEL_CHANNEL_NAME, category=start_category, overwrites=public_overwrites, topic="Open a private support ticket here.", apply_channel_permissions=apply_channel_permissions, notes=notes, created=created, reused=reused)
+    vc_verify_channel = await _ensure_voice_channel(guild, VC_VERIFY_CHANNEL_NAME, category=start_category, overwrites=voice_overwrites, apply_channel_permissions=apply_channel_permissions, notes=notes, created=created, reused=reused)
+    vc_queue_channel = await _ensure_text_channel(guild, VC_QUEUE_CHANNEL_NAME, category=management_category, overwrites=staff_overwrites, topic="Staff queue and status channel for voice verification requests.", apply_channel_permissions=apply_channel_permissions, notes=notes, created=created, reused=reused)
+    transcripts_channel = await _ensure_text_channel(guild, TRANSCRIPTS_CHANNEL_NAME, category=management_category, overwrites=staff_overwrites, topic="Ticket transcripts are posted here.", apply_channel_permissions=apply_channel_permissions, notes=notes, created=created, reused=reused)
+    modlog_channel = await _ensure_text_channel(guild, MODLOG_CHANNEL_NAME, category=management_category, overwrites=staff_overwrites, topic="Moderation, ticket, and security logs are posted here.", apply_channel_permissions=apply_channel_permissions, notes=notes, created=created, reused=reused)
+    join_leave_channel = await _ensure_text_channel(guild, JOIN_LEAVE_CHANNEL_NAME, category=management_category, overwrites=staff_overwrites, topic="Join and leave events are posted here.", apply_channel_permissions=apply_channel_permissions, notes=notes, created=created, reused=reused)
+    status_channel = await _ensure_text_channel(guild, STATUS_CHANNEL_NAME, category=management_category, overwrites=staff_overwrites, topic="Bot status and restored-service notices are posted here.", apply_channel_permissions=apply_channel_permissions, notes=notes, created=created, reused=reused)
 
     required_pairs = [
         ("server-control role", control_role),
@@ -753,7 +553,7 @@ async def _setup_defaults_callback(
     if blockers:
         embed = discord.Embed(
             title="🚫 Default Setup Incomplete",
-            description="I could not create or resolve every required default item. Fix the blockers below, then run this again.",
+            description="I could not create or resolve every required default item. Fix the blockers below, then run `/stoney setup` again.",
             color=discord.Color.red(),
         )
         embed.add_field(name="Blockers", value=_line_list(blockers), inline=False)
@@ -788,6 +588,7 @@ async def _setup_defaults_callback(
         "force_verify_log_channel_id": str(int(modlog_channel.id)) if modlog_channel else None,
         "join_log_channel_id": str(int(join_leave_channel.id)) if join_leave_channel else None,
         "status_channel_id": str(int(status_channel.id)) if status_channel else None,
+        "bot_status_channel_id": str(int(status_channel.id)) if status_channel else None,
         "ticket_prefix": "ticket",
         "configured_by_id": str(interaction.user.id),
         "configured_by_name": str(interaction.user),
@@ -821,7 +622,7 @@ async def _setup_defaults_callback(
     )
     embed.add_field(
         name="Next Step",
-        value="Run `/stoney health`. If it passes, post your ticket/verify panels and test ticket create/close.",
+        value="Run `/stoney setup` to verify the full configuration, then post your ticket/verify panels and test ticket create/close.",
         inline=False,
     )
     await interaction.followup.send(embed=embed, ephemeral=True)
@@ -866,7 +667,7 @@ def register_public_setup_defaults_commands(bot, tree) -> None:
     _ = bot, tree
     _attach()
     try:
-        print("✅ public_setup_defaults: attached /stoney setup-defaults command")
+        print("✅ public_setup_defaults: attached advanced /stoney setup-defaults command")
     except Exception:
         pass
 
