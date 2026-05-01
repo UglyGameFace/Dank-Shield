@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any, Iterable, Optional
+from typing import Any, Iterable
 
 import discord
 
@@ -11,7 +11,7 @@ from ..guild_config import get_guild_config, invalidate_guild_config
 
 _ATTACHED = False
 
-_REPLACEMENTS = {
+_LEGACY_COMMAND_REPLACEMENTS = {
     "/stoney setup-picker": "/stoney setup",
     "/stoney setup-assistant": "/stoney setup",
     "/stoney setup-defaults": "/stoney setup",
@@ -47,21 +47,9 @@ _REPLACEMENTS = {
 }
 
 _CUSTOMIZE_PAGES: tuple[tuple[str, str, tuple[str, ...]], ...] = (
-    (
-        "core",
-        "Core Roles + Ticket Category",
-        ("staff_role", "unverified_role", "verified_role", "resident_role", "ticket_category"),
-    ),
-    (
-        "ticket_verify",
-        "Tickets + Verification Rooms",
-        ("archive_category", "verify_channel", "support_channel", "vc_verify_channel", "vc_queue_channel"),
-    ),
-    (
-        "logs_status",
-        "Logs + Status Channels",
-        ("transcripts_channel", "modlog_channel", "join_log_channel", "status_channel"),
-    ),
+    ("core", "Core Roles + Ticket Category", ("staff_role", "unverified_role", "verified_role", "resident_role", "ticket_category")),
+    ("ticket_verify", "Tickets + Verification Rooms", ("archive_category", "verify_channel", "support_channel", "vc_verify_channel", "vc_queue_channel")),
+    ("logs_status", "Logs + Status Channels", ("transcripts_channel", "modlog_channel", "join_log_channel", "status_channel")),
 )
 
 
@@ -70,11 +58,9 @@ def _clean_text(value: Any) -> str:
         text = str(value or "")
     except Exception:
         return ""
-    for old, new in _REPLACEMENTS.items():
+    for old, new in _LEGACY_COMMAND_REPLACEMENTS.items():
         text = text.replace(old, new)
-    text = text.replace("setup assistant", "quick setup")
-    text = text.replace("Setup Assistant", "Quick Setup")
-    return text
+    return text.replace("Setup Assistant", "Quick Setup").replace("setup assistant", "quick setup")
 
 
 def _clean_embed(embed: discord.Embed) -> discord.Embed:
@@ -88,8 +74,8 @@ def _clean_embed(embed: discord.Embed) -> discord.Embed:
             embed.clear_fields()
             for field in fields:
                 embed.add_field(
-                    name=_clean_text(getattr(field, "name", ""))[:256] or "Status",
-                    value=_clean_text(getattr(field, "value", ""))[:1024] or "—",
+                    name=(_clean_text(getattr(field, "name", "")) or "Status")[:256],
+                    value=(_clean_text(getattr(field, "value", "")) or "—")[:1024],
                     inline=bool(getattr(field, "inline", False)),
                 )
         footer_text = getattr(getattr(embed, "footer", None), "text", "")
@@ -101,36 +87,20 @@ def _clean_embed(embed: discord.Embed) -> discord.Embed:
 
 
 def _mention(obj: Any) -> str:
-    value = getattr(obj, "mention", None)
-    if value:
-        return str(value)
-    name = getattr(obj, "name", None)
-    return f"`{name or obj}`"
+    mention = getattr(obj, "mention", None)
+    return str(mention) if mention else f"`{getattr(obj, 'name', obj)}`"
 
 
-def _channel_id(value: Any) -> str:
+def _snowflake(value: Any) -> str:
     return str(int(getattr(value, "id", value)))
-
-
-def _role_id(value: Any) -> str:
-    return str(int(getattr(value, "id", value)))
-
-
-def _specs_by_key(module: Any) -> dict[str, Any]:
-    try:
-        return {str(getattr(spec, "key", "")): spec for spec in getattr(module, "REPAIR_SPECS", ())}
-    except Exception:
-        return {}
 
 
 def _spec_subset(module: Any, keys: Iterable[str]) -> list[Any]:
-    specs = _specs_by_key(module)
-    out: list[Any] = []
-    for key in keys:
-        spec = specs.get(str(key))
-        if spec is not None:
-            out.append(spec)
-    return out
+    try:
+        by_key = {str(getattr(spec, "key", "")): spec for spec in getattr(module, "REPAIR_SPECS", ())}
+        return [by_key[key] for key in keys if key in by_key]
+    except Exception:
+        return []
 
 
 async def _current_missing_specs(guild: discord.Guild, module: Any) -> list[Any]:
@@ -142,25 +112,47 @@ async def _current_missing_specs(guild: discord.Guild, module: Any) -> list[Any]
         return []
 
 
-async def _has_missing_specs(guild: discord.Guild, module: Any) -> bool:
-    return bool(await _current_missing_specs(guild, module))
-
-
 async def _save_config(interaction: discord.Interaction, payload: dict[str, Any]) -> None:
     guild = interaction.guild
     if guild is None:
         raise RuntimeError("This must be used inside a server.")
     from .public_setup_config_writer import upsert_guild_config
 
-    payload = dict(payload)
-    payload.update(
-        {
-            "configured_by_id": str(interaction.user.id),
-            "configured_by_name": str(interaction.user),
-        }
-    )
-    await upsert_guild_config(guild.id, payload)
+    final_payload = dict(payload)
+    final_payload.update({"configured_by_id": str(interaction.user.id), "configured_by_name": str(interaction.user)})
+    await upsert_guild_config(guild.id, final_payload)
     invalidate_guild_config(guild.id)
+
+
+def _install_cleaners(module: Any) -> None:
+    try:
+        if getattr(module, "_STONEY_SETUP_CLEANERS_INSTALLED", False):
+            return
+
+        original_health = getattr(module, "_health_embed", None)
+        if callable(original_health):
+            def cleaned_health(guild: discord.Guild, cfg: Any):
+                return _clean_embed(original_health(guild, cfg))
+            module._health_embed = cleaned_health
+
+        original_payload = getattr(module, "_build_assistant_payload", None)
+        if callable(original_payload):
+            module._STONEY_ORIGINAL_BUILD_ASSISTANT_PAYLOAD = original_payload
+
+            async def cleaned_payload(guild: discord.Guild):
+                embed, _old_view = await original_payload(guild)
+                embed = _clean_embed(embed)
+                has_missing = bool(await _current_missing_specs(guild, module))
+                return embed, StoneySetupView(has_missing=has_missing)
+
+            module._build_assistant_payload = cleaned_payload
+
+        module._STONEY_SETUP_CLEANERS_INSTALLED = True
+    except Exception as e:
+        try:
+            print(f"⚠️ public_setup_start cleaner install failed: {repr(e)}")
+        except Exception:
+            pass
 
 
 async def _build_main_setup_payload(guild: discord.Guild, *, title: str = "🚀 Stoney Quick Setup") -> tuple[discord.Embed, "StoneySetupView"]:
@@ -182,46 +174,14 @@ async def _build_main_setup_payload(guild: discord.Guild, *, title: str = "🚀 
         "🧩 **Choose Existing Items** lets you map your own roles/channels with dropdowns.\n\n"
         f"{embed.description or ''}"
     )[:4096]
-    embed = _clean_embed(embed)
-    has_missing = await _has_missing_specs(guild, public_setup_assistant)
-    return embed, StoneySetupView(has_missing=has_missing)
-
-
-def _install_cleaners(module: Any) -> None:
-    try:
-        if getattr(module, "_STONEY_SETUP_CLEANERS_INSTALLED", False):
-            return
-
-        original_health = getattr(module, "_health_embed", None)
-        if callable(original_health):
-            def cleaned_health(guild: discord.Guild, cfg: Any):
-                return _clean_embed(original_health(guild, cfg))
-            module._health_embed = cleaned_health
-
-        original_payload = getattr(module, "_build_assistant_payload", None)
-        if callable(original_payload):
-            module._STONEY_ORIGINAL_BUILD_ASSISTANT_PAYLOAD = original_payload
-
-            async def cleaned_payload(guild: discord.Guild):
-                embed, _old_view = await original_payload(guild)
-                embed = _clean_embed(embed)
-                return embed, StoneySetupView(has_missing=await _has_missing_specs(guild, module))
-
-            module._build_assistant_payload = cleaned_payload
-
-        module._STONEY_SETUP_CLEANERS_INSTALLED = True
-    except Exception as e:
-        try:
-            print(f"⚠️ public_setup_start cleaner install failed: {repr(e)}")
-        except Exception:
-            pass
+    return _clean_embed(embed), StoneySetupView(has_missing=bool(await _current_missing_specs(guild, public_setup_assistant)))
 
 
 class BackToSetupView(discord.ui.View):
     def __init__(self) -> None:
         super().__init__(timeout=900)
 
-    @discord.ui.button(label="Back to Setup", emoji="⬅️", style=discord.ButtonStyle.secondary, custom_id="stoney_setup:back")
+    @discord.ui.button(label="Back to Setup", emoji="⬅️", style=discord.ButtonStyle.secondary, custom_id="stoney_setup:back", row=4)
     async def back(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         if not await _require_setup_permission(interaction):
             return
@@ -235,8 +195,7 @@ class BackToSetupView(discord.ui.View):
 class StoneySetupView(discord.ui.View):
     def __init__(self, *, has_missing: bool) -> None:
         super().__init__(timeout=900)
-        self.has_missing = bool(has_missing)
-        if not self.has_missing:
+        if not bool(has_missing):
             try:
                 self.auto_fix.disabled = True
             except Exception:
@@ -312,13 +271,7 @@ class StoneySetupView(discord.ui.View):
             return
         if interaction.channel is None or not isinstance(interaction.channel, discord.TextChannel):
             return await interaction.response.send_message("❌ Use this inside the text channel you want as the bot status channel.", ephemeral=True)
-        await _save_config(
-            interaction,
-            {
-                "status_channel_id": _channel_id(interaction.channel),
-                "bot_status_channel_id": _channel_id(interaction.channel),
-            },
-        )
+        await _save_config(interaction, {"status_channel_id": _snowflake(interaction.channel), "bot_status_channel_id": _snowflake(interaction.channel)})
         embed, view = await _build_main_setup_payload(interaction.guild)  # type: ignore[arg-type]
         embed.add_field(name="Saved", value=f"Bot status channel set to {interaction.channel.mention}.", inline=False)
         await interaction.response.edit_message(embed=embed, view=view)
@@ -405,11 +358,9 @@ class SaveRoleSelect(discord.ui.RoleSelect):
         if not await _require_setup_permission(interaction):
             return
         role = self.values[0]
-        value = _role_id(role)
-        payload = {column: value for column in self.columns + self.also_same}
+        payload = {column: _snowflake(role) for column in self.columns + self.also_same}
         await _save_config(interaction, payload)
-        embed = discord.Embed(title="✅ Saved Setup Role", description=f"Saved {_mention(role)}.", color=discord.Color.green())
-        await interaction.response.send_message(embed=embed, ephemeral=True)
+        await interaction.response.send_message(embed=discord.Embed(title="✅ Saved Setup Role", description=f"Saved {_mention(role)}.", color=discord.Color.green()), ephemeral=True)
 
 
 class SaveChannelSelect(discord.ui.ChannelSelect):
@@ -422,11 +373,9 @@ class SaveChannelSelect(discord.ui.ChannelSelect):
         if not await _require_setup_permission(interaction):
             return
         channel = self.values[0]
-        value = _channel_id(channel)
-        payload = {column: value for column in self.columns + self.also_same}
+        payload = {column: _snowflake(channel) for column in self.columns + self.also_same}
         await _save_config(interaction, payload)
-        embed = discord.Embed(title="✅ Saved Setup Channel", description=f"Saved {_mention(channel)}.", color=discord.Color.green())
-        await interaction.response.send_message(embed=embed, ephemeral=True)
+        await interaction.response.send_message(embed=discord.Embed(title="✅ Saved Setup Channel", description=f"Saved {_mention(channel)}.", color=discord.Color.green()), ephemeral=True)
 
 
 class TicketBasicsPickerView(BackToSetupView):
@@ -466,13 +415,10 @@ class LogsStatusPickerView(BackToSetupView):
 async def _setup_callback(interaction: discord.Interaction) -> None:
     if not await _require_setup_permission(interaction):
         return
-
     await safe_defer(interaction, ephemeral=True)
-
     guild = interaction.guild
     if guild is None:
         return await interaction.followup.send("❌ This command must be used inside a server.", ephemeral=True)
-
     try:
         embed, view = await _build_main_setup_payload(guild)
         await interaction.followup.send(embed=embed, view=view, ephemeral=True)
@@ -488,16 +434,8 @@ def _attach() -> None:
         existing = stoney_group.get_command("setup")
     except Exception:
         existing = None
-    if existing is not None:
-        _ATTACHED = True
-        return
-    stoney_group.add_command(
-        discord.app_commands.Command(
-            name="setup",
-            description="Start the guided Stoney setup flow.",
-            callback=_setup_callback,
-        )
-    )
+    if existing is None:
+        stoney_group.add_command(discord.app_commands.Command(name="setup", description="Start the guided Stoney setup flow.", callback=_setup_callback))
     _ATTACHED = True
 
 
@@ -507,10 +445,7 @@ _attach()
 def register_public_setup_start_commands(bot: Any, tree: Any) -> None:
     _ = bot, tree
     _attach()
-    try:
-        print("✅ public_setup_start: attached /stoney setup quick-start command")
-    except Exception:
-        pass
+    print("✅ public_setup_start: attached /stoney setup quick-start command")
 
 
 __all__ = ["register_public_setup_start_commands"]
