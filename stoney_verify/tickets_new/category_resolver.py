@@ -12,7 +12,7 @@ Public-production rules:
 - resolve from guild_configs, not private/env server IDs
 - fail loudly when setup is missing instead of creating tickets in random places
 - verify bot permissions before channel creation/move
-- never search by a Stoney Balonney-specific name
+- never search by a private server-specific name
 """
 
 import asyncio
@@ -47,6 +47,14 @@ def _safe_int(value: Any, default: int = 0) -> int:
         return int(default)
 
 
+def _setup_hint(label: str) -> str:
+    return (
+        f"{label} category is not configured. Run `/stoney setup`, then choose "
+        "**Auto-Fix Missing Defaults** to create categories or **Choose Existing Items → Ticket Basics** "
+        "to select your own existing categories."
+    )
+
+
 def _permission_missing_for_category(
     guild: discord.Guild,
     category: discord.CategoryChannel,
@@ -73,20 +81,19 @@ async def _load_guild_config(guild: discord.Guild, *, refresh: bool = True) -> A
         return await asyncio.wait_for(get_guild_config(guild.id, refresh=refresh), timeout=5.0)
     except Exception as e:
         raise TicketCategoryResolutionError(
-            f"Could not load this server's saved ticket setup: {type(e).__name__}: {e}"
+            f"Could not load this server's saved ticket setup: {type(e).__name__}: {e}. Run `/stoney setup` and try again."
         ) from e
 
 
 def _resolve_category_channel(guild: discord.Guild, category_id: int, *, label: str) -> discord.CategoryChannel:
     if category_id <= 0:
-        raise TicketCategoryResolutionError(
-            f"{label} category is not configured. Run `/stoney setup-defaults`, `/stoney setup-assistant`, or custom setup."
-        )
+        raise TicketCategoryResolutionError(_setup_hint(label))
 
     channel = guild.get_channel(int(category_id))
     if not isinstance(channel, discord.CategoryChannel):
         raise TicketCategoryResolutionError(
-            f"Configured {label} category `{category_id}` no longer exists or is not a category. Run setup repair."
+            f"Configured {label} category `{category_id}` no longer exists or is not a category. "
+            "Run `/stoney setup` and choose **Choose Existing Items → Ticket Basics** to select the correct category."
         )
     return channel
 
@@ -108,7 +115,8 @@ async def resolve_active_ticket_category(
     )
     if missing:
         raise TicketCategoryResolutionError(
-            f"I cannot create tickets in `{category.name}`. Missing: {', '.join(missing)}."
+            f"I cannot create tickets in `{category.name}`. Missing: {', '.join(missing)}. "
+            "Fix the category permissions or run `/stoney setup` and choose **Choose Existing Items → Ticket Basics**."
         )
 
     return TicketCategoryResolution(
@@ -137,7 +145,8 @@ async def resolve_archive_ticket_category(
     )
     if missing:
         raise TicketCategoryResolutionError(
-            f"I cannot move closed tickets to `{category.name}`. Missing: {', '.join(missing)}."
+            f"I cannot move closed tickets to `{category.name}`. Missing: {', '.join(missing)}. "
+            "Fix the category permissions or run `/stoney setup` and choose **Choose Existing Items → Ticket Basics**."
         )
 
     return TicketCategoryResolution(
@@ -160,7 +169,8 @@ async def assert_ticket_channel_in_active_category(channel: discord.TextChannel)
     resolved = await resolve_active_ticket_category(channel.guild, refresh=True, require_manage_channels=False)
     if not channel_is_in_category(channel, resolved.category):
         raise TicketCategoryResolutionError(
-            f"Ticket channel `{channel.name}` was created outside configured open ticket category `{resolved.category_name}`."
+            f"Ticket channel `{channel.name}` was created outside configured open ticket category `{resolved.category_name}`. "
+            "Run `/stoney setup` and verify **Ticket Basics**."
         )
 
 
