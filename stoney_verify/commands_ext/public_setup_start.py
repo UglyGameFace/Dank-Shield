@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any, Iterable
+from typing import Any, Iterable, Optional
 
 import discord
 
@@ -95,6 +95,13 @@ def _snowflake(value: Any) -> str:
     return str(int(getattr(value, "id", value)))
 
 
+def _short(value: Any, limit: int = 90) -> str:
+    text = str(value or "").strip()
+    if len(text) <= limit:
+        return text
+    return text[: max(0, limit - 1)] + "…"
+
+
 def _spec_subset(module: Any, keys: Iterable[str]) -> list[Any]:
     try:
         by_key = {str(getattr(spec, "key", "")): spec for spec in getattr(module, "REPAIR_SPECS", ())}
@@ -129,6 +136,14 @@ async def _safe_defer_update(interaction: discord.Interaction) -> None:
     try:
         if not interaction.response.is_done():
             await interaction.response.defer(thinking=False)
+    except Exception:
+        pass
+
+
+async def _safe_defer_modal(interaction: discord.Interaction) -> None:
+    try:
+        if not interaction.response.is_done():
+            await interaction.response.defer(ephemeral=True, thinking=True)
     except Exception:
         pass
 
@@ -197,10 +212,140 @@ async def _build_main_setup_payload(guild: discord.Guild, *, title: str = "🚀 
         "This is the main setup screen. Pick the easiest path below:\n\n"
         "✨ **Auto-Fix Missing Defaults** creates only missing default roles/channels.\n"
         "✏️ **Customize Setup Names** lets you name every default group before creating it.\n"
-        "🧩 **Choose Existing Items** lets you map your own roles/channels with dropdowns.\n\n"
+        "🧩 **Choose Existing Items** lets you map your own roles/channels with dropdowns.\n"
+        "🗂️ **Manage Ticket Categories** lets you add/edit/delete routing categories without memorizing commands.\n\n"
         f"{embed.description or ''}"
     )[:4096]
     return _clean_embed(embed), StoneySetupView(has_missing=bool(await _current_missing_specs(guild, public_setup_assistant)))
+
+
+async def _category_rows(guild: discord.Guild) -> list[dict[str, Any]]:
+    from . import ticket_category_admin as category_admin
+
+    return await category_admin._fetch_categories(guild.id)
+
+
+def _category_line(row: dict[str, Any]) -> str:
+    slug = str(row.get("slug") or "unknown")
+    name = str(row.get("name") or slug)
+    intake_type = str(row.get("intake_type") or "general")
+    default = " ⭐" if bool(row.get("is_default")) else ""
+    keywords = row.get("match_keywords") or []
+    keyword_text = ", ".join(str(x) for x in keywords[:4]) if keywords else "no keywords"
+    order = row.get("sort_order")
+    order_text = f" • sort `{order}`" if order is not None else ""
+    return f"• **{_short(name, 48)}**{default} — `{slug}` • `{intake_type}`{order_text}\n  ↳ {_short(keyword_text, 90)}"
+
+
+def _category_list_text(rows: list[dict[str, Any]], *, empty: str = "No ticket categories yet.") -> str:
+    if not rows:
+        return empty
+    lines = [_category_line(row) for row in rows[:12]]
+    if len(rows) > 12:
+        lines.append(f"…and {len(rows) - 12} more")
+    text = "\n".join(lines)
+    return text[:1024] or empty
+
+
+def _category_governance_text(rows: list[dict[str, Any]]) -> str:
+    try:
+        from . import ticket_category_admin as category_admin
+
+        warnings = category_admin._governance_warnings(rows)
+    except Exception:
+        warnings = []
+    if not warnings:
+        return "✅ Default and verification routing look safe."
+    return "\n".join(f"• {item}" for item in warnings)[:1024]
+
+
+async def _build_category_manager_payload(guild: discord.Guild, *, title: str = "🗂️ Manage Ticket Categories") -> tuple[discord.Embed, "CategoryManagerView"]:
+    rows = await _category_rows(guild)
+    embed = discord.Embed(
+        title=title,
+        description=(
+            "These are logical routing/intake categories, not Discord channel categories.\n"
+            "They control what users can pick and how tickets route to staff."
+        ),
+        color=discord.Color.blurple(),
+    )
+    embed.add_field(name="Current Categories", value=_category_list_text(rows), inline=False)
+    embed.add_field(name="Safety", value=_category_governance_text(rows), inline=False)
+    embed.add_field(
+        name="Tip",
+        value=(
+            "Use **Ticket Basics** in `/stoney setup → Choose Existing Items` for the actual Discord open/archive categories.\n"
+            "Use this manager for support/verification/appeal/report-style routing categories."
+        ),
+        inline=False,
+    )
+    return embed, CategoryManagerView(rows=rows)
+
+
+def _category_options(rows: list[dict[str, Any]], *, placeholder: str) -> list[discord.SelectOption]:
+    options: list[discord.SelectOption] = []
+    for row in rows[:25]:
+        slug = str(row.get("slug") or "").strip()
+        if not slug:
+            continue
+        name = str(row.get("name") or slug).strip()
+        intake_type = str(row.get("intake_type") or "general").strip()
+        default = "Default • " if bool(row.get("is_default")) else ""
+        options.append(
+            discord.SelectOption(
+                label=_short(name, 95) or slug,
+                description=_short(f"{default}{slug} • {intake_type}", 100),
+                value=slug[:100],
+            )
+        )
+    if not options:
+        options.append(discord.SelectOption(label="No categories available", value="__none__", description=placeholder[:100]))
+    return options
+
+
+async def _send_category_result(interaction: discord.Interaction, *, guild: discord.Guild, title: str, message: str, ok: bool = True) -> None:
+    embed, view = await _build_category_manager_payload(guild, title=title)
+    embed.add_field(name="Result", value=message[:1024] or "Done.", inline=False)
+    embed.color = discord.Color.green() if ok else discord.Color.red()
+    try:
+        await interaction.followup.send(embed=embed, view=view, ephemeral=True)
+    except Exception:
+        try:
+            await interaction.edit_original_response(embed=embed, view=view)
+        except Exception:
+            pass
+
+
+async def _delete_category_safely(guild: discord.Guild, slug: str) -> tuple[bool, str]:
+    from . import ticket_category_admin as category_admin
+
+    slug_clean = category_admin._slugify(slug)
+    row = await category_admin._fetch_category_by_slug(guild.id, slug_clean)
+    if not row:
+        return False, f"Category `{slug_clean}` was not found."
+
+    rows_before = await category_admin._fetch_categories(guild.id)
+    if len(rows_before) <= 1:
+        return False, "You cannot delete the only remaining ticket category. Create another category first."
+
+    verification_rows = category_admin._verification_like_categories(rows_before)
+    deleting_verification_like = any(category_admin._safe_str(x.get("slug")).lower() == slug_clean for x in verification_rows)
+    if deleting_verification_like and len(verification_rows) <= 1:
+        return False, "You cannot delete the only verification-like category. Create another verification category first."
+
+    replacement_default = category_admin._choose_replacement_default(rows_before, slug_clean) if bool(row.get("is_default")) else None
+    ok = await category_admin._delete_category(guild.id, slug_clean)
+    if not ok:
+        return False, f"Failed to delete `{slug_clean}`."
+
+    suffix = ""
+    if replacement_default is not None:
+        replacement_slug = category_admin._safe_str(replacement_default.get("slug"))
+        if replacement_slug:
+            await category_admin._set_default(guild.id, replacement_slug)
+            suffix = f" Auto-promoted `{replacement_slug}` as the new default."
+
+    return True, f"Deleted `{slug_clean}`.{suffix}"
 
 
 class BackToSetupView(discord.ui.View):
@@ -283,7 +428,7 @@ class StoneySetupView(discord.ui.View):
         embed.add_field(
             name="Sections",
             value=(
-                "🎫 **Ticket Basics** — active/archive categories, staff role, transcripts\n"
+                "🎫 **Ticket Basics** — active/archive Discord categories, staff role, transcripts\n"
                 "✅ **Verification Roles** — Unverified, Verified, Member\n"
                 "🎙️ **Verification Channels** — verify text, support panel, VC verify, VC queue\n"
                 "🧾 **Logs + Status** — modlog, join/leave log, bot-status"
@@ -291,6 +436,17 @@ class StoneySetupView(discord.ui.View):
             inline=False,
         )
         await interaction.response.edit_message(embed=embed, view=ChooseExistingMenuView())
+
+    @discord.ui.button(label="Manage Ticket Categories", emoji="🗂️", style=discord.ButtonStyle.primary, custom_id="stoney_setup:ticket_categories", row=1)
+    async def ticket_categories(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        if not await _require_setup_permission(interaction):
+            return
+        guild = interaction.guild
+        if guild is None:
+            return await interaction.response.send_message("❌ This must be used inside a server.", ephemeral=True)
+        await _safe_defer_update(interaction)
+        embed, view = await _build_category_manager_payload(guild)
+        await _edit_setup_message(interaction, embed=embed, view=view)
 
     @discord.ui.button(label="Use This Channel for Status", emoji="📌", style=discord.ButtonStyle.secondary, custom_id="stoney_setup:use_status_channel", row=2)
     async def use_status_channel(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
@@ -439,6 +595,257 @@ class LogsStatusPickerView(BackToSetupView):
         self.add_item(SaveChannelSelect(placeholder="Modlog channel", columns=("modlog_channel_id",), also_same=("raidlog_channel_id", "force_verify_log_channel_id"), channel_types=[discord.ChannelType.text], row=0))
         self.add_item(SaveChannelSelect(placeholder="Join/leave log channel", columns=("join_log_channel_id",), channel_types=[discord.ChannelType.text], row=1))
         self.add_item(SaveChannelSelect(placeholder="Bot status channel", columns=("status_channel_id",), also_same=("bot_status_channel_id",), channel_types=[discord.ChannelType.text], row=2))
+
+
+class CategoryManagerView(BackToSetupView):
+    def __init__(self, *, rows: list[dict[str, Any]]) -> None:
+        super().__init__()
+        self.rows = rows
+        if not rows:
+            try:
+                self.edit_category.disabled = True
+                self.set_default.disabled = True
+                self.delete_category.disabled = True
+            except Exception:
+                pass
+
+    @discord.ui.button(label="Add Category", emoji="➕", style=discord.ButtonStyle.success, custom_id="stoney_setup:category_add", row=0)
+    async def add_category(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        if not await _require_setup_permission(interaction):
+            return
+        await interaction.response.send_modal(AddTicketCategoryModal(existing_count=len(self.rows)))
+
+    @discord.ui.button(label="Edit Category", emoji="✏️", style=discord.ButtonStyle.primary, custom_id="stoney_setup:category_edit", row=0)
+    async def edit_category(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        await self._open_select(interaction, action="edit")
+
+    @discord.ui.button(label="Set Default", emoji="⭐", style=discord.ButtonStyle.secondary, custom_id="stoney_setup:category_default", row=1)
+    async def set_default(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        await self._open_select(interaction, action="default")
+
+    @discord.ui.button(label="Delete Category", emoji="🗑️", style=discord.ButtonStyle.danger, custom_id="stoney_setup:category_delete", row=1)
+    async def delete_category(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        await self._open_select(interaction, action="delete")
+
+    @discord.ui.button(label="Refresh", emoji="🔄", style=discord.ButtonStyle.secondary, custom_id="stoney_setup:category_refresh", row=2)
+    async def refresh(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        if not await _require_setup_permission(interaction):
+            return
+        guild = interaction.guild
+        if guild is None:
+            return await interaction.response.send_message("❌ This must be used inside a server.", ephemeral=True)
+        await _safe_defer_update(interaction)
+        embed, view = await _build_category_manager_payload(guild)
+        await _edit_setup_message(interaction, embed=embed, view=view)
+
+    async def _open_select(self, interaction: discord.Interaction, *, action: str) -> None:
+        if not await _require_setup_permission(interaction):
+            return
+        guild = interaction.guild
+        if guild is None:
+            return await interaction.response.send_message("❌ This must be used inside a server.", ephemeral=True)
+        await _safe_defer_update(interaction)
+        rows = await _category_rows(guild)
+        if not rows:
+            embed, view = await _build_category_manager_payload(guild)
+            embed.add_field(name="No Categories", value="Create a category first.", inline=False)
+            return await _edit_setup_message(interaction, embed=embed, view=view)
+        label = {"edit": "Edit a category", "default": "Choose the default category", "delete": "Delete a category"}.get(action, "Choose a category")
+        embed = discord.Embed(
+            title=f"🗂️ {label}",
+            description="Pick a category from the dropdown below.",
+            color=discord.Color.blurple(),
+        )
+        embed.add_field(name="Current Categories", value=_category_list_text(rows), inline=False)
+        await _edit_setup_message(interaction, embed=embed, view=CategorySelectActionView(rows=rows, action=action))
+
+
+class CategorySelectActionView(BackToSetupView):
+    def __init__(self, *, rows: list[dict[str, Any]], action: str) -> None:
+        super().__init__()
+        self.add_item(CategoryActionSelect(rows=rows, action=action))
+
+
+class CategoryActionSelect(discord.ui.Select):
+    def __init__(self, *, rows: list[dict[str, Any]], action: str) -> None:
+        self.rows = rows
+        self.action = action
+        placeholder = {"edit": "Choose a category to edit", "default": "Choose the default category", "delete": "Choose a category to delete"}.get(action, "Choose a category")
+        super().__init__(placeholder=placeholder, min_values=1, max_values=1, options=_category_options(rows, placeholder=placeholder), row=0)
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        if not await _require_setup_permission(interaction):
+            return
+        guild = interaction.guild
+        if guild is None:
+            return await interaction.response.send_message("❌ This must be used inside a server.", ephemeral=True)
+        slug = str(self.values[0])
+        if slug == "__none__":
+            return await interaction.response.send_message("❌ No categories are available yet.", ephemeral=True)
+
+        if self.action == "edit":
+            row = next((x for x in self.rows if str(x.get("slug")) == slug), None)
+            if not row:
+                return await interaction.response.send_message("❌ That category no longer exists. Refresh and try again.", ephemeral=True)
+            return await interaction.response.send_modal(EditTicketCategoryModal(row=row))
+
+        if self.action == "default":
+            await _safe_defer_update(interaction)
+            from . import ticket_category_admin as category_admin
+
+            ok = await category_admin._set_default(guild.id, slug)
+            embed, view = await _build_category_manager_payload(guild, title="⭐ Default Ticket Category Updated" if ok else "🚫 Default Update Failed")
+            embed.add_field(name="Result", value=(f"`{slug}` is now the default category." if ok else f"Could not set `{slug}` as default."), inline=False)
+            embed.color = discord.Color.green() if ok else discord.Color.red()
+            return await _edit_setup_message(interaction, embed=embed, view=view)
+
+        if self.action == "delete":
+            row = next((x for x in self.rows if str(x.get("slug")) == slug), None)
+            embed = discord.Embed(
+                title="🗑️ Confirm Category Delete",
+                description=(
+                    f"You are about to delete `{slug}`.\n\n"
+                    "This does **not** delete old ticket channels. It only removes this routing/intake category."
+                ),
+                color=discord.Color.red(),
+            )
+            if row:
+                embed.add_field(name="Selected", value=_category_line(row), inline=False)
+            return await interaction.response.edit_message(embed=embed, view=ConfirmDeleteCategoryView(slug=slug))
+
+
+class ConfirmDeleteCategoryView(BackToSetupView):
+    def __init__(self, *, slug: str) -> None:
+        super().__init__()
+        self.slug = slug
+
+    @discord.ui.button(label="Yes, Delete Category", emoji="🗑️", style=discord.ButtonStyle.danger, custom_id="stoney_setup:category_delete_confirm", row=0)
+    async def confirm_delete(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        if not await _require_setup_permission(interaction):
+            return
+        guild = interaction.guild
+        if guild is None:
+            return await interaction.response.send_message("❌ This must be used inside a server.", ephemeral=True)
+        await _safe_defer_update(interaction)
+        ok, message = await _delete_category_safely(guild, self.slug)
+        embed, view = await _build_category_manager_payload(guild, title="✅ Category Deleted" if ok else "🚫 Category Not Deleted")
+        embed.add_field(name="Result", value=message, inline=False)
+        embed.color = discord.Color.green() if ok else discord.Color.red()
+        await _edit_setup_message(interaction, embed=embed, view=view)
+
+    @discord.ui.button(label="Cancel", emoji="↩️", style=discord.ButtonStyle.secondary, custom_id="stoney_setup:category_delete_cancel", row=1)
+    async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        if not await _require_setup_permission(interaction):
+            return
+        guild = interaction.guild
+        if guild is None:
+            return await interaction.response.send_message("❌ This must be used inside a server.", ephemeral=True)
+        await _safe_defer_update(interaction)
+        embed, view = await _build_category_manager_payload(guild)
+        await _edit_setup_message(interaction, embed=embed, view=view)
+
+
+class AddTicketCategoryModal(discord.ui.Modal):
+    def __init__(self, *, existing_count: int = 0) -> None:
+        super().__init__(title="Add Ticket Category")
+        self.existing_count = int(existing_count)
+        self.name_input = discord.ui.TextInput(label="Display name", placeholder="Support", max_length=120)
+        self.slug_input = discord.ui.TextInput(label="Slug (optional)", placeholder="support", required=False, max_length=80)
+        self.type_input = discord.ui.TextInput(label="Type", placeholder="support, verification, appeal, report, custom", default="support", max_length=40)
+        self.keywords_input = discord.ui.TextInput(label="Routing keywords", placeholder="help, support, issue", required=False, max_length=300)
+        self.description_input = discord.ui.TextInput(label="Description", placeholder="General help and support tickets", required=False, style=discord.TextStyle.paragraph, max_length=500)
+        self.add_item(self.name_input)
+        self.add_item(self.slug_input)
+        self.add_item(self.type_input)
+        self.add_item(self.keywords_input)
+        self.add_item(self.description_input)
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        if not await _require_setup_permission(interaction):
+            return
+        guild = interaction.guild
+        if guild is None:
+            return await interaction.response.send_message("❌ This must be used inside a server.", ephemeral=True)
+        await _safe_defer_modal(interaction)
+        from . import ticket_category_admin as category_admin
+
+        name = category_admin._normalize_name(str(self.name_input.value or ""))
+        slug = category_admin._slugify(str(self.slug_input.value or name))
+        intake_type = category_admin._safe_str(str(self.type_input.value or "general"), "general").lower()
+        if not name:
+            return await _send_category_result(interaction, guild=guild, title="🚫 Category Not Created", message="Category name cannot be empty.", ok=False)
+        if not slug:
+            return await _send_category_result(interaction, guild=guild, title="🚫 Category Not Created", message="Category slug is invalid.", ok=False)
+        if intake_type not in category_admin._ALLOWED_INTAKE_TYPES:
+            return await _send_category_result(interaction, guild=guild, title="🚫 Category Not Created", message=f"Invalid type. Use one of: {category_admin._human_intake_types()}", ok=False)
+        if await category_admin._fetch_category_by_slug(guild.id, slug):
+            return await _send_category_result(interaction, guild=guild, title="🚫 Category Not Created", message=f"Category `{slug}` already exists.", ok=False)
+
+        rows = await category_admin._fetch_categories(guild.id)
+        payload = {
+            "guild_id": str(guild.id),
+            "slug": slug,
+            "name": name,
+            "description": category_admin._normalize_description(str(self.description_input.value or "")),
+            "intake_type": intake_type,
+            "match_keywords": category_admin._normalize_keywords(str(self.keywords_input.value or "")),
+            "is_default": len(rows) == 0,
+            "sort_order": (len(rows) + 1) * 10,
+        }
+        ok = await category_admin._insert_category(payload)
+        if ok and payload["is_default"]:
+            await category_admin._set_default(guild.id, slug)
+        await _send_category_result(interaction, guild=guild, title="✅ Category Created" if ok else "🚫 Category Not Created", message=(f"Created `{slug}`." if ok else "Database insert failed."), ok=ok)
+
+
+class EditTicketCategoryModal(discord.ui.Modal):
+    def __init__(self, *, row: dict[str, Any]) -> None:
+        self.row = row
+        slug = str(row.get("slug") or "")
+        super().__init__(title=f"Edit {slug[:35]}")
+        self.name_input = discord.ui.TextInput(label="Display name", default=str(row.get("name") or slug)[:120], required=False, max_length=120)
+        self.type_input = discord.ui.TextInput(label="Type", default=str(row.get("intake_type") or "general")[:40], required=False, max_length=40)
+        self.keywords_input = discord.ui.TextInput(label="Routing keywords", default=", ".join(str(x) for x in (row.get("match_keywords") or []))[:300], required=False, max_length=300)
+        self.description_input = discord.ui.TextInput(label="Description", default=str(row.get("description") or "")[:500], required=False, style=discord.TextStyle.paragraph, max_length=500)
+        self.sort_input = discord.ui.TextInput(label="Sort order", default=str(row.get("sort_order") if row.get("sort_order") is not None else ""), required=False, max_length=8)
+        self.add_item(self.name_input)
+        self.add_item(self.type_input)
+        self.add_item(self.keywords_input)
+        self.add_item(self.description_input)
+        self.add_item(self.sort_input)
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        if not await _require_setup_permission(interaction):
+            return
+        guild = interaction.guild
+        if guild is None:
+            return await interaction.response.send_message("❌ This must be used inside a server.", ephemeral=True)
+        await _safe_defer_modal(interaction)
+        from . import ticket_category_admin as category_admin
+
+        slug = category_admin._safe_str(self.row.get("slug"))
+        patch: dict[str, Any] = {}
+        name = category_admin._normalize_name(str(self.name_input.value or ""))
+        if name:
+            patch["name"] = name
+        intake_type = category_admin._safe_str(str(self.type_input.value or "general"), "general").lower()
+        if intake_type not in category_admin._ALLOWED_INTAKE_TYPES:
+            return await _send_category_result(interaction, guild=guild, title="🚫 Category Not Updated", message=f"Invalid type. Use one of: {category_admin._human_intake_types()}", ok=False)
+        patch["intake_type"] = intake_type
+        patch["match_keywords"] = category_admin._normalize_keywords(str(self.keywords_input.value or ""))
+        patch["description"] = category_admin._normalize_description(str(self.description_input.value or ""))
+        sort_raw = str(self.sort_input.value or "").strip()
+        if sort_raw:
+            try:
+                sort_value: Optional[int] = int(sort_raw)
+            except Exception:
+                return await _send_category_result(interaction, guild=guild, title="🚫 Category Not Updated", message="Sort order must be a number.", ok=False)
+            sort_clean = category_admin._validated_sort_order(sort_value)
+            if sort_clean is None:
+                return await _send_category_result(interaction, guild=guild, title="🚫 Category Not Updated", message=f"Sort order must be between `{category_admin._MIN_SORT_ORDER}` and `{category_admin._MAX_SORT_ORDER}`.", ok=False)
+            patch["sort_order"] = sort_clean
+        ok = await category_admin._update_category(guild.id, slug, patch)
+        await _send_category_result(interaction, guild=guild, title="✅ Category Updated" if ok else "🚫 Category Not Updated", message=(f"Updated `{slug}`." if ok else "Database update failed."), ok=ok)
 
 
 async def _setup_callback(interaction: discord.Interaction) -> None:
