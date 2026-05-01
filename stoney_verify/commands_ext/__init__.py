@@ -157,11 +157,12 @@ _STALE_TOP_LEVEL_COMMANDS: Tuple[str, ...] = (
     "ticket_panel_bootstrap_stop",
 )
 
-# Direct /stoney children that should be nested before sync. This fixes the
-# real TicketTool-style problem: /stoney had too many direct children, so newer
-# ones such as /stoney commands could disappear or fail to surface reliably.
-_STONEY_SETUP_RENAMES: Dict[str, str] = {
-    "setup": "start",
+# Direct /stoney children that should be nested before sync. Keep /stoney setup
+# as the single obvious quick-start command. Advanced setup/config commands are
+# moved under /stoney config ..., and readiness checks are moved under
+# /stoney audit ... . This is the TicketTool-style surface: one obvious setup
+# command, with deeper controls tucked away.
+_STONEY_CONFIG_RENAMES: Dict[str, str] = {
     "setup-tickets": "tickets",
     "setup-verify": "verify",
     "setup-logs": "logs",
@@ -380,7 +381,7 @@ def _move_stoney_command(stoney_group: Any, target_group: Any, old_name: str, ne
         return False
 
     # Do not move an already-grouped target group into itself.
-    if old_name in {"setup", "audit"} and hasattr(command, "commands"):
+    if old_name in {"config", "audit"} and hasattr(command, "commands"):
         return False
 
     try:
@@ -419,15 +420,16 @@ def _stoney_direct_child_names(stoney_group: Any) -> list[str]:
 
 
 def _consolidate_stoney_command_surface() -> None:
-    """Nest crowded /stoney commands into setup/audit groups.
+    """Nest crowded /stoney commands into config/audit groups.
 
     This is intentionally centralized here instead of rewriting every public
     setup module. Older modules can keep registering their direct commands; the
     loader then normalizes the surface right before sync. This keeps the public
     command UI stable and prevents /stoney from hitting Discord's child limit.
+
+    Important: /stoney setup remains a direct, single quick-start command.
     """
     try:
-        from discord import app_commands
         from .public_setup_group import stoney_group
     except Exception as e:
         print(f"⚠️ commands_ext could not load /stoney group for consolidation: {repr(e)}")
@@ -436,10 +438,10 @@ def _consolidate_stoney_command_surface() -> None:
     try:
         before = _stoney_direct_child_names(stoney_group)
 
-        setup_group = _ensure_stoney_child_group(
+        config_group = _ensure_stoney_child_group(
             stoney_group,
-            name="setup",
-            description="Setup, config, and database checks.",
+            name="config",
+            description="Advanced setup, config, and database checks.",
         )
         audit_group = _ensure_stoney_child_group(
             stoney_group,
@@ -448,16 +450,16 @@ def _consolidate_stoney_command_surface() -> None:
         )
 
         moved: list[str] = []
-        for old_name, new_name in _STONEY_SETUP_RENAMES.items():
-            if _move_stoney_command(stoney_group, setup_group, old_name, new_name):
-                moved.append(f"{old_name}->setup {new_name}")
+        for old_name, new_name in _STONEY_CONFIG_RENAMES.items():
+            if _move_stoney_command(stoney_group, config_group, old_name, new_name):
+                moved.append(f"{old_name}->config {new_name}")
 
         for old_name, new_name in _STONEY_AUDIT_RENAMES.items():
             if _move_stoney_command(stoney_group, audit_group, old_name, new_name):
                 moved.append(f"{old_name}->audit {new_name}")
 
         # Leave these directly visible because they are the obvious public entrypoints.
-        keep_direct = {"help", "commands", "setup", "audit", "cleanup", "spam"}
+        keep_direct = {"setup", "help", "commands", "config", "audit", "cleanup", "spam"}
         remaining = set(_stoney_direct_child_names(stoney_group))
         crowded = sorted(name for name in remaining if name not in keep_direct)
 
