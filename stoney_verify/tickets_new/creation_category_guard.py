@@ -3,12 +3,14 @@ from __future__ import annotations
 """
 Ticket creation category guard.
 
-This replaces the old root-level runtime_ticket_creation_native_category_patch.py.
-It keeps ticket creation pointed at the configured per-guild Active Tickets
-category while the larger ticket service continues being simplified.
+Keeps ticket creation pointed at the configured per-guild Active Tickets category
+while remaining compatible with older panel callers and newer service signatures.
 
-Kept inside stoney_verify/tickets_new so the behavior lives with ticket code,
-not as root-folder duct tape.
+Important compatibility rule:
+Some panel/intake paths still call create_ticket_channel(..., parent_category=...).
+The current service may not accept that keyword. This guard translates/removes
+legacy category kwargs before calling the real service so public ticket creation
+cannot fail with an unexpected-keyword TypeError.
 """
 
 import builtins
@@ -21,6 +23,9 @@ import discord
 _ORIGINAL_IMPORT = builtins.__import__
 _PATCHED: set[str] = set()
 _PATCHING = False
+
+_CATEGORY_OBJECT_KWARGS = ("parent_category", "category", "parent")
+_CATEGORY_ID_KWARGS = ("parent_category_id", "explicit_parent_category_id", "ticket_category_id")
 
 
 def _log(message: str) -> None:
@@ -71,18 +76,52 @@ def _guild_from_call(args: tuple[Any, ...], kwargs: dict[str, Any]) -> Optional[
         kwargs.get("member"),
         kwargs.get("interaction"),
         kwargs.get("channel"),
+        kwargs.get("parent_category"),
+        kwargs.get("category"),
+        kwargs.get("parent"),
         *list(args),
     )
 
 
+def _signature_parameters(fn: Any) -> dict[str, inspect.Parameter]:
+    try:
+        return dict(inspect.signature(fn).parameters)
+    except Exception:
+        return {}
+
+
 def _signature_accepts(fn: Any, name: str) -> bool:
     try:
-        sig = inspect.signature(fn)
-        if name in sig.parameters:
+        params = _signature_parameters(fn)
+        if name in params:
             return True
-        return any(p.kind == inspect.Parameter.VAR_KEYWORD for p in sig.parameters.values())
+        return any(p.kind == inspect.Parameter.VAR_KEYWORD for p in params.values())
     except Exception:
         return False
+
+
+def _signature_accepts_kwargs(fn: Any) -> bool:
+    try:
+        return any(p.kind == inspect.Parameter.VAR_KEYWORD for p in _signature_parameters(fn).values())
+    except Exception:
+        return False
+
+
+def _category_from_kwargs(kwargs: dict[str, Any]) -> Optional[discord.CategoryChannel]:
+    for name in _CATEGORY_OBJECT_KWARGS:
+        value = kwargs.get(name)
+        if isinstance(value, discord.CategoryChannel):
+            return value
+    return None
+
+
+def _category_id_from_kwargs(kwargs: dict[str, Any]) -> int:
+    for name in _CATEGORY_ID_KWARGS:
+        cid = _safe_int(kwargs.get(name), 0)
+        if cid > 0:
+            return cid
+    category = _category_from_kwargs(kwargs)
+    return int(category.id) if category is not None else 0
 
 
 async def _configured_active_category(guild: discord.Guild) -> discord.CategoryChannel:
@@ -92,16 +131,39 @@ async def _configured_active_category(guild: discord.Guild) -> discord.CategoryC
     return resolved.category
 
 
+def _remove_unsupported_category_kwargs(fn: Any, kwargs: dict[str, Any]) -> None:
+    """Drop legacy category kwargs the real service does not accept.
+
+    The wrapper itself accepts every kwarg, so callers can still pass legacy names.
+    The original service should only receive names its signature actually accepts.
+    """
+    if _signature_accepts_kwargs(fn):
+        return
+    for name in (*_CATEGORY_OBJECT_KWARGS, *_CATEGORY_ID_KWARGS):
+        if not _signature_accepts(fn, name):
+            kwargs.pop(name, None)
+
+
 def _set_category_kwargs(fn: Any, kwargs: dict[str, Any], category: discord.CategoryChannel) -> None:
+    """Translate the resolved Discord category into whatever the service accepts."""
     cid = int(category.id)
-    for name in ("parent_category", "category"):
+
+    existing_category = _category_from_kwargs(kwargs) or category
+    existing_cid = _category_id_from_kwargs(kwargs) or cid
+
+    # Prefer object kwargs when the service supports them.
+    for name in _CATEGORY_OBJECT_KWARGS:
         if _signature_accepts(fn, name) and not kwargs.get(name):
-            kwargs[name] = category
-    if _signature_accepts(fn, "parent") and not kwargs.get("parent"):
-        kwargs["parent"] = category
-    for name in ("parent_category_id", "explicit_parent_category_id", "ticket_category_id"):
+            kwargs[name] = existing_category
+            break
+
+    # Also support ID-based service signatures.
+    for name in _CATEGORY_ID_KWARGS:
         if _signature_accepts(fn, name) and not kwargs.get(name):
-            kwargs[name] = cid
+            kwargs[name] = existing_cid
+            break
+
+    _remove_unsupported_category_kwargs(fn, kwargs)
 
 
 def _result_channel(result: Any, guild: discord.Guild) -> Optional[discord.TextChannel]:
@@ -140,6 +202,7 @@ def _patch_service(module: Any) -> None:
         async def create_ticket_channel_native_category(*args: Any, **kwargs: Any) -> Any:
             guild = _guild_from_call(args, kwargs)
             if guild is None:
+                _remove_unsupported_category_kwargs(original, kwargs)
                 return await original(*args, **kwargs)
 
             category = await _configured_active_category(guild)
