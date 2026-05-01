@@ -11,6 +11,12 @@ Some panel/intake paths still call create_ticket_channel(..., parent_category=..
 The current service may not accept that keyword. This guard translates/removes
 legacy category kwargs before calling the real service so public ticket creation
 cannot fail with an unexpected-keyword TypeError.
+
+Why this file is strict about legacy kwargs:
+Other runtime wrappers may accept **kwargs but simply pass them deeper. If this
+guard leaves parent_category in kwargs just because an intermediate wrapper has
+**kwargs, the deepest service can still crash. Therefore legacy Discord category
+kwargs are only preserved when the immediate callable explicitly names them.
 """
 
 import builtins
@@ -24,8 +30,11 @@ _ORIGINAL_IMPORT = builtins.__import__
 _PATCHED: set[str] = set()
 _PATCHING = False
 
-_CATEGORY_OBJECT_KWARGS = ("parent_category", "category", "parent")
+# Do not treat `category` as a Discord parent category. In the ticket service it
+# usually means the logical ticket category slug, such as verification_issue.
+_CATEGORY_OBJECT_KWARGS = ("parent_category", "parent")
 _CATEGORY_ID_KWARGS = ("parent_category_id", "explicit_parent_category_id", "ticket_category_id")
+_ALL_LEGACY_PARENT_KWARGS = (*_CATEGORY_OBJECT_KWARGS, *_CATEGORY_ID_KWARGS)
 
 
 def _log(message: str) -> None:
@@ -77,7 +86,6 @@ def _guild_from_call(args: tuple[Any, ...], kwargs: dict[str, Any]) -> Optional[
         kwargs.get("interaction"),
         kwargs.get("channel"),
         kwargs.get("parent_category"),
-        kwargs.get("category"),
         kwargs.get("parent"),
         *list(args),
     )
@@ -90,19 +98,9 @@ def _signature_parameters(fn: Any) -> dict[str, inspect.Parameter]:
         return {}
 
 
-def _signature_accepts(fn: Any, name: str) -> bool:
+def _signature_explicitly_accepts(fn: Any, name: str) -> bool:
     try:
-        params = _signature_parameters(fn)
-        if name in params:
-            return True
-        return any(p.kind == inspect.Parameter.VAR_KEYWORD for p in params.values())
-    except Exception:
-        return False
-
-
-def _signature_accepts_kwargs(fn: Any) -> bool:
-    try:
-        return any(p.kind == inspect.Parameter.VAR_KEYWORD for p in _signature_parameters(fn).values())
+        return name in _signature_parameters(fn)
     except Exception:
         return False
 
@@ -112,6 +110,9 @@ def _category_from_kwargs(kwargs: dict[str, Any]) -> Optional[discord.CategoryCh
         value = kwargs.get(name)
         if isinstance(value, discord.CategoryChannel):
             return value
+    value = kwargs.get("category")
+    if isinstance(value, discord.CategoryChannel):
+        return value
     return None
 
 
@@ -131,39 +132,41 @@ async def _configured_active_category(guild: discord.Guild) -> discord.CategoryC
     return resolved.category
 
 
-def _remove_unsupported_category_kwargs(fn: Any, kwargs: dict[str, Any]) -> None:
-    """Drop legacy category kwargs the real service does not accept.
+def _strip_legacy_parent_kwargs(fn: Any, kwargs: dict[str, Any]) -> None:
+    """Remove legacy Discord-parent kwargs unless explicitly supported.
 
-    The wrapper itself accepts every kwarg, so callers can still pass legacy names.
-    The original service should only receive names its signature actually accepts.
+    Do not keep these just because the callable has **kwargs. Several wrappers
+    accept **kwargs for flexibility but do not consume parent_category; they pass
+    it onward until the real service throws TypeError.
     """
-    if _signature_accepts_kwargs(fn):
-        return
-    for name in (*_CATEGORY_OBJECT_KWARGS, *_CATEGORY_ID_KWARGS):
-        if not _signature_accepts(fn, name):
+    removed: list[str] = []
+    for name in _ALL_LEGACY_PARENT_KWARGS:
+        if name in kwargs and not _signature_explicitly_accepts(fn, name):
             kwargs.pop(name, None)
+            removed.append(name)
+    if removed:
+        _log(f"stripped legacy parent kwargs before service call: {removed}")
 
 
 def _set_category_kwargs(fn: Any, kwargs: dict[str, Any], category: discord.CategoryChannel) -> None:
-    """Translate the resolved Discord category into whatever the service accepts."""
+    """Translate the resolved Discord category into whatever the service explicitly accepts."""
     cid = int(category.id)
-
     existing_category = _category_from_kwargs(kwargs) or category
     existing_cid = _category_id_from_kwargs(kwargs) or cid
 
-    # Prefer object kwargs when the service supports them.
+    # Never overwrite `category` because it is the logical ticket category slug
+    # in the modern service/panel path.
     for name in _CATEGORY_OBJECT_KWARGS:
-        if _signature_accepts(fn, name) and not kwargs.get(name):
+        if _signature_explicitly_accepts(fn, name) and not kwargs.get(name):
             kwargs[name] = existing_category
             break
 
-    # Also support ID-based service signatures.
     for name in _CATEGORY_ID_KWARGS:
-        if _signature_accepts(fn, name) and not kwargs.get(name):
+        if _signature_explicitly_accepts(fn, name) and not kwargs.get(name):
             kwargs[name] = existing_cid
             break
 
-    _remove_unsupported_category_kwargs(fn, kwargs)
+    _strip_legacy_parent_kwargs(fn, kwargs)
 
 
 def _result_channel(result: Any, guild: discord.Guild) -> Optional[discord.TextChannel]:
@@ -202,13 +205,27 @@ def _patch_service(module: Any) -> None:
         async def create_ticket_channel_native_category(*args: Any, **kwargs: Any) -> Any:
             guild = _guild_from_call(args, kwargs)
             if guild is None:
-                _remove_unsupported_category_kwargs(original, kwargs)
+                _strip_legacy_parent_kwargs(original, kwargs)
                 return await original(*args, **kwargs)
 
             category = await _configured_active_category(guild)
             _set_category_kwargs(original, kwargs, category)
 
-            result = await original(*args, **kwargs)
+            try:
+                result = await original(*args, **kwargs)
+            except TypeError as e:
+                # One final defensive cleanup for wrapper chains that explicitly
+                # accepted a parent kwarg but passed it to a deeper service that
+                # rejected it.
+                message = str(e)
+                if "unexpected keyword argument" in message and any(name in message for name in _ALL_LEGACY_PARENT_KWARGS):
+                    retry_kwargs = dict(kwargs)
+                    for name in _ALL_LEGACY_PARENT_KWARGS:
+                        retry_kwargs.pop(name, None)
+                    _warn(f"retrying ticket create after stripping parent kwargs due to TypeError: {message[:220]}")
+                    result = await original(*args, **retry_kwargs)
+                else:
+                    raise
 
             # Strict sanity check: ticket creation must land in the configured
             # active category. If the original service ignores the category
@@ -247,8 +264,6 @@ def _patch_service(module: Any) -> None:
 
 def _patch_panel(module: Any) -> None:
     key = "panel:create_ticket_channel_reference"
-    if key in _PATCHED:
-        return
     try:
         service = sys.modules.get("stoney_verify.tickets_new.service")
         if service is not None and callable(getattr(service, "create_ticket_channel", None)):
