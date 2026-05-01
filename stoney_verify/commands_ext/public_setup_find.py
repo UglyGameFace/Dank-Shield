@@ -22,21 +22,6 @@ from .public_setup_group import (
 )
 
 
-# ============================================================
-# public_setup_find.py
-# ------------------------------------------------------------
-# Production setup fallback for Discord's native pickers.
-#
-# Why this exists:
-# Discord's native ChannelSelect / RoleSelect UI is client-filtered and can omit
-# items depending on channel type, visibility, mobile rendering, and search quirks.
-# This command searches the bot's full guild cache, shows safe typed results, and
-# writes the selected value only after validating the resource.
-#
-# This is intentionally generic and config-driven. No server-specific IDs.
-# ============================================================
-
-
 @dataclass(frozen=True)
 class SetupTarget:
     key: str
@@ -314,7 +299,7 @@ class SetupSearchSelect(discord.ui.Select):
     async def callback(self, interaction: discord.Interaction) -> None:
         view = self.view
         if not isinstance(view, SetupSearchResultView):
-            return await interaction.response.send_message("❌ Search view state expired. Run `/stoney setup-find` again.", ephemeral=True)
+            return await interaction.response.send_message("❌ Search view state expired. Run `/stoney setup` again.", ephemeral=True)
         await view.apply(interaction, int(self.values[0]))
 
 
@@ -362,7 +347,7 @@ class SetupSearchResultView(discord.ui.View):
         embed.add_field(name="Selected", value=f"{_mention(obj)} (`{int(obj.id)}`)", inline=False)
         if warnings:
             embed.add_field(name="Warnings", value="\n".join(f"• {item}" for item in warnings), inline=False)
-        embed.set_footer(text="Run /stoney health after setup changes to verify the full configuration.")
+        embed.set_footer(text="Run /stoney setup after setup changes to verify the full configuration.")
         await interaction.response.edit_message(embed=embed, view=None)
 
 
@@ -407,13 +392,10 @@ async def setup_find(interaction: discord.Interaction, target: app_commands.Choi
 
 
 def register_public_setup_find_commands(bot: Any, tree: Any) -> None:
-    # The command is attached to stoney_group by the decorator above.
-    # public_setup_group registers the shared /stoney group with the tree.
-    _ = bot
-    _ = tree
+    _ = bot, tree
     apply_public_setup_writer_patch()
     try:
-        print("✅ public_setup_find: attached /stoney setup-find search fallback command")
+        print("✅ public_setup_find: attached advanced /stoney setup-find search fallback command")
     except Exception:
         pass
 
