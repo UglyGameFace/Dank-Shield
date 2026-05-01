@@ -42,11 +42,11 @@ STALE_TOP_LEVEL_MOVES = {
     "channel_cleanup_status": "/stoney cleanup status",
     "run_channel_cleanup": "/stoney cleanup run",
     "purge_channel_messages": "/stoney cleanup purge",
-    "ticket_setup_status": "/stoney setup-review",
-    "ticket_setup_discover": "/stoney setup-find",
-    "ticket_setup_save_discovered": "/stoney setup-picker",
-    "ticket_setup_set_channel": "/stoney setup-tickets or /stoney setup-verify",
-    "ticket_setup_set_role": "/stoney setup-tickets or /stoney setup-verify",
+    "ticket_setup_status": "/stoney setup",
+    "ticket_setup_discover": "/stoney setup",
+    "ticket_setup_save_discovered": "/stoney setup",
+    "ticket_setup_set_channel": "/stoney setup",
+    "ticket_setup_set_role": "/stoney setup",
     "ticket_panel_list": "/ticket-panel list",
     "ticket_panel_show": "/ticket-panel show",
     "ticket_panel_bind_categories": "/ticket-panel bind-categories",
@@ -113,7 +113,7 @@ def _add_field(embed: discord.Embed, name: str, value: str, *, inline: bool = Fa
 def _base_embed(section: str) -> discord.Embed:
     title_map = {
         "overview": "📚 Stoney Command Help",
-        "setup": "🧭 Stoney Setup Commands",
+        "setup": "🧭 Stoney Setup",
         "tickets": "🎫 Ticket Commands",
         "panels": "🎛️ Ticket Panel Commands",
         "verification": "✅ Verification Commands",
@@ -125,7 +125,7 @@ def _base_embed(section: str) -> discord.Embed:
         color=discord.Color.blurple(),
         timestamp=now_utc(),
     )
-    embed.set_footer(text="Boring command layout: few top-level commands, many organized subcommands.")
+    embed.set_footer(text="Boring command layout: few top-level commands, organized subcommands.")
     return embed
 
 
@@ -133,7 +133,7 @@ def _overview_embed() -> discord.Embed:
     embed = _base_embed("overview")
     embed.description = (
         "Stoney uses a TicketTool-style command layout: **small public surface, grouped tools underneath**.\n\n"
-        "Use `/stoney help section:<category>` to drill into a specific area."
+        "Start with `/stoney setup`. Use `/stoney help section:<category>` for details."
     )
     _add_field(
         embed,
@@ -154,41 +154,29 @@ def _overview_embed() -> discord.Embed:
         "`/spam_guard_status` → `/stoney spam status`\n"
         "`/grant_vr` → `/verify grant-vr`\n"
         "`/fix_unverified` → `/verify repair-unverified`\n"
+        "old setup helper commands → `/stoney setup`\n"
         "`/ticket_panel_*` → `/ticket-panel ...`\n"
         "`/channel_cleanup_*` → `/stoney cleanup ...`",
     )
-    _add_field(
-        embed,
-        "Command audit",
-        "Run `/stoney commands` to see the current top-level command count and stale alias status.",
-    )
+    _add_field(embed, "Command audit", "Run `/stoney commands` to see the loaded command count and stale alias status.")
     return embed
 
 
 def _setup_embed() -> discord.Embed:
     embed = _base_embed("setup")
-    embed.description = "Server owner/admin setup lives under `/stoney` so every server stays isolated and DB-backed."
+    embed.description = "Server owner/admin setup is intentionally one obvious command: `/stoney setup`."
     _add_field(
         embed,
         "Recommended setup flow",
-        "`/stoney setup` — guided quick-start\n"
-        "`/stoney setup-defaults` — create safe default categories/roles/channels\n"
-        "`/stoney setup-assistant` — interactive setup wizard\n"
-        "`/stoney setup-review` — review saved per-server config\n"
-        "`/stoney permission-check` — verify bot permissions/hierarchy\n"
-        "`/stoney launch-check` — production readiness check\n"
-        "`/stoney tickettool-check` — TicketTool parity audit\n"
-        "`/stoney production-audit` — brutal public launch audit",
+        "1. Run `/stoney setup`\n"
+        "2. Choose **Auto-Fix Missing Defaults** if the server is fresh\n"
+        "3. Choose **Choose Existing Items** if the server already has channels/roles\n"
+        "4. Post the ticket panel with `/ticket-panel post` when setup is ready",
     )
     _add_field(
         embed,
-        "Manual setup helpers",
-        "`/stoney setup-tickets` — ticket category/staff/transcripts\n"
-        "`/stoney setup-verify` — verification channel/roles\n"
-        "`/stoney setup-logs` — modlog/join/security logs\n"
-        "`/stoney setup-find` — search for matching channels/roles\n"
-        "`/stoney setup-picker` — dropdown setup picker\n"
-        "`/stoney setup-verify-ids` — ID fallback setup",
+        "Why it is simple",
+        "The old setup helper commands are hidden from the normal public flow. Server owners should not need to memorize `setup-*` commands.",
     )
     return embed
 
@@ -216,7 +204,7 @@ def _tickets_embed() -> discord.Embed:
 
 def _panels_embed() -> discord.Embed:
     embed = _base_embed("panels")
-    embed.description = "Panel tools are grouped under one command family so the bot can have many panel features without command spam."
+    embed.description = "Panel tools are grouped so the bot can have many panel features without command spam."
     _add_field(
         embed,
         "Panel commands",
@@ -287,15 +275,7 @@ def _utilities_embed() -> discord.Embed:
         "`/stoney cleanup run` — run configured channel cleanup\n"
         "`/stoney cleanup purge` — purge selected channel messages",
     )
-    _add_field(
-        embed,
-        "Health/config",
-        "`/stoney db-check` — DB/config diagnostics\n"
-        "`/stoney archive-backfill` — repair/archive ticket history\n"
-        "`/stoney setup-review` — config review\n"
-        "`/stoney commands` — command surface audit\n"
-        "`/stoney help` — command catalog",
-    )
+    _add_field(embed, "Health/config", "`/stoney setup` — setup health and repair\n`/stoney commands` — command surface audit\n`/stoney help` — command catalog")
     return embed
 
 
