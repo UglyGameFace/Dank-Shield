@@ -157,7 +157,37 @@ _STALE_TOP_LEVEL_COMMANDS: Tuple[str, ...] = (
     "ticket_panel_bootstrap_start",
     "ticket_panel_bootstrap_once",
     "ticket_panel_bootstrap_stop",
+    "repair_verify_ui",
+    "recompute_member_risk",
+    "recompute_all_member_risk",
 )
+
+_CONFUSING_STONEY_CHILDREN: Tuple[str, ...] = (
+    "archive-backfill",
+    "cache",
+    "config",
+    "db-check",
+    "health",
+    "launch-check",
+    "modlog-check",
+    "permission-check",
+    "production-audit",
+    "refresh-config",
+    "setup-access",
+    "setup-assistant",
+    "setup-defaults",
+    "setup-find",
+    "setup-logs",
+    "setup-picker",
+    "setup-review",
+    "setup-status",
+    "setup-tickets",
+    "setup-verify",
+    "setup-verify-ids",
+    "tickettool-check",
+)
+
+_ALLOWED_STONEY_CHILDREN = {"setup", "help", "commands", "cleanup", "spam"}
 
 
 def _csv_set(value: str) -> set[str]:
@@ -217,6 +247,10 @@ def _strict_public_guard_enabled() -> bool:
     return _env_bool("STONEY_STRICT_PUBLIC_GUARD", False) or _deployment_mode() in {"prod", "production"}
 
 
+def _public_profile_like(profile: str) -> bool:
+    return str(profile or "").strip().lower() in {"public", "minimal"}
+
+
 def _selected_command_modules() -> List[CommandModuleSpec]:
     profile = _command_profile()
     explicit = _env_csv_set("STONEY_COMMAND_MODULES")
@@ -273,6 +307,17 @@ def _tree_command_counts(tree: Any) -> tuple[int, int]:
     return int(global_count), int(guild_count)
 
 
+def _child_names(group: Any) -> list[str]:
+    try:
+        return sorted(
+            str(getattr(cmd, "name", ""))
+            for cmd in list(getattr(group, "commands", []) or [])
+            if str(getattr(cmd, "name", "")).strip()
+        )
+    except Exception:
+        return []
+
+
 def _remove_stale_top_level_commands(tree: Any, *, reason: str) -> list[str]:
     removed: list[str] = []
     for name in _STALE_TOP_LEVEL_COMMANDS:
@@ -287,6 +332,41 @@ def _remove_stale_top_level_commands(tree: Any, *, reason: str) -> list[str]:
             print(f"🧹 commands_ext removed stale top-level commands reason={reason}: {removed}")
         except Exception:
             pass
+    return removed
+
+
+def _prune_public_stoney_children(*, profile: str, reason: str) -> list[str]:
+    if not _public_profile_like(profile):
+        return []
+
+    try:
+        from .public_setup_group import stoney_group
+    except Exception:
+        return []
+
+    before = _child_names(stoney_group)
+    removed: list[str] = []
+
+    for name in _CONFUSING_STONEY_CHILDREN:
+        try:
+            if stoney_group.get_command(name) is not None:
+                stoney_group.remove_command(name)
+                removed.append(name)
+        except Exception:
+            continue
+
+    after = _child_names(stoney_group)
+    unexpected = [name for name in after if name not in _ALLOWED_STONEY_CHILDREN]
+
+    if removed or unexpected:
+        try:
+            print(
+                "🧹 commands_ext pruned /stoney during registration "
+                f"reason={reason} before={before} after={after} removed={removed} unexpected_remaining={unexpected}"
+            )
+        except Exception:
+            pass
+
     return removed
 
 
@@ -318,19 +398,9 @@ def _log_stoney_setup_surface() -> None:
     try:
         from .public_setup_group import stoney_group
 
-        child_names = sorted(
-            str(getattr(cmd, "name", ""))
-            for cmd in getattr(stoney_group, "commands", [])
-            if getattr(cmd, "name", None)
-        )
+        child_names = _child_names(stoney_group)
         setup_present = "setup" in child_names
-        advanced_aliases = [
-            name for name in child_names
-            if name.startswith("setup-") or name in {
-                "archive-backfill", "cache", "config", "db-check", "health", "launch-check",
-                "modlog-check", "permission-check", "production-audit", "refresh-config", "tickettool-check",
-            }
-        ]
+        advanced_aliases = [name for name in child_names if name in _CONFUSING_STONEY_CHILDREN]
         print(
             "🧭 commands_ext /stoney setup surface "
             f"setup_present={setup_present} advanced_aliases={advanced_aliases} direct_children={child_names}"
@@ -416,9 +486,11 @@ def register_all_commands(bot: Any, tree: Any) -> None:
 
     for module_name, function_name, label in selected_modules:
         _register_one_module(bot=bot, tree=tree, module_name=module_name, function_name=function_name, label=label, errors=errors)
+        _prune_public_stoney_children(profile=profile, reason=f"after_{module_name}")
 
     _log_stoney_setup_surface()
     _remove_stale_top_level_commands(tree, reason="after_module_registration")
+    _prune_public_stoney_children(profile=profile, reason="after_module_registration")
 
     _COMMANDS_EXT_REGISTERED = True
     final_global, final_guild = _tree_command_counts(tree)
