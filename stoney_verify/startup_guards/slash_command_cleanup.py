@@ -7,8 +7,8 @@ Why this exists:
   /spam_guard, /grant_vr, /ticket_panel_rules_set, etc. were replaced by grouped
   commands such as /stoney spam, /verify grant-vr, /ticket-panel rules set.
 - Discord keeps previously synced global commands until the next successful sync.
-- This guard strips stale top-level aliases from the local CommandTree right
-  before sync so the next successful sync removes them from Discord too.
+- This guard strips stale aliases from the local CommandTree right before sync so
+  the next successful sync removes them from Discord too.
 - It also prevents the old CLEAR_GLOBAL_COMMANDS_ON_BOOT env from accidentally
   wiping the full public command surface. A dangerous emergency wipe still exists
   behind STONEY_DANGEROUS_CLEAR_ALL_GLOBAL_COMMANDS_ON_BOOT=true.
@@ -56,6 +56,43 @@ STALE_TOP_LEVEL_COMMANDS = {
     "ticket_panel_bootstrap_stop",
 }
 
+# Public users should not see a wall of setup/debug/audit commands when they
+# type /stoney. The guided setup flow is /stoney setup. Everything else here is
+# an internal/admin helper that should not be part of the default public surface.
+# These are removed right before global sync, so the next successful sync clears
+# them from Discord's command picker.
+CONFUSING_STONEY_CHILDREN = {
+    "archive-backfill",
+    "cache",
+    "config",
+    "db-check",
+    "health",  # replaced by /stoney setup health/status inside the guided flow later
+    "launch-check",
+    "modlog-check",
+    "permission-check",
+    "production-audit",
+    "refresh-config",
+    "setup-access",
+    "setup-assistant",
+    "setup-defaults",
+    "setup-find",
+    "setup-logs",
+    "setup-picker",
+    "setup-review",
+    "setup-tickets",
+    "setup-verify",
+    "setup-verify-ids",
+    "tickettool-check",
+}
+
+ALLOWED_STONEY_CHILDREN = {
+    "setup",
+    "help",
+    "commands",
+    "spam",
+    "cleanup",
+}
+
 
 def _env_true(name: str, default: bool = False) -> bool:
     try:
@@ -88,15 +125,13 @@ def _public_scope_enabled() -> bool:
             deployment = "public"
         else:
             deployment = "development"
-    return profile in {"public", "minimal", "public-admin"} or deployment in {"public", "prod", "production"}
+    return profile in {"public", "minimal"} or deployment in {"public", "prod", "production"}
 
 
 def _guild_from_sync_args(args: tuple[Any, ...], kwargs: dict[str, Any]) -> Optional[Any]:
     try:
         if "guild" in kwargs:
             return kwargs.get("guild")
-        # CommandTree.sync signature is sync(*, guild=None). This fallback is
-        # defensive only in case a wrapper passes it positionally.
         if args:
             return args[0]
     except Exception:
@@ -112,6 +147,17 @@ def _safe_command_names(tree: app_commands.CommandTree[Any]) -> list[str]:
             return [str(cmd.name) for cmd in tree.get_commands()]
         except Exception:
             return []
+
+
+def _safe_child_names(group: Any) -> list[str]:
+    try:
+        return sorted(
+            str(getattr(cmd, "name", ""))
+            for cmd in list(getattr(group, "commands", []) or [])
+            if str(getattr(cmd, "name", "")).strip()
+        )
+    except Exception:
+        return []
 
 
 def remove_stale_top_level_commands(tree: app_commands.CommandTree[Any], *, reason: str = "manual") -> list[str]:
@@ -141,6 +187,48 @@ def remove_stale_top_level_commands(tree: app_commands.CommandTree[Any], *, reas
     return removed
 
 
+def prune_public_stoney_children(tree: app_commands.CommandTree[Any], *, reason: str = "manual") -> list[str]:
+    if not _public_scope_enabled():
+        return []
+
+    try:
+        stoney = tree.get_command("stoney", guild=None)
+    except Exception:
+        stoney = None
+
+    if stoney is None or not hasattr(stoney, "remove_command"):
+        return []
+
+    before = _safe_child_names(stoney)
+    removed: list[str] = []
+
+    for name in sorted(CONFUSING_STONEY_CHILDREN):
+        try:
+            existing = stoney.get_command(name)
+        except Exception:
+            existing = None
+        if existing is None:
+            continue
+        try:
+            stoney.remove_command(name)
+            removed.append(name)
+        except Exception:
+            continue
+
+    after = _safe_child_names(stoney)
+    unexpected = [name for name in after if name not in ALLOWED_STONEY_CHILDREN]
+
+    try:
+        print(
+            "🧹 slash_command_cleanup pruned /stoney public surface "
+            f"reason={reason} before={before} after={after} removed={removed} unexpected_remaining={unexpected}"
+        )
+    except Exception:
+        pass
+
+    return removed
+
+
 def _should_block_global_clear(guild: Optional[Any]) -> bool:
     if guild is not None:
         return False
@@ -166,6 +254,7 @@ def install_slash_command_cleanup_guard() -> None:
         guild = _guild_from_sync_args(args, kwargs)
         if guild is None:
             remove_stale_top_level_commands(self, reason="pre_global_sync")
+            prune_public_stoney_children(self, reason="pre_global_sync")
             try:
                 names = _safe_command_names(self)
                 print(f"🧹 slash_command_cleanup pre-sync global command count={len(names)} names={names}")
@@ -191,7 +280,7 @@ def install_slash_command_cleanup_guard() -> None:
 
     _PATCHED = True
     try:
-        print("🧹 slash_command_cleanup loaded; stale alias cleanup + safe global-clear guard active")
+        print("🧹 slash_command_cleanup loaded; stale alias cleanup + public /stoney surface pruning active")
     except Exception:
         pass
 
@@ -200,7 +289,10 @@ install_slash_command_cleanup_guard()
 
 
 __all__ = [
+    "ALLOWED_STONEY_CHILDREN",
+    "CONFUSING_STONEY_CHILDREN",
     "STALE_TOP_LEVEL_COMMANDS",
     "install_slash_command_cleanup_guard",
+    "prune_public_stoney_children",
     "remove_stale_top_level_commands",
 ]
