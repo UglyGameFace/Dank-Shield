@@ -124,6 +124,32 @@ async def _save_config(interaction: discord.Interaction, payload: dict[str, Any]
     invalidate_guild_config(guild.id)
 
 
+async def _safe_defer_update(interaction: discord.Interaction) -> None:
+    """Acknowledge a component press immediately so slow DB/config reads do not time out."""
+    try:
+        if not interaction.response.is_done():
+            await interaction.response.defer(thinking=False)
+    except Exception:
+        pass
+
+
+async def _edit_setup_message(interaction: discord.Interaction, *, embed: discord.Embed, view: discord.ui.View) -> None:
+    """Edit the current setup card after either a normal response or deferred component update."""
+    try:
+        if interaction.response.is_done():
+            await interaction.edit_original_response(embed=embed, view=view)
+        else:
+            await interaction.response.edit_message(embed=embed, view=view)
+        return
+    except Exception:
+        pass
+
+    try:
+        await interaction.followup.send(embed=embed, view=view, ephemeral=True)
+    except Exception:
+        pass
+
+
 def _install_cleaners(module: Any) -> None:
     try:
         if getattr(module, "_STONEY_SETUP_CLEANERS_INSTALLED", False):
@@ -188,8 +214,9 @@ class BackToSetupView(discord.ui.View):
         guild = interaction.guild
         if guild is None:
             return await interaction.response.send_message("❌ This must be used inside a server.", ephemeral=True)
+        await _safe_defer_update(interaction)
         embed, view = await _build_main_setup_payload(guild)
-        await interaction.response.edit_message(embed=embed, view=view)
+        await _edit_setup_message(interaction, embed=embed, view=view)
 
 
 class StoneySetupView(discord.ui.View):
@@ -271,10 +298,11 @@ class StoneySetupView(discord.ui.View):
             return
         if interaction.channel is None or not isinstance(interaction.channel, discord.TextChannel):
             return await interaction.response.send_message("❌ Use this inside the text channel you want as the bot status channel.", ephemeral=True)
+        await _safe_defer_update(interaction)
         await _save_config(interaction, {"status_channel_id": _snowflake(interaction.channel), "bot_status_channel_id": _snowflake(interaction.channel)})
         embed, view = await _build_main_setup_payload(interaction.guild)  # type: ignore[arg-type]
         embed.add_field(name="Saved", value=f"Bot status channel set to {interaction.channel.mention}.", inline=False)
-        await interaction.response.edit_message(embed=embed, view=view)
+        await _edit_setup_message(interaction, embed=embed, view=view)
 
     @discord.ui.button(label="Run Health Check", emoji="🩺", style=discord.ButtonStyle.secondary, custom_id="stoney_setup:health", row=2)
     async def health(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
@@ -283,8 +311,9 @@ class StoneySetupView(discord.ui.View):
         guild = interaction.guild
         if guild is None:
             return await interaction.response.send_message("❌ This must be used inside a server.", ephemeral=True)
+        await _safe_defer_update(interaction)
         embed, view = await _build_main_setup_payload(guild, title="🩺 Stoney Setup Health")
-        await interaction.response.edit_message(embed=embed, view=view)
+        await _edit_setup_message(interaction, embed=embed, view=view)
 
 
 class CustomizeSetupMenuView(BackToSetupView):
