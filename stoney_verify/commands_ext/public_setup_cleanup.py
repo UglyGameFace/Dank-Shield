@@ -6,6 +6,11 @@ This patches /stoney setup -> Recovery / Start Over with cleanup options that
 can remove one thing, only setup channels, only setup roles, only empty setup
 categories, or all detected bot-created setup items.
 
+UX rule:
+- "Reset Saved Setup Only" means database/config reset only.
+- "Full Start Over + Remove Bot Items" means database/config reset PLUS deleting
+  detected Stoney-created Discord setup channels/categories/roles.
+
 Safety rules:
 - Exact default setup names only. No guessing custom channels/roles.
 - Preview before destructive cleanup.
@@ -27,7 +32,6 @@ from . import public_setup_recovery as recovery
 from . import public_setup_solid as solid
 
 _PATCHED = False
-_ORIGINAL_RECOVERY_EMBED = None
 
 DEFAULT_ROLE_NAMES = ("Bot Manager", "Support Team", "Unverified", "Verified", "Member")
 DEFAULT_CATEGORY_NAMES = ("👋 START HERE", "🎫 ACTIVE TICKETS", "📦 TICKET ARCHIVE", "🛠️ STAFF TOOLS")
@@ -320,7 +324,7 @@ async def _delete_full_setup(guild: discord.Guild, user: discord.abc.User) -> tu
     return f"{reset_msg}\n\n{delete_msg}", bool(reset_ok and delete_ok)
 
 
-async def build_cleanup_preview_embed(guild: discord.Guild, *, title: str = "🧹 Setup Cleanup Preview") -> discord.Embed:
+async def build_cleanup_preview_embed(guild: discord.Guild, *, title: str = "🔎 Preview / Selective Cleanup") -> discord.Embed:
     candidates, skipped = collect_setup_cleanup_candidates(guild)
     embed = discord.Embed(
         title=title,
@@ -344,6 +348,7 @@ async def build_cleanup_preview_embed(guild: discord.Guild, *, title: str = "�
         ),
         inline=False,
     )
+    embed.set_footer(text="Nothing is deleted from this preview screen until you confirm.")
     return embed
 
 
@@ -351,10 +356,9 @@ class ConfirmDeleteModal(discord.ui.Modal):
     def __init__(self, *, mode: str, selected_value: str = "") -> None:
         self.mode = mode
         self.selected_value = selected_value
-        title = "Confirm Cleanup"
         expected = "DELETE SETUP" if mode == "all" else "REMOVE"
         self.expected = expected
-        super().__init__(title=title)
+        super().__init__(title="Confirm Cleanup")
         self.confirm = discord.ui.TextInput(label=f"Type {expected} to continue", placeholder=expected, min_length=len(expected), max_length=20)
         self.add_item(self.confirm)
 
@@ -519,11 +523,11 @@ class ConfirmTypeView(solid.BackToSetupView):
 
 
 class PatchedRecoveryCenterView(solid.BackToSetupView):
-    @discord.ui.button(label="Safe Start Over", emoji="🛟", style=discord.ButtonStyle.danger, custom_id="stoney_recovery:start_over", row=0)
-    async def start_over(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+    @discord.ui.button(label="Full Start Over + Remove Bot Items", emoji="🧨", style=discord.ButtonStyle.danger, custom_id="stoney_cleanup:full_start_over", row=0)
+    async def full_start_over(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         if not await solid._require_setup_permission(interaction):
             return
-        await interaction.response.send_modal(recovery.ConfirmRecoveryModal(action="start_over"))
+        await interaction.response.send_modal(ConfirmDeleteModal(mode="all"))
 
     @discord.ui.button(label="Preview / Selective Cleanup", emoji="🔎", style=discord.ButtonStyle.primary, custom_id="stoney_cleanup:preview", row=0)
     async def preview_cleanup(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
@@ -536,25 +540,31 @@ class PatchedRecoveryCenterView(solid.BackToSetupView):
         embed = await build_cleanup_preview_embed(guild)
         await solid._edit_or_followup(interaction, embed=embed, view=CleanupPreviewView())
 
-    @discord.ui.button(label="Reset Saved Channels/Roles", emoji="🧽", style=discord.ButtonStyle.secondary, custom_id="stoney_recovery:reset_config", row=1)
+    @discord.ui.button(label="Reset Saved Setup Only", emoji="🧽", style=discord.ButtonStyle.secondary, custom_id="stoney_recovery:reset_config_only", row=1)
+    async def reset_saved_setup_only(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        if not await solid._require_setup_permission(interaction):
+            return
+        await interaction.response.send_modal(recovery.ConfirmRecoveryModal(action="start_over"))
+
+    @discord.ui.button(label="Reset Saved Channels/Roles Only", emoji="🧽", style=discord.ButtonStyle.secondary, custom_id="stoney_recovery:reset_config", row=1)
     async def reset_config(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         if not await solid._require_setup_permission(interaction):
             return
         await interaction.response.send_modal(recovery.ConfirmRecoveryModal(action="reset_config"))
 
-    @discord.ui.button(label="Reset Ticket Menu Only", emoji="🧾", style=discord.ButtonStyle.secondary, custom_id="stoney_recovery:reset_menu", row=1)
+    @discord.ui.button(label="Reset Ticket Menu Only", emoji="🧾", style=discord.ButtonStyle.secondary, custom_id="stoney_recovery:reset_menu", row=2)
     async def reset_menu(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         if not await solid._require_setup_permission(interaction):
             return
         await interaction.response.send_modal(recovery.ConfirmRecoveryModal(action="reset_menu"))
 
-    @discord.ui.button(label="Restore Last Reset", emoji="↩️", style=discord.ButtonStyle.primary, custom_id="stoney_recovery:restore", row=2)
+    @discord.ui.button(label="Restore Last Saved Reset", emoji="↩️", style=discord.ButtonStyle.primary, custom_id="stoney_recovery:restore", row=2)
     async def restore(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         if not await solid._require_setup_permission(interaction):
             return
         await interaction.response.send_modal(recovery.ConfirmRecoveryModal(action="restore"))
 
-    @discord.ui.button(label="Rebuild Recommended Menu", emoji="🧱", style=discord.ButtonStyle.success, custom_id="stoney_recovery:rebuild_menu", row=2)
+    @discord.ui.button(label="Rebuild Recommended Menu", emoji="🧱", style=discord.ButtonStyle.success, custom_id="stoney_recovery:rebuild_menu", row=3)
     async def rebuild_menu(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         if not await solid._require_setup_permission(interaction):
             return
@@ -570,24 +580,56 @@ class PatchedRecoveryCenterView(solid.BackToSetupView):
 
 
 async def patched_recovery_embed(guild: discord.Guild, *, title: str = "🛟 Setup Recovery Center") -> discord.Embed:
-    builder = _ORIGINAL_RECOVERY_EMBED or recovery._build_recovery_embed
-    embed = await builder(guild, title=title)
     candidates, skipped = collect_setup_cleanup_candidates(guild)
+    embed = discord.Embed(
+        title=title,
+        description=(
+            "Use this when setup got messy, the wrong things were picked, or the owner wants to undo what Stoney created.\n\n"
+            "Pick the action that matches what you actually want. The red full-start-over button removes detected bot-created Discord setup items."
+        ),
+        color=discord.Color.gold(),
+        timestamp=now_utc(),
+    )
     embed.add_field(
-        name="Selective Discord Cleanup",
+        name="🧨 Full Start Over + Remove Bot Items",
         value=(
-            f"Detected `{len(candidates)}` removable default setup item(s) and `{len(skipped)}` skipped/manual-review item(s).\n"
-            "Use **Preview / Selective Cleanup** to remove one item, only channels, only roles, only empty setup categories, or all detected setup items."
+            "Deletes detected Stoney default setup channels/categories/roles **and** clears saved setup.\n"
+            "Use this when Fresh Server made channels/roles you do not want. Requires typing `DELETE SETUP`."
         ),
         inline=False,
     )
+    embed.add_field(
+        name="🔎 Preview / Selective Cleanup",
+        value=(
+            f"Detected `{len(candidates)}` removable default setup item(s) and `{len(skipped)}` skipped/manual-review item(s).\n"
+            "Remove one item, only channels, only roles, only empty categories, or all detected setup items."
+        ),
+        inline=False,
+    )
+    embed.add_field(
+        name="🧽 Reset Saved Setup Only",
+        value=(
+            "Clears Stoney's saved setup database values only.\n"
+            "It **does not** delete Discord channels, roles, categories, tickets, messages, or transcripts."
+        ),
+        inline=False,
+    )
+    embed.add_field(
+        name="Safety Rules",
+        value=(
+            "• Exact default setup names only.\n"
+            "• Ticket-looking channels are skipped.\n"
+            "• Categories with custom/non-default channels are skipped.\n"
+            "• Role hierarchy is checked before deleting roles."
+        ),
+        inline=False,
+    )
+    embed.set_footer(text=f"Guild {guild.id} • destructive Discord cleanup requires confirmation")
     return embed
 
 
 def _patch() -> None:
-    global _PATCHED, _ORIGINAL_RECOVERY_EMBED
-    if _ORIGINAL_RECOVERY_EMBED is None:
-        _ORIGINAL_RECOVERY_EMBED = getattr(recovery, "_build_recovery_embed", None)
+    global _PATCHED
     recovery._build_recovery_embed = patched_recovery_embed
     recovery.RecoveryCenterView = PatchedRecoveryCenterView
     _PATCHED = True
@@ -599,7 +641,7 @@ _patch()
 def register_public_setup_cleanup_commands(bot: Any, tree: Any) -> None:
     _ = bot, tree
     _patch()
-    print("✅ public_setup_cleanup: selective setup cleanup tools active")
+    print("✅ public_setup_cleanup: clear full-start-over and selective cleanup UX active")
 
 
 __all__ = ["register_public_setup_cleanup_commands", "collect_setup_cleanup_candidates"]
