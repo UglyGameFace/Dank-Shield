@@ -19,26 +19,13 @@ from ..globals import get_supabase
 from ..guild_config import get_guild_config, guild_config_cache_snapshot
 
 
-# ============================================================
-# public_setup_review.py
-# ------------------------------------------------------------
-# Adds read-only /stoney setup-review and /stoney db-check
-# commands to the public setup group.
-#
-# This module intentionally imports and extends the existing
-# /stoney group instead of creating another top-level command.
-# It adds production-friendly review/diagnostic output without
-# increasing Discord's global top-level slash command surface.
-# ============================================================
-
-
 _REVIEW_COMMAND_ATTACHED = False
 _DB_CHECK_COMMAND_ATTACHED = False
 
 
 def _status_line(blockers: List[str], warnings: List[str]) -> str:
     if blockers:
-        return "🚫 **Not ready** — fix blockers before beta/public use."
+        return "🚫 **Not ready** — run `/stoney setup` and fix the blockers before beta/public use."
     if warnings:
         return "⚠️ **Usable with warnings** — safe to test, but review the warnings."
     return "✅ **Ready** — no setup blockers or warnings found."
@@ -46,26 +33,24 @@ def _status_line(blockers: List[str], warnings: List[str]) -> str:
 
 def _next_steps(blockers: List[str], warnings: List[str]) -> list[str]:
     steps: list[str] = []
-
     joined = "\n".join(blockers + warnings).lower()
 
     if "ticket" in joined or "category" in joined or "staff" in joined or "transcript" in joined:
-        steps.append("Run `/stoney setup-tickets` to fix ticket categories, staff role, or transcript channel.")
+        steps.append("Run `/stoney setup` and use the setup buttons to repair ticket categories, staff role, or transcript channel.")
     if "verify" in joined or "role" in joined or "vc" in joined:
-        steps.append("Run `/stoney setup-verify` to fix verification channels or role hierarchy.")
+        steps.append("Run `/stoney setup` and use the setup buttons to repair verification channels or role hierarchy.")
     if "modlog" in joined or "join/exit" in joined or "raid" in joined or "log" in joined:
-        steps.append("Run `/stoney setup-logs` to fix modlog, raid/security log, or join/exit log channels.")
+        steps.append("Run `/stoney setup` and use the setup buttons to repair modlog, raid/security log, or join/exit log channels.")
     if "env/default" in joined or "fallback" in joined:
-        steps.append("Run `/stoney refresh-config`, then verify the config source says `supabase:guild_configs`.")
+        steps.append("Run `/stoney setup` so this server saves its own database-backed config instead of using fallback config.")
 
     if not steps and blockers:
-        steps.append("Fix the blockers listed above, then run `/stoney setup-review` again.")
+        steps.append("Fix the blockers listed above, then run `/stoney setup` again.")
     if not steps and warnings:
         steps.append("Warnings are allowed, but review them before inviting the bot to public/beta servers.")
     if not steps:
         steps.append("Post or refresh your ticket panel, then test ticket create/close/reopen as a staff member.")
 
-    # Preserve order while de-duping.
     out: list[str] = []
     seen: set[str] = set()
     for step in steps:
@@ -88,12 +73,11 @@ def _setup_review_embed(guild: discord.Guild, cfg: Any) -> discord.Embed:
         ),
         color=discord.Color.red() if blockers else discord.Color.gold() if warnings else discord.Color.green(),
     )
-
     embed.add_field(name="Blockers", value=_field_text(blockers, empty="✅ None"), inline=False)
     embed.add_field(name="Warnings", value=_field_text(warnings, empty="✅ None"), inline=False)
     embed.add_field(name="Passing Checks", value=_field_text(ok, empty="No passing checks reported."), inline=False)
     embed.add_field(name="Next Steps", value=_field_text(_next_steps(blockers, warnings), empty="✅ No setup actions needed."), inline=False)
-    embed.set_footer(text="Read-only review. This command does not change server config.")
+    embed.set_footer(text="Read-only review. Use /stoney setup for fixes.")
     return embed
 
 
@@ -162,15 +146,14 @@ def _db_probe_next_steps(probe: Mapping[str, Any], cfg: Any) -> list[str]:
     elif error_kind == "permission_or_rls":
         steps.append("Confirm the bot is using the service-role key server-side only. Do not expose it to the dashboard/client.")
     elif probe.get("read_ok") and not probe.get("row_found"):
-        steps.append("Run `/stoney setup-tickets`, `/stoney setup-verify`, or `/stoney setup-logs` to create this guild's config row.")
+        steps.append("Run `/stoney setup` to create this guild's config row.")
     elif probe.get("read_ok") and source.startswith("supabase:"):
-        steps.append("Database config is visible. If Discord still shows old values, run `/stoney refresh-config` and restart once.")
+        steps.append("Database config is visible. If Discord still shows old values, restart once after a clean sync.")
     elif probe.get("read_ok"):
-        steps.append("Database is readable, but runtime config is still using fallback. Run `/stoney refresh-config` and check `/stoney config`.")
+        steps.append("Database is readable, but runtime config is still using fallback. Run `/stoney setup` and check again.")
 
     if not steps:
-        steps.append("Fix the database error shown above, then run `/stoney db-check` again.")
-
+        steps.append("Fix the database error shown above, then run `/stoney setup` again.")
     return steps
 
 
@@ -193,7 +176,6 @@ def _db_check_embed(guild: discord.Guild, cfg: Any, probe: Mapping[str, Any]) ->
         ),
         color=discord.Color.green() if healthy else discord.Color.gold(),
     )
-
     embed.add_field(
         name="Connection",
         value=(
@@ -213,16 +195,13 @@ def _db_check_embed(guild: discord.Guild, cfg: Any, probe: Mapping[str, Any]) ->
         ),
         inline=False,
     )
-
     columns = probe.get("row_columns") or []
     if columns:
         embed.add_field(name="Detected Row Columns", value=_field_text([", ".join(str(x) for x in columns)], empty="None"), inline=False)
-
     if error:
         embed.add_field(name=f"DB Error ({error_kind or 'unknown'})", value=f"```txt\n{error}\n```", inline=False)
-
     embed.add_field(name="Next Steps", value=_field_text(_db_probe_next_steps(probe, cfg), empty="✅ None"), inline=False)
-    embed.set_footer(text="Read-only diagnostic. This command does not write to Supabase.")
+    embed.set_footer(text="Read-only diagnostic. Use /stoney setup for setup fixes.")
     return embed
 
 
@@ -287,22 +266,20 @@ def _attach_setup_review_command() -> None:
     global _REVIEW_COMMAND_ATTACHED
     if _REVIEW_COMMAND_ATTACHED:
         return
-
     try:
         existing = stoney_group.get_command("setup-review")
     except Exception:
         existing = None
-
     if existing is not None:
         _REVIEW_COMMAND_ATTACHED = True
         return
-
-    command = discord.app_commands.Command(
-        name="setup-review",
-        description="Review this server's Stoney setup without changing anything.",
-        callback=_setup_review_callback,
+    stoney_group.add_command(
+        discord.app_commands.Command(
+            name="setup-review",
+            description="Review this server's Stoney setup without changing anything.",
+            callback=_setup_review_callback,
+        )
     )
-    stoney_group.add_command(command)
     _REVIEW_COMMAND_ATTACHED = True
 
 
@@ -310,22 +287,20 @@ def _attach_db_check_command() -> None:
     global _DB_CHECK_COMMAND_ATTACHED
     if _DB_CHECK_COMMAND_ATTACHED:
         return
-
     try:
         existing = stoney_group.get_command("db-check")
     except Exception:
         existing = None
-
     if existing is not None:
         _DB_CHECK_COMMAND_ATTACHED = True
         return
-
-    command = discord.app_commands.Command(
-        name="db-check",
-        description="Check whether this server's saved config is visible to the bot database client.",
-        callback=_db_check_callback,
+    stoney_group.add_command(
+        discord.app_commands.Command(
+            name="db-check",
+            description="Check whether this server's saved config is visible to the bot database client.",
+            callback=_db_check_callback,
+        )
     )
-    stoney_group.add_command(command)
     _DB_CHECK_COMMAND_ATTACHED = True
 
 
@@ -334,8 +309,7 @@ _attach_db_check_command()
 
 
 def register_public_setup_review_commands(bot, tree) -> None:
-    _ = bot
-    _ = tree
+    _ = bot, tree
     _attach_setup_review_command()
     _attach_db_check_command()
     try:
