@@ -18,24 +18,24 @@ COMMAND_MODULES: List[CommandModuleSpec] = [
     ("public_join_removal_safety", "register_public_join_removal_safety", "public fresh-join stale timer cleanup listener"),
     ("public_spam_cleanup_hardening", "register_public_spam_cleanup_hardening", "public spam guard burst cleanup hardening"),
     ("public_setup_start", "register_public_setup_start_commands", "public obvious /stoney setup quick-start command"),
-    ("public_setup_review", "register_public_setup_review_commands", "public legacy /stoney setup-review compatibility alias"),
-    ("public_setup_logs", "register_public_setup_logs_commands", "public legacy /stoney setup-logs compatibility alias"),
-    ("public_setup_defaults", "register_public_setup_defaults_commands", "public legacy /stoney setup-defaults compatibility alias"),
-    ("public_setup_assistant", "register_public_setup_assistant_commands", "public legacy /stoney setup-assistant compatibility alias"),
+    ("public_setup_review", "register_public_setup_review_commands", "advanced /stoney setup-review and /stoney db-check commands"),
+    ("public_setup_logs", "register_public_setup_logs_commands", "advanced /stoney setup-logs command"),
+    ("public_setup_defaults", "register_public_setup_defaults_commands", "advanced /stoney setup-defaults command"),
+    ("public_setup_assistant", "register_public_setup_assistant_commands", "advanced /stoney setup-assistant command"),
     ("public_status_reporter", "register_public_status_reporter", "public bot status reports and heartbeat"),
     ("public_modlog_coverage", "register_public_modlog_coverage_listeners", "public supplemental modlog coverage listeners"),
-    ("public_setup_by_id", "register_public_setup_by_id_commands", "public legacy /stoney setup by ID compatibility alias"),
-    ("public_setup_picker", "register_public_setup_picker_commands", "public legacy /stoney setup-picker compatibility alias"),
-    ("public_setup_find", "register_public_setup_find_commands", "public legacy /stoney setup-find compatibility alias"),
-    ("public_archive_backfill", "register_public_archive_backfill_commands", "public grouped /stoney ticket archive backfill command"),
-    ("public_permission_check", "register_public_permission_check_commands", "public grouped /stoney runtime permission check command"),
-    ("public_launch_check", "register_public_launch_check_commands", "public grouped /stoney production launch check command"),
-    ("public_tickettool_check", "register_public_tickettool_check_commands", "public grouped /stoney TicketTool parity check command"),
-    ("public_production_audit", "register_public_production_audit_commands", "public brutal production readiness audit command"),
-    ("public_setup_group", "register_public_setup_group_commands", "public grouped /stoney setup commands"),
-    ("public_help_group", "register_public_help_group_commands", "public grouped /stoney help command catalog"),
-    ("public_cleanup_group", "register_public_cleanup_group_commands", "public grouped /stoney cleanup commands"),
-    ("public_spam_group", "register_public_spam_group_commands", "public grouped /stoney spam commands"),
+    ("public_setup_by_id", "register_public_setup_by_id_commands", "advanced /stoney setup by ID fallback command"),
+    ("public_setup_picker", "register_public_setup_picker_commands", "advanced /stoney setup-picker command"),
+    ("public_setup_find", "register_public_setup_find_commands", "advanced /stoney setup-find command"),
+    ("public_archive_backfill", "register_public_archive_backfill_commands", "advanced /stoney archive-backfill command"),
+    ("public_permission_check", "register_public_permission_check_commands", "advanced /stoney permission-check command"),
+    ("public_launch_check", "register_public_launch_check_commands", "advanced /stoney launch-check command"),
+    ("public_tickettool_check", "register_public_tickettool_check_commands", "advanced /stoney tickettool-check command"),
+    ("public_production_audit", "register_public_production_audit_commands", "advanced /stoney production-audit command"),
+    ("public_setup_group", "register_public_setup_group_commands", "public /stoney command group"),
+    ("public_help_group", "register_public_help_group_commands", "public /stoney help command catalog"),
+    ("public_cleanup_group", "register_public_cleanup_group_commands", "public /stoney cleanup commands"),
+    ("public_spam_group", "register_public_spam_group_commands", "public /stoney spam commands"),
     ("public_mod_group", "register_public_mod_group_commands", "public grouped /mod moderation commands"),
     ("public_ticket_group_clean", "register_public_ticket_group_clean_commands", "public grouped /ticket commands with native lifecycle handling"),
     ("public_ticket_delete", "register_public_ticket_delete_commands", "public grouped /ticket delete command"),
@@ -47,10 +47,10 @@ COMMAND_MODULES: List[CommandModuleSpec] = [
     ("public_setup_gate", "register_public_setup_gate", "public setup readiness gate for ticket commands"),
 
     # Optional advanced public-safe modules. They are intentionally NOT in the
-    # default public profile because Discord hard-limits public bots to 100 global
-    # commands and this deployment also has a safer 25-command sync guard.
-    # Enable only while actively doing admin work:
-    # STONEY_COMMAND_MODULES_EXTRA=ticket_panel_admin_safe,panel_bootstrap_admin
+    # default public profile because Discord hard-limits command/group children
+    # and the server-owner UX should be boring: /stoney setup first.
+    # Enable only while actively doing admin/debug work:
+    # STONEY_COMMAND_MODULES_EXTRA=public_setup_review,public_setup_picker,public_tickettool_check
     ("ticket_panel_admin_safe", "register_ticket_panel_admin_commands", "ticket panel setup/config commands"),
     ("panel_bootstrap_admin", "register_panel_bootstrap_admin_commands", "panel bootstrap/self-heal admin commands"),
     ("role_admin", "register_role_admin_commands", "legacy top-level role admin commands"),
@@ -75,10 +75,9 @@ COMMAND_MODULES: List[CommandModuleSpec] = [
 
 _LEGACY_MODULES: Tuple[str, ...] = tuple(name for name, _fn, _label in COMMAND_MODULES if not name.startswith("public_"))
 
-# Default public profile stays below the 25-command sync guard at the top-level
-# command-family layer. Setup helper aliases remain registered for now so stale
-# Discord clients do not fail while /stoney setup becomes the obvious single
-# setup entrypoint.
+# Default public profile: only the clean, boring owner/member-facing command
+# families. Advanced setup/debug aliases are opt-in through
+# STONEY_COMMAND_MODULES_EXTRA so /stoney does not become a junk drawer.
 _PUBLIC_CORE_MODULES: Tuple[str, ...] = (
     "public_staff_scope",
     "public_access_control",
@@ -86,20 +85,8 @@ _PUBLIC_CORE_MODULES: Tuple[str, ...] = (
     "public_join_removal_safety",
     "public_spam_cleanup_hardening",
     "public_setup_start",
-    "public_setup_review",
-    "public_setup_logs",
-    "public_setup_defaults",
-    "public_setup_assistant",
     "public_status_reporter",
     "public_modlog_coverage",
-    "public_setup_by_id",
-    "public_setup_picker",
-    "public_setup_find",
-    "public_archive_backfill",
-    "public_permission_check",
-    "public_launch_check",
-    "public_tickettool_check",
-    "public_production_audit",
     "public_setup_group",
     "public_help_group",
     "public_cleanup_group",
@@ -116,13 +103,25 @@ _PUBLIC_CORE_MODULES: Tuple[str, ...] = (
 )
 
 _PUBLIC_ADMIN_EXTRA_MODULES: Tuple[str, ...] = (
+    "public_setup_review",
+    "public_setup_logs",
+    "public_setup_defaults",
+    "public_setup_assistant",
+    "public_setup_by_id",
+    "public_setup_picker",
+    "public_setup_find",
+    "public_archive_backfill",
+    "public_permission_check",
+    "public_launch_check",
+    "public_tickettool_check",
+    "public_production_audit",
     "ticket_panel_admin_safe",
     "panel_bootstrap_admin",
 )
 
 COMMAND_PROFILES: Dict[str, Sequence[str]] = {
     "public": _PUBLIC_CORE_MODULES,
-    "minimal": tuple(name for name in _PUBLIC_CORE_MODULES if name not in {"public_production_audit"}),
+    "minimal": tuple(name for name in _PUBLIC_CORE_MODULES if name not in {"public_spam_group", "public_cleanup_group"}),
     "public-admin": _PUBLIC_CORE_MODULES + _PUBLIC_ADMIN_EXTRA_MODULES,
     "full": _LEGACY_MODULES,
     "dev": _LEGACY_MODULES,
@@ -325,10 +324,16 @@ def _log_stoney_setup_surface() -> None:
             if getattr(cmd, "name", None)
         )
         setup_present = "setup" in child_names
-        setup_aliases = [name for name in child_names if name.startswith("setup-")]
+        advanced_aliases = [
+            name for name in child_names
+            if name.startswith("setup-") or name in {
+                "archive-backfill", "cache", "config", "db-check", "health", "launch-check",
+                "modlog-check", "permission-check", "production-audit", "refresh-config", "tickettool-check",
+            }
+        ]
         print(
             "🧭 commands_ext /stoney setup surface "
-            f"setup_present={setup_present} legacy_aliases={setup_aliases} direct_children={child_names}"
+            f"setup_present={setup_present} advanced_aliases={advanced_aliases} direct_children={child_names}"
         )
         if not setup_present:
             print("⚠️ commands_ext /stoney setup is missing; the one-command setup entrypoint did not register.")
@@ -412,11 +417,6 @@ def register_all_commands(bot: Any, tree: Any) -> None:
     for module_name, function_name, label in selected_modules:
         _register_one_module(bot=bot, tree=tree, module_name=module_name, function_name=function_name, label=label, errors=errors)
 
-    # Do NOT rename or move live /stoney setup-* commands during startup.
-    # Discord clients can keep stale slash commands cached for a while, and
-    # moving them locally before a clean sync makes those visible stale commands
-    # fail with "The application did not respond". The public happy path remains
-    # /stoney setup; the setup-* paths are temporary compatibility aliases.
     _log_stoney_setup_surface()
     _remove_stale_top_level_commands(tree, reason="after_module_registration")
 
