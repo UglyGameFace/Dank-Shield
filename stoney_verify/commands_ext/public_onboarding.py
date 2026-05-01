@@ -95,8 +95,8 @@ def _setup_embed(guild: discord.Guild) -> discord.Embed:
     embed = discord.Embed(
         title="👋 Thanks for adding Stoney Verify",
         description=(
-            "I’m ready, but I won’t use another server’s channels or roles.\n\n"
-            "Start setup with **`/stoney setup-picker`**. It uses dropdowns for channels and roles, so you do not need to paste IDs."
+            "I’m ready, and I won’t use another server’s channels or roles.\n\n"
+            "Start setup with **`/stoney setup`**. It walks you through the safest setup path for this server."
         ),
         color=discord.Color.blurple(),
         timestamp=datetime.now(timezone.utc),
@@ -104,10 +104,10 @@ def _setup_embed(guild: discord.Guild) -> discord.Embed:
     embed.add_field(
         name="Fast setup order",
         value=(
-            "1. `/stoney setup-picker`\n"
-            "2. Configure **Tickets**, **Verification**, and **Logs**\n"
-            "3. Run `/stoney permission-check`\n"
-            "4. Use `/ticket` and `/tickets` once setup is ready"
+            "1. Run `/stoney setup`\n"
+            "2. Choose **Auto-Fix Missing Defaults** or **Choose Existing Items**\n"
+            "3. Let Stoney save this server’s ticket, verification, and log settings\n"
+            "4. Use `/ticket`, `/tickets`, and `/ticket-panel` once setup is ready"
         ),
         inline=False,
     )
