@@ -3,13 +3,10 @@ from __future__ import annotations
 import os
 from typing import Any, Callable, Dict, List, Sequence, Tuple
 
-
 _COMMANDS_EXT_REGISTERED = False
 DEFAULT_COMMAND_PROFILE = "public"
-
 CommandRegistrar = Callable[[Any, Any], None]
 CommandModuleSpec = Tuple[str, str, str]
-
 
 COMMAND_MODULES: List[CommandModuleSpec] = [
     ("public_staff_scope", "register_public_staff_scope", "public per-guild staff permission isolation"),
@@ -17,27 +14,28 @@ COMMAND_MODULES: List[CommandModuleSpec] = [
     ("public_onboarding", "register_public_onboarding_listeners", "public isolated guild join/leave onboarding lifecycle"),
     ("public_join_removal_safety", "register_public_join_removal_safety", "public fresh-join stale timer cleanup listener"),
     ("public_spam_cleanup_hardening", "register_public_spam_cleanup_hardening", "public spam guard burst cleanup hardening"),
-    ("public_setup_start", "register_public_setup_start_commands", "public obvious /stoney setup quick-start command"),
-    ("public_setup_review", "register_public_setup_review_commands", "advanced /stoney setup-review and /stoney db-check commands"),
-    ("public_setup_logs", "register_public_setup_logs_commands", "advanced /stoney setup-logs command"),
-    ("public_setup_defaults", "register_public_setup_defaults_commands", "advanced /stoney setup-defaults command"),
-    ("public_setup_assistant", "register_public_setup_assistant_commands", "advanced /stoney setup-assistant command"),
+    ("public_setup_solid", "register_public_setup_solid_commands", "hardened public /stoney setup guided flow"),
+    ("public_setup_start", "register_public_setup_start_commands", "legacy /stoney setup quick-start fallback"),
+    ("public_setup_review", "register_public_setup_review_commands", "advanced setup review commands"),
+    ("public_setup_logs", "register_public_setup_logs_commands", "advanced setup log command"),
+    ("public_setup_defaults", "register_public_setup_defaults_commands", "advanced setup defaults command"),
+    ("public_setup_assistant", "register_public_setup_assistant_commands", "advanced setup assistant command"),
     ("public_status_reporter", "register_public_status_reporter", "public bot status reports and heartbeat"),
     ("public_modlog_coverage", "register_public_modlog_coverage_listeners", "public supplemental modlog coverage listeners"),
-    ("public_setup_by_id", "register_public_setup_by_id_commands", "advanced /stoney setup by ID fallback command"),
-    ("public_setup_picker", "register_public_setup_picker_commands", "advanced /stoney setup-picker command"),
-    ("public_setup_find", "register_public_setup_find_commands", "advanced /stoney setup-find command"),
-    ("public_archive_backfill", "register_public_archive_backfill_commands", "advanced /stoney archive-backfill command"),
-    ("public_permission_check", "register_public_permission_check_commands", "advanced /stoney permission-check command"),
-    ("public_launch_check", "register_public_launch_check_commands", "advanced /stoney launch-check command"),
-    ("public_tickettool_check", "register_public_tickettool_check_commands", "advanced /stoney tickettool-check command"),
-    ("public_production_audit", "register_public_production_audit_commands", "advanced /stoney production-audit command"),
+    ("public_setup_by_id", "register_public_setup_by_id_commands", "advanced setup by ID fallback command"),
+    ("public_setup_picker", "register_public_setup_picker_commands", "advanced setup picker command"),
+    ("public_setup_find", "register_public_setup_find_commands", "advanced setup find command"),
+    ("public_archive_backfill", "register_public_archive_backfill_commands", "advanced archive backfill command"),
+    ("public_permission_check", "register_public_permission_check_commands", "advanced permission check command"),
+    ("public_launch_check", "register_public_launch_check_commands", "advanced launch check command"),
+    ("public_tickettool_check", "register_public_tickettool_check_commands", "advanced TicketTool check command"),
+    ("public_production_audit", "register_public_production_audit_commands", "advanced production audit command"),
     ("public_setup_group", "register_public_setup_group_commands", "public /stoney command group"),
     ("public_help_group", "register_public_help_group_commands", "public /stoney help command catalog"),
     ("public_cleanup_group", "register_public_cleanup_group_commands", "public /stoney cleanup commands"),
     ("public_spam_group", "register_public_spam_group_commands", "public /stoney spam commands"),
     ("public_mod_group", "register_public_mod_group_commands", "public grouped /mod moderation commands"),
-    ("public_ticket_group_clean", "register_public_ticket_group_clean_commands", "public grouped /ticket commands with native lifecycle handling"),
+    ("public_ticket_group_clean", "register_public_ticket_group_clean_commands", "public grouped /ticket commands"),
     ("public_ticket_delete", "register_public_ticket_delete_commands", "public grouped /ticket delete command"),
     ("public_tickets_group", "register_public_tickets_group_commands", "public grouped /tickets commands"),
     ("public_ticket_intake_group", "register_public_ticket_intake_group_commands", "public grouped /ticket-intake commands"),
@@ -45,18 +43,10 @@ COMMAND_MODULES: List[CommandModuleSpec] = [
     ("public_tickettool_parity_polish", "register_public_tickettool_parity_polish", "public TicketTool parity polish aliases"),
     ("public_verify_group", "register_public_verify_group_commands", "public grouped /verify role repair commands"),
     ("public_setup_gate", "register_public_setup_gate", "public setup readiness gate for ticket commands"),
-
-    # Optional advanced public-safe modules. They are intentionally NOT in the
-    # default public profile because Discord hard-limits command/group children
-    # and the server-owner UX should be boring: /stoney setup first.
-    # Enable only while actively doing admin/debug work:
-    # STONEY_COMMAND_MODULES_EXTRA=public_setup_review,public_setup_picker,public_tickettool_check
     ("ticket_panel_admin_safe", "register_ticket_panel_admin_commands", "ticket panel setup/config commands"),
     ("panel_bootstrap_admin", "register_panel_bootstrap_admin_commands", "panel bootstrap/self-heal admin commands"),
     ("role_admin", "register_role_admin_commands", "legacy top-level role admin commands"),
     ("channel_cleanup_admin", "register_channel_cleanup_admin_commands", "legacy top-level channel cleanup admin commands"),
-
-    # Legacy / full profile modules.
     ("kick_timers", "register_kick_timer_commands", "kick timer commands"),
     ("vc_flow", "register_vc_flow_commands", "VC flow commands"),
     ("ticket_admin", "register_ticket_admin_commands", "ticket admin commands"),
@@ -74,119 +64,41 @@ COMMAND_MODULES: List[CommandModuleSpec] = [
 ]
 
 _LEGACY_MODULES: Tuple[str, ...] = tuple(name for name, _fn, _label in COMMAND_MODULES if not name.startswith("public_"))
-
-# Default public profile: only the clean, boring owner/member-facing command
-# families. Advanced setup/debug aliases are opt-in through
-# STONEY_COMMAND_MODULES_EXTRA so /stoney does not become a junk drawer.
 _PUBLIC_CORE_MODULES: Tuple[str, ...] = (
-    "public_staff_scope",
-    "public_access_control",
-    "public_onboarding",
-    "public_join_removal_safety",
-    "public_spam_cleanup_hardening",
-    "public_setup_start",
-    "public_status_reporter",
-    "public_modlog_coverage",
-    "public_setup_group",
-    "public_help_group",
-    "public_cleanup_group",
-    "public_spam_group",
-    "public_mod_group",
-    "public_ticket_group_clean",
-    "public_ticket_delete",
-    "public_tickets_group",
-    "public_ticket_intake_group",
-    "public_ticket_category_group",
-    "public_tickettool_parity_polish",
-    "public_verify_group",
-    "public_setup_gate",
+    "public_staff_scope", "public_access_control", "public_onboarding", "public_join_removal_safety",
+    "public_spam_cleanup_hardening", "public_setup_solid", "public_status_reporter", "public_modlog_coverage",
+    "public_setup_group", "public_help_group", "public_cleanup_group", "public_spam_group", "public_mod_group",
+    "public_ticket_group_clean", "public_ticket_delete", "public_tickets_group", "public_ticket_intake_group",
+    "public_ticket_category_group", "public_tickettool_parity_polish", "public_verify_group", "public_setup_gate",
 )
-
 _PUBLIC_ADMIN_EXTRA_MODULES: Tuple[str, ...] = (
-    "public_setup_review",
-    "public_setup_logs",
-    "public_setup_defaults",
-    "public_setup_assistant",
-    "public_setup_by_id",
-    "public_setup_picker",
-    "public_setup_find",
-    "public_archive_backfill",
-    "public_permission_check",
-    "public_launch_check",
-    "public_tickettool_check",
-    "public_production_audit",
-    "ticket_panel_admin_safe",
-    "panel_bootstrap_admin",
+    "public_setup_start", "public_setup_review", "public_setup_logs", "public_setup_defaults", "public_setup_assistant",
+    "public_setup_by_id", "public_setup_picker", "public_setup_find", "public_archive_backfill", "public_permission_check",
+    "public_launch_check", "public_tickettool_check", "public_production_audit", "ticket_panel_admin_safe", "panel_bootstrap_admin",
 )
-
 COMMAND_PROFILES: Dict[str, Sequence[str]] = {
     "public": _PUBLIC_CORE_MODULES,
-    "minimal": tuple(name for name in _PUBLIC_CORE_MODULES if name not in {"public_spam_group", "public_cleanup_group"}),
+    "minimal": tuple(x for x in _PUBLIC_CORE_MODULES if x not in {"public_spam_group", "public_cleanup_group"}),
     "public-admin": _PUBLIC_CORE_MODULES + _PUBLIC_ADMIN_EXTRA_MODULES,
     "full": _LEGACY_MODULES,
     "dev": _LEGACY_MODULES,
 }
 
 _STALE_TOP_LEVEL_COMMANDS: Tuple[str, ...] = (
-    "spam_guard",
-    "spam_guard_status",
-    "fix_unverified",
-    "set_verified",
-    "set_resident",
-    "grant_vr",
-    "verify_diagnose",
-    "fix_unverified_member",
-    "verify_status",
-    "channel_cleanup_status",
-    "run_channel_cleanup",
-    "purge_channel_messages",
-    "ticket_setup_status",
-    "ticket_setup_discover",
-    "ticket_setup_save_discovered",
-    "ticket_setup_set_channel",
-    "ticket_setup_set_role",
-    "ticket_panel_list",
-    "ticket_panel_show",
-    "ticket_panel_bind_categories",
-    "ticket_panel_rules",
-    "ticket_panel_rules_set",
-    "ticket_panel_runtime",
-    "ticket_panel_bootstrap_status",
-    "ticket_panel_bootstrap_run",
-    "ticket_panel_bootstrap_all",
-    "ticket_panel_bootstrap_start",
-    "ticket_panel_bootstrap_once",
-    "ticket_panel_bootstrap_stop",
-    "repair_verify_ui",
-    "recompute_member_risk",
-    "recompute_all_member_risk",
+    "spam_guard", "spam_guard_status", "fix_unverified", "set_verified", "set_resident", "grant_vr", "verify_diagnose",
+    "fix_unverified_member", "verify_status", "repair_verify_ui", "recompute_member_risk", "recompute_all_member_risk",
+    "channel_cleanup_status", "run_channel_cleanup", "purge_channel_messages", "ticket_setup_status", "ticket_setup_discover",
+    "ticket_setup_save_discovered", "ticket_setup_set_channel", "ticket_setup_set_role", "ticket_panel_list", "ticket_panel_show",
+    "ticket_panel_bind_categories", "ticket_panel_rules", "ticket_panel_rules_set", "ticket_panel_runtime",
+    "ticket_panel_bootstrap_status", "ticket_panel_bootstrap_run", "ticket_panel_bootstrap_all", "ticket_panel_bootstrap_start",
+    "ticket_panel_bootstrap_once", "ticket_panel_bootstrap_stop",
 )
-
 _CONFUSING_STONEY_CHILDREN: Tuple[str, ...] = (
-    "archive-backfill",
-    "cache",
-    "config",
-    "db-check",
-    "health",
-    "launch-check",
-    "modlog-check",
-    "permission-check",
-    "production-audit",
-    "refresh-config",
-    "setup-access",
-    "setup-assistant",
-    "setup-defaults",
-    "setup-find",
-    "setup-logs",
-    "setup-picker",
-    "setup-review",
-    "setup-status",
-    "setup-tickets",
-    "setup-verify",
-    "setup-verify-ids",
+    "archive-backfill", "cache", "config", "db-check", "health", "launch-check", "modlog-check", "permission-check",
+    "production-audit", "refresh-config", "setup-access", "setup-assistant", "setup-defaults", "setup-find",
+    "setup-logs", "setup-picker", "setup-review", "setup-status", "setup-tickets", "setup-verify", "setup-verify-ids",
     "tickettool-check",
 )
-
 _ALLOWED_STONEY_CHILDREN = {"setup", "help", "commands", "cleanup", "spam"}
 
 
@@ -228,8 +140,7 @@ def _env_str(name: str, default: str = "") -> str:
 
 
 def _command_profile() -> str:
-    profile = _env_str("STONEY_COMMAND_PROFILE", DEFAULT_COMMAND_PROFILE).lower()
-    return profile or DEFAULT_COMMAND_PROFILE
+    return _env_str("STONEY_COMMAND_PROFILE", DEFAULT_COMMAND_PROFILE).lower() or DEFAULT_COMMAND_PROFILE
 
 
 def _deployment_mode() -> str:
@@ -243,10 +154,6 @@ def _deployment_mode() -> str:
     return "development"
 
 
-def _strict_public_guard_enabled() -> bool:
-    return _env_bool("STONEY_STRICT_PUBLIC_GUARD", False) or _deployment_mode() in {"prod", "production"}
-
-
 def _public_profile_like(profile: str) -> bool:
     return str(profile or "").strip().lower() in {"public", "minimal"}
 
@@ -256,64 +163,34 @@ def _selected_command_modules() -> List[CommandModuleSpec]:
     explicit = _env_csv_set("STONEY_COMMAND_MODULES")
     extra = _env_csv_set("STONEY_COMMAND_MODULES_EXTRA")
     skip = _env_csv_set("STONEY_COMMAND_MODULES_SKIP")
-    known_names = {name for name, _fn, _label in COMMAND_MODULES}
-
-    if explicit:
-        selected_names = {name for name in explicit if name in known_names}
-        unknown = sorted(explicit - known_names)
+    known = {name for name, _fn, _label in COMMAND_MODULES}
+    selected = {name for name in explicit if name in known} if explicit else set(COMMAND_PROFILES.get(profile, COMMAND_PROFILES[DEFAULT_COMMAND_PROFILE]))
+    selected |= known.intersection(extra)
+    selected -= known.intersection(skip)
+    for label, values in (("STONEY_COMMAND_MODULES", explicit), ("STONEY_COMMAND_MODULES_EXTRA", extra), ("STONEY_COMMAND_MODULES_SKIP", skip)):
+        unknown = sorted(values - known)
         if unknown:
-            print(f"⚠️ commands_ext: unknown STONEY_COMMAND_MODULES ignored: {unknown}")
-    else:
-        if profile not in COMMAND_PROFILES:
-            print(f"⚠️ commands_ext: unknown STONEY_COMMAND_PROFILE={profile!r}; falling back to {DEFAULT_COMMAND_PROFILE}")
-        selected_names = set(COMMAND_PROFILES.get(profile, COMMAND_PROFILES[DEFAULT_COMMAND_PROFILE]))
-
-    if extra:
-        unknown_extra = sorted(extra - known_names)
-        if unknown_extra:
-            print(f"⚠️ commands_ext: unknown STONEY_COMMAND_MODULES_EXTRA ignored: {unknown_extra}")
-        selected_names |= known_names.intersection(extra)
-
-    if skip:
-        unknown_skip = sorted(skip - known_names)
-        if unknown_skip:
-            print(f"⚠️ commands_ext: unknown STONEY_COMMAND_MODULES_SKIP ignored: {unknown_skip}")
-        selected_names -= known_names.intersection(skip)
-
-    return [spec for spec in COMMAND_MODULES if spec[0] in selected_names]
+            print(f"⚠️ commands_ext: unknown {label} ignored: {unknown}")
+    return [spec for spec in COMMAND_MODULES if spec[0] in selected]
 
 
 def _tree_command_counts(tree: Any) -> tuple[int, int]:
-    global_count = 0
-    guild_count = 0
     try:
         global_count = len(list(tree.get_commands(guild=None) or []))
     except Exception:
-        try:
-            commands = getattr(tree, "_global_commands", {}) or {}
-            global_count = len(commands) if isinstance(commands, dict) else 0
-        except Exception:
-            global_count = 0
+        global_count = len(getattr(tree, "_global_commands", {}) or {})
+    guild_count = 0
     try:
-        guild_commands = getattr(tree, "_guild_commands", {}) or {}
-        if isinstance(guild_commands, dict):
-            for value in guild_commands.values():
-                try:
-                    guild_count += len(value or {})
-                except Exception:
-                    pass
+        for value in (getattr(tree, "_guild_commands", {}) or {}).values():
+            guild_count += len(value or {})
     except Exception:
-        guild_count = 0
+        pass
     return int(global_count), int(guild_count)
 
 
 def _child_names(group: Any) -> list[str]:
     try:
-        return sorted(
-            str(getattr(cmd, "name", ""))
-            for cmd in list(getattr(group, "commands", []) or [])
-            if str(getattr(cmd, "name", "")).strip()
-        )
+        return sorted(str(getattr(cmd, "name", "")) for cmd in list(getattr(group, "commands", []) or []) if str(getattr(cmd, "name", "")).strip())
     except Exception:
         return []
 
@@ -326,47 +203,32 @@ def _remove_stale_top_level_commands(tree: Any, *, reason: str) -> list[str]:
                 tree.remove_command(name, guild=None)
                 removed.append(name)
         except Exception:
-            continue
-    if removed:
-        try:
-            print(f"🧹 commands_ext removed stale top-level commands reason={reason}: {removed}")
-        except Exception:
             pass
+    if removed:
+        print(f"🧹 commands_ext removed stale top-level commands reason={reason}: {removed}")
     return removed
 
 
 def _prune_public_stoney_children(*, profile: str, reason: str) -> list[str]:
     if not _public_profile_like(profile):
         return []
-
     try:
         from .public_setup_group import stoney_group
     except Exception:
         return []
-
     before = _child_names(stoney_group)
     removed: list[str] = []
-
     for name in _CONFUSING_STONEY_CHILDREN:
         try:
             if stoney_group.get_command(name) is not None:
                 stoney_group.remove_command(name)
                 removed.append(name)
         except Exception:
-            continue
-
+            pass
     after = _child_names(stoney_group)
     unexpected = [name for name in after if name not in _ALLOWED_STONEY_CHILDREN]
-
     if removed or unexpected:
-        try:
-            print(
-                "🧹 commands_ext pruned /stoney during registration "
-                f"reason={reason} before={before} after={after} removed={removed} unexpected_remaining={unexpected}"
-            )
-        except Exception:
-            pass
-
+        print(f"🧹 commands_ext pruned /stoney during registration reason={reason} before={before} after={after} removed={removed} unexpected_remaining={unexpected}")
     return removed
 
 
@@ -381,14 +243,9 @@ def _import_registrar(module_name: str, function_name: str) -> CommandRegistrar:
 def _register_one_module(*, bot: Any, tree: Any, module_name: str, function_name: str, label: str, errors: List[str]) -> None:
     before_global, before_guild = _tree_command_counts(tree)
     try:
-        registrar = _import_registrar(module_name, function_name)
-        registrar(bot, tree)
+        _import_registrar(module_name, function_name)(bot, tree)
         after_global, after_guild = _tree_command_counts(tree)
-        print(
-            f"✅ commands_ext: registered {label} module={module_name} "
-            f"global_delta={after_global - before_global} global_total={after_global} "
-            f"guild_delta={after_guild - before_guild} guild_total={after_guild}"
-        )
+        print(f"✅ commands_ext: registered {label} module={module_name} global_delta={after_global - before_global} global_total={after_global} guild_delta={after_guild - before_guild} guild_total={after_guild}")
     except Exception as e:
         errors.append(f"{module_name}: {repr(e)}")
         print(f"⚠️ commands_ext: failed registering {label}: {repr(e)}")
@@ -397,67 +254,45 @@ def _register_one_module(*, bot: Any, tree: Any, module_name: str, function_name
 def _log_stoney_setup_surface() -> None:
     try:
         from .public_setup_group import stoney_group
-
         child_names = _child_names(stoney_group)
-        setup_present = "setup" in child_names
-        advanced_aliases = [name for name in child_names if name in _CONFUSING_STONEY_CHILDREN]
-        print(
-            "🧭 commands_ext /stoney setup surface "
-            f"setup_present={setup_present} advanced_aliases={advanced_aliases} direct_children={child_names}"
-        )
-        if not setup_present:
-            print("⚠️ commands_ext /stoney setup is missing; the one-command setup entrypoint did not register.")
+        advanced = [name for name in child_names if name in _CONFUSING_STONEY_CHILDREN]
+        print(f"🧭 commands_ext /stoney setup surface setup_present={'setup' in child_names} advanced_aliases={advanced} direct_children={child_names}")
     except Exception as e:
         print(f"⚠️ commands_ext could not inspect /stoney setup surface: {repr(e)}")
-
-
-def _masked_secret_state(value: str) -> str:
-    if not value:
-        return "missing"
-    if len(value) < 16:
-        return f"present-but-too-short(len={len(value)})"
-    return f"present(len={len(value)})"
 
 
 def _public_guard_findings(profile: str) -> tuple[list[str], list[str]]:
     blockers: list[str] = []
     warnings: list[str] = []
-    deployment_mode = _deployment_mode()
+    deployment = _deployment_mode()
     require_auth = _env_bool("BOT_API_REQUIRE_AUTH", True)
     allow_insecure = _env_bool("BOT_API_ALLOW_INSECURE", False)
-    shared_secret = _env_str("BOT_API_SHARED_SECRET", "")
-    bind_host = _env_str("BOT_API_BIND_HOST", "127.0.0.1")
+    secret = _env_str("BOT_API_SHARED_SECRET", "")
+    host = _env_str("BOT_API_BIND_HOST", "127.0.0.1")
     expected_guilds = _env_int("STONEY_EXPECTED_PUBLIC_GUILDS", 1)
-    auto_shard = _env_bool("DISCORD_AUTO_SHARD", False)
-
     if profile in {"full", "dev"}:
-        msg = f"STONEY_COMMAND_PROFILE={profile!r} exposes the old top-level command surface. Use public/minimal before beta/public rollout."
-        (blockers if deployment_mode in {"public", "prod", "production"} else warnings).append(msg)
+        (blockers if deployment in {"public", "prod", "production"} else warnings).append(f"STONEY_COMMAND_PROFILE={profile!r} exposes the old top-level command surface.")
     if not require_auth:
-        msg = "BOT_API_REQUIRE_AUTH=false leaves the structured bot API unauthenticated."
-        (blockers if deployment_mode in {"public", "prod", "production"} else warnings).append(msg)
+        (blockers if deployment in {"public", "prod", "production"} else warnings).append("BOT_API_REQUIRE_AUTH=false leaves the structured bot API unauthenticated.")
     if allow_insecure:
-        msg = "BOT_API_ALLOW_INSECURE=true is local-dev only and must be false for public use."
-        (blockers if deployment_mode in {"public", "prod", "production"} else warnings).append(msg)
-    if require_auth and len(shared_secret) < 32:
-        msg = f"BOT_API_SHARED_SECRET should be a strong random secret with at least 32 characters ({_masked_secret_state(shared_secret)})."
-        (blockers if deployment_mode in {"public", "prod", "production"} else warnings).append(msg)
-    if bind_host in {"0.0.0.0", "::"} and not require_auth:
+        (blockers if deployment in {"public", "prod", "production"} else warnings).append("BOT_API_ALLOW_INSECURE=true is local-dev only and must be false for public use.")
+    if require_auth and len(secret) < 32:
+        (blockers if deployment in {"public", "prod", "production"} else warnings).append("BOT_API_SHARED_SECRET should be at least 32 characters.")
+    if host in {"0.0.0.0", "::"} and not require_auth:
         blockers.append("BOT_API_BIND_HOST is public-facing while API auth is disabled.")
-    if expected_guilds >= 100 and not auto_shard:
-        warnings.append("STONEY_EXPECTED_PUBLIC_GUILDS is 100+ but DISCORD_AUTO_SHARD is not enabled. Enable AutoShardedBot before serious public scaling.")
+    if expected_guilds >= 100 and not _env_bool("DISCORD_AUTO_SHARD", False):
+        warnings.append("STONEY_EXPECTED_PUBLIC_GUILDS is 100+ but DISCORD_AUTO_SHARD is not enabled.")
     if _env_bool("CLEAR_GLOBAL_COMMANDS_ON_BOOT", False):
-        warnings.append("CLEAR_GLOBAL_COMMANDS_ON_BOOT=true is legacy and ignored in public mode. Use STONEY_DANGEROUS_CLEAR_ALL_GLOBAL_COMMANDS_ON_BOOT=true only for an intentional one-time wipe.")
+        warnings.append("CLEAR_GLOBAL_COMMANDS_ON_BOOT=true is legacy and ignored in public mode.")
     if _env_str("GUILD_ID", ""):
-        warnings.append("GUILD_ID is still set. That is fine for beta or fallback mode, but production behavior should rely on per-guild DB config.")
+        warnings.append("GUILD_ID is still set. Production behavior should rely on per-guild DB config.")
     return blockers, warnings
 
 
 def _run_public_startup_guard(profile: str) -> None:
     blockers, warnings = _public_guard_findings(profile)
-    deployment_mode = _deployment_mode()
-    strict = _strict_public_guard_enabled()
-    print(f"🧯 public_startup_guard deployment={deployment_mode} profile={profile} strict={strict} blockers={len(blockers)} warnings={len(warnings)}")
+    strict = _env_bool("STONEY_STRICT_PUBLIC_GUARD", False) or _deployment_mode() in {"prod", "production"}
+    print(f"🧯 public_startup_guard deployment={_deployment_mode()} profile={profile} strict={strict} blockers={len(blockers)} warnings={len(warnings)}")
     for item in blockers:
         print(f"🚫 public_startup_guard blocker: {item}")
     for item in warnings:
@@ -471,32 +306,25 @@ def register_all_commands(bot: Any, tree: Any) -> None:
     if _COMMANDS_EXT_REGISTERED:
         print("ℹ️ commands_ext.register_all_commands already ran; skipping duplicate registration.")
         return
-
     errors: list[str] = []
     profile = _command_profile()
     _run_public_startup_guard(profile)
-
     _remove_stale_top_level_commands(tree, reason="before_module_registration")
-
     selected_modules = _selected_command_modules()
     selected_names = [name for name, _fn, _label in selected_modules]
     skipped_names = [name for name, _fn, _label in COMMAND_MODULES if name not in set(selected_names)]
     before_global, before_guild = _tree_command_counts(tree)
     print(f"🧩 commands_ext profile profile={profile} selected={selected_names} skipped={skipped_names} initial_global={before_global} initial_guild={before_guild}")
-
     for module_name, function_name, label in selected_modules:
         _register_one_module(bot=bot, tree=tree, module_name=module_name, function_name=function_name, label=label, errors=errors)
         _prune_public_stoney_children(profile=profile, reason=f"after_{module_name}")
-
     _log_stoney_setup_surface()
     _remove_stale_top_level_commands(tree, reason="after_module_registration")
     _prune_public_stoney_children(profile=profile, reason="after_module_registration")
-
     _COMMANDS_EXT_REGISTERED = True
     final_global, final_guild = _tree_command_counts(tree)
-
     if final_global >= 95:
-        print(f"⚠️ commands_ext command budget high: global={final_global}/100. Use STONEY_COMMAND_PROFILE=public or minimal before public rollout.")
+        print(f"⚠️ commands_ext command budget high: global={final_global}/100.")
     if errors:
         print(f"⚠️ commands_ext registration completed with errors final_global={final_global} final_guild={final_guild}:")
         for item in errors:
