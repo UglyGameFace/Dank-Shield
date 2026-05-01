@@ -17,6 +17,7 @@ COMMAND_MODULES: List[CommandModuleSpec] = [
     ("public_setup_solid", "register_public_setup_solid_commands", "hardened public /stoney setup guided flow"),
     ("public_setup_recommend", "register_public_setup_recommend_commands", "self-explanatory setup UX"),
     ("public_setup_recovery", "register_public_setup_recovery_commands", "setup recovery/start-over center"),
+    ("public_setup_cleanup", "register_public_setup_cleanup_commands", "selective setup cleanup tools"),
     ("public_setup_start", "register_public_setup_start_commands", "legacy /stoney setup quick-start fallback"),
     ("public_setup_review", "register_public_setup_review_commands", "advanced setup review commands"),
     ("public_setup_logs", "register_public_setup_logs_commands", "advanced setup log command"),
@@ -68,7 +69,7 @@ COMMAND_MODULES: List[CommandModuleSpec] = [
 _LEGACY_MODULES: Tuple[str, ...] = tuple(name for name, _fn, _label in COMMAND_MODULES if not name.startswith("public_"))
 _PUBLIC_CORE_MODULES: Tuple[str, ...] = (
     "public_staff_scope", "public_access_control", "public_onboarding", "public_join_removal_safety",
-    "public_spam_cleanup_hardening", "public_setup_solid", "public_setup_recommend", "public_setup_recovery",
+    "public_spam_cleanup_hardening", "public_setup_solid", "public_setup_recommend", "public_setup_recovery", "public_setup_cleanup",
     "public_status_reporter", "public_modlog_coverage", "public_setup_group", "public_help_group",
     "public_cleanup_group", "public_spam_group", "public_mod_group", "public_ticket_group_clean",
     "public_ticket_delete", "public_tickets_group", "public_ticket_intake_group", "public_ticket_category_group",
