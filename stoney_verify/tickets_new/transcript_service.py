@@ -3,15 +3,16 @@ from __future__ import annotations
 import asyncio
 import html
 import io
+import os
 import re
 import time
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, Dict, List, Optional, Tuple
 
 import discord
 
 from .. import globals as app_globals
-from ..globals import TRANSCRIPTS_CHANNEL_ID, now_utc
+from ..globals import bot, now_utc
 from .service import attach_transcript_to_ticket, mark_ticket_deleted
 
 try:
@@ -31,6 +32,12 @@ except Exception:
 # - DB metadata writes cannot block channel deletion forever
 # - channel.delete() is always attempted unless Discord blocks it
 # - every public service returns a dict/tuple instead of silently dying
+#
+# Multi-guild hardening goals:
+# - transcript channel resolution must be guild-aware
+# - never fetch/post to a transcript channel that belongs to another guild
+# - support per-guild transcript channel overrides
+# - safe fallback to a same-guild transcripts channel by name
 # ============================================================
 
 _DELETE_LOCKS: Dict[str, asyncio.Lock] = {}
@@ -39,7 +46,7 @@ _LOCK_LAST_USED: Dict[str, float] = {}
 _LOCK_CLEANUP_INTERVAL_SECONDS = 600.0
 _LAST_LOCK_CLEANUP_AT = 0.0
 
-_TRANSCRIPT_MARKER = "stoney_verify:transcript_posted:v8"
+_TRANSCRIPT_MARKER = "stoney_verify:transcript_posted:v9"
 
 DEFAULT_LOCK_TIMEOUT_SECONDS = 3.0
 DEFAULT_HISTORY_TIMEOUT_SECONDS = 15.0
@@ -145,6 +152,36 @@ def _env_int(name: str, default: int = 0) -> int:
         return default
 
 
+def _env_guild_override_int(base_name: str, guild_id: int, default: int = 0) -> int:
+    """
+    Supports several env naming patterns without breaking existing single-guild envs:
+      - TRANSCRIPTS_CHANNEL_ID_<guild_id>
+      - TRANSCRIPTS_CHANNEL_ID__<guild_id>
+      - GUILD_<guild_id>_TRANSCRIPTS_CHANNEL_ID
+    """
+    try:
+        gid = int(guild_id or 0)
+    except Exception:
+        gid = 0
+
+    if gid <= 0:
+        return default
+
+    candidates = (
+        f"{base_name}_{gid}",
+        f"{base_name}__{gid}",
+        f"GUILD_{gid}_{base_name}",
+    )
+
+    for key in candidates:
+        raw = os.getenv(key, "")
+        val = _safe_int(raw, 0)
+        if val > 0:
+            return val
+
+    return default
+
+
 def _actor_id(actor: Optional[discord.abc.User]) -> Optional[int]:
     try:
         return int(actor.id) if actor is not None else None
@@ -235,6 +272,144 @@ def _render_embed_summary_text(message: discord.Message) -> str:
         return "\n".join(chunks)
     except Exception:
         return ""
+
+
+# ============================================================
+# Multi-guild transcript channel resolution
+# ============================================================
+
+def _same_guild_channel(candidate: Any, guild: discord.Guild) -> bool:
+    try:
+        return (
+            isinstance(candidate, discord.TextChannel)
+            and getattr(candidate, "guild", None) is not None
+            and int(candidate.guild.id) == int(guild.id)
+        )
+    except Exception:
+        return False
+
+
+def _candidate_transcripts_channel_ids(
+    guild: discord.Guild,
+    ticket_row: Optional[Dict[str, Any]] = None,
+) -> List[int]:
+    out: List[int] = []
+    seen: set[int] = set()
+
+    def _push(value: Any) -> None:
+        cid = _safe_int(value, 0)
+        if cid > 0 and cid not in seen:
+            seen.add(cid)
+            out.append(cid)
+
+    # Row-level transcript channel metadata wins first if it already exists.
+    if isinstance(ticket_row, dict):
+        _push(ticket_row.get("transcript_channel_id"))
+        _push(ticket_row.get("transcripts_channel_id"))
+
+    # Per-guild env override(s).
+    _push(_env_guild_override_int("TRANSCRIPTS_CHANNEL_ID", int(guild.id), 0))
+
+    # Legacy/global env fallback.
+    _push(_env_int("TRANSCRIPTS_CHANNEL_ID", 0))
+
+    return out
+
+
+def _find_same_guild_transcripts_channel_by_name(guild: discord.Guild) -> Optional[discord.TextChannel]:
+    exact_names = {
+        "transcripts",
+        "ticket-transcripts",
+        "ticket_transcripts",
+        "support-transcripts",
+        "archive-transcripts",
+    }
+
+    contains_terms = (
+        "transcript",
+        "tickets-log",
+        "ticket-log",
+    )
+
+    try:
+        # Exact match first.
+        for ch in guild.text_channels:
+            name = _safe_text(getattr(ch, "name", "")).strip().lower()
+            if name in exact_names:
+                return ch
+    except Exception:
+        pass
+
+    try:
+        # Then fuzzy contains.
+        for ch in guild.text_channels:
+            name = _safe_text(getattr(ch, "name", "")).strip().lower()
+            if any(term in name for term in contains_terms):
+                return ch
+    except Exception:
+        pass
+
+    return None
+
+
+async def _resolve_same_guild_text_channel_by_id(
+    guild: discord.Guild,
+    channel_id: int,
+) -> Optional[discord.TextChannel]:
+    cid = _safe_int(channel_id, 0)
+    if cid <= 0:
+        return None
+
+    # First: check guild-local cache.
+    try:
+        ch = guild.get_channel(cid)
+        if _same_guild_channel(ch, guild):
+            return ch
+    except Exception:
+        pass
+
+    # Second: check bot-wide cache to detect foreign-guild leakage early.
+    try:
+        bot_cached = bot.get_channel(cid)
+        if isinstance(bot_cached, discord.TextChannel):
+            if int(bot_cached.guild.id) != int(guild.id):
+                _warn(
+                    f"configured transcript channel id={cid} belongs to a different guild "
+                    f"expected_guild={guild.id} actual_guild={bot_cached.guild.id}"
+                )
+                return None
+            return bot_cached
+    except Exception:
+        pass
+
+    # Third: fetch through the guild, but treat foreign-guild resolution as invalid.
+    try:
+        fetched = await asyncio.wait_for(
+            guild.fetch_channel(cid),
+            timeout=DEFAULT_CHANNEL_DELETE_TIMEOUT_SECONDS,
+        )
+        if _same_guild_channel(fetched, guild):
+            return fetched
+        if isinstance(fetched, discord.TextChannel):
+            _warn(
+                f"fetched transcript channel id={cid} but it resolved to a different guild "
+                f"expected_guild={guild.id} actual_guild={getattr(getattr(fetched, 'guild', None), 'id', 'unknown')}"
+            )
+        return None
+    except discord.InvalidData as e:
+        _warn(
+            f"transcript channel id={cid} invalid for guild={guild.id}; "
+            f"likely belongs to a different guild error={repr(e)}"
+        )
+        return None
+    except discord.NotFound:
+        return None
+    except asyncio.TimeoutError:
+        _warn(f"timeout fetching transcript channel id={cid} guild={guild.id}")
+        return None
+    except Exception as e:
+        _warn(f"failed to fetch transcript channel id={cid} guild={guild.id} error={repr(e)}")
+        return None
 
 
 # ============================================================
@@ -535,7 +710,6 @@ async def _channel_still_exists(guild: discord.Guild, channel_id: int | str) -> 
     except discord.NotFound:
         return False
     except asyncio.TimeoutError:
-        # Timeout means we cannot prove deletion.
         return True
     except Exception:
         return True
@@ -918,29 +1092,28 @@ async def generate_transcript_files(
 # Transcript posting
 # ============================================================
 
-async def _get_transcripts_channel(guild: discord.Guild) -> Optional[discord.TextChannel]:
-    cid = _safe_int(TRANSCRIPTS_CHANNEL_ID, 0)
-    if cid <= 0:
-        _warn("TRANSCRIPTS_CHANNEL_ID missing")
-        return None
+async def _get_transcripts_channel(
+    guild: discord.Guild,
+    ticket_row: Optional[Dict[str, Any]] = None,
+) -> Optional[discord.TextChannel]:
+    candidate_ids = _candidate_transcripts_channel_ids(guild, ticket_row)
 
-    try:
-        ch = guild.get_channel(cid)
+    for cid in candidate_ids:
+        ch = await _resolve_same_guild_text_channel_by_id(guild, cid)
         if isinstance(ch, discord.TextChannel):
+            _debug(f"resolved transcripts channel guild={guild.id} channel={ch.id} source=id")
             return ch
-    except Exception:
-        pass
 
-    try:
-        fetched = await asyncio.wait_for(
-            guild.fetch_channel(cid),
-            timeout=DEFAULT_CHANNEL_DELETE_TIMEOUT_SECONDS,
-        )
-        if isinstance(fetched, discord.TextChannel):
-            return fetched
-    except Exception as e:
-        _warn(f"failed to fetch transcripts channel id={cid} error={repr(e)}")
+    # Final same-guild fallback by channel name.
+    fallback = _find_same_guild_transcripts_channel_by_name(guild)
+    if isinstance(fallback, discord.TextChannel):
+        _debug(f"resolved transcripts channel guild={guild.id} channel={fallback.id} source=name")
+        return fallback
 
+    _warn(
+        f"cannot resolve transcripts channel for guild={guild.id}; "
+        f"checked_ids={candidate_ids or []} fallback_name_search_failed=True"
+    )
     return None
 
 
@@ -1072,9 +1245,12 @@ async def post_transcript_to_channel(
             _debug(f"transcript already exists channel={channel_id} message={msg_id} transcript_channel={ch_id}")
             return None, transcript_url
 
-        transcript_channel = await _get_transcripts_channel(ticket_channel.guild)
+        transcript_channel = await _get_transcripts_channel(ticket_channel.guild, row)
         if transcript_channel is None:
-            _warn(f"cannot post transcript; transcript channel unavailable ticket_channel={channel_id}")
+            _warn(
+                f"cannot post transcript; transcript channel unavailable "
+                f"ticket_channel={channel_id} guild={ticket_channel.guild.id}"
+            )
             return None, None
 
         try:
