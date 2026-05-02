@@ -7,17 +7,20 @@ Production command rules:
 - Member-targeting tools use Discord's native member picker
 - Heavy repair tools acknowledge immediately so Discord never shows
   "The application did not respond"
+- Existing customer roles are valid. Stoney does not require roles to have been
+  created by Stoney; it can discover usable roles by name and save them.
 - Uses per-guild DB config from guild_configs through guild_config.py
 """
 
 import asyncio
+import re
 from typing import Any, Dict, Optional
 
 import discord
 from discord import app_commands
 
 from ..globals import now_utc
-from ..guild_config import get_guild_config
+from ..guild_config import get_guild_config, upsert_guild_config
 from ..tickets import is_verification_ticket_channel
 from ..tickets_new.service import find_open_ticket_for_owner
 from ..transcripts import ensure_verify_ui_present
@@ -30,6 +33,57 @@ verify_group = app_commands.Group(
 )
 
 _REGISTERED = False
+
+_ROLE_ALIASES: dict[str, tuple[str, ...]] = {
+    "unverified": (
+        "unverified",
+        "not verified",
+        "un-verified",
+        "pending verification",
+        "pending",
+        "verify required",
+        "needs verification",
+        "new member",
+        "newcomer",
+    ),
+    "verified": (
+        "verified",
+        "verify complete",
+        "verified member",
+    ),
+    "resident": (
+        "resident",
+        "member",
+        "members",
+        "community member",
+    ),
+    "staff": (
+        "staff",
+        "ticket staff",
+        "support team",
+        "support",
+        "mod",
+        "moderator",
+        "admin",
+        "dickheads",
+    ),
+    "vc_staff": (
+        "vc staff",
+        "voice staff",
+        "ticket staff",
+        "support team",
+        "support",
+        "staff",
+    ),
+}
+
+_ROLE_CONFIG_KEYS: dict[str, str] = {
+    "unverified": "unverified_role_id",
+    "verified": "verified_role_id",
+    "resident": "resident_role_id",
+    "staff": "staff_role_id",
+    "vc_staff": "vc_staff_role_id",
+}
 
 
 # ============================================================
@@ -71,6 +125,39 @@ def _cfg_value(cfg: Any, key: str) -> Any:
         return getattr(cfg, key, None)
     except Exception:
         return None
+
+
+def _normalize_role_name(name: Any) -> str:
+    text = _safe_str(name).lower()
+    text = re.sub(r"[^a-z0-9\s_\-]+", " ", text)
+    text = re.sub(r"[\s_\-]+", " ", text).strip()
+    return text
+
+
+def _find_existing_role_by_alias(guild: discord.Guild, logical_name: str) -> Optional[discord.Role]:
+    aliases = tuple(_normalize_role_name(x) for x in _ROLE_ALIASES.get(logical_name, (logical_name,)) if _safe_str(x))
+    aliases = tuple(x for x in aliases if x)
+    if not aliases:
+        return None
+
+    try:
+        roles = [role for role in guild.roles if not getattr(role, "is_default", lambda: False)()]
+    except Exception:
+        roles = list(getattr(guild, "roles", []) or [])
+
+    # Exact normalized name first.
+    for role in roles:
+        role_name = _normalize_role_name(getattr(role, "name", ""))
+        if role_name in aliases:
+            return role
+
+    # Then contains. This supports names like "❌ Unverified" or "✅ Verified".
+    for role in roles:
+        role_name = _normalize_role_name(getattr(role, "name", ""))
+        if any(alias and alias in role_name for alias in aliases):
+            return role
+
+    return None
 
 
 async def _ack(interaction: discord.Interaction) -> None:
@@ -124,22 +211,61 @@ async def _guild_or_reply(interaction: discord.Interaction) -> Optional[discord.
 
 
 async def _guild_roles(guild: discord.Guild) -> Dict[str, Optional[discord.Role]]:
-    cfg = await get_guild_config(guild.id, refresh=True)
+    """Resolve configured roles, then discover existing customer-created roles.
 
-    def role_for(key: str) -> Optional[discord.Role]:
+    Stoney must not require roles to have been created by Stoney. If a server
+    already has an Unverified/Verified/Resident/etc. role, the repair tools can
+    use it and save the discovered role id back to guild_configs.
+    """
+    cfg = await get_guild_config(guild.id, refresh=True)
+    discovered_patch: dict[str, str] = {}
+    discovery_notes: list[str] = []
+
+    def role_for_config_key(key: str) -> Optional[discord.Role]:
         rid = _safe_int(_cfg_value(cfg, key), 0)
         if rid <= 0:
             return None
         role = guild.get_role(rid)
         return role if isinstance(role, discord.Role) else None
 
-    return {
-        "unverified": role_for("unverified_role_id"),
-        "verified": role_for("verified_role_id"),
-        "resident": role_for("resident_role_id"),
-        "staff": role_for("staff_role_id"),
-        "vc_staff": role_for("vc_staff_role_id"),
-    }
+    roles: Dict[str, Optional[discord.Role]] = {}
+    for logical_name, config_key in _ROLE_CONFIG_KEYS.items():
+        role = role_for_config_key(config_key)
+        if role is None:
+            discovered = _find_existing_role_by_alias(guild, logical_name)
+            if discovered is not None:
+                role = discovered
+                discovered_patch[config_key] = str(discovered.id)
+                discovery_notes.append(f"{logical_name}={discovered.name}:{discovered.id}")
+        roles[logical_name] = role
+
+    # If VC staff is missing but staff exists, use staff as the safe fallback.
+    if roles.get("vc_staff") is None and roles.get("staff") is not None:
+        staff_role = roles.get("staff")
+        roles["vc_staff"] = staff_role
+        if staff_role is not None:
+            discovered_patch.setdefault("vc_staff_role_id", str(staff_role.id))
+
+    if discovered_patch:
+        try:
+            await upsert_guild_config(guild.id, discovered_patch)
+            try:
+                print(
+                    "✅ public_verify_group saved discovered existing verification roles "
+                    f"guild={guild.id} patch={discovered_patch} notes={discovery_notes}"
+                )
+            except Exception:
+                pass
+        except Exception as e:
+            try:
+                print(
+                    "⚠️ public_verify_group discovered existing verification roles but could not save "
+                    f"guild={guild.id} patch={discovered_patch} error={e!r}"
+                )
+            except Exception:
+                pass
+
+    return roles
 
 
 def _role_status(member: discord.Member, role: Optional[discord.Role]) -> bool:
@@ -246,12 +372,20 @@ def _status_lines(member: discord.Member, roles: Dict[str, Optional[discord.Role
     staff = roles.get("staff")
     return [
         f"👤 {member.mention} (`{member.id}`)",
-        f"⚠️ Unverified: {'YES' if _role_status(member, uv) else 'NO'}" + (f" ({uv.mention})" if uv else " (not configured)"),
-        f"✅ Verified: {'YES' if _role_status(member, verified) else 'NO'}" + (f" ({verified.mention})" if verified else " (not configured)"),
-        f"🏠 Resident: {'YES' if _role_status(member, resident) else 'NO'}" + (f" ({resident.mention})" if resident else " (not configured)"),
-        f"🛡️ Staff: {'YES' if _role_status(member, staff) else 'NO'}" + (f" ({staff.mention})" if staff else " (not configured)"),
+        f"⚠️ Unverified: {'YES' if _role_status(member, uv) else 'NO'}" + (f" ({uv.mention})" if uv else " (not configured / no matching existing role found)"),
+        f"✅ Verified: {'YES' if _role_status(member, verified) else 'NO'}" + (f" ({verified.mention})" if verified else " (not configured / no matching existing role found)"),
+        f"🏠 Resident: {'YES' if _role_status(member, resident) else 'NO'}" + (f" ({resident.mention})" if resident else " (not configured / no matching existing role found)"),
+        f"🛡️ Staff: {'YES' if _role_status(member, staff) else 'NO'}" + (f" ({staff.mention})" if staff else " (not configured / no matching existing role found)"),
         f"🧭 Needs verification: {'YES' if _needs_verification(member, roles) else 'NO'}",
     ]
+
+
+def _missing_role_message(role_name: str, aliases: tuple[str, ...]) -> str:
+    sample = ", ".join(f"`{x}`" for x in aliases[:5])
+    return (
+        f"❌ {role_name} role is not configured and I could not auto-discover an existing role.\n"
+        f"Rename/select a role like {sample}, then run `/stoney setup` → Existing Server, or run this command again."
+    )
 
 
 # ============================================================
@@ -297,7 +431,7 @@ async def verify_diagnose(interaction: discord.Interaction, user: discord.Member
     hierarchy_lines = []
     for label, role in roles.items():
         if role is None:
-            hierarchy_lines.append(f"{label}: not configured")
+            hierarchy_lines.append(f"{label}: not configured / not found")
             continue
         ok, why = _bot_can_manage_role(guild, role)
         hierarchy_lines.append(f"{label}: {'OK' if ok else why}")
@@ -316,7 +450,7 @@ async def verify_set_verified(interaction: discord.Interaction, user: discord.Me
         return
     role = (await _guild_roles(guild)).get("verified")
     if role is None:
-        return await _send(interaction, "❌ Verified role is not configured for this server.")
+        return await _send(interaction, _missing_role_message("Verified", _ROLE_ALIASES["verified"]))
     await _apply_role_change(interaction=interaction, member=user, role=role, enable=enable, reason=f"/verify set-verified by {interaction.user} ({interaction.user.id})")
 
 
@@ -331,7 +465,7 @@ async def verify_set_resident(interaction: discord.Interaction, user: discord.Me
         return
     role = (await _guild_roles(guild)).get("resident")
     if role is None:
-        return await _send(interaction, "❌ Resident role is not configured for this server.")
+        return await _send(interaction, _missing_role_message("Resident/Member", _ROLE_ALIASES["resident"]))
     await _apply_role_change(interaction=interaction, member=user, role=role, enable=enable, reason=f"/verify set-resident by {interaction.user} ({interaction.user.id})")
 
 
@@ -349,9 +483,17 @@ async def verify_grant_vr(interaction: discord.Interaction, user: discord.Member
     verified = roles.get("verified")
     resident = roles.get("resident")
     unverified = roles.get("unverified")
-    missing = [name for name, role in (("Verified", verified), ("Resident", resident)) if role is None]
+    missing = []
+    if verified is None:
+        missing.append("Verified")
+    if resident is None:
+        missing.append("Resident/Member")
     if missing:
-        return await _send(interaction, f"❌ Missing configured role(s): {', '.join(missing)}.")
+        return await _send(
+            interaction,
+            "❌ Missing configured/discoverable role(s): " + ", ".join(missing) + ".\n"
+            "Use `/stoney setup` → Existing Server to choose your existing roles, or rename roles to common names like `Verified`, `Resident`, and `Unverified`.",
+        )
 
     for role in (verified, resident, unverified):
         if role is None:
@@ -398,7 +540,7 @@ async def verify_fix_member(interaction: discord.Interaction, user: discord.Memb
     verified = roles.get("verified")
     resident = roles.get("resident")
     if unverified is None:
-        return await _send(interaction, "❌ Unverified role is not configured for this server.")
+        return await _send(interaction, _missing_role_message("Unverified", _ROLE_ALIASES["unverified"]))
 
     for role in (unverified, verified, resident):
         if role is None:
@@ -420,6 +562,7 @@ async def verify_fix_member(interaction: discord.Interaction, user: discord.Memb
             added.append(unverified)
         ticket_ch = await _maybe_repair_verify_ui_for_member(guild, user)
         lines = [f"✅ Unverified repair complete for {user.mention}."]
+        lines.append("Using role: " + unverified.mention)
         lines.append("Added: " + (", ".join(r.mention for r in added) if added else "nothing"))
         lines.append("Removed: " + (", ".join(r.mention for r in removed) if removed else "nothing"))
         if ticket_ch:
@@ -448,11 +591,11 @@ async def verify_repair_unverified(interaction: discord.Interaction) -> None:
         staff = roles.get("staff")
 
         if unverified is None:
-            return await _send(interaction, "❌ Unverified role is not configured for this server.")
+            return await _send(interaction, _missing_role_message("Unverified", _ROLE_ALIASES["unverified"]))
 
         ok, why = _bot_can_manage_role(guild, unverified)
         if not ok:
-            return await _send(interaction, f"❌ I cannot manage Unverified: {why}.")
+            return await _send(interaction, f"❌ I found {unverified.mention}, but I cannot manage it: {why}.")
 
         chunk_ok = False
         try:
@@ -502,6 +645,7 @@ async def verify_repair_unverified(interaction: discord.Interaction) -> None:
         await _send(
             interaction,
             "✅ **Unverified repair complete**\n"
+            f"- Using role: {unverified.mention}\n"
             f"- Members scanned: **{len(members)}** (`{cache_note}`)\n"
             f"- Added Unverified: **{added}**\n"
             f"- Already had Unverified: **{already_ok}**\n"
@@ -553,7 +697,7 @@ def register_public_verify_group_commands(bot: Any, tree: Any) -> None:
         _REGISTERED = True
         try:
             suffix = f" removed_legacy={removed}" if removed else ""
-            print(f"✅ public_verify_group: registered /verify grouped commands with immediate defer{suffix}")
+            print(f"✅ public_verify_group: registered /verify grouped commands with existing-role discovery{suffix}")
         except Exception:
             pass
         return
@@ -561,7 +705,7 @@ def register_public_verify_group_commands(bot: Any, tree: Any) -> None:
     _REGISTERED = True
     try:
         suffix = f" removed_legacy={removed}" if removed else ""
-        print(f"✅ public_verify_group: /verify already registered with immediate defer{suffix}")
+        print(f"✅ public_verify_group: /verify already registered with existing-role discovery{suffix}")
     except Exception:
         pass
 
