@@ -7,6 +7,8 @@ Boring/professional command strategy:
 - Verification role tools live as subcommands
 - Uses per-guild DB config from guild_configs through guild_config.py
 - Does not rely on deployment .env role IDs for public servers
+- Member-targeting commands use Discord's native member picker instead of a
+  plain string, so staff can search/select users reliably on mobile and web.
 """
 
 import asyncio
@@ -20,7 +22,7 @@ from ..guild_config import get_guild_config
 from ..tickets_new.service import find_open_ticket_for_owner
 from ..tickets import is_verification_ticket_channel
 from ..transcripts import ensure_verify_ui_present
-from .common import _staff_check, require_target_member, reply_once, safe_defer, safe_followup
+from .common import _staff_check, reply_once, safe_defer, safe_followup
 
 
 verify_group = app_commands.Group(
@@ -77,8 +79,19 @@ async def _guild_or_reply(interaction: discord.Interaction) -> Optional[discord.
 async def _guild_roles(guild: discord.Guild) -> Dict[str, Optional[discord.Role]]:
     cfg = await get_guild_config(guild.id, refresh=True)
 
+    def read_cfg(key: str) -> Any:
+        try:
+            if hasattr(cfg, "get"):
+                return cfg.get(key)
+        except Exception:
+            pass
+        try:
+            return getattr(cfg, key, None)
+        except Exception:
+            return None
+
     def role_for(key: str) -> Optional[discord.Role]:
-        rid = _safe_int(cfg.get(key), 0)
+        rid = _safe_int(read_cfg(key), 0)
         if rid <= 0:
             return None
         role = guild.get_role(rid)
@@ -219,35 +232,29 @@ def _status_lines(member: discord.Member, roles: Dict[str, Optional[discord.Role
 # ============================================================
 
 @verify_group.command(name="status", description="Show a member's verification/resident status.")
-@app_commands.describe(user="Mention, ID, username, or display name to inspect")
-async def verify_status(interaction: discord.Interaction, user: str) -> None:
+@app_commands.describe(user="Choose the member to inspect")
+async def verify_status(interaction: discord.Interaction, user: discord.Member) -> None:
     if not await _staff_only(interaction):
         return
     guild = await _guild_or_reply(interaction)
     if guild is None:
         return
 
-    member = await require_target_member(interaction, user)
-    if member is None:
-        return
-
+    member = user
     roles = await _guild_roles(guild)
     await reply_once(interaction, {"content": "\n".join(_status_lines(member, roles)), "ephemeral": True})
 
 
 @verify_group.command(name="diagnose", description="Deep verification diagnostics for a member.")
-@app_commands.describe(user="Mention, ID, username, or display name to inspect")
-async def verify_diagnose(interaction: discord.Interaction, user: str) -> None:
+@app_commands.describe(user="Choose the member to inspect")
+async def verify_diagnose(interaction: discord.Interaction, user: discord.Member) -> None:
     if not await _staff_only(interaction):
         return
     guild = await _guild_or_reply(interaction)
     if guild is None:
         return
 
-    member = await require_target_member(interaction, user)
-    if member is None:
-        return
-
+    member = user
     await safe_defer(interaction, ephemeral=True)
     roles = await _guild_roles(guild)
     open_ticket = await _resolve_open_ticket_channel_for_owner(guild, int(member.id))
@@ -277,16 +284,14 @@ async def verify_diagnose(interaction: discord.Interaction, user: str) -> None:
 
 
 @verify_group.command(name="set-verified", description="Add or remove the Verified role.")
-@app_commands.describe(user="Mention, ID, username, or display name", enable="True to add Verified; False to remove")
-async def verify_set_verified(interaction: discord.Interaction, user: str, enable: bool) -> None:
+@app_commands.describe(user="Choose the member", enable="True to add Verified; False to remove")
+async def verify_set_verified(interaction: discord.Interaction, user: discord.Member, enable: bool) -> None:
     if not await _staff_only(interaction):
         return
     guild = await _guild_or_reply(interaction)
     if guild is None:
         return
-    member = await require_target_member(interaction, user)
-    if member is None:
-        return
+    member = user
     roles = await _guild_roles(guild)
     role = roles.get("verified")
     if role is None:
@@ -295,16 +300,14 @@ async def verify_set_verified(interaction: discord.Interaction, user: str, enabl
 
 
 @verify_group.command(name="set-resident", description="Add or remove the Resident role.")
-@app_commands.describe(user="Mention, ID, username, or display name", enable="True to add Resident; False to remove")
-async def verify_set_resident(interaction: discord.Interaction, user: str, enable: bool) -> None:
+@app_commands.describe(user="Choose the member", enable="True to add Resident; False to remove")
+async def verify_set_resident(interaction: discord.Interaction, user: discord.Member, enable: bool) -> None:
     if not await _staff_only(interaction):
         return
     guild = await _guild_or_reply(interaction)
     if guild is None:
         return
-    member = await require_target_member(interaction, user)
-    if member is None:
-        return
+    member = user
     roles = await _guild_roles(guild)
     role = roles.get("resident")
     if role is None:
@@ -313,16 +316,14 @@ async def verify_set_resident(interaction: discord.Interaction, user: str, enabl
 
 
 @verify_group.command(name="grant-vr", description="Grant Verified + Resident and remove Unverified.")
-@app_commands.describe(user="Mention, ID, username, or display name")
-async def verify_grant_vr(interaction: discord.Interaction, user: str) -> None:
+@app_commands.describe(user="Choose the member")
+async def verify_grant_vr(interaction: discord.Interaction, user: discord.Member) -> None:
     if not await _staff_only(interaction):
         return
     guild = await _guild_or_reply(interaction)
     if guild is None:
         return
-    member = await require_target_member(interaction, user)
-    if member is None:
-        return
+    member = user
 
     await safe_defer(interaction, ephemeral=True)
     roles = await _guild_roles(guild)
@@ -373,16 +374,14 @@ async def verify_grant_vr(interaction: discord.Interaction, user: str) -> None:
 
 
 @verify_group.command(name="fix-member", description="Re-add Unverified to a member when it is missing.")
-@app_commands.describe(user="Mention, ID, username, or display name", remove_conflicts="Also remove Verified/Resident while restoring Unverified")
-async def verify_fix_member(interaction: discord.Interaction, user: str, remove_conflicts: bool = False) -> None:
+@app_commands.describe(user="Choose the member", remove_conflicts="Also remove Verified/Resident while restoring Unverified")
+async def verify_fix_member(interaction: discord.Interaction, user: discord.Member, remove_conflicts: bool = False) -> None:
     if not await _staff_only(interaction):
         return
     guild = await _guild_or_reply(interaction)
     if guild is None:
         return
-    member = await require_target_member(interaction, user)
-    if member is None:
-        return
+    member = user
 
     await safe_defer(interaction, ephemeral=True)
     roles = await _guild_roles(guild)
@@ -544,7 +543,7 @@ def register_public_verify_group_commands(bot: Any, tree: Any) -> None:
         _REGISTERED = True
         try:
             suffix = f" removed_legacy={removed}" if removed else ""
-            print(f"✅ public_verify_group: registered /verify grouped commands{suffix}")
+            print(f"✅ public_verify_group: registered /verify grouped commands with native member picker{suffix}")
         except Exception:
             pass
         return
@@ -552,7 +551,7 @@ def register_public_verify_group_commands(bot: Any, tree: Any) -> None:
     _REGISTERED = True
     try:
         suffix = f" removed_legacy={removed}" if removed else ""
-        print(f"✅ public_verify_group: /verify already registered{suffix}")
+        print(f"✅ public_verify_group: /verify already registered with native member picker{suffix}")
     except Exception:
         pass
 
