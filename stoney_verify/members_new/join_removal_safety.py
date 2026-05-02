@@ -9,6 +9,13 @@ enables that behavior or a staff-confirmed moderation flow opts into it.
 
 This module owns the real business rules so runtime patches do not keep carrying
 production logic forever.
+
+Production behavior:
+If verification automation tries to fail-closed kick/ban a fresh join because
+the member has no safe verification role state, first try to assign/recover the
+configured Unverified role. If recovery succeeds, suppress the removal. If
+recovery fails, block the removal anyway and log exactly why setup/role hierarchy
+must be fixed.
 """
 
 import asyncio
@@ -25,6 +32,11 @@ TIMER_TYPES: tuple[str, ...] = ("join_grace", "member_no_ticket")
 FRESH_JOIN_OVERRIDE_MARKERS: tuple[str, ...] = (
     "manual_override:fresh_join_removal",
     "confirmed_staff_override:fresh_join_removal",
+)
+FAIL_CLOSED_RECOVERY_MARKERS: tuple[str, ...] = (
+    "verification fail-closed",
+    "no safe verification role state",
+    "ensured_unverified=false",
 )
 
 _ALLOW_FRESH_JOIN_REMOVAL_CONTEXT: contextvars.ContextVar[bool] = contextvars.ContextVar(
@@ -145,6 +157,11 @@ def is_fresh_join(member: discord.Member) -> bool:
 def has_fresh_join_override(reason: Any) -> bool:
     reason_text = safe_str(reason, "").lower()
     return any(marker in reason_text for marker in FRESH_JOIN_OVERRIDE_MARKERS)
+
+
+def is_fail_closed_verification_reason(reason: Any) -> bool:
+    reason_text = safe_str(reason, "").lower()
+    return any(marker in reason_text for marker in FAIL_CLOSED_RECOVERY_MARKERS)
 
 
 def should_block_bot_fresh_join_removal(member: Any, *, reason: Any = None) -> bool:
@@ -292,6 +309,42 @@ def build_fresh_join_removal_embed(
     return embed
 
 
+def build_fresh_join_recovery_embed(
+    guild: discord.Guild,
+    member: discord.Member,
+    *,
+    action: str,
+    reason: Any,
+    recovery_detail: str,
+    success: bool,
+) -> discord.Embed:
+    age = member_join_age_seconds(member)
+    age_text = "unknown" if age is None else f"{int(age)}s"
+    clean_action = safe_str(action, "remove").lower()
+    title = "🧷 Fresh Join Verification Role Recovered" if success else "⚠️ Fresh Join Verification Recovery Failed"
+    embed = discord.Embed(
+        title=title,
+        color=discord.Color.green() if success else discord.Color.gold(),
+        timestamp=datetime.now(timezone.utc),
+    )
+    embed.add_field(name="User", value=f"{member.mention}\n`{member}`\n`{member.id}`", inline=False)
+    embed.add_field(name="Original Bot Action", value=clean_action.upper(), inline=True)
+    embed.add_field(name="Joined Age", value=age_text, inline=True)
+    embed.add_field(name="Reason", value=safe_str(reason, "No reason provided")[:1024], inline=False)
+    embed.add_field(name="Recovery Result", value=safe_str(recovery_detail, "unknown")[:1024], inline=False)
+    embed.add_field(
+        name="Action Taken",
+        value=(
+            "The bot assigned/recovered the safe verification role and suppressed the instant removal."
+            if success
+            else "The instant removal was still blocked. Fix the Unverified role, bot Manage Roles permission, or bot role hierarchy."
+        ),
+        inline=False,
+    )
+    embed.set_footer(text=f"Guild {guild.id} • fresh join verification recovery")
+    return embed
+
+
 async def post_fresh_join_removal_log(
     guild: discord.Guild,
     member: discord.Member,
@@ -326,6 +379,101 @@ async def post_fresh_join_removal_log(
         pass
 
 
+async def post_fresh_join_recovery_log(
+    guild: discord.Guild,
+    member: discord.Member,
+    *,
+    action: str,
+    reason: Any,
+    recovery_detail: str,
+    success: bool,
+) -> None:
+    try:
+        embed = build_fresh_join_recovery_embed(
+            guild,
+            member,
+            action=action,
+            reason=reason,
+            recovery_detail=recovery_detail,
+            success=success,
+        )
+        sent = False
+        for channel in await configured_fresh_join_safety_log_channels(guild):
+            try:
+                await channel.send(embed=embed, allowed_mentions=discord.AllowedMentions.none())
+                sent = True
+            except Exception:
+                continue
+        if not sent:
+            _warn(
+                f"fresh join recovery {'succeeded' if success else 'failed'} but no writable log channel "
+                f"guild={guild.id} user={member.id} detail={recovery_detail!r}"
+            )
+    except Exception:
+        pass
+
+
+async def try_recover_unverified_before_removal(
+    member: discord.Member,
+    *,
+    action: str,
+    reason: Any,
+) -> tuple[bool, str]:
+    """Recover safe verification role state before blocking/removing a fresh join."""
+    if not isinstance(member, discord.Member) or getattr(member, "bot", False):
+        return False, "not a human guild member"
+    if not is_fail_closed_verification_reason(reason):
+        return False, "removal reason is not verification fail-closed"
+
+    try:
+        from stoney_verify.startup_guards.fresh_join_role_recovery import ensure_fresh_join_unverified_role
+
+        ok, detail = await ensure_fresh_join_unverified_role(
+            member,
+            source="native_join_removal_safety_fail_closed",
+            log_success=False,
+        )
+        if ok:
+            await clear_persisted_member_wait_timers(
+                member.guild.id,
+                member.id,
+                reason="fresh join verification role recovered before fail-closed removal",
+            )
+            await post_fresh_join_recovery_log(
+                member.guild,
+                member,
+                action=action,
+                reason=reason,
+                recovery_detail=detail,
+                success=True,
+            )
+            _log(f"suppressed fail-closed fresh join {action} after native role recovery guild={member.guild.id} user={member.id}")
+            return True, detail
+
+        await post_fresh_join_recovery_log(
+            member.guild,
+            member,
+            action=action,
+            reason=reason,
+            recovery_detail=detail,
+            success=False,
+        )
+        _warn(f"native role recovery failed before fresh join {action} guild={member.guild.id} user={member.id}: {detail}")
+        return False, detail
+    except Exception as e:
+        detail = f"native role recovery crashed: {type(e).__name__}: {e}"
+        await post_fresh_join_recovery_log(
+            member.guild,
+            member,
+            action=action,
+            reason=reason,
+            recovery_detail=detail,
+            success=False,
+        )
+        _warn(f"{detail} guild={member.guild.id} user={member.id}")
+        return False, detail
+
+
 async def block_or_run_bot_removal(
     *,
     action: str,
@@ -337,16 +485,20 @@ async def block_or_run_bot_removal(
 ) -> Any:
     decision = removal_decision(member, action=action, reason=reason, staff_confirmed=staff_confirmed)
     if decision.blocked:
+        recovered, recovery_detail = await try_recover_unverified_before_removal(member, action=action, reason=reason)
+        if recovered:
+            return None
+
         await clear_persisted_member_wait_timers(guild.id, member.id, reason=f"blocked fresh join bot {action}")
         _warn(
             f"blocked fresh-join bot {action} guild={guild.id} user={member.id} "
-            f"age={decision.join_age_seconds} reason={reason!r}"
+            f"age={decision.join_age_seconds} recovery={recovery_detail!r} reason={reason!r}"
         )
         await post_fresh_join_removal_log(
             guild,
             member,
             action=action,
-            reason=reason,
+            reason=f"{reason}\n\nRecovery detail: {recovery_detail}",
             prevented=True,
             staff_confirmed=staff_confirmed,
         )
@@ -385,19 +537,23 @@ async def block_or_run_bot_removal(
 
 
 __all__ = [
+    "FAIL_CLOSED_RECOVERY_MARKERS",
     "FRESH_JOIN_OVERRIDE_MARKERS",
     "FreshJoinRemovalDecision",
     "TIMER_TYPES",
     "block_or_run_bot_removal",
     "bot_fresh_join_removal_allowed",
+    "build_fresh_join_recovery_embed",
     "build_fresh_join_removal_embed",
     "clear_persisted_member_wait_timers",
     "clear_stale_timers_for_join",
     "configured_fresh_join_safety_log_channels",
     "fresh_join_protection_minutes",
     "has_fresh_join_override",
+    "is_fail_closed_verification_reason",
     "is_fresh_join",
     "member_join_age_seconds",
+    "post_fresh_join_recovery_log",
     "post_fresh_join_removal_log",
     "removal_decision",
     "safe_bool",
@@ -405,4 +561,5 @@ __all__ = [
     "safe_str",
     "should_block_bot_fresh_join_removal",
     "staff_confirmed_removal_context_active",
+    "try_recover_unverified_before_removal",
 ]
