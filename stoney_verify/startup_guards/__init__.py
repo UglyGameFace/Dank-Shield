@@ -73,8 +73,11 @@ _STARTUP_GUARDS: Tuple[str, ...] = (
     "stoney_verify.startup_guards.unverified_ticket_panel_flow",
 
     # Make VC setup failures readable instead of saying only that the staff
-    # panel could not be posted.
+    # panel could not be posted, and make setup health check the real VC path.
     "stoney_verify.startup_guards.vc_request_setup_clarity",
+
+    # Add a one-press setup button that repairs common VC permission blockers.
+    "stoney_verify.startup_guards.vc_setup_one_press_fix",
 
     # DB-backed panel/config bootstrap runtime.
     # This self-registers on_ready/on_guild_join listeners and starts the
@@ -122,6 +125,7 @@ _IMPORT_CHATTER_PREFIXES: Tuple[str, ...] = (
     "🎯 ticket_category_enforcer patched",
     "🎟️ unverified_ticket_panel_flow patched",
     "✅ vc_request_setup_clarity:",
+    "✅ vc_setup_one_press_fix:",
     "🧩 panel_bootstrap_runtime runtime listeners registered",
     "🧯 event_safety loaded",
     "🛰️ shard_safety patched",
@@ -172,7 +176,7 @@ def _should_suppress_import_line(text: str) -> bool:
     # intentionally conservative so runtime health, Discord, DB, and ticket sync
     # logs still show normally.
     if any(token in line for token in _IMPORT_CHATTER_CONTAINS):
-        if any(name in line for name in ("safety", "guard", "startup", "ticket_", "guild_config", "raidguard", "panel_bootstrap")):
+        if any(name in line for name in ("safety", "guard", "startup", "ticket_", "guild_config", "raidguard", "panel_bootstrap", "vc_setup")):
             return True
 
     return False
