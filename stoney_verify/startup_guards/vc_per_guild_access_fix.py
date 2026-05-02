@@ -129,6 +129,90 @@ def _guild_voice_cached(guild: discord.Guild, channel_id: int) -> Optional[disco
         return None
 
 
+def _voice_name_score(channel: Any) -> int:
+    try:
+        name = str(getattr(channel, "name", "") or "").lower()
+    except Exception:
+        return 0
+
+    compact = (
+        name.replace("-", " ")
+        .replace("_", " ")
+        .replace("•", " ")
+        .replace("|", " ")
+    )
+
+    if "voice verification" in compact:
+        return 100
+    if "vc verification" in compact:
+        return 95
+    if "voice verify" in compact:
+        return 90
+    if "vc verify" in compact:
+        return 85
+    if "verification" in compact and ("voice" in compact or "vc" in compact):
+        return 80
+    if "verify" in compact and ("voice" in compact or "vc" in compact):
+        return 70
+    return 0
+
+
+def _discover_vc_by_name_cached(guild: discord.Guild) -> Optional[discord.abc.GuildChannel]:
+    """Last-resort sync lookup for old/stale button handlers.
+
+    The Accept button calls a synchronous ``_get_vc_channel`` before the async
+    unlock path has a chance to load fresh guild config. If the cache is cold
+    after a restart, this name-based fallback prevents the false "VC channel
+    not found" failure while still only selecting real voice/stage channels.
+    """
+    try:
+        candidates = []
+        for channel in list(getattr(guild, "channels", []) or []):
+            if not _is_voice(channel):
+                continue
+            score = _voice_name_score(channel)
+            if score > 0:
+                candidates.append((score, int(getattr(channel, "position", 0) or 0), channel))
+
+        if not candidates:
+            return None
+
+        candidates.sort(key=lambda item: (-item[0], item[1]))
+        return candidates[0][2]
+    except Exception:
+        return None
+
+
+async def _discover_vc_by_name(guild: discord.Guild) -> Optional[discord.abc.GuildChannel]:
+    channel = _discover_vc_by_name_cached(guild)
+    if channel is not None:
+        return channel
+
+    # If Discord cache is cold, fetch visible channels once and score only
+    # real voice/stage channels. This keeps the async grant path reliable.
+    try:
+        fetched = await guild.fetch_channels()
+    except Exception:
+        fetched = []
+
+    try:
+        candidates = []
+        for channel in list(fetched or []):
+            if not _is_voice(channel):
+                continue
+            score = _voice_name_score(channel)
+            if score > 0:
+                candidates.append((score, int(getattr(channel, "position", 0) or 0), channel))
+
+        if not candidates:
+            return None
+
+        candidates.sort(key=lambda item: (-item[0], item[1]))
+        return candidates[0][2]
+    except Exception:
+        return None
+
+
 async def _guild_voice(guild: discord.Guild, channel_id: int) -> Optional[discord.abc.GuildChannel]:
     channel = _guild_voice_cached(guild, channel_id)
     if channel is not None:
@@ -229,14 +313,23 @@ async def _resolve_saved_vc(
             if channel is not None:
                 return channel
 
+    # Final production fallback: many public servers name the configured channel
+    # "Voice Verification" but older button messages may not have a warm guild
+    # config cache after restart. Only select real voice/stage channels.
+    channel = await _discover_vc_by_name(guild)
+    if channel is not None:
+        _patch_rows(
+            key,
+            {"vc_channel_id": int(channel.id), "vc_channel_discovered_by": "name", "vc_channel_fixed_at": _utc_iso()},
+            vc_verify,
+            vc_flow,
+        )
+        return channel
+
     return None
 
 
-def _resolve_saved_vc_cached(
-    guild: discord.Guild,
-    vc_verify: Any,
-    vc_flow: Any,
-) -> Optional[discord.abc.GuildChannel]:
+def _resolve_saved_vc_cached(guild: discord.Guild, vc_verify: Any, vc_flow: Any) -> Optional[discord.abc.GuildChannel]:
     cfg = _cached_cfg(guild)
     channel = _guild_voice_cached(guild, _vc_id_from_cfg(cfg))
     if channel is not None:
@@ -248,7 +341,7 @@ def _resolve_saved_vc_cached(
             if channel is not None:
                 return channel
 
-    return None
+    return _discover_vc_by_name_cached(guild)
 
 
 def _can_manage(me: Optional[discord.Member], channel: discord.abc.GuildChannel) -> bool:
