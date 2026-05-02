@@ -79,6 +79,10 @@ _STARTUP_GUARDS: Tuple[str, ...] = (
     # Add a one-press setup button that repairs common VC permission blockers.
     "stoney_verify.startup_guards.vc_setup_one_press_fix",
 
+    # Force VC staff Accept/Reissue to use the per-guild saved voice channel
+    # instead of the old global/env fallback channel id.
+    "stoney_verify.startup_guards.vc_per_guild_access_fix",
+
     # DB-backed panel/config bootstrap runtime.
     # This self-registers on_ready/on_guild_join listeners and starts the
     # panel bootstrap worker after the bot is ready. It does not create roles,
@@ -126,6 +130,7 @@ _IMPORT_CHATTER_PREFIXES: Tuple[str, ...] = (
     "🎟️ unverified_ticket_panel_flow patched",
     "✅ vc_request_setup_clarity:",
     "✅ vc_setup_one_press_fix:",
+    "✅ vc_per_guild_access_fix:",
     "🧩 panel_bootstrap_runtime runtime listeners registered",
     "🧯 event_safety loaded",
     "🛰️ shard_safety patched",
@@ -176,7 +181,19 @@ def _should_suppress_import_line(text: str) -> bool:
     # intentionally conservative so runtime health, Discord, DB, and ticket sync
     # logs still show normally.
     if any(token in line for token in _IMPORT_CHATTER_CONTAINS):
-        if any(name in line for name in ("safety", "guard", "startup", "ticket_", "guild_config", "raidguard", "panel_bootstrap", "vc_setup")):
+        if any(
+            name in line
+            for name in (
+                "safety",
+                "guard",
+                "startup",
+                "ticket_",
+                "guild_config",
+                "raidguard",
+                "panel_bootstrap",
+                "vc_setup",
+            )
+        ):
             return True
 
     return False
