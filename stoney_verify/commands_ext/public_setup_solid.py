@@ -2,24 +2,29 @@ from __future__ import annotations
 
 """Solid public /stoney setup flow.
 
-This module is the public setup source of truth. It deliberately keeps owners in
-one boring path:
+This file is the public setup source of truth.
 
-/stoney setup
-
-Everything that used to require hidden setup-* commands is exposed here through
-buttons, selects, modals, validation, and a real health screen.
+Design goals:
+- One obvious command: /stoney setup
+- Simple language for server owners
+- Purpose-based setup, not fixed role names
+- Fully custom roles/channels/categories using Discord pickers
+- Setup-builder choices are explicit and protected from accidental overwrite
+- Auto-build fills missing items only
+- Back / View Current Setup / Close controls on setup screens
 """
 
 import asyncio
+import re
 from dataclasses import dataclass
-from typing import Any, Iterable, Optional
+from typing import Any, Iterable, Mapping, Optional
 
 import discord
 
 from .common import safe_defer
 from .public_setup_group import (
     _build_setup_health,
+    _can_manage_role,
     _category_missing_perms,
     _config_embed,
     _field_text,
@@ -27,7 +32,6 @@ from .public_setup_group import (
     _safe_str,
     _text_channel_missing_perms,
     _utc_iso,
-    _can_manage_role,
     stoney_group,
 )
 from ..globals import get_supabase, now_utc
@@ -51,7 +55,7 @@ RECOMMENDED_CATEGORIES: tuple[dict[str, Any], ...] = (
         "name": "Verification Help",
         "description": "Help for users stuck during verification.",
         "intake_type": "verification",
-        "match_keywords": ["verify", "verification", "unverified", "vc verify"],
+        "match_keywords": ["verify", "verification", "pending", "unverified", "vc verify"],
         "is_default": False,
         "sort_order": 20,
     },
@@ -102,6 +106,23 @@ RECOMMENDED_CATEGORIES: tuple[dict[str, Any], ...] = (
     },
 )
 
+INTAKE_TYPE_OPTIONS: tuple[str, ...] = (
+    "support",
+    "verification",
+    "appeal",
+    "report",
+    "question",
+    "bug",
+    "custom",
+)
+
+CONTROL_KEYS = {
+    "__config_write_mode",
+    "__config_write_source",
+    "__config_write_allow_keys",
+    "__config_write_dry_run",
+}
+
 
 @dataclass(frozen=True)
 class CategoryLoad:
@@ -137,6 +158,77 @@ def _bot_member(guild: discord.Guild) -> Optional[discord.Member]:
         return None
 
 
+def _cfg_value(cfg: Any, key: str) -> Any:
+    try:
+        if hasattr(cfg, "get"):
+            return cfg.get(key)
+    except Exception:
+        pass
+    try:
+        return getattr(cfg, key, None)
+    except Exception:
+        return None
+
+
+def _safe_int(value: Any, default: int = 0) -> int:
+    try:
+        if value is None or isinstance(value, bool):
+            return int(default)
+        text = str(value).strip()
+        return int(text) if text else int(default)
+    except Exception:
+        return int(default)
+
+
+def _none_if_blank(value: Any) -> Optional[str]:
+    text = str(value or "").strip()
+    return text or None
+
+
+def _slugify(value: Any) -> str:
+    text = str(value or "").strip().lower()
+    text = re.sub(r"[^a-z0-9]+", "_", text)
+    text = re.sub(r"_+", "_", text).strip("_")
+    return text[:50] or "custom"
+
+
+def _split_keywords(value: Any) -> list[str]:
+    text = str(value or "").strip()
+    if not text:
+        return []
+    out: list[str] = []
+    for item in re.split(r"[,\n]", text):
+        cleaned = item.strip().lower()
+        if cleaned and cleaned not in out:
+            out.append(cleaned[:40])
+    return out[:20]
+
+
+def _line_list(lines: Iterable[str], *, empty: str = "None", limit: int = 1000) -> str:
+    kept: list[str] = []
+    total = 0
+    source = [str(x).strip() for x in lines if str(x).strip()]
+    if not source:
+        return empty
+    for line in source:
+        if total + len(line) + 1 > limit:
+            kept.append(f"…and {len(source) - len(kept)} more")
+            break
+        kept.append(line)
+        total += len(line) + 1
+    return "\n".join(kept)[:limit] or empty
+
+
+def _channel_or_not_set(guild: discord.Guild, value: Any) -> str:
+    channel = guild.get_channel(_safe_int(value, 0))
+    return _mention(channel) if channel else "`Not set`"
+
+
+def _role_or_not_set(guild: discord.Guild, value: Any) -> str:
+    role = guild.get_role(_safe_int(value, 0))
+    return _mention(role) if role else "`Not set`"
+
+
 async def _safe_defer_update(interaction: discord.Interaction) -> None:
     try:
         if not interaction.response.is_done():
@@ -145,15 +237,12 @@ async def _safe_defer_update(interaction: discord.Interaction) -> None:
         pass
 
 
-async def _safe_defer_modal(interaction: discord.Interaction) -> None:
-    try:
-        if not interaction.response.is_done():
-            await interaction.response.defer(ephemeral=True, thinking=True)
-    except Exception:
-        pass
-
-
-async def _edit_or_followup(interaction: discord.Interaction, *, embed: discord.Embed, view: Optional[discord.ui.View] = None) -> None:
+async def _edit_or_followup(
+    interaction: discord.Interaction,
+    *,
+    embed: discord.Embed,
+    view: Optional[discord.ui.View] = None,
+) -> None:
     try:
         if interaction.response.is_done():
             await interaction.edit_original_response(embed=embed, view=view)
@@ -164,18 +253,52 @@ async def _edit_or_followup(interaction: discord.Interaction, *, embed: discord.
         pass
 
     try:
-        await interaction.followup.send(embed=embed, view=view, ephemeral=True)
+        await interaction.followup.send(
+            embed=embed,
+            view=view,
+            ephemeral=True,
+            allowed_mentions=discord.AllowedMentions.none(),
+        )
+    except Exception:
+        pass
+
+
+async def _send_ephemeral(
+    interaction: discord.Interaction,
+    *,
+    embed: discord.Embed,
+    view: Optional[discord.ui.View] = None,
+) -> None:
+    try:
+        if interaction.response.is_done():
+            await interaction.followup.send(
+                embed=embed,
+                view=view,
+                ephemeral=True,
+                allowed_mentions=discord.AllowedMentions.none(),
+            )
+        else:
+            await interaction.response.send_message(
+                embed=embed,
+                view=view,
+                ephemeral=True,
+                allowed_mentions=discord.AllowedMentions.none(),
+            )
     except Exception:
         pass
 
 
 async def _save_config(interaction: discord.Interaction, payload: dict[str, Any]) -> None:
+    """Save owner-picked setup choices through the protected setup writer."""
     guild = interaction.guild
     if guild is None:
         raise RuntimeError("This must be used inside a server.")
+
     from .public_setup_config_writer import upsert_guild_config
 
     final = dict(payload)
+    final.setdefault("__config_write_mode", "setup_builder")
+    final.setdefault("__config_write_source", "/stoney setup guided builder")
     final.update(
         {
             "configured_by_id": str(interaction.user.id),
@@ -187,18 +310,82 @@ async def _save_config(interaction: discord.Interaction, payload: dict[str, Any]
     invalidate_guild_config(guild.id)
 
 
+async def _clear_config_keys(interaction: discord.Interaction, keys: Iterable[str]) -> None:
+    """Clear optional setup slots.
+
+    The public setup writer intentionally ignores empty snowflakes to prevent
+    accidental data loss. This clear path is explicit and only available inside
+    /stoney setup.
+    """
+    guild = interaction.guild
+    if guild is None:
+        raise RuntimeError("This must be used inside a server.")
+
+    keys = [str(k) for k in keys if str(k).strip() and str(k) not in CONTROL_KEYS]
+    if not keys:
+        return
+
+    def _sync() -> None:
+        sb = get_supabase()
+        if sb is None:
+            raise RuntimeError("Supabase is not available.")
+
+        table = "guild_configs"
+        try:
+            import os
+
+            table = (os.getenv("STONEY_GUILD_CONFIG_TABLE") or table).strip() or table
+        except Exception:
+            pass
+
+        res = sb.table(table).select("*").eq("guild_id", str(int(guild.id))).limit(1).execute()
+        rows = getattr(res, "data", None) or []
+        existing = rows[0] if rows and isinstance(rows[0], Mapping) else {}
+
+        payload: dict[str, Any] = {
+            "updated_at": _utc_iso(),
+            "config_last_write_mode": "explicit_clear",
+            "config_last_write_source": "/stoney setup clear optional slots",
+            "config_last_write_at": _utc_iso(),
+        }
+
+        for key in keys:
+            if key in existing:
+                payload[key] = None
+
+        for json_key in ("settings", "config", "metadata", "meta"):
+            current = existing.get(json_key) if isinstance(existing, Mapping) else None
+            if isinstance(current, Mapping):
+                next_payload = dict(current)
+                for key in keys:
+                    next_payload.pop(key, None)
+                payload[json_key] = next_payload
+
+        if existing:
+            sb.table(table).update(payload).eq("guild_id", str(int(guild.id))).execute()
+        else:
+            payload["guild_id"] = str(int(guild.id))
+            sb.table(table).upsert(payload).execute()
+
+    await asyncio.to_thread(_sync)
+    invalidate_guild_config(guild.id)
+
+
 # ---------------------------------------------------------------------------
-# health
+# health / summaries
 # ---------------------------------------------------------------------------
 
 
 async def _category_load(guild: discord.Guild) -> CategoryLoad:
-    from . import ticket_category_admin as category_admin
+    try:
+        from . import ticket_category_admin as category_admin
+    except Exception:
+        category_admin = None
 
     def _read_sync() -> CategoryLoad:
         sb = get_supabase()
         if sb is None:
-            return CategoryLoad([], "Supabase is not available, so ticket routing categories cannot be checked.")
+            return CategoryLoad([], "Supabase is not available, so ticket menu options cannot be checked.")
         try:
             res = (
                 sb.table("ticket_categories")
@@ -207,7 +394,16 @@ async def _category_load(guild: discord.Guild) -> CategoryLoad:
                 .execute()
             )
             rows_raw = getattr(res, "data", None) or []
-            rows = [category_admin._normalize_category_row(x) for x in rows_raw if isinstance(x, dict)]
+            rows: list[dict[str, Any]] = []
+            for item in rows_raw:
+                if not isinstance(item, dict):
+                    continue
+                if category_admin is not None:
+                    try:
+                        item = category_admin._normalize_category_row(item)
+                    except Exception:
+                        pass
+                rows.append(dict(item))
             rows.sort(
                 key=lambda r: (
                     r.get("sort_order") is None,
@@ -226,7 +422,7 @@ async def _category_load(guild: discord.Guild) -> CategoryLoad:
 def _category_line(row: dict[str, Any]) -> str:
     slug = str(row.get("slug") or "unknown")
     name = str(row.get("name") or slug)
-    intake_type = str(row.get("intake_type") or "general")
+    intake_type = str(row.get("intake_type") or "custom")
     default = " ⭐" if bool(row.get("is_default")) else ""
     keywords = row.get("match_keywords") or []
     keyword_text = ", ".join(str(x) for x in keywords[:4]) if keywords else "no keywords"
@@ -235,7 +431,7 @@ def _category_line(row: dict[str, Any]) -> str:
     return f"• **{_short(name, 48)}**{default} — `{slug}` • `{intake_type}`{order_text}\n  ↳ {_short(keyword_text, 90)}"
 
 
-def _category_list_text(rows: list[dict[str, Any]], *, empty: str = "No ticket categories yet.") -> str:
+def _category_list_text(rows: list[dict[str, Any]], *, empty: str = "No ticket menu options yet.") -> str:
     if not rows:
         return empty
     lines = [_category_line(row) for row in rows[:12]]
@@ -245,14 +441,16 @@ def _category_list_text(rows: list[dict[str, Any]], *, empty: str = "No ticket c
 
 
 def _category_governance_text(rows: list[dict[str, Any]]) -> str:
-    try:
-        from . import ticket_category_admin as category_admin
-
-        warnings = category_admin._governance_warnings(rows)
-    except Exception:
-        warnings = []
+    warnings: list[str] = []
+    if not rows:
+        return "⚠️ No ticket menu options exist yet. Users may only get a generic support path."
+    if not any(bool(row.get("is_default")) for row in rows):
+        warnings.append("Pick one default option so unclear tickets have somewhere to go.")
+    slugs = [str(row.get("slug") or "").strip().lower() for row in rows]
+    if len(slugs) != len(set(slugs)):
+        warnings.append("Two options share the same slug. Rename one so routing stays predictable.")
     if not warnings:
-        return "✅ Default and verification routing look safe."
+        return "✅ Ticket menu options look safe."
     return "\n".join(f"• {item}" for item in warnings)[:1024]
 
 
@@ -266,42 +464,95 @@ async def _build_health_embed(guild: discord.Guild) -> discord.Embed:
         b, w, p = _build_setup_health(guild, cfg)
         blockers.extend([str(x).replace("/stoney setup-tickets", "/stoney setup") for x in b])
         warnings.extend([str(x).replace("/stoney setup-tickets", "/stoney setup") for x in w])
-        ok.extend(p)
+        ok.extend(str(x) for x in p)
     except Exception as e:
-        blockers.append(f"Could not load this server's saved config: {type(e).__name__}: {str(e)[:250]}")
+        blockers.append(f"Could not load this server's saved setup: {type(e).__name__}: {str(e)[:250]}")
 
     category_load = await _category_load(guild)
     if category_load.error:
         blockers.append(category_load.error)
     elif not category_load.rows:
-        warnings.append("No ticket routing categories exist yet. Use `/stoney setup → Manage Ticket Categories → Create Recommended`.")
+        warnings.append("No ticket menu options exist yet. Press Ticket Menu Options → Create Recommended.")
     else:
-        ok.append(f"Ticket routing categories loaded: `{len(category_load.rows)}`.")
-        try:
-            from . import ticket_category_admin as category_admin
-
-            for warning in category_admin._governance_warnings(category_load.rows):
-                warnings.append(warning)
-        except Exception:
-            pass
+        ok.append(f"Ticket menu options loaded: `{len(category_load.rows)}`.")
+        governance = _category_governance_text(category_load.rows)
+        if governance.startswith("•") or governance.startswith("⚠️"):
+            warnings.append(governance)
 
     ready = not blockers
     embed = discord.Embed(
-        title="🩺 Stoney Setup Health",
-        description="✅ **Ready enough to test**" if ready else "🚫 **Needs fixes before public use**",
+        title="🩺 Setup Health Check",
+        description=(
+            "✅ **Ready enough to test.**" if ready else "🚫 **Fix the blockers first.**"
+        ),
         color=discord.Color.green() if ready else discord.Color.red(),
         timestamp=now_utc(),
     )
     embed.add_field(name="Blockers", value=_field_text(blockers, empty="✅ None"), inline=False)
     embed.add_field(name="Warnings", value=_field_text(warnings, empty="✅ None"), inline=False)
     embed.add_field(name="Passing Checks", value=_field_text(ok, empty="No passing checks reported."), inline=False)
-    embed.set_footer(text=f"Guild {guild.id} • use /stoney setup to fix anything listed here")
+    embed.add_field(
+        name="What To Press Next",
+        value=(
+            "If there are blockers, press **Back to Setup** and use **Use My Existing Server** to pick the exact missing item.\n"
+            "If there are no blockers, test creating a ticket and test your verification flow."
+        ),
+        inline=False,
+    )
+    embed.set_footer(text=f"Guild {guild.id} • /stoney setup")
     return embed
 
 
-# ---------------------------------------------------------------------------
-# main setup card
-# ---------------------------------------------------------------------------
+async def _build_current_setup_embed(guild: discord.Guild) -> discord.Embed:
+    try:
+        cfg = await get_guild_config(guild.id, refresh=True)
+    except Exception as e:
+        embed = discord.Embed(
+            title="📋 Current Setup",
+            description=f"Could not load setup: `{type(e).__name__}: {str(e)[:250]}`",
+            color=discord.Color.red(),
+            timestamp=now_utc(),
+        )
+        return embed
+
+    embed = _config_embed(guild, cfg, title="📋 Current Setup")
+    embed.description = (
+        "This is what Stoney currently has saved for this server.\n"
+        "Names can be anything. Stoney uses the saved Discord IDs."
+    )
+    embed.add_field(
+        name="Access Role Style",
+        value=(
+            f"Mode: `{_safe_str(_cfg_value(cfg, 'verification_mode'), 'not chosen')}`\n"
+            f"New/waiting role: {_role_or_not_set(guild, _cfg_value(cfg, 'unverified_role_id'))}\n"
+            f"Approved role: {_role_or_not_set(guild, _cfg_value(cfg, 'verified_role_id'))}\n"
+            f"Full access/member role: {_role_or_not_set(guild, _cfg_value(cfg, 'resident_role_id'))}"
+        )[:1024],
+        inline=False,
+    )
+    embed.add_field(
+        name="Owner Controls",
+        value=(
+            f"Server-control role: {_role_or_not_set(guild, _cfg_value(cfg, 'server_control_role_id') or _cfg_value(cfg, 'control_role_id') or _cfg_value(cfg, 'perm_role_id'))}\n"
+            f"Ticket staff role: {_role_or_not_set(guild, _cfg_value(cfg, 'staff_role_id'))}\n"
+            f"Ticket prefix: `{_safe_str(_cfg_value(cfg, 'ticket_prefix'), 'ticket')}`\n"
+            f"Verify kick hours: `{_safe_str(_cfg_value(cfg, 'verify_kick_hours'), '24')}`"
+        )[:1024],
+        inline=False,
+    )
+    embed.add_field(
+        name="Main Channels / Categories",
+        value=(
+            f"Open tickets: {_channel_or_not_set(guild, _cfg_value(cfg, 'ticket_category_id'))}\n"
+            f"Closed tickets: {_channel_or_not_set(guild, _cfg_value(cfg, 'ticket_archive_category_id'))}\n"
+            f"Ticket panel: {_channel_or_not_set(guild, _cfg_value(cfg, 'ticket_panel_channel_id') or _cfg_value(cfg, 'support_channel_id'))}\n"
+            f"Transcripts: {_channel_or_not_set(guild, _cfg_value(cfg, 'transcripts_channel_id'))}\n"
+            f"Mod/security log: {_channel_or_not_set(guild, _cfg_value(cfg, 'modlog_channel_id') or _cfg_value(cfg, 'raidlog_channel_id'))}\n"
+            f"Status: {_channel_or_not_set(guild, _cfg_value(cfg, 'status_channel_id') or _cfg_value(cfg, 'bot_status_channel_id'))}"
+        )[:1024],
+        inline=False,
+    )
+    return embed
 
 
 async def _build_main_setup_payload(guild: discord.Guild) -> tuple[discord.Embed, "SolidSetupView"]:
@@ -312,32 +563,48 @@ async def _build_main_setup_payload(guild: discord.Guild) -> tuple[discord.Embed
         cfg = None
 
     embed = discord.Embed(
-        title="🚀 Stoney Quick Setup",
+        title="🚀 Stoney Setup",
         description=(
-            "Everything starts here. Pick the setup path that matches this server.\n\n"
-            "✨ **Auto-Fix Missing Defaults** creates missing default roles/channels/categories.\n"
-            "✏️ **Customize Setup Names** lets you rename default items before creating them.\n"
-            "🧩 **Choose Existing Items** maps your current roles/channels safely.\n"
-            "🗂️ **Manage Ticket Categories** controls support/verification/appeal/report routing.\n"
-            "🩺 **Run Health Check** shows blockers, warnings, and passing checks."
+            "Setup is one step at a time. Use the buttons below. You can go back any time.\n\n"
+            "✨ **Auto-Build Missing Items** creates only missing defaults. It does not replace saved choices.\n"
+            "✏️ **Name Items Before Build** lets you choose names before Stoney creates anything.\n"
+            "🧩 **Use My Existing Server** lets you pick the exact roles/channels you already use. Names do not matter.\n"
+            "🗂️ **Ticket Menu Options** controls the support choices users see when opening tickets.\n"
+            "🩺 **Run Health Check** tells you what is ready and what needs fixing.\n\n"
+            "**Safe rule:** setup saves choices. It does not delete your channels, roles, tickets, or messages."
         ),
         color=discord.Color.blurple(),
         timestamp=now_utc(),
     )
     if cfg is not None:
         embed.add_field(
-            name="Current Config Snapshot",
+            name="Current Setup Snapshot",
             value=(
-                f"Open tickets: {_mention(guild.get_channel(int(getattr(cfg, 'ticket_category_id', 0) or 0)) or 'Not set')}\n"
-                f"Archive: {_mention(guild.get_channel(int(getattr(cfg, 'ticket_archive_category_id', 0) or 0)) or 'Not set')}\n"
-                f"Staff role: {_mention(guild.get_role(int(getattr(cfg, 'staff_role_id', 0) or 0)) or 'Not set')}"
+                f"Open tickets: {_channel_or_not_set(guild, _cfg_value(cfg, 'ticket_category_id'))}\n"
+                f"Closed tickets: {_channel_or_not_set(guild, _cfg_value(cfg, 'ticket_archive_category_id'))}\n"
+                f"Staff role: {_role_or_not_set(guild, _cfg_value(cfg, 'staff_role_id'))}\n"
+                f"Access mode: `{_safe_str(_cfg_value(cfg, 'verification_mode'), 'not chosen')}`"
             )[:1024],
             inline=False,
         )
+    embed.add_field(
+        name="Best Starting Choice",
+        value=(
+            "• New server? Press **Auto-Build Missing Items**.\n"
+            "• Existing server? Press **Use My Existing Server**.\n"
+            "• Unsure? Press **Run Health Check**."
+        ),
+        inline=False,
+    )
     return embed, SolidSetupView()
 
 
-class BackToSetupView(discord.ui.View):
+# ---------------------------------------------------------------------------
+# reusable navigation
+# ---------------------------------------------------------------------------
+
+
+class SetupNavView(discord.ui.View):
     def __init__(self) -> None:
         super().__init__(timeout=900)
 
@@ -352,12 +619,42 @@ class BackToSetupView(discord.ui.View):
         embed, view = await _build_main_setup_payload(guild)
         await _edit_or_followup(interaction, embed=embed, view=view)
 
+    @discord.ui.button(label="View Current Setup", emoji="📋", style=discord.ButtonStyle.secondary, custom_id="stoney_solid:summary", row=4)
+    async def summary(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        if not await _require_setup_permission(interaction):
+            return
+        guild = interaction.guild
+        if guild is None:
+            return await interaction.response.send_message("❌ This must be used inside a server.", ephemeral=True)
+        await _safe_defer_update(interaction)
+        embed = await _build_current_setup_embed(guild)
+        await _edit_or_followup(interaction, embed=embed, view=SetupNavView())
 
-class SolidSetupView(discord.ui.View):
+    @discord.ui.button(label="Close", emoji="✖️", style=discord.ButtonStyle.danger, custom_id="stoney_solid:close", row=4)
+    async def close(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        if not await _require_setup_permission(interaction):
+            return
+        embed = discord.Embed(
+            title="Setup Closed",
+            description="Nothing else was changed. Run `/stoney setup` whenever you want to continue.",
+            color=discord.Color.dark_grey(),
+        )
+        await _edit_or_followup(interaction, embed=embed, view=None)
+
+
+BackToSetupView = SetupNavView
+
+
+# ---------------------------------------------------------------------------
+# main setup view
+# ---------------------------------------------------------------------------
+
+
+class SolidSetupView(SetupNavView):
     def __init__(self) -> None:
-        super().__init__(timeout=900)
+        super().__init__()
 
-    @discord.ui.button(label="Auto-Fix Missing Defaults", emoji="✨", style=discord.ButtonStyle.success, custom_id="stoney_solid:auto", row=0)
+    @discord.ui.button(label="Auto-Build Missing Items", emoji="✨", style=discord.ButtonStyle.success, custom_id="stoney_solid:auto", row=0)
     async def auto_fix(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         if not await _require_setup_permission(interaction):
             return
@@ -368,62 +665,87 @@ class SolidSetupView(discord.ui.View):
             if interaction.guild is not None:
                 created, skipped, error = await _seed_recommended_categories(interaction.guild)
                 if error:
-                    await interaction.followup.send(f"⚠️ Defaults were handled, but recommended ticket categories could not be checked: `{error}`", ephemeral=True)
+                    await interaction.followup.send(
+                        f"⚠️ Auto-build ran, but ticket menu options could not be checked: `{error}`",
+                        ephemeral=True,
+                        allowed_mentions=discord.AllowedMentions.none(),
+                    )
                 elif created:
-                    await interaction.followup.send(f"✅ Recommended ticket categories created: {', '.join(f'`{x}`' for x in created)}", ephemeral=True)
+                    await interaction.followup.send(
+                        f"✅ Ticket menu options created: {', '.join(f'`{x}`' for x in created)}",
+                        ephemeral=True,
+                        allowed_mentions=discord.AllowedMentions.none(),
+                    )
                 elif skipped:
-                    await interaction.followup.send("✅ Recommended ticket categories already exist.", ephemeral=True)
+                    await interaction.followup.send(
+                        "✅ Ticket menu options already exist. Nothing was overwritten.",
+                        ephemeral=True,
+                        allowed_mentions=discord.AllowedMentions.none(),
+                    )
         except Exception as e:
-            if not interaction.response.is_done():
-                await interaction.response.send_message(f"❌ Auto-fix failed: `{type(e).__name__}: {str(e)[:250]}`", ephemeral=True)
-            else:
-                await interaction.followup.send(f"❌ Auto-fix failed: `{type(e).__name__}: {str(e)[:250]}`", ephemeral=True)
+            embed = discord.Embed(
+                title="❌ Auto-Build Failed",
+                description=(
+                    f"`{type(e).__name__}: {str(e)[:300]}`\n\n"
+                    "What to do next: run **Health Check**, fix the listed permission problem, then try again."
+                ),
+                color=discord.Color.red(),
+            )
+            await _send_ephemeral(interaction, embed=embed, view=SetupNavView())
 
-    @discord.ui.button(label="Customize Setup Names", emoji="✏️", style=discord.ButtonStyle.primary, custom_id="stoney_solid:customize", row=0)
+    @discord.ui.button(label="Name Items Before Build", emoji="✏️", style=discord.ButtonStyle.primary, custom_id="stoney_solid:customize", row=0)
     async def customize(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         if not await _require_setup_permission(interaction):
             return
-        # Reuse the existing modal pages, but keep entry through /stoney setup.
         try:
             from .public_setup_start import CustomizeSetupMenuView
 
             embed = discord.Embed(
-                title="✏️ Customize Setup Names",
+                title="✏️ Name Items Before Build",
                 description=(
-                    "Discord modals can only show 5 text fields at a time, so setup names are split into simple pages.\n\n"
-                    "Use this when you want Stoney to create roles/channels, but with your names instead of the defaults."
+                    "Use this before Auto-Build if you want Stoney to create missing items with your own names.\n\n"
+                    "Names are split into small pages so the form is easier to read. Nothing is created until you submit a page."
                 ),
                 color=discord.Color.blurple(),
             )
             await interaction.response.edit_message(embed=embed, view=CustomizeSetupMenuView())
         except Exception as e:
-            await interaction.response.send_message(f"❌ Custom setup names failed to open: `{type(e).__name__}: {str(e)[:250]}`", ephemeral=True)
+            embed = discord.Embed(
+                title="❌ Name Editor Did Not Open",
+                description=(
+                    f"`{type(e).__name__}: {str(e)[:300]}`\n\n"
+                    "What to do next: use **Use My Existing Server** to pick your current roles/channels instead."
+                ),
+                color=discord.Color.red(),
+            )
+            await _send_ephemeral(interaction, embed=embed, view=SetupNavView())
 
-    @discord.ui.button(label="Choose Existing Items", emoji="🧩", style=discord.ButtonStyle.secondary, custom_id="stoney_solid:existing", row=1)
+    @discord.ui.button(label="Use My Existing Server", emoji="🧩", style=discord.ButtonStyle.secondary, custom_id="stoney_solid:existing", row=1)
     async def choose_existing(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         if not await _require_setup_permission(interaction):
             return
         embed = discord.Embed(
-            title="🧩 Choose Existing Items",
+            title="🧩 Use My Existing Server",
             description=(
-                "Use this when the server already has its own roles/channels/categories.\n"
-                "Each picker validates permissions before saving."
+                "Pick what your server already uses. Names do not matter. Stoney saves IDs, not names.\n"
+                "Only pick the items your server uses. Leave anything else alone."
             ),
             color=discord.Color.blurple(),
         )
         embed.add_field(
             name="Sections",
             value=(
-                "🎫 **Ticket Basics** — open/archive Discord categories, staff role, transcripts\n"
-                "✅ **Verification Roles** — Unverified, Verified, Member\n"
-                "🎙️ **Verification Channels** — verify text, support panel, VC verify, VC queue\n"
-                "🧾 **Logs + Status** — modlog, join/leave log, bot status"
+                "🎫 **Ticket Basics** — where tickets open/close, staff role, transcripts\n"
+                "🎭 **Access Roles** — optional roles for new/waiting, approved, full access\n"
+                "🎙️ **Verification Channels** — optional text/voice verification channels\n"
+                "🧾 **Logs + Status** — modlog, join/leave log, bot status\n"
+                "⚙️ **Behavior Settings** — verification style, ticket prefix, kick timer"
             ),
             inline=False,
         )
         await interaction.response.edit_message(embed=embed, view=ChooseExistingView())
 
-    @discord.ui.button(label="Manage Ticket Categories", emoji="🗂️", style=discord.ButtonStyle.primary, custom_id="stoney_solid:categories", row=1)
+    @discord.ui.button(label="Ticket Menu Options", emoji="🗂️", style=discord.ButtonStyle.primary, custom_id="stoney_solid:categories", row=1)
     async def categories(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         if not await _require_setup_permission(interaction):
             return
@@ -434,16 +756,26 @@ class SolidSetupView(discord.ui.View):
         embed, view = await _build_category_manager_payload(guild)
         await _edit_or_followup(interaction, embed=embed, view=view)
 
-    @discord.ui.button(label="Use This Channel for Status", emoji="📌", style=discord.ButtonStyle.secondary, custom_id="stoney_solid:status", row=2)
+    @discord.ui.button(label="Set This as Status Channel", emoji="📌", style=discord.ButtonStyle.secondary, custom_id="stoney_solid:status", row=2)
     async def status_channel(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         if not await _require_setup_permission(interaction):
             return
         if interaction.channel is None or not isinstance(interaction.channel, discord.TextChannel):
             return await interaction.response.send_message("❌ Use this inside the text channel you want as the bot status channel.", ephemeral=True)
         await _safe_defer_update(interaction)
-        await _save_config(interaction, {"status_channel_id": _snowflake(interaction.channel), "bot_status_channel_id": _snowflake(interaction.channel)})
+        await _save_config(
+            interaction,
+            {
+                "status_channel_id": _snowflake(interaction.channel),
+                "bot_status_channel_id": _snowflake(interaction.channel),
+            },
+        )
         embed, view = await _build_main_setup_payload(interaction.guild)  # type: ignore[arg-type]
-        embed.add_field(name="Saved", value=f"Bot status channel set to {interaction.channel.mention}.", inline=False)
+        embed.add_field(
+            name="Saved",
+            value=f"Bot status channel set to {interaction.channel.mention}.\n\nNext: Run Health Check.",
+            inline=False,
+        )
         await _edit_or_followup(interaction, embed=embed, view=view)
 
     @discord.ui.button(label="Run Health Check", emoji="🩺", style=discord.ButtonStyle.secondary, custom_id="stoney_solid:health", row=2)
@@ -455,46 +787,123 @@ class SolidSetupView(discord.ui.View):
             return await interaction.response.send_message("❌ This must be used inside a server.", ephemeral=True)
         await _safe_defer_update(interaction)
         embed = await _build_health_embed(guild)
-        await _edit_or_followup(interaction, embed=embed, view=BackToSetupView())
+        await _edit_or_followup(interaction, embed=embed, view=SetupNavView())
+
+    @discord.ui.button(label="Start Over / Cleanup", emoji="🧹", style=discord.ButtonStyle.secondary, custom_id="stoney_solid:cleanup", row=3)
+    async def cleanup(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        if not await _require_setup_permission(interaction):
+            return
+        embed = discord.Embed(
+            title="🧹 Start Over / Cleanup",
+            description=(
+                "Use cleanup when setup got messy.\n\n"
+                "**Safe rule:** cleanup should only remove things Stoney created or things you explicitly pick. "
+                "It should not delete unrelated server channels, roles, tickets, or messages.\n\n"
+                "Use `/stoney cleanup` for cleanup tools, then return to `/stoney setup`."
+            ),
+            color=discord.Color.blurple(),
+        )
+        embed.add_field(
+            name="Recommended Order",
+            value=(
+                "1. View Current Setup.\n"
+                "2. Cleanup only the wrong item.\n"
+                "3. Come back here.\n"
+                "4. Use My Existing Server to pick the correct item.\n"
+                "5. Run Health Check."
+            ),
+            inline=False,
+        )
+        await interaction.response.edit_message(embed=embed, view=SetupNavView())
 
 
 # ---------------------------------------------------------------------------
-# validated existing item setup
+# existing item setup
 # ---------------------------------------------------------------------------
 
 
-class ChooseExistingView(BackToSetupView):
+class ChooseExistingView(SetupNavView):
     @discord.ui.button(label="Ticket Basics", emoji="🎫", style=discord.ButtonStyle.primary, custom_id="stoney_solid:existing_ticket", row=0)
     async def ticket(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         if not await _require_setup_permission(interaction):
             return
-        embed = discord.Embed(title="🎫 Ticket Basics", description="Pick the existing ticket items. Each save is validated first.", color=discord.Color.blurple())
+        embed = discord.Embed(
+            title="🎫 Ticket Basics",
+            description="Pick where tickets go. Use your exact server items. Names do not matter. Each save is checked first.",
+            color=discord.Color.blurple(),
+        )
         await interaction.response.edit_message(embed=embed, view=TicketBasicsPickerView())
 
-    @discord.ui.button(label="Verification Roles", emoji="✅", style=discord.ButtonStyle.primary, custom_id="stoney_solid:existing_roles", row=1)
+    @discord.ui.button(label="Access Roles", emoji="🎭", style=discord.ButtonStyle.primary, custom_id="stoney_solid:existing_roles", row=1)
     async def roles(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         if not await _require_setup_permission(interaction):
             return
-        embed = discord.Embed(title="✅ Verification Roles", description="Pick the roles Stoney should assign/remove during verification.", color=discord.Color.blurple())
-        await interaction.response.edit_message(embed=embed, view=VerificationRolesPickerView())
+        embed = discord.Embed(
+            title="🎭 Access Roles",
+            description=(
+                "Optional. Pick the exact roles your server uses. They can be named anything.\n"
+                "If your server does not use one of these role steps, leave it blank."
+            ),
+            color=discord.Color.blurple(),
+        )
+        embed.add_field(
+            name="Simple Meaning",
+            value=(
+                "• **New / waiting role**: role people have before approval, if your server uses one.\n"
+                "• **Approved role**: role people get after passing verification, if used.\n"
+                "• **Full access role**: extra member/resident role, if used.\n"
+                "• **Server-control role**: people allowed to run setup/admin tools."
+            ),
+            inline=False,
+        )
+        await interaction.response.edit_message(embed=embed, view=AccessRolesPickerView())
 
     @discord.ui.button(label="Verification Channels", emoji="🎙️", style=discord.ButtonStyle.primary, custom_id="stoney_solid:existing_channels", row=2)
     async def channels(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         if not await _require_setup_permission(interaction):
             return
-        embed = discord.Embed(title="🎙️ Verification Channels", description="Pick verification text/voice channels.", color=discord.Color.blurple())
+        embed = discord.Embed(
+            title="🎙️ Verification Channels",
+            description="Optional. Pick the channels your verification flow uses. If your server does not use one, leave it blank.",
+            color=discord.Color.blurple(),
+        )
         await interaction.response.edit_message(embed=embed, view=VerificationChannelsPickerView())
 
     @discord.ui.button(label="Logs + Status", emoji="🧾", style=discord.ButtonStyle.primary, custom_id="stoney_solid:existing_logs", row=3)
     async def logs(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         if not await _require_setup_permission(interaction):
             return
-        embed = discord.Embed(title="🧾 Logs + Status", description="Pick logging/status channels.", color=discord.Color.blurple())
+        embed = discord.Embed(
+            title="🧾 Logs + Status",
+            description="Pick where logs and status messages go. Names do not matter.",
+            color=discord.Color.blurple(),
+        )
         await interaction.response.edit_message(embed=embed, view=LogsStatusPickerView())
+
+    @discord.ui.button(label="Behavior Settings", emoji="⚙️", style=discord.ButtonStyle.secondary, custom_id="stoney_solid:existing_behavior", row=3)
+    async def behavior(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        if not await _require_setup_permission(interaction):
+            return
+        embed = discord.Embed(
+            title="⚙️ Behavior Settings",
+            description=(
+                "Choose how strict setup should be. Keep this simple: pick the closest style, then save prefix/timer only if you need them."
+            ),
+            color=discord.Color.blurple(),
+        )
+        await interaction.response.edit_message(embed=embed, view=BehaviorSettingsView())
 
 
 class SaveRoleSelect(discord.ui.RoleSelect):
-    def __init__(self, *, placeholder: str, columns: tuple[str, ...], require_manage: bool, also_same: tuple[str, ...] = (), row: int = 0) -> None:
+    def __init__(
+        self,
+        *,
+        placeholder: str,
+        columns: tuple[str, ...],
+        require_manage: bool,
+        also_same: tuple[str, ...] = (),
+        row: int = 0,
+    ) -> None:
         super().__init__(placeholder=placeholder, min_values=1, max_values=1, row=row)
         self.columns = columns
         self.also_same = also_same
@@ -507,6 +916,7 @@ class SaveRoleSelect(discord.ui.RoleSelect):
         role = self.values[0]
         if guild is None:
             return await interaction.response.send_message("❌ This must be used inside a server.", ephemeral=True)
+
         blockers: list[str] = []
         warnings: list[str] = []
         if role.is_default():
@@ -519,15 +929,30 @@ class SaveRoleSelect(discord.ui.RoleSelect):
             blockers.append(reason)
         elif not manageable:
             warnings.append(f"Bot may not be able to manage {role.mention}: {reason}")
+
         if blockers:
-            embed = discord.Embed(title="🚫 Role Not Saved", description="\n".join(f"• {x}" for x in blockers), color=discord.Color.red())
-            return await interaction.response.send_message(embed=embed, ephemeral=True)
+            embed = discord.Embed(
+                title="🚫 Role Not Saved",
+                description="\n".join(f"• {x}" for x in blockers)
+                + "\n\nWhat to do next: pick a different role, or move Stoney's bot role above that role and try again.",
+                color=discord.Color.red(),
+            )
+            return await interaction.response.send_message(embed=embed, ephemeral=True, allowed_mentions=discord.AllowedMentions.none())
+
         payload = {column: _snowflake(role) for column in self.columns + self.also_same}
         await _save_config(interaction, payload)
-        embed = discord.Embed(title="✅ Saved Setup Role", description=f"Saved {_mention(role)}.", color=discord.Color.green())
+        embed = discord.Embed(
+            title="✅ Saved Setup Role",
+            description=(
+                f"Saved {_mention(role)}.\n\n"
+                "Names do not matter. Stoney saved the role ID.\n\n"
+                "Next: pick another item, press Back to Setup, or Run Health Check."
+            ),
+            color=discord.Color.green(),
+        )
         if warnings:
             embed.add_field(name="Warnings", value="\n".join(f"• {x}" for x in warnings), inline=False)
-        await interaction.response.send_message(embed=embed, ephemeral=True)
+        await interaction.response.send_message(embed=embed, ephemeral=True, allowed_mentions=discord.AllowedMentions.none())
 
 
 class SaveChannelSelect(discord.ui.ChannelSelect):
@@ -557,6 +982,7 @@ class SaveChannelSelect(discord.ui.ChannelSelect):
         channel = self.values[0]
         if guild is None:
             return await interaction.response.send_message("❌ This must be used inside a server.", ephemeral=True)
+
         blockers: list[str] = []
         bot_member = _bot_member(guild)
         if bot_member is None:
@@ -580,70 +1006,375 @@ class SaveChannelSelect(discord.ui.ChannelSelect):
                 missing.append("Manage Channels")
             if missing:
                 blockers.append(f"{channel.mention} is missing bot permissions: {', '.join(missing)}")
+
         if blockers:
-            embed = discord.Embed(title="🚫 Channel Not Saved", description="\n".join(f"• {x}" for x in blockers), color=discord.Color.red())
-            return await interaction.response.send_message(embed=embed, ephemeral=True)
+            embed = discord.Embed(
+                title="🚫 Channel Not Saved",
+                description="\n".join(f"• {x}" for x in blockers)
+                + "\n\nWhat to do next: pick a different channel, or fix Stoney's permissions in that channel and try again.",
+                color=discord.Color.red(),
+            )
+            return await interaction.response.send_message(embed=embed, ephemeral=True, allowed_mentions=discord.AllowedMentions.none())
+
         payload = {column: _snowflake(channel) for column in self.columns + self.also_same}
         await _save_config(interaction, payload)
-        await interaction.response.send_message(embed=discord.Embed(title="✅ Saved Setup Channel", description=f"Saved {_mention(channel)}.", color=discord.Color.green()), ephemeral=True)
+        embed = discord.Embed(
+            title="✅ Saved Setup Channel",
+            description=(
+                f"Saved {_mention(channel)}.\n\n"
+                "Names do not matter. Stoney saved the channel ID.\n\n"
+                "Next: pick another item, press Back to Setup, or Run Health Check."
+            ),
+            color=discord.Color.green(),
+        )
+        await interaction.response.send_message(embed=embed, ephemeral=True, allowed_mentions=discord.AllowedMentions.none())
 
 
-class TicketBasicsPickerView(BackToSetupView):
+class TicketBasicsPickerView(SetupNavView):
     def __init__(self) -> None:
         super().__init__()
-        self.add_item(SaveChannelSelect(placeholder="Open ticket category", columns=("ticket_category_id",), channel_types=[discord.ChannelType.category], row=0, require_category_manage=True))
-        self.add_item(SaveChannelSelect(placeholder="Archive/closed ticket category", columns=("ticket_archive_category_id",), channel_types=[discord.ChannelType.category], row=1, require_category_manage=True))
-        self.add_item(SaveRoleSelect(placeholder="Ticket staff role", columns=("staff_role_id",), also_same=("vc_staff_role_id",), require_manage=False, row=2))
-        self.add_item(SaveChannelSelect(placeholder="Transcript text channel", columns=("transcripts_channel_id",), channel_types=[discord.ChannelType.text], row=3, require_text=True, require_files=True))
+        self.add_item(
+            SaveChannelSelect(
+                placeholder="Where open tickets go",
+                columns=("ticket_category_id",),
+                channel_types=[discord.ChannelType.category],
+                row=0,
+                require_category_manage=True,
+            )
+        )
+        self.add_item(
+            SaveChannelSelect(
+                placeholder="Where closed tickets go",
+                columns=("ticket_archive_category_id",),
+                also_same=("ticket_closed_category_id",),
+                channel_types=[discord.ChannelType.category],
+                row=1,
+                require_category_manage=True,
+            )
+        )
+        self.add_item(
+            SaveRoleSelect(
+                placeholder="Staff role that handles tickets",
+                columns=("staff_role_id",),
+                also_same=("vc_staff_role_id",),
+                require_manage=False,
+                row=2,
+            )
+        )
+        self.add_item(
+            SaveChannelSelect(
+                placeholder="Where users press Create Ticket",
+                columns=("ticket_panel_channel_id",),
+                also_same=("support_channel_id",),
+                channel_types=[discord.ChannelType.text],
+                row=3,
+                require_text=True,
+            )
+        )
 
 
-class VerificationRolesPickerView(BackToSetupView):
+class AccessRolesPickerView(SetupNavView):
     def __init__(self) -> None:
         super().__init__()
-        self.add_item(SaveRoleSelect(placeholder="Unverified role", columns=("unverified_role_id",), require_manage=True, row=0))
-        self.add_item(SaveRoleSelect(placeholder="Verified role", columns=("verified_role_id",), require_manage=True, row=1))
-        self.add_item(SaveRoleSelect(placeholder="Member/Resident role", columns=("resident_role_id",), require_manage=True, row=2))
+        self.add_item(
+            SaveRoleSelect(
+                placeholder="New / waiting role (optional, any name)",
+                columns=("unverified_role_id",),
+                require_manage=True,
+                row=0,
+            )
+        )
+        self.add_item(
+            SaveRoleSelect(
+                placeholder="Approved role (optional, any name)",
+                columns=("verified_role_id",),
+                require_manage=True,
+                row=1,
+            )
+        )
+        self.add_item(
+            SaveRoleSelect(
+                placeholder="Full access / member role (optional, any name)",
+                columns=("resident_role_id",),
+                require_manage=True,
+                row=2,
+            )
+        )
+        self.add_item(
+            SaveRoleSelect(
+                placeholder="Server-control / setup admin role",
+                columns=("server_control_role_id",),
+                also_same=("control_role_id", "perm_role_id"),
+                require_manage=False,
+                row=3,
+            )
+        )
 
 
-class VerificationChannelsPickerView(BackToSetupView):
+VerificationRolesPickerView = AccessRolesPickerView
+
+
+class VerificationChannelsPickerView(SetupNavView):
     def __init__(self) -> None:
         super().__init__()
-        self.add_item(SaveChannelSelect(placeholder="Verify text channel", columns=("verify_channel_id",), channel_types=[discord.ChannelType.text], row=0, require_text=True))
-        self.add_item(SaveChannelSelect(placeholder="Support/ticket panel channel", columns=("ticket_panel_channel_id",), also_same=("support_channel_id",), channel_types=[discord.ChannelType.text], row=1, require_text=True))
-        self.add_item(SaveChannelSelect(placeholder="VC verification voice channel", columns=("vc_verify_channel_id",), channel_types=[discord.ChannelType.voice], row=2))
-        self.add_item(SaveChannelSelect(placeholder="VC queue/status text channel", columns=("vc_verify_queue_channel_id",), channel_types=[discord.ChannelType.text], row=3, require_text=True))
+        self.add_item(
+            SaveChannelSelect(
+                placeholder="Text channel for verification, if used",
+                columns=("verify_channel_id",),
+                channel_types=[discord.ChannelType.text],
+                row=0,
+                require_text=True,
+            )
+        )
+        self.add_item(
+            SaveChannelSelect(
+                placeholder="Voice verification channel, if used",
+                columns=("vc_verify_channel_id",),
+                channel_types=[discord.ChannelType.voice],
+                row=1,
+            )
+        )
+        self.add_item(
+            SaveChannelSelect(
+                placeholder="Staff VC queue/status channel, if used",
+                columns=("vc_verify_queue_channel_id",),
+                channel_types=[discord.ChannelType.text],
+                row=2,
+                require_text=True,
+            )
+        )
+        self.add_item(
+            SaveChannelSelect(
+                placeholder="Welcome/start channel, if used",
+                columns=("welcome_channel_id",),
+                channel_types=[discord.ChannelType.text],
+                row=3,
+                require_text=True,
+            )
+        )
 
 
-class LogsStatusPickerView(BackToSetupView):
+class LogsStatusPickerView(SetupNavView):
     def __init__(self) -> None:
         super().__init__()
-        self.add_item(SaveChannelSelect(placeholder="Modlog channel", columns=("modlog_channel_id",), also_same=("raidlog_channel_id", "force_verify_log_channel_id"), channel_types=[discord.ChannelType.text], row=0, require_text=True))
-        self.add_item(SaveChannelSelect(placeholder="Join/leave log channel", columns=("join_log_channel_id",), channel_types=[discord.ChannelType.text], row=1, require_text=True))
-        self.add_item(SaveChannelSelect(placeholder="Bot status channel", columns=("status_channel_id",), also_same=("bot_status_channel_id",), channel_types=[discord.ChannelType.text], row=2, require_text=True))
+        self.add_item(
+            SaveChannelSelect(
+                placeholder="Where moderation/security logs go",
+                columns=("modlog_channel_id",),
+                also_same=("raidlog_channel_id", "raid_log_channel_id", "force_verify_log_channel_id"),
+                channel_types=[discord.ChannelType.text],
+                row=0,
+                require_text=True,
+            )
+        )
+        self.add_item(
+            SaveChannelSelect(
+                placeholder="Where join/leave logs go",
+                columns=("join_log_channel_id",),
+                also_same=("join_exit_log_channel_id",),
+                channel_types=[discord.ChannelType.text],
+                row=1,
+                require_text=True,
+            )
+        )
+        self.add_item(
+            SaveChannelSelect(
+                placeholder="Where bot status messages go",
+                columns=("status_channel_id",),
+                also_same=("bot_status_channel_id", "health_channel_id"),
+                channel_types=[discord.ChannelType.text],
+                row=2,
+                require_text=True,
+            )
+        )
+        self.add_item(
+            SaveChannelSelect(
+                placeholder="Bans / blacklist channel, if used",
+                columns=("bans_channel_id",),
+                also_same=("blacklist_channel_id",),
+                channel_types=[discord.ChannelType.text],
+                row=3,
+                require_text=True,
+            )
+        )
 
 
 # ---------------------------------------------------------------------------
-# category manager
+# behavior settings
 # ---------------------------------------------------------------------------
 
 
-async def _build_category_manager_payload(guild: discord.Guild, *, title: str = "🗂️ Manage Ticket Categories") -> tuple[discord.Embed, "CategoryManagerView"]:
+class VerificationModeSelect(discord.ui.Select):
+    def __init__(self) -> None:
+        options = [
+            discord.SelectOption(
+                label="No access roles",
+                value="none",
+                description="Stoney will not require a waiting/approved/member role style.",
+                emoji="🚫",
+            ),
+            discord.SelectOption(
+                label="One approved role only",
+                value="single_approved_role",
+                description="Users only get one approved role after verification.",
+                emoji="✅",
+            ),
+            discord.SelectOption(
+                label="Waiting role → approved role",
+                value="waiting_to_approved",
+                description="Users start with one role, then switch to approved.",
+                emoji="🔁",
+            ),
+            discord.SelectOption(
+                label="Waiting → approved → full access",
+                value="waiting_to_approved_to_member",
+                description="Use all three role steps if your server wants that.",
+                emoji="🎭",
+            ),
+            discord.SelectOption(
+                label="Custom / staff controlled",
+                value="custom",
+                description="Use your saved role picks, but do not assume a fixed flow.",
+                emoji="🧩",
+            ),
+        ]
+        super().__init__(placeholder="Choose how your server handles access roles", min_values=1, max_values=1, options=options, row=0)
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        if not await _require_setup_permission(interaction):
+            return
+        mode = str(self.values[0])
+        await _save_config(interaction, {"verification_mode": mode})
+        embed = discord.Embed(
+            title="✅ Saved Access Role Style",
+            description=(
+                f"Saved mode: `{mode}`\n\n"
+                "Next: pick custom roles if needed, then Run Health Check."
+            ),
+            color=discord.Color.green(),
+        )
+        await interaction.response.send_message(embed=embed, ephemeral=True, allowed_mentions=discord.AllowedMentions.none())
+
+
+class BehaviorSettingsView(SetupNavView):
+    def __init__(self) -> None:
+        super().__init__()
+        self.add_item(VerificationModeSelect())
+
+    @discord.ui.button(label="Set Prefix / Timer", emoji="⏱️", style=discord.ButtonStyle.primary, custom_id="stoney_solid:behavior_modal", row=1)
+    async def modal(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        if not await _require_setup_permission(interaction):
+            return
+        await interaction.response.send_modal(BehaviorSettingsModal())
+
+    @discord.ui.button(label="Clear Optional Access Roles", emoji="🧽", style=discord.ButtonStyle.secondary, custom_id="stoney_solid:clear_access_roles", row=1)
+    async def clear_access_roles(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        if not await _require_setup_permission(interaction):
+            return
+        await _clear_config_keys(interaction, ("unverified_role_id", "verified_role_id", "resident_role_id"))
+        embed = discord.Embed(
+            title="✅ Optional Access Roles Cleared",
+            description=(
+                "Cleared the saved new/waiting, approved, and full-access role slots.\n\n"
+                "This did not delete any Discord roles. It only removed Stoney's saved choices."
+            ),
+            color=discord.Color.green(),
+        )
+        await interaction.response.send_message(embed=embed, ephemeral=True, allowed_mentions=discord.AllowedMentions.none())
+
+
+class BehaviorSettingsModal(discord.ui.Modal, title="Behavior Settings"):
+    ticket_prefix = discord.ui.TextInput(
+        label="Ticket channel prefix",
+        placeholder="ticket",
+        required=False,
+        max_length=24,
+    )
+    verify_kick_hours = discord.ui.TextInput(
+        label="Kick unverified users after hours",
+        placeholder="24",
+        required=False,
+        max_length=4,
+    )
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        if not await _require_setup_permission(interaction):
+            return
+
+        payload: dict[str, Any] = {}
+        prefix = _none_if_blank(self.ticket_prefix.value)
+        if prefix:
+            cleaned = re.sub(r"[^a-zA-Z0-9_-]+", "-", prefix).strip("-")[:24]
+            payload["ticket_prefix"] = cleaned or "ticket"
+
+        kick_raw = _none_if_blank(self.verify_kick_hours.value)
+        if kick_raw:
+            hours = _safe_int(kick_raw, 24)
+            if hours < 1 or hours > 720:
+                embed = discord.Embed(
+                    title="🚫 Timer Not Saved",
+                    description="Use a number from 1 to 720 hours. Example: `24`.",
+                    color=discord.Color.red(),
+                )
+                return await interaction.response.send_message(embed=embed, ephemeral=True)
+            payload["verify_kick_hours"] = str(hours)
+
+        if not payload:
+            embed = discord.Embed(
+                title="Nothing Changed",
+                description="No values were entered. Press Back to Setup to continue.",
+                color=discord.Color.dark_grey(),
+            )
+            return await interaction.response.send_message(embed=embed, ephemeral=True)
+
+        await _save_config(interaction, payload)
+        embed = discord.Embed(
+            title="✅ Behavior Settings Saved",
+            description="Saved your settings. Next: Run Health Check.",
+            color=discord.Color.green(),
+        )
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+
+
+# ---------------------------------------------------------------------------
+# ticket category / menu manager
+# ---------------------------------------------------------------------------
+
+
+async def _build_category_manager_payload(
+    guild: discord.Guild,
+    *,
+    title: str = "🗂️ Ticket Menu Options",
+) -> tuple[discord.Embed, "CategoryManagerView"]:
     load = await _category_load(guild)
     embed = discord.Embed(
         title=title,
         description=(
-            "These are logical routing/intake categories, not Discord channel categories.\n"
-            "Use **Ticket Basics** for the actual Discord open/archive categories."
+            "These are the choices users see when they open a ticket, like Support, Appeal, or Report.\n"
+            "This is not where ticket channels are stored. Use **Ticket Basics** for open/closed ticket folders."
         ),
         color=discord.Color.blurple() if not load.error else discord.Color.red(),
         timestamp=now_utc(),
     )
     if load.error:
         embed.add_field(name="Database Problem", value=load.error[:1024], inline=False)
-        embed.add_field(name="Fix", value="Confirm the `ticket_categories` table exists and Supabase is reachable, then restart or refresh.", inline=False)
+        embed.add_field(
+            name="What To Do Next",
+            value="Confirm the `ticket_categories` table exists and Supabase is reachable, then restart or refresh.",
+            inline=False,
+        )
     else:
-        embed.add_field(name="Current Categories", value=_category_list_text(load.rows), inline=False)
+        embed.add_field(name="Current Ticket Menu Options", value=_category_list_text(load.rows), inline=False)
         embed.add_field(name="Safety", value=_category_governance_text(load.rows), inline=False)
+        embed.add_field(
+            name="Plain Meaning",
+            value=(
+                "• **Name** is what staff/users see.\n"
+                "• **Keywords** help the bot recommend the right option.\n"
+                "• **Default** is used when Stoney is unsure."
+            ),
+            inline=False,
+        )
     return embed, CategoryManagerView(rows=load.rows, db_error=load.error)
 
 
@@ -654,97 +1385,148 @@ def _category_options(rows: list[dict[str, Any]], *, placeholder: str) -> list[d
         if not slug:
             continue
         name = str(row.get("name") or slug).strip()
-        intake_type = str(row.get("intake_type") or "general").strip()
+        intake_type = str(row.get("intake_type") or "custom").strip()
         default = "Default • " if bool(row.get("is_default")) else ""
-        options.append(discord.SelectOption(label=_short(name, 95) or slug, description=_short(f"{default}{slug} • {intake_type}", 100), value=slug[:100]))
+        options.append(
+            discord.SelectOption(
+                label=_short(name, 95) or slug,
+                description=_short(f"{default}{slug} • {intake_type}", 100),
+                value=slug[:100],
+            )
+        )
     if not options:
-        options.append(discord.SelectOption(label="No categories available", value="__none__", description=placeholder[:100]))
+        options.append(discord.SelectOption(label="No options available", value="__none__", description=placeholder[:100]))
     return options
 
 
-async def _seed_recommended_categories(guild: discord.Guild) -> tuple[list[str], list[str], str]:
-    from . import ticket_category_admin as category_admin
+def _find_category(rows: list[dict[str, Any]], slug: str) -> Optional[dict[str, Any]]:
+    slug_l = str(slug or "").strip().lower()
+    for row in rows:
+        if str(row.get("slug") or "").strip().lower() == slug_l:
+            return row
+    return None
 
+
+def _category_table_write_sync(guild_id: int, row: dict[str, Any], *, set_default: bool = False) -> tuple[bool, str]:
+    sb = get_supabase()
+    if sb is None:
+        return False, "Supabase is not available."
+
+    slug = _slugify(row.get("slug") or row.get("name"))
+    payload = {
+        "guild_id": str(int(guild_id)),
+        "name": str(row.get("name") or slug).strip()[:80],
+        "display_name": str(row.get("name") or slug).strip()[:80],
+        "slug": slug,
+        "description": str(row.get("description") or "").strip()[:300],
+        "intake_type": str(row.get("intake_type") or "custom").strip().lower(),
+        "match_keywords": row.get("match_keywords") or [],
+        "sort_order": _safe_int(row.get("sort_order"), 50),
+        "is_default": bool(row.get("is_default")),
+        "color": str(row.get("color") or "#45d483")[:16],
+    }
+    if payload["intake_type"] not in INTAKE_TYPE_OPTIONS:
+        payload["intake_type"] = "custom"
+
+    existing_res = (
+        sb.table("ticket_categories")
+        .select("*")
+        .eq("guild_id", str(int(guild_id)))
+        .eq("slug", slug)
+        .limit(1)
+        .execute()
+    )
+    existing = getattr(existing_res, "data", None) or []
+
+    if set_default or payload["is_default"]:
+        try:
+            sb.table("ticket_categories").update({"is_default": False}).eq("guild_id", str(int(guild_id))).execute()
+        except Exception:
+            pass
+        payload["is_default"] = True
+
+    if existing:
+        sb.table("ticket_categories").update(payload).eq("guild_id", str(int(guild_id))).eq("slug", slug).execute()
+    else:
+        sb.table("ticket_categories").insert(payload).execute()
+    return True, slug
+
+
+async def _write_category(guild: discord.Guild, row: dict[str, Any], *, set_default: bool = False) -> tuple[bool, str]:
+    return await asyncio.to_thread(_category_table_write_sync, int(guild.id), dict(row), set_default=set_default)
+
+
+async def _seed_recommended_categories(guild: discord.Guild) -> tuple[list[str], list[str], str]:
     load = await _category_load(guild)
     if load.error:
         return [], [], load.error
-    existing = {category_admin._safe_str(row.get("slug")).lower() for row in load.rows}
+    existing = {str(row.get("slug") or "").strip().lower() for row in load.rows}
     created: list[str] = []
     skipped: list[str] = []
     has_default = any(bool(row.get("is_default")) for row in load.rows)
 
     for item in RECOMMENDED_CATEGORIES:
-        slug = category_admin._slugify(str(item["slug"]))
+        slug = _slugify(item["slug"])
         if slug in existing:
             skipped.append(slug)
             continue
         payload = dict(item)
-        payload["guild_id"] = str(guild.id)
         payload["slug"] = slug
         payload["is_default"] = bool(item.get("is_default")) and not has_default
-        ok = await category_admin._insert_category(payload)
-        if ok:
-            created.append(slug)
-            existing.add(slug)
-            if payload["is_default"]:
-                await category_admin._set_default(guild.id, slug)
-                has_default = True
-        else:
-            return created, skipped, f"Database insert failed while creating `{slug}`."
+        ok, msg = await _write_category(guild, payload, set_default=bool(payload["is_default"]))
+        if not ok:
+            return created, skipped, msg
+        created.append(slug)
+        existing.add(slug)
+        if payload["is_default"]:
+            has_default = True
 
-    if not has_default:
-        rows = (await _category_load(guild)).rows
-        if rows:
-            first_slug = category_admin._safe_str(rows[0].get("slug"))
-            if first_slug:
-                await category_admin._set_default(guild.id, first_slug)
     return created, skipped, ""
 
 
-async def _delete_category_safely(guild: discord.Guild, slug: str) -> tuple[bool, str]:
-    from . import ticket_category_admin as category_admin
+class CategorySelect(discord.ui.Select):
+    def __init__(self, rows: list[dict[str, Any]], *, action: str, placeholder: str, row: int) -> None:
+        super().__init__(placeholder=placeholder, min_values=1, max_values=1, options=_category_options(rows, placeholder=placeholder), row=row)
+        self.rows = rows
+        self.action = action
 
-    slug_clean = category_admin._slugify(slug)
-    row = await category_admin._fetch_category_by_slug(guild.id, slug_clean)
-    if not row:
-        return False, f"Category `{slug_clean}` was not found."
-    rows_before = await category_admin._fetch_categories(guild.id)
-    if len(rows_before) <= 1:
-        return False, "You cannot delete the only remaining ticket category. Create another category first."
-    verification_rows = category_admin._verification_like_categories(rows_before)
-    deleting_verification_like = any(category_admin._safe_str(x.get("slug")).lower() == slug_clean for x in verification_rows)
-    if deleting_verification_like and len(verification_rows) <= 1:
-        return False, "You cannot delete the only verification-like category. Create another verification category first."
-    replacement_default = category_admin._choose_replacement_default(rows_before, slug_clean) if bool(row.get("is_default")) else None
-    ok = await category_admin._delete_category(guild.id, slug_clean)
-    if not ok:
-        return False, f"Failed to delete `{slug_clean}`."
-    if replacement_default is not None:
-        replacement_slug = category_admin._safe_str(replacement_default.get("slug"))
-        if replacement_slug:
-            await category_admin._set_default(guild.id, replacement_slug)
-            return True, f"Deleted `{slug_clean}`. Auto-promoted `{replacement_slug}` as the new default."
-    return True, f"Deleted `{slug_clean}`."
+    async def callback(self, interaction: discord.Interaction) -> None:
+        if not await _require_setup_permission(interaction):
+            return
+        guild = interaction.guild
+        if guild is None:
+            return await interaction.response.send_message("❌ This must be used inside a server.", ephemeral=True)
+        value = str(self.values[0])
+        if value == "__none__":
+            return await interaction.response.send_message("No ticket menu option was selected.", ephemeral=True)
+        item = _find_category(self.rows, value)
+        if item is None:
+            return await interaction.response.send_message("That ticket menu option was not found. Press Refresh and try again.", ephemeral=True)
+
+        if self.action == "edit":
+            await interaction.response.send_modal(CategoryModal(existing=item))
+            return
+
+        if self.action == "default":
+            ok, msg = await _write_category(guild, {**item, "is_default": True}, set_default=True)
+            if not ok:
+                embed = discord.Embed(title="🚫 Default Not Saved", description=msg, color=discord.Color.red())
+                return await interaction.response.send_message(embed=embed, ephemeral=True)
+            embed, view = await _build_category_manager_payload(guild, title="✅ Default Ticket Option Saved")
+            await _edit_or_followup(interaction, embed=embed, view=view)
+            return
 
 
-class CategoryManagerView(BackToSetupView):
+class CategoryManagerView(SetupNavView):
     def __init__(self, *, rows: list[dict[str, Any]], db_error: str = "") -> None:
         super().__init__()
         self.rows = rows
         self.db_error = db_error
-        if db_error:
-            for child in self.children:
-                if getattr(child, "custom_id", "") != "stoney_solid:cat_refresh" and getattr(child, "custom_id", "") != "stoney_solid:back":
-                    child.disabled = True
-        elif not rows:
-            try:
-                self.edit_category.disabled = True
-                self.set_default.disabled = True
-                self.delete_category.disabled = True
-            except Exception:
-                pass
+        if not db_error:
+            self.add_item(CategorySelect(rows, action="edit", placeholder="Edit a ticket menu option", row=0))
+            self.add_item(CategorySelect(rows, action="default", placeholder="Pick the default ticket option", row=1))
 
-    @discord.ui.button(label="Create Recommended", emoji="🧱", style=discord.ButtonStyle.success, custom_id="stoney_solid:cat_seed", row=0)
+    @discord.ui.button(label="Create Recommended", emoji="✨", style=discord.ButtonStyle.success, custom_id="stoney_solid:cat_seed", row=2)
     async def seed(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         if not await _require_setup_permission(interaction):
             return
@@ -753,37 +1535,25 @@ class CategoryManagerView(BackToSetupView):
             return await interaction.response.send_message("❌ This must be used inside a server.", ephemeral=True)
         await _safe_defer_update(interaction)
         created, skipped, error = await _seed_recommended_categories(guild)
-        embed, view = await _build_category_manager_payload(guild, title="🧱 Recommended Categories")
         if error:
-            embed.add_field(name="Result", value=f"🚫 {error}", inline=False)
-            embed.color = discord.Color.red()
-        elif created:
-            embed.add_field(name="Created", value=", ".join(f"`{x}`" for x in created), inline=False)
-        else:
-            embed.add_field(name="Result", value="✅ Recommended categories already exist.", inline=False)
-        if skipped:
-            embed.add_field(name="Already existed", value=", ".join(f"`{x}`" for x in skipped[:20]), inline=False)
+            embed = discord.Embed(
+                title="🚫 Recommended Options Not Created",
+                description=f"{error}\n\nWhat to do next: check Supabase and try again.",
+                color=discord.Color.red(),
+            )
+            return await _edit_or_followup(interaction, embed=embed, view=SetupNavView())
+        embed, view = await _build_category_manager_payload(guild, title="✅ Ticket Menu Options Checked")
+        embed.add_field(name="Created", value=_line_list([f"`{x}`" for x in created], empty="Nothing new created."), inline=False)
+        embed.add_field(name="Already Existed", value=_line_list([f"`{x}`" for x in skipped], empty="None"), inline=False)
         await _edit_or_followup(interaction, embed=embed, view=view)
 
-    @discord.ui.button(label="Add Category", emoji="➕", style=discord.ButtonStyle.primary, custom_id="stoney_solid:cat_add", row=0)
-    async def add_category(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+    @discord.ui.button(label="Add Custom Option", emoji="➕", style=discord.ButtonStyle.primary, custom_id="stoney_solid:cat_add", row=2)
+    async def add(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         if not await _require_setup_permission(interaction):
             return
-        await interaction.response.send_modal(AddTicketCategoryModal(existing_count=len(self.rows)))
+        await interaction.response.send_modal(CategoryModal(existing=None))
 
-    @discord.ui.button(label="Edit Category", emoji="✏️", style=discord.ButtonStyle.primary, custom_id="stoney_solid:cat_edit", row=1)
-    async def edit_category(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        await self._open_select(interaction, action="edit")
-
-    @discord.ui.button(label="Set Default", emoji="⭐", style=discord.ButtonStyle.secondary, custom_id="stoney_solid:cat_default", row=1)
-    async def set_default(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        await self._open_select(interaction, action="default")
-
-    @discord.ui.button(label="Delete Category", emoji="🗑️", style=discord.ButtonStyle.danger, custom_id="stoney_solid:cat_delete", row=2)
-    async def delete_category(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        await self._open_select(interaction, action="delete")
-
-    @discord.ui.button(label="Refresh", emoji="🔄", style=discord.ButtonStyle.secondary, custom_id="stoney_solid:cat_refresh", row=2)
+    @discord.ui.button(label="Refresh", emoji="🔄", style=discord.ButtonStyle.secondary, custom_id="stoney_solid:cat_refresh", row=3)
     async def refresh(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         if not await _require_setup_permission(interaction):
             return
@@ -794,116 +1564,54 @@ class CategoryManagerView(BackToSetupView):
         embed, view = await _build_category_manager_payload(guild)
         await _edit_or_followup(interaction, embed=embed, view=view)
 
-    async def _open_select(self, interaction: discord.Interaction, *, action: str) -> None:
-        if not await _require_setup_permission(interaction):
-            return
-        guild = interaction.guild
-        if guild is None:
-            return await interaction.response.send_message("❌ This must be used inside a server.", ephemeral=True)
-        await _safe_defer_update(interaction)
-        load = await _category_load(guild)
-        if load.error:
-            embed, view = await _build_category_manager_payload(guild)
-            return await _edit_or_followup(interaction, embed=embed, view=view)
-        if not load.rows:
-            embed, view = await _build_category_manager_payload(guild)
-            embed.add_field(name="No Categories", value="Create recommended categories or add one manually first.", inline=False)
-            return await _edit_or_followup(interaction, embed=embed, view=view)
-        label = {"edit": "Edit a category", "default": "Choose the default category", "delete": "Delete a category"}.get(action, "Choose a category")
-        embed = discord.Embed(title=f"🗂️ {label}", description="Pick a category from the dropdown below.", color=discord.Color.blurple())
-        embed.add_field(name="Current Categories", value=_category_list_text(load.rows), inline=False)
-        await _edit_or_followup(interaction, embed=embed, view=CategorySelectActionView(rows=load.rows, action=action))
 
-
-class CategorySelectActionView(BackToSetupView):
-    def __init__(self, *, rows: list[dict[str, Any]], action: str) -> None:
+class CategoryModal(discord.ui.Modal, title="Ticket Menu Option"):
+    def __init__(self, *, existing: Optional[dict[str, Any]]) -> None:
         super().__init__()
-        self.add_item(CategoryActionSelect(rows=rows, action=action))
+        self.existing = existing or {}
 
+        self.name_input = discord.ui.TextInput(
+            label="Name users/staff see",
+            placeholder="Support",
+            default=str(self.existing.get("name") or "")[:80],
+            required=True,
+            max_length=80,
+        )
+        self.slug_input = discord.ui.TextInput(
+            label="Short ID / slug",
+            placeholder="support",
+            default=str(self.existing.get("slug") or "")[:50],
+            required=False,
+            max_length=50,
+        )
+        self.description_input = discord.ui.TextInput(
+            label="Description",
+            placeholder="General help and support tickets.",
+            default=str(self.existing.get("description") or "")[:300],
+            required=False,
+            max_length=300,
+            style=discord.TextStyle.paragraph,
+        )
+        self.keywords_input = discord.ui.TextInput(
+            label="Keywords, comma separated",
+            placeholder="help, support, issue",
+            default=", ".join(str(x) for x in (self.existing.get("match_keywords") or [])[:8])[:200],
+            required=False,
+            max_length=200,
+        )
+        self.type_input = discord.ui.TextInput(
+            label="Type: support/report/appeal/question/bug/custom",
+            placeholder="support",
+            default=str(self.existing.get("intake_type") or "custom")[:30],
+            required=False,
+            max_length=30,
+        )
 
-class CategoryActionSelect(discord.ui.Select):
-    def __init__(self, *, rows: list[dict[str, Any]], action: str) -> None:
-        self.rows = rows
-        self.action = action
-        placeholder = {"edit": "Choose a category to edit", "default": "Choose the default category", "delete": "Choose a category to delete"}.get(action, "Choose a category")
-        super().__init__(placeholder=placeholder, min_values=1, max_values=1, options=_category_options(rows, placeholder=placeholder), row=0)
-
-    async def callback(self, interaction: discord.Interaction) -> None:
-        if not await _require_setup_permission(interaction):
-            return
-        guild = interaction.guild
-        if guild is None:
-            return await interaction.response.send_message("❌ This must be used inside a server.", ephemeral=True)
-        slug = str(self.values[0])
-        if slug == "__none__":
-            return await interaction.response.send_message("❌ No categories are available yet.", ephemeral=True)
-        from . import ticket_category_admin as category_admin
-
-        if self.action == "edit":
-            row = next((x for x in self.rows if str(x.get("slug")) == slug), None)
-            if not row:
-                return await interaction.response.send_message("❌ That category no longer exists. Refresh and try again.", ephemeral=True)
-            return await interaction.response.send_modal(EditTicketCategoryModal(row=row))
-        if self.action == "default":
-            await _safe_defer_update(interaction)
-            ok = await category_admin._set_default(guild.id, slug)
-            embed, view = await _build_category_manager_payload(guild, title="⭐ Default Ticket Category Updated" if ok else "🚫 Default Update Failed")
-            embed.add_field(name="Result", value=(f"`{slug}` is now the default category." if ok else f"Could not set `{slug}` as default."), inline=False)
-            embed.color = discord.Color.green() if ok else discord.Color.red()
-            return await _edit_or_followup(interaction, embed=embed, view=view)
-        if self.action == "delete":
-            row = next((x for x in self.rows if str(x.get("slug")) == slug), None)
-            embed = discord.Embed(title="🗑️ Confirm Category Delete", description=f"Delete `{slug}`?\n\nThis does **not** delete old ticket channels. It only removes this routing/intake category.", color=discord.Color.red())
-            if row:
-                embed.add_field(name="Selected", value=_category_line(row), inline=False)
-            return await interaction.response.edit_message(embed=embed, view=ConfirmDeleteCategoryView(slug=slug))
-
-
-class ConfirmDeleteCategoryView(BackToSetupView):
-    def __init__(self, *, slug: str) -> None:
-        super().__init__()
-        self.slug = slug
-
-    @discord.ui.button(label="Yes, Delete Category", emoji="🗑️", style=discord.ButtonStyle.danger, custom_id="stoney_solid:cat_delete_yes", row=0)
-    async def confirm_delete(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        if not await _require_setup_permission(interaction):
-            return
-        guild = interaction.guild
-        if guild is None:
-            return await interaction.response.send_message("❌ This must be used inside a server.", ephemeral=True)
-        await _safe_defer_update(interaction)
-        ok, message = await _delete_category_safely(guild, self.slug)
-        embed, view = await _build_category_manager_payload(guild, title="✅ Category Deleted" if ok else "🚫 Category Not Deleted")
-        embed.add_field(name="Result", value=message, inline=False)
-        embed.color = discord.Color.green() if ok else discord.Color.red()
-        await _edit_or_followup(interaction, embed=embed, view=view)
-
-    @discord.ui.button(label="Cancel", emoji="↩️", style=discord.ButtonStyle.secondary, custom_id="stoney_solid:cat_delete_cancel", row=1)
-    async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        if not await _require_setup_permission(interaction):
-            return
-        guild = interaction.guild
-        if guild is None:
-            return await interaction.response.send_message("❌ This must be used inside a server.", ephemeral=True)
-        await _safe_defer_update(interaction)
-        embed, view = await _build_category_manager_payload(guild)
-        await _edit_or_followup(interaction, embed=embed, view=view)
-
-
-class AddTicketCategoryModal(discord.ui.Modal):
-    def __init__(self, *, existing_count: int = 0) -> None:
-        super().__init__(title="Add Ticket Category")
-        self.existing_count = int(existing_count)
-        self.name_input = discord.ui.TextInput(label="Display name", placeholder="Support", max_length=120)
-        self.slug_input = discord.ui.TextInput(label="Slug (optional)", placeholder="support", required=False, max_length=80)
-        self.type_input = discord.ui.TextInput(label="Type", placeholder="support, verification, appeal, report, custom", default="support", max_length=40)
-        self.keywords_input = discord.ui.TextInput(label="Routing keywords", placeholder="help, support, issue", required=False, max_length=300)
-        self.description_input = discord.ui.TextInput(label="Description", placeholder="General help and support tickets", required=False, style=discord.TextStyle.paragraph, max_length=500)
         self.add_item(self.name_input)
         self.add_item(self.slug_input)
-        self.add_item(self.type_input)
-        self.add_item(self.keywords_input)
         self.add_item(self.description_input)
+        self.add_item(self.keywords_input)
+        self.add_item(self.type_input)
 
     async def on_submit(self, interaction: discord.Interaction) -> None:
         if not await _require_setup_permission(interaction):
@@ -911,125 +1619,82 @@ class AddTicketCategoryModal(discord.ui.Modal):
         guild = interaction.guild
         if guild is None:
             return await interaction.response.send_message("❌ This must be used inside a server.", ephemeral=True)
-        await _safe_defer_modal(interaction)
-        from . import ticket_category_admin as category_admin
 
-        name = category_admin._normalize_name(str(self.name_input.value or ""))
-        slug = category_admin._slugify(str(self.slug_input.value or name))
-        intake_type = category_admin._safe_str(str(self.type_input.value or "general"), "general").lower()
-        if not name or not slug:
-            return await _category_result(interaction, guild, "🚫 Category Not Created", "Name/slug is invalid.", ok=False)
-        if intake_type not in category_admin._ALLOWED_INTAKE_TYPES:
-            return await _category_result(interaction, guild, "🚫 Category Not Created", f"Invalid type. Use one of: {category_admin._human_intake_types()}", ok=False)
-        if await category_admin._fetch_category_by_slug(guild.id, slug):
-            return await _category_result(interaction, guild, "🚫 Category Not Created", f"Category `{slug}` already exists.", ok=False)
-        rows = (await _category_load(guild)).rows
-        payload = {
-            "guild_id": str(guild.id),
-            "slug": slug,
+        name = str(self.name_input.value or "").strip()
+        slug = _slugify(self.slug_input.value or name)
+        intake_type = str(self.type_input.value or "custom").strip().lower()
+        if intake_type not in INTAKE_TYPE_OPTIONS:
+            intake_type = "custom"
+        sort_order = _safe_int(self.existing.get("sort_order"), 50)
+
+        row = {
+            **self.existing,
             "name": name,
-            "description": category_admin._normalize_description(str(self.description_input.value or "")),
+            "display_name": name,
+            "slug": slug,
+            "description": str(self.description_input.value or "").strip(),
             "intake_type": intake_type,
-            "match_keywords": category_admin._normalize_keywords(str(self.keywords_input.value or "")),
-            "is_default": len(rows) == 0,
-            "sort_order": (len(rows) + 1) * 10,
+            "match_keywords": _split_keywords(self.keywords_input.value),
+            "sort_order": sort_order,
+            "is_default": bool(self.existing.get("is_default", False)),
         }
-        ok = await category_admin._insert_category(payload)
-        if ok and payload["is_default"]:
-            await category_admin._set_default(guild.id, slug)
-        await _category_result(interaction, guild, "✅ Category Created" if ok else "🚫 Category Not Created", f"Created `{slug}`." if ok else "Database insert failed.", ok=ok)
-
-
-class EditTicketCategoryModal(discord.ui.Modal):
-    def __init__(self, *, row: dict[str, Any]) -> None:
-        self.row = row
-        slug = str(row.get("slug") or "")
-        super().__init__(title=f"Edit {slug[:35]}")
-        self.name_input = discord.ui.TextInput(label="Display name", default=str(row.get("name") or slug)[:120], required=False, max_length=120)
-        self.type_input = discord.ui.TextInput(label="Type", default=str(row.get("intake_type") or "general")[:40], required=False, max_length=40)
-        self.keywords_input = discord.ui.TextInput(label="Routing keywords", default=", ".join(str(x) for x in (row.get("match_keywords") or []))[:300], required=False, max_length=300)
-        self.description_input = discord.ui.TextInput(label="Description", default=str(row.get("description") or "")[:500], required=False, style=discord.TextStyle.paragraph, max_length=500)
-        self.sort_input = discord.ui.TextInput(label="Sort order", default=str(row.get("sort_order") if row.get("sort_order") is not None else ""), required=False, max_length=8)
-        self.add_item(self.name_input)
-        self.add_item(self.type_input)
-        self.add_item(self.keywords_input)
-        self.add_item(self.description_input)
-        self.add_item(self.sort_input)
-
-    async def on_submit(self, interaction: discord.Interaction) -> None:
-        if not await _require_setup_permission(interaction):
-            return
-        guild = interaction.guild
-        if guild is None:
-            return await interaction.response.send_message("❌ This must be used inside a server.", ephemeral=True)
-        await _safe_defer_modal(interaction)
-        from . import ticket_category_admin as category_admin
-
-        slug = category_admin._safe_str(self.row.get("slug"))
-        patch: dict[str, Any] = {}
-        name = category_admin._normalize_name(str(self.name_input.value or ""))
-        if name:
-            patch["name"] = name
-        intake_type = category_admin._safe_str(str(self.type_input.value or "general"), "general").lower()
-        if intake_type not in category_admin._ALLOWED_INTAKE_TYPES:
-            return await _category_result(interaction, guild, "🚫 Category Not Updated", f"Invalid type. Use one of: {category_admin._human_intake_types()}", ok=False)
-        patch["intake_type"] = intake_type
-        patch["match_keywords"] = category_admin._normalize_keywords(str(self.keywords_input.value or ""))
-        patch["description"] = category_admin._normalize_description(str(self.description_input.value or ""))
-        sort_raw = str(self.sort_input.value or "").strip()
-        if sort_raw:
-            try:
-                sort_value = int(sort_raw)
-            except Exception:
-                return await _category_result(interaction, guild, "🚫 Category Not Updated", "Sort order must be a number.", ok=False)
-            sort_clean = category_admin._validated_sort_order(sort_value)
-            if sort_clean is None:
-                return await _category_result(interaction, guild, "🚫 Category Not Updated", f"Sort order must be between `{category_admin._MIN_SORT_ORDER}` and `{category_admin._MAX_SORT_ORDER}`.", ok=False)
-            patch["sort_order"] = sort_clean
-        ok = await category_admin._update_category(guild.id, slug, patch)
-        await _category_result(interaction, guild, "✅ Category Updated" if ok else "🚫 Category Not Updated", f"Updated `{slug}`." if ok else "Database update failed.", ok=ok)
-
-
-async def _category_result(interaction: discord.Interaction, guild: discord.Guild, title: str, message: str, *, ok: bool = True) -> None:
-    embed, view = await _build_category_manager_payload(guild, title=title)
-    embed.add_field(name="Result", value=message[:1024], inline=False)
-    embed.color = discord.Color.green() if ok else discord.Color.red()
-    try:
-        await interaction.followup.send(embed=embed, view=view, ephemeral=True)
-    except Exception:
-        await _edit_or_followup(interaction, embed=embed, view=view)
+        ok, msg = await _write_category(guild, row, set_default=bool(row.get("is_default")))
+        if not ok:
+            embed = discord.Embed(
+                title="🚫 Ticket Option Not Saved",
+                description=f"{msg}\n\nWhat to do next: check the values and try again.",
+                color=discord.Color.red(),
+            )
+            return await interaction.response.send_message(embed=embed, ephemeral=True)
+        embed, view = await _build_category_manager_payload(guild, title="✅ Ticket Menu Option Saved")
+        await interaction.response.edit_message(embed=embed, view=view)
 
 
 # ---------------------------------------------------------------------------
-# command registration
+# slash registration
 # ---------------------------------------------------------------------------
 
 
 async def _setup_callback(interaction: discord.Interaction) -> None:
     if not await _require_setup_permission(interaction):
         return
-    await safe_defer(interaction, ephemeral=True)
     guild = interaction.guild
     if guild is None:
-        return await interaction.followup.send("❌ This command must be used inside a server.", ephemeral=True)
-    try:
-        embed, view = await _build_main_setup_payload(guild)
-        await interaction.followup.send(embed=embed, view=view, ephemeral=True)
-    except Exception as e:
-        await interaction.followup.send(f"❌ Setup failed: `{type(e).__name__}: {str(e)[:300]}`", ephemeral=True)
+        return await interaction.response.send_message("❌ This command must be used inside a server.", ephemeral=True)
+    await safe_defer(interaction, ephemeral=True)
+    embed, view = await _build_main_setup_payload(guild)
+    await interaction.followup.send(
+        embed=embed,
+        view=view,
+        ephemeral=True,
+        allowed_mentions=discord.AllowedMentions.none(),
+    )
 
 
 def _attach() -> None:
     global _ATTACHED
     if _ATTACHED:
         return
+
     try:
         existing = stoney_group.get_command("setup")
-        if existing is not None:
-            stoney_group.remove_command("setup")
     except Exception:
-        pass
-    stoney_group.add_command(discord.app_commands.Command(name="setup", description="Start the guided Stoney setup flow.", callback=_setup_callback))
+        existing = None
+
+    if existing is not None:
+        try:
+            stoney_group.remove_command("setup")
+        except Exception:
+            # If the command cannot be removed, keep startup safe and do not add a duplicate.
+            _ATTACHED = True
+            return
+
+    command = discord.app_commands.Command(
+        name="setup",
+        description="Simple guided setup for this server.",
+        callback=_setup_callback,
+    )
+    stoney_group.add_command(command)
     _ATTACHED = True
 
 
@@ -1039,7 +1704,21 @@ _attach()
 def register_public_setup_solid_commands(bot: Any, tree: Any) -> None:
     _ = bot, tree
     _attach()
-    print("✅ public_setup_solid: attached hardened /stoney setup guided flow")
+    try:
+        print("✅ public_setup_solid: attached simple guided /stoney setup flow")
+    except Exception:
+        pass
 
 
-__all__ = ["register_public_setup_solid_commands"]
+__all__ = [
+    "register_public_setup_solid_commands",
+    "SolidSetupView",
+    "ChooseExistingView",
+    "TicketBasicsPickerView",
+    "AccessRolesPickerView",
+    "VerificationRolesPickerView",
+    "VerificationChannelsPickerView",
+    "LogsStatusPickerView",
+    "BehaviorSettingsView",
+    "CategoryManagerView",
+]
