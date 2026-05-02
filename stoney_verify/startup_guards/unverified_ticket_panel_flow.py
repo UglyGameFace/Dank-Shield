@@ -14,6 +14,7 @@ not required because fresh joins can press the panel before Discord/the bot
 finishes assigning that role.
 """
 
+import asyncio
 import inspect
 from typing import Any, Dict, Optional
 
@@ -70,6 +71,16 @@ def _config_role_id(cfg: Any, *names: str) -> int:
     return 0
 
 
+async def _get_guild_config_safe(guild_id: int) -> Any:
+    try:
+        from stoney_verify.guild_config import get_guild_config
+
+        return await get_guild_config(int(guild_id), refresh=True)
+    except Exception as e:
+        _warn(f"config lookup failed guild={guild_id}: {e!r}")
+        return None
+
+
 def _is_staff(member: discord.Member, cfg: Any) -> bool:
     try:
         if member.guild_permissions.administrator or member.guild_permissions.manage_guild or member.guild_permissions.manage_channels:
@@ -102,12 +113,8 @@ async def _is_unverified_only_member(member: discord.Member) -> bool:
     if getattr(member, "bot", False):
         return False
 
-    try:
-        from stoney_verify.guild_config import get_guild_config
-
-        cfg = await get_guild_config(member.guild.id, refresh=True)
-    except Exception as e:
-        _warn(f"config lookup failed while checking verification-needed member guild={getattr(member.guild, 'id', None)} user={getattr(member, 'id', None)}: {e!r}")
+    cfg = await _get_guild_config_safe(member.guild.id)
+    if cfg is None:
         return False
 
     if _is_staff(member, cfg):
@@ -221,7 +228,144 @@ async def _existing_open_ticket_channel(guild: discord.Guild, owner_id: int) -> 
         return None
 
 
-async def _post_verify_ui(channel: discord.TextChannel, member: discord.Member) -> None:
+def _ticket_bot_overwrite() -> discord.PermissionOverwrite:
+    return discord.PermissionOverwrite(
+        view_channel=True,
+        send_messages=True,
+        read_message_history=True,
+        attach_files=True,
+        embed_links=True,
+        use_application_commands=True,
+        manage_messages=True,
+        manage_channels=True,
+    )
+
+
+def _ticket_owner_overwrite() -> discord.PermissionOverwrite:
+    return discord.PermissionOverwrite(
+        view_channel=True,
+        send_messages=True,
+        read_message_history=True,
+        attach_files=True,
+        embed_links=True,
+        use_application_commands=True,
+    )
+
+
+def _ticket_staff_overwrite() -> discord.PermissionOverwrite:
+    return discord.PermissionOverwrite(
+        view_channel=True,
+        send_messages=True,
+        read_message_history=True,
+        attach_files=True,
+        embed_links=True,
+        use_application_commands=True,
+        manage_messages=True,
+    )
+
+
+def _ticket_everyone_overwrite() -> discord.PermissionOverwrite:
+    return discord.PermissionOverwrite(view_channel=False)
+
+
+def _configured_staff_role_ids(cfg: Any) -> list[int]:
+    ids: list[int] = []
+    seen: set[int] = set()
+
+    def add(value: Any) -> None:
+        rid = _safe_int(value, 0)
+        if rid <= 0 or rid in seen:
+            return
+        seen.add(rid)
+        ids.append(rid)
+
+    for name in (
+        "staff_role_id",
+        "ticket_staff_role_id",
+        "support_role_id",
+        "server_control_role_id",
+        "control_role_id",
+        "perm_role_id",
+        "bot_manager_role_id",
+    ):
+        try:
+            add(getattr(cfg, name, 0))
+        except Exception:
+            pass
+
+    try:
+        from stoney_verify import globals as g
+
+        for name in ("STAFF_ROLE_ID", "SUPPORT_ROLE_ID", "MOD_ROLE_ID", "ADMIN_ROLE_ID"):
+            add(getattr(g, name, 0))
+    except Exception:
+        pass
+
+    return ids
+
+
+async def _ensure_ticket_channel_access(channel: discord.TextChannel, member: discord.Member) -> bool:
+    """Repair the ticket channel access before posting verification UI.
+
+    Some older ticket-service paths create the channel but forget to give the bot
+    an explicit overwrite. When the server/category hides private channels from
+    @everyone, the bot can create the channel and then immediately lose access.
+    This repair is intentionally local to the created ticket channel.
+    """
+    ok = True
+    guild = channel.guild
+    cfg = await _get_guild_config_safe(guild.id)
+
+    targets: list[tuple[Any, discord.PermissionOverwrite, str]] = []
+    try:
+        targets.append((guild.default_role, _ticket_everyone_overwrite(), "everyone"))
+    except Exception:
+        pass
+
+    bot_member = None
+    try:
+        bot_member = guild.me or guild.get_member(int(getattr(guild._state.user, "id", 0) or 0))  # type: ignore[attr-defined]
+    except Exception:
+        bot_member = None
+    if bot_member is not None:
+        targets.append((bot_member, _ticket_bot_overwrite(), "bot"))
+
+    targets.append((member, _ticket_owner_overwrite(), "owner"))
+
+    for rid in _configured_staff_role_ids(cfg):
+        try:
+            role = guild.get_role(int(rid))
+            if role is not None:
+                targets.append((role, _ticket_staff_overwrite(), f"staff:{rid}"))
+        except Exception:
+            continue
+
+    for target, overwrite, label in targets:
+        try:
+            await channel.set_permissions(
+                target,
+                overwrite=overwrite,
+                reason="Repair verification ticket access before posting verification panel",
+            )
+        except Exception as e:
+            ok = False
+            _warn(f"ticket access repair failed channel={channel.id} target={label}: {e!r}")
+
+    if ok:
+        _log(f"ticket access repaired channel={channel.id} owner={member.id}")
+        try:
+            await asyncio.sleep(0.35)
+        except Exception:
+            pass
+    return ok
+
+
+async def _post_verify_ui(channel: discord.TextChannel, member: discord.Member) -> bool:
+    try:
+        await _ensure_ticket_channel_access(channel, member)
+    except Exception:
+        pass
+
     try:
         from stoney_verify.verify_ui import post_or_replace_verify_ui
 
@@ -233,8 +377,10 @@ async def _post_verify_ui(channel: discord.TextChannel, member: discord.Member) 
             ttl_minutes=_token_ttl_minutes(),
             allow_regen=_allow_user_regen(),
         )
+        return True
     except Exception as e:
         _warn(f"verify UI post failed channel={getattr(channel, 'id', None)} user={getattr(member, 'id', None)}: {e!r}")
+        return False
 
 
 async def _resolve_channel_from_ticket_result(guild: discord.Guild, result: Any) -> Optional[discord.TextChannel]:
@@ -343,6 +489,16 @@ async def _call_ticket_creator(
             last_error = e
             type_errors.append(f"{label}: {e}")
             continue
+        except discord.Forbidden as e:
+            # The service sometimes creates the ticket row/channel and then
+            # raises when trying to post its opening message before bot access is
+            # repaired. Recover the channel from the DB and repair it below.
+            last_error = e
+            recovered = await _existing_open_ticket_channel(guild, int(member.id))
+            if recovered is not None:
+                _warn(f"ticket creator raised Forbidden after channel creation; recovered channel={recovered.id}")
+                return recovered
+            raise
         except Exception as e:
             last_error = e
             raise
@@ -391,20 +547,37 @@ async def _handle_unverified_panel_click(interaction: discord.Interaction) -> bo
 
     existing = await _existing_open_ticket_channel(guild, int(member.id))
     if existing is not None:
-        await _post_verify_ui(existing, member)
-        await _reply(
-            interaction,
-            f"✅ You already have a verification ticket open: {existing.mention}\nI refreshed the verification panel there.",
-        )
+        await _ensure_ticket_channel_access(existing, member)
+        posted = await _post_verify_ui(existing, member)
+        if posted:
+            await _reply(
+                interaction,
+                f"✅ You already have a verification ticket open: {existing.mention}\nI refreshed the verification panel there.",
+            )
+        else:
+            await _reply(
+                interaction,
+                f"⚠️ You already have a verification ticket open: {existing.mention}\nI could not post the panel because Stoney still lacks access inside that channel.",
+            )
         return True
 
     try:
         channel = await _create_verification_ticket(guild, member)
     except Exception as e:
         _warn(f"verification ticket auto-route failed guild={getattr(guild, 'id', None)} user={getattr(member, 'id', None)}: {e!r}")
+        recovered = await _existing_open_ticket_channel(guild, int(member.id))
+        if recovered is not None:
+            await _ensure_ticket_channel_access(recovered, member)
+            posted = await _post_verify_ui(recovered, member)
+            if posted:
+                await _reply(
+                    interaction,
+                    f"✅ Opened your verification ticket: {recovered.mention}\nUse the verification buttons inside that ticket.",
+                )
+                return True
         await _reply(
             interaction,
-            "❌ I could not open your verification ticket. Staff has been given the technical reason in the bot logs. Please try again in a moment.",
+            "❌ I could not open your verification ticket because Stoney does not have enough access to the created ticket channel. Please ask staff to run `/stoney setup` → Health Check.",
         )
         return True
 
@@ -412,11 +585,18 @@ async def _handle_unverified_panel_click(interaction: discord.Interaction) -> bo
         await _reply(interaction, "❌ I tried to open your verification ticket, but the ticket service did not return a channel.")
         return True
 
-    await _post_verify_ui(channel, member)
-    await _reply(
-        interaction,
-        f"✅ Opened your verification ticket: {channel.mention}\nUse the verification buttons inside that ticket.",
-    )
+    await _ensure_ticket_channel_access(channel, member)
+    posted = await _post_verify_ui(channel, member)
+    if posted:
+        await _reply(
+            interaction,
+            f"✅ Opened your verification ticket: {channel.mention}\nUse the verification buttons inside that ticket.",
+        )
+    else:
+        await _reply(
+            interaction,
+            f"⚠️ Opened your verification ticket: {channel.mention}\nBut I could not post the verification panel because Stoney lacks access inside that channel.",
+        )
     return True
 
 
