@@ -8,10 +8,10 @@ support issue. They should get a verification ticket immediately.
 
 Production rule:
 A member is verification-needed when they are not staff/admin, do not have the
-configured Verified role, and do not have the configured Resident/Member role.
-The configured waiting/pending role is helpful, but it is not required because
-fresh joins can press the panel before Discord/the bot finishes assigning that
-role.
+configured approved/verified role, and do not have the configured full access
+member/resident role. The configured waiting/pending role is helpful, but it is
+not required because fresh joins can press the panel before Discord/the bot
+finishes assigning that role.
 """
 
 import inspect
@@ -113,18 +113,18 @@ async def _is_unverified_only_member(member: discord.Member) -> bool:
     if _is_staff(member, cfg):
         return False
 
-    unverified_role_id = _config_role_id(cfg, "unverified_role_id")
-    verified_role_id = _config_role_id(cfg, "verified_role_id")
-    resident_role_id = _config_role_id(cfg, "resident_role_id", "member_role_id")
+    waiting_role_id = _config_role_id(cfg, "unverified_role_id")
+    approved_role_id = _config_role_id(cfg, "verified_role_id")
+    member_role_id = _config_role_id(cfg, "resident_role_id", "member_role_id")
 
-    has_unverified = unverified_role_id > 0 and _member_has_role(member, unverified_role_id)
-    has_verified = verified_role_id > 0 and _member_has_role(member, verified_role_id)
-    has_resident = resident_role_id > 0 and _member_has_role(member, resident_role_id)
+    has_waiting = waiting_role_id > 0 and _member_has_role(member, waiting_role_id)
+    has_approved = approved_role_id > 0 and _member_has_role(member, approved_role_id)
+    has_member = member_role_id > 0 and _member_has_role(member, member_role_id)
 
-    if has_verified or has_resident:
+    if has_approved or has_member:
         return False
 
-    if has_unverified:
+    if has_waiting:
         _log(f"verification-needed user matched by waiting/pending role guild={member.guild.id} user={member.id}")
         return True
 
@@ -132,11 +132,11 @@ async def _is_unverified_only_member(member: discord.Member) -> bool:
     # server has verification/member roles configured, lacking approved/member
     # roles is enough to send the user to verification instead of the generic
     # support modal.
-    if unverified_role_id > 0 or verified_role_id > 0 or resident_role_id > 0:
+    if waiting_role_id > 0 or approved_role_id > 0 or member_role_id > 0:
         _log(
             "verification-needed user matched by missing approved/member roles "
             f"guild={member.guild.id} user={member.id} roles={sorted(_member_role_ids(member))} "
-            f"configured_waiting={unverified_role_id} configured_approved={verified_role_id} configured_member={resident_role_id}"
+            f"configured_waiting={waiting_role_id} configured_approved={approved_role_id} configured_member={member_role_id}"
         )
         return True
 
@@ -237,20 +237,54 @@ async def _post_verify_ui(channel: discord.TextChannel, member: discord.Member) 
         _warn(f"verify UI post failed channel={getattr(channel, 'id', None)} user={getattr(member, 'id', None)}: {e!r}")
 
 
-async def _call_ticket_creator(create_ticket_channel: Any, *, guild: discord.Guild, member: discord.Member, category: str, reason: str, metadata: Dict[str, Any]) -> Optional[discord.TextChannel]:
+async def _resolve_channel_from_ticket_result(guild: discord.Guild, result: Any) -> Optional[discord.TextChannel]:
+    if isinstance(result, discord.TextChannel):
+        return result
+
+    if isinstance(result, dict):
+        channel_id = _safe_int(result.get("discord_thread_id") or result.get("channel_id"), 0)
+        if channel_id > 0:
+            channel = guild.get_channel(channel_id)
+            if isinstance(channel, discord.TextChannel):
+                return channel
+            try:
+                fetched = await guild.fetch_channel(channel_id)
+                return fetched if isinstance(fetched, discord.TextChannel) else None
+            except Exception:
+                return None
+
+    # Some older paths may return (channel, row) or similar.
+    if isinstance(result, (list, tuple)):
+        for item in result:
+            resolved = await _resolve_channel_from_ticket_result(guild, item)
+            if resolved is not None:
+                return resolved
+
+    return None
+
+
+async def _call_ticket_creator(
+    create_ticket_channel: Any,
+    *,
+    guild: discord.Guild,
+    member: discord.Member,
+    category: str,
+    reason: str,
+    metadata: Dict[str, Any],
+) -> Optional[discord.TextChannel]:
     """Call ticket creation across old/new service signatures safely.
 
-    Important: do not pass alias kwargs like ``member=`` or ``user=`` into the
-    wrapped service. Several runtime guards expose ``**kwargs`` but then forward
-    to an older create_ticket_channel that does not accept those aliases. That
-    was the cause of: unexpected keyword argument 'member'.
+    The runtime wrapped service can expose ``**kwargs`` while forwarding to an
+    older keyword-only function. So the first attempts must be the smallest
+    payloads the old service accepts: guild, owner, category, and maybe is_ghost.
+    Do not lead with ``reason=`` or alias kwargs like ``member=``/``requester=``.
     """
     canonical: Dict[str, Any] = {
         "guild": guild,
         "owner": member,
         "category": category,
-        "reason": reason,
         "is_ghost": False,
+        "reason": reason,
         "metadata": metadata,
         "extra_metadata": metadata,
         "category_metadata": metadata,
@@ -259,7 +293,11 @@ async def _call_ticket_creator(create_ticket_channel: Any, *, guild: discord.Gui
         "priority": "medium",
     }
 
-    attempts: list[tuple[str, Any]] = []
+    attempts: list[tuple[str, Any]] = [
+        ("owner_category_ghost", lambda: create_ticket_channel(guild=guild, owner=member, category=category, is_ghost=False)),
+        ("owner_category", lambda: create_ticket_channel(guild=guild, owner=member, category=category)),
+        ("owner_only", lambda: create_ticket_channel(guild=guild, owner=member)),
+    ]
 
     try:
         sig = inspect.signature(create_ticket_channel)
@@ -268,55 +306,49 @@ async def _call_ticket_creator(create_ticket_channel: Any, *, guild: discord.Gui
         if not has_varkw:
             filtered = {k: v for k, v in canonical.items() if k in params}
             if filtered:
-                attempts.append(("signature_filtered", lambda filtered=filtered: create_ticket_channel(**filtered)))
-        else:
-            # Wrapped guard signatures often show **kwargs even though the real
-            # service underneath is stricter. Use the smallest safe owner-based
-            # payload first instead of dumping every alias into the wrapper.
-            attempts.append(("minimal_owner_kwargs", lambda: create_ticket_channel(guild=guild, owner=member, category=category, reason=reason, is_ghost=False)))
+                # Put exact signature match first for true new signatures, but
+                # keep no-reason fallback attempts immediately after it.
+                attempts.insert(0, ("signature_filtered", lambda filtered=filtered: create_ticket_channel(**filtered)))
     except Exception:
         pass
 
     attempts.extend(
         [
-            ("minimal_owner_kwargs", lambda: create_ticket_channel(guild=guild, owner=member, category=category, reason=reason, is_ghost=False)),
-            ("owner_kwargs_no_ghost", lambda: create_ticket_channel(guild=guild, owner=member, category=category, reason=reason)),
-            ("requester_kwargs", lambda: create_ticket_channel(guild=guild, requester=member, category=category, reason=reason, is_ghost=False)),
+            ("owner_category_reason", lambda: create_ticket_channel(guild=guild, owner=member, category=category, reason=reason)),
+            ("owner_category_reason_ghost", lambda: create_ticket_channel(guild=guild, owner=member, category=category, reason=reason, is_ghost=False)),
+            ("requester_category", lambda: create_ticket_channel(guild=guild, requester=member, category=category, is_ghost=False)),
+            ("user_category", lambda: create_ticket_channel(guild=guild, user=member, category=category, is_ghost=False)),
             ("positional_four", lambda: create_ticket_channel(guild, member, category, reason)),
             ("positional_three", lambda: create_ticket_channel(guild, member, category)),
         ]
     )
 
     seen: set[str] = set()
+    type_errors: list[str] = []
     last_error: Optional[BaseException] = None
+
     for label, factory in attempts:
-        if label in seen and label != "minimal_owner_kwargs":
+        if label in seen:
             continue
         seen.add(label)
         try:
             result = await factory()
-            if isinstance(result, discord.TextChannel):
-                return result
-            # Some paths return a row/dict containing channel id.
-            if isinstance(result, dict):
-                channel_id = _safe_int(result.get("discord_thread_id") or result.get("channel_id"), 0)
-                if channel_id > 0:
-                    channel = guild.get_channel(channel_id)
-                    if isinstance(channel, discord.TextChannel):
-                        return channel
-                    fetched = await guild.fetch_channel(channel_id)
-                    if isinstance(fetched, discord.TextChannel):
-                        return fetched
+            channel = await _resolve_channel_from_ticket_result(guild, result)
+            if channel is not None:
+                return channel
             if result is not None:
-                return result if isinstance(result, discord.TextChannel) else None
+                _warn(f"ticket creator returned unsupported result label={label} type={type(result).__name__}")
+                return None
         except TypeError as e:
             last_error = e
-            _warn(f"ticket creator signature attempt failed label={label}: {e}")
+            type_errors.append(f"{label}: {e}")
             continue
         except Exception as e:
             last_error = e
             raise
 
+    if type_errors:
+        _warn("ticket creator signature attempts failed: " + " | ".join(type_errors[:8]))
     if last_error is not None:
         raise last_error
     return None
