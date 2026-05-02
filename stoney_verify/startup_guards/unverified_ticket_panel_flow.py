@@ -322,6 +322,7 @@ def _configured_staff_role_ids(cfg: Any) -> list[int]:
             pass
     try:
         from stoney_verify import globals as g
+
         for name in ("STAFF_ROLE_ID", "SUPPORT_ROLE_ID", "MOD_ROLE_ID", "ADMIN_ROLE_ID"):
             add(getattr(g, name, 0))
     except Exception:
@@ -337,6 +338,7 @@ def _configured_open_ticket_category(guild: discord.Guild, cfg: Any) -> Optional
             ids.append(cid)
     try:
         from stoney_verify import globals as g
+
         for name in ("TICKET_CATEGORY_ID", "OPEN_TICKET_CATEGORY_ID", "ACTIVE_TICKET_CATEGORY_ID"):
             cid = _safe_int(getattr(g, name, 0), 0)
             if cid > 0:
@@ -458,6 +460,7 @@ async def _db_max_ticket_number(guild_id: int) -> int:
     def _sync() -> int:
         try:
             from stoney_verify.globals import get_supabase
+
             sb = get_supabase()
             resp = sb.table("tickets").select("ticket_number").eq("guild_id", str(guild_id)).order("ticket_number", desc=True).limit(1).execute()
             rows = getattr(resp, "data", None) or []
@@ -466,6 +469,7 @@ async def _db_max_ticket_number(guild_id: int) -> int:
         except Exception as e:
             _warn(f"direct ticket number DB lookup failed guild={guild_id}: {e!r}")
         return 0
+
     return await asyncio.to_thread(_sync)
 
 
@@ -501,9 +505,11 @@ async def _insert_direct_ticket_row(channel: discord.TextChannel, member: discor
         "matched_category_score": 100,
         "ticket_number": int(ticket_number),
     }
+
     def _sync() -> None:
         try:
             from stoney_verify.globals import get_supabase
+
             sb = get_supabase()
             sb.table("tickets").insert(payload).execute()
             _log(f"direct ticket row inserted channel={channel.id} owner={member.id} ticket_number={ticket_number}")
@@ -511,10 +517,12 @@ async def _insert_direct_ticket_row(channel: discord.TextChannel, member: discor
             _warn(f"direct ticket row insert failed channel={channel.id} owner={member.id}: {e!r}")
         try:
             from stoney_verify.globals import get_supabase
+
             sb = get_supabase()
             sb.table("ticket_counters").upsert({"guild_id": str(channel.guild.id), "last_ticket_number": int(ticket_number), "updated_at": _now_iso()}, on_conflict="guild_id").execute()
         except Exception:
             pass
+
     await asyncio.to_thread(_sync)
 
 
@@ -546,7 +554,6 @@ async def _create_direct_verification_ticket(guild: discord.Guild, member: disco
         category=category,
         overwrites=overwrites,
         topic=topic,
-        sync_permissions=False,
         reason="Verification-needed member pressed public ticket panel",
     )
     _log(f"direct access-safe verification ticket channel created guild={guild.id} owner={member.id} channel={channel.id} category={getattr(category, 'id', 0) or 0}")
@@ -621,6 +628,7 @@ def patch_ticket_panel_view() -> bool:
         return True
     try:
         from stoney_verify.tickets_new import panel
+
         view_cls = getattr(panel, "TicketPanelView", None)
         if view_cls is None:
             _warn("TicketPanelView not found")
@@ -629,6 +637,7 @@ def patch_ticket_panel_view() -> bool:
         if not callable(original_init) or getattr(original_init, "_unverified_flow_wrapped", False):
             _PATCHED = True
             return True
+
         def _patched_init(self: Any, *args: Any, **kwargs: Any) -> None:
             original_init(self, *args, **kwargs)
             try:
@@ -638,11 +647,13 @@ def patch_ticket_panel_view() -> bool:
                     original_callback = getattr(item, "callback", None)
                     if not callable(original_callback) or getattr(original_callback, "_unverified_flow_wrapped", False):
                         continue
+
                     async def _wrapped_callback(interaction: discord.Interaction, *, _original=original_callback) -> Any:
                         handled = await _handle_unverified_panel_click(interaction)
                         if handled:
                             return None
                         return await _original(interaction)
+
                     try:
                         setattr(_wrapped_callback, "_unverified_flow_wrapped", True)
                     except Exception:
@@ -650,6 +661,7 @@ def patch_ticket_panel_view() -> bool:
                     item.callback = _wrapped_callback
             except Exception as e:
                 _warn(f"failed wiring TicketPanelView button callback: {e!r}")
+
         try:
             setattr(_patched_init, "_unverified_flow_wrapped", True)
         except Exception:
