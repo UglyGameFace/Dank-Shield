@@ -20,6 +20,9 @@ Hardening:
   ticket.
 - Treat bot + owner access as critical. Staff overwrite failures are warnings,
   not a reason to leave the member with a blank ticket.
+- Before routing a verification-needed member, repair the configured VC verify
+  channel into a locked waiting-room state. If Discord will not let Stoney lock
+  it, the flow stops instead of running half-configured.
 """
 
 import asyncio
@@ -386,6 +389,40 @@ def _configured_open_ticket_category(guild: discord.Guild, cfg: Any) -> Optional
     return None
 
 
+def _configured_vc_verify_channel(guild: discord.Guild, cfg: Any) -> Optional[discord.abc.GuildChannel]:
+    cid = _config_channel_id(cfg, "vc_verify_channel_id", "vc_verify_vc_id")
+    if cid <= 0:
+        return None
+    try:
+        return guild.get_channel(int(cid))
+    except Exception:
+        return None
+
+
+def _is_voice_like(channel: Any) -> bool:
+    voice_types: list[type] = [discord.VoiceChannel]
+    stage_type = getattr(discord, "StageChannel", None)
+    if stage_type is not None:
+        voice_types.append(stage_type)
+    return isinstance(channel, tuple(voice_types))
+
+
+def _vc_lock_everyone_overwrite() -> discord.PermissionOverwrite:
+    return discord.PermissionOverwrite(view_channel=False, connect=False)
+
+
+def _vc_lock_waiting_overwrite() -> discord.PermissionOverwrite:
+    return discord.PermissionOverwrite(view_channel=True, connect=False, speak=False)
+
+
+def _vc_lock_bot_overwrite() -> discord.PermissionOverwrite:
+    return discord.PermissionOverwrite(view_channel=True, connect=True, speak=True, move_members=True, manage_channels=True)
+
+
+def _vc_lock_staff_overwrite() -> discord.PermissionOverwrite:
+    return discord.PermissionOverwrite(view_channel=True, connect=True, speak=True, move_members=True)
+
+
 def _bot_member_for_guild(guild: discord.Guild) -> Optional[discord.Member]:
     try:
         if isinstance(guild.me, discord.Member):
@@ -400,6 +437,78 @@ def _bot_member_for_guild(guild: discord.Guild) -> Optional[discord.Member]:
         return member if isinstance(member, discord.Member) else None
     except Exception:
         return None
+
+
+def _can_manage_channel(guild: discord.Guild, channel: discord.abc.GuildChannel) -> tuple[bool, str]:
+    bot_member = _bot_member_for_guild(guild)
+    if bot_member is None:
+        return False, "bot member is not available in guild cache"
+    try:
+        if bot_member.guild_permissions.administrator or bot_member.guild_permissions.manage_channels:
+            return True, "server Manage Channels"
+    except Exception:
+        pass
+    try:
+        if channel.permissions_for(bot_member).manage_channels:
+            return True, f"Manage Channels in #{getattr(channel, 'name', 'channel')}"
+    except Exception:
+        pass
+    return False, "missing Manage Channels on the configured VC verification channel"
+
+
+async def _ensure_configured_vc_verify_locked(guild: discord.Guild, cfg: Any) -> tuple[bool, str]:
+    """Repair the configured VC verify channel into a locked waiting-room state.
+
+    VC verification is supposed to be private/controlled: normal members should
+    not freely connect. Staff grants temporary per-member access from the VC
+    request panel. If the channel is not configured, VC verify is treated as
+    disabled and this does not block web verification tickets.
+    """
+
+    channel = _configured_vc_verify_channel(guild, cfg)
+    if channel is None:
+        return True, "VC verify disabled/not configured"
+    if not _is_voice_like(channel):
+        return False, "configured VC verify channel is not a voice/stage channel"
+
+    can_manage, why = _can_manage_channel(guild, channel)
+    if not can_manage:
+        return False, why
+
+    critical_ok = True
+    critical_targets: list[tuple[Any, discord.PermissionOverwrite, str]] = [
+        (guild.default_role, _vc_lock_everyone_overwrite(), "everyone"),
+    ]
+
+    bot_member = _bot_member_for_guild(guild)
+    if bot_member is not None:
+        critical_targets.append((bot_member, _vc_lock_bot_overwrite(), "bot"))
+
+    waiting_role_id = _config_role_id(cfg, "unverified_role_id")
+    waiting_role = guild.get_role(waiting_role_id) if waiting_role_id > 0 else None
+    if waiting_role is not None:
+        critical_targets.append((waiting_role, _vc_lock_waiting_overwrite(), f"waiting:{waiting_role_id}"))
+
+    for target, overwrite, label in critical_targets:
+        try:
+            await channel.set_permissions(target, overwrite=overwrite, reason="Stoney setup safety: lock VC verification waiting room")
+        except Exception as e:
+            critical_ok = False
+            _warn(f"VC lock critical overwrite failed channel={getattr(channel, 'id', 0)} target={label}: {e!r}")
+
+    for rid in _configured_staff_role_ids(cfg):
+        role = guild.get_role(int(rid))
+        if role is None:
+            continue
+        try:
+            await channel.set_permissions(role, overwrite=_vc_lock_staff_overwrite(), reason="Stoney setup safety: staff VC verification access")
+        except Exception as e:
+            _warn(f"VC lock staff overwrite skipped channel={getattr(channel, 'id', 0)} role={rid}: {e!r}")
+
+    if critical_ok:
+        _log(f"VC verify channel locked guild={guild.id} channel={getattr(channel, 'id', 0)}")
+        return True, "VC verify channel locked"
+    return False, "could not apply critical VC verification lock overwrites"
 
 
 def _critical_creation_overwrites(guild: discord.Guild, member: discord.Member) -> Dict[Any, discord.PermissionOverwrite]:
@@ -712,6 +821,17 @@ async def _handle_unverified_panel_click(interaction: discord.Interaction) -> bo
     if not await _is_unverified_only_member(member):
         return False
     await _defer(interaction)
+
+    cfg = await _get_guild_config_safe(guild.id)
+    vc_locked, vc_message = await _ensure_configured_vc_verify_locked(guild, cfg)
+    if not vc_locked:
+        await _reply(
+            interaction,
+            "❌ Verification is not safe to run yet because the configured VC verification channel is not locked correctly.\n"
+            f"Reason: **{vc_message}**\n\n"
+            "Staff should run `/stoney setup` → **Auto-Build Missing Items** or fix the bot's Manage Channels permission on the VC verification channel.",
+        )
+        return True
 
     existing = await _existing_open_ticket_channel(guild, int(member.id))
     if existing is not None:
