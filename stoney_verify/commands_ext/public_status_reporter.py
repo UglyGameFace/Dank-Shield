@@ -1,20 +1,18 @@
 from __future__ import annotations
 
-"""
-Public status / uptime reporting for Stoney Verify.
+"""Public status / uptime reporting for Stoney Verify.
 
-Important limitation:
-A Discord bot cannot send a Discord message while the bot process is fully down.
-This module handles the parts the bot process *can* own:
+This module owns the user-facing status report and the optional heartbeat row.
+The important production rule here is simple: health checks must never freeze
+Discord's event loop and must never spam users with scary transient Supabase
+messages just because a single probe was slow.
 
-- Posts a back-online / restored report to every configured guild on startup.
-- Reports service availability per guild.
-- Maintains an optional Supabase heartbeat row that an external watchdog can use
-  to detect true downtime and notify all configured servers while the bot is down.
-- Adds /stoney setup-status so each guild can choose where status notices go.
-
-True down alerts require a separate monitor process, uptime service, or hosting
-provider webhook. The heartbeat written here is the source of truth for that.
+Fixes included here:
+- Supabase probes are cached.
+- Only one Supabase probe can run at a time per process.
+- Slow probes return the last known state instead of blocking setup/status UI.
+- Periodic heartbeat writes use a short timeout and fail quietly.
+- /stoney setup-status still works and posts a clear status report.
 """
 
 import asyncio
@@ -44,6 +42,14 @@ _STATUS_CHANNEL_KEYS: tuple[str, ...] = (
     "raidlog_channel_id",
     "join_log_channel_id",
 )
+
+_SUPABASE_PROBE_LOCK: asyncio.Lock | None = None
+_SUPABASE_PROBE_CACHE: dict[str, Any] = {
+    "checked_at": 0.0,
+    "ok": None,
+    "detail": "not checked yet",
+    "inflight": False,
+}
 
 
 # ============================================================
@@ -92,12 +98,10 @@ def _report_on_ready_enabled() -> bool:
 
 
 def _heartbeat_interval_seconds() -> int:
-    return max(30, _env_int("STONEY_STATUS_HEARTBEAT_SECONDS", 60))
+    return max(30, _env_int("STONEY_STATUS_HEARTBEAT_SECONDS", 120))
 
 
 def _startup_report_delay_seconds() -> int:
-    # Give guild_config bootstrap/runtime discovery a little room before
-    # the status snapshot posts.
     return max(8, _env_int("STONEY_STATUS_STARTUP_REPORT_DELAY_SECONDS", 20))
 
 
@@ -111,6 +115,27 @@ def _auto_save_discovered_config_enabled() -> bool:
 
 def _treat_env_fallback_as_ok() -> bool:
     return _env_bool("STONEY_STATUS_TREAT_ENV_FALLBACK_OK", False)
+
+
+def _supabase_probe_cache_seconds() -> int:
+    return max(60, _env_int("STONEY_SUPABASE_PROBE_CACHE_SECONDS", 300))
+
+
+def _supabase_probe_timeout_seconds() -> float:
+    # This is intentionally short. A status card should not wait on a slow DB.
+    try:
+        raw = float(_env_str("STONEY_SUPABASE_PROBE_TIMEOUT_SECONDS", "2.5") or "2.5")
+        return max(0.75, min(raw, 5.0))
+    except Exception:
+        return 2.5
+
+
+def _heartbeat_write_timeout_seconds() -> float:
+    try:
+        raw = float(_env_str("STONEY_STATUS_HEARTBEAT_WRITE_TIMEOUT_SECONDS", "3.0") or "3.0")
+        return max(0.75, min(raw, 6.0))
+    except Exception:
+        return 3.0
 
 
 def _bot_status_id(bot: Any) -> str:
@@ -251,7 +276,12 @@ def _fetch_config_row_sync(guild_id: int) -> Optional[dict[str, Any]]:
 
 
 async def _fetch_config_row(guild_id: int) -> Optional[dict[str, Any]]:
-    return await asyncio.to_thread(_fetch_config_row_sync, int(guild_id))
+    try:
+        return await asyncio.wait_for(asyncio.to_thread(_fetch_config_row_sync, int(guild_id)), timeout=4.0)
+    except asyncio.TimeoutError:
+        return None
+    except Exception:
+        return None
 
 
 def _extract_status_channel_id(row: Optional[Mapping[str, Any]]) -> int:
@@ -333,42 +363,116 @@ def _service_line(name: str, ok: bool, detail: str = "") -> str:
     return f"{icon} **{name}:** {detail or ('available' if ok else 'degraded')}"
 
 
-async def _probe_supabase() -> tuple[bool, str]:
+def _probe_supabase_sync_once() -> tuple[bool, str]:
     try:
-        from ..globals import get_supabase
+        from ..globals import get_supabase, supabase_diagnostics
 
         sb = get_supabase()
         if sb is None:
-            return False, "Supabase client unavailable"
+            diag = supabase_diagnostics(ensure_client=False)
+            state = _safe_str(diag.get("client_state"), "unavailable") if isinstance(diag, Mapping) else "unavailable"
+            return False, f"client unavailable (`{state}`)"
 
         last_error = ""
-
-        def _probe_table(table_name: str) -> None:
-            (
-                sb.table(table_name)
-                .select("guild_id")
-                .limit(1)
-                .execute()
-            )
-
         for table_name in _config_table_names():
             try:
-                await asyncio.wait_for(
-                    asyncio.to_thread(_probe_table, table_name),
-                    timeout=6.0,
+                (
+                    sb.table(table_name)
+                    .select("guild_id")
+                    .limit(1)
+                    .execute()
                 )
                 return True, f"database reachable (`{table_name}`)"
-            except asyncio.TimeoutError:
-                last_error = "database probe timed out"
             except Exception as e:
-                last_error = f"database probe failed on `{table_name}`: {type(e).__name__}"
+                last_error = f"probe failed on `{table_name}`: {type(e).__name__}"
                 continue
 
         return False, last_error or "database probe failed"
-    except asyncio.TimeoutError:
-        return False, "database probe timed out"
     except Exception as e:
         return False, f"database probe failed: {type(e).__name__}"
+
+
+def _probe_cache_age() -> float:
+    try:
+        return max(0.0, time.monotonic() - float(_SUPABASE_PROBE_CACHE.get("checked_at") or 0.0))
+    except Exception:
+        return 999999.0
+
+
+def _cached_supabase_probe_detail(*, pending_label: bool = True) -> tuple[bool, str]:
+    ok = _SUPABASE_PROBE_CACHE.get("ok")
+    detail = _safe_str(_SUPABASE_PROBE_CACHE.get("detail"), "not checked yet")
+    age = _probe_cache_age()
+
+    if ok is True:
+        return True, f"{detail}; last checked {int(age)}s ago"
+    if ok is False:
+        return False, f"{detail}; last checked {int(age)}s ago"
+
+    if pending_label:
+        return True, "probe pending; client initialized, not blocking setup"
+    return False, detail
+
+
+async def _probe_supabase() -> tuple[bool, str]:
+    """Non-blocking cached Supabase status probe.
+
+    This intentionally does not wait forever. If the database is slow, the user
+    should see a stable cached health state instead of a repeated timeout error.
+    """
+    global _SUPABASE_PROBE_LOCK
+
+    if _SUPABASE_PROBE_LOCK is None:
+        _SUPABASE_PROBE_LOCK = asyncio.Lock()
+
+    age = _probe_cache_age()
+    cache_ttl = float(_supabase_probe_cache_seconds())
+
+    if _SUPABASE_PROBE_CACHE.get("ok") is not None and age < cache_ttl:
+        return _cached_supabase_probe_detail()
+
+    if _SUPABASE_PROBE_LOCK.locked():
+        return _cached_supabase_probe_detail()
+
+    async with _SUPABASE_PROBE_LOCK:
+        # Another waiter may have refreshed it while this coroutine waited.
+        age = _probe_cache_age()
+        if _SUPABASE_PROBE_CACHE.get("ok") is not None and age < cache_ttl:
+            return _cached_supabase_probe_detail()
+
+        _SUPABASE_PROBE_CACHE["inflight"] = True
+        try:
+            timeout = _supabase_probe_timeout_seconds()
+            try:
+                ok, detail = await asyncio.wait_for(
+                    asyncio.to_thread(_probe_supabase_sync_once),
+                    timeout=timeout,
+                )
+            except asyncio.TimeoutError:
+                previous_ok = _SUPABASE_PROBE_CACHE.get("ok")
+                previous_detail = _safe_str(_SUPABASE_PROBE_CACHE.get("detail"), "previous state unavailable")
+
+                # Do not convert a single slow probe into a blocker when we have
+                # a recent successful state. This was the noisy false-negative.
+                if previous_ok is True:
+                    return True, f"last successful DB probe still valid; current probe exceeded {timeout:.1f}s"
+
+                ok = False
+                detail = f"database probe slow; retrying in background instead of blocking setup"
+                if previous_detail and previous_detail != "not checked yet":
+                    detail += f" (previous: {previous_detail})"
+
+            _SUPABASE_PROBE_CACHE.update(
+                {
+                    "checked_at": time.monotonic(),
+                    "ok": bool(ok),
+                    "detail": str(detail),
+                    "inflight": False,
+                }
+            )
+            return _cached_supabase_probe_detail()
+        finally:
+            _SUPABASE_PROBE_CACHE["inflight"] = False
 
 
 async def _maybe_auto_save_discovered_config(guild: discord.Guild) -> None:
@@ -410,16 +514,10 @@ async def _probe_guild_config(guild: discord.Guild) -> tuple[bool, str]:
         if source.startswith("env_fallback"):
             if _treat_env_fallback_as_ok():
                 return True, f"using configured fallback (`{source}`)"
-            return False, (
-                f"using fallback config (`{source}`); "
-                "run setup/discovery to save DB config"
-            )
+            return False, f"using fallback config (`{source}`); run setup/discovery to save DB config"
 
         if "runtime_discovery" in source:
-            return False, (
-                f"using runtime discovery (`{source}`); "
-                "save discovery to DB for stable config"
-            )
+            return False, f"using runtime discovery (`{source}`); save discovery to DB for stable config"
 
         detail = f"`{source}`"
         if use_env_fallbacks:
@@ -535,10 +633,7 @@ async def _send_status_report(bot: Any, guild: discord.Guild, *, event: str, for
     embed.add_field(name="Service Availability", value="\n".join(lines)[:1024], inline=False)
     embed.add_field(
         name="Important",
-        value=(
-            "True **bot-down** alerts require the separate watchdog/uptime monitor, "
-            "because the bot cannot send Discord messages while its own process is offline."
-        ),
+        value="True bot-down alerts require a separate watchdog because the bot cannot send Discord messages while its own process is offline.",
         inline=False,
     )
     embed.set_footer(text="Stoney Verify status reporter")
@@ -590,9 +685,16 @@ async def _heartbeat_loop(bot: Any) -> None:
     while True:
         try:
             guild_count = len(list(getattr(bot, "guilds", []) or []))
-            await asyncio.to_thread(_write_heartbeat_sync, bot_id, guild_count)
+            await asyncio.wait_for(
+                asyncio.to_thread(_write_heartbeat_sync, bot_id, guild_count),
+                timeout=_heartbeat_write_timeout_seconds(),
+            )
         except asyncio.CancelledError:
             raise
+        except asyncio.TimeoutError:
+            # Deliberately quiet. A slow heartbeat write should not make the bot
+            # look unhealthy or block the gateway.
+            pass
         except Exception:
             pass
 
@@ -666,10 +768,6 @@ async def _require_status_setup_permission(interaction: discord.Interaction) -> 
 
 
 async def _save_status_channel(guild_id: int, status_channel_id: int, interaction: discord.Interaction) -> None:
-    """
-    Save status channel using existing public setup config when available.
-    Fallback writes to guild_config if that resolver supports the key.
-    """
     updates = {
         "status_channel_id": str(int(status_channel_id)),
         "configured_by_id": str(interaction.user.id),
@@ -740,18 +838,12 @@ async def _setup_status_callback(interaction: discord.Interaction, status_channe
     embed.add_field(name="Server", value=f"`{guild.name}` (`{guild.id}`)", inline=False)
     embed.add_field(
         name="Status Reports",
-        value=(
-            f"Status channel: {status_channel.mention} (`{status_channel.id}`)\n"
-            "Back-online reports will post here after restarts/reconnects."
-        ),
+        value=f"Status channel: {status_channel.mention} (`{status_channel.id}`)\nBack-online reports will post here after restarts/reconnects.",
         inline=False,
     )
     embed.add_field(
         name="Note",
-        value=(
-            "This does not replace a true external uptime watchdog. "
-            "The bot cannot send Discord alerts while its own process is offline."
-        ),
+        value="This does not replace a true external uptime watchdog. The bot cannot send Discord alerts while its own process is offline.",
         inline=False,
     )
 
