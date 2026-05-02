@@ -9,6 +9,8 @@ Production command rules:
   "The application did not respond"
 - Existing customer roles are valid. Stoney does not require roles to have been
   created by Stoney; it can discover usable roles by name and save them.
+- No-role users are never left stuck because a server forgot to save/create an
+  Unverified role. Repair tools discover one, or create a safe one if needed.
 - Uses per-guild DB config from guild_configs through guild_config.py
 """
 
@@ -210,6 +212,26 @@ async def _guild_or_reply(interaction: discord.Interaction) -> Optional[discord.
     return guild
 
 
+async def _save_discovered_role(guild: discord.Guild, config_key: str, role: discord.Role, *, source: str) -> None:
+    try:
+        await upsert_guild_config(guild.id, {config_key: str(role.id)})
+        try:
+            print(
+                "✅ public_verify_group saved verification role "
+                f"guild={guild.id} key={config_key} role={role.name}:{role.id} source={source}"
+            )
+        except Exception:
+            pass
+    except Exception as e:
+        try:
+            print(
+                "⚠️ public_verify_group could not save verification role "
+                f"guild={guild.id} key={config_key} role={role.name}:{role.id} source={source} error={e!r}"
+            )
+        except Exception:
+            pass
+
+
 async def _guild_roles(guild: discord.Guild) -> Dict[str, Optional[discord.Role]]:
     """Resolve configured roles, then discover existing customer-created roles.
 
@@ -266,6 +288,48 @@ async def _guild_roles(guild: discord.Guild) -> Dict[str, Optional[discord.Role]
                 pass
 
     return roles
+
+
+async def _ensure_unverified_role(guild: discord.Guild, roles: Dict[str, Optional[discord.Role]]) -> tuple[Optional[discord.Role], str, bool]:
+    """Return a usable Unverified role, creating one if the server has none.
+
+    The purpose of /verify repair-unverified is to fix no-role members. That
+    should not fail just because the Unverified role was never saved or never
+    existed. If discovery fails, create a plain @Unverified role, save it, and
+    let the command assign it.
+    """
+    existing = roles.get("unverified")
+    if isinstance(existing, discord.Role):
+        return existing, f"using existing role {existing.mention}", False
+
+    # Try one last live discovery in case cache/config was stale.
+    discovered = _find_existing_role_by_alias(guild, "unverified")
+    if isinstance(discovered, discord.Role):
+        roles["unverified"] = discovered
+        await _save_discovered_role(guild, "unverified_role_id", discovered, source="verify_repair_live_discovery")
+        return discovered, f"auto-discovered existing role {discovered.mention}", False
+
+    me = guild.me
+    if me is None:
+        return None, "bot member could not be resolved, so I could not create @Unverified", False
+    if not me.guild_permissions.manage_roles:
+        return None, "bot is missing Manage Roles, so I could not create @Unverified", False
+
+    try:
+        created = await guild.create_role(
+            name="Unverified",
+            permissions=discord.Permissions.none(),
+            mentionable=False,
+            hoist=False,
+            reason="Stoney Verify repair created missing Unverified role for no-role members",
+        )
+        roles["unverified"] = created
+        await _save_discovered_role(guild, "unverified_role_id", created, source="verify_repair_auto_create")
+        return created, f"created and saved {created.mention}", True
+    except discord.Forbidden:
+        return None, "Forbidden while creating @Unverified. Move Stoney's bot role higher and grant Manage Roles.", False
+    except Exception as e:
+        return None, f"failed to create @Unverified: {type(e).__name__}: {_truncate(e, 240)}", False
 
 
 def _role_status(member: discord.Member, role: Optional[discord.Role]) -> bool:
@@ -536,11 +600,11 @@ async def verify_fix_member(interaction: discord.Interaction, user: discord.Memb
         return
 
     roles = await _guild_roles(guild)
-    unverified = roles.get("unverified")
+    unverified, role_detail, created_role = await _ensure_unverified_role(guild, roles)
     verified = roles.get("verified")
     resident = roles.get("resident")
     if unverified is None:
-        return await _send(interaction, _missing_role_message("Unverified", _ROLE_ALIASES["unverified"]))
+        return await _send(interaction, f"❌ I could not prepare an Unverified role: {role_detail}")
 
     for role in (unverified, verified, resident):
         if role is None:
@@ -563,6 +627,9 @@ async def verify_fix_member(interaction: discord.Interaction, user: discord.Memb
         ticket_ch = await _maybe_repair_verify_ui_for_member(guild, user)
         lines = [f"✅ Unverified repair complete for {user.mention}."]
         lines.append("Using role: " + unverified.mention)
+        lines.append("Role source: " + role_detail)
+        if created_role:
+            lines.append("Created role: yes")
         lines.append("Added: " + (", ".join(r.mention for r in added) if added else "nothing"))
         lines.append("Removed: " + (", ".join(r.mention for r in removed) if removed else "nothing"))
         if ticket_ch:
@@ -585,13 +652,13 @@ async def verify_repair_unverified(interaction: discord.Interaction) -> None:
             return
 
         roles = await _guild_roles(guild)
-        unverified = roles.get("unverified")
+        unverified, role_detail, created_role = await _ensure_unverified_role(guild, roles)
         verified = roles.get("verified")
         resident = roles.get("resident")
         staff = roles.get("staff")
 
         if unverified is None:
-            return await _send(interaction, _missing_role_message("Unverified", _ROLE_ALIASES["unverified"]))
+            return await _send(interaction, f"❌ I could not prepare an Unverified role: {role_detail}")
 
         ok, why = _bot_can_manage_role(guild, unverified)
         if not ok:
@@ -646,6 +713,8 @@ async def verify_repair_unverified(interaction: discord.Interaction) -> None:
             interaction,
             "✅ **Unverified repair complete**\n"
             f"- Using role: {unverified.mention}\n"
+            f"- Role source: **{role_detail}**\n"
+            f"- Created role: **{'yes' if created_role else 'no'}**\n"
             f"- Members scanned: **{len(members)}** (`{cache_note}`)\n"
             f"- Added Unverified: **{added}**\n"
             f"- Already had Unverified: **{already_ok}**\n"
@@ -697,7 +766,7 @@ def register_public_verify_group_commands(bot: Any, tree: Any) -> None:
         _REGISTERED = True
         try:
             suffix = f" removed_legacy={removed}" if removed else ""
-            print(f"✅ public_verify_group: registered /verify grouped commands with existing-role discovery{suffix}")
+            print(f"✅ public_verify_group: registered /verify grouped commands with no-role auto-repair{suffix}")
         except Exception:
             pass
         return
@@ -705,7 +774,7 @@ def register_public_verify_group_commands(bot: Any, tree: Any) -> None:
     _REGISTERED = True
     try:
         suffix = f" removed_legacy={removed}" if removed else ""
-        print(f"✅ public_verify_group: /verify already registered with existing-role discovery{suffix}")
+        print(f"✅ public_verify_group: /verify already registered with no-role auto-repair{suffix}")
     except Exception:
         pass
 
