@@ -7,6 +7,7 @@ Auto-build must be boring and safe:
 - reuse existing default-looking Discord items second
 - create only truly missing items
 - never move, rename, delete, or permission-overwrite existing items
+- never overwrite owner-picked setup values; auto-build fills blanks only
 """
 
 import re
@@ -355,7 +356,7 @@ async def _setup_defaults_callback(
     verified_role = _role_from_config(guild, cfg, "verified_role_id") or await _ensure_role(guild, DEFAULT_VERIFIED_ROLE_NAME, create_missing_roles=create_missing_roles, notes=notes, created=created, reused=reused)
     member_role = _role_from_config(guild, cfg, "resident_role_id", "member_role_id") or await _ensure_role(guild, DEFAULT_MEMBER_ROLE_NAME, create_missing_roles=create_missing_roles, notes=notes, created=created, reused=reused)
 
-    for label, role in (("Unverified role", unverified_role), ("Verified role", verified_role), ("Member role", member_role)):
+    for label, role in (("Pending / Unverified role", unverified_role), ("Verified role", verified_role), ("Member / Resident role", member_role)):
         if role:
             _unique(reused, f"{label}: {role.mention}")
 
@@ -385,7 +386,7 @@ async def _setup_defaults_callback(
     status_channel = _channel_from_config(guild, cfg, discord.TextChannel, "status_channel_id", "bot_status_channel_id") or await _ensure_text(guild, STATUS_CHANNEL_NAME, category=management_category, overwrites=staff_ow, topic="Bot status and restored-service notices are posted here.", notes=notes, created=created, reused=reused)
 
     required = [
-        ("server-control role", control_role), ("ticket staff role", staff_role), ("unverified role", unverified_role), ("verified role", verified_role),
+        ("server-control role", control_role), ("ticket staff role", staff_role), ("pending/unverified role", unverified_role), ("verified role", verified_role),
         ("start category", start_category), ("ticket category", ticket_category), ("archive category", archive_category), ("management category", management_category),
         ("welcome channel", welcome_channel), ("verify channel", verify_channel), ("support/ticket panel channel", ticket_panel_channel),
         ("transcripts channel", transcripts_channel), ("modlog channel", modlog_channel),
@@ -400,9 +401,12 @@ async def _setup_defaults_callback(
             embed.add_field(name="Reused", value=_line_list(reused), inline=False)
         if notes:
             embed.add_field(name="Notes", value=_line_list(notes), inline=False)
+        embed.add_field(name="What To Press Next", value="Press `/stoney setup` → **Choose Existing Items** if you already have custom roles/channels, or fix bot permissions and run Auto-Build again.", inline=False)
         return await interaction.followup.send(embed=embed, ephemeral=True)
 
     updates = {
+        "__config_write_mode": "auto_create",
+        "__config_write_source": "/stoney setup auto-build recommended layout",
         "server_control_role_id": _role_value(control_role), "control_role_id": _role_value(control_role), "perm_role_id": _role_value(control_role),
         "staff_role_id": _role_value(staff_role), "vc_staff_role_id": _role_value(staff_role),
         "unverified_role_id": _role_value(unverified_role), "verified_role_id": _role_value(verified_role), "resident_role_id": _role_value(member_role),
@@ -423,7 +427,7 @@ async def _setup_defaults_callback(
         "bot_status_channel_id": str(int(status_channel.id)) if status_channel else None,
         "ticket_prefix": "ticket",
         "configured_by_id": str(interaction.user.id), "configured_by_name": str(interaction.user), "configured_at": _utc_iso(),
-        "default_setup_version": "4_idempotent_recommended_layout",
+        "default_setup_version": "5_fill_only_idempotent_recommended_layout",
     }
 
     try:
@@ -431,7 +435,7 @@ async def _setup_defaults_callback(
         invalidate_guild_config(guild.id)
         cfg_after = await get_guild_config(guild.id, refresh=True)
     except Exception as e:
-        return await interaction.followup.send(f"❌ Recommended layout handled Discord items but failed saving config: `{e}`", ephemeral=True)
+        return await interaction.followup.send(f"❌ Recommended layout handled Discord items but failed saving config: `{e}`\n\nPress `/stoney setup` → **Choose Existing Items** to save your roles/channels manually.", ephemeral=True)
 
     embed = _config_embed(guild, cfg_after, title="✅ Recommended Layout Handled")
     embed.add_field(name="Created", value=_line_list(created, empty="Nothing new created."), inline=False)
@@ -440,8 +444,8 @@ async def _setup_defaults_callback(
         embed.add_field(name="Passing Checks", value=_line_list(ok), inline=False)
     if notes:
         embed.add_field(name="Notes", value=_line_list(notes), inline=False)
-    embed.add_field(name="Auto-Build Safety", value="Only missing setup items are created. Existing items are reused without moving, renaming, deleting, or permission-overwriting them.", inline=False)
-    embed.add_field(name="Next Step", value="Run `/stoney setup` health check, then post your ticket/verify panels and test ticket create/close.", inline=False)
+    embed.add_field(name="Auto-Build Safety", value="Auto-Build fills missing setup only. It does not replace owner-picked roles, channels, categories, or logs. Existing Discord items are reused without moving, renaming, deleting, or permission-overwriting them.", inline=False)
+    embed.add_field(name="Next Step", value="Press `/stoney setup` → **Run Health Check**. If anything is wrong, press **Choose Existing Items** and pick the exact role/channel/category you want.", inline=False)
     await interaction.followup.send(embed=embed, ephemeral=True)
 
 
@@ -464,7 +468,7 @@ def _attach() -> None:
     try:
         command._params["control_role"].description = "Optional server-control role. Leave blank to reuse/create Bot Manager."
         command._params["staff_role"].description = "Optional ticket staff role. Leave blank to reuse/create Support Team."
-        command._params["create_missing_roles"].description = "Create missing recommended roles when needed."
+        command._params["create_missing_roles"].description = "Create missing recommended roles only when no saved/custom role exists."
         command._params["apply_channel_permissions"].description = "Applies permissions only to newly created setup items. Existing items are reused safely."
     except Exception:
         pass
@@ -479,7 +483,7 @@ def register_public_setup_defaults_commands(bot, tree) -> None:
     _ = bot, tree
     _attach()
     try:
-        print("✅ public_setup_defaults: attached idempotent /stoney setup-defaults command")
+        print("✅ public_setup_defaults: attached fill-only /stoney setup-defaults command")
     except Exception:
         pass
 
