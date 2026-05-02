@@ -3,8 +3,8 @@ from __future__ import annotations
 """Public /stoney help and /stoney commands catalog.
 
 TicketTool-style command discovery without adding a new top-level /help command.
-This keeps the public slash surface boring and small while still making the
-feature set easy to understand.
+The normal help surface should explain what to press next, not dump every
+advanced/internal command the bot knows how to run.
 """
 
 from typing import Any, Iterable, Optional
@@ -72,6 +72,13 @@ BORING_PUBLIC_TARGET = {
     "verify",
 }
 
+ADVANCED_HELP_PATTERNS = (
+    "bootstrap",
+    "runtime",
+    "rules set",
+    "bind-categories",
+)
+
 
 def _safe_str(value: Any, default: str = "") -> str:
     try:
@@ -112,7 +119,7 @@ def _add_field(embed: discord.Embed, name: str, value: str, *, inline: bool = Fa
 
 def _base_embed(section: str) -> discord.Embed:
     title_map = {
-        "overview": "📚 Stoney Command Help",
+        "overview": "📚 Stoney Help",
         "setup": "🧭 Stoney Setup",
         "tickets": "🎫 Ticket Commands",
         "panels": "🎛️ Ticket Panel Commands",
@@ -121,62 +128,72 @@ def _base_embed(section: str) -> discord.Embed:
         "utilities": "🧹 Utility Commands",
     }
     embed = discord.Embed(
-        title=title_map.get(section, "📚 Stoney Command Help"),
+        title=title_map.get(section, "📚 Stoney Help"),
         color=discord.Color.blurple(),
         timestamp=now_utc(),
     )
-    embed.set_footer(text="Boring command layout: few top-level commands, organized subcommands.")
+    embed.set_footer(text="Simple public layout: one setup command, grouped tools underneath.")
     return embed
 
 
 def _overview_embed() -> discord.Embed:
     embed = _base_embed("overview")
     embed.description = (
-        "Stoney uses a TicketTool-style command layout: **small public surface, grouped tools underneath**.\n\n"
-        "Start with `/stoney setup`. Use `/stoney help section:<category>` for details."
+        "Start here if you are setting up Stoney for a server.\n\n"
+        "**Normal path:** run `/stoney setup`, follow the buttons, then run **Run Health Check**."
     )
     _add_field(
         embed,
-        "Top-level command families",
-        "`/stoney` setup, help, command audit, cleanup, spam\n"
-        "`/ticket` close/reopen/delete and current-ticket actions\n"
-        "`/tickets` queues, lists, searching, history\n"
-        "`/ticket-panel` panel posting/config/rules/bootstrap\n"
-        "`/ticket-category` category/routing tools\n"
-        "`/ticket-intake` intake setup and panel alias\n"
-        "`/verify` verification/resident role tools\n"
-        "`/mod` moderation tools",
+        "What most owners need",
+        "`/stoney setup` — setup, fix, choose existing roles/channels, health check\n"
+        "`/ticket-panel post` — post the public Create Ticket panel\n"
+        "`/verify repair-unverified` — make sure new/pending members are not left with no role\n"
+        "`/stoney help section:Setup` — setup-specific help",
     )
     _add_field(
         embed,
-        "Where old commands went",
-        "`/spam_guard` → `/stoney spam panel`\n"
-        "`/spam_guard_status` → `/stoney spam status`\n"
-        "`/grant_vr` → `/verify grant-vr`\n"
-        "`/fix_unverified` → `/verify repair-unverified`\n"
-        "old setup helper commands → `/stoney setup`\n"
-        "`/ticket_panel_*` → `/ticket-panel ...`\n"
-        "`/channel_cleanup_*` → `/stoney cleanup ...`",
+        "Main command families",
+        "`/stoney` — setup, help, cleanup, spam controls\n"
+        "`/ticket` — close/reopen/delete current tickets\n"
+        "`/tickets` — queues and ticket lists\n"
+        "`/ticket-panel` — public panel tools\n"
+        "`/ticket-category` — logical support/verification/report routing\n"
+        "`/verify` — Pending / Unverified, Verified, Member role repair\n"
+        "`/mod` — moderation tools",
     )
-    _add_field(embed, "Command audit", "Run `/stoney commands` to see the loaded command count and stale alias status.")
+    _add_field(
+        embed,
+        "Old command names",
+        "Old setup/helper commands are intentionally hidden from the normal flow. Use `/stoney setup` instead.",
+    )
     return embed
 
 
 def _setup_embed() -> discord.Embed:
     embed = _base_embed("setup")
-    embed.description = "Server owner/admin setup is intentionally one obvious command: `/stoney setup`."
+    embed.description = "Server setup should feel like one boring command: `/stoney setup`."
     _add_field(
         embed,
-        "Recommended setup flow",
+        "Fresh server",
         "1. Run `/stoney setup`\n"
-        "2. Choose **Auto-Fix Missing Defaults** if the server is fresh\n"
-        "3. Choose **Choose Existing Items** if the server already has channels/roles\n"
-        "4. Post the ticket panel with `/ticket-panel post` when setup is ready",
+        "2. Press **Auto-Fix Missing Defaults**\n"
+        "3. Read the **Created** and **Reused** summary\n"
+        "4. Press **Run Health Check**\n"
+        "5. Post the public ticket panel with `/ticket-panel post`",
     )
     _add_field(
         embed,
-        "Why it is simple",
-        "The old setup helper commands are hidden from the normal public flow. Server owners should not need to memorize `setup-*` commands.",
+        "Existing server with custom names",
+        "1. Run `/stoney setup`\n"
+        "2. Press **Choose Existing Items**\n"
+        "3. Pick your actual roles/channels/categories with Discord pickers\n"
+        "4. Press **Run Health Check**\n\n"
+        "Your server can call pending members anything: `Pending`, `Guest`, `Visitor`, `Needs Vetting`, etc. Pick the role; Stoney saves the ID.",
+    )
+    _add_field(
+        embed,
+        "Safety rules",
+        "Auto-Build fills blanks only. It should not replace owner-picked roles, channels, categories, or logs. If Stoney says something cannot be saved, it should explain what to fix and what to press next.",
     )
     return embed
 
@@ -194,9 +211,8 @@ def _tickets_embed() -> discord.Embed:
     _add_field(
         embed,
         "Queue/history actions",
-        "`/tickets` — grouped ticket queue/history tools\n"
-        "`/ticket-category` — category and routing tools\n"
-        "`/ticket-intake` — intake configuration tools\n"
+        "`/tickets` — ticket queue/history tools\n"
+        "`/ticket-category` — logical routing categories like Support, Verification, Appeal, Report\n"
         "`/ticket-intake post-panel` — compatibility alias for posting the public panel",
     )
     return embed
@@ -204,44 +220,46 @@ def _tickets_embed() -> discord.Embed:
 
 def _panels_embed() -> discord.Embed:
     embed = _base_embed("panels")
-    embed.description = "Panel tools are grouped so the bot can have many panel features without command spam."
+    embed.description = "For most servers, the only panel command needed after setup is `/ticket-panel post`."
     _add_field(
         embed,
-        "Panel commands",
+        "Normal panel path",
+        "`/stoney setup` — confirm roles/channels/categories first\n"
         "`/ticket-panel post` — post the Create Ticket panel\n"
-        "`/ticket-panel list` — list DB-backed panels\n"
-        "`/ticket-panel show` — inspect a panel\n"
-        "`/ticket-panel bind-categories` — bind allowed category slugs\n"
-        "`/ticket-panel runtime` — show effective runtime config\n"
-        "`/ticket-panel rules view` — view behavior rules\n"
-        "`/ticket-panel rules set` — update common behavior rules",
+        "`/ticket-panel list` — list existing panels\n"
+        "`/ticket-panel show` — inspect a panel",
     )
     _add_field(
         embed,
-        "Bootstrap/self-heal",
-        "`/ticket-panel bootstrap status`\n"
-        "`/ticket-panel bootstrap run`\n"
-        "`/ticket-panel bootstrap all`\n"
-        "`/ticket-panel bootstrap start`\n"
-        "`/ticket-panel bootstrap once`\n"
-        "`/ticket-panel bootstrap stop`",
+        "Advanced panel tools",
+        "Advanced tools like bootstrap, runtime, rules, and category binding are intentionally not part of the normal setup path. Use them only when debugging or customizing a production server.",
     )
     return embed
 
 
 def _verification_embed() -> discord.Embed:
     embed = _base_embed("verification")
-    embed.description = "Verification commands use per-server role config and do not rely on deployment `.env` IDs."
+    embed.description = "Verification commands use saved per-server setup. They do not require role names to be `Unverified` or `Verified`."
+    _add_field(
+        embed,
+        "Role meaning",
+        "**Pending / Unverified role** — users who still need verification\n"
+        "**Verified role** — users who passed verification\n"
+        "**Member / Resident role** — full-access member role, if your server uses one",
+    )
     _add_field(
         embed,
         "Verification tools",
-        "`/verify status` — show verification/resident status\n"
-        "`/verify diagnose` — deep verification diagnostics\n"
-        "`/verify set-verified` — add/remove Verified\n"
-        "`/verify set-resident` — add/remove Resident\n"
-        "`/verify grant-vr` — grant Verified + Resident and remove Unverified\n"
-        "`/verify fix-member` — repair one member's Unverified role\n"
-        "`/verify repair-unverified` — bulk repair missing Unverified roles",
+        "`/verify status` — show a member's verification/member status\n"
+        "`/verify diagnose` — deeper diagnostics\n"
+        "`/verify grant-vr` — grant Verified + Member/Resident and remove Pending / Unverified\n"
+        "`/verify fix-member` — repair one user's Pending / Unverified role\n"
+        "`/verify repair-unverified` — bulk repair users who are not Verified/Member/Staff/Bots",
+    )
+    _add_field(
+        embed,
+        "Custom role names",
+        "Use `/stoney setup` → **Choose Existing Items** → **Verification Roles** to pick whatever your server calls pending, verified, and member roles.",
     )
     return embed
 
@@ -275,7 +293,7 @@ def _utilities_embed() -> discord.Embed:
         "`/stoney cleanup run` — run configured channel cleanup\n"
         "`/stoney cleanup purge` — purge selected channel messages",
     )
-    _add_field(embed, "Health/config", "`/stoney setup` — setup health and repair\n`/stoney commands` — command surface audit\n`/stoney help` — command catalog")
+    _add_field(embed, "Health/config", "`/stoney setup` — setup health and repair\n`/stoney commands` — staff-only command surface audit\n`/stoney help` — command catalog")
     return embed
 
 
@@ -316,6 +334,11 @@ def _iter_subcommands(command: Any) -> Iterable[str]:
                 yield child_name
     except Exception:
         return
+
+
+def _is_advanced_subcommand(name: str) -> bool:
+    lowered = name.lower()
+    return any(pattern in lowered for pattern in ADVANCED_HELP_PATTERNS)
 
 
 def _local_top_level_commands(interaction: discord.Interaction) -> list[Any]:
@@ -362,15 +385,20 @@ def _command_surface_embed(interaction: discord.Interaction) -> discord.Embed:
         _add_field(embed, "Missing Expected Families", _truncate("\n".join(f"• `/{name}`" for name in missing_target), 1024))
 
     grouped_lines: list[str] = []
+    advanced_hidden = 0
     for cmd in commands:
         name = _command_name(cmd)
         if not name:
             continue
         children = list(_iter_subcommands(cmd))
+        visible_children = [child for child in children if not _is_advanced_subcommand(child)]
+        advanced_hidden += max(0, len(children) - len(visible_children))
         if children:
-            grouped_lines.append(f"`/{name}` → {len(children)} visible subcommand path(s)")
+            grouped_lines.append(f"`/{name}` → {len(visible_children)} normal path(s)" + (f" + {len(children) - len(visible_children)} advanced" if len(children) != len(visible_children) else ""))
     if grouped_lines:
         _add_field(embed, "Grouped Command Depth", _truncate("\n".join(grouped_lines), 1024))
+    if advanced_hidden:
+        _add_field(embed, "Advanced Noise Hidden From Normal Help", f"{advanced_hidden} advanced/debug subcommand path(s) are intentionally omitted from the normal help screens.")
 
     embed.set_footer(text="If stale commands still show in Discord UI, wait for the next successful global sync/propagation.")
     return embed
@@ -410,7 +438,7 @@ def register_public_help_group_commands(bot: Any, tree: Any) -> None:
 
     added: list[str] = []
     try:
-        if _attach_command_once("help", "Show the Stoney command catalog.", stoney_help_callback):
+        if _attach_command_once("help", "Show simple Stoney help and what to press next.", stoney_help_callback):
             added.append("/stoney help")
         if _attach_command_once("commands", "Audit the current top-level slash command surface.", stoney_commands_callback):
             added.append("/stoney commands")
