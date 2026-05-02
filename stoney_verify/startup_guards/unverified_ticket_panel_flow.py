@@ -15,18 +15,14 @@ finishes assigning that role.
 """
 
 import asyncio
-import contextvars
-import inspect
+import re
+from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
 import discord
 
 _PATCHED = False
-_CREATE_TEXT_PATCHED = False
-_CREATE_TEXT_CONTEXT: contextvars.ContextVar[Optional[Dict[str, Any]]] = contextvars.ContextVar(
-    "stoney_verify_unverified_ticket_create_context",
-    default=None,
-)
+_TICKET_NUM_RE = re.compile(r"^(?:ticket|closed)-(\d+)$", re.I)
 
 
 def _log(message: str) -> None:
@@ -41,6 +37,10 @@ def _warn(message: str) -> None:
         print(f"⚠️ unverified_ticket_panel_flow {message}")
     except Exception:
         pass
+
+
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
 
 
 def _safe_int(value: Any, default: int = 0) -> int:
@@ -113,27 +113,15 @@ def _is_staff(member: discord.Member, cfg: Any) -> bool:
         _config_role_id(cfg, "bot_manager_role_id"),
     }
     staff_like_role_ids.discard(0)
-
-    member_role_ids = _member_role_ids(member)
-    return bool(staff_like_role_ids and member_role_ids.intersection(staff_like_role_ids))
+    return bool(staff_like_role_ids and _member_role_ids(member).intersection(staff_like_role_ids))
 
 
 async def _is_unverified_only_member(member: discord.Member) -> bool:
-    """Return True when the member should skip support intake and verify.
-
-    This deliberately handles the race where a fresh join has not received the
-    waiting/pending role yet. If verification roles are configured and the user
-    has neither approved nor full-access/member roles, they are treated as
-    verification-needed.
-    """
     if getattr(member, "bot", False):
         return False
 
     cfg = await _get_guild_config_safe(member.guild.id)
-    if cfg is None:
-        return False
-
-    if _is_staff(member, cfg):
+    if cfg is None or _is_staff(member, cfg):
         return False
 
     waiting_role_id = _config_role_id(cfg, "unverified_role_id")
@@ -146,15 +134,9 @@ async def _is_unverified_only_member(member: discord.Member) -> bool:
 
     if has_approved or has_member:
         return False
-
     if has_waiting:
         _log(f"verification-needed user matched by waiting/pending role guild={member.guild.id} user={member.id}")
         return True
-
-    # Fresh-join safety: role assignment can lag behind the button press. Once a
-    # server has verification/member roles configured, lacking approved/member
-    # roles is enough to send the user to verification instead of the generic
-    # support modal.
     if waiting_role_id > 0 or approved_role_id > 0 or member_role_id > 0:
         _log(
             "verification-needed user matched by missing approved/member roles "
@@ -162,9 +144,6 @@ async def _is_unverified_only_member(member: discord.Member) -> bool:
             f"configured_waiting={waiting_role_id} configured_approved={approved_role_id} configured_member={member_role_id}"
         )
         return True
-
-    # If no role config exists, do not hijack the public ticket panel. Setup gate
-    # should handle missing configuration instead.
     return False
 
 
@@ -244,16 +223,44 @@ async def _existing_open_ticket_channel(guild: discord.Guild, owner_id: int) -> 
         return None
 
 
-async def _retire_inaccessible_ticket(channel: discord.TextChannel, *, reason: str) -> bool:
-    try:
-        from stoney_verify.tickets_new.repository import mark_ticket_deleted as repo_mark_ticket_deleted
+async def _force_retire_open_ticket_rows(*, guild_id: int, owner_id: int, channel_id: Optional[int] = None, reason: str) -> bool:
+    payload = {
+        "status": "deleted",
+        "closed_at": _now_iso(),
+        "deleted_at": _now_iso(),
+        "closed_reason": reason,
+        "close_reason": reason,
+        "delete_reason": reason,
+        "updated_at": _now_iso(),
+    }
 
-        await repo_mark_ticket_deleted(channel_id=int(channel.id), reason=reason)
-        _warn(f"marked inaccessible stale verification ticket deleted in DB channel={channel.id}")
-        return True
-    except Exception as e:
-        _warn(f"failed marking inaccessible stale ticket deleted channel={getattr(channel, 'id', None)}: {e!r}")
-        return False
+    def _sync() -> bool:
+        try:
+            from stoney_verify.globals import get_supabase
+
+            sb = get_supabase()
+            changed = False
+            if channel_id and int(channel_id) > 0:
+                for col in ("channel_id", "discord_thread_id"):
+                    try:
+                        sb.table("tickets").update(payload).eq("guild_id", str(guild_id)).eq("user_id", str(owner_id)).eq(col, str(channel_id)).execute()
+                        changed = True
+                    except Exception as e:
+                        _warn(f"direct stale ticket row retire update failed col={col}: {e!r}")
+            try:
+                sb.table("tickets").update(payload).eq("guild_id", str(guild_id)).eq("user_id", str(owner_id)).in_("status", ["open", "claimed"]).execute()
+                changed = True
+            except Exception as e:
+                _warn(f"direct stale owner ticket row retire fallback failed: {e!r}")
+            return changed
+        except Exception as e:
+            _warn(f"force retire stale ticket rows failed guild={guild_id} owner={owner_id}: {e!r}")
+            return False
+
+    ok = await asyncio.to_thread(_sync)
+    if ok:
+        _warn(f"force-retired inaccessible/open ticket row(s) guild={guild_id} owner={owner_id} channel={channel_id or 0}")
+    return ok
 
 
 def _ticket_bot_overwrite() -> discord.PermissionOverwrite:
@@ -308,49 +315,28 @@ def _configured_staff_role_ids(cfg: Any) -> list[int]:
         seen.add(rid)
         ids.append(rid)
 
-    for name in (
-        "staff_role_id",
-        "ticket_staff_role_id",
-        "support_role_id",
-        "server_control_role_id",
-        "control_role_id",
-        "perm_role_id",
-        "bot_manager_role_id",
-    ):
+    for name in ("staff_role_id", "ticket_staff_role_id", "support_role_id", "server_control_role_id", "control_role_id", "perm_role_id", "bot_manager_role_id"):
         try:
             add(getattr(cfg, name, 0))
         except Exception:
             pass
-
     try:
         from stoney_verify import globals as g
-
         for name in ("STAFF_ROLE_ID", "SUPPORT_ROLE_ID", "MOD_ROLE_ID", "ADMIN_ROLE_ID"):
             add(getattr(g, name, 0))
     except Exception:
         pass
-
     return ids
 
 
 def _configured_open_ticket_category(guild: discord.Guild, cfg: Any) -> Optional[discord.CategoryChannel]:
     ids: list[int] = []
-
-    for names in (
-        ("open_ticket_category_id",),
-        ("ticket_open_category_id",),
-        ("active_ticket_category_id",),
-        ("ticket_category_id",),
-        ("tickets_category_id",),
-        ("open_category_id",),
-    ):
+    for names in (("open_ticket_category_id",), ("ticket_open_category_id",), ("active_ticket_category_id",), ("ticket_category_id",), ("tickets_category_id",), ("open_category_id",)):
         cid = _config_channel_id(cfg, *names)
         if cid > 0:
             ids.append(cid)
-
     try:
         from stoney_verify import globals as g
-
         for name in ("TICKET_CATEGORY_ID", "OPEN_TICKET_CATEGORY_ID", "ACTIVE_TICKET_CATEGORY_ID"):
             cid = _safe_int(getattr(g, name, 0), 0)
             if cid > 0:
@@ -363,12 +349,9 @@ def _configured_open_ticket_category(guild: discord.Guild, cfg: Any) -> Optional
         if cid in seen:
             continue
         seen.add(cid)
-        try:
-            channel = guild.get_channel(int(cid))
-            if isinstance(channel, discord.CategoryChannel):
-                return channel
-        except Exception:
-            continue
+        channel = guild.get_channel(int(cid))
+        if isinstance(channel, discord.CategoryChannel):
+            return channel
     return None
 
 
@@ -379,144 +362,58 @@ def _bot_member_for_guild(guild: discord.Guild) -> Optional[discord.Member]:
     except Exception:
         pass
     try:
-        user_id = int(getattr(getattr(guild, "_state", None), "user", None).id)  # type: ignore[union-attr]
+        state = getattr(guild, "_state", None)
+        user = getattr(state, "user", None)
+        user_id = int(getattr(user, "id", 0) or 0)
         member = guild.get_member(user_id)
         return member if isinstance(member, discord.Member) else None
     except Exception:
         return None
 
 
-def _creation_overwrites(guild: discord.Guild, member: discord.Member, cfg: Any, existing: Any = None) -> Dict[Any, discord.PermissionOverwrite]:
+def _creation_overwrites(guild: discord.Guild, member: discord.Member, cfg: Any) -> Dict[Any, discord.PermissionOverwrite]:
     overwrites: Dict[Any, discord.PermissionOverwrite] = {}
-
-    try:
-        if isinstance(existing, dict):
-            overwrites.update(existing)
-    except Exception:
-        overwrites = {}
-
-    try:
-        overwrites[guild.default_role] = _ticket_everyone_overwrite()
-    except Exception:
-        pass
-
+    overwrites[guild.default_role] = _ticket_everyone_overwrite()
     bot_member = _bot_member_for_guild(guild)
     if bot_member is not None:
         overwrites[bot_member] = _ticket_bot_overwrite()
-
     overwrites[member] = _ticket_owner_overwrite()
-
     for rid in _configured_staff_role_ids(cfg):
-        try:
-            role = guild.get_role(int(rid))
-            if role is not None:
-                overwrites[role] = _ticket_staff_overwrite()
-        except Exception:
-            continue
-
+        role = guild.get_role(int(rid))
+        if role is not None:
+            overwrites[role] = _ticket_staff_overwrite()
     return overwrites
 
 
-def _install_create_text_channel_guard() -> None:
-    """Install a context-scoped channel creation guard.
-
-    The older ticket service creates the channel first and posts after. If the
-    channel is created without an explicit bot overwrite, the bot can lose access
-    immediately and cannot repair itself afterward. This guard only activates
-    while this unverified auto-route is creating a verification ticket.
-    """
-    global _CREATE_TEXT_PATCHED
-    if _CREATE_TEXT_PATCHED:
-        return
-
-    original = discord.Guild.create_text_channel
-
-    async def guarded_create_text_channel(self: discord.Guild, name: str, *args: Any, **kwargs: Any):
-        ctx = _CREATE_TEXT_CONTEXT.get()
-        if isinstance(ctx, dict) and _safe_int(ctx.get("guild_id"), 0) == _safe_int(getattr(self, "id", 0), 0):
-            member = ctx.get("member")
-            cfg = ctx.get("cfg")
-            if isinstance(member, discord.Member):
-                existing_overwrites = kwargs.get("overwrites")
-                kwargs["overwrites"] = _creation_overwrites(self, member, cfg, existing_overwrites)
-                if kwargs.get("category") is None:
-                    category = _configured_open_ticket_category(self, cfg)
-                    if category is not None:
-                        kwargs["category"] = category
-                kwargs.setdefault("sync_permissions", False)
-                _log(
-                    "injecting access-safe overwrites before ticket channel create "
-                    f"guild={self.id} owner={member.id} category={getattr(kwargs.get('category'), 'id', 0) or 0}"
-                )
-        return await original(self, name, *args, **kwargs)
-
-    try:
-        setattr(guarded_create_text_channel, "_stoney_unverified_access_guard", True)
-    except Exception:
-        pass
-    discord.Guild.create_text_channel = guarded_create_text_channel  # type: ignore[assignment]
-    _CREATE_TEXT_PATCHED = True
-
-
 async def _ensure_ticket_channel_access(channel: discord.TextChannel, member: discord.Member) -> bool:
-    """Repair the ticket channel access before posting verification UI.
-
-    This can fix channels the bot can still see. Fully inaccessible channels are
-    retired in DB and replaced with a fresh access-safe ticket.
-    """
     ok = True
     guild = channel.guild
     cfg = await _get_guild_config_safe(guild.id)
-
-    targets: list[tuple[Any, discord.PermissionOverwrite, str]] = []
-    try:
-        targets.append((guild.default_role, _ticket_everyone_overwrite(), "everyone"))
-    except Exception:
-        pass
-
+    targets: list[tuple[Any, discord.PermissionOverwrite, str]] = [(guild.default_role, _ticket_everyone_overwrite(), "everyone")]
     bot_member = _bot_member_for_guild(guild)
     if bot_member is not None:
         targets.append((bot_member, _ticket_bot_overwrite(), "bot"))
-
     targets.append((member, _ticket_owner_overwrite(), "owner"))
-
     for rid in _configured_staff_role_ids(cfg):
-        try:
-            role = guild.get_role(int(rid))
-            if role is not None:
-                targets.append((role, _ticket_staff_overwrite(), f"staff:{rid}"))
-        except Exception:
-            continue
-
+        role = guild.get_role(int(rid))
+        if role is not None:
+            targets.append((role, _ticket_staff_overwrite(), f"staff:{rid}"))
     for target, overwrite, label in targets:
         try:
-            await channel.set_permissions(
-                target,
-                overwrite=overwrite,
-                reason="Repair verification ticket access before posting verification panel",
-            )
+            await channel.set_permissions(target, overwrite=overwrite, reason="Repair verification ticket access before posting verification panel")
         except Exception as e:
             ok = False
             _warn(f"ticket access repair failed channel={channel.id} target={label}: {e!r}")
-
     if ok:
         _log(f"ticket access repaired channel={channel.id} owner={member.id}")
-        try:
-            await asyncio.sleep(0.35)
-        except Exception:
-            pass
+        await asyncio.sleep(0.35)
     return ok
 
 
 async def _post_verify_ui(channel: discord.TextChannel, member: discord.Member) -> bool:
     try:
-        access_ok = await _ensure_ticket_channel_access(channel, member)
-        if not access_ok:
+        if not await _ensure_ticket_channel_access(channel, member):
             return False
-    except Exception:
-        return False
-
-    try:
         from stoney_verify.verify_ui import post_or_replace_verify_ui
 
         await post_or_replace_verify_ui(
@@ -533,201 +430,152 @@ async def _post_verify_ui(channel: discord.TextChannel, member: discord.Member) 
         return False
 
 
-async def _resolve_channel_from_ticket_result(guild: discord.Guild, result: Any) -> Optional[discord.TextChannel]:
-    if isinstance(result, discord.TextChannel):
-        return result
-
-    if isinstance(result, dict):
-        channel_id = _safe_int(result.get("discord_thread_id") or result.get("channel_id"), 0)
-        if channel_id > 0:
-            channel = guild.get_channel(channel_id)
-            if isinstance(channel, discord.TextChannel):
-                return channel
-            try:
-                fetched = await guild.fetch_channel(channel_id)
-                return fetched if isinstance(fetched, discord.TextChannel) else None
-            except Exception:
-                return None
-
-    # Some older paths may return (channel, row) or similar.
-    if isinstance(result, (list, tuple)):
-        for item in result:
-            resolved = await _resolve_channel_from_ticket_result(guild, item)
-            if resolved is not None:
-                return resolved
-
-    return None
-
-
-async def _call_ticket_creator(
-    create_ticket_channel: Any,
-    *,
-    guild: discord.Guild,
-    member: discord.Member,
-    category: str,
-    reason: str,
-    metadata: Dict[str, Any],
-) -> Optional[discord.TextChannel]:
-    """Call ticket creation across old/new service signatures safely.
-
-    The runtime wrapped service can expose ``**kwargs`` while forwarding to an
-    older keyword-only function. So the first attempts must be the smallest
-    payloads the old service accepts: guild, owner, category, and maybe is_ghost.
-    Do not lead with ``reason=`` or alias kwargs like ``member=``/``requester=``.
-    """
-    canonical: Dict[str, Any] = {
-        "guild": guild,
-        "owner": member,
-        "category": category,
-        "is_ghost": False,
-        "reason": reason,
-        "metadata": metadata,
-        "extra_metadata": metadata,
-        "category_metadata": metadata,
-        "initial_message": reason,
-        "title": "Verification",
-        "priority": "medium",
-    }
-
-    attempts: list[tuple[str, Any]] = [
-        ("owner_category_ghost", lambda: create_ticket_channel(guild=guild, owner=member, category=category, is_ghost=False)),
-        ("owner_category", lambda: create_ticket_channel(guild=guild, owner=member, category=category)),
-        ("owner_only", lambda: create_ticket_channel(guild=guild, owner=member)),
-    ]
-
+def _channel_ticket_number(channel: discord.TextChannel) -> int:
     try:
-        sig = inspect.signature(create_ticket_channel)
-        params = sig.parameters
-        has_varkw = any(p.kind == inspect.Parameter.VAR_KEYWORD for p in params.values())
-        if not has_varkw:
-            filtered = {k: v for k, v in canonical.items() if k in params}
-            if filtered:
-                # Put exact signature match first for true new signatures, but
-                # keep no-reason fallback attempts immediately after it.
-                attempts.insert(0, ("signature_filtered", lambda filtered=filtered: create_ticket_channel(**filtered)))
+        m = _TICKET_NUM_RE.match(str(channel.name or "").strip().lower())
+        if m:
+            return int(m.group(1))
     except Exception:
         pass
+    try:
+        topic = channel.topic or ""
+        m = re.search(r"(?:^|;)ticket_number=(\d+)(?:;|$)", topic)
+        if m:
+            return int(m.group(1))
+    except Exception:
+        pass
+    return 0
 
-    attempts.extend(
-        [
-            ("owner_category_reason", lambda: create_ticket_channel(guild=guild, owner=member, category=category, reason=reason)),
-            ("owner_category_reason_ghost", lambda: create_ticket_channel(guild=guild, owner=member, category=category, reason=reason, is_ghost=False)),
-            ("requester_category", lambda: create_ticket_channel(guild=guild, requester=member, category=category, is_ghost=False)),
-            ("user_category", lambda: create_ticket_channel(guild=guild, user=member, category=category, is_ghost=False)),
-            ("positional_four", lambda: create_ticket_channel(guild, member, category, reason)),
-            ("positional_three", lambda: create_ticket_channel(guild, member, category)),
-        ]
-    )
 
-    seen: set[str] = set()
-    type_errors: list[str] = []
-    last_error: Optional[BaseException] = None
+def _scan_max_ticket_number(guild: discord.Guild) -> int:
+    max_num = 0
+    for channel in list(getattr(guild, "text_channels", []) or []):
+        max_num = max(max_num, _channel_ticket_number(channel))
+    return max_num
 
-    for label, factory in attempts:
-        if label in seen:
-            continue
-        seen.add(label)
+
+async def _db_max_ticket_number(guild_id: int) -> int:
+    def _sync() -> int:
         try:
-            result = await factory()
-            channel = await _resolve_channel_from_ticket_result(guild, result)
-            if channel is not None:
-                return channel
-            if result is not None:
-                _warn(f"ticket creator returned unsupported result label={label} type={type(result).__name__}")
-                return None
-        except TypeError as e:
-            last_error = e
-            type_errors.append(f"{label}: {e}")
-            continue
-        except discord.Forbidden as e:
-            # The service sometimes creates the ticket row/channel and then
-            # raises when trying to post its opening message. If the creation
-            # guard worked, this should be rare. Recover if possible.
-            last_error = e
-            recovered = await _existing_open_ticket_channel(guild, int(member.id))
-            if recovered is not None:
-                _warn(f"ticket creator raised Forbidden after channel creation; recovered channel={recovered.id}")
-                return recovered
-            raise
+            from stoney_verify.globals import get_supabase
+            sb = get_supabase()
+            resp = sb.table("tickets").select("ticket_number").eq("guild_id", str(guild_id)).order("ticket_number", desc=True).limit(1).execute()
+            rows = getattr(resp, "data", None) or []
+            if rows and isinstance(rows[0], dict):
+                return _safe_int(rows[0].get("ticket_number"), 0)
         except Exception as e:
-            last_error = e
-            raise
-
-    if type_errors:
-        _warn("ticket creator signature attempts failed: " + " | ".join(type_errors[:8]))
-    if last_error is not None:
-        raise last_error
-    return None
+            _warn(f"direct ticket number DB lookup failed guild={guild_id}: {e!r}")
+        return 0
+    return await asyncio.to_thread(_sync)
 
 
-async def _create_verification_ticket(guild: discord.Guild, member: discord.Member) -> Optional[discord.TextChannel]:
-    from stoney_verify.tickets_new import service
+async def _reserve_direct_ticket_number(guild: discord.Guild) -> int:
+    return max(_scan_max_ticket_number(guild), await _db_max_ticket_number(int(guild.id))) + 1
 
-    create_ticket_channel = getattr(service, "create_ticket_channel")
-    reason = "Verification assistance requested from the public ticket panel."
-    category = "verification_issue"
-    metadata = {
-        "auto_routed": True,
-        "auto_route_reason": "verification_needed_member_pressed_public_ticket_panel",
+
+async def _insert_direct_ticket_row(channel: discord.TextChannel, member: discord.Member, *, ticket_number: int, category: str) -> None:
+    payload = {
+        "guild_id": str(channel.guild.id),
+        "user_id": str(member.id),
+        "owner_id": str(member.id),
+        "requester_id": str(member.id),
+        "username": str(member),
+        "owner_name": str(member),
+        "requester_name": str(member),
+        "title": "Verification",
+        "category": category,
+        "status": "open",
+        "priority": "medium",
+        "initial_message": "Verification assistance requested from the public ticket panel.",
+        "created_at": _now_iso(),
+        "updated_at": _now_iso(),
+        "discord_thread_id": str(channel.id),
+        "channel_id": str(channel.id),
+        "channel_name": channel.name,
+        "is_ghost": False,
+        "source": "discord_button_verification_auto_route_direct",
         "matched_category_slug": category,
         "matched_category_name": "Verification",
         "matched_intake_type": "verification",
+        "matched_category_reason": "Verification-needed member pressed public ticket panel.",
+        "matched_category_score": 100,
+        "ticket_number": int(ticket_number),
     }
-
-    cfg = await _get_guild_config_safe(guild.id)
-    _install_create_text_channel_guard()
-    token = _CREATE_TEXT_CONTEXT.set({"guild_id": int(guild.id), "member": member, "cfg": cfg})
-    try:
-        return await _call_ticket_creator(
-            create_ticket_channel,
-            guild=guild,
-            member=member,
-            category=category,
-            reason=reason,
-            metadata=metadata,
-        )
-    finally:
+    def _sync() -> None:
         try:
-            _CREATE_TEXT_CONTEXT.reset(token)
+            from stoney_verify.globals import get_supabase
+            sb = get_supabase()
+            sb.table("tickets").insert(payload).execute()
+            _log(f"direct ticket row inserted channel={channel.id} owner={member.id} ticket_number={ticket_number}")
+        except Exception as e:
+            _warn(f"direct ticket row insert failed channel={channel.id} owner={member.id}: {e!r}")
+        try:
+            from stoney_verify.globals import get_supabase
+            sb = get_supabase()
+            sb.table("ticket_counters").upsert({"guild_id": str(channel.guild.id), "last_ticket_number": int(ticket_number), "updated_at": _now_iso()}, on_conflict="guild_id").execute()
         except Exception:
             pass
+    await asyncio.to_thread(_sync)
+
+
+async def _send_direct_ticket_intro(channel: discord.TextChannel, member: discord.Member) -> None:
+    try:
+        embed = discord.Embed(
+            title="✅ Verification Ticket Opened",
+            description=(
+                f"Hi {member.mention}. This private ticket was opened because your account still needs verification.\n\n"
+                "Use the verification panel below. Staff can help here if anything fails."
+            ),
+            color=discord.Color.green(),
+        )
+        embed.set_footer(text="Stoney Verify • verification ticket")
+        await channel.send(content=member.mention, embed=embed, allowed_mentions=discord.AllowedMentions(users=True, roles=False, everyone=False))
+    except Exception as e:
+        _warn(f"direct ticket intro send failed channel={getattr(channel, 'id', None)}: {e!r}")
+
+
+async def _create_direct_verification_ticket(guild: discord.Guild, member: discord.Member) -> Optional[discord.TextChannel]:
+    cfg = await _get_guild_config_safe(guild.id)
+    ticket_number = await _reserve_direct_ticket_number(guild)
+    channel_name = f"ticket-{int(ticket_number):04d}"
+    topic = f"owner_id={member.id};category=verification_issue;ghost=false;ticket_number={int(ticket_number)}"
+    category = _configured_open_ticket_category(guild, cfg)
+    overwrites = _creation_overwrites(guild, member, cfg)
+    channel = await guild.create_text_channel(
+        channel_name,
+        category=category,
+        overwrites=overwrites,
+        topic=topic,
+        sync_permissions=False,
+        reason="Verification-needed member pressed public ticket panel",
+    )
+    _log(f"direct access-safe verification ticket channel created guild={guild.id} owner={member.id} channel={channel.id} category={getattr(category, 'id', 0) or 0}")
+    await _insert_direct_ticket_row(channel, member, ticket_number=ticket_number, category="verification_issue")
+    await _send_direct_ticket_intro(channel, member)
+    return channel
 
 
 async def _open_fresh_verification_ticket(interaction: discord.Interaction, guild: discord.Guild, member: discord.Member) -> bool:
     try:
-        channel = await _create_verification_ticket(guild, member)
+        await _force_retire_open_ticket_rows(
+            guild_id=int(guild.id),
+            owner_id=int(member.id),
+            channel_id=None,
+            reason="Verification auto-route preparing clean access-safe ticket",
+        )
+        channel = await _create_direct_verification_ticket(guild, member)
     except Exception as e:
         _warn(f"verification ticket auto-route failed guild={getattr(guild, 'id', None)} user={getattr(member, 'id', None)}: {e!r}")
-        recovered = await _existing_open_ticket_channel(guild, int(member.id))
-        if recovered is not None:
-            posted = await _post_verify_ui(recovered, member)
-            if posted:
-                await _reply(
-                    interaction,
-                    f"✅ Opened your verification ticket: {recovered.mention}\nUse the verification buttons inside that ticket.",
-                )
-                return True
-        await _reply(
-            interaction,
-            "❌ I could not open your verification ticket because Stoney does not have enough access to the created ticket channel. Please ask staff to run `/stoney setup` → Health Check.",
-        )
+        await _reply(interaction, "❌ I could not open your verification ticket. Staff should run `/stoney setup` → Health Check and confirm Stoney can Manage Channels.")
         return True
-
     if channel is None:
-        await _reply(interaction, "❌ I tried to open your verification ticket, but the ticket service did not return a channel.")
+        await _reply(interaction, "❌ I tried to open your verification ticket, but ticket creation did not return a channel.")
         return True
-
     posted = await _post_verify_ui(channel, member)
     if posted:
-        await _reply(
-            interaction,
-            f"✅ Opened your verification ticket: {channel.mention}\nUse the verification buttons inside that ticket.",
-        )
+        await _reply(interaction, f"✅ Opened your verification ticket: {channel.mention}\nUse the verification buttons inside that ticket.")
     else:
-        await _reply(
-            interaction,
-            f"⚠️ Opened your verification ticket: {channel.mention}\nBut I could not post the verification panel because Stoney lacks access inside that channel.",
-        )
+        await _reply(interaction, f"⚠️ Opened your verification ticket: {channel.mention}\nBut I could not post the verification panel because Stoney lacks access inside that channel.")
     return True
 
 
@@ -736,34 +584,22 @@ async def _handle_unverified_panel_click(interaction: discord.Interaction) -> bo
     member = _interaction_member(interaction)
     if guild is None or member is None:
         return False
-
     if not await _is_unverified_only_member(member):
         return False
-
     await _defer(interaction)
-
     existing = await _existing_open_ticket_channel(guild, int(member.id))
     if existing is not None:
         access_ok = await _ensure_ticket_channel_access(existing, member)
-        posted = False
-        if access_ok:
-            posted = await _post_verify_ui(existing, member)
-        if posted:
-            await _reply(
-                interaction,
-                f"✅ You already have a verification ticket open: {existing.mention}\nI refreshed the verification panel there.",
-            )
+        if access_ok and await _post_verify_ui(existing, member):
+            await _reply(interaction, f"✅ You already have a verification ticket open: {existing.mention}\nI refreshed the verification panel there.")
             return True
-
-        # If the existing row points to a channel Stoney cannot access, do not
-        # trap the user forever. Retire the stale row and create a clean ticket
-        # using the access-safe creation guard.
-        await _retire_inaccessible_ticket(
-            existing,
+        await _force_retire_open_ticket_rows(
+            guild_id=int(guild.id),
+            owner_id=int(member.id),
+            channel_id=int(existing.id),
             reason="Verification auto-route found an inaccessible stale ticket; replacing it with an access-safe ticket",
         )
         return await _open_fresh_verification_ticket(interaction, guild, member)
-
     return await _open_fresh_verification_ticket(interaction, guild, member)
 
 
@@ -783,23 +619,18 @@ def patch_ticket_panel_view() -> bool:
     global _PATCHED
     if _PATCHED:
         return True
-
     try:
         from stoney_verify.tickets_new import panel
-
         view_cls = getattr(panel, "TicketPanelView", None)
         if view_cls is None:
             _warn("TicketPanelView not found")
             return False
-
         original_init = getattr(view_cls, "__init__", None)
         if not callable(original_init) or getattr(original_init, "_unverified_flow_wrapped", False):
             _PATCHED = True
             return True
-
         def _patched_init(self: Any, *args: Any, **kwargs: Any) -> None:
             original_init(self, *args, **kwargs)
-
             try:
                 for item in list(getattr(self, "children", []) or []):
                     if not _button_looks_like_create_ticket(item):
@@ -807,13 +638,11 @@ def patch_ticket_panel_view() -> bool:
                     original_callback = getattr(item, "callback", None)
                     if not callable(original_callback) or getattr(original_callback, "_unverified_flow_wrapped", False):
                         continue
-
                     async def _wrapped_callback(interaction: discord.Interaction, *, _original=original_callback) -> Any:
                         handled = await _handle_unverified_panel_click(interaction)
                         if handled:
                             return None
                         return await _original(interaction)
-
                     try:
                         setattr(_wrapped_callback, "_unverified_flow_wrapped", True)
                     except Exception:
@@ -821,14 +650,12 @@ def patch_ticket_panel_view() -> bool:
                     item.callback = _wrapped_callback
             except Exception as e:
                 _warn(f"failed wiring TicketPanelView button callback: {e!r}")
-
         try:
             setattr(_patched_init, "_unverified_flow_wrapped", True)
         except Exception:
             pass
         setattr(view_cls, "__init__", _patched_init)
         _PATCHED = True
-        _install_create_text_channel_guard()
         _log("patched TicketPanelView so verification-needed members open verification tickets directly")
         return True
     except Exception as e:
