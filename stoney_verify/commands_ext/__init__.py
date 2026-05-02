@@ -8,8 +8,8 @@ DEFAULT_COMMAND_PROFILE = "public"
 CommandRegistrar = Callable[[Any, Any], None]
 CommandModuleSpec = Tuple[str, str, str]
 
-# Keep the public surface boring and consolidated. Do not add new one-off patch
-# modules here unless they are later folded into their owner module.
+# Keep the public surface boring and consolidated. Do not add new public command
+# clutter. Full customization lives inside /stoney setup as picker screens.
 COMMAND_MODULES: List[CommandModuleSpec] = [
     ("public_staff_scope", "register_public_staff_scope", "public per-guild staff permission isolation"),
     ("public_access_control", "register_public_access_control", "public server-control and staff role split"),
@@ -21,6 +21,7 @@ COMMAND_MODULES: List[CommandModuleSpec] = [
     ("public_setup_recovery", "register_public_setup_recovery_commands", "setup recovery/start-over center"),
     ("public_setup_cleanup", "register_public_setup_cleanup_commands", "selective setup cleanup tools"),
     ("public_setup_fresh_choice", "register_public_setup_fresh_choice_commands", "clear fresh-server auto-build vs build-it-myself choices"),
+    ("public_setup_full_customization", "register_public_setup_full_customization_commands", "full setup customization picker flow"),
     ("public_setup_start", "register_public_setup_start_commands", "legacy /stoney setup quick-start fallback"),
     ("public_setup_review", "register_public_setup_review_commands", "advanced setup review commands"),
     ("public_setup_logs", "register_public_setup_logs_commands", "advanced setup log command"),
@@ -73,9 +74,9 @@ _LEGACY_MODULES: Tuple[str, ...] = tuple(name for name, _fn, _label in COMMAND_M
 _PUBLIC_CORE_MODULES: Tuple[str, ...] = (
     "public_staff_scope", "public_access_control", "public_onboarding", "public_join_removal_safety",
     "public_spam_cleanup_hardening", "public_setup_solid", "public_setup_recommend", "public_setup_recovery",
-    "public_setup_cleanup", "public_setup_fresh_choice", "public_status_reporter", "public_modlog_coverage",
-    "public_setup_group", "public_help_group", "public_cleanup_group", "public_spam_group", "public_mod_group",
-    "public_ticket_group_clean", "public_ticket_delete", "public_tickets_group", "public_ticket_intake_group",
+    "public_setup_cleanup", "public_setup_fresh_choice", "public_setup_full_customization", "public_status_reporter",
+    "public_modlog_coverage", "public_setup_group", "public_help_group", "public_cleanup_group", "public_spam_group",
+    "public_mod_group", "public_ticket_group_clean", "public_ticket_delete", "public_tickets_group", "public_ticket_intake_group",
     "public_ticket_category_group", "public_tickettool_parity_polish", "public_verify_group", "public_setup_gate",
 )
 _PUBLIC_ADMIN_EXTRA_MODULES: Tuple[str, ...] = (
