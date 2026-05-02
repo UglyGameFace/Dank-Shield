@@ -12,6 +12,14 @@ configured approved/verified role, and do not have the configured full access
 member/resident role. The configured waiting/pending role is helpful, but it is
 not required because fresh joins can press the panel before Discord/the bot
 finishes assigning that role.
+
+Hardening:
+- Never retire existing/open ticket rows before a replacement channel is created.
+- Create tickets with only the critical overwrites first. Staff overwrites are
+  applied after creation so one high/blocked staff role cannot break the whole
+  ticket.
+- Treat bot + owner access as critical. Staff overwrite failures are warnings,
+  not a reason to leave the member with a blank ticket.
 """
 
 import asyncio
@@ -223,7 +231,13 @@ async def _existing_open_ticket_channel(guild: discord.Guild, owner_id: int) -> 
         return None
 
 
-async def _force_retire_open_ticket_rows(*, guild_id: int, owner_id: int, channel_id: Optional[int] = None, reason: str) -> bool:
+async def _force_retire_open_ticket_rows(
+    *,
+    guild_id: int,
+    owner_id: int,
+    channel_id: Optional[int] = None,
+    reason: str,
+) -> bool:
     payload = {
         "status": "deleted",
         "closed_at": _now_iso(),
@@ -247,11 +261,12 @@ async def _force_retire_open_ticket_rows(*, guild_id: int, owner_id: int, channe
                         changed = True
                     except Exception as e:
                         _warn(f"direct stale ticket row retire update failed col={col}: {e!r}")
-            try:
-                sb.table("tickets").update(payload).eq("guild_id", str(guild_id)).eq("user_id", str(owner_id)).in_("status", ["open", "claimed"]).execute()
-                changed = True
-            except Exception as e:
-                _warn(f"direct stale owner ticket row retire fallback failed: {e!r}")
+            else:
+                try:
+                    sb.table("tickets").update(payload).eq("guild_id", str(guild_id)).eq("user_id", str(owner_id)).in_("status", ["open", "claimed"]).execute()
+                    changed = True
+                except Exception as e:
+                    _warn(f"direct stale owner ticket row retire fallback failed: {e!r}")
             return changed
         except Exception as e:
             _warn(f"force retire stale ticket rows failed guild={guild_id} owner={owner_id}: {e!r}")
@@ -273,7 +288,6 @@ def _ticket_bot_overwrite() -> discord.PermissionOverwrite:
         use_application_commands=True,
         manage_messages=True,
         manage_channels=True,
-        manage_permissions=True,
     )
 
 
@@ -315,7 +329,15 @@ def _configured_staff_role_ids(cfg: Any) -> list[int]:
         seen.add(rid)
         ids.append(rid)
 
-    for name in ("staff_role_id", "ticket_staff_role_id", "support_role_id", "server_control_role_id", "control_role_id", "perm_role_id", "bot_manager_role_id"):
+    for name in (
+        "staff_role_id",
+        "ticket_staff_role_id",
+        "support_role_id",
+        "server_control_role_id",
+        "control_role_id",
+        "perm_role_id",
+        "bot_manager_role_id",
+    ):
         try:
             add(getattr(cfg, name, 0))
         except Exception:
@@ -332,7 +354,14 @@ def _configured_staff_role_ids(cfg: Any) -> list[int]:
 
 def _configured_open_ticket_category(guild: discord.Guild, cfg: Any) -> Optional[discord.CategoryChannel]:
     ids: list[int] = []
-    for names in (("open_ticket_category_id",), ("ticket_open_category_id",), ("active_ticket_category_id",), ("ticket_category_id",), ("tickets_category_id",), ("open_category_id",)):
+    for names in (
+        ("open_ticket_category_id",),
+        ("ticket_open_category_id",),
+        ("active_ticket_category_id",),
+        ("ticket_category_id",),
+        ("tickets_category_id",),
+        ("open_category_id",),
+    ):
         cid = _config_channel_id(cfg, *names)
         if cid > 0:
             ids.append(cid)
@@ -373,43 +402,96 @@ def _bot_member_for_guild(guild: discord.Guild) -> Optional[discord.Member]:
         return None
 
 
-def _creation_overwrites(guild: discord.Guild, member: discord.Member, cfg: Any) -> Dict[Any, discord.PermissionOverwrite]:
-    overwrites: Dict[Any, discord.PermissionOverwrite] = {}
-    overwrites[guild.default_role] = _ticket_everyone_overwrite()
+def _critical_creation_overwrites(guild: discord.Guild, member: discord.Member) -> Dict[Any, discord.PermissionOverwrite]:
+    """Only include overwrites that must exist for the ticket to work.
+
+    Staff roles are intentionally not included here. Some customer servers put
+    staff/admin roles above the bot, and Discord can reject channel creation
+    when those role overwrites are included in the create payload. Staff access
+    is added after creation best-effort.
+    """
+
+    overwrites: Dict[Any, discord.PermissionOverwrite] = {
+        guild.default_role: _ticket_everyone_overwrite(),
+        member: _ticket_owner_overwrite(),
+    }
     bot_member = _bot_member_for_guild(guild)
     if bot_member is not None:
         overwrites[bot_member] = _ticket_bot_overwrite()
-    overwrites[member] = _ticket_owner_overwrite()
-    for rid in _configured_staff_role_ids(cfg):
-        role = guild.get_role(int(rid))
-        if role is not None:
-            overwrites[role] = _ticket_staff_overwrite()
     return overwrites
 
 
+def _can_create_ticket_channel(guild: discord.Guild, category: Optional[discord.CategoryChannel]) -> tuple[bool, str]:
+    bot_member = _bot_member_for_guild(guild)
+    if bot_member is None:
+        return False, "bot member is not available in guild cache"
+
+    try:
+        if bot_member.guild_permissions.administrator:
+            return True, "administrator"
+        if bot_member.guild_permissions.manage_channels:
+            return True, "server Manage Channels"
+    except Exception:
+        pass
+
+    try:
+        if category is not None and category.permissions_for(bot_member).manage_channels:
+            return True, f"category Manage Channels in #{category.name}"
+    except Exception:
+        pass
+
+    return (
+        False,
+        "missing Manage Channels. Give the bot Manage Channels server-wide, "
+        "or allow Manage Channels on the configured active ticket category.",
+    )
+
+
+async def _apply_staff_ticket_access(channel: discord.TextChannel, cfg: Any) -> None:
+    for rid in _configured_staff_role_ids(cfg):
+        role = channel.guild.get_role(int(rid))
+        if role is None:
+            continue
+        try:
+            await channel.set_permissions(
+                role,
+                overwrite=_ticket_staff_overwrite(),
+                reason="Grant staff access to verification ticket",
+            )
+        except Exception as e:
+            _warn(f"staff ticket access skipped channel={channel.id} role={rid}: {e!r}")
+
+
 async def _ensure_ticket_channel_access(channel: discord.TextChannel, member: discord.Member) -> bool:
-    ok = True
     guild = channel.guild
     cfg = await _get_guild_config_safe(guild.id)
-    targets: list[tuple[Any, discord.PermissionOverwrite, str]] = [(guild.default_role, _ticket_everyone_overwrite(), "everyone")]
+    critical_ok = True
+
+    critical_targets: list[tuple[Any, discord.PermissionOverwrite, str]] = [
+        (guild.default_role, _ticket_everyone_overwrite(), "everyone"),
+        (member, _ticket_owner_overwrite(), "owner"),
+    ]
     bot_member = _bot_member_for_guild(guild)
     if bot_member is not None:
-        targets.append((bot_member, _ticket_bot_overwrite(), "bot"))
-    targets.append((member, _ticket_owner_overwrite(), "owner"))
-    for rid in _configured_staff_role_ids(cfg):
-        role = guild.get_role(int(rid))
-        if role is not None:
-            targets.append((role, _ticket_staff_overwrite(), f"staff:{rid}"))
-    for target, overwrite, label in targets:
+        critical_targets.append((bot_member, _ticket_bot_overwrite(), "bot"))
+
+    for target, overwrite, label in critical_targets:
         try:
-            await channel.set_permissions(target, overwrite=overwrite, reason="Repair verification ticket access before posting verification panel")
+            await channel.set_permissions(
+                target,
+                overwrite=overwrite,
+                reason="Repair verification ticket access before posting verification panel",
+            )
         except Exception as e:
-            ok = False
-            _warn(f"ticket access repair failed channel={channel.id} target={label}: {e!r}")
-    if ok:
+            critical_ok = False
+            _warn(f"critical ticket access repair failed channel={channel.id} target={label}: {e!r}")
+
+    await _apply_staff_ticket_access(channel, cfg)
+
+    if critical_ok:
         _log(f"ticket access repaired channel={channel.id} owner={member.id}")
         await asyncio.sleep(0.35)
-    return ok
+    return critical_ok
 
 
 async def _post_verify_ui(channel: discord.TextChannel, member: discord.Member) -> bool:
@@ -519,7 +601,14 @@ async def _insert_direct_ticket_row(channel: discord.TextChannel, member: discor
             from stoney_verify.globals import get_supabase
 
             sb = get_supabase()
-            sb.table("ticket_counters").upsert({"guild_id": str(channel.guild.id), "last_ticket_number": int(ticket_number), "updated_at": _now_iso()}, on_conflict="guild_id").execute()
+            sb.table("ticket_counters").upsert(
+                {
+                    "guild_id": str(channel.guild.id),
+                    "last_ticket_number": int(ticket_number),
+                    "updated_at": _now_iso(),
+                },
+                on_conflict="guild_id",
+            ).execute()
         except Exception:
             pass
 
@@ -548,7 +637,11 @@ async def _create_direct_verification_ticket(guild: discord.Guild, member: disco
     channel_name = f"ticket-{int(ticket_number):04d}"
     topic = f"owner_id={member.id};category=verification_issue;ghost=false;ticket_number={int(ticket_number)}"
     category = _configured_open_ticket_category(guild, cfg)
-    overwrites = _creation_overwrites(guild, member, cfg)
+    can_create, create_reason = _can_create_ticket_channel(guild, category)
+    if not can_create:
+        raise PermissionError(create_reason)
+
+    overwrites = _critical_creation_overwrites(guild, member)
     channel = await guild.create_text_channel(
         channel_name,
         category=category,
@@ -556,7 +649,20 @@ async def _create_direct_verification_ticket(guild: discord.Guild, member: disco
         topic=topic,
         reason="Verification-needed member pressed public ticket panel",
     )
-    _log(f"direct access-safe verification ticket channel created guild={guild.id} owner={member.id} channel={channel.id} category={getattr(category, 'id', 0) or 0}")
+    _log(
+        "direct access-safe verification ticket channel created "
+        f"guild={guild.id} owner={member.id} channel={channel.id} "
+        f"category={getattr(category, 'id', 0) or 0} permission_source={create_reason}"
+    )
+
+    await _apply_staff_ticket_access(channel, cfg)
+
+    await _force_retire_open_ticket_rows(
+        guild_id=int(guild.id),
+        owner_id=int(member.id),
+        channel_id=None,
+        reason="Verification auto-route replaced stale ticket rows after creating an access-safe ticket",
+    )
     await _insert_direct_ticket_row(channel, member, ticket_number=ticket_number, category="verification_issue")
     await _send_direct_ticket_intro(channel, member)
     return channel
@@ -564,20 +670,32 @@ async def _create_direct_verification_ticket(guild: discord.Guild, member: disco
 
 async def _open_fresh_verification_ticket(interaction: discord.Interaction, guild: discord.Guild, member: discord.Member) -> bool:
     try:
-        await _force_retire_open_ticket_rows(
-            guild_id=int(guild.id),
-            owner_id=int(member.id),
-            channel_id=None,
-            reason="Verification auto-route preparing clean access-safe ticket",
-        )
         channel = await _create_direct_verification_ticket(guild, member)
+    except PermissionError as e:
+        _warn(f"verification ticket auto-route missing permissions guild={getattr(guild, 'id', None)} user={getattr(member, 'id', None)}: {e!r}")
+        await _reply(
+            interaction,
+            "❌ I could not open your verification ticket because Stoney is missing **Manage Channels** for ticket creation. "
+            "Staff should run `/stoney setup` → **Health Check** and fix the bot/category permissions.",
+        )
+        return True
+    except discord.Forbidden as e:
+        _warn(f"verification ticket auto-route missing permissions guild={getattr(guild, 'id', None)} user={getattr(member, 'id', None)}: {e!r}")
+        await _reply(
+            interaction,
+            "❌ I could not open your verification ticket because Discord denied Stoney permission to create the private ticket. "
+            "Staff should run `/stoney setup` → **Health Check** and fix the bot/category permissions.",
+        )
+        return True
     except Exception as e:
         _warn(f"verification ticket auto-route failed guild={getattr(guild, 'id', None)} user={getattr(member, 'id', None)}: {e!r}")
-        await _reply(interaction, "❌ I could not open your verification ticket. Staff should run `/stoney setup` → Health Check and confirm Stoney can Manage Channels.")
+        await _reply(interaction, "❌ I could not open your verification ticket. Staff should run `/stoney setup` → Health Check.")
         return True
+
     if channel is None:
         await _reply(interaction, "❌ I tried to open your verification ticket, but ticket creation did not return a channel.")
         return True
+
     posted = await _post_verify_ui(channel, member)
     if posted:
         await _reply(interaction, f"✅ Opened your verification ticket: {channel.mention}\nUse the verification buttons inside that ticket.")
@@ -594,12 +712,16 @@ async def _handle_unverified_panel_click(interaction: discord.Interaction) -> bo
     if not await _is_unverified_only_member(member):
         return False
     await _defer(interaction)
+
     existing = await _existing_open_ticket_channel(guild, int(member.id))
     if existing is not None:
         access_ok = await _ensure_ticket_channel_access(existing, member)
         if access_ok and await _post_verify_ui(existing, member):
             await _reply(interaction, f"✅ You already have a verification ticket open: {existing.mention}\nI refreshed the verification panel there.")
             return True
+
+        # Only retire the broken row that points at the inaccessible channel.
+        # Do not wipe all owner rows until a replacement channel is successfully created.
         await _force_retire_open_ticket_rows(
             guild_id=int(guild.id),
             owner_id=int(member.id),
@@ -607,6 +729,7 @@ async def _handle_unverified_panel_click(interaction: discord.Interaction) -> bo
             reason="Verification auto-route found an inaccessible stale ticket; replacing it with an access-safe ticket",
         )
         return await _open_fresh_verification_ticket(interaction, guild, member)
+
     return await _open_fresh_verification_ticket(interaction, guild, member)
 
 
