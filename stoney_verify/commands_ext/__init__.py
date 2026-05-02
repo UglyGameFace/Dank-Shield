@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import builtins
 import os
-from typing import Any, Callable, Dict, List, Sequence, Tuple
+from contextlib import contextmanager
+from typing import Any, Callable, Dict, Iterator, List, Sequence, Tuple
 
 _COMMANDS_EXT_REGISTERED = False
 DEFAULT_COMMAND_PROFILE = "public"
@@ -109,6 +111,23 @@ _CONFUSING_STONEY_CHILDREN: Tuple[str, ...] = (
 )
 _ALLOWED_STONEY_CHILDREN = {"setup", "help", "commands", "cleanup", "spam"}
 
+_COMPACT_SUPPRESS_PREFIXES: Tuple[str, ...] = (
+    "✅ public_",
+    "✅ commands_ext: registered",
+    "✅ public_ticket_panel_commands:",
+    "✅ Ticket panel buttons registered",
+    "🧹 commands_ext pruned /stoney during registration",
+    "🧹 public_spam_group removed legacy top-level spam commands",
+)
+
+_COMPACT_SUPPRESS_CONTAINS: Tuple[str, ...] = (
+    " global_delta=",
+    " guild_delta=",
+    " attached ",
+    " registered ",
+    " active",
+)
+
 
 def _csv_set(value: str) -> set[str]:
     return {part.strip().lower() for part in str(value or "").split(",") if part.strip()}
@@ -149,6 +168,53 @@ def _env_str(name: str, default: str = "") -> str:
 
 def _command_profile() -> str:
     return _env_str("STONEY_COMMAND_PROFILE", DEFAULT_COMMAND_PROFILE).lower() or DEFAULT_COMMAND_PROFILE
+
+
+def _command_log_style() -> str:
+    return _env_str("STONEY_COMMAND_LOG_STYLE", _env_str("STONEY_STARTUP_LOG_STYLE", "compact")).lower()
+
+
+def _verbose_command_logs() -> bool:
+    return _command_log_style() in {"verbose", "debug", "trace", "full"}
+
+
+def _should_suppress_command_line(text: str) -> bool:
+    if _verbose_command_logs():
+        return False
+    line = str(text or "")
+    if not line:
+        return False
+    if line.startswith(("⚠️", "🚫", "❌", "Traceback", "RuntimeError", "Error")):
+        return False
+    if any(line.startswith(prefix) for prefix in _COMPACT_SUPPRESS_PREFIXES):
+        return True
+    if line.startswith("✅ ") and any(token in line for token in _COMPACT_SUPPRESS_CONTAINS):
+        return True
+    return False
+
+
+@contextmanager
+def _compact_command_print_filter() -> Iterator[None]:
+    if _verbose_command_logs():
+        yield
+        return
+
+    original_print = builtins.print
+
+    def filtered_print(*args, **kwargs):  # type: ignore[no-untyped-def]
+        try:
+            text = " ".join(str(arg) for arg in args)
+            if _should_suppress_command_line(text):
+                return None
+        except Exception:
+            pass
+        return original_print(*args, **kwargs)
+
+    builtins.print = filtered_print
+    try:
+        yield
+    finally:
+        builtins.print = original_print
 
 
 def _deployment_mode() -> str:
@@ -212,7 +278,7 @@ def _remove_stale_top_level_commands(tree: Any, *, reason: str) -> list[str]:
                 removed.append(name)
         except Exception:
             pass
-    if removed:
+    if removed and _verbose_command_logs():
         print(f"🧹 commands_ext removed stale top-level commands reason={reason}: {removed}")
     return removed
 
@@ -235,7 +301,7 @@ def _prune_public_stoney_children(*, profile: str, reason: str) -> list[str]:
             pass
     after = _child_names(stoney_group)
     unexpected = [name for name in after if name not in _ALLOWED_STONEY_CHILDREN]
-    if removed or unexpected:
+    if unexpected or (removed and _verbose_command_logs()):
         print(f"🧹 commands_ext pruned /stoney during registration reason={reason} before={before} after={after} removed={removed} unexpected_remaining={unexpected}")
     return removed
 
@@ -248,25 +314,34 @@ def _import_registrar(module_name: str, function_name: str) -> CommandRegistrar:
     return registrar
 
 
-def _register_one_module(*, bot: Any, tree: Any, module_name: str, function_name: str, label: str, errors: List[str]) -> None:
+def _register_one_module(*, bot: Any, tree: Any, module_name: str, function_name: str, label: str, errors: List[str]) -> tuple[int, int]:
     before_global, before_guild = _tree_command_counts(tree)
     try:
-        _import_registrar(module_name, function_name)(bot, tree)
+        with _compact_command_print_filter():
+            _import_registrar(module_name, function_name)(bot, tree)
         after_global, after_guild = _tree_command_counts(tree)
-        print(f"✅ commands_ext: registered {label} module={module_name} global_delta={after_global - before_global} global_total={after_global} guild_delta={after_guild - before_guild} guild_total={after_guild}")
+        delta_global = after_global - before_global
+        delta_guild = after_guild - before_guild
+        if _verbose_command_logs():
+            print(f"✅ commands_ext: registered {label} module={module_name} global_delta={delta_global} global_total={after_global} guild_delta={delta_guild} guild_total={after_guild}")
+        return delta_global, delta_guild
     except Exception as e:
         errors.append(f"{module_name}: {repr(e)}")
         print(f"⚠️ commands_ext: failed registering {label}: {repr(e)}")
+        return 0, 0
 
 
-def _log_stoney_setup_surface() -> None:
+def _log_stoney_setup_surface() -> tuple[list[str], list[str]]:
     try:
         from .public_setup_group import stoney_group
         child_names = _child_names(stoney_group)
         advanced = [name for name in child_names if name in _CONFUSING_STONEY_CHILDREN]
-        print(f"🧭 commands_ext /stoney setup surface setup_present={'setup' in child_names} advanced_aliases={advanced} direct_children={child_names}")
+        if advanced or _verbose_command_logs():
+            print(f"🧭 commands_ext /stoney setup surface setup_present={'setup' in child_names} advanced_aliases={advanced} direct_children={child_names}")
+        return child_names, advanced
     except Exception as e:
         print(f"⚠️ commands_ext could not inspect /stoney setup surface: {repr(e)}")
+        return [], []
 
 
 def _public_guard_findings(profile: str) -> tuple[list[str], list[str]]:
@@ -317,18 +392,28 @@ def register_all_commands(bot: Any, tree: Any) -> None:
     errors: list[str] = []
     profile = _command_profile()
     _run_public_startup_guard(profile)
-    _remove_stale_top_level_commands(tree, reason="before_module_registration")
+    pre_removed = _remove_stale_top_level_commands(tree, reason="before_module_registration")
     selected_modules = _selected_command_modules()
     selected_names = [name for name, _fn, _label in selected_modules]
     skipped_names = [name for name, _fn, _label in COMMAND_MODULES if name not in set(selected_names)]
     before_global, before_guild = _tree_command_counts(tree)
-    print(f"🧩 commands_ext profile profile={profile} selected={selected_names} skipped={skipped_names} initial_global={before_global} initial_guild={before_guild}")
+    if _verbose_command_logs():
+        print(f"🧩 commands_ext profile profile={profile} selected={selected_names} skipped={skipped_names} initial_global={before_global} initial_guild={before_guild}")
+    else:
+        print(f"🧩 commands_ext profile={profile} modules={len(selected_names)} skipped={len(skipped_names)} initial_global={before_global} initial_guild={before_guild} log=compact")
+    total_global_delta = 0
+    total_guild_delta = 0
+    prune_removed = 0
     for module_name, function_name, label in selected_modules:
-        _register_one_module(bot=bot, tree=tree, module_name=module_name, function_name=function_name, label=label, errors=errors)
-        _prune_public_stoney_children(profile=profile, reason=f"after_{module_name}")
-    _log_stoney_setup_surface()
-    _remove_stale_top_level_commands(tree, reason="after_module_registration")
-    _prune_public_stoney_children(profile=profile, reason="after_module_registration")
+        delta_global, delta_guild = _register_one_module(bot=bot, tree=tree, module_name=module_name, function_name=function_name, label=label, errors=errors)
+        total_global_delta += delta_global
+        total_guild_delta += delta_guild
+        removed = _prune_public_stoney_children(profile=profile, reason=f"after_{module_name}")
+        prune_removed += len(removed)
+    child_names, advanced = _log_stoney_setup_surface()
+    post_removed = _remove_stale_top_level_commands(tree, reason="after_module_registration")
+    removed = _prune_public_stoney_children(profile=profile, reason="after_module_registration")
+    prune_removed += len(removed)
     _COMMANDS_EXT_REGISTERED = True
     final_global, final_guild = _tree_command_counts(tree)
     if final_global >= 95:
@@ -338,7 +423,13 @@ def register_all_commands(bot: Any, tree: Any) -> None:
         for item in errors:
             print(f"   - {item}")
     else:
-        print(f"✅ commands_ext registration complete. final_global={final_global} final_guild={final_guild} profile={profile}")
+        print(
+            "✅ commands_ext registration complete. "
+            f"final_global={final_global} final_guild={final_guild} profile={profile} "
+            f"modules={len(selected_names)} delta_global={total_global_delta} delta_guild={total_guild_delta} "
+            f"stoney_children={child_names} advanced_aliases={advanced} "
+            f"stale_removed={len(pre_removed) + len(post_removed)} stoney_pruned={prune_removed} log={_command_log_style()}"
+        )
 
 
 __all__ = ["register_all_commands", "COMMAND_MODULES", "COMMAND_PROFILES", "DEFAULT_COMMAND_PROFILE"]
