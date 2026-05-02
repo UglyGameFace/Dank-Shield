@@ -4,16 +4,25 @@ from __future__ import annotations
 
 Production rule: verification must never borrow deployment-level channel/role
 IDs from another server. This guard keeps the currently-refactored runtime
-paths on the current guild's saved setup config only.
+paths on the current guild's saved setup config only and makes VC approval
+return a visible result instead of silently doing nothing.
 """
 
 import asyncio
+import builtins
+import sys
 from typing import Any, Optional, Tuple
 
 import discord
 
 _PATCHED = False
-_LOCK = asyncio.Lock()
+_IMPORT_PATCHED = False
+_ROLE_CONTEXT_LOCK = asyncio.Lock()
+_DIRECT_APPROVE_LOCKS: dict[str, asyncio.Lock] = {}
+
+if not hasattr(builtins, "_stoney_true_original_import"):
+    setattr(builtins, "_stoney_true_original_import", builtins.__import__)
+_ORIGINAL_IMPORT = getattr(builtins, "_stoney_true_original_import")
 
 
 def _log(msg: str) -> None:
@@ -38,6 +47,28 @@ def _safe_int(value: Any, default: int = 0) -> int:
         return int(text) if text else int(default)
     except Exception:
         return int(default)
+
+
+def _safe_str(value: Any, default: str = "") -> str:
+    try:
+        text = str(value or "").strip()
+        return text if text else default
+    except Exception:
+        return default
+
+
+async def _run_sync(label: str, fn: Any, *args: Any, timeout: float = 8.0, **kwargs: Any) -> Any:
+    if not callable(fn):
+        return None
+
+    def _call() -> Any:
+        return fn(*args, **kwargs)
+
+    try:
+        return await asyncio.wait_for(asyncio.to_thread(_call), timeout=timeout)
+    except asyncio.TimeoutError:
+        _warn(f"{label} timed out after {timeout:.1f}s")
+        raise
 
 
 def _voice_types() -> tuple[type, ...]:
@@ -318,6 +349,24 @@ async def _unlock(*, guild: discord.Guild, token: str, owner: discord.Member, st
     if not ok_staff:
         await _revoke(guild, owner, token, "staff grant rollback", vc_verify, vc_flow)
         return False, msg_staff
+
+    # Keep the in-memory status aligned so Approve (VC) is allowed immediately
+    # after Accept without depending on a separate legacy status update.
+    for module in (vc_verify, vc_flow):
+        try:
+            rows = getattr(module, "VC_REQUESTS", None)
+            if isinstance(rows, dict):
+                row = dict(rows.get(str(token)) or {})
+                row.update({
+                    "status": "READY",
+                    "vc_channel_id": int(getattr(await _resolve_vc(guild, token, vc_verify, vc_flow), "id", 0) or 0),
+                    "accepted_by": int(staff_member.id),
+                    "accepted_staff_id": int(staff_member.id),
+                })
+                rows[str(token)] = row
+        except Exception:
+            pass
+
     return True, "Owner and assigned staff now have private VC access."
 
 
@@ -347,6 +396,7 @@ async def _role_values(guild: discord.Guild) -> dict[str, int]:
         "RESIDENT_ROLE_ID": _role_id(guild, config, "resident_role_id"),
         "STAFF_ROLE_ID": _role_id(guild, config, "staff_role_id"),
         "VC_STAFF_ROLE_ID": _role_id(guild, config, "vc_staff_role_id", "staff_role_id"),
+        # Legacy private-server custom member roles must not leak into public installs.
         "STONER_ROLE_ID": 0,
         "DRUNKEN_ROLE_ID": 0,
     }
@@ -374,9 +424,293 @@ async def _push_roles(guild: discord.Guild, *modules: Any):
     return restore
 
 
+def _interaction_action_token(interaction: discord.Interaction) -> tuple[str, str]:
+    try:
+        cid = _safe_str(getattr(getattr(interaction, "data", None), "get", lambda *_: "")("custom_id"))
+    except Exception:
+        try:
+            cid = _safe_str((getattr(interaction, "data", None) or {}).get("custom_id"))
+        except Exception:
+            cid = ""
+    if not cid:
+        return "", ""
+
+    try:
+        from stoney_verify.commands_ext.common import parse_custom_id
+
+        parsed = parse_custom_id(cid)
+        if isinstance(parsed, tuple) and len(parsed) >= 2:
+            return _safe_str(parsed[0]), _safe_str(parsed[1])
+        if isinstance(parsed, dict):
+            return _safe_str(parsed.get("action")), _safe_str(parsed.get("token"))
+    except Exception:
+        pass
+
+    if ":" in cid:
+        action, token = cid.split(":", 1)
+        return _safe_str(action), _safe_str(token)
+    return cid, ""
+
+
+async def _defer(interaction: discord.Interaction) -> None:
+    try:
+        if not interaction.response.is_done():
+            await interaction.response.defer(ephemeral=True)
+    except Exception:
+        pass
+
+
+async def _send_ephemeral(interaction: discord.Interaction, content: str) -> None:
+    content = _safe_str(content)[:1900] or "Done."
+    try:
+        if interaction.response.is_done():
+            await interaction.followup.send(content, ephemeral=True)
+        else:
+            await interaction.response.send_message(content, ephemeral=True)
+    except Exception:
+        try:
+            await interaction.followup.send(content, ephemeral=True)
+        except Exception:
+            pass
+
+
+def _lock_for_direct_approve(guild_id: int, token: str) -> asyncio.Lock:
+    key = f"{int(guild_id)}:{str(token)}"
+    lock = _DIRECT_APPROVE_LOCKS.get(key)
+    if lock is None:
+        lock = asyncio.Lock()
+        _DIRECT_APPROVE_LOCKS[key] = lock
+    return lock
+
+
+async def _resolve_member(guild: discord.Guild, user_id: int) -> Optional[discord.Member]:
+    if int(user_id or 0) <= 0:
+        return None
+    try:
+        member = guild.get_member(int(user_id))
+        if isinstance(member, discord.Member):
+            return member
+    except Exception:
+        pass
+    try:
+        member = await guild.fetch_member(int(user_id))
+        return member if isinstance(member, discord.Member) else None
+    except Exception:
+        return None
+
+
+def _role_manage_error(guild: discord.Guild, roles: list[discord.Role]) -> str:
+    me = guild.me
+    if not isinstance(me, discord.Member):
+        return "Bot member is missing in this server."
+    try:
+        if not (me.guild_permissions.administrator or me.guild_permissions.manage_roles):
+            return "Stoney needs **Manage Roles** to approve verification."
+    except Exception:
+        return "Could not read Stoney's role permissions."
+
+    bad: list[str] = []
+    for role in roles:
+        try:
+            if role >= me.top_role:
+                bad.append(f"{role.name} (`{role.id}`)")
+        except Exception:
+            continue
+    if bad:
+        return "Move Stoney's bot role above these roles: " + ", ".join(bad)
+    return ""
+
+
+async def _direct_vc_approve(interaction: discord.Interaction, token: str) -> bool:
+    guild = interaction.guild
+    staff = interaction.user
+    channel = interaction.channel
+
+    if not isinstance(guild, discord.Guild) or not isinstance(staff, discord.Member):
+        return False
+    if not isinstance(channel, discord.TextChannel):
+        return False
+
+    token = _safe_str(token)
+    if not token:
+        return False
+
+    await _defer(interaction)
+    lock = _lock_for_direct_approve(guild.id, token)
+
+    async with lock:
+        try:
+            from stoney_verify.store import sb_get_token_info, sb_mark_decision, sb_set_used
+        except Exception:
+            await _send_ephemeral(interaction, "❌ Verification store is unavailable. Restart and try again.")
+            return True
+
+        try:
+            token_info = await _run_sync("vc approve token lookup", sb_get_token_info, token, timeout=8.0)
+        except asyncio.TimeoutError:
+            await _send_ephemeral(interaction, "❌ Supabase took too long while reading this VC token. Try again once; the bot did not freeze.")
+            return True
+        except Exception as e:
+            await _send_ephemeral(interaction, f"❌ Could not read this VC token: `{type(e).__name__}`")
+            return True
+
+        if not isinstance(token_info, dict) or not token_info:
+            await _send_ephemeral(interaction, "❌ Invalid or expired VC token.")
+            return True
+
+        token_guild = _safe_str(token_info.get("guild_id"))
+        if token_guild and token_guild != str(guild.id):
+            await _send_ephemeral(interaction, "❌ This VC token belongs to a different server.")
+            return True
+
+        token_channel_id = _safe_int(token_info.get("channel_id"), 0)
+        if token_channel_id > 0 and token_channel_id != int(channel.id):
+            await _send_ephemeral(interaction, "❌ This VC token belongs to a different ticket channel.")
+            return True
+
+        owner_id = _safe_int(token_info.get("requester_id") or token_info.get("user_id"), 0)
+        owner = await _resolve_member(guild, owner_id)
+        if not isinstance(owner, discord.Member):
+            await _send_ephemeral(interaction, "❌ Could not resolve the ticket owner in this server.")
+            return True
+
+        role_ids = await _role_values(guild)
+        verified_role = guild.get_role(_safe_int(role_ids.get("VERIFIED_ROLE_ID"), 0))
+        resident_role = guild.get_role(_safe_int(role_ids.get("RESIDENT_ROLE_ID"), 0))
+        unverified_role = guild.get_role(_safe_int(role_ids.get("UNVERIFIED_ROLE_ID"), 0))
+
+        grant_roles = [r for r in (verified_role, resident_role) if isinstance(r, discord.Role)]
+        if not grant_roles:
+            await _send_ephemeral(
+                interaction,
+                "❌ This server has no valid **Verified** or **Resident/Member** role saved in setup. Run `/stoney setup` and save this server's roles again.",
+            )
+            return True
+
+        manage_error = _role_manage_error(guild, grant_roles + ([unverified_role] if isinstance(unverified_role, discord.Role) else []))
+        if manage_error:
+            await _send_ephemeral(interaction, f"❌ {manage_error}")
+            return True
+
+        try:
+            to_add = [role for role in grant_roles if role not in owner.roles]
+            if to_add:
+                await owner.add_roles(*to_add, reason=f"Stoney VC verification approved by {staff} ({staff.id})")
+            removed_unverified = False
+            if isinstance(unverified_role, discord.Role) and unverified_role in owner.roles:
+                await owner.remove_roles(unverified_role, reason=f"Stoney VC verification cleanup by {staff} ({staff.id})")
+                removed_unverified = True
+        except discord.Forbidden:
+            await _send_ephemeral(interaction, "❌ Discord denied role assignment. Move Stoney's bot role higher and make sure it has Manage Roles.")
+            return True
+        except Exception as e:
+            await _send_ephemeral(interaction, f"❌ Role assignment failed: `{type(e).__name__}: {str(e)[:160]}`")
+            return True
+
+        try:
+            await _run_sync("vc approve mark decision", sb_mark_decision, token, "APPROVED (VC)", int(staff.id), approved_user_id=int(owner.id), timeout=8.0)
+        except Exception as e:
+            _warn(f"mark decision failed for vc approval token={token}: {e!r}")
+        try:
+            await _run_sync("vc approve mark used", sb_set_used, token, True, timeout=8.0)
+        except Exception as e:
+            _warn(f"set used failed for vc approval token={token}: {e!r}")
+
+        try:
+            from stoney_verify.commands_ext.common import VC_REQUESTS
+
+            req = dict(VC_REQUESTS.get(str(token)) or {})
+            req.update({
+                "status": "APPROVED",
+                "approved_by": int(staff.id),
+                "approved_user_id": int(owner.id),
+            })
+            VC_REQUESTS[str(token)] = req
+        except Exception:
+            pass
+
+        role_names = ", ".join(role.name for role in grant_roles if isinstance(role, discord.Role))
+        try:
+            await channel.send(
+                f"✅ **VC verification approved** by {staff.mention}.\n"
+                f"{owner.mention} has been verified. Roles granted/confirmed: **{role_names}**."
+                + ("\nRemoved **Unverified**." if removed_unverified else "")
+            )
+        except Exception:
+            pass
+
+        try:
+            if interaction.message:
+                await interaction.message.edit(view=None)
+        except Exception:
+            pass
+
+        try:
+            from stoney_verify.transcripts import auto_close_after_decision
+
+            await asyncio.wait_for(
+                auto_close_after_decision(channel, closer=staff, decision="APPROVED (VC)"),
+                timeout=10.0,
+            )
+        except Exception as e:
+            _warn(f"auto close after direct vc approve skipped: {e!r}")
+
+        await _send_ephemeral(interaction, f"✅ Approved {owner.display_name}. Roles granted/confirmed: {role_names}.")
+        _log(f"direct VC approve completed guild={guild.id} user={owner.id} staff={staff.id}")
+        return True
+
+
+def _patch_interaction_handler() -> None:
+    try:
+        module = sys.modules.get("stoney_verify.interaction_handlers")
+        if module is None:
+            return
+        original = getattr(module, "handle_component_interaction", None)
+        if not callable(original) or getattr(original, "_public_no_env_vc_approve_safe", False):
+            return
+
+        async def handle_component_interaction_safe(interaction: discord.Interaction):
+            action, token = _interaction_action_token(interaction)
+            if action == "vc_approve" and token:
+                handled = await _direct_vc_approve(interaction, token)
+                if handled:
+                    return None
+            return await original(interaction)
+
+        try:
+            setattr(handle_component_interaction_safe, "_public_no_env_vc_approve_safe", True)
+        except Exception:
+            pass
+        setattr(module, "handle_component_interaction", handle_component_interaction_safe)
+        _log("VC approve interaction now defers immediately and has a direct no-env approval path")
+    except Exception as e:
+        _warn(f"interaction handler safety patch failed: {e!r}")
+
+
+def _install_import_hook() -> None:
+    global _IMPORT_PATCHED
+    if _IMPORT_PATCHED:
+        return
+
+    def _safe_import(name: str, globals: Any = None, locals: Any = None, fromlist: Any = (), level: int = 0) -> Any:
+        module = _ORIGINAL_IMPORT(name, globals, locals, fromlist, level)
+        try:
+            if name == "stoney_verify.interaction_handlers" or name.endswith("interaction_handlers"):
+                _patch_interaction_handler()
+            else:
+                _patch_interaction_handler()
+        except Exception:
+            pass
+        return module
+
+    builtins.__import__ = _safe_import
+    _IMPORT_PATCHED = True
+
+
 def patch_public_no_env_runtime_config() -> bool:
     global _PATCHED
     if _PATCHED:
+        _patch_interaction_handler()
         return True
 
     try:
@@ -447,7 +781,7 @@ def patch_public_no_env_runtime_config() -> bool:
                 guild = _guild_from_call(args, kwargs)
                 if not isinstance(guild, discord.Guild):
                     return await fn(*args, **kwargs)
-                async with _LOCK:
+                async with _ROLE_CONTEXT_LOCK:
                     restore = await _push_roles(guild, verify_service, transcripts, voice_verify)
                     try:
                         return await fn(*args, **kwargs)
@@ -470,8 +804,10 @@ def patch_public_no_env_runtime_config() -> bool:
             except Exception:
                 pass
 
+    _install_import_hook()
+    _patch_interaction_handler()
     _PATCHED = True
-    _log("public verification runtime now uses per-guild setup only; env IDs are ignored")
+    _log("public verification runtime now uses per-guild setup only; VC approve cannot silently fail")
     return True
 
 
