@@ -22,6 +22,11 @@ _STARTUP_GUARDS: Tuple[str, ...] = (
     "stoney_verify.startup_guards.command_safety",
     "stoney_verify.startup_guards.slash_command_cleanup",
 
+    # Central config write protection must load before setup/verify/ticket
+    # modules can write guild_configs. It prevents accidental overwrites of
+    # owner-picked roles/channels/categories and makes discovery fill blanks only.
+    "stoney_verify.startup_guards.guild_config_write_safety",
+
     # Broad event-loop DB/modlog/ticket safety layer.
     # sitecustomize.py remains as a tiny host fallback, but main startup loads
     # the real package module directly.
