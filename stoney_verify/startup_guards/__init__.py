@@ -72,6 +72,10 @@ _STARTUP_GUARDS: Tuple[str, ...] = (
     # support reason.
     "stoney_verify.startup_guards.unverified_ticket_panel_flow",
 
+    # Make VC setup failures readable instead of saying only that the staff
+    # panel could not be posted.
+    "stoney_verify.startup_guards.vc_request_setup_clarity",
+
     # DB-backed panel/config bootstrap runtime.
     # This self-registers on_ready/on_guild_join listeners and starts the
     # panel bootstrap worker after the bot is ready. It does not create roles,
@@ -117,6 +121,7 @@ _IMPORT_CHATTER_PREFIXES: Tuple[str, ...] = (
     "🧰 ticket_channel_panel_repair patched",
     "🎯 ticket_category_enforcer patched",
     "🎟️ unverified_ticket_panel_flow patched",
+    "✅ vc_request_setup_clarity:",
     "🧩 panel_bootstrap_runtime runtime listeners registered",
     "🧯 event_safety loaded",
     "🛰️ shard_safety patched",
