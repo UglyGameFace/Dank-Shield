@@ -83,6 +83,10 @@ _STARTUP_GUARDS: Tuple[str, ...] = (
     # instead of the old global/env fallback channel id.
     "stoney_verify.startup_guards.vc_per_guild_access_fix",
 
+    # Public production isolation: VC and verification approval must use the
+    # current server's saved setup config, never deployment/global .env IDs.
+    "stoney_verify.startup_guards.public_no_env_runtime_config",
+
     # DB-backed panel/config bootstrap runtime.
     # This self-registers on_ready/on_guild_join listeners and starts the
     # panel bootstrap worker after the bot is ready. It does not create roles,
@@ -131,6 +135,7 @@ _IMPORT_CHATTER_PREFIXES: Tuple[str, ...] = (
     "✅ vc_request_setup_clarity:",
     "✅ vc_setup_one_press_fix:",
     "✅ vc_per_guild_access_fix:",
+    "✅ public_no_env_runtime_config:",
     "🧩 panel_bootstrap_runtime runtime listeners registered",
     "🧯 event_safety loaded",
     "🛰️ shard_safety patched",
@@ -192,6 +197,7 @@ def _should_suppress_import_line(text: str) -> bool:
                 "raidguard",
                 "panel_bootstrap",
                 "vc_setup",
+                "public_no_env",
             )
         ):
             return True
