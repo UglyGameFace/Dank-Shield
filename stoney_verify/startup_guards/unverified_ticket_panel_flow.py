@@ -1,11 +1,16 @@
 from __future__ import annotations
 
-"""Auto-route unverified users from the public ticket panel into verification.
+"""Auto-route verification-needed users from the public ticket panel.
 
 The public Create Ticket button should feel like TicketTool for verified users,
-but unverified members should not be asked to describe a support issue. If a
-member only has the configured Unverified role, pressing Create Ticket opens a
-verification ticket directly and posts the verification UI inside it.
+but members who still need verification should not be asked to describe a
+support issue. They should get a verification ticket immediately.
+
+Production rule:
+A member is verification-needed when they are not staff/admin, do not have the
+configured Verified role, and do not have the configured Resident/Member role.
+The configured Unverified role is helpful, but it is not required because fresh
+joins can press the panel before Discord/the bot finishes assigning that role.
 """
 
 import inspect
@@ -49,6 +54,21 @@ def _member_has_role(member: discord.Member, role_id: int) -> bool:
         return False
 
 
+def _member_role_ids(member: discord.Member) -> set[int]:
+    try:
+        return {int(getattr(role, "id", 0) or 0) for role in (member.roles or []) if int(getattr(role, "id", 0) or 0) > 0}
+    except Exception:
+        return set()
+
+
+def _config_role_id(cfg: Any, *names: str) -> int:
+    for name in names:
+        value = _safe_int(getattr(cfg, name, 0), 0)
+        if value > 0:
+            return value
+    return 0
+
+
 def _is_staff(member: discord.Member, cfg: Any) -> bool:
     try:
         if member.guild_permissions.administrator or member.guild_permissions.manage_guild or member.guild_permissions.manage_channels:
@@ -56,11 +76,27 @@ def _is_staff(member: discord.Member, cfg: Any) -> bool:
     except Exception:
         pass
 
-    staff_role_id = _safe_int(getattr(cfg, "staff_role_id", 0), 0)
-    return bool(staff_role_id > 0 and _member_has_role(member, staff_role_id))
+    staff_like_role_ids = {
+        _config_role_id(cfg, "staff_role_id"),
+        _config_role_id(cfg, "vc_staff_role_id"),
+        _config_role_id(cfg, "server_control_role_id"),
+        _config_role_id(cfg, "control_role_id"),
+        _config_role_id(cfg, "perm_role_id"),
+        _config_role_id(cfg, "bot_manager_role_id"),
+    }
+    staff_like_role_ids.discard(0)
+
+    member_role_ids = _member_role_ids(member)
+    return bool(staff_like_role_ids and member_role_ids.intersection(staff_like_role_ids))
 
 
 async def _is_unverified_only_member(member: discord.Member) -> bool:
+    """Return True when the member should skip support intake and verify.
+
+    This deliberately handles the race where a fresh join has not received the
+    Unverified role yet. If verification roles are configured and the user has
+    neither Verified nor Resident/Member, they are treated as unverified.
+    """
     if getattr(member, "bot", False):
         return False
 
@@ -68,22 +104,42 @@ async def _is_unverified_only_member(member: discord.Member) -> bool:
         from stoney_verify.guild_config import get_guild_config
 
         cfg = await get_guild_config(member.guild.id, refresh=True)
-    except Exception:
+    except Exception as e:
+        _warn(f"config lookup failed while checking verification-needed member guild={getattr(member.guild, 'id', None)} user={getattr(member, 'id', None)}: {e!r}")
         return False
 
     if _is_staff(member, cfg):
         return False
 
-    unverified_role_id = _safe_int(getattr(cfg, "unverified_role_id", 0), 0)
-    verified_role_id = _safe_int(getattr(cfg, "verified_role_id", 0), 0)
-    resident_role_id = _safe_int(getattr(cfg, "resident_role_id", 0), 0)
+    unverified_role_id = _config_role_id(cfg, "unverified_role_id")
+    verified_role_id = _config_role_id(cfg, "verified_role_id")
+    resident_role_id = _config_role_id(cfg, "resident_role_id", "member_role_id")
 
-    if verified_role_id > 0 and _member_has_role(member, verified_role_id):
-        return False
-    if resident_role_id > 0 and _member_has_role(member, resident_role_id):
+    has_unverified = unverified_role_id > 0 and _member_has_role(member, unverified_role_id)
+    has_verified = verified_role_id > 0 and _member_has_role(member, verified_role_id)
+    has_resident = resident_role_id > 0 and _member_has_role(member, resident_role_id)
+
+    if has_verified or has_resident:
         return False
 
-    return bool(unverified_role_id > 0 and _member_has_role(member, unverified_role_id))
+    if has_unverified:
+        _log(f"verification-needed user matched by Unverified role guild={member.guild.id} user={member.id}")
+        return True
+
+    # Fresh-join safety: role assignment can lag behind the button press. Once a
+    # server has verification/member roles configured, lacking Verified/Resident
+    # is enough to send the user to verification instead of the generic modal.
+    if unverified_role_id > 0 or verified_role_id > 0 or resident_role_id > 0:
+        _log(
+            "verification-needed user matched by missing verified/resident roles "
+            f"guild={member.guild.id} user={member.id} roles={sorted(_member_role_ids(member))} "
+            f"configured_unverified={unverified_role_id} configured_verified={verified_role_id} configured_resident={resident_role_id}"
+        )
+        return True
+
+    # If no role config exists, do not hijack the public ticket panel. Setup gate
+    # should handle missing configuration instead.
+    return False
 
 
 def _interaction_member(interaction: discord.Interaction) -> Optional[discord.Member]:
@@ -186,7 +242,7 @@ async def _create_verification_ticket(guild: discord.Guild, member: discord.Memb
     category = "verification_issue"
     metadata = {
         "auto_routed": True,
-        "auto_route_reason": "unverified_member_pressed_public_ticket_panel",
+        "auto_route_reason": "verification_needed_member_pressed_public_ticket_panel",
         "matched_category_slug": category,
         "matched_category_name": "Verification",
         "matched_intake_type": "verification",
@@ -335,7 +391,7 @@ def patch_ticket_panel_view() -> bool:
             pass
         setattr(view_cls, "__init__", _patched_init)
         _PATCHED = True
-        _log("patched TicketPanelView so unverified members open verification tickets directly")
+        _log("patched TicketPanelView so verification-needed members open verification tickets directly")
         return True
     except Exception as e:
         _warn(f"patch failed: {e!r}")
