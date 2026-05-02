@@ -2,13 +2,12 @@ from __future__ import annotations
 
 """Public /verify command family.
 
-Boring/professional command strategy:
+Production command rules:
 - One top-level command: /verify
-- Verification role tools live as subcommands
+- Member-targeting tools use Discord's native member picker
+- Heavy repair tools acknowledge immediately so Discord never shows
+  "The application did not respond"
 - Uses per-guild DB config from guild_configs through guild_config.py
-- Does not rely on deployment .env role IDs for public servers
-- Member-targeting commands use Discord's native member picker instead of a
-  plain string, so staff can search/select users reliably on mobile and web.
 """
 
 import asyncio
@@ -19,10 +18,10 @@ from discord import app_commands
 
 from ..globals import now_utc
 from ..guild_config import get_guild_config
-from ..tickets_new.service import find_open_ticket_for_owner
 from ..tickets import is_verification_ticket_channel
+from ..tickets_new.service import find_open_ticket_for_owner
 from ..transcripts import ensure_verify_ui_present
-from .common import _staff_check, reply_once, safe_defer, safe_followup
+from .common import _staff_check
 
 
 verify_group = app_commands.Group(
@@ -34,7 +33,7 @@ _REGISTERED = False
 
 
 # ============================================================
-# Helpers
+# Shared helpers
 # ============================================================
 
 def _safe_str(value: Any, default: str = "") -> str:
@@ -48,10 +47,11 @@ def _safe_str(value: Any, default: str = "") -> str:
 def _safe_int(value: Any, default: int = 0) -> int:
     try:
         if value is None or isinstance(value, bool):
-            return default
-        return int(str(value).strip())
+            return int(default)
+        text = str(value).strip()
+        return int(text) if text else int(default)
     except Exception:
-        return default
+        return int(default)
 
 
 def _truncate(value: Any, limit: int = 1000) -> str:
@@ -61,17 +61,64 @@ def _truncate(value: Any, limit: int = 1000) -> str:
     return text[: max(0, limit - 1)] + "…"
 
 
+def _cfg_value(cfg: Any, key: str) -> Any:
+    try:
+        if hasattr(cfg, "get"):
+            return cfg.get(key)
+    except Exception:
+        pass
+    try:
+        return getattr(cfg, key, None)
+    except Exception:
+        return None
+
+
+async def _ack(interaction: discord.Interaction) -> None:
+    """Acknowledge fast enough to avoid Discord interaction timeouts."""
+    try:
+        if not interaction.response.is_done():
+            try:
+                await interaction.response.defer(ephemeral=True, thinking=True)
+            except TypeError:
+                await interaction.response.defer(ephemeral=True)
+    except Exception as e:
+        try:
+            print(f"⚠️ public_verify_group defer failed: {e!r}")
+        except Exception:
+            pass
+
+
+async def _send(interaction: discord.Interaction, content: Optional[str] = None, **kwargs: Any) -> None:
+    payload = dict(kwargs)
+    if content is not None:
+        payload["content"] = content
+    payload.setdefault("ephemeral", True)
+    try:
+        if interaction.response.is_done():
+            await interaction.followup.send(**payload)
+        else:
+            await interaction.response.send_message(**payload)
+    except Exception:
+        try:
+            await interaction.followup.send(**payload)
+        except Exception:
+            pass
+
+
 async def _staff_only(interaction: discord.Interaction) -> bool:
-    if _staff_check(interaction):
-        return True
-    await reply_once(interaction, {"content": "❌ Staff only.", "ephemeral": True})
+    try:
+        if _staff_check(interaction):
+            return True
+    except Exception:
+        pass
+    await _send(interaction, "❌ Staff only.")
     return False
 
 
 async def _guild_or_reply(interaction: discord.Interaction) -> Optional[discord.Guild]:
     guild = interaction.guild
     if guild is None:
-        await reply_once(interaction, {"content": "❌ This command must be used inside a server.", "ephemeral": True})
+        await _send(interaction, "❌ This command must be used inside a server.")
         return None
     return guild
 
@@ -79,19 +126,8 @@ async def _guild_or_reply(interaction: discord.Interaction) -> Optional[discord.
 async def _guild_roles(guild: discord.Guild) -> Dict[str, Optional[discord.Role]]:
     cfg = await get_guild_config(guild.id, refresh=True)
 
-    def read_cfg(key: str) -> Any:
-        try:
-            if hasattr(cfg, "get"):
-                return cfg.get(key)
-        except Exception:
-            pass
-        try:
-            return getattr(cfg, key, None)
-        except Exception:
-            return None
-
     def role_for(key: str) -> Optional[discord.Role]:
-        rid = _safe_int(read_cfg(key), 0)
+        rid = _safe_int(_cfg_value(cfg, key), 0)
         if rid <= 0:
             return None
         role = guild.get_role(rid)
@@ -114,29 +150,25 @@ def _role_status(member: discord.Member, role: Optional[discord.Role]) -> bool:
 
 
 def _needs_verification(member: discord.Member, roles: Dict[str, Optional[discord.Role]]) -> bool:
-    has_uv = _role_status(member, roles.get("unverified"))
-    has_v = _role_status(member, roles.get("verified"))
-    has_r = _role_status(member, roles.get("resident"))
-    return bool(has_uv and not has_v and not has_r)
+    has_unverified = _role_status(member, roles.get("unverified"))
+    has_verified = _role_status(member, roles.get("verified"))
+    has_resident = _role_status(member, roles.get("resident"))
+    return bool(has_unverified and not has_verified and not has_resident)
 
 
 def _bot_can_manage_role(guild: discord.Guild, role: Optional[discord.Role]) -> tuple[bool, str]:
     if role is None:
         return False, "role is not configured or was not found"
-
     me = guild.me
     if me is None:
         return False, "bot member could not be resolved"
-
     if not me.guild_permissions.manage_roles:
         return False, "bot is missing Manage Roles"
-
     try:
         if me.top_role <= role and not me.guild_permissions.administrator:
             return False, f"bot role hierarchy is below {role.name}"
     except Exception:
         pass
-
     return True, "ok"
 
 
@@ -150,27 +182,27 @@ async def _apply_role_change(
 ) -> None:
     guild = interaction.guild
     if guild is None:
-        return await reply_once(interaction, {"content": "❌ Guild only.", "ephemeral": True})
+        return await _send(interaction, "❌ Guild only.")
 
     ok, why = _bot_can_manage_role(guild, role)
     if not ok:
-        return await reply_once(interaction, {"content": f"❌ I cannot manage that role: {why}.", "ephemeral": True})
+        return await _send(interaction, f"❌ I cannot manage {role.mention}: {why}.")
 
     try:
         if enable:
             if role in member.roles:
-                return await reply_once(interaction, {"content": f"✅ {member.mention} already has {role.mention}.", "ephemeral": True})
+                return await _send(interaction, f"✅ {member.mention} already has {role.mention}.")
             await member.add_roles(role, reason=reason)
-            return await reply_once(interaction, {"content": f"✅ Added {role.mention} to {member.mention}.", "ephemeral": True})
+            return await _send(interaction, f"✅ Added {role.mention} to {member.mention}.")
 
         if role not in member.roles:
-            return await reply_once(interaction, {"content": f"✅ {member.mention} does not have {role.mention}.", "ephemeral": True})
+            return await _send(interaction, f"✅ {member.mention} does not have {role.mention}.")
         await member.remove_roles(role, reason=reason)
-        return await reply_once(interaction, {"content": f"✅ Removed {role.mention} from {member.mention}.", "ephemeral": True})
+        return await _send(interaction, f"✅ Removed {role.mention} from {member.mention}.")
     except discord.Forbidden:
-        return await reply_once(interaction, {"content": "❌ Forbidden. Check Manage Roles and role hierarchy.", "ephemeral": True})
+        return await _send(interaction, "❌ Forbidden. Check Manage Roles and role hierarchy.")
     except Exception as e:
-        return await reply_once(interaction, {"content": f"❌ Failed: {_truncate(e, 300)}", "ephemeral": True})
+        return await _send(interaction, f"❌ Failed: {_truncate(e, 300)}")
 
 
 async def _resolve_open_ticket_channel_for_owner(guild: discord.Guild, owner_id: int) -> Optional[discord.TextChannel]:
@@ -178,7 +210,6 @@ async def _resolve_open_ticket_channel_for_owner(guild: discord.Guild, owner_id:
         row = await find_open_ticket_for_owner(guild_id=guild.id, owner_id=owner_id)
     except Exception:
         row = None
-
     if not isinstance(row, dict):
         return None
 
@@ -189,7 +220,6 @@ async def _resolve_open_ticket_channel_for_owner(guild: discord.Guild, owner_id:
     ch = guild.get_channel(ch_id)
     if isinstance(ch, discord.TextChannel):
         return ch
-
     try:
         fetched = await guild.fetch_channel(ch_id)
         return fetched if isinstance(fetched, discord.TextChannel) else None
@@ -201,13 +231,11 @@ async def _maybe_repair_verify_ui_for_member(guild: discord.Guild, member: disco
     ticket_ch = await _resolve_open_ticket_channel_for_owner(guild, int(member.id))
     if ticket_ch is None:
         return None
-
     try:
         if is_verification_ticket_channel(ticket_ch):
             await ensure_verify_ui_present(ticket_ch, reason="verify_group_repair")
     except Exception:
         pass
-
     return ticket_ch
 
 
@@ -216,7 +244,6 @@ def _status_lines(member: discord.Member, roles: Dict[str, Optional[discord.Role
     verified = roles.get("verified")
     resident = roles.get("resident")
     staff = roles.get("staff")
-
     return [
         f"👤 {member.mention} (`{member.id}`)",
         f"⚠️ Unverified: {'YES' if _role_status(member, uv) else 'NO'}" + (f" ({uv.mention})" if uv else " (not configured)"),
@@ -234,39 +261,35 @@ def _status_lines(member: discord.Member, roles: Dict[str, Optional[discord.Role
 @verify_group.command(name="status", description="Show a member's verification/resident status.")
 @app_commands.describe(user="Choose the member to inspect")
 async def verify_status(interaction: discord.Interaction, user: discord.Member) -> None:
+    await _ack(interaction)
     if not await _staff_only(interaction):
         return
     guild = await _guild_or_reply(interaction)
     if guild is None:
         return
-
-    member = user
     roles = await _guild_roles(guild)
-    await reply_once(interaction, {"content": "\n".join(_status_lines(member, roles)), "ephemeral": True})
+    await _send(interaction, "\n".join(_status_lines(user, roles)))
 
 
 @verify_group.command(name="diagnose", description="Deep verification diagnostics for a member.")
 @app_commands.describe(user="Choose the member to inspect")
 async def verify_diagnose(interaction: discord.Interaction, user: discord.Member) -> None:
+    await _ack(interaction)
     if not await _staff_only(interaction):
         return
     guild = await _guild_or_reply(interaction)
     if guild is None:
         return
 
-    member = user
-    await safe_defer(interaction, ephemeral=True)
     roles = await _guild_roles(guild)
-    open_ticket = await _resolve_open_ticket_channel_for_owner(guild, int(member.id))
+    open_ticket = await _resolve_open_ticket_channel_for_owner(guild, int(user.id))
     me = guild.me
 
     embed = discord.Embed(title="🩺 Verification Diagnose", color=discord.Color.blurple(), timestamp=now_utc())
-    embed.add_field(name="Member", value=f"{member.mention} (`{member.id}`)", inline=False)
-
-    for line in _status_lines(member, roles)[1:]:
+    embed.add_field(name="Member", value=f"{user.mention} (`{user.id}`)", inline=False)
+    for line in _status_lines(user, roles)[1:]:
         name, _, value = line.partition(":")
         embed.add_field(name=name.strip(), value=value.strip() or "unknown", inline=True)
-
     embed.add_field(name="Open Ticket", value=open_ticket.mention if open_ticket else "None", inline=False)
     embed.add_field(name="Bot Manage Roles", value="YES" if bool(me and me.guild_permissions.manage_roles) else "NO", inline=True)
     embed.add_field(name="Bot Kick Members", value="YES" if bool(me and me.guild_permissions.kick_members) else "NO", inline=True)
@@ -279,229 +302,218 @@ async def verify_diagnose(interaction: discord.Interaction, user: discord.Member
         ok, why = _bot_can_manage_role(guild, role)
         hierarchy_lines.append(f"{label}: {'OK' if ok else why}")
     embed.add_field(name="Role Hierarchy", value=_truncate("\n".join(hierarchy_lines), 1024), inline=False)
-
-    await safe_followup(interaction, embed=embed, ephemeral=True)
+    await _send(interaction, embed=embed)
 
 
 @verify_group.command(name="set-verified", description="Add or remove the Verified role.")
 @app_commands.describe(user="Choose the member", enable="True to add Verified; False to remove")
 async def verify_set_verified(interaction: discord.Interaction, user: discord.Member, enable: bool) -> None:
+    await _ack(interaction)
     if not await _staff_only(interaction):
         return
     guild = await _guild_or_reply(interaction)
     if guild is None:
         return
-    member = user
-    roles = await _guild_roles(guild)
-    role = roles.get("verified")
+    role = (await _guild_roles(guild)).get("verified")
     if role is None:
-        return await reply_once(interaction, {"content": "❌ Verified role is not configured for this server.", "ephemeral": True})
-    await _apply_role_change(interaction=interaction, member=member, role=role, enable=enable, reason=f"/verify set-verified by {interaction.user} ({interaction.user.id})")
+        return await _send(interaction, "❌ Verified role is not configured for this server.")
+    await _apply_role_change(interaction=interaction, member=user, role=role, enable=enable, reason=f"/verify set-verified by {interaction.user} ({interaction.user.id})")
 
 
 @verify_group.command(name="set-resident", description="Add or remove the Resident role.")
 @app_commands.describe(user="Choose the member", enable="True to add Resident; False to remove")
 async def verify_set_resident(interaction: discord.Interaction, user: discord.Member, enable: bool) -> None:
+    await _ack(interaction)
     if not await _staff_only(interaction):
         return
     guild = await _guild_or_reply(interaction)
     if guild is None:
         return
-    member = user
-    roles = await _guild_roles(guild)
-    role = roles.get("resident")
+    role = (await _guild_roles(guild)).get("resident")
     if role is None:
-        return await reply_once(interaction, {"content": "❌ Resident role is not configured for this server.", "ephemeral": True})
-    await _apply_role_change(interaction=interaction, member=member, role=role, enable=enable, reason=f"/verify set-resident by {interaction.user} ({interaction.user.id})")
+        return await _send(interaction, "❌ Resident role is not configured for this server.")
+    await _apply_role_change(interaction=interaction, member=user, role=role, enable=enable, reason=f"/verify set-resident by {interaction.user} ({interaction.user.id})")
 
 
 @verify_group.command(name="grant-vr", description="Grant Verified + Resident and remove Unverified.")
 @app_commands.describe(user="Choose the member")
 async def verify_grant_vr(interaction: discord.Interaction, user: discord.Member) -> None:
+    await _ack(interaction)
     if not await _staff_only(interaction):
         return
     guild = await _guild_or_reply(interaction)
     if guild is None:
         return
-    member = user
 
-    await safe_defer(interaction, ephemeral=True)
     roles = await _guild_roles(guild)
     verified = roles.get("verified")
     resident = roles.get("resident")
     unverified = roles.get("unverified")
-
-    missing = []
-    if verified is None:
-        missing.append("Verified")
-    if resident is None:
-        missing.append("Resident")
+    missing = [name for name, role in (("Verified", verified), ("Resident", resident)) if role is None]
     if missing:
-        return await safe_followup(interaction, f"❌ Missing configured role(s): {', '.join(missing)}.", ephemeral=True)
+        return await _send(interaction, f"❌ Missing configured role(s): {', '.join(missing)}.")
 
     for role in (verified, resident, unverified):
         if role is None:
             continue
         ok, why = _bot_can_manage_role(guild, role)
         if not ok:
-            return await safe_followup(interaction, f"❌ I cannot manage {role.mention}: {why}.", ephemeral=True)
+            return await _send(interaction, f"❌ I cannot manage {role.mention}: {why}.")
 
     added: list[discord.Role] = []
     removed: list[discord.Role] = []
-
     try:
-        to_add = [role for role in (verified, resident) if role is not None and role not in member.roles]
+        to_add = [role for role in (verified, resident) if role is not None and role not in user.roles]
         if to_add:
-            await member.add_roles(*to_add, reason=f"/verify grant-vr by {interaction.user} ({interaction.user.id})")
+            await user.add_roles(*to_add, reason=f"/verify grant-vr by {interaction.user} ({interaction.user.id})")
             added.extend(to_add)
-
-        if unverified is not None and unverified in member.roles:
-            await member.remove_roles(unverified, reason=f"/verify grant-vr cleanup by {interaction.user} ({interaction.user.id})")
+        if unverified is not None and unverified in user.roles:
+            await user.remove_roles(unverified, reason=f"/verify grant-vr cleanup by {interaction.user} ({interaction.user.id})")
             removed.append(unverified)
-
-        ticket_ch = await _maybe_repair_verify_ui_for_member(guild, member)
-
-        lines = [f"✅ Updated {member.mention}."]
+        ticket_ch = await _maybe_repair_verify_ui_for_member(guild, user)
+        lines = [f"✅ Updated {user.mention}."]
         lines.append("Added: " + (", ".join(r.mention for r in added) if added else "nothing; already had roles"))
         lines.append("Removed: " + (", ".join(r.mention for r in removed) if removed else "nothing"))
         if ticket_ch:
             lines.append(f"Ticket: {ticket_ch.mention}")
-        await safe_followup(interaction, "\n".join(lines), ephemeral=True)
+        await _send(interaction, "\n".join(lines))
     except discord.Forbidden:
-        await safe_followup(interaction, "❌ Forbidden. Check Manage Roles and role hierarchy.", ephemeral=True)
+        await _send(interaction, "❌ Forbidden. Check Manage Roles and role hierarchy.")
     except Exception as e:
-        await safe_followup(interaction, f"❌ Failed: {_truncate(e, 300)}", ephemeral=True)
+        await _send(interaction, f"❌ Failed: {_truncate(e, 300)}")
 
 
 @verify_group.command(name="fix-member", description="Re-add Unverified to a member when it is missing.")
 @app_commands.describe(user="Choose the member", remove_conflicts="Also remove Verified/Resident while restoring Unverified")
 async def verify_fix_member(interaction: discord.Interaction, user: discord.Member, remove_conflicts: bool = False) -> None:
+    await _ack(interaction)
     if not await _staff_only(interaction):
         return
     guild = await _guild_or_reply(interaction)
     if guild is None:
         return
-    member = user
 
-    await safe_defer(interaction, ephemeral=True)
     roles = await _guild_roles(guild)
     unverified = roles.get("unverified")
     verified = roles.get("verified")
     resident = roles.get("resident")
-
     if unverified is None:
-        return await safe_followup(interaction, "❌ Unverified role is not configured for this server.", ephemeral=True)
+        return await _send(interaction, "❌ Unverified role is not configured for this server.")
 
     for role in (unverified, verified, resident):
         if role is None:
             continue
         ok, why = _bot_can_manage_role(guild, role)
         if not ok:
-            return await safe_followup(interaction, f"❌ I cannot manage {role.mention}: {why}.", ephemeral=True)
+            return await _send(interaction, f"❌ I cannot manage {role.mention}: {why}.")
 
     added: list[discord.Role] = []
     removed: list[discord.Role] = []
-
     try:
         if remove_conflicts:
-            to_remove = [role for role in (verified, resident) if role is not None and role in member.roles]
+            to_remove = [role for role in (verified, resident) if role is not None and role in user.roles]
             if to_remove:
-                await member.remove_roles(*to_remove, reason=f"/verify fix-member conflict cleanup by {interaction.user} ({interaction.user.id})")
+                await user.remove_roles(*to_remove, reason=f"/verify fix-member conflict cleanup by {interaction.user} ({interaction.user.id})")
                 removed.extend(to_remove)
-
-        if unverified not in member.roles:
-            await member.add_roles(unverified, reason=f"/verify fix-member by {interaction.user} ({interaction.user.id})")
+        if unverified not in user.roles:
+            await user.add_roles(unverified, reason=f"/verify fix-member by {interaction.user} ({interaction.user.id})")
             added.append(unverified)
-
-        ticket_ch = await _maybe_repair_verify_ui_for_member(guild, member)
-
-        lines = [f"✅ Unverified repair complete for {member.mention}."]
+        ticket_ch = await _maybe_repair_verify_ui_for_member(guild, user)
+        lines = [f"✅ Unverified repair complete for {user.mention}."]
         lines.append("Added: " + (", ".join(r.mention for r in added) if added else "nothing"))
         lines.append("Removed: " + (", ".join(r.mention for r in removed) if removed else "nothing"))
         if ticket_ch:
             lines.append(f"Ticket: {ticket_ch.mention}")
-        await safe_followup(interaction, "\n".join(lines), ephemeral=True)
+        await _send(interaction, "\n".join(lines))
     except discord.Forbidden:
-        await safe_followup(interaction, "❌ Forbidden. Check Manage Roles and role hierarchy.", ephemeral=True)
+        await _send(interaction, "❌ Forbidden. Check Manage Roles and role hierarchy.")
     except Exception as e:
-        await safe_followup(interaction, f"❌ Failed: {_truncate(e, 300)}", ephemeral=True)
+        await _send(interaction, f"❌ Failed: {_truncate(e, 300)}")
 
 
 @verify_group.command(name="repair-unverified", description="Assign Unverified to members who are not Verified/Resident.")
 async def verify_repair_unverified(interaction: discord.Interaction) -> None:
-    if not await _staff_only(interaction):
-        return
-    guild = await _guild_or_reply(interaction)
-    if guild is None:
-        return
-
-    await safe_defer(interaction, ephemeral=True)
-    roles = await _guild_roles(guild)
-    unverified = roles.get("unverified")
-    verified = roles.get("verified")
-    resident = roles.get("resident")
-    staff = roles.get("staff")
-
-    if unverified is None:
-        return await safe_followup(interaction, "❌ Unverified role is not configured for this server.", ephemeral=True)
-
-    ok, why = _bot_can_manage_role(guild, unverified)
-    if not ok:
-        return await safe_followup(interaction, f"❌ I cannot manage Unverified: {why}.", ephemeral=True)
-
+    await _ack(interaction)
     try:
-        await guild.chunk(cache=True)
-    except Exception:
-        pass
+        if not await _staff_only(interaction):
+            return
+        guild = await _guild_or_reply(interaction)
+        if guild is None:
+            return
 
-    added = 0
-    skipped_verified = 0
-    skipped_resident = 0
-    skipped_staff = 0
-    skipped_bots = 0
-    already_ok = 0
-    failed = 0
+        roles = await _guild_roles(guild)
+        unverified = roles.get("unverified")
+        verified = roles.get("verified")
+        resident = roles.get("resident")
+        staff = roles.get("staff")
 
-    for index, member in enumerate(list(guild.members or []), start=1):
+        if unverified is None:
+            return await _send(interaction, "❌ Unverified role is not configured for this server.")
+
+        ok, why = _bot_can_manage_role(guild, unverified)
+        if not ok:
+            return await _send(interaction, f"❌ I cannot manage Unverified: {why}.")
+
+        chunk_ok = False
         try:
-            if getattr(member, "bot", False):
-                skipped_bots += 1
-                continue
-            if staff and staff in member.roles:
-                skipped_staff += 1
-                continue
-            if verified and verified in member.roles:
-                skipped_verified += 1
-                continue
-            if resident and resident in member.roles:
-                skipped_resident += 1
-                continue
-            if unverified in member.roles:
-                already_ok += 1
-                continue
-            await member.add_roles(unverified, reason=f"/verify repair-unverified by {interaction.user} ({interaction.user.id})")
-            added += 1
-        except Exception:
-            failed += 1
-
-        if index % 10 == 0:
+            await asyncio.wait_for(guild.chunk(cache=True), timeout=6.0)
+            chunk_ok = True
+        except Exception as e:
             try:
-                await asyncio.sleep(0.4)
+                print(f"⚠️ /verify repair-unverified member chunk failed guild={guild.id}: {e!r}")
             except Exception:
                 pass
 
-    await safe_followup(
-        interaction,
-        "✅ **Unverified repair complete**\n"
-        f"- Added Unverified: **{added}**\n"
-        f"- Already had Unverified: **{already_ok}**\n"
-        f"- Skipped Verified: **{skipped_verified}**\n"
-        f"- Skipped Resident: **{skipped_resident}**\n"
-        f"- Skipped Staff: **{skipped_staff}**\n"
-        f"- Skipped Bots: **{skipped_bots}**\n"
-        f"- Failed: **{failed}**",
-        ephemeral=True,
-    )
+        members = list(guild.members or [])
+        added = 0
+        skipped_verified = 0
+        skipped_resident = 0
+        skipped_staff = 0
+        skipped_bots = 0
+        already_ok = 0
+        failed = 0
+
+        for index, member in enumerate(members, start=1):
+            try:
+                if getattr(member, "bot", False):
+                    skipped_bots += 1
+                    continue
+                if staff and staff in member.roles:
+                    skipped_staff += 1
+                    continue
+                if verified and verified in member.roles:
+                    skipped_verified += 1
+                    continue
+                if resident and resident in member.roles:
+                    skipped_resident += 1
+                    continue
+                if unverified in member.roles:
+                    already_ok += 1
+                    continue
+                await member.add_roles(unverified, reason=f"/verify repair-unverified by {interaction.user} ({interaction.user.id})")
+                added += 1
+            except Exception:
+                failed += 1
+
+            if index % 5 == 0:
+                await asyncio.sleep(0.35)
+
+        cache_note = "complete/member chunk succeeded" if chunk_ok else "partial/member chunk failed or timed out"
+        await _send(
+            interaction,
+            "✅ **Unverified repair complete**\n"
+            f"- Members scanned: **{len(members)}** (`{cache_note}`)\n"
+            f"- Added Unverified: **{added}**\n"
+            f"- Already had Unverified: **{already_ok}**\n"
+            f"- Skipped Verified: **{skipped_verified}**\n"
+            f"- Skipped Resident: **{skipped_resident}**\n"
+            f"- Skipped Staff: **{skipped_staff}**\n"
+            f"- Skipped Bots: **{skipped_bots}**\n"
+            f"- Failed: **{failed}**"
+            + ("\n\n⚠️ Member cache may be partial. Use `/verify fix-member` for a specific user if needed." if not chunk_ok else ""),
+        )
+    except Exception as e:
+        await _send(interaction, f"❌ Repair crashed before completion: `{type(e).__name__}: {_truncate(e, 300)}`")
 
 
 # ============================================================
@@ -514,8 +526,6 @@ def register_public_verify_group_commands(bot: Any, tree: Any) -> None:
     if _REGISTERED:
         return
 
-    # Remove old top-level command aliases from the local tree so they stop
-    # showing after sync. These were replaced by grouped /verify subcommands.
     removed: list[str] = []
     for old_name in (
         "fix_unverified",
@@ -543,7 +553,7 @@ def register_public_verify_group_commands(bot: Any, tree: Any) -> None:
         _REGISTERED = True
         try:
             suffix = f" removed_legacy={removed}" if removed else ""
-            print(f"✅ public_verify_group: registered /verify grouped commands with native member picker{suffix}")
+            print(f"✅ public_verify_group: registered /verify grouped commands with immediate defer{suffix}")
         except Exception:
             pass
         return
@@ -551,7 +561,7 @@ def register_public_verify_group_commands(bot: Any, tree: Any) -> None:
     _REGISTERED = True
     try:
         suffix = f" removed_legacy={removed}" if removed else ""
-        print(f"✅ public_verify_group: /verify already registered with native member picker{suffix}")
+        print(f"✅ public_verify_group: /verify already registered with immediate defer{suffix}")
     except Exception:
         pass
 
