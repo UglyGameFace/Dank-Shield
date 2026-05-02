@@ -9,8 +9,9 @@ support issue. They should get a verification ticket immediately.
 Production rule:
 A member is verification-needed when they are not staff/admin, do not have the
 configured Verified role, and do not have the configured Resident/Member role.
-The configured Unverified role is helpful, but it is not required because fresh
-joins can press the panel before Discord/the bot finishes assigning that role.
+The configured waiting/pending role is helpful, but it is not required because
+fresh joins can press the panel before Discord/the bot finishes assigning that
+role.
 """
 
 import inspect
@@ -94,8 +95,9 @@ async def _is_unverified_only_member(member: discord.Member) -> bool:
     """Return True when the member should skip support intake and verify.
 
     This deliberately handles the race where a fresh join has not received the
-    Unverified role yet. If verification roles are configured and the user has
-    neither Verified nor Resident/Member, they are treated as unverified.
+    waiting/pending role yet. If verification roles are configured and the user
+    has neither approved nor full-access/member roles, they are treated as
+    verification-needed.
     """
     if getattr(member, "bot", False):
         return False
@@ -123,17 +125,18 @@ async def _is_unverified_only_member(member: discord.Member) -> bool:
         return False
 
     if has_unverified:
-        _log(f"verification-needed user matched by Unverified role guild={member.guild.id} user={member.id}")
+        _log(f"verification-needed user matched by waiting/pending role guild={member.guild.id} user={member.id}")
         return True
 
     # Fresh-join safety: role assignment can lag behind the button press. Once a
-    # server has verification/member roles configured, lacking Verified/Resident
-    # is enough to send the user to verification instead of the generic modal.
+    # server has verification/member roles configured, lacking approved/member
+    # roles is enough to send the user to verification instead of the generic
+    # support modal.
     if unverified_role_id > 0 or verified_role_id > 0 or resident_role_id > 0:
         _log(
-            "verification-needed user matched by missing verified/resident roles "
+            "verification-needed user matched by missing approved/member roles "
             f"guild={member.guild.id} user={member.id} roles={sorted(_member_role_ids(member))} "
-            f"configured_unverified={unverified_role_id} configured_verified={verified_role_id} configured_resident={resident_role_id}"
+            f"configured_waiting={unverified_role_id} configured_approved={verified_role_id} configured_member={resident_role_id}"
         )
         return True
 
@@ -234,11 +237,96 @@ async def _post_verify_ui(channel: discord.TextChannel, member: discord.Member) 
         _warn(f"verify UI post failed channel={getattr(channel, 'id', None)} user={getattr(member, 'id', None)}: {e!r}")
 
 
+async def _call_ticket_creator(create_ticket_channel: Any, *, guild: discord.Guild, member: discord.Member, category: str, reason: str, metadata: Dict[str, Any]) -> Optional[discord.TextChannel]:
+    """Call ticket creation across old/new service signatures safely.
+
+    Important: do not pass alias kwargs like ``member=`` or ``user=`` into the
+    wrapped service. Several runtime guards expose ``**kwargs`` but then forward
+    to an older create_ticket_channel that does not accept those aliases. That
+    was the cause of: unexpected keyword argument 'member'.
+    """
+    canonical: Dict[str, Any] = {
+        "guild": guild,
+        "owner": member,
+        "category": category,
+        "reason": reason,
+        "is_ghost": False,
+        "metadata": metadata,
+        "extra_metadata": metadata,
+        "category_metadata": metadata,
+        "initial_message": reason,
+        "title": "Verification",
+        "priority": "medium",
+    }
+
+    attempts: list[tuple[str, Any]] = []
+
+    try:
+        sig = inspect.signature(create_ticket_channel)
+        params = sig.parameters
+        has_varkw = any(p.kind == inspect.Parameter.VAR_KEYWORD for p in params.values())
+        if not has_varkw:
+            filtered = {k: v for k, v in canonical.items() if k in params}
+            if filtered:
+                attempts.append(("signature_filtered", lambda filtered=filtered: create_ticket_channel(**filtered)))
+        else:
+            # Wrapped guard signatures often show **kwargs even though the real
+            # service underneath is stricter. Use the smallest safe owner-based
+            # payload first instead of dumping every alias into the wrapper.
+            attempts.append(("minimal_owner_kwargs", lambda: create_ticket_channel(guild=guild, owner=member, category=category, reason=reason, is_ghost=False)))
+    except Exception:
+        pass
+
+    attempts.extend(
+        [
+            ("minimal_owner_kwargs", lambda: create_ticket_channel(guild=guild, owner=member, category=category, reason=reason, is_ghost=False)),
+            ("owner_kwargs_no_ghost", lambda: create_ticket_channel(guild=guild, owner=member, category=category, reason=reason)),
+            ("requester_kwargs", lambda: create_ticket_channel(guild=guild, requester=member, category=category, reason=reason, is_ghost=False)),
+            ("positional_four", lambda: create_ticket_channel(guild, member, category, reason)),
+            ("positional_three", lambda: create_ticket_channel(guild, member, category)),
+        ]
+    )
+
+    seen: set[str] = set()
+    last_error: Optional[BaseException] = None
+    for label, factory in attempts:
+        if label in seen and label != "minimal_owner_kwargs":
+            continue
+        seen.add(label)
+        try:
+            result = await factory()
+            if isinstance(result, discord.TextChannel):
+                return result
+            # Some paths return a row/dict containing channel id.
+            if isinstance(result, dict):
+                channel_id = _safe_int(result.get("discord_thread_id") or result.get("channel_id"), 0)
+                if channel_id > 0:
+                    channel = guild.get_channel(channel_id)
+                    if isinstance(channel, discord.TextChannel):
+                        return channel
+                    fetched = await guild.fetch_channel(channel_id)
+                    if isinstance(fetched, discord.TextChannel):
+                        return fetched
+            if result is not None:
+                return result if isinstance(result, discord.TextChannel) else None
+        except TypeError as e:
+            last_error = e
+            _warn(f"ticket creator signature attempt failed label={label}: {e}")
+            continue
+        except Exception as e:
+            last_error = e
+            raise
+
+    if last_error is not None:
+        raise last_error
+    return None
+
+
 async def _create_verification_ticket(guild: discord.Guild, member: discord.Member) -> Optional[discord.TextChannel]:
     from stoney_verify.tickets_new import service
 
     create_ticket_channel = getattr(service, "create_ticket_channel")
-    reason = "Verification assistance requested by unverified member from public ticket panel."
+    reason = "Verification assistance requested from the public ticket panel."
     category = "verification_issue"
     metadata = {
         "auto_routed": True,
@@ -248,48 +336,14 @@ async def _create_verification_ticket(guild: discord.Guild, member: discord.Memb
         "matched_intake_type": "verification",
     }
 
-    kwargs: Dict[str, Any] = {
-        "guild": guild,
-        "owner": member,
-        "member": member,
-        "requester": member,
-        "user": member,
-        "created_by": member,
-        "actor": member,
-        "category": category,
-        "reason": reason,
-        "initial_message": reason,
-        "title": "Verification",
-        "priority": "medium",
-        "is_ghost": False,
-        "metadata": metadata,
-        "extra_metadata": metadata,
-        "category_metadata": metadata,
-    }
-
-    try:
-        sig = inspect.signature(create_ticket_channel)
-        params = sig.parameters
-        if any(p.kind == inspect.Parameter.VAR_KEYWORD for p in params.values()):
-            filtered = kwargs
-        else:
-            filtered = {k: v for k, v in kwargs.items() if k in params}
-        result = await create_ticket_channel(**filtered)
-        return result if isinstance(result, discord.TextChannel) else None
-    except TypeError as first_error:
-        # Fallback for older signatures during refactor windows.
-        patterns = (
-            lambda: create_ticket_channel(guild=guild, owner=member, category=category, reason=reason, is_ghost=False),
-            lambda: create_ticket_channel(guild, member, category, reason),
-            lambda: create_ticket_channel(guild, member, category=category, reason=reason),
-        )
-        for factory in patterns:
-            try:
-                result = await factory()
-                return result if isinstance(result, discord.TextChannel) else None
-            except TypeError:
-                continue
-        raise first_error
+    return await _call_ticket_creator(
+        create_ticket_channel,
+        guild=guild,
+        member=member,
+        category=category,
+        reason=reason,
+        metadata=metadata,
+    )
 
 
 async def _handle_unverified_panel_click(interaction: discord.Interaction) -> bool:
@@ -315,7 +369,11 @@ async def _handle_unverified_panel_click(interaction: discord.Interaction) -> bo
     try:
         channel = await _create_verification_ticket(guild, member)
     except Exception as e:
-        await _reply(interaction, f"❌ I could not open your verification ticket: `{type(e).__name__}: {str(e)[:220]}`")
+        _warn(f"verification ticket auto-route failed guild={getattr(guild, 'id', None)} user={getattr(member, 'id', None)}: {e!r}")
+        await _reply(
+            interaction,
+            "❌ I could not open your verification ticket. Staff has been given the technical reason in the bot logs. Please try again in a moment.",
+        )
         return True
 
     if channel is None:
