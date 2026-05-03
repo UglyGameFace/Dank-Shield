@@ -120,6 +120,25 @@ def _upsert_setup_targets_sync(guild_id: int, fields: Dict[str, Any]) -> Dict[st
     return payload
 
 
+def _mark_setup_completed_sync(guild_id: int, *, completed: bool, notes: str) -> Dict[str, Any]:
+    sb = get_supabase()
+    if not sb:
+        raise RuntimeError("Supabase client unavailable")
+
+    payload: Dict[str, Any] = {
+        "guild_id": str(int(guild_id)),
+        "setup_completed": bool(completed),
+        "setup_source": "setup_finish_command" if completed else "setup_reopen_command",
+        "setup_notes": notes,
+    }
+
+    res = sb.table(_table_name()).upsert(payload, on_conflict="guild_id").execute()
+    rows = getattr(res, "data", None) or []
+    if rows and isinstance(rows[0], dict):
+        return dict(rows[0])
+    return payload
+
+
 async def save_setup_targets(guild_id: int | str, **fields: Any) -> Dict[str, Any]:
     gid = int(str(guild_id))
     filtered = {key: value for key, value in fields.items() if key in ALLOWED_SETUP_FIELDS and _clean_id(value)}
@@ -165,4 +184,43 @@ async def save_setup_targets(guild_id: int | str, **fields: Any) -> Dict[str, An
     raise RuntimeError("Setup target save failed without captured exception")
 
 
-__all__ = ["ALLOWED_SETUP_FIELDS", "save_setup_targets"]
+async def mark_setup_completed(guild_id: int | str, *, completed: bool = True, notes: Optional[str] = None) -> Dict[str, Any]:
+    gid = int(str(guild_id))
+    final_notes = notes or (
+        "Setup was marked complete after service-aware setup-health found no critical blockers."
+        if completed
+        else "Setup was reopened by an admin."
+    )
+
+    last_error: Optional[Exception] = None
+    for attempt in range(1, DEFAULT_MAX_ATTEMPTS + 1):
+        try:
+            async with db_guild_limit(gid, label="setup_finish"):
+                row = await asyncio.wait_for(
+                    asyncio.to_thread(_mark_setup_completed_sync, gid, completed=completed, notes=final_notes),
+                    timeout=DEFAULT_DB_TIMEOUT_SECONDS,
+                )
+                clear_guild_config_cache(gid)
+                return {
+                    "ok": True,
+                    "guild_id": str(gid),
+                    "setup_completed": bool(completed),
+                    "row": row,
+                }
+        except Exception as e:
+            last_error = e
+            if _is_retryable_db_error(e) and attempt < DEFAULT_MAX_ATTEMPTS:
+                try:
+                    reset_supabase()
+                except Exception:
+                    pass
+                await _sleep_backoff(attempt, guild_id=gid)
+                continue
+            raise
+
+    if last_error:
+        raise last_error
+    raise RuntimeError("Setup completion save failed without captured exception")
+
+
+__all__ = ["ALLOWED_SETUP_FIELDS", "mark_setup_completed", "save_setup_targets"]
