@@ -35,6 +35,11 @@ _STARTUP_GUARDS: Tuple[str, ...] = (
     # owner-picked roles/channels/categories and makes discovery fill blanks only.
     "stoney_verify.startup_guards.guild_config_write_safety",
 
+    # Hotfix: old advanced setup persistent buttons still call
+    # public_setup_solid.AddTicketCategoryModal. Keep that attribute restored on
+    # the deployed main branch so Add Custom Menu Option does not crash.
+    "stoney_verify.startup_guards.setup_category_modal_compat",
+
     # Broad event-loop DB/modlog/ticket safety layer.
     # sitecustomize.py remains as a tiny host fallback, but main startup loads
     # the real package module directly.
@@ -107,6 +112,7 @@ _IMPORT_CHATTER_PREFIXES: Tuple[str, ...] = (
     "🧯 raidguard_hard_stop patched",
     "🧪 ",
     "🧠 ",
+    "🧭 setup_category_modal_compat patched",
     "🛡️ member_join_removal_safety patched",
     "🛡️ member_join_removal_safety attached",
     "🛡️ member_join_removal_safety loaded",
