@@ -7,6 +7,15 @@
 create table if not exists guild_configs (
   guild_id text primary key,
 
+  -- Service enablement flags
+  -- Servers can use Stoney Verify for only tickets, only verification,
+  -- moderation/logging, or any combination. Setup health must validate only
+  -- the services a guild has enabled.
+  tickets_enabled boolean not null default true,
+  verification_enabled boolean not null default false,
+  voice_verification_enabled boolean not null default false,
+  moderation_enabled boolean not null default false,
+
   -- Channel/category config
   modlog_channel_id text null,
   transcripts_channel_id text null,
@@ -31,11 +40,22 @@ create table if not exists guild_configs (
   updated_at timestamptz not null default now()
 );
 
+-- Existing installs that created guild_configs before these flags existed can
+-- safely run this migration again.
+alter table guild_configs
+  add column if not exists tickets_enabled boolean not null default true,
+  add column if not exists verification_enabled boolean not null default false,
+  add column if not exists voice_verification_enabled boolean not null default false,
+  add column if not exists moderation_enabled boolean not null default false;
+
 create unique index if not exists uq_guild_configs_guild_id
   on guild_configs (guild_id);
 
 create index if not exists idx_guild_configs_setup_completed
   on guild_configs (setup_completed);
+
+create index if not exists idx_guild_configs_services
+  on guild_configs (tickets_enabled, verification_enabled, voice_verification_enabled, moderation_enabled);
 
 -- Keep updated_at fresh on upserts/updates.
 create or replace function set_guild_configs_updated_at()
