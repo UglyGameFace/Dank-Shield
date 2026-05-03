@@ -8,6 +8,7 @@ from typing import Any, Dict, Optional
 import discord
 
 from ..globals import get_supabase, reset_supabase
+from ..runtime_limits import db_guild_limit, jitter_sleep
 from .guild_config import clear_guild_config_cache
 
 
@@ -67,8 +68,12 @@ def _is_retryable_db_error(error: Exception) -> bool:
     )
 
 
-async def _sleep_backoff(attempt: int) -> None:
-    await asyncio.sleep(min(0.35 * (2 ** max(0, attempt - 1)), 2.5))
+async def _sleep_backoff(attempt: int, *, guild_id: int | str = 0) -> None:
+    await jitter_sleep(
+        base_seconds=min(0.35 * (2 ** max(0, attempt - 1)), 2.5),
+        max_jitter_seconds=0.35,
+        guild_id=guild_id,
+    )
 
 
 def _guild_id(guild: discord.Guild | int | str) -> int:
@@ -126,15 +131,23 @@ def _insert_config_row_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
     return dict(payload)
 
 
-async def _with_retry(label: str, fn, *args, timeout_seconds: float = DEFAULT_DB_TIMEOUT_SECONDS, **kwargs):
+async def _with_retry(
+    label: str,
+    fn,
+    *args,
+    guild_id: int | str = 0,
+    timeout_seconds: float = DEFAULT_DB_TIMEOUT_SECONDS,
+    **kwargs,
+):
     last_error: Optional[Exception] = None
 
     for attempt in range(1, DEFAULT_MAX_ATTEMPTS + 1):
         try:
-            return await asyncio.wait_for(
-                asyncio.to_thread(fn, *args, **kwargs),
-                timeout=timeout_seconds,
-            )
+            async with db_guild_limit(guild_id or "global", label=f"guild_config:{label}"):
+                return await asyncio.wait_for(
+                    asyncio.to_thread(fn, *args, **kwargs),
+                    timeout=timeout_seconds,
+                )
         except Exception as e:
             last_error = e
             if _is_retryable_db_error(e) and attempt < DEFAULT_MAX_ATTEMPTS:
@@ -144,9 +157,9 @@ async def _with_retry(label: str, fn, *args, timeout_seconds: float = DEFAULT_DB
                     pass
                 print(
                     f"⚠️ guild_config_provision {label} transient DB error "
-                    f"attempt={attempt}/{DEFAULT_MAX_ATTEMPTS}: {repr(e)}"
+                    f"guild={guild_id} attempt={attempt}/{DEFAULT_MAX_ATTEMPTS}: {repr(e)}"
                 )
-                await _sleep_backoff(attempt)
+                await _sleep_backoff(attempt, guild_id=guild_id)
                 continue
             raise
 
@@ -180,7 +193,11 @@ async def ensure_guild_config_row(
         return {"ok": False, "created": False, "reason": "invalid_guild_id"}
 
     try:
-        existing = await _with_retry("select", _select_config_row_sync, gid)
+        # Spread startup load by guild so restarts across many servers don't slam Supabase at once.
+        if source == "startup_backfill":
+            await jitter_sleep(base_seconds=0.0, max_jitter_seconds=1.5, guild_id=gid)
+
+        existing = await _with_retry("select", _select_config_row_sync, gid, guild_id=gid)
         if isinstance(existing, dict):
             return {
                 "ok": True,
@@ -192,7 +209,7 @@ async def ensure_guild_config_row(
             }
 
         payload = _default_config_payload(guild, source=source)
-        inserted = await _with_retry("insert", _insert_config_row_sync, payload)
+        inserted = await _with_retry("insert", _insert_config_row_sync, payload, guild_id=gid)
         clear_guild_config_cache(gid)
 
         print(
