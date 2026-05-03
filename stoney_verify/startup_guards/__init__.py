@@ -46,9 +46,9 @@ _STARTUP_GUARDS: Tuple[str, ...] = (
     # refactored onto explicit runtime_limits calls.
     "stoney_verify.startup_guards.discord_operation_limits",
 
-    # Read-only production diagnostics command. This lets server admins see
-    # exactly which guild config, channel, role, hierarchy, and permission pieces
-    # are missing without mutating setup state.
+    # Simple modular setup commands. Servers pick the service preset they want,
+    # then setup-health reports only the missing pieces for those services.
+    "stoney_verify.startup_guards.setup_services_command",
     "stoney_verify.startup_guards.setup_health_command",
 
     # Broad event-loop DB/modlog/ticket safety layer.
@@ -143,6 +143,7 @@ _IMPORT_CHATTER_PREFIXES: Tuple[str, ...] = (
     "🧭 api_guild_config_guard loaded",
     "🧭 guild_config_runtime patched",
     "🛡️ discord_operation_limits patched",
+    "🧭 setup_services_command registered",
     "🧭 setup_health_command registered",
     "🛡️ panel_creation_guard_runtime panel denial",
     "🛡️ panel_creation_guard_runtime ticket creation guard installed",
