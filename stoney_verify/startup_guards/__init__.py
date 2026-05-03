@@ -47,8 +47,10 @@ _STARTUP_GUARDS: Tuple[str, ...] = (
     "stoney_verify.startup_guards.discord_operation_limits",
 
     # Simple modular setup commands. Servers pick the service preset they want,
-    # then setup-health reports only the missing pieces for those services.
+    # save selected channels/roles with Discord pickers, then setup-health reports
+    # only the missing pieces for those selected services.
     "stoney_verify.startup_guards.setup_services_command",
+    "stoney_verify.startup_guards.setup_targets_command",
     "stoney_verify.startup_guards.setup_health_command",
 
     # Broad event-loop DB/modlog/ticket safety layer.
@@ -144,6 +146,7 @@ _IMPORT_CHATTER_PREFIXES: Tuple[str, ...] = (
     "🧭 guild_config_runtime patched",
     "🛡️ discord_operation_limits patched",
     "🧭 setup_services_command registered",
+    "🧭 setup_targets_command registered",
     "🧭 setup_health_command registered",
     "🛡️ panel_creation_guard_runtime panel denial",
     "🛡️ panel_creation_guard_runtime ticket creation guard installed",
