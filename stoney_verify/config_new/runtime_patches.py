@@ -10,20 +10,28 @@ continues.
 
 Installed patches:
 - tickets_new.transcript_service._get_transcripts_channel
+- tickets_new.transcript_service.post_transcript_to_channel
 - modlog._get_modlog_channel
+- modlog._post_modlog
 
-Both patches use config_new.guild_config and validate that resolved objects
-belong to the active guild. Owner/global env IDs remain owner-guild-only through
-GuildConfig fallback rules.
+Both config patches use config_new.guild_config and validate that resolved
+objects belong to the active guild. Owner/global env IDs remain owner-guild-only
+through GuildConfig fallback rules.
+
+Discord send wrappers use runtime_limits so transcript/modlog storms are bounded
+per guild and globally.
 """
 
 from typing import Optional
 
 import discord
 
+from ..runtime_limits import discord_guild_limit, jitter_sleep
 from .guild_config import resolve_configured_text_channel
 
 _PATCHED = False
+_ORIGINAL_TRANSCRIPT_POST = None
+_ORIGINAL_MODLOG_POST = None
 
 
 def _log(message: str) -> None:
@@ -117,13 +125,41 @@ def _resolve_modlog_channel_sync(guild: discord.Guild) -> Optional[discord.TextC
     return None
 
 
+async def _patched_post_transcript_to_channel(*args, **kwargs):
+    if _ORIGINAL_TRANSCRIPT_POST is None:
+        return None, None
+
+    ticket_channel = kwargs.get("ticket_channel")
+    if ticket_channel is None and args:
+        ticket_channel = args[0]
+
+    guild_id = getattr(getattr(ticket_channel, "guild", None), "id", "0")
+
+    # Add tiny jitter to avoid cleanup storms when many tickets are deleted after startup/repairs.
+    await jitter_sleep(base_seconds=0.0, max_jitter_seconds=0.25, guild_id=guild_id)
+
+    async with discord_guild_limit(guild_id, label="transcript_post"):
+        return await _ORIGINAL_TRANSCRIPT_POST(*args, **kwargs)
+
+
+async def _patched_post_modlog(guild: discord.Guild, embed: discord.Embed, view: Optional[discord.ui.View] = None):
+    if _ORIGINAL_MODLOG_POST is None:
+        return None
+
+    guild_id = getattr(guild, "id", "0")
+    await jitter_sleep(base_seconds=0.0, max_jitter_seconds=0.15, guild_id=guild_id)
+
+    async with discord_guild_limit(guild_id, label="modlog_send"):
+        return await _ORIGINAL_MODLOG_POST(guild, embed, view=view)
+
+
 def install_runtime_config_patches() -> None:
-    global _PATCHED
+    global _PATCHED, _ORIGINAL_TRANSCRIPT_POST, _ORIGINAL_MODLOG_POST
     if _PATCHED:
         return
     _PATCHED = True
 
-    # Patch ticket transcript destination to shared async resolver.
+    # Patch ticket transcript destination to shared async resolver and throttle transcript posts.
     try:
         from ..tickets_new import transcript_service
 
@@ -134,16 +170,30 @@ def install_runtime_config_patches() -> None:
             return await _resolve_transcripts_channel(guild, ticket_row)
 
         transcript_service._get_transcripts_channel = _patched_get_transcripts_channel  # type: ignore[attr-defined]
-        _log("patched tickets_new.transcript_service._get_transcripts_channel")
+
+        original_post = getattr(transcript_service, "post_transcript_to_channel", None)
+        if callable(original_post):
+            _ORIGINAL_TRANSCRIPT_POST = original_post
+            transcript_service.post_transcript_to_channel = _patched_post_transcript_to_channel  # type: ignore[attr-defined]
+            _log("patched transcript destination + throttled post_transcript_to_channel")
+        else:
+            _log("patched transcript destination only; post function not found")
     except Exception as e:
         _warn(f"failed patching transcript service: {repr(e)}")
 
-    # Patch sync modlog resolver for immediate cross-guild safety.
+    # Patch sync modlog resolver for immediate cross-guild safety and throttle modlog posts.
     try:
         from .. import modlog
 
         modlog._get_modlog_channel = _resolve_modlog_channel_sync  # type: ignore[attr-defined]
-        _log("patched modlog._get_modlog_channel sync safety resolver")
+
+        original_modlog_post = getattr(modlog, "_post_modlog", None)
+        if callable(original_modlog_post):
+            _ORIGINAL_MODLOG_POST = original_modlog_post
+            modlog._post_modlog = _patched_post_modlog  # type: ignore[attr-defined]
+            _log("patched modlog resolver + throttled _post_modlog")
+        else:
+            _log("patched modlog resolver only; _post_modlog not found")
     except Exception as e:
         _warn(f"failed patching modlog resolver: {repr(e)}")
 
