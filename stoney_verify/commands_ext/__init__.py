@@ -49,7 +49,7 @@ COMMAND_MODULES: List[CommandModuleSpec] = [
     ("public_tickets_group", "register_public_tickets_group_commands", "public grouped /tickets commands"),
     ("public_ticket_intake_group", "register_public_ticket_intake_group_commands", "public grouped /ticket-intake commands"),
     ("public_ticket_category_group", "register_public_ticket_category_group_commands", "public grouped /ticket-category commands"),
-    ("public_ticket_panel_clean_v2", "register_public_ticket_panel_clean", "clean public category-menu ticket panel"),
+    ("public_ticket_panel_clean", "register_public_ticket_panel_clean", "clean public category-menu ticket panel"),
     ("public_verify_group", "register_public_verify_group_commands", "public grouped /verify role repair commands"),
     ("public_setup_gate", "register_public_setup_gate", "public setup readiness gate for ticket commands"),
     ("ticket_panel_admin_safe", "register_ticket_panel_admin_commands", "ticket panel setup/config commands"),
@@ -79,7 +79,7 @@ _PUBLIC_CORE_MODULES: Tuple[str, ...] = (
     "public_setup_cleanup", "public_setup_fresh_choice", "public_setup_full_customization", "public_status_reporter",
     "public_modlog_coverage", "public_setup_group", "public_help_group", "public_cleanup_group", "public_spam_group",
     "public_mod_group", "public_ticket_group_clean", "public_ticket_delete", "public_tickets_group",
-    "public_ticket_intake_group", "public_ticket_category_group", "public_ticket_panel_clean_v2", "public_verify_group", "public_setup_gate",
+    "public_ticket_intake_group", "public_ticket_category_group", "public_ticket_panel_clean", "public_verify_group", "public_setup_gate",
 )
 _PUBLIC_ADMIN_EXTRA_MODULES: Tuple[str, ...] = (
     "public_setup_start", "public_setup_review", "public_setup_logs", "public_setup_defaults", "public_setup_assistant",
