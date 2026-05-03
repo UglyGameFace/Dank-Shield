@@ -107,6 +107,56 @@ def _table_name() -> str:
     return _DEFAULT_TABLE_NAME
 
 
+def _configured_owner_guild_id() -> int:
+    """
+    Owner/home guild compatibility guard.
+
+    Legacy single-server env globals are allowed only for this guild. This keeps
+    the existing Stoney Balonney server working during migration while blocking
+    those same IDs from leaking into customer/test guilds.
+
+    Preferred production env:
+      STONEY_OWNER_GUILD_ID=1357215261001912320
+
+    Fallbacks are accepted only for compatibility.
+    """
+    for key in (
+        "STONEY_OWNER_GUILD_ID",
+        "STONEY_HOME_GUILD_ID",
+        "OWNER_GUILD_ID",
+        "HOME_GUILD_ID",
+    ):
+        value = _safe_int(os.getenv(key, ""), 0)
+        if value > 0:
+            return value
+
+    try:
+        value = _safe_int(getattr(app_globals, "STONEY_OWNER_GUILD_ID", 0), 0)
+        if value > 0:
+            return value
+    except Exception:
+        pass
+
+    try:
+        value = _safe_int(getattr(app_globals, "GUILD_ID", 0), 0)
+        if value > 0:
+            return value
+    except Exception:
+        pass
+
+    value = _safe_int(os.getenv("GUILD_ID", ""), 0)
+    if value > 0:
+        return value
+
+    return 0
+
+
+def _legacy_globals_allowed_for_guild(guild_id: int) -> bool:
+    gid = _safe_int(guild_id, 0)
+    owner_gid = _configured_owner_guild_id()
+    return gid > 0 and owner_gid > 0 and gid == owner_gid
+
+
 def _is_retryable_db_error(error: Exception) -> bool:
     text = repr(error).lower()
     return any(
@@ -166,6 +216,32 @@ def _legacy_global_int(name: str, default: int = 0) -> int:
         pass
 
     return default
+
+
+def _migration_int(base_name: str, guild_id: int) -> int:
+    """
+    Resolve temporary migration config safely.
+
+    Order:
+      1. explicit per-guild env override for this guild;
+      2. legacy global env/app value only when this guild is the owner/home guild;
+      3. 0 for every other guild.
+    """
+    gid = _safe_int(guild_id, 0)
+    explicit = _env_guild_override_int(base_name, gid, 0)
+    if explicit > 0:
+        return explicit
+
+    if _legacy_globals_allowed_for_guild(gid):
+        return _legacy_global_int(base_name, 0)
+
+    legacy = _legacy_global_int(base_name, 0)
+    if legacy > 0:
+        print(
+            f"⚠️ guild_config refusing legacy global {base_name} for guild={gid}; "
+            f"owner_guild={_configured_owner_guild_id() or 'unset'}"
+        )
+    return 0
 
 
 def clear_guild_config_cache(guild_id: Optional[int] = None) -> None:
@@ -230,22 +306,24 @@ async def _load_config_row(guild_id: int) -> Optional[Dict[str, Any]]:
 def _fallback_raw_from_env(guild_id: int) -> Dict[str, Any]:
     gid = int(guild_id)
 
-    # These env fallbacks are migration/local-dev only.
-    # Public production should store these in DB per guild.
+    # Env fallback rules:
+    # - Explicit per-guild env overrides are always allowed for that guild.
+    # - Legacy single-server global IDs are allowed only for STONEY_OWNER_GUILD_ID / home guild.
+    # - Other guilds must use DB config or setup discovery, never the owner's IDs.
     return {
         "guild_id": str(gid),
-        "modlog_channel_id": _env_guild_override_int("MODLOG_CHANNEL_ID", gid, _legacy_global_int("MODLOG_CHANNEL_ID", 0)),
-        "transcripts_channel_id": _env_guild_override_int("TRANSCRIPTS_CHANNEL_ID", gid, _legacy_global_int("TRANSCRIPTS_CHANNEL_ID", 0)),
-        "ticket_category_id": _env_guild_override_int("TICKET_CATEGORY_ID", gid, _legacy_global_int("TICKET_CATEGORY_ID", 0)),
-        "ticket_archive_category_id": _env_guild_override_int("TICKET_ARCHIVE_CATEGORY_ID", gid, _legacy_global_int("TICKET_ARCHIVE_CATEGORY_ID", 0)),
-        "verify_channel_id": _env_guild_override_int("VERIFY_CHANNEL_ID", gid, _legacy_global_int("VERIFY_CHANNEL_ID", 0)),
-        "vc_verify_channel_id": _env_guild_override_int("VC_VERIFY_CHANNEL_ID", gid, _legacy_global_int("VC_VERIFY_CHANNEL_ID", 0)),
-        "vc_verify_queue_channel_id": _env_guild_override_int("VC_VERIFY_QUEUE_CHANNEL_ID", gid, _legacy_global_int("VC_VERIFY_QUEUE_CHANNEL_ID", 0)),
-        "unverified_role_id": _env_guild_override_int("UNVERIFIED_ROLE_ID", gid, _legacy_global_int("UNVERIFIED_ROLE_ID", 0)),
-        "verified_role_id": _env_guild_override_int("VERIFIED_ROLE_ID", gid, _legacy_global_int("VERIFIED_ROLE_ID", 0)),
-        "resident_role_id": _env_guild_override_int("RESIDENT_ROLE_ID", gid, _legacy_global_int("RESIDENT_ROLE_ID", 0)),
-        "staff_role_id": _env_guild_override_int("STAFF_ROLE_ID", gid, _legacy_global_int("STAFF_ROLE_ID", 0)),
-        "source": "env_fallback",
+        "modlog_channel_id": _migration_int("MODLOG_CHANNEL_ID", gid),
+        "transcripts_channel_id": _migration_int("TRANSCRIPTS_CHANNEL_ID", gid),
+        "ticket_category_id": _migration_int("TICKET_CATEGORY_ID", gid),
+        "ticket_archive_category_id": _migration_int("TICKET_ARCHIVE_CATEGORY_ID", gid),
+        "verify_channel_id": _migration_int("VERIFY_CHANNEL_ID", gid),
+        "vc_verify_channel_id": _migration_int("VC_VERIFY_CHANNEL_ID", gid),
+        "vc_verify_queue_channel_id": _migration_int("VC_VERIFY_QUEUE_CHANNEL_ID", gid),
+        "unverified_role_id": _migration_int("UNVERIFIED_ROLE_ID", gid),
+        "verified_role_id": _migration_int("VERIFIED_ROLE_ID", gid),
+        "resident_role_id": _migration_int("RESIDENT_ROLE_ID", gid),
+        "staff_role_id": _migration_int("STAFF_ROLE_ID", gid),
+        "source": "env_fallback_owner_guarded",
     }
 
 
@@ -279,7 +357,7 @@ async def get_guild_config(guild_id: int, *, force_refresh: bool = False) -> Gui
 
         if not isinstance(row, dict):
             row = _fallback_raw_from_env(gid)
-            source = "env_fallback"
+            source = str(row.get("source") or "env_fallback_owner_guarded")
 
         cfg = GuildConfig(guild_id=gid, raw=row, source=source)
         _CONFIG_CACHE[gid] = (time.monotonic(), cfg)
