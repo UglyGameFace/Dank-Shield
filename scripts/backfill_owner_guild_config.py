@@ -9,6 +9,8 @@ Why this exists:
 - Public multi-guild mode needs per-guild config to prevent cross-server leaks.
 - This script copies the existing owner server values into the same config table
   every other server will use, without changing the server's actual channels/roles.
+- Owner backfill enables the full current Stoney service set so existing behavior
+  is preserved. New public guilds default to tickets-only in provisioning.py.
 
 Usage:
   python scripts/backfill_owner_guild_config.py --dry-run
@@ -77,9 +79,16 @@ def _owner_guild_id() -> str:
 def _build_payload(owner_guild_id: str) -> Dict[str, Any]:
     payload: Dict[str, Any] = {
         "guild_id": owner_guild_id,
+        "tickets_enabled": True,
+        "verification_enabled": True,
+        "voice_verification_enabled": True,
+        "moderation_enabled": True,
         "setup_completed": True,
         "setup_source": "owner_env_backfill",
-        "setup_notes": "Backfilled from existing owner-server env globals; should preserve current Stoney Balonney behavior.",
+        "setup_notes": (
+            "Backfilled from existing owner-server env globals; should preserve current Stoney Balonney behavior. "
+            "All services enabled for owner guild compatibility."
+        ),
         "updated_at": datetime.now(timezone.utc).isoformat(),
     }
 
