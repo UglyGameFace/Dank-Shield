@@ -40,6 +40,12 @@ _STARTUP_GUARDS: Tuple[str, ...] = (
     # leaks are blocked before app.py imports runtime modules.
     "stoney_verify.config_new.runtime_patches",
 
+    # Shared Discord write throttling. This loads before app runtime so ticket
+    # creation/deletion, channel edits, verification role writes, and moderation
+    # actions are bounded globally/per guild even before every feature is fully
+    # refactored onto explicit runtime_limits calls.
+    "stoney_verify.startup_guards.discord_operation_limits",
+
     # Broad event-loop DB/modlog/ticket safety layer.
     # sitecustomize.py remains as a tiny host fallback, but main startup loads
     # the real package module directly.
@@ -131,6 +137,7 @@ _IMPORT_CHATTER_PREFIXES: Tuple[str, ...] = (
     "🧭 ticket_sync_alias_guard loaded",
     "🧭 api_guild_config_guard loaded",
     "🧭 guild_config_runtime patched",
+    "🛡️ discord_operation_limits patched",
     "🛡️ panel_creation_guard_runtime panel denial",
     "🛡️ panel_creation_guard_runtime ticket creation guard installed",
     "🎫 ticket_creation_category_guard patched",
