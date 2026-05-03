@@ -6,17 +6,16 @@ This module owns the public /ticket-panel post command in the public command
 surface. It intentionally does not import public_ticket_panel_commands.py because
 that older module posts TicketPanelView(), which opens the Discord reason modal.
 
-The public panel must be simple:
+The public panel flow is intentionally boring and reliable:
 - /ticket-panel post posts one user-facing Create Ticket button
 - Create Ticket opens a category dropdown first
 - selecting a category creates the ticket through tickets_new.service
-- the created channel is forced into the configured Active Tickets category when
-  possible
+- the created channel is repaired into the configured Active Tickets category
 """
 
 import asyncio
 import inspect
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import discord
 from discord import app_commands
@@ -32,7 +31,37 @@ _CHECKER_PATCHED = False
 _PANEL_VIEW_REGISTERED = False
 _PANEL_GROUP_REGISTERED = False
 
-PANEL_BUTTON_CUSTOM_ID = "sv:ticket:panel:create:v5"
+PANEL_BUTTON_CUSTOM_ID = "sv:ticket:panel:create:v6"
+
+_DUPLICATE_CATEGORY_CANONICALS: Dict[str, str] = {
+    "verification-help": "verification",
+    "verification-issue": "verification",
+    "verify": "verification",
+    "bug-report": "bug",
+    "bug-technical-support": "bug",
+    "technical-support": "bug",
+    "other": "support",
+    "general": "support",
+    "general-support": "support",
+}
+
+_CANONICAL_PRIORITY: Tuple[str, ...] = (
+    "verification",
+    "account-access",
+    "payments-refunds",
+    "appeal",
+    "report",
+    "staff-complaint",
+    "cod-services",
+    "service-request",
+    "vouch-referral",
+    "giveaway-reward",
+    "content-media",
+    "partnership",
+    "question",
+    "bug",
+    "support",
+)
 
 
 def _log(message: str) -> None:
@@ -336,6 +365,71 @@ def _row_sort(row: Dict[str, Any]) -> int:
     return _safe_int(row.get("sort_order", row.get("position", 999)), 999)
 
 
+def _canonical_category_key(row: Dict[str, Any]) -> str:
+    slug = _row_slug(row).replace("_", "-")
+    name = _slugify(_row_name(row)).replace("_", "-")
+    text = f"{slug} {name}".lower()
+
+    if slug in _DUPLICATE_CATEGORY_CANONICALS:
+        return _DUPLICATE_CATEGORY_CANONICALS[slug]
+    if "verification" in text or text.startswith("verify"):
+        return "verification"
+    if "staff" in text and "complaint" in text:
+        return "staff-complaint"
+    if "cod" in text or "call-of-duty" in text:
+        return "cod-services"
+    if "vouch" in text or "referral" in text or "invite" in text:
+        return "vouch-referral"
+    if "giveaway" in text or "reward" in text:
+        return "giveaway-reward"
+    if "content" in text or "media" in text:
+        return "content-media"
+    if "partner" in text:
+        return "partnership"
+    if "appeal" in text:
+        return "appeal"
+    if "report" in text:
+        return "report"
+    if "account" in text or "access" in text:
+        return "account-access"
+    if "payment" in text or "refund" in text:
+        return "payments-refunds"
+    if "service" in text:
+        return "service-request"
+    if "question" in text:
+        return "question"
+    if "bug" in text or "technical" in text:
+        return "bug"
+    if "other" in text or "support" in text or "general" in text:
+        return "support"
+    return slug
+
+
+def _canonical_rank(key: str) -> int:
+    try:
+        return _CANONICAL_PRIORITY.index(key)
+    except ValueError:
+        return 999
+
+
+def _prefer_category_row(existing: Dict[str, Any], candidate: Dict[str, Any]) -> Dict[str, Any]:
+    existing_slug = _row_slug(existing)
+    candidate_slug = _row_slug(candidate)
+
+    # Prefer explicit, polished default category names over older helper aliases.
+    bad_slugs = {"verification-help", "bug-report", "other", "general"}
+    if existing_slug in bad_slugs and candidate_slug not in bad_slugs:
+        return candidate
+    if candidate_slug in bad_slugs and existing_slug not in bad_slugs:
+        return existing
+
+    existing_sort = _row_sort(existing)
+    candidate_sort = _row_sort(candidate)
+    if candidate_sort < existing_sort:
+        return candidate
+    return existing
+
+
 def _normalize_ticket_rows(raw_rows: Any) -> List[Dict[str, Any]]:
     rows: List[Dict[str, Any]] = []
     try:
@@ -345,15 +439,16 @@ def _normalize_ticket_rows(raw_rows: Any) -> List[Dict[str, Any]]:
     except Exception:
         pass
 
-    rows.sort(key=lambda r: (_row_sort(r), _row_name(r).lower(), _row_slug(r)))
-    seen: set[str] = set()
-    out: List[Dict[str, Any]] = []
+    by_canonical: Dict[str, Dict[str, Any]] = {}
     for row in rows:
-        slug = _row_slug(row)
-        if slug in seen:
-            continue
-        seen.add(slug)
-        out.append(row)
+        key = _canonical_category_key(row)
+        if key not in by_canonical:
+            by_canonical[key] = row
+        else:
+            by_canonical[key] = _prefer_category_row(by_canonical[key], row)
+
+    out = list(by_canonical.values())
+    out.sort(key=lambda r: (_canonical_rank(_canonical_category_key(r)), _row_sort(r), _row_name(r).lower(), _row_slug(r)))
     return out[:25]
 
 
@@ -361,13 +456,19 @@ async def _load_ticket_rows(guild: discord.Guild) -> List[Dict[str, Any]]:
     try:
         from ..tickets_new import panel
 
-        for helper_name in ("_fetch_dashboard_ticket_categories_sync", "_seed_dashboard_ticket_categories_sync"):
-            helper = getattr(panel, helper_name, None)
-            if callable(helper):
-                rows = await asyncio.to_thread(helper, int(guild.id))
-                normalized = _normalize_ticket_rows(rows)
-                if normalized:
-                    return normalized
+        fetcher = getattr(panel, "_fetch_dashboard_ticket_categories_sync", None)
+        if callable(fetcher):
+            rows = await asyncio.to_thread(fetcher, int(guild.id))
+            normalized = _normalize_ticket_rows(rows)
+            if normalized:
+                return normalized
+
+        seeder = getattr(panel, "_seed_dashboard_ticket_categories_sync", None)
+        if callable(seeder):
+            rows = await asyncio.to_thread(seeder, int(guild.id))
+            normalized = _normalize_ticket_rows(rows)
+            if normalized:
+                return normalized
 
         defaults = _normalize_ticket_rows(getattr(panel, "_DEFAULT_BOOTSTRAP_CATEGORIES", None))
         if defaults:
@@ -418,10 +519,6 @@ def _extract_created_channel(result: Any, guild: discord.Guild) -> Optional[disc
     return None
 
 
-def _has_var_kwargs(signature: inspect.Signature) -> bool:
-    return any(p.kind == inspect.Parameter.VAR_KEYWORD for p in signature.parameters.values())
-
-
 async def _maybe_async(func: Any, *args: Any, **kwargs: Any) -> Any:
     result = func(*args, **kwargs)
     if inspect.isawaitable(result):
@@ -429,22 +526,28 @@ async def _maybe_async(func: Any, *args: Any, **kwargs: Any) -> Any:
     return result
 
 
-async def _create_ticket_from_row(interaction: discord.Interaction, row: Dict[str, Any]) -> None:
-    guild = interaction.guild
-    member = interaction.user if isinstance(interaction.user, discord.Member) else None
-    if guild is None or member is None:
-        return await _send_ephemeral(interaction, "❌ This must be used inside a server.")
+def _signature_accepts(signature: inspect.Signature, key: str) -> bool:
+    return key in signature.parameters
 
-    await _defer_ephemeral(interaction, thinking=True)
 
-    existing = await _existing_open_ticket(guild, member)
-    if existing is not None:
-        return await _send_ephemeral(interaction, f"You already have an open ticket: {existing.mention}")
+def _filtered_kwargs(signature: inspect.Signature, values: Dict[str, Any]) -> Dict[str, Any]:
+    # Do not pass through **kwargs wrappers. Several startup guards wrap the
+    # service with *args/**kwargs and forward directly to the original, so only
+    # pass names that the visible callable explicitly declares.
+    return {key: value for key, value in values.items() if value is not None and _signature_accepts(signature, key)}
 
-    active_category = await _active_ticket_category(guild)
-    slug = _row_slug(row)
-    name = _row_name(row)
-    reason = f"{name} ticket opened from public ticket category menu."
+
+async def _call_create_ticket_channel(
+    *,
+    create_ticket_channel: Any,
+    guild: discord.Guild,
+    member: discord.Member,
+    slug: str,
+    name: str,
+    reason: str,
+    active_category: Optional[discord.CategoryChannel],
+    row: Dict[str, Any],
+) -> Any:
     metadata = {
         "source": "ticket_panel_category_menu",
         "selected_category_slug": slug,
@@ -452,23 +555,15 @@ async def _create_ticket_from_row(interaction: discord.Interaction, row: Dict[st
         "ticket_category_row_id": _safe_str(row.get("id")),
     }
 
-    try:
-        from ..tickets_new.service import create_ticket_channel
-    except Exception as e:
-        return await _send_ephemeral(interaction, f"❌ Ticket creation service unavailable: `{type(e).__name__}`")
-
     values: Dict[str, Any] = {
-        "interaction": interaction,
         "guild": guild,
-        "member": member,
         "owner": member,
+        "member": member,
         "user": member,
         "requester": member,
-        "created_by": member,
         "category": slug,
         "category_slug": slug,
         "category_name": name,
-        "title": name,
         "reason": reason,
         "message": reason,
         "description": reason,
@@ -492,7 +587,6 @@ async def _create_ticket_from_row(interaction: discord.Interaction, row: Dict[st
                 "category_channel": active_category,
                 "ticket_category": active_category,
                 "ticket_parent": active_category,
-                "explicit_parent_category": active_category,
                 "parent_category_id": int(active_category.id),
                 "ticket_category_id": int(active_category.id),
                 "ticket_parent_category_id": int(active_category.id),
@@ -501,18 +595,78 @@ async def _create_ticket_from_row(interaction: discord.Interaction, row: Dict[st
             }
         )
 
+    attempts: List[Tuple[Tuple[Any, ...], Dict[str, Any], str]] = []
+
     try:
         signature = inspect.signature(create_ticket_channel)
-        accepts_kwargs = _has_var_kwargs(signature)
-        kwargs = {
-            key: value
-            for key, value in values.items()
-            if value is not None and (accepts_kwargs or key in signature.parameters)
-        }
-        if kwargs:
-            result = await _maybe_async(create_ticket_channel, **kwargs)
-        else:
-            result = await _maybe_async(create_ticket_channel, guild, member, slug, reason)
+        filtered = _filtered_kwargs(signature, values)
+        if filtered:
+            attempts.append(((), filtered, "filtered_kwargs"))
+    except Exception:
+        pass
+
+    attempts.extend(
+        [
+            ((), {"guild": guild, "owner": member, "category": slug, "reason": reason}, "guild_owner_category_reason"),
+            ((), {"guild": guild, "member": member, "category": slug, "reason": reason}, "guild_member_category_reason"),
+            ((), {"guild": guild, "user": member, "category": slug, "reason": reason}, "guild_user_category_reason"),
+            ((guild, member, slug, reason), {}, "pos_guild_member_slug_reason"),
+            ((guild, member, slug), {}, "pos_guild_member_slug"),
+            ((guild, member), {}, "pos_guild_member"),
+        ]
+    )
+
+    last_error: Optional[BaseException] = None
+    for args, kwargs, label in attempts:
+        try:
+            return await _maybe_async(create_ticket_channel, *args, **kwargs)
+        except TypeError as e:
+            last_error = e
+            text = repr(e).lower()
+            if "unexpected keyword" in text or "positional" in text or "required positional" in text or "missing" in text:
+                continue
+            raise
+        except Exception:
+            raise
+
+    if last_error is not None:
+        raise last_error
+    raise RuntimeError("No compatible create_ticket_channel signature was available.")
+
+
+async def _create_ticket_from_row(interaction: discord.Interaction, row: Dict[str, Any]) -> None:
+    guild = interaction.guild
+    member = interaction.user if isinstance(interaction.user, discord.Member) else None
+    if guild is None or member is None:
+        return await _send_ephemeral(interaction, "❌ This must be used inside a server.")
+
+    await _defer_ephemeral(interaction, thinking=True)
+
+    existing = await _existing_open_ticket(guild, member)
+    if existing is not None:
+        return await _send_ephemeral(interaction, f"You already have an open ticket: {existing.mention}")
+
+    active_category = await _active_ticket_category(guild)
+    slug = _row_slug(row)
+    name = _row_name(row)
+    reason = f"{name} ticket opened from public ticket category menu."
+
+    try:
+        from ..tickets_new.service import create_ticket_channel
+    except Exception as e:
+        return await _send_ephemeral(interaction, f"❌ Ticket creation service unavailable: `{type(e).__name__}`")
+
+    try:
+        result = await _call_create_ticket_channel(
+            create_ticket_channel=create_ticket_channel,
+            guild=guild,
+            member=member,
+            slug=slug,
+            name=name,
+            reason=reason,
+            active_category=active_category,
+            row=row,
+        )
     except Exception as e:
         return await _send_ephemeral(interaction, f"❌ Failed to create ticket: `{type(e).__name__}: {_truncate(e, 240)}`")
 
@@ -537,12 +691,7 @@ class TicketCategorySelect(discord.ui.Select):
     def __init__(self, rows: List[Dict[str, Any]]) -> None:
         self.rows = rows
         options = [
-            discord.SelectOption(
-                label=_row_name(row),
-                value=_row_slug(row),
-                description=_row_description(row),
-                emoji="🎫",
-            )
+            discord.SelectOption(label=_row_name(row), value=_row_slug(row), description=_row_description(row), emoji="🎫")
             for row in rows[:25]
         ] or [discord.SelectOption(label="Support", value="support", description="General support request", emoji="🎫")]
         super().__init__(placeholder="Choose a ticket type", min_values=1, max_values=1, options=options)
