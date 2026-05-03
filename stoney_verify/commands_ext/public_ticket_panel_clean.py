@@ -570,12 +570,6 @@ def _ticket_insert_payload(
 ) -> Dict[str, Any]:
     slug = _row_slug(row)
     name = _row_name(row)
-    metadata = {
-        "source": "ticket_panel_confirm_flow",
-        "selected_category_slug": slug,
-        "selected_category_name": name,
-    }
-
     return {
         "guild_id": str(guild.id),
         "user_id": str(owner.id),
@@ -597,7 +591,6 @@ def _ticket_insert_payload(
         "matched_category_slug": slug,
         "matched_intake_type": _safe_str(row.get("intake_type") or slug),
         "category_override": True,
-        "metadata": metadata,
         "created_at": _now_iso(),
         "updated_at": _now_iso(),
     }
@@ -618,19 +611,20 @@ async def _insert_row(
     payload = _ticket_insert_payload(guild, owner, channel, row, number)
 
     def sync() -> str:
+        # Production-safe schema compatibility:
+        # Insert only the columns this project treats as required.
+        #
+        # Older/live Supabase projects may not have optional columns like
+        # metadata, owner_id, requester_id, priority, etc. The ticket should
+        # still open cleanly and staff should not see a scary setup warning
+        # just because optional analytics fields are missing.
+        safe_payload = {k: payload[k] for k in TICKET_REQUIRED_COLUMNS if k in payload}
+
         try:
-            sb.table("tickets").insert(payload).execute()
+            sb.table("tickets").insert(safe_payload).execute()
             return ""
-        except Exception as e1:
-            minimum = {k: payload[k] for k in TICKET_REQUIRED_COLUMNS if k in payload}
-            try:
-                sb.table("tickets").insert(minimum).execute()
-                return (
-                    "Saved minimal ticket row only; schema should be upgraded. "
-                    f"Full insert failed: {type(e1).__name__}: {_short(e1, 180)}"
-                )
-            except Exception as e2:
-                return f"{type(e2).__name__}: {_short(e2, 240)}"
+        except Exception as e:
+            return f"{type(e).__name__}: {_short(e, 240)}"
 
     return await _to_thread(sync, "Could not write tickets row.")
 
