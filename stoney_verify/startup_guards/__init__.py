@@ -59,6 +59,11 @@ _STARTUP_GUARDS: Tuple[str, ...] = (
     "stoney_verify.startup_guards.setup_health_command",
     "stoney_verify.startup_guards.setup_finish_command",
 
+    # Replace the old messy /stoney setup home screen with a boring guided
+    # TicketTool-style setup panel. This intentionally loads after the modular
+    # setup commands exist but before the public setup group is registered.
+    "stoney_verify.startup_guards.setup_flow_simplify",
+
     # Broad event-loop DB/modlog/ticket safety layer.
     # sitecustomize.py remains as a tiny host fallback, but main startup loads
     # the real package module directly.
@@ -156,6 +161,7 @@ _IMPORT_CHATTER_PREFIXES: Tuple[str, ...] = (
     "🧭 setup_targets_command registered",
     "🧭 setup_health_command registered",
     "🧭 setup_finish_command registered",
+    "🧭 setup_flow_simplify installed",
     "🛡️ panel_creation_guard_runtime panel denial",
     "🛡️ panel_creation_guard_runtime ticket creation guard installed",
     "🎫 ticket_creation_category_guard patched",
