@@ -2,11 +2,19 @@ from __future__ import annotations
 
 """Clean public ticket panel flow.
 
-One owner for the public /ticket-panel post path:
-- no modal-first Create Ticket behavior
-- category select first
-- direct Discord channel creation in saved Active Tickets category
-- setup health check explains missing config/perms/tables/columns
+This is the single public `/ticket-panel post` owner.
+
+What this file guarantees:
+- no modal-first ticket creation
+- persistent Create Ticket button opens a category select first
+- category select creates the ticket directly in the saved Active Tickets category
+- the panel button ACKs immediately so Discord does not show silent interaction failures
+- ticket DB fallback includes required title/username fields
+- stale open DB rows from already-closed/deleted tickets do not block new tickets
+- health check reports setup/category/permission/schema problems clearly
+
+Do not add router/patch modules on top of this file for ticket-panel behavior.
+Fix this file directly.
 """
 
 import asyncio
@@ -23,6 +31,7 @@ from .common import _staff_check, reply_once
 _PANEL_VIEW_REGISTERED = False
 _PANEL_GROUP_REGISTERED = False
 _HEALTH_PATCHED = False
+
 PANEL_BUTTON_CUSTOM_ID = "sv:ticket:panel:create:clean:v1"
 
 DEFAULT_ROWS: Tuple[Dict[str, Any], ...] = (
@@ -34,10 +43,13 @@ DEFAULT_ROWS: Tuple[Dict[str, Any], ...] = (
     {"slug": "bug", "name": "Bug Report", "description": "Report a bot or server workflow bug.", "sort_order": 60},
 )
 
+# Required for both health checks and the minimal DB fallback insert.
+# Do not include generated columns like id.
 TICKET_REQUIRED_COLUMNS: Tuple[str, ...] = (
-    "id",
     "guild_id",
     "user_id",
+    "username",
+    "title",
     "status",
     "category",
     "channel_id",
@@ -48,7 +60,6 @@ TICKET_REQUIRED_COLUMNS: Tuple[str, ...] = (
 )
 
 TICKET_CATEGORY_REQUIRED_COLUMNS: Tuple[str, ...] = (
-    "id",
     "guild_id",
     "slug",
     "name",
@@ -106,14 +117,19 @@ def _now_iso() -> str:
 
 
 def _db_url_present() -> bool:
-    return any(_safe_str(os.getenv(k)) for k in ("SUPABASE_DB_URL", "DATABASE_URL", "POSTGRES_URL", "POSTGRES_PRISMA_URL"))
+    return any(
+        _safe_str(os.getenv(k))
+        for k in ("SUPABASE_DB_URL", "DATABASE_URL", "POSTGRES_URL", "POSTGRES_PRISMA_URL")
+    )
 
 
 def _sb() -> Any:
     try:
         from ..globals import get_supabase
+
         return get_supabase()
-    except Exception:
+    except Exception as e:
+        _warn(f"supabase unavailable: {type(e).__name__}: {_short(e, 220)}")
         return None
 
 
@@ -128,8 +144,10 @@ async def _to_thread(fn, default: Any = None) -> Any:
 async def _cfg(guild_id: int) -> Any:
     try:
         from ..guild_config import get_guild_config
+
         return await get_guild_config(int(guild_id), refresh=True)
-    except Exception:
+    except Exception as e:
+        _warn(f"guild config load failed guild={guild_id}: {type(e).__name__}: {_short(e, 220)}")
         return None
 
 
@@ -153,19 +171,16 @@ async def _active_category(guild: discord.Guild) -> Optional[discord.CategoryCha
     config = await _cfg(guild.id)
     ch = _channel(
         guild,
-        _cfg_get(
-            config,
-            "ticket_category_id",
-            "active_ticket_category_id",
-            "ticket_active_category_id",
-            "open_ticket_category_id",
-        ),
+        _cfg_get(config, "ticket_category_id", "active_ticket_category_id", "ticket_active_category_id", "open_ticket_category_id"),
     )
     if isinstance(ch, discord.CategoryChannel):
         return ch
+
     for c in guild.categories:
-        if "active" in c.name.lower() and "ticket" in c.name.lower():
+        n = c.name.lower()
+        if "active" in n and "ticket" in n:
             return c
+
     return None
 
 
@@ -174,9 +189,12 @@ async def _archive_category(guild: discord.Guild) -> Optional[discord.CategoryCh
     ch = _channel(guild, _cfg_get(config, "ticket_archive_category_id", "archive_ticket_category_id", "ticket_archived_category_id"))
     if isinstance(ch, discord.CategoryChannel):
         return ch
+
     for c in guild.categories:
-        if "archive" in c.name.lower() and "ticket" in c.name.lower():
+        n = c.name.lower()
+        if "archive" in n and "ticket" in n:
             return c
+
     return None
 
 
@@ -193,12 +211,7 @@ async def _transcript_channel(guild: discord.Guild) -> Optional[discord.TextChan
 
 
 async def _staff_role(guild: discord.Guild) -> Optional[discord.Role]:
-    """Per-guild staff role only.
-
-    No global STAFF_ROLE_ID fallback here. Public servers must use their own
-    saved setup row, and health check should explain the missing role instead of
-    silently leaking one server's role IDs into another.
-    """
+    # Per-guild only. No global STAFF_ROLE_ID fallback for public servers.
     config = await _cfg(guild.id)
     rid = _safe_int(_cfg_get(config, "staff_role_id", "ticket_staff_role_id", "support_role_id"), 0)
     return guild.get_role(rid) if rid > 0 else None
@@ -207,6 +220,7 @@ async def _staff_role(guild: discord.Guild) -> Optional[discord.Role]:
 def _missing_text_perms(ch: discord.TextChannel, me: Optional[discord.Member], manage: bool = False) -> List[str]:
     if me is None:
         return ["Bot member unavailable"]
+
     p = ch.permissions_for(me)
     checks = [
         ("View Channel", p.view_channel),
@@ -215,14 +229,17 @@ def _missing_text_perms(ch: discord.TextChannel, me: Optional[discord.Member], m
         ("Embed Links", p.embed_links),
         ("Attach Files", p.attach_files),
     ]
+
     if manage:
         checks += [("Manage Channels", p.manage_channels), ("Manage Permissions", p.manage_permissions)]
+
     return [n for n, ok in checks if not ok]
 
 
 def _missing_category_perms(cat: discord.CategoryChannel, me: Optional[discord.Member]) -> List[str]:
     if me is None:
         return ["Bot member unavailable"]
+
     p = cat.permissions_for(me)
     checks = [
         ("View Channel", p.view_channel),
@@ -237,11 +254,11 @@ def _missing_category_perms(cat: discord.CategoryChannel, me: Optional[discord.M
 
 
 def _row_slug(row: Dict[str, Any]) -> str:
-    return _slug(row.get("slug") or row.get("category_slug") or row.get("name") or "support")
+    return _slug(row.get("slug") or row.get("category_slug") or row.get("name") or row.get("title") or "support")
 
 
 def _row_name(row: Dict[str, Any]) -> str:
-    return _safe_str(row.get("button_label") or row.get("name") or row.get("display_name") or _row_slug(row), "Support")[:100]
+    return _safe_str(row.get("button_label") or row.get("name") or row.get("display_name") or row.get("title") or _row_slug(row), "Support")[:100]
 
 
 def _row_desc(row: Dict[str, Any]) -> str:
@@ -254,6 +271,7 @@ def _row_sort(row: Dict[str, Any]) -> int:
 
 def _canon(row: Dict[str, Any]) -> str:
     text = f"{_row_slug(row)} {_slug(_row_name(row))}".lower()
+
     if "verification" in text or text.startswith("verify"):
         return "verification"
     if "appeal" in text:
@@ -266,18 +284,22 @@ def _canon(row: Dict[str, Any]) -> str:
         return "bug"
     if "support" in text or "other" in text or "custom" in text or "general" in text:
         return "support"
+
     return _row_slug(row)
 
 
 def _rows(raw: Any) -> List[Dict[str, Any]]:
     priority = {"support": 0, "verification": 1, "appeal": 2, "report": 3, "question": 4, "bug": 5}
     by: Dict[str, Dict[str, Any]] = {}
+
     for x in raw or []:
         if not isinstance(x, dict) or x.get("is_enabled") is False:
             continue
+
         k = _canon(x)
         if k not in by or _row_sort(x) < _row_sort(by[k]):
             by[k] = dict(x)
+
     out = list(by.values())
     out.sort(key=lambda r: (priority.get(_canon(r), 99), _row_sort(r), _row_name(r).lower()))
     return out[:25]
@@ -285,6 +307,7 @@ def _rows(raw: Any) -> List[Dict[str, Any]]:
 
 async def _load_rows(guild: discord.Guild) -> Tuple[List[Dict[str, Any]], str]:
     sb = _sb()
+
     if sb is None:
         return list(DEFAULT_ROWS), "Supabase client unavailable; using fallback categories."
 
@@ -292,7 +315,9 @@ async def _load_rows(guild: discord.Guild) -> Tuple[List[Dict[str, Any]], str]:
         try:
             res = sb.table("ticket_categories").select("*").eq("guild_id", str(guild.id)).execute()
             found = _rows(getattr(res, "data", None) or [])
-            return (found, "") if found else (list(DEFAULT_ROWS), "No ticket menu rows found; using fallback categories.")
+            if found:
+                return found, ""
+            return list(DEFAULT_ROWS), "No ticket menu rows found; using fallback categories."
         except Exception as e:
             return list(DEFAULT_ROWS), f"Could not read ticket_categories: {type(e).__name__}: {_short(e, 220)}"
 
@@ -309,6 +334,7 @@ def _ticket_num(name: str) -> int:
 async def _next_number(guild: discord.Guild, parent: discord.CategoryChannel) -> int:
     n = max([0] + [_ticket_num(c.name) for c in list(parent.text_channels) + list(guild.text_channels)])
     sb = _sb()
+
     if sb is not None:
         def sync() -> int:
             try:
@@ -327,15 +353,18 @@ async def _next_number(guild: discord.Guild, parent: discord.CategoryChannel) ->
                 return 0
 
         n = max(n, _safe_int(await _to_thread(sync, 0), 0))
+
     return n + 1
 
 
 async def _fetch_text(guild: discord.Guild, cid: int) -> Optional[discord.TextChannel]:
     if cid <= 0:
         return None
+
     ch = guild.get_channel(cid)
     if isinstance(ch, discord.TextChannel):
         return ch
+
     try:
         fetched = await guild.fetch_channel(cid)
         return fetched if isinstance(fetched, discord.TextChannel) else None
@@ -343,10 +372,36 @@ async def _fetch_text(guild: discord.Guild, cid: int) -> Optional[discord.TextCh
         return None
 
 
+def _channel_is_closed_like(ch: discord.TextChannel) -> bool:
+    try:
+        name = (ch.name or "").lower()
+        cat = (ch.category.name if ch.category else "").lower()
+        return name.startswith("closed-") or ("archive" in cat and "ticket" in cat)
+    except Exception:
+        return False
+
+
+async def _mark_row_stale(row_id: str, reason: str) -> None:
+    sb = _sb()
+
+    if sb is None or not row_id:
+        return
+
+    def sync() -> None:
+        try:
+            sb.table("tickets").update({"status": "closed", "closed_at": _now_iso(), "updated_at": _now_iso(), "deleted_reason": reason}).eq("id", row_id).execute()
+        except Exception as e:
+            _warn(f"stale ticket row repair failed id={row_id}: {type(e).__name__}: {_short(e, 220)}")
+
+    await _to_thread(sync, None)
+
+
 async def _existing_open(guild: discord.Guild, member: discord.Member) -> Optional[discord.TextChannel]:
     sb = _sb()
+
     if sb is None:
         return None
+
     for col in ("owner_id", "user_id", "requester_id"):
         def sync(c: str = col) -> List[Dict[str, Any]]:
             try:
@@ -363,35 +418,28 @@ async def _existing_open(guild: discord.Guild, member: discord.Member) -> Option
                     None,
                 ) or []
                 return [r for r in data if isinstance(r, dict)]
-            except Exception:
+            except Exception as e:
+                _warn(f"existing-open query failed guild={guild.id} user={member.id} col={c}: {type(e).__name__}: {_short(e, 220)}")
                 return []
 
         for row in await _to_thread(sync, []):
+            row_id = _safe_str(row.get("id"))
             ch = await _fetch_text(guild, _safe_int(row.get("channel_id") or row.get("discord_thread_id"), 0))
-            if ch:
+
+            if ch and not _channel_is_closed_like(ch):
                 return ch
-            rid = _safe_str(row.get("id"))
-            if rid:
-                await _to_thread(
-                    lambda rid=rid: sb.table("tickets")
-                    .update({"status": "deleted", "deleted_at": _now_iso(), "deleted_reason": "stale missing channel auto-repaired"})
-                    .eq("id", rid)
-                    .execute(),
-                    None,
-                )
+
+            await _mark_row_stale(row_id, "stale open row ignored by ticket panel")
+
     return None
 
 
-def _overwrites(
-    guild: discord.Guild,
-    owner: discord.Member,
-    bot_member: Optional[discord.Member],
-    staff: Optional[discord.Role],
-) -> Dict[Any, discord.PermissionOverwrite]:
+def _overwrites(guild: discord.Guild, owner: discord.Member, bot_member: Optional[discord.Member], staff: Optional[discord.Role]) -> Dict[Any, discord.PermissionOverwrite]:
     out: Dict[Any, discord.PermissionOverwrite] = {
         guild.default_role: discord.PermissionOverwrite(view_channel=False),
         owner: discord.PermissionOverwrite(view_channel=True, send_messages=True, read_message_history=True, attach_files=True, embed_links=True),
     }
+
     if bot_member:
         out[bot_member] = discord.PermissionOverwrite(
             view_channel=True,
@@ -403,6 +451,7 @@ def _overwrites(
             manage_messages=True,
             manage_permissions=True,
         )
+
     if staff:
         out[staff] = discord.PermissionOverwrite(
             view_channel=True,
@@ -412,18 +461,15 @@ def _overwrites(
             embed_links=True,
             manage_messages=True,
         )
+
     return out
 
 
-def _ticket_insert_payload(
-    guild: discord.Guild,
-    owner: discord.Member,
-    channel: discord.TextChannel,
-    row: Dict[str, Any],
-    number: int,
-) -> Dict[str, Any]:
-    slug, name = _row_slug(row), _row_name(row)
+def _ticket_insert_payload(guild: discord.Guild, owner: discord.Member, channel: discord.TextChannel, row: Dict[str, Any], number: int) -> Dict[str, Any]:
+    slug = _row_slug(row)
+    name = _row_name(row)
     meta = {"source": "ticket_panel_category_menu", "selected_category_slug": slug, "selected_category_name": name}
+
     return {
         "guild_id": str(guild.id),
         "user_id": str(owner.id),
@@ -454,19 +500,18 @@ def _ticket_insert_payload(
 
 async def _insert_row(guild: discord.Guild, owner: discord.Member, channel: discord.TextChannel, row: Dict[str, Any], number: int) -> str:
     sb = _sb()
+
     if sb is None:
         return "Supabase client unavailable."
+
     payload = _ticket_insert_payload(guild, owner, channel, row, number)
 
     def sync() -> str:
-        # Try the full canonical payload first. If an older table is missing
-        # optional compatibility columns, try the minimum payload so Discord
-        # ticket creation does not fail while health check reports the schema gap.
         try:
             sb.table("tickets").insert(payload).execute()
             return ""
         except Exception as e1:
-            minimum = {k: payload[k] for k in TICKET_REQUIRED_COLUMNS if k in payload and k != "id"}
+            minimum = {k: payload[k] for k in TICKET_REQUIRED_COLUMNS if k in payload}
             try:
                 sb.table("tickets").insert(minimum).execute()
                 return f"Saved minimal ticket row only; schema should be upgraded. Full insert failed: {type(e1).__name__}: {_short(e1, 180)}"
@@ -485,18 +530,20 @@ async def _open_message(channel: discord.TextChannel, owner: discord.Member, row
     )
     embed.add_field(name="Category", value=f"`{_row_slug(row)}`", inline=True)
     embed.add_field(name="Opened by", value=owner.mention, inline=True)
+
     view = None
     try:
         from ..tickets_new.panel import TicketChannelActionsView
         view = TicketChannelActionsView()
-    except Exception:
-        pass
+    except Exception as e:
+        _warn(f"ticket action view unavailable: {type(e).__name__}: {_short(e, 220)}")
+
     try:
         await channel.send(content=owner.mention, embed=embed, view=view, allowed_mentions=discord.AllowedMentions(users=True, roles=False, everyone=False))
     except TypeError:
         await channel.send(content=owner.mention, embed=embed, allowed_mentions=discord.AllowedMentions(users=True, roles=False, everyone=False))
     except Exception as e:
-        _warn(f"open message failed channel={channel.id}: {type(e).__name__}: {_short(e)}")
+        _warn(f"open message failed channel={channel.id}: {type(e).__name__}: {_short(e, 220)}")
 
 
 async def _ephemeral(i: discord.Interaction, content: str, *, embed: Optional[discord.Embed] = None, view: Optional[discord.ui.View] = None) -> None:
@@ -505,31 +552,39 @@ async def _ephemeral(i: discord.Interaction, content: str, *, embed: Optional[di
         payload["embed"] = embed
     if view:
         payload["view"] = view
+
     try:
         if i.response.is_done():
             await i.followup.send(**payload)
         else:
             await i.response.send_message(**payload)
-    except Exception:
-        pass
+    except Exception as e:
+        _warn(f"ephemeral reply failed guild={getattr(getattr(i, 'guild', None), 'id', None)} user={getattr(getattr(i, 'user', None), 'id', None)} content={_short(content, 80)!r} error={type(e).__name__}: {_short(e, 220)}")
 
 
 async def _defer(i: discord.Interaction, thinking: bool = False) -> None:
     try:
         if not i.response.is_done():
             await i.response.defer(ephemeral=True, thinking=thinking)
-    except Exception:
-        pass
+    except Exception as e:
+        _warn(f"defer failed guild={getattr(getattr(i, 'guild', None), 'id', None)} user={getattr(getattr(i, 'user', None), 'id', None)} error={type(e).__name__}: {_short(e, 220)}")
 
 
 async def _create_ticket(i: discord.Interaction, row: Dict[str, Any]) -> None:
     await _defer(i, True)
+
     guild = i.guild
     owner = i.user if isinstance(i.user, discord.Member) else None
+
     if guild is None or owner is None:
         return await _ephemeral(i, "❌ This must be used inside a server.")
 
-    parent = await _active_category(guild)
+    try:
+        parent = await asyncio.wait_for(_active_category(guild), timeout=6.0)
+    except asyncio.TimeoutError:
+        _warn(f"active category lookup timed out guild={guild.id}")
+        parent = None
+
     if parent is None:
         return await _ephemeral(i, "❌ Active Tickets category is not set. Run `/stoney setup` → **Run Health Check**.")
 
@@ -537,15 +592,26 @@ async def _create_ticket(i: discord.Interaction, row: Dict[str, Any]) -> None:
     if missing:
         return await _ephemeral(i, f"❌ I cannot create tickets in **{parent.name}**. Missing: {', '.join(missing)}. Run `/stoney setup` → **Run Health Check**.")
 
-    staff = await _staff_role(guild)
+    try:
+        staff = await asyncio.wait_for(_staff_role(guild), timeout=6.0)
+    except asyncio.TimeoutError:
+        _warn(f"staff role lookup timed out guild={guild.id}")
+        staff = None
+
     if staff is None:
         return await _ephemeral(i, "❌ Ticket staff role is not set. Run `/stoney setup` → **Run Health Check**.")
 
-    existing = await _existing_open(guild, owner)
+    try:
+        existing = await asyncio.wait_for(_existing_open(guild, owner), timeout=6.0)
+    except asyncio.TimeoutError:
+        _warn(f"existing-open check timed out guild={guild.id} user={owner.id}; continuing")
+        existing = None
+
     if existing:
         return await _ephemeral(i, f"You already have an open ticket: {existing.mention}")
 
     number = await _next_number(guild, parent)
+
     try:
         channel = await guild.create_text_channel(
             name=f"ticket-{number:04d}",
@@ -555,6 +621,7 @@ async def _create_ticket(i: discord.Interaction, row: Dict[str, Any]) -> None:
             reason=f"Ticket opened by {owner} from category menu",
         )
     except Exception as e:
+        _warn(f"discord channel create failed guild={guild.id} user={owner.id}: {type(e).__name__}: {_short(e, 220)}")
         return await _ephemeral(i, f"❌ Failed to create ticket in **{parent.name}**: `{type(e).__name__}: {_short(e, 220)}`")
 
     db_warning = await _insert_row(guild, owner, channel, row, number)
@@ -563,10 +630,7 @@ async def _create_ticket(i: discord.Interaction, row: Dict[str, Any]) -> None:
     if db_warning:
         _warn(f"ticket created but DB warning channel={channel.id}: {db_warning}")
         try:
-            await channel.send(
-                f"⚠️ Ticket opened, but database logging needs setup attention: `{_short(db_warning, 350)}`",
-                allowed_mentions=discord.AllowedMentions.none(),
-            )
+            await channel.send(f"⚠️ Ticket opened, but database logging needs setup attention: `{_short(db_warning, 350)}`", allowed_mentions=discord.AllowedMentions.none())
         except Exception:
             pass
 
@@ -584,15 +648,23 @@ class TicketSelect(discord.ui.Select):
         )
 
     async def callback(self, i: discord.Interaction) -> None:
-        slug = _safe_str(self.values[0], "support")
-        row = next((r for r in self.rows if _row_slug(r) == slug), {"slug": slug, "name": "Support"})
-        await _create_ticket(i, row)
+        try:
+            slug = _safe_str(self.values[0], "support")
+            row = next((r for r in self.rows if _row_slug(r) == slug), {"slug": slug, "name": "Support"})
+            await _create_ticket(i, row)
+        except Exception as e:
+            _warn(f"ticket type select crashed guild={getattr(getattr(i, 'guild', None), 'id', None)} user={getattr(getattr(i, 'user', None), 'id', None)} values={getattr(self, 'values', None)} error={type(e).__name__}: {_short(e, 220)}")
+            await _ephemeral(i, f"❌ Ticket category selection failed: `{type(e).__name__}: {_short(e, 160)}`")
 
 
 class TicketSelectView(discord.ui.View):
     def __init__(self, rows: List[Dict[str, Any]]) -> None:
         super().__init__(timeout=300)
         self.add_item(TicketSelect(rows))
+
+    async def on_error(self, interaction: discord.Interaction, error: Exception, item: discord.ui.Item[Any]) -> None:
+        _warn(f"ticket select view error guild={getattr(getattr(interaction, 'guild', None), 'id', None)} user={getattr(getattr(interaction, 'user', None), 'id', None)} item={type(item).__name__} error={type(error).__name__}: {_short(error, 220)}")
+        await _ephemeral(interaction, f"❌ Ticket menu failed: `{type(error).__name__}: {_short(error, 160)}`")
 
 
 class PublicCreateTicketPanelView(discord.ui.View):
@@ -604,23 +676,52 @@ class PublicCreateTicketPanelView(discord.ui.View):
         _ = button
         guild = i.guild
         member = i.user if isinstance(i.user, discord.Member) else None
-        if guild is None or member is None:
-            return await _ephemeral(i, "❌ This must be used inside a server.")
+
+        # ACK immediately. This prevents Discord's generic "interaction failed".
+        await _defer(i, True)
+
         try:
-            from ..startup_guards.unverified_ticket_panel_flow import _handle_unverified_panel_click
-            if await _handle_unverified_panel_click(i):
-                return
-        except Exception:
-            pass
-        existing = await _existing_open(guild, member)
-        if existing:
-            return await _ephemeral(i, f"You already have an open ticket: {existing.mention}")
-        rows, warning = await _load_rows(guild)
-        embed = discord.Embed(title="Create Ticket", description="Choose the type of ticket you want to open.", color=discord.Color.blurple())
-        embed.set_footer(text="Pick a category. No form needed.")
-        if warning:
-            embed.add_field(name="Setup Notice", value=_short(warning, 900), inline=False)
-        await _ephemeral(i, "Choose a ticket type.", embed=embed, view=TicketSelectView(rows))
+            if guild is None or member is None:
+                return await _ephemeral(i, "❌ This must be used inside a server.")
+
+            try:
+                from ..startup_guards.unverified_ticket_panel_flow import _handle_unverified_panel_click
+                if await asyncio.wait_for(_handle_unverified_panel_click(i), timeout=2.5):
+                    return
+            except asyncio.TimeoutError:
+                _warn(f"unverified panel route timed out guild={guild.id} user={member.id}; continuing normal ticket flow")
+            except Exception as e:
+                _warn(f"unverified panel route skipped guild={guild.id} user={member.id}: {type(e).__name__}: {_short(e, 220)}")
+
+            try:
+                existing = await asyncio.wait_for(_existing_open(guild, member), timeout=6.0)
+            except asyncio.TimeoutError:
+                _warn(f"existing-open check timed out guild={guild.id} user={member.id}; continuing")
+                existing = None
+
+            if existing:
+                return await _ephemeral(i, f"You already have an open ticket: {existing.mention}")
+
+            try:
+                rows, warning = await asyncio.wait_for(_load_rows(guild), timeout=6.0)
+            except asyncio.TimeoutError:
+                _warn(f"ticket category load timed out guild={guild.id}; using fallback categories")
+                rows, warning = list(DEFAULT_ROWS), "Ticket category loading timed out; using fallback categories."
+
+            embed = discord.Embed(title="Create Ticket", description="Choose the type of ticket you want to open.", color=discord.Color.blurple())
+            embed.set_footer(text="Pick a category. No form needed.")
+
+            if warning:
+                embed.add_field(name="Setup Notice", value=_short(warning, 900), inline=False)
+
+            await _ephemeral(i, "Choose a ticket type.", embed=embed, view=TicketSelectView(rows))
+        except Exception as e:
+            _warn(f"public create ticket button crashed guild={getattr(guild, 'id', None)} user={getattr(member, 'id', None)} error={type(e).__name__}: {_short(e, 220)}")
+            await _ephemeral(i, f"❌ Ticket panel failed: `{type(e).__name__}: {_short(e, 160)}`")
+
+    async def on_error(self, interaction: discord.Interaction, error: Exception, item: discord.ui.Item[Any]) -> None:
+        _warn(f"public ticket panel view error guild={getattr(getattr(interaction, 'guild', None), 'id', None)} user={getattr(getattr(interaction, 'user', None), 'id', None)} item={type(item).__name__} error={type(error).__name__}: {_short(error, 220)}")
+        await _ephemeral(interaction, f"❌ Ticket panel failed: `{type(error).__name__}: {_short(error, 160)}`")
 
 
 def _panel_embed(guild: discord.Guild) -> discord.Embed:
@@ -638,27 +739,35 @@ def _panel_embed(guild: discord.Guild) -> discord.Embed:
 async def _post_panel(i: discord.Interaction, channel: Optional[discord.TextChannel] = None) -> None:
     if not _staff_check(i):
         return await reply_once(i, {"content": "❌ Staff only.", "ephemeral": True})
+
     guild = i.guild
     if guild is None:
         return await reply_once(i, {"content": "❌ Guild only.", "ephemeral": True})
+
     await _defer(i)
     target = channel or await _panel_channel(guild) or (i.channel if isinstance(i.channel, discord.TextChannel) else None)
+
     if target is None:
         return await reply_once(i, {"content": "❌ I could not find a text channel to post the ticket panel.", "ephemeral": True})
+
     missing = _missing_text_perms(target, guild.me)
     if missing:
         return await reply_once(i, {"content": f"❌ I cannot post in {target.mention}. Missing: {', '.join(missing)}.", "ephemeral": True})
+
     try:
         msg = await target.send(embed=_panel_embed(guild), view=PublicCreateTicketPanelView(), allowed_mentions=discord.AllowedMentions.none())
     except Exception as e:
         return await reply_once(i, {"content": f"❌ Failed posting ticket panel in {target.mention}: `{type(e).__name__}: {_short(e, 220)}`", "ephemeral": True})
+
     try:
         from .public_setup_config_writer import upsert_guild_config
         from ..guild_config import invalidate_guild_config
+
         await upsert_guild_config(guild.id, {"ticket_panel_channel_id": str(target.id), "ticket_panel_message_id": str(msg.id)})
         invalidate_guild_config(guild.id)
-    except Exception:
-        pass
+    except Exception as e:
+        _warn(f"saving panel config failed guild={guild.id}: {type(e).__name__}: {_short(e, 220)}")
+
     await reply_once(i, {"content": f"✅ Posted the public **category-menu Create Ticket** panel in {target.mention}.", "ephemeral": True})
 
 
@@ -675,8 +784,10 @@ def _ticket_panel_group() -> app_commands.Group:
 
 async def _table_probe(table: str, columns: Sequence[str]) -> Tuple[bool, str]:
     sb = _sb()
+
     if sb is None:
         return False, "Supabase client unavailable"
+
     select_expr = ",".join(columns)
 
     def sync() -> Tuple[bool, str]:
@@ -684,8 +795,7 @@ async def _table_probe(table: str, columns: Sequence[str]) -> Tuple[bool, str]:
             sb.table(table).select(select_expr).limit(1).execute()
             return True, "ok"
         except Exception as e:
-            text = _short(e, 260)
-            return False, f"{type(e).__name__}: {text}"
+            return False, f"{type(e).__name__}: {_short(e, 260)}"
 
     return await _to_thread(sync, (False, "unknown error"))
 
@@ -731,10 +841,12 @@ async def _health_lines(guild: discord.Guild) -> Tuple[List[str], List[str], Lis
 
     cat_ok, cat_msg = await _table_probe("ticket_categories", TICKET_CATEGORY_REQUIRED_COLUMNS)
     tic_ok, tic_msg = await _table_probe("tickets", TICKET_REQUIRED_COLUMNS)
+
     if cat_ok:
         ok.append("Supabase `ticket_categories` table has required menu columns.")
     else:
         blockers.append(f"Supabase `ticket_categories` missing table/required columns: {cat_msg}")
+
     if tic_ok:
         ok.append("Supabase `tickets` table has required ticket columns.")
     else:
@@ -752,28 +864,36 @@ def _field(lines: List[str], empty: str) -> str:
 
 def _patch_health() -> None:
     global _HEALTH_PATCHED
+
     if _HEALTH_PATCHED:
         return
+
     try:
         from . import public_setup_solid as solid
+
         original = getattr(solid, "_build_health_embed", None)
+
         if not callable(original) or getattr(original, "_ticket_panel_clean_wrapped", False):
             _HEALTH_PATCHED = True
             return
 
         async def wrapped(guild: discord.Guild) -> discord.Embed:
             embed = await original(guild)
-            b, w, ok = await _health_lines(guild)
-            embed.add_field(name="Ticket Creation Blockers", value=_field(b, "✅ None"), inline=False)
-            embed.add_field(name="Ticket Creation Warnings", value=_field(w, "✅ None"), inline=False)
+            blockers, warnings, ok = await _health_lines(guild)
+
+            embed.add_field(name="Ticket Creation Blockers", value=_field(blockers, "✅ None"), inline=False)
+            embed.add_field(name="Ticket Creation Warnings", value=_field(warnings, "✅ None"), inline=False)
             embed.add_field(name="Ticket Creation Passing", value=_field(ok[:8], "No passing checks."), inline=False)
-            if b:
+
+            if blockers:
                 embed.color = discord.Color.red()
                 embed.description = "🚫 **Fix the blockers first.** Ticket creation is not ready."
+
             return embed
 
         setattr(wrapped, "_ticket_panel_clean_wrapped", True)
         setattr(solid, "_build_health_embed", wrapped)
+
         _HEALTH_PATCHED = True
         _log("patched /stoney setup health check")
     except Exception as e:
@@ -782,24 +902,28 @@ def _patch_health() -> None:
 
 def register_public_ticket_panel_clean(bot: Any, tree: Any) -> None:
     global _PANEL_VIEW_REGISTERED, _PANEL_GROUP_REGISTERED
+
     if not _PANEL_VIEW_REGISTERED:
         try:
             bot.add_view(PublicCreateTicketPanelView())
             _PANEL_VIEW_REGISTERED = True
         except Exception as e:
             _warn(f"could not register persistent view: {e!r}")
+
     if not _PANEL_GROUP_REGISTERED:
         try:
             if tree.get_command("ticket-panel", guild=None) is not None:
                 tree.remove_command("ticket-panel", guild=None)
         except Exception:
             pass
+
         try:
             tree.add_command(_ticket_panel_group())
             _PANEL_GROUP_REGISTERED = True
             _log("registered clean /ticket-panel post")
         except Exception as e:
             _warn(f"could not register /ticket-panel post: {e!r}")
+
     _patch_health()
 
 
