@@ -1,65 +1,39 @@
 from __future__ import annotations
 
-"""Public ticket panel command owner.
+"""Menu-first public ticket panel.
 
-Owns the public panel commands used by server admins:
+This module is intentionally boring:
 
-- /ticket-panel post
-- /ticket-intake post-panel
+- owns /ticket-panel post
+- exposes post_public_ticket_panel() so /ticket-intake post-panel can reuse it
+- registers one persistent Create Ticket button view
+- shows a category select first instead of opening the old reason modal
+- creates tickets through the normal ticket service and repairs category placement
+  only as a final safety net
 
-Both commands post the same menu-first Create Ticket panel. This file also
-registers compatibility handlers for known old Create Ticket button custom IDs so
-old public panels can be intercepted after deploy instead of opening the old
-modal flow.
+No import hooks. No monkey-patching another module. No guessed legacy button ID
+list. Old panel messages should be deleted and reposted with /ticket-panel post.
 """
 
 import asyncio
-import builtins
 import inspect
-import sys
 from typing import Any, Optional
 
 import discord
 from discord import app_commands
 
-if not hasattr(builtins, "_stoney_true_original_import"):
-    setattr(builtins, "_stoney_true_original_import", builtins.__import__)
-
-_ORIGINAL_IMPORT = getattr(builtins, "_stoney_true_original_import")
-_PATCHED_REGISTER = False
-_PERSISTENT_VIEW_REGISTERED = False
+from .common import _staff_check, reply_once
 
 TICKET_PANEL_GROUP_NAME = "ticket-panel"
 TICKET_PANEL_POST_NAME = "post"
-TICKET_INTAKE_POST_PANEL_NAME = "post-panel"
+MENU_FIRST_CUSTOM_ID = "sv:ticket:public:create_menu:v4"
 
-MENU_FIRST_CUSTOM_ID = "sv:ticket:public:create_menu:v3"
-
-# Known/likely old Create Ticket IDs used across the project while this was
-# being refactored. The goal is to override old public panel messages after a
-# restart where possible, not just newly posted panels.
-LEGACY_CREATE_CUSTOM_IDS = (
-    "sv:ticket:create",
-    "sv:ticket:open",
-    "sv:ticket:public:create",
-    "sv:ticket:public:create:v1",
-    "sv:ticket:public:create:v2",
-    "sv:ticket:public_create",
-    "sv:ticket_panel:create",
-    "sv:ticket-panel:create",
-    "ticket:create",
-    "ticket:open",
-    "ticket_panel:create",
-    "ticket-panel:create",
-    "stoney_verify:ticket:create",
-    "stoney_verify:ticket_panel:create",
-    "stoney_verify:create_ticket",
-)
+_PERSISTENT_VIEW_REGISTERED = False
 
 
 def _log(message: str) -> None:
     try:
-        print(f"🎫 public_ticket_panel_command_guard {message}")
+        print(f"🎫 public_ticket_panel {message}")
     except Exception:
         pass
 
@@ -151,59 +125,39 @@ def _normalize_rows(raw_rows: Any) -> list[dict[str, Any]]:
     return out[:25]
 
 
-async def _reply_once(
+async def _send_ephemeral(
     interaction: discord.Interaction,
     content: str = "",
     *,
-    ephemeral: bool = True,
     embed: Optional[discord.Embed] = None,
     view: Optional[discord.ui.View] = None,
 ) -> None:
-    try:
-        kwargs: dict[str, Any] = {
-            "ephemeral": ephemeral,
-            "allowed_mentions": discord.AllowedMentions.none(),
-        }
-        if embed is not None:
-            kwargs["embed"] = embed
-            if content:
-                kwargs["content"] = content
-        else:
-            kwargs["content"] = content
-        if view is not None:
-            kwargs["view"] = view
+    payload: dict[str, Any] = {
+        "ephemeral": True,
+        "allowed_mentions": discord.AllowedMentions.none(),
+    }
+    if content:
+        payload["content"] = content
+    if embed is not None:
+        payload["embed"] = embed
+    if view is not None:
+        payload["view"] = view
 
+    try:
         if interaction.response.is_done():
-            await interaction.followup.send(**kwargs)
+            await interaction.followup.send(**payload)
         else:
-            await interaction.response.send_message(**kwargs)
+            await interaction.response.send_message(**payload)
     except Exception:
         pass
 
 
-async def _defer(interaction: discord.Interaction, *, thinking: bool = False) -> None:
+async def _defer_ephemeral(interaction: discord.Interaction, *, thinking: bool = False) -> None:
     try:
         if not interaction.response.is_done():
             await interaction.response.defer(ephemeral=True, thinking=thinking)
     except Exception:
         pass
-
-
-def _staff_check(interaction: discord.Interaction) -> bool:
-    try:
-        from stoney_verify.commands_ext.common import _staff_check as common_staff_check
-
-        return bool(common_staff_check(interaction))
-    except Exception:
-        member = interaction.user
-        return bool(
-            isinstance(member, discord.Member)
-            and (
-                member.guild_permissions.administrator
-                or member.guild_permissions.manage_guild
-                or member.guild_permissions.manage_channels
-            )
-        )
 
 
 async def _guild_config(guild: discord.Guild) -> Any:
@@ -234,7 +188,6 @@ async def _configured_ticket_panel_channel(guild: discord.Guild) -> Optional[dis
 
 async def _configured_active_ticket_category(guild: discord.Guild) -> Optional[discord.CategoryChannel]:
     cfg = await _guild_config(guild)
-
     for attr in (
         "ticket_category_id",
         "active_ticket_category_id",
@@ -250,7 +203,6 @@ async def _configured_active_ticket_category(guild: discord.Guild) -> Optional[d
         if isinstance(ch, discord.CategoryChannel):
             return ch
 
-    # Last-resort name fallback for public servers whose DB config is missing.
     try:
         for category in guild.categories:
             name = _safe_text(category.name).lower()
@@ -277,9 +229,9 @@ async def _ensure_channel_in_active_category(
             sync_permissions=False,
             reason="Stoney Verify ticket creation category repair",
         )
-        _log(f"repaired created ticket channel={channel.id} into active category={target_category.id}")
+        _log(f"repaired ticket channel={channel.id} into active category={target_category.id}")
     except Exception as e:
-        _log(f"failed to repair ticket category channel={getattr(channel, 'id', '?')} error={e!r}")
+        _log(f"category repair failed channel={getattr(channel, 'id', '?')} error={e!r}")
 
 
 def _panel_embed(guild: discord.Guild) -> discord.Embed:
@@ -293,18 +245,11 @@ def _panel_embed(guild: discord.Guild) -> discord.Embed:
     )
     embed.add_field(
         name="How it works",
-        value="1. Press **Create Ticket**\n2. Pick a ticket type from the menu\n3. A private ticket channel opens",
+        value="1. Press **Create Ticket**\n2. Pick a ticket type\n3. A private ticket channel opens",
         inline=False,
     )
     embed.set_footer(text=f"{guild.name} • Stoney Verify ticket panel • menu-first")
     return embed
-
-
-async def _maybe_async(func: Any, *args: Any, **kwargs: Any) -> Any:
-    result = func(*args, **kwargs)
-    if inspect.isawaitable(result):
-        return await result
-    return result
 
 
 async def _load_ticket_menu_rows(guild: discord.Guild) -> list[dict[str, Any]]:
@@ -323,7 +268,7 @@ async def _load_ticket_menu_rows(guild: discord.Guild) -> list[dict[str, Any]]:
         if defaults:
             return defaults
     except Exception as e:
-        _log(f"ticket menu row fallback used: {e!r}")
+        _log(f"ticket menu fallback used: {e!r}")
 
     return [
         {
@@ -387,24 +332,31 @@ def _has_var_keyword(signature: inspect.Signature) -> bool:
         return False
 
 
+async def _maybe_async(func: Any, *args: Any, **kwargs: Any) -> Any:
+    result = func(*args, **kwargs)
+    if inspect.isawaitable(result):
+        return await result
+    return result
+
+
 async def _create_ticket_from_choice(interaction: discord.Interaction, row: dict[str, Any]) -> None:
     guild = interaction.guild
     member = interaction.user if isinstance(interaction.user, discord.Member) else None
     if guild is None or member is None:
-        return await _reply_once(interaction, "❌ This must be used inside a server.")
+        return await _send_ephemeral(interaction, "❌ This must be used inside a server.")
 
-    await _defer(interaction, thinking=True)
+    await _defer_ephemeral(interaction, thinking=True)
 
     existing = await _existing_open_ticket(guild, member)
     if existing is not None:
-        return await _reply_once(interaction, f"You already have an open ticket: {existing.mention}")
+        return await _send_ephemeral(interaction, f"You already have an open ticket: {existing.mention}")
 
     active_category = await _configured_active_ticket_category(guild)
 
     try:
         from stoney_verify.tickets_new.service import create_ticket_channel
     except Exception as e:
-        return await _reply_once(interaction, f"❌ Ticket creator is unavailable: `{type(e).__name__}`")
+        return await _send_ephemeral(interaction, f"❌ Ticket creator unavailable: `{type(e).__name__}`")
 
     slug = _row_slug(row)
     name = _row_name(row)
@@ -446,9 +398,6 @@ async def _create_ticket_from_choice(interaction: discord.Interaction, row: dict
     }
 
     if active_category is not None:
-        # Support all known service argument names without forcing the service
-        # signature to change. Only matching names are passed unless the service
-        # explicitly accepts **kwargs.
         values.update(
             {
                 "parent_category": active_category,
@@ -474,21 +423,16 @@ async def _create_ticket_from_choice(interaction: discord.Interaction, row: dict
             for key, value in values.items()
             if value is not None and (accepts_kwargs or key in signature.parameters)
         }
-
         if not kwargs:
-            raise TypeError("create_ticket_channel signature did not expose supported keyword parameters")
-
+            raise TypeError("create_ticket_channel exposes no supported keyword parameters")
         result = await _maybe_async(create_ticket_channel, **kwargs)
     except TypeError as e:
-        # Do not use broad positional fallbacks anymore. That is what caused
-        # tickets to be created in the wrong place when the signature did not
-        # match what this guard expected.
-        return await _reply_once(
+        return await _send_ephemeral(
             interaction,
             f"❌ Ticket creation route is incompatible with this build: `{_truncate(e, 240)}`",
         )
     except Exception as e:
-        return await _reply_once(
+        return await _send_ephemeral(
             interaction,
             f"❌ Ticket creation failed: `{type(e).__name__}: {_truncate(e, 240)}`",
         )
@@ -496,9 +440,9 @@ async def _create_ticket_from_choice(interaction: discord.Interaction, row: dict
     channel = _extract_channel(result, guild)
     if channel is not None:
         await _ensure_channel_in_active_category(channel, active_category)
-        return await _reply_once(interaction, f"✅ Ticket created: {channel.mention}")
+        return await _send_ephemeral(interaction, f"✅ Ticket created: {channel.mention}")
 
-    return await _reply_once(
+    return await _send_ephemeral(
         interaction,
         "✅ Ticket created. If you do not see it, ask staff to check ticket category permissions.",
     )
@@ -513,18 +457,18 @@ async def _maybe_route_unverified(interaction: discord.Interaction) -> bool:
         return False
 
 
-async def _show_ticket_type_menu(interaction: discord.Interaction) -> None:
+async def show_ticket_type_menu(interaction: discord.Interaction) -> None:
     if await _maybe_route_unverified(interaction):
         return
 
     guild = interaction.guild
     member = interaction.user if isinstance(interaction.user, discord.Member) else None
     if guild is None or member is None:
-        return await _reply_once(interaction, "❌ This must be used inside a server.")
+        return await _send_ephemeral(interaction, "❌ This must be used inside a server.")
 
     existing = await _existing_open_ticket(guild, member)
     if existing is not None:
-        return await _reply_once(interaction, f"You already have an open ticket: {existing.mention}")
+        return await _send_ephemeral(interaction, f"You already have an open ticket: {existing.mention}")
 
     rows = await _load_ticket_menu_rows(guild)
     embed = discord.Embed(
@@ -533,7 +477,7 @@ async def _show_ticket_type_menu(interaction: discord.Interaction) -> None:
         color=discord.Color.blurple(),
     )
     embed.set_footer(text="Pick a category. No form needed.")
-    await _reply_once(interaction, "Choose a ticket type.", embed=embed, view=PublicTicketTypeView(rows))
+    await _send_ephemeral(interaction, "Choose a ticket type.", embed=embed, view=PublicTicketTypeView(rows))
 
 
 class PublicTicketTypeSelect(discord.ui.Select):
@@ -573,59 +517,27 @@ class PublicTicketPanelButtonView(discord.ui.View):
         custom_id=MENU_FIRST_CUSTOM_ID,
     )
     async def create_ticket_menu(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        await _show_ticket_type_menu(interaction)
+        await show_ticket_type_menu(interaction)
 
 
-class LegacyPublicTicketPanelCompatibilityView(discord.ui.View):
-    def __init__(self) -> None:
-        super().__init__(timeout=None)
-        for custom_id in LEGACY_CREATE_CUSTOM_IDS:
-            button = discord.ui.Button(
-                label="Create Ticket",
-                style=discord.ButtonStyle.green,
-                emoji="🎫",
-                custom_id=custom_id,
-            )
-            button.callback = self._legacy_create_callback  # type: ignore[assignment]
-            self.add_item(button)
-
-    async def _legacy_create_callback(self, interaction: discord.Interaction) -> None:
-        await _show_ticket_type_menu(interaction)
-
-
-def _register_persistent_public_panel_view() -> None:
-    global _PERSISTENT_VIEW_REGISTERED
-    if _PERSISTENT_VIEW_REGISTERED:
-        return
-    try:
-        from stoney_verify.globals import bot
-
-        bot.add_view(PublicTicketPanelButtonView())
-        try:
-            bot.add_view(LegacyPublicTicketPanelCompatibilityView())
-        except Exception as e:
-            _log(f"legacy public panel compatibility view skipped: {e!r}")
-        _PERSISTENT_VIEW_REGISTERED = True
-        _log("registered persistent menu-first Create Ticket views v3")
-    except Exception as e:
-        _log(f"persistent view registration skipped: {e!r}")
-
-
-async def _post_ticket_panel_command(interaction: discord.Interaction, channel: Optional[discord.TextChannel] = None) -> None:
+async def post_public_ticket_panel(
+    interaction: discord.Interaction,
+    channel: Optional[discord.TextChannel] = None,
+) -> None:
     if not _staff_check(interaction):
-        return await _reply_once(interaction, "❌ Staff only.")
+        return await reply_once(interaction, {"content": "❌ Staff only.", "ephemeral": True})
 
-    await _defer(interaction)
+    await _defer_ephemeral(interaction)
 
     guild = interaction.guild
     if guild is None:
-        return await _reply_once(interaction, "❌ This command must be used inside a server.")
+        return await reply_once(interaction, {"content": "❌ This command must be used inside a server.", "ephemeral": True})
 
     target = channel or await _configured_ticket_panel_channel(guild)
     if target is None and isinstance(interaction.channel, discord.TextChannel):
         target = interaction.channel
     if target is None:
-        return await _reply_once(interaction, "❌ I could not find a text channel to post the panel.")
+        return await reply_once(interaction, {"content": "❌ I could not find a text channel to post the panel.", "ephemeral": True})
 
     me = guild.me
     if me is not None:
@@ -640,7 +552,10 @@ async def _post_ticket_panel_command(interaction: discord.Interaction, channel: 
             if not ok
         ]
         if missing:
-            return await _reply_once(interaction, f"❌ I cannot post in {target.mention}. Missing: {', '.join(missing)}.")
+            return await reply_once(
+                interaction,
+                {"content": f"❌ I cannot post in {target.mention}. Missing: {', '.join(missing)}.", "ephemeral": True},
+            )
 
     try:
         msg = await target.send(
@@ -649,9 +564,9 @@ async def _post_ticket_panel_command(interaction: discord.Interaction, channel: 
             allowed_mentions=discord.AllowedMentions.none(),
         )
     except Exception as e:
-        return await _reply_once(
+        return await reply_once(
             interaction,
-            f"❌ Failed posting panel in {target.mention}: `{type(e).__name__}: {_truncate(e, 180)}`",
+            {"content": f"❌ Failed posting panel in {target.mention}: `{type(e).__name__}: {_truncate(e, 180)}`", "ephemeral": True},
         )
 
     try:
@@ -669,132 +584,53 @@ async def _post_ticket_panel_command(interaction: discord.Interaction, channel: 
     except Exception:
         pass
 
-    await _reply_once(interaction, f"✅ Posted the **menu-first Create Ticket** panel in {target.mention}.")
+    await reply_once(
+        interaction,
+        {"content": f"✅ Posted the **menu-first Create Ticket** panel in {target.mention}.", "ephemeral": True},
+    )
 
 
 ticket_panel_group = app_commands.Group(name=TICKET_PANEL_GROUP_NAME, description="Ticket panel commands.")
 
 
 @ticket_panel_group.command(name=TICKET_PANEL_POST_NAME, description="Post the public menu-first Create Ticket panel.")
-@app_commands.describe(channel="Optional channel. Defaults to configured support/ticket-panel channel, then current channel.")
+@app_commands.describe(channel="Optional channel. Defaults to configured panel/support channel, then current channel.")
 async def ticket_panel_post(interaction: discord.Interaction, channel: Optional[discord.TextChannel] = None) -> None:
-    await _post_ticket_panel_command(interaction, channel)
+    await post_public_ticket_panel(interaction, channel)
 
 
-def _build_intake_post_panel_command() -> app_commands.Command:
-    command = app_commands.Command(
-        name=TICKET_INTAKE_POST_PANEL_NAME,
-        description="Post the public menu-first Create Ticket panel.",
-        callback=_post_ticket_panel_command,
-    )
-    try:
-        command._params["channel"].description = "Optional channel. Defaults to configured support/ticket-panel channel."
-    except Exception:
-        pass
-    return command
-
-
-def _remove_group_child(group: Any, name: str) -> None:
-    try:
-        if group.get_command(name) is None:
-            return
-    except Exception:
-        pass
-    for remover_name in ("remove_command", "_remove_command"):
-        remover = getattr(group, remover_name, None)
-        if callable(remover):
-            try:
-                remover(name)
-                return
-            except Exception:
-                pass
-    try:
-        children = getattr(group, "_children", None)
-        if isinstance(children, dict):
-            children.pop(name, None)
-    except Exception:
-        pass
-
-
-def _replace_intake_post_panel(module: Any) -> None:
-    group = getattr(module, "ticket_intake_group", None)
-    if group is None:
+def _register_persistent_view(bot: Any) -> None:
+    global _PERSISTENT_VIEW_REGISTERED
+    if _PERSISTENT_VIEW_REGISTERED:
         return
-    _remove_group_child(group, TICKET_INTAKE_POST_PANEL_NAME)
     try:
-        group.add_command(_build_intake_post_panel_command())
-        _log("registered /ticket-intake post-panel as menu-first")
+        bot.add_view(PublicTicketPanelButtonView())
+        _PERSISTENT_VIEW_REGISTERED = True
+        _log("registered persistent menu-first Create Ticket view v4")
     except Exception as e:
-        _log(f"failed registering /ticket-intake post-panel: {e!r}")
+        _log(f"persistent view registration skipped: {e!r}")
 
 
-def _replace_tree_ticket_panel_group(tree: Any) -> None:
+def register_public_ticket_panel_command_guard_commands(bot: Any, tree: Any) -> None:
+    _register_persistent_view(bot)
+
     try:
-        if tree.get_command(TICKET_PANEL_GROUP_NAME, guild=None) is not None:
+        existing = tree.get_command(TICKET_PANEL_GROUP_NAME, guild=None)
+        if existing is not None:
             tree.remove_command(TICKET_PANEL_GROUP_NAME, guild=None)
-            _log("removed old /ticket-panel command/group before registering menu-first group")
+            _log("removed existing /ticket-panel command/group before clean registration")
     except Exception:
         pass
-    try:
-        tree.add_command(ticket_panel_group)
-        _log("registered /ticket-panel post as menu-first")
-    except Exception as e:
-        _log(f"failed registering /ticket-panel post: {e!r}")
+
+    tree.add_command(ticket_panel_group)
+    _log("registered /ticket-panel post menu-first command")
 
 
-def _patch_register_function(module: Any) -> None:
-    global _PATCHED_REGISTER
-    original = getattr(module, "register_public_ticket_intake_group_commands", None)
-    if not callable(original):
-        return
-    if getattr(original, "_menu_first_panel_wrapped", False):
-        _PATCHED_REGISTER = True
-        return
-
-    def patched_register(bot: Any, tree: Any) -> None:
-        _register_persistent_public_panel_view()
-        _replace_intake_post_panel(module)
-        try:
-            original(bot, tree)
-        finally:
-            _replace_intake_post_panel(module)
-            _replace_tree_ticket_panel_group(tree)
-
-    try:
-        setattr(patched_register, "_menu_first_panel_wrapped", True)
-    except Exception:
-        pass
-    setattr(module, "register_public_ticket_intake_group_commands", patched_register)
-    _PATCHED_REGISTER = True
-    _log("patched ticket intake registration; /ticket-panel post is menu-first")
-
-
-def _patch_loaded() -> None:
-    module = sys.modules.get("stoney_verify.commands_ext.public_ticket_intake_group")
-    if module is not None:
-        _patch_register_function(module)
-        _replace_intake_post_panel(module)
-
-
-def _safe_import(name: str, globals: Any = None, locals: Any = None, fromlist: Any = (), level: int = 0) -> Any:
-    module = _ORIGINAL_IMPORT(name, globals, locals, fromlist, level)
-    try:
-        if name == "stoney_verify.commands_ext.public_ticket_intake_group" or name.endswith("commands_ext.public_ticket_intake_group"):
-            target = sys.modules.get("stoney_verify.commands_ext.public_ticket_intake_group") or sys.modules.get(name)
-            if target is not None:
-                _patch_register_function(target)
-                _replace_intake_post_panel(target)
-        else:
-            _patch_loaded()
-    except Exception:
-        pass
-    return module
-
-
-builtins.__import__ = _safe_import
-_register_persistent_public_panel_view()
-_patch_loaded()
-_log("loaded; /ticket-panel post and /ticket-intake post-panel are menu-first with category repair")
-
-
-__all__ = ["PublicTicketPanelButtonView", "ticket_panel_group", "ticket_panel_post"]
+__all__ = [
+    "MENU_FIRST_CUSTOM_ID",
+    "PublicTicketPanelButtonView",
+    "post_public_ticket_panel",
+    "show_ticket_type_menu",
+    "register_public_ticket_panel_command_guard_commands",
+    "ticket_panel_group",
+]
