@@ -58,26 +58,6 @@ def _category_summary_lines(rows: List[Dict[str, Any]]) -> List[str]:
 
 
 @ticket_intake_group.command(
-    name="post-panel",
-    description="Post the public menu-first Create Ticket panel.",
-)
-@app_commands.describe(channel="Optional channel. Defaults to configured support/ticket-panel channel, then current channel.")
-async def intake_post_panel(
-    interaction: discord.Interaction,
-    channel: Optional[discord.TextChannel] = None,
-):
-    try:
-        from .public_ticket_panel_command_guard import post_public_ticket_panel
-    except Exception as e:
-        return await reply_once(
-            interaction,
-            {"content": f"❌ Public ticket panel module unavailable: `{type(e).__name__}`", "ephemeral": True},
-        )
-
-    await post_public_ticket_panel(interaction, channel)
-
-
-@ticket_intake_group.command(
     name="categories",
     description="Show configured dashboard ticket categories for this server.",
 )
@@ -248,7 +228,7 @@ async def intake_status(interaction: discord.Interaction):
         value=(f"{staff_role.mention}\n`{staff_role.id}`" if staff_role else "Not configured / not found"),
         inline=False,
     )
-    embed.add_field(name="Public Ticket Panel", value="`/ticket-panel post` or `/ticket-intake post-panel`", inline=True)
+    embed.add_field(name="Public Ticket Panel", value="`/ticket-panel post`", inline=True)
     embed.add_field(name="Actions Panel", value="`/ticket-intake post-actions`", inline=True)
     embed.add_field(
         name="Staff Note",
@@ -358,7 +338,7 @@ async def intake_post_actions(
             {
                 "content": (
                     "❌ This is the **staff actions** command, not the public Create Ticket button.\n"
-                    "Use `/ticket-panel post` or `/ticket-intake post-panel` in your support channel to post the user-facing Create Ticket button."
+                    "Use `/ticket-panel post` in your support channel to post the user-facing Create Ticket button."
                 ),
                 "ephemeral": True,
             },
