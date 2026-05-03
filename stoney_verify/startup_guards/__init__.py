@@ -64,6 +64,11 @@ _STARTUP_GUARDS: Tuple[str, ...] = (
     # setup commands exist but before the public setup group is registered.
     "stoney_verify.startup_guards.setup_flow_simplify",
 
+    # Legacy advanced setup compatibility. The newer simple setup flow avoids
+    # this old menu path, but old buttons still exist in persistent messages and
+    # must not crash when Add Custom Menu Option is pressed.
+    "stoney_verify.startup_guards.setup_category_modal_compat",
+
     # Broad event-loop DB/modlog/ticket safety layer.
     # sitecustomize.py remains as a tiny host fallback, but main startup loads
     # the real package module directly.
@@ -162,6 +167,7 @@ _IMPORT_CHATTER_PREFIXES: Tuple[str, ...] = (
     "🧭 setup_health_command registered",
     "🧭 setup_finish_command registered",
     "🧭 setup_flow_simplify installed",
+    "🧭 setup_category_modal_compat patched",
     "🛡️ panel_creation_guard_runtime panel denial",
     "🛡️ panel_creation_guard_runtime ticket creation guard installed",
     "🎫 ticket_creation_category_guard patched",
