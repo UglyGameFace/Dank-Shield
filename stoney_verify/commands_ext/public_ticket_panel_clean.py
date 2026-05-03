@@ -10,6 +10,7 @@ What this file guarantees:
 - category select shows Confirm / Back before creating anything
 - ticket creates only after Confirm in the saved Active Tickets category
 - the panel button ACKs immediately so Discord does not show silent interaction failures
+- the public Create Ticket button stays usable across bot restarts
 - ticket DB fallback includes required title/username fields
 - stale open DB rows from already-closed/deleted tickets do not block new tickets
 - health check reports setup/category/permission/schema problems clearly
@@ -31,9 +32,11 @@ from .common import _staff_check, reply_once
 
 _PANEL_VIEW_REGISTERED = False
 _PANEL_GROUP_REGISTERED = False
+_PANEL_FALLBACK_LISTENER_REGISTERED = False
 _HEALTH_PATCHED = False
 
 PANEL_BUTTON_CUSTOM_ID = "sv:ticket:panel:create:clean:v1"
+PANEL_BUTTON_CUSTOM_IDS = {PANEL_BUTTON_CUSTOM_ID}
 
 # Simple, boring TicketTool-style defaults.
 # The order is intentional: most common/urgent paths first, "Other" last.
@@ -645,6 +648,7 @@ async def _open_message(channel: discord.TextChannel, owner: discord.Member, row
     view = None
     try:
         from ..tickets_new.panel import TicketChannelActionsView
+
         view = TicketChannelActionsView()
     except Exception as e:
         _warn(f"ticket action view unavailable: {type(e).__name__}: {_short(e, 220)}")
@@ -891,7 +895,7 @@ class TicketSelect(discord.ui.Select):
             row = next((r for r in self.rows if _row_slug(r) == slug), {"slug": slug, "name": "Support"})
             await _edit_or_reply(
                 i,
-                content="Review your choice.",
+                content="Confirm this ticket type.",
                 embed=_category_embed(row),
                 view=TicketConfirmView(self.rows, row),
             )
@@ -907,8 +911,7 @@ class TicketSelect(discord.ui.Select):
 
 class TicketSelectView(discord.ui.View):
     def __init__(self, rows: List[Dict[str, Any]]) -> None:
-        # This is temporary per-user UI. Do not make it persistent or it will leak
-        # memory at scale. The main Create Ticket button is the permanent panel.
+        # Temporary user picker. The public panel itself is permanent.
         super().__init__(timeout=1800)
         self.add_item(TicketSelect(rows))
 
@@ -929,66 +932,67 @@ class TicketSelectView(discord.ui.View):
         await _ephemeral(interaction, f"❌ Ticket menu failed: `{type(error).__name__}: {_short(error, 160)}`")
 
 
-class PublicCreateTicketPanelView(discord.ui.View):
-    def __init__(self) -> None:
-        super().__init__(timeout=None)
+async def _handle_panel_button(i: discord.Interaction) -> None:
+    guild = i.guild
+    member = i.user if isinstance(i.user, discord.Member) else None
 
-    @discord.ui.button(label="Create Ticket", style=discord.ButtonStyle.green, emoji="🎫", custom_id=PANEL_BUTTON_CUSTOM_ID)
-    async def create_ticket(self, i: discord.Interaction, button: discord.ui.Button) -> None:
-        _ = button
-        guild = i.guild
-        member = i.user if isinstance(i.user, discord.Member) else None
+    # ACK immediately. This prevents Discord's generic "interaction failed"
+    # when Supabase/config checks are slow after a ticket close/archive.
+    await _defer(i, True)
 
-        # ACK immediately. This prevents Discord's generic "interaction failed".
-        await _defer(i, True)
+    try:
+        if guild is None or member is None:
+            return await _ephemeral(i, "❌ This must be used inside a server.")
 
         try:
-            if guild is None or member is None:
-                return await _ephemeral(i, "❌ This must be used inside a server.")
+            existing = await asyncio.wait_for(_existing_open(guild, member), timeout=6.0)
+        except asyncio.TimeoutError:
+            _warn(f"existing-open check timed out guild={guild.id} user={member.id}; continuing")
+            existing = None
 
-            try:
-                from ..startup_guards.unverified_ticket_panel_flow import _handle_unverified_panel_click
+        if existing:
+            return await _ephemeral(i, f"You already have an open ticket: {existing.mention}")
 
-                if await asyncio.wait_for(_handle_unverified_panel_click(i), timeout=2.5):
-                    return
-            except asyncio.TimeoutError:
-                _warn(f"unverified panel route timed out guild={guild.id} user={member.id}; continuing normal ticket flow")
-            except Exception as e:
-                _warn(f"unverified panel route skipped guild={guild.id} user={member.id}: {type(e).__name__}: {_short(e, 220)}")
+        try:
+            rows, warning = await asyncio.wait_for(_load_rows(guild), timeout=6.0)
+        except asyncio.TimeoutError:
+            _warn(f"ticket category load timed out guild={guild.id}; using fallback categories")
+            rows, warning = list(DEFAULT_ROWS), "Ticket category loading timed out; using fallback categories."
 
-            try:
-                existing = await asyncio.wait_for(_existing_open(guild, member), timeout=6.0)
-            except asyncio.TimeoutError:
-                _warn(f"existing-open check timed out guild={guild.id} user={member.id}; continuing")
-                existing = None
+        embed = discord.Embed(
+            title="Create Ticket",
+            description="Choose the type of ticket you want to open.",
+            color=discord.Color.blurple(),
+        )
+        embed.set_footer(text="Pick a category. You can review it before anything is created.")
 
-            if existing:
-                return await _ephemeral(i, f"You already have an open ticket: {existing.mention}")
+        if warning:
+            embed.add_field(name="Setup Notice", value=_short(warning, 900), inline=False)
 
-            try:
-                rows, warning = await asyncio.wait_for(_load_rows(guild), timeout=6.0)
-            except asyncio.TimeoutError:
-                _warn(f"ticket category load timed out guild={guild.id}; using fallback categories")
-                rows, warning = list(DEFAULT_ROWS), "Ticket category loading timed out; using fallback categories."
+        await _ephemeral(i, "Choose a ticket type.", embed=embed, view=TicketSelectView(rows))
+    except Exception as e:
+        _warn(
+            "public create ticket button crashed "
+            f"guild={getattr(guild, 'id', None)} user={getattr(member, 'id', None)} "
+            f"error={type(e).__name__}: {_short(e, 220)}"
+        )
+        await _ephemeral(i, f"❌ Ticket panel failed: `{type(e).__name__}: {_short(e, 160)}`")
 
-            embed = discord.Embed(
-                title="Create Ticket",
-                description="Choose the type of ticket you want to open.",
-                color=discord.Color.blurple(),
-            )
-            embed.set_footer(text="Pick a category. You can review it before anything is created.")
 
-            if warning:
-                embed.add_field(name="Setup Notice", value=_short(warning, 900), inline=False)
+class PublicCreateTicketPanelView(discord.ui.View):
+    def __init__(self) -> None:
+        # This is the permanent panel. It should never expire.
+        super().__init__(timeout=None)
 
-            await _ephemeral(i, "Choose a ticket type.", embed=embed, view=TicketSelectView(rows))
-        except Exception as e:
-            _warn(
-                "public create ticket button crashed "
-                f"guild={getattr(guild, 'id', None)} user={getattr(member, 'id', None)} "
-                f"error={type(e).__name__}: {_short(e, 220)}"
-            )
-            await _ephemeral(i, f"❌ Ticket panel failed: `{type(e).__name__}: {_short(e, 160)}`")
+    @discord.ui.button(
+        label="Create Ticket",
+        style=discord.ButtonStyle.green,
+        emoji="🎫",
+        custom_id=PANEL_BUTTON_CUSTOM_ID,
+    )
+    async def create_ticket(self, i: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        await _handle_panel_button(i)
 
     async def on_error(self, interaction: discord.Interaction, error: Exception, item: discord.ui.Item[Any]) -> None:
         _warn(
@@ -1000,22 +1004,67 @@ class PublicCreateTicketPanelView(discord.ui.View):
         await _ephemeral(interaction, f"❌ Ticket panel failed: `{type(error).__name__}: {_short(error, 160)}`")
 
 
+async def _component_fallback_listener(i: discord.Interaction) -> None:
+    """Last-resort handler for the permanent panel button.
+
+    If the persistent View registry misses the custom_id after a restart/reload,
+    Discord otherwise shows "This interaction failed" with no useful log.
+    This listener is in this same consolidated file, not a separate patch module.
+    """
+    try:
+        if i.type is not discord.InteractionType.component:
+            return
+
+        data = i.data if isinstance(i.data, dict) else {}
+        custom_id = _safe_str(data.get("custom_id"))
+        if custom_id not in PANEL_BUTTON_CUSTOM_IDS:
+            return
+
+        # Give discord.py's persistent View dispatch a tiny chance to answer first.
+        await asyncio.sleep(0.15)
+        if i.response.is_done():
+            return
+
+        _warn(
+            "persistent view missed Create Ticket button; fallback handled it "
+            f"guild={getattr(getattr(i, 'guild', None), 'id', None)} "
+            f"user={getattr(getattr(i, 'user', None), 'id', None)} custom_id={custom_id!r}"
+        )
+        await _handle_panel_button(i)
+    except Exception as e:
+        _warn(
+            "panel fallback listener crashed "
+            f"guild={getattr(getattr(i, 'guild', None), 'id', None)} "
+            f"user={getattr(getattr(i, 'user', None), 'id', None)} "
+            f"error={type(e).__name__}: {_short(e, 220)}"
+        )
+        try:
+            await _ephemeral(i, f"❌ Ticket panel fallback failed: `{type(e).__name__}: {_short(e, 160)}`")
+        except Exception:
+            pass
+
+
 def _panel_embed(guild: discord.Guild) -> discord.Embed:
     e = discord.Embed(
         title="🎫 Need help? Open a ticket",
         description=(
-            "Press **Create Ticket** below, pick a ticket type, then confirm.\n\n"
-            "No form first. No guessing. Nothing is created until you confirm."
+            "Press **Create Ticket** below, then pick the ticket type.\n\n"
+            "No form first. No guessing. You can confirm the category before anything is created."
         ),
         color=discord.Color.blurple(),
         timestamp=discord.utils.utcnow(),
     )
     e.add_field(
         name="How it works",
-        value="1. Press **Create Ticket**\n2. Pick a ticket type\n3. Confirm or go back\n4. A private ticket opens",
+        value=(
+            "1. Press **Create Ticket**\n"
+            "2. Pick a ticket type\n"
+            "3. Confirm or go back\n"
+            "4. A private ticket channel opens"
+        ),
         inline=False,
     )
-    e.set_footer(text=f"{guild.name} • Stoney Verify ticket panel")
+    e.set_footer(text=f"{guild.name} • Stoney Verify ticket panel • category-menu")
     return e
 
 
@@ -1028,8 +1077,8 @@ async def _post_panel(i: discord.Interaction, channel: Optional[discord.TextChan
         return await reply_once(i, {"content": "❌ Guild only.", "ephemeral": True})
 
     await _defer(i)
-    target = channel or await _panel_channel(guild) or (i.channel if isinstance(i.channel, discord.TextChannel) else None)
 
+    target = channel or await _panel_channel(guild) or (i.channel if isinstance(i.channel, discord.TextChannel) else None)
     if target is None:
         return await reply_once(i, {"content": "❌ I could not find a text channel to post the ticket panel.", "ephemeral": True})
 
@@ -1069,14 +1118,14 @@ async def _post_panel(i: discord.Interaction, channel: Optional[discord.TextChan
 
     await reply_once(
         i,
-        {"content": f"✅ Posted the public **Create Ticket** panel in {target.mention}.", "ephemeral": True},
+        {"content": f"✅ Posted the public **category-menu Create Ticket** panel in {target.mention}.", "ephemeral": True},
     )
 
 
 def _ticket_panel_group() -> app_commands.Group:
     group = app_commands.Group(name="ticket-panel", description="Manage and post ticket panels.")
 
-    @group.command(name="post", description="Post the public Create Ticket panel.")
+    @group.command(name="post", description="Post the public category-menu Create Ticket panel.")
     @app_commands.describe(channel="Optional channel. Defaults to saved support/ticket-panel channel, then current channel.")
     async def post(i: discord.Interaction, channel: Optional[discord.TextChannel] = None) -> None:
         await _post_panel(i, channel)
@@ -1111,40 +1160,28 @@ async def _health_lines(guild: discord.Guild) -> Tuple[List[str], List[str], Lis
         blockers.append("Active Tickets category is not set. Use `/stoney setup` → Ticket Basics.")
     else:
         m = _missing_category_perms(active, guild.me)
-        if m:
-            blockers.append(f"Active Tickets category missing: {', '.join(m)}.")
-        else:
-            ok.append(f"Active Tickets category ready: {active.mention}.")
+        (blockers if m else ok).append(f"Active Tickets category {'missing: ' + ', '.join(m) if m else 'ready'}: {active.mention}.")
 
     archive = await _archive_category(guild)
     if not archive:
         warnings.append("Archive category is not set. Closed ticket archiving may fail.")
     else:
         m = _missing_category_perms(archive, guild.me)
-        if m:
-            warnings.append(f"Archive category missing: {', '.join(m)}.")
-        else:
-            ok.append(f"Archive category ready: {archive.mention}.")
+        (warnings if m else ok).append(f"Archive category {'missing: ' + ', '.join(m) if m else 'ready'}: {archive.mention}.")
 
     panel = await _panel_channel(guild)
     if not panel:
         warnings.append("Ticket panel channel is not saved. Use `/ticket-panel post` in the support channel.")
     else:
         m = _missing_text_perms(panel, guild.me)
-        if m:
-            blockers.append(f"Ticket panel channel missing: {', '.join(m)}.")
-        else:
-            ok.append(f"Ticket panel channel ready: {panel.mention}.")
+        (blockers if m else ok).append(f"Ticket panel channel {'missing: ' + ', '.join(m) if m else 'ready'}: {panel.mention}.")
 
     transcripts = await _transcript_channel(guild)
     if not transcripts:
         warnings.append("Transcripts channel is not set. Close/delete transcripts may not post.")
     else:
         m = _missing_text_perms(transcripts, guild.me)
-        if m:
-            warnings.append(f"Transcripts channel missing: {', '.join(m)}.")
-        else:
-            ok.append(f"Transcripts channel ready: {transcripts.mention}.")
+        (warnings if m else ok).append(f"Transcripts channel {'missing: ' + ', '.join(m) if m else 'ready'}: {transcripts.mention}.")
 
     staff = await _staff_role(guild)
     if not staff:
@@ -1180,6 +1217,7 @@ def _field(lines: List[str], empty: str) -> str:
 
 def _patch_health() -> None:
     global _HEALTH_PATCHED
+
     if _HEALTH_PATCHED:
         return
 
@@ -1194,12 +1232,15 @@ def _patch_health() -> None:
         async def wrapped(guild: discord.Guild) -> discord.Embed:
             embed = await original(guild)
             b, w, ok = await _health_lines(guild)
+
             embed.add_field(name="Ticket Creation Blockers", value=_field(b, "✅ None"), inline=False)
             embed.add_field(name="Ticket Creation Warnings", value=_field(w, "✅ None"), inline=False)
             embed.add_field(name="Ticket Creation Passing", value=_field(ok[:8], "No passing checks."), inline=False)
+
             if b:
                 embed.color = discord.Color.red()
                 embed.description = "🚫 **Fix the blockers first.** Ticket creation is not ready."
+
             return embed
 
         setattr(wrapped, "_ticket_panel_clean_wrapped", True)
@@ -1211,14 +1252,23 @@ def _patch_health() -> None:
 
 
 def register_public_ticket_panel_clean(bot: Any, tree: Any) -> None:
-    global _PANEL_VIEW_REGISTERED, _PANEL_GROUP_REGISTERED
+    global _PANEL_VIEW_REGISTERED, _PANEL_GROUP_REGISTERED, _PANEL_FALLBACK_LISTENER_REGISTERED
 
     if not _PANEL_VIEW_REGISTERED:
         try:
             bot.add_view(PublicCreateTicketPanelView())
             _PANEL_VIEW_REGISTERED = True
+            _log(f"registered persistent Create Ticket view custom_id={PANEL_BUTTON_CUSTOM_ID}")
         except Exception as e:
             _warn(f"could not register persistent view: {e!r}")
+
+    if not _PANEL_FALLBACK_LISTENER_REGISTERED:
+        try:
+            bot.add_listener(_component_fallback_listener, "on_interaction")
+            _PANEL_FALLBACK_LISTENER_REGISTERED = True
+            _log("registered Create Ticket component fallback listener")
+        except Exception as e:
+            _warn(f"could not register Create Ticket fallback listener: {e!r}")
 
     if not _PANEL_GROUP_REGISTERED:
         try:
