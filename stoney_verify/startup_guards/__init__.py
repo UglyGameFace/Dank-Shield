@@ -48,10 +48,12 @@ _STARTUP_GUARDS: Tuple[str, ...] = (
 
     # Simple modular setup commands. Servers pick the service preset they want,
     # save selected channels/roles with Discord pickers, then setup-health reports
-    # only the missing pieces for those selected services.
+    # only the missing pieces for those selected services. setup-finish marks a
+    # server complete only when no critical selected-service blockers remain.
     "stoney_verify.startup_guards.setup_services_command",
     "stoney_verify.startup_guards.setup_targets_command",
     "stoney_verify.startup_guards.setup_health_command",
+    "stoney_verify.startup_guards.setup_finish_command",
 
     # Broad event-loop DB/modlog/ticket safety layer.
     # sitecustomize.py remains as a tiny host fallback, but main startup loads
@@ -148,6 +150,7 @@ _IMPORT_CHATTER_PREFIXES: Tuple[str, ...] = (
     "🧭 setup_services_command registered",
     "🧭 setup_targets_command registered",
     "🧭 setup_health_command registered",
+    "🧭 setup_finish_command registered",
     "🛡️ panel_creation_guard_runtime panel denial",
     "🛡️ panel_creation_guard_runtime ticket creation guard installed",
     "🎫 ticket_creation_category_guard patched",
