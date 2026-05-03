@@ -30,6 +30,10 @@ _STARTUP_GUARDS: Tuple[str, ...] = (
     "stoney_verify.startup_guards.command_safety",
     "stoney_verify.startup_guards.slash_command_cleanup",
 
+    # Optional idempotent DB table/column creation. This only runs when a direct
+    # Postgres DSN is configured; Supabase REST cannot create missing tables.
+    "stoney_verify.startup_guards.auto_schema_bootstrap",
+
     # Central config write protection must load before setup/verify/ticket
     # modules can write guild_configs. It prevents accidental overwrites of
     # owner-picked roles/channels/categories and makes discovery fill blanks only.
@@ -51,7 +55,6 @@ _STARTUP_GUARDS: Tuple[str, ...] = (
     "stoney_verify.startup_guards.raidguard_risk_engine_v2",
     "stoney_verify.startup_guards.alt_identity_link_safety",
     "stoney_verify.startup_guards.member_join_removal_safety",
-    "stoney_verify.startup_guards.fresh_join_role_recovery",
     "stoney_verify.members_new.role_state_compat_guard",
     "stoney_verify.startup_guards.setup_role_safety",
     "stoney_verify.commands_ext.public_moderation_command_guard",
@@ -202,6 +205,7 @@ def _should_suppress_import_line(text: str) -> bool:
                 "panel_bootstrap",
                 "vc_setup",
                 "public_no_env",
+                "auto_schema",
             )
         ):
             return True
