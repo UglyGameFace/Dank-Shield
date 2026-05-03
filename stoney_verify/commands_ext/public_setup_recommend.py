@@ -15,6 +15,13 @@ from ..globals import now_utc
 from ..guild_config import get_guild_config
 from . import public_setup_solid as solid
 
+try:
+    from ..startup_guards.setup_category_modal_compat import install_setup_category_modal_compat
+
+    install_setup_category_modal_compat()
+except Exception:
+    pass
+
 _PATCHED = False
 
 _RECOMMENDED_PURPOSES = {
@@ -218,7 +225,7 @@ class ProductSetupHomeView(discord.ui.View):
             name="Plain-English map",
             value=(
                 "🎫 **Ticket Basics** = actual Discord category folders/channels/roles.\n"
-                "🧾 **Ticket Menu Options** = choices users see when opening a ticket.\n"
+                "🧾 **Ticket Menu Options** = current/internal ticket routing menu. If your public panel still uses the basic form, users see the form first, not this list.\n"
                 "📌 **Status Channel** = where the bot posts heartbeat/setup status."
             ),
             inline=False,
@@ -322,8 +329,8 @@ async def _better_category_manager_payload(guild: discord.Guild, *, title: str =
     embed = discord.Embed(
         title=title,
         description=(
-            "These are the choices users see when they open a ticket.\n"
-            "They are **not** Discord channel categories/folders."
+            "These are ticket routing/menu records. They control how Stoney classifies or presents support choices when that menu flow is enabled.\n"
+            "They are **not** Discord channel categories/folders. Use **Ticket Basics** for the real Discord categories."
         ),
         color=discord.Color.blurple() if not load.error else discord.Color.red(),
         timestamp=now_utc(),
@@ -334,13 +341,13 @@ async def _better_category_manager_payload(guild: discord.Guild, *, title: str =
         embed.add_field(name="Fix", value="Make sure the `ticket_categories` table exists and Supabase is reachable, then press Refresh.", inline=False)
         return embed, ProductCategoryManagerView(rows=load.rows, db_error=load.error)
 
-    embed.add_field(name="Current Ticket Menu", value=solid._category_list_text(load.rows), inline=False)
-    embed.add_field(name="Stoney's Recommended Menu", value=_recommended_text(load.rows), inline=False)
-    embed.add_field(name="Missing Recommended Options", value=_missing_text(load.rows), inline=False)
+    embed.add_field(name="Current Ticket Routing/Menu Records", value=solid._category_list_text(load.rows), inline=False)
+    embed.add_field(name="Stoney's Recommended Records", value=_recommended_text(load.rows), inline=False)
+    embed.add_field(name="Missing Recommended Records", value=_missing_text(load.rows), inline=False)
     embed.add_field(
         name="What the green button does",
         value=(
-            "Creates only the missing recommended ticket menu options. It does **not** create Discord channels, "
+            "Creates only the missing recommended ticket routing/menu records. It does **not** create Discord channels, "
             "delete tickets, delete categories, or lock you into Stoney's names. You can edit everything after."
         ),
         inline=False,
@@ -364,7 +371,7 @@ class ProductCategoryManagerView(solid.BackToSetupView):
             self.set_default.disabled = True
             self.delete_option.disabled = True
 
-    @discord.ui.button(label="Create Recommended Ticket Menu", emoji="🧱", style=discord.ButtonStyle.success, custom_id="stoney_product:cat_seed", row=0)
+    @discord.ui.button(label="Create Recommended Ticket Records", emoji="🧱", style=discord.ButtonStyle.success, custom_id="stoney_product:cat_seed", row=0)
     async def seed(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         if not await solid._require_setup_permission(interaction):
             return
@@ -373,7 +380,7 @@ class ProductCategoryManagerView(solid.BackToSetupView):
             return await interaction.response.send_message("❌ This must be used inside a server.", ephemeral=True)
         await solid._safe_defer_update(interaction)
         created, skipped, error = await solid._seed_recommended_categories(guild)
-        embed, view = await _better_category_manager_payload(guild, title="🧱 Recommended Ticket Menu Applied")
+        embed, view = await _better_category_manager_payload(guild, title="🧱 Recommended Ticket Records Applied")
         if error:
             embed.add_field(name="Result", value=f"🚫 {error}", inline=False)
             embed.color = discord.Color.red()
@@ -381,26 +388,41 @@ class ProductCategoryManagerView(solid.BackToSetupView):
             embed.add_field(name="Created", value=", ".join(f"`{x}`" for x in created), inline=False)
             embed.add_field(name="Next Step", value="Back to Setup → Health Check. Then post the ticket panel with `/ticket-panel post`.", inline=False)
         else:
-            embed.add_field(name="Result", value="✅ Nothing new needed. Recommended menu options already exist.", inline=False)
+            embed.add_field(name="Result", value="✅ Nothing new needed. Recommended records already exist.", inline=False)
         if skipped:
             embed.add_field(name="Already existed", value=", ".join(f"`{x}`" for x in skipped[:20]), inline=False)
         await solid._edit_or_followup(interaction, embed=embed, view=view)
 
-    @discord.ui.button(label="Add Custom Menu Option", emoji="➕", style=discord.ButtonStyle.primary, custom_id="stoney_product:cat_add", row=0)
+    @discord.ui.button(label="Add Custom Routing Record", emoji="➕", style=discord.ButtonStyle.primary, custom_id="stoney_product:cat_add", row=0)
     async def add_option(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         if not await solid._require_setup_permission(interaction):
             return
-        await interaction.response.send_modal(solid.AddTicketCategoryModal(existing_count=len(self.rows)))
+        modal_cls = getattr(solid, "AddTicketCategoryModal", None)
+        if modal_cls is None:
+            try:
+                from ..startup_guards.setup_category_modal_compat import install_setup_category_modal_compat
 
-    @discord.ui.button(label="Edit Menu Option", emoji="✏️", style=discord.ButtonStyle.primary, custom_id="stoney_product:cat_edit", row=1)
+                install_setup_category_modal_compat()
+                modal_cls = getattr(solid, "AddTicketCategoryModal", None)
+            except Exception:
+                modal_cls = None
+        if modal_cls is None:
+            return await interaction.response.send_message(
+                "❌ The ticket routing record editor is unavailable. Redeploy/restart the latest build and try again.",
+                ephemeral=True,
+                allowed_mentions=discord.AllowedMentions.none(),
+            )
+        await interaction.response.send_modal(modal_cls(existing_count=len(self.rows)))
+
+    @discord.ui.button(label="Edit Record", emoji="✏️", style=discord.ButtonStyle.primary, custom_id="stoney_product:cat_edit", row=1)
     async def edit_option(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         await self._open_select(interaction, action="edit")
 
-    @discord.ui.button(label="Set Default Option", emoji="⭐", style=discord.ButtonStyle.secondary, custom_id="stoney_product:cat_default", row=1)
+    @discord.ui.button(label="Set Default Record", emoji="⭐", style=discord.ButtonStyle.secondary, custom_id="stoney_product:cat_default", row=1)
     async def set_default(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         await self._open_select(interaction, action="default")
 
-    @discord.ui.button(label="Delete Menu Option", emoji="🗑️", style=discord.ButtonStyle.danger, custom_id="stoney_product:cat_delete", row=2)
+    @discord.ui.button(label="Delete Record", emoji="🗑️", style=discord.ButtonStyle.danger, custom_id="stoney_product:cat_delete", row=2)
     async def delete_option(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         await self._open_select(interaction, action="delete")
 
@@ -426,9 +448,9 @@ class ProductCategoryManagerView(solid.BackToSetupView):
         if load.error or not load.rows:
             embed, view = await _better_category_manager_payload(guild)
             return await solid._edit_or_followup(interaction, embed=embed, view=view)
-        label = {"edit": "Edit a ticket menu option", "default": "Choose the default ticket option", "delete": "Delete a ticket menu option"}.get(action, "Choose a ticket menu option")
+        label = {"edit": "Edit a ticket routing/menu record", "default": "Choose the default ticket record", "delete": "Delete a ticket record"}.get(action, "Choose a ticket record")
         embed = discord.Embed(title=f"🧾 {label}", description="Pick an option from the dropdown below.", color=discord.Color.blurple())
-        embed.add_field(name="Current Ticket Menu", value=solid._category_list_text(load.rows), inline=False)
+        embed.add_field(name="Current Ticket Records", value=solid._category_list_text(load.rows), inline=False)
         await solid._edit_or_followup(interaction, embed=embed, view=solid.CategorySelectActionView(rows=load.rows, action=action))
 
 
