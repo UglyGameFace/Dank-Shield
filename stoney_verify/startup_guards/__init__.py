@@ -40,11 +40,6 @@ _STARTUP_GUARDS: Tuple[str, ...] = (
     # the deployed main branch so Add Custom Menu Option does not crash.
     "stoney_verify.startup_guards.setup_category_modal_compat",
 
-    # Hotfix: public Create Ticket should show the configured ticket menu before
-    # asking for any form/reason text. Unverified users still use the verification
-    # ticket route from unverified_ticket_panel_flow.
-    "stoney_verify.startup_guards.ticket_panel_menu_first",
-
     # Broad event-loop DB/modlog/ticket safety layer.
     # sitecustomize.py remains as a tiny host fallback, but main startup loads
     # the real package module directly.
@@ -59,7 +54,6 @@ _STARTUP_GUARDS: Tuple[str, ...] = (
     "stoney_verify.startup_guards.fresh_join_role_recovery",
     "stoney_verify.members_new.role_state_compat_guard",
     "stoney_verify.startup_guards.setup_role_safety",
-    "stoney_verify.commands_ext.public_ticket_panel_command_guard",
     "stoney_verify.commands_ext.public_moderation_command_guard",
     "stoney_verify.startup_guards.member_update_modlog",
     "stoney_verify.startup_guards.resource_modlog_coverage",
@@ -118,13 +112,10 @@ _IMPORT_CHATTER_PREFIXES: Tuple[str, ...] = (
     "🧪 ",
     "🧠 ",
     "🧭 setup_category_modal_compat patched",
-    "🧭 ticket_panel_menu_first patched",
-    "🧭 ticket_panel_menu_first Create Ticket opens menu first",
     "🛡️ member_join_removal_safety patched",
     "🛡️ member_join_removal_safety attached",
     "🛡️ member_join_removal_safety loaded",
     "🧾 role_state_compat_guard loaded",
-    "🎫 public_ticket_panel_command_guard loaded",
     "🪄 public_moderation_command_guard loaded",
     "✅ public_member_update_modlog:",
     "🧍 member_update_modlog registered",
