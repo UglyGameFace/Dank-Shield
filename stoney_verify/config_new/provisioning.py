@@ -85,13 +85,20 @@ def _guild_id(guild: discord.Guild | int | str) -> int:
 def _default_config_payload(guild: discord.Guild, *, source: str) -> Dict[str, Any]:
     # Keep this aligned with supabase/migrations/20260502_guild_configs.sql.
     # Do not include guild_name/icon/member_count unless the schema adds those columns.
+    # New public guilds default to tickets-only so admins are not forced into ID/VC
+    # verification or moderation logging just to use the ticket service.
     return {
         "guild_id": str(int(guild.id)),
+        "tickets_enabled": True,
+        "verification_enabled": False,
+        "voice_verification_enabled": False,
+        "moderation_enabled": False,
         "setup_completed": False,
         "setup_source": source,
         "setup_notes": (
             "Auto-provisioned when Stoney Verify saw this guild. "
-            "Run setup to save server-specific channels, roles, categories, and panels."
+            "Default service mode is tickets-only. Run setup to enable verification, voice verification, "
+            "moderation/modlog, and to save server-specific channels, roles, categories, and panels."
         ),
     }
 
@@ -107,7 +114,7 @@ def _select_config_row_sync(guild_id: int) -> Optional[Dict[str, Any]]:
 
     res = (
         sb.table(_table_name())
-        .select("guild_id, setup_completed, setup_source")
+        .select("guild_id, setup_completed, setup_source, tickets_enabled, verification_enabled, voice_verification_enabled, moderation_enabled")
         .eq("guild_id", str(int(guild_id)))
         .limit(1)
         .execute()
@@ -186,6 +193,7 @@ async def ensure_guild_config_row(
     - Never overwrites existing admin/setup config.
     - One bad guild/Supabase hiccup returns a structured failure instead of
       raising through the gateway event handler.
+    - New guilds default to tickets-only service mode.
     """
     started = time.monotonic()
     gid = _guild_id(guild)
@@ -205,6 +213,12 @@ async def ensure_guild_config_row(
                 "guild_id": str(gid),
                 "source": existing.get("setup_source") or "existing",
                 "setup_completed": bool(existing.get("setup_completed")),
+                "services": {
+                    "tickets": bool(existing.get("tickets_enabled", True)),
+                    "verification": bool(existing.get("verification_enabled", False)),
+                    "voice_verification": bool(existing.get("voice_verification_enabled", False)),
+                    "moderation": bool(existing.get("moderation_enabled", False)),
+                },
                 "elapsed_ms": int((time.monotonic() - started) * 1000),
             }
 
@@ -214,7 +228,7 @@ async def ensure_guild_config_row(
 
         print(
             f"🧭 {log_prefix} created guild_configs row "
-            f"guild={gid} source={source}"
+            f"guild={gid} source={source} services=tickets-only"
         )
         return {
             "ok": True,
@@ -222,6 +236,12 @@ async def ensure_guild_config_row(
             "guild_id": str(gid),
             "source": source,
             "row": inserted,
+            "services": {
+                "tickets": True,
+                "verification": False,
+                "voice_verification": False,
+                "moderation": False,
+            },
             "elapsed_ms": int((time.monotonic() - started) * 1000),
         }
 
