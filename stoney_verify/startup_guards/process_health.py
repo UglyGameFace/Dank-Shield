@@ -6,8 +6,8 @@ Process health / crash visibility guard.
 This replaces the old root-level runtime_process_health_guard.py.
 
 It logs boot count, host shutdown signals, unhandled sync/async exceptions,
-process exit, and periodic memory/task heartbeats. It exits cleanly on host
-SIGTERM/SIGINT instead of swallowing shutdown signals.
+process exit, periodic memory/task heartbeats, and runtime throttle settings.
+It exits cleanly on host SIGTERM/SIGINT instead of swallowing shutdown signals.
 """
 
 import atexit
@@ -80,6 +80,24 @@ def _memory_snapshot() -> str:
         return "rss=unknown"
 
 
+def _runtime_limit_snapshot_text() -> str:
+    try:
+        from ..runtime_limits import runtime_limit_snapshot
+
+        snap = runtime_limit_snapshot()
+        return (
+            "limits="
+            f"discord_global:{snap.global_discord_limit},"
+            f"discord_guild:{snap.per_guild_discord_limit},"
+            f"db_global:{snap.global_db_limit},"
+            f"db_guild:{snap.per_guild_db_limit},"
+            f"active_global:{snap.active_named_limiters},"
+            f"active_guild:{snap.active_guild_limiters}"
+        )
+    except Exception as e:
+        return f"limits=unavailable:{type(e).__name__}"
+
+
 def _sync_excepthook(exc_type: type[BaseException], exc: BaseException, tb: Any) -> None:
     try:
         _log(f"UNHANDLED_SYNC_EXCEPTION type={getattr(exc_type, '__name__', exc_type)} error={exc!r}")
@@ -123,14 +141,17 @@ def _signal_handler(signum: int, frame: Any) -> None:
     except Exception:
         name = str(signum)
     uptime = time.time() - _BOOT_TS
-    _log(f"SIGNAL_RECEIVED signal={name} uptime={uptime:.1f}s {_memory_snapshot()} exiting_cleanly=true")
+    _log(
+        f"SIGNAL_RECEIVED signal={name} uptime={uptime:.1f}s "
+        f"{_memory_snapshot()} {_runtime_limit_snapshot_text()} exiting_cleanly=true"
+    )
     raise SystemExit(128 + int(signum))
 
 
 def _atexit() -> None:
     try:
         uptime = time.time() - _BOOT_TS
-        _log(f"PROCESS_EXIT uptime={uptime:.1f}s {_memory_snapshot()}")
+        _log(f"PROCESS_EXIT uptime={uptime:.1f}s {_memory_snapshot()} {_runtime_limit_snapshot_text()}")
     except Exception:
         pass
 
@@ -147,7 +168,10 @@ async def _health_loop() -> None:
                 task_count = len([t for t in asyncio.all_tasks(loop) if not t.done()])
             except Exception:
                 task_count = 0
-            _log(f"heartbeat uptime={uptime:.1f}s tasks={task_count} {_memory_snapshot()}")
+            _log(
+                f"heartbeat uptime={uptime:.1f}s tasks={task_count} "
+                f"{_memory_snapshot()} {_runtime_limit_snapshot_text()}"
+            )
         except asyncio.CancelledError:
             raise
         except Exception as e:
@@ -183,7 +207,10 @@ def _attach_ready_listener(bot: Any) -> None:
             user = getattr(bot, "user", None)
             guilds = len(getattr(bot, "guilds", []) or [])
             uptime = time.time() - _BOOT_TS
-            _log(f"on_ready health attached user={user} guilds={guilds} uptime={uptime:.1f}s {_memory_snapshot()}")
+            _log(
+                f"on_ready health attached user={user} guilds={guilds} "
+                f"uptime={uptime:.1f}s {_memory_snapshot()} {_runtime_limit_snapshot_text()}"
+            )
         except Exception as e:
             _log(f"on_ready health attach failed: {e!r}")
 
@@ -245,9 +272,15 @@ def install() -> None:
     count += 1
     _write_boot_state(count, now)
     if last_ts:
-        _log(f"BOOT count={count} seconds_since_previous_boot={since:.1f} pid={os.getpid()} {_memory_snapshot()}")
+        _log(
+            f"BOOT count={count} seconds_since_previous_boot={since:.1f} "
+            f"pid={os.getpid()} {_memory_snapshot()} {_runtime_limit_snapshot_text()}"
+        )
     else:
-        _log(f"BOOT count={count} first_recorded_boot pid={os.getpid()} {_memory_snapshot()}")
+        _log(
+            f"BOOT count={count} first_recorded_boot pid={os.getpid()} "
+            f"{_memory_snapshot()} {_runtime_limit_snapshot_text()}"
+        )
 
     _maybe_attach_loaded_bot()
 
