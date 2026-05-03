@@ -46,6 +46,10 @@ _STARTUP_GUARDS: Tuple[str, ...] = (
     # refactored onto explicit runtime_limits calls.
     "stoney_verify.startup_guards.discord_operation_limits",
 
+    # Command-level service gates stop disabled VC/mod/verify/ticket commands
+    # before their large legacy callbacks can half-run.
+    "stoney_verify.startup_guards.service_command_gate",
+
     # Simple modular setup commands. Servers pick the service preset they want,
     # save selected channels/roles with Discord pickers, then setup-health reports
     # only the missing pieces for those selected services. setup-finish marks a
@@ -147,6 +151,7 @@ _IMPORT_CHATTER_PREFIXES: Tuple[str, ...] = (
     "🧭 api_guild_config_guard loaded",
     "🧭 guild_config_runtime patched",
     "🛡️ discord_operation_limits patched",
+    "🧭 service_command_gate patched",
     "🧭 setup_services_command registered",
     "🧭 setup_targets_command registered",
     "🧭 setup_health_command registered",
