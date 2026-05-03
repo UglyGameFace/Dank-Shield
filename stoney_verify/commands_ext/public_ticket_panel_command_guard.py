@@ -8,9 +8,9 @@ Owns the public, user-facing Create Ticket panel for the public command set:
 - /ticket-panel
 - /ticket-intake post-panel
 
-This file intentionally posts a menu-first panel. Users press Create Ticket,
-choose a ticket type, and a ticket opens. It does not post the old modal-first
-panel that immediately asks users to describe their issue.
+Important: this file force-replaces old modal-first post-panel commands. The old
+panel opened a Discord modal immediately. The public panel now opens a simple
+menu first, then creates the ticket from the selected type.
 """
 
 import asyncio
@@ -30,6 +30,7 @@ _GROUP_PATCHED = False
 _REGISTER_PATCHED = False
 _PERSISTENT_VIEW_REGISTERED = False
 _TOP_LEVEL_COMMAND_NAME = "ticket-panel"
+_GROUP_POST_PANEL_NAME = "post-panel"
 
 
 def _log(message: str) -> None:
@@ -113,7 +114,6 @@ def _normalize_rows(raw_rows: Any) -> list[dict[str, Any]]:
             continue
         seen.add(slug)
         out.append(row)
-
     return out[:25]
 
 
@@ -544,9 +544,65 @@ async def ticket_panel_top_level_command(
     await _post_ticket_panel_command(interaction, channel)
 
 
-def _attach_group_command(module: Any) -> None:
+def _build_group_post_panel_command() -> app_commands.Command:
+    command = app_commands.Command(
+        name=_GROUP_POST_PANEL_NAME,
+        description="Post the public Create Ticket menu panel for users.",
+        callback=_post_ticket_panel_command,
+    )
+    try:
+        command._params["channel"].description = "Optional channel. Defaults to configured support/ticket-panel channel."
+    except Exception:
+        pass
+    return command
+
+
+def _remove_group_command_if_present(group: Any, name: str) -> bool:
+    removed = False
+    try:
+        existing = group.get_command(name)
+    except Exception:
+        existing = None
+    if existing is None:
+        return False
+
+    for remover_name in ("remove_command", "_remove_command"):
+        remover = getattr(group, remover_name, None)
+        if not callable(remover):
+            continue
+        try:
+            remover(name)
+            removed = True
+            break
+        except TypeError:
+            try:
+                remover(existing)
+                removed = True
+                break
+            except Exception:
+                pass
+        except Exception:
+            pass
+
+    if not removed:
+        try:
+            children = getattr(group, "_children", None)
+            if isinstance(children, dict):
+                children.pop(name, None)
+                removed = True
+        except Exception:
+            pass
+
+    if removed:
+        _log(f"removed old /ticket-intake {name} command before replacing it")
+    else:
+        _log(f"could not remove old /ticket-intake {name}; attempting add replacement anyway")
+    return removed
+
+
+def _attach_group_command(module: Any, *, force: bool = False) -> None:
     global _GROUP_PATCHED
-    if _GROUP_PATCHED:
+    if _GROUP_PATCHED and not force:
         return
 
     group = getattr(module, "ticket_intake_group", None)
@@ -554,40 +610,60 @@ def _attach_group_command(module: Any) -> None:
         return
 
     try:
-        existing = group.get_command("post-panel")
+        existing = group.get_command(_GROUP_POST_PANEL_NAME)
     except Exception:
         existing = None
+
     if existing is not None:
-        _GROUP_PATCHED = True
-        return
+        callback = getattr(existing, "callback", None)
+        if callback is _post_ticket_panel_command and not force:
+            _GROUP_PATCHED = True
+            return
+        _remove_group_command_if_present(group, _GROUP_POST_PANEL_NAME)
 
     try:
-        command = app_commands.Command(
-            name="post-panel",
-            description="Post the public Create Ticket menu panel for users.",
-            callback=_post_ticket_panel_command,
-        )
-        try:
-            command._params["channel"].description = "Optional channel. Defaults to configured support/ticket-panel channel."
-        except Exception:
-            pass
-        group.add_command(command)
+        group.add_command(_build_group_post_panel_command())
         _GROUP_PATCHED = True
-        _log("attached /ticket-intake post-panel menu-first command")
+        _log("force-attached /ticket-intake post-panel menu-first command")
     except Exception as e:
         _log(f"failed attaching /ticket-intake post-panel: {e!r}")
 
 
-def _tree_has_command(tree: Any, name: str) -> bool:
+def _remove_tree_command_if_present(tree: Any, name: str) -> bool:
     try:
-        return tree.get_command(name, guild=None) is not None
+        if tree.get_command(name, guild=None) is None:
+            return False
+    except Exception:
+        return False
+
+    try:
+        tree.remove_command(name, guild=None)
+        _log(f"removed old /{name} command before replacing it")
+        return True
+    except TypeError:
+        try:
+            tree.remove_command(name)
+            _log(f"removed old /{name} command before replacing it")
+            return True
+        except Exception:
+            return False
     except Exception:
         return False
 
 
-def _add_top_level_command(tree: Any) -> None:
-    if _tree_has_command(tree, _TOP_LEVEL_COMMAND_NAME):
-        return
+def _add_top_level_command(tree: Any, *, force: bool = False) -> None:
+    existing = None
+    try:
+        existing = tree.get_command(_TOP_LEVEL_COMMAND_NAME, guild=None)
+    except Exception:
+        existing = None
+
+    if existing is not None:
+        callback = getattr(existing, "callback", None)
+        if callback is ticket_panel_top_level_command.callback and not force:
+            return
+        _remove_tree_command_if_present(tree, _TOP_LEVEL_COMMAND_NAME)
+
     try:
         tree.add_command(ticket_panel_top_level_command)
         _log("registered /ticket-panel menu-first direct command")
@@ -609,11 +685,14 @@ def _patch_register_function(module: Any) -> None:
 
     def register_public_ticket_intake_group_commands_patched(bot: Any, tree: Any) -> None:
         _register_persistent_public_panel_view()
-        _attach_group_command(module)
         try:
             original(bot, tree)
         finally:
-            _add_top_level_command(tree)
+            # Replace after the legacy register function runs. This is the key:
+            # the old command was being kept because we previously returned when
+            # post-panel already existed.
+            _attach_group_command(module, force=True)
+            _add_top_level_command(tree, force=True)
 
     try:
         setattr(register_public_ticket_intake_group_commands_patched, "_ticket_panel_command_wrapped", True)
@@ -621,15 +700,15 @@ def _patch_register_function(module: Any) -> None:
         pass
     setattr(module, "register_public_ticket_intake_group_commands", register_public_ticket_intake_group_commands_patched)
     _REGISTER_PATCHED = True
-    _log("patched intake registration to include menu-first /ticket-panel direct command")
+    _log("patched intake registration to force menu-first ticket panel commands")
 
 
 def _patch_loaded() -> None:
     try:
         module = sys.modules.get("stoney_verify.commands_ext.public_ticket_intake_group")
         if module is not None:
-            _attach_group_command(module)
             _patch_register_function(module)
+            _attach_group_command(module, force=True)
     except Exception:
         pass
 
@@ -640,8 +719,8 @@ def _safe_import(name: str, globals: Any = None, locals: Any = None, fromlist: A
         if name == "stoney_verify.commands_ext.public_ticket_intake_group" or name.endswith("commands_ext.public_ticket_intake_group"):
             target = sys.modules.get("stoney_verify.commands_ext.public_ticket_intake_group") or sys.modules.get(name)
             if target is not None:
-                _attach_group_command(target)
                 _patch_register_function(target)
+                _attach_group_command(target, force=True)
         else:
             _patch_loaded()
     except Exception:
