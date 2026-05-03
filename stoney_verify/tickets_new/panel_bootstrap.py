@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import asyncio
-import random
+import os
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
@@ -12,6 +12,7 @@ from ..guild_config import (
     clear_guild_config_cache,
     save_runtime_discovered_config,
 )
+from ..runtime_limits import db_guild_limit, jitter_sleep
 from .panel_repository import (
     DEFAULT_PANEL_RULES,
     ensure_ticket_panel_exists,
@@ -36,6 +37,7 @@ from .panel_repository import (
 # - seed safe DB defaults only
 # - isolate guild failures so one bad server cannot block others
 # - keep work bounded so command storms do not starve the bot
+# - throttle startup/backfill DB pressure for public scale
 #
 # Legal/privacy posture:
 # - does not collect extra data
@@ -45,9 +47,9 @@ from .panel_repository import (
 # ============================================================
 
 
-PANEL_BOOTSTRAP_INTERVAL_SECONDS = 30 * 60
-PANEL_BOOTSTRAP_GUILD_CONCURRENCY = 4
-PANEL_BOOTSTRAP_STARTUP_JITTER_SECONDS = 8
+DEFAULT_PANEL_BOOTSTRAP_INTERVAL_SECONDS = 30 * 60
+DEFAULT_PANEL_BOOTSTRAP_GUILD_CONCURRENCY = 4
+DEFAULT_PANEL_BOOTSTRAP_STARTUP_JITTER_SECONDS = 8
 
 DEFAULT_SUPPORT_PANEL_KEY = "support"
 DEFAULT_SUPPORT_PRESET_KEY = "default-support"
@@ -106,6 +108,30 @@ def _safe_bool(value: Any, default: bool = False) -> bool:
         return default
     except Exception:
         return default
+
+
+def _env_int(name: str, default: int) -> int:
+    try:
+        raw = os.getenv(name, "")
+        if raw is None or str(raw).strip() == "":
+            return int(default)
+        return int(str(raw).strip())
+    except Exception:
+        return int(default)
+
+
+def _panel_interval_seconds() -> int:
+    return max(300, _env_int("STONEY_PANEL_BOOTSTRAP_INTERVAL_SECONDS", DEFAULT_PANEL_BOOTSTRAP_INTERVAL_SECONDS))
+
+
+def _panel_guild_concurrency() -> int:
+    # Keep panel/bootstrap DB work intentionally conservative. Discord writes are
+    # already separately guarded by discord_operation_limits.
+    return max(1, min(_env_int("STONEY_PANEL_BOOTSTRAP_GUILD_CONCURRENCY", DEFAULT_PANEL_BOOTSTRAP_GUILD_CONCURRENCY), 20))
+
+
+def _panel_startup_jitter_seconds() -> int:
+    return max(1, min(_env_int("STONEY_PANEL_BOOTSTRAP_STARTUP_JITTER_SECONDS", DEFAULT_PANEL_BOOTSTRAP_STARTUP_JITTER_SECONDS), 120))
 
 
 def _now() -> datetime:
@@ -329,24 +355,29 @@ async def bootstrap_panel_system_for_guild(
     }
 
     try:
-        clear_guild_config_cache(guild.id)
+        # Spread DB maintenance load across guilds during startup/recurrent passes.
+        await jitter_sleep(base_seconds=0.0, max_jitter_seconds=0.75, guild_id=gid)
 
-        if save_discovery:
-            try:
-                await save_runtime_discovered_config(guild)
-                result["saved_discovery"] = True
-            except Exception as e:
-                result["saved_discovery"] = False
-                _debug(f"runtime discovery save skipped guild={guild.id}: {repr(e)}")
+        # The whole bootstrap is DB-heavy, so hold a per-guild/global DB slot.
+        async with db_guild_limit(gid, label="panel_bootstrap"):
+            clear_guild_config_cache(guild.id)
 
-        preset = await ensure_default_support_preset(guild)
-        result["default_preset_ready"] = bool(preset)
+            if save_discovery:
+                try:
+                    await save_runtime_discovered_config(guild)
+                    result["saved_discovery"] = True
+                except Exception as e:
+                    result["saved_discovery"] = False
+                    _debug(f"runtime discovery save skipped guild={guild.id}: {repr(e)}")
 
-        if seed_default_panel:
-            created = await ensure_default_support_panel(guild)
-            result["default_panel_created"] = bool(created)
+            preset = await ensure_default_support_preset(guild)
+            result["default_preset_ready"] = bool(preset)
 
-        result["rules_repaired"] = await ensure_default_panel_rules_for_existing_panels(guild)
+            if seed_default_panel:
+                created = await ensure_default_support_panel(guild)
+                result["default_panel_created"] = bool(created)
+
+            result["rules_repaired"] = await ensure_default_panel_rules_for_existing_panels(guild)
 
         result["finished_at"] = _now_iso()
         _PANEL_BOOTSTRAP_LAST_RUN[gid] = result["finished_at"]
@@ -366,9 +397,11 @@ async def bootstrap_panel_system_for_bot(
     *,
     save_discovery: bool = True,
     seed_default_panel: bool = True,
-    concurrency: int = PANEL_BOOTSTRAP_GUILD_CONCURRENCY,
+    concurrency: int = 0,
 ) -> Dict[str, Any]:
     guilds = list(getattr(bot, "guilds", []) or [])
+    if concurrency <= 0:
+        concurrency = _panel_guild_concurrency()
     sem = asyncio.Semaphore(max(1, int(concurrency or 1)))
 
     results: List[Dict[str, Any]] = []
@@ -414,7 +447,8 @@ async def bootstrap_panel_system_for_bot(
     _debug(
         "bot bootstrap complete "
         f"guilds={len(guilds)} ok={ok_count} failed={failed_count} "
-        f"rules_repaired={rules_repaired} default_created={default_created}"
+        f"rules_repaired={rules_repaired} default_created={default_created} "
+        f"concurrency={concurrency}"
     )
 
     return summary
@@ -438,7 +472,7 @@ async def _wait_until_ready(bot: discord.Client, timeout_seconds: int = 90) -> N
 async def _panel_bootstrap_loop(
     bot: discord.Client,
     *,
-    interval_seconds: int = PANEL_BOOTSTRAP_INTERVAL_SECONDS,
+    interval_seconds: int = 0,
     save_discovery: bool = True,
     seed_default_panel: bool = True,
     once: bool = False,
@@ -448,11 +482,16 @@ async def _panel_bootstrap_loop(
     if _PANEL_BOOTSTRAP_STOP_EVENT is None:
         _PANEL_BOOTSTRAP_STOP_EVENT = asyncio.Event()
 
+    if interval_seconds <= 0:
+        interval_seconds = _panel_interval_seconds()
+
     await _wait_until_ready(bot)
 
     try:
-        jitter = random.uniform(0.5, float(max(1, PANEL_BOOTSTRAP_STARTUP_JITTER_SECONDS)))
-        await asyncio.sleep(jitter)
+        await jitter_sleep(
+            base_seconds=0.5,
+            max_jitter_seconds=float(_panel_startup_jitter_seconds()),
+        )
     except Exception:
         pass
 
@@ -463,7 +502,7 @@ async def _panel_bootstrap_loop(
                     bot,
                     save_discovery=save_discovery,
                     seed_default_panel=seed_default_panel,
-                    concurrency=PANEL_BOOTSTRAP_GUILD_CONCURRENCY,
+                    concurrency=_panel_guild_concurrency(),
                 )
         except asyncio.CancelledError:
             raise
@@ -487,7 +526,7 @@ async def _panel_bootstrap_loop(
 def start_panel_bootstrap_worker(
     bot: discord.Client,
     *,
-    interval_seconds: int = PANEL_BOOTSTRAP_INTERVAL_SECONDS,
+    interval_seconds: int = 0,
     save_discovery: bool = True,
     seed_default_panel: bool = True,
 ) -> Optional[asyncio.Task]:
@@ -510,7 +549,7 @@ def start_panel_bootstrap_worker(
         _PANEL_BOOTSTRAP_TASK = loop.create_task(
             _panel_bootstrap_loop(
                 bot,
-                interval_seconds=interval_seconds,
+                interval_seconds=interval_seconds or _panel_interval_seconds(),
                 save_discovery=save_discovery,
                 seed_default_panel=seed_default_panel,
                 once=False,
@@ -538,7 +577,7 @@ def start_panel_bootstrap_once(
         task = loop.create_task(
             _panel_bootstrap_loop(
                 bot,
-                interval_seconds=PANEL_BOOTSTRAP_INTERVAL_SECONDS,
+                interval_seconds=_panel_interval_seconds(),
                 save_discovery=save_discovery,
                 seed_default_panel=seed_default_panel,
                 once=True,
@@ -594,6 +633,7 @@ def panel_bootstrap_status() -> Dict[str, Any]:
         "task_state": task_state,
         "last_run": dict(_PANEL_BOOTSTRAP_LAST_RUN),
         "last_error": dict(_PANEL_BOOTSTRAP_LAST_ERROR),
-        "interval_seconds": PANEL_BOOTSTRAP_INTERVAL_SECONDS,
-        "guild_concurrency": PANEL_BOOTSTRAP_GUILD_CONCURRENCY,
+        "interval_seconds": _panel_interval_seconds(),
+        "guild_concurrency": _panel_guild_concurrency(),
+        "startup_jitter_seconds": _panel_startup_jitter_seconds(),
     }
