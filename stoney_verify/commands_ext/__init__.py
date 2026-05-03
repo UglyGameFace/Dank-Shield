@@ -47,7 +47,6 @@ COMMAND_MODULES: List[CommandModuleSpec] = [
     ("public_ticket_group_clean", "register_public_ticket_group_clean_commands", "public grouped /ticket commands"),
     ("public_ticket_delete", "register_public_ticket_delete_commands", "public grouped /ticket delete command"),
     ("public_tickets_group", "register_public_tickets_group_commands", "public grouped /tickets commands"),
-    ("public_ticket_panel_command_guard", "register_public_ticket_panel_command_guard_commands", "public menu-first /ticket-panel post command"),
     ("public_ticket_intake_group", "register_public_ticket_intake_group_commands", "public grouped /ticket-intake commands"),
     ("public_ticket_category_group", "register_public_ticket_category_group_commands", "public grouped /ticket-category commands"),
     ("public_tickettool_parity_polish", "register_public_tickettool_parity_polish", "public TicketTool parity polish aliases"),
@@ -79,7 +78,7 @@ _PUBLIC_CORE_MODULES: Tuple[str, ...] = (
     "public_spam_cleanup_hardening", "public_setup_solid", "public_setup_recommend", "public_setup_recovery",
     "public_setup_cleanup", "public_setup_fresh_choice", "public_setup_full_customization", "public_status_reporter",
     "public_modlog_coverage", "public_setup_group", "public_help_group", "public_cleanup_group", "public_spam_group",
-    "public_mod_group", "public_ticket_group_clean", "public_ticket_delete", "public_tickets_group", "public_ticket_panel_command_guard",
+    "public_mod_group", "public_ticket_group_clean", "public_ticket_delete", "public_tickets_group",
     "public_ticket_intake_group", "public_ticket_category_group", "public_tickettool_parity_polish", "public_verify_group", "public_setup_gate",
 )
 _PUBLIC_ADMIN_EXTRA_MODULES: Tuple[str, ...] = (
