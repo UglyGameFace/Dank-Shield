@@ -1139,6 +1139,19 @@ def _check_layout_health(
     warnings: List[str],
     ok: List[str],
 ) -> None:
+    """Validate that configured channels are placed in sane Discord categories.
+
+    Important:
+    - Do not infer the expected public category from the ticket panel itself.
+      If #support is already misplaced, that would bless the bad placement.
+    - Public/start placement is anchored from the verify channel or a clearly
+      named start/welcome/verify category.
+    - Staff/tools placement is anchored from modlog/transcripts/vc queue or a
+      clearly named staff/tools category.
+    - Ticket lifecycle placement is anchored from the configured active/archive
+      categories only.
+    """
+
     active_category = guild.get_channel(_safe_int(ticket_category_id, 0))
     archive_category = guild.get_channel(_safe_int(ticket_archive_category_id, 0))
 
@@ -1151,11 +1164,63 @@ def _check_layout_health(
     vc_queue_channel = _channel_by_id(guild, vc_verify_requests_channel_id)
     transcripts_channel = _channel_by_id(guild, transcripts_channel_id)
     modlog_channel = _channel_by_id(guild, modlog_channel_id)
+    join_log_channel = _channel_by_id(guild, join_log_channel_id)
+    status_channel = _channel_by_id(guild, status_channel_id)
 
-    public_parent = _channel_parent(panel_channel) or _channel_parent(verify_channel) or _channel_parent(vc_voice_channel)
+    # ------------------------------
+    # Pick expected public/start parent
+    # ------------------------------
+    public_parent = _channel_parent(verify_channel)
+
+    if public_parent is None:
+        for category in guild.categories:
+            if _category_name_hits(category, "start", "welcome", "verify"):
+                public_parent = category
+                break
+
+    # Never allow ticket lifecycle categories to become the public parent.
+    if public_parent is not None and active_category is not None and int(public_parent.id) == int(active_category.id):
+        warnings.append(
+            f"Public/start category resolved to the active ticket category **{active_category.name}**. "
+            "Move your verify/support panel channels into a real public start category."
+        )
+        public_parent = None
+
+    if public_parent is not None and archive_category is not None and int(public_parent.id) == int(archive_category.id):
+        warnings.append(
+            f"Public/start category resolved to the archive category **{archive_category.name}**. "
+            "Move your verify/support panel channels into a real public start category."
+        )
+        public_parent = None
+
+    # ------------------------------
+    # Pick expected staff/tools parent
+    # ------------------------------
     staff_parent = _channel_parent(modlog_channel) or _channel_parent(transcripts_channel) or _channel_parent(vc_queue_channel)
 
-    # Duplicate setup categories usually confuse admins and cause wrong placements.
+    if staff_parent is None:
+        for category in guild.categories:
+            if _category_name_hits(category, "staff tool", "support tool", "mod tool", "admin tool", "staff"):
+                staff_parent = category
+                break
+
+    if staff_parent is not None and active_category is not None and int(staff_parent.id) == int(active_category.id):
+        warnings.append(
+            f"Staff/tools category resolved to the active ticket category **{active_category.name}**. "
+            "Move logs/transcripts/vc queue into a real staff tools category."
+        )
+        staff_parent = None
+
+    if staff_parent is not None and archive_category is not None and int(staff_parent.id) == int(archive_category.id):
+        warnings.append(
+            f"Staff/tools category resolved to the archive category **{archive_category.name}**. "
+            "Move logs/transcripts/vc queue into a real staff tools category."
+        )
+        staff_parent = None
+
+    # ------------------------------
+    # Duplicate category detection
+    # ------------------------------
     duplicates = _find_duplicate_setup_categories(guild)
     for label, cats in duplicates.items():
         warnings.append(
@@ -1164,6 +1229,24 @@ def _check_layout_health(
             + ". Keep one clean setup category or make sure setup points to the intended one."
         )
 
+    # ------------------------------
+    # Category name sanity
+    # ------------------------------
+    if active_category is not None and not _category_name_hits(active_category, "active ticket", "open ticket", "tickets"):
+        warnings.append(f"Configured active ticket category name looks unusual: **{active_category.name}**.")
+
+    if archive_category is not None and not _category_name_hits(archive_category, "archive", "closed ticket"):
+        warnings.append(f"Configured archive category name looks unusual: **{archive_category.name}**.")
+
+    if public_parent is not None and not _category_name_hits(public_parent, "start", "welcome", "verify"):
+        warnings.append(f"Public/start category name looks unusual: **{public_parent.name}**.")
+
+    if staff_parent is not None and not _category_name_hits(staff_parent, "staff", "tool", "support tool", "mod"):
+        warnings.append(f"Staff/tools category name looks unusual: **{staff_parent.name}**.")
+
+    # ------------------------------
+    # Category order sanity
+    # ------------------------------
     _check_category_order(
         first=public_parent,
         second=active_category,
@@ -1180,40 +1263,68 @@ def _check_layout_health(
         warnings=warnings,
         ok=ok,
     )
-    _check_category_order(
-        first=archive_category,
-        second=staff_parent,
-        first_label="ticket archive",
-        second_label="staff tools",
-        warnings=warnings,
-        ok=ok,
-    )
 
+    # Staff tools can be above or below archive depending on server style,
+    # but it should not be between active and archive.
+    if active_category is not None and archive_category is not None and staff_parent is not None:
+        try:
+            if int(active_category.position) < int(staff_parent.position) < int(archive_category.position):
+                warnings.append(
+                    f"Staff/tools category **{staff_parent.name}** is between active tickets and archive. "
+                    "Cleaner layout: public/start, active tickets, archive, then staff tools."
+                )
+            else:
+                ok.append("Staff/tools category is not splitting the active/archive ticket lifecycle.")
+        except Exception:
+            warnings.append("Could not verify staff/tools category order.")
+
+    # ------------------------------
+    # Hard bad-category checks
+    # ------------------------------
     restricted_lifecycle_categories = [cat for cat in (active_category, archive_category) if cat is not None]
 
-    _check_not_inside_category(
-        guild=guild,
-        channel_id=ticket_panel_channel_id,
-        label="Public ticket panel",
-        forbidden_categories=restricted_lifecycle_categories,
-        blockers=blockers,
-        warnings=warnings,
-        ok=ok,
-        blocker=True,
-    )
+    for label, channel_id in (
+        ("Public ticket panel", ticket_panel_channel_id),
+        ("Verify", verify_channel_id),
+        ("VC verify voice", vc_verify_channel_id),
+        ("VC verify requests / queue", vc_verify_requests_channel_id),
+        ("Transcript", transcripts_channel_id),
+        ("Modlog", modlog_channel_id),
+        ("Raid/security log", raidlog_channel_id),
+        ("Join/exit log", join_log_channel_id),
+        ("Forced verification log", force_verify_log_channel_id),
+        ("Bot status", status_channel_id),
+    ):
+        if _safe_int(channel_id, 0) > 0:
+            _check_not_inside_category(
+                guild=guild,
+                channel_id=channel_id,
+                label=label,
+                forbidden_categories=restricted_lifecycle_categories,
+                blockers=blockers,
+                warnings=warnings,
+                ok=ok,
+                blocker=label in {"Public ticket panel", "Verify", "VC verify requests / queue", "Transcript", "Modlog"},
+            )
 
-    _check_not_inside_category(
-        guild=guild,
-        channel_id=verify_channel_id,
-        label="Verify",
-        forbidden_categories=restricted_lifecycle_categories,
-        blockers=blockers,
-        warnings=warnings,
-        ok=ok,
-        blocker=True,
-    )
+    # ------------------------------
+    # Public/start placement
+    # ------------------------------
+    if public_parent is None:
+        warnings.append("Could not resolve a clean public/start category. Put #verify, #support, and Voice Verification together under START HERE.")
+    else:
+        _check_channel_placement(
+            guild=guild,
+            channel_id=verify_channel_id,
+            label="Verify",
+            expected_parent=public_parent,
+            expected_parent_label="public/start",
+            required=True,
+            blockers=blockers,
+            warnings=warnings,
+            ok=ok,
+        )
 
-    if public_parent is not None:
         _check_channel_placement(
             guild=guild,
             channel_id=ticket_panel_channel_id,
@@ -1225,18 +1336,8 @@ def _check_layout_health(
             warnings=warnings,
             ok=ok,
         )
-        _check_channel_placement(
-            guild=guild,
-            channel_id=verify_channel_id,
-            label="Verify",
-            expected_parent=public_parent,
-            expected_parent_label="public/start",
-            required=False,
-            blockers=blockers,
-            warnings=warnings,
-            ok=ok,
-        )
-        if vc_verify_channel_id > 0:
+
+        if _safe_int(vc_verify_channel_id, 0) > 0:
             _check_channel_placement(
                 guild=guild,
                 channel_id=vc_verify_channel_id,
@@ -1249,15 +1350,20 @@ def _check_layout_health(
                 ok=ok,
             )
 
-    if staff_parent is not None:
-        for label, channel_id in (
-            ("VC verify requests / queue", vc_verify_requests_channel_id),
-            ("Transcript", transcripts_channel_id),
-            ("Modlog", modlog_channel_id),
-            ("Raid/security log", raidlog_channel_id),
-            ("Join/exit log", join_log_channel_id),
-            ("Forced verification log", force_verify_log_channel_id),
-            ("Bot status", status_channel_id),
+    # ------------------------------
+    # Staff/tools placement
+    # ------------------------------
+    if staff_parent is None:
+        warnings.append("Could not resolve a clean staff/tools category. Put vc queue, transcripts, modlog, join-leave-log, and bot-status together under STAFF TOOLS.")
+    else:
+        for label, channel_id, critical in (
+            ("VC verify requests / queue", vc_verify_requests_channel_id, True),
+            ("Transcript", transcripts_channel_id, True),
+            ("Modlog", modlog_channel_id, True),
+            ("Raid/security log", raidlog_channel_id, False),
+            ("Join/exit log", join_log_channel_id, False),
+            ("Forced verification log", force_verify_log_channel_id, False),
+            ("Bot status", status_channel_id, False),
         ):
             if _safe_int(channel_id, 0) > 0:
                 _check_channel_placement(
@@ -1265,13 +1371,62 @@ def _check_layout_health(
                     channel_id=channel_id,
                     label=label,
                     expected_parent=staff_parent,
-                    expected_parent_label="staff tools",
-                    required=False,
+                    expected_parent_label="staff/tools",
+                    required=critical,
                     blockers=blockers,
                     warnings=warnings,
                     ok=ok,
                 )
 
+    # ------------------------------
+    # Same-category grouping sanity
+    # ------------------------------
+    if panel_channel is not None and verify_channel is not None:
+        if _same_category(panel_channel, verify_channel):
+            ok.append("Public ticket panel and verify channel are grouped together.")
+        else:
+            blockers.append(
+                f"Public ticket panel and verify channel are split across categories: "
+                f"{_placement_line(panel_channel)}; {_placement_line(verify_channel)}."
+            )
+
+    if vc_voice_channel is not None and verify_channel is not None:
+        if _same_category(vc_voice_channel, verify_channel):
+            ok.append("VC verify voice channel is grouped with the public verification area.")
+        else:
+            warnings.append(
+                f"VC verify voice channel is not grouped with the verify channel: "
+                f"{_placement_line(vc_voice_channel)}; {_placement_line(verify_channel)}."
+            )
+
+    staff_channels = [
+        ("VC queue", vc_queue_channel),
+        ("Transcripts", transcripts_channel),
+        ("Modlog", modlog_channel),
+        ("Join/exit log", join_log_channel),
+        ("Bot status", status_channel),
+    ]
+    present_staff = [(label, ch) for label, ch in staff_channels if ch is not None]
+
+    if len(present_staff) >= 2:
+        base_label, base_channel = present_staff[0]
+        split = []
+        for label, channel in present_staff[1:]:
+            if not _same_category(base_channel, channel):
+                split.append(f"{label}: {_placement_line(channel)}")
+
+        if split:
+            warnings.append(
+                "Staff/tool channels are split across categories. "
+                f"{base_label}: {_placement_line(base_channel)}; "
+                + "; ".join(split[:5])
+            )
+        else:
+            ok.append("Staff/tool channels are grouped together.")
+
+    # ------------------------------
+    # Existing ticket channel lifecycle placement
+    # ------------------------------
     _check_ticket_channel_lifecycle_placement(
         guild=guild,
         active_category=active_category,
@@ -2076,3 +2231,64 @@ def register_public_setup_group_commands(bot: Any, tree: Any) -> None:
         print("✅ public_setup_group registered /dank command group")
     except Exception:
         pass
+
+# DANK_SHIELD_FORCE_SOLID_SETUP_START
+# Force /dank setup to use the newer solid setup flow.
+# This avoids the old legacy setup view where buttons can go stale or point at
+# old callback IDs after the rebrand.
+
+async def _dank_shield_solid_setup_entry(interaction: discord.Interaction) -> None:
+    if not await _require_setup_permission(interaction):
+        return
+
+    guild = interaction.guild
+    if guild is None:
+        if interaction.response.is_done():
+            await interaction.followup.send("❌ This must be used inside a server.", ephemeral=True)
+        else:
+            await interaction.response.send_message("❌ This must be used inside a server.", ephemeral=True)
+        return
+
+    try:
+        from .public_setup_solid import _build_main_setup_payload
+
+        embed, view = await _build_main_setup_payload(guild)
+
+        if interaction.response.is_done():
+            await interaction.followup.send(
+                embed=embed,
+                view=view,
+                ephemeral=True,
+                allowed_mentions=discord.AllowedMentions.none(),
+            )
+        else:
+            await interaction.response.send_message(
+                embed=embed,
+                view=view,
+                ephemeral=True,
+                allowed_mentions=discord.AllowedMentions.none(),
+            )
+    except Exception as e:
+        message = f"❌ Could not open Dank Shield setup: `{type(e).__name__}: {str(e)[:300]}`"
+        if interaction.response.is_done():
+            await interaction.followup.send(message, ephemeral=True)
+        else:
+            await interaction.response.send_message(message, ephemeral=True)
+
+
+try:
+    stoney_group.remove_command("setup")
+except Exception:
+    pass
+
+try:
+    stoney_group.command(
+        name="setup",
+        description="Open Dank Shield setup, health checks, layout repair, and configuration tools.",
+    )(_dank_shield_solid_setup_entry)
+except Exception as e:
+    try:
+        print(f"⚠️ Failed to force /dank setup solid entry: {type(e).__name__}: {e}")
+    except Exception:
+        pass
+# DANK_SHIELD_FORCE_SOLID_SETUP_END
