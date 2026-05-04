@@ -629,6 +629,58 @@ async def _insert_row(
     return await _to_thread(sync, "Could not write tickets row.")
 
 
+
+async def _maybe_post_verification_panel(channel: discord.TextChannel, owner: discord.Member, row: Dict[str, Any]) -> str:
+    """Post the real verification panel when an unverified user chose Verification.
+
+    This keeps the TicketTool-style category flow, but restores the important
+    verification behavior: choosing Verification should give the member the
+    Upload ID / Verify in VC verification UI inside the ticket.
+    """
+    if _canon(row) != "verification":
+        return ""
+
+    try:
+        from ..startup_guards import unverified_ticket_panel_flow as verify_flow
+    except Exception as e:
+        _warn(f"verification flow import failed channel={getattr(channel, 'id', None)}: {type(e).__name__}: {_short(e, 220)}")
+        return "Verification panel module is unavailable. Staff should check the bot deployment."
+
+    try:
+        is_unverified = await verify_flow._is_unverified_only_member(owner)
+    except Exception as e:
+        _warn(f"verification role check failed channel={channel.id} user={owner.id}: {type(e).__name__}: {_short(e, 220)}")
+        return "Could not confirm the member's verification status. Staff should run `/stoney setup` → Health Check."
+
+    if not is_unverified:
+        # Verified/staff users can still open a normal Verification support ticket.
+        return ""
+
+    try:
+        cfg = await verify_flow._get_guild_config_safe(channel.guild.id)
+        vc_locked, vc_message = await verify_flow._ensure_configured_vc_verify_locked(channel.guild, cfg)
+        if not vc_locked:
+            return (
+                "Verification panel was not posted because VC verification setup is not safe yet. "
+                f"Reason: {vc_message}. Staff should run `/stoney setup` → Health Check."
+            )
+    except Exception as e:
+        _warn(f"verification VC safety check failed channel={channel.id} user={owner.id}: {type(e).__name__}: {_short(e, 220)}")
+        return "Verification panel safety check failed. Staff should run `/stoney setup` → Health Check."
+
+    try:
+        posted = await verify_flow._post_verify_ui(channel, owner)
+    except Exception as e:
+        _warn(f"verification panel post crashed channel={channel.id} user={owner.id}: {type(e).__name__}: {_short(e, 220)}")
+        posted = False
+
+    if posted:
+        return ""
+
+    return "Verification panel failed to post. Staff should run `/stoney setup` → Health Check and verify bot permissions in this ticket channel."
+
+
+
 async def _open_message(channel: discord.TextChannel, owner: discord.Member, row: Dict[str, Any]) -> None:
     embed = discord.Embed(
         title=f"🎫 {_row_name(row)} Ticket",
@@ -785,6 +837,8 @@ async def _create_ticket(i: discord.Interaction, row: Dict[str, Any]) -> None:
     db_warning = await _insert_row(guild, owner, channel, row, number)
     await _open_message(channel, owner, row)
 
+    verify_warning = await _maybe_post_verification_panel(channel, owner, row)
+
     if db_warning:
         _warn(f"ticket created but DB warning channel={channel.id}: {db_warning}")
         try:
@@ -795,7 +849,20 @@ async def _create_ticket(i: discord.Interaction, row: Dict[str, Any]) -> None:
         except Exception:
             pass
 
-    await _ephemeral(i, f"✅ Ticket created: {channel.mention}")
+    if verify_warning:
+        _warn(f"ticket created but verification panel warning channel={channel.id}: {verify_warning}")
+        try:
+            await channel.send(
+                f"⚠️ Verification setup needs attention: `{_short(verify_warning, 500)}`",
+                allowed_mentions=discord.AllowedMentions.none(),
+            )
+        except Exception:
+            pass
+
+    if verify_warning:
+        await _ephemeral(i, f"⚠️ Ticket created: {channel.mention}\nVerification panel needs setup attention. Staff can see details inside the ticket.")
+    else:
+        await _ephemeral(i, f"✅ Ticket created: {channel.mention}")
 
 
 def _category_embed(row: Dict[str, Any]) -> discord.Embed:
