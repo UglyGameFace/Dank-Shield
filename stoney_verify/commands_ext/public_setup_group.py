@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import re
 from typing import Any, Dict, List, Mapping, Optional, Tuple
 
 import discord
@@ -921,6 +922,365 @@ def _check_supabase_select(
         )
 
 
+
+def _norm_name(value: Any) -> str:
+    text = _safe_str(value, "").lower()
+    keep = []
+    for ch in text:
+        if ch.isalnum():
+            keep.append(ch)
+        elif ch in {" ", "-", "_"}:
+            keep.append(" ")
+    return " ".join("".join(keep).split())
+
+
+def _category_name_hits(category: Optional[discord.CategoryChannel], *needles: str) -> bool:
+    if category is None:
+        return False
+
+    name = _norm_name(category.name)
+    return any(_norm_name(needle) in name for needle in needles)
+
+
+def _channel_parent(channel: Optional[discord.abc.GuildChannel]) -> Optional[discord.CategoryChannel]:
+    try:
+        parent = getattr(channel, "category", None)
+        return parent if isinstance(parent, discord.CategoryChannel) else None
+    except Exception:
+        return None
+
+
+def _same_category(a: Optional[discord.abc.GuildChannel], b: Optional[discord.abc.GuildChannel]) -> bool:
+    pa = _channel_parent(a)
+    pb = _channel_parent(b)
+    return pa is not None and pb is not None and int(pa.id) == int(pb.id)
+
+
+def _placement_line(channel: Optional[discord.abc.GuildChannel]) -> str:
+    if channel is None:
+        return "missing"
+
+    parent = _channel_parent(channel)
+    if parent is None:
+        return f"{channel.mention} has no category"
+
+    return f"{channel.mention} under **{parent.name}**"
+
+
+def _find_duplicate_setup_categories(guild: discord.Guild) -> dict[str, list[discord.CategoryChannel]]:
+    groups: dict[str, list[discord.CategoryChannel]] = {
+        "start/public": [],
+        "active tickets": [],
+        "ticket archive": [],
+        "staff tools": [],
+    }
+
+    for category in guild.categories:
+        if _category_name_hits(category, "start", "welcome", "verify"):
+            groups["start/public"].append(category)
+        if _category_name_hits(category, "active ticket", "open ticket"):
+            groups["active tickets"].append(category)
+        if _category_name_hits(category, "ticket archive", "archive", "closed ticket"):
+            groups["ticket archive"].append(category)
+        if _category_name_hits(category, "staff tool", "support tool", "mod tool", "admin tool"):
+            groups["staff tools"].append(category)
+
+    return {label: cats for label, cats in groups.items() if len(cats) > 1}
+
+
+def _channel_by_id(guild: discord.Guild, channel_id: int) -> Optional[discord.abc.GuildChannel]:
+    cid = _safe_int(channel_id, 0)
+    return guild.get_channel(cid) if cid > 0 else None
+
+
+def _check_channel_placement(
+    *,
+    guild: discord.Guild,
+    channel_id: int,
+    label: str,
+    expected_parent: Optional[discord.CategoryChannel],
+    expected_parent_label: str,
+    required: bool,
+    blockers: List[str],
+    warnings: List[str],
+    ok: List[str],
+) -> None:
+    channel = _channel_by_id(guild, channel_id)
+
+    if channel is None:
+        if required:
+            blockers.append(f"{label} placement could not be checked because the channel is missing.")
+        return
+
+    if expected_parent is None:
+        if required:
+            warnings.append(f"{label} placement could not be checked because {expected_parent_label} category is not configured.")
+        return
+
+    parent = _channel_parent(channel)
+    if parent is None:
+        (blockers if required else warnings).append(
+            f"{label} channel {channel.mention} is not inside any category. Expected it under **{expected_parent.name}**."
+        )
+        return
+
+    if int(parent.id) != int(expected_parent.id):
+        (blockers if required else warnings).append(
+            f"{label} channel is in the wrong category: {_placement_line(channel)}. Expected it under **{expected_parent.name}**."
+        )
+        return
+
+    ok.append(f"{label} channel placement is correct: {_placement_line(channel)}.")
+
+
+def _check_not_inside_category(
+    *,
+    guild: discord.Guild,
+    channel_id: int,
+    label: str,
+    forbidden_categories: list[discord.CategoryChannel],
+    blockers: List[str],
+    warnings: List[str],
+    ok: List[str],
+    blocker: bool = True,
+) -> None:
+    channel = _channel_by_id(guild, channel_id)
+    if channel is None:
+        return
+
+    parent = _channel_parent(channel)
+    if parent is None:
+        warnings.append(f"{label} channel {channel.mention} has no category. Put it in the proper public/staff area.")
+        return
+
+    forbidden_ids = {int(cat.id) for cat in forbidden_categories if cat is not None}
+    if int(parent.id) in forbidden_ids:
+        target = blockers if blocker else warnings
+        target.append(f"{label} channel is in a bad category: {_placement_line(channel)}.")
+    else:
+        ok.append(f"{label} channel is not inside a restricted ticket lifecycle category.")
+
+
+def _check_category_order(
+    *,
+    first: Optional[discord.CategoryChannel],
+    second: Optional[discord.CategoryChannel],
+    first_label: str,
+    second_label: str,
+    warnings: List[str],
+    ok: List[str],
+) -> None:
+    if first is None or second is None:
+        return
+
+    try:
+        if int(first.position) < int(second.position):
+            ok.append(f"Category order looks right: **{first.name}** is above **{second.name}**.")
+        else:
+            warnings.append(f"Category order looks backwards: **{first.name}** should be above **{second.name}**.")
+    except Exception:
+        warnings.append(f"Could not verify category order for {first_label} and {second_label}.")
+
+
+def _check_ticket_channel_lifecycle_placement(
+    *,
+    guild: discord.Guild,
+    active_category: Optional[discord.CategoryChannel],
+    archive_category: Optional[discord.CategoryChannel],
+    warnings: List[str],
+    ok: List[str],
+) -> None:
+    if active_category is None or archive_category is None:
+        return
+
+    open_wrong: list[str] = []
+    closed_wrong: list[str] = []
+
+    for channel in guild.text_channels:
+        name = _safe_str(channel.name, "").lower()
+
+        if re.match(r"^ticket-\d{3,6}$", name):
+            parent = _channel_parent(channel)
+            if parent is None or int(parent.id) != int(active_category.id):
+                open_wrong.append(_placement_line(channel))
+
+        if re.match(r"^closed-\d{3,6}$", name):
+            parent = _channel_parent(channel)
+            if parent is None or int(parent.id) != int(archive_category.id):
+                closed_wrong.append(_placement_line(channel))
+
+    if open_wrong:
+        warnings.append("Some open ticket channels are outside the active ticket category: " + "; ".join(open_wrong[:5]) + ("; …" if len(open_wrong) > 5 else ""))
+    else:
+        ok.append("Existing open ticket channel placement looks correct.")
+
+    if closed_wrong:
+        warnings.append("Some closed ticket channels are outside the archive category: " + "; ".join(closed_wrong[:5]) + ("; …" if len(closed_wrong) > 5 else ""))
+    else:
+        ok.append("Existing closed ticket channel placement looks correct.")
+
+
+def _check_layout_health(
+    *,
+    guild: discord.Guild,
+    ticket_category_id: int,
+    ticket_archive_category_id: int,
+    ticket_panel_channel_id: int,
+    verify_channel_id: int,
+    vc_verify_channel_id: int,
+    vc_verify_requests_channel_id: int,
+    transcripts_channel_id: int,
+    modlog_channel_id: int,
+    raidlog_channel_id: int,
+    join_log_channel_id: int,
+    force_verify_log_channel_id: int,
+    status_channel_id: int,
+    blockers: List[str],
+    warnings: List[str],
+    ok: List[str],
+) -> None:
+    active_category = guild.get_channel(_safe_int(ticket_category_id, 0))
+    archive_category = guild.get_channel(_safe_int(ticket_archive_category_id, 0))
+
+    active_category = active_category if isinstance(active_category, discord.CategoryChannel) else None
+    archive_category = archive_category if isinstance(archive_category, discord.CategoryChannel) else None
+
+    panel_channel = _channel_by_id(guild, ticket_panel_channel_id)
+    verify_channel = _channel_by_id(guild, verify_channel_id)
+    vc_voice_channel = _channel_by_id(guild, vc_verify_channel_id)
+    vc_queue_channel = _channel_by_id(guild, vc_verify_requests_channel_id)
+    transcripts_channel = _channel_by_id(guild, transcripts_channel_id)
+    modlog_channel = _channel_by_id(guild, modlog_channel_id)
+
+    public_parent = _channel_parent(panel_channel) or _channel_parent(verify_channel) or _channel_parent(vc_voice_channel)
+    staff_parent = _channel_parent(modlog_channel) or _channel_parent(transcripts_channel) or _channel_parent(vc_queue_channel)
+
+    # Duplicate setup categories usually confuse admins and cause wrong placements.
+    duplicates = _find_duplicate_setup_categories(guild)
+    for label, cats in duplicates.items():
+        warnings.append(
+            f"Multiple possible **{label}** categories found: "
+            + ", ".join(f"**{cat.name}**" for cat in cats[:5])
+            + ". Keep one clean setup category or make sure setup points to the intended one."
+        )
+
+    _check_category_order(
+        first=public_parent,
+        second=active_category,
+        first_label="public/start",
+        second_label="active tickets",
+        warnings=warnings,
+        ok=ok,
+    )
+    _check_category_order(
+        first=active_category,
+        second=archive_category,
+        first_label="active tickets",
+        second_label="ticket archive",
+        warnings=warnings,
+        ok=ok,
+    )
+    _check_category_order(
+        first=archive_category,
+        second=staff_parent,
+        first_label="ticket archive",
+        second_label="staff tools",
+        warnings=warnings,
+        ok=ok,
+    )
+
+    restricted_lifecycle_categories = [cat for cat in (active_category, archive_category) if cat is not None]
+
+    _check_not_inside_category(
+        guild=guild,
+        channel_id=ticket_panel_channel_id,
+        label="Public ticket panel",
+        forbidden_categories=restricted_lifecycle_categories,
+        blockers=blockers,
+        warnings=warnings,
+        ok=ok,
+        blocker=True,
+    )
+
+    _check_not_inside_category(
+        guild=guild,
+        channel_id=verify_channel_id,
+        label="Verify",
+        forbidden_categories=restricted_lifecycle_categories,
+        blockers=blockers,
+        warnings=warnings,
+        ok=ok,
+        blocker=True,
+    )
+
+    if public_parent is not None:
+        _check_channel_placement(
+            guild=guild,
+            channel_id=ticket_panel_channel_id,
+            label="Public ticket panel",
+            expected_parent=public_parent,
+            expected_parent_label="public/start",
+            required=True,
+            blockers=blockers,
+            warnings=warnings,
+            ok=ok,
+        )
+        _check_channel_placement(
+            guild=guild,
+            channel_id=verify_channel_id,
+            label="Verify",
+            expected_parent=public_parent,
+            expected_parent_label="public/start",
+            required=False,
+            blockers=blockers,
+            warnings=warnings,
+            ok=ok,
+        )
+        if vc_verify_channel_id > 0:
+            _check_channel_placement(
+                guild=guild,
+                channel_id=vc_verify_channel_id,
+                label="VC verify voice",
+                expected_parent=public_parent,
+                expected_parent_label="public/start",
+                required=False,
+                blockers=blockers,
+                warnings=warnings,
+                ok=ok,
+            )
+
+    if staff_parent is not None:
+        for label, channel_id in (
+            ("VC verify requests / queue", vc_verify_requests_channel_id),
+            ("Transcript", transcripts_channel_id),
+            ("Modlog", modlog_channel_id),
+            ("Raid/security log", raidlog_channel_id),
+            ("Join/exit log", join_log_channel_id),
+            ("Forced verification log", force_verify_log_channel_id),
+            ("Bot status", status_channel_id),
+        ):
+            if _safe_int(channel_id, 0) > 0:
+                _check_channel_placement(
+                    guild=guild,
+                    channel_id=channel_id,
+                    label=label,
+                    expected_parent=staff_parent,
+                    expected_parent_label="staff tools",
+                    required=False,
+                    blockers=blockers,
+                    warnings=warnings,
+                    ok=ok,
+                )
+
+    _check_ticket_channel_lifecycle_placement(
+        guild=guild,
+        active_category=active_category,
+        archive_category=archive_category,
+        warnings=warnings,
+        ok=ok,
+    )
+
+
 def _check_db_health(
     *,
     blockers: List[str],
@@ -1316,6 +1676,29 @@ def _build_setup_health(guild: discord.Guild, cfg: Any) -> Tuple[List[str], List
 
     if unverified_role_id > 0 and verified_role_id > 0 and unverified_role_id == verified_role_id:
         blockers.append("Unverified role and Verified role cannot be the same role.")
+
+
+    # ------------------------------
+    # Channel/category placement checks
+    # ------------------------------
+    _check_layout_health(
+        guild=guild,
+        ticket_category_id=ticket_category_id,
+        ticket_archive_category_id=ticket_archive_category_id,
+        ticket_panel_channel_id=ticket_panel_channel_id,
+        verify_channel_id=verify_channel_id,
+        vc_verify_channel_id=vc_verify_channel_id,
+        vc_verify_requests_channel_id=vc_verify_requests_channel_id,
+        transcripts_channel_id=transcripts_channel_id,
+        modlog_channel_id=modlog_channel_id,
+        raidlog_channel_id=raidlog_channel_id,
+        join_log_channel_id=join_log_channel_id,
+        force_verify_log_channel_id=force_verify_log_channel_id,
+        status_channel_id=status_channel_id,
+        blockers=blockers,
+        warnings=warnings,
+        ok=ok,
+    )
 
     # ------------------------------
     # Database schema checks
