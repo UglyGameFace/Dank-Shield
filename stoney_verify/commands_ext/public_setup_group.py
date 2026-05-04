@@ -2203,41 +2203,15 @@ async def config_cache(interaction: discord.Interaction) -> None:
     )
 
 # ============================================================
-# command registration
+# stable /dank setup entry
 # ============================================================
 
-def register_public_setup_group_commands(bot: Any, tree: Any) -> None:
-    """Register the clean public Dank Shield command group.
-
-    The variable is still named stoney_group internally for compatibility with
-    older modules that attach setup/help/cleanup/spam commands to it.
-    The actual Discord slash command name is /dank.
-    """
-    try:
-        if tree.get_command("stoney", guild=None) is not None:
-            tree.remove_command("stoney", guild=None)
-    except Exception:
-        pass
-
-    try:
-        if tree.get_command(stoney_group.name, guild=None) is not None:
-            tree.remove_command(stoney_group.name, guild=None)
-    except Exception:
-        pass
-
-    tree.add_command(stoney_group)
-
-    try:
-        print("✅ public_setup_group registered /dank command group")
-    except Exception:
-        pass
-
-# DANK_SHIELD_FORCE_SOLID_SETUP_START
-# Force /dank setup to use the newer solid setup flow.
-# This avoids the old legacy setup view where buttons can go stale or point at
-# old callback IDs after the rebrand.
-
 async def _dank_shield_solid_setup_entry(interaction: discord.Interaction) -> None:
+    """Open the current guided Dank Shield setup UI.
+
+    This keeps /dank setup stable while the actual setup screen lives in
+    public_setup_solid.py.
+    """
     if not await _require_setup_permission(interaction):
         return
 
@@ -2250,45 +2224,90 @@ async def _dank_shield_solid_setup_entry(interaction: discord.Interaction) -> No
         return
 
     try:
+        await safe_defer(interaction, ephemeral=True)
+
         from .public_setup_solid import _build_main_setup_payload
 
         embed, view = await _build_main_setup_payload(guild)
 
-        if interaction.response.is_done():
-            await interaction.followup.send(
-                embed=embed,
-                view=view,
-                ephemeral=True,
-                allowed_mentions=discord.AllowedMentions.none(),
-            )
-        else:
-            await interaction.response.send_message(
-                embed=embed,
-                view=view,
-                ephemeral=True,
-                allowed_mentions=discord.AllowedMentions.none(),
-            )
+        await interaction.followup.send(
+            embed=embed,
+            view=view,
+            ephemeral=True,
+            allowed_mentions=discord.AllowedMentions.none(),
+        )
     except Exception as e:
         message = f"❌ Could not open Dank Shield setup: `{type(e).__name__}: {str(e)[:300]}`"
-        if interaction.response.is_done():
-            await interaction.followup.send(message, ephemeral=True)
-        else:
-            await interaction.response.send_message(message, ephemeral=True)
+        try:
+            if interaction.response.is_done():
+                await interaction.followup.send(message, ephemeral=True)
+            else:
+                await interaction.response.send_message(message, ephemeral=True)
+        except Exception:
+            pass
 
 
-try:
-    stoney_group.remove_command("setup")
-except Exception:
-    pass
+def _ensure_solid_setup_command() -> None:
+    """Make sure /dank setup points at the solid setup flow.
 
-try:
-    stoney_group.command(
-        name="setup",
-        description="Open Dank Shield setup, health checks, layout repair, and configuration tools.",
-    )(_dank_shield_solid_setup_entry)
-except Exception as e:
+    This only changes the child command inside the local Python command group.
+    It does not delete/recreate the top-level /dank command from Discord.
+    """
     try:
-        print(f"⚠️ Failed to force /dank setup solid entry: {type(e).__name__}: {e}")
+        existing = stoney_group.get_command("setup")
+        if existing is not None:
+            stoney_group.remove_command("setup")
     except Exception:
         pass
-# DANK_SHIELD_FORCE_SOLID_SETUP_END
+
+    try:
+        stoney_group.command(
+            name="setup",
+            description="Open Dank Shield setup, health checks, layout repair, and configuration tools.",
+        )(_dank_shield_solid_setup_entry)
+    except Exception as e:
+        try:
+            print(f"⚠️ Failed to attach /dank setup solid entry: {type(e).__name__}: {e}")
+        except Exception:
+            pass
+
+
+# ============================================================
+# command registration
+# ============================================================
+
+def register_public_setup_group_commands(bot: Any, tree: Any) -> None:
+    """Register the clean public Dank Shield command group.
+
+    Important:
+    - Keep internal variable name stoney_group for compatibility.
+    - Expose Discord command as /dank.
+    - Remove only stale /stoney from the local tree.
+    - Do NOT remove/recreate /dank every boot.
+    """
+    _ensure_solid_setup_command()
+
+    try:
+        stale = tree.get_command("stoney", guild=None)
+        if stale is not None:
+            tree.remove_command("stoney", guild=None)
+    except Exception:
+        pass
+
+    try:
+        tree.add_command(stoney_group, override=True)
+    except TypeError:
+        # Older discord.py fallback.
+        existing = tree.get_command(stoney_group.name, guild=None)
+        if existing is None:
+            tree.add_command(stoney_group)
+
+    try:
+        children = sorted(
+            str(getattr(cmd, "name", ""))
+            for cmd in getattr(stoney_group, "commands", [])
+            if getattr(cmd, "name", "")
+        )
+        print(f"✅ public_setup_group registered /dank command group children={children}")
+    except Exception:
+        pass
