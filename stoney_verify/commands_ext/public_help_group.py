@@ -42,11 +42,11 @@ STALE_TOP_LEVEL_MOVES = {
     "channel_cleanup_status": "/stoney cleanup status",
     "run_channel_cleanup": "/stoney cleanup run",
     "purge_channel_messages": "/stoney cleanup purge",
-    "ticket_setup_status": "/stoney setup",
-    "ticket_setup_discover": "/stoney setup",
-    "ticket_setup_save_discovered": "/stoney setup",
-    "ticket_setup_set_channel": "/stoney setup",
-    "ticket_setup_set_role": "/stoney setup",
+    "ticket_setup_status": "/dank setup",
+    "ticket_setup_discover": "/dank setup",
+    "ticket_setup_save_discovered": "/dank setup",
+    "ticket_setup_set_channel": "/dank setup",
+    "ticket_setup_set_role": "/dank setup",
     "ticket_panel_list": "/ticket-panel list",
     "ticket_panel_show": "/ticket-panel show",
     "ticket_panel_bind_categories": "/ticket-panel bind-categories",
@@ -120,7 +120,7 @@ def _add_field(embed: discord.Embed, name: str, value: str, *, inline: bool = Fa
 def _base_embed(section: str) -> discord.Embed:
     title_map = {
         "overview": "📚 Stoney Help",
-        "setup": "🧭 Stoney Setup",
+        "setup": "🧭 Dank Shield Setup",
         "tickets": "🎫 Ticket Commands",
         "panels": "🎛️ Ticket Panel Commands",
         "verification": "✅ Verification Commands",
@@ -140,12 +140,12 @@ def _overview_embed() -> discord.Embed:
     embed = _base_embed("overview")
     embed.description = (
         "Start here if you are setting up Stoney for a server.\n\n"
-        "**Normal path:** run `/stoney setup`, follow the buttons, then run **Run Health Check**."
+        "**Normal path:** run `/dank setup`, follow the buttons, then run **Run Health Check**."
     )
     _add_field(
         embed,
         "What most owners need",
-        "`/stoney setup` — setup, fix, choose existing roles/channels, health check\n"
+        "`/dank setup` — setup, fix, choose existing roles/channels, health check\n"
         "`/ticket-panel post` — post the public Create Ticket panel\n"
         "`/verify repair-unverified` — make sure new/pending members are not left with no role\n"
         "`/stoney help section:Setup` — setup-specific help",
@@ -164,18 +164,18 @@ def _overview_embed() -> discord.Embed:
     _add_field(
         embed,
         "Old command names",
-        "Old setup/helper commands are intentionally hidden from the normal flow. Use `/stoney setup` instead.",
+        "Old setup/helper commands are intentionally hidden from the normal flow. Use `/dank setup` instead.",
     )
     return embed
 
 
 def _setup_embed() -> discord.Embed:
     embed = _base_embed("setup")
-    embed.description = "Server setup should feel like one boring command: `/stoney setup`."
+    embed.description = "Server setup should feel like one boring command: `/dank setup`."
     _add_field(
         embed,
         "Fresh server",
-        "1. Run `/stoney setup`\n"
+        "1. Run `/dank setup`\n"
         "2. Press **Auto-Fix Missing Defaults**\n"
         "3. Read the **Created** and **Reused** summary\n"
         "4. Press **Run Health Check**\n"
@@ -184,7 +184,7 @@ def _setup_embed() -> discord.Embed:
     _add_field(
         embed,
         "Existing server with custom names",
-        "1. Run `/stoney setup`\n"
+        "1. Run `/dank setup`\n"
         "2. Press **Choose Existing Items**\n"
         "3. Pick your actual roles/channels/categories with Discord pickers\n"
         "4. Press **Run Health Check**\n\n"
@@ -224,7 +224,7 @@ def _panels_embed() -> discord.Embed:
     _add_field(
         embed,
         "Normal panel path",
-        "`/stoney setup` — confirm roles/channels/categories first\n"
+        "`/dank setup` — confirm roles/channels/categories first\n"
         "`/ticket-panel post` — post the Create Ticket panel\n"
         "`/ticket-panel list` — list existing panels\n"
         "`/ticket-panel show` — inspect a panel",
@@ -259,7 +259,7 @@ def _verification_embed() -> discord.Embed:
     _add_field(
         embed,
         "Custom role names",
-        "Use `/stoney setup` → **Choose Existing Items** → **Verification Roles** to pick whatever your server calls pending, verified, and member roles.",
+        "Use `/dank setup` → **Choose Existing Items** → **Verification Roles** to pick whatever your server calls pending, verified, and member roles.",
     )
     return embed
 
@@ -293,7 +293,7 @@ def _utilities_embed() -> discord.Embed:
         "`/stoney cleanup run` — run configured channel cleanup\n"
         "`/stoney cleanup purge` — purge selected channel messages",
     )
-    _add_field(embed, "Health/config", "`/stoney setup` — setup health and repair\n`/stoney commands` — staff-only command surface audit\n`/stoney help` — command catalog")
+    _add_field(embed, "Health/config", "`/dank setup` — setup health and repair\n`/stoney commands` — staff-only command surface audit\n`/stoney help` — command catalog")
     return embed
 
 

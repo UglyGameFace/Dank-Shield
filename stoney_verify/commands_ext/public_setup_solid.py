@@ -1,11 +1,11 @@
 from __future__ import annotations
 
-"""Solid public /stoney setup flow.
+"""Solid public /dank setup flow.
 
 This file is the public setup source of truth.
 
 Design goals:
-- One obvious command: /stoney setup
+- One obvious command: /dank setup
 - Simple language for server owners
 - Purpose-based setup, not fixed role names
 - Fully custom roles/channels/categories using Discord pickers
@@ -298,7 +298,7 @@ async def _save_config(interaction: discord.Interaction, payload: dict[str, Any]
 
     final = dict(payload)
     final.setdefault("__config_write_mode", "setup_builder")
-    final.setdefault("__config_write_source", "/stoney setup guided builder")
+    final.setdefault("__config_write_source", "/dank setup guided builder")
     final.update(
         {
             "configured_by_id": str(interaction.user.id),
@@ -315,7 +315,7 @@ async def _clear_config_keys(interaction: discord.Interaction, keys: Iterable[st
 
     The public setup writer intentionally ignores empty snowflakes to prevent
     accidental data loss. This clear path is explicit and only available inside
-    /stoney setup.
+    /dank setup.
     """
     guild = interaction.guild
     if guild is None:
@@ -345,7 +345,7 @@ async def _clear_config_keys(interaction: discord.Interaction, keys: Iterable[st
         payload: dict[str, Any] = {
             "updated_at": _utc_iso(),
             "config_last_write_mode": "explicit_clear",
-            "config_last_write_source": "/stoney setup clear optional slots",
+            "config_last_write_source": "/dank setup clear optional slots",
             "config_last_write_at": _utc_iso(),
         }
 
@@ -462,8 +462,8 @@ async def _build_health_embed(guild: discord.Guild) -> discord.Embed:
     try:
         cfg = await get_guild_config(guild.id, refresh=True)
         b, w, p = _build_setup_health(guild, cfg)
-        blockers.extend([str(x).replace("/stoney setup-tickets", "/stoney setup") for x in b])
-        warnings.extend([str(x).replace("/stoney setup-tickets", "/stoney setup") for x in w])
+        blockers.extend([str(x).replace("/dank setup-tickets", "/dank setup") for x in b])
+        warnings.extend([str(x).replace("/dank setup-tickets", "/dank setup") for x in w])
         ok.extend(str(x) for x in p)
     except Exception as e:
         blockers.append(f"Could not load this server's saved setup: {type(e).__name__}: {str(e)[:250]}")
@@ -499,7 +499,7 @@ async def _build_health_embed(guild: discord.Guild) -> discord.Embed:
         ),
         inline=False,
     )
-    embed.set_footer(text=f"Guild {guild.id} • /stoney setup")
+    embed.set_footer(text=f"Guild {guild.id} • /dank setup")
     return embed
 
 
@@ -517,8 +517,8 @@ async def _build_current_setup_embed(guild: discord.Guild) -> discord.Embed:
 
     embed = _config_embed(guild, cfg, title="📋 Current Setup")
     embed.description = (
-        "This is what Stoney currently has saved for this server.\n"
-        "Names can be anything. Stoney uses the saved Discord IDs."
+        "This is what Dank Shield currently has saved for this server.\n"
+        "Names can be anything. Dank Shield uses the saved Discord IDs."
     )
     embed.add_field(
         name="Access Role Style",
@@ -563,11 +563,11 @@ async def _build_main_setup_payload(guild: discord.Guild) -> tuple[discord.Embed
         cfg = None
 
     embed = discord.Embed(
-        title="🚀 Stoney Setup",
+        title="🚀 Dank Shield Setup",
         description=(
             "Setup is one step at a time. Use the buttons below. You can go back any time.\n\n"
             "✨ **Auto-Build Missing Items** creates only missing defaults. It does not replace saved choices.\n"
-            "✏️ **Name Items Before Build** lets you choose names before Stoney creates anything.\n"
+            "✏️ **Name Items Before Build** lets you choose names before Dank Shield creates anything.\n"
             "🧩 **Use My Existing Server** lets you pick the exact roles/channels you already use. Names do not matter.\n"
             "🗂️ **Ticket Menu Options** controls the support choices users see when opening tickets.\n"
             "🩺 **Run Health Check** tells you what is ready and what needs fixing.\n\n"
@@ -636,7 +636,7 @@ class SetupNavView(discord.ui.View):
             return
         embed = discord.Embed(
             title="Setup Closed",
-            description="Nothing else was changed. Run `/stoney setup` whenever you want to continue.",
+            description="Nothing else was changed. Run `/dank setup` whenever you want to continue.",
             color=discord.Color.dark_grey(),
         )
         await _edit_or_followup(interaction, embed=embed, view=None)
@@ -727,7 +727,7 @@ class SolidSetupView(SetupNavView):
         embed = discord.Embed(
             title="🧩 Use My Existing Server",
             description=(
-                "Pick what your server already uses. Names do not matter. Stoney saves IDs, not names.\n"
+                "Pick what your server already uses. Names do not matter. Dank Shield saves IDs, not names.\n"
                 "Only pick the items your server uses. Leave anything else alone."
             ),
             color=discord.Color.blurple(),
@@ -799,7 +799,7 @@ class SolidSetupView(SetupNavView):
                 "Use cleanup when setup got messy.\n\n"
                 "**Safe rule:** cleanup should only remove things Stoney created or things you explicitly pick. "
                 "It should not delete unrelated server channels, roles, tickets, or messages.\n\n"
-                "Use `/stoney cleanup` for cleanup tools, then return to `/stoney setup`."
+                "Use `/stoney cleanup` for cleanup tools, then return to `/dank setup`."
             ),
             color=discord.Color.blurple(),
         )
@@ -1705,7 +1705,7 @@ def register_public_setup_solid_commands(bot: Any, tree: Any) -> None:
     _ = bot, tree
     _attach()
     try:
-        print("✅ public_setup_solid: attached simple guided /stoney setup flow")
+        print("✅ public_setup_solid: attached simple guided /dank setup flow")
     except Exception:
         pass
 

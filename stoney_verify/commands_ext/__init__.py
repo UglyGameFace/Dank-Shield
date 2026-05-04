@@ -11,20 +11,20 @@ CommandRegistrar = Callable[[Any, Any], None]
 CommandModuleSpec = Tuple[str, str, str]
 
 # Keep the public surface boring and consolidated. Do not add new public command
-# clutter. Full customization lives inside /stoney setup as picker screens.
+# clutter. Full customization lives inside /dank setup as picker screens.
 COMMAND_MODULES: List[CommandModuleSpec] = [
     ("public_staff_scope", "register_public_staff_scope", "public per-guild staff permission isolation"),
     ("public_access_control", "register_public_access_control", "public server-control and staff role split"),
     ("public_onboarding", "register_public_onboarding_listeners", "public isolated guild join/leave onboarding lifecycle"),
     ("public_join_removal_safety", "register_public_join_removal_safety", "public fresh-join stale timer cleanup listener"),
     ("public_spam_cleanup_hardening", "register_public_spam_cleanup_hardening", "public spam guard burst cleanup hardening"),
-    ("public_setup_solid", "register_public_setup_solid_commands", "hardened public /stoney setup guided flow"),
+    ("public_setup_solid", "register_public_setup_solid_commands", "hardened public /dank setup guided flow"),
     ("public_setup_recommend", "register_public_setup_recommend_commands", "self-explanatory setup UX"),
     ("public_setup_recovery", "register_public_setup_recovery_commands", "setup recovery/start-over center"),
     ("public_setup_cleanup", "register_public_setup_cleanup_commands", "selective setup cleanup tools"),
     ("public_setup_fresh_choice", "register_public_setup_fresh_choice_commands", "clear fresh-server auto-build vs build-it-myself choices"),
     ("public_setup_full_customization", "register_public_setup_full_customization_commands", "full setup customization picker flow"),
-    ("public_setup_start", "register_public_setup_start_commands", "legacy /stoney setup quick-start fallback"),
+    ("public_setup_start", "register_public_setup_start_commands", "legacy /dank setup quick-start fallback"),
     ("public_setup_review", "register_public_setup_review_commands", "advanced setup review commands"),
     ("public_setup_logs", "register_public_setup_logs_commands", "advanced setup log command"),
     ("public_setup_defaults", "register_public_setup_defaults_commands", "advanced setup defaults command"),
@@ -39,10 +39,10 @@ COMMAND_MODULES: List[CommandModuleSpec] = [
     ("public_launch_check", "register_public_launch_check_commands", "advanced launch check command"),
     ("public_tickettool_check", "register_public_tickettool_check_commands", "advanced TicketTool check command"),
     ("public_production_audit", "register_public_production_audit_commands", "advanced production audit command"),
-    ("public_setup_group", "register_public_setup_group_commands", "public /stoney command group"),
-    ("public_help_group", "register_public_help_group_commands", "public /stoney help command catalog"),
-    ("public_cleanup_group", "register_public_cleanup_group_commands", "public /stoney cleanup commands"),
-    ("public_spam_group", "register_public_spam_group_commands", "public /stoney spam commands"),
+    ("public_setup_group", "register_public_setup_group_commands", "public /dank command group"),
+    ("public_help_group", "register_public_help_group_commands", "public /dank help command catalog"),
+    ("public_cleanup_group", "register_public_cleanup_group_commands", "public /dank cleanup commands"),
+    ("public_spam_group", "register_public_spam_group_commands", "public /dank spam commands"),
     ("public_mod_group", "register_public_mod_group_commands", "public grouped /mod moderation commands"),
     ("public_ticket_group_clean", "register_public_ticket_group_clean_commands", "public grouped /ticket commands"),
     ("public_ticket_delete", "register_public_ticket_delete_commands", "public grouped /ticket delete command"),
@@ -95,6 +95,7 @@ COMMAND_PROFILES: Dict[str, Sequence[str]] = {
 }
 
 _STALE_TOP_LEVEL_COMMANDS: Tuple[str, ...] = (
+    "stoney",
     "spam_guard", "spam_guard_status", "fix_unverified", "set_verified", "set_resident", "grant_vr", "verify_diagnose",
     "fix_unverified_member", "verify_status", "repair_verify_ui", "recompute_member_risk", "recompute_all_member_risk",
     "channel_cleanup_status", "run_channel_cleanup", "purge_channel_messages", "ticket_setup_status", "ticket_setup_discover",
@@ -104,6 +105,8 @@ _STALE_TOP_LEVEL_COMMANDS: Tuple[str, ...] = (
     "ticket_panel_bootstrap_once", "ticket_panel_bootstrap_stop",
 )
 _CONFUSING_STONEY_CHILDREN: Tuple[str, ...] = (
+    "config-cache",
+    "current",
     "archive-backfill", "cache", "config", "db-check", "health", "launch-check", "modlog-check", "permission-check",
     "production-audit", "refresh-config", "setup-access", "setup-assistant", "setup-defaults", "setup-find",
     "setup-logs", "setup-picker", "setup-review", "setup-status", "setup-tickets", "setup-verify", "setup-verify-ids",
@@ -116,7 +119,7 @@ _COMPACT_SUPPRESS_PREFIXES: Tuple[str, ...] = (
     "✅ commands_ext: registered",
     "✅ public_ticket_panel_commands:",
     "✅ Ticket panel buttons registered",
-    "🧹 commands_ext pruned /stoney during registration",
+    "🧹 commands_ext pruned /dank during registration",
     "🧹 public_spam_group removed legacy top-level spam commands",
 )
 
@@ -302,7 +305,7 @@ def _prune_public_stoney_children(*, profile: str, reason: str) -> list[str]:
     after = _child_names(stoney_group)
     unexpected = [name for name in after if name not in _ALLOWED_STONEY_CHILDREN]
     if unexpected or (removed and _verbose_command_logs()):
-        print(f"🧹 commands_ext pruned /stoney during registration reason={reason} before={before} after={after} removed={removed} unexpected_remaining={unexpected}")
+        print(f"🧹 commands_ext pruned /dank during registration reason={reason} before={before} after={after} removed={removed} unexpected_remaining={unexpected}")
     return removed
 
 
@@ -337,10 +340,10 @@ def _log_stoney_setup_surface() -> tuple[list[str], list[str]]:
         child_names = _child_names(stoney_group)
         advanced = [name for name in child_names if name in _CONFUSING_STONEY_CHILDREN]
         if advanced or _verbose_command_logs():
-            print(f"🧭 commands_ext /stoney setup surface setup_present={'setup' in child_names} advanced_aliases={advanced} direct_children={child_names}")
+            print(f"🧭 commands_ext /dank setup surface setup_present={'setup' in child_names} advanced_aliases={advanced} direct_children={child_names}")
         return child_names, advanced
     except Exception as e:
-        print(f"⚠️ commands_ext could not inspect /stoney setup surface: {repr(e)}")
+        print(f"⚠️ commands_ext could not inspect /dank setup surface: {repr(e)}")
         return [], []
 
 
@@ -427,8 +430,8 @@ def register_all_commands(bot: Any, tree: Any) -> None:
             "✅ commands_ext registration complete. "
             f"final_global={final_global} final_guild={final_guild} profile={profile} "
             f"modules={len(selected_names)} delta_global={total_global_delta} delta_guild={total_guild_delta} "
-            f"stoney_children={child_names} advanced_aliases={advanced} "
-            f"stale_removed={len(pre_removed) + len(post_removed)} stoney_pruned={prune_removed} log={_command_log_style()}"
+            f"dank_children={child_names} advanced_aliases={advanced} "
+            f"stale_removed={len(pre_removed) + len(post_removed)} dank_pruned={prune_removed} log={_command_log_style()}"
         )
 
 

@@ -28,8 +28,8 @@ from ..globals import get_supabase, now_utc
 
 
 stoney_group = app_commands.Group(
-    name="stoney",
-    description="Dank Shield setup and server configuration.",
+    name="dank",
+    description="Dank Shield setup, help, and server configuration.",
 )
 
 
@@ -1008,7 +1008,7 @@ def _build_setup_health(guild: discord.Guild, cfg: Any) -> Tuple[List[str], List
     )
 
     if _safe_str(_cfg_value(cfg, "source", ""), "") in {"env", "defaults", "default"}:
-        warnings.append("This server appears to be using env/default fallback config. Run `/stoney setup` before public use.")
+        warnings.append("This server appears to be using env/default fallback config. Run `/dank setup` before public use.")
 
     return blockers, warnings, ok
 
@@ -1347,3 +1347,33 @@ async def config_cache(interaction: discord.Interaction) -> None:
         ephemeral=True,
         allowed_mentions=discord.AllowedMentions.none(),
     )
+
+# ============================================================
+# command registration
+# ============================================================
+
+def register_public_setup_group_commands(bot: Any, tree: Any) -> None:
+    """Register the clean public Dank Shield command group.
+
+    The variable is still named stoney_group internally for compatibility with
+    older modules that attach setup/help/cleanup/spam commands to it.
+    The actual Discord slash command name is /dank.
+    """
+    try:
+        if tree.get_command("stoney", guild=None) is not None:
+            tree.remove_command("stoney", guild=None)
+    except Exception:
+        pass
+
+    try:
+        if tree.get_command(stoney_group.name, guild=None) is not None:
+            tree.remove_command(stoney_group.name, guild=None)
+    except Exception:
+        pass
+
+    tree.add_command(stoney_group)
+
+    try:
+        print("✅ public_setup_group registered /dank command group")
+    except Exception:
+        pass

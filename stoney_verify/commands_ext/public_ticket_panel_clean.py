@@ -650,7 +650,7 @@ async def _maybe_post_verification_panel(channel: discord.TextChannel, owner: di
         is_unverified = await verify_flow._is_unverified_only_member(owner)
     except Exception as e:
         _warn(f"verification role check failed channel={channel.id} user={owner.id}: {type(e).__name__}: {_short(e, 220)}")
-        return "Could not confirm the member's verification status. Staff should run `/stoney setup` → Health Check."
+        return "Could not confirm the member's verification status. Staff should run `/dank setup` → Health Check."
 
     if not is_unverified:
         # Verified/staff users can still open a normal Verification support ticket.
@@ -662,11 +662,11 @@ async def _maybe_post_verification_panel(channel: discord.TextChannel, owner: di
         if not vc_locked:
             return (
                 "Verification panel was not posted because VC verification setup is not safe yet. "
-                f"Reason: {vc_message}. Staff should run `/stoney setup` → Health Check."
+                f"Reason: {vc_message}. Staff should run `/dank setup` → Health Check."
             )
     except Exception as e:
         _warn(f"verification VC safety check failed channel={channel.id} user={owner.id}: {type(e).__name__}: {_short(e, 220)}")
-        return "Verification panel safety check failed. Staff should run `/stoney setup` → Health Check."
+        return "Verification panel safety check failed. Staff should run `/dank setup` → Health Check."
 
     try:
         posted = await verify_flow._post_verify_ui(channel, owner)
@@ -677,7 +677,7 @@ async def _maybe_post_verification_panel(channel: discord.TextChannel, owner: di
     if posted:
         return ""
 
-    return "Verification panel failed to post. Staff should run `/stoney setup` → Health Check and verify bot permissions in this ticket channel."
+    return "Verification panel failed to post. Staff should run `/dank setup` → Health Check and verify bot permissions in this ticket channel."
 
 
 
@@ -792,14 +792,14 @@ async def _create_ticket(i: discord.Interaction, row: Dict[str, Any]) -> None:
         parent = None
 
     if parent is None:
-        return await _ephemeral(i, "❌ Active Tickets category is not set. Run `/stoney setup` → **Run Health Check**.")
+        return await _ephemeral(i, "❌ Active Tickets category is not set. Run `/dank setup` → **Run Health Check**.")
 
     missing = _missing_category_perms(parent, guild.me)
     if missing:
         return await _ephemeral(
             i,
             f"❌ I cannot create tickets in **{parent.name}**. Missing: {', '.join(missing)}. "
-            "Run `/stoney setup` → **Run Health Check**.",
+            "Run `/dank setup` → **Run Health Check**.",
         )
 
     try:
@@ -809,7 +809,7 @@ async def _create_ticket(i: discord.Interaction, row: Dict[str, Any]) -> None:
         staff = None
 
     if staff is None:
-        return await _ephemeral(i, "❌ Ticket staff role is not set. Run `/stoney setup` → **Run Health Check**.")
+        return await _ephemeral(i, "❌ Ticket staff role is not set. Run `/dank setup` → **Run Health Check**.")
 
     try:
         existing = await asyncio.wait_for(_existing_open(guild, owner), timeout=6.0)
@@ -1218,7 +1218,7 @@ async def _health_lines(guild: discord.Guild) -> Tuple[List[str], List[str], Lis
 
     active = await _active_category(guild)
     if not active:
-        blockers.append("Active Tickets category is not set. Use `/stoney setup` → Ticket Basics.")
+        blockers.append("Active Tickets category is not set. Use `/dank setup` → Ticket Basics.")
     else:
         m = _missing_category_perms(active, guild.me)
         (blockers if m else ok).append(f"Active Tickets category {'missing: ' + ', '.join(m) if m else 'ready'}: {active.mention}.")
@@ -1246,7 +1246,7 @@ async def _health_lines(guild: discord.Guild) -> Tuple[List[str], List[str], Lis
 
     staff = await _staff_role(guild)
     if not staff:
-        blockers.append("Ticket staff role is not set. Use `/stoney setup` → Ticket Basics.")
+        blockers.append("Ticket staff role is not set. Use `/dank setup` → Ticket Basics.")
     else:
         ok.append(f"Ticket staff role ready: {staff.mention}.")
 
@@ -1307,7 +1307,7 @@ def _patch_health() -> None:
         setattr(wrapped, "_ticket_panel_clean_wrapped", True)
         setattr(solid, "_build_health_embed", wrapped)
         _HEALTH_PATCHED = True
-        _log("patched /stoney setup health check")
+        _log("patched /dank setup health check")
     except Exception as e:
         _warn(f"could not patch health check: {e!r}")
 
