@@ -552,15 +552,15 @@ def _validate_verify_setup(
 
     if vc_queue_channel is None:
         if vc_verify_channel is not None:
-            blockers.append("VC verify requests channel is required when VC verification is configured.")
+            blockers.append("VC verify requests / queue channel is required when VC verification is configured.")
         else:
-            warnings.append("VC verify requests channel was not set. VC verification status messages will be disabled.")
+            warnings.append("VC verify requests / queue channel was not set. VC verification status messages will be disabled.")
     else:
-        queue_missing = _text_channel_missing_perms(vc_queue_channel, bot_member)
+        queue_missing = _text_channel_missing_perms(vc_queue_channel, bot_member, need_files=True)
         if queue_missing:
-            blockers.append(f"VC verify requests channel {vc_queue_channel.mention} is missing bot permissions: {', '.join(queue_missing)}.")
+            blockers.append(f"VC verify requests / queue channel {vc_queue_channel.mention} is missing bot permissions: {', '.join(queue_missing)}.")
         else:
-            ok.append(f"VC verify requests channel is writable: {vc_queue_channel.mention}.")
+            ok.append(f"VC verify requests / queue channel is writable: {vc_queue_channel.mention}.")
 
     return blockers, warnings, ok
 
@@ -647,7 +647,7 @@ def _config_embed(guild: discord.Guild, cfg: Any, *, title: str = "🧭 Dank Shi
         value=(
             f"Verify text channel: {_channel_line(guild, _cfg_snowflake(cfg, 'verify_channel_id'))}\n"
             f"VC verify voice: {_channel_line(guild, _cfg_snowflake(cfg, 'vc_verify_channel_id'))}\n"
-            f"VC verify requests: {_channel_line(guild, _cfg_snowflake(cfg, 'vc_verify_queue_channel_id', 'vc_queue_channel_id', 'vc_request_channel_id', 'vc_verify_requests_channel_id'))}\n"
+            f"VC verify requests / queue: {_channel_line(guild, _cfg_snowflake(cfg, 'vc_verify_queue_channel_id', 'vc_queue_channel_id', 'vc_request_channel_id', 'vc_verify_requests_channel_id'))}\n"
             f"Unverified: {_role_line(guild, _cfg_snowflake(cfg, 'unverified_role_id'))}\n"
             f"Verified: {_role_line(guild, _cfg_snowflake(cfg, 'verified_role_id'))}\n"
             f"Resident: {_role_line(guild, _cfg_snowflake(cfg, 'resident_role_id'))}"
@@ -767,6 +767,82 @@ def _check_voice_channel(
         warnings.append(f"{label} channel is configured but missing/unknown: `{cid}`.")
 
 
+
+def _voice_channel_missing_perms(
+    channel: discord.abc.GuildChannel,
+    bot_member: discord.Member,
+) -> tuple[list[str], list[str]]:
+    """Return blocker-level and warning-level missing VC permissions.
+
+    VC verify needs more than "is this a voice channel". The bot must be able
+    to see the channel, generate/join access paths, move members when needed,
+    and edit overwrites when temporary VC access is granted.
+    """
+    perms = channel.permissions_for(bot_member)
+    blockers: list[str] = []
+    warnings: list[str] = []
+
+    if not perms.view_channel:
+        blockers.append("View Channel")
+    if not getattr(perms, "connect", False):
+        blockers.append("Connect")
+    if not getattr(perms, "create_instant_invite", False):
+        blockers.append("Create Invite")
+    if not getattr(perms, "move_members", False):
+        blockers.append("Move Members")
+    if not perms.manage_channels:
+        blockers.append("Manage Channels")
+
+    # Speak is useful for future voice guidance, but the bot does not always
+    # need to talk during VC verification, so keep it as a warning.
+    if not getattr(perms, "speak", False):
+        warnings.append("Speak")
+
+    return blockers, warnings
+
+
+def _check_vc_verify_voice_channel(
+    *,
+    guild: discord.Guild,
+    bot_member: Optional[discord.Member],
+    channel_id: int,
+    label: str,
+    required: bool,
+    blockers: List[str],
+    warnings: List[str],
+    ok: List[str],
+) -> None:
+    cid = _safe_int(channel_id, 0)
+
+    if cid <= 0:
+        (blockers if required else warnings).append(f"{label} channel is not set.")
+        return
+
+    channel = guild.get_channel(cid)
+
+    if channel is None:
+        blockers.append(f"{label} channel is configured but missing/unknown: `{cid}`.")
+        return
+
+    if not _is_voice_channel(channel):
+        blockers.append(f"{label} must be a voice/stage channel, got {channel.mention}.")
+        return
+
+    if bot_member is None:
+        blockers.append("Bot member object is unavailable, so voice-channel permissions could not be checked.")
+        return
+
+    missing, warn_missing = _voice_channel_missing_perms(channel, bot_member)
+
+    if missing:
+        blockers.append(f"{label} channel {channel.mention} is missing bot permissions: {', '.join(missing)}.")
+    else:
+        ok.append(f"{label} channel is configured and usable: {channel.mention}.")
+
+    if warn_missing:
+        warnings.append(f"{label} channel {channel.mention} is missing optional permissions: {', '.join(warn_missing)}.")
+
+
 def _check_role_exists(
     *,
     guild: discord.Guild,
@@ -813,6 +889,85 @@ def _check_manageable_role(
         ok.append(f"Bot can manage {label} role {role.mention}.")
 
 
+
+def _check_supabase_select(
+    *,
+    table: str,
+    columns: str,
+    label: str,
+    required: bool,
+    blockers: List[str],
+    warnings: List[str],
+    ok: List[str],
+) -> None:
+    """Verify Supabase table + required columns through the REST client.
+
+    This catches missing tables/columns like PGRST204/PGRST125 before users hit
+    broken buttons.
+    """
+    sb = get_supabase()
+
+    if sb is None:
+        (blockers if required else warnings).append(f"{label} could not be checked because Supabase is not configured.")
+        return
+
+    try:
+        sb.table(table).select(columns).limit(1).execute()
+        ok.append(f"Supabase `{table}` table has required {label.lower()} columns.")
+    except Exception as e:
+        message = str(e).replace("\n", " ")
+        (blockers if required else warnings).append(
+            f"Supabase `{table}` check failed for {label}: `{type(e).__name__}: {message[:260]}`"
+        )
+
+
+def _check_db_health(
+    *,
+    blockers: List[str],
+    warnings: List[str],
+    ok: List[str],
+) -> None:
+    _check_supabase_select(
+        table=_config_table_name(),
+        columns="guild_id",
+        label="server config",
+        required=True,
+        blockers=blockers,
+        warnings=warnings,
+        ok=ok,
+    )
+
+    _check_supabase_select(
+        table="tickets",
+        columns="guild_id,user_id,channel_id,status,title,category,ticket_number,metadata,meta",
+        label="ticket",
+        required=True,
+        blockers=blockers,
+        warnings=warnings,
+        ok=ok,
+    )
+
+    _check_supabase_select(
+        table="ticket_categories",
+        columns="guild_id,slug,name,intake_type,match_keywords,is_default,sort_order",
+        label="ticket menu",
+        required=True,
+        blockers=blockers,
+        warnings=warnings,
+        ok=ok,
+    )
+
+    _check_supabase_select(
+        table="verification_tokens",
+        columns="guild_id,user_id,token,expires_at",
+        label="verification token",
+        required=True,
+        blockers=blockers,
+        warnings=warnings,
+        ok=ok,
+    )
+
+
 def _build_setup_health(guild: discord.Guild, cfg: Any) -> Tuple[List[str], List[str], List[str]]:
     blockers: list[str] = []
     warnings: list[str] = []
@@ -820,43 +975,99 @@ def _build_setup_health(guild: discord.Guild, cfg: Any) -> Tuple[List[str], List
 
     bot_member = _bot_member(guild)
 
+    # ------------------------------
+    # Server-level bot permissions
+    # ------------------------------
     if bot_member is None:
         blockers.append("Bot member could not be resolved in this guild.")
     else:
         guild_perms = bot_member.guild_permissions
         guild_missing: list[str] = []
+        guild_warnings: list[str] = []
 
-        if not guild_perms.manage_channels:
-            guild_missing.append("Manage Channels")
-        if not guild_perms.manage_roles:
-            guild_missing.append("Manage Roles")
-        if not guild_perms.view_audit_log:
-            warnings.append("Bot is missing **View Audit Log**. Some moderation attribution may be weaker.")
+        required_guild_perms = (
+            ("Manage Channels", guild_perms.manage_channels),
+            ("Manage Roles", guild_perms.manage_roles),
+            ("View Channels", guild_perms.view_channel),
+            ("Send Messages", guild_perms.send_messages),
+            ("Read Message History", guild_perms.read_message_history),
+            ("Embed Links", guild_perms.embed_links),
+        )
+
+        for label, allowed in required_guild_perms:
+            if not allowed:
+                guild_missing.append(label)
+
+        helpful_guild_perms = (
+            ("Attach Files", guild_perms.attach_files),
+            ("Manage Messages", guild_perms.manage_messages),
+            ("View Audit Log", guild_perms.view_audit_log),
+            ("Moderate Members", getattr(guild_perms, "moderate_members", False)),
+            ("Kick Members", guild_perms.kick_members),
+            ("Ban Members", guild_perms.ban_members),
+            ("Move Members", guild_perms.move_members),
+            ("Create Invite", guild_perms.create_instant_invite),
+        )
+
+        for label, allowed in helpful_guild_perms:
+            if not allowed:
+                guild_warnings.append(label)
 
         if guild_missing:
             blockers.append(f"Bot is missing required server permissions: {', '.join(guild_missing)}.")
         else:
             ok.append("Bot has required server-level channel/role permissions.")
 
-    ticket_category_id = _cfg_snowflake(cfg, "ticket_category_id")
-    ticket_archive_category_id = _cfg_snowflake(cfg, "ticket_archive_category_id", "archive_category_id")
-    staff_role_id = _cfg_snowflake(cfg, "staff_role_id", "vc_staff_role_id")
-    transcripts_channel_id = _cfg_snowflake(cfg, "transcripts_channel_id")
-    verify_channel_id = _cfg_snowflake(cfg, "verify_channel_id")
-    vc_verify_channel_id = _cfg_snowflake(cfg, "vc_verify_channel_id")
+        if guild_warnings:
+            warnings.append(
+                "Bot is missing useful server permissions for full moderation/verification coverage: "
+                + ", ".join(guild_warnings)
+                + "."
+            )
+
+    # ------------------------------
+    # Saved IDs / aliases
+    # ------------------------------
+    ticket_category_id = _cfg_snowflake(cfg, "ticket_category_id", "active_ticket_category_id", "open_ticket_category_id")
+    ticket_archive_category_id = _cfg_snowflake(cfg, "ticket_archive_category_id", "archive_category_id", "closed_ticket_category_id")
+    ticket_panel_channel_id = _cfg_snowflake(
+        cfg,
+        "ticket_panel_channel_id",
+        "support_channel_id",
+        "ticket_support_channel_id",
+        "public_ticket_panel_channel_id",
+        "panel_channel_id",
+    )
+    staff_role_id = _cfg_snowflake(cfg, "staff_role_id", "ticket_staff_role_id", "support_role_id")
+    vc_staff_role_id = _cfg_snowflake(cfg, "vc_staff_role_id", "staff_role_id", "ticket_staff_role_id", "support_role_id")
+    transcripts_channel_id = _cfg_snowflake(cfg, "transcripts_channel_id", "transcript_channel_id")
+
+    verify_channel_id = _cfg_snowflake(cfg, "verify_channel_id", "verification_channel_id")
+    vc_verify_channel_id = _cfg_snowflake(cfg, "vc_verify_channel_id", "voice_verify_channel_id")
     vc_verify_requests_channel_id = _cfg_snowflake(
         cfg,
         "vc_verify_queue_channel_id",
         "vc_queue_channel_id",
         "vc_request_channel_id",
         "vc_verify_requests_channel_id",
+        "vc_verify_requests_id",
+        "voice_verify_requests_channel_id",
     )
-    modlog_channel_id = _cfg_snowflake(cfg, "modlog_channel_id")
-    join_log_channel_id = _cfg_snowflake(cfg, "join_log_channel_id")
+
+    modlog_channel_id = _cfg_snowflake(cfg, "modlog_channel_id", "mod_log_channel_id", "raidlog_channel_id")
+    raidlog_channel_id = _cfg_snowflake(cfg, "raidlog_channel_id", "raid_log_channel_id", "security_log_channel_id")
+    join_log_channel_id = _cfg_snowflake(cfg, "join_log_channel_id", "join_leave_log_channel_id", "joinlog_channel_id")
+    force_verify_log_channel_id = _cfg_snowflake(cfg, "force_verify_log_channel_id", "forced_verify_log_channel_id")
+    status_channel_id = _cfg_snowflake(cfg, "status_channel_id", "bot_status_channel_id")
+
     unverified_role_id = _cfg_snowflake(cfg, "unverified_role_id")
     verified_role_id = _cfg_snowflake(cfg, "verified_role_id")
-    resident_role_id = _cfg_snowflake(cfg, "resident_role_id")
+    resident_role_id = _cfg_snowflake(cfg, "resident_role_id", "member_role_id")
+    server_control_role_id = _cfg_snowflake(cfg, "server_control_role_id", "control_role_id", "perm_role_id", "admin_role_id")
 
+    # ------------------------------
+    # Ticket system
+    # ------------------------------
     _check_category(
         guild=guild,
         bot_member=bot_member,
@@ -873,16 +1084,17 @@ def _build_setup_health(guild: discord.Guild, cfg: Any) -> Tuple[List[str], List
         bot_member=bot_member,
         category_id=ticket_archive_category_id,
         label="Archive/closed ticket",
-        required=False,
+        required=True,
         blockers=blockers,
         warnings=warnings,
         ok=ok,
     )
 
-    _check_role_exists(
+    _check_text_channel(
         guild=guild,
-        role_id=staff_role_id,
-        label="Ticket staff",
+        bot_member=bot_member,
+        channel_id=ticket_panel_channel_id,
+        label="Public ticket panel",
         required=True,
         blockers=blockers,
         warnings=warnings,
@@ -894,49 +1106,95 @@ def _build_setup_health(guild: discord.Guild, cfg: Any) -> Tuple[List[str], List
         bot_member=bot_member,
         channel_id=transcripts_channel_id,
         label="Transcript",
-        required=False,
+        required=True,
         blockers=blockers,
         warnings=warnings,
         ok=ok,
         need_files=True,
     )
 
+    ticket_staff_role = _check_role_exists(
+        guild=guild,
+        role_id=staff_role_id,
+        label="Ticket staff",
+        required=True,
+        blockers=blockers,
+        warnings=warnings,
+        ok=ok,
+    )
+
+    if ticket_staff_role is not None and ticket_staff_role.is_default():
+        blockers.append("Ticket staff role cannot be @everyone.")
+
+    # ------------------------------
+    # Verification text + VC flow
+    # ------------------------------
     _check_text_channel(
         guild=guild,
         bot_member=bot_member,
         channel_id=verify_channel_id,
         label="Verify",
+        required=True,
+        blockers=blockers,
+        warnings=warnings,
+        ok=ok,
+        need_files=False,
+    )
+
+    vc_enabled = vc_verify_channel_id > 0 or vc_verify_requests_channel_id > 0
+
+    _check_vc_verify_voice_channel(
+        guild=guild,
+        bot_member=bot_member,
+        channel_id=vc_verify_channel_id,
+        label="VC verify voice",
+        required=vc_enabled,
+        blockers=blockers,
+        warnings=warnings,
+        ok=ok,
+    )
+
+    _check_text_channel(
+        guild=guild,
+        bot_member=bot_member,
+        channel_id=vc_verify_requests_channel_id,
+        label="VC verify requests / queue",
+        required=vc_enabled,
+        blockers=blockers,
+        warnings=warnings,
+        ok=ok,
+        need_files=True,
+    )
+
+    vc_staff_role = _check_role_exists(
+        guild=guild,
+        role_id=vc_staff_role_id,
+        label="VC/ticket staff",
         required=False,
         blockers=blockers,
         warnings=warnings,
         ok=ok,
     )
 
-    _check_voice_channel(
-        guild=guild,
-        channel_id=vc_verify_channel_id,
-        label="VC verify",
-        warnings=warnings,
-        ok=ok,
-    )
-
-    if vc_verify_channel_id > 0 or vc_verify_requests_channel_id > 0:
-        _check_text_channel(
-            guild=guild,
-            bot_member=bot_member,
-            channel_id=vc_verify_requests_channel_id,
-            label="VC verify requests",
-            required=vc_verify_channel_id > 0,
-            blockers=blockers,
-            warnings=warnings,
-            ok=ok,
-        )
-
+    # ------------------------------
+    # Logs/status
+    # ------------------------------
     _check_text_channel(
         guild=guild,
         bot_member=bot_member,
         channel_id=modlog_channel_id,
         label="Modlog",
+        required=True,
+        blockers=blockers,
+        warnings=warnings,
+        ok=ok,
+    )
+
+    _check_text_channel(
+        guild=guild,
+        bot_member=bot_member,
+        channel_id=raidlog_channel_id,
+        label="Raid/security log",
         required=False,
         blockers=blockers,
         warnings=warnings,
@@ -954,11 +1212,36 @@ def _build_setup_health(guild: discord.Guild, cfg: Any) -> Tuple[List[str], List
         ok=ok,
     )
 
+    _check_text_channel(
+        guild=guild,
+        bot_member=bot_member,
+        channel_id=force_verify_log_channel_id,
+        label="Forced verification log",
+        required=False,
+        blockers=blockers,
+        warnings=warnings,
+        ok=ok,
+    )
+
+    _check_text_channel(
+        guild=guild,
+        bot_member=bot_member,
+        channel_id=status_channel_id,
+        label="Bot status",
+        required=False,
+        blockers=blockers,
+        warnings=warnings,
+        ok=ok,
+    )
+
+    # ------------------------------
+    # Roles + hierarchy
+    # ------------------------------
     unverified_role = _check_role_exists(
         guild=guild,
         role_id=unverified_role_id,
         label="Unverified",
-        required=False,
+        required=True,
         blockers=blockers,
         warnings=warnings,
         ok=ok,
@@ -967,7 +1250,7 @@ def _build_setup_health(guild: discord.Guild, cfg: Any) -> Tuple[List[str], List
         guild=guild,
         role_id=verified_role_id,
         label="Verified",
-        required=False,
+        required=True,
         blockers=blockers,
         warnings=warnings,
         ok=ok,
@@ -975,42 +1258,75 @@ def _build_setup_health(guild: discord.Guild, cfg: Any) -> Tuple[List[str], List
     resident_role = _check_role_exists(
         guild=guild,
         role_id=resident_role_id,
-        label="Resident",
+        label="Resident/member",
+        required=False,
+        blockers=blockers,
+        warnings=warnings,
+        ok=ok,
+    )
+    control_role = _check_role_exists(
+        guild=guild,
+        role_id=server_control_role_id,
+        label="Server-control",
         required=False,
         blockers=blockers,
         warnings=warnings,
         ok=ok,
     )
 
-    _check_manageable_role(
-        guild=guild,
-        bot_member=bot_member,
-        role=unverified_role,
-        label="Unverified",
-        blockers=blockers,
-        ok=ok,
-    )
-    _check_manageable_role(
-        guild=guild,
-        bot_member=bot_member,
-        role=verified_role,
-        label="Verified",
-        blockers=blockers,
-        ok=ok,
-    )
-    _check_manageable_role(
-        guild=guild,
-        bot_member=bot_member,
-        role=resident_role,
-        label="Resident",
-        blockers=blockers,
-        ok=ok,
-    )
+    for label, role in (
+        ("Unverified", unverified_role),
+        ("Verified", verified_role),
+        ("Resident/member", resident_role),
+    ):
+        if role is not None and role.is_default():
+            blockers.append(f"{label} role cannot be @everyone.")
+        _check_manageable_role(
+            guild=guild,
+            bot_member=bot_member,
+            role=role,
+            label=label,
+            blockers=blockers,
+            ok=ok,
+        )
+
+    if control_role is not None:
+        if control_role.is_default():
+            blockers.append("Server-control role cannot be @everyone.")
+        else:
+            ok.append(f"Server-control role is a safe plain/access role: {control_role.mention}.")
+
+    # Staff roles do not need to be managed by the bot, but they must exist and
+    # not be @everyone.
+    for label, role in (("Ticket staff", ticket_staff_role), ("VC/ticket staff", vc_staff_role)):
+        if role is not None and role.is_default():
+            blockers.append(f"{label} role cannot be @everyone.")
+
+    # ------------------------------
+    # Cross-check common setup mistakes
+    # ------------------------------
+    if verify_channel_id > 0 and ticket_panel_channel_id > 0 and verify_channel_id == ticket_panel_channel_id:
+        warnings.append("Verify channel and ticket panel channel are the same. This can work, but separate channels are cleaner.")
+
+    if modlog_channel_id > 0 and transcripts_channel_id > 0 and modlog_channel_id == transcripts_channel_id:
+        warnings.append("Modlog and transcript channel are the same. This can work, but separate channels are cleaner.")
+
+    if ticket_category_id > 0 and ticket_archive_category_id > 0 and ticket_category_id == ticket_archive_category_id:
+        blockers.append("Open ticket category and archive category cannot be the same category.")
+
+    if unverified_role_id > 0 and verified_role_id > 0 and unverified_role_id == verified_role_id:
+        blockers.append("Unverified role and Verified role cannot be the same role.")
+
+    # ------------------------------
+    # Database schema checks
+    # ------------------------------
+    _check_db_health(blockers=blockers, warnings=warnings, ok=ok)
 
     if _safe_str(_cfg_value(cfg, "source", ""), "") in {"env", "defaults", "default"}:
         warnings.append("This server appears to be using env/default fallback config. Run `/dank setup` before public use.")
 
     return blockers, warnings, ok
+
 
 
 def _health_embed(guild: discord.Guild, cfg: Any) -> discord.Embed:
@@ -1019,7 +1335,7 @@ def _health_embed(guild: discord.Guild, cfg: Any) -> discord.Embed:
 
     embed = discord.Embed(
         title="🩺 Dank Shield Setup Health",
-        description="✅ **Ready enough to test.**" if ready else "🚫 **Needs fixes before testing.**",
+        description="✅ **Core setup is ready to test.**" if ready else "🚫 **Fix the blockers before testing.**",
         color=discord.Color.green() if ready else discord.Color.red(),
     )
     embed.add_field(name="Blockers", value=_field_text(blockers, empty="✅ None"), inline=False)
