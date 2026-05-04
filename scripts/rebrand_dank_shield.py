@@ -69,19 +69,19 @@ SKIP_DIRS = {
 }
 
 REPLACEMENTS: tuple[tuple[str, str], ...] = (
-    ("Stoney Baloney Verification", VERIFY_TITLE),
-    ("Stoney Verify Verification", VERIFY_TITLE),
-    ("Stoney Verification", VERIFY_TITLE),
-    ("Stoney Verify ticket panel", f"{BRAND_NAME} ticket panel"),
-    ("Stoney Verify Ticket Panel", f"{BRAND_NAME} Ticket Panel"),
-    ("Stoney Verify dashboard", f"{BRAND_NAME} dashboard"),
-    ("Stoney Verify Dashboard", f"{BRAND_NAME} Dashboard"),
-    ("Stoney Verify helper", f"{BRAND_NAME} helper"),
-    ("Stoney Verify Helper", f"{BRAND_NAME} Helper"),
-    ("Stoney Verify", BRAND_NAME),
-    ("Stoney-Bot", "Dank-Shield"),
-    ("Stoney Bot", BRAND_NAME),
-    ("stoney-verify-helper", "dank-shield-helper"),
+    ("Dank Shield Verification", VERIFY_TITLE),
+    ("Dank Shield Verification", VERIFY_TITLE),
+    ("Dank Shield Verification", VERIFY_TITLE),
+    ("Dank Shield ticket panel", f"{BRAND_NAME} ticket panel"),
+    ("Dank Shield Ticket Panel", f"{BRAND_NAME} Ticket Panel"),
+    ("Dank Shield dashboard", f"{BRAND_NAME} dashboard"),
+    ("Dank Shield Dashboard", f"{BRAND_NAME} Dashboard"),
+    ("Dank Shield helper", f"{BRAND_NAME} helper"),
+    ("Dank Shield Helper", f"{BRAND_NAME} Helper"),
+    ("Dank Shield", BRAND_NAME),
+    ("Dank-Shield", "Dank-Shield"),
+    ("Dank Shield", BRAND_NAME),
+    ("dank-shield-helper", "dank-shield-helper"),
 )
 
 ENV_LINES = {

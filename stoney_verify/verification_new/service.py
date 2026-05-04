@@ -839,12 +839,12 @@ async def _apply_verified_roles(
     if grant_roles:
         await member.add_roles(
             *grant_roles,
-            reason=f"Stoney Verify approved by {staff_member} ({staff_member.id})",
+            reason=f"Dank Shield approved by {staff_member} ({staff_member.id})",
         )
 
     _, remove_error = await _remove_unverified_role_if_present(
         member,
-        reason=f"Stoney Verify approval cleanup by {staff_member} ({staff_member.id})",
+        reason=f"Dank Shield approval cleanup by {staff_member} ({staff_member.id})",
     )
 
     return grant_roles, remove_error

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-"""Public status / uptime reporting for Stoney Verify.
+"""Public status / uptime reporting for Dank Shield.
 
 This module owns the user-facing status report and the optional heartbeat row.
 The important production rule here is simple: health checks must never freeze
@@ -150,7 +150,7 @@ def _bot_status_id(bot: Any) -> str:
     except Exception:
         pass
 
-    return "stoney-verify-helper"
+    return "dank-shield-helper"
 
 
 def _utc_now() -> datetime:
@@ -611,7 +611,7 @@ async def _send_status_report(bot: Any, guild: discord.Guild, *, event: str, for
 
     lines, all_ok = await _build_service_status_lines(bot, guild)
 
-    title = "🟢 Stoney Verify is back online" if event == "startup" else "🟡 Stoney Verify gateway restored"
+    title = "🟢 Dank Shield is back online" if event == "startup" else "🟡 Dank Shield gateway restored"
     description = (
         "The bot process is online again. Service checks are below."
         if all_ok
@@ -636,7 +636,7 @@ async def _send_status_report(bot: Any, guild: discord.Guild, *, event: str, for
         value="True bot-down alerts require a separate watchdog because the bot cannot send Discord messages while its own process is offline.",
         inline=False,
     )
-    embed.set_footer(text="Stoney Verify status reporter")
+    embed.set_footer(text="Dank Shield status reporter")
 
     try:
         await channel.send(embed=embed)
@@ -871,7 +871,7 @@ def _attach_setup_status_command() -> None:
 
     command = discord.app_commands.Command(
         name="setup-status",
-        description="Choose where Stoney Verify posts online/restored status reports.",
+        description="Choose where Dank Shield posts online/restored status reports.",
         callback=_setup_status_callback,
     )
 

@@ -1,24 +1,24 @@
-# Stoney Verify Privacy Policy
+# Dank Shield Privacy Policy
 
 _Last updated: 2026-04-26_
 
 > This template is provided for public/beta launch preparation and should be reviewed by the bot owner before publishing. It is not legal advice.
 
-## 1. What Stoney Verify is
+## 1. What Dank Shield is
 
-Stoney Verify is a Discord bot that provides server verification, ticket support, moderation assistance, anti-spam protections, audit/modlog features, and related server administration tools.
+Dank Shield is a Discord bot that provides server verification, ticket support, moderation assistance, anti-spam protections, audit/modlog features, and related server administration tools.
 
-This policy explains what data Stoney Verify may process when the bot is added to a Discord server or when a user interacts with the bot.
+This policy explains what data Dank Shield may process when the bot is added to a Discord server or when a user interacts with the bot.
 
 ## 2. Who controls the data
 
-For each Discord server, the server owner and authorized server administrators decide how Stoney Verify is configured and used.
+For each Discord server, the server owner and authorized server administrators decide how Dank Shield is configured and used.
 
 The bot operator maintains the infrastructure that stores and processes bot data.
 
-## 3. Data Stoney Verify may collect
+## 3. Data Dank Shield may collect
 
-Depending on enabled features, Stoney Verify may process or store:
+Depending on enabled features, Dank Shield may process or store:
 
 - Discord user IDs
 - Discord guild/server IDs
@@ -33,11 +33,11 @@ Depending on enabled features, Stoney Verify may process or store:
 - Bot configuration for a server, including configured category IDs, channel IDs, role IDs, and feature settings
 - Operational logs needed to diagnose crashes, abuse, security events, or service reliability problems
 
-Stoney Verify should not intentionally collect passwords, payment-card data, government IDs, private Discord tokens, or unrelated sensitive personal information.
+Dank Shield should not intentionally collect passwords, payment-card data, government IDs, private Discord tokens, or unrelated sensitive personal information.
 
 ## 4. Why the data is used
 
-Stoney Verify uses data to:
+Dank Shield uses data to:
 
 - Create, manage, close, archive, and transcript support tickets
 - Verify users and manage configured verification roles
@@ -49,13 +49,13 @@ Stoney Verify uses data to:
 
 ## 5. Legal and safety basis
 
-Stoney Verify processes data only to provide the requested bot functionality for Discord communities that add and configure the bot.
+Dank Shield processes data only to provide the requested bot functionality for Discord communities that add and configure the bot.
 
 Server administrators should disclose their own moderation, logging, transcript, and retention practices to their members where required.
 
 ## 6. Data sharing
 
-Stoney Verify does not sell user data.
+Dank Shield does not sell user data.
 
 Data may be processed through infrastructure and service providers needed to run the bot, such as database hosting, application hosting, logging, and Discord itself.
 
@@ -63,7 +63,7 @@ Data may be disclosed when required to comply with valid legal obligations, prot
 
 ## 7. Data retention
 
-Stoney Verify should retain data only as long as needed for the feature that created it, server safety, moderation accountability, debugging, legal compliance, or abuse prevention.
+Dank Shield should retain data only as long as needed for the feature that created it, server safety, moderation accountability, debugging, legal compliance, or abuse prevention.
 
 Recommended default retention targets:
 
@@ -93,7 +93,7 @@ Requests should include:
 
 ## 9. Server configuration and permissions
 
-Stoney Verify stores server-specific configuration by Discord guild ID. This may include role IDs, channel IDs, ticket category IDs, transcript channel IDs, verification channel IDs, and moderation log channel IDs.
+Dank Shield stores server-specific configuration by Discord guild ID. This may include role IDs, channel IDs, ticket category IDs, transcript channel IDs, verification channel IDs, and moderation log channel IDs.
 
 Only users with appropriate server permissions, such as Administrator or Manage Server, should be allowed to configure the bot.
 
@@ -110,7 +110,7 @@ The bot operator should use reasonable technical and organizational safeguards, 
 
 ## 11. Children's privacy
 
-Stoney Verify is designed for Discord communities and is not intended to knowingly collect personal information from children outside the normal operation of Discord server administration. Server owners are responsible for ensuring their communities follow applicable age, safety, and platform requirements.
+Dank Shield is designed for Discord communities and is not intended to knowingly collect personal information from children outside the normal operation of Discord server administration. Server owners are responsible for ensuring their communities follow applicable age, safety, and platform requirements.
 
 ## 12. Changes to this policy
 

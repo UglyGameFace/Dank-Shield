@@ -1,10 +1,10 @@
 # TicketTool Parity Standard
 
-This document is the hard execution standard for Stoney Bot until it is honestly better than Ticket Tool in production.
+This document is the hard execution standard for Dank Shield until it is honestly better than Ticket Tool in production.
 
 ## Core rule
 
-Do **not** call Stoney Bot better than Ticket Tool until the checklist in this document is actually true in the live system.
+Do **not** call Dank Shield better than Ticket Tool until the checklist in this document is actually true in the live system.
 
 Feature count is not enough.
 Consistency, correctness, and staff trust are the deciding factors.
@@ -13,7 +13,7 @@ Consistency, correctness, and staff trust are the deciding factors.
 
 ## Non-negotiable product goal
 
-Stoney Bot must become:
+Dank Shield must become:
 
 1. easier for staff to use than Ticket Tool
 2. more reliable in ticket lifecycle handling than Ticket Tool
@@ -52,7 +52,7 @@ Closed/archive mismatches are failures.
 A stale panel, expired button path, or duplicated control surface counts as a real bug.
 
 ### 7. VC verify is part of the product
-Stoney Bot cannot be considered better overall if ticketing is strong but VC verify is flaky.
+Dank Shield cannot be considered better overall if ticketing is strong but VC verify is flaky.
 
 ### 8. Timer safety is mandatory
 Any timer that can kick, close, delete, or alter a member flow must be treated as trust-critical.
@@ -160,7 +160,7 @@ At minimum, verify these flows:
 
 ## What counts as a pass
 
-Stoney Bot can be called better than Ticket Tool only when all of the following are true:
+Dank Shield can be called better than Ticket Tool only when all of the following are true:
 
 - lifecycle state is consistent across service, repository, panels, transcripts, commands, and interactions
 - no stale controls can perform the wrong action

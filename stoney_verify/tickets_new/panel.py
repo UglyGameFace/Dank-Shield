@@ -2826,7 +2826,7 @@ async def send_ticket_panel(channel: discord.TextChannel):
         ),
         inline=False,
     )
-    embed.set_footer(text="Stoney Verify Ticket System")
+    embed.set_footer(text="Dank Shield Ticket System")
 
     _debug(f"send public panel channel={channel.id} guild={channel.guild.id}")
 

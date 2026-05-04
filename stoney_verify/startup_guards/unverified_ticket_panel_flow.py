@@ -734,7 +734,7 @@ async def _send_direct_ticket_intro(channel: discord.TextChannel, member: discor
             ),
             color=discord.Color.green(),
         )
-        embed.set_footer(text="Stoney Verify • verification ticket")
+        embed.set_footer(text="Dank Shield • verification ticket")
         await channel.send(content=member.mention, embed=embed, allowed_mentions=discord.AllowedMentions(users=True, roles=False, everyone=False))
     except Exception as e:
         _warn(f"direct ticket intro send failed channel={getattr(channel, 'id', None)}: {e!r}")

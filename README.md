@@ -1,6 +1,6 @@
-# Stoney Verify
+# Dank Shield
 
-Stoney Verify is a Discord ticket, verification, moderation, and setup assistant built to feel simple for server owners while still giving staff powerful tools.
+Dank Shield is a Discord ticket, verification, moderation, and setup assistant built to feel simple for server owners while still giving staff powerful tools.
 
 The normal public setup path is intentionally boring:
 

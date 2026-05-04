@@ -93,7 +93,7 @@ def _best_setup_channel(guild: discord.Guild) -> Optional[discord.TextChannel]:
 
 def _setup_embed(guild: discord.Guild) -> discord.Embed:
     embed = discord.Embed(
-        title="👋 Thanks for adding Stoney Verify",
+        title="👋 Thanks for adding Dank Shield",
         description=(
             "I’m ready, and I won’t use another server’s channels or roles.\n\n"
             "Start setup with **`/stoney setup`**. It walks you through the safest setup path for this server."

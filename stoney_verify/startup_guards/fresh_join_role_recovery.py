@@ -188,7 +188,7 @@ async def ensure_fresh_join_unverified_role(
         if not allowed:
             return False, reason
 
-        await member.add_roles(role, reason=f"Stoney Verify fresh join recovery: {source}"[:512])
+        await member.add_roles(role, reason=f"Dank Shield fresh join recovery: {source}"[:512])
 
         # Local member.roles usually updates immediately, but Discord can lag.
         # Treat the API success as enough to prevent an instant fail-closed kick.

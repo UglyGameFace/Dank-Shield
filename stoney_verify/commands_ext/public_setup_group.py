@@ -29,7 +29,7 @@ from ..globals import get_supabase, now_utc
 
 stoney_group = app_commands.Group(
     name="stoney",
-    description="Stoney Verify setup and server configuration.",
+    description="Dank Shield setup and server configuration.",
 )
 
 
@@ -783,7 +783,7 @@ async def setup_logs(interaction: discord.Interaction, modlog_channel: discord.T
     await interaction.followup.send(embed=embed, ephemeral=True)
 
 
-@stoney_group.command(name="config", description="Show this server's current Stoney Verify configuration.")
+@stoney_group.command(name="config", description="Show this server's current Dank Shield configuration.")
 async def show_config(interaction: discord.Interaction):
     if not await _require_setup_permission(interaction):
         return

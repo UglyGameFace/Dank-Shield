@@ -1,4 +1,4 @@
-# Stoney Verify Terms of Service
+# Dank Shield Terms of Service
 
 _Last updated: 2026-04-26_
 
@@ -6,13 +6,13 @@ _Last updated: 2026-04-26_
 
 ## 1. Acceptance of these terms
 
-By adding Stoney Verify to a Discord server, configuring the bot, or using bot commands, you agree to these Terms of Service.
+By adding Dank Shield to a Discord server, configuring the bot, or using bot commands, you agree to these Terms of Service.
 
 If you do not agree, do not use the bot and remove it from your server.
 
-## 2. What Stoney Verify does
+## 2. What Dank Shield does
 
-Stoney Verify is a Discord server administration bot that may provide:
+Dank Shield is a Discord server administration bot that may provide:
 
 - Support ticket creation, management, transcripts, and archives
 - User verification workflows
@@ -26,7 +26,7 @@ Features may change, be added, removed, limited, or disabled at any time.
 
 ## 3. Server owner responsibility
 
-When you add Stoney Verify to a server, you represent that you have authority to manage that server and install bots.
+When you add Dank Shield to a server, you represent that you have authority to manage that server and install bots.
 
 Server owners and administrators are responsible for:
 
@@ -39,9 +39,9 @@ Server owners and administrators are responsible for:
 
 ## 4. Acceptable use
 
-You may use Stoney Verify only for lawful server administration, moderation, verification, support, and community-safety purposes.
+You may use Dank Shield only for lawful server administration, moderation, verification, support, and community-safety purposes.
 
-You may not use Stoney Verify to:
+You may not use Dank Shield to:
 
 - Violate Discord's Terms of Service, Community Guidelines, Developer Terms, or platform policies
 - Harass, threaten, dox, stalk, or target users
@@ -59,17 +59,17 @@ Ticket transcripts, moderation logs, verification decisions, and audit records m
 
 Server administrators are responsible for deciding whether these features are enabled, who can access them, how long records are retained, and how members are informed.
 
-Stoney Verify should not be used as a place to store private secrets, passwords, payment information, or unrelated sensitive personal data.
+Dank Shield should not be used as a place to store private secrets, passwords, payment information, or unrelated sensitive personal data.
 
 ## 6. Bot permissions
 
-Stoney Verify requires Discord permissions to operate, such as Manage Channels, Manage Roles, Send Messages, Read Message History, Attach Files, Moderate Members, View Audit Log, and other permissions depending on enabled features.
+Dank Shield requires Discord permissions to operate, such as Manage Channels, Manage Roles, Send Messages, Read Message History, Attach Files, Moderate Members, View Audit Log, and other permissions depending on enabled features.
 
 Grant only the permissions required for your server's chosen features. You remain responsible for the permissions you grant.
 
 ## 7. Public/beta limitations
 
-During beta or public rollout, Stoney Verify may have bugs, downtime, missing features, rate-limit behavior, or data-sync delays.
+During beta or public rollout, Dank Shield may have bugs, downtime, missing features, rate-limit behavior, or data-sync delays.
 
 The bot is provided as-is and may not be appropriate as the only safety, compliance, or moderation system for a large community.
 
@@ -77,7 +77,7 @@ You should test configuration with `/stoney health` before relying on the bot in
 
 ## 8. Data and privacy
 
-Use of Stoney Verify is also governed by the Stoney Verify Privacy Policy.
+Use of Dank Shield is also governed by the Dank Shield Privacy Policy.
 
 Server owners and administrators should review the Privacy Policy and ensure their server's use of the bot matches their own community rules and legal obligations.
 
@@ -89,7 +89,7 @@ Unless a separate written agreement says otherwise, paid access does not guarant
 
 ## 10. Suspension or removal
 
-Access to Stoney Verify may be limited, suspended, or terminated if a server or user:
+Access to Dank Shield may be limited, suspended, or terminated if a server or user:
 
 - Violates these terms
 - Abuses the bot or other users
@@ -101,13 +101,13 @@ The bot may also leave or be removed from servers that are illegal, abusive, uns
 
 ## 11. Availability and changes
 
-Stoney Verify may be updated, restarted, rate-limited, degraded, or taken offline for maintenance, security, hosting issues, Discord API changes, or abuse prevention.
+Dank Shield may be updated, restarted, rate-limited, degraded, or taken offline for maintenance, security, hosting issues, Discord API changes, or abuse prevention.
 
 Features, command names, limits, and pricing may change over time.
 
 ## 12. Disclaimers
 
-To the fullest extent allowed by law, Stoney Verify is provided "as is" and "as available" without warranties of any kind.
+To the fullest extent allowed by law, Dank Shield is provided "as is" and "as available" without warranties of any kind.
 
 The bot operator does not guarantee that:
 
@@ -123,7 +123,7 @@ To the fullest extent allowed by law, the bot operator is not liable for indirec
 
 ## 14. Indemnity
 
-You agree to hold the bot operator harmless from claims, damages, liabilities, and expenses arising from your server's use of Stoney Verify, your configuration choices, your staff actions, your user content, or your violation of these terms or applicable law.
+You agree to hold the bot operator harmless from claims, damages, liabilities, and expenses arising from your server's use of Dank Shield, your configuration choices, your staff actions, your user content, or your violation of these terms or applicable law.
 
 ## 15. Contact
 

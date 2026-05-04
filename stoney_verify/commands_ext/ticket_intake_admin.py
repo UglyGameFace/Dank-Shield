@@ -840,7 +840,7 @@ def register_ticket_intake_admin_commands(bot, tree) -> None:
             )[:1024],
             inline=False,
         )
-        embed.set_footer(text="Stoney Verify Ticket System")
+        embed.set_footer(text="Dank Shield Ticket System")
 
         try:
             await ch.send(

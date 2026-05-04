@@ -1,0 +1,821 @@
+[1mdiff --git a/.env.example b/.env.example[m
+[1mindex c71bfe5..919c086 100644[m
+[1m--- a/.env.example[m
+[1m+++ b/.env.example[m
+[36m@@ -1,5 +1,5 @@[m
+ # ============================================================[m
+[31m-# Stoney Verify Bot Environment Example[m
+[32m+[m[32m# Dank Shield Bot Environment Example[m
+ # ------------------------------------------------------------[m
+ # Public-safe defaults are shown here.[m
+ # Never commit real tokens, service-role keys, API secrets, or customer data.[m
+[36m@@ -154,3 +154,9 @@[m [mVERIFY_EMBED_THUMBNAIL_URL=[m
+ ALLOW_USER_VERIFYLINK=false[m
+ VERIFY_TOKEN_TABLE=verification_tokens[m
+ TOKEN_TABLE=verification_tokens[m
+[32m+[m
+[32m+[m[32m# Dank Shield branding[m
+[32m+[m[32mBOT_DISPLAY_NAME=Dank Shield[m
+[32m+[m[32mVERIFY_UI_TITLE=Dank Shield Verification[m
+[32m+[m[32mDANK_SHIELD_TAGLINE_SHORT=Good vibes in. Bad actors out.[m
+[32m+[m[32mDANK_SHIELD_TAGLINE_LONG=Verification, tickets, and server protection without snuffing out the vibe.[m
+[1mdiff --git a/README.md b/README.md[m
+[1mindex 51f9b05..451d40e 100644[m
+[1m--- a/README.md[m
+[1m+++ b/README.md[m
+[36m@@ -1,6 +1,6 @@[m
+[31m-# Stoney Verify[m
+[32m+[m[32m# Dank Shield[m
+ [m
+[31m-Stoney Verify is a Discord ticket, verification, moderation, and setup assistant built to feel simple for server owners while still giving staff powerful tools.[m
+[32m+[m[32mDank Shield is a Discord ticket, verification, moderation, and setup assistant built to feel simple for server owners while still giving staff powerful tools.[m
+ [m
+ The normal public setup path is intentionally boring:[m
+ [m
+[1mdiff --git a/discloud.config b/discloud.config[m
+[1mindex 42d36b5..3951f5c 100644[m
+[1m--- a/discloud.config[m
+[1m+++ b/discloud.config[m
+[36m@@ -2,5 +2,5 @@[m [mID=stoneyverify[m
+ TYPE=bot[m
+ MAIN=main.py[m
+ RAM=512[m
+[31m-NAME=Stoney Verify Helper[m
+[32m+[m[32mNAME=Dank Shield Helper[m
+ AUTORESTART=true[m
+[1mdiff --git a/docs/PRIVACY_POLICY.md b/docs/PRIVACY_POLICY.md[m
+[1mindex 7d70567..0471883 100644[m
+[1m--- a/docs/PRIVACY_POLICY.md[m
+[1m+++ b/docs/PRIVACY_POLICY.md[m
+[36m@@ -1,24 +1,24 @@[m
+[31m-# Stoney Verify Privacy Policy[m
+[32m+[m[32m# Dank Shield Privacy Policy[m
+ [m
+ _Last updated: 2026-04-26_[m
+ [m
+ > This template is provided for public/beta launch preparation and should be reviewed by the bot owner before publishing. It is not legal advice.[m
+ [m
+[31m-## 1. What Stoney Verify is[m
+[32m+[m[32m## 1. What Dank Shield is[m
+ [m
+[31m-Stoney Verify is a Discord bot that provides server verification, ticket support, moderation assistance, anti-spam protections, audit/modlog features, and related server administration tools.[m
+[32m+[m[32mDank Shield is a Discord bot that provides server verification, ticket support, moderation assistance, anti-spam protections, audit/modlog features, and related server administration tools.[m
+ [m
+[31m-This policy explains what data Stoney Verify may process when the bot is added to a Discord server or when a user interacts with the bot.[m
+[32m+[m[32mThis policy explains what data Dank Shield may process when the bot is added to a Discord server or when a user interacts with the bot.[m
+ [m
+ ## 2. Who controls the data[m
+ [m
+[31m-For each Discord server, the server owner and authorized server administrators decide how Stoney Verify is configured and used.[m
+[32m+[m[32mFor each Discord server, the server owner and authorized server administrators decide how Dank Shield is configured and used.[m
+ [m
+ The bot operator maintains the infrastructure that stores and processes bot data.[m
+ [m
+[31m-## 3. Data Stoney Verify may collect[m
+[32m+[m[32m## 3. Data Dank Shield may collect[m
+ [m
+[31m-Depending on enabled features, Stoney Verify may process or store:[m
+[32m+[m[32mDepending on enabled features, Dank Shield may process or store:[m
+ [m
+ - Discord user IDs[m
+ - Discord guild/server IDs[m
+[36m@@ -33,11 +33,11 @@[m [mDepending on enabled features, Stoney Verify may process or store:[m
+ - Bot configuration for a server, including configured category IDs, channel IDs, role IDs, and feature settings[m
+ - Operational logs needed to diagnose crashes, abuse, security events, or service reliability problems[m
+ [m
+[31m-Stoney Verify should not intentionally collect passwords, payment-card data, government IDs, private Discord tokens, or unrelated sensitive personal information.[m
+[32m+[m[32mDank Shield should not intentionally collect passwords, payment-card data, government IDs, private Discord tokens, or unrelated sensitive personal information.[m
+ [m
+ ## 4. Why the data is used[m
+ [m
+[31m-Stoney Verify uses data to:[m
+[32m+[m[32mDank Shield uses data to:[m
+ [m
+ - Create, manage, close, archive, and transcript support tickets[m
+ - Verify users and manage configured verification roles[m
+[36m@@ -49,13 +49,13 @@[m [mStoney Verify uses data to:[m
+ [m
+ ## 5. Legal and safety basis[m
+ [m
+[31m-Stoney Verify processes data only to provide the requested bot functionality for Discord communities that add and configure the bot.[m
+[32m+[m[32mDank Shield processes data only to provide the requested bot functionality for Discord communities that add and configure the bot.[m
+ [m
+ Server administrators should disclose their own moderation, logging, transcript, and retention practices to their members where required.[m
+ [m
+ ## 6. Data sharing[m
+ [m
+[31m-Stoney Verify does not sell user data.[m
+[32m+[m[32mDank Shield does not sell user data.[m
+ [m
+ Data may be processed through infrastructure and service providers needed to run the bot, such as database hosting, application hosting, logging, and Discord itself.[m
+ [m
+[36m@@ -63,7 +63,7 @@[m [mData may be disclosed when required to comply with valid legal obligations, prot[m
+ [m
+ ## 7. Data retention[m
+ [m
+[31m-Stoney Verify should retain data only as long as needed for the feature that created it, server safety, moderation accountability, debugging, legal compliance, or abuse prevention.[m
+[32m+[m[32mDank Shield should retain data only as long as needed for the feature that created it, server safety, moderation accountability, debugging, legal compliance, or abuse prevention.[m
+ [m
+ Recommended default retention targets:[m
+ [m
+[36m@@ -93,7 +93,7 @@[m [mRequests should include:[m
+ [m
+ ## 9. Server configuration and permissions[m
+ [m
+[31m-Stoney Verify stores server-specific configuration by Discord guild ID. This may include role IDs, channel IDs, ticket category IDs, transcript channel IDs, verification channel IDs, and moderation log channel IDs.[m
+[32m+[m[32mDank Shield stores server-specific configuration by Discord guild ID. This may include role IDs, channel IDs, ticket category IDs, transcript channel IDs, verification channel IDs, and moderation log channel IDs.[m
+ [m
+ Only users with appropriate server permissions, such as Administrator or Manage Server, should be allowed to configure the bot.[m
+ [m
+[36m@@ -110,7 +110,7 @@[m [mThe bot operator should use reasonable technical and organizational safeguards,[m
+ [m
+ ## 11. Children's privacy[m
+ [m
+[31m-Stoney Verify is designed for Discord communities and is not intended to knowingly collect personal information from children outside the normal operation of Discord server administration. Server owners are responsible for ensuring their communities follow applicable age, safety, and platform requirements.[m
+[32m+[m[32mDank Shield is designed for Discord communities and is not intended to knowingly collect personal information from children outside the normal operation of Discord server administration. Server owners are responsible for ensuring their communities follow applicable age, safety, and platform requirements.[m
+ [m
+ ## 12. Changes to this policy[m
+ [m
+[1mdiff --git a/docs/PUBLIC_LAUNCH_CHECKLIST.md b/docs/PUBLIC_LAUNCH_CHECKLIST.md[m
+[1mindex 27e13cd..962b406 100644[m
+[1m--- a/docs/PUBLIC_LAUNCH_CHECKLIST.md[m
+[1m+++ b/docs/PUBLIC_LAUNCH_CHECKLIST.md[m
+[36m@@ -1,4 +1,4 @@[m
+[31m-# Stoney Verify Public Launch Checklist[m
+[32m+[m[32m# Dank Shield Public Launch Checklist[m
+ [m
+ _Last updated: 2026-04-26_[m
+ [m
+[36m@@ -6,7 +6,7 @@[m [m_Last updated: 2026-04-26_[m
+ [m
+ ## Public launch rule[m
+ [m
+[31m-Do **not** publicly invite Stoney Verify to outside servers until every **Blocker** item is complete.[m
+[32m+[m[32mDo **not** publicly invite Dank Shield to outside servers until every **Blocker** item is complete.[m
+ [m
+ Use this command in every test server before launch:[m
+ [m
+[36m@@ -20,9 +20,9 @@[m [mA server is ready only when `/stoney health` shows no blockers.[m
+ [m
+ ## 1. Competitor benchmark targets[m
+ [m
+[31m-These are the product standards Stoney Verify should be measured against.[m
+[32m+[m[32mThese are the product standards Dank Shield should be measured against.[m
+ [m
+[31m-| Competitor-style reference | What users expect | Stoney Verify launch target |[m
+[32m+[m[32m| Competitor-style reference | What users expect | Dank Shield launch target |[m
+ |---|---|---|[m
+ | Ticket Tool-style ticket bots | Fast ticket panels, category routing, staff actions, transcripts, close/reopen/archive flow | Ticket creation must be fast, reliable, per-server configurable, and easy for non-technical admins |[m
+ | MEE6/ProBot-style public bots | Simple onboarding, minimal command clutter, clear permissions, public docs | Public profile must stay under Discord command limits and setup must be guided |[m
+[36m@@ -30,7 +30,7 @@[m [mThese are the product standards Stoney Verify should be measured against.[m
+ | Premium bot dashboards | Clear pricing tiers, server-level settings, billing transparency | Paid plans must be documented before charging anyone |[m
+ | Large verified bots | Privacy Policy, Terms, support server, status communication, abuse handling | Legal docs and support process must exist before public rollout |[m
+ [m
+[31m-Do not copy competitor branding, embeds, copywriting, designs, docs, code, or pricing tables directly. Use the category of feature as the benchmark and build original Stoney Verify behavior.[m
+[32m+[m[32mDo not copy competitor branding, embeds, copywriting, designs, docs, code, or pricing tables directly. Use the category of feature as the benchmark and build original Dank Shield behavior.[m
+ [m
+ ---[m
+ [m
+[1mdiff --git a/docs/SECURITY.md b/docs/SECURITY.md[m
+[1mindex 934bb22..cabb6bd 100644[m
+[1m--- a/docs/SECURITY.md[m
+[1m+++ b/docs/SECURITY.md[m
+[36m@@ -1,8 +1,8 @@[m
+[31m-# Stoney Verify Security Policy[m
+[32m+[m[32m# Dank Shield Security Policy[m
+ [m
+ _Last updated: 2026-04-27_[m
+ [m
+[31m-> This document defines how Stoney Verify handles security reporting, secret management, API authentication, Discord permissions, database access, and incident response. It is an operational security policy, not legal advice.[m
+[32m+[m[32m> This document defines how Dank Shield handles security reporting, secret management, API authentication, Discord permissions, database access, and incident response. It is an operational security policy, not legal advice.[m
+ [m
+ ## 1. Security contact[m
+ [m
+[36m@@ -18,7 +18,7 @@[m [mDo not ask security reporters to post vulnerabilities publicly.[m
+ [m
+ ## 2. Supported versions[m
+ [m
+[31m-Public security support applies only to actively deployed public/beta versions of Stoney Verify.[m
+[32m+[m[32mPublic security support applies only to actively deployed public/beta versions of Dank Shield.[m
+ [m
+ | Version / branch | Supported |[m
+ |---|---:|[m
+[1mdiff --git a/docs/SUPPORT_AND_INCIDENT_RESPONSE.md b/docs/SUPPORT_AND_INCIDENT_RESPONSE.md[m
+[1mindex c5d646c..da0bf42 100644[m
+[1m--- a/docs/SUPPORT_AND_INCIDENT_RESPONSE.md[m
+[1m+++ b/docs/SUPPORT_AND_INCIDENT_RESPONSE.md[m
+[36m@@ -1,8 +1,8 @@[m
+[31m-# Stoney Verify Support and Incident Response[m
+[32m+[m[32m# Dank Shield Support and Incident Response[m
+ [m
+ _Last updated: 2026-04-26_[m
+ [m
+[31m-> This document defines how Stoney Verify should handle public/beta support, outages, abuse reports, privacy requests, and security incidents. It is an operational runbook, not legal advice.[m
+[32m+[m[32m> This document defines how Dank Shield should handle public/beta support, outages, abuse reports, privacy requests, and security incidents. It is an operational runbook, not legal advice.[m
+ [m
+ ## 1. Purpose[m
+ [m
+[36m@@ -200,7 +200,7 @@[m [mOwner:[m
+ ### Initial incident notice[m
+ [m
+ ```txt[m
+[31m-We are investigating an issue affecting Stoney Verify: <short issue>.[m
+[32m+[m[32mWe are investigating an issue affecting Dank Shield: <short issue>.[m
+ Impact: <who/what is affected>.[m
+ Current status: investigating.[m
+ Next update: when we have a confirmed fix or workaround.[m
+[1mdiff --git a/docs/TERMS_OF_SERVICE.md b/docs/TERMS_OF_SERVICE.md[m
+[1mindex 7db76e6..e1651ba 100644[m
+[1m--- a/docs/TERMS_OF_SERVICE.md[m
+[1m+++ b/docs/TERMS_OF_SERVICE.md[m
+[36m@@ -1,4 +1,4 @@[m
+[31m-# Stoney Verify Terms of Service[m
+[32m+[m[32m# Dank Shield Terms of Service[m
+ [m
+ _Last updated: 2026-04-26_[m
+ [m
+[36m@@ -6,13 +6,13 @@[m [m_Last updated: 2026-04-26_[m
+ [m
+ ## 1. Acceptance of these terms[m
+ [m
+[31m-By adding Stoney Verify to a Discord server, configuring the bot, or using bot commands, you agree to these Terms of Service.[m
+[32m+[m[32mBy adding Dank Shield to a Discord server, configuring the bot, or using bot commands, you agree to these Terms of Service.[m
+ [m
+ If you do not agree, do not use the bot and remove it from your server.[m
+ [m
+[31m-## 2. What Stoney Verify does[m
+[32m+[m[32m## 2. What Dank Shield does[m
+ [m
+[31m-Stoney Verify is a Discord server administration bot that may provide:[m
+[32m+[m[32mDank Shield is a Discord server administration bot that may provide:[m
+ [m
+ - Support ticket creation, management, transcripts, and archives[m
+ - User verification workflows[m
+[36m@@ -26,7 +26,7 @@[m [mFeatures may change, be added, removed, limited, or disabled at any time.[m
+ [m
+ ## 3. Server owner responsibility[m
+ [m
+[31m-When you add Stoney Verify to a server, you represent that you have authority to manage that server and install bots.[m
+[32m+[m[32mWhen you add Dank Shield to a server, you represent that you have authority to manage that server and install bots.[m
+ [m
+ Server owners and administrators are responsible for:[m
+ [m
+[36m@@ -39,9 +39,9 @@[m [mServer owners and administrators are responsible for:[m
+ [m
+ ## 4. Acceptable use[m
+ [m
+[31m-You may use Stoney Verify only for lawful server administration, moderation, verification, support, and community-safety purposes.[m
+[32m+[m[32mYou may use Dank Shield only for lawful server administration, moderation, verification, support, and community-safety purposes.[m
+ [m
+[31m-You may not use Stoney Verify to:[m
+[32m+[m[32mYou may not use Dank Shield to:[m
+ [m
+ - Violate Discord's Terms of Service, Community Guidelines, Developer Terms, or platform policies[m
+ - Harass, threaten, dox, stalk, or target users[m
+[36m@@ -59,17 +59,17 @@[m [mTicket transcripts, moderation logs, verification decisions, and audit records m[m
+ [m
+ Server administrators are responsible for deciding whether these features are enabled, who can access them, how long records are retained, and how members are informed.[m
+ [m
+[31m-Stoney Verify should not be used as a place to store private secrets, passwords, payment information, or unrelated sensitive personal data.[m
+[32m+[m[32mDank Shield should not be used as a place to store private secrets, passwords, payment information, or unrelated sensitive personal data.[m
+ [m
+ ## 6. Bot permissions[m
+ [m
+[31m-Stoney Verify requires Discord permissions to operate, such as Manage Channels, Manage Roles, Send Messages, Read Message History, Attach Files, Moderate Members, View Audit Log, and other permissions depending on enabled features.[m
+[32m+[m[32mDank Shield requires Discord permissions to operate, such as Manage Channels, Manage Roles, Send Messages, Read Message History, Attach Files, Moderate Members, View Audit Log, and other permissions depending on enabled features.[m
+ [m
+ Grant only the permissions required for your server's chosen features. You remain responsible for the permissions you grant.[m
+ [m
+ ## 7. Public/beta limitations[m
+ [m
+[31m-During beta or public rollout, Stoney Verify may have bugs, downtime, missing features, rate-limit behavior, or data-sync delays.[m
+[32m+[m[32mDuring beta or public rollout, Dank Shield may have bugs, downtime, missing features, rate-limit behavior, or data-sync delays.[m
+ [m
+ The bot is provided as-is and may not be appropriate as the only safety, compliance, or moderation system for a large community.[m
+ [m
+[36m@@ -77,7 +77,7 @@[m [mYou should test configuration with `/stoney health` before relying on the bot in[m
+ [m
+ ## 8. Data and privacy[m
+ [m
+[31m-Use of Stoney Verify is also governed by the Stoney Verify Privacy Policy.[m
+[32m+[m[32mUse of Dank Shield is also governed by the Dank Shield Privacy Policy.[m
+ [m
+ Server owners and administrators should review the Privacy Policy and ensure their server's use of the bot matches their own community rules and legal obligations.[m
+ [m
+[36m@@ -89,7 +89,7 @@[m [mUnless a separate written agreement says otherwise, paid access does not guarant[m
+ [m
+ ## 10. Suspension or removal[m
+ [m
+[31m-Access to Stoney Verify may be limited, suspended, or terminated if a server or user:[m
+[32m+[m[32mAccess to Dank Shield may be limited, suspended, or terminated if a server or user:[m
+ [m
+ - Violates these terms[m
+ - Abuses the bot or other users[m
+[36m@@ -101,13 +101,13 @@[m [mThe bot may also leave or be removed from servers that are illegal, abusive, uns[m
+ [m
+ ## 11. Availability and changes[m
+ [m
+[31m-Stoney Verify may be updated, restarted, rate-limited, degraded, or taken offline for maintenance, security, hosting issues, Discord API changes, or abuse prevention.[m
+[32m+[m[32mDank Shield may be updated, restarted, rate-limited, degraded, or taken offline for maintenance, security, hosting issues, Discord API changes, or abuse prevention.[m
+ [m
+ Features, command names, limits, and pricing may change over time.[m
+ [m
+ ## 12. Disclaimers[m
+ [m
+[31m-To the fullest extent allowed by law, Stoney Verify is provided "as is" and "as available" without warranties of any kind.[m
+[32m+[m[32mTo the fullest extent allowed by law, Dank Shield is provided "as is" and "as available" without warranties of any kind.[m
+ [m
+ The bot operator does not guarantee that:[m
+ [m
+[36m@@ -123,7 +123,7 @@[m [mTo the fullest extent allowed by law, the bot operator is not liable for indirec[m
+ [m
+ ## 14. Indemnity[m
+ [m
+[31m-You agree to hold the bot operator harmless from claims, damages, liabilities, and expenses arising from your server's use of Stoney Verify, your configuration choices, your staff actions, your user content, or your violation of these terms or applicable law.[m
+[32m+[m[32mYou agree to hold the bot operator harmless from claims, damages, liabilities, and expenses arising from your server's use of Dank Shield, your configuration choices, your staff actions, your user content, or your violation of these terms or applicable law.[m
+ [m
+ ## 15. Contact[m
+ [m
+[1mdiff --git a/docs/TICKETTOOL_PARITY_STANDARD.md b/docs/TICKETTOOL_PARITY_STANDARD.md[m
+[1mindex 4d8fcbe..7d0050b 100644[m
+[1m--- a/docs/TICKETTOOL_PARITY_STANDARD.md[m
+[1m+++ b/docs/TICKETTOOL_PARITY_STANDARD.md[m
+[36m@@ -1,10 +1,10 @@[m
+ # TicketTool Parity Standard[m
+ [m
+[31m-This document is the hard execution standard for Stoney Bot until it is honestly better than Ticket Tool in production.[m
+[32m+[m[32mThis document is the hard execution standard for Dank Shield until it is honestly better than Ticket Tool in production.[m
+ [m
+ ## Core rule[m
+ [m
+[31m-Do **not** call Stoney Bot better than Ticket Tool until the checklist in this document is actually true in the live system.[m
+[32m+[m[32mDo **not** call Dank Shield better than Ticket Tool until the checklist in this document is actually true in the live system.[m
+ [m
+ Feature count is not enough.[m
+ Consistency, correctness, and staff trust are the deciding factors.[m
+[36m@@ -13,7 +13,7 @@[m [mConsistency, correctness, and staff trust are the deciding factors.[m
+ [m
+ ## Non-negotiable product goal[m
+ [m
+[31m-Stoney Bot must become:[m
+[32m+[m[32mDank Shield must become:[m
+ [m
+ 1. easier for staff to use than Ticket Tool[m
+ 2. more reliable in ticket lifecycle handling than Ticket Tool[m
+[36m@@ -52,7 +52,7 @@[m [mClosed/archive mismatches are failures.[m
+ A stale panel, expired button path, or duplicated control surface counts as a real bug.[m
+ [m
+ ### 7. VC verify is part of the product[m
+[31m-Stoney Bot cannot be considered better overall if ticketing is strong but VC verify is flaky.[m
+[32m+[m[32mDank Shield cannot be considered better overall if ticketing is strong but VC verify is flaky.[m
+ [m
+ ### 8. Timer safety is mandatory[m
+ Any timer that can kick, close, delete, or alter a member flow must be treated as trust-critical.[m
+[36m@@ -160,7 +160,7 @@[m [mAt minimum, verify these flows:[m
+ [m
+ ## What counts as a pass[m
+ [m
+[31m-Stoney Bot can be called better than Ticket Tool only when all of the following are true:[m
+[32m+[m[32mDank Shield can be called better than Ticket Tool only when all of the following are true:[m
+ [m
+ - lifecycle state is consistent across service, repository, panels, transcripts, commands, and interactions[m
+ - no stale controls can perform the wrong action[m
+[1mdiff --git a/runtime_raidguard_risk_engine_v2_patch.py b/runtime_raidguard_risk_engine_v2_patch.py[m
+[1mindex 72305b1..9385ac7 100644[m
+[1m--- a/runtime_raidguard_risk_engine_v2_patch.py[m
+[1m+++ b/runtime_raidguard_risk_engine_v2_patch.py[m
+[36m@@ -1,7 +1,7 @@[m
+ from __future__ import annotations[m
+ [m
+ """[m
+[31m-Risk Engine v2 for Stoney Verify raidguard.[m
+[32m+[m[32mRisk Engine v2 for Dank Shield raidguard.[m
+ [m
+ This layer keeps the bot realistic for servers that intentionally get public[m
+ traffic from listing sites such as Disboard, Discodus, Discordfy, and Discadia.[m
+[1mdiff --git a/scripts/rebrand_dank_shield.py b/scripts/rebrand_dank_shield.py[m
+[1mindex 1ef57af..891b299 100644[m
+[1m--- a/scripts/rebrand_dank_shield.py[m
+[1m+++ b/scripts/rebrand_dank_shield.py[m
+[36m@@ -69,19 +69,19 @@[m [mSKIP_DIRS = {[m
+ }[m
+ [m
+ REPLACEMENTS: tuple[tuple[str, str], ...] = ([m
+[31m-    ("Stoney Baloney Verification", VERIFY_TITLE),[m
+[31m-    ("Stoney Verify Verification", VERIFY_TITLE),[m
+[31m-    ("Stoney Verification", VERIFY_TITLE),[m
+[31m-    ("Stoney Verify ticket panel", f"{BRAND_NAME} ticket panel"),[m
+[31m-    ("Stoney Verify Ticket Panel", f"{BRAND_NAME} Ticket Panel"),[m
+[31m-    ("Stoney Verify dashboard", f"{BRAND_NAME} dashboard"),[m
+[31m-    ("Stoney Verify Dashboard", f"{BRAND_NAME} Dashboard"),[m
+[31m-    ("Stoney Verify helper", f"{BRAND_NAME} helper"),[m
+[31m-    ("Stoney Verify Helper", f"{BRAND_NAME} Helper"),[m
+[31m-    ("Stoney Verify", BRAND_NAME),[m
+[31m-    ("Stoney-Bot", "Dank-Shield"),[m
+[31m-    ("Stoney Bot", BRAND_NAME),[m
+[31m-    ("stoney-verify-helper", "dank-shield-helper"),[m
+[32m+[m[32m    ("Dank Shield Verification", VERIFY_TITLE),[m
+[32m+[m[32m    ("Dank Shield Verification", VERIFY_TITLE),[m
+[32m+[m[32m    ("Dank Shield Verification", VERIFY_TITLE),[m
+[32m+[m[32m    ("Dank Shield ticket panel", f"{BRAND_NAME} ticket panel"),[m
+[32m+[m[32m    ("Dank Shield Ticket Panel", f"{BRAND_NAME} Ticket Panel"),[m
+[32m+[m[32m    ("Dank Shield dashboard", f"{BRAND_NAME} dashboard"),[m
+[32m+[m[32m    ("Dank Shield Dashboard", f"{BRAND_NAME} Dashboard"),[m
+[32m+[m[32m    ("Dank Shield helper", f"{BRAND_NAME} helper"),[m
+[32m+[m[32m    ("Dank Shield Helper", f"{BRAND_NAME} Helper"),[m
+[32m+[m[32m    ("Dank Shield", BRAND_NAME),[m
+[32m+[m[32m    ("Dank-Shield", "Dank-Shield"),[m
+[32m+[m[32m    ("Dank Shield", BRAND_NAME),[m
+[32m+[m[32m    ("dank-shield-helper", "dank-shield-helper"),[m
+ )[m
+ [m
+ ENV_LINES = {[m
+[1mdiff --git a/sitecustomize.py b/sitecustomize.py[m
+[1mindex ecc9473..3f3ca2d 100644[m
+[1m--- a/sitecustomize.py[m
+[1m+++ b/sitecustomize.py[m
+[36m@@ -1,7 +1,7 @@[m
+ from __future__ import annotations[m
+ [m
+ """[m
+[31m-Python host fallback for Stoney Verify startup safety.[m
+[32m+[m[32mPython host fallback for Dank Shield startup safety.[m
+ [m
+ Some hosts auto-import ``sitecustomize`` before the normal app entrypoint. Keep[m
+ this file tiny: the real runtime safety logic lives in[m
+[1mdiff --git a/stoney_verify/commands_ext/public_access_control.py b/stoney_verify/commands_ext/public_access_control.py[m
+[1mindex d060bcd..35b17d0 100644[m
+[1m--- a/stoney_verify/commands_ext/public_access_control.py[m
+[1m+++ b/stoney_verify/commands_ext/public_access_control.py[m
+[36m@@ -3,7 +3,7 @@[m [mfrom __future__ import annotations[m
+ """[m
+ Public/beta access-control hardening.[m
+ [m
+[31m-Role tiers used by Stoney Verify:[m
+[32m+[m[32mRole tiers used by Dank Shield:[m
+ [m
+ - server-control role: the owner/admin-level bot control role for setup/config,[m
+   destructive cleanup, and production switches. In the Stoney server this is[m
+[1mdiff --git a/stoney_verify/commands_ext/public_member_lifecycle_logs.py b/stoney_verify/commands_ext/public_member_lifecycle_logs.py[m
+[1mindex 26f8f5a..5b9c02d 100644[m
+[1m--- a/stoney_verify/commands_ext/public_member_lifecycle_logs.py[m
+[1m+++ b/stoney_verify/commands_ext/public_member_lifecycle_logs.py[m
+[36m@@ -421,7 +421,7 @@[m [mdef _member_staff_leave_embed(member: discord.Member, removal_info: Optional[Dic[m
+     if actor is not None:[m
+         actor_title = "Actor"[m
+         if bool(info.get("stoney_actor")):[m
+[31m-            actor_title = "Actor — Stoney Verify"[m
+[32m+[m[32m            actor_title = "Actor — Dank Shield"[m
+         embed.add_field(name=actor_title, value=_display_actor(actor), inline=False)[m
+ [m
+     reason = info.get("reason")[m
+[1mdiff --git a/stoney_verify/commands_ext/public_onboarding.py b/stoney_verify/commands_ext/public_onboarding.py[m
+[1mindex 7c6cdfe..e5efb8a 100644[m
+[1m--- a/stoney_verify/commands_ext/public_onboarding.py[m
+[1m+++ b/stoney_verify/commands_ext/public_onboarding.py[m
+[36m@@ -93,7 +93,7 @@[m [mdef _best_setup_channel(guild: discord.Guild) -> Optional[discord.TextChannel]:[m
+ [m
+ def _setup_embed(guild: discord.Guild) -> discord.Embed:[m
+     embed = discord.Embed([m
+[31m-        title="👋 Thanks for adding Stoney Verify",[m
+[32m+[m[32m        title="👋 Thanks for adding Dank Shield",[m
+         description=([m
+             "I’m ready, and I won’t use another server’s channels or roles.\n\n"[m
+             "Start setup with **`/stoney setup`**. It walks you through the safest setup path for this server."[m
+[1mdiff --git a/stoney_verify/commands_ext/public_setup_assistant.py b/stoney_verify/commands_ext/public_setup_assistant.py[m
+[1mindex fa77961..fcdc736 100644[m
+[1m--- a/stoney_verify/commands_ext/public_setup_assistant.py[m
+[1m+++ b/stoney_verify/commands_ext/public_setup_assistant.py[m
+[36m@@ -454,7 +454,7 @@[m [mdef _topic_for_spec(spec: RepairSpec) -> str:[m
+         "modlog_channel": "Moderation, ticket, and security logs are posted here.",[m
+         "join_log_channel": "Join and leave events are posted here.",[m
+         "status_channel": "Bot status and restored-service notices are posted here.",[m
+[31m-    }.get(spec.key, "Created by Stoney Verify setup assistant.")[m
+[32m+[m[32m    }.get(spec.key, "Created by Dank Shield setup assistant.")[m
+ [m
+ [m
+ async def _repair_specs(interaction: discord.Interaction, specs: list[RepairSpec], *, custom_names: Optional[dict[str, str]] = None) -> None:[m
+[1mdiff --git a/stoney_verify/commands_ext/public_setup_group.py b/stoney_verify/commands_ext/public_setup_group.py[m
+[1mindex c230863..7377e15 100644[m
+[1m--- a/stoney_verify/commands_ext/public_setup_group.py[m
+[1m+++ b/stoney_verify/commands_ext/public_setup_group.py[m
+[36m@@ -29,7 +29,7 @@[m [mfrom ..globals import get_supabase, now_utc[m
+ [m
+ stoney_group = app_commands.Group([m
+     name="stoney",[m
+[31m-    description="Stoney Verify setup and server configuration.",[m
+[32m+[m[32m    description="Dank Shield setup and server configuration.",[m
+ )[m
+ [m
+ [m
+[36m@@ -783,7 +783,7 @@[m [masync def setup_logs(interaction: discord.Interaction, modlog_channel: discord.T[m
+     await interaction.followup.send(embed=embed, ephemeral=True)[m
+ [m
+ [m
+[31m-@stoney_group.command(name="config", description="Show this server's current Stoney Verify configuration.")[m
+[32m+[m[32m@stoney_group.command(name="config", description="Show this server's current Dank Shield configuration.")[m
+ async def show_config(interaction: discord.Interaction):[m
+     if not await _require_setup_permission(interaction):[m
+         return[m
+[1mdiff --git a/stoney_verify/commands_ext/public_status_reporter.py b/stoney_verify/commands_ext/public_status_reporter.py[m
+[1mindex ba9805a..b9602d3 100644[m
+[1m--- a/stoney_verify/commands_ext/public_status_reporter.py[m
+[1m+++ b/stoney_verify/commands_ext/public_status_reporter.py[m
+[36m@@ -1,6 +1,6 @@[m
+ from __future__ import annotations[m
+ [m
+[31m-"""Public status / uptime reporting for Stoney Verify.[m
+[32m+[m[32m"""Public status / uptime reporting for Dank Shield.[m
+ [m
+ This module owns the user-facing status report and the optional heartbeat row.[m
+ The important production rule here is simple: health checks must never freeze[m
+[36m@@ -150,7 +150,7 @@[m [mdef _bot_status_id(bot: Any) -> str:[m
+     except Exception:[m
+         pass[m
+ [m
+[31m-    return "stoney-verify-helper"[m
+[32m+[m[32m    return "dank-shield-helper"[m
+ [m
+ [m
+ def _utc_now() -> datetime:[m
+[36m@@ -611,7 +611,7 @@[m [masync def _send_status_report(bot: Any, guild: discord.Guild, *, event: str, for[m
+ [m
+     lines, all_ok = await _build_service_status_lines(bot, guild)[m
+ [m
+[31m-    title = "🟢 Stoney Verify is back online" if event == "startup" else "🟡 Stoney Verify gateway restored"[m
+[32m+[m[32m    title = "🟢 Dank Shield is back online" if event == "startup" else "🟡 Dank Shield gateway restored"[m
+     description = ([m
+         "The bot process is online again. Service checks are below."[m
+         if all_ok[m
+[36m@@ -636,7 +636,7 @@[m [masync def _send_status_report(bot: Any, guild: discord.Guild, *, event: str, for[m
+         value="True bot-down alerts require a separate watchdog because the bot cannot send Discord messages while its own process is offline.",[m
+         inline=False,[m
+     )[m
+[31m-    embed.set_footer(text="Stoney Verify status reporter")[m
+[32m+[m[32m    embed.set_footer(text="Dank Shield status reporter")[m
+ [m
+     try:[m
+         await channel.send(embed=embed)[m
+[36m@@ -871,7 +871,7 @@[m [mdef _attach_setup_status_command() -> None:[m
+ [m
+     command = discord.app_commands.Command([m
+         name="setup-status",[m
+[31m-        description="Choose where Stoney Verify posts online/restored status reports.",[m
+[32m+[m[32m        description="Choose where Dank Shield posts online/restored status reports.",[m
+         callback=_setup_status_callback,[m
+     )[m
+ [m
+[1mdiff --git a/stoney_verify/commands_ext/public_ticket_panel_clean.py b/stoney_verify/commands_ext/public_ticket_panel_clean.py[m
+[1mindex 470de41..153d310 100644[m
+[1m--- a/stoney_verify/commands_ext/public_ticket_panel_clean.py[m
+[1m+++ b/stoney_verify/commands_ext/public_ticket_panel_clean.py[m
+[36m@@ -1125,7 +1125,7 @@[m [mdef _panel_embed(guild: discord.Guild) -> discord.Embed:[m
+         ),[m
+         inline=False,[m
+     )[m
+[31m-    e.set_footer(text=f"{guild.name} • Stoney Verify ticket panel • category-menu")[m
+[32m+[m[32m    e.set_footer(text=f"{guild.name} • Dank Shield ticket panel • category-menu")[m
+     return e[m
+ [m
+ [m
+[1mdiff --git a/stoney_verify/commands_ext/public_ticket_panel_commands.py b/stoney_verify/commands_ext/public_ticket_panel_commands.py[m
+[1mindex 8969904..0935d07 100644[m
+[1m--- a/stoney_verify/commands_ext/public_ticket_panel_commands.py[m
+[1m+++ b/stoney_verify/commands_ext/public_ticket_panel_commands.py[m
+[36m@@ -196,7 +196,7 @@[m [mdef _public_panel_embed(guild: discord.Guild) -> discord.Embed:[m
+         ),[m
+         inline=False,[m
+     )[m
+[31m-    embed.set_footer(text=f"{guild.name} • Stoney Verify ticket panel")[m
+[32m+[m[32m    embed.set_footer(text=f"{guild.name} • Dank Shield ticket panel")[m
+     return embed[m
+ [m
+ [m
+[1mdiff --git a/stoney_verify/commands_ext/public_tickettool_parity_polish.py b/stoney_verify/commands_ext/public_tickettool_parity_polish.py[m
+[1mindex 0008c30..950ae0b 100644[m
+[1m--- a/stoney_verify/commands_ext/public_tickettool_parity_polish.py[m
+[1m+++ b/stoney_verify/commands_ext/public_tickettool_parity_polish.py[m
+[36m@@ -297,7 +297,7 @@[m [mdef _panel_embed(guild: discord.Guild) -> discord.Embed:[m
+         value="1. Press **Create Ticket**\n2. Pick a ticket type\n3. A private ticket channel opens",[m
+         inline=False,[m
+     )[m
+[31m-    embed.set_footer(text=f"{guild.name} • Stoney Verify ticket panel • category-menu")[m
+[32m+[m[32m    embed.set_footer(text=f"{guild.name} • Dank Shield ticket panel • category-menu")[m
+     return embed[m
+ [m
+ [m
+[1mdiff --git a/stoney_verify/commands_ext/public_verify_group.py b/stoney_verify/commands_ext/public_verify_group.py[m
+[1mindex 7b6a72d..599e91d 100644[m
+[1m--- a/stoney_verify/commands_ext/public_verify_group.py[m
+[1m+++ b/stoney_verify/commands_ext/public_verify_group.py[m
+[36m@@ -430,7 +430,7 @@[m [masync def _ensure_pending_role([m
+             permissions=discord.Permissions.none(),[m
+             mentionable=False,[m
+             hoist=False,[m
+[31m-            reason="Stoney Verify repair created missing Pending / Unverified role for no-role members",[m
+[32m+[m[32m            reason="Dank Shield repair created missing Pending / Unverified role for no-role members",[m
+         )[m
+         roles["pending"] = created[m
+         await _save_role_config([m
+[1mdiff --git a/stoney_verify/commands_ext/ticket_intake_admin.py b/stoney_verify/commands_ext/ticket_intake_admin.py[m
+[1mindex a5f76df..b1e2d91 100644[m
+[1m--- a/stoney_verify/commands_ext/ticket_intake_admin.py[m
+[1m+++ b/stoney_verify/commands_ext/ticket_intake_admin.py[m
+[36m@@ -840,7 +840,7 @@[m [mdef register_ticket_intake_admin_commands(bot, tree) -> None:[m
+             )[:1024],[m
+             inline=False,[m
+         )[m
+[31m-        embed.set_footer(text="Stoney Verify Ticket System")[m
+[32m+[m[32m        embed.set_footer(text="Dank Shield Ticket System")[m
+ [m
+         try:[m
+             await ch.send([m
+[1mdiff --git a/stoney_verify/commands_ext/vc_flow.py b/stoney_verify/commands_ext/vc_flow.py[m
+[1mindex 38b3889..6d509e6 100644[m
+[1m--- a/stoney_verify/commands_ext/vc_flow.py[m
+[1m+++ b/stoney_verify/commands_ext/vc_flow.py[m
+[36m@@ -497,7 +497,7 @@[m [mdef _build_vc_staff_embed([m
+             globals().get("VC_REQUEST_TTL_MINUTES", TOKEN_TTL_MINUTES or 20),[m
+         ) or 20[m
+     )[m
+[31m-    emb.set_footer(text=f"Stoney Verify • VC staff panel | TTL {vc_footer_ttl}m")[m
+[32m+[m[32m    emb.set_footer(text=f"Dank Shield • VC staff panel | TTL {vc_footer_ttl}m")[m
+     return emb[m
+ [m
+ [m
+[1mdiff --git a/stoney_verify/interaction_handlers.py b/stoney_verify/interaction_handlers.py[m
+[1mindex f0c9c24..1f7b0aa 100644[m
+[1m--- a/stoney_verify/interaction_handlers.py[m
+[1m+++ b/stoney_verify/interaction_handlers.py[m
+[36m@@ -966,12 +966,12 @@[m [masync def _legacy_approve_verification([m
+         if grant_roles:[m
+             await owner.add_roles([m
+                 *grant_roles,[m
+[31m-                reason=f"Stoney Verify approved by {staff_member} ({staff_member.id})",[m
+[32m+[m[32m                reason=f"Dank Shield approved by {staff_member} ({staff_member.id})",[m
+             )[m
+ [m
+         _, remove_error = await _remove_unverified_role_if_present([m
+             owner,[m
+[31m-            reason=f"Stoney Verify approval cleanup by {staff_member} ({staff_member.id})",[m
+[32m+[m[32m            reason=f"Dank Shield approval cleanup by {staff_member} ({staff_member.id})",[m
+         )[m
+         if remove_error:[m
+             try:[m
+[1mdiff --git a/stoney_verify/startup_guards/__init__.py b/stoney_verify/startup_guards/__init__.py[m
+[1mindex 4c54625..390ef29 100644[m
+[1m--- a/stoney_verify/startup_guards/__init__.py[m
+[1m+++ b/stoney_verify/startup_guards/__init__.py[m
+[36m@@ -1,6 +1,6 @@[m
+ from __future__ import annotations[m
+ [m
+[31m-"""Startup guard loader for Stoney Verify.[m
+[32m+[m[32m"""Startup guard loader for Dank Shield.[m
+ [m
+ The guard modules still need to load before ``stoney_verify.app`` because they[m
+ patch/import-wrap older production paths while the project is being fully[m
+[1mdiff --git a/stoney_verify/startup_guards/fresh_join_role_recovery.py b/stoney_verify/startup_guards/fresh_join_role_recovery.py[m
+[1mindex 348684e..e80664c 100644[m
+[1m--- a/stoney_verify/startup_guards/fresh_join_role_recovery.py[m
+[1m+++ b/stoney_verify/startup_guards/fresh_join_role_recovery.py[m
+[36m@@ -188,7 +188,7 @@[m [masync def ensure_fresh_join_unverified_role([m
+         if not allowed:[m
+             return False, reason[m
+ [m
+[31m-        await member.add_roles(role, reason=f"Stoney Verify fresh join recovery: {source}"[:512])[m
+[32m+[m[32m        await member.add_roles(role, reason=f"Dank Shield fresh join recovery: {source}"[:512])[m
+ [m
+         # Local member.roles usually updates immediately, but Discord can lag.[m
+         # Treat the API success as enough to prevent an instant fail-closed kick.[m
+[1mdiff --git a/stoney_verify/startup_guards/runtime_safety.py b/stoney_verify/startup_guards/runtime_safety.py[m
+[1mindex c538661..fb44dfe 100644[m
+[1m--- a/stoney_verify/startup_guards/runtime_safety.py[m
+[1m+++ b/stoney_verify/startup_guards/runtime_safety.py[m
+[36m@@ -1,7 +1,7 @@[m
+ from __future__ import annotations[m
+ [m
+ """[m
+[31m-Runtime safety guard for Stoney Verify.[m
+[32m+[m[32mRuntime safety guard for Dank Shield.[m
+ [m
+ Purpose:[m
+ - prevent sync Supabase/PostgREST risk lookups from blocking Discord's event loop[m
+[1mdiff --git a/stoney_verify/startup_guards/setup_role_safety.py b/stoney_verify/startup_guards/setup_role_safety.py[m
+[1mindex 704b1cc..220c8f4 100644[m
+[1m--- a/stoney_verify/startup_guards/setup_role_safety.py[m
+[1m+++ b/stoney_verify/startup_guards/setup_role_safety.py[m
+[36m@@ -8,7 +8,7 @@[m [mThis replaces the old root-level runtime_setup_role_safety_patch.py.[m
+ Purpose:[m
+ Discord's role creation UI offers friendly presets such as Cosmetic, Member,[m
+ Moderator, and Manager. Those presets are fine for normal Discord management,[m
+[31m-but Stoney Verify setup roles should be safer:[m
+[32m+[m[32mbut Dank Shield setup roles should be safer:[m
+ [m
+ - Bot-created default roles should be plain roles with no server-level powers.[m
+ - Verification/member roles must not accidentally have Moderator/Manager/Admin[m
+[1mdiff --git a/stoney_verify/startup_guards/unverified_ticket_panel_flow.py b/stoney_verify/startup_guards/unverified_ticket_panel_flow.py[m
+[1mindex b6ae729..8c197a5 100644[m
+[1m--- a/stoney_verify/startup_guards/unverified_ticket_panel_flow.py[m
+[1m+++ b/stoney_verify/startup_guards/unverified_ticket_panel_flow.py[m
+[36m@@ -734,7 +734,7 @@[m [masync def _send_direct_ticket_intro(channel: discord.TextChannel, member: discor[m
+             ),[m
+             color=discord.Color.green(),[m
+         )[m
+[31m-        embed.set_footer(text="Stoney Verify • verification ticket")[m
+[32m+[m[32m        embed.set_footer(text="Dank Shield • verification ticket")[m
+         await channel.send(content=member.mention, embed=embed, allowed_mentions=discord.AllowedMentions(users=True, roles=False, everyone=False))[m
+     except Exception as e:[m
+         _warn(f"direct ticket intro send failed channel={getattr(channel, 'id', None)}: {e!r}")[m
+[1mdiff --git a/stoney_verify/startup_guards/vc_request_setup_clarity.py b/stoney_verify/startup_guards/vc_request_setup_clarity.py[m
+[1mindex 21d8f86..0f3d6c8 100644[m
+[1m--- a/stoney_verify/startup_guards/vc_request_setup_clarity.py[m
+[1m+++ b/stoney_verify/startup_guards/vc_request_setup_clarity.py[m
+[36m@@ -469,7 +469,7 @@[m [mdef _build_staff_panel_embed(guild: discord.Guild, cfg: Any, *, requester_id: in[m
+     embed.add_field(name="Ticket", value=f"<#{int(ticket_channel_id)}>\n`{ticket_channel_id}`", inline=True)[m
+     embed.add_field(name="VC Channel", value=(f"<#{vc_id}>\n`{vc_id}`" if vc_id > 0 else "`Not configured`"), inline=True)[m
+     embed.add_field(name="Token", value=f"`{token}`", inline=False)[m
+[31m-    embed.set_footer(text="Stoney Verify • VC staff panel")[m
+[32m+[m[32m    embed.set_footer(text="Dank Shield • VC staff panel")[m
+     return embed[m
+ [m
+ [m
+[1mdiff --git a/stoney_verify/tickets.py b/stoney_verify/tickets.py[m
+[1mindex 13cee13..0c12f17 100644[m
+[1m--- a/stoney_verify/tickets.py[m
+[1m+++ b/stoney_verify/tickets.py[m
+[36m@@ -11,7 +11,7 @@[m [mfrom .globals import *[m
+ [m
+ [m
+ # ============================================================[m
+[31m-# Stoney Verify ticket helpers[m
+[32m+[m[32m# Dank Shield ticket helpers[m
+ # ------------------------------------------------------------[m
+ # IMPORTANT:[m
+ # - This file is aligned to YOUR custom ticket architecture.[m
+[36m@@ -822,7 +822,7 @@[m [masync def get_or_create_webhook(channel: discord.TextChannel) -> Optional[str]:[m
+     except Exception:[m
+         pass[m
+ [m
+[31m-    webhook_name = _env_str_local("WEBHOOK_NAME", "Stoney Verify Upload")[m
+[32m+[m[32m    webhook_name = _env_str_local("WEBHOOK_NAME", "Dank Shield Upload")[m
+     try:[m
+         wh = await channel.create_webhook(name=webhook_name)[m
+         url = str(wh.url or "")[m
+[1mdiff --git a/stoney_verify/tickets_new/panel.py b/stoney_verify/tickets_new/panel.py[m
+[1mindex 7a5f344..121791c 100644[m
+[1m--- a/stoney_verify/tickets_new/panel.py[m
+[1m+++ b/stoney_verify/tickets_new/panel.py[m
+[36m@@ -2826,7 +2826,7 @@[m [masync def send_ticket_panel(channel: discord.TextChannel):[m
+         ),[m
+         inline=False,[m
+     )[m
+[31m-    embed.set_footer(text="Stoney Verify Ticket System")[m
+[32m+[m[32m    embed.set_footer(text="Dank Shield Ticket System")[m
+ [m
+     _debug(f"send public panel channel={channel.id} guild={channel.guild.id}")[m
+ [m
+[1mdiff --git a/stoney_verify/transcripts.py b/stoney_verify/transcripts.py[m
+[1mindex 7c2c12d..f74daf6 100644[m
+[1m--- a/stoney_verify/transcripts.py[m
+[1m+++ b/stoney_verify/transcripts.py[m
+[36m@@ -2533,7 +2533,7 @@[m [mdef _is_legacy_verify_ui_embed(embed: Optional[discord.Embed]) -> bool:[m
+ [m
+         legacy_titles = {[m
+             "Stoney Balonney Verification",[m
+[31m-            "Stoney Baloney Verification",[m
+[32m+[m[32m            "Dank Shield Verification",[m
+         }[m
+ [m
+         if title in legacy_titles and title != VERIFY_UI_TITLE:[m
+[1mdiff --git a/stoney_verify/verification_new/service.py b/stoney_verify/verification_new/service.py[m
+[1mindex f10ea0e..7becf38 100644[m
+[1m--- a/stoney_verify/verification_new/service.py[m
+[1m+++ b/stoney_verify/verification_new/service.py[m
+[36m@@ -839,12 +839,12 @@[m [masync def _apply_verified_roles([m
+     if grant_roles:[m
+         await member.add_roles([m
+             *grant_roles,[m
+[31m-            reason=f"Stoney Verify approved by {staff_member} ({staff_member.id})",[m
+[32m+[m[32m            reason=f"Dank Shield approved by {staff_member} ({staff_member.id})",[m
+         )[m
+ [m
+     _, remove_error = await _remove_unverified_role_if_present([m
+         member,[m
+[31m-        reason=f"Stoney Verify approval cleanup by {staff_member} ({staff_member.id})",[m
+[32m+[m[32m        reason=f"Dank Shield approval cleanup by {staff_member} ({staff_member.id})",[m
+     )[m
+ [m
+     return grant_roles, remove_error[m
+[1mdiff --git a/stoney_verify/verify_ui.py b/stoney_verify/verify_ui.py[m
+[1mindex ebe53fd..67d05da 100644[m
+[1m--- a/stoney_verify/verify_ui.py[m
+[1m+++ b/stoney_verify/verify_ui.py[m
+[36m@@ -30,7 +30,7 @@[m [mexcept Exception:[m
+     get_or_create_webhook = None  # type: ignore[m
+ [m
+ [m
+[31m-VERIFY_UI_TITLE = "Stoney Baloney Verification"[m
+[32m+[m[32mVERIFY_UI_TITLE = os.getenv("VERIFY_UI_TITLE", "Dank Shield Verification")[m
+ VERIFY_UI_FOOTER = "stoney_verify:verify_ui:v9"[m
+ [m
+ [m

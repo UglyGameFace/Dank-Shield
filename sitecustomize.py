@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 """
-Python host fallback for Stoney Verify startup safety.
+Python host fallback for Dank Shield startup safety.
 
 Some hosts auto-import ``sitecustomize`` before the normal app entrypoint. Keep
 this file tiny: the real runtime safety logic lives in

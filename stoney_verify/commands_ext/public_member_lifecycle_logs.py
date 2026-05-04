@@ -421,7 +421,7 @@ def _member_staff_leave_embed(member: discord.Member, removal_info: Optional[Dic
     if actor is not None:
         actor_title = "Actor"
         if bool(info.get("stoney_actor")):
-            actor_title = "Actor — Stoney Verify"
+            actor_title = "Actor — Dank Shield"
         embed.add_field(name=actor_title, value=_display_actor(actor), inline=False)
 
     reason = info.get("reason")

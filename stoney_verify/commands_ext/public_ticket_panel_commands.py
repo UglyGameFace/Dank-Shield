@@ -196,7 +196,7 @@ def _public_panel_embed(guild: discord.Guild) -> discord.Embed:
         ),
         inline=False,
     )
-    embed.set_footer(text=f"{guild.name} • Stoney Verify ticket panel")
+    embed.set_footer(text=f"{guild.name} • Dank Shield ticket panel")
     return embed
 
 

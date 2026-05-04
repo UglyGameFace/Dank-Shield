@@ -469,7 +469,7 @@ def _build_staff_panel_embed(guild: discord.Guild, cfg: Any, *, requester_id: in
     embed.add_field(name="Ticket", value=f"<#{int(ticket_channel_id)}>\n`{ticket_channel_id}`", inline=True)
     embed.add_field(name="VC Channel", value=(f"<#{vc_id}>\n`{vc_id}`" if vc_id > 0 else "`Not configured`"), inline=True)
     embed.add_field(name="Token", value=f"`{token}`", inline=False)
-    embed.set_footer(text="Stoney Verify • VC staff panel")
+    embed.set_footer(text="Dank Shield • VC staff panel")
     return embed
 
 

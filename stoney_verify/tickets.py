@@ -11,7 +11,7 @@ from .globals import *
 
 
 # ============================================================
-# Stoney Verify ticket helpers
+# Dank Shield ticket helpers
 # ------------------------------------------------------------
 # IMPORTANT:
 # - This file is aligned to YOUR custom ticket architecture.
@@ -822,7 +822,7 @@ async def get_or_create_webhook(channel: discord.TextChannel) -> Optional[str]:
     except Exception:
         pass
 
-    webhook_name = _env_str_local("WEBHOOK_NAME", "Stoney Verify Upload")
+    webhook_name = _env_str_local("WEBHOOK_NAME", "Dank Shield Upload")
     try:
         wh = await channel.create_webhook(name=webhook_name)
         url = str(wh.url or "")

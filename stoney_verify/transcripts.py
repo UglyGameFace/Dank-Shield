@@ -2533,7 +2533,7 @@ def _is_legacy_verify_ui_embed(embed: Optional[discord.Embed]) -> bool:
 
         legacy_titles = {
             "Stoney Balonney Verification",
-            "Stoney Baloney Verification",
+            "Dank Shield Verification",
         }
 
         if title in legacy_titles and title != VERIFY_UI_TITLE:

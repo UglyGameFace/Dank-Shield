@@ -30,7 +30,7 @@ except Exception:
     get_or_create_webhook = None  # type: ignore
 
 
-VERIFY_UI_TITLE = "Stoney Baloney Verification"
+VERIFY_UI_TITLE = os.getenv("VERIFY_UI_TITLE", "Dank Shield Verification")
 VERIFY_UI_FOOTER = "stoney_verify:verify_ui:v9"
 
 

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 """
-Risk Engine v2 for Stoney Verify raidguard.
+Risk Engine v2 for Dank Shield raidguard.
 
 This layer keeps the bot realistic for servers that intentionally get public
 traffic from listing sites such as Disboard, Discodus, Discordfy, and Discadia.

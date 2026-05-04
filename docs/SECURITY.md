@@ -1,8 +1,8 @@
-# Stoney Verify Security Policy
+# Dank Shield Security Policy
 
 _Last updated: 2026-04-27_
 
-> This document defines how Stoney Verify handles security reporting, secret management, API authentication, Discord permissions, database access, and incident response. It is an operational security policy, not legal advice.
+> This document defines how Dank Shield handles security reporting, secret management, API authentication, Discord permissions, database access, and incident response. It is an operational security policy, not legal advice.
 
 ## 1. Security contact
 
@@ -18,7 +18,7 @@ Do not ask security reporters to post vulnerabilities publicly.
 
 ## 2. Supported versions
 
-Public security support applies only to actively deployed public/beta versions of Stoney Verify.
+Public security support applies only to actively deployed public/beta versions of Dank Shield.
 
 | Version / branch | Supported |
 |---|---:|

@@ -3,7 +3,7 @@ from __future__ import annotations
 """
 Public/beta access-control hardening.
 
-Role tiers used by Stoney Verify:
+Role tiers used by Dank Shield:
 
 - server-control role: the owner/admin-level bot control role for setup/config,
   destructive cleanup, and production switches. In the Stoney server this is

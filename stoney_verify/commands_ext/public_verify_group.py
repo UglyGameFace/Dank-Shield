@@ -430,7 +430,7 @@ async def _ensure_pending_role(
             permissions=discord.Permissions.none(),
             mentionable=False,
             hoist=False,
-            reason="Stoney Verify repair created missing Pending / Unverified role for no-role members",
+            reason="Dank Shield repair created missing Pending / Unverified role for no-role members",
         )
         roles["pending"] = created
         await _save_role_config(

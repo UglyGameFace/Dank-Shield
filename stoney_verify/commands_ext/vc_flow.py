@@ -497,7 +497,7 @@ def _build_vc_staff_embed(
             globals().get("VC_REQUEST_TTL_MINUTES", TOKEN_TTL_MINUTES or 20),
         ) or 20
     )
-    emb.set_footer(text=f"Stoney Verify • VC staff panel | TTL {vc_footer_ttl}m")
+    emb.set_footer(text=f"Dank Shield • VC staff panel | TTL {vc_footer_ttl}m")
     return emb
 
 

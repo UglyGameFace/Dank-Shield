@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-"""Startup guard loader for Stoney Verify.
+"""Startup guard loader for Dank Shield.
 
 The guard modules still need to load before ``stoney_verify.app`` because they
 patch/import-wrap older production paths while the project is being fully

@@ -1,8 +1,8 @@
-# Stoney Verify Support and Incident Response
+# Dank Shield Support and Incident Response
 
 _Last updated: 2026-04-26_
 
-> This document defines how Stoney Verify should handle public/beta support, outages, abuse reports, privacy requests, and security incidents. It is an operational runbook, not legal advice.
+> This document defines how Dank Shield should handle public/beta support, outages, abuse reports, privacy requests, and security incidents. It is an operational runbook, not legal advice.
 
 ## 1. Purpose
 
@@ -200,7 +200,7 @@ Owner:
 ### Initial incident notice
 
 ```txt
-We are investigating an issue affecting Stoney Verify: <short issue>.
+We are investigating an issue affecting Dank Shield: <short issue>.
 Impact: <who/what is affected>.
 Current status: investigating.
 Next update: when we have a confirmed fix or workaround.

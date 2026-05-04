@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 """
-Runtime safety guard for Stoney Verify.
+Runtime safety guard for Dank Shield.
 
 Purpose:
 - prevent sync Supabase/PostgREST risk lookups from blocking Discord's event loop

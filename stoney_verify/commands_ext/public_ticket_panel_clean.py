@@ -1125,7 +1125,7 @@ def _panel_embed(guild: discord.Guild) -> discord.Embed:
         ),
         inline=False,
     )
-    e.set_footer(text=f"{guild.name} • Stoney Verify ticket panel • category-menu")
+    e.set_footer(text=f"{guild.name} • Dank Shield ticket panel • category-menu")
     return e
 
 

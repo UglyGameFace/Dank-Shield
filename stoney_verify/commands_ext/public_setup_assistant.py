@@ -454,7 +454,7 @@ def _topic_for_spec(spec: RepairSpec) -> str:
         "modlog_channel": "Moderation, ticket, and security logs are posted here.",
         "join_log_channel": "Join and leave events are posted here.",
         "status_channel": "Bot status and restored-service notices are posted here.",
-    }.get(spec.key, "Created by Stoney Verify setup assistant.")
+    }.get(spec.key, "Created by Dank Shield setup assistant.")
 
 
 async def _repair_specs(interaction: discord.Interaction, specs: list[RepairSpec], *, custom_names: Optional[dict[str, str]] = None) -> None:

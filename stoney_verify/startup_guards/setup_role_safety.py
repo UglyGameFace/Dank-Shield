@@ -8,7 +8,7 @@ This replaces the old root-level runtime_setup_role_safety_patch.py.
 Purpose:
 Discord's role creation UI offers friendly presets such as Cosmetic, Member,
 Moderator, and Manager. Those presets are fine for normal Discord management,
-but Stoney Verify setup roles should be safer:
+but Dank Shield setup roles should be safer:
 
 - Bot-created default roles should be plain roles with no server-level powers.
 - Verification/member roles must not accidentally have Moderator/Manager/Admin
