@@ -6,6 +6,7 @@ This production slice is intentionally scan/review only:
 - It previews verified/resident members who look quiet after verification.
 - It explains confidence and safety status.
 - It provides manual review controls for staff.
+- It lets staff lock reviewed users out of future scans.
 - It does not perform member removal.
 
 Accuracy rule:
@@ -32,9 +33,13 @@ from stoney_verify.members_new.activity_service import (
     InactiveScanOptions,
     InactiveMemberCandidate,
     InactiveScanReport,
+    ScanLockRecord,
     get_last_scan,
+    get_scan_lock_records,
+    is_scan_user_locked,
     report_summary_lines,
     scan_inactive_members,
+    set_scan_user_lock,
 )
 
 
@@ -146,6 +151,7 @@ def _build_activity_meter(report: InactiveScanReport) -> str:
         f"**Overall server activity:** {report.active_activity_percent}% active/recent in this server\n"
         f"**Verified/resident with no post-verify activity:** {report.verified_resident_without_post_activity}/{report.verified_resident_seen} ({report.verified_vanished_percent}%)\n"
         f"**Users found for review:** {len(report.candidates)} user(s), {report.quiet_review_percent}% of members\n"
+        f"**Scan-locked skipped:** {report.locked_users_skipped} user(s)\n"
         f"**Safety locks:** {report.protected_or_blocked_count} member(s) protected or blocked by Discord permissions\n"
         f"**Data confidence:** {report.data_confidence_label} — {report.data_coverage_percent}% of optional history sources readable"
     )
@@ -155,7 +161,9 @@ def _build_data_limits_text(report: InactiveScanReport) -> str:
     extra = ""
     try:
         if report.audit_log_times_found:
-            extra = f"\n\nAudit-log fallback found **{report.audit_log_times_found}** verification/resident role timestamp(s)."
+            extra += f"\n\nAudit-log fallback found **{report.audit_log_times_found}** verification/resident role timestamp(s)."
+        if report.scan_lock_persistence:
+            extra += f"\nScan-lock storage: **{report.scan_lock_persistence}**"
     except Exception:
         pass
     if not report.data_warnings:
@@ -204,8 +212,8 @@ def _build_report_embed(report: InactiveScanReport, *, page: int = 0) -> discord
     embed.add_field(
         name="Manual Review Options",
         value=_safe_field(
-            "Use the dropdown below to inspect one user at a time. Use the 30d / 90d / 180d buttons to rescan with common thresholds.\n\n"
-            "No one is automatically removed from this screen."
+            "Use the dropdown below to inspect one user at a time. Use **Lock / Skip in Scans** on the detail card when a user has been manually reviewed and should stop appearing.\n\n"
+            "Use the 30d / 90d / 180d buttons to rescan with common thresholds. No one is automatically removed from this screen."
         ),
         inline=False,
     )
@@ -216,6 +224,7 @@ def _build_report_embed(report: InactiveScanReport, *, page: int = 0) -> discord
             f"New-member grace period: **{report.options.grace_days} day(s)**\n"
             f"Verified/resident focus: **{'Yes' if report.options.verified_resident_focus else 'No'}**\n"
             f"Audit-log fallback for verification date: **{'Yes' if report.options.use_audit_log_fallback else 'No'}**\n"
+            f"Skip scan-locked users: **{'Yes' if report.options.skip_locked_users else 'No'}**\n"
             f"Bot accounts protected: **{'Yes' if report.options.protect_bots else 'No'}**\n"
             f"Staff/admin roles protected: **{'Yes' if report.options.protect_staff else 'No'}**"
         ),
@@ -226,7 +235,7 @@ def _build_report_embed(report: InactiveScanReport, *, page: int = 0) -> discord
     return embed
 
 
-def _build_user_detail_embed(candidate: InactiveMemberCandidate) -> discord.Embed:
+def _build_user_detail_embed(candidate: InactiveMemberCandidate, *, locked: bool = False) -> discord.Embed:
     icon, label = _status_icon(candidate)
     verified_at = _fmt_ts(getattr(candidate, "verified_at", None))
     post_verify_activity = _fmt_ts(getattr(candidate, "post_verification_activity_at", None), fallback="none found")
@@ -236,7 +245,10 @@ def _build_user_detail_embed(candidate: InactiveMemberCandidate) -> discord.Embe
 
     embed = discord.Embed(
         title=f"{icon} Manual Review: {candidate.display_name}",
-        description="Use this card to manually inspect the member before taking any server action.",
+        description=(
+            "Use this card to manually inspect the member before taking any server action.\n"
+            f"Scan lock: **{'Locked / skipped in future scans' if locked else 'Not locked'}**"
+        ),
         color=discord.Color.orange() if label in {"Review candidate", "Needs manual review"} else discord.Color.blurple(),
     )
     embed.add_field(
@@ -265,15 +277,129 @@ def _build_user_detail_embed(candidate: InactiveMemberCandidate) -> discord.Embe
     embed.add_field(
         name="Manual Options",
         value=_safe_field(
-            "1. Search/copy the User ID above in Discord if needed.\n"
-            "2. Open the member profile and review roles, messages, tickets, and notes.\n"
-            "3. If the result is wrong, treat it as a data-confidence issue, not a final decision.\n"
-            "4. If the result is correct, use Discord's normal moderation tools manually for now.\n\n"
-            "Automatic cleanup should only be added after this review list is accurate."
+            "• Use **Lock / Skip in Scans** after you manually reviewed this user and do not want them listed again.\n"
+            "• Use `/dank members locked` to view or unlock skipped users.\n"
+            "• If the result is wrong, treat it as a data-confidence issue, not a final decision.\n"
+            "• Automatic cleanup should only be added after this review list is accurate."
         ),
         inline=False,
     )
     return embed
+
+
+def _build_locked_users_embed(records: list[ScanLockRecord], persistence: str) -> discord.Embed:
+    embed = discord.Embed(
+        title="🔒 Scan-Locked Members",
+        description="These users are skipped by future `/dank members scan` results until unlocked.",
+        color=discord.Color.blurple(),
+    )
+    if not records:
+        embed.add_field(name="Locked Users", value="✅ No users are locked/skipped from scans.", inline=False)
+    else:
+        lines: list[str] = []
+        for idx, record in enumerate(records[:20], start=1):
+            locked_at = _fmt_ts(record.locked_at, fallback="unknown time")
+            storage = "DB" if record.persisted else "memory"
+            lines.append(f"{idx}. <@{record.user_id}> (`{record.user_id}`) — {locked_at} • {storage}\nReason: {record.reason[:120]}")
+        extra = max(0, len(records) - 20)
+        if extra:
+            lines.append(f"…and **{extra}** more locked user(s).")
+        embed.add_field(name=f"Locked Users ({len(records)})", value=_safe_field("\n\n".join(lines)), inline=False)
+    embed.add_field(name="Storage", value=_safe_field(persistence), inline=False)
+    embed.set_footer(text="Use the dropdown below to unlock a user.")
+    return embed
+
+
+class UserDetailLockView(discord.ui.View):
+    def __init__(self, candidate: InactiveMemberCandidate, *, locked: bool = False) -> None:
+        super().__init__(timeout=600)
+        self.candidate = candidate
+        self.locked = bool(locked)
+        self._rebuild()
+
+    def _rebuild(self) -> None:
+        self.clear_items()
+        lock_button = discord.ui.Button(
+            label="Unlock / Show in Scans" if self.locked else "Lock / Skip in Scans",
+            emoji="🔓" if self.locked else "🔒",
+            style=discord.ButtonStyle.success if self.locked else discord.ButtonStyle.secondary,
+        )
+        lock_button.callback = self._toggle_lock  # type: ignore[assignment]
+        self.add_item(lock_button)
+
+    async def _toggle_lock(self, interaction: discord.Interaction) -> None:
+        if not await _require_review_permission(interaction):
+            return
+        if interaction.guild is None:
+            return
+        new_locked = not self.locked
+        persisted, message = await set_scan_user_lock(
+            int(interaction.guild.id),
+            int(self.candidate.user_id),
+            locked=new_locked,
+            actor_id=int(interaction.user.id),
+            reason="Locked from member activity scan after manual review" if new_locked else "Unlocked from member activity scan",
+        )
+        self.locked = new_locked
+        self._rebuild()
+        status = "🔒 Locked. This user will be skipped by future scans." if new_locked else "🔓 Unlocked. This user can appear in future scans again."
+        if not persisted:
+            status += f"\n⚠️ {message}"
+        await interaction.response.edit_message(embed=_build_user_detail_embed(self.candidate, locked=self.locked), view=self)
+        try:
+            await interaction.followup.send(status, ephemeral=True, allowed_mentions=discord.AllowedMentions.none())
+        except Exception:
+            pass
+
+
+class LockedUserSelect(discord.ui.Select):
+    def __init__(self, records: list[ScanLockRecord]) -> None:
+        self.records = list(records[:25])
+        options: list[discord.SelectOption] = []
+        for record in self.records:
+            options.append(
+                discord.SelectOption(
+                    label=_trim(f"{record.user_id}", 95),
+                    description=_trim(f"Unlock this user • {record.reason}", 95),
+                    value=str(record.user_id),
+                    emoji="🔓",
+                )
+            )
+        if not options:
+            options.append(discord.SelectOption(label="No locked users", description="Nothing to unlock.", value="none", emoji="✅"))
+        super().__init__(placeholder="Select a locked user to unlock", min_values=1, max_values=1, options=options, disabled=not records)
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        if not await _require_review_permission(interaction):
+            return
+        if interaction.guild is None:
+            return
+        value = self.values[0] if self.values else "none"
+        if value == "none":
+            return await reply_once(interaction, {"content": "No locked users to unlock.", "ephemeral": True})
+        persisted, message = await set_scan_user_lock(
+            int(interaction.guild.id),
+            int(value),
+            locked=False,
+            actor_id=int(interaction.user.id),
+            reason="Unlocked from locked-users menu",
+        )
+        records, persistence = await get_scan_lock_records(int(interaction.guild.id))
+        view = LockedUsersView(records)
+        content = f"🔓 Unlocked <@{value}>. They can appear in future scans again."
+        if not persisted:
+            content += f"\n⚠️ {message}"
+        await interaction.response.edit_message(embed=_build_locked_users_embed(records, persistence), view=view)
+        try:
+            await interaction.followup.send(content, ephemeral=True, allowed_mentions=discord.AllowedMentions.none())
+        except Exception:
+            pass
+
+
+class LockedUsersView(discord.ui.View):
+    def __init__(self, records: list[ScanLockRecord]) -> None:
+        super().__init__(timeout=600)
+        self.add_item(LockedUserSelect(records))
 
 
 class MemberSelect(discord.ui.Select):
@@ -306,7 +432,15 @@ class MemberSelect(discord.ui.Select):
         candidate = self.parent_view.find_candidate(value)
         if candidate is None:
             return await reply_once(interaction, {"content": "That user is no longer available in this scan. Refresh and try again.", "ephemeral": True})
-        await interaction.response.send_message(embed=_build_user_detail_embed(candidate), ephemeral=True, allowed_mentions=discord.AllowedMentions.none())
+        locked = False
+        if interaction.guild is not None:
+            locked = await is_scan_user_locked(int(interaction.guild.id), int(candidate.user_id))
+        await interaction.response.send_message(
+            embed=_build_user_detail_embed(candidate, locked=locked),
+            view=UserDetailLockView(candidate, locked=locked),
+            ephemeral=True,
+            allowed_mentions=discord.AllowedMentions.none(),
+        )
 
 
 class MemberActivityReviewView(discord.ui.View):
@@ -390,6 +524,7 @@ class MemberActivityReviewView(discord.ui.View):
             max_candidates=int(base.max_candidates),
             verified_resident_focus=bool(base.verified_resident_focus),
             use_audit_log_fallback=bool(base.use_audit_log_fallback),
+            skip_locked_users=bool(base.skip_locked_users),
         )
         report = await scan_inactive_members(interaction.guild, options)
         view = MemberActivityReviewView(report, page=0)
@@ -413,7 +548,7 @@ class MemberActivityReviewView(discord.ui.View):
             "This scan checks **post-verification activity inside this server only**. It does **not** use online/offline/idle status.\n\n"
             "For verified/resident members, Dank Shield tries to find when the role was granted from its own records first. If that is missing, it can use Discord audit log as a fallback.\n\n"
             "Normal verified/member/resident roles are **not** treated as protected by default. They are the group being reviewed.\n\n"
-            "The 30d / 90d / 180d buttons simply rerun the same safe preview with a different quiet-after-verification threshold."
+            "Use **Lock / Skip in Scans** after manually reviewing a user who should not appear again. Use `/dank members locked` to unlock them later."
         )
         await reply_once(interaction, {"content": text, "ephemeral": True})
 
@@ -435,6 +570,7 @@ async def _run_activity_scan(
     grace_days: int = _DEFAULT_GRACE_DAYS,
     include_low_confidence: bool = True,
     use_audit_log_fallback: bool = True,
+    skip_locked_users: bool = True,
 ) -> None:
     if not await _require_review_permission(interaction):
         return
@@ -447,6 +583,7 @@ async def _run_activity_scan(
         grace_days=max(1, min(int(grace_days), 90)),
         include_low_confidence=bool(include_low_confidence),
         use_audit_log_fallback=bool(use_audit_log_fallback),
+        skip_locked_users=bool(skip_locked_users),
     )
     report = await scan_inactive_members(interaction.guild, options)
     await interaction.followup.send(
@@ -473,6 +610,7 @@ async def members_scan(interaction: discord.Interaction) -> None:
     grace_days="Protect members newer than this many days.",
     include_low_confidence="Show low-confidence users as Needs manual review. Default: true.",
     use_audit_log_fallback="Use Discord audit log to estimate when Verified/Resident was added. Default: true.",
+    skip_locked_users="Hide users staff locked/skipped from scans. Default: true.",
 )
 async def members_advanced_scan(
     interaction: discord.Interaction,
@@ -480,6 +618,7 @@ async def members_advanced_scan(
     grace_days: int = _DEFAULT_GRACE_DAYS,
     include_low_confidence: bool = True,
     use_audit_log_fallback: bool = True,
+    skip_locked_users: bool = True,
 ) -> None:
     await _run_activity_scan(
         interaction,
@@ -487,6 +626,22 @@ async def members_advanced_scan(
         grace_days=grace_days,
         include_low_confidence=include_low_confidence,
         use_audit_log_fallback=use_audit_log_fallback,
+        skip_locked_users=skip_locked_users,
+    )
+
+
+@members_group.command(name="locked", description="View and unlock members skipped from activity scans.")
+async def members_locked(interaction: discord.Interaction) -> None:
+    if not await _require_review_permission(interaction):
+        return
+    if interaction.guild is None:
+        return
+    records, persistence = await get_scan_lock_records(int(interaction.guild.id))
+    await interaction.response.send_message(
+        embed=_build_locked_users_embed(records, persistence),
+        view=LockedUsersView(records),
+        ephemeral=True,
+        allowed_mentions=discord.AllowedMentions.none(),
     )
 
 
