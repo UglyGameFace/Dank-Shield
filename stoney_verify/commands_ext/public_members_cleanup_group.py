@@ -495,10 +495,10 @@ async def members_cleanup_queue(
             body += "\n\n**Skipped before validation**\n" + _format_blocked_lines(skipped)
         if validation_blocked:
             body += "\n\n**Blocked by final validation**\n" + _trim("\n".join(f"• {_safe_name(c.display_name)} — {v.status}" for c, v in validation_blocked[:8]), 900)
-        return await interaction.followup.send(embed=_result_embed("🧹 Cleanup Queue Empty", body, ok=False), ephemeral=True)
+        return await interaction.edit_original_response(embed=_result_embed("🧹 Cleanup Queue Empty", body, ok=False))
 
     body = (
-        f"{'This is a confirmation screen. Nothing has happened yet.' if settings.require_queue_confirmation else 'Auto-process mode is enabled. The queue will process now after this preview.'}\n\n"
+        f"{'This is a confirmation screen. Nothing has happened yet.' if settings.require_queue_confirmation else 'Auto-process mode is enabled. Processing starts from this message.'}\n\n"
         f"{_queue_source_summary(report)}\n"
         f"Fresh scan run for queue: **{'Yes' if fresh_scan else 'No, used latest scan'}**\n"
         f"{_queue_context_line(settings, include_low_confidence=include_low, safe_limit=safe_limit)}\n\n"
@@ -510,16 +510,14 @@ async def members_cleanup_queue(
 
     if settings.require_queue_confirmation:
         body += "\n\nPress **Confirm Queue** to process these members one by one with final safety checks. Press **Cancel** to do nothing."
-        return await interaction.followup.send(
+        return await interaction.edit_original_response(
             embed=_result_embed("⚠️ Confirm Cleanup Queue", body, ok=False),
             view=ConfirmCleanupQueueView(actor_user_id=int(interaction.user.id), items=queued, reason=reason),
-            ephemeral=True,
             allowed_mentions=discord.AllowedMentions.none(),
         )
 
-    await interaction.followup.send(
+    await interaction.edit_original_response(
         embed=_result_embed("🧹 Processing Cleanup Queue", body, ok=False),
-        ephemeral=True,
         allowed_mentions=discord.AllowedMentions.none(),
     )
     removed, blocked, failed = await _process_queue_items(interaction, items=queued, reason=reason)
