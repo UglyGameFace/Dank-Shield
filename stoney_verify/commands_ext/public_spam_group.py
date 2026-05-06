@@ -25,6 +25,7 @@ from .public_setup_group import stoney_group
 
 _REGISTERED = False
 _LEGACY_COMMANDS: dict[str, app_commands.Command[Any, ..., Any]] = {}
+_SETUP_BUTTON_PATCHED = False
 
 spam_group = app_commands.Group(
     name="spam",
@@ -173,17 +174,38 @@ async def _call_spamguard_command(interaction: discord.Interaction, legacy_name:
 
 
 async def open_spamguard_panel(interaction: discord.Interaction) -> None:
-    """Open the real SpamGuard panel from setup or /dank spam.
-
-    This is intentionally a normal callable. Do not call the decorated
-    ``spam_panel`` app-command object from setup buttons.
-    """
+    """Open the real SpamGuard panel from setup or /dank spam."""
     await _call_spamguard_command(interaction, "spam_guard")
 
 
 async def show_spamguard_status(interaction: discord.Interaction) -> None:
     """Show SpamGuard status from setup or /dank spam."""
     await _call_spamguard_command(interaction, "spam_guard_status")
+
+
+async def _setup_button_call_spam_group(interaction: discord.Interaction, target: str) -> None:
+    if str(target).lower() == "panel":
+        await open_spamguard_panel(interaction)
+    else:
+        await show_spamguard_status(interaction)
+
+
+def _patch_setup_service_buttons() -> None:
+    """Make /dank setup buttons call normal helpers, not decorated commands."""
+    global _SETUP_BUTTON_PATCHED
+    if _SETUP_BUTTON_PATCHED:
+        return
+    try:
+        from stoney_verify.startup_guards import setup_service_modes
+
+        setup_service_modes._call_spam_group = _setup_button_call_spam_group  # type: ignore[attr-defined]
+        _SETUP_BUTTON_PATCHED = True
+        print("✅ public_spam_group: setup SpamGuard buttons patched to helper path")
+    except Exception as e:
+        try:
+            print(f"⚠️ public_spam_group could not patch setup SpamGuard buttons: {repr(e)}")
+        except Exception:
+            pass
 
 
 @spam_group.command(name="panel", description="Open the interactive SpamGuard control panel.")
@@ -220,6 +242,7 @@ def register_public_spam_group_commands(bot: Any, tree: Any) -> None:
     global _REGISTERED
     _ = bot
     if _REGISTERED:
+        _patch_setup_service_buttons()
         return
 
     removed: list[str] = []
@@ -243,7 +266,11 @@ def register_public_spam_group_commands(bot: Any, tree: Any) -> None:
         except Exception:
             pass
 
+    _patch_setup_service_buttons()
     _REGISTERED = True
+
+
+_patch_setup_service_buttons()
 
 
 __all__ = [
