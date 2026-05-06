@@ -36,6 +36,10 @@ members_group = app_commands.Group(
 )
 
 _REGISTERED = False
+_FIELD_LIMIT = 1024
+_SAFE_FIELD_LIMIT = 950
+_MAX_USER_FIELDS = 4
+_MAX_USER_ROWS = 12
 
 
 def _can_review_members(interaction: discord.Interaction) -> bool:
@@ -66,58 +70,99 @@ def _trim(text: str, limit: int = 3900) -> str:
     return raw if len(raw) <= limit else raw[: max(0, limit - 1)] + "…"
 
 
-def _candidate_lines(report: InactiveScanReport, *, limit: int = 10) -> str:
+def _safe_field(text: str, limit: int = _FIELD_LIMIT) -> str:
+    return _trim(str(text or "None"), max(1, int(limit)))
+
+
+def _candidate_entry(candidate: Any, idx: int) -> str:
+    days = "unknown" if candidate.inactivity_days is None else f"{candidate.inactivity_days} day(s)"
+    verified_at = "unknown"
+    post_verify_activity = "none found"
+    try:
+        if getattr(candidate, "verified_at", None) is not None:
+            verified_at = f"<t:{int(candidate.verified_at.timestamp())}:R>"
+        if getattr(candidate, "post_verification_activity_at", None) is not None:
+            post_verify_activity = f"<t:{int(candidate.post_verification_activity_at.timestamp())}:R>"
+    except Exception:
+        pass
+
+    if candidate.status == "Review candidate":
+        icon = "🟠"
+        label = "Review candidate"
+    elif candidate.status == "Needs review":
+        icon = "🟡"
+        label = "Needs manual review"
+    elif candidate.status == "Protected":
+        icon = "🛡️"
+        label = "Safety-protected"
+    elif candidate.status == "Cannot action":
+        icon = "⛔"
+        label = "Cannot action"
+    else:
+        icon = "⚪"
+        label = str(candidate.status)
+
+    verified_tag = " • Verified/Resident" if getattr(candidate, "verified_or_resident", False) else ""
+    source = str(getattr(candidate, "verification_source", "unknown") or "unknown")
+    return (
+        f"{idx}. {icon} **{candidate.display_name}** (`{candidate.user_id}`){verified_tag}\n"
+        f"Status: **{label}** • Confidence: **{candidate.confidence}** • Quiet after verify: **{days}**\n"
+        f"Verified/resident since: {verified_at} • Post-verify activity: {post_verify_activity}\n"
+        f"Source: `{source[:70]}`\n"
+        f"Why: {candidate.short_reason(140)}"
+    )
+
+
+def _candidate_chunks(report: InactiveScanReport, *, limit: int = _MAX_USER_ROWS) -> list[str]:
     if not report.candidates:
-        return "✅ No verified/resident users were found with missing post-verification activity under these settings."
+        return ["✅ No verified/resident users were found with missing post-verification activity under these settings."]
 
-    lines: list[str] = []
+    chunks: list[str] = []
+    current = ""
+    shown = 0
     for idx, candidate in enumerate(report.candidates[:limit], start=1):
-        days = "unknown" if candidate.inactivity_days is None else f"{candidate.inactivity_days} day(s)"
-        verified_at = "unknown"
-        post_verify_activity = "none found"
-        try:
-            if getattr(candidate, "verified_at", None) is not None:
-                verified_at = f"<t:{int(candidate.verified_at.timestamp())}:R>"
-            if getattr(candidate, "post_verification_activity_at", None) is not None:
-                post_verify_activity = f"<t:{int(candidate.post_verification_activity_at.timestamp())}:R>"
-        except Exception:
-            pass
-
-        if candidate.status == "Review candidate":
-            icon = "🟠"
-            label = "Review candidate"
-        elif candidate.status == "Needs review":
-            icon = "🟡"
-            label = "Needs manual review"
-        elif candidate.status == "Protected":
-            icon = "🛡️"
-            label = "Safety-protected"
-        elif candidate.status == "Cannot action":
-            icon = "⛔"
-            label = "Cannot action"
+        entry = _candidate_entry(candidate, idx)
+        # Keep a single very long username/reason from breaking the field.
+        entry = _safe_field(entry, _SAFE_FIELD_LIMIT)
+        addition = entry if not current else f"\n\n{entry}"
+        if len(current) + len(addition) > _SAFE_FIELD_LIMIT:
+            if current:
+                chunks.append(current)
+            current = entry
+            if len(chunks) >= _MAX_USER_FIELDS:
+                break
         else:
-            icon = "⚪"
-            label = candidate.status
+            current += addition
+        shown = idx
 
-        verified_tag = " • Verified/Resident" if getattr(candidate, "verified_or_resident", False) else ""
-        source = str(getattr(candidate, "verification_source", "unknown") or "unknown")
-        lines.append(
-            f"{idx}. {icon} **{candidate.display_name}** (`{candidate.user_id}`){verified_tag}\n"
-            f"   Status: **{label}** • Confidence: **{candidate.confidence}** • Quiet after verify for: **{days}**\n"
-            f"   Verified/resident since: {verified_at} • Post-verify activity: {post_verify_activity}\n"
-            f"   Verification date source: `{source[:70]}`\n"
-            f"   Why: {candidate.short_reason(180)}"
-        )
+    if current and len(chunks) < _MAX_USER_FIELDS:
+        chunks.append(current)
 
-    extra = len(report.candidates) - limit
+    extra = max(0, len(report.candidates) - shown)
     if extra > 0:
-        lines.append(f"…and **{extra}** more user(s) found for review.")
+        note = f"…and **{extra}** more user(s) found for review. Narrow the scan or rerun with a shorter threshold to inspect smaller batches."
+        if chunks and len(chunks[-1]) + len(note) + 2 <= _SAFE_FIELD_LIMIT:
+            chunks[-1] = f"{chunks[-1]}\n\n{note}"
+        elif len(chunks) < _MAX_USER_FIELDS:
+            chunks.append(note)
+        else:
+            chunks[-1] = _safe_field(f"{chunks[-1]}\n\n{note}", _SAFE_FIELD_LIMIT)
 
-    return _trim("\n".join(lines))
+    return chunks or ["✅ No verified/resident users were found with missing post-verification activity under these settings."]
+
+
+def _add_users_found_fields(embed: discord.Embed, report: InactiveScanReport) -> None:
+    chunks = _candidate_chunks(report)
+    total = len(report.candidates)
+    if len(chunks) == 1:
+        embed.add_field(name=f"Users Found ({total})", value=_safe_field(chunks[0]), inline=False)
+        return
+    for idx, chunk in enumerate(chunks, start=1):
+        embed.add_field(name=f"Users Found {idx}/{len(chunks)} ({total})", value=_safe_field(chunk), inline=False)
 
 
 def _build_activity_meter(report: InactiveScanReport) -> str:
-    return (
+    return _safe_field(
         f"**Overall server activity:** {report.active_activity_percent}% active/recent in this server\n"
         f"**Verified/resident with no post-verify activity:** {report.verified_resident_without_post_activity}/{report.verified_resident_seen} ({report.verified_vanished_percent}%)\n"
         f"**Users found for review:** {len(report.candidates)} user(s), {report.quiet_review_percent}% of members\n"
@@ -134,13 +179,13 @@ def _build_data_limits_text(report: InactiveScanReport) -> str:
     except Exception:
         pass
     if not report.data_warnings:
-        return ("✅ Good enough data coverage for this scan." + extra)[:1024]
+        return _safe_field("✅ Good enough data coverage for this scan." + extra)
     intro = (
         "Dank Shield could not read every optional server-history source yet. "
         "That does **not** mean members are inactive. It means low-confidence users are shown for manual review instead of hidden."
     )
-    warnings = "\n".join(f"• {warning}" for warning in report.data_warnings[:4])
-    return _trim(f"{intro}{extra}\n\n{warnings}", 1024)
+    warnings = "\n".join(f"• {warning}" for warning in report.data_warnings[:3])
+    return _safe_field(f"{intro}{extra}\n\n{warnings}")
 
 
 def _build_report_embed(report: InactiveScanReport) -> discord.Embed:
@@ -155,12 +200,12 @@ def _build_report_embed(report: InactiveScanReport) -> discord.Embed:
         color=color,
         timestamp=report.scanned_at,
     )
-    embed.add_field(name="Users Found", value=_candidate_lines(report), inline=False)
+    _add_users_found_fields(embed, report)
     embed.add_field(name="Activity Health", value=_build_activity_meter(report), inline=False)
-    embed.add_field(name="Scan Counts", value="\n".join(report_summary_lines(report)[5:]), inline=False)
+    embed.add_field(name="Scan Counts", value=_safe_field("\n".join(report_summary_lines(report)[5:])), inline=False)
     embed.add_field(
         name="Review Settings",
-        value=(
+        value=_safe_field(
             f"Quiet after verification for: **{report.options.inactive_days} day(s)**\n"
             f"New-member grace period: **{report.options.grace_days} day(s)**\n"
             f"Verified/resident focus: **{'Yes' if report.options.verified_resident_focus else 'No'}**\n"
@@ -173,7 +218,7 @@ def _build_report_embed(report: InactiveScanReport) -> discord.Embed:
     embed.add_field(name="Data Confidence", value=_build_data_limits_text(report), inline=False)
     embed.add_field(
         name="How To Read This",
-        value=(
+        value=_safe_field(
             "🟠 **Review candidate** = verified/resident and quiet after verification with enough data to inspect.\n"
             "🟡 **Needs manual review** = user was found, but verification/activity history is limited.\n"
             "🛡️ **Safety-protected** = owner, bot, staff/admin, protected role, or new member.\n"
