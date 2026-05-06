@@ -15,6 +15,13 @@ Verified/resident rule:
 - The target is members who became verified/resident, then did not do anything
   observable in the server afterward.
 - Audit log is used only as a fallback to estimate when a role was granted.
+
+Scan-lock rule:
+- Staff can lock a member out of future activity scans after manual review.
+- Locks are per guild.
+- The preferred persistent store is `member_activity_scan_locks`.
+- If that table is missing, locks still work in memory until restart and the
+  report warns that persistence is not available.
 """
 
 from dataclasses import dataclass, field
@@ -37,6 +44,10 @@ except Exception:
         return datetime.now(timezone.utc)
 
 
+SCAN_LOCKS_TABLE = "member_activity_scan_locks"
+_MEMORY_SCAN_LOCKS: dict[int, dict[int, dict[str, Any]]] = {}
+
+
 @dataclass(frozen=True)
 class InactiveScanOptions:
     inactive_days: int = 90
@@ -49,6 +60,7 @@ class InactiveScanOptions:
     max_candidates: int = 250
     verified_resident_focus: bool = True
     use_audit_log_fallback: bool = True
+    skip_locked_users: bool = True
 
 
 @dataclass
@@ -57,6 +69,16 @@ class MemberActivitySignal:
     timestamp: Optional[datetime]
     confidence: str
     note: str
+
+
+@dataclass
+class ScanLockRecord:
+    guild_id: int
+    user_id: int
+    reason: str = "Manual review lock"
+    locked_by: Optional[int] = None
+    locked_at: Optional[datetime] = None
+    persisted: bool = False
 
 
 @dataclass
@@ -104,6 +126,8 @@ class InactiveScanReport:
     verified_resident_seen: int = 0
     verified_resident_without_post_activity: int = 0
     audit_log_times_found: int = 0
+    locked_users_skipped: int = 0
+    scan_lock_persistence: str = "unknown"
 
     @property
     def removable(self) -> list[InactiveMemberCandidate]:
@@ -269,6 +293,128 @@ def _role_ids_from_value(value: Any) -> set[int]:
     except Exception:
         pass
     return out
+
+
+def _memory_lock_records(guild_id: int) -> dict[int, dict[str, Any]]:
+    return _MEMORY_SCAN_LOCKS.setdefault(int(guild_id), {})
+
+
+def _select_scan_lock_rows(guild_id: int) -> tuple[list[dict[str, Any]], bool, str]:
+    if get_supabase is None:
+        return [], False, "Supabase unavailable; scan locks are memory-only until restart."
+    sb = get_supabase()
+    if sb is None:
+        return [], False, "Supabase unavailable; scan locks are memory-only until restart."
+    try:
+        resp = sb.table(SCAN_LOCKS_TABLE).select("*").eq("guild_id", str(int(guild_id))).execute()
+        rows = getattr(resp, "data", None) or []
+        if not rows:
+            try:
+                resp = sb.table(SCAN_LOCKS_TABLE).select("*").eq("guild_id", int(guild_id)).execute()
+                rows = getattr(resp, "data", None) or []
+            except Exception:
+                pass
+        return [dict(r) for r in rows if isinstance(r, Mapping)], True, ""
+    except Exception:
+        return [], False, f"Optional `{SCAN_LOCKS_TABLE}` table was not readable. Scan locks will work until restart only."
+
+
+def _write_scan_lock_row(guild_id: int, user_id: int, *, locked: bool, actor_id: Optional[int], reason: str) -> tuple[bool, str]:
+    if get_supabase is None:
+        return False, "Supabase unavailable; scan lock saved in memory only."
+    sb = get_supabase()
+    if sb is None:
+        return False, "Supabase unavailable; scan lock saved in memory only."
+    try:
+        payload = {
+            "guild_id": str(int(guild_id)),
+            "user_id": str(int(user_id)),
+            "active": bool(locked),
+            "reason": str(reason or "Manual review lock")[:500],
+            "locked_by": str(int(actor_id)) if actor_id else None,
+            "locked_at": now_utc().isoformat(),
+            "updated_at": now_utc().isoformat(),
+        }
+        sb.table(SCAN_LOCKS_TABLE).upsert(payload, on_conflict="guild_id,user_id").execute()
+        return True, "Saved to Supabase."
+    except Exception:
+        return False, f"Optional `{SCAN_LOCKS_TABLE}` table was not writable. Scan lock saved in memory only."
+
+
+async def get_scan_lock_records(guild_id: int) -> tuple[list[ScanLockRecord], str]:
+    rows, persisted_ok, warning = await __import__("asyncio").to_thread(_select_scan_lock_rows, guild_id)
+    records: dict[int, ScanLockRecord] = {}
+    for row in rows:
+        uid = _safe_int(row.get("user_id"), 0)
+        if uid <= 0:
+            continue
+        active = row.get("active", True)
+        if str(active).lower() in {"false", "0", "no", "off"}:
+            continue
+        records[uid] = ScanLockRecord(
+            guild_id=int(guild_id),
+            user_id=uid,
+            reason=str(row.get("reason") or "Manual review lock"),
+            locked_by=_safe_int(row.get("locked_by"), 0) or None,
+            locked_at=_safe_dt(row.get("locked_at") or row.get("created_at") or row.get("updated_at")),
+            persisted=True,
+        )
+    for uid, row in _memory_lock_records(guild_id).items():
+        if uid not in records:
+            records[uid] = ScanLockRecord(
+                guild_id=int(guild_id),
+                user_id=int(uid),
+                reason=str(row.get("reason") or "Manual review lock"),
+                locked_by=_safe_int(row.get("locked_by"), 0) or None,
+                locked_at=_safe_dt(row.get("locked_at")),
+                persisted=False,
+            )
+    persistence = "persistent" if persisted_ok else "memory-only"
+    if warning:
+        persistence = f"{persistence}; {warning}"
+    return sorted(records.values(), key=lambda r: (r.locked_at or now_utc(), r.user_id), reverse=True), persistence
+
+
+async def get_scan_locked_user_ids(guild_id: int) -> tuple[set[int], str]:
+    records, persistence = await get_scan_lock_records(guild_id)
+    return {int(r.user_id) for r in records}, persistence
+
+
+async def set_scan_user_lock(
+    guild_id: int,
+    user_id: int,
+    *,
+    locked: bool,
+    actor_id: Optional[int] = None,
+    reason: str = "Manual review lock",
+) -> tuple[bool, str]:
+    guild_id = int(guild_id)
+    user_id = int(user_id)
+    memory = _memory_lock_records(guild_id)
+    if locked:
+        memory[user_id] = {
+            "reason": str(reason or "Manual review lock"),
+            "locked_by": str(actor_id) if actor_id else None,
+            "locked_at": now_utc().isoformat(),
+        }
+    else:
+        memory.pop(user_id, None)
+    persisted, message = await __import__("asyncio").to_thread(
+        _write_scan_lock_row,
+        guild_id,
+        user_id,
+        locked=locked,
+        actor_id=actor_id,
+        reason=reason,
+    )
+    if persisted:
+        return True, "Saved. This user will be skipped by future scans." if locked else "Unlocked. This user can appear in future scans again."
+    return False, message
+
+
+async def is_scan_user_locked(guild_id: int, user_id: int) -> bool:
+    locked, _persistence = await get_scan_locked_user_ids(guild_id)
+    return int(user_id) in locked
 
 
 async def _load_role_sets(guild: discord.Guild) -> tuple[set[int], set[int]]:
@@ -571,7 +717,15 @@ async def scan_inactive_members(guild: discord.Guild, options: Optional[Inactive
     options = options or InactiveScanOptions()
     now = now_utc()
     protected_role_ids, verified_resident_role_ids = await _load_role_sets(guild)
-    activity_signals, verification_times, data_warnings, sources_read, sources_attempted = await _load_known_activity_signals(int(guild.id))
+    locked_user_ids: set[int] = set()
+    lock_persistence = "disabled"
+    data_warnings: list[str] = []
+    if options.skip_locked_users:
+        locked_user_ids, lock_persistence = await get_scan_locked_user_ids(int(guild.id))
+        if "memory-only" in lock_persistence:
+            data_warnings.append(lock_persistence)
+    activity_signals, verification_times, activity_warnings, sources_read, sources_attempted = await _load_known_activity_signals(int(guild.id))
+    data_warnings.extend(activity_warnings)
     audit_times, audit_warning = await _load_audit_role_grant_times(guild, verified_resident_role_ids, enabled=options.use_audit_log_fallback)
     if audit_warning:
         data_warnings.append(audit_warning)
@@ -585,10 +739,14 @@ async def scan_inactive_members(guild: discord.Guild, options: Optional[Inactive
     unknown_activity_count = 0
     verified_resident_seen = 0
     verified_resident_without_post_activity = 0
+    locked_users_skipped = 0
 
     for member in members:
         try:
             uid = int(member.id)
+            if options.skip_locked_users and uid in locked_user_ids:
+                locked_users_skipped += 1
+                continue
             role_ids = _member_role_ids(member)
             is_verified_resident = bool(role_ids.intersection(verified_resident_role_ids)) if verified_resident_role_ids else False
             joined_at = _safe_dt(getattr(member, "joined_at", None))
@@ -742,6 +900,8 @@ async def scan_inactive_members(guild: discord.Guild, options: Optional[Inactive
         verified_resident_seen=verified_resident_seen,
         verified_resident_without_post_activity=verified_resident_without_post_activity,
         audit_log_times_found=len(audit_times),
+        locked_users_skipped=locked_users_skipped,
+        scan_lock_persistence=lock_persistence,
     )
     remember_scan(report)
     return report
@@ -761,6 +921,7 @@ def report_summary_lines(report: InactiveScanReport) -> list[str]:
         f"Overall server activity: **{report.active_activity_percent}%** active/recent in this server",
         f"Verified/resident with no post-verification activity: **{report.verified_resident_without_post_activity}/{report.verified_resident_seen}** ({report.verified_vanished_percent}%)",
         f"Users found for review: **{len(report.candidates)}** ({report.quiet_review_percent}% of members)",
+        f"Scan-locked users skipped: **{report.locked_users_skipped}**",
         f"Cleanup safety locks: **{report.protected_or_blocked_count}** member(s)",
         f"Data confidence: **{report.data_confidence_label}** ({report.data_coverage_percent}% of optional history sources readable)",
         f"Members scanned: **{report.total_members_seen}**",
@@ -770,6 +931,7 @@ def report_summary_lines(report: InactiveScanReport) -> list[str]:
         f"Protected by safety rules: **{len(report.protected)}**",
         f"Cannot action because of Discord permissions/hierarchy: **{len(report.cannot_remove)}**",
         f"Audit-log verification timestamps found: **{report.audit_log_times_found}**",
+        f"Scan-lock storage: **{report.scan_lock_persistence}**",
     ]
 
 
@@ -777,9 +939,14 @@ __all__ = [
     "InactiveScanOptions",
     "InactiveMemberCandidate",
     "InactiveScanReport",
+    "ScanLockRecord",
     "scan_inactive_members",
     "get_last_scan",
     "remember_scan",
     "format_dt",
     "report_summary_lines",
+    "get_scan_lock_records",
+    "get_scan_locked_user_ids",
+    "set_scan_user_lock",
+    "is_scan_user_locked",
 ]
