@@ -3,14 +3,15 @@ from __future__ import annotations
 """Public /dank spam command family.
 
 Command strategy:
-- Keep advanced SpamGuard controls grouped under /dank spam.
+- Keep SpamGuard public controls under /dank spam.
 - Do not expose /spam_guard and /spam_guard_status as top-level public commands.
-- Prefer captured legacy callbacks when they exist.
-- In public mode those legacy top-level commands may never be registered, so this
-  wrapper also resolves the real callbacks directly from stoney_verify.spam_guard.
+- Send public users to the same simple setup-native SpamGuard page used by
+  /dank setup, so there are not two conflicting SpamGuard screens.
 
-Setup integration belongs in setup_service_modes.py. This module should not patch
-setup from the side.
+The old advanced standalone panel was confusing in production because it showed
+low-level rule internals and refreshed/edited messages in a way that created
+modlog noise. Advanced legacy callbacks are still kept as private fallback
+helpers here, but the public /dank spam commands now prefer the setup-native UI.
 """
 
 import inspect
@@ -28,7 +29,7 @@ _LEGACY_COMMANDS: dict[str, app_commands.Command[Any, ..., Any]] = {}
 
 spam_group = app_commands.Group(
     name="spam",
-    description="Advanced SpamGuard controls and status.",
+    description="Simple SpamGuard setup and status.",
 )
 
 
@@ -130,18 +131,15 @@ async def _invoke_callback(interaction: discord.Interaction, callback: Any) -> N
         await result
 
 
-async def _call_spamguard_command(interaction: discord.Interaction, legacy_name: str) -> None:
-    if not await _staff_only(interaction):
-        return
-
+async def _call_legacy_spamguard_command(interaction: discord.Interaction, legacy_name: str) -> None:
     callback, source = _resolve_spamguard_callback(legacy_name)
     if callback is None:
         return await reply_once(
             interaction,
             {
                 "content": (
-                    "❌ Advanced SpamGuard callback was not found.\n"
-                    "The grouped public command loaded, but the core spam_guard module did not expose the expected callback.\n"
+                    "❌ SpamGuard advanced callback was not found.\n"
+                    "Use `/dank setup` → **Services** → **SpamGuard Setup** instead.\n"
                     f"`source={source}`"
                 ),
                 "ephemeral": True,
@@ -150,43 +148,67 @@ async def _call_spamguard_command(interaction: discord.Interaction, legacy_name:
 
     try:
         await _invoke_callback(interaction, callback)
-    except TypeError as e:
-        await reply_once(
-            interaction,
-            {
-                "content": (
-                    "❌ SpamGuard callback signature changed and needs a wrapper update.\n"
-                    f"`{type(e).__name__}: {str(e)[:300]}`"
-                ),
-                "ephemeral": True,
-            },
-        )
     except Exception as e:
         await reply_once(
             interaction,
             {
-                "content": f"❌ SpamGuard command failed from `{source}`: `{type(e).__name__}: {str(e)[:300]}`",
+                "content": f"❌ Advanced SpamGuard command failed from `{source}`: `{type(e).__name__}: {str(e)[:300]}`",
                 "ephemeral": True,
             },
         )
 
 
+async def _open_setup_native_spamguard(interaction: discord.Interaction) -> bool:
+    try:
+        from stoney_verify.startup_guards import setup_service_modes
+
+        builder = getattr(setup_service_modes, "build_spamguard_setup_embed", None)
+        view_cls = getattr(setup_service_modes, "SpamGuardSetupView", None)
+        if not callable(builder) or view_cls is None:
+            return False
+        if interaction.guild is None:
+            return False
+
+        embed = await builder(interaction.guild)
+        view = view_cls()
+        if interaction.response.is_done():
+            await interaction.followup.send(embed=embed, view=view, ephemeral=True, allowed_mentions=discord.AllowedMentions.none())
+        else:
+            await interaction.response.send_message(embed=embed, view=view, ephemeral=True, allowed_mentions=discord.AllowedMentions.none())
+        return True
+    except Exception:
+        return False
+
+
 async def open_spamguard_panel(interaction: discord.Interaction) -> None:
-    """Open the advanced standalone SpamGuard panel."""
-    await _call_spamguard_command(interaction, "spam_guard")
+    """Open the simple setup-native SpamGuard page.
+
+    Public production should not drop users into the old advanced panel by
+    default. The setup-native page explains the guard in plain English and avoids
+    noisy standalone message refreshes.
+    """
+    if not await _staff_only(interaction):
+        return
+    if await _open_setup_native_spamguard(interaction):
+        return
+    await _call_legacy_spamguard_command(interaction, "spam_guard")
 
 
 async def show_spamguard_status(interaction: discord.Interaction) -> None:
-    """Show advanced SpamGuard status diagnostics."""
-    await _call_spamguard_command(interaction, "spam_guard_status")
+    """Show the simple setup-native SpamGuard status page."""
+    if not await _staff_only(interaction):
+        return
+    if await _open_setup_native_spamguard(interaction):
+        return
+    await _call_legacy_spamguard_command(interaction, "spam_guard_status")
 
 
-@spam_group.command(name="panel", description="Open the advanced SpamGuard control panel.")
+@spam_group.command(name="panel", description="Open simple SpamGuard setup.")
 async def spam_panel(interaction: discord.Interaction) -> None:
     await open_spamguard_panel(interaction)
 
 
-@spam_group.command(name="status", description="Show advanced SpamGuard status and persistence diagnostics.")
+@spam_group.command(name="status", description="Show simple SpamGuard status and fixes.")
 async def spam_status(interaction: discord.Interaction) -> None:
     await show_spamguard_status(interaction)
 
@@ -225,7 +247,7 @@ def register_public_spam_group_commands(bot: Any, tree: Any) -> None:
     try:
         if stoney_group.get_command("spam") is None:
             stoney_group.add_command(spam_group)
-            print("✅ public_spam_group: attached /dank spam advanced commands")
+            print("✅ public_spam_group: attached /dank spam simple setup commands")
         else:
             print("✅ public_spam_group: /dank spam already attached")
     except Exception as e:
