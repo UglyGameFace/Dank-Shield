@@ -13,6 +13,11 @@ Accuracy rule:
 - Users can appear offline, so presence would be misleading.
 - The scan only uses server-observed activity Dank Shield can see inside this guild.
 - Discord audit log is only a fallback for estimating when Verified/Resident was granted.
+
+Usability rule:
+- /dank members scan is the simple one-click/default path.
+- Advanced thresholds live in /dank members advanced-scan.
+- Staff can adjust common thresholds with quick preset buttons in the review UI.
 """
 
 from math import ceil
@@ -42,6 +47,8 @@ _REGISTERED = False
 _FIELD_LIMIT = 1024
 _SAFE_FIELD_LIMIT = 950
 _PAGE_SIZE = 4
+_DEFAULT_INACTIVE_DAYS = 90
+_DEFAULT_GRACE_DAYS = 14
 
 
 def _can_review_members(interaction: discord.Interaction) -> bool:
@@ -197,8 +204,8 @@ def _build_report_embed(report: InactiveScanReport, *, page: int = 0) -> discord
     embed.add_field(
         name="Manual Review Options",
         value=_safe_field(
-            "Use the dropdown below to inspect one user at a time. The detail card gives the member mention, ID, verification date source, post-verification activity, and manual next steps.\n\n"
-            "This screen does not automatically remove anyone. That keeps review safe until the list is trusted."
+            "Use the dropdown below to inspect one user at a time. Use the 30d / 90d / 180d buttons to rescan with common thresholds.\n\n"
+            "No one is automatically removed from this screen."
         ),
         inline=False,
     )
@@ -314,21 +321,30 @@ class MemberActivityReviewView(discord.ui.View):
         self.add_item(MemberSelect(self))
         previous_button = discord.ui.Button(label="Previous", emoji="⬅️", style=discord.ButtonStyle.secondary, disabled=self.page <= 0, row=1)
         next_button = discord.ui.Button(label="Next", emoji="➡️", style=discord.ButtonStyle.secondary, disabled=self.page >= _page_count(self.report) - 1, row=1)
-        refresh_button = discord.ui.Button(label="Refresh Scan", emoji="🔄", style=discord.ButtonStyle.primary, row=1)
-        safety_button = discord.ui.Button(label="Explain Safety", emoji="🛡️", style=discord.ButtonStyle.secondary, row=2)
-        ids_button = discord.ui.Button(label="Show Page IDs", emoji="🆔", style=discord.ButtonStyle.secondary, row=2)
+        refresh_button = discord.ui.Button(label="Refresh", emoji="🔄", style=discord.ButtonStyle.primary, row=1)
+        safety_button = discord.ui.Button(label="Safety", emoji="🛡️", style=discord.ButtonStyle.secondary, row=2)
+        ids_button = discord.ui.Button(label="Page IDs", emoji="🆔", style=discord.ButtonStyle.secondary, row=2)
+        preset_30_button = discord.ui.Button(label="30d", emoji="⚡", style=discord.ButtonStyle.secondary, row=3)
+        preset_90_button = discord.ui.Button(label="90d", emoji="🎯", style=discord.ButtonStyle.secondary, row=3)
+        preset_180_button = discord.ui.Button(label="180d", emoji="🧊", style=discord.ButtonStyle.secondary, row=3)
 
         previous_button.callback = self._previous_page  # type: ignore[assignment]
         next_button.callback = self._next_page  # type: ignore[assignment]
         refresh_button.callback = self._refresh_scan  # type: ignore[assignment]
         safety_button.callback = self._explain_safety  # type: ignore[assignment]
         ids_button.callback = self._show_page_ids  # type: ignore[assignment]
+        preset_30_button.callback = self._preset_30_days  # type: ignore[assignment]
+        preset_90_button.callback = self._preset_90_days  # type: ignore[assignment]
+        preset_180_button.callback = self._preset_180_days  # type: ignore[assignment]
 
         self.add_item(previous_button)
         self.add_item(next_button)
         self.add_item(refresh_button)
         self.add_item(safety_button)
         self.add_item(ids_button)
+        self.add_item(preset_30_button)
+        self.add_item(preset_90_button)
+        self.add_item(preset_180_button)
 
     def find_candidate(self, user_id: str) -> Optional[InactiveMemberCandidate]:
         try:
@@ -356,23 +372,48 @@ class MemberActivityReviewView(discord.ui.View):
     async def _next_page(self, interaction: discord.Interaction) -> None:
         await self._replace_page(interaction, self.page + 1)
 
-    async def _refresh_scan(self, interaction: discord.Interaction) -> None:
+    async def _rescan(self, interaction: discord.Interaction, *, inactive_days: Optional[int] = None) -> None:
         if not await _require_review_permission(interaction):
             return
         if interaction.guild is None:
             return
         await interaction.response.defer(ephemeral=True)
-        report = await scan_inactive_members(interaction.guild, self.report.options)
+        base = self.report.options
+        options = InactiveScanOptions(
+            inactive_days=max(7, min(int(inactive_days if inactive_days is not None else base.inactive_days), 730)),
+            grace_days=max(1, min(int(base.grace_days), 90)),
+            protect_bots=bool(base.protect_bots),
+            protect_staff=bool(base.protect_staff),
+            include_low_confidence=bool(base.include_low_confidence),
+            include_medium_confidence=bool(base.include_medium_confidence),
+            include_high_confidence=bool(base.include_high_confidence),
+            max_candidates=int(base.max_candidates),
+            verified_resident_focus=bool(base.verified_resident_focus),
+            use_audit_log_fallback=bool(base.use_audit_log_fallback),
+        )
+        report = await scan_inactive_members(interaction.guild, options)
         view = MemberActivityReviewView(report, page=0)
         await interaction.edit_original_response(embed=_build_report_embed(report, page=0), view=view)
+
+    async def _refresh_scan(self, interaction: discord.Interaction) -> None:
+        await self._rescan(interaction)
+
+    async def _preset_30_days(self, interaction: discord.Interaction) -> None:
+        await self._rescan(interaction, inactive_days=30)
+
+    async def _preset_90_days(self, interaction: discord.Interaction) -> None:
+        await self._rescan(interaction, inactive_days=90)
+
+    async def _preset_180_days(self, interaction: discord.Interaction) -> None:
+        await self._rescan(interaction, inactive_days=180)
 
     async def _explain_safety(self, interaction: discord.Interaction) -> None:
         text = (
             "🛡️ **Safety rules used by this scan**\n\n"
             "This scan checks **post-verification activity inside this server only**. It does **not** use online/offline/idle status.\n\n"
             "For verified/resident members, Dank Shield tries to find when the role was granted from its own records first. If that is missing, it can use Discord audit log as a fallback.\n\n"
-            "Dank Shield protects the server owner, the bot itself, bot accounts by default, staff/admin-style roles, configured protected roles, and new members inside the grace period.\n\n"
-            "Normal verified/member/resident roles are **not** treated as cleanup-protected by default. They are the group being reviewed."
+            "Normal verified/member/resident roles are **not** treated as protected by default. They are the group being reviewed.\n\n"
+            "The 30d / 90d / 180d buttons simply rerun the same safe preview with a different quiet-after-verification threshold."
         )
         await reply_once(interaction, {"content": text, "ephemeral": True})
 
@@ -390,8 +431,8 @@ class MemberActivityReviewView(discord.ui.View):
 async def _run_activity_scan(
     interaction: discord.Interaction,
     *,
-    inactive_days: int = 90,
-    grace_days: int = 14,
+    inactive_days: int = _DEFAULT_INACTIVE_DAYS,
+    grace_days: int = _DEFAULT_GRACE_DAYS,
     include_low_confidence: bool = True,
     use_audit_log_fallback: bool = True,
 ) -> None:
@@ -416,22 +457,27 @@ async def _run_activity_scan(
     )
 
 
-@members_group.command(name="inactive", description="Open a preview-only verified member activity review.")
+@members_group.command(name="inactive", description="Open the verified member activity review console.")
 async def members_inactive(interaction: discord.Interaction) -> None:
     await _run_activity_scan(interaction)
 
 
-@members_group.command(name="scan", description="Preview verified/resident members with no post-verification activity.")
+@members_group.command(name="scan", description="Run the default verified member activity review.")
+async def members_scan(interaction: discord.Interaction) -> None:
+    await _run_activity_scan(interaction)
+
+
+@members_group.command(name="advanced-scan", description="Run member review with custom thresholds.")
 @app_commands.describe(
     inactive_days="Verified/resident members quiet this many days after verification are shown.",
     grace_days="Protect members newer than this many days.",
     include_low_confidence="Show low-confidence users as Needs manual review. Default: true.",
     use_audit_log_fallback="Use Discord audit log to estimate when Verified/Resident was added. Default: true.",
 )
-async def members_scan(
+async def members_advanced_scan(
     interaction: discord.Interaction,
-    inactive_days: int = 90,
-    grace_days: int = 14,
+    inactive_days: int = _DEFAULT_INACTIVE_DAYS,
+    grace_days: int = _DEFAULT_GRACE_DAYS,
     include_low_confidence: bool = True,
     use_audit_log_fallback: bool = True,
 ) -> None:
