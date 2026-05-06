@@ -211,6 +211,17 @@ create table if not exists public.member_joins (
     unique (guild_id, user_id)
 );
 
+create table if not exists public.member_activity_scan_locks (
+    guild_id text not null,
+    user_id text not null,
+    active boolean not null default true,
+    reason text,
+    locked_by text,
+    locked_at timestamptz not null default now(),
+    updated_at timestamptz not null default now(),
+    primary key (guild_id, user_id)
+);
+
 alter table public.tickets add column if not exists owner_id text;
 alter table public.tickets add column if not exists requester_id text;
 alter table public.tickets add column if not exists channel_id text;
@@ -231,11 +242,18 @@ alter table public.ticket_categories add column if not exists button_label text;
 alter table public.ticket_categories add column if not exists is_enabled boolean not null default true;
 alter table public.ticket_categories add column if not exists match_keywords jsonb not null default '[]'::jsonb;
 
+alter table public.member_activity_scan_locks add column if not exists active boolean not null default true;
+alter table public.member_activity_scan_locks add column if not exists reason text;
+alter table public.member_activity_scan_locks add column if not exists locked_by text;
+alter table public.member_activity_scan_locks add column if not exists locked_at timestamptz not null default now();
+alter table public.member_activity_scan_locks add column if not exists updated_at timestamptz not null default now();
+
 create index if not exists idx_tickets_guild_status on public.tickets (guild_id, status);
 create index if not exists idx_tickets_channel_id on public.tickets (channel_id);
 create index if not exists idx_tickets_discord_thread_id on public.tickets (discord_thread_id);
 create index if not exists idx_tickets_owner on public.tickets (guild_id, owner_id);
 create index if not exists idx_ticket_categories_guild_sort on public.ticket_categories (guild_id, sort_order);
+create index if not exists idx_member_activity_scan_locks_guild_active on public.member_activity_scan_locks (guild_id, active);
 """
 
 
