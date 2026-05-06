@@ -6,6 +6,13 @@ This service deliberately separates "scan and explain" from "kick/remove".
 The command layer can show candidates, require confirmation, or run no-confirm
 cleanup, but all safety decisions live here.
 
+Accuracy rule:
+- This service does NOT use Discord online/offline/idle presence.
+- Users can appear offline, and presence is not a reliable activity signal.
+- Scores are based only on activity Dank Shield can observe inside this server:
+  tickets, ticket messages, verification/member records, activity events, and
+  server join timestamps as a fallback.
+
 Design rules:
 - Never remove the server owner.
 - Never remove the bot itself.
@@ -88,6 +95,9 @@ class InactiveScanReport:
     protected: list[InactiveMemberCandidate]
     cannot_remove: list[InactiveMemberCandidate]
     data_warnings: list[str]
+    active_enough_count: int = 0
+    inactive_hidden_by_filter_count: int = 0
+    unknown_activity_count: int = 0
 
     @property
     def removable(self) -> list[InactiveMemberCandidate]:
@@ -96,6 +106,38 @@ class InactiveScanReport:
     @property
     def needs_review(self) -> list[InactiveMemberCandidate]:
         return [c for c in self.candidates if c.status == "Needs review"]
+
+    @property
+    def quiet_review_count(self) -> int:
+        return len(self.candidates) + int(self.inactive_hidden_by_filter_count)
+
+    @property
+    def protected_or_blocked_count(self) -> int:
+        return len(self.protected) + len(self.cannot_remove)
+
+    def percent(self, count: int) -> int:
+        try:
+            if self.total_members_seen <= 0:
+                return 0
+            return max(0, min(100, round((int(count) / int(self.total_members_seen)) * 100)))
+        except Exception:
+            return 0
+
+    @property
+    def active_activity_percent(self) -> int:
+        return self.percent(self.active_enough_count)
+
+    @property
+    def quiet_review_percent(self) -> int:
+        return self.percent(self.quiet_review_count)
+
+    @property
+    def protected_or_blocked_percent(self) -> int:
+        return self.percent(self.protected_or_blocked_count)
+
+    @property
+    def unknown_activity_percent(self) -> int:
+        return self.percent(self.unknown_activity_count)
 
 
 _LAST_SCANS: dict[int, InactiveScanReport] = {}
@@ -407,7 +449,7 @@ async def _load_known_activity_signals(guild_id: int) -> tuple[dict[int, list[Me
             merged.setdefault(uid, []).append(signal)
 
     if not merged:
-        warnings.append("No historical activity tables were readable, so confidence falls back to Discord join/role safety only.")
+        warnings.append("No historical server-activity tables were readable, so confidence falls back to Discord join/role safety only.")
 
     return merged, warnings
 
@@ -423,6 +465,9 @@ async def scan_inactive_members(guild: discord.Guild, options: Optional[Inactive
     candidates: list[InactiveMemberCandidate] = []
     protected: list[InactiveMemberCandidate] = []
     cannot_remove: list[InactiveMemberCandidate] = []
+    active_enough_count = 0
+    inactive_hidden_by_filter_count = 0
+    unknown_activity_count = 0
 
     for member in members:
         try:
@@ -458,14 +503,16 @@ async def scan_inactive_members(guild: discord.Guild, options: Optional[Inactive
             score = _activity_score(inactivity_days, confidence)
 
             if inactivity_days is None:
-                reasons.append("No reliable activity timestamp was available.")
+                unknown_activity_count += 1
+                reasons.append("No reliable server-activity timestamp was available.")
             elif inactivity_days >= int(options.inactive_days):
-                reasons.append(f"No tracked activity for {inactivity_days}+ days; threshold is {options.inactive_days} days.")
+                reasons.append(f"No tracked server activity for {inactivity_days}+ days; threshold is {options.inactive_days} days.")
             else:
-                reasons.append(f"Last tracked activity was {inactivity_days} day(s) ago, below the inactive threshold.")
+                active_enough_count += 1
+                reasons.append(f"Last tracked server activity was {inactivity_days} day(s) ago, below the inactive threshold.")
 
             if confidence.lower() == "low":
-                reasons.append("Confidence is low because the bot does not have enough historical activity data for this member.")
+                reasons.append("Confidence is low because the bot does not have enough historical server-activity data for this member.")
 
             inactive_enough = inactivity_days is not None and inactivity_days >= int(options.inactive_days)
             if is_protected:
@@ -502,9 +549,13 @@ async def scan_inactive_members(guild: discord.Guild, options: Optional[Inactive
                 protected.append(candidate)
             elif status == "Cannot remove":
                 cannot_remove.append(candidate)
-            elif inactive_enough and _scan_passes_confidence_filter(candidate, options):
-                candidates.append(candidate)
+            elif inactive_enough:
+                if _scan_passes_confidence_filter(candidate, options):
+                    candidates.append(candidate)
+                else:
+                    inactive_hidden_by_filter_count += 1
         except Exception:
+            unknown_activity_count += 1
             continue
 
     candidates.sort(key=lambda c: (0 if c.removable else 1, -(c.inactivity_days or 0), c.display_name.lower()))
@@ -520,6 +571,9 @@ async def scan_inactive_members(guild: discord.Guild, options: Optional[Inactive
         protected=protected,
         cannot_remove=cannot_remove,
         data_warnings=data_warnings,
+        active_enough_count=active_enough_count,
+        inactive_hidden_by_filter_count=inactive_hidden_by_filter_count,
+        unknown_activity_count=unknown_activity_count,
     )
     remember_scan(report)
     return report
@@ -536,12 +590,15 @@ def format_dt(dt: Optional[datetime]) -> str:
 
 def report_summary_lines(report: InactiveScanReport) -> list[str]:
     return [
+        f"Overall server activity: **{report.active_activity_percent}%** active/recent in this server",
+        f"Quiet review pool: **{report.quiet_review_percent}%** of members",
+        f"Protected or cannot-action: **{report.protected_or_blocked_percent}%** of members",
         f"Members scanned: **{report.total_members_seen}**",
-        f"Inactive candidates: **{len(report.candidates)}**",
-        f"Ready to remove: **{len(report.removable)}**",
+        f"Active/recent by server activity: **{report.active_enough_count}**",
+        f"Quiet/inactive candidates shown: **{len(report.candidates)}**",
         f"Needs review: **{len(report.needs_review)}**",
         f"Protected/skipped: **{len(report.protected)}**",
-        f"Cannot remove: **{len(report.cannot_remove)}**",
+        f"Cannot action: **{len(report.cannot_remove)}**",
     ]
 
 
