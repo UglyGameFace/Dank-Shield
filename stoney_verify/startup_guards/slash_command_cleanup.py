@@ -1,14 +1,16 @@
 from __future__ import annotations
 
-"""Slash command cleanup guard.
+"""Slash command cleanup guard for Dank Shield.
 
 Why this exists:
 - During the TicketTool-style command consolidation, old top-level commands like
-  /spam_guard, /grant_vr, /ticket_panel_rules_set, etc. were replaced by grouped
-  commands such as /stoney spam, /verify grant-vr, /ticket-panel rules set.
-- Discord keeps previously synced global commands until the next successful sync.
-- This guard strips stale aliases from the local CommandTree right before sync so
-  the next successful sync removes them from Discord too.
+  /spam_guard, /grant_vr, /ticket_panel_rules_set, and the old /stoney root were
+  replaced by grouped public commands such as /dank setup, /dank spam,
+  /verify grant-vr, and /ticket-panel post.
+- Discord keeps previously synced global or guild commands until the next
+  successful sync for that scope.
+- This guard strips stale aliases from the local CommandTree right before both
+  global and guild syncs so the next successful sync removes them from Discord.
 - It also prevents the old CLEAR_GLOBAL_COMMANDS_ON_BOOT env from accidentally
   wiping the full public command surface. A dangerous emergency wipe still exists
   behind STONEY_DANGEROUS_CLEAR_ALL_GLOBAL_COMMANDS_ON_BOOT=true.
@@ -25,6 +27,7 @@ _ORIGINAL_SYNC = None
 _ORIGINAL_CLEAR_COMMANDS = None
 
 STALE_TOP_LEVEL_COMMANDS = {
+    "stoney",
     "spam_guard",
     "spam_guard_status",
     "fix_unverified",
@@ -60,11 +63,11 @@ STALE_TOP_LEVEL_COMMANDS = {
 }
 
 # Public users should not see a wall of setup/debug/audit commands when they
-# type /stoney. The guided setup flow is /stoney setup. Everything else here is
-# an internal/admin helper that should not be part of the default public surface.
-# These are removed right before global sync, so the next successful sync clears
-# them from Discord's command picker.
-CONFUSING_STONEY_CHILDREN = {
+# type /dank. The guided setup flow is /dank setup. Everything else here is an
+# internal/admin helper that should not be part of the default public surface.
+# These are removed right before global/guild sync, so the next successful sync
+# clears them from Discord's command picker.
+CONFUSING_DANK_CHILDREN = {
     "archive-backfill",
     "cache",
     "config",
@@ -89,13 +92,17 @@ CONFUSING_STONEY_CHILDREN = {
     "tickettool-check",
 }
 
-ALLOWED_STONEY_CHILDREN = {
+ALLOWED_DANK_CHILDREN = {
     "setup",
     "help",
     "commands",
     "spam",
     "cleanup",
 }
+
+# Backward-compatible names for older imports/tests.
+CONFUSING_STONEY_CHILDREN = CONFUSING_DANK_CHILDREN
+ALLOWED_STONEY_CHILDREN = ALLOWED_DANK_CHILDREN
 
 
 def _env_true(name: str, default: bool = False) -> bool:
@@ -143,9 +150,18 @@ def _guild_from_sync_args(args: tuple[Any, ...], kwargs: dict[str, Any]) -> Opti
     return None
 
 
-def _safe_command_names(tree: app_commands.CommandTree[Any]) -> list[str]:
+def _scope_label(guild: Optional[Any]) -> str:
+    if guild is None:
+        return "global"
     try:
-        return [str(cmd.name) for cmd in tree.get_commands(guild=None)]
+        return f"guild:{int(getattr(guild, 'id', guild))}"
+    except Exception:
+        return "guild:unknown"
+
+
+def _safe_command_names(tree: app_commands.CommandTree[Any], *, guild: Optional[Any] = None) -> list[str]:
+    try:
+        return [str(cmd.name) for cmd in tree.get_commands(guild=guild)]
     except Exception:
         try:
             return [str(cmd.name) for cmd in tree.get_commands()]
@@ -164,72 +180,119 @@ def _safe_child_names(group: Any) -> list[str]:
         return []
 
 
-def remove_stale_top_level_commands(tree: app_commands.CommandTree[Any], *, reason: str = "manual") -> list[str]:
+def _get_command(tree: app_commands.CommandTree[Any], name: str, *, guild: Optional[Any]) -> Optional[Any]:
+    try:
+        return tree.get_command(name, guild=guild)
+    except TypeError:
+        try:
+            return tree.get_command(name)
+        except Exception:
+            return None
+    except Exception:
+        return None
+
+
+def _remove_command(tree: app_commands.CommandTree[Any], name: str, *, guild: Optional[Any]) -> bool:
+    try:
+        tree.remove_command(name, guild=guild)
+        return True
+    except TypeError:
+        try:
+            tree.remove_command(name)
+            return True
+        except Exception:
+            return False
+    except Exception:
+        return False
+
+
+def remove_stale_top_level_commands(
+    tree: app_commands.CommandTree[Any],
+    *,
+    reason: str = "manual",
+    guild: Optional[Any] = None,
+) -> list[str]:
     removed: list[str] = []
 
     for name in sorted(STALE_TOP_LEVEL_COMMANDS):
-        try:
-            existing = tree.get_command(name, guild=None)
-        except Exception:
-            existing = None
-
+        existing = _get_command(tree, name, guild=guild)
         if existing is None:
             continue
-
-        try:
-            tree.remove_command(name, guild=None)
+        if _remove_command(tree, name, guild=guild):
             removed.append(name)
-        except Exception:
-            continue
 
     if removed:
         try:
-            print(f"🧹 slash_command_cleanup removed stale top-level commands reason={reason}: {removed}")
+            print(
+                "🧹 slash_command_cleanup removed stale top-level commands "
+                f"scope={_scope_label(guild)} reason={reason}: {removed}"
+            )
         except Exception:
             pass
 
     return removed
 
 
-def prune_public_stoney_children(tree: app_commands.CommandTree[Any], *, reason: str = "manual") -> list[str]:
-    if not _public_scope_enabled():
+def _prune_public_group_children(
+    tree: app_commands.CommandTree[Any],
+    *,
+    group_name: str,
+    reason: str,
+    guild: Optional[Any] = None,
+) -> list[str]:
+    group = _get_command(tree, group_name, guild=guild)
+    if group is None or not hasattr(group, "remove_command"):
         return []
 
-    try:
-        stoney = tree.get_command("stoney", guild=None)
-    except Exception:
-        stoney = None
-
-    if stoney is None or not hasattr(stoney, "remove_command"):
-        return []
-
-    before = _safe_child_names(stoney)
+    before = _safe_child_names(group)
     removed: list[str] = []
 
-    for name in sorted(CONFUSING_STONEY_CHILDREN):
+    for name in sorted(CONFUSING_DANK_CHILDREN):
         try:
-            existing = stoney.get_command(name)
+            existing = group.get_command(name)
         except Exception:
             existing = None
         if existing is None:
             continue
         try:
-            stoney.remove_command(name)
+            group.remove_command(name)
             removed.append(name)
         except Exception:
             continue
 
-    after = _safe_child_names(stoney)
-    unexpected = [name for name in after if name not in ALLOWED_STONEY_CHILDREN]
+    after = _safe_child_names(group)
+    unexpected = [name for name in after if name not in ALLOWED_DANK_CHILDREN]
 
-    try:
-        print(
-            "🧹 slash_command_cleanup pruned /stoney public surface "
-            f"reason={reason} before={before} after={after} removed={removed} unexpected_remaining={unexpected}"
-        )
-    except Exception:
-        pass
+    if removed or unexpected:
+        try:
+            print(
+                f"🧹 slash_command_cleanup pruned /{group_name} public surface "
+                f"scope={_scope_label(guild)} reason={reason} before={before} "
+                f"after={after} removed={removed} unexpected_remaining={unexpected}"
+            )
+        except Exception:
+            pass
 
+    return removed
+
+
+def prune_public_stoney_children(
+    tree: app_commands.CommandTree[Any],
+    *,
+    reason: str = "manual",
+    guild: Optional[Any] = None,
+) -> list[str]:
+    """Prune public setup surfaces.
+
+    The function name is kept for older imports, but Dank Shield's public command
+    root is /dank. We still clean /stoney if a legacy tree has it locally.
+    """
+    if not _public_scope_enabled():
+        return []
+
+    removed: list[str] = []
+    removed.extend(_prune_public_group_children(tree, group_name="dank", reason=reason, guild=guild))
+    removed.extend(_prune_public_group_children(tree, group_name="stoney", reason=reason, guild=guild))
     return removed
 
 
@@ -256,14 +319,16 @@ def install_slash_command_cleanup_guard() -> None:
 
     async def _patched_sync(self: app_commands.CommandTree[Any], *args: Any, **kwargs: Any):
         guild = _guild_from_sync_args(args, kwargs)
-        if guild is None:
-            remove_stale_top_level_commands(self, reason="pre_global_sync")
-            prune_public_stoney_children(self, reason="pre_global_sync")
-            try:
-                names = _safe_command_names(self)
-                print(f"🧹 slash_command_cleanup pre-sync global command count={len(names)} names={names}")
-            except Exception:
-                pass
+        remove_stale_top_level_commands(self, reason="pre_sync", guild=guild)
+        prune_public_stoney_children(self, reason="pre_sync", guild=guild)
+        try:
+            names = _safe_command_names(self, guild=guild)
+            print(
+                "🧹 slash_command_cleanup pre-sync command surface "
+                f"scope={_scope_label(guild)} count={len(names)} names={names}"
+            )
+        except Exception:
+            pass
         return await _ORIGINAL_SYNC(self, *args, **kwargs)  # type: ignore[misc]
 
     def _patched_clear_commands(self: app_commands.CommandTree[Any], *args: Any, **kwargs: Any):
@@ -284,7 +349,7 @@ def install_slash_command_cleanup_guard() -> None:
 
     _PATCHED = True
     try:
-        print("🧹 slash_command_cleanup loaded; stale alias cleanup + public /stoney surface pruning active")
+        print("🧹 slash_command_cleanup loaded; stale alias cleanup + public /dank surface pruning active")
     except Exception:
         pass
 
@@ -293,7 +358,9 @@ install_slash_command_cleanup_guard()
 
 
 __all__ = [
+    "ALLOWED_DANK_CHILDREN",
     "ALLOWED_STONEY_CHILDREN",
+    "CONFUSING_DANK_CHILDREN",
     "CONFUSING_STONEY_CHILDREN",
     "STALE_TOP_LEVEL_COMMANDS",
     "install_slash_command_cleanup_guard",
