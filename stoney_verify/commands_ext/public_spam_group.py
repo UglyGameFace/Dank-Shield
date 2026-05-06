@@ -1,12 +1,13 @@
 from __future__ import annotations
 
-"""Public /stoney spam command family.
+"""Public /dank spam command family.
 
 Boring/professional command strategy:
-- Keep spam guard controls, but do not expose /spam_guard and /spam_guard_status
-  as separate top-level commands.
-- Capture the existing working callbacks, attach them under /stoney spam, then
-  remove the legacy top-level aliases from the local command tree before sync.
+- Keep SpamGuard controls grouped under /dank spam.
+- Do not expose /spam_guard and /spam_guard_status as separate top-level commands.
+- Prefer captured legacy callbacks when they exist.
+- In public mode those legacy top-level commands may never be registered, so this
+  wrapper also resolves the real callbacks directly from stoney_verify.spam_guard.
 """
 
 import inspect
@@ -24,7 +25,7 @@ _LEGACY_COMMANDS: dict[str, app_commands.Command[Any, ..., Any]] = {}
 
 spam_group = app_commands.Group(
     name="spam",
-    description="Spam guard controls and status.",
+    description="SpamGuard controls and status.",
 )
 
 
@@ -35,39 +36,129 @@ async def _staff_only(interaction: discord.Interaction) -> bool:
     return False
 
 
-async def _call_legacy_command(interaction: discord.Interaction, legacy_name: str) -> None:
+def _callable_accepts_interaction(callback: Any) -> bool:
+    try:
+        signature = inspect.signature(callback)
+        params = list(signature.parameters.values())
+        if not params:
+            return False
+        # Bound callbacks may expose only the interaction argument; unbound
+        # callbacks usually expose interaction as the first argument too because
+        # these are plain app_commands callbacks, not Cog methods.
+        return any(str(p.name).lower() in {"interaction", "ctx"} for p in params[:2])
+    except Exception:
+        return True
+
+
+def _command_from_module_by_name(module: Any, legacy_name: str) -> Optional[app_commands.Command[Any, ..., Any]]:
+    try:
+        for value in vars(module).values():
+            if isinstance(value, app_commands.Command) and not isinstance(value, app_commands.Group):
+                if str(getattr(value, "name", "")).strip().lower() == legacy_name.lower():
+                    return value
+    except Exception:
+        pass
+    return None
+
+
+def _callback_from_module_by_candidate(module: Any, legacy_name: str) -> Optional[Any]:
+    candidates = {
+        "spam_guard": (
+            "spam_guard",
+            "spam_guard_command",
+            "spam_guard_panel",
+            "open_spam_guard_panel",
+            "show_spam_guard_panel",
+            "spam_panel",
+            "panel",
+        ),
+        "spam_guard_status": (
+            "spam_guard_status",
+            "spam_guard_status_command",
+            "show_spam_guard_status",
+            "spam_guard_diagnostics",
+            "spam_status",
+            "status",
+        ),
+    }.get(legacy_name, ())
+
+    for name in candidates:
+        try:
+            value = getattr(module, name, None)
+            if isinstance(value, app_commands.Command):
+                callback = getattr(value, "callback", None)
+                if callable(callback):
+                    return callback
+            if callable(value) and _callable_accepts_interaction(value):
+                return value
+        except Exception:
+            continue
+    return None
+
+
+def _resolve_spamguard_callback(legacy_name: str) -> tuple[Optional[Any], str]:
+    command = _LEGACY_COMMANDS.get(legacy_name)
+    if command is not None:
+        callback = getattr(command, "callback", None)
+        if callable(callback):
+            return callback, "captured_tree_command"
+
+    try:
+        from stoney_verify import spam_guard
+    except Exception as e:
+        return None, f"spam_guard_import_failed:{type(e).__name__}"
+
+    module_command = _command_from_module_by_name(spam_guard, legacy_name)
+    if module_command is not None:
+        callback = getattr(module_command, "callback", None)
+        if callable(callback):
+            return callback, "module_app_command"
+
+    module_callback = _callback_from_module_by_candidate(spam_guard, legacy_name)
+    if callable(module_callback):
+        return module_callback, "module_candidate"
+
+    return None, "not_found"
+
+
+async def _invoke_callback(interaction: discord.Interaction, callback: Any) -> None:
+    try:
+        result = callback(interaction)
+    except TypeError:
+        # Some app_commands callbacks can be wrapped in a way that expects a
+        # keyword interaction. Try that once before reporting a signature issue.
+        result = callback(interaction=interaction)
+    if inspect.isawaitable(result):
+        await result
+
+
+async def _call_spamguard_command(interaction: discord.Interaction, legacy_name: str) -> None:
     if not await _staff_only(interaction):
         return
 
-    command = _LEGACY_COMMANDS.get(legacy_name)
-    if command is None:
+    callback, source = _resolve_spamguard_callback(legacy_name)
+    if callback is None:
         return await reply_once(
             interaction,
             {
                 "content": (
-                    "❌ Spam guard command callback was not found. "
-                    "Restart after the spam guard module is loaded, or check the spam guard registration logs."
+                    "❌ SpamGuard panel/status callback was not found.\n"
+                    "The grouped public command loaded, but the core spam_guard module did not expose the expected callback. "
+                    "This needs a wrapper update, not a server setup change.\n"
+                    f"`source={source}`"
                 ),
                 "ephemeral": True,
             },
         )
 
-    callback = getattr(command, "callback", None)
-    if not callable(callback):
-        return await reply_once(interaction, {"content": "❌ Spam guard callback is unavailable.", "ephemeral": True})
-
     try:
-        result = callback(interaction)
-        if inspect.isawaitable(result):
-            await result
+        await _invoke_callback(interaction, callback)
     except TypeError as e:
-        # The legacy callback probably changed signature. Keep this graceful so a
-        # stale command surface does not crash all public command registration.
         await reply_once(
             interaction,
             {
                 "content": (
-                    "❌ Spam guard callback signature changed and needs a wrapper update.\n"
+                    "❌ SpamGuard callback signature changed and needs a wrapper update.\n"
                     f"`{type(e).__name__}: {str(e)[:300]}`"
                 ),
                 "ephemeral": True,
@@ -77,20 +168,20 @@ async def _call_legacy_command(interaction: discord.Interaction, legacy_name: st
         await reply_once(
             interaction,
             {
-                "content": f"❌ Spam guard command failed: `{type(e).__name__}: {str(e)[:300]}`",
+                "content": f"❌ SpamGuard command failed from `{source}`: `{type(e).__name__}: {str(e)[:300]}`",
                 "ephemeral": True,
             },
         )
 
 
-@spam_group.command(name="panel", description="Open the interactive spam guard control panel.")
+@spam_group.command(name="panel", description="Open the interactive SpamGuard control panel.")
 async def spam_panel(interaction: discord.Interaction) -> None:
-    await _call_legacy_command(interaction, "spam_guard")
+    await _call_spamguard_command(interaction, "spam_guard")
 
 
-@spam_group.command(name="status", description="Show spam guard status and persistence diagnostics.")
+@spam_group.command(name="status", description="Show SpamGuard status and persistence diagnostics.")
 async def spam_status(interaction: discord.Interaction) -> None:
-    await _call_legacy_command(interaction, "spam_guard_status")
+    await _call_spamguard_command(interaction, "spam_guard_status")
 
 
 def _capture_and_remove_legacy(tree: Any, name: str) -> bool:
@@ -127,11 +218,11 @@ def register_public_spam_group_commands(bot: Any, tree: Any) -> None:
     try:
         if stoney_group.get_command("spam") is None:
             stoney_group.add_command(spam_group)
-            print("✅ public_spam_group: attached /stoney spam commands")
+            print("✅ public_spam_group: attached /dank spam commands")
         else:
-            print("✅ public_spam_group: /stoney spam already attached")
+            print("✅ public_spam_group: /dank spam already attached")
     except Exception as e:
-        print(f"⚠️ public_spam_group failed attaching /stoney spam: {repr(e)}")
+        print(f"⚠️ public_spam_group failed attaching /dank spam: {repr(e)}")
         raise
 
     if removed:
@@ -143,4 +234,4 @@ def register_public_spam_group_commands(bot: Any, tree: Any) -> None:
     _REGISTERED = True
 
 
-__all__ = ["register_public_spam_group_commands", "spam_group"]
+__all__ = ["register_public_spam_group_commands", "spam_group", "spam_panel", "spam_status"]
