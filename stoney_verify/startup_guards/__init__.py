@@ -44,6 +44,9 @@ _STARTUP_GUARDS: Tuple[str, ...] = (
     # the deployed main branch so Add Custom Menu Option does not crash.
     "stoney_verify.startup_guards.setup_category_modal_compat",
 
+    # Normalize remaining legacy public text to Dank Shield + /dank setup.
+    "stoney_verify.startup_guards.dank_shield_branding_guard",
+
     # Broad event-loop DB/modlog/ticket safety layer.
     # sitecustomize.py remains as a tiny host fallback, but main startup loads
     # the real package module directly.
@@ -115,6 +118,7 @@ _IMPORT_CHATTER_PREFIXES: Tuple[str, ...] = (
     "🧪 ",
     "🧠 ",
     "🧭 setup_category_modal_compat patched",
+    "🛡️ dank_shield_branding_guard active",
     "🛡️ member_join_removal_safety patched",
     "🛡️ member_join_removal_safety attached",
     "🛡️ member_join_removal_safety loaded",
