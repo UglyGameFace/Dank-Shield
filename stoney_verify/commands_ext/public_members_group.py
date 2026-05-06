@@ -2,23 +2,12 @@ from __future__ import annotations
 
 """Public /dank members server-activity review commands.
 
-This production slice is intentionally scan/review only:
-- It previews verified/resident members who look quiet after verification.
-- It explains confidence and safety status.
-- It provides manual review controls for staff.
-- It lets staff lock reviewed users out of future scans.
-- It does not perform member removal.
-
-Accuracy rule:
-- This does NOT use Discord online/offline presence.
-- Users can appear offline, so presence would be misleading.
-- The scan only uses server-observed activity Dank Shield can see inside this guild.
-- Discord audit log is only a fallback for estimating when Verified/Resident was granted.
-
-Usability rule:
-- /dank members scan is the simple one-click/default path.
-- Advanced thresholds live in /dank members advanced-scan.
-- Staff can adjust common thresholds with quick preset buttons in the review UI.
+This module owns the review UI for verified/resident member activity scans.
+The scan itself is intentionally conservative:
+- It does not use online/offline/idle presence.
+- It only uses activity Dank Shield can observe inside this guild.
+- The main dashboard stays short enough for Discord mobile.
+- Full explanations live behind select menus and buttons.
 """
 
 from math import ceil
@@ -37,7 +26,6 @@ from stoney_verify.members_new.activity_service import (
     get_last_scan,
     get_scan_lock_records,
     is_scan_user_locked,
-    report_summary_lines,
     scan_inactive_members,
     set_scan_user_lock,
 )
@@ -97,41 +85,27 @@ def _fmt_ts(value: Any, *, fallback: str = "unknown") -> str:
     return fallback
 
 
+def _safe_int_attr(obj: Any, name: str, default: int = 0) -> int:
+    try:
+        value = getattr(obj, name, default)
+        if value is None:
+            return int(default)
+        return int(value)
+    except Exception:
+        return int(default)
+
+
 def _status_icon(candidate: Any) -> tuple[str, str]:
     status = str(getattr(candidate, "status", "") or "")
     if status == "Review candidate":
-        return "🟠", "Review candidate"
+        return "🟠", "Review"
     if status == "Needs review":
-        return "🟡", "Needs manual review"
+        return "🟡", "Manual"
     if status == "Protected":
-        return "🛡️", "Safety-protected"
+        return "🛡️", "Protected"
     if status == "Cannot action":
-        return "⛔", "Cannot action"
+        return "⛔", "Blocked"
     return "⚪", status or "Unknown"
-
-
-def _candidate_title(candidate: Any, idx: int) -> str:
-    icon, label = _status_icon(candidate)
-    verified_tag = " • Verified/Resident" if getattr(candidate, "verified_or_resident", False) else ""
-    return f"{idx}. {icon} {candidate.display_name}{verified_tag} — {label}"
-
-
-def _candidate_summary(candidate: Any, idx: int) -> tuple[str, str]:
-    days = "unknown" if candidate.inactivity_days is None else f"{candidate.inactivity_days} day(s)"
-    verified_at = _fmt_ts(getattr(candidate, "verified_at", None))
-    post_verify_activity = _fmt_ts(getattr(candidate, "post_verification_activity_at", None), fallback="none found")
-    source = str(getattr(candidate, "verification_source", "unknown") or "unknown")
-    name = _safe_field(_candidate_title(candidate, idx), 256)
-    value = _safe_field(
-        f"User: {getattr(candidate, 'mention', f'<@{candidate.user_id}>')} (`{candidate.user_id}`)\n"
-        f"Confidence: **{candidate.confidence}** • Quiet after verify: **{days}**\n"
-        f"Verified/resident since: {verified_at}\n"
-        f"Post-verify activity: {post_verify_activity}\n"
-        f"Source: `{source[:70]}`\n"
-        f"Why: {candidate.short_reason(180)}",
-        _SAFE_FIELD_LIMIT,
-    )
-    return name, value
 
 
 def _page_count(report: InactiveScanReport) -> int:
@@ -146,92 +120,107 @@ def _page_bounds(report: InactiveScanReport, page: int) -> tuple[int, int, int]:
     return safe_page, start, end
 
 
-def _build_activity_meter(report: InactiveScanReport) -> str:
+def _short_candidate_line(candidate: InactiveMemberCandidate, idx: int) -> str:
+    icon, label = _status_icon(candidate)
+    days = "?d" if candidate.inactivity_days is None else f"{candidate.inactivity_days}d"
+    confidence = str(getattr(candidate, "confidence", "?") or "?")
+    mention = getattr(candidate, "mention", f"<@{candidate.user_id}>")
+    return f"`{idx}.` {icon} {mention} • **{days} quiet** • {confidence} • {label}"
+
+
+def _build_status_snapshot(report: InactiveScanReport) -> str:
     return _safe_field(
-        f"**Overall server activity:** {report.active_activity_percent}% active/recent in this server\n"
-        f"**Verified/resident with no post-verify activity:** {report.verified_resident_without_post_activity}/{report.verified_resident_seen} ({report.verified_vanished_percent}%)\n"
-        f"**Users found for review:** {len(report.candidates)} user(s), {report.quiet_review_percent}% of members\n"
-        f"**Scan-locked skipped:** {report.locked_users_skipped} user(s)\n"
-        f"**Safety locks:** {report.protected_or_blocked_count} member(s) protected or blocked by Discord permissions\n"
-        f"**Data confidence:** {report.data_confidence_label} — {report.data_coverage_percent}% of optional history sources readable"
+        f"**Found:** {len(report.candidates)} review user(s) • **Pages:** {_page_count(report)}\n"
+        f"**Verified quiet:** {_safe_int_attr(report, 'verified_resident_without_post_activity')}/{_safe_int_attr(report, 'verified_resident_seen')} ({_safe_int_attr(report, 'verified_vanished_percent')}%)\n"
+        f"**Server activity:** {_safe_int_attr(report, 'active_activity_percent')}% active/recent • **Locked skipped:** {_safe_int_attr(report, 'locked_users_skipped')}\n"
+        f"**Data:** {getattr(report, 'data_confidence_label', 'Unknown')} ({_safe_int_attr(report, 'data_coverage_percent')}%) • **Audit hits:** {_safe_int_attr(report, 'audit_log_times_found')}",
+        _SAFE_FIELD_LIMIT,
     )
 
 
-def _build_data_limits_text(report: InactiveScanReport) -> str:
-    extra = ""
-    try:
-        if report.audit_log_times_found:
-            extra += f"\n\nAudit-log fallback found **{report.audit_log_times_found}** verification/resident role timestamp(s)."
-        if report.scan_lock_persistence:
-            extra += f"\nScan-lock storage: **{report.scan_lock_persistence}**"
-    except Exception:
-        pass
-    if not report.data_warnings:
-        return _safe_field("✅ Good enough data coverage for this scan." + extra)
-    intro = (
-        "Dank Shield could not read every optional server-history source yet. "
-        "That does **not** mean members are inactive. It means low-confidence users are shown for manual review instead of hidden."
+def _build_page_users_text(report: InactiveScanReport, *, page: int) -> str:
+    page, start, end = _page_bounds(report, page)
+    if not report.candidates:
+        return "✅ No verified/resident users matched this scan."
+    lines = [_short_candidate_line(candidate, idx) for idx, candidate in enumerate(report.candidates[start:end], start=start + 1)]
+    footer = f"\n\nShowing **{start + 1}-{end}** of **{len(report.candidates)}**. Select a user below for full details."
+    return _safe_field("\n".join(lines) + footer, _SAFE_FIELD_LIMIT)
+
+
+def _build_settings_line(report: InactiveScanReport) -> str:
+    options = report.options
+    return _safe_field(
+        f"Quiet **{options.inactive_days}d** after verify • Grace **{options.grace_days}d** • "
+        f"Audit fallback **{'on' if options.use_audit_log_fallback else 'off'}** • "
+        f"Skip locked **{'on' if options.skip_locked_users else 'off'}**",
+        _SAFE_FIELD_LIMIT,
     )
-    warnings = "\n".join(f"• {warning}" for warning in report.data_warnings[:3])
-    return _safe_field(f"{intro}{extra}\n\n{warnings}")
+
+
+def _build_data_notes_embed(report: InactiveScanReport) -> discord.Embed:
+    attempted = _safe_int_attr(report, "data_sources_attempted", 0)
+    readable = _safe_int_attr(report, "data_sources_read", 0)
+    if attempted <= 0:
+        # Older reports only expose coverage percent. Keep the UI truthful without
+        # assuming internal counters exist.
+        source_line = f"Optional source coverage: **{_safe_int_attr(report, 'data_coverage_percent')}%**"
+    else:
+        source_line = f"Optional sources readable: **{readable}/{attempted}** ({_safe_int_attr(report, 'data_coverage_percent')}%)"
+
+    embed = discord.Embed(
+        title="📊 Member Scan Data Notes",
+        description="Detailed data/confidence notes for the latest member activity scan.",
+        color=discord.Color.blurple(),
+        timestamp=report.scanned_at,
+    )
+    embed.add_field(
+        name="Data Sources",
+        value=_safe_field(
+            f"Confidence: **{getattr(report, 'data_confidence_label', 'Unknown')}**\n"
+            f"{source_line}\n"
+            f"Audit-log verification timestamps found: **{_safe_int_attr(report, 'audit_log_times_found')}**\n"
+            f"Scan-lock storage: **{getattr(report, 'scan_lock_persistence', None) or 'unknown'}**"
+        ),
+        inline=False,
+    )
+    warnings = list(getattr(report, "data_warnings", []) or [])
+    if warnings:
+        embed.add_field(
+            name="Warnings",
+            value=_safe_field("\n".join(f"• {warning}" for warning in warnings[:8])),
+            inline=False,
+        )
+    else:
+        embed.add_field(name="Warnings", value="✅ No data warnings for this scan.", inline=False)
+    embed.add_field(
+        name="What This Means",
+        value=_safe_field(
+            "Low or partial data does **not** prove a member is inactive. It means Dank Shield is showing the user for manual review instead of pretending the scan is perfect."
+        ),
+        inline=False,
+    )
+    return embed
 
 
 def _build_report_embed(report: InactiveScanReport, *, page: int = 0) -> discord.Embed:
-    page, start, end = _page_bounds(report, page)
+    page, _start, _end = _page_bounds(report, page)
     pages = _page_count(report)
-    color = discord.Color.green() if report.data_confidence_label in {"Good", "Partial"} else discord.Color.orange()
+    confidence = str(getattr(report, "data_confidence_label", "") or "")
+    color = discord.Color.green() if confidence in {"Good", "Partial"} else discord.Color.orange()
     embed = discord.Embed(
-        title="🧹 Verified Member Activity Review",
+        title="🧹 Verified Member Review",
         description=(
-            "Preview-only review console. Nobody is removed from the server.\n\n"
-            "Dank Shield lists verified/resident members who verified, then had no tracked server activity afterward. "
-            "It does **not** use online/offline/idle status."
+            "Preview only. No one is removed here.\n"
+            "Reviews verified/resident members with no tracked activity after verification."
         ),
         color=color,
         timestamp=report.scanned_at,
     )
-
-    if not report.candidates:
-        embed.add_field(
-            name="Users Found",
-            value="✅ No verified/resident users were found with missing post-verification activity under these settings.",
-            inline=False,
-        )
-    else:
-        embed.add_field(
-            name=f"Users Found — Page {page + 1}/{pages}",
-            value=_safe_field(f"Showing **{start + 1}-{end}** of **{len(report.candidates)}** users found for manual review."),
-            inline=False,
-        )
-        for display_idx, candidate in enumerate(report.candidates[start:end], start=start + 1):
-            name, value = _candidate_summary(candidate, display_idx)
-            embed.add_field(name=name, value=value, inline=False)
-
-    embed.add_field(name="Activity Health", value=_build_activity_meter(report), inline=False)
-    embed.add_field(name="Scan Counts", value=_safe_field("\n".join(report_summary_lines(report)[5:])), inline=False)
-    embed.add_field(
-        name="Manual Review Options",
-        value=_safe_field(
-            "Use the dropdown below to inspect one user at a time. Use **Lock / Skip in Scans** on the detail card when a user has been manually reviewed and should stop appearing.\n\n"
-            "Use the 30d / 90d / 180d buttons to rescan with common thresholds. No one is automatically removed from this screen."
-        ),
-        inline=False,
-    )
-    embed.add_field(
-        name="Review Settings",
-        value=_safe_field(
-            f"Quiet after verification for: **{report.options.inactive_days} day(s)**\n"
-            f"New-member grace period: **{report.options.grace_days} day(s)**\n"
-            f"Verified/resident focus: **{'Yes' if report.options.verified_resident_focus else 'No'}**\n"
-            f"Audit-log fallback for verification date: **{'Yes' if report.options.use_audit_log_fallback else 'No'}**\n"
-            f"Skip scan-locked users: **{'Yes' if report.options.skip_locked_users else 'No'}**\n"
-            f"Bot accounts protected: **{'Yes' if report.options.protect_bots else 'No'}**\n"
-            f"Staff/admin roles protected: **{'Yes' if report.options.protect_staff else 'No'}**"
-        ),
-        inline=False,
-    )
-    embed.add_field(name="Data Confidence", value=_build_data_limits_text(report), inline=False)
-    embed.set_footer(text=f"Guild {report.guild_id} • /dank members scan • post-verification server activity only")
+    embed.add_field(name="Status Snapshot", value=_build_status_snapshot(report), inline=False)
+    embed.add_field(name=f"Users Found — Page {page + 1}/{pages}", value=_build_page_users_text(report, page=page), inline=False)
+    embed.add_field(name="Controls", value="Select a user for full details, lock/skip after review, or rescan with 30d/90d/180d.", inline=False)
+    embed.add_field(name="Settings", value=_build_settings_line(report), inline=False)
+    embed.set_footer(text=f"Guild {report.guild_id} • post-verification activity only • Data Notes has the long details")
     return embed
 
 
@@ -246,10 +235,10 @@ def _build_user_detail_embed(candidate: InactiveMemberCandidate, *, locked: bool
     embed = discord.Embed(
         title=f"{icon} Manual Review: {candidate.display_name}",
         description=(
-            "Use this card to manually inspect the member before taking any server action.\n"
+            "Inspect this member before taking action.\n"
             f"Scan lock: **{'Locked / skipped in future scans' if locked else 'Not locked'}**"
         ),
-        color=discord.Color.orange() if label in {"Review candidate", "Needs manual review"} else discord.Color.blurple(),
+        color=discord.Color.orange() if label in {"Review", "Manual"} else discord.Color.blurple(),
     )
     embed.add_field(
         name="Member",
@@ -277,10 +266,9 @@ def _build_user_detail_embed(candidate: InactiveMemberCandidate, *, locked: bool
     embed.add_field(
         name="Manual Options",
         value=_safe_field(
-            "• Use **Lock / Skip in Scans** after you manually reviewed this user and do not want them listed again.\n"
-            "• Use `/dank members locked` to view or unlock skipped users.\n"
-            "• If the result is wrong, treat it as a data-confidence issue, not a final decision.\n"
-            "• Automatic cleanup should only be added after this review list is accurate."
+            "• **Lock / Skip in Scans**: hide this reviewed user from future scans.\n"
+            "• `/dank members locked`: view or unlock skipped users.\n"
+            "• `/dank members cleanup-user`: confirmed one-user cleanup after review."
         ),
         inline=False,
     )
@@ -456,6 +444,7 @@ class MemberActivityReviewView(discord.ui.View):
         previous_button = discord.ui.Button(label="Previous", emoji="⬅️", style=discord.ButtonStyle.secondary, disabled=self.page <= 0, row=1)
         next_button = discord.ui.Button(label="Next", emoji="➡️", style=discord.ButtonStyle.secondary, disabled=self.page >= _page_count(self.report) - 1, row=1)
         refresh_button = discord.ui.Button(label="Refresh", emoji="🔄", style=discord.ButtonStyle.primary, row=1)
+        data_button = discord.ui.Button(label="Data Notes", emoji="📊", style=discord.ButtonStyle.secondary, row=2)
         safety_button = discord.ui.Button(label="Safety", emoji="🛡️", style=discord.ButtonStyle.secondary, row=2)
         ids_button = discord.ui.Button(label="Page IDs", emoji="🆔", style=discord.ButtonStyle.secondary, row=2)
         preset_30_button = discord.ui.Button(label="30d", emoji="⚡", style=discord.ButtonStyle.secondary, row=3)
@@ -465,6 +454,7 @@ class MemberActivityReviewView(discord.ui.View):
         previous_button.callback = self._previous_page  # type: ignore[assignment]
         next_button.callback = self._next_page  # type: ignore[assignment]
         refresh_button.callback = self._refresh_scan  # type: ignore[assignment]
+        data_button.callback = self._show_data_notes  # type: ignore[assignment]
         safety_button.callback = self._explain_safety  # type: ignore[assignment]
         ids_button.callback = self._show_page_ids  # type: ignore[assignment]
         preset_30_button.callback = self._preset_30_days  # type: ignore[assignment]
@@ -474,6 +464,7 @@ class MemberActivityReviewView(discord.ui.View):
         self.add_item(previous_button)
         self.add_item(next_button)
         self.add_item(refresh_button)
+        self.add_item(data_button)
         self.add_item(safety_button)
         self.add_item(ids_button)
         self.add_item(preset_30_button)
@@ -542,6 +533,11 @@ class MemberActivityReviewView(discord.ui.View):
     async def _preset_180_days(self, interaction: discord.Interaction) -> None:
         await self._rescan(interaction, inactive_days=180)
 
+    async def _show_data_notes(self, interaction: discord.Interaction) -> None:
+        if not await _require_review_permission(interaction):
+            return
+        await interaction.response.send_message(embed=_build_data_notes_embed(self.report), ephemeral=True)
+
     async def _explain_safety(self, interaction: discord.Interaction) -> None:
         text = (
             "🛡️ **Safety rules used by this scan**\n\n"
@@ -555,7 +551,7 @@ class MemberActivityReviewView(discord.ui.View):
     async def _show_page_ids(self, interaction: discord.Interaction) -> None:
         if not await _require_review_permission(interaction):
             return
-        page, start, end = _page_bounds(self.report, self.page)
+        _page, start, end = _page_bounds(self.report, self.page)
         candidates = self.report.candidates[start:end]
         if not candidates:
             return await reply_once(interaction, {"content": "No users on this page.", "ephemeral": True})
