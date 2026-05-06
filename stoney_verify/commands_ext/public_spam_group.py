@@ -8,6 +8,9 @@ Boring/professional command strategy:
 - Prefer captured legacy callbacks when they exist.
 - In public mode those legacy top-level commands may never be registered, so this
   wrapper also resolves the real callbacks directly from stoney_verify.spam_guard.
+- Export normal helper functions for setup buttons. Discord app-command objects
+  are not normal callables after decoration, so setup must not call the command
+  object directly.
 """
 
 import inspect
@@ -42,9 +45,6 @@ def _callable_accepts_interaction(callback: Any) -> bool:
         params = list(signature.parameters.values())
         if not params:
             return False
-        # Bound callbacks may expose only the interaction argument; unbound
-        # callbacks usually expose interaction as the first argument too because
-        # these are plain app_commands callbacks, not Cog methods.
         return any(str(p.name).lower() in {"interaction", "ctx"} for p in params[:2])
     except Exception:
         return True
@@ -125,8 +125,6 @@ async def _invoke_callback(interaction: discord.Interaction, callback: Any) -> N
     try:
         result = callback(interaction)
     except TypeError:
-        # Some app_commands callbacks can be wrapped in a way that expects a
-        # keyword interaction. Try that once before reporting a signature issue.
         result = callback(interaction=interaction)
     if inspect.isawaitable(result):
         await result
@@ -174,14 +172,28 @@ async def _call_spamguard_command(interaction: discord.Interaction, legacy_name:
         )
 
 
+async def open_spamguard_panel(interaction: discord.Interaction) -> None:
+    """Open the real SpamGuard panel from setup or /dank spam.
+
+    This is intentionally a normal callable. Do not call the decorated
+    ``spam_panel`` app-command object from setup buttons.
+    """
+    await _call_spamguard_command(interaction, "spam_guard")
+
+
+async def show_spamguard_status(interaction: discord.Interaction) -> None:
+    """Show SpamGuard status from setup or /dank spam."""
+    await _call_spamguard_command(interaction, "spam_guard_status")
+
+
 @spam_group.command(name="panel", description="Open the interactive SpamGuard control panel.")
 async def spam_panel(interaction: discord.Interaction) -> None:
-    await _call_spamguard_command(interaction, "spam_guard")
+    await open_spamguard_panel(interaction)
 
 
 @spam_group.command(name="status", description="Show SpamGuard status and persistence diagnostics.")
 async def spam_status(interaction: discord.Interaction) -> None:
-    await _call_spamguard_command(interaction, "spam_guard_status")
+    await show_spamguard_status(interaction)
 
 
 def _capture_and_remove_legacy(tree: Any, name: str) -> bool:
@@ -234,4 +246,11 @@ def register_public_spam_group_commands(bot: Any, tree: Any) -> None:
     _REGISTERED = True
 
 
-__all__ = ["register_public_spam_group_commands", "spam_group", "spam_panel", "spam_status"]
+__all__ = [
+    "register_public_spam_group_commands",
+    "spam_group",
+    "spam_panel",
+    "spam_status",
+    "open_spamguard_panel",
+    "show_spamguard_status",
+]
