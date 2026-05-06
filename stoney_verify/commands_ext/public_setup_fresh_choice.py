@@ -2,16 +2,20 @@ from __future__ import annotations
 
 """Fresh-server setup choice polish.
 
-A brand-new server does not always mean the owner wants Stoney's default layout.
-This module replaces the vague Fresh Server screen with two clear paths:
+A brand-new server does not always mean the owner wants Dank Shield's default
+layout. This module replaces the vague first setup screen with clear paths:
 
-1. Auto-Build Recommended Layout
-   - Stoney creates a specific starter layout.
+1. Services
+   - Pick Tickets-only, Verification-only, SpamGuard-only, or combinations.
+   - Health Check focuses only on enabled services.
+
+2. Fresh Server
+   - Dank Shield creates a specific starter layout.
    - The screen shows exactly what may be created before the owner confirms.
 
-2. Build It Myself
-   - Stoney creates nothing.
-   - The owner builds their own Discord structure and maps it with dropdowns.
+3. Existing Server
+   - Dank Shield creates nothing.
+   - The owner maps their current Discord structure with dropdowns.
 
 The patch is loaded after the main setup/recovery modules and updates the
 builder used by the Recovery button wrapper so the first setup screen keeps all
@@ -23,7 +27,6 @@ from typing import Any
 import discord
 
 from ..globals import now_utc
-from ..guild_config import get_guild_config
 from . import public_setup_recommend as recommend
 from . import public_setup_recovery as recovery
 from . import public_setup_solid as solid
@@ -72,12 +75,53 @@ async def _progress_for_home(guild: discord.Guild) -> tuple[str, int, int, str]:
         return f"🚫 Setup progress failed: `{type(e).__name__}: {str(e)[:180]}`", 0, 1, "Run Health Check or check boot logs."
 
 
+async def _service_state_for_home(guild: discord.Guild) -> tuple[str, str, bool]:
+    try:
+        from stoney_verify.startup_guards import setup_service_modes
+
+        state = await setup_service_modes.load_service_state(guild.id)
+        summary = setup_service_modes._service_summary_text(state)  # type: ignore[attr-defined]
+        hint = setup_service_modes._service_mode_hint(state)  # type: ignore[attr-defined]
+        spam_on = bool(getattr(state, "spamguard", False) or getattr(state, "moderation", False))
+        return summary, hint, spam_on
+    except Exception:
+        return (
+            "✅ Tickets\n⬜ ID verification\n⬜ Voice verification\n⬜ SpamGuard\n⬜ Moderation/logging",
+            "Health Check will focus on: Ticket Basics.",
+            False,
+        )
+
+
+async def _open_service_picker(interaction: discord.Interaction) -> None:
+    if not await solid._require_setup_permission(interaction):
+        return
+    guild = interaction.guild
+    if guild is None:
+        return await interaction.response.send_message("❌ This must be used inside a server.", ephemeral=True)
+
+    try:
+        from stoney_verify.startup_guards import setup_service_modes
+
+        state = await setup_service_modes.load_service_state(guild.id)
+        embed = await setup_service_modes.build_service_picker_embed(guild, state)
+        view = setup_service_modes.ServiceModeView(state)  # type: ignore[attr-defined]
+        await interaction.response.edit_message(embed=embed, view=view)
+    except Exception as e:
+        await interaction.response.send_message(
+            f"❌ Service picker failed to open: `{type(e).__name__}: {str(e)[:250]}`",
+            ephemeral=True,
+            allowed_mentions=discord.AllowedMentions.none(),
+        )
+
+
 async def _fresh_choice_main_payload(guild: discord.Guild) -> tuple[discord.Embed, discord.ui.View]:
     progress_text, done, total, next_step = await _progress_for_home(guild)
+    service_summary, service_hint, spam_on = await _service_state_for_home(guild)
     embed = discord.Embed(
-        title="🚀 Stoney Setup",
+        title="🚀 Dank Shield Setup",
         description=(
             "Pick **one path**. You do not need to know any setup commands.\n\n"
+            "🧭 **Services** — choose Tickets-only, Verification-only, SpamGuard-only, or any combo.\n"
             "🟢 **Fresh Server** — choose auto-build or build everything yourself.\n"
             "🔵 **Existing Server** — map your current roles/channels with dropdowns.\n"
             "⚙️ **Advanced Setup** — fine-tune ticket menu options, logs, status, and checks."
@@ -85,15 +129,27 @@ async def _fresh_choice_main_payload(guild: discord.Guild) -> tuple[discord.Embe
         color=discord.Color.blurple(),
         timestamp=now_utc(),
     )
+    embed.add_field(name="Enabled Services", value=service_summary, inline=True)
+    embed.add_field(name="Health Check Focus", value=service_hint[:1024], inline=False)
+    if spam_on:
+        embed.add_field(
+            name="SpamGuard Setup",
+            value="Press **Services**, then use **Open SpamGuard Panel** or **SpamGuard Status**.",
+            inline=False,
+        )
     embed.add_field(name=f"Setup Progress: {done}/{total} complete", value=progress_text or "No setup checks ran.", inline=False)
     embed.add_field(name="Recommended Next Step", value=next_step[:1024], inline=False)
-    embed.set_footer(text=f"Guild {guild.id} • start here every time: /stoney setup")
+    embed.set_footer(text=f"Guild {guild.id} • start here every time: /dank setup")
     return embed, FreshChoiceHomeView()
 
 
 class FreshChoiceHomeView(discord.ui.View):
     def __init__(self) -> None:
         super().__init__(timeout=900)
+
+    @discord.ui.button(label="Services", emoji="🧭", style=discord.ButtonStyle.primary, custom_id="stoney_fresh_choice:services", row=0)
+    async def services(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        await _open_service_picker(interaction)
 
     @discord.ui.button(label="Fresh Server", emoji="🟢", style=discord.ButtonStyle.success, custom_id="stoney_fresh_choice:fresh", row=0)
     async def fresh(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
@@ -103,7 +159,7 @@ class FreshChoiceHomeView(discord.ui.View):
             title="🟢 Fresh Server Setup",
             description=(
                 "Use this when the server is new or not configured yet.\n\n"
-                "A new server can go two ways: let Stoney auto-build a starter layout, or build your own layout and only map it to Stoney."
+                "A new server can go two ways: let Dank Shield auto-build a starter layout, or build your own layout and only map it to Dank Shield."
             ),
             color=discord.Color.green(),
             timestamp=now_utc(),
@@ -111,7 +167,7 @@ class FreshChoiceHomeView(discord.ui.View):
         embed.add_field(
             name="✨ Auto-Build Recommended Layout",
             value=(
-                "Stoney creates missing recommended roles, Discord category folders, channels, and ticket menu options.\n"
+                "Dank Shield creates missing recommended roles, Discord category folders, channels, and ticket menu options.\n"
                 "Choose this if you want the fastest working setup."
             ),
             inline=False,
@@ -119,7 +175,7 @@ class FreshChoiceHomeView(discord.ui.View):
         embed.add_field(
             name="🛠️ Build It Myself",
             value=(
-                "Stoney creates nothing. You create your own Discord roles/channels/categories, then map them with dropdowns.\n"
+                "Dank Shield creates nothing. You create your own Discord roles/channels/categories, then map them with dropdowns.\n"
                 "Choose this if you want full customization from the beginning."
             ),
             inline=False,
@@ -127,8 +183,8 @@ class FreshChoiceHomeView(discord.ui.View):
         embed.add_field(
             name="Safety",
             value=(
-                "Auto-build only creates missing Stoney starter items. It will **not** delete, rename, or overwrite channels, tickets, roles, "
-                "categories, messages, or transcripts that were not made by Stoney."
+                "Auto-build only creates missing Dank Shield starter items. It will **not** delete, rename, or overwrite channels, tickets, roles, "
+                "categories, messages, or transcripts that were not made by Dank Shield."
             ),
             inline=False,
         )
@@ -141,7 +197,7 @@ class FreshChoiceHomeView(discord.ui.View):
         embed = discord.Embed(
             title="🔵 Existing Server Setup",
             description=(
-                "Use this when you already have channels/roles and want Stoney to use them.\n\n"
+                "Use this when you already have channels/roles and want Dank Shield to use them.\n\n"
                 "Pick each section below. The bot validates permissions before saving."
             ),
             color=discord.Color.blurple(),
@@ -173,8 +229,10 @@ class FreshChoiceHomeView(discord.ui.View):
         embed.add_field(
             name="Plain-English map",
             value=(
+                "🧭 **Services** = choose which parts of Dank Shield this server uses.\n"
                 "🎫 **Ticket Basics** = actual Discord category folders/channels/roles.\n"
                 "🧾 **Ticket Menu Options** = choices users see when opening a ticket.\n"
+                "🛡️ **SpamGuard** = detection, enforcement, allow-lists, and status.\n"
                 "📌 **Status Channel** = where the bot posts heartbeat/setup status."
             ),
             inline=False,
@@ -202,8 +260,8 @@ class FreshServerChoiceView(solid.BackToSetupView):
         embed = discord.Embed(
             title="✨ Auto-Build Recommended Layout",
             description=(
-                "This creates Stoney's starter layout for a new server.\n\n"
-                "It only creates missing items from the list below. If something already exists, Stoney should reuse/skip instead of duplicating where the setup helper supports that."
+                "This creates Dank Shield's starter layout for a new server.\n\n"
+                "It only creates missing items from the list below. If something already exists, Dank Shield should reuse/skip instead of duplicating where the setup helper supports that."
             ),
             color=discord.Color.green(),
             timestamp=now_utc(),
@@ -213,11 +271,11 @@ class FreshServerChoiceView(solid.BackToSetupView):
             name="Safety",
             value=(
                 "This will **not** delete, rename, overwrite, or move channels, tickets, roles, categories, messages, or transcripts "
-                "that were not made by Stoney. If you dislike the generated layout, use Recovery / Start Over → Full Start Over + Remove Bot Items."
+                "that were not made by Dank Shield. If you dislike the generated layout, use Recovery / Start Over → Full Start Over + Remove Bot Items."
             ),
             inline=False,
         )
-        embed.add_field(name="Confirm", value="Press **Create This Recommended Layout** only if you want Stoney to create the starter layout above.", inline=False)
+        embed.add_field(name="Confirm", value="Press **Create This Recommended Layout** only if you want Dank Shield to create the starter layout above.", inline=False)
         await interaction.response.edit_message(embed=embed, view=AutoBuildConfirmView())
 
     @discord.ui.button(label="Build It Myself", emoji="🛠️", style=discord.ButtonStyle.primary, custom_id="stoney_fresh_choice:manual", row=0)
@@ -227,8 +285,8 @@ class FreshServerChoiceView(solid.BackToSetupView):
         embed = discord.Embed(
             title="🛠️ Build It Myself",
             description=(
-                "Use this when the server is new, but you **do not** want Stoney's default channel/role names.\n\n"
-                "Stoney creates nothing here. You make your own Discord structure first, then map it with dropdowns."
+                "Use this when the server is new, but you **do not** want Dank Shield's default channel/role names.\n\n"
+                "Dank Shield creates nothing here. You make your own Discord structure first, then map it with dropdowns."
             ),
             color=discord.Color.blurple(),
             timestamp=now_utc(),
@@ -265,7 +323,7 @@ class AutoBuildConfirmView(solid.BackToSetupView):
                 created, skipped, error = await solid._seed_recommended_categories(interaction.guild)
                 msg = (
                     "✅ Recommended layout was handled.\n\n"
-                    "**Next:** run `/stoney setup`, press **Health Check**, then post the ticket panel with `/ticket-panel post`."
+                    "**Next:** run `/dank setup`, press **Health Check**, then post the ticket panel with `/ticket-panel post`."
                 )
                 if error:
                     msg += f"\n\n⚠️ Ticket menu options could not be checked: `{error}`"
@@ -295,7 +353,7 @@ class ManualFreshSetupView(solid.BackToSetupView):
             return
         embed = discord.Embed(
             title="🧩 Map My Existing Items",
-            description="Pick your own channels/roles/categories with dropdowns. Stoney validates permissions before saving.",
+            description="Pick your own channels/roles/categories with dropdowns. Dank Shield validates permissions before saving.",
             color=discord.Color.blurple(),
             timestamp=now_utc(),
         )
@@ -337,8 +395,8 @@ class ManualFreshSetupView(solid.BackToSetupView):
 def _patch() -> None:
     global _PATCHED
     # Recovery wraps whatever builder is stored here. Update that builder so the
-    # main /stoney setup screen keeps the recovery button while using the clearer
-    # fresh-server choice flow.
+    # main /dank setup screen keeps the recovery button while using the clearer
+    # setup choice flow.
     try:
         recovery._ORIGINAL_BUILD_MAIN = _fresh_choice_main_payload
         solid._build_main_setup_payload = recovery._build_main_with_recovery
@@ -353,7 +411,7 @@ _patch()
 def register_public_setup_fresh_choice_commands(bot: Any, tree: Any) -> None:
     _ = bot, tree
     _patch()
-    print("✅ public_setup_fresh_choice: clear auto-build vs build-it-myself setup active")
+    print("✅ public_setup_fresh_choice: services + clear setup paths active")
 
 
 __all__ = ["register_public_setup_fresh_choice_commands"]
