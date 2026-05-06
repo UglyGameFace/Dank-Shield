@@ -1,11 +1,16 @@
 from __future__ import annotations
 
-"""Public /dank members activity review commands.
+"""Public /dank members server-activity review commands.
 
 This first production slice is intentionally scan-only:
-- It previews inactive/quiet members.
+- It previews members who look quiet inside this server.
 - It explains confidence and safety status.
 - It does not perform member removal.
+
+Important accuracy rule:
+- This does NOT use Discord online/offline presence.
+- Users can appear offline, so presence would be misleading.
+- The scan only uses server-observed activity Dank Shield can see inside this guild.
 
 Removal/cleanup execution should be a later reviewed PR after the preview data is
 trusted in live servers.
@@ -29,7 +34,7 @@ from stoney_verify.members_new.activity_service import (
 
 members_group = app_commands.Group(
     name="members",
-    description="Member activity review tools.",
+    description="Member server-activity review tools.",
 )
 
 _REGISTERED = False
@@ -70,12 +75,12 @@ def _candidate_lines(report: InactiveScanReport, *, limit: int = 10) -> str:
     lines: list[str] = []
     for idx, candidate in enumerate(report.candidates[:limit], start=1):
         days = "unknown" if candidate.inactivity_days is None else f"{candidate.inactivity_days} day(s)"
-        last_seen = "unknown"
+        last_server_activity = "unknown"
         try:
             if candidate.last_seen_at is not None:
-                last_seen = f"<t:{int(candidate.last_seen_at.timestamp())}:R>"
+                last_server_activity = f"<t:{int(candidate.last_seen_at.timestamp())}:R>"
         except Exception:
-            last_seen = "unknown"
+            last_server_activity = "unknown"
 
         if candidate.status == "Removable":
             icon = "🟠"
@@ -95,7 +100,7 @@ def _candidate_lines(report: InactiveScanReport, *, limit: int = 10) -> str:
 
         lines.append(
             f"{idx}. {icon} **{candidate.display_name}** (`{candidate.user_id}`)\n"
-            f"   Status: **{label}** • Confidence: **{candidate.confidence}** • Quiet for: **{days}** • Last seen: {last_seen}\n"
+            f"   Status: **{label}** • Confidence: **{candidate.confidence}** • Quiet in server for: **{days}** • Last server activity: {last_server_activity}\n"
             f"   Why: {candidate.short_reason(180)}"
         )
 
@@ -106,21 +111,32 @@ def _candidate_lines(report: InactiveScanReport, *, limit: int = 10) -> str:
     return _trim("\n".join(lines))
 
 
+def _build_activity_meter(report: InactiveScanReport) -> str:
+    return (
+        f"**Overall server activity:** {report.active_activity_percent}% active/recent in this server\n"
+        f"**Quiet review pool:** {report.quiet_review_percent}% may need review\n"
+        f"**Protected/cannot-action:** {report.protected_or_blocked_percent}% skipped for safety or Discord permissions\n"
+        f"**Unknown/low data:** {report.unknown_activity_percent}% have limited server-history data"
+    )
+
+
 def _build_report_embed(report: InactiveScanReport) -> discord.Embed:
     embed = discord.Embed(
-        title="🧹 Member Activity Review",
+        title="🧹 Member Server Activity Review",
         description=(
             "This is a **preview only**. Nobody is removed from the server.\n\n"
-            "Dank Shield looks at the activity data it can safely read, then explains who looks quiet, protected, blocked by role hierarchy, or needs manual review."
+            "Dank Shield does **not** use online/offline/idle status. People can appear offline, so that would be misleading. "
+            "This scan only uses activity Dank Shield can observe inside this server, like tickets, ticket messages, verification/member records, activity events, and join dates."
         ),
         color=discord.Color.blurple(),
         timestamp=report.scanned_at,
     )
-    embed.add_field(name="Summary", value="\n".join(report_summary_lines(report)), inline=False)
+    embed.add_field(name="Server Activity Percentage", value=_build_activity_meter(report), inline=False)
+    embed.add_field(name="Scan Counts", value="\n".join(report_summary_lines(report)[3:]), inline=False)
     embed.add_field(
         name="Review Settings",
         value=(
-            f"Quiet after: **{report.options.inactive_days} day(s)**\n"
+            f"Quiet after: **{report.options.inactive_days} day(s) without tracked server activity**\n"
             f"New-member grace period: **{report.options.grace_days} day(s)**\n"
             f"Bot accounts protected: **{'Yes' if report.options.protect_bots else 'No'}**\n"
             f"Staff/protected roles protected: **{'Yes' if report.options.protect_staff else 'No'}**"
@@ -137,14 +153,14 @@ def _build_report_embed(report: InactiveScanReport) -> discord.Embed:
     embed.add_field(
         name="How To Read This",
         value=(
-            "🟠 **Review candidate** = looks quiet with enough data to review.\n"
-            "🟡 **Needs manual review** = not enough history for an automatic decision.\n"
+            "🟠 **Review candidate** = looks quiet in this server with enough data to review.\n"
+            "🟡 **Needs manual review** = not enough server history for an automatic decision.\n"
             "🛡️ **Protected** = staff, protected role, bot, server owner, or new member.\n"
             "⛔ **Cannot action** = Discord role hierarchy or permission issue."
         ),
         inline=False,
     )
-    embed.set_footer(text=f"Guild {report.guild_id} • /dank members scan")
+    embed.set_footer(text=f"Guild {report.guild_id} • /dank members scan • server activity only, not presence")
     return embed
 
 
@@ -167,6 +183,7 @@ class MemberActivityReviewView(discord.ui.View):
     async def explain_safety(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         text = (
             "🛡️ **Safety rules used by this scan**\n\n"
+            "This scan checks activity inside this server only. It does **not** use online/offline/idle status.\n\n"
             "Dank Shield protects the server owner, the bot itself, bot accounts by default, staff/admin-style roles, configured protected roles, and new members inside the grace period.\n\n"
             "It also checks whether the bot has permission and role hierarchy before marking a member as action-ready. This screen is preview-only."
         )
@@ -200,16 +217,16 @@ async def _run_activity_scan(
     )
 
 
-@members_group.command(name="inactive", description="Open a preview-only inactive member activity review.")
+@members_group.command(name="inactive", description="Open a preview-only server-activity review.")
 async def members_inactive(interaction: discord.Interaction) -> None:
     await _run_activity_scan(interaction)
 
 
-@members_group.command(name="scan", description="Preview quiet/inactive members without changing the server.")
+@members_group.command(name="scan", description="Preview quiet/inactive members using server activity only.")
 @app_commands.describe(
-    inactive_days="Members quiet this many days are shown for review.",
+    inactive_days="Members quiet in this server this many days are shown for review.",
     grace_days="Protect members newer than this many days.",
-    include_low_confidence="Show low-confidence results when the bot has limited history.",
+    include_low_confidence="Show low-confidence results when the bot has limited server history.",
 )
 async def members_scan(
     interaction: discord.Interaction,
@@ -225,7 +242,7 @@ async def members_scan(
     )
 
 
-@members_group.command(name="last-scan", description="Show the latest member activity review since the bot started.")
+@members_group.command(name="last-scan", description="Show the latest member server-activity review since the bot started.")
 async def members_last_scan(interaction: discord.Interaction) -> None:
     if not await _require_review_permission(interaction):
         return
@@ -235,7 +252,7 @@ async def members_last_scan(interaction: discord.Interaction) -> None:
     if report is None:
         return await reply_once(
             interaction,
-            {"content": "No activity review has been run since the bot started. Use `/dank members scan` first.", "ephemeral": True},
+            {"content": "No server-activity review has been run since the bot started. Use `/dank members scan` first.", "ephemeral": True},
         )
     await interaction.response.send_message(
         embed=_build_report_embed(report),
@@ -254,7 +271,7 @@ def register_public_members_group_commands(bot: Any, tree: Any) -> None:
     try:
         if stoney_group.get_command("members") is None:
             stoney_group.add_command(members_group)
-            print("✅ public_members_group: attached /dank members activity review commands")
+            print("✅ public_members_group: attached /dank members server-activity review commands")
         else:
             print("✅ public_members_group: /dank members already attached")
         _REGISTERED = True
