@@ -17,7 +17,7 @@ never drops user data.
 
 import asyncio
 import os
-from typing import Any, Iterable, Optional
+from typing import Optional
 
 import discord
 
@@ -222,6 +222,15 @@ create table if not exists public.member_activity_scan_locks (
     primary key (guild_id, user_id)
 );
 
+create table if not exists public.member_cleanup_settings (
+    guild_id text primary key,
+    require_queue_confirmation boolean not null default true,
+    allow_low_confidence_queue boolean not null default false,
+    default_queue_limit integer not null default 10,
+    updated_by text,
+    updated_at timestamptz not null default now()
+);
+
 alter table public.tickets add column if not exists owner_id text;
 alter table public.tickets add column if not exists requester_id text;
 alter table public.tickets add column if not exists channel_id text;
@@ -247,6 +256,12 @@ alter table public.member_activity_scan_locks add column if not exists reason te
 alter table public.member_activity_scan_locks add column if not exists locked_by text;
 alter table public.member_activity_scan_locks add column if not exists locked_at timestamptz not null default now();
 alter table public.member_activity_scan_locks add column if not exists updated_at timestamptz not null default now();
+
+alter table public.member_cleanup_settings add column if not exists require_queue_confirmation boolean not null default true;
+alter table public.member_cleanup_settings add column if not exists allow_low_confidence_queue boolean not null default false;
+alter table public.member_cleanup_settings add column if not exists default_queue_limit integer not null default 10;
+alter table public.member_cleanup_settings add column if not exists updated_by text;
+alter table public.member_cleanup_settings add column if not exists updated_at timestamptz not null default now();
 
 create index if not exists idx_tickets_guild_status on public.tickets (guild_id, status);
 create index if not exists idx_tickets_channel_id on public.tickets (channel_id);
