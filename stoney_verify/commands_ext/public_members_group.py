@@ -67,7 +67,7 @@ def _trim(text: str, limit: int = 3900) -> str:
 
 def _candidate_lines(report: InactiveScanReport, *, limit: int = 10) -> str:
     if not report.candidates:
-        return "✅ No quiet/inactive members matched these settings."
+        return "✅ No users were found for review with these settings."
 
     lines: list[str] = []
     for idx, candidate in enumerate(report.candidates[:limit], start=1):
@@ -97,13 +97,14 @@ def _candidate_lines(report: InactiveScanReport, *, limit: int = 10) -> str:
 
         lines.append(
             f"{idx}. {icon} **{candidate.display_name}** (`{candidate.user_id}`)\n"
-            f"   Status: **{label}** • Confidence: **{candidate.confidence}** • Quiet in server for: **{days}** • Last server activity: {last_server_activity}\n"
+            f"   Status: **{label}** • Confidence: **{candidate.confidence}** • Quiet in server for: **{days}**\n"
+            f"   Last server activity: {last_server_activity}\n"
             f"   Why: {candidate.short_reason(180)}"
         )
 
     extra = len(report.candidates) - limit
     if extra > 0:
-        lines.append(f"…and **{extra}** more member(s) in this review.")
+        lines.append(f"…and **{extra}** more user(s) found for review.")
 
     return _trim("\n".join(lines))
 
@@ -111,7 +112,7 @@ def _candidate_lines(report: InactiveScanReport, *, limit: int = 10) -> str:
 def _build_activity_meter(report: InactiveScanReport) -> str:
     return (
         f"**Overall server activity:** {report.active_activity_percent}% active/recent in this server\n"
-        f"**Needs review:** {report.quiet_review_percent}% quiet enough to inspect\n"
+        f"**Users found for review:** {len(report.candidates)} user(s), {report.quiet_review_percent}% of members\n"
         f"**Safety locks:** {report.protected_or_blocked_count} member(s) protected or blocked by Discord permissions\n"
         f"**Data confidence:** {report.data_confidence_label} — {report.data_coverage_percent}% of optional history sources readable"
     )
@@ -122,7 +123,7 @@ def _build_data_limits_text(report: InactiveScanReport) -> str:
         return "✅ Good enough data coverage for this scan."
     intro = (
         "Dank Shield could not read every optional server-history source yet. "
-        "That does **not** mean members are inactive. It means the scan is being cautious and lowering confidence."
+        "That does **not** mean members are inactive. It means low-confidence users are shown for manual review instead of hidden."
     )
     warnings = "\n".join(f"• {warning}" for warning in report.data_warnings[:4])
     return _trim(f"{intro}\n\n{warnings}", 1024)
@@ -140,6 +141,7 @@ def _build_report_embed(report: InactiveScanReport) -> discord.Embed:
         color=color,
         timestamp=report.scanned_at,
     )
+    embed.add_field(name="Users Found", value=_candidate_lines(report), inline=False)
     embed.add_field(name="Activity Health", value=_build_activity_meter(report), inline=False)
     embed.add_field(name="Scan Counts", value="\n".join(report_summary_lines(report)[4:]), inline=False)
     embed.add_field(
@@ -153,12 +155,11 @@ def _build_report_embed(report: InactiveScanReport) -> discord.Embed:
         inline=False,
     )
     embed.add_field(name="Data Confidence", value=_build_data_limits_text(report), inline=False)
-    embed.add_field(name="Top Review Items", value=_candidate_lines(report), inline=False)
     embed.add_field(
         name="How To Read This",
         value=(
             "🟠 **Review candidate** = quiet in this server with enough data to inspect.\n"
-            "🟡 **Needs manual review** = not enough server history for a confident result.\n"
+            "🟡 **Needs manual review** = user was found, but server-history data is limited.\n"
             "🛡️ **Safety-protected** = owner, bot, staff/admin, protected role, or new member.\n"
             "⛔ **Cannot action** = Discord role hierarchy or permission issue."
         ),
@@ -190,7 +191,7 @@ class MemberActivityReviewView(discord.ui.View):
             "This scan checks activity inside this server only. It does **not** use online/offline/idle status.\n\n"
             "Dank Shield protects the server owner, the bot itself, bot accounts by default, staff/admin-style roles, configured protected roles, and new members inside the grace period.\n\n"
             "Normal verified/member roles are **not** treated as cleanup-protected by default.\n\n"
-            "It also checks whether the bot has permission and role hierarchy before marking a member as action-ready. This screen is preview-only."
+            "Low-confidence users are still shown because this is a preview dashboard. Low confidence means manual review, not hidden results."
         )
         await reply_once(interaction, {"content": text, "ephemeral": True})
 
@@ -200,7 +201,7 @@ async def _run_activity_scan(
     *,
     inactive_days: int = 90,
     grace_days: int = 14,
-    include_low_confidence: bool = False,
+    include_low_confidence: bool = True,
 ) -> None:
     if not await _require_review_permission(interaction):
         return
@@ -231,13 +232,13 @@ async def members_inactive(interaction: discord.Interaction) -> None:
 @app_commands.describe(
     inactive_days="Members quiet in this server this many days are shown for review.",
     grace_days="Protect members newer than this many days.",
-    include_low_confidence="Show low-confidence results when the bot has limited server history.",
+    include_low_confidence="Show low-confidence users as Needs manual review. Default: true.",
 )
 async def members_scan(
     interaction: discord.Interaction,
     inactive_days: int = 90,
     grace_days: int = 14,
-    include_low_confidence: bool = False,
+    include_low_confidence: bool = True,
 ) -> None:
     await _run_activity_scan(
         interaction,
