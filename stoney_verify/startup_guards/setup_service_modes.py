@@ -7,6 +7,7 @@ Goal:
 - Keep /dank setup simple instead of forcing every owner through tickets,
   verification, VC verification, logging, and SpamGuard all at once.
 - Make health checks judge only the services the server enabled.
+- Keep SpamGuard reachable from the setup flow, not only from /dank spam.
 
 This is intentionally additive. It stores service flags in guild_configs and
 patches the current public setup UI with a small service picker. The existing
@@ -225,7 +226,7 @@ def _service_mode_hint(state: ServiceState) -> str:
     if state.verification or state.voice:
         enabled.append("Access Roles / Verification Channels")
     if state.spamguard or state.moderation:
-        enabled.append("Logs + Status")
+        enabled.append("SpamGuard / Logs")
     if not enabled:
         return "Choose at least one service first."
     return "Health Check will focus on: " + ", ".join(enabled) + "."
@@ -236,7 +237,7 @@ async def _save_service_state(guild_id: int, payload: dict[str, bool], actor: An
         **payload,
         "setup_service_mode_saved_at": now_utc().isoformat(),
         "setup_completed": False,
-        "__config_write_mode": "setup_services",
+        "__config_write_mode": "setup_builder",
         "__config_write_source": "/dank setup service picker",
     }
     try:
@@ -266,32 +267,134 @@ async def _save_service_state(guild_id: int, payload: dict[str, bool], actor: An
         pass
 
 
-async def _filter_health_for_services(guild_id: int, blockers: list[str], warnings: list[str], ok: list[str]) -> tuple[list[str], list[str], list[str], ServiceState]:
-    state = await load_service_state(guild_id)
+def _line_mentions_ticket(text: str) -> bool:
+    ticket_terms = (
+        "ticket",
+        "transcript",
+        "archive",
+        "open category",
+        "closed category",
+        "support channel",
+        "active tickets",
+    )
+    return any(term in text for term in ticket_terms)
 
-    def keep(line: str) -> bool:
-        text = str(line or "").lower()
-        ticket_terms = ("ticket", "transcript", "archive", "open category", "closed category", "support channel")
-        verify_terms = ("verify", "verification", "unverified", "verified", "resident", "vc verify", "voice")
-        spam_terms = ("spam", "raid", "modlog", "mod-log", "moderation", "log", "join/exit", "join/leave")
-        schema_terms = ("supabase", "database", "guild config", "guild_configs", "ticket_categories")
 
-        if any(term in text for term in schema_terms):
-            return True
-        if any(term in text for term in ticket_terms):
-            return state.tickets
-        if any(term in text for term in verify_terms):
-            return state.verification or state.voice
-        if any(term in text for term in spam_terms):
-            return state.spamguard or state.moderation
+def _line_mentions_verification(text: str) -> bool:
+    verify_terms = (
+        "verify",
+        "verification",
+        "unverified",
+        "verified role",
+        "resident role",
+        "vc verify",
+        "voice verification",
+        "voice channel",
+        "vc/ticket staff",
+    )
+    return any(term in text for term in verify_terms)
+
+
+def _line_mentions_spamguard(text: str) -> bool:
+    spam_terms = (
+        "spam",
+        "spamguard",
+        "spam guard",
+        "raid",
+        "security",
+        "guild_security",
+        "quarantine",
+        "modlog",
+        "mod-log",
+        "moderation",
+        "join/exit",
+        "join/leave",
+        "allow list",
+        "allowlist",
+        "exempt",
+        "external invite",
+        "invite blocker",
+        "url flood",
+        "hacked",
+        "compromised",
+    )
+    return any(term in text for term in spam_terms)
+
+
+def _line_mentions_schema(text: str) -> bool:
+    schema_terms = (
+        "supabase",
+        "database",
+        "guild config",
+        "guild_configs",
+        "ticket_categories",
+        "tickets table",
+        "schema",
+    )
+    return any(term in text for term in schema_terms)
+
+
+def _keep_health_line_for_state(line: str, state: ServiceState) -> bool:
+    text = str(line or "").lower()
+    if not text:
+        return False
+    if text in {"✅ none", "none", "no passing checks reported."}:
+        return False
+
+    # Schema/database checks are shared infrastructure and should still appear.
+    if _line_mentions_schema(text):
         return True
 
+    mentions_verification = _line_mentions_verification(text)
+    mentions_spamguard = _line_mentions_spamguard(text)
+    mentions_ticket = _line_mentions_ticket(text)
+
+    # Negative filtering first. This fixes mixed lines like:
+    # "Verify channel and ticket panel channel are the same" in Tickets-only mode.
+    if mentions_verification and not (state.verification or state.voice):
+        return False
+    if mentions_spamguard and not (state.spamguard or state.moderation):
+        return False
+    if mentions_ticket and not state.tickets:
+        return False
+
+    # If the line mentions no service-specific term, keep it. These are usually
+    # generic bot permission or setup-writer diagnostics.
+    if not (mentions_ticket or mentions_verification or mentions_spamguard):
+        return True
+
+    return True
+
+
+async def _filter_health_for_services(guild_id: int, blockers: list[str], warnings: list[str], ok: list[str]) -> tuple[list[str], list[str], list[str], ServiceState]:
+    state = await load_service_state(guild_id)
     return (
-        [line for line in blockers if keep(line)],
-        [line for line in warnings if keep(line)],
-        [line for line in ok if keep(line)],
+        [line for line in blockers if _keep_health_line_for_state(line, state)],
+        [line for line in warnings if _keep_health_line_for_state(line, state)],
+        [line for line in ok if _keep_health_line_for_state(line, state)],
         state,
     )
+
+
+async def _call_spam_group(interaction: discord.Interaction, target: str) -> None:
+    try:
+        from stoney_verify.commands_ext import public_spam_group
+
+        callback = getattr(public_spam_group, "spam_panel" if target == "panel" else "spam_status", None)
+        if callable(callback):
+            await callback(interaction)
+            return
+    except Exception as e:
+        _warn(f"spam group callback failed target={target}: {e!r}")
+
+    content = "❌ SpamGuard panel is not available yet. Try `/dank spam panel` after the bot finishes starting."
+    try:
+        if interaction.response.is_done():
+            await interaction.followup.send(content, ephemeral=True, allowed_mentions=discord.AllowedMentions.none())
+        else:
+            await interaction.response.send_message(content, ephemeral=True, allowed_mentions=discord.AllowedMentions.none())
+    except Exception:
+        pass
 
 
 class ServicePresetSelect(discord.ui.Select):
@@ -349,6 +452,22 @@ class ServiceToggleButton(discord.ui.Button):
         await interaction.edit_original_response(embed=embed, view=ServiceModeView(next_state))
 
 
+class OpenSpamGuardPanelButton(discord.ui.Button):
+    def __init__(self) -> None:
+        super().__init__(label="Open SpamGuard Panel", emoji="🛡️", style=discord.ButtonStyle.primary, row=3)
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        await _call_spam_group(interaction, "panel")
+
+
+class SpamGuardStatusButton(discord.ui.Button):
+    def __init__(self) -> None:
+        super().__init__(label="SpamGuard Status", emoji="📊", style=discord.ButtonStyle.secondary, row=3)
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        await _call_spam_group(interaction, "status")
+
+
 class ServiceModeView(discord.ui.View):
     def __init__(self, state: ServiceState) -> None:
         super().__init__(timeout=900)
@@ -358,6 +477,9 @@ class ServiceModeView(discord.ui.View):
         self.add_item(ServiceToggleButton("voice_verification_enabled", "Voice Verify", state.voice, "🎙️", 1))
         self.add_item(ServiceToggleButton("spam_guard_enabled", "SpamGuard", state.spamguard, "🛡️", 2))
         self.add_item(ServiceToggleButton("moderation_enabled", "Logs/Moderation", state.moderation, "🧾", 2))
+        if state.spamguard or state.moderation:
+            self.add_item(OpenSpamGuardPanelButton())
+            self.add_item(SpamGuardStatusButton())
 
 
 async def build_service_picker_embed(guild: discord.Guild, state: Optional[ServiceState] = None, *, saved_message: str = "") -> discord.Embed:
@@ -384,8 +506,37 @@ async def build_service_picker_embed(guild: discord.Guild, state: Optional[Servi
         ),
         inline=False,
     )
+    if state.spamguard or state.moderation:
+        embed.add_field(
+            name="SpamGuard Setup",
+            value=(
+                "Use **Open SpamGuard Panel** to configure detection, enforcement, allow-lists, and quarantine behavior.\n"
+                "Use **SpamGuard Status** to confirm persistence and current mode."
+            ),
+            inline=False,
+        )
     embed.set_footer(text="Run Health Check after saving services.")
     return embed
+
+
+def _format_health_value(lines: list[str], *, empty: str) -> str:
+    if not lines:
+        return empty
+    text = "\n".join(lines)
+    return text[:1024] if text else empty
+
+
+def _extract_health_lines(value: str) -> list[str]:
+    out: list[str] = []
+    for raw in str(value or "").splitlines():
+        line = raw.strip()
+        if not line:
+            continue
+        line = line.lstrip("•").strip()
+        if line in {"✅ None", "None"}:
+            continue
+        out.append(line)
+    return out
 
 
 def _patch_setup_ui() -> None:
@@ -403,6 +554,12 @@ def _patch_setup_ui() -> None:
                 state = await load_service_state(guild.id)
                 embed.add_field(name="Enabled Services", value=_service_summary_text(state), inline=True)
                 embed.add_field(name="Health Check Focus", value=_service_mode_hint(state), inline=False)
+                if state.spamguard or state.moderation:
+                    embed.add_field(
+                        name="SpamGuard Setup",
+                        value="Press **Choose Services**, then use **Open SpamGuard Panel** or **SpamGuard Status**.",
+                        inline=False,
+                    )
                 try:
                     view.add_item(OpenServiceModeButton())
                 except Exception:
@@ -423,7 +580,7 @@ def _patch_setup_ui() -> None:
                     for field in fields:
                         name = str(getattr(field, "name", "") or "").lower()
                         value = str(getattr(field, "value", "") or "")
-                        lines = [line.strip("• ").strip() for line in value.splitlines() if line.strip() and line.strip() != "✅ None"]
+                        lines = _extract_health_lines(value)
                         if "blocker" in name:
                             raw["blockers"].extend(lines)
                         elif "warning" in name:
@@ -438,10 +595,16 @@ def _patch_setup_ui() -> None:
                         timestamp=now_utc(),
                     )
                     filtered.add_field(name="Enabled Services", value=_service_summary_text(state), inline=False)
-                    filtered.add_field(name="Blockers", value="\n".join(blockers)[:1024] if blockers else "✅ None", inline=False)
-                    filtered.add_field(name="Warnings", value="\n".join(warnings)[:1024] if warnings else "✅ None", inline=False)
-                    filtered.add_field(name="Passing Checks", value="\n".join(ok)[:1024] if ok else "No passing checks reported.", inline=False)
-                    filtered.add_field(name="What To Press Next", value="Use **Choose Services** if this server is not using every Dank Shield feature. Otherwise fix the blockers above, then test tickets/verification.", inline=False)
+                    filtered.add_field(name="Blockers", value=_format_health_value(blockers, empty="✅ None"), inline=False)
+                    filtered.add_field(name="Warnings", value=_format_health_value(warnings, empty="✅ None"), inline=False)
+                    filtered.add_field(name="Passing Checks", value=_format_health_value(ok, empty="No passing checks reported."), inline=False)
+                    next_text = (
+                        "Use **Choose Services** if this server is not using every Dank Shield feature. "
+                        "Then test only the enabled services shown above."
+                    )
+                    if state.spamguard or state.moderation:
+                        next_text += " For SpamGuard, open **Choose Services** → **Open SpamGuard Panel**."
+                    filtered.add_field(name="What To Press Next", value=next_text[:1024], inline=False)
                     filtered.set_footer(text=f"Guild {guild.id} • /dank setup")
                     return filtered
                 except Exception:
