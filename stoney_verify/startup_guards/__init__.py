@@ -44,6 +44,10 @@ _STARTUP_GUARDS: Tuple[str, ...] = (
     # the deployed main branch so Add Custom Menu Option does not crash.
     "stoney_verify.startup_guards.setup_category_modal_compat",
 
+    # Phase 2: service-mode setup picker for Tickets-only / Verification-only /
+    # SpamGuard-only / combinations, plus service-focused health checks.
+    "stoney_verify.startup_guards.setup_service_modes",
+
     # Normalize remaining legacy public text to Dank Shield + /dank setup.
     "stoney_verify.startup_guards.dank_shield_branding_guard",
 
@@ -118,6 +122,7 @@ _IMPORT_CHATTER_PREFIXES: Tuple[str, ...] = (
     "🧪 ",
     "🧠 ",
     "🧭 setup_category_modal_compat patched",
+    "🧭 setup_service_modes installed",
     "🛡️ dank_shield_branding_guard active",
     "🛡️ member_join_removal_safety patched",
     "🛡️ member_join_removal_safety attached",
