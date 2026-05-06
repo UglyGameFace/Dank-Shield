@@ -98,6 +98,7 @@ ALLOWED_DANK_CHILDREN = {
     "commands",
     "spam",
     "cleanup",
+    "members",
 }
 
 # Backward-compatible names for older imports/tests.
