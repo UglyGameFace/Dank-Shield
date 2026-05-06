@@ -7,7 +7,8 @@ layout. This module replaces the vague first setup screen with clear paths:
 
 1. Services
    - Pick Tickets-only, Verification-only, SpamGuard-only, or combinations.
-   - Health Check focuses only on enabled services.
+   - Health Check focuses only on selected services.
+   - SpamGuard setup shows selected-service state separately from actual guard state.
 
 2. Fresh Server
    - Dank Shield creates a specific starter layout.
@@ -86,7 +87,7 @@ async def _service_state_for_home(guild: discord.Guild) -> tuple[str, str, bool]
         return summary, hint, spam_on
     except Exception:
         return (
-            "✅ Tickets\n⬜ ID verification\n⬜ Voice verification\n⬜ SpamGuard\n⬜ Moderation/logging",
+            "✅ Tickets\n⬜ ID verification\n⬜ Voice verification\n⬜ SpamGuard service\n⬜ Moderation/logging",
             "Health Check will focus on: Ticket Basics.",
             False,
         )
@@ -129,12 +130,12 @@ async def _fresh_choice_main_payload(guild: discord.Guild) -> tuple[discord.Embe
         color=discord.Color.blurple(),
         timestamp=now_utc(),
     )
-    embed.add_field(name="Enabled Services", value=service_summary, inline=True)
+    embed.add_field(name="Selected Services", value=service_summary, inline=True)
     embed.add_field(name="Health Check Focus", value=service_hint[:1024], inline=False)
     if spam_on:
         embed.add_field(
             name="SpamGuard Setup",
-            value="Press **Services**, then use **Open SpamGuard Panel** or **SpamGuard Status**.",
+            value="Press **Services**, then **SpamGuard Setup**. It shows selected-service state separately from actual guard state.",
             inline=False,
         )
     embed.add_field(name=f"Setup Progress: {done}/{total} complete", value=progress_text or "No setup checks ran.", inline=False)
@@ -206,11 +207,12 @@ class FreshChoiceHomeView(discord.ui.View):
         embed.add_field(
             name="Recommended order",
             value=(
-                "1. **Ticket Basics**\n"
-                "2. **Verification Roles**\n"
-                "3. **Verification Channels**\n"
-                "4. **Logs + Status**\n"
-                "5. Back → Health Check"
+                "1. **Services**\n"
+                "2. **Ticket Basics**\n"
+                "3. **Verification Roles**\n"
+                "4. **Verification Channels**\n"
+                "5. **Logs + Status**\n"
+                "6. Back → Health Check"
             ),
             inline=False,
         )
@@ -232,7 +234,7 @@ class FreshChoiceHomeView(discord.ui.View):
                 "🧭 **Services** = choose which parts of Dank Shield this server uses.\n"
                 "🎫 **Ticket Basics** = actual Discord category folders/channels/roles.\n"
                 "🧾 **Ticket Menu Options** = choices users see when opening a ticket.\n"
-                "🛡️ **SpamGuard** = detection, enforcement, allow-lists, and status.\n"
+                "🛡️ **SpamGuard Setup** = selected-service vs actual-active guard state.\n"
                 "📌 **Status Channel** = where the bot posts heartbeat/setup status."
             ),
             inline=False,
@@ -294,11 +296,12 @@ class FreshServerChoiceView(solid.BackToSetupView):
         embed.add_field(
             name="Recommended manual order",
             value=(
-                "1. Create your own Discord roles/channels/categories.\n"
-                "2. Press **Map My Existing Items**.\n"
-                "3. Configure Ticket Basics, Verification Roles, Verification Channels, and Logs + Status.\n"
-                "4. Customize Ticket Menu Options if needed.\n"
-                "5. Run Health Check."
+                "1. Pick Services.\n"
+                "2. Create your own Discord roles/channels/categories.\n"
+                "3. Press **Map My Existing Items**.\n"
+                "4. Configure Ticket Basics, Verification Roles, Verification Channels, and Logs + Status.\n"
+                "5. Customize Ticket Menu Options if needed.\n"
+                "6. Run Health Check."
             ),
             inline=False,
         )

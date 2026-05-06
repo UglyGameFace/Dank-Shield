@@ -2,15 +2,15 @@ from __future__ import annotations
 
 """Public /dank spam command family.
 
-Boring/professional command strategy:
-- Keep SpamGuard controls grouped under /dank spam.
-- Do not expose /spam_guard and /spam_guard_status as separate top-level commands.
+Command strategy:
+- Keep advanced SpamGuard controls grouped under /dank spam.
+- Do not expose /spam_guard and /spam_guard_status as top-level public commands.
 - Prefer captured legacy callbacks when they exist.
 - In public mode those legacy top-level commands may never be registered, so this
   wrapper also resolves the real callbacks directly from stoney_verify.spam_guard.
-- Export normal helper functions for setup buttons. Discord app-command objects
-  are not normal callables after decoration, so setup must not call the command
-  object directly.
+
+Setup integration belongs in setup_service_modes.py. This module should not patch
+setup from the side.
 """
 
 import inspect
@@ -25,11 +25,10 @@ from .public_setup_group import stoney_group
 
 _REGISTERED = False
 _LEGACY_COMMANDS: dict[str, app_commands.Command[Any, ..., Any]] = {}
-_SETUP_BUTTON_PATCHED = False
 
 spam_group = app_commands.Group(
     name="spam",
-    description="SpamGuard controls and status.",
+    description="Advanced SpamGuard controls and status.",
 )
 
 
@@ -141,9 +140,8 @@ async def _call_spamguard_command(interaction: discord.Interaction, legacy_name:
             interaction,
             {
                 "content": (
-                    "❌ SpamGuard panel/status callback was not found.\n"
-                    "The grouped public command loaded, but the core spam_guard module did not expose the expected callback. "
-                    "This needs a wrapper update, not a server setup change.\n"
+                    "❌ Advanced SpamGuard callback was not found.\n"
+                    "The grouped public command loaded, but the core spam_guard module did not expose the expected callback.\n"
                     f"`source={source}`"
                 ),
                 "ephemeral": True,
@@ -174,46 +172,21 @@ async def _call_spamguard_command(interaction: discord.Interaction, legacy_name:
 
 
 async def open_spamguard_panel(interaction: discord.Interaction) -> None:
-    """Open the real SpamGuard panel from setup or /dank spam."""
+    """Open the advanced standalone SpamGuard panel."""
     await _call_spamguard_command(interaction, "spam_guard")
 
 
 async def show_spamguard_status(interaction: discord.Interaction) -> None:
-    """Show SpamGuard status from setup or /dank spam."""
+    """Show advanced SpamGuard status diagnostics."""
     await _call_spamguard_command(interaction, "spam_guard_status")
 
 
-async def _setup_button_call_spam_group(interaction: discord.Interaction, target: str) -> None:
-    if str(target).lower() == "panel":
-        await open_spamguard_panel(interaction)
-    else:
-        await show_spamguard_status(interaction)
-
-
-def _patch_setup_service_buttons() -> None:
-    """Make /dank setup buttons call normal helpers, not decorated commands."""
-    global _SETUP_BUTTON_PATCHED
-    if _SETUP_BUTTON_PATCHED:
-        return
-    try:
-        from stoney_verify.startup_guards import setup_service_modes
-
-        setup_service_modes._call_spam_group = _setup_button_call_spam_group  # type: ignore[attr-defined]
-        _SETUP_BUTTON_PATCHED = True
-        print("✅ public_spam_group: setup SpamGuard buttons patched to helper path")
-    except Exception as e:
-        try:
-            print(f"⚠️ public_spam_group could not patch setup SpamGuard buttons: {repr(e)}")
-        except Exception:
-            pass
-
-
-@spam_group.command(name="panel", description="Open the interactive SpamGuard control panel.")
+@spam_group.command(name="panel", description="Open the advanced SpamGuard control panel.")
 async def spam_panel(interaction: discord.Interaction) -> None:
     await open_spamguard_panel(interaction)
 
 
-@spam_group.command(name="status", description="Show SpamGuard status and persistence diagnostics.")
+@spam_group.command(name="status", description="Show advanced SpamGuard status and persistence diagnostics.")
 async def spam_status(interaction: discord.Interaction) -> None:
     await show_spamguard_status(interaction)
 
@@ -242,7 +215,6 @@ def register_public_spam_group_commands(bot: Any, tree: Any) -> None:
     global _REGISTERED
     _ = bot
     if _REGISTERED:
-        _patch_setup_service_buttons()
         return
 
     removed: list[str] = []
@@ -253,7 +225,7 @@ def register_public_spam_group_commands(bot: Any, tree: Any) -> None:
     try:
         if stoney_group.get_command("spam") is None:
             stoney_group.add_command(spam_group)
-            print("✅ public_spam_group: attached /dank spam commands")
+            print("✅ public_spam_group: attached /dank spam advanced commands")
         else:
             print("✅ public_spam_group: /dank spam already attached")
     except Exception as e:
@@ -266,11 +238,7 @@ def register_public_spam_group_commands(bot: Any, tree: Any) -> None:
         except Exception:
             pass
 
-    _patch_setup_service_buttons()
     _REGISTERED = True
-
-
-_patch_setup_service_buttons()
 
 
 __all__ = [
