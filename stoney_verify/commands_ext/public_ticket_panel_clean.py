@@ -11,8 +11,9 @@ What this file guarantees:
 - ticket creates only after Confirm in the saved Active Tickets category
 - the panel button ACKs immediately so Discord does not show silent interaction failures
 - the public Create Ticket button stays usable across bot restarts
-- ticket DB fallback includes required title/username fields
-- stale open DB rows from already-closed/deleted tickets do not block new tickets
+- ticket DB insert uses schema-safe required columns only
+- stale DB rows and already-closed/deleted ticket channels do not block new tickets
+- double-click/double-confirm is guarded by a per-user create lock
 - health check reports setup/category/permission/schema problems clearly
 
 Do not add router/patch modules on top of this file for ticket-panel behavior.
@@ -34,6 +35,7 @@ _PANEL_VIEW_REGISTERED = False
 _PANEL_GROUP_REGISTERED = False
 _PANEL_FALLBACK_LISTENER_REGISTERED = False
 _HEALTH_PATCHED = False
+_CREATE_LOCKS: Dict[Tuple[int, int], asyncio.Lock] = {}
 
 PANEL_BUTTON_CUSTOM_ID = "sv:ticket:panel:create:clean:v1"
 PANEL_BUTTON_CUSTOM_IDS = {PANEL_BUTTON_CUSTOM_ID}
@@ -481,42 +483,93 @@ async def _mark_row_stale(row_id: str, reason: str) -> None:
     await _to_thread(sync, None)
 
 
-async def _existing_open(guild: discord.Guild, member: discord.Member) -> Optional[discord.TextChannel]:
+async def _existing_open_from_db(guild: discord.Guild, member: discord.Member) -> Optional[discord.TextChannel]:
+    """Find an open ticket from the schema-safe DB path.
+
+    Public deployments should rely on the required `user_id` column first. Older
+    optional columns such as owner_id/requester_id are intentionally ignored here
+    because querying missing columns caused noisy PGRST errors in live Supabase.
+    """
     sb = _sb()
 
     if sb is None:
         return None
 
-    for col in ("owner_id", "user_id", "requester_id"):
-        def sync(c: str = col) -> List[Dict[str, Any]]:
-            try:
-                data = getattr(
-                    sb.table("tickets")
-                    .select("*")
-                    .eq("guild_id", str(guild.id))
-                    .eq(c, str(member.id))
-                    .in_("status", ["open", "claimed"])
-                    .order("created_at", desc=True)
-                    .limit(5)
-                    .execute(),
-                    "data",
-                    None,
-                ) or []
-                return [r for r in data if isinstance(r, dict)]
-            except Exception as e:
-                _warn(f"existing-open query failed guild={guild.id} user={member.id} col={c}: {type(e).__name__}: {_short(e, 220)}")
-                return []
+    def sync() -> List[Dict[str, Any]]:
+        try:
+            data = getattr(
+                sb.table("tickets")
+                .select("id,user_id,status,channel_id,discord_thread_id,updated_at,created_at")
+                .eq("guild_id", str(guild.id))
+                .eq("user_id", str(member.id))
+                .in_("status", ["open", "claimed"])
+                .order("created_at", desc=True)
+                .limit(10)
+                .execute(),
+                "data",
+                None,
+            ) or []
+            return [r for r in data if isinstance(r, dict)]
+        except Exception as e:
+            _warn(f"existing-open DB query failed guild={guild.id} user={member.id}: {type(e).__name__}: {_short(e, 220)}")
+            return []
 
-        for row in await _to_thread(sync, []):
-            row_id = _safe_str(row.get("id"))
-            ch = await _fetch_text(guild, _safe_int(row.get("channel_id") or row.get("discord_thread_id"), 0))
+    for row in await _to_thread(sync, []):
+        row_id = _safe_str(row.get("id"))
+        ch = await _fetch_text(guild, _safe_int(row.get("channel_id") or row.get("discord_thread_id"), 0))
 
-            if ch and not _channel_is_closed_like(ch):
-                return ch
+        if ch and not _channel_is_closed_like(ch):
+            return ch
 
-            await _mark_row_stale(row_id, "stale open row ignored by ticket panel")
+        await _mark_row_stale(row_id, "stale open row ignored by ticket panel")
 
     return None
+
+
+def _topic_owner_id(topic: Any) -> int:
+    text = _safe_str(topic)
+    if not text:
+        return 0
+    m = re.search(r"(?:^|[;\s])owner_id=(\d+)(?:$|[;\s])", text)
+    if m:
+        return _safe_int(m.group(1), 0)
+    return 0
+
+
+async def _existing_open_from_channels(guild: discord.Guild, member: discord.Member) -> Optional[discord.TextChannel]:
+    """Catch open tickets even when the DB row was not written/backfilled yet."""
+    try:
+        parent = await _active_category(guild)
+    except Exception:
+        parent = None
+
+    candidates: List[discord.TextChannel] = []
+    if isinstance(parent, discord.CategoryChannel):
+        candidates.extend(list(parent.text_channels))
+    else:
+        candidates.extend(list(guild.text_channels))
+
+    for ch in candidates:
+        try:
+            if not isinstance(ch, discord.TextChannel):
+                continue
+            if _channel_is_closed_like(ch):
+                continue
+            if not str(ch.name or "").lower().startswith("ticket-"):
+                continue
+            if _topic_owner_id(getattr(ch, "topic", None)) == int(member.id):
+                return ch
+        except Exception:
+            continue
+
+    return None
+
+
+async def _existing_open(guild: discord.Guild, member: discord.Member) -> Optional[discord.TextChannel]:
+    found = await _existing_open_from_db(guild, member)
+    if found:
+        return found
+    return await _existing_open_from_channels(guild, member)
 
 
 def _overwrites(
@@ -629,13 +682,12 @@ async def _insert_row(
     return await _to_thread(sync, "Could not write tickets row.")
 
 
-
 async def _maybe_post_verification_panel(channel: discord.TextChannel, owner: discord.Member, row: Dict[str, Any]) -> str:
-    """Post the real verification panel when an unverified user chose Verification.
+    """Post the real verification UI inside Verification tickets for unverified users.
 
-    This keeps the TicketTool-style category flow, but restores the important
-    verification behavior: choosing Verification should give the member the
-    Upload ID / Verify in VC verification UI inside the ticket.
+    This keeps the public panel TicketTool-simple while preserving your Verify
+    product: the ticket opens only after Confirm, then the verification UI is
+    placed inside the ticket when that server is configured safely.
     """
     if _canon(row) != "verification":
         return ""
@@ -653,7 +705,6 @@ async def _maybe_post_verification_panel(channel: discord.TextChannel, owner: di
         return "Could not confirm the member's verification status. Staff should run `/dank setup` → Health Check."
 
     if not is_unverified:
-        # Verified/staff users can still open a normal Verification support ticket.
         return ""
 
     try:
@@ -678,7 +729,6 @@ async def _maybe_post_verification_panel(channel: discord.TextChannel, owner: di
         return ""
 
     return "Verification panel failed to post. Staff should run `/dank setup` → Health Check and verify bot permissions in this ticket channel."
-
 
 
 async def _open_message(channel: discord.TextChannel, owner: discord.Member, row: Dict[str, Any]) -> None:
@@ -785,84 +835,86 @@ async def _create_ticket(i: discord.Interaction, row: Dict[str, Any]) -> None:
     if guild is None or owner is None:
         return await _ephemeral(i, "❌ This must be used inside a server.")
 
-    try:
-        parent = await asyncio.wait_for(_active_category(guild), timeout=6.0)
-    except asyncio.TimeoutError:
-        _warn(f"active category lookup timed out guild={guild.id}")
-        parent = None
+    lock_key = (int(guild.id), int(owner.id))
+    lock = _CREATE_LOCKS.get(lock_key)
+    if lock is None:
+        lock = asyncio.Lock()
+        _CREATE_LOCKS[lock_key] = lock
 
-    if parent is None:
-        return await _ephemeral(i, "❌ Active Tickets category is not set. Run `/dank setup` → **Run Health Check**.")
-
-    missing = _missing_category_perms(parent, guild.me)
-    if missing:
-        return await _ephemeral(
-            i,
-            f"❌ I cannot create tickets in **{parent.name}**. Missing: {', '.join(missing)}. "
-            "Run `/dank setup` → **Run Health Check**.",
-        )
-
-    try:
-        staff = await asyncio.wait_for(_staff_role(guild), timeout=6.0)
-    except asyncio.TimeoutError:
-        _warn(f"staff role lookup timed out guild={guild.id}")
-        staff = None
-
-    if staff is None:
-        return await _ephemeral(i, "❌ Ticket staff role is not set. Run `/dank setup` → **Run Health Check**.")
-
-    try:
-        existing = await asyncio.wait_for(_existing_open(guild, owner), timeout=6.0)
-    except asyncio.TimeoutError:
-        _warn(f"existing-open check timed out guild={guild.id} user={owner.id}; continuing")
-        existing = None
-
-    if existing:
-        return await _ephemeral(i, f"You already have an open ticket: {existing.mention}")
-
-    number = await _next_number(guild, parent)
-
-    try:
-        channel = await guild.create_text_channel(
-            name=f"ticket-{number:04d}",
-            category=parent,
-            overwrites=_overwrites(guild, owner, guild.me, staff),
-            topic=f"owner_id={owner.id};category={_row_slug(row)};ghost=false;ticket_number={number}",
-            reason=f"Ticket opened by {owner} from category menu",
-        )
-    except Exception as e:
-        _warn(f"discord channel create failed guild={guild.id} user={owner.id}: {type(e).__name__}: {_short(e, 220)}")
-        return await _ephemeral(i, f"❌ Failed to create ticket in **{parent.name}**: `{type(e).__name__}: {_short(e, 220)}`")
-
-    db_warning = await _insert_row(guild, owner, channel, row, number)
-    await _open_message(channel, owner, row)
-
-    verify_warning = await _maybe_post_verification_panel(channel, owner, row)
-
-    if db_warning:
-        _warn(f"ticket created but DB warning channel={channel.id}: {db_warning}")
+    async with lock:
         try:
-            await channel.send(
-                f"⚠️ Ticket opened, but database logging needs setup attention: `{_short(db_warning, 350)}`",
-                allowed_mentions=discord.AllowedMentions.none(),
-            )
-        except Exception:
-            pass
+            parent = await asyncio.wait_for(_active_category(guild), timeout=6.0)
+        except asyncio.TimeoutError:
+            _warn(f"active category lookup timed out guild={guild.id}")
+            parent = None
 
-    if verify_warning:
-        _warn(f"ticket created but verification panel warning channel={channel.id}: {verify_warning}")
+        if parent is None:
+            return await _ephemeral(i, "❌ Active Tickets category is not set. Run `/dank setup` → **Run Health Check**.")
+
+        missing = _missing_category_perms(parent, guild.me)
+        if missing:
+            return await _ephemeral(
+                i,
+                f"❌ I cannot create tickets in **{parent.name}**. Missing: {', '.join(missing)}. "
+                "Run `/dank setup` → **Run Health Check**.",
+            )
+
         try:
-            await channel.send(
-                f"⚠️ Verification setup needs attention: `{_short(verify_warning, 500)}`",
-                allowed_mentions=discord.AllowedMentions.none(),
-            )
-        except Exception:
-            pass
+            staff = await asyncio.wait_for(_staff_role(guild), timeout=6.0)
+        except asyncio.TimeoutError:
+            _warn(f"staff role lookup timed out guild={guild.id}")
+            staff = None
 
-    if verify_warning:
-        await _ephemeral(i, f"⚠️ Ticket created: {channel.mention}\nVerification panel needs setup attention. Staff can see details inside the ticket.")
-    else:
-        await _ephemeral(i, f"✅ Ticket created: {channel.mention}")
+        if staff is None:
+            return await _ephemeral(i, "❌ Ticket staff role is not set. Run `/dank setup` → **Run Health Check**.")
+
+        try:
+            existing = await asyncio.wait_for(_existing_open(guild, owner), timeout=6.0)
+        except asyncio.TimeoutError:
+            _warn(f"existing-open check timed out guild={guild.id} user={owner.id}; continuing")
+            existing = None
+
+        if existing:
+            return await _ephemeral(i, f"You already have an open ticket: {existing.mention}")
+
+        number = await _next_number(guild, parent)
+
+        try:
+            channel = await guild.create_text_channel(
+                name=f"ticket-{number:04d}",
+                category=parent,
+                overwrites=_overwrites(guild, owner, guild.me, staff),
+                topic=f"owner_id={owner.id};category={_row_slug(row)};ghost=false;ticket_number={number}",
+                reason=f"Ticket opened by {owner} from category menu",
+            )
+        except Exception as e:
+            _warn(f"discord channel create failed guild={guild.id} user={owner.id}: {type(e).__name__}: {_short(e, 220)}")
+            return await _ephemeral(i, f"❌ Failed to create ticket in **{parent.name}**: `{type(e).__name__}: {_short(e, 220)}`")
+
+        db_warning = await _insert_row(guild, owner, channel, row, number)
+        await _open_message(channel, owner, row)
+        verify_warning = await _maybe_post_verification_panel(channel, owner, row)
+
+        # DB logging issues must never scare users inside the ticket channel.
+        # The channel exists and startup backfill can repair the row later.
+        if db_warning:
+            _warn(f"ticket created but DB logging warning channel={channel.id}: {db_warning}")
+
+        if verify_warning:
+            _warn(f"ticket created but verification panel warning channel={channel.id}: {verify_warning}")
+            try:
+                await channel.send(
+                    f"⚠️ Verification setup needs attention: `{_short(verify_warning, 500)}`",
+                    allowed_mentions=discord.AllowedMentions.none(),
+                )
+            except Exception:
+                pass
+            return await _ephemeral(
+                i,
+                f"⚠️ Ticket created: {channel.mention}\nVerification setup needs attention. Staff can see details inside the ticket.",
+            )
+
+        return await _ephemeral(i, f"✅ Ticket created: {channel.mention}")
 
 
 def _category_embed(row: Dict[str, Any]) -> discord.Embed:
@@ -1125,7 +1177,7 @@ def _panel_embed(guild: discord.Guild) -> discord.Embed:
         ),
         inline=False,
     )
-    e.set_footer(text=f"{guild.name} • Dank Shield ticket panel • category-menu")
+    e.set_footer(text=f"{guild.name} • Stoney Verify ticket panel • category-menu")
     return e
 
 
@@ -1218,7 +1270,7 @@ async def _health_lines(guild: discord.Guild) -> Tuple[List[str], List[str], Lis
 
     active = await _active_category(guild)
     if not active:
-        blockers.append("Active Tickets category is not set. Use `/dank setup` → Ticket Basics.")
+        blockers.append("Active Tickets category is not set. Use `/stoney setup` → Ticket Basics.")
     else:
         m = _missing_category_perms(active, guild.me)
         (blockers if m else ok).append(f"Active Tickets category {'missing: ' + ', '.join(m) if m else 'ready'}: {active.mention}.")
@@ -1246,7 +1298,7 @@ async def _health_lines(guild: discord.Guild) -> Tuple[List[str], List[str], Lis
 
     staff = await _staff_role(guild)
     if not staff:
-        blockers.append("Ticket staff role is not set. Use `/dank setup` → Ticket Basics.")
+        blockers.append("Ticket staff role is not set. Use `/stoney setup` → Ticket Basics.")
     else:
         ok.append(f"Ticket staff role ready: {staff.mention}.")
 
@@ -1307,7 +1359,7 @@ def _patch_health() -> None:
         setattr(wrapped, "_ticket_panel_clean_wrapped", True)
         setattr(solid, "_build_health_embed", wrapped)
         _HEALTH_PATCHED = True
-        _log("patched /dank setup health check")
+        _log("patched /stoney setup health check")
     except Exception as e:
         _warn(f"could not patch health check: {e!r}")
 
