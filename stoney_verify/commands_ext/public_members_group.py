@@ -120,12 +120,25 @@ def _page_bounds(report: InactiveScanReport, page: int) -> tuple[int, int, int]:
     return safe_page, start, end
 
 
+def _candidate_display_name(candidate: InactiveMemberCandidate) -> str:
+    for attr in ("display_name", "username", "global_name", "name"):
+        try:
+            value = getattr(candidate, attr, None)
+            if value:
+                cleaned = discord.utils.escape_markdown(str(value), as_needed=True).strip()
+                if cleaned:
+                    return _trim(cleaned, 42)
+        except Exception:
+            continue
+    return "Unknown user"
+
+
 def _short_candidate_line(candidate: InactiveMemberCandidate, idx: int) -> str:
     icon, label = _status_icon(candidate)
     days = "?d" if candidate.inactivity_days is None else f"{candidate.inactivity_days}d"
     confidence = str(getattr(candidate, "confidence", "?") or "?")
-    mention = getattr(candidate, "mention", f"<@{candidate.user_id}>")
-    return f"`{idx}.` {icon} {mention} • **{days} quiet** • {confidence} • {label}"
+    name = _candidate_display_name(candidate)
+    return f"`{idx}.` {icon} **{name}** • **{days} quiet** • {confidence} • {label}"
 
 
 def _build_status_snapshot(report: InactiveScanReport) -> str:
@@ -161,8 +174,6 @@ def _build_data_notes_embed(report: InactiveScanReport) -> discord.Embed:
     attempted = _safe_int_attr(report, "data_sources_attempted", 0)
     readable = _safe_int_attr(report, "data_sources_read", 0)
     if attempted <= 0:
-        # Older reports only expose coverage percent. Keep the UI truthful without
-        # assuming internal counters exist.
         source_line = f"Optional source coverage: **{_safe_int_attr(report, 'data_coverage_percent')}%**"
     else:
         source_line = f"Optional sources readable: **{readable}/{attempted}** ({_safe_int_attr(report, 'data_coverage_percent')}%)"
@@ -210,7 +221,7 @@ def _build_report_embed(report: InactiveScanReport, *, page: int = 0) -> discord
     embed = discord.Embed(
         title="🧹 Verified Member Review",
         description=(
-            "Preview only. No one is removed here.\n"
+            "Preview only. No action is taken here.\n"
             "Reviews verified/resident members with no tracked activity after verification."
         ),
         color=color,
@@ -267,8 +278,7 @@ def _build_user_detail_embed(candidate: InactiveMemberCandidate, *, locked: bool
         name="Manual Options",
         value=_safe_field(
             "• **Lock / Skip in Scans**: hide this reviewed user from future scans.\n"
-            "• `/dank members locked`: view or unlock skipped users.\n"
-            "• `/dank members cleanup-user`: confirmed one-user cleanup after review."
+            "• `/dank members locked`: view or unlock skipped users."
         ),
         inline=False,
     )
