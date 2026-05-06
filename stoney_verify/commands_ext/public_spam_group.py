@@ -8,10 +8,12 @@ Command strategy:
 - Send public users to the same simple setup-native SpamGuard page used by
   /dank setup, so there are not two conflicting SpamGuard screens.
 
-The old advanced standalone panel was confusing in production because it showed
-low-level rule internals and refreshed/edited messages in a way that created
-modlog noise. Advanced legacy callbacks are still kept as private fallback
-helpers here, but the public /dank spam commands now prefer the setup-native UI.
+Important setup rule:
+- If an older deployed setup page still shows an "Advanced Standalone Panel"
+  button, do not duplicate the same panel again. That button is deprecated and
+  should be removed from setup_service_modes.py when the full owner file can be
+  rewritten safely. Until then, this owner command refuses to spawn duplicate
+  setup cards from that stale button.
 """
 
 import inspect
@@ -49,6 +51,42 @@ def _callable_accepts_interaction(callback: Any) -> bool:
         return any(str(p.name).lower() in {"interaction", "ctx"} for p in params[:2])
     except Exception:
         return True
+
+
+def _looks_like_setup_spamguard_message(interaction: discord.Interaction) -> bool:
+    """Return True when a stale setup button called this helper.
+
+    The bad button lives on the setup-native SpamGuard card. Pressing it should
+    not post a second copy of the same card. We detect that source from the
+    message embed rather than relying on a fragile custom_id.
+    """
+    try:
+        message = getattr(interaction, "message", None)
+        embeds = list(getattr(message, "embeds", []) or [])
+        for embed in embeds:
+            title = str(getattr(embed, "title", "") or "").lower()
+            description = str(getattr(embed, "description", "") or "").lower()
+            footer_text = str(getattr(getattr(embed, "footer", None), "text", "") or "").lower()
+            if "spamguard setup" in title and "/dank setup" in (description + " " + footer_text):
+                return True
+    except Exception:
+        pass
+    return False
+
+
+async def _send_stale_advanced_notice(interaction: discord.Interaction) -> None:
+    content = (
+        "🛡️ **Advanced Standalone Panel was removed from setup.**\n"
+        "Use the buttons already on this SpamGuard Setup page. They are the production-safe controls.\n\n"
+        "For now: **Enable Actual Guard**, **Use Timeout Mode**, **External Only**, **Allow Own Invites**, and **Watch Verified** are the recommended setup."
+    )
+    try:
+        if interaction.response.is_done():
+            await interaction.followup.send(content, ephemeral=True, allowed_mentions=discord.AllowedMentions.none())
+        else:
+            await interaction.response.send_message(content, ephemeral=True, allowed_mentions=discord.AllowedMentions.none())
+    except Exception:
+        pass
 
 
 def _command_from_module_by_name(module: Any, legacy_name: str) -> Optional[app_commands.Command[Any, ..., Any]]:
@@ -181,13 +219,11 @@ async def _open_setup_native_spamguard(interaction: discord.Interaction) -> bool
 
 
 async def open_spamguard_panel(interaction: discord.Interaction) -> None:
-    """Open the simple setup-native SpamGuard page.
-
-    Public production should not drop users into the old advanced panel by
-    default. The setup-native page explains the guard in plain English and avoids
-    noisy standalone message refreshes.
-    """
+    """Open the simple setup-native SpamGuard page."""
     if not await _staff_only(interaction):
+        return
+    if _looks_like_setup_spamguard_message(interaction):
+        await _send_stale_advanced_notice(interaction)
         return
     if await _open_setup_native_spamguard(interaction):
         return
@@ -197,6 +233,9 @@ async def open_spamguard_panel(interaction: discord.Interaction) -> None:
 async def show_spamguard_status(interaction: discord.Interaction) -> None:
     """Show the simple setup-native SpamGuard status page."""
     if not await _staff_only(interaction):
+        return
+    if _looks_like_setup_spamguard_message(interaction):
+        await _send_stale_advanced_notice(interaction)
         return
     if await _open_setup_native_spamguard(interaction):
         return
