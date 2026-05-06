@@ -11,9 +11,6 @@ Important accuracy rule:
 - This does NOT use Discord online/offline presence.
 - Users can appear offline, so presence would be misleading.
 - The scan only uses server-observed activity Dank Shield can see inside this guild.
-
-Removal/cleanup execution should be a later reviewed PR after the preview data is
-trusted in live servers.
 """
 
 from typing import Any
@@ -82,7 +79,7 @@ def _candidate_lines(report: InactiveScanReport, *, limit: int = 10) -> str:
         except Exception:
             last_server_activity = "unknown"
 
-        if candidate.status == "Removable":
+        if candidate.status == "Review candidate":
             icon = "🟠"
             label = "Review candidate"
         elif candidate.status == "Needs review":
@@ -90,8 +87,8 @@ def _candidate_lines(report: InactiveScanReport, *, limit: int = 10) -> str:
             label = "Needs manual review"
         elif candidate.status == "Protected":
             icon = "🛡️"
-            label = "Protected"
-        elif candidate.status == "Cannot remove":
+            label = "Safety-protected"
+        elif candidate.status == "Cannot action":
             icon = "⛔"
             label = "Cannot action"
         else:
@@ -114,48 +111,55 @@ def _candidate_lines(report: InactiveScanReport, *, limit: int = 10) -> str:
 def _build_activity_meter(report: InactiveScanReport) -> str:
     return (
         f"**Overall server activity:** {report.active_activity_percent}% active/recent in this server\n"
-        f"**Quiet review pool:** {report.quiet_review_percent}% may need review\n"
-        f"**Protected/cannot-action:** {report.protected_or_blocked_percent}% skipped for safety or Discord permissions\n"
-        f"**Unknown/low data:** {report.unknown_activity_percent}% have limited server-history data"
+        f"**Needs review:** {report.quiet_review_percent}% quiet enough to inspect\n"
+        f"**Safety locks:** {report.protected_or_blocked_count} member(s) protected or blocked by Discord permissions\n"
+        f"**Data confidence:** {report.data_confidence_label} — {report.data_coverage_percent}% of optional history sources readable"
     )
 
 
+def _build_data_limits_text(report: InactiveScanReport) -> str:
+    if not report.data_warnings:
+        return "✅ Good enough data coverage for this scan."
+    intro = (
+        "Dank Shield could not read every optional server-history source yet. "
+        "That does **not** mean members are inactive. It means the scan is being cautious and lowering confidence."
+    )
+    warnings = "\n".join(f"• {warning}" for warning in report.data_warnings[:4])
+    return _trim(f"{intro}\n\n{warnings}", 1024)
+
+
 def _build_report_embed(report: InactiveScanReport) -> discord.Embed:
+    color = discord.Color.green() if report.data_confidence_label in {"Good", "Partial"} else discord.Color.orange()
     embed = discord.Embed(
         title="🧹 Member Server Activity Review",
         description=(
             "This is a **preview only**. Nobody is removed from the server.\n\n"
             "Dank Shield does **not** use online/offline/idle status. People can appear offline, so that would be misleading. "
-            "This scan only uses activity Dank Shield can observe inside this server, like tickets, ticket messages, verification/member records, activity events, and join dates."
+            "This scan only uses activity Dank Shield can observe inside this server."
         ),
-        color=discord.Color.blurple(),
+        color=color,
         timestamp=report.scanned_at,
     )
-    embed.add_field(name="Server Activity Percentage", value=_build_activity_meter(report), inline=False)
-    embed.add_field(name="Scan Counts", value="\n".join(report_summary_lines(report)[3:]), inline=False)
+    embed.add_field(name="Activity Health", value=_build_activity_meter(report), inline=False)
+    embed.add_field(name="Scan Counts", value="\n".join(report_summary_lines(report)[4:]), inline=False)
     embed.add_field(
         name="Review Settings",
         value=(
             f"Quiet after: **{report.options.inactive_days} day(s) without tracked server activity**\n"
             f"New-member grace period: **{report.options.grace_days} day(s)**\n"
             f"Bot accounts protected: **{'Yes' if report.options.protect_bots else 'No'}**\n"
-            f"Staff/protected roles protected: **{'Yes' if report.options.protect_staff else 'No'}**"
+            f"Staff/admin roles protected: **{'Yes' if report.options.protect_staff else 'No'}**"
         ),
         inline=False,
     )
-    if report.data_warnings:
-        embed.add_field(
-            name="Data Limits",
-            value=_trim("\n".join(f"• {warning}" for warning in report.data_warnings[:6]), 1024),
-            inline=False,
-        )
+    embed.add_field(name="Data Confidence", value=_build_data_limits_text(report), inline=False)
     embed.add_field(name="Top Review Items", value=_candidate_lines(report), inline=False)
     embed.add_field(
         name="How To Read This",
         value=(
-            "🟠 **Review candidate** = looks quiet in this server with enough data to review.\n"
-            "🟡 **Needs manual review** = not enough server history for an automatic decision.\n"
-            "🛡️ **Protected** = staff, protected role, bot, server owner, or new member.\n"
+            "🟠 **Review candidate** = quiet in this server with enough data to inspect.\n"
+            "🟡 **Needs manual review** = not enough server history for a confident result.\n"
+            "🛡️ **Safety-protected** = owner, bot, staff/admin, protected role, or new member.\n"
             "⛔ **Cannot action** = Discord role hierarchy or permission issue."
         ),
         inline=False,
@@ -185,6 +189,7 @@ class MemberActivityReviewView(discord.ui.View):
             "🛡️ **Safety rules used by this scan**\n\n"
             "This scan checks activity inside this server only. It does **not** use online/offline/idle status.\n\n"
             "Dank Shield protects the server owner, the bot itself, bot accounts by default, staff/admin-style roles, configured protected roles, and new members inside the grace period.\n\n"
+            "Normal verified/member roles are **not** treated as cleanup-protected by default.\n\n"
             "It also checks whether the bot has permission and role hierarchy before marking a member as action-ready. This screen is preview-only."
         )
         await reply_once(interaction, {"content": text, "ephemeral": True})

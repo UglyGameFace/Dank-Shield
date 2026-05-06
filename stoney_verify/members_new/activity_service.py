@@ -1,26 +1,22 @@
 from __future__ import annotations
 
-"""Inactive member activity scoring for Dank Shield.
+"""Inactive member server-activity scoring for Dank Shield.
 
-This service deliberately separates "scan and explain" from "kick/remove".
-The command layer can show candidates, require confirmation, or run no-confirm
-cleanup, but all safety decisions live here.
+This service deliberately separates "scan and explain" from any future member
+removal/cleanup action.
 
 Accuracy rule:
 - This service does NOT use Discord online/offline/idle presence.
 - Users can appear offline, and presence is not a reliable activity signal.
 - Scores are based only on activity Dank Shield can observe inside this server:
-  tickets, ticket messages, verification/member records, activity events, and
-  server join timestamps as a fallback.
+  ticket messages, ticket lifecycle rows, member/verification records, activity
+  events, and server join timestamps as a fallback.
 
-Design rules:
-- Never remove the server owner.
-- Never remove the bot itself.
-- Protect bots by default.
-- Protect staff/admin/setup roles by default.
-- Protect new members during a grace period.
-- Respect Discord role hierarchy before marking a member removable.
-- If activity data is incomplete, lower confidence and explain why.
+Plain-English rule:
+- Normal verified/member roles are NOT cleanup-protected by default.
+- Staff/admin/setup/protected roles are cleanup-protected by default.
+- Missing database tables lower data confidence; they should not dump raw API
+  errors into the user-facing dashboard.
 """
 
 from dataclasses import dataclass, field
@@ -98,6 +94,8 @@ class InactiveScanReport:
     active_enough_count: int = 0
     inactive_hidden_by_filter_count: int = 0
     unknown_activity_count: int = 0
+    data_sources_read: int = 0
+    data_sources_attempted: int = 0
 
     @property
     def removable(self) -> list[InactiveMemberCandidate]:
@@ -138,6 +136,23 @@ class InactiveScanReport:
     @property
     def unknown_activity_percent(self) -> int:
         return self.percent(self.unknown_activity_count)
+
+    @property
+    def data_coverage_percent(self) -> int:
+        try:
+            if self.data_sources_attempted <= 0:
+                return 0
+            return max(0, min(100, round((self.data_sources_read / self.data_sources_attempted) * 100)))
+        except Exception:
+            return 0
+
+    @property
+    def data_confidence_label(self) -> str:
+        if self.data_sources_read >= 3:
+            return "Good"
+        if self.data_sources_read >= 1:
+            return "Partial"
+        return "Low"
 
 
 _LAST_SCANS: dict[int, InactiveScanReport] = {}
@@ -240,6 +255,12 @@ def _role_ids_from_value(value: Any) -> set[int]:
 
 
 async def _load_protected_role_ids(guild: discord.Guild) -> set[int]:
+    """Load roles that should be protected from future cleanup actions.
+
+    Do not include normal verified/member roles here. Those roles represent normal
+    membership, not cleanup immunity. Including them made the first live scan say
+    almost the whole server was protected/skipped.
+    """
     protected: set[int] = set()
     try:
         if get_guild_config is None:
@@ -250,8 +271,6 @@ async def _load_protected_role_ids(guild: discord.Guild) -> set[int]:
             "vc_staff_role_id",
             "server_control_role_id",
             "bot_manager_role_id",
-            "verified_role_id",
-            "resident_role_id",
             "inactive_cleanup_protected_role_ids",
             "protected_role_ids",
         ):
@@ -291,9 +310,9 @@ def _bot_can_remove(member: discord.Member) -> tuple[bool, str]:
         if int(member.id) == int(guild.owner_id):
             return False, "Server owner is protected."
         if int(member.id) == int(me.id):
-            return False, "Dank Shield will never remove itself."
+            return False, "Dank Shield will never action itself."
         if not me.guild_permissions.kick_members:
-            return False, "Bot is missing Kick Members permission."
+            return False, "Bot is missing Kick Members permission for future cleanup actions."
         if guild.owner_id != me.id and member.top_role >= me.top_role:
             return False, "Member is above or equal to the bot role."
         return True, ""
@@ -383,38 +402,61 @@ def _rows_by_user(rows: Iterable[Mapping[str, Any]], *, user_keys: tuple[str, ..
     return out
 
 
-def _select_recent_rows(table: str, columns: str, guild_id: int, *, limit: int = 5000) -> tuple[list[dict[str, Any]], Optional[str]]:
+def _table_display_name(table: str) -> str:
+    return {
+        "ticket_messages": "ticket message history",
+        "tickets": "ticket history",
+        "member_joins": "member tracking history",
+        "activity_feed_events": "activity-feed history",
+    }.get(str(table), str(table))
+
+
+def _select_recent_rows(table: str, guild_id: int, *, limit: int = 5000) -> tuple[list[dict[str, Any]], bool, str]:
+    """Read rows without assuming exact optional column names.
+
+    The old version selected a hard-coded column list. If a server DB was missing
+    one optional column, Supabase raised APIError and the dashboard printed ugly
+    raw errors. select('*') keeps this resilient across schema variants.
+    """
     if get_supabase is None:
-        return [], "Supabase client unavailable."
+        return [], False, "Supabase is unavailable, so optional server-history tables could not be checked."
     sb = get_supabase()
     if sb is None:
-        return [], "Supabase client unavailable."
-    try:
-        resp = sb.table(table).select(columns).eq("guild_id", str(int(guild_id))).limit(int(limit)).execute()
+        return [], False, "Supabase is unavailable, so optional server-history tables could not be checked."
+
+    def _try_query(guild_value: Any) -> list[dict[str, Any]]:
+        resp = sb.table(table).select("*").eq("guild_id", guild_value).limit(int(limit)).execute()
         rows = getattr(resp, "data", None) or []
-        return [dict(r) for r in rows if isinstance(r, Mapping)], None
-    except Exception as e:
-        return [], f"Could not read `{table}`: {type(e).__name__}."
+        return [dict(r) for r in rows if isinstance(r, Mapping)]
+
+    try:
+        rows = _try_query(str(int(guild_id)))
+        if not rows:
+            try:
+                rows = _try_query(int(guild_id))
+            except Exception:
+                pass
+        return rows, True, ""
+    except Exception:
+        return [], False, f"Optional {_table_display_name(table)} was not readable. The scan still works, but confidence is lower."
 
 
-async def _load_known_activity_signals(guild_id: int) -> tuple[dict[int, list[MemberActivitySignal]], list[str]]:
+async def _load_known_activity_signals(guild_id: int) -> tuple[dict[int, list[MemberActivitySignal]], list[str], int, int]:
     warnings: list[str] = []
     merged: dict[int, list[MemberActivitySignal]] = {}
 
     table_specs = (
         (
             "ticket_messages",
-            "guild_id,user_id,author_id,created_at,timestamp",
-            ("user_id", "author_id"),
-            ("created_at", "timestamp"),
+            ("user_id", "author_id", "member_id", "discord_user_id"),
+            ("created_at", "timestamp", "sent_at", "updated_at"),
             "ticket message",
             "High",
             "Had ticket-message activity recorded by Dank Shield.",
         ),
         (
             "tickets",
-            "guild_id,user_id,creator_id,created_at,updated_at,last_activity_at,closed_at",
-            ("user_id", "creator_id"),
+            ("user_id", "creator_id", "member_id", "opened_by_id"),
             ("last_activity_at", "updated_at", "created_at", "closed_at"),
             "ticket",
             "Medium",
@@ -422,43 +464,53 @@ async def _load_known_activity_signals(guild_id: int) -> tuple[dict[int, list[Me
         ),
         (
             "member_joins",
-            "guild_id,user_id,member_id,joined_at,created_at,last_seen_at,updated_at",
-            ("user_id", "member_id"),
-            ("last_seen_at", "updated_at", "joined_at", "created_at"),
+            ("user_id", "member_id", "discord_user_id"),
+            ("last_seen_at", "last_activity_at", "updated_at", "joined_at", "created_at"),
             "member record",
             "Medium",
             "Had member tracking data recorded by Dank Shield.",
         ),
         (
             "activity_feed_events",
-            "guild_id,user_id,actor_id,created_at,updated_at",
-            ("user_id", "actor_id"),
-            ("updated_at", "created_at"),
+            ("user_id", "actor_id", "member_id", "target_user_id"),
+            ("updated_at", "created_at", "timestamp"),
             "activity feed",
             "Medium",
             "Had activity-feed events recorded by Dank Shield.",
         ),
     )
 
-    for table, columns, user_keys, time_keys, source, confidence, note in table_specs:
-        rows, warning = await __import__("asyncio").to_thread(_select_recent_rows, table, columns, guild_id)
-        if warning:
-            warnings.append(warning)
+    sources_read = 0
+    attempted = len(table_specs)
+    for table, user_keys, time_keys, source, confidence, note in table_specs:
+        rows, ok, warning = await __import__("asyncio").to_thread(_select_recent_rows, table, guild_id)
+        if not ok:
+            if warning:
+                warnings.append(warning)
             continue
+        sources_read += 1
         for uid, signal in _rows_by_user(rows, user_keys=user_keys, time_keys=time_keys, source=source, confidence=confidence, note=note).items():
             merged.setdefault(uid, []).append(signal)
 
-    if not merged:
-        warnings.append("No historical server-activity tables were readable, so confidence falls back to Discord join/role safety only.")
+    if sources_read == 0:
+        warnings.append(
+            "Data confidence is low: no optional server-activity history tables were readable. "
+            "The scan is using join dates, role safety, and Discord hierarchy only."
+        )
+    elif sources_read < attempted:
+        warnings.append(
+            f"Data confidence is partial: {sources_read}/{attempted} optional server-activity sources were readable. "
+            "Percentages may improve as tracking history fills in."
+        )
 
-    return merged, warnings
+    return merged, warnings, sources_read, attempted
 
 
 async def scan_inactive_members(guild: discord.Guild, options: Optional[InactiveScanOptions] = None) -> InactiveScanReport:
     options = options or InactiveScanOptions()
     now = now_utc()
     protected_role_ids = await _load_protected_role_ids(guild)
-    activity_signals, data_warnings = await _load_known_activity_signals(int(guild.id))
+    activity_signals, data_warnings, sources_read, sources_attempted = await _load_known_activity_signals(int(guild.id))
     db_available = bool(activity_signals)
 
     members = list(getattr(guild, "members", []) or [])
@@ -497,33 +549,37 @@ async def scan_inactive_members(guild: discord.Guild, options: Optional[Inactive
                 cannot = True
                 reasons.append(bot_reason)
 
+            # Fallback to join date only when no better server-activity signal exists.
             last_seen = _best_last_seen(signals, joined_at)
             inactivity_days = _days_since(last_seen, now)
             confidence = _confidence_from_signals(signals, db_available=db_available)
             score = _activity_score(inactivity_days, confidence)
 
-            if inactivity_days is None:
+            if not signals:
                 unknown_activity_count += 1
+                reasons.append("No message/ticket/activity history was found for this member; join date is being used as the fallback.")
+
+            if inactivity_days is None:
                 reasons.append("No reliable server-activity timestamp was available.")
             elif inactivity_days >= int(options.inactive_days):
                 reasons.append(f"No tracked server activity for {inactivity_days}+ days; threshold is {options.inactive_days} days.")
             else:
                 active_enough_count += 1
-                reasons.append(f"Last tracked server activity was {inactivity_days} day(s) ago, below the inactive threshold.")
+                reasons.append(f"Recent enough server activity: {inactivity_days} day(s) ago, below the inactive threshold.")
 
             if confidence.lower() == "low":
-                reasons.append("Confidence is low because the bot does not have enough historical server-activity data for this member.")
+                reasons.append("Confidence is low because Dank Shield does not have enough server-history data for this member yet.")
 
             inactive_enough = inactivity_days is not None and inactivity_days >= int(options.inactive_days)
             if is_protected:
                 status = "Protected"
                 removable = False
             elif cannot:
-                status = "Cannot remove"
+                status = "Cannot action"
                 removable = False
             elif inactive_enough:
-                status = "Removable" if confidence.lower() in {"high", "medium"} else "Needs review"
-                removable = status == "Removable"
+                status = "Review candidate" if confidence.lower() in {"high", "medium"} else "Needs review"
+                removable = status == "Review candidate"
             else:
                 status = "Active enough"
                 removable = False
@@ -547,7 +603,7 @@ async def scan_inactive_members(guild: discord.Guild, options: Optional[Inactive
 
             if status == "Protected":
                 protected.append(candidate)
-            elif status == "Cannot remove":
+            elif status == "Cannot action":
                 cannot_remove.append(candidate)
             elif inactive_enough:
                 if _scan_passes_confidence_filter(candidate, options):
@@ -574,6 +630,8 @@ async def scan_inactive_members(guild: discord.Guild, options: Optional[Inactive
         active_enough_count=active_enough_count,
         inactive_hidden_by_filter_count=inactive_hidden_by_filter_count,
         unknown_activity_count=unknown_activity_count,
+        data_sources_read=sources_read,
+        data_sources_attempted=sources_attempted,
     )
     remember_scan(report)
     return report
@@ -592,13 +650,14 @@ def report_summary_lines(report: InactiveScanReport) -> list[str]:
     return [
         f"Overall server activity: **{report.active_activity_percent}%** active/recent in this server",
         f"Quiet review pool: **{report.quiet_review_percent}%** of members",
-        f"Protected or cannot-action: **{report.protected_or_blocked_percent}%** of members",
+        f"Cleanup safety locks: **{report.protected_or_blocked_count}** member(s), not {report.protected_or_blocked_percent}% skipped",
+        f"Data confidence: **{report.data_confidence_label}** ({report.data_coverage_percent}% of optional history sources readable)",
         f"Members scanned: **{report.total_members_seen}**",
         f"Active/recent by server activity: **{report.active_enough_count}**",
-        f"Quiet/inactive candidates shown: **{len(report.candidates)}**",
-        f"Needs review: **{len(report.needs_review)}**",
-        f"Protected/skipped: **{len(report.protected)}**",
-        f"Cannot action: **{len(report.cannot_remove)}**",
+        f"Quiet/inactive review candidates shown: **{len(report.candidates)}**",
+        f"Needs manual review: **{len(report.needs_review)}**",
+        f"Protected by safety rules: **{len(report.protected)}**",
+        f"Cannot action because of Discord permissions/hierarchy: **{len(report.cannot_remove)}**",
     ]
 
 
