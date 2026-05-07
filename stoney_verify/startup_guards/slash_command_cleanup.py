@@ -9,14 +9,18 @@ Why this exists:
   /verify grant-vr, and /ticket-panel post.
 - Discord keeps previously synced global or guild commands until the next
   successful sync for that scope.
-- This guard strips stale aliases from the local CommandTree right before both
-  global and guild syncs so the next successful sync removes them from Discord.
-- It also prevents the old CLEAR_GLOBAL_COMMANDS_ON_BOOT env from accidentally
-  wiping the full public command surface. A dangerous emergency wipe still exists
-  behind STONEY_DANGEROUS_CLEAR_ALL_GLOBAL_COMMANDS_ON_BOOT=true.
+- This guard strips stale aliases from the local CommandTree right before sync.
+- In public/production mode, it also avoids repeating unchanged global syncs on
+  every restart. Re-syncing the same command surface constantly makes Discord
+  clients more likely to show stale "command is outdated" notices.
+- A dangerous emergency wipe still exists behind
+  STONEY_DANGEROUS_CLEAR_ALL_GLOBAL_COMMANDS_ON_BOOT=true.
 """
 
+import hashlib
+import json
 import os
+from pathlib import Path
 from typing import Any, Optional
 
 from discord import app_commands
@@ -62,11 +66,6 @@ STALE_TOP_LEVEL_COMMANDS = {
     "ticket_panel_bootstrap_stop",
 }
 
-# Public users should not see a wall of setup/debug/audit commands when they
-# type /dank. The guided setup flow is /dank setup. Everything else here is an
-# internal/admin helper that should not be part of the default public surface.
-# These are removed right before global/guild sync, so the next successful sync
-# clears them from Discord's command picker.
 CONFUSING_DANK_CHILDREN = {
     "archive-backfill",
     "cache",
@@ -101,7 +100,6 @@ ALLOWED_DANK_CHILDREN = {
     "members",
 }
 
-# Backward-compatible names for older imports/tests.
 CONFUSING_STONEY_CHILDREN = CONFUSING_DANK_CHILDREN
 ALLOWED_STONEY_CHILDREN = ALLOWED_DANK_CHILDREN
 
@@ -179,6 +177,102 @@ def _safe_child_names(group: Any) -> list[str]:
         )
     except Exception:
         return []
+
+
+def _command_payload(command: Any) -> Any:
+    try:
+        payload = command.to_dict()
+        if isinstance(payload, dict):
+            return payload
+    except Exception:
+        pass
+
+    children: list[Any] = []
+    try:
+        for child in list(getattr(command, "commands", []) or []):
+            children.append(_command_payload(child))
+    except Exception:
+        children = []
+
+    params: list[str] = []
+    try:
+        for param in list(getattr(command, "parameters", []) or []):
+            params.append(str(getattr(param, "name", param)))
+    except Exception:
+        params = []
+
+    return {
+        "name": str(getattr(command, "name", "")),
+        "description": str(getattr(command, "description", "")),
+        "children": children,
+        "parameters": params,
+    }
+
+
+def _command_surface_hash(tree: app_commands.CommandTree[Any], *, guild: Optional[Any] = None) -> str:
+    try:
+        commands = list(tree.get_commands(guild=guild))
+    except Exception:
+        commands = list(tree.get_commands())
+
+    payload = [_command_payload(cmd) for cmd in sorted(commands, key=lambda c: str(getattr(c, "name", "")))]
+    raw = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str)
+    return hashlib.sha256(raw.encode("utf-8", "ignore")).hexdigest()
+
+
+def _sync_state_path() -> Path:
+    raw = _env_str("DANK_COMMAND_SYNC_STATE_FILE", "")
+    if raw:
+        return Path(raw)
+    return Path(".dank_command_sync_state.json")
+
+
+def _read_sync_state() -> dict[str, Any]:
+    path = _sync_state_path()
+    try:
+        if not path.exists():
+            return {}
+        data = json.loads(path.read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+def _write_sync_state(state: dict[str, Any]) -> None:
+    path = _sync_state_path()
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(state, sort_keys=True, indent=2), encoding="utf-8")
+    except Exception as e:
+        try:
+            print(f"⚠️ slash_command_cleanup could not write sync state: {type(e).__name__}: {e}")
+        except Exception:
+            pass
+
+
+def _should_skip_unchanged_sync(*, guild: Optional[Any], surface_hash: str) -> bool:
+    if guild is not None:
+        return False
+    if not _public_scope_enabled():
+        return False
+    if _env_true("DANK_FORCE_COMMAND_SYNC_ON_BOOT", False):
+        return False
+    if not _env_true("DANK_SKIP_UNCHANGED_GLOBAL_SYNC", True):
+        return False
+
+    state = _read_sync_state()
+    key = "global"
+    return str(state.get(key, "")) == str(surface_hash)
+
+
+def _remember_sync_hash(*, guild: Optional[Any], surface_hash: str) -> None:
+    if guild is not None:
+        return
+    if not _public_scope_enabled():
+        return
+    state = _read_sync_state()
+    state["global"] = str(surface_hash)
+    _write_sync_state(state)
 
 
 def _get_command(tree: app_commands.CommandTree[Any], name: str, *, guild: Optional[Any]) -> Optional[Any]:
@@ -283,11 +377,6 @@ def prune_public_stoney_children(
     reason: str = "manual",
     guild: Optional[Any] = None,
 ) -> list[str]:
-    """Prune public setup surfaces.
-
-    The function name is kept for older imports, but Dank Shield's public command
-    root is /dank. We still clean /stoney if a legacy tree has it locally.
-    """
     if not _public_scope_enabled():
         return []
 
@@ -322,15 +411,30 @@ def install_slash_command_cleanup_guard() -> None:
         guild = _guild_from_sync_args(args, kwargs)
         remove_stale_top_level_commands(self, reason="pre_sync", guild=guild)
         prune_public_stoney_children(self, reason="pre_sync", guild=guild)
+        names = _safe_command_names(self, guild=guild)
+        surface_hash = _command_surface_hash(self, guild=guild)
+
         try:
-            names = _safe_command_names(self, guild=guild)
             print(
                 "🧹 slash_command_cleanup pre-sync command surface "
-                f"scope={_scope_label(guild)} count={len(names)} names={names}"
+                f"scope={_scope_label(guild)} count={len(names)} names={names} hash={surface_hash[:12]}"
             )
         except Exception:
             pass
-        return await _ORIGINAL_SYNC(self, *args, **kwargs)  # type: ignore[misc]
+
+        if _should_skip_unchanged_sync(guild=guild, surface_hash=surface_hash):
+            try:
+                print(
+                    "🧹 slash_command_cleanup skipped unchanged global slash sync "
+                    f"hash={surface_hash[:12]} set DANK_FORCE_COMMAND_SYNC_ON_BOOT=true to force"
+                )
+            except Exception:
+                pass
+            return []
+
+        result = await _ORIGINAL_SYNC(self, *args, **kwargs)  # type: ignore[misc]
+        _remember_sync_hash(guild=guild, surface_hash=surface_hash)
+        return result
 
     def _patched_clear_commands(self: app_commands.CommandTree[Any], *args: Any, **kwargs: Any):
         guild = kwargs.get("guild", None)
