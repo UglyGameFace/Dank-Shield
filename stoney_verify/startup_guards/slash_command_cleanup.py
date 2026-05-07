@@ -10,9 +10,13 @@ Why this exists:
 - Discord keeps previously synced global or guild commands until the next
   successful sync for that scope.
 - This guard strips stale aliases from the local CommandTree right before sync.
-- In public/production mode, it also avoids repeating unchanged global syncs on
-  every restart. Re-syncing the same command surface constantly makes Discord
-  clients more likely to show stale "command is outdated" notices.
+- In public/production mode, it avoids repeating unchanged global syncs on every
+  restart. Re-syncing the same command surface constantly makes Discord clients
+  more likely to show stale "command is outdated" notices.
+- In public/production mode, stale guild-scoped beta command copies are cleared
+  only for explicitly configured cleanup guild IDs. This prevents Discord mobile
+  from showing duplicate global+guild slash suggestions without touching random
+  public/customer guilds.
 - A dangerous emergency wipe still exists behind
   STONEY_DANGEROUS_CLEAR_ALL_GLOBAL_COMMANDS_ON_BOOT=true.
 """
@@ -114,6 +118,16 @@ def _env_true(name: str, default: bool = False) -> bool:
         return bool(default)
 
 
+def _env_explicit_true(name: str) -> bool:
+    try:
+        raw = os.getenv(name)
+        if raw is None:
+            return False
+        return str(raw).strip().lower() in {"1", "true", "yes", "y", "on"}
+    except Exception:
+        return False
+
+
 def _env_str(name: str, default: str = "") -> str:
     try:
         raw = os.getenv(name)
@@ -123,6 +137,27 @@ def _env_str(name: str, default: str = "") -> str:
         return text if text else default
     except Exception:
         return default
+
+
+def _env_int_set(name: str) -> set[int]:
+    out: set[int] = set()
+    try:
+        raw = _env_str(name, "")
+        if not raw:
+            return out
+        for item in raw.replace(";", ",").replace(" ", ",").split(","):
+            text = str(item or "").strip()
+            if not text:
+                continue
+            try:
+                value = int(text)
+                if value > 0:
+                    out.add(value)
+            except Exception:
+                continue
+    except Exception:
+        pass
+    return out
 
 
 def _public_scope_enabled() -> bool:
@@ -156,6 +191,29 @@ def _scope_label(guild: Optional[Any]) -> str:
         return f"guild:{int(getattr(guild, 'id', guild))}"
     except Exception:
         return "guild:unknown"
+
+
+def _guild_id(guild: Optional[Any]) -> int:
+    try:
+        return int(getattr(guild, "id", guild) or 0)
+    except Exception:
+        return 0
+
+
+def _guild_command_cleanup_allowlist() -> set[int]:
+    """Guilds where stale guild-scoped command copies may be cleared.
+
+    Defaulting to GUILD_ID keeps cleanup limited to the configured beta/home
+    guild instead of touching every public guild the bot is installed in.
+    Additional IDs can be listed in DANK_GUILD_COMMAND_CLEANUP_IDS or
+    STONEY_GUILD_COMMAND_CLEANUP_IDS.
+    """
+    allowed: set[int] = set()
+    allowed |= _env_int_set("DANK_GUILD_COMMAND_CLEANUP_IDS")
+    allowed |= _env_int_set("STONEY_GUILD_COMMAND_CLEANUP_IDS")
+    for name in ("GUILD_ID", "STONEY_BETA_GUILD_ID", "DANK_BETA_GUILD_ID"):
+        allowed |= _env_int_set(name)
+    return {gid for gid in allowed if gid > 0}
 
 
 def _safe_command_names(tree: app_commands.CommandTree[Any], *, guild: Optional[Any] = None) -> list[str]:
@@ -261,8 +319,22 @@ def _should_skip_unchanged_sync(*, guild: Optional[Any], surface_hash: str) -> b
         return False
 
     state = _read_sync_state()
-    key = "global"
-    return str(state.get(key, "")) == str(surface_hash)
+    return str(state.get("global", "")) == str(surface_hash)
+
+
+def _should_clear_public_guild_command_copy(guild: Optional[Any]) -> bool:
+    if guild is None:
+        return False
+    if not _public_scope_enabled():
+        return False
+    if _env_explicit_true("STONEY_SYNC_BETA_GUILD_COMMANDS"):
+        return False
+    gid = _guild_id(guild)
+    if gid <= 0:
+        return False
+    if _env_explicit_true("DANK_CLEAR_ANY_GUILD_COMMAND_COPY_ON_BOOT"):
+        return True
+    return gid in _guild_command_cleanup_allowlist()
 
 
 def _remember_sync_hash(*, guild: Optional[Any], surface_hash: str) -> None:
@@ -409,6 +481,20 @@ def install_slash_command_cleanup_guard() -> None:
 
     async def _patched_sync(self: app_commands.CommandTree[Any], *args: Any, **kwargs: Any):
         guild = _guild_from_sync_args(args, kwargs)
+
+        if _should_clear_public_guild_command_copy(guild):
+            try:
+                _ORIGINAL_CLEAR_COMMANDS(self, guild=guild)  # type: ignore[misc]
+                result = await _ORIGINAL_SYNC(self, *args, **kwargs)  # type: ignore[misc]
+                print(
+                    "🧹 slash_command_cleanup cleared allowed guild-scoped command copy in public mode "
+                    f"scope={_scope_label(guild)} commands={len(result)} "
+                    "set STONEY_SYNC_BETA_GUILD_COMMANDS=true only for intentional test-guild copies"
+                )
+                return result
+            except Exception as e:
+                print(f"⚠️ slash_command_cleanup failed clearing guild command copy scope={_scope_label(guild)}: {type(e).__name__}: {e}")
+
         remove_stale_top_level_commands(self, reason="pre_sync", guild=guild)
         prune_public_stoney_children(self, reason="pre_sync", guild=guild)
         names = _safe_command_names(self, guild=guild)
