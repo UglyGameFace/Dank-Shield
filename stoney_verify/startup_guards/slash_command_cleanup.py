@@ -10,9 +10,12 @@ Why this exists:
 - Discord keeps previously synced global or guild commands until the next
   successful sync for that scope.
 - This guard strips stale aliases from the local CommandTree right before sync.
-- In public/production mode, it also avoids repeating unchanged global syncs on
-  every restart. Re-syncing the same command surface constantly makes Discord
-  clients more likely to show stale "command is outdated" notices.
+- In public/production mode, it avoids repeating unchanged global syncs on every
+  restart. Re-syncing the same command surface constantly makes Discord clients
+  more likely to show stale "command is outdated" notices.
+- In public/production mode, guild-scoped beta command copies are cleared unless
+  STONEY_SYNC_BETA_GUILD_COMMANDS=true is explicitly set. This prevents Discord
+  mobile from showing duplicate global+guild slash suggestions.
 - A dangerous emergency wipe still exists behind
   STONEY_DANGEROUS_CLEAR_ALL_GLOBAL_COMMANDS_ON_BOOT=true.
 """
@@ -112,6 +115,16 @@ def _env_true(name: str, default: bool = False) -> bool:
         return str(raw).strip().lower() in {"1", "true", "yes", "y", "on"}
     except Exception:
         return bool(default)
+
+
+def _env_explicit_true(name: str) -> bool:
+    try:
+        raw = os.getenv(name)
+        if raw is None:
+            return False
+        return str(raw).strip().lower() in {"1", "true", "yes", "y", "on"}
+    except Exception:
+        return False
 
 
 def _env_str(name: str, default: str = "") -> str:
@@ -261,8 +274,15 @@ def _should_skip_unchanged_sync(*, guild: Optional[Any], surface_hash: str) -> b
         return False
 
     state = _read_sync_state()
-    key = "global"
-    return str(state.get(key, "")) == str(surface_hash)
+    return str(state.get("global", "")) == str(surface_hash)
+
+
+def _should_clear_public_guild_command_copy(guild: Optional[Any]) -> bool:
+    if guild is None:
+        return False
+    if not _public_scope_enabled():
+        return False
+    return not _env_explicit_true("STONEY_SYNC_BETA_GUILD_COMMANDS")
 
 
 def _remember_sync_hash(*, guild: Optional[Any], surface_hash: str) -> None:
@@ -409,6 +429,20 @@ def install_slash_command_cleanup_guard() -> None:
 
     async def _patched_sync(self: app_commands.CommandTree[Any], *args: Any, **kwargs: Any):
         guild = _guild_from_sync_args(args, kwargs)
+
+        if _should_clear_public_guild_command_copy(guild):
+            try:
+                _ORIGINAL_CLEAR_COMMANDS(self, guild=guild)  # type: ignore[misc]
+                result = await _ORIGINAL_SYNC(self, *args, **kwargs)  # type: ignore[misc]
+                print(
+                    "🧹 slash_command_cleanup cleared guild-scoped command copy in public mode "
+                    f"scope={_scope_label(guild)} commands={len(result)} "
+                    "set STONEY_SYNC_BETA_GUILD_COMMANDS=true only for intentional test-guild copies"
+                )
+                return result
+            except Exception as e:
+                print(f"⚠️ slash_command_cleanup failed clearing guild command copy scope={_scope_label(guild)}: {type(e).__name__}: {e}")
+
         remove_stale_top_level_commands(self, reason="pre_sync", guild=guild)
         prune_public_stoney_children(self, reason="pre_sync", guild=guild)
         names = _safe_command_names(self, guild=guild)
