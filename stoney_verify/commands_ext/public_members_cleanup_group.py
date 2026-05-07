@@ -143,19 +143,17 @@ def _candidate_is_purge_all_eligible(
 ) -> tuple[bool, str]:
     """Hard gate for purge-all.
 
-    Purge-all must never target active members. A candidate is only eligible when
-    the scanner says the user is verified/resident and has no tracked server
-    activity after verification, then final cleanup validation still passes.
+    Purge-all must never target recently active members. A candidate may have
+    interacted after verification and still be eligible if their last tracked
+    server activity after verification is older than the inactive threshold.
     """
     try:
         if not bool(getattr(candidate, "verified_or_resident", False)):
             return False, "not verified/resident"
-        if getattr(candidate, "post_verification_activity_at", None) is not None:
-            return False, "has tracked activity after verification"
         if getattr(candidate, "inactivity_days", None) is None:
             return False, "quiet days unknown"
         if int(candidate.inactivity_days or 0) < int(inactive_days):
-            return False, f"quiet for less than {inactive_days}d"
+            return False, f"last tracked activity is newer than {inactive_days}d"
         if not bool(getattr(candidate, "removable", False)):
             return False, "scan did not mark this user removable"
         if bool(getattr(candidate, "protected", False)):
@@ -241,7 +239,7 @@ def _settings_embed(settings: MemberCleanupSettings) -> discord.Embed:
         name="Safety Note",
         value=(
             "Confirmation is required by default. Turning it off means queue/purge commands can process after the preview text, "
-            "but every member still receives final permission, role, lock, staff, owner, bot, and active-member checks."
+            "but every member still receives final permission, role, lock, staff, owner, bot, and recent-activity checks."
         ),
         inline=False,
     )
@@ -616,7 +614,7 @@ async def members_cleanup_queue(
 
 @members_group.command(name="purge-all", description="Purge all eligible inactive verified/resident members except locked users.")
 @app_commands.describe(
-    inactive_days="Only users quiet this many days after verification are eligible. Default 90.",
+    inactive_days="Only users quiet this many days after last tracked server activity are eligible. Default 90.",
     grace_days="Protect newer members inside this many days. Default 14.",
     include_low_confidence="Include low-confidence users. Default false.",
     reason="Reason stored in Discord audit log and Dank Shield activity history.",
@@ -647,12 +645,13 @@ async def members_purge_all(
     )
 
     body = (
-        "**Purge-all is intentionally strict. Active members are not eligible.**\n\n"
+        "**Purge-all is intentionally strict. Recently active members are not eligible.**\n\n"
         f"Fresh scan: **Yes** • Locked users skipped: **{report.locked_users_skipped}**\n"
-        f"Threshold: **{safe_days}d quiet after verification** • New-member grace: **{safe_grace}d**\n"
+        f"Threshold: **{safe_days}d quiet after last tracked server activity** • New-member grace: **{safe_grace}d**\n"
         f"Low-confidence included: **{'Yes' if include_low_confidence else 'No'}**\n"
         f"Confirmation mode: **{settings.mode_label}**\n\n"
-        "Eligible means verified/resident, no tracked activity after verification, not locked, and final safety validation passed.\n\n"
+        "Eligible means verified/resident, quiet past the threshold, not locked, and final safety validation passed.\n"
+        "A few old interactions do not block purge-all; recent tracked activity does.\n\n"
         f"**Eligible for purge ({len(queued)})**\n{_format_queue_lines(queued, limit=_PURGE_ALL_PREVIEW_LIMIT)}"
     )
     if validation_blocked:
