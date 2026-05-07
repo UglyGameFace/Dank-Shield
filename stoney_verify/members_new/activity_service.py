@@ -9,11 +9,13 @@ Accuracy rule:
 - This service does NOT use Discord online/offline/idle presence.
 - Users can appear offline, and presence is not a reliable activity signal.
 - Scores are based only on activity Dank Shield can observe inside this server.
+- Fresh recent Discord evidence is checked before showing inactive candidates,
+  so stale DB history does not create obvious false positives.
 
 Verified/resident rule:
 - The main cleanup target is not "people who joined a while ago."
-- The target is members who became verified/resident, then did not do anything
-  observable in the server afterward.
+- The target is members who became verified/resident, then went quiet inside the
+  server.
 - Audit log is used only as a fallback to estimate when a role was granted.
 
 Scan-lock rule:
@@ -25,7 +27,7 @@ Scan-lock rule:
 """
 
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Iterable, Mapping, Optional
 
 import discord
@@ -46,6 +48,14 @@ except Exception:
 
 SCAN_LOCKS_TABLE = "member_activity_scan_locks"
 _MEMORY_SCAN_LOCKS: dict[int, dict[int, dict[str, Any]]] = {}
+_LAST_SCANS: dict[int, "InactiveScanReport"] = {}
+
+# Bounded fresh evidence sweep. This is intentionally limited so public servers
+# do not hammer Discord when scanning.
+_RECENT_EVIDENCE_LOOKBACK_DAYS = 60
+_RECENT_EVIDENCE_MAX_CHANNELS = 35
+_RECENT_EVIDENCE_PER_CHANNEL_LIMIT = 250
+_RECENT_EVIDENCE_MAX_MEMBERS_FOR_NAME_MATCH = 2000
 
 
 @dataclass(frozen=True)
@@ -196,9 +206,6 @@ class InactiveScanReport:
         return "Low"
 
 
-_LAST_SCANS: dict[int, InactiveScanReport] = {}
-
-
 def remember_scan(report: InactiveScanReport) -> None:
     _LAST_SCANS[int(report.guild_id)] = report
 
@@ -246,6 +253,10 @@ def _days_since(dt: Optional[datetime], now: Optional[datetime] = None) -> Optio
         return max(0, int((current - dt).total_seconds() // 86400))
     except Exception:
         return None
+
+
+def _norm(text: Any) -> str:
+    return str(text or "").strip().lower()
 
 
 def _cfg_value(cfg: Any, key: str, default: Any = None) -> Any:
@@ -449,6 +460,18 @@ def _member_role_ids(member: discord.Member) -> set[int]:
         return {int(role.id) for role in member.roles or [] if int(role.id) != int(member.guild.default_role.id)}
     except Exception:
         return set()
+
+
+def _role_collection_ids(value: Any) -> set[int]:
+    out: set[int] = set()
+    try:
+        for role in value or []:
+            rid = _safe_int(getattr(role, "id", role), 0)
+            if rid > 0:
+                out.add(rid)
+    except Exception:
+        pass
+    return out
 
 
 def _is_staff_like(member: discord.Member, protected_role_ids: set[int]) -> bool:
@@ -667,19 +690,189 @@ async def _load_known_activity_signals(guild_id: int) -> tuple[dict[int, list[Me
     return merged, verification_times, warnings, sources_read, attempted
 
 
-def _role_collection_ids(value: Any) -> set[int]:
-    out: set[int] = set()
+def _channel_can_be_read(channel: object, me: Optional[discord.Member]) -> bool:
     try:
-        for role in value or []:
-            rid = _safe_int(getattr(role, "id", role), 0)
-            if rid > 0:
-                out.add(rid)
+        if me is None or not isinstance(channel, discord.TextChannel):
+            return False
+        perms = channel.permissions_for(me)
+        return bool(perms.view_channel and perms.read_message_history)
     except Exception:
-        pass
-    return out
+        return False
 
 
-async def _load_audit_role_grant_times(guild: discord.Guild, role_ids: set[int], *, enabled: bool = True, limit: int = 1000) -> tuple[dict[int, datetime], str]:
+def _is_modlog_like(channel: object) -> bool:
+    name = _norm(getattr(channel, "name", ""))
+    return any(part in name for part in ("mod-log", "modlog", "member-log", "activity-log", "audit", "logs"))
+
+
+def _member_name_tokens(member: discord.Member) -> set[str]:
+    tokens: set[str] = {str(int(member.id)), f"<@{int(member.id)}>", f"<@!{int(member.id)}>"}
+    for value in (
+        getattr(member, "display_name", None),
+        getattr(member, "global_name", None),
+        getattr(member, "name", None),
+        getattr(member, "nick", None),
+    ):
+        text = _norm(value)
+        if text and len(text) >= 3:
+            tokens.add(text)
+    return tokens
+
+
+def _merge_signal(target: dict[int, list[MemberActivitySignal]], uid: int, signal: MemberActivitySignal) -> None:
+    if uid <= 0 or signal.timestamp is None:
+        return
+    existing = target.setdefault(int(uid), [])
+    for old in existing:
+        if old.source == signal.source and old.timestamp == signal.timestamp:
+            return
+    existing.append(signal)
+
+
+def _signal_recent_enough(signal: MemberActivitySignal, *, now: datetime, lookback_days: int) -> bool:
+    dt = _safe_dt(signal.timestamp)
+    if dt is None:
+        return False
+    days = _days_since(dt, now)
+    return days is not None and days <= int(lookback_days)
+
+
+async def _load_recent_discord_evidence(
+    guild: discord.Guild,
+    members: list[discord.Member],
+    *,
+    verified_resident_role_ids: set[int],
+    lookback_days: int = _RECENT_EVIDENCE_LOOKBACK_DAYS,
+) -> tuple[dict[int, list[MemberActivitySignal]], list[str], int, int]:
+    """Read recent Discord-visible evidence before scoring inactive members.
+
+    Normal readable-channel messages count only when authored by the member.
+    Mod-log-like channels can also match a member mention, ID, username,
+    display name, or nickname. Mod-log matches are evidence, not presence.
+    """
+    warnings: list[str] = []
+    evidence: dict[int, list[MemberActivitySignal]] = {}
+    now = now_utc()
+    safe_lookback = max(1, min(int(lookback_days or _RECENT_EVIDENCE_LOOKBACK_DAYS), _RECENT_EVIDENCE_LOOKBACK_DAYS))
+    after = now - timedelta(days=safe_lookback)
+    me = getattr(guild, "me", None)
+
+    try:
+        readable = [ch for ch in getattr(guild, "text_channels", []) or [] if _channel_can_be_read(ch, me)]
+    except Exception:
+        readable = []
+
+    if not readable:
+        return {}, ["Recent Discord evidence sweep could not read any text-channel history. Grant View Channel + Read Message History to improve scan accuracy."], 0, 1
+
+    modlogs = [ch for ch in readable if _is_modlog_like(ch)]
+    normal = [ch for ch in readable if ch not in modlogs]
+    channels = (modlogs + normal)[:_RECENT_EVIDENCE_MAX_CHANNELS]
+    attempted = len(channels)
+    read = 0
+
+    member_ids = {int(m.id) for m in members if not getattr(m, "bot", False)}
+    review_members = [m for m in members if int(m.id) in member_ids]
+    if verified_resident_role_ids:
+        focused = [m for m in review_members if _member_role_ids(m).intersection(verified_resident_role_ids)]
+        if focused:
+            review_members = focused
+
+    token_to_uid: dict[str, int] = {}
+    ambiguous_tokens: set[str] = set()
+    for member in review_members[:_RECENT_EVIDENCE_MAX_MEMBERS_FOR_NAME_MATCH]:
+        for token in _member_name_tokens(member):
+            if token in ambiguous_tokens:
+                continue
+            if token in token_to_uid and token_to_uid[token] != int(member.id):
+                token_to_uid.pop(token, None)
+                ambiguous_tokens.add(token)
+                continue
+            token_to_uid[token] = int(member.id)
+
+    for channel in channels:
+        is_modlog = _is_modlog_like(channel)
+        try:
+            async for message in channel.history(limit=_RECENT_EVIDENCE_PER_CHANNEL_LIMIT, after=after, oldest_first=False):
+                msg_time = _safe_dt(getattr(message, "created_at", None)) or now
+                author_id = _safe_int(getattr(getattr(message, "author", None), "id", 0), 0)
+
+                # Direct authored message is the strongest recent activity proof.
+                if author_id in member_ids:
+                    _merge_signal(
+                        evidence,
+                        author_id,
+                        MemberActivitySignal(
+                            source="recent Discord message history",
+                            timestamp=msg_time,
+                            confidence="High",
+                            note=f"Recent message authored in #{getattr(channel, 'name', 'unknown')}.",
+                        ),
+                    )
+
+                if not is_modlog:
+                    continue
+
+                # Mod-log evidence is a fallback signal. It can catch moderation
+                # touches or bot-generated records that stored DB history missed.
+                for mention in getattr(message, "mentions", []) or []:
+                    uid = _safe_int(getattr(mention, "id", 0), 0)
+                    if uid in member_ids:
+                        _merge_signal(
+                            evidence,
+                            uid,
+                            MemberActivitySignal(
+                                source="recent mod-log mention evidence",
+                                timestamp=msg_time,
+                                confidence="Medium",
+                                note=f"Recent mod-log evidence mentioned this member in #{getattr(channel, 'name', 'unknown')}.",
+                            ),
+                        )
+
+                content_text = _norm(getattr(message, "content", ""))
+                if not content_text:
+                    continue
+
+                for token, uid in token_to_uid.items():
+                    if token and token in content_text:
+                        _merge_signal(
+                            evidence,
+                            uid,
+                            MemberActivitySignal(
+                                source="recent mod-log text evidence",
+                                timestamp=msg_time,
+                                confidence="Medium",
+                                note=f"Recent mod-log evidence matched this member in #{getattr(channel, 'name', 'unknown')}.",
+                            ),
+                        )
+        except discord.Forbidden:
+            warnings.append(f"Could not read recent history in #{getattr(channel, 'name', 'unknown')}; missing permission.")
+            continue
+        except Exception:
+            continue
+
+        read += 1
+
+    if read:
+        moved_count = sum(
+            1
+            for signals in evidence.values()
+            if any(_signal_recent_enough(s, now=now, lookback_days=safe_lookback) for s in signals)
+        )
+        warnings.append(
+            f"Recent Discord evidence sweep checked {read}/{attempted} readable channel(s) for the last {safe_lookback} day(s); found recent evidence for {moved_count} member(s)."
+        )
+
+    return evidence, warnings, read, attempted
+
+
+async def _load_audit_role_grant_times(
+    guild: discord.Guild,
+    role_ids: set[int],
+    *,
+    enabled: bool = True,
+    limit: int = 1000,
+) -> tuple[dict[int, datetime], str]:
     if not enabled or not role_ids:
         return {}, ""
     try:
@@ -696,6 +889,7 @@ async def _load_audit_role_grant_times(guild: discord.Guild, role_ids: set[int],
             uid = _safe_int(getattr(target, "id", 0), 0)
             if uid <= 0 or uid in found:
                 continue
+
             before_ids: set[int] = set()
             after_ids: set[int] = set()
             changes = getattr(entry, "changes", None)
@@ -704,6 +898,7 @@ async def _load_audit_role_grant_times(guild: discord.Guild, role_ids: set[int],
                 after_ids = _role_collection_ids(getattr(getattr(changes, "after", None), "roles", None))
             except Exception:
                 pass
+
             if after_ids.intersection(role_ids) and not before_ids.intersection(role_ids):
                 dt = _safe_dt(getattr(entry, "created_at", None))
                 if dt is not None:
@@ -713,10 +908,66 @@ async def _load_audit_role_grant_times(guild: discord.Guild, role_ids: set[int],
         return found, "Audit-log fallback could not be read. Use View Audit Log permission or rely on Dank Shield verification records."
 
 
+def _candidate_for_member(
+    member: discord.Member,
+    *,
+    joined_at: Optional[datetime],
+    last_seen: Optional[datetime],
+    inactivity_days: Optional[int],
+    score: int,
+    confidence: str,
+    status: str,
+    removable: bool,
+    protected: bool,
+    cannot_remove: bool,
+    reasons: list[str],
+    signals: list[MemberActivitySignal],
+    verified_or_resident: bool,
+    verified_at: Optional[datetime],
+    verification_source: str,
+    post_verification_activity_at: Optional[datetime],
+    days_since_verification: Optional[int],
+) -> InactiveMemberCandidate:
+    return InactiveMemberCandidate(
+        user_id=int(member.id),
+        display_name=str(getattr(member, "display_name", None) or getattr(member, "name", None) or member.id),
+        mention=f"<@{int(member.id)}>",
+        joined_at=joined_at,
+        last_seen_at=last_seen,
+        inactivity_days=inactivity_days,
+        activity_score=score,
+        confidence=confidence,
+        status=status,
+        removable=bool(removable),
+        protected=bool(protected),
+        cannot_remove=bool(cannot_remove),
+        reasons=reasons,
+        signals=signals,
+        verified_or_resident=bool(verified_or_resident),
+        verified_at=verified_at,
+        verification_source=verification_source,
+        post_verification_activity_at=post_verification_activity_at,
+        days_since_verification=days_since_verification,
+    )
+
+
+def _confidence_allowed(confidence: str, options: InactiveScanOptions) -> bool:
+    c = str(confidence or "").lower()
+    if c == "high":
+        return bool(options.include_high_confidence)
+    if c == "medium":
+        return bool(options.include_medium_confidence)
+    if c == "low":
+        return bool(options.include_low_confidence)
+    return True
+
+
 async def scan_inactive_members(guild: discord.Guild, options: Optional[InactiveScanOptions] = None) -> InactiveScanReport:
     options = options or InactiveScanOptions()
     now = now_utc()
     protected_role_ids, verified_resident_role_ids = await _load_role_sets(guild)
+    members = list(getattr(guild, "members", []) or [])
+
     locked_user_ids: set[int] = set()
     lock_persistence = "disabled"
     data_warnings: list[str] = []
@@ -724,14 +975,36 @@ async def scan_inactive_members(guild: discord.Guild, options: Optional[Inactive
         locked_user_ids, lock_persistence = await get_scan_locked_user_ids(int(guild.id))
         if "memory-only" in lock_persistence:
             data_warnings.append(lock_persistence)
+
     activity_signals, verification_times, activity_warnings, sources_read, sources_attempted = await _load_known_activity_signals(int(guild.id))
     data_warnings.extend(activity_warnings)
-    audit_times, audit_warning = await _load_audit_role_grant_times(guild, verified_resident_role_ids, enabled=options.use_audit_log_fallback)
+
+    recent_signals, recent_warnings, recent_read, recent_attempted = await _load_recent_discord_evidence(
+        guild,
+        members,
+        verified_resident_role_ids=verified_resident_role_ids,
+        lookback_days=min(_RECENT_EVIDENCE_LOOKBACK_DAYS, max(14, int(options.inactive_days))),
+    )
+    data_warnings.extend(recent_warnings)
+    for uid, signals in recent_signals.items():
+        activity_signals.setdefault(int(uid), []).extend(signals)
+
+    # Treat the bounded Discord evidence sweep as one additional source group.
+    if recent_attempted > 0:
+        sources_attempted += 1
+        if recent_read > 0:
+            sources_read += 1
+
+    audit_times, audit_warning = await _load_audit_role_grant_times(
+        guild,
+        verified_resident_role_ids,
+        enabled=options.use_audit_log_fallback,
+    )
     if audit_warning:
         data_warnings.append(audit_warning)
+
     db_available = bool(activity_signals)
 
-    members = list(getattr(guild, "members", []) or [])
     candidates: list[InactiveMemberCandidate] = []
     protected: list[InactiveMemberCandidate] = []
     cannot_remove: list[InactiveMemberCandidate] = []
@@ -740,6 +1013,7 @@ async def scan_inactive_members(guild: discord.Guild, options: Optional[Inactive
     verified_resident_seen = 0
     verified_resident_without_post_activity = 0
     locked_users_skipped = 0
+    inactive_hidden_by_filter_count = 0
 
     for member in members:
         try:
@@ -747,8 +1021,12 @@ async def scan_inactive_members(guild: discord.Guild, options: Optional[Inactive
             if options.skip_locked_users and uid in locked_user_ids:
                 locked_users_skipped += 1
                 continue
+
             role_ids = _member_role_ids(member)
             is_verified_resident = bool(role_ids.intersection(verified_resident_role_ids)) if verified_resident_role_ids else False
+            if options.verified_resident_focus and verified_resident_role_ids and not is_verified_resident:
+                continue
+
             joined_at = _safe_dt(getattr(member, "joined_at", None))
             signals = list(activity_signals.get(uid, []))
             reasons: list[str] = []
@@ -767,6 +1045,7 @@ async def scan_inactive_members(guild: discord.Guild, options: Optional[Inactive
             if options.protect_staff and _is_staff_like(member, protected_role_ids):
                 is_protected = True
                 reasons.append("Staff/admin/protected role is protected.")
+
             joined_days = _days_since(joined_at, now)
             if joined_days is not None and joined_days < int(options.grace_days):
                 is_protected = True
@@ -791,6 +1070,7 @@ async def scan_inactive_members(guild: discord.Guild, options: Optional[Inactive
 
             post_verify_activity = _best_post_verification_activity(signals, verified_at)
             last_seen = _best_last_seen(signals, joined_at)
+            days_since_verification: Optional[int] = None
 
             if is_verified_resident and verified_at is not None:
                 days_since_verification = _days_since(verified_at, now)
@@ -802,62 +1082,54 @@ async def scan_inactive_members(guild: discord.Guild, options: Optional[Inactive
                     )
                 else:
                     last_seen_for_threshold = post_verify_activity
-                    reasons.append("Verified/resident member has tracked server activity after verification.")
+                    recent_source = (
+                        "recent Discord evidence"
+                        if any(str(s.source).startswith("recent Discord") or "mod-log" in str(s.source) for s in signals)
+                        else "stored history"
+                    )
+                    reasons.append(f"Verified/resident member has tracked server activity after verification from {recent_source}.")
             else:
-                days_since_verification = None
                 last_seen_for_threshold = last_seen
 
             inactivity_days = _days_since(last_seen_for_threshold, now)
             confidence = _confidence_from_signals(signals, db_available=db_available)
             if is_verified_resident and verified_at is not None and post_verify_activity is None:
                 confidence = "Medium" if verification_source.startswith("DB:") or "audit" in verification_source.lower() else "Low"
+
             score = _activity_score(inactivity_days, confidence)
 
             if not signals:
                 unknown_activity_count += 1
                 reasons.append("No message/ticket/activity history was found for this member.")
 
-            if inactivity_days is None:
-                reasons.append("No reliable server-activity timestamp was available.")
-            elif inactivity_days >= int(options.inactive_days):
-                if is_verified_resident:
-                    reasons.append(f"No tracked post-verification server activity for {inactivity_days}+ days; threshold is {options.inactive_days} days.")
-                else:
-                    reasons.append(f"No tracked server activity for {inactivity_days}+ days; threshold is {options.inactive_days} days.")
-            else:
+            # Core false-positive fix:
+            # recent message/mod-log evidence becomes a signal and therefore
+            # updates post_verify_activity / last_seen_for_threshold above.
+            # Recent activity means the member is counted as active, not shown
+            # as a purge/review candidate.
+            if inactivity_days is not None and inactivity_days < int(options.inactive_days):
                 active_enough_count += 1
-                reasons.append(f"Recent enough server activity: {inactivity_days} day(s) ago, below the inactive threshold.")
+                continue
 
-            if confidence.lower() == "low":
-                reasons.append("Confidence is low because Dank Shield does not have enough server-history data for this member yet.")
-
-            inactive_enough = inactivity_days is not None and inactivity_days >= int(options.inactive_days)
-            verified_vanished = bool(is_verified_resident and post_verify_activity is None and inactive_enough)
-
-            if is_protected:
-                status = "Protected"
-                removable = False
-            elif cannot:
-                status = "Cannot action"
-                removable = False
-            elif verified_vanished or inactive_enough:
-                status = "Review candidate" if confidence.lower() in {"high", "medium"} else "Needs review"
-                removable = status == "Review candidate"
+            if inactivity_days is None:
+                status = "Needs review"
+                reasons.append("Dank Shield could not determine a reliable quiet-days value for this member.")
+            elif confidence.lower() == "low":
+                status = "Needs review"
+                reasons.append("Low confidence: evidence is incomplete, so staff should review before taking action.")
             else:
-                status = "Active enough"
-                removable = False
+                status = "Review candidate"
+                reasons.append(f"Quiet for {inactivity_days} day(s), meeting the {options.inactive_days}-day threshold.")
 
-            candidate = InactiveMemberCandidate(
-                user_id=uid,
-                display_name=str(getattr(member, "display_name", None) or getattr(member, "name", None) or member),
-                mention=getattr(member, "mention", f"<@{uid}>"),
+            candidate = _candidate_for_member(
+                member,
                 joined_at=joined_at,
-                last_seen_at=last_seen_for_threshold,
+                last_seen=last_seen,
                 inactivity_days=inactivity_days,
-                activity_score=score,
+                score=score,
                 confidence=confidence,
-                status=status,
-                removable=removable,
+                status="Cannot action" if cannot else "Protected" if is_protected else status,
+                removable=not cannot and not is_protected,
                 protected=is_protected,
                 cannot_remove=cannot,
                 reasons=reasons,
@@ -869,19 +1141,25 @@ async def scan_inactive_members(guild: discord.Guild, options: Optional[Inactive
                 days_since_verification=days_since_verification,
             )
 
-            if status == "Protected":
-                protected.append(candidate)
-            elif status == "Cannot action":
+            if cannot:
                 cannot_remove.append(candidate)
-            elif status in {"Review candidate", "Needs review"}:
+            elif is_protected:
+                protected.append(candidate)
+            elif not _confidence_allowed(confidence, options):
+                inactive_hidden_by_filter_count += 1
+            else:
                 candidates.append(candidate)
         except Exception:
-            unknown_activity_count += 1
             continue
 
-    candidates.sort(key=lambda c: (0 if c.verified_or_resident else 1, 0 if c.status == "Review candidate" else 1, -(c.inactivity_days or 0), c.display_name.lower()))
-    if options.max_candidates > 0:
-        candidates = candidates[: int(options.max_candidates)]
+    candidates.sort(
+        key=lambda c: (
+            c.inactivity_days if c.inactivity_days is not None else 999999,
+            _confidence_rank(c.confidence),
+        ),
+        reverse=True,
+    )
+    candidates = candidates[: max(1, int(options.max_candidates))]
 
     report = InactiveScanReport(
         guild_id=int(guild.id),
@@ -893,7 +1171,7 @@ async def scan_inactive_members(guild: discord.Guild, options: Optional[Inactive
         cannot_remove=cannot_remove,
         data_warnings=data_warnings,
         active_enough_count=active_enough_count,
-        inactive_hidden_by_filter_count=0,
+        inactive_hidden_by_filter_count=inactive_hidden_by_filter_count,
         unknown_activity_count=unknown_activity_count,
         data_sources_read=sources_read,
         data_sources_attempted=sources_attempted,
@@ -907,46 +1185,17 @@ async def scan_inactive_members(guild: discord.Guild, options: Optional[Inactive
     return report
 
 
-def format_dt(dt: Optional[datetime]) -> str:
-    if dt is None:
-        return "unknown"
-    try:
-        return f"<t:{int(dt.timestamp())}:R>"
-    except Exception:
-        return "unknown"
-
-
-def report_summary_lines(report: InactiveScanReport) -> list[str]:
-    return [
-        f"Overall server activity: **{report.active_activity_percent}%** active/recent in this server",
-        f"Verified/resident with no post-verification activity: **{report.verified_resident_without_post_activity}/{report.verified_resident_seen}** ({report.verified_vanished_percent}%)",
-        f"Users found for review: **{len(report.candidates)}** ({report.quiet_review_percent}% of members)",
-        f"Scan-locked users skipped: **{report.locked_users_skipped}**",
-        f"Cleanup safety locks: **{report.protected_or_blocked_count}** member(s)",
-        f"Data confidence: **{report.data_confidence_label}** ({report.data_coverage_percent}% of optional history sources readable)",
-        f"Members scanned: **{report.total_members_seen}**",
-        f"Active/recent by server activity: **{report.active_enough_count}**",
-        f"Users found for review: **{len(report.candidates)}**",
-        f"Needs manual review: **{len(report.needs_review)}**",
-        f"Protected by safety rules: **{len(report.protected)}**",
-        f"Cannot action because of Discord permissions/hierarchy: **{len(report.cannot_remove)}**",
-        f"Audit-log verification timestamps found: **{report.audit_log_times_found}**",
-        f"Scan-lock storage: **{report.scan_lock_persistence}**",
-    ]
-
-
 __all__ = [
-    "InactiveScanOptions",
     "InactiveMemberCandidate",
+    "InactiveScanOptions",
     "InactiveScanReport",
+    "MemberActivitySignal",
     "ScanLockRecord",
-    "scan_inactive_members",
     "get_last_scan",
-    "remember_scan",
-    "format_dt",
-    "report_summary_lines",
     "get_scan_lock_records",
     "get_scan_locked_user_ids",
-    "set_scan_user_lock",
     "is_scan_user_locked",
+    "remember_scan",
+    "scan_inactive_members",
+    "set_scan_user_lock",
 ]
