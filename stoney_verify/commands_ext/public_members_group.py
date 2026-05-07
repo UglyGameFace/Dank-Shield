@@ -103,6 +103,10 @@ def _status_icon(candidate: Any) -> tuple[str, str]:
         return "🟠", "Review"
     if status == "Needs review":
         return "🟡", "Manual"
+    if status == "Insufficient data":
+        return "⚪", "Insufficient"
+    if status == "Insufficient data":
+        return "⚪", "Insufficient"
     if status == "Protected":
         return "🛡️", "Protected"
     if status == "Cannot action":
@@ -175,6 +179,10 @@ def _short_candidate_line(candidate: InactiveMemberCandidate, idx: int) -> str:
     days = "?d" if candidate.inactivity_days is None else f"{candidate.inactivity_days}d"
     confidence = str(getattr(candidate, "confidence", "?") or "?")
     name = _candidate_display_name(candidate)
+    if str(getattr(candidate, "confidence", "") or "").lower() == "low" or str(getattr(candidate, "status", "") or "") == "Insufficient data":
+        return f"`{idx}.` {icon} **{name}** • not enough proof • {confidence} • {label}"
+    if str(getattr(candidate, "confidence", "") or "").lower() == "low" or str(getattr(candidate, "status", "") or "") == "Insufficient data":
+        return f"`{idx}.` {icon} **{name}** • not enough proof • {confidence} • {label}"
     return f"`{idx}.` {icon} **{name}** • **{days} quiet** • {confidence} • {label}"
 
 
@@ -188,7 +196,7 @@ def _short_locked_line(guild: Optional[discord.Guild], record: ScanLockRecord, i
 
 def _build_status_snapshot(report: InactiveScanReport) -> str:
     return _safe_field(
-        f"**Found:** {len(report.candidates)} review user(s) • **Pages:** {_page_count(report)}\n"
+        f"**Found:** {len(report.candidates)} stronger review user(s) • **Pages:** {_page_count(report)}\n"
         f"**Verified quiet:** {_safe_int_attr(report, 'verified_resident_without_post_activity')}/{_safe_int_attr(report, 'verified_resident_seen')} ({_safe_int_attr(report, 'verified_vanished_percent')}%)\n"
         f"**Server activity:** {_safe_int_attr(report, 'active_activity_percent')}% active/recent • **Locked skipped:** {_safe_int_attr(report, 'locked_users_skipped')}\n"
         f"**Data:** {getattr(report, 'data_confidence_label', 'Unknown')} ({_safe_int_attr(report, 'data_coverage_percent')}%) • **Audit hits:** {_safe_int_attr(report, 'audit_log_times_found')}",
@@ -251,7 +259,7 @@ def _build_data_notes_embed(report: InactiveScanReport) -> discord.Embed:
     embed.add_field(
         name="What This Means",
         value=_safe_field(
-            "Low or partial data does **not** prove a member is inactive. It means Dank Shield is showing the user for manual review instead of pretending the scan is perfect."
+            "Confidence now uses calibrated rules: High requires direct member activity evidence; Medium requires reliable DB/audit/mod-log verification timing plus readable activity coverage; Low means weak proof and is hidden from default scans. Mod-log embeds are scanned too. Use Advanced Scan with low-confidence enabled only when you want a manual research list."
         ),
         inline=False,
     )
@@ -267,7 +275,7 @@ def _build_report_embed(report: InactiveScanReport, *, page: int = 0) -> discord
         title="🧹 Verified Member Review",
         description=(
             "Preview only. No action is taken here.\n"
-            "Reviews verified/resident members with no tracked activity after verification."
+            "Reviews verified/resident members with stronger inactivity evidence after verification."
         ),
         color=color,
         timestamp=report.scanned_at,
@@ -905,7 +913,7 @@ async def _run_activity_scan(
     *,
     inactive_days: int = _DEFAULT_INACTIVE_DAYS,
     grace_days: int = _DEFAULT_GRACE_DAYS,
-    include_low_confidence: bool = True,
+    include_low_confidence: bool = False,
     use_audit_log_fallback: bool = True,
     skip_locked_users: bool = True,
 ) -> None:
@@ -945,7 +953,7 @@ async def members_scan(interaction: discord.Interaction) -> None:
 @app_commands.describe(
     inactive_days="Verified/resident members quiet this many days after verification are shown.",
     grace_days="Protect members newer than this many days.",
-    include_low_confidence="Show low-confidence users as Needs manual review. Default: true.",
+    include_low_confidence="Show weak/low-confidence users too. Default: false for accuracy.",
     use_audit_log_fallback="Use Discord audit log to estimate when Verified/Resident was added. Default: true.",
     skip_locked_users="Hide users staff locked/skipped from scans. Default: true.",
 )
@@ -953,7 +961,7 @@ async def members_advanced_scan(
     interaction: discord.Interaction,
     inactive_days: int = _DEFAULT_INACTIVE_DAYS,
     grace_days: int = _DEFAULT_GRACE_DAYS,
-    include_low_confidence: bool = True,
+    include_low_confidence: bool = False,
     use_audit_log_fallback: bool = True,
     skip_locked_users: bool = True,
 ) -> None:
