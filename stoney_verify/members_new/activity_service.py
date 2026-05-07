@@ -52,9 +52,9 @@ _LAST_SCANS: dict[int, "InactiveScanReport"] = {}
 
 # Bounded fresh evidence sweep. This is intentionally limited so public servers
 # do not hammer Discord when scanning.
-_RECENT_EVIDENCE_LOOKBACK_DAYS = 60
-_RECENT_EVIDENCE_MAX_CHANNELS = 35
-_RECENT_EVIDENCE_PER_CHANNEL_LIMIT = 250
+_RECENT_EVIDENCE_LOOKBACK_DAYS = 180
+_RECENT_EVIDENCE_MAX_CHANNELS = 75
+_RECENT_EVIDENCE_PER_CHANNEL_LIMIT = 750
 _RECENT_EVIDENCE_MAX_MEMBERS_FOR_NAME_MATCH = 2000
 
 
@@ -64,7 +64,7 @@ class InactiveScanOptions:
     grace_days: int = 14
     protect_bots: bool = True
     protect_staff: bool = True
-    include_low_confidence: bool = True
+    include_low_confidence: bool = False
     include_medium_confidence: bool = True
     include_high_confidence: bool = True
     max_candidates: int = 250
@@ -517,6 +517,167 @@ def _confidence_rank(value: str) -> int:
     return 0
 
 
+
+def _signal_source_text(signal: MemberActivitySignal) -> str:
+    try:
+        return str(signal.source or "").strip().lower()
+    except Exception:
+        return ""
+
+
+def _signal_is_direct_activity(signal: MemberActivitySignal) -> bool:
+    """True when the signal directly proves the member did something."""
+    source = _signal_source_text(signal)
+    return any(
+        key in source
+        for key in (
+            "recent discord message history",
+            "ticket message",
+            "message history",
+        )
+    )
+
+
+def _signal_is_indirect_activity(signal: MemberActivitySignal) -> bool:
+    """True when the signal is useful, but not as strong as direct authorship."""
+    if _signal_is_verification_timestamp(signal):
+        return False
+    source = _signal_source_text(signal)
+    return any(
+        key in source
+        for key in (
+            "ticket",
+            "activity feed",
+            "member record",
+            "mod-log",
+            "audit",
+        )
+    )
+
+
+def _verification_source_strength(source: str) -> int:
+    """How trustworthy the verification/resident timestamp is.
+
+    3 = exact DB timestamp
+    2 = Discord audit-log role-added timestamp
+    0 = join-date fallback / unknown
+    """
+    text = str(source or "").strip().lower()
+    if text.startswith("db:"):
+        return 3
+    if "audit" in text and "fallback" in text:
+        return 2
+    if "mod-log" in text and "fallback" in text:
+        return 2
+    return 0
+
+
+def _coverage_strength(*, sources_read: int, sources_attempted: int, recent_read: int) -> int:
+    """Overall scan coverage strength.
+
+    This intentionally does not require every optional DB table to be readable,
+    because many public servers may not have every history table populated yet.
+    """
+    try:
+        read = max(0, int(sources_read))
+        attempted = max(1, int(sources_attempted))
+        coverage = read / attempted
+    except Exception:
+        read = 0
+        coverage = 0.0
+
+    if recent_read > 0 and read >= 4 and coverage >= 0.75:
+        return 3
+    if recent_read > 0 and read >= 2 and coverage >= 0.40:
+        return 2
+    if recent_read > 0 or read >= 1:
+        return 1
+    return 0
+
+
+def _activity_signal_strength(
+    signals: list[MemberActivitySignal],
+    *,
+    verified_at: Optional[datetime],
+    post_verification_activity_at: Optional[datetime],
+) -> int:
+    """Strength of activity evidence for this member.
+
+    3 = direct authored/ticket-message activity
+    2 = useful indirect DB/mod-log activity
+    1 = weak signal exists
+    0 = no signal
+    """
+    if not signals:
+        return 0
+
+    relevant = list(signals)
+    if verified_at is not None:
+        relevant = [s for s in signals if s.timestamp is not None and s.timestamp > verified_at] or list(signals)
+
+    if any(_signal_is_direct_activity(s) and _confidence_rank(s.confidence) >= 3 for s in relevant):
+        return 3
+    if any(_signal_is_direct_activity(s) for s in relevant):
+        return 3
+    if any(_signal_is_indirect_activity(s) for s in relevant):
+        return 2
+    return 1
+
+
+def _calibrated_candidate_confidence(
+    *,
+    signals: list[MemberActivitySignal],
+    verified_at: Optional[datetime],
+    verification_source: str,
+    post_verification_activity_at: Optional[datetime],
+    sources_read: int,
+    sources_attempted: int,
+    recent_read: int,
+) -> str:
+    """Classify confidence without unfairly dumping valid evidence into Low.
+
+    Important distinction:
+    - Confidence in a member being ACTIVE can be High from direct activity.
+    - Confidence in a member being QUIET is usually Medium unless coverage and
+      verification timing are excellent. Absence of evidence should almost never
+      be called High.
+    """
+    verification_strength = _verification_source_strength(verification_source)
+    coverage = _coverage_strength(
+        sources_read=sources_read,
+        sources_attempted=sources_attempted,
+        recent_read=recent_read,
+    )
+    signal_strength = _activity_signal_strength(
+        signals,
+        verified_at=verified_at,
+        post_verification_activity_at=post_verification_activity_at,
+    )
+
+    if post_verification_activity_at is not None:
+        if signal_strength >= 3:
+            return "High"
+        if signal_strength >= 2:
+            return "Medium"
+        return "Low"
+
+    # No post-verification activity found.
+    # This is only actionable/reviewable if the verification timestamp is real.
+    if verification_strength <= 0:
+        return "Low"
+
+    # Exact DB verification + strong readable coverage earns Medium.
+    # Audit-log verification + decent coverage also earns Medium.
+    if verification_strength >= 3 and coverage >= 2:
+        return "Medium"
+    if verification_strength >= 2 and coverage >= 2:
+        return "Medium"
+
+    # If we have an exact verification timestamp but weak coverage, do not
+    # pretend it is useless, but keep it Low so default scans hide it.
+    return "Low"
+
+
 def _confidence_from_signals(signals: list[MemberActivitySignal], *, db_available: bool) -> str:
     if any(_confidence_rank(s.confidence) >= 3 for s in signals):
         return "High"
@@ -537,7 +698,13 @@ def _best_last_seen(signals: list[MemberActivitySignal], fallback: Optional[date
 def _best_post_verification_activity(signals: list[MemberActivitySignal], verified_at: Optional[datetime]) -> Optional[datetime]:
     if verified_at is None:
         return None
-    after = [s.timestamp for s in signals if s.timestamp is not None and s.timestamp > verified_at]
+    after = [
+        s.timestamp
+        for s in signals
+        if s.timestamp is not None
+        and s.timestamp > verified_at
+        and not _signal_is_verification_timestamp(s)
+    ]
     return max(after) if after else None
 
 
@@ -687,6 +854,8 @@ async def _load_known_activity_signals(guild_id: int) -> tuple[dict[int, list[Me
     elif sources_read < attempted:
         warnings.append(f"Data confidence is partial: {sources_read}/{attempted} optional server-activity sources were readable. Percentages may improve as tracking history fills in.")
 
+    warnings.append("Confidence calibration: High requires direct member activity evidence; Medium requires reliable DB/audit/mod-log verification timing plus readable activity coverage; Low is hidden by default. Mod-log embeds are scanned, not just plain message text.")
+
     return merged, verification_times, warnings, sources_read, attempted
 
 
@@ -703,6 +872,87 @@ def _channel_can_be_read(channel: object, me: Optional[discord.Member]) -> bool:
 def _is_modlog_like(channel: object) -> bool:
     name = _norm(getattr(channel, "name", ""))
     return any(part in name for part in ("mod-log", "modlog", "member-log", "activity-log", "audit", "logs"))
+
+
+
+def _message_search_text(message: discord.Message) -> str:
+    """Searchable text for mod-log matching.
+
+    Discord mod logs are often embeds with empty message.content, so checking
+    only content misses real evidence. This includes embed title, description,
+    fields, footer, author, and raw embed dict values.
+    """
+    parts: list[str] = []
+    for attr in ("content", "clean_content"):
+        try:
+            value = getattr(message, attr, None)
+            if value:
+                parts.append(str(value))
+        except Exception:
+            pass
+
+    try:
+        for embed in getattr(message, "embeds", []) or []:
+            for attr in ("title", "description", "url"):
+                value = getattr(embed, attr, None)
+                if value:
+                    parts.append(str(value))
+
+            try:
+                author = getattr(embed, "author", None)
+                if author is not None:
+                    value = getattr(author, "name", None)
+                    if value:
+                        parts.append(str(value))
+            except Exception:
+                pass
+
+            try:
+                footer = getattr(embed, "footer", None)
+                if footer is not None:
+                    value = getattr(footer, "text", None)
+                    if value:
+                        parts.append(str(value))
+            except Exception:
+                pass
+
+            try:
+                for field in getattr(embed, "fields", []) or []:
+                    name = getattr(field, "name", None)
+                    value = getattr(field, "value", None)
+                    if name:
+                        parts.append(str(name))
+                    if value:
+                        parts.append(str(value))
+            except Exception:
+                pass
+
+            try:
+                raw = embed.to_dict()
+                if isinstance(raw, dict):
+                    parts.append(str(raw))
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+    return _norm(" ".join(parts))
+
+
+def _looks_like_verification_modlog(text: str) -> bool:
+    """True when a mod-log line appears to be about verification/resident role state."""
+    raw = str(text or "").lower()
+    if not raw:
+        return False
+    has_verify_word = any(word in raw for word in ("verified", "verify", "verification", "resident"))
+    has_role_word = any(word in raw for word in ("role", "grant", "granted", "added", "gave", "assigned"))
+    return bool(has_verify_word and has_role_word)
+
+
+def _signal_is_verification_timestamp(signal: MemberActivitySignal) -> bool:
+    source = _signal_source_text(signal)
+    return "verification timestamp" in source or "verification fallback" in source
+
 
 
 def _member_name_tokens(member: discord.Member) -> set[str]:
@@ -829,22 +1079,36 @@ async def _load_recent_discord_evidence(
                             ),
                         )
 
-                content_text = _norm(getattr(message, "content", ""))
+                content_text = _message_search_text(message)
                 if not content_text:
                     continue
 
+                is_verification_modlog = _looks_like_verification_modlog(content_text)
+
                 for token, uid in token_to_uid.items():
                     if token and token in content_text:
-                        _merge_signal(
-                            evidence,
-                            uid,
-                            MemberActivitySignal(
-                                source="recent mod-log text evidence",
-                                timestamp=msg_time,
-                                confidence="Medium",
-                                note=f"Recent mod-log evidence matched this member in #{getattr(channel, 'name', 'unknown')}.",
-                            ),
-                        )
+                        if is_verification_modlog:
+                            _merge_signal(
+                                evidence,
+                                uid,
+                                MemberActivitySignal(
+                                    source="recent mod-log verification timestamp",
+                                    timestamp=msg_time,
+                                    confidence="Medium",
+                                    note=f"Recent mod-log verification/resident-role evidence matched this member in #{getattr(channel, 'name', 'unknown')}.",
+                                ),
+                            )
+                        else:
+                            _merge_signal(
+                                evidence,
+                                uid,
+                                MemberActivitySignal(
+                                    source="recent mod-log text evidence",
+                                    timestamp=msg_time,
+                                    confidence="Medium",
+                                    note=f"Recent mod-log evidence matched this member in #{getattr(channel, 'name', 'unknown')}.",
+                                ),
+                            )
         except discord.Forbidden:
             warnings.append(f"Could not read recent history in #{getattr(channel, 'name', 'unknown')}; missing permission.")
             continue
@@ -1064,9 +1328,18 @@ async def scan_inactive_members(guild: discord.Guild, options: Optional[Inactive
             elif uid in audit_times:
                 verified_at = audit_times[uid]
                 verification_source = "Discord audit log role-added fallback"
-            elif is_verified_resident:
-                verified_at = joined_at
-                verification_source = "join-date fallback; exact verification date unknown"
+            else:
+                modlog_verify_times = [
+                    s.timestamp
+                    for s in signals
+                    if s.timestamp is not None and _signal_is_verification_timestamp(s)
+                ]
+                if modlog_verify_times:
+                    verified_at = max(modlog_verify_times)
+                    verification_source = "Discord mod-log role/verification fallback"
+                elif is_verified_resident:
+                    verified_at = joined_at
+                    verification_source = "join-date fallback; exact verification date unknown"
 
             post_verify_activity = _best_post_verification_activity(signals, verified_at)
             last_seen = _best_last_seen(signals, joined_at)
@@ -1075,11 +1348,19 @@ async def scan_inactive_members(guild: discord.Guild, options: Optional[Inactive
             if is_verified_resident and verified_at is not None:
                 days_since_verification = _days_since(verified_at, now)
                 if post_verify_activity is None:
-                    verified_resident_without_post_activity += 1
-                    last_seen_for_threshold = verified_at
-                    reasons.append(
-                        f"Verified/resident member with no tracked server activity after verification. Verification source: {verification_source}."
-                    )
+                    # If exact verification date is unknown and we only have the join date,
+                    # this is not strong enough for the main default review list.
+                    if str(verification_source).startswith("join-date fallback"):
+                        last_seen_for_threshold = None
+                        reasons.append(
+                            "Exact verification date is unknown and no post-verification activity was found. This is low-confidence and should not be treated as real inactivity proof."
+                        )
+                    else:
+                        verified_resident_without_post_activity += 1
+                        last_seen_for_threshold = verified_at
+                        reasons.append(
+                            f"Verified/resident member with no tracked server activity after verification. Verification source: {verification_source}."
+                        )
                 else:
                     last_seen_for_threshold = post_verify_activity
                     recent_source = (
@@ -1092,9 +1373,15 @@ async def scan_inactive_members(guild: discord.Guild, options: Optional[Inactive
                 last_seen_for_threshold = last_seen
 
             inactivity_days = _days_since(last_seen_for_threshold, now)
-            confidence = _confidence_from_signals(signals, db_available=db_available)
-            if is_verified_resident and verified_at is not None and post_verify_activity is None:
-                confidence = "Medium" if verification_source.startswith("DB:") or "audit" in verification_source.lower() else "Low"
+            confidence = _calibrated_candidate_confidence(
+                signals=signals,
+                verified_at=verified_at,
+                verification_source=verification_source,
+                post_verification_activity_at=post_verify_activity,
+                sources_read=sources_read,
+                sources_attempted=sources_attempted,
+                recent_read=recent_read,
+            )
 
             score = _activity_score(inactivity_days, confidence)
 
@@ -1112,11 +1399,11 @@ async def scan_inactive_members(guild: discord.Guild, options: Optional[Inactive
                 continue
 
             if inactivity_days is None:
-                status = "Needs review"
-                reasons.append("Dank Shield could not determine a reliable quiet-days value for this member.")
+                status = "Insufficient data"
+                reasons.append("Dank Shield could not prove a reliable quiet-days value for this member.")
             elif confidence.lower() == "low":
-                status = "Needs review"
-                reasons.append("Low confidence: evidence is incomplete, so staff should review before taking action.")
+                status = "Insufficient data"
+                reasons.append("Low confidence: weak or incomplete evidence. Hidden from the default scan unless low-confidence results are explicitly included.")
             else:
                 status = "Review candidate"
                 reasons.append(f"Quiet for {inactivity_days} day(s), meeting the {options.inactive_days}-day threshold.")
