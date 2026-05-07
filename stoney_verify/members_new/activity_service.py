@@ -64,7 +64,7 @@ class InactiveScanOptions:
     grace_days: int = 14
     protect_bots: bool = True
     protect_staff: bool = True
-    include_low_confidence: bool = False
+    include_low_confidence: bool = True
     include_medium_confidence: bool = True
     include_high_confidence: bool = True
     max_candidates: int = 250
@@ -854,7 +854,7 @@ async def _load_known_activity_signals(guild_id: int) -> tuple[dict[int, list[Me
     elif sources_read < attempted:
         warnings.append(f"Data confidence is partial: {sources_read}/{attempted} optional server-activity sources were readable. Percentages may improve as tracking history fills in.")
 
-    warnings.append("Confidence calibration: High requires direct member activity evidence; Medium requires reliable DB/audit/mod-log verification timing plus readable activity coverage; Low is hidden by default. Mod-log embeds are scanned, not just plain message text.")
+    warnings.append("Confidence calibration: High requires direct member activity evidence; Medium is purge-safe review evidence; Low is shown for manual review but is not purge-safe. Mod-log embeds are scanned, not just plain message text.")
 
     return merged, verification_times, warnings, sources_read, attempted
 
@@ -1348,16 +1348,13 @@ async def scan_inactive_members(guild: discord.Guild, options: Optional[Inactive
             if is_verified_resident and verified_at is not None:
                 days_since_verification = _days_since(verified_at, now)
                 if post_verify_activity is None:
-                    # If exact verification date is unknown and we only have the join date,
-                    # this is not strong enough for the main default review list.
+                    verified_resident_without_post_activity += 1
+                    last_seen_for_threshold = verified_at
                     if str(verification_source).startswith("join-date fallback"):
-                        last_seen_for_threshold = None
                         reasons.append(
-                            "Exact verification date is unknown and no post-verification activity was found. This is low-confidence and should not be treated as real inactivity proof."
+                            "Exact verification date is unknown, so Dank Shield is using join-date fallback plus the recent evidence sweep. This user is reviewable/manual-only unless confidence becomes Medium/High from stronger evidence."
                         )
                     else:
-                        verified_resident_without_post_activity += 1
-                        last_seen_for_threshold = verified_at
                         reasons.append(
                             f"Verified/resident member with no tracked server activity after verification. Verification source: {verification_source}."
                         )
@@ -1399,11 +1396,11 @@ async def scan_inactive_members(guild: discord.Guild, options: Optional[Inactive
                 continue
 
             if inactivity_days is None:
-                status = "Insufficient data"
+                status = "Needs review"
                 reasons.append("Dank Shield could not prove a reliable quiet-days value for this member.")
             elif confidence.lower() == "low":
-                status = "Insufficient data"
-                reasons.append("Low confidence: weak or incomplete evidence. Hidden from the default scan unless low-confidence results are explicitly included.")
+                status = "Needs review"
+                reasons.append("Low confidence: weak or incomplete evidence. Shown for manual review, but not purge-safe.")
             else:
                 status = "Review candidate"
                 reasons.append(f"Quiet for {inactivity_days} day(s), meeting the {options.inactive_days}-day threshold.")
@@ -1416,7 +1413,7 @@ async def scan_inactive_members(guild: discord.Guild, options: Optional[Inactive
                 score=score,
                 confidence=confidence,
                 status="Cannot action" if cannot else "Protected" if is_protected else status,
-                removable=not cannot and not is_protected,
+                removable=not cannot and not is_protected and confidence.lower() in {"medium", "high"} and status == "Review candidate",
                 protected=is_protected,
                 cannot_remove=cannot,
                 reasons=reasons,
