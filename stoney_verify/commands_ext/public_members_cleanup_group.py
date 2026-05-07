@@ -38,6 +38,8 @@ from stoney_verify.members_new.cleanup_settings_service import (
 _REGISTERED = False
 _QUEUE_MAX_LIMIT = 20
 _QUEUE_DEFAULT_LIMIT = 10
+_PURGE_ALL_MAX_LIMIT = 10000
+_PURGE_ALL_PREVIEW_LIMIT = 20
 
 
 @dataclass
@@ -133,6 +135,42 @@ def _candidate_is_queue_eligible(candidate: InactiveMemberCandidate, *, include_
         return False, "could not read scan candidate"
 
 
+def _candidate_is_purge_all_eligible(
+    candidate: InactiveMemberCandidate,
+    *,
+    inactive_days: int,
+    include_low_confidence: bool,
+) -> tuple[bool, str]:
+    """Hard gate for purge-all.
+
+    Purge-all must never target recently active members. A candidate may have
+    interacted after verification and still be eligible if their last tracked
+    server activity after verification is older than the inactive threshold.
+    """
+    try:
+        if not bool(getattr(candidate, "verified_or_resident", False)):
+            return False, "not verified/resident"
+        if getattr(candidate, "inactivity_days", None) is None:
+            return False, "quiet days unknown"
+        if int(candidate.inactivity_days or 0) < int(inactive_days):
+            return False, f"last tracked activity is newer than {inactive_days}d"
+        if not bool(getattr(candidate, "removable", False)):
+            return False, "scan did not mark this user removable"
+        if bool(getattr(candidate, "protected", False)):
+            return False, "protected by scan safety"
+        if bool(getattr(candidate, "cannot_remove", False)):
+            return False, "blocked by scan safety"
+        confidence = str(getattr(candidate, "confidence", "") or "").lower()
+        if confidence == "low" and not include_low_confidence:
+            return False, "low confidence excluded by default"
+        status = str(getattr(candidate, "status", "") or "")
+        if status not in {"Review candidate", "Needs review"}:
+            return False, f"status is {status or 'unknown'}"
+        return True, "eligible"
+    except Exception:
+        return False, "could not read scan candidate"
+
+
 def _queue_source_summary(report: InactiveScanReport) -> str:
     try:
         return (
@@ -175,7 +213,7 @@ def _settings_embed(settings: MemberCleanupSettings) -> discord.Embed:
     updated_by = "Unknown" if not settings.updated_by else f"<@{settings.updated_by}>"
     embed = discord.Embed(
         title="🧹 Member Cleanup Settings",
-        description="Server-level defaults for `/dank members cleanup-queue`.",
+        description="Server-level defaults for `/dank members cleanup-queue` and `/dank members purge-all`.",
         color=discord.Color.green() if settings.require_queue_confirmation else discord.Color.orange(),
     )
     embed.add_field(
@@ -200,8 +238,8 @@ def _settings_embed(settings: MemberCleanupSettings) -> discord.Embed:
     embed.add_field(
         name="Safety Note",
         value=(
-            "Confirmation is required by default. Turning it off means the queue command will process immediately after showing the preview text, "
-            "but every member still receives final permission, role, lock, staff, owner, and bot checks."
+            "Confirmation is required by default. Turning it off means queue/purge commands can process after the preview text, "
+            "but every member still receives final permission, role, lock, staff, owner, bot, and recent-activity checks."
         ),
         inline=False,
     )
@@ -212,7 +250,7 @@ def _queue_context_line(settings: MemberCleanupSettings, *, include_low_confiden
     return (
         f"Queue confirmation: **{settings.mode_label}**\n"
         f"Queue limit: **{safe_limit}**\n"
-        f"Low-confidence included: **{'Yes' if include_low_confidence else 'No'}**"
+        f"Low-confidence included: **{'Yes' if include_low_confidence else 'No'}"
     )
 
 
@@ -258,6 +296,55 @@ async def _build_queue_preview(
     return report, fresh_scan, queued, skipped, validation_blocked
 
 
+async def _build_purge_all_preview(
+    guild: discord.Guild,
+    *,
+    actor_user_id: int,
+    inactive_days: int,
+    grace_days: int,
+    include_low_confidence: bool,
+) -> tuple[InactiveScanReport, list[QueuePreviewItem], list[tuple[InactiveMemberCandidate, str]], list[tuple[InactiveMemberCandidate, MemberCleanupValidation]]]:
+    report = await scan_inactive_members(
+        guild,
+        InactiveScanOptions(
+            inactive_days=max(7, min(int(inactive_days), 730)),
+            grace_days=max(1, min(int(grace_days), 90)),
+            include_low_confidence=bool(include_low_confidence),
+            include_medium_confidence=True,
+            include_high_confidence=True,
+            max_candidates=_PURGE_ALL_MAX_LIMIT,
+            verified_resident_focus=True,
+            use_audit_log_fallback=True,
+            skip_locked_users=True,
+        ),
+    )
+    queued: list[QueuePreviewItem] = []
+    skipped: list[tuple[InactiveMemberCandidate, str]] = []
+    validation_blocked: list[tuple[InactiveMemberCandidate, MemberCleanupValidation]] = []
+
+    for candidate in report.candidates:
+        ok, reason = _candidate_is_purge_all_eligible(
+            candidate,
+            inactive_days=inactive_days,
+            include_low_confidence=include_low_confidence,
+        )
+        if not ok:
+            skipped.append((candidate, reason))
+            continue
+        request = MemberCleanupRequest(
+            guild_id=int(guild.id),
+            target_user_id=int(candidate.user_id),
+            actor_user_id=int(actor_user_id),
+            reason="Purge-all inactive verified/resident cleanup",
+        )
+        validation = await validate_member_cleanup(guild, request)
+        if validation.ok:
+            queued.append(QueuePreviewItem(candidate=candidate, validation=validation))
+        else:
+            validation_blocked.append((candidate, validation))
+    return report, queued, skipped, validation_blocked
+
+
 async def _process_queue_items(
     interaction: discord.Interaction,
     *,
@@ -289,9 +376,9 @@ async def _process_queue_items(
     return removed, blocked, failed
 
 
-def _queue_result_embed(*, removed: list[str], blocked: list[str], failed: list[str]) -> discord.Embed:
+def _queue_result_embed(*, removed: list[str], blocked: list[str], failed: list[str], title: str = "🧹 Cleanup Queue Result") -> discord.Embed:
     body = (
-        f"Completed queue.\n\n"
+        f"Completed.\n\n"
         f"✅ Removed: **{len(removed)}**\n"
         f"⛔ Blocked/skipped: **{len(blocked)}**\n"
         f"⚠️ Failed: **{len(failed)}**"
@@ -302,7 +389,7 @@ def _queue_result_embed(*, removed: list[str], blocked: list[str], failed: list[
         body += "\n\n**Blocked / skipped by final checks**\n" + _trim("\n".join(blocked[:8]), 900)
     if failed:
         body += "\n\n**Failed**\n" + _trim("\n".join(failed[:8]), 900)
-    return _result_embed("🧹 Cleanup Queue Result", body, ok=not failed)
+    return _result_embed(title, body, ok=not failed)
 
 
 class ConfirmMemberCleanupView(discord.ui.View):
@@ -358,11 +445,12 @@ class ConfirmMemberCleanupView(discord.ui.View):
 
 
 class ConfirmCleanupQueueView(discord.ui.View):
-    def __init__(self, *, actor_user_id: int, items: list[QueuePreviewItem], reason: str) -> None:
+    def __init__(self, *, actor_user_id: int, items: list[QueuePreviewItem], reason: str, result_title: str = "🧹 Cleanup Queue Result") -> None:
         super().__init__(timeout=240)
         self.actor_user_id = int(actor_user_id)
         self.items = list(items)
         self.reason = str(reason or "Confirmed inactive verified/resident cleanup queue")[:450]
+        self.result_title = result_title
         self.done = False
 
     @discord.ui.button(label="Confirm Queue", emoji="✅", style=discord.ButtonStyle.danger)
@@ -384,11 +472,11 @@ class ConfirmCleanupQueueView(discord.ui.View):
             except Exception:
                 pass
         await interaction.edit_original_response(
-            embed=_result_embed("🧹 Processing Cleanup Queue", f"Processing **{len(self.items)}** queued member(s). Final safety checks are running again now.", ok=False),
+            embed=_result_embed("🧹 Processing", f"Processing **{len(self.items)}** member(s). Final safety checks are running again now.", ok=False),
             view=self,
         )
         removed, blocked, failed = await _process_queue_items(interaction, items=self.items, reason=self.reason)
-        await interaction.edit_original_response(embed=_queue_result_embed(removed=removed, blocked=blocked, failed=failed), view=self)
+        await interaction.edit_original_response(embed=_queue_result_embed(removed=removed, blocked=blocked, failed=failed, title=self.result_title), view=self)
 
     @discord.ui.button(label="Cancel", emoji="✋", style=discord.ButtonStyle.secondary)
     async def cancel_queue(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
@@ -402,7 +490,7 @@ class ConfirmCleanupQueueView(discord.ui.View):
                 child.disabled = True
             except Exception:
                 pass
-        await interaction.response.edit_message(embed=_result_embed("Cleanup Queue Cancelled", "No action was taken.", ok=False), view=self)
+        await interaction.response.edit_message(embed=_result_embed("Cleanup Cancelled", "No action was taken.", ok=False), view=self)
 
 
 @members_group.command(name="cleanup-user", description="Confirm cleanup for one reviewed inactive verified/resident member.")
@@ -524,6 +612,77 @@ async def members_cleanup_queue(
     await interaction.edit_original_response(embed=_queue_result_embed(removed=removed, blocked=blocked, failed=failed))
 
 
+@members_group.command(name="purge-all", description="Purge all eligible inactive verified/resident members except locked users.")
+@app_commands.describe(
+    inactive_days="Only users quiet this many days after last tracked server activity are eligible. Default 90.",
+    grace_days="Protect newer members inside this many days. Default 14.",
+    include_low_confidence="Include low-confidence users. Default false.",
+    reason="Reason stored in Discord audit log and Dank Shield activity history.",
+)
+async def members_purge_all(
+    interaction: discord.Interaction,
+    inactive_days: int = 90,
+    grace_days: int = 14,
+    include_low_confidence: bool = False,
+    reason: str = "Purge-all inactive verified/resident cleanup",
+) -> None:
+    if not await _require_cleanup_permission(interaction):
+        return
+    if interaction.guild is None:
+        return
+
+    safe_days = max(7, min(int(inactive_days or 90), 730))
+    safe_grace = max(1, min(int(grace_days or 14), 90))
+    settings = await get_cleanup_settings(int(interaction.guild.id))
+
+    await interaction.response.defer(ephemeral=True, thinking=True)
+    report, queued, skipped, validation_blocked = await _build_purge_all_preview(
+        interaction.guild,
+        actor_user_id=int(interaction.user.id),
+        inactive_days=safe_days,
+        grace_days=safe_grace,
+        include_low_confidence=bool(include_low_confidence),
+    )
+
+    body = (
+        "**Purge-all is intentionally strict. Recently active members are not eligible.**\n\n"
+        f"Fresh scan: **Yes** • Locked users skipped: **{report.locked_users_skipped}**\n"
+        f"Threshold: **{safe_days}d quiet after last tracked server activity** • New-member grace: **{safe_grace}d**\n"
+        f"Low-confidence included: **{'Yes' if include_low_confidence else 'No'}**\n"
+        f"Confirmation mode: **{settings.mode_label}**\n\n"
+        "Eligible means verified/resident, quiet past the threshold, not locked, and final safety validation passed.\n"
+        "A few old interactions do not block purge-all; recent tracked activity does.\n\n"
+        f"**Eligible for purge ({len(queued)})**\n{_format_queue_lines(queued, limit=_PURGE_ALL_PREVIEW_LIMIT)}"
+    )
+    if validation_blocked:
+        body += "\n\n**Blocked by final validation**\n" + _trim("\n".join(f"• {_safe_name(c.display_name)} — {v.status}" for c, v in validation_blocked[:8]), 900)
+    if skipped:
+        body += "\n\n**Skipped / not eligible examples**\n" + _format_blocked_lines(skipped, limit=8)
+
+    if not queued:
+        return await interaction.edit_original_response(embed=_result_embed("🧹 Purge-All Found Nothing Eligible", body, ok=False))
+
+    if settings.require_queue_confirmation:
+        body += "\n\nPress **Confirm Queue** to purge exactly these eligible members. Press **Cancel** to do nothing."
+        return await interaction.edit_original_response(
+            embed=_result_embed("⚠️ Confirm Purge-All", body, ok=False),
+            view=ConfirmCleanupQueueView(
+                actor_user_id=int(interaction.user.id),
+                items=queued,
+                reason=reason,
+                result_title="🧹 Purge-All Result",
+            ),
+            allowed_mentions=discord.AllowedMentions.none(),
+        )
+
+    await interaction.edit_original_response(
+        embed=_result_embed("🧹 Processing Purge-All", body, ok=False),
+        allowed_mentions=discord.AllowedMentions.none(),
+    )
+    removed, blocked, failed = await _process_queue_items(interaction, items=queued, reason=reason)
+    await interaction.edit_original_response(embed=_queue_result_embed(removed=removed, blocked=blocked, failed=failed, title="🧹 Purge-All Result"))
+
+
 @members_group.command(name="cleanup-settings", description="View or change member cleanup queue settings.")
 @app_commands.describe(
     require_queue_confirmation="Require Confirm Queue before processing. Default/safest: true.",
@@ -565,7 +724,7 @@ def register_public_members_cleanup_group_commands(bot: Any, tree: Any) -> None:
     if _REGISTERED:
         return
     try:
-        print("✅ public_members_cleanup_group: /dank members cleanup-user, cleanup-queue, cleanup-settings available")
+        print("✅ public_members_cleanup_group: /dank members cleanup-user, cleanup-queue, purge-all, cleanup-settings available")
         _REGISTERED = True
     except Exception as e:
         print(f"⚠️ public_members_cleanup_group failed: {repr(e)}")
