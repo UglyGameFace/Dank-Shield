@@ -10,6 +10,7 @@ Public language rules:
 - Use plain labels: Basic server, Help desk, ID check, Voice check,
   ID + voice check, Custom setup.
 - No forced forms by default.
+- Do not show raw role/channel IDs as public setup instructions.
 """
 
 from typing import Any, Optional
@@ -63,6 +64,212 @@ def _saved_choice_text(cfg: Any) -> str:
         if choice is not None:
             return f"✅ Saved setup choice: **{choice.label}**"
     return "⚠️ No setup choice saved yet. Press **Choose Setup Type** first."
+
+
+def _plain_lines(lines: list[str], *, empty: str = "✅ Nothing here.", limit: int = 1000) -> str:
+    clean = [str(line).strip() for line in lines if str(line).strip()]
+    if not clean:
+        return empty
+    out: list[str] = []
+    used = 0
+    for line in clean:
+        text = line if line.startswith(("•", "✅", "⚠️", "🚫")) else f"• {line}"
+        if used + len(text) + 1 > limit:
+            out.append(f"…and {len(clean) - len(out)} more")
+            break
+        out.append(text)
+        used += len(text) + 1
+    return "\n".join(out)[:limit] or empty
+
+
+def _has_role(guild: discord.Guild, cfg: Any, key: str) -> bool:
+    return guild.get_role(_attr_id(cfg, key)) is not None
+
+
+def _has_channel(guild: discord.Guild, cfg: Any, *keys: str) -> bool:
+    for key in keys:
+        if guild.get_channel(_attr_id(cfg, key)) is not None:
+            return True
+    return False
+
+
+def _setup_choice_label(cfg: Any) -> str:
+    label = str(_cfg_value(cfg, "setup_choice_label", "") or "").strip()
+    if label:
+        return label
+    key = str(_cfg_value(cfg, "setup_choice", "") or "").strip()
+    choice = get_setup_template(key)
+    return choice.label if choice is not None else "Not chosen yet"
+
+
+def _needs_id_check(cfg: Any) -> bool:
+    style = str(_cfg_value(cfg, "verification_panel_style", "") or "").strip()
+    return style in {"id_check", "id_voice_check", "custom"} or bool(_cfg_value(cfg, "verification_requires_id", False))
+
+
+def _needs_voice_check(cfg: Any) -> bool:
+    style = str(_cfg_value(cfg, "verification_panel_style", "") or "").strip()
+    return style in {"voice_check", "id_voice_check", "custom"} or bool(_cfg_value(cfg, "verification_allows_voice", False))
+
+
+async def _build_plain_setup_health_embed(guild: discord.Guild) -> discord.Embed:
+    """Plain setup health screen for normal server owners.
+
+    This avoids raw IDs and treats old single-server settings as optional unless
+    the chosen setup type actually needs them.
+    """
+    blockers: list[str] = []
+    warnings: list[str] = []
+    passing: list[str] = []
+
+    try:
+        cfg = await get_guild_config(guild.id, refresh=True)
+    except Exception as e:
+        embed = discord.Embed(
+            title="🩺 Setup Check",
+            description="🚫 I could not read this server's saved setup yet.",
+            color=discord.Color.red(),
+            timestamp=now_utc(),
+        )
+        embed.add_field(name="How to fix", value=f"Check Supabase/config first. Error: `{type(e).__name__}`", inline=False)
+        return embed
+
+    setup_choice = str(_cfg_value(cfg, "setup_choice", "") or "").strip()
+    choice_label = _setup_choice_label(cfg)
+    needs_id = _needs_id_check(cfg)
+    needs_voice = _needs_voice_check(cfg)
+
+    if setup_choice:
+        passing.append(f"Setup type chosen: **{choice_label}**")
+    else:
+        blockers.append("Choose a setup type first. Press **Choose Setup Type**.")
+
+    bot_member = getattr(guild, "me", None)
+    bot_perms = getattr(bot_member, "guild_permissions", None)
+    if bot_perms and bot_perms.manage_channels and bot_perms.manage_roles and bot_perms.send_messages:
+        passing.append("Bot has the basic server permissions it needs.")
+    else:
+        blockers.append("Give the bot **Manage Channels**, **Manage Roles**, **Send Messages**, **Embed Links**, and **Attach Files**.")
+
+    if _has_role(guild, cfg, "staff_role_id"):
+        passing.append("Ticket staff role is chosen.")
+    else:
+        blockers.append("Choose the role that can answer tickets.")
+
+    if _has_channel(guild, cfg, "ticket_category_id"):
+        passing.append("Open ticket folder is chosen.")
+    else:
+        blockers.append("Choose where new tickets should open.")
+
+    if _has_channel(guild, cfg, "ticket_archive_category_id", "archive_category_id"):
+        passing.append("Closed ticket folder is chosen.")
+    else:
+        warnings.append("Closed ticket folder is not chosen yet. Closed tickets may stay in the open ticket folder.")
+
+    if _has_channel(guild, cfg, "transcripts_channel_id"):
+        passing.append("Transcript channel is chosen.")
+    else:
+        warnings.append("Transcript channel is not chosen yet. Pick one if you want ticket history saved to a channel.")
+
+    if _has_channel(guild, cfg, "ticket_panel_channel_id", "support_channel_id"):
+        passing.append("Public ticket panel channel is chosen.")
+    else:
+        warnings.append("Public ticket panel channel is not chosen yet. Pick where members should click to open tickets.")
+
+    if needs_id or needs_voice:
+        if _has_channel(guild, cfg, "verify_channel_id"):
+            passing.append("Verify text channel is chosen.")
+        else:
+            blockers.append("Choose the text channel where members start verification.")
+
+        if _has_role(guild, cfg, "verified_role_id"):
+            passing.append("Approved role is chosen.")
+        else:
+            blockers.append("Choose the role members get after they are approved.")
+
+        if _has_role(guild, cfg, "unverified_role_id"):
+            passing.append("New/waiting role is chosen.")
+        else:
+            warnings.append("New/waiting role is not chosen. This is useful if new members should wait before full access.")
+
+    if needs_voice:
+        if _has_channel(guild, cfg, "vc_verify_channel_id"):
+            passing.append("Voice check channel is chosen.")
+        else:
+            blockers.append("Choose the voice channel used for voice checks.")
+
+        if _has_channel(guild, cfg, "vc_verify_queue_channel_id", "vc_queue_channel_id", "vc_request_channel_id", "vc_verify_requests_channel_id"):
+            passing.append("Voice check request channel is chosen.")
+        else:
+            warnings.append("Voice check request channel is not chosen. Staff may miss voice-check requests.")
+
+    if _has_channel(guild, cfg, "modlog_channel_id", "raidlog_channel_id"):
+        passing.append("Log channel is chosen.")
+    else:
+        warnings.append("Log channel is not chosen. This is optional, but recommended.")
+
+    control_role_keys = ("server_control_role_id", "control_role_id", "perm_role_id")
+    has_saved_control_id = any(_attr_id(cfg, key) > 0 for key in control_role_keys)
+    has_control_role = any(guild.get_role(_attr_id(cfg, key)) is not None for key in control_role_keys)
+    if has_saved_control_id and not has_control_role:
+        warnings.append("An old owner/admin role choice is saved but no longer exists. You can pick a new one later or ignore it if your server does not use that feature.")
+    elif has_control_role:
+        passing.append("Optional owner/admin role is chosen.")
+
+    try:
+        category_load = await solid._category_load(guild)
+        if category_load.error:
+            blockers.append("Ticket menu options could not be checked. Press **Ticket Menu Options** and create recommended options.")
+        elif category_load.rows:
+            passing.append(f"Ticket menu has {len(category_load.rows)} option(s).")
+        else:
+            blockers.append("Create at least one ticket menu option.")
+    except Exception:
+        warnings.append("Ticket menu options could not be checked right now.")
+
+    ready = not blockers
+    embed = discord.Embed(
+        title="🩺 Setup Check",
+        description=(
+            "✅ **Ready to test.** Open one test ticket and try the member flow."
+            if ready
+            else "🚫 **A few things still need fixing before this setup is ready.**"
+        ),
+        color=discord.Color.green() if ready else discord.Color.red(),
+        timestamp=now_utc(),
+    )
+    embed.add_field(name="Setup Type", value=f"**{choice_label}**", inline=False)
+    embed.add_field(name="Needs Fixing", value=_plain_lines(blockers, empty="✅ Nothing required is missing."), inline=False)
+    embed.add_field(name="Looks Good", value=_plain_lines(passing, empty="No passing checks yet."), inline=False)
+    embed.add_field(name="Optional Later", value=_plain_lines(warnings, empty="✅ No optional warnings."), inline=False)
+    embed.add_field(
+        name="How to fix this",
+        value=(
+            "Press **Use My Existing Server** to pick roles/channels you already have.\n"
+            "Press **Create Missing Items** if you want Dank Shield to create missing basics.\n"
+            "Press **Help / FAQ** if you are unsure what something means."
+        ),
+        inline=False,
+    )
+    embed.set_footer(text=f"Guild {guild.id} • /dank setup • no raw IDs shown")
+    return embed
+
+
+def _build_setup_help_embed() -> discord.Embed:
+    embed = discord.Embed(
+        title="❓ Dank Shield Setup Help",
+        description="Simple answers for the setup screen. No technical terms needed.",
+        color=discord.Color.blurple(),
+        timestamp=now_utc(),
+    )
+    embed.add_field(name="What should I press first?", value="Press **Choose Setup Type**. Pick the option closest to your server. You can change it later.", inline=False)
+    embed.add_field(name="What if I already made my roles/channels?", value="Press **Use My Existing Server**. Then pick your existing roles and channels from Discord menus.", inline=False)
+    embed.add_field(name="What if I do not have roles/channels yet?", value="Press **Create Missing Items**. Dank Shield creates missing basics only. It does not delete your server setup.", inline=False)
+    embed.add_field(name="What is ID + voice check?", value="That is the upload-link plus voice-check style like your current Stoney Baloney setup, but without hardcoded server names, role IDs, or channel IDs.", inline=False)
+    embed.add_field(name="What if setup says owner/admin role is missing?", value="That is optional. It came from older server-specific setup. Pick a new owner/admin role only if you want that feature.", inline=False)
+    embed.add_field(name="Will this force forms on members?", value="No. Ticket flow stays fast by default. Forms are optional only.", inline=False)
+    embed.add_field(name="Will this copy Stoney Baloney settings to other servers?", value="No. Every server saves its own setup. No Stoney Baloney IDs or branding should be used for other guilds.", inline=False)
+    return embed
 
 
 async def _setup_progress(guild: discord.Guild) -> tuple[str, int, int, str]:
@@ -173,7 +380,8 @@ async def _product_main_setup_payload(guild: discord.Guild) -> tuple[discord.Emb
             "🧭 **Choose Setup Type** — pick Basic server, Help desk, ID check, Voice check, ID + voice check, or Custom setup.\n"
             "🧩 **Use My Existing Server** — choose the roles/channels/folders you already have.\n"
             "✨ **Create Missing Items** — creates only missing default items. It does not delete anything.\n"
-            "🧾 **Ticket Menu Options** — edit the choices users see when opening a ticket."
+            "🧾 **Ticket Menu Options** — edit the choices users see when opening a ticket.\n"
+            "❓ **Help / FAQ** — plain answers if setup feels confusing."
         )[:1024],
         inline=False,
     )
@@ -267,6 +475,14 @@ class SetupChoiceView(solid.BackToSetupView):
         embed = build_setup_template_embed(selected_key=selected, guild_name=str(guild_name or "this server"))
         embed.add_field(name="Preview only", value="Nothing has been saved yet.", inline=False)
         await interaction.response.edit_message(embed=embed, view=self)
+
+
+class SetupHealthHelpView(solid.BackToSetupView):
+    @discord.ui.button(label="Help / FAQ", emoji="❓", style=discord.ButtonStyle.primary, custom_id="dank_setup:help_from_health", row=0)
+    async def help_faq(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        if not await solid._require_setup_permission(interaction):
+            return
+        await interaction.response.edit_message(embed=_build_setup_help_embed(), view=solid.BackToSetupView())
 
 
 class ProductSetupHomeView(discord.ui.View):
@@ -367,9 +583,14 @@ class ProductSetupHomeView(discord.ui.View):
         if guild is None:
             return await interaction.response.send_message("❌ This must be used inside a server.", ephemeral=True)
         await solid._safe_defer_update(interaction)
-        embed = await solid._build_health_embed(guild)
-        embed.add_field(name="What happens next", value="Fix the first blocker listed, then press Back to Setup and run Health Check again.", inline=False)
-        await solid._edit_or_followup(interaction, embed=embed, view=solid.BackToSetupView())
+        embed = await _build_plain_setup_health_embed(guild)
+        await solid._edit_or_followup(interaction, embed=embed, view=SetupHealthHelpView())
+
+    @discord.ui.button(label="Help / FAQ", emoji="❓", style=discord.ButtonStyle.secondary, custom_id="dank_setup:help", row=2)
+    async def help_faq(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        if not await solid._require_setup_permission(interaction):
+            return
+        await interaction.response.edit_message(embed=_build_setup_help_embed(), view=solid.BackToSetupView())
 
 
 def _patch() -> None:
