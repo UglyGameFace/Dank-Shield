@@ -891,10 +891,17 @@ async def _process_due_member_notices(bot: Any, *, one_pass: bool = False) -> No
 
 
 def _start_member_notice_worker(bot: Any) -> None:
+    """Attach the member notice worker safely.
+
+    discord.py 2.x does not allow accessing bot.loop from a synchronous setup
+    path before login. The worker is therefore attached as an on_ready listener
+    and the actual asyncio task is created only after Discord has connected.
+    """
     global _NOTICE_WORKER_STARTED
     if _NOTICE_WORKER_STARTED:
         return
     _NOTICE_WORKER_STARTED = True
+
     try:
         bot.add_view(MemberActivityNoticeDMView())
     except Exception:
@@ -907,11 +914,22 @@ def _start_member_notice_worker(bot: Any) -> None:
             pass
         await _process_due_member_notices(bot)
 
+    async def _on_ready_member_activity_notices() -> None:
+        try:
+            existing = getattr(bot, "_member_activity_notice_worker_task", None)
+            if existing is not None and not existing.done():
+                return
+            task = asyncio.create_task(_runner(), name="member_activity_notices_worker")
+            setattr(bot, "_member_activity_notice_worker_task", task)
+            print("📩 member_activity_notices worker started")
+        except Exception as e:
+            print(f"⚠️ member_activity_notices worker failed to start: {repr(e)}")
+
     try:
-        bot.loop.create_task(_runner())
-        print("📩 member_activity_notices worker started")
+        bot.add_listener(_on_ready_member_activity_notices, "on_ready")
+        print("📩 member_activity_notices worker listener attached")
     except Exception as e:
-        print(f"⚠️ member_activity_notices worker failed to start: {repr(e)}")
+        print(f"⚠️ member_activity_notices worker listener failed to attach: {repr(e)}")
 
 
 def _notice_results_embed(guild: discord.Guild) -> discord.Embed:
