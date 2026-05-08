@@ -28,6 +28,8 @@ Scan-lock rule:
 
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
+import asyncio
+import re
 from typing import Any, Iterable, Mapping, Optional
 
 import discord
@@ -56,6 +58,7 @@ _RECENT_EVIDENCE_LOOKBACK_DAYS = 180
 _RECENT_EVIDENCE_MAX_CHANNELS = 75
 _RECENT_EVIDENCE_PER_CHANNEL_LIMIT = 750
 _RECENT_EVIDENCE_MAX_MEMBERS_FOR_NAME_MATCH = 2000
+_RECENT_EVIDENCE_CHANNEL_CONCURRENCY = 4
 
 
 @dataclass(frozen=True)
@@ -353,7 +356,7 @@ def _write_scan_lock_row(guild_id: int, user_id: int, *, locked: bool, actor_id:
 
 
 async def get_scan_lock_records(guild_id: int) -> tuple[list[ScanLockRecord], str]:
-    rows, persisted_ok, warning = await __import__("asyncio").to_thread(_select_scan_lock_rows, guild_id)
+    rows, persisted_ok, warning = await asyncio.to_thread(_select_scan_lock_rows, guild_id)
     records: dict[int, ScanLockRecord] = {}
     for row in rows:
         uid = _safe_int(row.get("user_id"), 0)
@@ -410,7 +413,7 @@ async def set_scan_user_lock(
         }
     else:
         memory.pop(user_id, None)
-    persisted, message = await __import__("asyncio").to_thread(
+    persisted, message = await asyncio.to_thread(
         _write_scan_lock_row,
         guild_id,
         user_id,
@@ -832,17 +835,30 @@ async def _load_known_activity_signals(guild_id: int) -> tuple[dict[int, list[Me
         ("activity_feed_events", ("user_id", "actor_id", "member_id", "target_user_id"), ("updated_at", "created_at", "timestamp"), "activity feed", "Medium", "Had activity-feed events recorded by Dank Shield."),
     )
 
-    sources_read = 0
     attempted = len(table_specs)
-    for table, user_keys, time_keys, source, confidence, note in table_specs:
-        rows, ok, warning = await __import__("asyncio").to_thread(_select_recent_rows, table, guild_id)
+    query_tasks = [
+        asyncio.to_thread(_select_recent_rows, table, guild_id)
+        for table, *_rest in table_specs
+    ]
+    results = await asyncio.gather(*query_tasks, return_exceptions=True)
+
+    sources_read = 0
+    for spec, result in zip(table_specs, results):
+        table, user_keys, time_keys, source, confidence, note = spec
+        if isinstance(result, Exception):
+            warnings.append(f"Optional {_table_display_name(table)} could not be read: {type(result).__name__}. The scan still works, but confidence is lower.")
+            continue
+
+        rows, ok, warning = result
         if not ok:
             if warning:
                 warnings.append(warning)
             continue
+
         sources_read += 1
         for uid, signal in _rows_by_user(rows, user_keys=user_keys, time_keys=time_keys, source=source, confidence=confidence, note=note).items():
             merged.setdefault(uid, []).append(signal)
+
         if table in {"member_joins", "activity_feed_events", "tickets"}:
             for uid, pair in _verification_times_from_rows(rows, user_keys=user_keys).items():
                 old = verification_times.get(uid)
@@ -854,7 +870,7 @@ async def _load_known_activity_signals(guild_id: int) -> tuple[dict[int, list[Me
     elif sources_read < attempted:
         warnings.append(f"Data confidence is partial: {sources_read}/{attempted} optional server-activity sources were readable. Percentages may improve as tracking history fills in.")
 
-    warnings.append("Confidence calibration: High requires direct member activity evidence; Medium is purge-safe review evidence; Low is shown for manual review but is not purge-safe. Mod-log embeds are scanned, not just plain message text.")
+    warnings.append("Confidence calibration: High requires direct member activity evidence; Medium is purge-safe review evidence; Low is shown for manual review but is not purge-safe. Mod-log embeds are scanned with faster matching, not just plain message text.")
 
     return merged, verification_times, warnings, sources_read, attempted
 
@@ -955,6 +971,36 @@ def _signal_is_verification_timestamp(signal: MemberActivitySignal) -> bool:
 
 
 
+
+def _build_token_regex(token_to_uid: dict[str, int]) -> Optional[re.Pattern[str]]:
+    """Build one escaped regex for mod-log token matching.
+
+    This avoids scanning every token one-by-one for every mod-log message.
+    """
+    try:
+        tokens = sorted((str(t).strip() for t in token_to_uid.keys() if str(t).strip()), key=len, reverse=True)
+        if not tokens:
+            return None
+        escaped = [re.escape(t) for t in tokens]
+        return re.compile("|".join(f"(?:{part})" for part in escaped), re.IGNORECASE)
+    except Exception:
+        return None
+
+
+def _regex_matched_user_ids(pattern: Optional[re.Pattern[str]], text: str, token_to_uid: dict[str, int]) -> set[int]:
+    if pattern is None or not text:
+        return set()
+    matched: set[int] = set()
+    try:
+        for match in pattern.finditer(text):
+            uid = token_to_uid.get(_norm(match.group(0)))
+            if uid is not None:
+                matched.add(int(uid))
+    except Exception:
+        pass
+    return matched
+
+
 def _member_name_tokens(member: discord.Member) -> set[str]:
     tokens: set[str] = {str(int(member.id)), f"<@{int(member.id)}>", f"<@!{int(member.id)}>"}
     for value in (
@@ -1040,6 +1086,8 @@ async def _load_recent_discord_evidence(
                 continue
             token_to_uid[token] = int(member.id)
 
+    token_pattern = _build_token_regex(token_to_uid)
+
     for channel in channels:
         is_modlog = _is_modlog_like(channel)
         try:
@@ -1085,30 +1133,29 @@ async def _load_recent_discord_evidence(
 
                 is_verification_modlog = _looks_like_verification_modlog(content_text)
 
-                for token, uid in token_to_uid.items():
-                    if token and token in content_text:
-                        if is_verification_modlog:
-                            _merge_signal(
-                                evidence,
-                                uid,
-                                MemberActivitySignal(
-                                    source="recent mod-log verification timestamp",
-                                    timestamp=msg_time,
-                                    confidence="Medium",
-                                    note=f"Recent mod-log verification/resident-role evidence matched this member in #{getattr(channel, 'name', 'unknown')}.",
-                                ),
-                            )
-                        else:
-                            _merge_signal(
-                                evidence,
-                                uid,
-                                MemberActivitySignal(
-                                    source="recent mod-log text evidence",
-                                    timestamp=msg_time,
-                                    confidence="Medium",
-                                    note=f"Recent mod-log evidence matched this member in #{getattr(channel, 'name', 'unknown')}.",
-                                ),
-                            )
+                for uid in _regex_matched_user_ids(token_pattern, content_text, token_to_uid):
+                    if is_verification_modlog:
+                        _merge_signal(
+                            evidence,
+                            uid,
+                            MemberActivitySignal(
+                                source="recent mod-log verification timestamp",
+                                timestamp=msg_time,
+                                confidence="Medium",
+                                note=f"Recent mod-log verification/resident-role evidence matched this member in #{getattr(channel, 'name', 'unknown')}.",
+                            ),
+                        )
+                    else:
+                        _merge_signal(
+                            evidence,
+                            uid,
+                            MemberActivitySignal(
+                                source="recent mod-log text evidence",
+                                timestamp=msg_time,
+                                confidence="Medium",
+                                note=f"Recent mod-log evidence matched this member in #{getattr(channel, 'name', 'unknown')}.",
+                            ),
+                        )
         except discord.Forbidden:
             warnings.append(f"Could not read recent history in #{getattr(channel, 'name', 'unknown')}; missing permission.")
             continue
