@@ -11,8 +11,12 @@ The scan itself is intentionally conservative:
 - Scan-locked users can be reviewed, unlocked, and relocked from the scan UI.
 """
 
+from datetime import datetime, timedelta, timezone
 from math import ceil
-from typing import Any, Optional
+from typing import Any, Mapping, Optional
+from zoneinfo import ZoneInfo
+import asyncio
+import uuid
 
 import discord
 from discord import app_commands
@@ -31,6 +35,8 @@ from stoney_verify.members_new.activity_service import (
     set_scan_user_lock,
 )
 
+from stoney_verify.globals import get_supabase
+
 
 members_group = app_commands.Group(
     name="members",
@@ -44,6 +50,32 @@ _PAGE_SIZE = 4
 _LOCKED_PAGE_SIZE = 6
 _DEFAULT_INACTIVE_DAYS = 90
 _DEFAULT_GRACE_DAYS = 14
+
+_NOTICE_TABLE = "member_activity_notices"
+_NOTICE_MEMORY: dict[str, dict[str, Any]] = {}
+_NOTICE_WORKER_STARTED = False
+_NOTICE_SEND_DELAY_SECONDS = 2.5
+_NOTICE_WORKER_INTERVAL_SECONDS = 30
+_NOTICE_DEFAULT_TZ = "America/New_York"
+_NOTICE_STATUS_SCHEDULED = "scheduled"
+_NOTICE_STATUS_DELIVERED = "delivered"
+_NOTICE_STATUS_DM_BLOCKED = "dm_blocked"
+_NOTICE_STATUS_FAILED = "failed"
+_NOTICE_STATUS_RESPONDED_STAYING = "responded_staying"
+_NOTICE_STATUS_OK_LEAVING = "ok_leaving"
+_NOTICE_STATUS_DEADLINE_PASSED = "deadline_passed"
+_NOTICE_PENDING_STATUSES = {
+    _NOTICE_STATUS_SCHEDULED,
+    _NOTICE_STATUS_DELIVERED,
+}
+_NOTICE_FINAL_STATUSES = {
+    _NOTICE_STATUS_DM_BLOCKED,
+    _NOTICE_STATUS_FAILED,
+    _NOTICE_STATUS_RESPONDED_STAYING,
+    _NOTICE_STATUS_OK_LEAVING,
+    _NOTICE_STATUS_DEADLINE_PASSED,
+}
+
 
 
 def _can_review_members(interaction: discord.Interaction) -> bool:
@@ -391,6 +423,652 @@ def _build_locked_users_embed(
     return embed
 
 
+
+# ============================================================
+# Member Activity Notices
+# ============================================================
+
+def _utcnow() -> datetime:
+    try:
+        return now_utc()  # type: ignore[name-defined]
+    except Exception:
+        return datetime.now(timezone.utc)
+
+
+def _coerce_utc(value: Any) -> Optional[datetime]:
+    try:
+        if value is None:
+            return None
+        if isinstance(value, datetime):
+            dt = value
+        else:
+            raw = str(value).strip().replace("Z", "+00:00")
+            if not raw:
+                return None
+            dt = datetime.fromisoformat(raw)
+        if dt.tzinfo is None:
+            return dt.replace(tzinfo=timezone.utc)
+        return dt.astimezone(timezone.utc)
+    except Exception:
+        return None
+
+
+def _parse_notice_datetime(raw_value: str, *, timezone_name: str, now: Optional[datetime] = None) -> datetime:
+    """Parse staff-entered notice dates.
+
+    Supported:
+    - now
+    - +2h / +3d / +45m
+    - YYYY-MM-DD HH:MM
+    - YYYY-MM-DD 7:30 PM
+    - MM/DD/YYYY HH:MM
+    - MM/DD/YYYY 7:30 PM
+
+    Naive date-times are interpreted in the supplied IANA timezone, then stored
+    as UTC. Discord timestamps in the DM render in each user's local timezone.
+    """
+    current = now or _utcnow()
+    text = str(raw_value or "").strip()
+    if not text or text.lower() == "now":
+        return current
+
+    lowered = text.lower().replace(" ", "")
+    if lowered.startswith("+"):
+        number = ""
+        unit = ""
+        for ch in lowered[1:]:
+            if ch.isdigit():
+                number += ch
+            else:
+                unit += ch
+        amount = int(number or "0")
+        if amount <= 0:
+            raise ValueError("Relative time must be greater than zero.")
+        if unit in {"m", "min", "mins", "minute", "minutes"}:
+            return current + timedelta(minutes=amount)
+        if unit in {"h", "hr", "hrs", "hour", "hours"}:
+            return current + timedelta(hours=amount)
+        if unit in {"d", "day", "days"}:
+            return current + timedelta(days=amount)
+        raise ValueError("Use +30m, +2h, or +3d for relative times.")
+
+    try:
+        tz = ZoneInfo(str(timezone_name or _NOTICE_DEFAULT_TZ).strip() or _NOTICE_DEFAULT_TZ)
+    except Exception:
+        tz = ZoneInfo("UTC")
+
+    formats = (
+        "%Y-%m-%d %H:%M",
+        "%Y-%m-%d %I:%M %p",
+        "%m/%d/%Y %H:%M",
+        "%m/%d/%Y %I:%M %p",
+    )
+    last_error: Optional[Exception] = None
+    for fmt in formats:
+        try:
+            local_dt = datetime.strptime(text, fmt).replace(tzinfo=tz)
+            return local_dt.astimezone(timezone.utc)
+        except Exception as e:
+            last_error = e
+    raise ValueError("Use `now`, `+3d`, or a date like `2026-05-11 8:00 PM`.") from last_error
+
+
+def _discord_timestamp(dt: Optional[datetime], style: str = "F") -> str:
+    parsed = _coerce_utc(dt)
+    if parsed is None:
+        return "unknown"
+    return f"<t:{int(parsed.timestamp())}:{style}>"
+
+
+def _notice_id() -> str:
+    return uuid.uuid4().hex
+
+
+def _candidate_notice_scope(report: InactiveScanReport, scope: str, *, page: int = 0, selected: Optional[InactiveMemberCandidate] = None) -> list[InactiveMemberCandidate]:
+    scope = str(scope or "review").lower()
+    if selected is not None:
+        return [selected]
+    if scope == "purge_safe":
+        return [c for c in report.candidates if getattr(c, "removable", False)]
+    if scope == "manual_only":
+        return [c for c in report.candidates if not getattr(c, "removable", False)]
+    if scope == "current_page":
+        _page, start, end = _page_bounds(report, page)
+        return list(report.candidates[start:end])
+    return list(report.candidates)
+
+
+def _notice_scope_label(scope: str) -> str:
+    return {
+        "selected": "selected user",
+        "current_page": "current page",
+        "review": "full review list",
+        "purge_safe": "purge-safe list",
+        "manual_only": "manual-only list",
+    }.get(str(scope or "review"), "review list")
+
+
+def _build_notice_row(
+    *,
+    guild: discord.Guild,
+    candidate: InactiveMemberCandidate,
+    scope: str,
+    send_at: datetime,
+    deadline_at: datetime,
+    created_by: int,
+    note: str = "",
+) -> dict[str, Any]:
+    now = _utcnow()
+    return {
+        "notice_id": _notice_id(),
+        "guild_id": str(int(guild.id)),
+        "guild_name": str(getattr(guild, "name", "this server") or "this server")[:160],
+        "user_id": str(int(candidate.user_id)),
+        "user_display_name": str(candidate.display_name or candidate.user_id)[:160],
+        "scope": str(scope or "review")[:40],
+        "status": _NOTICE_STATUS_SCHEDULED,
+        "send_at": send_at.astimezone(timezone.utc).isoformat(),
+        "deadline_at": deadline_at.astimezone(timezone.utc).isoformat(),
+        "created_by": str(int(created_by)),
+        "created_at": now.isoformat(),
+        "updated_at": now.isoformat(),
+        "note": str(note or "")[:800],
+        "confidence": str(getattr(candidate, "confidence", "") or "")[:40],
+        "inactivity_days": int(candidate.inactivity_days) if candidate.inactivity_days is not None else None,
+        "removable": bool(getattr(candidate, "removable", False)),
+        "error": None,
+        "dm_message_id": None,
+    }
+
+
+def _notice_table() -> Any:
+    try:
+        sb = get_supabase()
+        if sb is None:
+            return None
+        return sb.table(_NOTICE_TABLE)
+    except Exception:
+        return None
+
+
+def _memory_upsert_notice(row: dict[str, Any]) -> None:
+    _NOTICE_MEMORY[str(row.get("notice_id"))] = dict(row)
+
+
+def _memory_update_notice(notice_id: str, **fields: Any) -> None:
+    row = _NOTICE_MEMORY.get(str(notice_id))
+    if row is None:
+        return
+    row.update(fields)
+    row["updated_at"] = _utcnow().isoformat()
+
+
+def _upsert_notice_row(row: dict[str, Any]) -> tuple[bool, str]:
+    table = _notice_table()
+    _memory_upsert_notice(row)
+    if table is None:
+        return False, "Notice saved in memory only because Supabase is unavailable."
+    try:
+        table.upsert(row, on_conflict="notice_id").execute()
+        return True, "Notice saved."
+    except Exception:
+        return False, f"Optional `{_NOTICE_TABLE}` table was not writable. Notice saved in memory only until restart."
+
+
+def _update_notice_row(notice_id: str, **fields: Any) -> tuple[bool, str]:
+    notice_id = str(notice_id)
+    fields = dict(fields)
+    fields["updated_at"] = _utcnow().isoformat()
+    _memory_update_notice(notice_id, **fields)
+    table = _notice_table()
+    if table is None:
+        return False, "Notice updated in memory only."
+    try:
+        table.update(fields).eq("notice_id", notice_id).execute()
+        return True, "Notice updated."
+    except Exception:
+        return False, f"Optional `{_NOTICE_TABLE}` table was not writable. Notice update is memory-only until restart."
+
+
+def _select_notice_rows(*, guild_id: Optional[int] = None, user_id: Optional[int] = None, limit: int = 500) -> tuple[list[dict[str, Any]], str]:
+    rows: list[dict[str, Any]] = []
+    table = _notice_table()
+    warning = ""
+    if table is not None:
+        try:
+            query = table.select("*")
+            if guild_id is not None:
+                query = query.eq("guild_id", str(int(guild_id)))
+            if user_id is not None:
+                query = query.eq("user_id", str(int(user_id)))
+            resp = query.limit(int(limit)).execute()
+            rows = [dict(r) for r in (getattr(resp, "data", None) or []) if isinstance(r, Mapping)]
+        except Exception:
+            warning = f"Optional `{_NOTICE_TABLE}` table was not readable. Showing memory-only notice results."
+
+    # Merge memory fallback / newest local rows.
+    seen = {str(r.get("notice_id")) for r in rows}
+    for row in _NOTICE_MEMORY.values():
+        if guild_id is not None and str(row.get("guild_id")) != str(int(guild_id)):
+            continue
+        if user_id is not None and str(row.get("user_id")) != str(int(user_id)):
+            continue
+        if str(row.get("notice_id")) in seen:
+            continue
+        rows.append(dict(row))
+
+    rows.sort(key=lambda r: str(r.get("created_at") or ""), reverse=True)
+    return rows[: int(limit)], warning
+
+
+def _due_notice_rows(now: Optional[datetime] = None, *, limit: int = 25) -> tuple[list[dict[str, Any]], str]:
+    current = now or _utcnow()
+    rows, warning = _select_notice_rows(limit=1000)
+    due: list[dict[str, Any]] = []
+    for row in rows:
+        status = str(row.get("status") or "")
+        send_at = _coerce_utc(row.get("send_at"))
+        if status == _NOTICE_STATUS_SCHEDULED and send_at is not None and send_at <= current:
+            due.append(row)
+    due.sort(key=lambda r: str(r.get("send_at") or ""))
+    return due[: int(limit)], warning
+
+
+def _latest_pending_notice_for_user(user_id: int) -> Optional[dict[str, Any]]:
+    rows, _warning = _select_notice_rows(user_id=int(user_id), limit=100)
+    current = _utcnow()
+    pending: list[dict[str, Any]] = []
+    for row in rows:
+        status = str(row.get("status") or "")
+        if status not in _NOTICE_PENDING_STATUSES:
+            continue
+        deadline = _coerce_utc(row.get("deadline_at"))
+        if deadline is not None and deadline < current:
+            continue
+        pending.append(row)
+    pending.sort(key=lambda r: str(r.get("created_at") or ""), reverse=True)
+    return pending[0] if pending else None
+
+
+def _notice_dm_embed(row: dict[str, Any]) -> discord.Embed:
+    guild_name = str(row.get("guild_name") or "the server")
+    user_name = str(row.get("user_display_name") or "there")
+    deadline = _coerce_utc(row.get("deadline_at"))
+    note = str(row.get("note") or "").strip()
+
+    embed = discord.Embed(
+        title=f"Quick check-in from {guild_name}",
+        description=(
+            f"Hey **{discord.utils.escape_markdown(user_name, as_needed=True)}** 👋\n\n"
+            f"This is a quick check-in from the **{discord.utils.escape_markdown(guild_name, as_needed=True)}** staff team.\n\n"
+            "You’re still verified here, but we haven’t seen much recent activity from your account in the server. "
+            "No action has been taken yet — we’re just checking before cleaning up inactive members.\n\n"
+            f"If you still want to stay in **{discord.utils.escape_markdown(guild_name, as_needed=True)}**, tap **I’m still active** before:\n\n"
+            f"**{_discord_timestamp(deadline, 'F')}**\n"
+            f"{_discord_timestamp(deadline, 'R')}\n\n"
+            "✅ Tap **I’m still active** and you’ll be marked as staying."
+        ),
+        color=discord.Color.blurple(),
+        timestamp=_utcnow(),
+    )
+    if note:
+        embed.add_field(name="Note from staff", value=_safe_field(note, 600), inline=False)
+    embed.set_footer(text=f"Sent by the {guild_name} team using Dank Shield.")
+    return embed
+
+
+class MemberActivityNoticeDMView(discord.ui.View):
+    def __init__(self) -> None:
+        super().__init__(timeout=None)
+
+    @discord.ui.button(
+        label="I’m still active",
+        emoji="✅",
+        style=discord.ButtonStyle.success,
+        custom_id="dank_member_notice_still_active",
+    )
+    async def still_active(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        notice = _latest_pending_notice_for_user(int(interaction.user.id))
+        if notice is None:
+            return await interaction.response.send_message(
+                "You’re all set — I don’t see an active cleanup notice for you anymore.",
+                ephemeral=True,
+            )
+
+        guild_id = _safe_int_attr(type("Obj", (), {"guild_id": notice.get("guild_id")})(), "guild_id", 0)
+        # Safer than _safe_int_attr on dict:
+        try:
+            guild_id = int(str(notice.get("guild_id")))
+        except Exception:
+            guild_id = 0
+
+        _update_notice_row(
+            str(notice.get("notice_id")),
+            status=_NOTICE_STATUS_RESPONDED_STAYING,
+            responded_at=_utcnow().isoformat(),
+            response="still_active",
+        )
+        if guild_id > 0:
+            try:
+                await set_scan_user_lock(
+                    guild_id,
+                    int(interaction.user.id),
+                    locked=True,
+                    actor_id=None,
+                    reason="Member replied to activity notice: still active",
+                )
+            except Exception:
+                pass
+
+        guild_name = str(notice.get("guild_name") or "the server")
+        await interaction.response.send_message(
+            f"✅ You’re all set. The **{discord.utils.escape_markdown(guild_name, as_needed=True)}** team will see that you’re still active.",
+            ephemeral=True,
+        )
+
+    @discord.ui.button(
+        label="What is this?",
+        emoji="❓",
+        style=discord.ButtonStyle.secondary,
+        custom_id="dank_member_notice_what_is_this",
+    )
+    async def what_is_this(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        notice = _latest_pending_notice_for_user(int(interaction.user.id))
+        guild_name = str((notice or {}).get("guild_name") or "that server")
+        await interaction.response.send_message(
+            "This message was sent because the server staff is checking inactive verified members before cleanup.\n\n"
+            f"Dank Shield is the moderation tool helping the **{discord.utils.escape_markdown(guild_name, as_needed=True)}** staff team track responses. "
+            "Tapping **I’m still active** tells staff not to include you in inactive cleanup.",
+            ephemeral=True,
+        )
+
+    @discord.ui.button(
+        label="I’m okay leaving",
+        emoji="🚪",
+        style=discord.ButtonStyle.secondary,
+        custom_id="dank_member_notice_ok_leaving",
+    )
+    async def okay_leaving(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        notice = _latest_pending_notice_for_user(int(interaction.user.id))
+        if notice is not None:
+            _update_notice_row(
+                str(notice.get("notice_id")),
+                status=_NOTICE_STATUS_OK_LEAVING,
+                responded_at=_utcnow().isoformat(),
+                response="ok_leaving",
+            )
+        await interaction.response.send_message(
+            "Thanks for letting the staff team know. No action was taken from this button alone.",
+            ephemeral=True,
+        )
+
+
+async def _send_notice_row(bot: Any, row: dict[str, Any]) -> None:
+    notice_id = str(row.get("notice_id") or "")
+    if not notice_id:
+        return
+
+    try:
+        guild_id = int(str(row.get("guild_id")))
+        user_id = int(str(row.get("user_id")))
+    except Exception:
+        _update_notice_row(notice_id, status=_NOTICE_STATUS_FAILED, error="Invalid guild_id/user_id")
+        return
+
+    guild = None
+    try:
+        guild = bot.get_guild(guild_id)
+    except Exception:
+        guild = None
+
+    user: Optional[discord.abc.User] = None
+    try:
+        if guild is not None:
+            user = guild.get_member(user_id)
+        if user is None:
+            user = await bot.fetch_user(user_id)
+    except Exception as e:
+        _update_notice_row(notice_id, status=_NOTICE_STATUS_FAILED, error=f"Could not resolve user: {type(e).__name__}")
+        return
+
+    try:
+        message = await user.send(
+            embed=_notice_dm_embed(row),
+            view=MemberActivityNoticeDMView(),
+            allowed_mentions=discord.AllowedMentions.none(),
+        )
+        _update_notice_row(
+            notice_id,
+            status=_NOTICE_STATUS_DELIVERED,
+            sent_at=_utcnow().isoformat(),
+            dm_message_id=str(getattr(message, "id", "")),
+            error=None,
+        )
+    except discord.Forbidden:
+        _update_notice_row(
+            notice_id,
+            status=_NOTICE_STATUS_DM_BLOCKED,
+            attempted_at=_utcnow().isoformat(),
+            error="User has DMs closed or blocked the bot.",
+        )
+    except Exception as e:
+        _update_notice_row(
+            notice_id,
+            status=_NOTICE_STATUS_FAILED,
+            attempted_at=_utcnow().isoformat(),
+            error=f"{type(e).__name__}: {str(e)[:180]}",
+        )
+
+
+async def _expire_passed_notice_deadlines() -> None:
+    now = _utcnow()
+    rows, _warning = _select_notice_rows(limit=1000)
+    for row in rows:
+        status = str(row.get("status") or "")
+        if status not in {_NOTICE_STATUS_DELIVERED, _NOTICE_STATUS_SCHEDULED}:
+            continue
+        deadline = _coerce_utc(row.get("deadline_at"))
+        if deadline is not None and deadline < now:
+            _update_notice_row(str(row.get("notice_id")), status=_NOTICE_STATUS_DEADLINE_PASSED)
+
+
+async def _process_due_member_notices(bot: Any, *, one_pass: bool = False) -> None:
+    while True:
+        try:
+            await _expire_passed_notice_deadlines()
+            rows, warning = _due_notice_rows(limit=20)
+            if warning:
+                print(f"⚠️ member activity notices: {warning}")
+            for row in rows:
+                await _send_notice_row(bot, row)
+                await asyncio.sleep(_NOTICE_SEND_DELAY_SECONDS)
+        except Exception as e:
+            print(f"⚠️ member activity notice worker error: {repr(e)}")
+
+        if one_pass:
+            return
+        await asyncio.sleep(_NOTICE_WORKER_INTERVAL_SECONDS)
+
+
+def _start_member_notice_worker(bot: Any) -> None:
+    global _NOTICE_WORKER_STARTED
+    if _NOTICE_WORKER_STARTED:
+        return
+    _NOTICE_WORKER_STARTED = True
+    try:
+        bot.add_view(MemberActivityNoticeDMView())
+    except Exception:
+        pass
+
+    async def _runner() -> None:
+        try:
+            await bot.wait_until_ready()
+        except Exception:
+            pass
+        await _process_due_member_notices(bot)
+
+    try:
+        bot.loop.create_task(_runner())
+        print("📩 member_activity_notices worker started")
+    except Exception as e:
+        print(f"⚠️ member_activity_notices worker failed to start: {repr(e)}")
+
+
+def _notice_results_embed(guild: discord.Guild) -> discord.Embed:
+    rows, warning = _select_notice_rows(guild_id=int(guild.id), limit=500)
+    counts: dict[str, int] = {}
+    for row in rows:
+        status = str(row.get("status") or "unknown")
+        counts[status] = counts.get(status, 0) + 1
+
+    def _count(name: str) -> int:
+        return counts.get(name, 0)
+
+    embed = discord.Embed(
+        title="📊 Member Activity Notice Results",
+        description="Latest notice delivery and response status for this server.",
+        color=discord.Color.blurple(),
+        timestamp=_utcnow(),
+    )
+    embed.add_field(
+        name="Summary",
+        value=_safe_field(
+            f"Scheduled: **{_count(_NOTICE_STATUS_SCHEDULED)}**\n"
+            f"Delivered: **{_count(_NOTICE_STATUS_DELIVERED)}**\n"
+            f"Responded staying: **{_count(_NOTICE_STATUS_RESPONDED_STAYING)}**\n"
+            f"Okay leaving: **{_count(_NOTICE_STATUS_OK_LEAVING)}**\n"
+            f"DM blocked: **{_count(_NOTICE_STATUS_DM_BLOCKED)}**\n"
+            f"Deadline passed: **{_count(_NOTICE_STATUS_DEADLINE_PASSED)}**\n"
+            f"Failed: **{_count(_NOTICE_STATUS_FAILED)}**"
+        ),
+        inline=False,
+    )
+    recent = rows[:8]
+    if recent:
+        lines = []
+        for row in recent:
+            name = _trim(str(row.get("user_display_name") or row.get("user_id")), 40)
+            status = str(row.get("status") or "unknown")
+            deadline = _discord_timestamp(_coerce_utc(row.get("deadline_at")), "R")
+            lines.append(f"• **{name}** — `{status}` — deadline {deadline}")
+        embed.add_field(name="Recent Notices", value=_safe_field("\n".join(lines), 900), inline=False)
+    if warning:
+        embed.add_field(name="Storage Warning", value=_safe_field(warning), inline=False)
+    return embed
+
+
+class NoticeScheduleModal(discord.ui.Modal):
+    def __init__(
+        self,
+        *,
+        scope: str,
+        report: InactiveScanReport,
+        page: int = 0,
+        selected: Optional[InactiveMemberCandidate] = None,
+    ) -> None:
+        self.scope = scope
+        self.report = report
+        self.page = int(page)
+        self.selected = selected
+        title = "Schedule Activity Notice"
+        if selected is not None:
+            title = "Notice This Member"
+        super().__init__(title=title, timeout=600)
+
+        self.send_at = discord.ui.TextInput(
+            label="Send when?",
+            placeholder="now, +2h, +3d, or 2026-05-11 7:00 PM",
+            default="now",
+            required=True,
+            max_length=40,
+        )
+        self.deadline_at = discord.ui.TextInput(
+            label="Response deadline",
+            placeholder="+3d or 2026-05-14 8:00 PM",
+            default="+3d",
+            required=True,
+            max_length=40,
+        )
+        self.timezone_name = discord.ui.TextInput(
+            label="Timezone for typed dates",
+            placeholder="America/New_York, UTC, America/Los_Angeles",
+            default=_NOTICE_DEFAULT_TZ,
+            required=True,
+            max_length=64,
+        )
+        self.staff_note = discord.ui.TextInput(
+            label="Optional staff note",
+            placeholder="Optional short note shown in the DM",
+            required=False,
+            style=discord.TextStyle.paragraph,
+            max_length=500,
+        )
+        self.add_item(self.send_at)
+        self.add_item(self.deadline_at)
+        self.add_item(self.timezone_name)
+        self.add_item(self.staff_note)
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        if not await _require_review_permission(interaction):
+            return
+        if interaction.guild is None:
+            return
+
+        await interaction.response.defer(ephemeral=True, thinking=True)
+        try:
+            tz_text = str(self.timezone_name.value or _NOTICE_DEFAULT_TZ).strip()
+            now = _utcnow()
+            send_at = _parse_notice_datetime(str(self.send_at.value), timezone_name=tz_text, now=now)
+            deadline_at = _parse_notice_datetime(str(self.deadline_at.value), timezone_name=tz_text, now=send_at)
+            if deadline_at <= send_at:
+                await interaction.followup.send("❌ The response deadline must be after the send time.", ephemeral=True)
+                return
+        except Exception as e:
+            await interaction.followup.send(f"❌ Could not understand the date/time: {e}", ephemeral=True)
+            return
+
+        targets = _candidate_notice_scope(self.report, self.scope, page=self.page, selected=self.selected)
+        if not targets:
+            await interaction.followup.send("No users matched that notice scope.", ephemeral=True)
+            return
+
+        saved = 0
+        memory_only = 0
+        for candidate in targets:
+            row = _build_notice_row(
+                guild=interaction.guild,
+                candidate=candidate,
+                scope="selected" if self.selected is not None else self.scope,
+                send_at=send_at,
+                deadline_at=deadline_at,
+                created_by=int(interaction.user.id),
+                note=str(self.staff_note.value or ""),
+            )
+            persisted, _message = _upsert_notice_row(row)
+            saved += 1
+            if not persisted:
+                memory_only += 1
+
+        # Wake the worker for immediate notices without making the interaction wait.
+        try:
+            interaction.client.loop.create_task(_process_due_member_notices(interaction.client, one_pass=True))
+        except Exception:
+            pass
+
+        await interaction.followup.send(
+            _trim(
+                f"📩 **Member Activity Notices queued**\n\n"
+                f"Scope: **{_notice_scope_label('selected' if self.selected is not None else self.scope)}**\n"
+                f"Users queued: **{saved}**\n"
+                f"Send time: {_discord_timestamp(send_at, 'F')} ({_discord_timestamp(send_at, 'R')})\n"
+                f"Response deadline: {_discord_timestamp(deadline_at, 'F')} ({_discord_timestamp(deadline_at, 'R')})\n"
+                + (f"\n⚠️ {memory_only} notice(s) are memory-only because the optional `{_NOTICE_TABLE}` table was unavailable." if memory_only else "")
+            ),
+            ephemeral=True,
+            allowed_mentions=discord.AllowedMentions.none(),
+        )
+
+
 class UserDetailLockView(discord.ui.View):
     def __init__(self, candidate: InactiveMemberCandidate, *, locked: bool = False) -> None:
         super().__init__(timeout=600)
@@ -405,8 +1083,34 @@ class UserDetailLockView(discord.ui.View):
             emoji="🔓" if self.locked else "🔒",
             style=discord.ButtonStyle.success if self.locked else discord.ButtonStyle.secondary,
         )
+        notice_button = discord.ui.Button(
+            label="Notice This User",
+            emoji="📩",
+            style=discord.ButtonStyle.primary,
+        )
         lock_button.callback = self._toggle_lock  # type: ignore[assignment]
+        notice_button.callback = self._notice_this_user  # type: ignore[assignment]
         self.add_item(lock_button)
+        self.add_item(notice_button)
+
+    async def _notice_this_user(self, interaction: discord.Interaction) -> None:
+        if not await _require_review_permission(interaction):
+            return
+        if interaction.guild is None:
+            return
+        fake_report = InactiveScanReport(
+            guild_id=int(interaction.guild.id),
+            scanned_at=_utcnow(),
+            options=InactiveScanOptions(),
+            total_members_seen=1,
+            candidates=[self.candidate],
+            protected=[],
+            cannot_remove=[],
+            data_warnings=[],
+        )
+        await interaction.response.send_modal(
+            NoticeScheduleModal(scope="selected", report=fake_report, page=0, selected=self.candidate)
+        )
 
     async def _toggle_lock(self, interaction: discord.Interaction) -> None:
         if not await _require_review_permission(interaction):
@@ -777,6 +1481,10 @@ class MemberActivityReviewView(discord.ui.View):
         preset_30_button = discord.ui.Button(label="30d", emoji="⚡", style=discord.ButtonStyle.secondary, row=3)
         preset_90_button = discord.ui.Button(label="90d", emoji="🎯", style=discord.ButtonStyle.secondary, row=3)
         preset_180_button = discord.ui.Button(label="180d", emoji="🧊", style=discord.ButtonStyle.secondary, row=3)
+        notice_review_button = discord.ui.Button(label="Notice Review", emoji="📣", style=discord.ButtonStyle.primary, row=4)
+        notice_purge_button = discord.ui.Button(label="Notice Purge-Safe", emoji="⚠️", style=discord.ButtonStyle.secondary, row=4)
+        notice_manual_button = discord.ui.Button(label="Notice Manual", emoji="📩", style=discord.ButtonStyle.secondary, row=4)
+        notice_results_button = discord.ui.Button(label="Notice Results", emoji="📊", style=discord.ButtonStyle.secondary, row=4)
 
         previous_button.callback = self._previous_page  # type: ignore[assignment]
         next_button.callback = self._next_page  # type: ignore[assignment]
@@ -788,6 +1496,10 @@ class MemberActivityReviewView(discord.ui.View):
         preset_30_button.callback = self._preset_30_days  # type: ignore[assignment]
         preset_90_button.callback = self._preset_90_days  # type: ignore[assignment]
         preset_180_button.callback = self._preset_180_days  # type: ignore[assignment]
+        notice_review_button.callback = self._notice_review_list  # type: ignore[assignment]
+        notice_purge_button.callback = self._notice_purge_safe_list  # type: ignore[assignment]
+        notice_manual_button.callback = self._notice_manual_only_list  # type: ignore[assignment]
+        notice_results_button.callback = self._show_notice_results  # type: ignore[assignment]
 
         self.add_item(previous_button)
         self.add_item(next_button)
@@ -799,6 +1511,10 @@ class MemberActivityReviewView(discord.ui.View):
         self.add_item(preset_30_button)
         self.add_item(preset_90_button)
         self.add_item(preset_180_button)
+        self.add_item(notice_review_button)
+        self.add_item(notice_purge_button)
+        self.add_item(notice_manual_button)
+        self.add_item(notice_results_button)
 
     def find_candidate(self, user_id: str) -> Optional[InactiveMemberCandidate]:
         try:
@@ -861,6 +1577,35 @@ class MemberActivityReviewView(discord.ui.View):
 
     async def _preset_180_days(self, interaction: discord.Interaction) -> None:
         await self._rescan(interaction, inactive_days=180)
+
+    async def _open_notice_modal(self, interaction: discord.Interaction, scope: str) -> None:
+        if not await _require_review_permission(interaction):
+            return
+        if interaction.guild is None:
+            return
+        targets = _candidate_notice_scope(self.report, scope, page=self.page)
+        if not targets:
+            return await reply_once(
+                interaction,
+                {"content": f"No users matched **{_notice_scope_label(scope)}** for this scan.", "ephemeral": True},
+            )
+        await interaction.response.send_modal(NoticeScheduleModal(scope=scope, report=self.report, page=self.page))
+
+    async def _notice_review_list(self, interaction: discord.Interaction) -> None:
+        await self._open_notice_modal(interaction, "review")
+
+    async def _notice_purge_safe_list(self, interaction: discord.Interaction) -> None:
+        await self._open_notice_modal(interaction, "purge_safe")
+
+    async def _notice_manual_only_list(self, interaction: discord.Interaction) -> None:
+        await self._open_notice_modal(interaction, "manual_only")
+
+    async def _show_notice_results(self, interaction: discord.Interaction) -> None:
+        if not await _require_review_permission(interaction):
+            return
+        if interaction.guild is None:
+            return
+        await interaction.response.send_message(embed=_notice_results_embed(interaction.guild), ephemeral=True)
 
     async def _show_data_notes(self, interaction: discord.Interaction) -> None:
         if not await _require_review_permission(interaction):
@@ -990,6 +1735,19 @@ async def members_locked(interaction: discord.Interaction) -> None:
     )
 
 
+@members_group.command(name="notices", description="Show member activity notice delivery and response results.")
+async def members_notices(interaction: discord.Interaction) -> None:
+    if not await _require_review_permission(interaction):
+        return
+    if interaction.guild is None:
+        return
+    await interaction.response.send_message(
+        embed=_notice_results_embed(interaction.guild),
+        ephemeral=True,
+        allowed_mentions=discord.AllowedMentions.none(),
+    )
+
+
 @members_group.command(name="last-scan", description="Show the latest member server-activity review since the bot started.")
 async def members_last_scan(interaction: discord.Interaction) -> None:
     if not await _require_review_permission(interaction):
@@ -1022,6 +1780,7 @@ def register_public_members_group_commands(bot: Any, tree: Any) -> None:
             print("✅ public_members_group: attached /dank members post-verification activity review commands")
         else:
             print("✅ public_members_group: /dank members already attached")
+        _start_member_notice_worker(bot)
         _REGISTERED = True
     except Exception as e:
         print(f"⚠️ public_members_group failed attaching /dank members: {repr(e)}")
