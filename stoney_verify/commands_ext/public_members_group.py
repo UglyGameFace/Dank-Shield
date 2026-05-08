@@ -259,7 +259,7 @@ def _build_data_notes_embed(report: InactiveScanReport) -> discord.Embed:
     embed.add_field(
         name="What This Means",
         value=_safe_field(
-            "Confidence now uses calibrated rules: High requires direct member activity evidence; Medium requires reliable DB/audit/mod-log verification timing plus readable activity coverage; Low means weak proof and is shown as manual-only, not purge-safe. Mod-log embeds are scanned too. Low-confidence users are shown for manual review but are not purge-safe."
+            "Confidence now uses calibrated rules: High requires direct member activity evidence; Medium requires reliable DB/audit/mod-log verification timing plus readable activity coverage; Low means weak proof and is shown as manual-only, not purge-safe. Mod-log embeds are scanned with faster matching. Low-confidence users are shown for manual review but are not purge-safe."
         ),
         inline=False,
     )
