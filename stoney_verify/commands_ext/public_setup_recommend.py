@@ -65,7 +65,14 @@ def _saved_choice_text(cfg: Any) -> str:
     return "⚠️ No setup choice saved yet. Press **Choose Setup Type** first."
 
 
-async def _setup_progress(guild: discord.Guild) -> tuple[str, int, int, str, Any]:
+async def _setup_progress(guild: discord.Guild) -> tuple[str, int, int, str]:
+    """Return only the original 4-value progress tuple.
+
+    Compatibility note:
+    public_setup_recommend originally returned exactly 4 values from this
+    helper. Other setup paths can still call it directly, so do not add cfg or
+    other extra return values here.
+    """
     done = 0
     total = 0
     lines: list[str] = []
@@ -79,7 +86,6 @@ async def _setup_progress(guild: discord.Guild) -> tuple[str, int, int, str, Any
             0,
             1,
             "Fix Supabase/config loading first.",
-            None,
         )
 
     def check(label: str, ok: bool, fail_hint: str) -> None:
@@ -137,11 +143,15 @@ async def _setup_progress(guild: discord.Guild) -> tuple[str, int, int, str, Any
     if done == total:
         next_step = "Post your ticket panel, then open a test ticket."
 
-    return "\n".join(lines)[:1024], done, total, next_step, cfg
+    return "\n".join(lines)[:1024], done, total, next_step
 
 
 async def _product_main_setup_payload(guild: discord.Guild) -> tuple[discord.Embed, discord.ui.View]:
-    progress_text, done, total, next_step, cfg = await _setup_progress(guild)
+    progress_text, done, total, next_step = await _setup_progress(guild)
+    try:
+        cfg = await get_guild_config(guild.id, refresh=True)
+    except Exception:
+        cfg = None
     saved_choice = _saved_choice_text(cfg) if cfg is not None else "⚠️ Saved setup could not be read."
 
     embed = discord.Embed(
