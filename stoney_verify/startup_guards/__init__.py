@@ -34,6 +34,10 @@ _STARTUP_GUARDS: Tuple[str, ...] = (
     # Postgres DSN is configured; Supabase REST cannot create missing tables.
     "stoney_verify.startup_guards.auto_schema_bootstrap",
 
+    # Discord-level throttling/retry safety must load early so every later
+    # module shares one audit-log guard, send retry layer, and channel edit queue.
+    "stoney_verify.startup_guards.discord_api_safety",
+
     # Central config write protection must load before setup/verify/ticket
     # modules can write guild_configs. It prevents accidental overwrites of
     # owner-picked roles/channels/categories and makes discovery fill blanks only.
@@ -119,6 +123,7 @@ _IMPORT_CHATTER_PREFIXES: Tuple[str, ...] = (
     "🩹 ",
     "🔗 ",
     "🧯 raidguard_hard_stop patched",
+    "🧯 discord_api_safety active",
     "🧪 ",
     "🧠 ",
     "🧭 setup_category_modal_compat patched",
