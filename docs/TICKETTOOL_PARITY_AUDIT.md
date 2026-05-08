@@ -14,6 +14,33 @@ Default workflow priority:
 
 Forms/modals must be optional and off by default. The default ticket flow should be instant.
 
+## Plain-language rule
+
+Dank Shield setup must use simple words that normal server owners and members understand immediately.
+
+Avoid unclear labels like:
+
+- "verification heavy"
+- "advanced workflow"
+- "intake flow"
+- "security posture"
+- "template profile"
+
+Use direct labels like:
+
+- "Basic server"
+- "Help desk"
+- "ID check"
+- "Voice check"
+- "Custom setup"
+
+Every setup option should answer these questions in plain English:
+
+1. What does this do?
+2. Who is it for?
+3. What will members see?
+4. Can I change it later?
+
 ## Confirmed direction
 
 - Default ticket creation should not force a form.
@@ -23,6 +50,9 @@ Forms/modals must be optional and off by default. The default ticket flow should
 - Public setup should explain what is enabled, what is missing, and how to fix it.
 - Multi-guild isolation must remain strict.
 - Caching/scaling work comes after TicketTool parity is solid.
+- Do not assume every server wants the Stoney Baloney service flow.
+- Stoney Baloney-style verification must be available as an optional setup choice, not the only default.
+- Setup wording must be clear enough for young users, new Discord users, tired moderators, and users who need extra-simple instructions.
 
 ## Active TicketTool parity audit
 
@@ -35,7 +65,7 @@ Required behavior:
 - [ ] Default ticket button opens a ticket immediately.
 - [ ] If multiple ticket types exist, use a select menu before opening.
 - [ ] Do not require a modal/form by default.
-- [ ] If a form is enabled, label it clearly as optional/advanced setup.
+- [ ] If a form is enabled, label it clearly as optional.
 - [ ] Ticket channel should immediately show helpful next-step buttons after creation.
 
 Acceptance:
@@ -51,7 +81,7 @@ Goal: server owners can configure tickets without guessing.
 Required behavior:
 
 - [ ] `/dank setup` has a clear Tickets section.
-- [ ] Tickets section shows Enabled/Disabled.
+- [ ] Tickets section shows On/Off instead of technical status words when possible.
 - [ ] Tickets section shows missing permissions with real fixes.
 - [ ] Tickets section has Preview Panel.
 - [ ] Tickets section has Publish Panel.
@@ -144,11 +174,40 @@ Required behavior:
 - [ ] Staff-only controls clearly separated from user controls.
 - [ ] Setup preview matches the real published panel.
 - [ ] Error messages explain what happened and how to fix it.
-- [ ] Optional smart templates per ticket type.
+- [ ] Optional smart setup choices per server type.
 
 Acceptance:
 
 - A non-technical server owner can understand setup without reading docs.
+
+### 8. Plain setup choices
+
+Goal: stop assuming every server wants the same setup while keeping the Stoney Baloney-style verification panel available as a simple choice.
+
+Setup choices should use plain labels:
+
+- [ ] Basic server — simple welcome/check-in and basic tickets.
+- [ ] Help desk — ticket support for members/customers.
+- [ ] ID check — users need to verify with an upload link.
+- [ ] Voice check — users can ask staff to verify them in voice chat.
+- [ ] ID + voice check — same style as the Stoney Baloney setup, but without hardcoded server branding.
+- [ ] Custom setup — choose only what this server needs.
+
+Required behavior:
+
+- [ ] `/dank setup` shows simple setup choices instead of technical labels.
+- [ ] Each choice has a one-sentence explanation.
+- [ ] Each choice has Preview before Publish.
+- [ ] Verification panel style is stored per guild.
+- [ ] Stoney Baloney-style setup is selectable but not assumed.
+- [ ] Template choice must not hardcode Stoney Baloney channel IDs, role IDs, or branding into other guilds.
+- [ ] Switching setup choices should not erase existing config without explicit confirmation.
+
+Acceptance:
+
+- A new server owner can choose a setup without knowing bot/developer terminology.
+- The Stoney Baloney-style verification panel can still be selected and published when desired.
+- Setup remains button/select driven and avoids forms unless absolutely necessary.
 
 ## Already handled / removed from active TODO
 
@@ -175,6 +234,9 @@ These are important, but they should not distract from ticket parity first:
 ## Non-negotiables
 
 - Do not force ticket users into forms by default.
+- Do not use confusing setup labels when plain words work.
+- Do not assume one server’s verification/service setup is the universal default.
+- Do not hardcode Stoney Baloney-specific branding, channel IDs, or role IDs into public guild workflows.
 - Do not add tiny patch files for core ticket behavior.
 - Update existing owner files when behavior is wrong.
 - Keep server-specific configuration isolated.
