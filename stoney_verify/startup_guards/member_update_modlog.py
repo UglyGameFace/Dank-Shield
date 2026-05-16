@@ -2,9 +2,17 @@ from __future__ import annotations
 
 """Startup loader for public member-update modlog coverage.
 
-This keeps role/nickname/timeout audit logging available even though the public
-command profile intentionally hides older legacy moderation modules.
+The main events.py listener already calls modlog.maybe_log_member_update_diff.
+Registering the older public listener at the same time creates duplicate
+Member Updated embeds for every role change.
+
+Default behavior now keeps the extra listener off. It can still be enabled for
+special deployments that intentionally do not load events.py by setting:
+
+    DANK_ENABLE_EXTRA_MEMBER_UPDATE_MODLOG=true
 """
+
+import os
 
 _REGISTERED = False
 
@@ -23,10 +31,26 @@ def _warn(message: str) -> None:
         pass
 
 
+def _env_bool(name: str, default: bool = False) -> bool:
+    try:
+        raw = os.getenv(name)
+        if raw is None or not str(raw).strip():
+            return bool(default)
+        return str(raw).strip().lower() in {"1", "true", "yes", "y", "on"}
+    except Exception:
+        return bool(default)
+
+
 def register_member_update_modlog() -> bool:
     global _REGISTERED
     if _REGISTERED:
         return True
+
+    if not _env_bool("DANK_ENABLE_EXTRA_MEMBER_UPDATE_MODLOG", False):
+        _REGISTERED = True
+        _log("extra public listener disabled; core events.py member-update logger is active")
+        return True
+
     try:
         from stoney_verify.globals import bot
         from stoney_verify.commands_ext.public_member_update_modlog import register_public_member_update_modlog
