@@ -20,6 +20,7 @@ from typing import Any, List, Tuple
 
 _REGISTERED = False
 _CONTEXT_PATCHED = False
+_APPROVAL_PATCHED = False
 
 
 def _log(message: str) -> None:
@@ -164,6 +165,89 @@ def patch_member_update_context_noise() -> bool:
         return False
 
 
+def _approval_role_churn_enabled() -> bool:
+    return _env_bool("DANK_SILENCE_APPROVAL_ROLE_CHURN", True)
+
+
+def _looks_like_bot_approval_role_churn(modlog: Any, role_added: List[str], role_removed: List[str], audit_reason: str) -> bool:
+    if not role_added and not role_removed:
+        return False
+
+    reason = str(audit_reason or "").strip().lower()
+    if not reason:
+        return False
+
+    if "approved by" not in reason:
+        return False
+
+    joined = "\n".join([*role_added, *role_removed]).lower()
+    approval_role_terms = (
+        "verified",
+        "resident",
+        "unverified",
+        "stoner",
+        "drunken",
+    )
+    return any(term in joined for term in approval_role_terms)
+
+
+def patch_approval_role_churn_noise() -> bool:
+    global _APPROVAL_PATCHED
+    if _APPROVAL_PATCHED:
+        return True
+
+    try:
+        from stoney_verify import modlog
+    except Exception as e:
+        _warn(f"failed importing modlog for approval patch: {e!r}")
+        return False
+
+    original = getattr(modlog, "maybe_log_member_update_diff", None)
+    if not callable(original):
+        _warn("modlog.maybe_log_member_update_diff missing; approval patch skipped")
+        return False
+
+    if getattr(original, "__dank_approval_role_churn_patch__", False):
+        _APPROVAL_PATCHED = True
+        return True
+
+    async def filtered_maybe_log_member_update_diff(guild, before, after):  # type: ignore[no-untyped-def]
+        if not _approval_role_churn_enabled():
+            return await original(guild, before, after)
+
+        try:
+            role_added, role_removed = modlog._roles_diff_lines(before, after)
+            timeout_lines = modlog._timeout_change_lines(before, after)
+            nickname_changed = (before.nick or "") != (after.nick or "")
+
+            if role_added or role_removed:
+                if not timeout_lines and not nickname_changed:
+                    entry = await modlog._audit_find_best_member_update_match(guild, int(after.id))
+                    _actor, audit_reason = modlog._format_actor_from_audit(entry)
+                    if _looks_like_bot_approval_role_churn(modlog, list(role_added), list(role_removed), audit_reason):
+                        # The approval command/ticket flow is the meaningful event.
+                        # Hide the mechanical role add/remove noise and report handled
+                        # so events.py does not emit its fallback role-update embed.
+                        return True
+        except Exception:
+            pass
+
+        return await original(guild, before, after)
+
+    filtered_maybe_log_member_update_diff.__dank_approval_role_churn_patch__ = True  # type: ignore[attr-defined]
+    filtered_maybe_log_member_update_diff.__wrapped__ = original  # type: ignore[attr-defined]
+
+    try:
+        setattr(modlog, "_dank_original_maybe_log_member_update_diff", original)
+        setattr(modlog, "maybe_log_member_update_diff", filtered_maybe_log_member_update_diff)
+        _APPROVAL_PATCHED = True
+        _log("silencing routine approval role add/remove churn")
+        return True
+    except Exception as e:
+        _warn(f"failed installing approval role churn patch: {e!r}")
+        return False
+
+
 def register_member_update_modlog() -> bool:
     global _REGISTERED
     if _REGISTERED:
@@ -188,7 +272,12 @@ def register_member_update_modlog() -> bool:
 
 
 patch_member_update_context_noise()
+patch_approval_role_churn_noise()
 register_member_update_modlog()
 
 
-__all__ = ["register_member_update_modlog", "patch_member_update_context_noise"]
+__all__ = [
+    "register_member_update_modlog",
+    "patch_member_update_context_noise",
+    "patch_approval_role_churn_noise",
+]
