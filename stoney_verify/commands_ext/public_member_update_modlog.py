@@ -13,6 +13,7 @@ This uses per-guild config only and never hardcodes channel IDs.
 
 from datetime import datetime, timezone
 from typing import Any, Optional
+import os
 
 import discord
 
@@ -23,6 +24,21 @@ _LISTENERS_REGISTERED = False
 
 def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
+
+
+def _env_bool(name: str, default: bool = False) -> bool:
+    try:
+        raw = os.getenv(name)
+        if raw is None or not str(raw).strip():
+            return bool(default)
+        value = str(raw).strip().lower()
+        if value in {"1", "true", "yes", "y", "on"}:
+            return True
+        if value in {"0", "false", "no", "n", "off"}:
+            return False
+        return bool(default)
+    except Exception:
+        return bool(default)
 
 
 def _trim(value: Any, limit: int = 1024) -> str:
@@ -243,10 +259,24 @@ def register_public_member_update_modlog(bot, tree) -> None:
     _ = tree
     if _LISTENERS_REGISTERED:
         return
+
+    # The main events.py member-update path already posts the richer teal
+    # member-update embed. This listener is now an emergency fallback only;
+    # leaving it on by default creates duplicate blue + teal mod-log spam.
+    if not _env_bool("DANK_ENABLE_PUBLIC_MEMBER_UPDATE_FALLBACK_MODLOG", False):
+        try:
+            print(
+                "ℹ️ public_member_update_modlog: fallback listener disabled "
+                "(set DANK_ENABLE_PUBLIC_MEMBER_UPDATE_FALLBACK_MODLOG=true to re-enable)"
+            )
+        except Exception:
+            pass
+        return
+
     bot.add_listener(_on_member_update, "on_member_update")
     _LISTENERS_REGISTERED = True
     try:
-        print("✅ public_member_update_modlog: registered role/nickname/timeout update listener")
+        print("✅ public_member_update_modlog: registered fallback role/nickname/timeout update listener")
     except Exception:
         pass
 
