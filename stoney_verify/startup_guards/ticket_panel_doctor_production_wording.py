@@ -42,8 +42,8 @@ def _fmt_num(value: Any) -> str:
 
 def _sequence_from_rows(doc_mod: Any, guild: discord.Guild, rows: Iterable[Dict[str, Any]]) -> Dict[str, int]:
     current_db_highest = 0
-    previous_system_highest = 0
-    previous_system_count = 0
+    history_highest = 0
+    history_count = 0
     current_count = 0
 
     for row in rows or []:
@@ -57,16 +57,16 @@ def _sequence_from_rows(doc_mod: Any, guild: discord.Guild, rows: Iterable[Dict[
                 current_count += 1
                 current_db_highest = max(current_db_highest, number, doc_mod._num_from_channel(channel))
             else:
-                previous_system_count += 1
-                previous_system_highest = max(previous_system_highest, number)
+                history_count += 1
+                history_highest = max(history_highest, number)
         except Exception:
             continue
 
     return {
         "current_db_highest": current_db_highest,
         "current_count": current_count,
-        "previous_system_highest": previous_system_highest,
-        "previous_system_count": previous_system_count,
+        "history_highest": history_highest,
+        "history_count": history_count,
     }
 
 
@@ -77,6 +77,42 @@ def _counts_text(doc_mod: Any, counts: Dict[str, int]) -> str:
         if not counts:
             return "No ticket rows found."
         return " • ".join(f"{k}: **{v}**" for k, v in sorted(counts.items()))
+
+
+async def _read_ticket_rows(panel_mod: Any, guild_id: int) -> List[Dict[str, Any]]:
+    """Read ticket rows for history display only.
+
+    This is read-only and separate from the main doctor summary because the
+    original helper returns counts but not the raw rows needed to explain saved
+    ticket history clearly.
+    """
+    try:
+        sb = panel_mod._sb()
+    except Exception:
+        sb = None
+    if sb is None:
+        return []
+
+    def sync() -> List[Dict[str, Any]]:
+        try:
+            rows = getattr(
+                sb.table("tickets")
+                .select("ticket_number,channel_id,discord_thread_id,status")
+                .eq("guild_id", str(guild_id))
+                .limit(1000)
+                .execute(),
+                "data",
+                None,
+            ) or []
+            return [row for row in rows if isinstance(row, dict)] if isinstance(rows, list) else []
+        except Exception as e:
+            _warn(f"ticket history row read failed guild={guild_id}: {type(e).__name__}: {e!r}")
+            return []
+
+    try:
+        return await panel_mod._to_thread(sync, [])
+    except Exception:
+        return []
 
 
 async def _production_doctor_command(doc_mod: Any, panel_mod: Any, interaction: discord.Interaction) -> None:
@@ -103,19 +139,20 @@ async def _production_doctor_command(doc_mod: Any, panel_mod: Any, interaction: 
 
     db_summary = await doc_mod._db_ticket_summary(panel_mod, guild.id)
     counter_summary = await doc_mod._db_counter_summary(panel_mod, guild.id)
-    stale_open = 0
-    sequence = {"current_db_highest": 0, "previous_system_highest": 0, "previous_system_count": 0}
+    all_rows = await _read_ticket_rows(panel_mod, guild.id)
 
+    stale_open = 0
+    sequence = {"current_db_highest": 0, "history_highest": 0, "history_count": 0}
     if db_summary.get("ok"):
         stale_open = await doc_mod._stale_open_rows(guild, db_summary.get("open_like") or [])
-        sequence = _sequence_from_rows(doc_mod, guild, db_summary.get("rows") or [])
+        sequence = _sequence_from_rows(doc_mod, guild, all_rows)
 
     clean_panels, old_panels, total_panels = await doc_mod._panel_message_counts(panel_channel)
 
     counter_num = _safe_int(counter_summary.get("last_ticket_number"), 0) if counter_summary.get("ok") else 0
     current_db_highest = _safe_int(sequence.get("current_db_highest"), 0)
-    previous_highest = _safe_int(sequence.get("previous_system_highest"), 0)
-    previous_count = _safe_int(sequence.get("previous_system_count"), 0)
+    history_highest = _safe_int(sequence.get("history_highest"), 0)
+    history_count = _safe_int(sequence.get("history_count"), 0)
     trusted_highest = max(counter_num, highest_channel_num, current_db_highest, 0)
     next_ticket_number = trusted_highest + 1
 
@@ -170,7 +207,10 @@ async def _production_doctor_command(doc_mod: Any, panel_mod: Any, interaction: 
     else:
         passing.append(f"Ticket database is readable: {_counts_text(doc_mod, db_summary.get('counts') or {})}")
         if stale_open:
-            warnings.append(f"{stale_open} open or claimed ticket record(s) point to a missing or already-closed channel.")
+            warnings.append(
+                f"{stale_open} active ticket record(s) need cleanup because the linked channel is missing or already closed. "
+                "New tickets are not blocked, but staff should repair or archive those records when possible."
+            )
 
     if not counter_summary.get("ok"):
         warnings.append(f"Ticket number counter check failed: {counter_summary.get('error')}")
@@ -183,11 +223,11 @@ async def _production_doctor_command(doc_mod: Any, panel_mod: Any, interaction: 
     else:
         passing.append(f"Ticket number counter is ready: {_fmt_num(counter_num)}")
 
-    if previous_count > 0:
+    if history_count > 0:
         info.append(
-            "Previous ticket history was found from an older ticket setup or imported records. "
-            f"Highest previous number: {_fmt_num(previous_highest)} across {previous_count} saved record(s). "
-            "This is kept for history only and does not change new Dank Shield ticket numbers."
+            "Saved ticket history was found. "
+            f"Highest saved history number: {_fmt_num(history_highest)} across {history_count} record(s). "
+            "This is kept for reference only and does not change the next new Dank Shield ticket number."
         )
 
     if clean_panels <= 0:
@@ -240,16 +280,15 @@ def apply() -> bool:
         _warn(f"could not import doctor dependencies: {e!r}")
         return False
 
-    if getattr(doc_mod, "_TICKET_PANEL_DOCTOR_PRODUCTION_WORDING_APPLIED", False):
-        return True
-
+    # Always re-apply on import so wording fixes can replace an older in-memory
+    # function after a deploy/restart without requiring another command reload.
     try:
         async def patched_doctor(panel_mod_arg: Any, interaction: discord.Interaction) -> None:
             return await _production_doctor_command(doc_mod, panel_mod_arg, interaction)
 
         doc_mod._doctor_command = patched_doctor
         setattr(doc_mod, "_TICKET_PANEL_DOCTOR_PRODUCTION_WORDING_APPLIED", True)
-        _log("patched /ticket-panel doctor with production-safe wording")
+        _log("patched /ticket-panel doctor with production-safe wording and history notes")
         return True
     except Exception as e:
         _warn(f"patch failed: {e!r}")
