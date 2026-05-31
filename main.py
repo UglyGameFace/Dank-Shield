@@ -21,6 +21,9 @@ load_all_startup_guards()
 # before extra ticket UI patches so creation/reopen paths choose a usable parent.
 import stoney_verify.startup_guards.ticket_overflow_category_guard  # noqa: F401,E402
 
+# Ticket categories can optionally define dashboard-managed form questions.
+import stoney_verify.startup_guards.ticket_forms_foundation_guard  # noqa: F401,E402
+
 # Setup actions can create channels/roles and write config. Load this before the
 # app starts so duplicate taps are blocked instead of racing setup state.
 import stoney_verify.startup_guards.setup_operation_lock_guard  # noqa: F401,E402
