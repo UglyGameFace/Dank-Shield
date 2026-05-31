@@ -105,6 +105,10 @@ _STARTUP_GUARDS: Tuple[str, ...] = (
     # channel action controls alive. The clean ticket panel below is canonical.
     "stoney_verify.startup_guards.legacy_public_ticket_panel_disable",
 
+    # Add `/ticket-panel doctor` before public_ticket_panel_clean registers the
+    # app command group so the doctor subcommand ships with /ticket-panel post.
+    "stoney_verify.startup_guards.ticket_panel_doctor_command",
+
     # Harden the live public category-menu ticket panel without introducing a
     # second ticket creation path. This fixes duplicate/wrong menu rows and
     # prevents ticket numbers from restarting at #0001 on existing servers.
@@ -175,6 +179,7 @@ _IMPORT_CHATTER_PREFIXES: Tuple[str, ...] = (
     "✅ vc_per_guild_access_fix:",
     "✅ public_no_env_runtime_config:",
     "✅ legacy_public_ticket_panel_disable:",
+    "✅ ticket_panel_doctor_command:",
     "✅ public_ticket_panel_clean_hardening:",
     "✅ vc_accept_claim_guard:",
     "✅ ticket_action_lock_guard:",
