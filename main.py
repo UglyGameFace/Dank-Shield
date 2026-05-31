@@ -21,6 +21,9 @@ load_all_startup_guards()
 # app starts so duplicate taps are blocked instead of racing setup state.
 import stoney_verify.startup_guards.setup_operation_lock_guard  # noqa: F401,E402
 
+# Ticket open controls should show live staff context instead of plain buttons.
+import stoney_verify.startup_guards.ticket_open_controls_status_guard  # noqa: F401,E402
+
 from stoney_verify.app import run
 
 
