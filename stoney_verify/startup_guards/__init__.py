@@ -101,6 +101,10 @@ _STARTUP_GUARDS: Tuple[str, ...] = (
     # current server's saved setup config, never deployment/global .env IDs.
     "stoney_verify.startup_guards.public_no_env_runtime_config",
 
+    # Disable stale public TicketPanelView creation while keeping staff ticket
+    # channel action controls alive. The clean ticket panel below is canonical.
+    "stoney_verify.startup_guards.legacy_public_ticket_panel_disable",
+
     # Harden the live public category-menu ticket panel without introducing a
     # second ticket creation path. This fixes duplicate/wrong menu rows and
     # prevents ticket numbers from restarting at #0001 on existing servers.
@@ -161,6 +165,7 @@ _IMPORT_CHATTER_PREFIXES: Tuple[str, ...] = (
     "✅ vc_setup_one_press_fix:",
     "✅ vc_per_guild_access_fix:",
     "✅ public_no_env_runtime_config:",
+    "✅ legacy_public_ticket_panel_disable:",
     "✅ public_ticket_panel_clean_hardening:",
     "✅ vc_accept_claim_guard:",
     "🧩 panel_bootstrap_runtime runtime listeners registered",
