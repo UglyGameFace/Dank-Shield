@@ -17,6 +17,10 @@ from stoney_verify.startup_guards import (
 # This keeps root startup clean and makes the next permanent-refactor pass easier.
 load_all_startup_guards()
 
+# Ticket categories can hit Discord's child-channel limit. Load overflow routing
+# before extra ticket UI patches so creation/reopen paths choose a usable parent.
+import stoney_verify.startup_guards.ticket_overflow_category_guard  # noqa: F401,E402
+
 # Setup actions can create channels/roles and write config. Load this before the
 # app starts so duplicate taps are blocked instead of racing setup state.
 import stoney_verify.startup_guards.setup_operation_lock_guard  # noqa: F401,E402
