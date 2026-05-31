@@ -10,6 +10,12 @@ from typing import Any, Dict, List, Optional
 
 import discord
 
+try:
+    from . import ticket_form_default_templates_guard as _default_templates
+    _default_templates.apply()
+except Exception:
+    pass
+
 
 def _log(message: str) -> None:
     try:
