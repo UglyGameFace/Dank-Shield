@@ -24,6 +24,9 @@ import stoney_verify.startup_guards.setup_operation_lock_guard  # noqa: F401,E40
 # Ticket open controls should show live staff context instead of plain buttons.
 import stoney_verify.startup_guards.ticket_open_controls_status_guard  # noqa: F401,E402
 
+# Keep that live status panel fresh after claim/unclaim/transfer/priority edits.
+import stoney_verify.startup_guards.ticket_open_controls_refresh_guard  # noqa: F401,E402
+
 from stoney_verify.app import run
 
 
