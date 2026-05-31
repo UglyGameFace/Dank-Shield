@@ -288,7 +288,14 @@ def apply() -> bool:
 
         doc_mod._doctor_command = patched_doctor
         setattr(doc_mod, "_TICKET_PANEL_DOCTOR_PRODUCTION_WORDING_APPLIED", True)
-        _log("patched /ticket-panel doctor with production-safe wording and history notes")
+
+        try:
+            from . import ticket_panel_repair_records_command as repair_mod
+            repair_mod.apply()
+        except Exception as e:
+            _warn(f"repair-records command load failed: {e!r}")
+
+        _log("patched /ticket-panel doctor with production-safe wording, history notes, and repair-records command")
         return True
     except Exception as e:
         _warn(f"patch failed: {e!r}")
