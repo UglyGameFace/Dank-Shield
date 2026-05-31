@@ -81,10 +81,10 @@ _STARTUP_GUARDS: Tuple[str, ...] = (
     # panel.py flow calls create_ticket_channel directly.
     "stoney_verify.tickets_new.panel_creation_guard_runtime",
 
-    # Route verification-needed users from the public Create Ticket button
-    # directly into the verification ticket flow instead of asking for a generic
-    # support reason.
+    # Keep verification helper functions available for the clean panel, but then
+    # immediately disable its old legacy TicketPanelView patch side effect.
     "stoney_verify.startup_guards.unverified_ticket_panel_flow",
+    "stoney_verify.startup_guards.unverified_legacy_panel_patch_disable",
 
     # Make VC setup failures readable instead of saying only that the staff
     # panel could not be posted, and make setup health check the real VC path.
@@ -161,6 +161,7 @@ _IMPORT_CHATTER_PREFIXES: Tuple[str, ...] = (
     "🧰 ticket_channel_panel_repair patched",
     "🎯 ticket_category_enforcer patched",
     "🎟️ unverified_ticket_panel_flow patched",
+    "✅ unverified_legacy_panel_patch_disable:",
     "✅ vc_request_setup_clarity:",
     "✅ vc_setup_one_press_fix:",
     "✅ vc_per_guild_access_fix:",
