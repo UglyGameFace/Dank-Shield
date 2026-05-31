@@ -106,6 +106,10 @@ _STARTUP_GUARDS: Tuple[str, ...] = (
     # prevents ticket numbers from restarting at #0001 on existing servers.
     "stoney_verify.startup_guards.public_ticket_panel_clean_hardening",
 
+    # VC Accept must claim the ticket through tickets_new.service.assign_ticket
+    # before granting voice access, so claimed-by state and logs stay correct.
+    "stoney_verify.startup_guards.vc_accept_claim_guard",
+
     # DB-backed panel/config bootstrap runtime.
     # This self-registers on_ready/on_guild_join listeners and starts the
     # panel bootstrap worker after the bot is ready. It does not create roles,
@@ -158,6 +162,7 @@ _IMPORT_CHATTER_PREFIXES: Tuple[str, ...] = (
     "✅ vc_per_guild_access_fix:",
     "✅ public_no_env_runtime_config:",
     "✅ public_ticket_panel_clean_hardening:",
+    "✅ vc_accept_claim_guard:",
     "🧩 panel_bootstrap_runtime runtime listeners registered",
     "🧯 event_safety loaded",
     "🛰️ shard_safety patched",
