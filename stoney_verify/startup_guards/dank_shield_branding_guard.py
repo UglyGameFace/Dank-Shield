@@ -13,17 +13,25 @@ Discord application/bot profile, not by these embed/text patches.
 from typing import Any, Iterable
 
 _PATCHED = False
+_DISCORD_PATCHED = False
 
 _REPLACEMENTS: tuple[tuple[str, str], ...] = (
     ("/stoney setup", "/dank setup"),
+    ("`/stoney setup`", "`/dank setup`"),
     ("/stoney", "/dank"),
+    ("`/stoney`", "`/dank`"),
     ("Stoney Verify", "Dank Shield"),
     ("StoneyVerify", "DankShield"),
     ("Stoney setup", "Dank Shield setup"),
+    ("Stoney Setup", "Dank Shield Setup"),
+    ("Stoney Quick Setup", "Dank Shield Quick Setup"),
+    ("Stoney Setup Assistant", "Dank Shield Setup Assistant"),
     ("Stoney is", "Dank Shield is"),
     ("Stoney lacks", "Dank Shield lacks"),
     ("Stoney ticket", "Dank Shield ticket"),
     ("Stoney panel", "Dank Shield panel"),
+    ("Stoney's", "Dank Shield's"),
+    ("Stoney’s", "Dank Shield’s"),
     ("Stoney", "Dank Shield"),
 )
 
@@ -41,6 +49,45 @@ def _clean(value: Any) -> Any:
     if isinstance(value, dict):
         return {k: _clean(v) for k, v in value.items()}
     return value
+
+
+def _clean_select_option(option: Any) -> Any:
+    try:
+        if getattr(option, "label", None):
+            option.label = _clean(option.label)
+    except Exception:
+        pass
+    try:
+        if getattr(option, "description", None):
+            option.description = _clean(option.description)
+    except Exception:
+        pass
+    return option
+
+
+def _clean_view(view: Any) -> Any:
+    try:
+        for child in list(getattr(view, "children", []) or []):
+            try:
+                if getattr(child, "label", None):
+                    child.label = _clean(child.label)
+            except Exception:
+                pass
+            try:
+                if getattr(child, "placeholder", None):
+                    child.placeholder = _clean(child.placeholder)
+            except Exception:
+                pass
+            try:
+                options = getattr(child, "options", None)
+                if options:
+                    for option in list(options):
+                        _clean_select_option(option)
+            except Exception:
+                pass
+    except Exception:
+        pass
+    return view
 
 
 def _clean_embed(embed: Any) -> Any:
@@ -67,11 +114,11 @@ def _clean_embed(embed: Any) -> Any:
         pass
 
     try:
-        for field in list(getattr(embed, "fields", []) or []):
+        fields = list(getattr(embed, "fields", []) or [])
+        for idx, field in enumerate(fields):
             name = _clean(getattr(field, "name", "") or "")
             value = _clean(getattr(field, "value", "") or "")
             inline = bool(getattr(field, "inline", False))
-            idx = list(getattr(embed, "fields", []) or []).index(field)
             embed.set_field_at(idx, name=name, value=value, inline=inline)
     except Exception:
         pass
@@ -88,7 +135,21 @@ def _clean_payload(payload: dict[str, Any]) -> dict[str, Any]:
         out["embed"] = _clean_embed(out["embed"])
     if "embeds" in out and isinstance(out["embeds"], list):
         out["embeds"] = [_clean_embed(e) for e in out["embeds"]]
+    if "view" in out and out["view"] is not None:
+        out["view"] = _clean_view(out["view"])
     return out
+
+
+def _clean_args(args: tuple[Any, ...]) -> tuple[Any, ...]:
+    if not args:
+        return args
+    cleaned = list(args)
+    try:
+        if isinstance(cleaned[0], str):
+            cleaned[0] = _clean(cleaned[0])
+    except Exception:
+        pass
+    return tuple(cleaned)
 
 
 def _wrap_async_reply_function(obj: Any, attr_name: str, *, content_arg_indexes: Iterable[int] = (1,)) -> bool:
@@ -112,10 +173,49 @@ def _wrap_async_reply_function(obj: Any, attr_name: str, *, content_arg_indexes:
     return True
 
 
+def _wrap_discord_send_like(cls: Any, attr_name: str) -> bool:
+    original = getattr(cls, attr_name, None)
+    if not callable(original) or getattr(original, "_dank_branding_wrapped", False):
+        return False
+
+    async def wrapper(self: Any, *args: Any, **kwargs: Any):
+        return await original(self, *_clean_args(args), **_clean_payload(kwargs))
+
+    setattr(wrapper, "_dank_branding_wrapped", True)
+    setattr(cls, attr_name, wrapper)
+    return True
+
+
+def _install_discord_surface_cleaner() -> int:
+    global _DISCORD_PATCHED
+    if _DISCORD_PATCHED:
+        return 0
+
+    wrapped = 0
+    try:
+        import discord
+
+        # Direct setup screens often use these instead of module helper wrappers.
+        wrapped += int(_wrap_discord_send_like(discord.InteractionResponse, "send_message"))
+        wrapped += int(_wrap_discord_send_like(discord.InteractionResponse, "edit_message"))
+        wrapped += int(_wrap_discord_send_like(discord.Interaction, "edit_original_response"))
+
+        webhook_cls = getattr(discord, "Webhook", None)
+        if webhook_cls is not None:
+            wrapped += int(_wrap_discord_send_like(webhook_cls, "send"))
+    except Exception:
+        pass
+
+    _DISCORD_PATCHED = True
+    return wrapped
+
+
 def install_dank_shield_branding_guard() -> bool:
     global _PATCHED
     if _PATCHED:
         return True
+
+    discord_wrapped = _install_discord_surface_cleaner()
 
     try:
         from stoney_verify.commands_ext import public_ticket_panel_clean as panel
@@ -177,7 +277,7 @@ def install_dank_shield_branding_guard() -> bool:
 
     _PATCHED = True
     try:
-        print("🛡️ dank_shield_branding_guard active")
+        print(f"🛡️ dank_shield_branding_guard active discord_wrapped={discord_wrapped}")
         print("ℹ️ Discord message author/app name is controlled by the Discord bot profile, not code embeds.")
     except Exception:
         pass
