@@ -4,6 +4,10 @@ from __future__ import annotations
 # can call audit logs, send modlogs, or edit ticket channels.
 import stoney_verify.startup_guards.discord_api_safety  # noqa: F401
 
+# Keep production/public slash commands on one surface. This runs before app.py
+# so the app does not create beta guild command copies unless explicitly enabled.
+import stoney_verify.startup_guards.command_scope_dedupe  # noqa: F401
+
 from stoney_verify.startup_guards import (
     load_all_startup_guards,
     start_process_health_loop,
