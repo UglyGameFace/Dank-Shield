@@ -118,6 +118,10 @@ _STARTUP_GUARDS: Tuple[str, ...] = (
     # once cannot duplicate messages or race ticket state.
     "stoney_verify.startup_guards.ticket_action_lock_guard",
 
+    # Better-than-TicketTool safety: open tickets must be closed before delete,
+    # so transcript/archive/audit lifecycle stays predictable.
+    "stoney_verify.startup_guards.ticket_delete_lifecycle_guard",
+
     # DB-backed panel/config bootstrap runtime.
     # This self-registers on_ready/on_guild_join listeners and starts the
     # panel bootstrap worker after the bot is ready. It does not create roles,
@@ -174,6 +178,7 @@ _IMPORT_CHATTER_PREFIXES: Tuple[str, ...] = (
     "✅ public_ticket_panel_clean_hardening:",
     "✅ vc_accept_claim_guard:",
     "✅ ticket_action_lock_guard:",
+    "✅ ticket_delete_lifecycle_guard:",
     "🧩 panel_bootstrap_runtime runtime listeners registered",
     "🧯 event_safety loaded",
     "🛰️ shard_safety patched",
