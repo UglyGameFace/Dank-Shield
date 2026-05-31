@@ -109,6 +109,10 @@ _STARTUP_GUARDS: Tuple[str, ...] = (
     # app command group so the doctor subcommand ships with /ticket-panel post.
     "stoney_verify.startup_guards.ticket_panel_doctor_command",
 
+    # Production wording layer for `/ticket-panel doctor`; it keeps diagnostics
+    # useful for normal server owners who did not build the bot with us.
+    "stoney_verify.startup_guards.ticket_panel_doctor_production_wording",
+
     # Harden the live public category-menu ticket panel without introducing a
     # second ticket creation path. This fixes duplicate/wrong menu rows and
     # prevents ticket numbers from restarting at #0001 on existing servers.
@@ -184,6 +188,7 @@ _IMPORT_CHATTER_PREFIXES: Tuple[str, ...] = (
     "✅ public_no_env_runtime_config:",
     "✅ legacy_public_ticket_panel_disable:",
     "✅ ticket_panel_doctor_command:",
+    "✅ ticket_panel_doctor_production_wording:",
     "✅ public_ticket_panel_clean_hardening:",
     "✅ external_ticket_history_sequence_guard:",
     "✅ vc_accept_claim_guard:",
