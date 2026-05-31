@@ -114,6 +114,10 @@ _STARTUP_GUARDS: Tuple[str, ...] = (
     # prevents ticket numbers from restarting at #0001 on existing servers.
     "stoney_verify.startup_guards.public_ticket_panel_clean_hardening",
 
+    # Final numbering authority: external/imported ticket-bot history is visible
+    # in diagnostics but cannot control Dank Shield's new ticket sequence.
+    "stoney_verify.startup_guards.external_ticket_history_sequence_guard",
+
     # VC Accept must claim the ticket through tickets_new.service.assign_ticket
     # before granting voice access, so claimed-by state and logs stay correct.
     "stoney_verify.startup_guards.vc_accept_claim_guard",
@@ -181,6 +185,7 @@ _IMPORT_CHATTER_PREFIXES: Tuple[str, ...] = (
     "✅ legacy_public_ticket_panel_disable:",
     "✅ ticket_panel_doctor_command:",
     "✅ public_ticket_panel_clean_hardening:",
+    "✅ external_ticket_history_sequence_guard:",
     "✅ vc_accept_claim_guard:",
     "✅ ticket_action_lock_guard:",
     "✅ ticket_delete_lifecycle_guard:",
