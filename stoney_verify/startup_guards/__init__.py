@@ -101,6 +101,11 @@ _STARTUP_GUARDS: Tuple[str, ...] = (
     # current server's saved setup config, never deployment/global .env IDs.
     "stoney_verify.startup_guards.public_no_env_runtime_config",
 
+    # Harden the live public category-menu ticket panel without introducing a
+    # second ticket creation path. This fixes duplicate/wrong menu rows and
+    # prevents ticket numbers from restarting at #0001 on existing servers.
+    "stoney_verify.startup_guards.public_ticket_panel_clean_hardening",
+
     # DB-backed panel/config bootstrap runtime.
     # This self-registers on_ready/on_guild_join listeners and starts the
     # panel bootstrap worker after the bot is ready. It does not create roles,
@@ -152,6 +157,7 @@ _IMPORT_CHATTER_PREFIXES: Tuple[str, ...] = (
     "✅ vc_setup_one_press_fix:",
     "✅ vc_per_guild_access_fix:",
     "✅ public_no_env_runtime_config:",
+    "✅ public_ticket_panel_clean_hardening:",
     "🧩 panel_bootstrap_runtime runtime listeners registered",
     "🧯 event_safety loaded",
     "🛰️ shard_safety patched",
