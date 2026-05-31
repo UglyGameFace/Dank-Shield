@@ -31,6 +31,9 @@ import stoney_verify.startup_guards.ticket_open_controls_status_guard  # noqa: F
 # Keep that live status panel fresh after claim/unclaim/transfer/priority edits.
 import stoney_verify.startup_guards.ticket_open_controls_refresh_guard  # noqa: F401,E402
 
+# Staff can add/remove extra members or roles from a ticket through More Actions.
+import stoney_verify.startup_guards.ticket_access_management_guard  # noqa: F401,E402
+
 # Make transcript posts easier for staff/server owners to read at a glance.
 import stoney_verify.startup_guards.transcript_summary_card_guard  # noqa: F401,E402
 
