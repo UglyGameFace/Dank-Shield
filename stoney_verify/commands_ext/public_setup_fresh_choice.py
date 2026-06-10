@@ -245,6 +245,70 @@ def _choice_preview_embed(guild: discord.Guild, choice: PlainSetupChoice) -> dis
     return embed
 
 
+async def _edit_setup_message(
+    interaction: discord.Interaction,
+    *,
+    embed: discord.Embed,
+    view: discord.ui.View,
+) -> None:
+    """Edit the current setup message without assuming response state.
+
+    Both the home buttons and the after-choice buttons use this. Keeping it as a
+    helper prevents decorated discord.ui callback methods from being called via
+    `.callback`, which is not valid on the class-level function object.
+    """
+    if interaction.response.is_done():
+        await solid._edit_or_followup(interaction, embed=embed, view=view)
+    else:
+        await interaction.response.edit_message(embed=embed, view=view)
+
+
+async def _open_existing_server_setup(interaction: discord.Interaction) -> None:
+    if not await solid._require_setup_permission(interaction):
+        return
+    embed = discord.Embed(
+        title="🧩 Use My Existing Server",
+        description=(
+            "Pick the roles/channels/folders your server already uses. Names do not matter. "
+            "Dank Shield saves Discord IDs per server."
+        ),
+        color=discord.Color.blurple(),
+        timestamp=now_utc(),
+    )
+    embed.add_field(
+        name="Sections",
+        value=(
+            "🎫 **Ticket Basics** — ticket folders, staff role, transcripts\n"
+            "🎭 **Access Roles** — waiting role, approved role, member role\n"
+            "🎙️ **Verification Channels** — ID/voice check channels\n"
+            "🧾 **Logs + Status** — modlog, join log, status channel\n"
+            "⚙️ **Behavior Settings** — ticket prefix, kick timer, verification style"
+        ),
+        inline=False,
+    )
+    await _edit_setup_message(interaction, embed=embed, view=solid.ChooseExistingView())
+
+
+async def _open_create_missing_items(interaction: discord.Interaction) -> None:
+    if not await solid._require_setup_permission(interaction):
+        return
+    embed = discord.Embed(
+        title="✨ Create Missing Items",
+        description=(
+            "Dank Shield can create missing starter roles/channels/folders. "
+            "It does **not** delete your server setup."
+        ),
+        color=discord.Color.green(),
+        timestamp=now_utc(),
+    )
+    embed.add_field(
+        name="Before it creates anything",
+        value="Review this screen. Press **Create Basic Missing Items** only if you want the starter layout.",
+        inline=False,
+    )
+    await _edit_setup_message(interaction, embed=embed, view=CreateMissingItemsView())
+
+
 async def _open_ticket_menu_options(interaction: discord.Interaction) -> None:
     if not await solid._require_setup_permission(interaction):
         return
@@ -363,49 +427,11 @@ class PlainSetupHomeView(discord.ui.View):
 
     @discord.ui.button(label="Use My Existing Server", emoji="🧩", style=discord.ButtonStyle.primary, custom_id="dank_setup_plain:existing", row=0)
     async def existing(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        if not await solid._require_setup_permission(interaction):
-            return
-        embed = discord.Embed(
-            title="🧩 Use My Existing Server",
-            description=(
-                "Pick the roles/channels/folders your server already uses. Names do not matter. "
-                "Dank Shield saves Discord IDs per server."
-            ),
-            color=discord.Color.blurple(),
-            timestamp=now_utc(),
-        )
-        embed.add_field(
-            name="Sections",
-            value=(
-                "🎫 **Ticket Basics** — ticket folders, staff role, transcripts\n"
-                "🎭 **Access Roles** — waiting role, approved role, member role\n"
-                "🎙️ **Verification Channels** — ID/voice check channels\n"
-                "🧾 **Logs + Status** — modlog, join log, status channel\n"
-                "⚙️ **Behavior Settings** — ticket prefix, kick timer, verification style"
-            ),
-            inline=False,
-        )
-        await interaction.response.edit_message(embed=embed, view=solid.ChooseExistingView())
+        await _open_existing_server_setup(interaction)
 
     @discord.ui.button(label="Create Missing Items", emoji="✨", style=discord.ButtonStyle.success, custom_id="dank_setup_plain:create_missing", row=0)
     async def create_missing(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        if not await solid._require_setup_permission(interaction):
-            return
-        embed = discord.Embed(
-            title="✨ Create Missing Items",
-            description=(
-                "Dank Shield can create missing starter roles/channels/folders. "
-                "It does **not** delete your server setup."
-            ),
-            color=discord.Color.green(),
-            timestamp=now_utc(),
-        )
-        embed.add_field(
-            name="Before it creates anything",
-            value="Review this screen. Press **Create Basic Missing Items** only if you want the starter layout.",
-            inline=False,
-        )
-        await interaction.response.edit_message(embed=embed, view=CreateMissingItemsView())
+        await _open_create_missing_items(interaction)
 
     @discord.ui.button(label="Ticket Menu Options", emoji="🧾", style=discord.ButtonStyle.secondary, custom_id="dank_setup_plain:ticket_menu", row=1)
     async def ticket_menu(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
@@ -426,9 +452,13 @@ class PlainSetupChoiceView(solid.BackToSetupView):
     async def _save_and_show(self, interaction: discord.Interaction, choice: PlainSetupChoice) -> None:
         if not await solid._require_setup_permission(interaction):
             return
+        guild = interaction.guild
+        if guild is None:
+            return await interaction.response.send_message("❌ This must be used inside a server.", ephemeral=True)
+
         await solid._safe_defer_update(interaction)
         await _save_choice(interaction, choice)
-        embed = _choice_preview_embed(interaction.guild, choice)  # type: ignore[arg-type]
+        embed = _choice_preview_embed(guild, choice)
         await solid._edit_or_followup(interaction, embed=embed, view=AfterChoiceView())
 
     @discord.ui.button(label="Basic server", emoji="🏠", style=discord.ButtonStyle.primary, custom_id="dank_setup_choice:basic", row=0)
@@ -459,11 +489,11 @@ class PlainSetupChoiceView(solid.BackToSetupView):
 class AfterChoiceView(solid.BackToSetupView):
     @discord.ui.button(label="Use My Existing Server", emoji="🧩", style=discord.ButtonStyle.primary, custom_id="dank_setup_after_choice:existing", row=0)
     async def existing(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        await PlainSetupHomeView.existing.callback(PlainSetupHomeView(), interaction, button)  # type: ignore[misc]
+        await _open_existing_server_setup(interaction)
 
     @discord.ui.button(label="Create Missing Items", emoji="✨", style=discord.ButtonStyle.success, custom_id="dank_setup_after_choice:create", row=0)
     async def create_missing(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        await PlainSetupHomeView.create_missing.callback(PlainSetupHomeView(), interaction, button)  # type: ignore[misc]
+        await _open_create_missing_items(interaction)
 
     @discord.ui.button(label="Setup Check", emoji="🩺", style=discord.ButtonStyle.secondary, custom_id="dank_setup_after_choice:health", row=1)
     async def health(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
