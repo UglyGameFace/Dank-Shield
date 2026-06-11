@@ -37,6 +37,9 @@ import stoney_verify.startup_guards.guild_config_runtime_validator  # noqa: F401
 # Keep dashboard bot-command worker role decisions scoped to the command guild.
 import stoney_verify.startup_guards.bot_command_worker_public_config_guard  # noqa: F401,E402
 
+# Probe optional REST-readable tables and print exact migration guidance.
+import stoney_verify.startup_guards.optional_schema_health  # noqa: F401,E402
+
 # Ticket categories can hit Discord's child-channel limit. Load overflow routing
 # before extra ticket UI patches so creation/reopen paths choose a usable parent.
 import stoney_verify.startup_guards.ticket_overflow_category_guard  # noqa: F401,E402
