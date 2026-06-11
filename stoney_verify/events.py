@@ -1651,6 +1651,24 @@ def _invite_meta(invite: discord.Invite) -> Dict[str, Any]:
     }
 
 
+def _join_truth_quality(entry_method: str, *, invite_code: Optional[str] = None, invited_by: Optional[str] = None) -> Tuple[str, int, str]:
+    method = str(entry_method or "").strip().lower()
+
+    if method == "invite" and (invite_code or invited_by):
+        return ("confirmed", 95, "Invite usage delta identified a specific invite.")
+    if method == "vanity_invite":
+        return ("confirmed", 90, "Vanity invite usage increased.")
+    if method in {"vouched", "manual_verification", "ticket_verification"}:
+        return ("confirmed", 85, "Entry source came from an explicit staff/ticket action.")
+    if method == "invite_tracking_unavailable":
+        return ("unknown", 15, "Invite tracking was unavailable due to permissions or API failure.")
+    if method == "invite_cache_warming":
+        return ("partial", 35, "Invite cache was still warming; attribution should not be trusted as exact.")
+    if method == "invite_unresolved":
+        return ("partial", 45, "Invite cache existed, but the usage delta did not identify one invite.")
+    return ("unknown", 20, "Join attribution is unknown.")
+
+
 def _build_join_context(
     *,
     entry_method: str,
@@ -1671,6 +1689,11 @@ def _build_join_context(
     vanity_used: bool = False,
     source_ticket_id: Optional[str] = None,
 ) -> Dict[str, Any]:
+    quality, confidence, quality_reason = _join_truth_quality(
+        entry_method,
+        invite_code=invite_code,
+        invited_by=invited_by,
+    )
     return {
         "entry_method": str(entry_method or "").strip() or "unknown_join",
         "join_source": str(join_source or "").strip() or "unknown_join",
@@ -1689,6 +1712,10 @@ def _build_join_context(
         "channel_name": str(channel_name or "").strip() or None,
         "vanity_used": bool(vanity_used),
         "source_ticket_id": str(source_ticket_id or "").strip() or None,
+        "entry_truth_quality": quality,
+        "entry_confidence": confidence,
+        "entry_quality_reason": quality_reason,
+        "entry_conflict": False,
     }
 
 
@@ -1936,6 +1963,10 @@ async def _persist_member_join_context(
             "entry_reason": context.get("entry_reason"),
             "approval_reason": context.get("approval_reason"),
             "source_ticket_id": context.get("source_ticket_id"),
+            "entry_truth_quality": context.get("entry_truth_quality"),
+            "entry_confidence": context.get("entry_confidence"),
+            "entry_quality_reason": context.get("entry_quality_reason"),
+            "entry_conflict": bool(context.get("entry_conflict", False)),
             "joined_at": joined_at,
             "vanity_used": bool(context.get("vanity_used", False)),
             "synced_at": now_iso,
@@ -1968,6 +1999,10 @@ async def _persist_member_join_context(
             "approved_by_name": context.get("approved_by_name"),
             "join_note": context.get("join_note"),
             "source_ticket_id": context.get("source_ticket_id"),
+            "entry_truth_quality": context.get("entry_truth_quality"),
+            "entry_confidence": context.get("entry_confidence"),
+            "entry_quality_reason": context.get("entry_quality_reason"),
+            "entry_conflict": bool(context.get("entry_conflict", False)),
             "vanity_used": bool(context.get("vanity_used", False)),
             "risk_score": risk_payload.get("risk_score", 0),
             "risk_level": risk_payload.get("risk_level", "low"),
@@ -2022,6 +2057,10 @@ async def _persist_member_join_context(
                         "channel_name": context.get("channel_name"),
                         "joined_at": joined_at,
                         "vanity_used": bool(context.get("vanity_used", False)),
+                        "entry_truth_quality": context.get("entry_truth_quality"),
+                        "entry_confidence": context.get("entry_confidence"),
+                        "entry_quality_reason": context.get("entry_quality_reason"),
+                        "entry_conflict": bool(context.get("entry_conflict", False)),
                         "invited_by": context.get("invited_by"),
                         "invited_by_name": context.get("invited_by_name"),
                         "vouched_by": context.get("vouched_by"),
