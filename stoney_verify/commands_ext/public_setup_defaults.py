@@ -6,8 +6,9 @@ Auto-build must be boring and safe:
 - reuse saved config IDs first
 - reuse existing default-looking Discord items second
 - create only truly missing items
-- never move, rename, delete, or permission-overwrite existing items
+- never move, rename, or delete existing items
 - never overwrite owner-picked setup values; auto-build fills blanks only
+- when enabled, repair only the safe bot/staff/control overwrites needed for Dank Shield to function
 """
 
 import re
@@ -207,6 +208,129 @@ def _voice_overwrites(guild: discord.Guild, staff_role: Optional[discord.Role], 
     return ow
 
 
+def _target_label(target: Any) -> str:
+    try:
+        mention = getattr(target, "mention", None)
+        if mention:
+            return str(mention)
+        name = getattr(target, "name", None)
+        if name:
+            return f"`{name}`"
+    except Exception:
+        pass
+    return "`unknown target`"
+
+
+def _overwrite_allows_staff_like_access(expected: discord.PermissionOverwrite) -> bool:
+    try:
+        allow, _deny = expected.pair()
+        return bool(
+            allow.manage_channels
+            or allow.manage_messages
+            or allow.manage_threads
+            or allow.send_messages
+            or allow.move_members
+        )
+    except Exception:
+        return False
+
+
+def _is_safe_repair_target(
+    guild: discord.Guild,
+    target: Any,
+    expected: discord.PermissionOverwrite,
+) -> bool:
+    """Only repair Dank Shield's bot/staff/control access, not member-facing defaults."""
+
+    try:
+        if target == guild.default_role:
+            return False
+
+        me = _bot_member(guild)
+        if me is not None and getattr(target, "id", None) == getattr(me, "id", None):
+            return True
+
+        if isinstance(target, discord.Role):
+            if target.is_default():
+                return False
+            return _overwrite_allows_staff_like_access(expected)
+    except Exception:
+        return False
+
+    return False
+
+
+def _overwrite_changed(
+    current: discord.PermissionOverwrite,
+    expected: discord.PermissionOverwrite,
+) -> bool:
+    try:
+        return current.pair() != expected.pair()
+    except Exception:
+        return True
+
+
+async def _repair_existing_permissions(
+    channel: Optional[Any],
+    overwrites: dict[Any, discord.PermissionOverwrite],
+    *,
+    label: str,
+    notes: list[str],
+    ok: list[str],
+) -> None:
+    """Repair only the access required for the bot and staff/control roles to work.
+
+    This intentionally skips @everyone and normal member-facing role overwrites so
+    auto-build remains safe on existing servers.
+    """
+
+    if channel is None or not overwrites:
+        return
+
+    guild = getattr(channel, "guild", None)
+    if not isinstance(guild, discord.Guild):
+        return
+
+    repair_items = [
+        (target, expected)
+        for target, expected in overwrites.items()
+        if _is_safe_repair_target(guild, target, expected)
+    ]
+    if not repair_items:
+        return
+
+    can_manage, reason = _can_manage_channels(guild)
+    if not can_manage:
+        notes.append(f"Could not repair permissions on {label}: {reason}")
+        return
+
+    repaired: list[str] = []
+    for target, expected in repair_items:
+        try:
+            current = channel.overwrites_for(target)
+        except Exception:
+            current = discord.PermissionOverwrite()
+
+        if not _overwrite_changed(current, expected):
+            continue
+
+        try:
+            await channel.set_permissions(
+                target,
+                overwrite=expected,
+                reason="Dank Shield setup -> repair required bot/staff access",
+            )
+            repaired.append(_target_label(target))
+        except Exception as e:
+            notes.append(f"Could not repair {label} permissions for {_target_label(target)}: {type(e).__name__}")
+
+    if repaired:
+        shown = ", ".join(repaired[:5])
+        if len(repaired) > 5:
+            shown += f", …and {len(repaired) - 5} more"
+        ok.append(f"Repaired {label} access for {shown}.")
+
+
 async def _ensure_role(guild: discord.Guild, name: str, *, create_missing_roles: bool, notes: list[str], created: list[str], reused: list[str]) -> Optional[discord.Role]:
     role = _role_by_name(guild, name)
     if role:
@@ -220,7 +344,7 @@ async def _ensure_role(guild: discord.Guild, name: str, *, create_missing_roles:
         notes.append(f"Could not create role `{name}`: {reason}")
         return None
     try:
-        role = await guild.create_role(name=name, permissions=discord.Permissions.none(), hoist=False, mentionable=False, reason="Stoney auto-build missing recommended role")
+        role = await guild.create_role(name=name, permissions=discord.Permissions.none(), hoist=False, mentionable=False, reason="Dank Shield auto-build missing recommended role")
         created.append(f"Role: {role.mention}")
         return role
     except Exception as e:
@@ -232,14 +356,14 @@ async def _ensure_category(guild: discord.Guild, name: str, *, overwrites: dict[
     category = _category_by_name(guild, name)
     if category:
         _unique(reused, f"Category: `{category.name}`")
-        notes.append(f"Reused existing category `{category.name}` without overwriting permissions.")
+        notes.append(f"Reused existing category `{category.name}`; safe bot/staff permission repair will be checked.")
         return category
     ok, reason = _can_manage_channels(guild)
     if not ok:
         notes.append(f"Could not create category `{name}`: {reason}")
         return None
     try:
-        category = await guild.create_category(name=name, overwrites=overwrites, reason="Stoney auto-build missing recommended category")
+        category = await guild.create_category(name=name, overwrites=overwrites, reason="Dank Shield auto-build missing recommended category")
         created.append(f"Category: `{category.name}`")
         return category
     except Exception as e:
@@ -251,14 +375,14 @@ async def _ensure_text(guild: discord.Guild, name: str, *, category: Optional[di
     channel = _text_by_name(guild, name)
     if channel:
         _unique(reused, f"Channel: {channel.mention}")
-        notes.append(f"Reused existing channel {channel.mention} without moving it or overwriting permissions.")
+        notes.append(f"Reused existing channel {channel.mention}; safe bot/staff permission repair will be checked.")
         return channel
     ok, reason = _can_manage_channels(guild)
     if not ok:
         notes.append(f"Could not create channel `#{name}`: {reason}")
         return None
     try:
-        channel = await guild.create_text_channel(name=name, category=category, overwrites=overwrites, topic=topic[:1024] if topic else None, reason="Stoney auto-build missing recommended channel")
+        channel = await guild.create_text_channel(name=name, category=category, overwrites=overwrites, topic=topic[:1024] if topic else None, reason="Dank Shield auto-build missing recommended channel")
         created.append(f"Channel: {channel.mention}")
         return channel
     except Exception as e:
@@ -270,14 +394,14 @@ async def _ensure_voice(guild: discord.Guild, name: str, *, category: Optional[d
     channel = _voice_by_name(guild, name)
     if channel:
         _unique(reused, f"Voice: {channel.mention}")
-        notes.append(f"Reused existing voice channel {channel.mention} without moving it or overwriting permissions.")
+        notes.append(f"Reused existing voice channel {channel.mention}; safe bot/staff permission repair will be checked.")
         return channel
     ok, reason = _can_manage_channels(guild)
     if not ok:
         notes.append(f"Could not create voice channel `{name}`: {reason}")
         return None
     try:
-        channel = await guild.create_voice_channel(name=name, category=category, overwrites=overwrites, reason="Stoney auto-build missing recommended voice channel")
+        channel = await guild.create_voice_channel(name=name, category=category, overwrites=overwrites, reason="Dank Shield auto-build missing recommended voice channel")
         created.append(f"Voice: {channel.mention}")
         return channel
     except Exception as e:
@@ -309,7 +433,7 @@ async def _assign_control_role_to_runner(interaction: discord.Interaction, role:
         notes.append(f"Could not auto-assign {role.mention} to you because of bot role hierarchy.")
         return
     try:
-        await interaction.user.add_roles(role, reason="Stoney auto-build bootstrap")
+        await interaction.user.add_roles(role, reason="Dank Shield auto-build bootstrap")
         ok.append(f"Assigned {role.mention} to you for future bot setup access.")
     except Exception as e:
         notes.append(f"Could not auto-assign {role.mention} to you: {type(e).__name__}")
@@ -385,6 +509,24 @@ async def _setup_defaults_callback(
     join_leave_channel = _channel_from_config(guild, cfg, discord.TextChannel, "join_log_channel_id") or await _ensure_text(guild, JOIN_LEAVE_CHANNEL_NAME, category=management_category, overwrites=staff_ow, topic="Join and leave events are posted here.", notes=notes, created=created, reused=reused)
     status_channel = _channel_from_config(guild, cfg, discord.TextChannel, "status_channel_id", "bot_status_channel_id") or await _ensure_text(guild, STATUS_CHANNEL_NAME, category=management_category, overwrites=staff_ow, topic="Bot status and restored-service notices are posted here.", notes=notes, created=created, reused=reused)
 
+    if apply_channel_permissions:
+        for label, channel, overwrites in (
+            ("start category", start_category, public_ow),
+            ("open ticket category", ticket_category, staff_ow),
+            ("archive category", archive_category, staff_ow),
+            ("staff tools category", management_category, staff_ow),
+            ("welcome channel", welcome_channel, public_ow),
+            ("verify channel", verify_channel, public_ow),
+            ("support/ticket panel channel", ticket_panel_channel, public_ow),
+            ("voice verification channel", vc_verify_channel, voice_ow),
+            ("VC queue channel", vc_queue_channel, staff_ow),
+            ("transcripts channel", transcripts_channel, staff_ow),
+            ("modlog channel", modlog_channel, staff_ow),
+            ("join/leave log channel", join_leave_channel, staff_ow),
+            ("bot status channel", status_channel, staff_ow),
+        ):
+            await _repair_existing_permissions(channel, overwrites, label=label, notes=notes, ok=ok)
+
     required = [
         ("server-control role", control_role), ("ticket staff role", staff_role), ("pending/unverified role", unverified_role), ("verified role", verified_role),
         ("start category", start_category), ("ticket category", ticket_category), ("archive category", archive_category), ("management category", management_category),
@@ -393,7 +535,7 @@ async def _setup_defaults_callback(
     ]
     blockers = [f"Missing {label}." for label, value in required if value is None]
     if blockers:
-        embed = discord.Embed(title="🚫 Recommended Layout Incomplete", description="Fix the blockers below, then run `/stoney setup` again.", color=discord.Color.red())
+        embed = discord.Embed(title="🚫 Recommended Layout Incomplete", description="Fix the blockers below, then run `/dank setup` again.", color=discord.Color.red())
         embed.add_field(name="Blockers", value=_line_list(blockers), inline=False)
         if created:
             embed.add_field(name="Created Before Stopping", value=_line_list(created), inline=False)
@@ -401,12 +543,12 @@ async def _setup_defaults_callback(
             embed.add_field(name="Reused", value=_line_list(reused), inline=False)
         if notes:
             embed.add_field(name="Notes", value=_line_list(notes), inline=False)
-        embed.add_field(name="What To Press Next", value="Press `/stoney setup` → **Choose Existing Items** if you already have custom roles/channels, or fix bot permissions and run Auto-Build again.", inline=False)
+        embed.add_field(name="What To Press Next", value="Press `/dank setup` → **Use My Existing Server** if you already have custom roles/channels, or fix bot permissions and run Create Missing Items again.", inline=False)
         return await interaction.followup.send(embed=embed, ephemeral=True)
 
     updates = {
         "__config_write_mode": "auto_create",
-        "__config_write_source": "/stoney setup auto-build recommended layout",
+        "__config_write_source": "/dank setup create missing items",
         "server_control_role_id": _role_value(control_role), "control_role_id": _role_value(control_role), "perm_role_id": _role_value(control_role),
         "staff_role_id": _role_value(staff_role), "vc_staff_role_id": _role_value(staff_role),
         "unverified_role_id": _role_value(unverified_role), "verified_role_id": _role_value(verified_role), "resident_role_id": _role_value(member_role),
@@ -427,7 +569,7 @@ async def _setup_defaults_callback(
         "bot_status_channel_id": str(int(status_channel.id)) if status_channel else None,
         "ticket_prefix": "ticket",
         "configured_by_id": str(interaction.user.id), "configured_by_name": str(interaction.user), "configured_at": _utc_iso(),
-        "default_setup_version": "5_fill_only_idempotent_recommended_layout",
+        "default_setup_version": "6_repair_safe_bot_staff_overwrites",
     }
 
     try:
@@ -435,7 +577,7 @@ async def _setup_defaults_callback(
         invalidate_guild_config(guild.id)
         cfg_after = await get_guild_config(guild.id, refresh=True)
     except Exception as e:
-        return await interaction.followup.send(f"❌ Recommended layout handled Discord items but failed saving config: `{e}`\n\nPress `/stoney setup` → **Choose Existing Items** to save your roles/channels manually.", ephemeral=True)
+        return await interaction.followup.send(f"❌ Recommended layout handled Discord items but failed saving config: `{e}`\n\nPress `/dank setup` → **Use My Existing Server** to save your roles/channels manually.", ephemeral=True)
 
     embed = _config_embed(guild, cfg_after, title="✅ Recommended Layout Handled")
     embed.add_field(name="Created", value=_line_list(created, empty="Nothing new created."), inline=False)
@@ -444,8 +586,8 @@ async def _setup_defaults_callback(
         embed.add_field(name="Passing Checks", value=_line_list(ok), inline=False)
     if notes:
         embed.add_field(name="Notes", value=_line_list(notes), inline=False)
-    embed.add_field(name="Auto-Build Safety", value="Auto-Build fills missing setup only. It does not replace owner-picked roles, channels, categories, or logs. Existing Discord items are reused without moving, renaming, deleting, or permission-overwriting them.", inline=False)
-    embed.add_field(name="Next Step", value="Press `/stoney setup` → **Run Health Check**. If anything is wrong, press **Choose Existing Items** and pick the exact role/channel/category you want.", inline=False)
+    embed.add_field(name="Auto-Build Safety", value="Auto-Build fills missing setup only. For existing items, it repairs only Dank Shield bot/staff/control access. It does not move, rename, delete, or rewrite @everyone/member-facing permissions.", inline=False)
+    embed.add_field(name="Next Step", value="Press `/dank setup` → **Setup Check**. If anything is wrong, press **Use My Existing Server** and pick the exact role/channel/category you want.", inline=False)
     await interaction.followup.send(embed=embed, ephemeral=True)
 
 
@@ -462,14 +604,14 @@ def _attach() -> None:
         return
     command = discord.app_commands.Command(
         name="setup-defaults",
-        description="Create only missing recommended roles/channels/categories for a fresh server.",
+        description="Create missing recommended roles/channels/categories and repair safe bot/staff access.",
         callback=_setup_defaults_callback,
     )
     try:
         command._params["control_role"].description = "Optional server-control role. Leave blank to reuse/create Bot Manager."
         command._params["staff_role"].description = "Optional ticket staff role. Leave blank to reuse/create Support Team."
         command._params["create_missing_roles"].description = "Create missing recommended roles only when no saved/custom role exists."
-        command._params["apply_channel_permissions"].description = "Applies permissions only to newly created setup items. Existing items are reused safely."
+        command._params["apply_channel_permissions"].description = "Also repairs safe bot/staff/control overwrites on reused setup items."
     except Exception:
         pass
     stoney_group.add_command(command)
@@ -483,7 +625,7 @@ def register_public_setup_defaults_commands(bot, tree) -> None:
     _ = bot, tree
     _attach()
     try:
-        print("✅ public_setup_defaults: attached fill-only /stoney setup-defaults command")
+        print("✅ public_setup_defaults: attached fill-only /dank setup-defaults command with safe permission repair")
     except Exception:
         pass
 
