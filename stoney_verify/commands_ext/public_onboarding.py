@@ -5,23 +5,62 @@ Public guild onboarding lifecycle.
 
 This is the production-friendly first-run layer:
 
-- When Stoney joins a server, create a neutral guild_configs row for that guild.
-- Never copy the beta server's channels/roles.
+- When Dank Shield joins a server, create a neutral guild_configs row for that guild.
+- Never copy the beta/home server's channels or roles.
+- Purge stale role/channel/category IDs that may already exist for the new guild row.
 - Post a simple setup prompt in the best safe channel the bot can write to.
-- When Stoney leaves a server, mark the config inactive instead of deleting it.
+- When Dank Shield leaves a server, mark the config inactive instead of deleting it.
 
 The goal is TicketTool-simple onboarding without hidden cross-server state.
 """
 
+import os
 from datetime import datetime, timezone
-from typing import Any, Optional
+from typing import Any, Mapping, Optional
 
 import discord
 
 from .public_setup_config_writer import upsert_guild_config
+from ..globals import get_supabase
 from ..guild_config import invalidate_guild_config
 
 _LISTENERS_REGISTERED = False
+
+_STALE_SETUP_ID_KEYS: tuple[str, ...] = (
+    "verify_channel_id",
+    "vc_verify_channel_id",
+    "vc_verify_queue_channel_id",
+    "ticket_category_id",
+    "ticket_archive_category_id",
+    "transcripts_channel_id",
+    "ticket_panel_channel_id",
+    "support_channel_id",
+    "status_channel_id",
+    "bot_status_channel_id",
+    "uptime_channel_id",
+    "health_channel_id",
+    "modlog_channel_id",
+    "raidlog_channel_id",
+    "join_log_channel_id",
+    "force_verify_log_channel_id",
+    "welcome_channel_id",
+    "start_category_id",
+    "management_category_id",
+    "staff_tools_category_id",
+    "unverified_role_id",
+    "verified_role_id",
+    "resident_role_id",
+    "member_role_id",
+    "staff_role_id",
+    "ticket_staff_role_id",
+    "support_role_id",
+    "vc_staff_role_id",
+    "server_control_role_id",
+    "control_role_id",
+    "perm_role_id",
+)
+
+_JSON_CONFIG_KEYS: tuple[str, ...] = ("settings", "config", "metadata", "meta")
 
 
 def _utc_iso() -> str:
@@ -36,6 +75,29 @@ def _safe_int(value: Any, default: int = 0) -> int:
         return int(text) if text else int(default)
     except Exception:
         return int(default)
+
+
+def _config_table_name() -> str:
+    try:
+        return (os.getenv("STONEY_GUILD_CONFIG_TABLE") or "guild_configs").strip() or "guild_configs"
+    except Exception:
+        return "guild_configs"
+
+
+def _mapping(value: Any) -> dict[str, Any]:
+    try:
+        if isinstance(value, Mapping):
+            return dict(value)
+    except Exception:
+        pass
+    return {}
+
+
+def _strip_stale_setup_ids(value: Any) -> dict[str, Any]:
+    out = _mapping(value)
+    for key in _STALE_SETUP_ID_KEYS:
+        out.pop(key, None)
+    return out
 
 
 def _can_send_setup_prompt(channel: Any, guild: discord.Guild) -> bool:
@@ -96,7 +158,7 @@ def _setup_embed(guild: discord.Guild) -> discord.Embed:
         title="👋 Thanks for adding Dank Shield",
         description=(
             "I’m ready, and I won’t use another server’s channels or roles.\n\n"
-            "Start setup with **`/stoney setup`**. It walks you through the safest setup path for this server."
+            "Start setup with **`/dank setup`**. It walks you through the safest setup path for this server."
         ),
         color=discord.Color.blurple(),
         timestamp=datetime.now(timezone.utc),
@@ -104,9 +166,9 @@ def _setup_embed(guild: discord.Guild) -> discord.Embed:
     embed.add_field(
         name="Fast setup order",
         value=(
-            "1. Run `/stoney setup`\n"
-            "2. Choose **Auto-Fix Missing Defaults** or **Choose Existing Items**\n"
-            "3. Let Stoney save this server’s ticket, verification, and log settings\n"
+            "1. Run `/dank setup`\n"
+            "2. Choose **Create Missing Items** or **Use My Existing Server**\n"
+            "3. Let Dank Shield save this server’s ticket, verification, and log settings\n"
             "4. Use `/ticket`, `/tickets`, and `/ticket-panel` once setup is ready"
         ),
         inline=False,
@@ -120,6 +182,70 @@ def _setup_embed(guild: discord.Guild) -> discord.Embed:
     return embed
 
 
+def _purge_stale_existing_ids_sync(guild_id: int, neutral_payload: Mapping[str, Any]) -> None:
+    """Clear copied/stale setup snowflakes from an existing row before onboarding.
+
+    The public setup writer intentionally protects existing role/channel/category
+    IDs from accidental overwrite. That is correct during normal setup, but on a
+    fresh guild join it means an old row can keep another server's IDs forever.
+    This pre-flight purge only runs for the joining guild and only removes known
+    setup snowflake keys.
+    """
+
+    try:
+        sb = get_supabase()
+        if sb is None:
+            return
+        table = _config_table_name()
+        gid = str(int(guild_id))
+        res = sb.table(table).select("*").eq("guild_id", gid).limit(1).execute()
+        rows = getattr(res, "data", None) or []
+        if not rows or not isinstance(rows[0], Mapping):
+            return
+        row = dict(rows[0])
+        columns = {str(k) for k in row.keys()}
+
+        base = {str(k): v for k, v in dict(neutral_payload).items() if v is not None}
+        flat_clear = {key: None for key in _STALE_SETUP_ID_KEYS if key in columns}
+        json_updates: dict[str, Any] = {}
+        for json_key in _JSON_CONFIG_KEYS:
+            if json_key not in columns:
+                continue
+            current = _strip_stale_setup_ids(row.get(json_key))
+            current.update(base)
+            json_updates[json_key] = current
+
+        attempts: list[dict[str, Any]] = []
+        if json_updates or flat_clear:
+            attempts.append({**base, **json_updates, **flat_clear})
+        if json_updates:
+            attempts.append({**base, **json_updates})
+        if flat_clear:
+            attempts.append({**base, **flat_clear})
+        attempts.append(base)
+
+        for payload in attempts:
+            try:
+                sb.table(table).update(payload).eq("guild_id", gid).execute()
+                print(f"✅ public_onboarding purged stale setup IDs guild={guild_id} cleared_flat={len(flat_clear)} json={list(json_updates.keys())}")
+                return
+            except Exception:
+                continue
+    except Exception as e:
+        try:
+            print(f"⚠️ public_onboarding stale setup ID purge failed guild={guild_id}: {repr(e)}")
+        except Exception:
+            pass
+
+
+async def _purge_stale_existing_ids(guild_id: int, neutral_payload: Mapping[str, Any]) -> None:
+    try:
+        import asyncio
+        await asyncio.to_thread(_purge_stale_existing_ids_sync, int(guild_id), dict(neutral_payload))
+    except Exception:
+        pass
+
+
 async def _create_neutral_config_row(guild: discord.Guild, *, joined: bool) -> None:
     owner_id = _safe_int(getattr(guild, "owner_id", 0), 0)
     payload = {
@@ -127,6 +253,8 @@ async def _create_neutral_config_row(guild: discord.Guild, *, joined: bool) -> N
         "owner_id": str(owner_id) if owner_id else None,
         "bot_active": bool(joined),
         "last_seen_at": _utc_iso(),
+        "use_env_fallbacks": False,
+        "allow_runtime_discovery": True,
     }
     if joined:
         payload.update(
@@ -136,6 +264,7 @@ async def _create_neutral_config_row(guild: discord.Guild, *, joined: bool) -> N
                 "configured": False,
             }
         )
+        await _purge_stale_existing_ids(int(guild.id), payload)
     else:
         payload.update(
             {
