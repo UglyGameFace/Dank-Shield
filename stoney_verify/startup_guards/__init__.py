@@ -104,10 +104,6 @@ _STARTUP_GUARDS: Tuple[str, ...] = (
     # current server's saved setup config, never deployment/global .env IDs.
     "stoney_verify.startup_guards.public_no_env_runtime_config",
 
-    # Member truth must also use per-guild saved safe/pending roles, not global
-    # deployment role IDs. This protects sync state and fail-closed checks.
-    "stoney_verify.startup_guards.per_guild_role_truth_guard",
-
     # Disable stale public TicketPanelView creation while keeping staff ticket
     # channel action controls alive. The clean ticket panel below is canonical.
     "stoney_verify.startup_guards.legacy_public_ticket_panel_disable",
@@ -194,7 +190,6 @@ _IMPORT_CHATTER_PREFIXES: Tuple[str, ...] = (
     "✅ vc_setup_one_press_fix:",
     "✅ vc_per_guild_access_fix:",
     "✅ public_no_env_runtime_config:",
-    "🧭 per_guild_role_truth_guard ",
     "✅ legacy_public_ticket_panel_disable:",
     "✅ ticket_panel_doctor_command:",
     "✅ ticket_panel_doctor_production_wording:",
