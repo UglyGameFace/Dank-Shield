@@ -13,9 +13,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 ROLE_TRUTH = ROOT / "stoney_verify" / "role_truth.py"
 BRIDGE = ROOT / "stoney_verify" / "startup_guards" / "per_guild_role_truth_guard.py"
-WATCH_FILES = [
-    ROOT / "stoney_verify" / "startup_guards" / "per_guild_role_truth_guard.py",
-]
+MEMBER_SERVICE = ROOT / "stoney_verify" / "members_new" / "service.py"
 
 FORBIDDEN_IN_BRIDGE = (
     "STONEY_GUILD_CONFIG_TABLE",
@@ -25,6 +23,16 @@ FORBIDDEN_IN_BRIDGE = (
     "_SAFE_KEYS",
     "_PENDING_KEYS",
     "def _role_truth",
+)
+
+FORBIDDEN_MEMBER_SERVICE_GLOBAL_ROLE_MARKERS = (
+    "UNVERIFIED_ROLE_ID",
+    "VERIFIED_ROLE_ID",
+    "RESIDENT_ROLE_ID",
+    "STAFF_ROLE_ID",
+    "STONER_ROLE_ID",
+    "DRUNKEN_ROLE_ID",
+    "def _configured_role_ids",
 )
 
 REQUIRED_ROLE_TRUTH_MARKERS = (
@@ -59,6 +67,13 @@ def main() -> int:
     for marker in FORBIDDEN_IN_BRIDGE:
         if marker in bridge:
             failures.append(f"per_guild_role_truth_guard carries duplicate/native-owned logic: {marker}")
+
+    service = _read(MEMBER_SERVICE)
+    if "from .. import role_truth" not in service:
+        failures.append("members_new/service.py must import native role_truth")
+    for marker in FORBIDDEN_MEMBER_SERVICE_GLOBAL_ROLE_MARKERS:
+        if marker in service:
+            failures.append(f"members_new/service.py must not own global role truth: {marker}")
 
     if failures:
         print("Role truth audit failed:")
