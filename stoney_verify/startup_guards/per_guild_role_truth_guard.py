@@ -7,8 +7,6 @@ older modules that still expose sync helper names use the native resolver until
 those call sites are fully refactored.
 """
 
-from typing import Any
-
 import discord
 
 _PATCHED = False
@@ -36,22 +34,14 @@ def _patch_events() -> bool:
         _warn(f"events/role_truth import failed: {e!r}")
         return False
 
-    original_snapshot = getattr(events, "_member_role_snapshot", None)
-
     def member_has_any_safe_access_role(member: discord.Member, *, include_unverified: bool = True) -> bool:
         return bool(role_truth.member_has_any_safe_access_role(member, include_unverified=include_unverified))
 
     def member_is_pending_verification(member: discord.Member) -> bool:
         return bool(role_truth.member_is_pending_verification(member))
 
-    def member_role_snapshot(member: discord.Member) -> dict[str, Any]:
-        base: dict[str, Any] = {}
-        if callable(original_snapshot):
-            try:
-                base = dict(original_snapshot(member) or {})
-            except Exception:
-                base = {}
-        return role_truth.apply_truth_to_snapshot(member, base)
+    def member_role_snapshot(member: discord.Member) -> dict[str, object]:
+        return role_truth.build_member_role_snapshot(member)
 
     events._member_has_any_safe_access_role = member_has_any_safe_access_role  # type: ignore[attr-defined]
     events._member_is_pending_verification = member_is_pending_verification  # type: ignore[attr-defined]
@@ -67,16 +57,8 @@ def _patch_sync_service() -> bool:
         _warn(f"members_new.sync_service/role_truth import failed: {e!r}")
         return False
 
-    original_snapshot = getattr(sync_service, "_member_role_snapshot", None)
-
-    def member_role_snapshot(member: discord.Member) -> dict[str, Any]:
-        base: dict[str, Any] = {}
-        if callable(original_snapshot):
-            try:
-                base = dict(original_snapshot(member) or {})
-            except Exception:
-                base = {}
-        return role_truth.apply_truth_to_snapshot(member, base)
+    def member_role_snapshot(member: discord.Member) -> dict[str, object]:
+        return role_truth.build_member_role_snapshot(member)
 
     sync_service._member_role_snapshot = member_role_snapshot  # type: ignore[attr-defined]
     return True
