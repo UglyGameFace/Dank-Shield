@@ -43,6 +43,9 @@ import stoney_verify.startup_guards.verification_established_member_safety  # no
 # Passive feature: alert staff when established members lose all safe access roles.
 import stoney_verify.startup_guards.verification_role_drift_monitor  # noqa: F401,E402
 
+# Optional per-server feature: remove pending users who never start verification.
+import stoney_verify.startup_guards.verification_idle_kick_feature  # noqa: F401,E402
+
 # Probe optional REST-readable tables and print exact migration guidance.
 import stoney_verify.startup_guards.optional_schema_health  # noqa: F401,E402
 
@@ -54,6 +57,9 @@ import stoney_verify.startup_guards.setup_public_text_cleanup_guard  # noqa: F40
 
 # Ensure Ticket Basics can save every field the setup scoreboard requires.
 import stoney_verify.startup_guards.setup_ticket_transcripts_picker_guard  # noqa: F401,E402
+
+# Add per-server controls for optional no-start verification auto-remove.
+import stoney_verify.startup_guards.setup_verification_idle_kick_controls  # noqa: F401,E402
 
 # Ticket categories can hit Discord's child-channel limit. Load overflow routing
 # before extra ticket UI patches so creation/reopen paths choose a usable parent.
