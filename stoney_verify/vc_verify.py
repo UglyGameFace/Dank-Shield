@@ -468,7 +468,9 @@ def _ensure_session_backing(
 
     row = _get_session_row(tok)
     if row:
-        return row
+        status = str(row.get("status") or "").upper().strip()
+        if status not in {"EXPIRED", "COMPLETED", "DONE", "CANCELED", "CANCELLED"}:
+            return row
 
     if not vc_sessions or not hasattr(vc_sessions, "ensure_session"):
         return None

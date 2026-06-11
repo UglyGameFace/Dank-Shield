@@ -619,6 +619,53 @@ def ensure_session(
         desired_requester_id = int(requester_id or 0) or None
         desired_access_minutes = int(access_minutes or row.get("access_minutes") or _access_minutes())
 
+        status = _normalize_status(row.get("status"))
+        expired_or_terminal = _row_is_expired(row) or status in {"EXPIRED", "COMPLETED", "CANCELED"}
+        if expired_or_terminal:
+            now_iso = _utc_iso()
+            refreshed_access_minutes = desired_access_minutes if desired_access_minutes > 0 else _access_minutes()
+
+            refresh_meta = _merge_meta(
+                row.get("meta"),
+                {
+                    "owner_confirmed": False,
+                    "staff_confirmed": False,
+                    "unlocked": False,
+                    "last_action": "refresh_expired_session",
+                    "last_action_at": now_iso,
+                    "expired_refresh_from_status": status,
+                    "expired_refresh_previous_revoke_at": row.get("revoke_at"),
+                },
+            )
+
+            patch.update(
+                {
+                    "status": "PENDING",
+                    "ticket_channel_id": desired_ticket_channel_id or row.get("ticket_channel_id"),
+                    "requester_id": desired_requester_id or row.get("requester_id"),
+                    "owner_id": desired_owner_id or row.get("owner_id"),
+                    "vc_channel_id": desired_vc_channel_id or row.get("vc_channel_id"),
+                    "queue_channel_id": desired_queue_channel_id or row.get("queue_channel_id"),
+                    "queue_message_id": None,
+                    "accepted_at": None,
+                    "accepted_by": None,
+                    "ready_at": None,
+                    "started_at": None,
+                    "started_by": None,
+                    "completed_at": None,
+                    "completed_by": None,
+                    "canceled_at": None,
+                    "canceled_by": None,
+                    "expired_at": None,
+                    "restarted_at": None,
+                    "restarted_by": None,
+                    "access_minutes": refreshed_access_minutes,
+                    "revoke_at": _utc_iso(_utcnow() + timedelta(minutes=refreshed_access_minutes)),
+                    "last_watchdog_at": None,
+                    "meta": refresh_meta,
+                }
+            )
+
         if not row.get("queue_channel_id") and desired_queue_channel_id:
             patch["queue_channel_id"] = desired_queue_channel_id
         if not row.get("vc_channel_id") and desired_vc_channel_id:
@@ -633,7 +680,7 @@ def ensure_session(
             patch["access_minutes"] = desired_access_minutes
             patch["revoke_at"] = _utc_iso(_utcnow() + timedelta(minutes=desired_access_minutes))
         if isinstance(meta, dict) and meta:
-            patch["meta"] = _merge_meta(row.get("meta"), meta)
+            patch["meta"] = _merge_meta(patch.get("meta", row.get("meta")), meta)
 
         if patch:
             updated = _update_local(tok, patch)
