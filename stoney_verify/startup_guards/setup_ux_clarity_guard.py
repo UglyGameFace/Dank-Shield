@@ -2,9 +2,8 @@ from __future__ import annotations
 
 """Plain-language UX polish for /dank setup.
 
-This guard does not create a second setup flow. It wraps the existing setup
-screens and makes the copy easier for normal server owners to understand on
-mobile.
+This guard does not create a second setup flow. It wraps only setup screens and
+makes the copy easier for normal server owners to understand on mobile.
 """
 
 from typing import Any
@@ -12,6 +11,24 @@ from typing import Any
 import discord
 
 _PATCHED = False
+
+_SETUP_CUSTOM_ID_PREFIXES = (
+    "stoney_solid:",
+    "dank_setup:",
+    "setup_",
+    "public_setup:",
+)
+_SETUP_TITLE_MARKERS = (
+    "setup",
+    "ticket basics",
+    "access roles",
+    "verification channels",
+    "logs + status",
+    "logs and status",
+    "behavior settings",
+    "optional rules",
+    "ticket menu",
+)
 
 
 def _log(message: str) -> None:
@@ -35,7 +52,6 @@ def _clean_old_words(text: Any) -> Any:
     replacements = {
         "Use this before Auto-Build if you want Stoney to create missing items with your own names.": "Use this before Auto-Build if you want Dank Shield to create missing roles/channels/categories with your own names.",
         "Use cleanup when setup got messy.": "Use cleanup when setup got messy or you picked the wrong item.",
-        "It should not delete unrelated server channels, roles, tickets, or messages.": "It should not delete unrelated server channels, roles, tickets, or messages.",
         "Use `/stoney cleanup` for cleanup tools, then return to `/dank setup`.": "Use the cleanup options from this setup screen, then run `/dank setup` again when you are ready to continue.",
         "Choose how strict setup should be. Keep this simple: pick the closest style, then save prefix/timer only if you need them.": "Choose optional behavior rules. Leave these alone until the main setup is green, then turn on only the features your server actually wants.",
         "Stoney": "Dank Shield",
@@ -44,6 +60,61 @@ def _clean_old_words(text: Any) -> Any:
     for old, new in replacements.items():
         out = out.replace(old, new)
     return out
+
+
+def _is_setup_embed(embed: Any) -> bool:
+    try:
+        parts = [
+            str(getattr(embed, "title", "") or ""),
+            str(getattr(embed, "description", "") or ""),
+            str(getattr(getattr(embed, "footer", None), "text", "") or ""),
+        ]
+        for field in list(getattr(embed, "fields", []) or []):
+            parts.append(str(getattr(field, "name", "") or ""))
+            parts.append(str(getattr(field, "value", "") or ""))
+        haystack = "\n".join(parts).lower()
+        if "/dank setup" in haystack or "dank shield setup" in haystack:
+            return True
+        return any(marker in haystack for marker in _SETUP_TITLE_MARKERS)
+    except Exception:
+        return False
+
+
+def _view_has_setup_controls(view: Any) -> bool:
+    try:
+        for child in list(getattr(view, "children", []) or []):
+            custom_id = str(getattr(child, "custom_id", "") or "")
+            if custom_id.startswith(_SETUP_CUSTOM_ID_PREFIXES):
+                return True
+            label = str(getattr(child, "label", "") or "").lower()
+            if label in {
+                "auto-build missing items",
+                "auto-build missing setup",
+                "name items before build",
+                "choose names first",
+                "use my existing server",
+                "pick existing roles/channels",
+                "ticket menu options",
+                "ticket menu choices",
+                "run health check",
+                "check setup health",
+                "start over / cleanup",
+                "fix or clean setup",
+                "ticket basics",
+                "tickets: main setup",
+                "access roles",
+                "roles: member access",
+                "verification channels",
+                "verification: channels",
+                "logs + status",
+                "logs and status",
+                "behavior settings",
+                "optional rules",
+            }:
+                return True
+    except Exception:
+        pass
+    return False
 
 
 def _clean_embed(embed: discord.Embed) -> discord.Embed:
@@ -151,11 +222,13 @@ def _wrap_interaction_edit_response() -> bool:
 
     async def wrapped_edit_message(self: discord.InteractionResponse, *args: Any, **kwargs: Any):
         embed = kwargs.get("embed")
-        if isinstance(embed, discord.Embed):
-            kwargs["embed"] = _clean_embed(embed)
         view = kwargs.get("view")
-        if view is not None:
-            kwargs["view"] = _normalize_view_labels(view)
+        should_polish = (isinstance(embed, discord.Embed) and _is_setup_embed(embed)) or _view_has_setup_controls(view)
+        if should_polish:
+            if isinstance(embed, discord.Embed):
+                kwargs["embed"] = _clean_embed(embed)
+            if view is not None:
+                kwargs["view"] = _normalize_view_labels(view)
         return await original(self, *args, **kwargs)
 
     setattr(wrapped_edit_message, "_setup_ux_clarity_wrapped", True)
