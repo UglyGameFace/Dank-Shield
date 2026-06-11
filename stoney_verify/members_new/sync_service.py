@@ -72,6 +72,10 @@ _OPTIONAL_GUILD_MEMBER_COLUMNS = {
     "vanity_used",
     "entry_reason",
     "approval_reason",
+    "entry_truth_quality",
+    "entry_confidence",
+    "entry_quality_reason",
+    "entry_conflict",
     "has_any_role",
     "has_unverified",
     "has_verified_role",
@@ -863,6 +867,94 @@ def _infer_join_source(
     )
 
 
+def _entry_truth_quality_from_meta(
+    *,
+    entry_method: Optional[str],
+    invite_code: Optional[str],
+    invited_by: Optional[str],
+    latest_join: Optional[Dict[str, Any]],
+    existing: Dict[str, Any],
+) -> Dict[str, Any]:
+    explicit_quality = _coalesce_str(
+        (latest_join or {}).get("entry_truth_quality"),
+        existing.get("entry_truth_quality"),
+    )
+    explicit_reason = _coalesce_str(
+        (latest_join or {}).get("entry_quality_reason"),
+        existing.get("entry_quality_reason"),
+    )
+
+    try:
+        explicit_confidence = (latest_join or {}).get("entry_confidence")
+        if explicit_confidence is None:
+            explicit_confidence = existing.get("entry_confidence")
+        if explicit_confidence is not None:
+            explicit_confidence_int = max(0, min(100, int(explicit_confidence)))
+        else:
+            explicit_confidence_int = None
+    except Exception:
+        explicit_confidence_int = None
+
+    if explicit_quality:
+        return {
+            "entry_truth_quality": explicit_quality,
+            "entry_confidence": explicit_confidence_int if explicit_confidence_int is not None else 50,
+            "entry_quality_reason": explicit_reason or "Entry truth quality was already recorded.",
+            "entry_conflict": bool((latest_join or {}).get("entry_conflict") or existing.get("entry_conflict") or False),
+        }
+
+    method = _safe_str(entry_method).strip().lower()
+    if method == "invite" and (invite_code or invited_by):
+        return {
+            "entry_truth_quality": "confirmed",
+            "entry_confidence": 95,
+            "entry_quality_reason": "Invite usage delta identified a specific invite.",
+            "entry_conflict": False,
+        }
+    if method == "vanity_invite":
+        return {
+            "entry_truth_quality": "confirmed",
+            "entry_confidence": 90,
+            "entry_quality_reason": "Vanity invite usage increased.",
+            "entry_conflict": False,
+        }
+    if method in {"vouched", "manual_verification", "ticket_verification"}:
+        return {
+            "entry_truth_quality": "confirmed",
+            "entry_confidence": 85,
+            "entry_quality_reason": "Entry source came from an explicit staff/ticket action.",
+            "entry_conflict": False,
+        }
+    if method == "invite_tracking_unavailable":
+        return {
+            "entry_truth_quality": "unknown",
+            "entry_confidence": 15,
+            "entry_quality_reason": "Invite tracking was unavailable due to permissions or API failure.",
+            "entry_conflict": False,
+        }
+    if method == "invite_cache_warming":
+        return {
+            "entry_truth_quality": "partial",
+            "entry_confidence": 35,
+            "entry_quality_reason": "Invite cache was still warming; attribution should not be trusted as exact.",
+            "entry_conflict": False,
+        }
+    if method == "invite_unresolved":
+        return {
+            "entry_truth_quality": "partial",
+            "entry_confidence": 45,
+            "entry_quality_reason": "Invite cache existed, but the usage delta did not identify one invite.",
+            "entry_conflict": False,
+        }
+
+    return {
+        "entry_truth_quality": "unknown",
+        "entry_confidence": 20,
+        "entry_quality_reason": "Join attribution is unknown.",
+        "entry_conflict": False,
+    }
+
+
 def _entry_metadata_from_existing_join_and_tickets(
     *,
     existing: Dict[str, Any],
@@ -911,19 +1003,29 @@ def _entry_metadata_from_existing_join_and_tickets(
         existing.get("entry_reason"),
     )
 
+    invited_by = _coalesce_str(
+        (latest_join or {}).get("invited_by"),
+        existing.get("invited_by"),
+    )
+    invite_code = _coalesce_str(
+        (latest_join or {}).get("invite_code"),
+        existing.get("invite_code"),
+    )
+    truth_meta = _entry_truth_quality_from_meta(
+        entry_method=entry_method,
+        invite_code=invite_code,
+        invited_by=invited_by,
+        latest_join=latest_join,
+        existing=existing,
+    )
+
     return {
-        "invited_by": _coalesce_str(
-            (latest_join or {}).get("invited_by"),
-            existing.get("invited_by"),
-        ),
+        "invited_by": invited_by,
         "invited_by_name": _coalesce_str(
             (latest_join or {}).get("invited_by_name"),
             existing.get("invited_by_name"),
         ),
-        "invite_code": _coalesce_str(
-            (latest_join or {}).get("invite_code"),
-            existing.get("invite_code"),
-        ),
+        "invite_code": invite_code,
         "vouched_by": _coalesce_str(
             (latest_join or {}).get("vouched_by"),
             existing.get("vouched_by"),
@@ -951,6 +1053,7 @@ def _entry_metadata_from_existing_join_and_tickets(
         ),
         "entry_reason": entry_reason,
         "approval_reason": approval_reason,
+        **truth_meta,
     }
 
 
@@ -983,6 +1086,10 @@ async def _best_effort_update_latest_join_row(
             "entry_method",
             "verification_source",
             "join_source",
+            "entry_truth_quality",
+            "entry_confidence",
+            "entry_quality_reason",
+            "entry_conflict",
         ):
             value = entry_meta.get(key)
             if value is not None:
@@ -1205,6 +1312,10 @@ async def sync_member_to_supabase(member: discord.Member, in_guild: bool = True)
             "vanity_used": bool(entry_meta["vanity_used"]),
             "entry_reason": entry_meta["entry_reason"],
             "approval_reason": entry_meta["approval_reason"],
+            "entry_truth_quality": entry_meta.get("entry_truth_quality"),
+            "entry_confidence": entry_meta.get("entry_confidence"),
+            "entry_quality_reason": entry_meta.get("entry_quality_reason"),
+            "entry_conflict": bool(entry_meta.get("entry_conflict", False)),
         }
 
         try:
