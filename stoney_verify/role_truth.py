@@ -141,25 +141,75 @@ def configured_role_ids(guild_id: int, keys: tuple[str, ...]) -> set[int]:
     return out
 
 
-def member_role_ids(member: discord.Member) -> set[int]:
-    out: set[int] = set()
+def _iter_real_roles(member: discord.Member) -> list[Any]:
     try:
+        roles = []
         for role in getattr(member, "roles", []) or []:
             try:
                 if getattr(role, "is_default", lambda: False)():
                     continue
             except Exception:
                 pass
-            rid = safe_int(getattr(role, "id", 0), 0)
-            if rid > 0:
-                out.add(rid)
+            try:
+                if str(getattr(role, "name", "")) == "@everyone":
+                    continue
+            except Exception:
+                pass
+            roles.append(role)
+        return roles
     except Exception:
-        pass
+        return []
+
+
+def member_role_ids(member: discord.Member) -> set[int]:
+    out: set[int] = set()
+    for role in _iter_real_roles(member):
+        rid = safe_int(getattr(role, "id", 0), 0)
+        if rid > 0:
+            out.add(rid)
     return out
 
 
 def member_has_role_id(member: discord.Member, role_id: int) -> bool:
     return safe_int(role_id, 0) in member_role_ids(member)
+
+
+def base_member_role_snapshot(member: discord.Member) -> dict[str, Any]:
+    role_ids: list[str] = []
+    role_names: list[str] = []
+    roles_json: list[dict[str, Any]] = []
+
+    try:
+        sorted_roles = sorted(
+            _iter_real_roles(member),
+            key=lambda role: int(getattr(role, "position", 0)),
+            reverse=True,
+        )
+    except Exception:
+        sorted_roles = []
+
+    for role in sorted_roles:
+        try:
+            rid = str(getattr(role, "id", "") or "")
+            rname = str(getattr(role, "name", "") or "")
+            rpos = int(getattr(role, "position", 0) or 0)
+            if not rid:
+                continue
+            role_ids.append(rid)
+            role_names.append(rname)
+            roles_json.append({"id": rid, "name": rname, "position": rpos})
+        except Exception:
+            continue
+
+    return {
+        "role_ids": role_ids,
+        "role_names": role_names,
+        "roles": roles_json,
+        "top_role": role_names[0] if role_names else None,
+        "highest_role_id": role_ids[0] if role_ids else None,
+        "highest_role_name": role_names[0] if role_names else None,
+        "data_health": "ok",
+    }
 
 
 def member_role_truth(member: discord.Member) -> dict[str, Any]:
@@ -258,12 +308,18 @@ def apply_truth_to_snapshot(member: discord.Member, snapshot: Mapping[str, Any] 
     return out
 
 
+def build_member_role_snapshot(member: discord.Member) -> dict[str, Any]:
+    return apply_truth_to_snapshot(member, base_member_role_snapshot(member))
+
+
 __all__ = [
     "PENDING_ROLE_KEYS",
     "SAFE_ROLE_KEYS",
     "STAFF_ROLE_KEYS",
     "SECONDARY_SAFE_ROLE_KEYS",
     "apply_truth_to_snapshot",
+    "base_member_role_snapshot",
+    "build_member_role_snapshot",
     "clear_cache",
     "configured_role_ids",
     "get_guild_role_config",
