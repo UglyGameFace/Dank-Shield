@@ -46,6 +46,9 @@ import stoney_verify.startup_guards.setup_scoreboard_command  # noqa: F401,E402
 # Normalize stale setup wording that still references the old private bot name.
 import stoney_verify.startup_guards.setup_public_text_cleanup_guard  # noqa: F401,E402
 
+# Ensure Ticket Basics can save every field the setup scoreboard requires.
+import stoney_verify.startup_guards.setup_ticket_transcripts_picker_guard  # noqa: F401,E402
+
 # Ticket categories can hit Discord's child-channel limit. Load overflow routing
 # before extra ticket UI patches so creation/reopen paths choose a usable parent.
 import stoney_verify.startup_guards.ticket_overflow_category_guard  # noqa: F401,E402
