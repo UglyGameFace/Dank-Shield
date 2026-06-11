@@ -7,6 +7,7 @@ feel product-ready without requiring server owners to hand-edit Supabase rows:
 
 - dashboard-provided questions always win
 - recognized categories get sensible built-in form templates
+- verification stays one-click after category confirmation by default
 - dashboard can opt out with form_config.disable_default_template=true
 - custom COD/modded-lobby categories are recognized by name/slug
 """
@@ -116,24 +117,11 @@ DEFAULT_TEMPLATES: Dict[str, List[Dict[str, Any]]] = {
             "max_length": 1000,
         },
     ],
-    "verification": [
-        {
-            "key": "verification_issue",
-            "label": "What verification problem happened?",
-            "placeholder": "Could not submit, waiting on staff, VC issue, wrong role, etc.",
-            "required": True,
-            "style": "paragraph",
-            "max_length": 1000,
-        },
-        {
-            "key": "username_context",
-            "label": "What name should staff look for?",
-            "placeholder": "Discord name, server nickname, or previous name if relevant.",
-            "required": False,
-            "style": "short",
-            "max_length": 200,
-        },
-    ],
+    # Verification tickets intentionally have no default pre-ticket modal.
+    # Members already confirm the category; the verification panel inside the
+    # private ticket is the actual next action. This keeps verification from
+    # becoming a category confirm -> intake form -> verify panel three-step flow.
+    "verification": [],
     "report": [
         {
             "key": "reported_user",
@@ -313,7 +301,7 @@ def apply() -> bool:
         forms_mod._category_questions = category_questions
         forms_mod._form_enabled = form_enabled
         setattr(forms_mod, "_DEFAULT_TICKET_FORM_TEMPLATES_APPLIED", True)
-        _log("installed default ticket form templates with dashboard override support")
+        _log("installed default ticket form templates with one-step verification default and dashboard override support")
         return True
     except Exception as e:
         _warn(f"patch failed: {e!r}")
