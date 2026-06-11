@@ -40,6 +40,9 @@ import stoney_verify.startup_guards.bot_command_worker_public_config_guard  # no
 # Prevent automatic verification fail-closed removal of established members.
 import stoney_verify.startup_guards.verification_established_member_safety  # noqa: F401,E402
 
+# Passive feature: alert staff when established members lose all safe access roles.
+import stoney_verify.startup_guards.verification_role_drift_monitor  # noqa: F401,E402
+
 # Probe optional REST-readable tables and print exact migration guidance.
 import stoney_verify.startup_guards.optional_schema_health  # noqa: F401,E402
 
