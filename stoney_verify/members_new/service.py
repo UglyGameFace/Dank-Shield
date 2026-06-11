@@ -5,6 +5,7 @@ from typing import Any, Dict, List, Optional
 
 import discord
 
+from .. import role_truth
 from ..globals import get_supabase, now_utc
 from .sync_service import (
     mark_member_left as sync_service_mark_member_left,
@@ -132,116 +133,31 @@ def _role_summary(member: discord.Member) -> List[Dict[str, Any]]:
     return out
 
 
-def _configured_role_ids() -> Dict[str, int]:
-    role_map: Dict[str, int] = {}
-    for key in (
-        "UNVERIFIED_ROLE_ID",
-        "VERIFIED_ROLE_ID",
-        "RESIDENT_ROLE_ID",
-        "STAFF_ROLE_ID",
-        "STONER_ROLE_ID",
-        "DRUNKEN_ROLE_ID",
-    ):
-        try:
-            value = _safe_int(globals().get(key), 0)
-            if value > 0:
-                role_map[key] = value
-        except Exception:
-            continue
-    return role_map
-
-
 def _member_has_role_id(member: discord.Member, role_id: int) -> bool:
-    try:
-        if role_id <= 0:
-            return False
-        return any(int(getattr(role, "id", 0) or 0) == int(role_id) for role in (member.roles or []))
-    except Exception:
-        return False
+    return bool(role_truth.member_has_role_id(member, role_id))
 
 
 def _member_role_flags(member: discord.Member) -> Dict[str, bool]:
-    cfg = _configured_role_ids()
-
-    verified_role_id = _safe_int(cfg.get("VERIFIED_ROLE_ID"), 0)
-    resident_role_id = _safe_int(cfg.get("RESIDENT_ROLE_ID"), 0)
-    staff_role_id = _safe_int(cfg.get("STAFF_ROLE_ID"), 0)
-    stoner_role_id = _safe_int(cfg.get("STONER_ROLE_ID"), 0)
-    drunken_role_id = _safe_int(cfg.get("DRUNKEN_ROLE_ID"), 0)
-    unverified_role_id = _safe_int(cfg.get("UNVERIFIED_ROLE_ID"), 0)
-
-    has_verified_role = (
-        _member_has_role_id(member, verified_role_id)
-        or _member_has_role_id(member, resident_role_id)
-        or _member_has_role_id(member, stoner_role_id)
-        or _member_has_role_id(member, drunken_role_id)
-    )
-
-    has_staff_role = _member_has_role_id(member, staff_role_id)
-    has_unverified = _member_has_role_id(member, unverified_role_id)
-    has_any_role = len(_serialize_role_ids(member)) > 0
-
-    role_names = {str(r.name).strip().lower() for r in getattr(member, "roles", []) if getattr(r, "name", None) and str(r.name) != "@everyone"}
-
-    has_secondary_verified_role = bool(
-        {"resident", "stoner", "drunken"} & role_names
-    )
-
-    cosmetic_only = bool(has_any_role and not has_verified_role and not has_staff_role and not has_unverified)
-
+    truth = role_truth.member_role_truth(member)
     return {
-        "has_any_role": has_any_role,
-        "has_unverified": has_unverified,
-        "has_verified_role": has_verified_role,
-        "has_staff_role": has_staff_role,
-        "has_secondary_verified_role": has_secondary_verified_role,
-        "has_cosmetic_only": cosmetic_only,
+        "has_any_role": bool(truth.get("has_any_role")),
+        "has_unverified": bool(truth.get("has_unverified")),
+        "has_verified_role": bool(truth.get("has_verified_role")),
+        "has_staff_role": bool(truth.get("has_staff_role")),
+        "has_secondary_verified_role": bool(truth.get("has_secondary_verified_role")),
+        "has_cosmetic_only": bool(truth.get("has_cosmetic_only")),
     }
 
 
 def _role_state(member: discord.Member) -> Dict[str, str]:
-    flags = _member_role_flags(member)
-
-    if flags["has_staff_role"]:
-        return {
-            "role_state": "staff",
-            "role_state_reason": "Member has staff-level role(s).",
-        }
-
-    if flags["has_verified_role"] and not flags["has_unverified"]:
-        return {
-            "role_state": "verified",
-            "role_state_reason": "Member has verified/resident role state and is not unverified.",
-        }
-
-    if flags["has_unverified"]:
-        return {
-            "role_state": "unverified",
-            "role_state_reason": "Member still has the Unverified role.",
-        }
-
-    if flags["has_cosmetic_only"]:
-        return {
-            "role_state": "cosmetic_only",
-            "role_state_reason": "Member has only cosmetic/non-verification roles.",
-        }
-
-    if flags["has_any_role"]:
-        return {
-            "role_state": "role_mixed",
-            "role_state_reason": "Member has roles but no clear verified/unverified state.",
-        }
-
-    return {
-        "role_state": "no_roles",
-        "role_state_reason": "Member has no tracked roles.",
-    }
+    state, reason = role_truth.role_state_from_truth(member)
+    return {"role_state": state, "role_state_reason": reason}
 
 
 def _has_verified_role(member: discord.Member) -> bool:
     try:
-        state = _member_role_flags(member)
-        return bool(state["has_verified_role"] and not state["has_unverified"])
+        truth = role_truth.member_role_truth(member)
+        return bool(truth.get("has_verified_role") and not truth.get("has_unverified"))
     except Exception:
         return False
 
