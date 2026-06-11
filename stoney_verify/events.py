@@ -43,6 +43,14 @@ from .modlog import (
 from .vc_verify import _can_manage_channel, _get_vc_channel, vc_sweeper_loop
 
 try:
+    from .guild_config import get_guild_config, public_config_isolation_enabled
+except Exception:
+    get_guild_config = None  # type: ignore
+
+    def public_config_isolation_enabled() -> bool:  # type: ignore
+        return True
+
+try:
     from . import vc_sessions
 except Exception:
     vc_sessions = None  # type: ignore
@@ -2696,6 +2704,68 @@ async def _resolve_bot_member(guild: discord.Guild) -> Optional[discord.Member]:
     return None
 
 
+async def _verification_role_ids_for_guild(guild: discord.Guild) -> Dict[str, int]:
+    """Resolve verification role IDs for this guild without leaking home-guild globals."""
+
+    try:
+        if callable(get_guild_config):
+            cfg = await get_guild_config(guild.id, force_refresh=False)  # type: ignore[misc]
+            return {
+                "unverified": _as_int(cfg.get("unverified_role_id"), 0),
+                "verified": _as_int(cfg.get("verified_role_id"), 0),
+                "resident": _as_int(cfg.get("resident_role_id"), 0),
+                "staff": _as_int(cfg.get("staff_role_id"), 0),
+                "stoner": _as_int(cfg.get("stoner_role_id"), 0),
+                "drunken": _as_int(cfg.get("drunken_role_id"), 0),
+            }
+    except Exception as e:
+        print(f"⚠️ [VERIFY] per-guild role config lookup failed guild={getattr(guild, 'id', 'unknown')} error={repr(e)}")
+
+    allow_global = True
+    try:
+        if public_config_isolation_enabled():
+            home_gid = _as_int(globals().get("GUILD_ID", 0), 0)
+            guild_id = _as_int(getattr(guild, "id", 0), 0)
+            allow_global = bool(home_gid > 0 and guild_id == home_gid)
+    except Exception:
+        allow_global = False
+
+    if not allow_global:
+        return {
+            "unverified": 0,
+            "verified": 0,
+            "resident": 0,
+            "staff": 0,
+            "stoner": 0,
+            "drunken": 0,
+        }
+
+    return {
+        "unverified": _as_int(globals().get("UNVERIFIED_ROLE_ID", 0), 0),
+        "verified": _as_int(globals().get("VERIFIED_ROLE_ID", 0), 0),
+        "resident": _as_int(globals().get("RESIDENT_ROLE_ID", 0), 0),
+        "staff": _as_int(globals().get("STAFF_ROLE_ID", 0), 0),
+        "stoner": _as_int(globals().get("STONER_ROLE_ID", 0), 0),
+        "drunken": _as_int(globals().get("DRUNKEN_ROLE_ID", 0), 0),
+    }
+
+
+async def _verification_config_ready_for_guild(guild: discord.Guild) -> Tuple[bool, str]:
+    role_ids = await _verification_role_ids_for_guild(guild)
+    uv_id = int(role_ids.get("unverified") or 0)
+    if uv_id <= 0:
+        return False, "No per-guild Unverified role configured. Setup must finish before join enforcement."
+
+    try:
+        role = guild.get_role(uv_id)
+        if role is None:
+            return False, f"Configured Unverified role {uv_id} does not exist in this guild."
+    except Exception:
+        return False, "Could not validate this guild's Unverified role."
+
+    return True, "Verification config ready."
+
+
 async def _handle_join_verification_failure(member: discord.Member, reason: str) -> None:
     try:
         if getattr(member, "bot", False):
@@ -2713,6 +2783,14 @@ async def _handle_join_verification_failure(member: discord.Member, reason: str)
 
         if _member_has_any_safe_access_role(member, include_unverified=True):
             print(f"ℹ️ [VERIFY] Fail-closed skipped for {member.id}; member already has a safe role state.")
+            return
+
+        config_ready, config_reason = await _verification_config_ready_for_guild(guild)
+        if not config_ready:
+            print(
+                f"🛡️ [VERIFY] Fail-closed skipped guild={guild.id} member={member.id}; "
+                f"{config_reason}"
+            )
             return
 
         embed = discord.Embed(
@@ -2771,15 +2849,16 @@ async def _ensure_unverified_on_join(member: discord.Member) -> bool:
             return False
 
         guild = member.guild
-        uv_id = int(UNVERIFIED_ROLE_ID or 0)
-        v_id = int(VERIFIED_ROLE_ID or 0)
-        resident_id = int(RESIDENT_ROLE_ID or 0) if RESIDENT_ROLE_ID else 0
-        staff_id = int(STAFF_ROLE_ID or 0) if STAFF_ROLE_ID else 0
-        stoner_id = int(STONER_ROLE_ID or 0) if STONER_ROLE_ID else 0
-        drunken_id = int(DRUNKEN_ROLE_ID or 0) if DRUNKEN_ROLE_ID else 0
+        role_ids = await _verification_role_ids_for_guild(guild)
+        uv_id = int(role_ids.get("unverified") or 0)
+        v_id = int(role_ids.get("verified") or 0)
+        resident_id = int(role_ids.get("resident") or 0)
+        staff_id = int(role_ids.get("staff") or 0)
+        stoner_id = int(role_ids.get("stoner") or 0)
+        drunken_id = int(role_ids.get("drunken") or 0)
 
         if not uv_id:
-            print("⚠️ [VERIFY] UNVERIFIED_ROLE_ID missing or invalid.")
+            print(f"⚠️ [VERIFY] Unverified role missing for guild={guild.id}; setup required before join enforcement.")
             return False
 
         role = guild.get_role(uv_id)

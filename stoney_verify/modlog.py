@@ -694,10 +694,21 @@ def _candidate_modlog_channel_ids(guild: discord.Guild) -> List[int]:
     except Exception:
         pass
 
+    allow_global_modlog = True
     try:
-        _push(globals().get("MODLOG_CHANNEL_ID", 0))
+        from .guild_config import public_config_isolation_enabled
+
+        if public_config_isolation_enabled():
+            home_gid = _safe_int(globals().get("GUILD_ID", 0), 0)
+            allow_global_modlog = bool(home_gid > 0 and int(guild.id) == int(home_gid))
     except Exception:
-        pass
+        allow_global_modlog = False
+
+    if allow_global_modlog:
+        try:
+            _push(globals().get("MODLOG_CHANNEL_ID", 0))
+        except Exception:
+            pass
 
     return out
 
