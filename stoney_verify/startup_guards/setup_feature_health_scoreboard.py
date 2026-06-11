@@ -7,12 +7,16 @@ command. It adds a compact Ticket Tool-style scoreboard so server owners can see
 which selected features are ready, skipped, or need exact setup work.
 """
 
+import asyncio
 from dataclasses import dataclass
+from time import monotonic
 from typing import Any, Mapping
 
 import discord
 
 _PATCHED = False
+_DB_CACHE_TTL_SECONDS = 45.0
+_DB_TABLE_CACHE: dict[str, tuple[float, bool]] = {}
 
 
 @dataclass(frozen=True)
@@ -22,6 +26,7 @@ class FeatureHealth:
     status: str
     summary: str
     fixes: tuple[str, ...] = ()
+    action: str = ""
 
     @property
     def icon(self) -> str:
@@ -60,22 +65,6 @@ def _safe_int(value: Any, default: int = 0) -> int:
         return int(text) if text else int(default)
     except Exception:
         return int(default)
-
-
-def _safe_bool(value: Any, default: bool = False) -> bool:
-    try:
-        if isinstance(value, bool):
-            return value
-        if value is None:
-            return bool(default)
-        text = str(value).strip().lower()
-        if text in {"1", "true", "yes", "y", "on", "enabled"}:
-            return True
-        if text in {"0", "false", "no", "n", "off", "disabled"}:
-            return False
-        return bool(default)
-    except Exception:
-        return bool(default)
 
 
 def _cfg_get(cfg: Any, key: str, default: Any = None) -> Any:
@@ -133,7 +122,7 @@ def _voice_types() -> tuple[type, ...]:
     return tuple(items)
 
 
-def _voice_channel(guild: discord.Guild, value: Any) -> discord.abc.GuildChannel | None:
+def _voice_channel(guild: discord.Guild, value: Any) -> Any | None:
     cid = _safe_int(value, 0)
     if cid <= 0:
         return None
@@ -174,7 +163,7 @@ def _can_manage_role(guild: discord.Guild, role: discord.Role | None) -> bool:
         return False
 
 
-def _can_use_channel(guild: discord.Guild, channel: discord.abc.GuildChannel | None, *, manage: bool = False) -> bool:
+def _can_use_channel(guild: discord.Guild, channel: Any | None, *, manage: bool = False) -> bool:
     me = _bot_member(guild)
     if me is None or channel is None:
         return False
@@ -190,7 +179,7 @@ def _can_use_channel(guild: discord.Guild, channel: discord.abc.GuildChannel | N
         return False
 
 
-def _db_table_readable(table: str) -> bool:
+def _db_table_readable_sync(table: str) -> bool:
     try:
         from stoney_verify.globals import get_supabase
 
@@ -203,13 +192,14 @@ def _db_table_readable(table: str) -> bool:
         return False
 
 
-async def _db_table_readable_async(table: str) -> bool:
-    try:
-        import asyncio
-
-        return bool(await asyncio.to_thread(_db_table_readable, table))
-    except Exception:
-        return False
+async def _db_table_readable(table: str) -> bool:
+    now = monotonic()
+    cached = _DB_TABLE_CACHE.get(str(table))
+    if cached and now - cached[0] <= _DB_CACHE_TTL_SECONDS:
+        return bool(cached[1])
+    ok = bool(await asyncio.to_thread(_db_table_readable_sync, str(table)))
+    _DB_TABLE_CACHE[str(table)] = (now, ok)
+    return ok
 
 
 async def _load_config(guild: discord.Guild) -> Any:
@@ -271,9 +261,9 @@ def _ticket_score(guild: discord.Guild, cfg: Any, enabled: bool) -> FeatureHealt
     elif not _can_use_channel(guild, transcripts):
         blockers.append("Bot cannot send embeds in the transcripts channel.")
     if blockers:
-        return FeatureHealth("Tickets", "🎫", "blocker", "Needs setup before ticket testing.", tuple(blockers[:3]))
+        return FeatureHealth("Tickets", "🎫", "blocker", "Needs setup before ticket testing.", tuple(blockers[:3]), "Open Existing Server → Ticket Categories.")
     if warnings:
-        return FeatureHealth("Tickets", "🎫", "warning", "Usable, but transcript setup is incomplete.", tuple(warnings[:3]))
+        return FeatureHealth("Tickets", "🎫", "warning", "Usable, but transcript setup is incomplete.", tuple(warnings[:3]), "Open Existing Server → Ticket Logs.")
     return FeatureHealth("Tickets", "🎫", "ready", f"Category `{cat.name}` and transcripts `{transcripts.name}` are ready.")
 
 
@@ -297,7 +287,7 @@ def _verification_score(guild: discord.Guild, cfg: Any, enabled: bool) -> Featur
     elif not _can_manage_role(guild, verified):
         blockers.append("Bot role must be above the Verified role.")
     if blockers:
-        return FeatureHealth("Verification", "✅", "blocker", "Needs channel/role setup before approvals.", tuple(blockers[:4]))
+        return FeatureHealth("Verification", "✅", "blocker", "Needs channel/role setup before approvals.", tuple(blockers[:4]), "Open Existing Server → Verification Roles/Channels.")
     return FeatureHealth("Verification", "✅", "ready", f"Channel `{verify_ch.name}` and roles are ready.")
 
 
@@ -320,9 +310,9 @@ def _voice_score(guild: discord.Guild, cfg: Any, enabled: bool) -> FeatureHealth
     if staff is None:
         warnings.append("Select a VC staff role so staff buttons are clear.")
     if blockers:
-        return FeatureHealth("Voice Verify", "🎙️", "blocker", "Needs voice channel permission setup.", tuple(blockers[:3]))
+        return FeatureHealth("Voice Verify", "🎙️", "blocker", "Needs voice channel permission setup.", tuple(blockers[:3]), "Open Existing Server → Voice Verification.")
     if warnings:
-        return FeatureHealth("Voice Verify", "🎙️", "warning", "Voice access can work, but queue/staff config is incomplete.", tuple(warnings[:3]))
+        return FeatureHealth("Voice Verify", "🎙️", "warning", "Voice access can work, but queue/staff config is incomplete.", tuple(warnings[:3]), "Open Existing Server → Voice Verification.")
     return FeatureHealth("Voice Verify", "🎙️", "ready", f"Voice `{getattr(voice, 'name', 'configured')}` and queue `{queue.name}` are ready.")
 
 
@@ -337,16 +327,18 @@ def _logs_score(guild: discord.Guild, cfg: Any, enabled: bool) -> FeatureHealth:
     elif not _can_use_channel(guild, modlog):
         blockers.append("Bot cannot send embeds in the modlog channel.")
     me = _bot_member(guild)
-    if me is not None:
+    if me is None:
+        warnings.append("Could not inspect bot member permissions yet.")
+    else:
         perms = me.guild_permissions
         if not bool(getattr(perms, "view_audit_log", False)):
             warnings.append("View Audit Log improves staff attribution.")
         if not bool(getattr(perms, "moderate_members", False)):
             warnings.append("Moderate Members is needed for timeout-based moderation.")
     if blockers:
-        return FeatureHealth("Logs/Moderation", "🧾", "blocker", "Logging channel is not usable.", tuple(blockers[:3]))
+        return FeatureHealth("Logs/Moderation", "🧾", "blocker", "Logging channel is not usable.", tuple(blockers[:3]), "Open Existing Server → Logs.")
     if warnings:
-        return FeatureHealth("Logs/Moderation", "🧾", "warning", "Logging works, but moderation attribution/actions are limited.", tuple(warnings[:3]))
+        return FeatureHealth("Logs/Moderation", "🧾", "warning", "Logging works, but moderation attribution/actions are limited.", tuple(warnings[:3]), "Review bot permissions.")
     return FeatureHealth("Logs/Moderation", "🧾", "ready", f"Modlog `{modlog.name}` and key permissions are ready.")
 
 
@@ -357,65 +349,67 @@ def _spam_score(spam_state: Any, enabled: bool) -> FeatureHealth:
     persisted = bool(getattr(spam_state, "persisted", False))
     label = str(getattr(spam_state, "persistence_label", "unknown") or "unknown")
     if not active:
-        return FeatureHealth("SpamGuard", "🛡️", "blocker", "Service selected, but actual guard is off.", ("Open Services → SpamGuard Setup → Enable Actual Guard.",))
+        return FeatureHealth("SpamGuard", "🛡️", "blocker", "Service selected, but actual guard is off.", ("Open Services → SpamGuard Setup → Enable Actual Guard.",), "Open Services → SpamGuard Setup.")
     if not persisted:
-        return FeatureHealth("SpamGuard", "🛡️", "warning", f"Active, but saving is `{label}`.", ("Create/fix guild_security_settings and save SpamGuard again.",))
+        return FeatureHealth("SpamGuard", "🛡️", "warning", f"Active, but saving is `{label}`.", ("Create/fix guild_security_settings and save SpamGuard again.",), "Fix guild_security_settings, then save SpamGuard again.")
     return FeatureHealth("SpamGuard", "🛡️", "ready", f"Actual guard is active and `{label}`.")
 
 
-async def _automation_score(guild: discord.Guild, enabled: bool) -> FeatureHealth:
+async def _automation_score(enabled: bool) -> FeatureHealth:
     if not enabled:
         return FeatureHealth("Automation", "🤖", "skipped", "Skipped because Tickets are not selected.")
-    settings_ok = await _db_table_readable_async("ticket_automation_settings")
-    state_ok = await _db_table_readable_async("ticket_automation_state")
+    settings_ok, state_ok = await asyncio.gather(
+        _db_table_readable("ticket_automation_settings"),
+        _db_table_readable("ticket_automation_state"),
+    )
     if settings_ok and state_ok:
         return FeatureHealth("Automation", "🤖", "ready", "SLA/reminder/auto-close tables are readable.")
     return FeatureHealth(
         "Automation",
         "🤖",
         "warning",
-        "Ticket automation will fall back or stay limited until DB tables exist.",
+        "Ticket automation will stay limited until DB tables exist.",
         ("Run supabase/migrations/20260611_ticket_automation_tables.sql.",),
+        "Run the ticket automation migration.",
     )
 
 
 async def _database_score() -> FeatureHealth:
     required = ["guild_configs", "tickets"]
     optional = ["member_activity_notices", "ticket_automation_settings", "ticket_automation_state"]
-    required_ok = [name for name in required if await _db_table_readable_async(name)]
-    optional_ok = [name for name in optional if await _db_table_readable_async(name)]
-    if len(required_ok) < len(required):
-        missing = [name for name in required if name not in required_ok]
-        return FeatureHealth("Database", "🧱", "blocker", "Required Supabase tables are missing/unreadable.", tuple(f"Fix `{name}` table." for name in missing[:3]))
-    if len(optional_ok) < len(optional):
-        missing = [name for name in optional if name not in optional_ok]
-        return FeatureHealth("Database", "🧱", "warning", "Core DB works; optional feature tables are missing.", tuple(f"Create `{name}` with the 20260611 migrations." for name in missing[:3]))
+    results = await asyncio.gather(*[_db_table_readable(name) for name in required + optional])
+    status = dict(zip(required + optional, results))
+    missing_required = [name for name in required if not status.get(name)]
+    missing_optional = [name for name in optional if not status.get(name)]
+    if missing_required:
+        return FeatureHealth("Database", "🧱", "blocker", "Required Supabase tables are missing/unreadable.", tuple(f"Fix `{name}` table." for name in missing_required[:3]), "Run core Supabase migrations.")
+    if missing_optional:
+        return FeatureHealth("Database", "🧱", "warning", "Core DB works; optional feature tables are missing.", tuple(f"Create `{name}` with the 20260611 migrations." for name in missing_optional[:3]), "Run optional 20260611 migrations.")
     return FeatureHealth("Database", "🧱", "ready", "Core and optional production tables are readable.")
 
 
 async def build_feature_scoreboard(guild: discord.Guild) -> list[FeatureHealth]:
-    cfg = await _load_config(guild)
-    state = await _load_service_state(guild)
+    cfg, state = await asyncio.gather(_load_config(guild), _load_service_state(guild))
     spam_state = await _load_spam_state(guild, state)
     tickets = bool(getattr(state, "tickets", True))
     verification = bool(getattr(state, "verification", False))
     voice = bool(getattr(state, "voice", False))
     spamguard = bool(getattr(state, "spamguard", False))
     moderation = bool(getattr(state, "moderation", spamguard))
+    automation, database = await asyncio.gather(_automation_score(tickets), _database_score())
     return [
         _ticket_score(guild, cfg, tickets),
         _verification_score(guild, cfg, verification),
         _voice_score(guild, cfg, voice),
         _spam_score(spam_state, spamguard),
         _logs_score(guild, cfg, moderation),
-        await _automation_score(guild, tickets),
-        await _database_score(),
+        automation,
+        database,
     ]
 
 
 def _scoreboard_value(scores: list[FeatureHealth]) -> str:
-    lines = [score.line for score in scores]
-    text = "\n".join(lines)
+    text = "\n".join(score.line for score in scores)
     return text[:1024] if text else "No feature checks ran."
 
 
@@ -430,6 +424,18 @@ def _fixes_value(scores: list[FeatureHealth]) -> str:
     if not lines:
         return "✅ No feature-level fixes needed. Test the selected flows."
     return "\n".join(lines[:7])[:1024]
+
+
+def _actions_value(scores: list[FeatureHealth]) -> str:
+    lines: list[str] = []
+    for score in scores:
+        if score.status in {"blocker", "warning"} and score.action:
+            line = f"• **{score.name}:** {score.action}"
+            if line not in lines:
+                lines.append(line)
+    if not lines:
+        return "✅ Run real-flow tests: open/close ticket, verify user, send modlog event, and test SpamGuard privately."
+    return "\n".join(lines[:6])[:1024]
 
 
 def _next_step(scores: list[FeatureHealth]) -> str:
@@ -468,6 +474,7 @@ def _wrap_setup_health() -> bool:
             skipped = [s for s in scores if s.status == "skipped"]
             embed.add_field(name="Feature Health Scoreboard", value=_scoreboard_value(scores), inline=False)
             embed.add_field(name="Feature Fixes", value=_fixes_value(scores), inline=False)
+            embed.add_field(name="Suggested Actions", value=_actions_value(scores), inline=False)
             embed.add_field(
                 name="Product Readiness",
                 value=(
