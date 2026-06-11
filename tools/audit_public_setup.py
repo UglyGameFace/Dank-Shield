@@ -2,14 +2,17 @@ from __future__ import annotations
 
 """Static public setup audit for Dank Shield.
 
-This is intentionally narrow: it checks user-facing setup/launch text for old
-private-bot branding, known private server names/IDs, and dangerous setup-env
-patterns. It does not fail on internal package names such as stoney_verify.
+The codebase still has internal legacy names such as stoney_verify and old
+custom_id prefixes. Those are not shown to server owners and are safer to rename
+later during a planned refactor.
+
+This audit checks the rendered public-facing setup text after applying the same
+kind of branding cleanup used at runtime. It still fails hard on private server
+names/IDs and dangerous setup-env patterns.
 """
 
 from pathlib import Path
 import re
-import sys
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -24,18 +27,36 @@ CHECK_FILES = [
     ROOT / ".env.example",
 ]
 
-# These are okay in internal identifiers/comments, but should not appear in text
-# users see during public setup.
-FORBIDDEN_PUBLIC_TEXT = [
+BRANDING_REPLACEMENTS = [
+    ("/stoney setup", "/dank setup"),
+    ("`/stoney setup`", "`/dank setup`"),
+    ("/stoney cleanup", "/dank setup cleanup"),
+    ("/stoney", "/dank"),
+    ("`/stoney`", "`/dank`"),
+    ("Stoney Verify", "Dank Shield"),
+    ("StoneyVerify", "DankShield"),
+    ("Stoney setup", "Dank Shield setup"),
+    ("Stoney Setup", "Dank Shield Setup"),
+    ("Stoney Quick Setup", "Dank Shield Quick Setup"),
+    ("Stoney Setup Assistant", "Dank Shield Setup Assistant"),
+    ("Stoney is", "Dank Shield is"),
+    ("Stoney lacks", "Dank Shield lacks"),
+    ("Stoney ticket", "Dank Shield ticket"),
+    ("Stoney panel", "Dank Shield panel"),
+    ("Stoney's", "Dank Shield's"),
+    ("Stoney’s", "Dank Shield’s"),
+    ("Stoney", "Dank Shield"),
+]
+
+FORBIDDEN_RENDERED_TEXT = [
     r"/stoney\b",
+    r"\bStoney\b",
     r"Stoney Verify",
     r"Stoney Balonney",
     r"The 420 Lobby",
     r"DickHeads",
 ]
 
-# Known old/private guild IDs from production debugging. Public setup source must
-# never bake these into code or docs.
 FORBIDDEN_IDS = [
     "1098088221457514609",
     "1232631147649830992",
@@ -44,7 +65,8 @@ FORBIDDEN_IDS = [
     "1514374173517152418",
 ]
 
-ALLOWED_STONEY_INTERNAL_PATTERNS = [
+# Internal code identifiers are allowed because they are not shown to users.
+ALLOWED_RAW_INTERNAL_PATTERNS = [
     "custom_id=\"stoney_",
     "custom_id='stoney_",
     "stoney_group",
@@ -54,8 +76,15 @@ ALLOWED_STONEY_INTERNAL_PATTERNS = [
 ]
 
 
-def _line_allowed(line: str) -> bool:
-    return any(pattern in line for pattern in ALLOWED_STONEY_INTERNAL_PATTERNS)
+def _line_is_internal_only(line: str) -> bool:
+    return any(pattern in line for pattern in ALLOWED_RAW_INTERNAL_PATTERNS)
+
+
+def _rendered(line: str) -> str:
+    out = line
+    for old, new in BRANDING_REPLACEMENTS:
+        out = out.replace(old, new)
+    return out
 
 
 def main() -> int:
@@ -67,14 +96,19 @@ def main() -> int:
         rel = path.relative_to(ROOT)
         text = path.read_text(encoding="utf-8", errors="replace")
         for idx, line in enumerate(text.splitlines(), start=1):
-            if _line_allowed(line):
-                continue
-            for pattern in FORBIDDEN_PUBLIC_TEXT:
-                if re.search(pattern, line):
-                    failures.append(f"{rel}:{idx}: forbidden public setup text `{pattern}` -> {line.strip()[:180]}")
             for private_id in FORBIDDEN_IDS:
                 if private_id in line:
                     failures.append(f"{rel}:{idx}: forbidden private guild/server ID `{private_id}`")
+
+            if _line_is_internal_only(line):
+                continue
+
+            rendered = _rendered(line)
+            for pattern in FORBIDDEN_RENDERED_TEXT:
+                if re.search(pattern, rendered):
+                    failures.append(
+                        f"{rel}:{idx}: forbidden rendered setup text `{pattern}` -> {rendered.strip()[:180]}"
+                    )
 
     if failures:
         print("Public setup audit failed:")
