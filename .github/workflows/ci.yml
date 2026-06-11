@@ -31,4 +31,7 @@ jobs:
           pip install -r requirements.txt
 
       - name: Compile Python modules
-        run: python -m compileall -q stoney_verify main.py
+        run: python -m compileall -q stoney_verify main.py tools
+
+      - name: Audit public setup text and isolation
+        run: python tools/audit_public_setup.py
