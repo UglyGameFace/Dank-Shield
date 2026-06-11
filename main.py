@@ -30,6 +30,10 @@ import stoney_verify.startup_guards.worker_start_return_guard  # noqa: F401,E402
 # Compact giant known-good startup summaries without hiding warnings/errors.
 import stoney_verify.startup_guards.public_runtime_log_hygiene  # noqa: F401,E402
 
+# Validate saved per-guild IDs against the live Discord guild before runtime
+# discovery trusts them.
+import stoney_verify.startup_guards.guild_config_runtime_validator  # noqa: F401,E402
+
 # Ticket categories can hit Discord's child-channel limit. Load overflow routing
 # before extra ticket UI patches so creation/reopen paths choose a usable parent.
 import stoney_verify.startup_guards.ticket_overflow_category_guard  # noqa: F401,E402
