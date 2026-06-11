@@ -38,3 +38,6 @@ jobs:
 
       - name: Audit setup safety rules
         run: python tools/audit_setup_safety.py
+
+      - name: Audit role truth ownership
+        run: python tools/audit_role_truth.py
