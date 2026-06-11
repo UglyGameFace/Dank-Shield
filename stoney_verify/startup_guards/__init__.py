@@ -104,6 +104,10 @@ _STARTUP_GUARDS: Tuple[str, ...] = (
     # current server's saved setup config, never deployment/global .env IDs.
     "stoney_verify.startup_guards.public_no_env_runtime_config",
 
+    # Member truth must also use per-guild saved safe/pending roles, not global
+    # deployment role IDs. This protects sync state and fail-closed checks.
+    "stoney_verify.startup_guards.per_guild_role_truth_guard",
+
     # Disable stale public TicketPanelView creation while keeping staff ticket
     # channel action controls alive. The clean ticket panel below is canonical.
     "stoney_verify.startup_guards.legacy_public_ticket_panel_disable",
@@ -190,6 +194,7 @@ _IMPORT_CHATTER_PREFIXES: Tuple[str, ...] = (
     "✅ vc_setup_one_press_fix:",
     "✅ vc_per_guild_access_fix:",
     "✅ public_no_env_runtime_config:",
+    "🧭 per_guild_role_truth_guard ",
     "✅ legacy_public_ticket_panel_disable:",
     "✅ ticket_panel_doctor_command:",
     "✅ ticket_panel_doctor_production_wording:",
@@ -258,9 +263,6 @@ def _should_suppress_import_line(text: str) -> bool:
                 "guild_config",
                 "raidguard",
                 "panel_bootstrap",
-                "vc_setup",
-                "public_no_env",
-                "auto_schema",
             )
         ):
             return True
@@ -269,16 +271,17 @@ def _should_suppress_import_line(text: str) -> bool:
 
 
 @contextmanager
-def _compact_import_print_filter() -> Iterator[None]:
+def _compact_import_chatter() -> Iterator[None]:
     if _verbose_startup_logs():
         yield
         return
 
     original_print = builtins.print
 
-    def filtered_print(*args, **kwargs):  # type: ignore[no-untyped-def]
+    def filtered_print(*args, **kwargs):
         try:
-            text = " ".join(str(arg) for arg in args)
+            sep = kwargs.get("sep", " ")
+            text = sep.join(str(arg) for arg in args)
             if _should_suppress_import_line(text):
                 return None
         except Exception:
@@ -292,36 +295,45 @@ def _compact_import_print_filter() -> Iterator[None]:
         builtins.print = original_print
 
 
-def load_all_startup_guards() -> tuple[Dict[str, ModuleType], Dict[str, BaseException]]:
-    for module_name in _STARTUP_GUARDS:
-        if module_name in _LOADED or module_name in _ERRORS:
-            continue
-        try:
-            with _compact_import_print_filter():
-                _LOADED[module_name] = importlib.import_module(module_name)
-        except Exception as e:  # keep booting; individual features can degrade
-            _ERRORS[module_name] = e
-            print(f"⚠️ startup guard failed: {module_name}: {repr(e)}")
-
-    style = _startup_log_style()
-    print(f"🧩 startup_guards loaded={len(_LOADED)} failed={len(_ERRORS)} mode={style}")
-    if _ERRORS and _verbose_startup_logs():
-        for name, err in _ERRORS.items():
-            print(f"   - {name}: {repr(err)}")
-    return dict(_LOADED), dict(_ERRORS)
-
-
-def start_process_health_loop() -> bool:
+def load_startup_guard(module_name: str) -> ModuleType:
+    if module_name in _LOADED:
+        return _LOADED[module_name]
     try:
-        module = _LOADED.get("stoney_verify.startup_guards.process_health")
-        if module is None:
-            module = importlib.import_module("stoney_verify.startup_guards.process_health")
-        starter = getattr(module, "start_process_health_loop", None)
-        if callable(starter):
-            return bool(starter())
-    except Exception as e:
-        print(f"⚠️ process_health start failed: {repr(e)}")
-    return False
+        with _compact_import_chatter():
+            module = importlib.import_module(module_name)
+        _LOADED[module_name] = module
+        return module
+    except BaseException as e:  # keep boot resilient; report after pass
+        _ERRORS[module_name] = e
+        raise
 
 
-__all__ = ["load_all_startup_guards", "start_process_health_loop"]
+def load_all_startup_guards(modules: Iterable[str] = _STARTUP_GUARDS) -> Dict[str, ModuleType]:
+    loaded: Dict[str, ModuleType] = {}
+    errors: Dict[str, BaseException] = {}
+
+    for module_name in modules:
+        try:
+            loaded[module_name] = load_startup_guard(module_name)
+        except BaseException as e:
+            errors[module_name] = e
+            try:
+                print(f"⚠️ startup_guard failed module={module_name}: {e!r}")
+            except Exception:
+                pass
+
+    try:
+        if errors:
+            print(f"⚠️ startup_guard load completed with errors={len(errors)} loaded={len(loaded)}")
+        else:
+            print(f"🧩 startup_guard loader complete loaded={len(loaded)}")
+    except Exception:
+        pass
+
+    return loaded
+
+
+__all__ = [
+    "load_startup_guard",
+    "load_all_startup_guards",
+]
