@@ -17,6 +17,7 @@ import discord
 _PATCHED = False
 _DB_CACHE_TTL_SECONDS = 45.0
 _DB_TABLE_CACHE: dict[str, tuple[float, bool]] = {}
+_TICKET_MENU_CACHE: dict[int, tuple[float, list[dict[str, Any]], str]] = {}
 
 
 @dataclass(frozen=True)
@@ -95,9 +96,7 @@ def _cfg_get(cfg: Any, key: str, default: Any = None) -> Any:
 def _cfg_first(cfg: Any, *keys: str) -> Any:
     for key in keys:
         value = _cfg_get(cfg, key, None)
-        if value is None:
-            continue
-        if isinstance(value, bool):
+        if value is None or isinstance(value, bool):
             continue
         text = str(value).strip()
         if text:
@@ -226,6 +225,31 @@ async def _db_table_readable(table: str) -> bool:
     ok = bool(await asyncio.to_thread(_db_table_readable_sync, str(table)))
     _DB_TABLE_CACHE[str(table)] = (now, ok)
     return ok
+
+
+def _ticket_menu_rows_sync(guild_id: int) -> tuple[list[dict[str, Any]], str]:
+    try:
+        from stoney_verify.globals import get_supabase
+
+        sb = get_supabase()
+        if sb is None:
+            return [], "Supabase is unavailable, so ticket menu options cannot be checked."
+        res = sb.table("ticket_categories").select("*").eq("guild_id", str(int(guild_id))).execute()
+        rows_raw = getattr(res, "data", None) or []
+        rows = [dict(row) for row in rows_raw if isinstance(row, Mapping)]
+        return rows, ""
+    except Exception as e:
+        return [], f"Could not read ticket_categories: {type(e).__name__}: {str(e)[:220]}"
+
+
+async def _ticket_menu_rows(guild_id: int) -> tuple[list[dict[str, Any]], str]:
+    now = monotonic()
+    cached = _TICKET_MENU_CACHE.get(int(guild_id))
+    if cached and now - cached[0] <= _DB_CACHE_TTL_SECONDS:
+        return list(cached[1]), str(cached[2])
+    rows, error = await asyncio.to_thread(_ticket_menu_rows_sync, int(guild_id))
+    _TICKET_MENU_CACHE[int(guild_id)] = (now, list(rows), str(error))
+    return rows, error
 
 
 async def _load_config(guild: discord.Guild) -> Any:
@@ -360,6 +384,44 @@ def _ticket_score(guild: discord.Guild, cfg: Any, enabled: bool) -> FeatureHealt
     )
 
 
+async def _ticket_menu_score(guild: discord.Guild, enabled: bool) -> FeatureHealth:
+    if not enabled:
+        return FeatureHealth("Ticket Menu", "🗂️", "skipped", "Skipped because Tickets are not selected.")
+    rows, error = await _ticket_menu_rows(int(guild.id))
+    if error:
+        return FeatureHealth(
+            "Ticket Menu",
+            "🗂️",
+            "blocker",
+            "Ticket menu options could not be checked.",
+            (error, "Confirm the ticket_categories table exists and Supabase is reachable."),
+            "Open /dank setup → Ticket Menu Options after fixing Supabase.",
+        )
+    if not rows:
+        return FeatureHealth(
+            "Ticket Menu",
+            "🗂️",
+            "blocker",
+            "No ticket menu options exist yet.",
+            ("Press Ticket Menu Options → Create Recommended.",),
+            "Open /dank setup → Ticket Menu Options → Create Recommended.",
+        )
+    slugs = [str(row.get("slug") or "").strip().lower() for row in rows if str(row.get("slug") or "").strip()]
+    duplicate_slugs = sorted({slug for slug in slugs if slugs.count(slug) > 1})
+    has_default = any(bool(row.get("is_default")) for row in rows)
+    warnings: list[str] = []
+    blockers: list[str] = []
+    if duplicate_slugs:
+        blockers.append("Duplicate ticket menu slugs: " + ", ".join(f"`{x}`" for x in duplicate_slugs[:5]))
+    if not has_default:
+        warnings.append("Pick one default ticket option so unclear tickets route predictably.")
+    if blockers:
+        return FeatureHealth("Ticket Menu", "🗂️", "blocker", "Ticket menu routing needs cleanup.", tuple(blockers[:3]), "Open /dank setup → Ticket Menu Options.")
+    if warnings:
+        return FeatureHealth("Ticket Menu", "🗂️", "warning", f"{len(rows)} option(s) exist, but no default is selected.", tuple(warnings[:3]), "Open /dank setup → Ticket Menu Options → Pick default.")
+    return FeatureHealth("Ticket Menu", "🗂️", "ready", f"{len(rows)} option(s) exist and a default route is selected.")
+
+
 def _verification_score(guild: discord.Guild, cfg: Any, enabled: bool) -> FeatureHealth:
     if not enabled:
         return FeatureHealth("Verification", "✅", "skipped", "Skipped by selected services.")
@@ -484,7 +546,7 @@ async def _automation_score(enabled: bool) -> FeatureHealth:
 
 
 async def _database_score() -> FeatureHealth:
-    required = ["guild_configs", "tickets"]
+    required = ["guild_configs", "tickets", "ticket_categories"]
     optional = ["member_activity_notices", "ticket_automation_settings", "ticket_automation_state"]
     results = await asyncio.gather(*[_db_table_readable(name) for name in required + optional])
     status = dict(zip(required + optional, results))
@@ -505,9 +567,14 @@ async def build_feature_scoreboard(guild: discord.Guild) -> list[FeatureHealth]:
     voice = bool(getattr(state, "voice", False))
     spamguard = bool(getattr(state, "spamguard", False))
     moderation = bool(getattr(state, "moderation", spamguard))
-    automation, database = await asyncio.gather(_automation_score(tickets), _database_score())
+    ticket_menu, automation, database = await asyncio.gather(
+        _ticket_menu_score(guild, tickets),
+        _automation_score(tickets),
+        _database_score(),
+    )
     return [
         _ticket_score(guild, cfg, tickets),
+        ticket_menu,
         _verification_score(guild, cfg, verification),
         _voice_score(guild, cfg, voice),
         _spam_score(spam_state, spamguard),
