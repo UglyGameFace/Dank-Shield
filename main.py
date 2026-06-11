@@ -52,9 +52,6 @@ import stoney_verify.startup_guards.optional_schema_health  # noqa: F401,E402
 # Shortcut command for the same setup feature scoreboard shown in Health Check.
 import stoney_verify.startup_guards.setup_scoreboard_command  # noqa: F401,E402
 
-# Normalize stale setup wording that still references the old private bot name.
-import stoney_verify.startup_guards.setup_public_text_cleanup_guard  # noqa: F401,E402
-
 # Ensure Ticket Basics can save every field the setup scoreboard requires.
 import stoney_verify.startup_guards.setup_ticket_transcripts_picker_guard  # noqa: F401,E402
 
