@@ -8,6 +8,11 @@ import stoney_verify.startup_guards.discord_api_safety  # noqa: F401
 # so the app does not create beta guild command copies unless explicitly enabled.
 import stoney_verify.startup_guards.command_scope_dedupe  # noqa: F401
 
+# Public production must never read deployment-level Discord role/channel/
+# category/home-guild IDs. This runs before the package guard loader and before
+# app.py imports globals consumers.
+import stoney_verify.startup_guards.public_server_env_id_guard  # noqa: F401
+
 from stoney_verify.startup_guards import (
     load_all_startup_guards,
     start_process_health_loop,
