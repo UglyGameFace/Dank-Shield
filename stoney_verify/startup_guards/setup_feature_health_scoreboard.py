@@ -92,6 +92,19 @@ def _cfg_get(cfg: Any, key: str, default: Any = None) -> Any:
     return default
 
 
+def _cfg_first(cfg: Any, *keys: str) -> Any:
+    for key in keys:
+        value = _cfg_get(cfg, key, None)
+        if value is None:
+            continue
+        if isinstance(value, bool):
+            continue
+        text = str(value).strip()
+        if text:
+            return value
+    return None
+
+
 def _text_channel(guild: discord.Guild, value: Any) -> discord.TextChannel | None:
     cid = _safe_int(value, 0)
     if cid <= 0:
@@ -163,7 +176,13 @@ def _can_manage_role(guild: discord.Guild, role: discord.Role | None) -> bool:
         return False
 
 
-def _can_use_channel(guild: discord.Guild, channel: Any | None, *, manage: bool = False) -> bool:
+def _can_use_channel(
+    guild: discord.Guild,
+    channel: Any | None,
+    *,
+    manage: bool = False,
+    need_files: bool = False,
+) -> bool:
     me = _bot_member(guild)
     if me is None or channel is None:
         return False
@@ -171,7 +190,14 @@ def _can_use_channel(guild: discord.Guild, channel: Any | None, *, manage: bool 
         perms = channel.permissions_for(me)
         base = bool(getattr(perms, "view_channel", False))
         if isinstance(channel, discord.TextChannel):
-            base = base and bool(getattr(perms, "send_messages", False)) and bool(getattr(perms, "embed_links", False))
+            base = (
+                base
+                and bool(getattr(perms, "send_messages", False))
+                and bool(getattr(perms, "read_message_history", False))
+                and bool(getattr(perms, "embed_links", False))
+            )
+            if need_files:
+                base = base and bool(getattr(perms, "attach_files", False))
         if manage:
             base = base and bool(getattr(perms, "manage_channels", False))
         return base
@@ -248,36 +274,105 @@ async def _load_spam_state(guild: discord.Guild, service_state: Any) -> Any:
 def _ticket_score(guild: discord.Guild, cfg: Any, enabled: bool) -> FeatureHealth:
     if not enabled:
         return FeatureHealth("Tickets", "🎫", "skipped", "Skipped by selected services.")
-    cat = _category(guild, _cfg_get(cfg, "ticket_category_id"))
-    transcripts = _text_channel(guild, _cfg_get(cfg, "transcripts_channel_id"))
+
+    active_cat = _category(guild, _cfg_first(cfg, "ticket_category_id", "active_ticket_category_id", "open_ticket_category_id"))
+    archive_cat = _category(guild, _cfg_first(cfg, "ticket_archive_category_id", "archive_category_id", "closed_ticket_category_id"))
+    panel_channel = _text_channel(
+        guild,
+        _cfg_first(
+            cfg,
+            "ticket_panel_channel_id",
+            "support_channel_id",
+            "ticket_support_channel_id",
+            "public_ticket_panel_channel_id",
+            "panel_channel_id",
+        ),
+    )
+    transcripts = _text_channel(guild, _cfg_first(cfg, "transcripts_channel_id", "transcript_channel_id"))
+    staff_role = _role(guild, _cfg_first(cfg, "staff_role_id", "ticket_staff_role_id", "support_role_id"))
+
     blockers: list[str] = []
     warnings: list[str] = []
-    if cat is None:
-        blockers.append("Choose or create a ticket category.")
-    elif not _can_use_channel(guild, cat, manage=True):
-        blockers.append("Bot needs View Channel + Manage Channels on the ticket category.")
+
+    if active_cat is None:
+        blockers.append("Choose or create the active ticket category.")
+    elif not _can_use_channel(guild, active_cat, manage=True):
+        blockers.append("Bot needs View Channels + Manage Channels on the active ticket category.")
+
+    if archive_cat is None:
+        blockers.append("Choose or create the ticket archive category.")
+    elif not _can_use_channel(guild, archive_cat, manage=True):
+        blockers.append("Bot needs View Channels + Manage Channels on the ticket archive category.")
+
+    if panel_channel is None:
+        blockers.append("Choose the public ticket panel/support channel.")
+    elif not _can_use_channel(guild, panel_channel):
+        blockers.append("Bot cannot send/read embeds in the ticket panel/support channel.")
+
     if transcripts is None:
-        warnings.append("Select a transcripts channel for clean close/delete records.")
-    elif not _can_use_channel(guild, transcripts):
-        blockers.append("Bot cannot send embeds in the transcripts channel.")
+        blockers.append("Choose the transcripts channel.")
+    elif not _can_use_channel(guild, transcripts, need_files=True):
+        blockers.append("Bot needs send/read/embed/attach permissions in the transcripts channel.")
+
+    if staff_role is None:
+        blockers.append("Choose the ticket staff role.")
+    elif staff_role.is_default():
+        blockers.append("Ticket staff role cannot be @everyone.")
+
+    if active_cat is not None and archive_cat is not None:
+        try:
+            if int(active_cat.id) == int(archive_cat.id):
+                blockers.append("Active and archive ticket categories must be separate.")
+        except Exception:
+            pass
+
+    if panel_channel is not None and active_cat is not None:
+        try:
+            parent = getattr(panel_channel, "category", None)
+            if parent is not None and int(parent.id) == int(active_cat.id):
+                warnings.append("Ticket panel/support channel is inside the active ticket category; public support panels should usually live in START HERE/public channels.")
+        except Exception:
+            pass
+
     if blockers:
-        return FeatureHealth("Tickets", "🎫", "blocker", "Needs setup before ticket testing.", tuple(blockers[:3]), "Open Existing Server → Ticket Categories.")
+        return FeatureHealth(
+            "Tickets",
+            "🎫",
+            "blocker",
+            "Needs real ticket setup pieces before ticket testing.",
+            tuple(blockers[:5]),
+            "Open /dank setup → Existing Server → Tickets/Panel/Logs.",
+        )
     if warnings:
-        return FeatureHealth("Tickets", "🎫", "warning", "Usable, but transcript setup is incomplete.", tuple(warnings[:3]), "Open Existing Server → Ticket Logs.")
-    return FeatureHealth("Tickets", "🎫", "ready", f"Category `{cat.name}` and transcripts `{transcripts.name}` are ready.")
+        return FeatureHealth(
+            "Tickets",
+            "🎫",
+            "warning",
+            "Ticket setup is usable, but layout should be cleaned up.",
+            tuple(warnings[:3]),
+            "Review ticket panel placement and rerun scoreboard.",
+        )
+    return FeatureHealth(
+        "Tickets",
+        "🎫",
+        "ready",
+        f"Panel `{panel_channel.name}`, active `{active_cat.name}`, archive `{archive_cat.name}`, staff `{staff_role.name}`, and transcripts `{transcripts.name}` are ready.",
+    )
 
 
 def _verification_score(guild: discord.Guild, cfg: Any, enabled: bool) -> FeatureHealth:
     if not enabled:
         return FeatureHealth("Verification", "✅", "skipped", "Skipped by selected services.")
-    verify_ch = _text_channel(guild, _cfg_get(cfg, "verify_channel_id"))
-    unverified = _role(guild, _cfg_get(cfg, "unverified_role_id"))
-    verified = _role(guild, _cfg_get(cfg, "verified_role_id"))
+    verify_ch = _text_channel(guild, _cfg_first(cfg, "verify_channel_id", "verification_channel_id"))
+    unverified = _role(guild, _cfg_first(cfg, "unverified_role_id"))
+    verified = _role(guild, _cfg_first(cfg, "verified_role_id"))
+    resident = _role(guild, _cfg_first(cfg, "resident_role_id", "member_role_id"))
     blockers: list[str] = []
+    warnings: list[str] = []
     if verify_ch is None:
         blockers.append("Select or create a verification channel.")
     elif not _can_use_channel(guild, verify_ch):
-        blockers.append("Bot cannot send embeds in the verification channel.")
+        blockers.append("Bot cannot send/read embeds in the verification channel.")
     if unverified is None:
         blockers.append("Select or create the Unverified role.")
     elif not _can_manage_role(guild, unverified):
@@ -286,17 +381,31 @@ def _verification_score(guild: discord.Guild, cfg: Any, enabled: bool) -> Featur
         blockers.append("Select or create the Verified role.")
     elif not _can_manage_role(guild, verified):
         blockers.append("Bot role must be above the Verified role.")
+    if resident is not None and not _can_manage_role(guild, resident):
+        warnings.append("Bot role should be above the Resident/member role if that role is granted during verification.")
     if blockers:
-        return FeatureHealth("Verification", "✅", "blocker", "Needs channel/role setup before approvals.", tuple(blockers[:4]), "Open Existing Server → Verification Roles/Channels.")
-    return FeatureHealth("Verification", "✅", "ready", f"Channel `{verify_ch.name}` and roles are ready.")
+        return FeatureHealth("Verification", "✅", "blocker", "Needs channel/role setup before approvals.", tuple(blockers[:4]), "Open /dank setup → Existing Server → Verification Roles/Channels.")
+    if warnings:
+        return FeatureHealth("Verification", "✅", "warning", "Core verification works, but optional member role hierarchy needs cleanup.", tuple(warnings[:3]), "Move the bot role above verification roles.")
+    return FeatureHealth("Verification", "✅", "ready", f"Channel `{verify_ch.name}` and verification roles are ready.")
 
 
 def _voice_score(guild: discord.Guild, cfg: Any, enabled: bool) -> FeatureHealth:
     if not enabled:
         return FeatureHealth("Voice Verify", "🎙️", "skipped", "Skipped by selected services.")
-    voice = _voice_channel(guild, _cfg_get(cfg, "vc_verify_channel_id"))
-    queue = _text_channel(guild, _cfg_get(cfg, "vc_verify_queue_channel_id"))
-    staff = _role(guild, _cfg_get(cfg, "vc_staff_role_id") or _cfg_get(cfg, "staff_role_id"))
+    voice = _voice_channel(guild, _cfg_first(cfg, "vc_verify_channel_id", "voice_verify_channel_id"))
+    queue = _text_channel(
+        guild,
+        _cfg_first(
+            cfg,
+            "vc_verify_queue_channel_id",
+            "vc_queue_channel_id",
+            "vc_request_channel_id",
+            "vc_verify_requests_channel_id",
+            "voice_verify_requests_channel_id",
+        ),
+    )
+    staff = _role(guild, _cfg_first(cfg, "vc_staff_role_id", "staff_role_id", "ticket_staff_role_id", "support_role_id"))
     blockers: list[str] = []
     warnings: list[str] = []
     if voice is None:
@@ -304,28 +413,28 @@ def _voice_score(guild: discord.Guild, cfg: Any, enabled: bool) -> FeatureHealth
     elif not _can_use_channel(guild, voice, manage=True):
         blockers.append("Bot needs View Channel + Manage Channels on the voice verify channel.")
     if queue is None:
-        warnings.append("Select a VC queue/staff request channel.")
-    elif not _can_use_channel(guild, queue):
-        blockers.append("Bot cannot send embeds in the VC queue channel.")
+        blockers.append("Select a VC queue/staff request channel.")
+    elif not _can_use_channel(guild, queue, need_files=True):
+        blockers.append("Bot cannot send/read/embed/files in the VC queue channel.")
     if staff is None:
-        warnings.append("Select a VC staff role so staff buttons are clear.")
+        warnings.append("Select a VC staff role so staff buttons and ticket claiming are clear.")
     if blockers:
-        return FeatureHealth("Voice Verify", "🎙️", "blocker", "Needs voice channel permission setup.", tuple(blockers[:3]), "Open Existing Server → Voice Verification.")
+        return FeatureHealth("Voice Verify", "🎙️", "blocker", "Needs voice channel and queue setup.", tuple(blockers[:4]), "Open /dank setup → Existing Server → Voice Verification.")
     if warnings:
-        return FeatureHealth("Voice Verify", "🎙️", "warning", "Voice access can work, but queue/staff config is incomplete.", tuple(warnings[:3]), "Open Existing Server → Voice Verification.")
+        return FeatureHealth("Voice Verify", "🎙️", "warning", "Voice access works, but staff role config is incomplete.", tuple(warnings[:3]), "Select VC/ticket staff role.")
     return FeatureHealth("Voice Verify", "🎙️", "ready", f"Voice `{getattr(voice, 'name', 'configured')}` and queue `{queue.name}` are ready.")
 
 
 def _logs_score(guild: discord.Guild, cfg: Any, enabled: bool) -> FeatureHealth:
     if not enabled:
         return FeatureHealth("Logs/Moderation", "🧾", "skipped", "Skipped by selected services.")
-    modlog = _text_channel(guild, _cfg_get(cfg, "modlog_channel_id"))
+    modlog = _text_channel(guild, _cfg_first(cfg, "modlog_channel_id", "mod_log_channel_id"))
     blockers: list[str] = []
     warnings: list[str] = []
     if modlog is None:
         blockers.append("Select or create a modlog channel.")
     elif not _can_use_channel(guild, modlog):
-        blockers.append("Bot cannot send embeds in the modlog channel.")
+        blockers.append("Bot cannot send/read embeds in the modlog channel.")
     me = _bot_member(guild)
     if me is None:
         warnings.append("Could not inspect bot member permissions yet.")
@@ -336,7 +445,7 @@ def _logs_score(guild: discord.Guild, cfg: Any, enabled: bool) -> FeatureHealth:
         if not bool(getattr(perms, "moderate_members", False)):
             warnings.append("Moderate Members is needed for timeout-based moderation.")
     if blockers:
-        return FeatureHealth("Logs/Moderation", "🧾", "blocker", "Logging channel is not usable.", tuple(blockers[:3]), "Open Existing Server → Logs.")
+        return FeatureHealth("Logs/Moderation", "🧾", "blocker", "Logging channel is not usable.", tuple(blockers[:3]), "Open /dank setup → Existing Server → Logs.")
     if warnings:
         return FeatureHealth("Logs/Moderation", "🧾", "warning", "Logging works, but moderation attribution/actions are limited.", tuple(warnings[:3]), "Review bot permissions.")
     return FeatureHealth("Logs/Moderation", "🧾", "ready", f"Modlog `{modlog.name}` and key permissions are ready.")
