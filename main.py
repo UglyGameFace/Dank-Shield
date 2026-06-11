@@ -37,6 +37,9 @@ import stoney_verify.startup_guards.guild_config_runtime_validator  # noqa: F401
 # Keep dashboard bot-command worker role decisions scoped to the command guild.
 import stoney_verify.startup_guards.bot_command_worker_public_config_guard  # noqa: F401,E402
 
+# Prevent automatic verification fail-closed removal of established members.
+import stoney_verify.startup_guards.verification_established_member_safety  # noqa: F401,E402
+
 # Probe optional REST-readable tables and print exact migration guidance.
 import stoney_verify.startup_guards.optional_schema_health  # noqa: F401,E402
 
