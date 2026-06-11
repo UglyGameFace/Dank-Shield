@@ -22,6 +22,11 @@ from stoney_verify.startup_guards import (
 # This keeps root startup clean and makes the next permanent-refactor pass easier.
 load_all_startup_guards()
 
+# Make worker starter return values match the live task they create. This keeps
+# startup logs from saying a worker was not started right before that worker says
+# it started.
+import stoney_verify.startup_guards.worker_start_return_guard  # noqa: F401,E402
+
 # Ticket categories can hit Discord's child-channel limit. Load overflow routing
 # before extra ticket UI patches so creation/reopen paths choose a usable parent.
 import stoney_verify.startup_guards.ticket_overflow_category_guard  # noqa: F401,E402
