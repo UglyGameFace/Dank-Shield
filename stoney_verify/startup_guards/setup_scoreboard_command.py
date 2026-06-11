@@ -88,6 +88,15 @@ def _build_embed(guild: discord.Guild, scores: list[Any]) -> discord.Embed:
     return embed
 
 
+async def _build_scores(guild: discord.Guild) -> list[Any]:
+    # Look up the module function at runtime so later scoreboard extension guards
+    # are visible to /dank scoreboard too. Do not capture the function during
+    # command registration.
+    from stoney_verify.startup_guards import setup_feature_health_scoreboard as scoreboard
+
+    return list(await scoreboard.build_feature_scoreboard(guild))
+
+
 def apply() -> bool:
     global _PATCHED
     if _PATCHED:
@@ -95,7 +104,6 @@ def apply() -> bool:
     try:
         from discord import app_commands
         from stoney_verify.commands_ext.public_setup_group import _require_setup_permission, stoney_group
-        from stoney_verify.startup_guards.setup_feature_health_scoreboard import build_feature_scoreboard
 
         if stoney_group.get_command("scoreboard") is not None:
             _PATCHED = True
@@ -113,7 +121,7 @@ def apply() -> bool:
             if guild is None:
                 return await interaction.followup.send("❌ This must be used inside a server.", ephemeral=True)
             try:
-                scores = await build_feature_scoreboard(guild)
+                scores = await _build_scores(guild)
                 embed = _build_embed(guild, scores)
             except Exception as e:
                 embed = discord.Embed(
