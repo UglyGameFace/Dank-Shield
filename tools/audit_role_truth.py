@@ -14,6 +14,7 @@ ROOT = Path(__file__).resolve().parents[1]
 ROLE_TRUTH = ROOT / "stoney_verify" / "role_truth.py"
 BRIDGE = ROOT / "stoney_verify" / "startup_guards" / "per_guild_role_truth_guard.py"
 MEMBER_SERVICE = ROOT / "stoney_verify" / "members_new" / "service.py"
+SYNC_SERVICE = ROOT / "stoney_verify" / "members_new" / "sync_service.py"
 
 FORBIDDEN_IN_BRIDGE = (
     "STONEY_GUILD_CONFIG_TABLE",
@@ -23,6 +24,7 @@ FORBIDDEN_IN_BRIDGE = (
     "_SAFE_KEYS",
     "_PENDING_KEYS",
     "def _role_truth",
+    "apply_truth_to_snapshot(member, base)",
 )
 
 FORBIDDEN_MEMBER_SERVICE_GLOBAL_ROLE_MARKERS = (
@@ -40,6 +42,8 @@ REQUIRED_ROLE_TRUTH_MARKERS = (
     "def member_is_pending_verification",
     "def member_has_any_safe_access_role",
     "def apply_truth_to_snapshot",
+    "def base_member_role_snapshot",
+    "def build_member_role_snapshot",
     "SAFE_ROLE_KEYS",
     "PENDING_ROLE_KEYS",
     "get_guild_role_config",
@@ -64,6 +68,8 @@ def main() -> int:
     bridge = _read(BRIDGE)
     if "from stoney_verify import role_truth" not in bridge:
         failures.append("per_guild_role_truth_guard must bridge to stoney_verify.role_truth")
+    if "role_truth.build_member_role_snapshot" not in bridge:
+        failures.append("per_guild_role_truth_guard must use native build_member_role_snapshot")
     for marker in FORBIDDEN_IN_BRIDGE:
         if marker in bridge:
             failures.append(f"per_guild_role_truth_guard carries duplicate/native-owned logic: {marker}")
@@ -74,6 +80,10 @@ def main() -> int:
     for marker in FORBIDDEN_MEMBER_SERVICE_GLOBAL_ROLE_MARKERS:
         if marker in service:
             failures.append(f"members_new/service.py must not own global role truth: {marker}")
+
+    sync_service = _read(SYNC_SERVICE)
+    if "UNVERIFIED_ROLE_ID" in sync_service or "VERIFIED_ROLE_ID" in sync_service:
+        print("Role truth audit notice: members_new/sync_service.py still has legacy global role snapshot code; bridge must remain loaded until it is refactored.")
 
     if failures:
         print("Role truth audit failed:")
