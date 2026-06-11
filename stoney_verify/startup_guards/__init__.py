@@ -48,6 +48,9 @@ _STARTUP_GUARDS: Tuple[str, ...] = (
     # SpamGuard-only / combinations, plus service-focused health checks.
     "stoney_verify.startup_guards.setup_service_modes",
 
+    # Product-grade service readiness scoreboard on the existing Health Check.
+    "stoney_verify.startup_guards.setup_feature_health_scoreboard",
+
     # Normalize remaining legacy public text to Dank Shield + /dank setup.
     "stoney_verify.startup_guards.dank_shield_branding_guard",
 
@@ -156,6 +159,7 @@ _IMPORT_CHATTER_PREFIXES: Tuple[str, ...] = (
     "🧠 ",
     "🧭 setup_category_modal_compat patched",
     "🧭 setup_service_modes installed",
+    "🧭 setup_feature_health_scoreboard active",
     "🛡️ dank_shield_branding_guard active",
     "🛡️ member_join_removal_safety patched",
     "🛡️ member_join_removal_safety attached",
@@ -288,96 +292,36 @@ def _compact_import_print_filter() -> Iterator[None]:
         builtins.print = original_print
 
 
-def _log(message: str) -> None:
+def load_all_startup_guards() -> tuple[Dict[str, ModuleType], Dict[str, BaseException]]:
+    for module_name in _STARTUP_GUARDS:
+        if module_name in _LOADED or module_name in _ERRORS:
+            continue
+        try:
+            with _compact_import_print_filter():
+                _LOADED[module_name] = importlib.import_module(module_name)
+        except Exception as e:  # keep booting; individual features can degrade
+            _ERRORS[module_name] = e
+            print(f"⚠️ startup guard failed: {module_name}: {repr(e)}")
+
+    style = _startup_log_style()
+    print(f"🧩 startup_guards loaded={len(_LOADED)} failed={len(_ERRORS)} mode={style}")
+    if _ERRORS and _verbose_startup_logs():
+        for name, err in _ERRORS.items():
+            print(f"   - {name}: {repr(err)}")
+    return dict(_LOADED), dict(_ERRORS)
+
+
+def start_process_health_loop() -> bool:
     try:
-        print(f"🧩 startup_guards {message}")
-    except Exception:
-        pass
-
-
-def _warn(message: str) -> None:
-    try:
-        print(f"⚠️ startup_guards {message}")
-    except Exception:
-        pass
-
-
-def _refresh_late_runtime_patches() -> None:
-    try:
-        guard = _LOADED.get("stoney_verify.tickets_new.panel_creation_guard_runtime")
-        if guard is None:
-            return
-
-        refresher = getattr(guard, "refresh_panel_creation_guard_patch_targets", None)
-        if callable(refresher):
-            refresher()
-    except Exception as e:
-        _warn(f"late runtime patch refresh failed: {e!r}")
-
-
-def load_startup_guard(module_name: str) -> ModuleType | None:
-    """Import one startup guard safely and remember the result."""
-    if module_name in _LOADED:
-        return _LOADED[module_name]
-
-    try:
-        module = importlib.import_module(module_name)
-        _LOADED[module_name] = module
-        _ERRORS.pop(module_name, None)
-        return module
-    except Exception as e:
-        _ERRORS[module_name] = e
-        _warn(f"failed to import {module_name}: {e!r}")
-        return None
-
-
-def load_all_startup_guards(extra_guards: Iterable[str] | None = None) -> Dict[str, ModuleType]:
-    """Load all pre-app startup guards in the safest known order.
-
-    This function is intentionally tolerant. One guard failing should be logged,
-    but it should not hide the real startup error by crashing before the bot can
-    report diagnostics.
-    """
-    ordered = list(_STARTUP_GUARDS)
-    if extra_guards:
-        for name in extra_guards:
-            if name and name not in ordered:
-                ordered.append(name)
-
-    with _compact_import_print_filter():
-        for module_name in ordered:
-            load_startup_guard(module_name)
-        _refresh_late_runtime_patches()
-
-    _log(f"loaded={len(_LOADED)} failed={len(_ERRORS)} mode={_startup_log_style()}")
-    if _ERRORS:
-        for name, error in _ERRORS.items():
-            _warn(f"{name}: {error!r}")
-    return dict(_LOADED)
-
-
-def startup_guard_errors() -> Dict[str, BaseException]:
-    """Return startup guard import errors for diagnostics/tests."""
-    return dict(_ERRORS)
-
-
-def start_process_health_loop() -> None:
-    """Start the process health heartbeat loop if that guard is available."""
-    module = _LOADED.get("stoney_verify.startup_guards.process_health")
-    if module is None:
-        module = load_startup_guard("stoney_verify.startup_guards.process_health")
-
-    try:
-        starter = getattr(module, "start_health_loop", None)
+        module = _LOADED.get("stoney_verify.startup_guards.process_health")
+        if module is None:
+            module = importlib.import_module("stoney_verify.startup_guards.process_health")
+        starter = getattr(module, "start_process_health_loop", None)
         if callable(starter):
-            starter()
+            return bool(starter())
     except Exception as e:
-        _warn(f"process health loop start failed: {e!r}")
+        print(f"⚠️ process_health start failed: {repr(e)}")
+    return False
 
 
-__all__ = [
-    "load_all_startup_guards",
-    "load_startup_guard",
-    "startup_guard_errors",
-    "start_process_health_loop",
-]
+__all__ = ["load_all_startup_guards", "start_process_health_loop"]
