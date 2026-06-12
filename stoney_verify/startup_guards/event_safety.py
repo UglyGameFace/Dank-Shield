@@ -131,6 +131,37 @@ def _patch_member_role_snapshot(module: Any) -> bool:
     return True
 
 
+def _patch_join_verification_failure(module: Any) -> bool:
+    """Route events.py fail-closed join handling through native removal safety."""
+    original = getattr(module, "_handle_join_verification_failure", None)
+    if not callable(original):
+        return False
+    if getattr(original, "_event_safety_fail_closed_wrapped", False):
+        return False
+
+    async def _service_join_verification_failure(member: Any, reason: Any) -> Any:
+        try:
+            from stoney_verify.members_new.join_removal_safety import handle_join_verification_failure
+
+            return await handle_join_verification_failure(member, reason)
+        except Exception as e:
+            _warn(
+                "native fail-closed handler failed; falling back to legacy events handler "
+                f"member={getattr(member, 'id', None)} error={e!r}"
+            )
+            return await original(member, reason)
+
+    try:
+        setattr(_service_join_verification_failure, "_event_safety_fail_closed_wrapped", True)
+        setattr(_service_join_verification_failure, "_fresh_join_role_recovery_wrapped", True)
+        setattr(_service_join_verification_failure, "_event_safety_original", original)
+    except Exception:
+        pass
+
+    setattr(module, "_handle_join_verification_failure", _service_join_verification_failure)
+    return True
+
+
 def _wrap_async_with_queue(
     module: Any,
     name: str,
@@ -207,6 +238,9 @@ def _patch_events(module: Any, *, final_attempt: bool = False) -> int:
 
     if _patch_member_role_snapshot(module):
         wrapped.append("_member_role_snapshot->role_truth")
+
+    if _patch_join_verification_failure(module):
+        wrapped.append("_handle_join_verification_failure->join_removal_safety")
 
     for name in ("_new_sync_member_safe", "_new_mark_member_left_safe"):
         if _wrap_async_with_queue(
