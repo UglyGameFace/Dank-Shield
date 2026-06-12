@@ -97,6 +97,40 @@ def _member_id_from_args(args: tuple[Any, ...], kwargs: dict[str, Any]) -> int |
     return None
 
 
+def _patch_member_role_snapshot(module: Any) -> bool:
+    """Force events.py member snapshots through native per-guild role truth.
+
+    events.py still has a legacy _member_role_snapshot body while the large
+    module is being split apart. Runtime sync payloads must not keep deriving
+    verification state from deployment/global role IDs, so redirect the helper to
+    stoney_verify.role_truth until the function is physically removed from
+    events.py.
+    """
+    original = getattr(module, "_member_role_snapshot", None)
+    if not callable(original):
+        return False
+    if getattr(original, "_event_safety_role_truth_wrapped", False):
+        return False
+
+    def _role_truth_member_snapshot(member: Any) -> dict[str, Any]:
+        try:
+            from stoney_verify import role_truth
+
+            return role_truth.build_member_role_snapshot(member)
+        except Exception as e:
+            _warn(f"role_truth snapshot fallback for member={getattr(member, 'id', None)}: {e!r}")
+            return original(member)
+
+    try:
+        setattr(_role_truth_member_snapshot, "_event_safety_role_truth_wrapped", True)
+        setattr(_role_truth_member_snapshot, "_event_safety_original", original)
+    except Exception:
+        pass
+
+    setattr(module, "_member_role_snapshot", _role_truth_member_snapshot)
+    return True
+
+
 def _wrap_async_with_queue(
     module: Any,
     name: str,
@@ -170,6 +204,9 @@ def _patch_events(module: Any, *, final_attempt: bool = False) -> int:
         return 0
 
     wrapped: list[str] = []
+
+    if _patch_member_role_snapshot(module):
+        wrapped.append("_member_role_snapshot->role_truth")
 
     for name in ("_new_sync_member_safe", "_new_mark_member_left_safe"):
         if _wrap_async_with_queue(
