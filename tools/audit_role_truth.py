@@ -45,6 +45,7 @@ REQUIRED_EVENTS_ROLE_TRUTH_MARKERS = (
     "return role_truth.member_has_role_id(member, role_id)",
     "role_truth.member_has_any_safe_access_role(",
     "return bool(role_truth.member_is_pending_verification(member))",
+    "def _member_role_snapshot(member: discord.Member) -> Dict[str, Any]:\n    return role_truth.build_member_role_snapshot(member)",
 )
 
 FORBIDDEN_EVENTS_LEGACY_ROLE_TRUTH_MARKERS = (
@@ -53,7 +54,6 @@ FORBIDDEN_EVENTS_LEGACY_ROLE_TRUTH_MARKERS = (
     "if STAFF_ROLE_ID and _member_has_role_id(member, int(STAFF_ROLE_ID)):",
     "if STONER_ROLE_ID and _member_has_role_id(member, int(STONER_ROLE_ID)):",
     "if DRUNKEN_ROLE_ID and _member_has_role_id(member, int(DRUNKEN_ROLE_ID)):",
-    "uv_id = int(UNVERIFIED_ROLE_ID or 0)",
     "verified_id = int(VERIFIED_ROLE_ID or 0)",
     "has_unverified = _member_has_role_id(member, uv_id) if uv_id else False",
 )
