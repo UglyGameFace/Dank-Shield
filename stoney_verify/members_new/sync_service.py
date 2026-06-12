@@ -84,6 +84,30 @@ _OPTIONAL_GUILD_MEMBER_COLUMNS = {
     "has_cosmetic_only",
     "role_state",
     "role_state_reason",
+    "risk_score",
+    "risk_level",
+    "risk_reasons",
+    "fingerprint",
+    "alt_cluster_key",
+    "alt_cluster_size",
+    "burst_join_count",
+    "same_fingerprint_count",
+    "similar_name_count",
+    "same_age_bucket_count",
+    "suspicious_name_pattern",
+    "repeated_char_pattern",
+    "default_avatar",
+    "account_age_days",
+    "age_bucket",
+    "digit_ratio",
+    "underscore_ratio",
+    "cluster_members",
+    "suspicion_flags",
+    "risk_last_evaluated_at",
+    "last_join_risk_score",
+    "last_join_risk_level",
+    "last_join_fingerprint",
+    "alt_notes",
     "data_health",
 }
 _OPTIONAL_GUILD_MEMBER_COLUMN_SUPPORT: Dict[str, Optional[bool]] = {
@@ -125,6 +149,156 @@ def _safe_bool(v: Any, default: bool = False) -> bool:
         return bool(v)
     except Exception:
         return default
+
+
+
+
+def _safe_string_list(value: Any, max_items: int = 20) -> List[str]:
+    out: List[str] = []
+    try:
+        if isinstance(value, (list, tuple, set)):
+            for item in value:
+                text = str(item or "").strip()
+                if text and text not in out:
+                    out.append(text)
+        else:
+            text = str(value or "").strip()
+            if text:
+                out.append(text)
+    except Exception:
+        pass
+    return out[:max_items]
+
+
+def _safe_json_object_list(value: Any, max_items: int = 10) -> List[Dict[str, Any]]:
+    out: List[Dict[str, Any]] = []
+    try:
+        if isinstance(value, list):
+            for item in value:
+                if isinstance(item, dict):
+                    out.append(dict(item))
+    except Exception:
+        pass
+    return out[:max_items]
+
+
+def _as_float(value: Any, default: float = 0.0) -> float:
+    try:
+        if value is None or isinstance(value, bool):
+            return float(default)
+        return float(str(value).strip())
+    except Exception:
+        return float(default)
+
+
+def _derive_alt_cluster_key_from_profile(profile: Dict[str, Any]) -> Optional[str]:
+    try:
+        explicit = str(profile.get("alt_cluster_key") or "").strip()
+        if explicit:
+            return explicit
+
+        fingerprint = str(profile.get("fingerprint") or "").strip()
+        username_key = str(
+            profile.get("username_normalized")
+            or profile.get("display_name_normalized")
+            or ""
+        ).strip()
+        age_bucket = str(profile.get("age_bucket") or "").strip()
+
+        if _as_int(profile.get("same_fingerprint_count"), 0) > 0 and fingerprint:
+            return f"fp:{fingerprint}"
+        if _as_int(profile.get("similar_name_count"), 0) > 0 and username_key:
+            return f"name:{username_key[:48]}"
+        if _as_int(profile.get("same_age_bucket_count"), 0) >= 3 and age_bucket:
+            return f"age:{age_bucket}"
+    except Exception:
+        pass
+    return None
+
+
+def _derive_suspicion_flags_from_profile(profile: Dict[str, Any]) -> List[str]:
+    flags = _safe_string_list(profile.get("suspicion_flags"), 20)
+    try:
+        if flags:
+            return flags
+        if _as_int(profile.get("account_age_days"), 999999) <= 1:
+            flags.append("extremely_new_account")
+        elif _as_int(profile.get("account_age_days"), 999999) <= 3:
+            flags.append("very_new_account")
+        elif _as_int(profile.get("account_age_days"), 999999) <= 7:
+            flags.append("fresh_account")
+        if bool(profile.get("default_avatar")):
+            flags.append("default_avatar")
+        if bool(profile.get("suspicious_name_pattern")):
+            flags.append("suspicious_name_pattern")
+        if bool(profile.get("repeated_char_pattern")):
+            flags.append("repeated_character_pattern")
+        if _as_float(profile.get("digit_ratio"), 0.0) >= 0.45:
+            flags.append("very_high_digit_ratio")
+        elif _as_float(profile.get("digit_ratio"), 0.0) >= 0.25:
+            flags.append("elevated_digit_ratio")
+        if _as_float(profile.get("underscore_ratio"), 0.0) >= 0.18:
+            flags.append("high_underscore_ratio")
+        if _as_int(profile.get("burst_count"), 0) > 0:
+            flags.append("join_burst")
+        if _as_int(profile.get("same_fingerprint_count"), 0) > 0:
+            flags.append("shared_behavior_fingerprint")
+        if _as_int(profile.get("similar_name_count"), 0) > 0:
+            flags.append("similar_recent_username")
+        if _as_int(profile.get("same_age_bucket_count"), 0) > 0:
+            flags.append("age_bucket_cluster")
+    except Exception:
+        pass
+    return flags[:20]
+
+
+def _build_risk_payload_from_profile(
+    risk_profile: Optional[Dict[str, Any]],
+    *,
+    now_iso: Optional[str] = None,
+) -> Dict[str, Any]:
+    if not isinstance(risk_profile, dict):
+        return {}
+
+    now_value = now_iso or _sync_iso_now()
+    score = max(0, min(100, _as_int(risk_profile.get("score"), 0)))
+    level_raw = str(risk_profile.get("level") or "low").strip().lower()
+    level = level_raw if level_raw in {"low", "medium", "high", "critical"} else "low"
+    fingerprint = str(risk_profile.get("fingerprint") or "").strip() or None
+    alt_cluster_key = _derive_alt_cluster_key_from_profile(risk_profile)
+    same_fingerprint_count = max(0, _as_int(risk_profile.get("same_fingerprint_count"), 0))
+    similar_name_count = max(0, _as_int(risk_profile.get("similar_name_count"), 0))
+    same_age_bucket_count = max(0, _as_int(risk_profile.get("same_age_bucket_count"), 0))
+    burst_join_count = max(0, _as_int(risk_profile.get("burst_count"), 0))
+    alt_cluster_size = max(0, _as_int(risk_profile.get("alt_cluster_size"), 0))
+    if alt_cluster_size <= 0 and alt_cluster_key:
+        alt_cluster_size = 1 + max(same_fingerprint_count, similar_name_count, same_age_bucket_count)
+
+    return {
+        "risk_score": score,
+        "risk_level": level,
+        "risk_reasons": _safe_string_list(risk_profile.get("reasons"), 12),
+        "fingerprint": fingerprint,
+        "alt_cluster_key": alt_cluster_key,
+        "alt_cluster_size": alt_cluster_size,
+        "burst_join_count": burst_join_count,
+        "same_fingerprint_count": same_fingerprint_count,
+        "similar_name_count": similar_name_count,
+        "same_age_bucket_count": same_age_bucket_count,
+        "suspicious_name_pattern": bool(risk_profile.get("suspicious_name_pattern")),
+        "repeated_char_pattern": bool(risk_profile.get("repeated_char_pattern")),
+        "default_avatar": bool(risk_profile.get("default_avatar")),
+        "account_age_days": _as_int(risk_profile.get("account_age_days"), 0),
+        "age_bucket": str(risk_profile.get("age_bucket") or "").strip() or None,
+        "digit_ratio": round(_as_float(risk_profile.get("digit_ratio"), 0.0), 3),
+        "underscore_ratio": round(_as_float(risk_profile.get("underscore_ratio"), 0.0), 3),
+        "cluster_members": _safe_json_object_list(risk_profile.get("cluster_members"), 8),
+        "suspicion_flags": _derive_suspicion_flags_from_profile(risk_profile),
+        "risk_last_evaluated_at": now_value,
+        "last_join_risk_score": score,
+        "last_join_risk_level": level,
+        "last_join_fingerprint": fingerprint,
+    }
 
 
 def _sync_iso_now() -> str:
@@ -1032,7 +1206,11 @@ async def _guild_members_update_safe_async(
 # Member sync persistence
 # ============================================================
 
-async def sync_member_to_supabase(member: discord.Member, in_guild: bool = True) -> None:
+async def sync_member_to_supabase(
+    member: discord.Member,
+    in_guild: bool = True,
+    risk_profile: Optional[Dict[str, Any]] = None,
+) -> None:
     try:
         sb = get_supabase()
         if not sb:
@@ -1105,6 +1283,37 @@ async def sync_member_to_supabase(member: discord.Member, in_guild: bool = True)
             existing=existing,
             latest_join=latest_join,
             latest_ticket_rows=latest_ticket_rows,
+        )
+
+        merged_risk_payload = (
+            _build_risk_payload_from_profile(risk_profile, now_iso=now_iso)
+            if isinstance(risk_profile, dict)
+            else {key: existing.get(key) for key in (
+                "risk_score",
+                "risk_level",
+                "risk_reasons",
+                "fingerprint",
+                "alt_cluster_key",
+                "alt_cluster_size",
+                "burst_join_count",
+                "same_fingerprint_count",
+                "similar_name_count",
+                "same_age_bucket_count",
+                "suspicious_name_pattern",
+                "repeated_char_pattern",
+                "default_avatar",
+                "account_age_days",
+                "age_bucket",
+                "digit_ratio",
+                "underscore_ratio",
+                "cluster_members",
+                "suspicion_flags",
+                "risk_last_evaluated_at",
+                "last_join_risk_score",
+                "last_join_risk_level",
+                "last_join_fingerprint",
+                "alt_notes",
+            ) if key in existing}
         )
 
         await _best_effort_update_latest_join_row(
@@ -1184,6 +1393,7 @@ async def sync_member_to_supabase(member: discord.Member, in_guild: bool = True)
             "entry_confidence": entry_meta.get("entry_confidence"),
             "entry_quality_reason": entry_meta.get("entry_quality_reason"),
             "entry_conflict": bool(entry_meta.get("entry_conflict", False)),
+            **merged_risk_payload,
         }
 
         try:

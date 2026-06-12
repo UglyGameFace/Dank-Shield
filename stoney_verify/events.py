@@ -442,7 +442,11 @@ async def _new_sync_member_safe(
     try:
         if callable(new_sync_member_to_supabase):
             try:
-                await new_sync_member_to_supabase(member, in_guild=in_guild)
+                await new_sync_member_to_supabase(
+                    member,
+                    in_guild=in_guild,
+                    risk_profile=risk_profile,
+                )
                 return
             except TypeError:
                 await new_sync_member_to_supabase(member)  # type: ignore[misc]
