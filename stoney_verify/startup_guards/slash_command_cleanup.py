@@ -17,6 +17,9 @@ Why this exists:
   only for explicitly configured cleanup guild IDs. This prevents Discord mobile
   from showing duplicate global+guild slash suggestions without touching random
   public/customer guilds.
+- A cleanup epoch is stored with the sync hash. When public command cleanup rules
+  change, the epoch forces one clean global sync so Discord receives the pruned
+  command surface even if the command hash is unchanged.
 - A dangerous emergency wipe still exists behind
   STONEY_DANGEROUS_CLEAR_ALL_GLOBAL_COMMANDS_ON_BOOT=true.
 """
@@ -33,6 +36,11 @@ from discord import app_commands
 _PATCHED = False
 _ORIGINAL_SYNC = None
 _ORIGINAL_CLEAR_COMMANDS = None
+
+# Bump this value when public command cleanup rules change and Discord needs one
+# guaranteed global sync after deployment. This avoids stale global /stoney or
+# old dev command cache while still allowing future unchanged syncs to be skipped.
+COMMAND_CLEANUP_EPOCH = "2026-06-12-public-command-surface-v2"
 
 STALE_TOP_LEVEL_COMMANDS = {
     "stoney",
@@ -319,7 +327,10 @@ def _should_skip_unchanged_sync(*, guild: Optional[Any], surface_hash: str) -> b
         return False
 
     state = _read_sync_state()
-    return str(state.get("global", "")) == str(surface_hash)
+    return (
+        str(state.get("global", "")) == str(surface_hash)
+        and str(state.get("cleanup_epoch", "")) == COMMAND_CLEANUP_EPOCH
+    )
 
 
 def _should_clear_public_guild_command_copy(guild: Optional[Any]) -> bool:
@@ -344,6 +355,7 @@ def _remember_sync_hash(*, guild: Optional[Any], surface_hash: str) -> None:
         return
     state = _read_sync_state()
     state["global"] = str(surface_hash)
+    state["cleanup_epoch"] = COMMAND_CLEANUP_EPOCH
     _write_sync_state(state)
 
 
@@ -501,9 +513,13 @@ def install_slash_command_cleanup_guard() -> None:
         surface_hash = _command_surface_hash(self, guild=guild)
 
         try:
+            state = _read_sync_state()
+            previous_epoch = str(state.get("cleanup_epoch", "")) or "none"
             print(
                 "🧹 slash_command_cleanup pre-sync command surface "
-                f"scope={_scope_label(guild)} count={len(names)} names={names} hash={surface_hash[:12]}"
+                f"scope={_scope_label(guild)} count={len(names)} names={names} "
+                f"hash={surface_hash[:12]} cleanup_epoch={COMMAND_CLEANUP_EPOCH} "
+                f"previous_epoch={previous_epoch}"
             )
         except Exception:
             pass
@@ -512,7 +528,8 @@ def install_slash_command_cleanup_guard() -> None:
             try:
                 print(
                     "🧹 slash_command_cleanup skipped unchanged global slash sync "
-                    f"hash={surface_hash[:12]} set DANK_FORCE_COMMAND_SYNC_ON_BOOT=true to force"
+                    f"hash={surface_hash[:12]} cleanup_epoch={COMMAND_CLEANUP_EPOCH} "
+                    "set DANK_FORCE_COMMAND_SYNC_ON_BOOT=true to force"
                 )
             except Exception:
                 pass
@@ -540,7 +557,10 @@ def install_slash_command_cleanup_guard() -> None:
 
     _PATCHED = True
     try:
-        print("🧹 slash_command_cleanup loaded; stale alias cleanup + public /dank surface pruning active")
+        print(
+            "🧹 slash_command_cleanup loaded; stale alias cleanup + public /dank surface pruning active "
+            f"cleanup_epoch={COMMAND_CLEANUP_EPOCH}"
+        )
     except Exception:
         pass
 
@@ -551,6 +571,7 @@ install_slash_command_cleanup_guard()
 __all__ = [
     "ALLOWED_DANK_CHILDREN",
     "ALLOWED_STONEY_CHILDREN",
+    "COMMAND_CLEANUP_EPOCH",
     "CONFUSING_DANK_CHILDREN",
     "CONFUSING_STONEY_CHILDREN",
     "STALE_TOP_LEVEL_COMMANDS",
