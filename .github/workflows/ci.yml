@@ -39,6 +39,9 @@ jobs:
       - name: Audit public command surface and startup friction
         run: python tools/audit_public_command_friction.py
 
+      - name: Audit public invite permissions
+        run: python tools/audit_public_invite_permissions.py
+
       - name: Audit setup safety rules
         run: python tools/audit_setup_safety.py
 
