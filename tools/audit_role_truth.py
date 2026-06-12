@@ -15,6 +15,7 @@ BRIDGE = ROOT / "stoney_verify" / "startup_guards" / "per_guild_role_truth_guard
 STARTUP_LOADER = ROOT / "stoney_verify" / "startup_guards" / "__init__.py"
 MEMBER_SERVICE = ROOT / "stoney_verify" / "members_new" / "service.py"
 SYNC_SERVICE = ROOT / "stoney_verify" / "members_new" / "sync_service.py"
+EVENTS = ROOT / "stoney_verify" / "events.py"
 
 FORBIDDEN_GLOBAL_ROLE_MARKERS = (
     "UNVERIFIED_ROLE_ID",
@@ -37,6 +38,24 @@ REQUIRED_ROLE_TRUTH_MARKERS = (
     "PENDING_ROLE_KEYS",
     "get_guild_role_config",
     "It does not fall back to deployment role IDs.",
+)
+
+REQUIRED_EVENTS_ROLE_TRUTH_MARKERS = (
+    "from . import role_truth",
+    "return role_truth.member_has_role_id(member, role_id)",
+    "role_truth.member_has_any_safe_access_role(",
+    "return bool(role_truth.member_is_pending_verification(member))",
+)
+
+FORBIDDEN_EVENTS_LEGACY_ROLE_TRUTH_MARKERS = (
+    "if VERIFIED_ROLE_ID and _member_has_role_id(member, int(VERIFIED_ROLE_ID)):",
+    "if RESIDENT_ROLE_ID and _member_has_role_id(member, int(RESIDENT_ROLE_ID)):",
+    "if STAFF_ROLE_ID and _member_has_role_id(member, int(STAFF_ROLE_ID)):",
+    "if STONER_ROLE_ID and _member_has_role_id(member, int(STONER_ROLE_ID)):",
+    "if DRUNKEN_ROLE_ID and _member_has_role_id(member, int(DRUNKEN_ROLE_ID)):",
+    "uv_id = int(UNVERIFIED_ROLE_ID or 0)",
+    "verified_id = int(VERIFIED_ROLE_ID or 0)",
+    "has_unverified = _member_has_role_id(member, uv_id) if uv_id else False",
 )
 
 
@@ -77,6 +96,16 @@ def main() -> int:
     if "role_truth.build_member_role_snapshot(member)" not in sync_service:
         failures.append("members_new/sync_service.py must use role_truth.build_member_role_snapshot(member)")
     _assert_no_global_role_truth(SYNC_SERVICE, "members_new/sync_service.py", failures)
+
+    events = _read(EVENTS)
+    if not events:
+        failures.append("stoney_verify/events.py is missing")
+    for marker in REQUIRED_EVENTS_ROLE_TRUTH_MARKERS:
+        if marker not in events:
+            failures.append(f"stoney_verify/events.py must delegate role truth to role_truth: {marker}")
+    for marker in FORBIDDEN_EVENTS_LEGACY_ROLE_TRUTH_MARKERS:
+        if marker in events:
+            failures.append(f"stoney_verify/events.py still has legacy global role truth helper logic: {marker}")
 
     if failures:
         print("Role truth audit failed:")
