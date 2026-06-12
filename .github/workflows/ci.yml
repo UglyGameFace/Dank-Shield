@@ -36,6 +36,9 @@ jobs:
       - name: Audit public setup text and isolation
         run: python tools/audit_public_setup.py
 
+      - name: Audit public command surface and startup friction
+        run: python tools/audit_public_command_friction.py
+
       - name: Audit setup safety rules
         run: python tools/audit_setup_safety.py
 
