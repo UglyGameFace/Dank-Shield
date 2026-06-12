@@ -6,12 +6,12 @@ Public/beta access-control hardening.
 Role tiers used by Dank Shield:
 
 - server-control role: the owner/admin-level bot control role for setup/config,
-  destructive cleanup, and production switches. In the Stoney server this is
-  @perm.
+  destructive cleanup, and production switches. Private servers may call this a
+  perm/admin role, but public servers configure it per guild.
 - ticket-staff role: daily staff/support role for ticket handling and normal
-  moderation workflow. In the Stoney server this is @DickHeads.
+  moderation workflow. Public servers configure this per guild.
 
-This module intentionally keeps the resolver per-guild. No private Stoney role
+This module intentionally keeps the resolver per-guild. No private legacy role
 ID is baked into the code, and no public guild can inherit another guild's
 server-control role from env unless guild_config explicitly allows env fallback.
 """
@@ -267,7 +267,7 @@ def _can_manage_guild(member: discord.Member) -> bool:
 
 
 def scoped_is_server_control(member: object) -> bool:
-    """Owner/admin/configured control role. Manage Server only bootstraps before a control role exists."""
+    """Owner/admin/configured control role. Manage Server bootstraps before a control role exists."""
     if not isinstance(member, discord.Member):
         return False
 
@@ -279,8 +279,8 @@ def scoped_is_server_control(member: object) -> bool:
     if control_ids:
         return bool(_member_role_ids(member).intersection(control_ids))
 
-    # Bootstrap path for brand-new public guilds. Once /stoney setup-access is
-    # saved, Manage Server alone no longer counts as bot control.
+    # Bootstrap path for brand-new public guilds. Once a server-control role is
+    # saved, Manage Server alone no longer counts as full bot control.
     return _can_manage_guild(member)
 
 
@@ -314,9 +314,9 @@ async def require_server_control(interaction: discord.Interaction) -> bool:
         roles = [interaction.guild.get_role(rid) for rid in sorted(control_ids)]
         role_text = ", ".join(role.mention for role in roles if role is not None)
         role_text = role_text or "the configured server-control role"
-        msg = f"❌ Server setup requires **Administrator** or {role_text}."
+        msg = f"❌ Server setup requires {role_text} or **Administrator**."
     else:
-        msg = "❌ Server setup requires **Administrator** or **Manage Server** until `/stoney setup-access` is configured."
+        msg = "❌ Server setup requires **Manage Server** or **Administrator**. Open `/dank setup` and choose a server-control role to lock setup access down after bootstrap."
 
     await reply_once(interaction, {"content": msg, "ephemeral": True})
     return False
@@ -427,116 +427,52 @@ def _attach_setup_access_command() -> None:
     global _ATTACHED
     if _ATTACHED:
         return
-
     try:
         from .public_setup_group import stoney_group
-    except Exception as e:
-        try:
-            print(f"⚠️ public_access_control: could not import stoney_group: {repr(e)}")
-        except Exception:
-            pass
-        return
 
-    try:
-        existing = stoney_group.get_command("setup-access")
-    except Exception:
-        existing = None
+        @stoney_group.command(name="setup-access", description="Set the role allowed to configure Dank Shield")
+        async def setup_access(
+            interaction: discord.Interaction,
+            control_role: discord.Role,
+            ticket_staff_role: Optional[discord.Role] = None,
+            vc_staff_role: Optional[discord.Role] = None,
+        ) -> None:
+            await _setup_access_callback(interaction, control_role, ticket_staff_role, vc_staff_role)
 
-    if existing is not None:
         _ATTACHED = True
-        return
-
-    command = discord.app_commands.Command(
-        name="setup-access",
-        description="Configure server-control and staff roles for this server.",
-        callback=_setup_access_callback,
-    )
-
-    try:
-        command._params["control_role"].description = "Top-level bot/server control role. Example: @perm."
-        command._params["ticket_staff_role"].description = "Optional daily ticket/support staff role. Example: @DickHeads."
-        command._params["vc_staff_role"].description = "Optional VC verification staff role. Defaults to ticket staff when provided."
-    except Exception:
-        pass
-
-    try:
-        stoney_group.add_command(command)
-        _ATTACHED = True
+        print("✅ public_access_control setup-access command attached.")
     except Exception as e:
-        try:
-            print(f"⚠️ public_access_control: failed adding /stoney setup-access: {repr(e)}")
-        except Exception:
-            pass
+        print("⚠️ public_access_control setup-access attach failed:", repr(e))
 
 
-def _patch_permission_helpers() -> None:
+def install_public_access_control() -> bool:
     global _PATCHED
+    if _PATCHED:
+        return True
 
-    try:
-        from .. import globals as g
-
-        g.is_staff = scoped_is_ticket_staff  # type: ignore[assignment]
-        g.is_server_control = scoped_is_server_control  # type: ignore[attr-defined]
-    except Exception as e:
+    for mod_name in _SETUP_PERMISSION_MODULES:
         try:
-            print(f"⚠️ public_access_control: could not patch globals helpers: {repr(e)}")
+            module = __import__(mod_name, fromlist=["*"])
+            setattr(module, "_require_setup_permission", require_server_control)
         except Exception:
-            pass
+            continue
 
-    try:
-        from . import common
-
-        common._staff_check = lambda interaction: scoped_is_ticket_staff(getattr(interaction, "user", None))  # type: ignore[assignment]
-        common._server_control_check = lambda interaction: scoped_is_server_control(getattr(interaction, "user", None))  # type: ignore[attr-defined]
-        common.require_server_control = require_server_control  # type: ignore[attr-defined]
-    except Exception as e:
-        try:
-            print(f"⚠️ public_access_control: could not patch common helpers: {repr(e)}")
-        except Exception:
-            pass
-
-    # Patch setup permission helper before the other setup modules import it.
-    try:
-        from . import public_setup_group
-
-        public_setup_group._require_setup_permission = require_server_control  # type: ignore[assignment]
-    except Exception as e:
-        try:
-            print(f"⚠️ public_access_control: could not patch public_setup_group permission: {repr(e)}")
-        except Exception:
-            pass
-
-    # If any setup modules were imported before this module, patch their local
-    # imported helper too. Future modules importing from public_setup_group will
-    # receive the patched function automatically.
-    try:
-        import sys
-
-        for module_name in _SETUP_PERMISSION_MODULES:
-            module = sys.modules.get(module_name)
-            if module is not None and hasattr(module, "_require_setup_permission"):
-                setattr(module, "_require_setup_permission", require_server_control)
-    except Exception:
-        pass
-
-    _PATCHED = True
-
-
-def register_public_access_control(bot, tree) -> None:
-    _ = bot, tree
-    _patch_permission_helpers()
     _attach_setup_access_command()
+    _PATCHED = True
     try:
-        print("✅ public_access_control: server-control/ticket-staff role split active")
+        print("🛡️ public_access_control loaded; server-control role gate active")
     except Exception:
         pass
+    return True
 
+
+install_public_access_control()
 
 __all__ = [
-    "register_public_access_control",
-    "scoped_is_server_control",
-    "scoped_is_ticket_staff",
-    "require_server_control",
     "configured_control_role_ids_for_guild",
     "invalidate_access_control_cache",
+    "install_public_access_control",
+    "require_server_control",
+    "scoped_is_server_control",
+    "scoped_is_ticket_staff",
 ]
