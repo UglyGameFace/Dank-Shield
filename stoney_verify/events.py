@@ -1168,13 +1168,48 @@ async def _fetch_active_vc_session_rows(
         return []
 
 
+def _vc_runtime_deps():
+    from .verification_new.vc_session_runtime_service import VcRuntimeDeps
+
+    return VcRuntimeDeps(
+        vc_sessions=vc_sessions,
+        vc_requests=VC_REQUESTS,
+        resolve_vc_verify_channel=_resolve_vc_verify_channel,
+        fetch_active_session_rows=_fetch_active_vc_session_rows,
+        can_manage_channel=_can_manage_channel,
+        as_int=_as_int,
+        vc_row_token=_vc_row_token,
+        vc_row_status=_vc_row_status,
+        vc_owner_id_from_row=_vc_owner_id_from_row,
+        vc_staff_ids_from_row=_vc_staff_ids_from_row,
+        vc_meta_dict=_vc_meta_dict,
+        member_in_target_voice=_member_in_target_voice,
+    )
+
+
+def _vc_runtime_deps():
+    from .verification_new.vc_session_runtime_service import VcRuntimeDeps
+
+    return VcRuntimeDeps(
+        vc_sessions=vc_sessions,
+        vc_requests=VC_REQUESTS,
+        resolve_vc_verify_channel=_resolve_vc_verify_channel,
+        fetch_active_session_rows=_fetch_active_vc_session_rows,
+        can_manage_channel=_can_manage_channel,
+        as_int=_as_int,
+        vc_row_token=_vc_row_token,
+        vc_row_status=_vc_row_status,
+        vc_owner_id_from_row=_vc_owner_id_from_row,
+        vc_staff_ids_from_row=_vc_staff_ids_from_row,
+        vc_meta_dict=_vc_meta_dict,
+        member_in_target_voice=_member_in_target_voice,
+    )
+
+
 async def _vc_channel_is_empty(channel: discord.abc.GuildChannel) -> bool:
-    try:
-        if isinstance(channel, (discord.VoiceChannel, discord.StageChannel)):
-            return len(channel.members) == 0
-    except Exception:
-        pass
-    return False
+    from .verification_new.vc_session_runtime_service import vc_channel_is_empty
+
+    return await vc_channel_is_empty(channel)
 
 
 async def _vc_relock_session_channel(
@@ -1183,95 +1218,23 @@ async def _vc_relock_session_channel(
     *,
     reason: str = "vc session ended",
 ) -> bool:
-    try:
-        ch = await _resolve_vc_verify_channel(guild)
-        if not isinstance(ch, (discord.VoiceChannel, discord.StageChannel)):
-            return False
+    from .verification_new.vc_session_runtime_service import relock_session_channel
 
-        me = guild.me
-        if me is None:
-            print("⚠️ VC relock skipped: bot member missing.")
-            return False
-
-        try:
-            can_manage = _can_manage_channel(me, ch)
-            if isinstance(can_manage, tuple):
-                ok, why = bool(can_manage[0]), str(can_manage[1] if len(can_manage) > 1 else "")
-            else:
-                ok, why = bool(can_manage), ""
-        except Exception as e:
-            ok, why = False, repr(e)
-
-        if not ok:
-            print(f"⚠️ VC relock skipped: bot cannot manage VC verify channel. reason={why}")
-            return False
-
-        owner_id = _vc_owner_id_from_row(row)
-        staff_ids = _vc_staff_ids_from_row(row)
-
-        touched = False
-
-        if owner_id > 0:
-            try:
-                owner = guild.get_member(owner_id) or await guild.fetch_member(owner_id)
-            except Exception:
-                owner = None
-
-            if owner:
-                try:
-                    await ch.set_permissions(owner, overwrite=None, reason=reason)
-                    touched = True
-                except Exception as e:
-                    print(f"⚠️ Failed clearing VC overwrite for owner {owner_id}: {repr(e)}")
-
-        for sid in staff_ids:
-            try:
-                staff_member = guild.get_member(sid) or await guild.fetch_member(sid)
-            except Exception:
-                staff_member = None
-
-            if staff_member is None:
-                continue
-
-            try:
-                await ch.set_permissions(staff_member, overwrite=None, reason=reason)
-                touched = True
-            except Exception as e:
-                print(f"⚠️ Failed clearing VC overwrite for staff {sid}: {repr(e)}")
-
-        return touched
-    except Exception as e:
-        print("⚠️ _vc_relock_session_channel failed:", repr(e))
-        return False
+    return await relock_session_channel(
+        guild,
+        row,
+        reason=reason,
+        deps=_vc_runtime_deps(),
+    )
 
 
 async def _vc_mark_session_completed(
     guild: discord.Guild,
     row: Dict[str, Any],
 ) -> None:
-    token = str(row.get("token") or "").strip()
-    if not token or vc_sessions is None:
-        return
+    from .verification_new.vc_session_runtime_service import mark_session_completed
 
-    try:
-        await vc_sessions.end_session(
-            guild_id=int(guild.id),
-            token=token,
-            status="COMPLETED",
-            staff_id=0,
-        )
-        return
-    except Exception:
-        pass
-
-    try:
-        vc_sessions.transition(
-            token=token,
-            new_status="COMPLETED",
-            staff_id=0,
-        )
-    except Exception:
-        pass
+    await mark_session_completed(guild, row, deps=_vc_runtime_deps())
 
 
 async def _vc_touch_session_activity(
@@ -1280,31 +1243,9 @@ async def _vc_touch_session_activity(
     *,
     reason: str,
 ) -> None:
-    token = _vc_row_token(row)
-    if not token or vc_sessions is None:
-        return
+    from .verification_new.vc_session_runtime_service import touch_session_activity
 
-    try:
-        primary_staff_id = 0
-        staff_ids = _vc_staff_ids_from_row(row)
-        if staff_ids:
-            primary_staff_id = int(staff_ids[0])
-
-        if hasattr(vc_sessions, "extend_expiry"):
-            vc_sessions.extend_expiry(
-                token=token,
-                minutes=_as_int(row.get("access_minutes"), 0),
-                reason=reason,
-                by_staff_id=primary_staff_id,
-            )
-    except Exception:
-        pass
-
-    try:
-        if hasattr(vc_sessions, "touch_watchdog"):
-            vc_sessions.touch_watchdog(token)
-    except Exception:
-        pass
+    await touch_session_activity(guild, row, reason=reason, deps=_vc_runtime_deps())
 
 
 async def _vc_mark_owner_confirmed_if_needed(
@@ -1312,23 +1253,14 @@ async def _vc_mark_owner_confirmed_if_needed(
     owner: Optional[discord.Member],
     verify_vc_id: int,
 ) -> None:
-    try:
-        if owner is None or vc_sessions is None or not hasattr(vc_sessions, "set_owner_confirmed"):
-            return
-        if not _member_in_target_voice(owner, verify_vc_id):
-            return
-        token = _vc_row_token(row)
-        if not token:
-            return
-        meta = _vc_meta_dict(row)
-        if bool(meta.get("owner_confirmed")):
-            return
-        vc_sessions.set_owner_confirmed(
-            token=token,
-            owner_id=int(owner.id),
-        )
-    except Exception:
-        pass
+    from .verification_new.vc_session_runtime_service import mark_owner_confirmed_if_needed
+
+    await mark_owner_confirmed_if_needed(
+        row,
+        owner,
+        verify_vc_id,
+        deps=_vc_runtime_deps(),
+    )
 
 
 async def _vc_mark_started_if_needed(
@@ -1337,29 +1269,15 @@ async def _vc_mark_started_if_needed(
     staff_members: List[discord.Member],
     verify_vc_id: int,
 ) -> None:
-    try:
-        if vc_sessions is None or not hasattr(vc_sessions, "mark_started"):
-            return
+    from .verification_new.vc_session_runtime_service import mark_started_if_needed
 
-        token = _vc_row_token(row)
-        if not token:
-            return
-
-        status = _vc_row_status(row)
-        if status in {"STARTED", "IN_VC", "COMPLETED", "CANCELED", "EXPIRED"}:
-            return
-
-        owner_in = _member_in_target_voice(owner, verify_vc_id)
-        staff_in_members = [m for m in staff_members if _member_in_target_voice(m, verify_vc_id)]
-        if not owner_in or not staff_in_members:
-            return
-
-        vc_sessions.mark_started(
-            token=token,
-            by_staff_id=int(staff_in_members[0].id),
-        )
-    except Exception:
-        pass
+    await mark_started_if_needed(
+        row,
+        owner,
+        staff_members,
+        verify_vc_id,
+        deps=_vc_runtime_deps(),
+    )
 
 
 async def _vc_sync_runtime_request_state(
@@ -1368,111 +1286,28 @@ async def _vc_sync_runtime_request_state(
     staff_members: List[discord.Member],
     verify_vc_id: int,
 ) -> None:
-    try:
-        token = _vc_row_token(row)
-        if not token:
-            return
+    from .verification_new.vc_session_runtime_service import sync_runtime_request_state
 
-        req = VC_REQUESTS.get(token) or {}
-        owner_in = _member_in_target_voice(owner, verify_vc_id)
-        staff_in = any(_member_in_target_voice(m, verify_vc_id) for m in staff_members)
-
-        if owner_in and staff_in:
-            req["status"] = "IN_VC"
-        elif staff_in:
-            req["status"] = "STARTED"
-        elif owner_in:
-            req["status"] = "READY"
-        else:
-            req.setdefault("status", _vc_row_status(row) or "PENDING")
-
-        req["owner_id"] = int(owner.id) if isinstance(owner, discord.Member) else _vc_owner_id_from_row(row)
-        req["ticket_channel_id"] = _as_int(row.get("ticket_channel_id"), 0)
-        req["vc_channel_id"] = int(verify_vc_id)
-        req["guild_id"] = int(row.get("guild_id") or 0)
-        if staff_members:
-            req["assigned_staff_id"] = int(staff_members[0].id)
-            req["accepted_staff_id"] = int(staff_members[0].id)
-        VC_REQUESTS[token] = req
-    except Exception:
-        pass
+    await sync_runtime_request_state(
+        row,
+        owner,
+        staff_members,
+        verify_vc_id,
+        deps=_vc_runtime_deps(),
+    )
 
 
 async def _maybe_finish_vc_sessions_after_voice_change(
     guild: discord.Guild,
     changed_channel_ids: set[int],
 ) -> None:
-    try:
-        verify_ch = await _resolve_vc_verify_channel(guild)
-        if not isinstance(verify_ch, (discord.VoiceChannel, discord.StageChannel)):
-            return
+    from .verification_new.vc_session_runtime_service import maybe_finish_vc_sessions_after_voice_change
 
-        verify_vc_id = int(verify_ch.id)
-        if verify_vc_id not in changed_channel_ids:
-            return
-
-        rows = await _fetch_active_vc_session_rows(guild, verify_vc_id)
-        if not rows:
-            return
-
-        if await _vc_channel_is_empty(verify_ch):
-            for row in rows:
-                try:
-                    await _vc_relock_session_channel(
-                        guild,
-                        row,
-                        reason="VC verify session ended and channel emptied",
-                    )
-                    await _vc_mark_session_completed(guild, row)
-
-                    ticket_channel_id = _as_int(row.get("ticket_channel_id"), 0)
-                    if ticket_channel_id > 0:
-                        try:
-                            ticket_ch = guild.get_channel(ticket_channel_id)
-                            if ticket_ch is None:
-                                ticket_ch = await guild.fetch_channel(ticket_channel_id)
-                            if isinstance(ticket_ch, discord.TextChannel):
-                                await ticket_ch.send(
-                                    "🔒 VC verify session ended. The ID Verify VC has been locked again."
-                                )
-                        except Exception:
-                            pass
-                except Exception as e:
-                    print("⚠️ VC session finalize loop error:", repr(e))
-            return
-
-        for row in rows:
-            try:
-                owner_id = _vc_owner_id_from_row(row)
-                owner = None
-                if owner_id > 0:
-                    try:
-                        owner = guild.get_member(owner_id) or await guild.fetch_member(owner_id)
-                    except Exception:
-                        owner = None
-
-                staff_members: List[discord.Member] = []
-                for sid in _vc_staff_ids_from_row(row):
-                    try:
-                        member = guild.get_member(sid) or await guild.fetch_member(sid)
-                        if isinstance(member, discord.Member):
-                            staff_members.append(member)
-                    except Exception:
-                        continue
-
-                await _vc_touch_session_activity(
-                    guild,
-                    row,
-                    reason="verify vc still has active users",
-                )
-                await _vc_mark_owner_confirmed_if_needed(row, owner, verify_vc_id)
-                await _vc_mark_started_if_needed(row, owner, staff_members, verify_vc_id)
-                await _vc_sync_runtime_request_state(row, owner, staff_members, verify_vc_id)
-            except Exception as e:
-                print("⚠️ VC session live-state reconcile error:", repr(e))
-
-    except Exception as e:
-        print("⚠️ _maybe_finish_vc_sessions_after_voice_change error:", repr(e))
+    await maybe_finish_vc_sessions_after_voice_change(
+        guild,
+        changed_channel_ids,
+        deps=_vc_runtime_deps(),
+    )
 
 
 # Guards
