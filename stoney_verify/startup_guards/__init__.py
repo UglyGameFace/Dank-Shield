@@ -20,6 +20,8 @@ from contextlib import contextmanager
 from types import ModuleType
 from typing import Dict, Iterable, Iterator, Tuple
 
+from .process_health import start_health_loop as start_process_health_loop
+
 _LOADED: Dict[str, ModuleType] = {}
 _ERRORS: Dict[str, BaseException] = {}
 
@@ -331,4 +333,5 @@ def load_all_startup_guards(modules: Iterable[str] = _STARTUP_GUARDS) -> Dict[st
 __all__ = [
     "load_startup_guard",
     "load_all_startup_guards",
+    "start_process_health_loop",
 ]
