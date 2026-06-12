@@ -3,11 +3,10 @@ from __future__ import annotations
 
 """Audit remaining stoney_verify/events.py ownership after service handoffs.
 
-This is a reporting-only script. It does not modify files.
+Reporting-only. Does not modify files.
 """
 
 import ast
-import re
 from pathlib import Path
 from typing import Iterable
 
@@ -15,17 +14,15 @@ ROOT = Path(__file__).resolve().parents[1]
 EVENTS = ROOT / "stoney_verify" / "events.py"
 
 HIGH_RISK_MARKERS = {
-    "direct guild_members upsert/update ownership": [
+    "direct guild_members write ownership": [
         'table("guild_members")',
         "table('guild_members')",
-        ".upsert(payload",
-        ".update(payload",
+        ".upsert(",
+        ".update(",
     ],
-    "direct member_joins/member_events ownership": [
+    "direct join/event table ownership": [
         'table("member_joins")',
         'table("member_events")',
-        "member_joins").insert",
-        "member_events").insert",
     ],
     "direct ticket lifecycle ownership": [
         "find_open_ticket_for_owner",
@@ -83,11 +80,8 @@ EXPECTED_DELEGATES = {
     ],
 }
 
-EVENT_HANDLER_PREFIXES = (
-    "on_",
-)
-
 EXPECTED_LOCAL_HELPER_PREFIXES = (
+    "on_",
     "_as_",
     "_startup_",
     "_assign_startup_task",
@@ -157,8 +151,6 @@ def function_names(text: str) -> list[str]:
 def possibly_owned_helpers(names: list[str]) -> list[str]:
     suspicious: list[str] = []
     for name in names:
-        if name.startswith(EVENT_HANDLER_PREFIXES):
-            continue
         if name.startswith(EXPECTED_LOCAL_HELPER_PREFIXES):
             continue
         suspicious.append(name)
