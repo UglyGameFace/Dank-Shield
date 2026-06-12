@@ -69,7 +69,7 @@ def _setup_missing_lines(guild: discord.Guild, cfg: GuildRuntimeConfig, feature:
     missing: list[str] = []
 
     # All public staff workflows need a scoped staff role after setup. Admins can
-    # still use /stoney setup-* before this exists.
+    # still use /dank setup-* before this exists.
     if not _role_exists(guild, cfg.staff_role_id):
         missing.append("staff role")
 
@@ -120,8 +120,8 @@ async def require_setup_ready(
             {
                 "content": (
                     f"🚧 **{action_label} is not available yet.**\n"
-                    "This server has not completed Stoney setup, so I will not use another server's channels/roles.\n\n"
-                    "Start with `/stoney setup-picker`, then run `/stoney permission-check`."
+                    "This server has not completed Dank Shield setup, so I will not use another server's channels/roles.\n\n"
+                    "Start with `/dank setup-picker`, then run `/dank permission-check`."
                 ),
                 "ephemeral": True,
             },
@@ -137,7 +137,7 @@ async def require_setup_ready(
                 "content": (
                     f"🚧 **{action_label} is not ready yet.**\n"
                     f"Missing or invalid setup: **{rendered}**.\n\n"
-                    "Use `/stoney setup-picker` or the specific `/stoney setup-*` commands, then run `/stoney permission-check`."
+                    "Use `/dank setup-picker` or the specific `/dank setup-*` commands, then run `/dank permission-check`."
                 ),
                 "ephemeral": True,
             },

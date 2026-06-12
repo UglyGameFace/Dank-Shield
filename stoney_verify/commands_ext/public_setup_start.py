@@ -12,38 +12,38 @@ from ..guild_config import get_guild_config, invalidate_guild_config
 _ATTACHED = False
 
 _LEGACY_COMMAND_REPLACEMENTS = {
-    "/stoney setup-picker": "/stoney setup",
-    "/stoney setup-assistant": "/stoney setup",
-    "/stoney setup-defaults": "/stoney setup",
-    "/stoney setup-find": "/stoney setup",
-    "/stoney setup-logs": "/stoney setup",
-    "/stoney setup-review": "/stoney setup",
-    "/stoney setup-status": "/stoney setup",
-    "/stoney setup-tickets": "/stoney setup",
-    "/stoney setup-verify": "/stoney setup",
-    "/stoney setup-verify-ids": "/stoney setup",
-    "/stoney setup-access": "/stoney setup",
-    "/stoney permission-check": "/stoney setup",
-    "/stoney launch-check": "/stoney setup",
-    "/stoney production-audit": "/stoney setup",
-    "/stoney tickettool-check": "/stoney setup",
-    "/stoney db-check": "/stoney setup",
-    "`/stoney setup-picker`": "`/stoney setup`",
-    "`/stoney setup-assistant`": "`/stoney setup`",
-    "`/stoney setup-defaults`": "`/stoney setup`",
-    "`/stoney setup-find`": "`/stoney setup`",
-    "`/stoney setup-logs`": "`/stoney setup`",
-    "`/stoney setup-review`": "`/stoney setup`",
-    "`/stoney setup-status`": "`/stoney setup`",
-    "`/stoney setup-tickets`": "`/stoney setup`",
-    "`/stoney setup-verify`": "`/stoney setup`",
-    "`/stoney setup-verify-ids`": "`/stoney setup`",
-    "`/stoney setup-access`": "`/stoney setup`",
-    "`/stoney permission-check`": "`/stoney setup`",
-    "`/stoney launch-check`": "`/stoney setup`",
-    "`/stoney production-audit`": "`/stoney setup`",
-    "`/stoney tickettool-check`": "`/stoney setup`",
-    "`/stoney db-check`": "`/stoney setup`",
+    "/dank setup-picker": "/dank setup",
+    "/dank setup-assistant": "/dank setup",
+    "/dank setup-defaults": "/dank setup",
+    "/dank setup-find": "/dank setup",
+    "/dank setup-logs": "/dank setup",
+    "/dank setup-review": "/dank setup",
+    "/dank setup-status": "/dank setup",
+    "/dank setup-tickets": "/dank setup",
+    "/dank setup-verify": "/dank setup",
+    "/dank setup-verify-ids": "/dank setup",
+    "/dank setup-access": "/dank setup",
+    "/stoney permission-check": "/dank setup",
+    "/dank launch-check": "/dank setup",
+    "/stoney production-audit": "/dank setup",
+    "/dank tickettool-check": "/dank setup",
+    "/stoney db-check": "/dank setup",
+    "`/dank setup-picker`": "`/dank setup`",
+    "`/dank setup-assistant`": "`/dank setup`",
+    "`/dank setup-defaults`": "`/dank setup`",
+    "`/dank setup-find`": "`/dank setup`",
+    "`/dank setup-logs`": "`/dank setup`",
+    "`/dank setup-review`": "`/dank setup`",
+    "`/dank setup-status`": "`/dank setup`",
+    "`/dank setup-tickets`": "`/dank setup`",
+    "`/dank setup-verify`": "`/dank setup`",
+    "`/dank setup-verify-ids`": "`/dank setup`",
+    "`/dank setup-access`": "`/dank setup`",
+    "`/dank permission-check`": "`/dank setup`",
+    "`/dank launch-check`": "`/dank setup`",
+    "`/dank production-audit`": "`/dank setup`",
+    "`/dank tickettool-check`": "`/dank setup`",
+    "`/dank db-check`": "`/dank setup`",
 }
 
 _CUSTOMIZE_PAGES: tuple[tuple[str, str, tuple[str, ...]], ...] = (
@@ -274,7 +274,7 @@ async def _build_category_manager_payload(guild: discord.Guild, *, title: str = 
     embed.add_field(
         name="Tip",
         value=(
-            "Use **Ticket Basics** in `/stoney setup → Choose Existing Items` for the actual Discord open/archive categories.\n"
+            "Use **Ticket Basics** in `/dank setup → Choose Existing Items` for the actual Discord open/archive categories.\n"
             "Use this manager for support/verification/appeal/report-style routing categories."
         ),
         inline=False,
@@ -421,7 +421,7 @@ class StoneySetupView(discord.ui.View):
             title="🧩 Choose Existing Items",
             description=(
                 "Use this when the server already has roles/channels and you do **not** want Stoney to create new defaults.\n\n"
-                "Pick a setup section below. Each picker saves immediately and stays inside `/stoney setup`."
+                "Pick a setup section below. Each picker saves immediately and stays inside `/dank setup`."
             ),
             color=discord.Color.blurple(),
         )
@@ -468,7 +468,7 @@ class StoneySetupView(discord.ui.View):
         if guild is None:
             return await interaction.response.send_message("❌ This must be used inside a server.", ephemeral=True)
         await _safe_defer_update(interaction)
-        embed, view = await _build_main_setup_payload(guild, title="🩺 Stoney Setup Health")
+        embed, view = await _build_main_setup_payload(guild, title="🩺 Dank Shield Setup Health")
         await _edit_setup_message(interaction, embed=embed, view=view)
 
 
@@ -871,7 +871,7 @@ def _attach() -> None:
     except Exception:
         existing = None
     if existing is None:
-        stoney_group.add_command(discord.app_commands.Command(name="setup", description="Start the guided Stoney setup flow.", callback=_setup_callback))
+        stoney_group.add_command(discord.app_commands.Command(name="setup", description="Start the guided Dank Shield setup flow.", callback=_setup_callback))
     _ATTACHED = True
 
 
@@ -881,7 +881,7 @@ _attach()
 def register_public_setup_start_commands(bot: Any, tree: Any) -> None:
     _ = bot, tree
     _attach()
-    print("✅ public_setup_start: attached /stoney setup quick-start command")
+    print("✅ public_setup_start: attached /dank setup quick-start command")
 
 
 __all__ = ["register_public_setup_start_commands"]

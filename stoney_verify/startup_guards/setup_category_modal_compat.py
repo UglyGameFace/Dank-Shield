@@ -524,7 +524,7 @@ def install_setup_category_modal_compat() -> bool:
                     return await solid._edit_or_followup(interaction, embed=embed, view=view)
             except Exception:
                 pass
-            await _reply(interaction, "Go back to `/stoney setup` and reopen Ticket Menu Options.")
+            await _reply(interaction, "Go back to `/dank setup` and reopen Ticket Menu Options.")
 
     try:
         setattr(solid, "AddTicketCategoryModal", AddTicketCategoryModal)

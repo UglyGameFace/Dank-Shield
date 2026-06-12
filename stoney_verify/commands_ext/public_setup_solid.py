@@ -799,7 +799,7 @@ class SolidSetupView(SetupNavView):
                 "Use cleanup when setup got messy.\n\n"
                 "**Safe rule:** cleanup should only remove things Stoney created or things you explicitly pick. "
                 "It should not delete unrelated server channels, roles, tickets, or messages.\n\n"
-                "Use `/stoney cleanup` for cleanup tools, then return to `/dank setup`."
+                "Use `/dank cleanup` for cleanup tools, then return to `/dank setup`."
             ),
             color=discord.Color.blurple(),
         )

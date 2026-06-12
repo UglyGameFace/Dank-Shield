@@ -14,7 +14,7 @@ Use this command in every test server before launch:
 /stoney health
 ```
 
-A server is ready only when `/stoney health` shows no blockers.
+A server is ready only when `/dank health` shows no blockers.
 
 ---
 
@@ -39,11 +39,11 @@ Do not copy competitor branding, embeds, copywriting, designs, docs, code, or pr
 ### 2.1 Database and per-server config
 
 - [ ] `public.guild_configs` table exists in Supabase.
-- [ ] `/stoney setup-tickets` successfully saves open ticket category, archive category, staff role, transcript channel, and prefix.
-- [ ] `/stoney setup-verify` successfully saves verification channels and verification roles.
-- [ ] `/stoney setup-logs` successfully saves modlog/security log channels.
-- [ ] `/stoney config` shows `config source` from DB, not env fallback.
-- [ ] `/stoney health` has no blockers in the primary test server.
+- [ ] `/dank setup-tickets` successfully saves open ticket category, archive category, staff role, transcript channel, and prefix.
+- [ ] `/dank setup-verify` successfully saves verification channels and verification roles.
+- [ ] `/dank setup-logs` successfully saves modlog/security log channels.
+- [ ] `/dank config` shows `config source` from DB, not env fallback.
+- [ ] `/dank health` has no blockers in the primary test server.
 - [ ] A second test server can be configured without changing `.env` values.
 - [ ] Ticket creation uses the configured category for that server.
 - [ ] Ticket close moves to the configured archive category.
@@ -201,8 +201,8 @@ Do not charge users until these exist:
 
 Goal: prove no obvious crashes.
 
-- [ ] Run all `/stoney setup-*` commands.
-- [ ] Run `/stoney health` until no blockers remain.
+- [ ] Run all `/dank setup-*` commands.
+- [ ] Run `/dank health` until no blockers remain.
 - [ ] Create 10 test tickets.
 - [ ] Close/reopen/delete test tickets.
 - [ ] Generate transcripts.
@@ -294,7 +294,7 @@ Only enable auto-sharding after testing startup, command sync, persistent views,
 ### Go for private beta only if:
 
 - [ ] Public startup guard shows `blockers=0`.
-- [ ] `/stoney health` shows no blockers in the owner server.
+- [ ] `/dank health` shows no blockers in the owner server.
 - [ ] Privacy Policy and Terms have been reviewed and placeholders replaced.
 - [ ] `guild_configs` exists and per-server config works.
 - [ ] Structured API is secure.

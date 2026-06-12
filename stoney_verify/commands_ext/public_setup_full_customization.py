@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-"""Full customization layer for /stoney setup.
+"""Full customization layer for /dank setup.
 
-This module keeps customization inside the normal /stoney setup flow instead of
+This module keeps customization inside the normal /dank setup flow instead of
 adding more public slash commands. It upgrades the "Choose Existing Items" path
 so public server owners can map every important role/channel/category/behavior
 setting with Discord pickers and simple modals.
@@ -144,7 +144,7 @@ async def _back_to_setup(interaction: discord.Interaction) -> None:
             return await _edit_setup(interaction, embed=embed, view=view)
     except Exception as e:
         _warn(f"back to setup failed: {e!r}")
-    await interaction.response.send_message("✅ Saved. Run `/stoney setup` again to return to the setup screen.", ephemeral=True)
+    await interaction.response.send_message("✅ Saved. Run `/dank setup` again to return to the setup screen.", ephemeral=True)
 
 
 def _bot_member(guild: discord.Guild) -> Optional[discord.Member]:
@@ -298,7 +298,7 @@ class SaveRoleSelect(discord.ui.RoleSelect):
             return await interaction.response.send_message(embed=embed, ephemeral=True)
 
         payload = {column: _snowflake(role) for column in self.columns + self.also_same}
-        await _save_config(interaction, payload, source=f"/stoney setup full customization role picker: {self.placeholder}")
+        await _save_config(interaction, payload, source=f"/dank setup full customization role picker: {self.placeholder}")
         await _send_saved(interaction, title="✅ Saved Setup Role", description=f"Saved {_mention(role)} for `{', '.join(self.columns + self.also_same)}`.", warnings=messages if messages else None)
 
 
@@ -324,7 +324,7 @@ class SaveChannelSelect(discord.ui.ChannelSelect):
             return await interaction.response.send_message(embed=embed, ephemeral=True)
 
         payload = {column: _snowflake(channel) for column in self.columns + self.also_same}
-        await _save_config(interaction, payload, source=f"/stoney setup full customization channel picker: {self.placeholder}")
+        await _save_config(interaction, payload, source=f"/dank setup full customization channel picker: {self.placeholder}")
         await _send_saved(interaction, title="✅ Saved Setup Channel", description=f"Saved {_mention(channel)} for `{', '.join(self.columns + self.also_same)}`.")
 
 
@@ -413,7 +413,7 @@ class BehaviorSettingsModal(discord.ui.Modal, title="Setup Behavior Settings"):
                 "verify_kick_hours": str(hours),
                 "setup_note": _short(self.notes.value, 200),
             },
-            source="/stoney setup full customization behavior modal",
+            source="/dank setup full customization behavior modal",
         )
         await _send_saved(
             interaction,

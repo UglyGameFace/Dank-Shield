@@ -3,7 +3,7 @@ from __future__ import annotations
 """
 Public launch readiness command.
 
-/stoney launch-check is the one-screen production checklist admins should run
+/dank launch-check is the one-screen production checklist admins should run
 before relying on Stoney in a real server. It combines:
 
 - per-guild setup health
@@ -41,11 +41,11 @@ _TREE: Any = None
 _JSON_CONFIG_KEYS = {"settings", "config", "metadata", "meta"}
 
 _REQUIRED_DB_FIELDS: tuple[tuple[str, tuple[str, ...], str], ...] = (
-    ("Open ticket category", ("ticket_category_id", "tickets_category_id", "support_category_id"), "/stoney setup-tickets"),
-    ("Ticket staff role", ("staff_role_id", "support_role_id", "mod_role_id"), "/stoney setup-tickets"),
-    ("Verify text channel", ("verify_channel_id", "verification_channel_id", "verify_channel"), "/stoney setup-verify"),
-    ("Unverified role", ("unverified_role_id",), "/stoney setup-verify"),
-    ("Verified role", ("verified_role_id",), "/stoney setup-verify"),
+    ("Open ticket category", ("ticket_category_id", "tickets_category_id", "support_category_id"), "/dank setup-tickets"),
+    ("Ticket staff role", ("staff_role_id", "support_role_id", "mod_role_id"), "/dank setup-tickets"),
+    ("Verify text channel", ("verify_channel_id", "verification_channel_id", "verify_channel"), "/dank setup-verify"),
+    ("Unverified role", ("unverified_role_id",), "/dank setup-verify"),
+    ("Verified role", ("verified_role_id",), "/dank setup-verify"),
 )
 
 _RECOMMENDED_DB_FIELDS: tuple[tuple[str, tuple[str, ...], str], ...] = (
@@ -59,10 +59,10 @@ _RECOMMENDED_DB_FIELDS: tuple[tuple[str, tuple[str, ...], str], ...] = (
             "closed_ticket_category_id",
             "closed_tickets_category_id",
         ),
-        "/stoney setup-tickets",
+        "/dank setup-tickets",
     ),
-    ("Transcript channel", ("transcripts_channel_id", "transcript_channel_id"), "/stoney setup-tickets"),
-    ("Modlog channel", ("modlog_channel_id", "mod_log_channel_id"), "/stoney setup-logs"),
+    ("Transcript channel", ("transcripts_channel_id", "transcript_channel_id"), "/dank setup-tickets"),
+    ("Modlog channel", ("modlog_channel_id", "mod_log_channel_id"), "/dank setup-logs"),
     (
         "Join/exit log channel",
         (
@@ -75,7 +75,7 @@ _RECOMMENDED_DB_FIELDS: tuple[tuple[str, tuple[str, ...], str], ...] = (
             "welcome_channel_id",
             "leave_log_channel_id",
         ),
-        "/stoney setup-logs",
+        "/dank setup-logs",
     ),
 )
 
@@ -223,7 +223,7 @@ async def _raw_db_config_checks(guild_id: int) -> tuple[list[str], list[str], li
         return blockers, warnings, ok
 
     if not row:
-        blockers.append(f"No raw guild config row exists in `{_config_table_name()}` for this server. Run `/stoney setup-picker` or `/stoney setup-tickets` first.")
+        blockers.append(f"No raw guild config row exists in `{_config_table_name()}` for this server. Run `/dank setup-picker` or `/dank setup-tickets` first.")
         return blockers, warnings, ok
 
     data = _merged_raw_config(row)
@@ -362,7 +362,7 @@ def _launch_embed(guild: discord.Guild, cfg: Any, setup_blockers: list[str], set
     embed.add_field(
         name="Next step",
         value=(
-            "Fix blockers, then run `/stoney launch-check` again."
+            "Fix blockers, then run `/dank launch-check` again."
             if blockers
             else "Review warnings, then run a live ticket + modlog test before public invite rollout."
             if warnings
@@ -434,7 +434,7 @@ def register_public_launch_check_commands(bot: Any, tree: Any) -> None:
     _TREE = tree
     _attach_launch_check_command()
     try:
-        print("✅ public_launch_check: attached /stoney launch-check production readiness command")
+        print("✅ public_launch_check: attached /dank launch-check production readiness command")
     except Exception:
         pass
 

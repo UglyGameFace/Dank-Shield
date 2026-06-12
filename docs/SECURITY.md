@@ -271,7 +271,7 @@ After schema changes:
 
 - Restart services if Supabase/PostgREST schema cache is stale.
 - Watch for `PGRST204` and `PGRST205` errors.
-- Verify `/stoney health` still works.
+- Verify `/dank health` still works.
 - Verify ticket create/close/reopen still works.
 
 ## 10. Event-loop safety as security
@@ -368,9 +368,9 @@ Do not invite untrusted public servers until:
 - [ ] Structured Bot API logs `SECURE`.
 - [ ] Public command profile is active.
 - [ ] Slash command budget is comfortably below 100.
-- [ ] `/stoney health` has no blockers in the owner server.
+- [ ] `/dank health` has no blockers in the owner server.
 - [ ] `guild_configs` migration exists in Supabase.
-- [ ] `/stoney setup-*` stores per-guild DB config.
+- [ ] `/dank setup-*` stores per-guild DB config.
 - [ ] Privacy Policy placeholders are replaced.
 - [ ] Terms placeholders are replaced.
 - [ ] Security/support contact placeholders are replaced.

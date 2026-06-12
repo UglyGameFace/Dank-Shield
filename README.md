@@ -5,7 +5,7 @@ Dank Shield is a Discord ticket, verification, moderation, and setup assistant b
 The normal public setup path is intentionally boring:
 
 ```text
-/stoney setup
+/dank setup
 ```
 
 You should not need to memorize setup helper commands.
@@ -46,7 +46,7 @@ Keep the Stoney bot role above roles it needs to assign, such as Unverified, Ver
 In Discord, run:
 
 ```text
-/stoney setup
+/dank setup
 ```
 
 You will see three main paths:
@@ -68,7 +68,7 @@ Stoney will create missing recommended items only. It will not delete old channe
 Recommended flow:
 
 ```text
-/stoney setup
+/dank setup
 Fresh Server
 Create Missing Defaults Now
 Health Check
@@ -83,7 +83,7 @@ Use this when the server already has roles/channels/categories.
 Recommended flow:
 
 ```text
-/stoney setup
+/dank setup
 Existing Server
 Ticket Basics
 Verification Roles
@@ -117,7 +117,7 @@ TICKET ARCHIVE
 Configure these in:
 
 ```text
-/stoney setup → Existing Server → Ticket Basics
+/dank setup → Existing Server → Ticket Basics
 ```
 
 ### Ticket menu options
@@ -137,7 +137,7 @@ Other
 Configure these in:
 
 ```text
-/stoney setup → Advanced Setup → Ticket Menu Options
+/dank setup → Advanced Setup → Ticket Menu Options
 ```
 
 The recommended menu is:
@@ -161,7 +161,7 @@ The green button in Ticket Menu Options creates only missing recommended menu op
 ### Owners/admins
 
 ```text
-/stoney setup
+/dank setup
 /stoney help
 /stoney commands
 /stoney spam panel
@@ -217,12 +217,12 @@ After setup passes health:
 
 ## Troubleshooting
 
-### I do not see `/stoney setup`
+### I do not see `/dank setup`
 
 - Restart/redeploy the bot.
 - Wait for Discord global command propagation.
 - Check the boot logs for command registration errors.
-- Run `/stoney commands` if available.
+- Run `/dank commands` if available.
 
 ### Setup says a role cannot be managed
 
@@ -237,7 +237,7 @@ Give Stoney permission to View Channel, Send Messages, Embed Links, Read Message
 Run:
 
 ```text
-/stoney setup → Advanced Setup → Ticket Menu Options → Create Recommended Ticket Menu
+/dank setup → Advanced Setup → Ticket Menu Options → Create Recommended Ticket Menu
 ```
 
 ### Health check still fails after setup
@@ -262,7 +262,7 @@ Before giving the bot to another server, test this exact flow in a fresh server:
 
 ```text
 Invite bot
-/stoney setup
+/dank setup
 Fresh Server
 Create Missing Defaults Now
 Health Check
@@ -276,7 +276,7 @@ Delete ticket
 Check transcript
 Check modlog
 Restart bot
-Confirm /stoney setup still works
+Confirm /dank setup still works
 ```
 
 If all of that works, the server-owner setup path is ready for beta testing.

@@ -236,7 +236,7 @@ async def _run_vc_permission_fix(interaction: discord.Interaction) -> tuple[list
 
     changed: list[str] = []
     failed: list[str] = []
-    reason = f"Stoney setup one-press VC permission repair by {interaction.user} ({interaction.user.id})"
+    reason = f"Dank Shield setup one-press VC permission repair by {interaction.user} ({interaction.user.id})"
 
     # Voice channel lock + access.
     await _set_overwrite(

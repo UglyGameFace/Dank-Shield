@@ -215,7 +215,7 @@ def register_public_setup_by_id_commands(bot, tree) -> None:
     apply_public_setup_writer_patch()
     _attach_verify_ids_command()
     try:
-        print("✅ public_setup_by_id: attached /stoney setup-verify-ids command + durable config writer")
+        print("✅ public_setup_by_id: attached /dank setup-verify-ids command + durable config writer")
     except Exception:
         pass
 

@@ -363,7 +363,7 @@ async def _grant(
 ) -> Tuple[bool, str]:
     vc = await _resolve_saved_vc(guild, str(key), vc_verify, vc_flow)
     if not _is_voice(vc):
-        return False, "VC verification channel is not saved as a real voice channel. Run `/stoney setup` → Health Check."
+        return False, "VC verification channel is not saved as a real voice channel. Run `/dank setup` → Health Check."
 
     if not _can_manage(guild.me, vc):
         return False, f"Stoney needs **View Channel** and **Manage Channels** on {getattr(vc, 'mention', '#voice')}."

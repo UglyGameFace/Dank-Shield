@@ -52,7 +52,7 @@ def _clean_old_words(text: Any) -> Any:
     replacements = {
         "Use this before Auto-Build if you want Stoney to create missing items with your own names.": "Use this before Auto-Build if you want Dank Shield to create missing roles/channels/categories with your own names.",
         "Use cleanup when setup got messy.": "Use cleanup when setup got messy or you picked the wrong item.",
-        "Use `/stoney cleanup` for cleanup tools, then return to `/dank setup`.": "Use the cleanup options from this setup screen, then run `/dank setup` again when you are ready to continue.",
+        "Use `/dank cleanup` for cleanup tools, then return to `/dank setup`.": "Use the cleanup options from this setup screen, then run `/dank setup` again when you are ready to continue.",
         "Choose how strict setup should be. Keep this simple: pick the closest style, then save prefix/timer only if you need them.": "Choose optional behavior rules. Leave these alone until the main setup is green, then turn on only the features your server actually wants.",
         "Stoney": "Dank Shield",
         "/stoney": "/dank",

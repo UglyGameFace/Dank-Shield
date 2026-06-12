@@ -8,7 +8,7 @@ Why this exists:
 Many commands can write guild_configs while repairing setup, discovering roles,
 auto-building defaults, bootstrapping panels, or saving setup choices. In public
 servers, a careless helper command must never silently replace a role/channel/
-category that the owner already picked in /stoney setup.
+category that the owner already picked in /dank setup.
 
 Write contract:
 - Saved config wins.

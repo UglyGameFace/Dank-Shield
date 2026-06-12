@@ -5,7 +5,7 @@ from __future__ import annotations
 This module is intentionally loaded as a startup guard because the public setup,
 verification UI, and VC flow live in separate modules. It keeps them aligned:
 
-- /stoney setup health checks the same VC queue/channel permissions that the
+- /dank setup health checks the same VC queue/channel permissions that the
   ticket VC button actually needs.
 - VC request panels use per-guild saved channels before env/global fallbacks.
 - VC failures tell staff exactly which setup area is broken instead of only
@@ -735,7 +735,7 @@ def _clear_vc_setup_message(original: Any = "") -> str:
     original_text = str(original or "").strip()
     details = (
         "VC verification is not ready yet because Stoney could not post the **staff VC request panel**.\n\n"
-        "Staff should run `/stoney setup` → **Run Health Check**. It now checks the same VC queue/channel permissions this button needs.\n\n"
+        "Staff should run `/dank setup` → **Run Health Check**. It now checks the same VC queue/channel permissions this button needs.\n\n"
         "Fix the first blocker shown under Health Check, especially:\n"
         "• **VC queue/status text channel** exists and is writable.\n"
         "• Stoney has **View Channel**, **Send Messages**, **Embed Links**, and **Read Message History** in that channel.\n"
@@ -787,7 +787,7 @@ def patch_vc_request_setup_clarity() -> bool:
             if _looks_like_staff_panel_post_failure(result.get("message")):
                 patched = dict(result)
                 patched["message"] = _clear_vc_setup_message(result.get("message"))
-                patched["setup_hint"] = "Run /stoney setup -> Run Health Check. Fix VC queue/status, fallback log channel, and VC channel permissions."
+                patched["setup_hint"] = "Run /dank setup -> Run Health Check. Fix VC queue/status, fallback log channel, and VC channel permissions."
                 return patched
         except Exception:
             return result

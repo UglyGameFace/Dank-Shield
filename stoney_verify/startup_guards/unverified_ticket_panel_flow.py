@@ -491,7 +491,7 @@ async def _ensure_configured_vc_verify_locked(guild: discord.Guild, cfg: Any) ->
 
     for target, overwrite, label in critical_targets:
         try:
-            await channel.set_permissions(target, overwrite=overwrite, reason="Stoney setup safety: lock VC verification waiting room")
+            await channel.set_permissions(target, overwrite=overwrite, reason="Dank Shield setup safety: lock VC verification waiting room")
         except Exception as e:
             critical_ok = False
             _warn(f"VC lock critical overwrite failed channel={getattr(channel, 'id', 0)} target={label}: {e!r}")
@@ -501,7 +501,7 @@ async def _ensure_configured_vc_verify_locked(guild: discord.Guild, cfg: Any) ->
         if role is None:
             continue
         try:
-            await channel.set_permissions(role, overwrite=_vc_lock_staff_overwrite(), reason="Stoney setup safety: staff VC verification access")
+            await channel.set_permissions(role, overwrite=_vc_lock_staff_overwrite(), reason="Dank Shield setup safety: staff VC verification access")
         except Exception as e:
             _warn(f"VC lock staff overwrite skipped channel={getattr(channel, 'id', 0)} role={rid}: {e!r}")
 
@@ -785,7 +785,7 @@ async def _open_fresh_verification_ticket(interaction: discord.Interaction, guil
         await _reply(
             interaction,
             "❌ I could not open your verification ticket because Stoney is missing **Manage Channels** for ticket creation. "
-            "Staff should run `/stoney setup` → **Health Check** and fix the bot/category permissions.",
+            "Staff should run `/dank setup` → **Health Check** and fix the bot/category permissions.",
         )
         return True
     except discord.Forbidden as e:
@@ -793,12 +793,12 @@ async def _open_fresh_verification_ticket(interaction: discord.Interaction, guil
         await _reply(
             interaction,
             "❌ I could not open your verification ticket because Discord denied Stoney permission to create the private ticket. "
-            "Staff should run `/stoney setup` → **Health Check** and fix the bot/category permissions.",
+            "Staff should run `/dank setup` → **Health Check** and fix the bot/category permissions.",
         )
         return True
     except Exception as e:
         _warn(f"verification ticket auto-route failed guild={getattr(guild, 'id', None)} user={getattr(member, 'id', None)}: {e!r}")
-        await _reply(interaction, "❌ I could not open your verification ticket. Staff should run `/stoney setup` → Health Check.")
+        await _reply(interaction, "❌ I could not open your verification ticket. Staff should run `/dank setup` → Health Check.")
         return True
 
     if channel is None:
@@ -829,7 +829,7 @@ async def _handle_unverified_panel_click(interaction: discord.Interaction) -> bo
             interaction,
             "❌ Verification is not safe to run yet because the configured VC verification channel is not locked correctly.\n"
             f"Reason: **{vc_message}**\n\n"
-            "Staff should run `/stoney setup` → **Auto-Build Missing Items** or fix the bot's Manage Channels permission on the VC verification channel.",
+            "Staff should run `/dank setup` → **Auto-Build Missing Items** or fix the bot's Manage Channels permission on the VC verification channel.",
         )
         return True
 

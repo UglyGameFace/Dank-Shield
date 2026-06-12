@@ -12,7 +12,7 @@ Fixes included here:
 - Only one Supabase probe can run at a time per process.
 - Slow probes return the last known state instead of blocking setup/status UI.
 - Periodic heartbeat writes use a short timeout and fail quietly.
-- /stoney setup-status still works and posts a clear status report.
+- /dank setup-status still works and posts a clear status report.
 """
 
 import asyncio
@@ -737,7 +737,7 @@ async def _startup_report_all_guilds(bot: Any) -> None:
 
 
 # ============================================================
-# /stoney setup-status command
+# /dank setup-status command
 # ============================================================
 
 async def _require_status_setup_permission(interaction: discord.Interaction) -> bool:
@@ -884,7 +884,7 @@ def _attach_setup_status_command() -> None:
         stoney_group.add_command(command)
     except Exception as e:
         try:
-            print(f"⚠️ status_reporter failed adding /stoney setup-status: {repr(e)}")
+            print(f"⚠️ status_reporter failed adding /dank setup-status: {repr(e)}")
         except Exception:
             pass
 

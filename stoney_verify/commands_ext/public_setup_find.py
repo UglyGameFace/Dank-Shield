@@ -299,7 +299,7 @@ class SetupSearchSelect(discord.ui.Select):
     async def callback(self, interaction: discord.Interaction) -> None:
         view = self.view
         if not isinstance(view, SetupSearchResultView):
-            return await interaction.response.send_message("❌ Search view state expired. Run `/stoney setup` again.", ephemeral=True)
+            return await interaction.response.send_message("❌ Search view state expired. Run `/dank setup` again.", ephemeral=True)
         await view.apply(interaction, int(self.values[0]))
 
 
@@ -347,7 +347,7 @@ class SetupSearchResultView(discord.ui.View):
         embed.add_field(name="Selected", value=f"{_mention(obj)} (`{int(obj.id)}`)", inline=False)
         if warnings:
             embed.add_field(name="Warnings", value="\n".join(f"• {item}" for item in warnings), inline=False)
-        embed.set_footer(text="Run /stoney setup after setup changes to verify the full configuration.")
+        embed.set_footer(text="Run /dank setup after setup changes to verify the full configuration.")
         await interaction.response.edit_message(embed=embed, view=None)
 
 
@@ -395,7 +395,7 @@ def register_public_setup_find_commands(bot: Any, tree: Any) -> None:
     _ = bot, tree
     apply_public_setup_writer_patch()
     try:
-        print("✅ public_setup_find: attached advanced /stoney setup-find search fallback command")
+        print("✅ public_setup_find: attached advanced /dank setup-find search fallback command")
     except Exception:
         pass
 

@@ -3,7 +3,7 @@ from __future__ import annotations
 """
 Public production readiness audit.
 
-This command is intentionally stricter than /stoney launch-check. Launch-check
+This command is intentionally stricter than /dank launch-check. Launch-check
 answers "can this guild function right now?" Production-audit answers "is this
 bot safe, understandable, isolated, and predictable enough to invite into public
 servers and eventually sell plans?"

@@ -257,7 +257,7 @@ def _can_manage(me: Optional[discord.Member], channel: discord.abc.GuildChannel)
 async def _grant(guild: discord.Guild, member: discord.Member, token: str, *modules: Any) -> Tuple[bool, str]:
     vc = await _resolve_vc(guild, str(token), *modules)
     if not _is_voice(vc):
-        return False, "VC verification channel is not configured as a real voice channel for this server. Run `/stoney setup` → Health Check."
+        return False, "VC verification channel is not configured as a real voice channel for this server. Run `/dank setup` → Health Check."
     if not _can_manage(guild.me, vc):
         return False, f"Stoney needs View Channel + Manage Channels on {getattr(vc, 'mention', '#voice')}."
     try:
@@ -583,7 +583,7 @@ async def _direct_vc_approve(interaction: discord.Interaction, token: str) -> bo
         if not grant_roles:
             await _send_ephemeral(
                 interaction,
-                "❌ This server has no valid **Verified** or **Resident/Member** role saved in setup. Run `/stoney setup` and save this server's roles again.",
+                "❌ This server has no valid **Verified** or **Resident/Member** role saved in setup. Run `/dank setup` and save this server's roles again.",
             )
             return True
 

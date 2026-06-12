@@ -218,7 +218,7 @@ async def _staff_only(interaction: discord.Interaction) -> bool:
             return True
     except Exception:
         pass
-    await _send(interaction, "❌ Staff only.\n\nWhat to do next: ask a server admin to give you Stoney setup/staff access, then try again.")
+    await _send(interaction, "❌ Staff only.\n\nWhat to do next: ask a server admin to give you Dank Shield setup/staff access, then try again.")
     return False
 
 
@@ -415,7 +415,7 @@ async def _ensure_pending_role(
     if not create_if_missing:
         return None, (
             "No Pending / Unverified role is saved or discoverable. "
-            "Pick one with the `role` option, or run `/stoney setup` → Existing Server."
+            "Pick one with the `role` option, or run `/dank setup` → Existing Server."
         ), False
 
     me = guild.me
@@ -487,7 +487,7 @@ async def _ensure_named_role(
     aliases = ", ".join(f"`{x}`" for x in _ROLE_ALIASES.get(logical_name, ())[:5])
     return None, (
         f"❌ {label} role is not configured and I could not auto-discover one.\n\n"
-        f"What to do next: use the command's role picker option, or run `/stoney setup` → Existing Server. "
+        f"What to do next: use the command's role picker option, or run `/dank setup` → Existing Server. "
         f"Common names I can auto-detect include: {aliases}."
     )
 
@@ -660,7 +660,7 @@ async def verify_diagnose(interaction: discord.Interaction, user: discord.Member
         name="What To Press Next",
         value=(
             "Use `/verify fix-member` for one user, `/verify repair-unverified` for all no-role/pending users, "
-            "or `/stoney setup` → Existing Server to pick your exact roles/channels."
+            "or `/dank setup` → Existing Server to pick your exact roles/channels."
         ),
         inline=False,
     )

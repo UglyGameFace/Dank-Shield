@@ -38,7 +38,7 @@ All support reports should be classified into one category.
 
 | Category | Examples | Target handling |
 |---|---|---|
-| Setup help | Missing category, wrong role, bad permissions, `/stoney health` blockers | Ask for `/stoney health` screenshot/log first |
+| Setup help | Missing category, wrong role, bad permissions, `/dank health` blockers | Ask for `/dank health` screenshot/log first |
 | Ticket bug | Ticket not created, close/reopen failed, transcript missing | Request guild ID, channel ID, timestamp, action used |
 | Verification bug | Verify role not assigned, token expired, VC verify broken | Request guild ID, user ID, role/channel config |
 | Moderation bug | Kick/ban/timeout failed, modlog incorrect | Request action, actor, target, reason, timestamp |
@@ -121,7 +121,7 @@ Criteria:
 
 Actions:
 
-1. Ask for `/stoney health`.
+1. Ask for `/dank health`.
 2. Fix config or document workaround.
 3. Patch if reproducible.
 4. Add docs if support repeats.
@@ -352,7 +352,7 @@ Do not:
 Before inviting more than trusted test servers:
 
 - [ ] `guild_configs` migration has been run.
-- [ ] `/stoney health` passes in the owner server.
+- [ ] `/dank health` passes in the owner server.
 - [ ] Privacy Policy placeholders are replaced.
 - [ ] Terms placeholders are replaced.
 - [ ] Support channel/contact placeholders are replaced.

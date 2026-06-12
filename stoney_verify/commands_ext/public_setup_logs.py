@@ -21,7 +21,7 @@ from ..guild_config import get_guild_config, invalidate_guild_config
 # ============================================================
 # public_setup_logs.py
 # ------------------------------------------------------------
-# Adds /stoney setup-logs to the existing public /stoney group.
+# Adds /dank setup-logs to the existing public /stoney group.
 #
 # Production goals:
 # - log-channel config is saved per guild_id, not env
@@ -169,7 +169,7 @@ def register_public_setup_logs_commands(bot, tree) -> None:
     _attach_setup_logs_command()
     _register_member_lifecycle_listeners(bot, tree)
     try:
-        print("✅ public_setup_logs: attached /stoney setup-logs command")
+        print("✅ public_setup_logs: attached /dank setup-logs command")
     except Exception:
         pass
 

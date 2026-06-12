@@ -351,7 +351,7 @@ async def _ensure_role(guild: discord.Guild, name: str, *, created: list[str], r
         notes.append(f"Could not create role `{name}` because the bot is missing Manage Roles.")
         return None
     try:
-        role = await guild.create_role(name=name, permissions=discord.Permissions.none(), hoist=False, mentionable=False, reason="Stoney setup assistant missing-item repair")
+        role = await guild.create_role(name=name, permissions=discord.Permissions.none(), hoist=False, mentionable=False, reason="Dank Shield setup assistant missing-item repair")
         created.append(f"Role: {role.mention}")
         return role
     except Exception as e:
@@ -370,7 +370,7 @@ async def _ensure_category(guild: discord.Guild, name: str, *, overwrites: Optio
         notes.append(f"Could not create category `{name}` because the bot is missing Manage Channels.")
         return None
     try:
-        category = await guild.create_category(name=name, overwrites=overwrites, reason="Stoney setup assistant missing-item repair")
+        category = await guild.create_category(name=name, overwrites=overwrites, reason="Dank Shield setup assistant missing-item repair")
         created.append(f"Category: `{category.name}`")
         return category
     except Exception as e:
@@ -384,7 +384,7 @@ async def _ensure_text_channel(guild: discord.Guild, name: str, *, category: Opt
     if existing is not None:
         reused.append(f"Channel: {existing.mention}")
         try:
-            kwargs: dict[str, Any] = {"reason": "Stoney setup assistant missing-item repair refresh"}
+            kwargs: dict[str, Any] = {"reason": "Dank Shield setup assistant missing-item repair refresh"}
             if category is not None and existing.category_id != category.id:
                 kwargs["category"] = category
             if overwrites is not None:
@@ -400,7 +400,7 @@ async def _ensure_text_channel(guild: discord.Guild, name: str, *, category: Opt
         notes.append(f"Could not create `#{name}` because the bot is missing Manage Channels.")
         return None
     try:
-        channel = await guild.create_text_channel(name=name, category=category, overwrites=overwrites, topic=topic[:1024] if topic else None, reason="Stoney setup assistant missing-item repair")
+        channel = await guild.create_text_channel(name=name, category=category, overwrites=overwrites, topic=topic[:1024] if topic else None, reason="Dank Shield setup assistant missing-item repair")
         created.append(f"Channel: {channel.mention}")
         return channel
     except Exception as e:
@@ -414,7 +414,7 @@ async def _ensure_voice_channel(guild: discord.Guild, name: str, *, category: Op
     if existing is not None:
         reused.append(f"Voice: {existing.mention}")
         try:
-            kwargs: dict[str, Any] = {"reason": "Stoney setup assistant missing-item repair refresh"}
+            kwargs: dict[str, Any] = {"reason": "Dank Shield setup assistant missing-item repair refresh"}
             if category is not None and existing.category_id != category.id:
                 kwargs["category"] = category
             if overwrites is not None:
@@ -428,7 +428,7 @@ async def _ensure_voice_channel(guild: discord.Guild, name: str, *, category: Op
         notes.append(f"Could not create voice channel `{name}` because the bot is missing Manage Channels.")
         return None
     try:
-        channel = await guild.create_voice_channel(name=name, category=category, overwrites=overwrites, reason="Stoney setup assistant missing-item repair")
+        channel = await guild.create_voice_channel(name=name, category=category, overwrites=overwrites, reason="Dank Shield setup assistant missing-item repair")
         created.append(f"Voice: {channel.mention}")
         return channel
     except Exception as e:
@@ -550,7 +550,7 @@ async def _repair_specs(interaction: discord.Interaction, specs: list[RepairSpec
 
 
 def _custom_setup_summary() -> str:
-    return "You do **not** need to memorize a pile of commands.\n\n**Best custom path:** run `/stoney setup-picker` and choose your existing channels/roles from dropdowns.\n\nUse manual setup commands only if a dropdown is annoying or Discord does not show what you need."
+    return "You do **not** need to memorize a pile of commands.\n\n**Best custom path:** run `/dank setup-picker` and choose your existing channels/roles from dropdowns.\n\nUse manual setup commands only if a dropdown is annoying or Discord does not show what you need."
 
 
 async def _build_assistant_payload(guild: discord.Guild) -> tuple[discord.Embed, "SetupAssistantView"]:
@@ -576,7 +576,7 @@ async def _build_assistant_payload(guild: discord.Guild) -> tuple[discord.Embed,
         description = "I found setup blockers. Use the repair buttons below or choose your existing channels/roles."
         color = discord.Color.blurple()
 
-    embed = discord.Embed(title="🧭 Stoney Setup Assistant", description=description, color=color)
+    embed = discord.Embed(title="🧭 Dank Shield Setup Assistant", description=description, color=color)
     embed.add_field(name="Missing Items I Can Create", value=_short_lines(missing_lines, empty="✅ None"), inline=False)
     embed.add_field(name="Health Blockers", value=_short_lines(blockers, empty="✅ None"), inline=False)
     embed.add_field(name="Warnings / Optional Fixes", value=_short_lines(warnings, empty="✅ None"), inline=False)
@@ -653,8 +653,8 @@ class SetupAssistantView(discord.ui.View):
     async def choose_existing(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         if not await self._require(interaction):
             return
-        embed = discord.Embed(title="🧩 Choose Existing Items", description="Use this when the server already has channels/roles and you do **not** want the bot to create new ones.\n\nStart with `/stoney setup-picker`. It uses dropdowns so you can pick existing roles, categories, and channels.", color=discord.Color.blurple())
-        embed.add_field(name="Specific manual setup, only when needed", value="`/stoney setup-access` → control/staff roles\n`/stoney setup-tickets` → ticket categories/staff/transcripts\n`/stoney setup-verify` → verify channel/roles/VC verify\n`/stoney setup-logs` → logs\n`/stoney setup-status` → bot status channel", inline=False)
+        embed = discord.Embed(title="🧩 Choose Existing Items", description="Use this when the server already has channels/roles and you do **not** want the bot to create new ones.\n\nStart with `/dank setup-picker`. It uses dropdowns so you can pick existing roles, categories, and channels.", color=discord.Color.blurple())
+        embed.add_field(name="Specific manual setup, only when needed", value="`/dank setup-access` → control/staff roles\n`/dank setup-tickets` → ticket categories/staff/transcripts\n`/dank setup-verify` → verify channel/roles/VC verify\n`/dank setup-logs` → logs\n`/dank setup-status` → bot status channel", inline=False)
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
     @discord.ui.button(label="Use This Channel for Status", emoji="📌", style=discord.ButtonStyle.secondary, custom_id="stoney_setup_assistant:use_current_status", row=1)
@@ -726,7 +726,7 @@ def register_public_setup_assistant_commands(bot: Any, tree: Any) -> None:
     _ = bot, tree
     _attach()
     try:
-        print("✅ public_setup_assistant: attached /stoney setup-assistant command")
+        print("✅ public_setup_assistant: attached /dank setup-assistant command")
     except Exception:
         pass
 

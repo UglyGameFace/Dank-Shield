@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-"""Full setup health audit + one-press repair for public /stoney setup.
+"""Full setup health audit + one-press repair for public /dank setup.
 
 This guard makes the setup health check behave like a real preflight, not a
 light checklist.
@@ -793,7 +793,7 @@ async def _repair_category(
         category,
         guild.default_role,
         _set_ow(discord.PermissionOverwrite(), view_channel=False),
-        reason="Stoney setup one-press repair: lock ticket category",
+        reason="Dank Shield setup one-press repair: lock ticket category",
         changed=changed,
         failed=failed,
         label=f"Locked @everyone out of {_mention(category)}",
@@ -813,7 +813,7 @@ async def _repair_category(
                 manage_messages=True,
                 manage_channels=True,
             ),
-            reason="Stoney setup one-press repair: bot ticket category permissions",
+            reason="Dank Shield setup one-press repair: bot ticket category permissions",
             changed=changed,
             failed=failed,
             label=f"Repaired Stoney permissions in {_mention(category)}",
@@ -831,7 +831,7 @@ async def _repair_category(
                 embed_links=True,
                 attach_files=True,
             ),
-            reason="Stoney setup one-press repair: staff ticket category permissions",
+            reason="Dank Shield setup one-press repair: staff ticket category permissions",
             changed=changed,
             failed=failed,
             label=f"Repaired staff permissions in {_mention(category)}",
@@ -859,7 +859,7 @@ async def _repair_text(
             channel,
             guild.default_role,
             _set_ow(discord.PermissionOverwrite(), view_channel=False),
-            reason="Stoney setup one-press repair: lock private text channel",
+            reason="Dank Shield setup one-press repair: lock private text channel",
             changed=changed,
             failed=failed,
             label=f"Locked @everyone out of {_mention(channel)}",
@@ -879,7 +879,7 @@ async def _repair_text(
                 manage_messages=True,
                 manage_channels=True,
             ),
-            reason="Stoney setup one-press repair: bot text permissions",
+            reason="Dank Shield setup one-press repair: bot text permissions",
             changed=changed,
             failed=failed,
             label=f"Repaired Stoney text permissions in {_mention(channel)}",
@@ -897,7 +897,7 @@ async def _repair_text(
                 embed_links=True,
                 attach_files=True,
             ),
-            reason="Stoney setup one-press repair: staff text permissions",
+            reason="Dank Shield setup one-press repair: staff text permissions",
             changed=changed,
             failed=failed,
             label=f"Repaired staff text permissions in {_mention(channel)}",
@@ -924,7 +924,7 @@ async def _repair_vc(
         channel,
         guild.default_role,
         _set_ow(discord.PermissionOverwrite(), view_channel=False, connect=False),
-        reason="Stoney setup one-press repair: lock VC verify from everyone",
+        reason="Dank Shield setup one-press repair: lock VC verify from everyone",
         changed=changed,
         failed=failed,
         label=f"Locked @everyone out of {_mention(channel)}",
@@ -935,7 +935,7 @@ async def _repair_vc(
             channel,
             unverified,
             _set_ow(discord.PermissionOverwrite(), view_channel=True, connect=False, speak=False),
-            reason="Stoney setup one-press repair: unverified VC cannot connect before staff approval",
+            reason="Dank Shield setup one-press repair: unverified VC cannot connect before staff approval",
             changed=changed,
             failed=failed,
             label=f"Blocked unverified role from connecting to {_mention(channel)}",
@@ -955,7 +955,7 @@ async def _repair_vc(
                 manage_channels=True,
                 move_members=True,
             ),
-            reason="Stoney setup one-press repair: bot VC permissions",
+            reason="Dank Shield setup one-press repair: bot VC permissions",
             changed=changed,
             failed=failed,
             label=f"Repaired Stoney VC permissions in {_mention(channel)}",
@@ -976,7 +976,7 @@ async def _repair_vc(
                 use_voice_activation=True,
                 move_members=True,
             ),
-            reason="Stoney setup one-press repair: staff/control VC permissions",
+            reason="Dank Shield setup one-press repair: staff/control VC permissions",
             changed=changed,
             failed=failed,
             label=f"Repaired {_mention(role)} VC access in {_mention(channel)}",
@@ -1024,7 +1024,7 @@ async def _repair_existing_tickets(
                         manage_messages=True,
                         manage_channels=True,
                     ),
-                    reason="Stoney setup one-press repair: existing ticket bot permissions",
+                    reason="Dank Shield setup one-press repair: existing ticket bot permissions",
                     changed=changed,
                     failed=failed,
                     label=f"Repaired Stoney permissions in existing ticket {_mention(channel)}",
@@ -1042,7 +1042,7 @@ async def _repair_existing_tickets(
                         embed_links=True,
                         attach_files=True,
                     ),
-                    reason="Stoney setup one-press repair: existing ticket staff permissions",
+                    reason="Dank Shield setup one-press repair: existing ticket staff permissions",
                     changed=changed,
                     failed=failed,
                     label=f"Repaired staff permissions in existing ticket {_mention(channel)}",
@@ -1158,7 +1158,7 @@ async def build_full_health_embed(guild: discord.Guild) -> discord.Embed:
         )[:1024],
         inline=False,
     )
-    embed.set_footer(text=f"Guild {guild.id} • /stoney setup • full preflight")
+    embed.set_footer(text=f"Guild {guild.id} • /dank setup • full preflight")
     return embed
 
 

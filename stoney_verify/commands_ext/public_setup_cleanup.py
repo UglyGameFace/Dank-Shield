@@ -2,7 +2,7 @@ from __future__ import annotations
 
 """Selective setup cleanup for rushed/clumsy server owners.
 
-This patches /stoney setup -> Recovery / Start Over with cleanup options that
+This patches /dank setup -> Recovery / Start Over with cleanup options that
 can remove one thing, only setup channels, only setup roles, only empty setup
 categories, or all detected bot-created setup items.
 

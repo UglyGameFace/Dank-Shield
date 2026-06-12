@@ -73,7 +73,7 @@ During beta or public rollout, Dank Shield may have bugs, downtime, missing feat
 
 The bot is provided as-is and may not be appropriate as the only safety, compliance, or moderation system for a large community.
 
-You should test configuration with `/stoney health` before relying on the bot in production.
+You should test configuration with `/dank health` before relying on the bot in production.
 
 ## 8. Data and privacy
 

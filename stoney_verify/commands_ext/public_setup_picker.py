@@ -145,7 +145,7 @@ async def _edit_or_send(interaction: discord.Interaction, *, embed: discord.Embe
 
 def _home_embed(guild: discord.Guild, cfg: Any) -> discord.Embed:
     embed = discord.Embed(
-        title="🧭 Stoney Setup Picker",
+        title="🧭 Dank Shield Setup Picker",
         description=(
             "Use the buttons below to configure this server with Discord dropdowns.\n\n"
             "No copied IDs. No fighting long or styled names. Every save still validates before writing."
@@ -524,7 +524,7 @@ def register_public_setup_picker_commands(bot: Any, tree: Any) -> None:
     _ = tree
     apply_public_setup_writer_patch()
     try:
-        print("✅ public_setup_picker: attached /stoney setup-picker interactive dropdown wizard")
+        print("✅ public_setup_picker: attached /dank setup-picker interactive dropdown wizard")
     except Exception:
         pass
 

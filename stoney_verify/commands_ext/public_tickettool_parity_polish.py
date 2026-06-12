@@ -194,7 +194,7 @@ async def _category_list_callback(interaction: discord.Interaction) -> None:
         return await reply_once(
             interaction,
             {
-                "content": "ℹ️ No ticket categories are configured yet. Use `/ticket-category create` or `/stoney setup-defaults`.",
+                "content": "ℹ️ No ticket categories are configured yet. Use `/ticket-category create` or `/dank setup-defaults`.",
                 "ephemeral": True,
             },
         )

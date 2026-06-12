@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-"""Setup recovery tools for the public /stoney setup flow.
+"""Setup recovery tools for the public /dank setup flow.
 
 Owners need a panic button that is safe by default. This module adds a Recovery
-Center to /stoney setup with reversible DB-level reset actions:
+Center to /dank setup with reversible DB-level reset actions:
 
 - Start over safely: clears saved setup + ticket menu options, but does not
   delete Discord roles/channels/tickets.
@@ -499,13 +499,13 @@ class ConfirmRecoveryModal(discord.ui.Modal):
         ok = False
         if self.action == "start_over":
             message, ok = await _reset_saved_setup(guild, interaction.user, include_menu=True)
-            next_step = "Run `/stoney setup`, then choose Fresh Server or Existing Server."
+            next_step = "Run `/dank setup`, then choose Fresh Server or Existing Server."
         elif self.action == "reset_config":
             message, ok = await _reset_saved_setup(guild, interaction.user, include_menu=False)
-            next_step = "Run `/stoney setup` → Existing Server and pick the correct roles/channels."
+            next_step = "Run `/dank setup` → Existing Server and pick the correct roles/channels."
         elif self.action == "reset_menu":
             message, ok = await _reset_ticket_menu_only(guild, interaction.user)
-            next_step = "Run `/stoney setup` → Advanced Setup → Ticket Menu Options → Create Recommended Ticket Menu."
+            next_step = "Run `/dank setup` → Advanced Setup → Ticket Menu Options → Create Recommended Ticket Menu."
         elif self.action == "restore":
             message, ok = await _restore_last_reset(guild)
             next_step = "Run Health Check to confirm the restored setup is usable."

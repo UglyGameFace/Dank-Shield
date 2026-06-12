@@ -292,7 +292,7 @@ def _runtime_ticket_checks(guild: discord.Guild, cfg: Any) -> tuple[list[str], l
     ok: list[str] = []
 
     if getattr(cfg, "is_unconfigured", False):
-        blockers.append("This guild is marked unconfigured. Run `/stoney setup-picker` before TicketTool parity testing.")
+        blockers.append("This guild is marked unconfigured. Run `/dank setup-picker` before TicketTool parity testing.")
         return blockers, warnings, ok
 
     if _category_usable(guild, getattr(cfg, "ticket_category_id", 0)):
@@ -382,7 +382,7 @@ def _parity_embed(guild: discord.Guild, cfg: Any, blockers: list[str], warnings:
     embed.add_field(
         name="Next step",
         value=(
-            "Fix blockers, then run `/stoney tickettool-check` again."
+            "Fix blockers, then run `/dank tickettool-check` again."
             if blockers
             else "Run a live test: create ticket → claim → transfer → close → transcript → delete."
             if warnings
@@ -453,7 +453,7 @@ def register_public_tickettool_check_commands(bot: Any, tree: Any) -> None:
     _TREE = tree
     _attach_tickettool_check_command()
     try:
-        print("✅ public_tickettool_check: attached /stoney tickettool-check parity audit command")
+        print("✅ public_tickettool_check: attached /dank tickettool-check parity audit command")
     except Exception:
         pass
 
