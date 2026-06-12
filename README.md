@@ -12,7 +12,7 @@ You should not need to memorize setup helper commands.
 
 ---
 
-## What Stoney does
+## What Dank Shield does
 
 - Creates and manages support tickets.
 - Lets staff close, reopen, delete, archive, and review tickets.
@@ -27,7 +27,7 @@ You should not need to memorize setup helper commands.
 
 ### 1. Invite the bot
 
-Invite Stoney with permissions that allow it to manage the workflow:
+Invite Dank Shield with permissions that allow it to manage the workflow:
 
 - Manage Channels
 - Manage Roles
@@ -39,7 +39,7 @@ Invite Stoney with permissions that allow it to manage the workflow:
 - Manage Messages
 - Moderate Members
 
-Keep the Stoney bot role above roles it needs to assign, such as Unverified, Verified, Member/Resident, and ticket staff roles.
+Keep the Dank Shield bot role above roles it needs to assign, such as Unverified, Verified, Member/Resident, and ticket staff roles.
 
 ### 2. Run setup
 
@@ -63,7 +63,7 @@ Advanced Setup
 
 Use this when the server does not already have a support/verification layout.
 
-Stoney will create missing recommended items only. It will not delete old channels, old tickets, or existing roles.
+Dank Shield will create missing recommended items only. It will not delete old channels, old tickets, or existing roles.
 
 Recommended flow:
 
@@ -162,10 +162,10 @@ The green button in Ticket Menu Options creates only missing recommended menu op
 
 ```text
 /dank setup
-/stoney help
-/stoney commands
-/stoney spam panel
-/stoney cleanup status
+/dank help
+/dank commands
+/dank spam panel
+/dank cleanup status
 ```
 
 ### Ticket staff
@@ -195,8 +195,8 @@ The green button in Ticket Menu Options creates only missing recommended menu op
 
 ```text
 /mod
-/stoney spam panel
-/stoney spam status
+/dank spam panel
+/dank spam status
 ```
 
 ---
@@ -226,11 +226,11 @@ After setup passes health:
 
 ### Setup says a role cannot be managed
 
-Move the Stoney bot role above the role it needs to assign/remove.
+Move the Dank Shield bot role above the role it needs to assign/remove.
 
 ### Setup says a channel/category is missing permissions
 
-Give Stoney permission to View Channel, Send Messages, Embed Links, Read Message History, Manage Channels where needed, and Attach Files for transcript channels.
+Give Dank Shield permission to View Channel, Send Messages, Embed Links, Read Message History, Manage Channels where needed, and Attach Files for transcript channels.
 
 ### Ticket menu options are missing
 
@@ -248,7 +248,7 @@ Fix the first blocker shown, then run Health Check again. Do not chase warnings 
 
 ## Public-server safety rules
 
-- Stoney stores setup per server.
+- Dank Shield stores setup per server.
 - A server must save its own roles/channels/categories.
 - If setup is missing, ticket/staff workflows stay locked instead of guessing.
 - The bot should not rely on one server's `.env` IDs for another server.
