@@ -1498,104 +1498,25 @@ async def on_member_update(before: discord.Member, after: discord.Member):
             removed_ids = (b_roles - a_roles)
 
             try:
-                uv_id = int(UNVERIFIED_ROLE_ID or 0)
-                key = (gid, int(after.id))
-                if uv_id and not added_ids and removed_ids == {uv_id}:
-                    ts = _AUTO_UV_REMOVAL_TS.get(key)
-                    if ts and (now_utc() - ts).total_seconds() <= 15:
-                        try:
-                            await _new_sync_member_safe(after, in_guild=True)
-                        except Exception:
-                            pass
-                        return
-            except Exception:
-                pass
+                from .members_new.role_update_reconciliation_service import reconcile_member_role_update
 
-            try:
-                uv_id = int(UNVERIFIED_ROLE_ID or 0)
-                v_id = int(VERIFIED_ROLE_ID or 0)
-
-                if uv_id and v_id and (v_id in added_ids):
-                    uv_role = guild.get_role(uv_id)
-                    if uv_role and _member_has_role_id(after, uv_id):
-                        await after.remove_roles(uv_role, reason="Auto-remove Unverified when Verified is granted")
-                        removed_unverified = True
-                        _AUTO_UV_REMOVAL_TS[(gid, int(after.id))] = now_utc()
-            except Exception:
-                removed_unverified = False
-
-            try:
-                if not getattr(after, "bot", False):
-                    uv_id = int(UNVERIFIED_ROLE_ID or 0)
-                    v_id = int(VERIFIED_ROLE_ID or 0)
-                    resident_id = int(RESIDENT_ROLE_ID or 0) if RESIDENT_ROLE_ID else 0
-                    staff_id = int(STAFF_ROLE_ID or 0) if STAFF_ROLE_ID else 0
-                    stoner_id = int(STONER_ROLE_ID or 0) if STONER_ROLE_ID else 0
-                    drunken_id = int(DRUNKEN_ROLE_ID or 0) if DRUNKEN_ROLE_ID else 0
-
-                    if uv_id:
-                        has_unverified = _member_has_role_id(after, uv_id)
-                        has_verified = _member_has_role_id(after, v_id) if v_id else False
-                        has_resident = _member_has_role_id(after, resident_id) if resident_id else False
-                        has_staff = _member_has_role_id(after, staff_id) if staff_id else False
-                        has_stoner = _member_has_role_id(after, stoner_id) if stoner_id else False
-                        has_drunken = _member_has_role_id(after, drunken_id) if drunken_id else False
-
-                        non_default_roles = [r for r in (after.roles or []) if not r.is_default()]
-                        has_no_real_roles = len(non_default_roles) == 0
-
-                        if (
-                            has_no_real_roles
-                            and not has_unverified
-                            and not has_verified
-                            and not has_resident
-                            and not has_staff
-                            and not has_stoner
-                            and not has_drunken
-                        ):
-                            uv_role = guild.get_role(uv_id)
-                            if uv_role is not None:
-                                try:
-                                    await after.add_roles(
-                                        uv_role,
-                                        reason="Auto-restore Unverified after member became roleless",
-                                    )
-                                    print(
-                                        f"✅ [ROLE-HEAL] Restored Unverified to member {after.id} "
-                                        f"after all roles were removed."
-                                    )
-
-                                    try:
-                                        refreshed = guild.get_member(after.id) or await guild.fetch_member(after.id)
-                                    except Exception:
-                                        refreshed = after
-
-                                    if isinstance(refreshed, discord.Member) and _member_is_pending_verification(refreshed):
-                                        fallback_channel = await _resolve_unverified_chat_channel(guild)
-                                        started = await start_join_grace_then_kick_timer_for_member(
-                                            refreshed,
-                                            source_channel=fallback_channel,
-                                        )
-                                        print(
-                                            f"⏳ [ROLE-HEAL] join grace timer start "
-                                            f"guild={gid} member={refreshed.id} started={started} "
-                                            f"fallback_channel={getattr(fallback_channel, 'id', None)}"
-                                        )
-                                except discord.Forbidden as e:
-                                    print(
-                                        f"❌ [ROLE-HEAL] Missing permission to restore Unverified "
-                                        f"to {after.id}: {repr(e)}"
-                                    )
-                                except discord.HTTPException as e:
-                                    print(
-                                        f"⚠️ [ROLE-HEAL] HTTPException restoring Unverified "
-                                        f"to {after.id}: {repr(e)}"
-                                    )
-            except Exception as e:
-                print(
-                    f"⚠️ roleless auto-heal block error for member "
-                    f"{getattr(after, 'id', 'unknown')}: {repr(e)}"
+                role_result = await reconcile_member_role_update(
+                    before,
+                    after,
+                    now_utc=now_utc,
+                    auto_uv_removal_ts=_AUTO_UV_REMOVAL_TS,
+                    resolve_unverified_chat_channel=_resolve_unverified_chat_channel,
+                    start_join_grace_timer=start_join_grace_then_kick_timer_for_member,
                 )
+                if role_result.suppress_further_processing:
+                    try:
+                        await _new_sync_member_safe(after, in_guild=True)
+                    except Exception:
+                        pass
+                    return
+                removed_unverified = bool(role_result.removed_unverified)
+            except Exception as e:
+                print(f"⚠️ role update reconciliation service error for member {getattr(after, 'id', 'unknown')}: {repr(e)}")
 
             try:
                 strip_msg = await _mass_role_strip_if_needed(after)
