@@ -85,7 +85,7 @@ EXPECTED_DELEGATES = {
         "VcRuntimeDeps",
     ],
     "role truth delegates": [
-        "role_truth.build_member_role_snapshot",
+        "role_truth.member_has_role_id",
         "role_truth.member_is_pending_verification",
         "role_truth.member_has_any_safe_access_role",
     ],
