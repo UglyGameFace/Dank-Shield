@@ -54,6 +54,7 @@ REQUIRED_PRUNED_DANK_CHILDREN = {
     "tickettool-check",
     "db-check",
     "health",
+    "scoreboard",
 }
 
 REQUIRED_ENV_MARKERS = {
