@@ -25,7 +25,7 @@ _DB_CHECK_COMMAND_ATTACHED = False
 
 def _status_line(blockers: List[str], warnings: List[str]) -> str:
     if blockers:
-        return "🚫 **Not ready** — run `/stoney setup` and fix the blockers before beta/public use."
+        return "🚫 **Not ready** — run `/dank setup` and fix the blockers before public use."
     if warnings:
         return "⚠️ **Usable with warnings** — safe to test, but review the warnings."
     return "✅ **Ready** — no setup blockers or warnings found."
@@ -36,18 +36,18 @@ def _next_steps(blockers: List[str], warnings: List[str]) -> list[str]:
     joined = "\n".join(blockers + warnings).lower()
 
     if "ticket" in joined or "category" in joined or "staff" in joined or "transcript" in joined:
-        steps.append("Run `/stoney setup` and use the setup buttons to repair ticket categories, staff role, or transcript channel.")
+        steps.append("Run `/dank setup` and use the setup buttons to repair ticket categories, staff role, or transcript channel.")
     if "verify" in joined or "role" in joined or "vc" in joined:
-        steps.append("Run `/stoney setup` and use the setup buttons to repair verification channels or role hierarchy.")
+        steps.append("Run `/dank setup` and use the setup buttons to repair verification channels or role hierarchy.")
     if "modlog" in joined or "join/exit" in joined or "raid" in joined or "log" in joined:
-        steps.append("Run `/stoney setup` and use the setup buttons to repair modlog, raid/security log, or join/exit log channels.")
+        steps.append("Run `/dank setup` and use the setup buttons to repair modlog, raid/security log, or join/exit log channels.")
     if "env/default" in joined or "fallback" in joined:
-        steps.append("Run `/stoney setup` so this server saves its own database-backed config instead of using fallback config.")
+        steps.append("Run `/dank setup` so this server saves its own database-backed config instead of using fallback config.")
 
     if not steps and blockers:
-        steps.append("Fix the blockers listed above, then run `/stoney setup` again.")
+        steps.append("Fix the blockers listed above, then run `/dank setup` again.")
     if not steps and warnings:
-        steps.append("Warnings are allowed, but review them before inviting the bot to public/beta servers.")
+        steps.append("Warnings are allowed, but review them before inviting the bot to public servers.")
     if not steps:
         steps.append("Post or refresh your ticket panel, then test ticket create/close/reopen as a staff member.")
 
@@ -65,7 +65,7 @@ def _setup_review_embed(guild: discord.Guild, cfg: Any) -> discord.Embed:
     source = _safe_str(getattr(cfg, "source", "unknown"), "unknown")
 
     embed = discord.Embed(
-        title="🧭 Stoney Setup Review",
+        title="🧭 Dank Shield Setup Review",
         description=(
             f"{_status_line(blockers, warnings)}\n"
             f"Config source: `{source}`\n"
@@ -77,7 +77,7 @@ def _setup_review_embed(guild: discord.Guild, cfg: Any) -> discord.Embed:
     embed.add_field(name="Warnings", value=_field_text(warnings, empty="✅ None"), inline=False)
     embed.add_field(name="Passing Checks", value=_field_text(ok, empty="No passing checks reported."), inline=False)
     embed.add_field(name="Next Steps", value=_field_text(_next_steps(blockers, warnings), empty="✅ No setup actions needed."), inline=False)
-    embed.set_footer(text="Read-only review. Use /stoney setup for fixes.")
+    embed.set_footer(text="Read-only review. Use /dank setup for fixes.")
     return embed
 
 
@@ -123,199 +123,68 @@ def _probe_guild_config_db_sync(guild_id: int) -> dict[str, Any]:
             result["error_kind"] = "table_not_in_rest_schema_cache"
         elif "permission" in lowered or "row-level security" in lowered or "rls" in lowered:
             result["error_kind"] = "permission_or_rls"
-        elif "column" in lowered and "guild_id" in lowered:
-            result["error_kind"] = "missing_guild_id_column"
         else:
-            result["error_kind"] = "read_failed"
+            result["error_kind"] = type(e).__name__
         return result
 
 
-def _db_probe_next_steps(probe: Mapping[str, Any], cfg: Any) -> list[str]:
-    steps: list[str] = []
-    error_kind = _safe_str(probe.get("error_kind"), "")
-    source = _safe_str(getattr(cfg, "source", "unknown"), "unknown")
-
-    if not probe.get("supabase_available"):
-        steps.append("Check `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY` in the bot environment.")
-    elif error_kind == "table_not_in_rest_schema_cache":
-        steps.append("Confirm the table exists as `public.guild_configs`, not in another schema or with a different name.")
-        steps.append("In Supabase, reload/refresh the REST schema cache or wait briefly, then restart the bot.")
-        steps.append("Confirm `STONEY_GUILD_CONFIG_TABLE` is unset or exactly `guild_configs`.")
-    elif error_kind == "missing_guild_id_column":
-        steps.append("Confirm `guild_configs` has a `guild_id` column, ideally text with a unique index.")
-    elif error_kind == "permission_or_rls":
-        steps.append("Confirm the bot is using the service-role key server-side only. Do not expose it to the dashboard/client.")
-    elif probe.get("read_ok") and not probe.get("row_found"):
-        steps.append("Run `/stoney setup` to create this guild's config row.")
-    elif probe.get("read_ok") and source.startswith("supabase:"):
-        steps.append("Database config is visible. If Discord still shows old values, restart once after a clean sync.")
-    elif probe.get("read_ok"):
-        steps.append("Database is readable, but runtime config is still using fallback. Run `/stoney setup` and check again.")
-
-    if not steps:
-        steps.append("Fix the database error shown above, then run `/stoney setup` again.")
-    return steps
+async def _probe_guild_config_db(guild_id: int) -> dict[str, Any]:
+    return await asyncio.to_thread(_probe_guild_config_db_sync, int(guild_id))
 
 
-def _db_check_embed(guild: discord.Guild, cfg: Any, probe: Mapping[str, Any]) -> discord.Embed:
-    source = _safe_str(getattr(cfg, "source", "unknown"), "unknown")
-    read_ok = bool(probe.get("read_ok"))
-    row_found = bool(probe.get("row_found"))
-    error = _safe_str(probe.get("error"), "")
-    error_kind = _safe_str(probe.get("error_kind"), "")
-    table = _safe_str(probe.get("table"), "guild_configs")
-    cache = guild_config_cache_snapshot()
+def attach_setup_review_commands() -> None:
+    global _REVIEW_COMMAND_ATTACHED, _DB_CHECK_COMMAND_ATTACHED
 
-    healthy = read_ok and row_found and source.startswith("supabase:")
-    embed = discord.Embed(
-        title="🧪 Stoney DB Config Check",
-        description=(
-            "✅ **Guild config DB is visible and runtime is using it.**"
-            if healthy
-            else "⚠️ **Guild config DB needs attention or this guild is still using fallback config.**"
-        ),
-        color=discord.Color.green() if healthy else discord.Color.gold(),
-    )
-    embed.add_field(
-        name="Connection",
-        value=(
-            f"Supabase client: `{'available' if probe.get('supabase_available') else 'missing'}`\n"
-            f"Config table: `{table}`\n"
-            f"Read query: `{'ok' if read_ok else 'failed'}`\n"
-            f"Row for this guild: `{'found' if row_found else 'not found'}`"
-        ),
-        inline=False,
-    )
-    embed.add_field(
-        name="Runtime Config",
-        value=(
-            f"Runtime source: `{source}`\n"
-            f"Cache table: `{cache.get('table')}`\n"
-            f"Cached guilds: `{cache.get('cached_guilds')}`"
-        ),
-        inline=False,
-    )
-    columns = probe.get("row_columns") or []
-    if columns:
-        embed.add_field(name="Detected Row Columns", value=_field_text([", ".join(str(x) for x in columns)], empty="None"), inline=False)
-    if error:
-        embed.add_field(name=f"DB Error ({error_kind or 'unknown'})", value=f"```txt\n{error}\n```", inline=False)
-    embed.add_field(name="Next Steps", value=_field_text(_db_probe_next_steps(probe, cfg), empty="✅ None"), inline=False)
-    embed.set_footer(text="Read-only diagnostic. Use /stoney setup for setup fixes.")
-    return embed
+    if not _REVIEW_COMMAND_ATTACHED:
+        try:
+            @stoney_group.command(name="setup-review", description="Read-only review of this server's Dank Shield setup")
+            async def setup_review(interaction: discord.Interaction) -> None:
+                if interaction.guild is None:
+                    return await interaction.response.send_message("❌ Run this inside a server.", ephemeral=True)
+                if not await _require_setup_permission(interaction):
+                    return
+                await safe_defer(interaction, ephemeral=True)
+                cfg = await get_guild_config(interaction.guild.id, refresh=True)
+                embed = _setup_review_embed(interaction.guild, cfg)
+                await interaction.followup.send(embed=embed, ephemeral=True)
 
+            _REVIEW_COMMAND_ATTACHED = True
+            print("✅ setup-review command attached.")
+        except Exception as e:
+            print("⚠️ setup-review command attach failed:", repr(e))
 
-async def _setup_review_callback(interaction: discord.Interaction) -> None:
-    if not await _require_setup_permission(interaction):
-        return
-    await safe_defer(interaction, ephemeral=True)
+    if not _DB_CHECK_COMMAND_ATTACHED:
+        try:
+            @stoney_group.command(name="db-check", description="Check whether this server's setup row is visible to the bot")
+            async def db_check(interaction: discord.Interaction) -> None:
+                if interaction.guild is None:
+                    return await interaction.response.send_message("❌ Run this inside a server.", ephemeral=True)
+                if not await _require_setup_permission(interaction):
+                    return
+                await safe_defer(interaction, ephemeral=True)
+                result = await _probe_guild_config_db(interaction.guild.id)
+                snapshot = guild_config_cache_snapshot(interaction.guild.id)
+                embed = discord.Embed(
+                    title="🗄️ Dank Shield Setup DB Check",
+                    description=f"Guild `{interaction.guild.id}` • table `{result.get('table')}`",
+                    color=discord.Color.green() if result.get("read_ok") else discord.Color.red(),
+                )
+                embed.add_field(name="Supabase Client", value="✅ available" if result.get("supabase_available") else "❌ unavailable", inline=True)
+                embed.add_field(name="Read OK", value="✅ yes" if result.get("read_ok") else "❌ no", inline=True)
+                embed.add_field(name="Setup Row", value="✅ found" if result.get("row_found") else "⚠️ missing", inline=True)
+                embed.add_field(name="REST Columns", value=", ".join(result.get("row_columns") or [])[:1024] or "None", inline=False)
+                embed.add_field(name="Cache Snapshot", value=f"source=`{snapshot.get('source')}` age=`{snapshot.get('age_seconds')}` keys=`{snapshot.get('cached_keys_count')}`", inline=False)
+                if result.get("error"):
+                    embed.add_field(name=f"Error ({result.get('error_kind')})", value=str(result.get("error"))[:1024], inline=False)
+                embed.set_footer(text="If this fails after migrations, refresh Supabase REST schema cache or check service-role env vars.")
+                await interaction.followup.send(embed=embed, ephemeral=True)
 
-    guild = interaction.guild
-    if guild is None:
-        return await interaction.followup.send("❌ This command must be used inside a server.", ephemeral=True)
-
-    try:
-        cfg = await get_guild_config(guild.id, refresh=True)
-    except Exception as e:
-        return await interaction.followup.send(f"❌ Failed loading config for setup review: `{e}`", ephemeral=True)
-
-    await interaction.followup.send(
-        embeds=[
-            _setup_review_embed(guild, cfg),
-            _config_embed(guild, cfg, title="📌 Current Saved Config"),
-        ],
-        ephemeral=True,
-    )
+            _DB_CHECK_COMMAND_ATTACHED = True
+            print("✅ setup db-check command attached.")
+        except Exception as e:
+            print("⚠️ setup db-check command attach failed:", repr(e))
 
 
-async def _db_check_callback(interaction: discord.Interaction) -> None:
-    if not await _require_setup_permission(interaction):
-        return
-    await safe_defer(interaction, ephemeral=True)
+attach_setup_review_commands()
 
-    guild = interaction.guild
-    if guild is None:
-        return await interaction.followup.send("❌ This command must be used inside a server.", ephemeral=True)
-
-    try:
-        cfg = await get_guild_config(guild.id, refresh=True)
-    except Exception as e:
-        cfg = None
-        load_error = e
-    else:
-        load_error = None
-
-    probe = await asyncio.to_thread(_probe_guild_config_db_sync, int(guild.id))
-
-    if cfg is None:
-        embed = discord.Embed(
-            title="🧪 Stoney DB Config Check",
-            description="❌ Runtime config failed to load before DB probe could complete.",
-            color=discord.Color.red(),
-        )
-        embed.add_field(name="Runtime Load Error", value=f"```txt\n{load_error!r}\n```", inline=False)
-        probe_error = _safe_str(probe.get("error"), "")
-        if probe_error:
-            embed.add_field(name="DB Probe Error", value=f"```txt\n{probe_error}\n```", inline=False)
-        return await interaction.followup.send(embed=embed, ephemeral=True)
-
-    await interaction.followup.send(embed=_db_check_embed(guild, cfg, probe), ephemeral=True)
-
-
-def _attach_setup_review_command() -> None:
-    global _REVIEW_COMMAND_ATTACHED
-    if _REVIEW_COMMAND_ATTACHED:
-        return
-    try:
-        existing = stoney_group.get_command("setup-review")
-    except Exception:
-        existing = None
-    if existing is not None:
-        _REVIEW_COMMAND_ATTACHED = True
-        return
-    stoney_group.add_command(
-        discord.app_commands.Command(
-            name="setup-review",
-            description="Review this server's Stoney setup without changing anything.",
-            callback=_setup_review_callback,
-        )
-    )
-    _REVIEW_COMMAND_ATTACHED = True
-
-
-def _attach_db_check_command() -> None:
-    global _DB_CHECK_COMMAND_ATTACHED
-    if _DB_CHECK_COMMAND_ATTACHED:
-        return
-    try:
-        existing = stoney_group.get_command("db-check")
-    except Exception:
-        existing = None
-    if existing is not None:
-        _DB_CHECK_COMMAND_ATTACHED = True
-        return
-    stoney_group.add_command(
-        discord.app_commands.Command(
-            name="db-check",
-            description="Check whether this server's saved config is visible to the bot database client.",
-            callback=_db_check_callback,
-        )
-    )
-    _DB_CHECK_COMMAND_ATTACHED = True
-
-
-_attach_setup_review_command()
-_attach_db_check_command()
-
-
-def register_public_setup_review_commands(bot, tree) -> None:
-    _ = bot, tree
-    _attach_setup_review_command()
-    _attach_db_check_command()
-    try:
-        print("✅ public_setup_review: attached /stoney setup-review and /stoney db-check commands")
-    except Exception:
-        pass
-
-
-__all__ = ["register_public_setup_review_commands"]
+__all__ = ["attach_setup_review_commands"]
