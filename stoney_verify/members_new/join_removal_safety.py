@@ -474,6 +474,73 @@ async def try_recover_unverified_before_removal(
         return False, detail
 
 
+async def refetch_live_member(guild: discord.Guild, member_id: int) -> Optional[discord.Member]:
+    try:
+        member = guild.get_member(int(member_id))
+        if isinstance(member, discord.Member):
+            return member
+    except Exception:
+        pass
+    try:
+        fetched = await guild.fetch_member(int(member_id))
+        if isinstance(fetched, discord.Member):
+            return fetched
+    except Exception:
+        pass
+    return None
+
+
+def member_has_safe_verification_state(member: discord.Member) -> bool:
+    try:
+        from stoney_verify import role_truth
+
+        return bool(role_truth.member_has_any_safe_access_role(member, include_unverified=True))
+    except Exception as e:
+        _warn(f"role_truth safe-state check failed guild={getattr(getattr(member, 'guild', None), 'id', None)} user={getattr(member, 'id', None)}: {e!r}")
+        return False
+
+
+async def handle_join_verification_failure(member: discord.Member, reason: Any) -> None:
+    """Native owner for join verification fail-closed removal handling.
+
+    events.py may still invoke or be patched into this while that large module is
+    split apart. This service owns the decision and log shape: recover safe
+    verification state first; otherwise route any removal through
+    block_or_run_bot_removal so public-server fresh joins are protected.
+    """
+    try:
+        if not isinstance(member, discord.Member) or getattr(member, "bot", False):
+            return
+
+        guild = member.guild
+        live_member = await refetch_live_member(guild, int(member.id)) or member
+        if member_has_safe_verification_state(live_member):
+            _log(f"verification fail-closed skipped; safe role state already present guild={guild.id} user={live_member.id}")
+            return
+
+        clean_reason = safe_str(reason, "member has no safe verification role state")
+        fail_closed_reason = f"verification fail-closed: {clean_reason}"
+
+        async def _kick_runner() -> None:
+            await live_member.kick(reason=fail_closed_reason[:512])
+            _log(f"executed verification fail-closed kick guild={guild.id} user={live_member.id}")
+
+        await block_or_run_bot_removal(
+            action="kick",
+            guild=guild,
+            member=live_member,
+            reason=fail_closed_reason,
+            runner=_kick_runner,
+            staff_confirmed=False,
+        )
+    except Exception as e:
+        _warn(
+            "handle_join_verification_failure crashed "
+            f"guild={getattr(getattr(member, 'guild', None), 'id', None)} "
+            f"user={getattr(member, 'id', None)} error={e!r}"
+        )
+
+
 async def block_or_run_bot_removal(
     *,
     action: str,
@@ -549,12 +616,15 @@ __all__ = [
     "clear_stale_timers_for_join",
     "configured_fresh_join_safety_log_channels",
     "fresh_join_protection_minutes",
+    "handle_join_verification_failure",
     "has_fresh_join_override",
     "is_fail_closed_verification_reason",
     "is_fresh_join",
+    "member_has_safe_verification_state",
     "member_join_age_seconds",
     "post_fresh_join_recovery_log",
     "post_fresh_join_removal_log",
+    "refetch_live_member",
     "removal_decision",
     "safe_bool",
     "safe_int",
