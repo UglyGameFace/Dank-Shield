@@ -1206,6 +1206,25 @@ def _vc_runtime_deps():
     )
 
 
+def _vc_runtime_deps():
+    from .verification_new.vc_session_runtime_service import VcRuntimeDeps
+
+    return VcRuntimeDeps(
+        vc_sessions=vc_sessions,
+        vc_requests=VC_REQUESTS,
+        resolve_vc_verify_channel=_resolve_vc_verify_channel,
+        fetch_active_session_rows=_fetch_active_vc_session_rows,
+        can_manage_channel=_can_manage_channel,
+        as_int=_as_int,
+        vc_row_token=_vc_row_token,
+        vc_row_status=_vc_row_status,
+        vc_owner_id_from_row=_vc_owner_id_from_row,
+        vc_staff_ids_from_row=_vc_staff_ids_from_row,
+        vc_meta_dict=_vc_meta_dict,
+        member_in_target_voice=_member_in_target_voice,
+    )
+
+
 async def _vc_channel_is_empty(channel: discord.abc.GuildChannel) -> bool:
     from .verification_new.vc_session_runtime_service import vc_channel_is_empty
 
