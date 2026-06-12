@@ -1,11 +1,14 @@
 from __future__ import annotations
 
-"""Add a direct /dank scoreboard command for setup readiness.
+"""Optional direct /dank scoreboard command for setup readiness.
 
-This is not a duplicate setup flow. It is a shortcut into the feature health
-scoreboard already shown by setup Health Check.
+The feature-level scoreboard belongs inside /dank setup health for normal public
+servers. A direct /dank scoreboard child is useful for dev/admin diagnostics, but
+it adds public autocomplete friction, so it is disabled in the normal public and
+production command profile unless explicitly enabled.
 """
 
+import os
 from typing import Any
 
 import discord
@@ -25,6 +28,51 @@ def _warn(message: str) -> None:
         print(f"⚠️ setup_scoreboard_command {message}")
     except Exception:
         pass
+
+
+def _env_true(name: str, default: bool = False) -> bool:
+    try:
+        raw = os.getenv(name)
+        if raw is None or str(raw).strip() == "":
+            return bool(default)
+        return str(raw).strip().lower() in {"1", "true", "yes", "y", "on"}
+    except Exception:
+        return bool(default)
+
+
+def _env_str(name: str, default: str = "") -> str:
+    try:
+        raw = os.getenv(name)
+        if raw is None:
+            return default
+        text = str(raw).strip()
+        return text if text else default
+    except Exception:
+        return default
+
+
+def _deployment_mode() -> str:
+    raw = _env_str("STONEY_DEPLOYMENT_MODE", "").lower()
+    if raw:
+        return raw
+    if _env_true("STONEY_PRODUCTION_MODE", False):
+        return "production"
+    if _env_true("STONEY_PUBLIC_MODE", False):
+        return "public"
+    return "development"
+
+
+def _public_like() -> bool:
+    profile = _env_str("STONEY_COMMAND_PROFILE", "public").lower()
+    deployment = _deployment_mode()
+    return profile in {"public", "minimal"} or deployment in {"public", "prod", "production"}
+
+
+def _direct_scoreboard_enabled() -> bool:
+    if _env_true("DANK_EXPOSE_SETUP_SCOREBOARD_COMMAND", False):
+        return True
+    profile = _env_str("STONEY_COMMAND_PROFILE", "public").lower()
+    return profile in {"public-admin", "dev", "full"}
 
 
 def _scoreboard_value(scores: list[Any]) -> str:
@@ -84,14 +132,14 @@ def _build_embed(guild: discord.Guild, scores: list[Any]) -> discord.Embed:
     embed.add_field(name="Suggested Actions", value=_actions_value(scores), inline=False)
     embed.add_field(name="Fix Details", value=_fixes_value(scores), inline=False)
     embed.add_field(name="Product Readiness", value=readiness[:1024], inline=False)
-    embed.set_footer(text=f"Guild {guild.id} • /dank setup scoreboard")
+    embed.set_footer(text=f"Guild {guild.id} • /dank setup health")
     return embed
 
 
 async def _build_scores(guild: discord.Guild) -> list[Any]:
     # Look up the module function at runtime so later scoreboard extension guards
-    # are visible to /dank scoreboard too. Do not capture the function during
-    # command registration.
+    # are visible to diagnostics too. Do not capture the function during command
+    # registration.
     from stoney_verify.startup_guards import setup_feature_health_scoreboard as scoreboard
 
     return list(await scoreboard.build_feature_scoreboard(guild))
@@ -101,8 +149,13 @@ def apply() -> bool:
     global _PATCHED
     if _PATCHED:
         return True
+
+    if _public_like() and not _direct_scoreboard_enabled():
+        _PATCHED = True
+        _log("direct /dank scoreboard disabled in public profile; use /dank setup health")
+        return True
+
     try:
-        from discord import app_commands
         from stoney_verify.commands_ext.public_setup_group import _require_setup_permission, stoney_group
 
         if stoney_group.get_command("scoreboard") is not None:
