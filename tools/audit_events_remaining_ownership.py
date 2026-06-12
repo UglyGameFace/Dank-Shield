@@ -13,12 +13,15 @@ from typing import Iterable
 ROOT = Path(__file__).resolve().parents[1]
 EVENTS = ROOT / "stoney_verify" / "events.py"
 
+# These markers intentionally look for old implementation ownership, not small
+# wrapper/delegate names. Wrapper functions can stay in events.py while service
+# modules own the behavior.
 HIGH_RISK_MARKERS = {
     "direct guild_members write ownership": [
         'table("guild_members")',
         "table('guild_members')",
-        ".upsert(",
-        ".update(",
+        ".upsert(payload",
+        ".update(payload",
     ],
     "direct join/event table ownership": [
         'table("member_joins")',
@@ -30,21 +33,29 @@ HIGH_RISK_MARKERS = {
         "mark_ticket_closed",
         "send_tickettool_style_transcript",
     ],
-    "legacy role truth ownership": [
-        "UNVERIFIED_ROLE_ID",
-        "VERIFIED_ROLE_ID",
-        "RESIDENT_ROLE_ID",
-        "STONER_ROLE_ID",
-        "STAFF_ROLE_ID",
+    "legacy role/update implementation ownership": [
+        "globals().get(\"UNVERIFIED_ROLE_ID\"",
+        "globals().get(\"VERIFIED_ROLE_ID\"",
+        "UNVERIFIED_ROLE_ID or 0",
+        "VERIFIED_ROLE_ID or 0",
+        "RESIDENT_ROLE_ID or 0",
+        "STONER_ROLE_ID or 0",
+        "STAFF_ROLE_ID or 0",
+        "Auto-assign Unverified on join (not Verified)",
+        "Auto-remove Unverified when Verified is granted",
+        "Auto-restore Unverified after member became roleless",
+        "[ROLE-HEAL]",
     ],
-    "legacy join context ownership": [
+    "legacy join context implementation ownership": [
         "_INVITE_USES_CACHE",
         "_VANITY_USES_CACHE",
-        "def _invite_meta",
-        "def _detect_join_entry_context",
-        "def _persist_member_join_context",
+        "def _invite_meta(",
+        "def _refresh_guild_invite_cache_sync",
+        "invite.uses",
+        "guild.invites()",
+        "guild.vanity_invite()",
     ],
-    "legacy VC runtime ownership": [
+    "legacy VC runtime implementation ownership": [
         "VC relock skipped",
         "Failed clearing VC overwrite",
         "VC session finalize loop error",
@@ -59,8 +70,8 @@ EXPECTED_DELEGATES = {
         "new_run_full_member_sync_for_guild",
     ],
     "join context service delegates": [
-        "join_context_service",
         "warm_invite_cache_for_guild",
+        "detect_join_entry_context",
         "persist_member_join_context",
     ],
     "departed ticket cleanup delegates": [
@@ -77,6 +88,15 @@ EXPECTED_DELEGATES = {
         "role_truth.build_member_role_snapshot",
         "role_truth.member_is_pending_verification",
         "role_truth.member_has_any_safe_access_role",
+    ],
+    "join verification service delegates": [
+        "join_verification_service",
+        "verification_role_ids_for_guild",
+        "ensure_unverified_on_join",
+    ],
+    "role update reconciliation delegates": [
+        "role_update_reconciliation_service",
+        "reconcile_member_role_update",
     ],
 }
 
@@ -115,6 +135,14 @@ EXPECTED_LOCAL_HELPER_PREFIXES = (
     "_fetch_",
     "_resolve_",
     "_set_",
+    "_member_",
+    "_new_",
+    "_run_",
+    "_cancel_",
+    "_start_",
+    "_handle_",
+    "_verification_",
+    "_public_",
 )
 
 
