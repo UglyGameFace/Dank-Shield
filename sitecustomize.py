@@ -9,6 +9,17 @@ this file tiny: the real runtime safety logic lives in
 """
 
 try:
+    import stoney_verify.startup_guards as startup_guards
+
+    if not hasattr(startup_guards, "load_all_startup_guards") and hasattr(startup_guards, "load_startup_guards"):
+        startup_guards.load_all_startup_guards = startup_guards.load_startup_guards
+except Exception as e:
+    try:
+        print(f"⚠️ sitecustomize failed to install startup guard loader compatibility: {e!r}")
+    except Exception:
+        pass
+
+try:
     from stoney_verify.startup_guards.runtime_safety import load_runtime_safety
 
     load_runtime_safety()
