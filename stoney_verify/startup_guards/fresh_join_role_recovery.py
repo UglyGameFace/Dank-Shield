@@ -23,6 +23,7 @@ if not hasattr(builtins, "_stoney_true_original_import"):
 _ORIGINAL_IMPORT = getattr(builtins, "_stoney_true_original_import")
 _ATTACHED = False
 _PATCHED_JOIN_REMOVAL = False
+_PATCHED_EVENTS_FAIL_CLOSED = False
 _PATCHING = False
 
 _FAIL_CLOSED_MARKERS = (
@@ -294,6 +295,60 @@ def _patch_join_removal_safety() -> None:
     _log("patched fresh-join removal safety to recover role state before fail-closed removals")
 
 
+def _patch_events_fail_closed() -> None:
+    """Recover fresh joins before events.py posts the red fail-closed kick warning."""
+    global _PATCHED_EVENTS_FAIL_CLOSED
+    if _PATCHED_EVENTS_FAIL_CLOSED:
+        return
+    try:
+        from stoney_verify import events
+    except Exception:
+        return
+
+    original = getattr(events, "_handle_join_verification_failure", None)
+    if not callable(original) or getattr(original, "_fresh_join_role_recovery_wrapped", False):
+        return
+
+    async def _handle_join_verification_failure_with_recovery(member: discord.Member, reason: str) -> Any:
+        if isinstance(member, discord.Member) and _is_fail_closed_reason(reason):
+            try:
+                from stoney_verify.members_new import join_removal_safety as safety
+
+                if safety.should_block_bot_fresh_join_removal(member, reason=reason):
+                    recovered, detail = await safety.try_recover_unverified_before_removal(
+                        member,
+                        action="kick",
+                        reason=reason,
+                    )
+                    if recovered:
+                        _log(
+                            "suppressed events fail-closed warning after preflight role recovery "
+                            f"guild={member.guild.id} user={member.id}"
+                        )
+                        return None
+                    _warn(
+                        "events fail-closed preflight recovery failed; original fail-closed handler will continue "
+                        f"guild={member.guild.id} user={member.id}: {detail}"
+                    )
+            except Exception as e:
+                _warn(
+                    "events fail-closed preflight recovery crashed; original fail-closed handler will continue "
+                    f"guild={getattr(getattr(member, 'guild', None), 'id', None)} "
+                    f"user={getattr(member, 'id', None)} error={e!r}"
+                )
+
+        return await original(member, reason)
+
+    try:
+        setattr(_handle_join_verification_failure_with_recovery, "_fresh_join_role_recovery_wrapped", True)
+    except Exception:
+        pass
+
+    setattr(events, "_handle_join_verification_failure", _handle_join_verification_failure_with_recovery)
+    _PATCHED_EVENTS_FAIL_CLOSED = True
+    _log("patched events fail-closed handler to recover fresh joins before red kick warnings")
+
+
 def _patch_loaded_once() -> None:
     global _PATCHING
     if _PATCHING:
@@ -302,6 +357,7 @@ def _patch_loaded_once() -> None:
     try:
         _maybe_attach_bot()
         _patch_join_removal_safety()
+        _patch_events_fail_closed()
     finally:
         _PATCHING = False
 
@@ -313,6 +369,8 @@ def _safe_import(name: str, globals: Any = None, locals: Any = None, fromlist: A
             _maybe_attach_bot()
         if name == "stoney_verify.members_new.join_removal_safety" or name.endswith("members_new.join_removal_safety"):
             _patch_join_removal_safety()
+        if name == "stoney_verify.events" or name.endswith("stoney_verify.events"):
+            _patch_events_fail_closed()
     except Exception as e:
         _warn(f"post-import patch failed for {name}: {e!r}")
     return module
