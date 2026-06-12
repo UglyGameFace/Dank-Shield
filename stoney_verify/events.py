@@ -889,84 +889,26 @@ async def _ensure_member_verification_safe_state(
 
 
 async def _resolve_bot_member(guild: discord.Guild) -> Optional[discord.Member]:
-    try:
-        me = getattr(guild, "me", None)
-        if isinstance(me, discord.Member):
-            return me
-    except Exception:
-        pass
+    from .members_new.join_verification_service import resolve_bot_member
 
+    bot_user_id = None
     try:
-        if getattr(bot, "user", None):
-            fetched = await guild.fetch_member(bot.user.id)  # type: ignore[arg-type]
-            if isinstance(fetched, discord.Member):
-                return fetched
+        bot_user_id = int(getattr(getattr(bot, "user", None), "id", 0) or 0) or None
     except Exception:
-        pass
-
-    return None
+        bot_user_id = None
+    return await resolve_bot_member(guild, bot_user_id=bot_user_id)
 
 
 async def _verification_role_ids_for_guild(guild: discord.Guild) -> Dict[str, int]:
-    """Resolve verification role IDs for this guild without leaking home-guild globals."""
+    from .members_new.join_verification_service import verification_role_ids_for_guild
 
-    try:
-        if callable(get_guild_config):
-            cfg = await get_guild_config(guild.id, force_refresh=False)  # type: ignore[misc]
-            return {
-                "unverified": _as_int(cfg.get("unverified_role_id"), 0),
-                "verified": _as_int(cfg.get("verified_role_id"), 0),
-                "resident": _as_int(cfg.get("resident_role_id"), 0),
-                "staff": _as_int(cfg.get("staff_role_id"), 0),
-                "stoner": _as_int(cfg.get("stoner_role_id"), 0),
-                "drunken": _as_int(cfg.get("drunken_role_id"), 0),
-            }
-    except Exception as e:
-        print(f"⚠️ [VERIFY] per-guild role config lookup failed guild={getattr(guild, 'id', 'unknown')} error={repr(e)}")
-
-    allow_global = True
-    try:
-        if public_config_isolation_enabled():
-            home_gid = _as_int(globals().get("GUILD_ID", 0), 0)
-            guild_id = _as_int(getattr(guild, "id", 0), 0)
-            allow_global = bool(home_gid > 0 and guild_id == home_gid)
-    except Exception:
-        allow_global = False
-
-    if not allow_global:
-        return {
-            "unverified": 0,
-            "verified": 0,
-            "resident": 0,
-            "staff": 0,
-            "stoner": 0,
-            "drunken": 0,
-        }
-
-    return {
-        "unverified": _as_int(globals().get("UNVERIFIED_ROLE_ID", 0), 0),
-        "verified": _as_int(globals().get("VERIFIED_ROLE_ID", 0), 0),
-        "resident": _as_int(globals().get("RESIDENT_ROLE_ID", 0), 0),
-        "staff": _as_int(globals().get("STAFF_ROLE_ID", 0), 0),
-        "stoner": _as_int(globals().get("STONER_ROLE_ID", 0), 0),
-        "drunken": _as_int(globals().get("DRUNKEN_ROLE_ID", 0), 0),
-    }
+    return await verification_role_ids_for_guild(guild)
 
 
 async def _verification_config_ready_for_guild(guild: discord.Guild) -> Tuple[bool, str]:
-    role_ids = await _verification_role_ids_for_guild(guild)
-    uv_id = int(role_ids.get("unverified") or 0)
-    if uv_id <= 0:
-        return False, "No per-guild Unverified role configured. Setup must finish before join enforcement."
+    from .members_new.join_verification_service import verification_config_ready_for_guild
 
-    try:
-        role = guild.get_role(uv_id)
-        if role is None:
-            return False, f"Configured Unverified role {uv_id} does not exist in this guild."
-    except Exception:
-        return False, "Could not validate this guild's Unverified role."
-
-    return True, "Verification config ready."
+    return await verification_config_ready_for_guild(guild)
 
 
 async def _handle_join_verification_failure(member: discord.Member, reason: str) -> None:
@@ -976,145 +918,14 @@ async def _handle_join_verification_failure(member: discord.Member, reason: str)
 
 
 async def _ensure_unverified_on_join(member: discord.Member) -> bool:
+    from .members_new.join_verification_service import ensure_unverified_on_join
+
+    bot_user_id = None
     try:
-        if getattr(member, "bot", False):
-            return False
-
-        guild = member.guild
-        role_ids = await _verification_role_ids_for_guild(guild)
-        uv_id = int(role_ids.get("unverified") or 0)
-        v_id = int(role_ids.get("verified") or 0)
-        resident_id = int(role_ids.get("resident") or 0)
-        staff_id = int(role_ids.get("staff") or 0)
-        stoner_id = int(role_ids.get("stoner") or 0)
-        drunken_id = int(role_ids.get("drunken") or 0)
-
-        if not uv_id:
-            print(f"⚠️ [VERIFY] Unverified role missing for guild={guild.id}; setup required before join enforcement.")
-            return False
-
-        role = guild.get_role(uv_id)
-        if not role:
-            print(f"⚠️ [VERIFY] UNVERIFIED_ROLE_ID not found in guild: {uv_id}")
-            return False
-
-        bot_member = await _resolve_bot_member(guild)
-        if not bot_member:
-            print("⚠️ [VERIFY] Could not resolve bot member in guild.")
-            return False
-
-        try:
-            if not bot_member.guild_permissions.manage_roles:
-                print("⚠️ [VERIFY] Bot is missing Manage Roles permission.")
-                return False
-        except Exception:
-            print("⚠️ [VERIFY] Could not confirm Manage Roles permission.")
-            return False
-
-        try:
-            if role.position >= bot_member.top_role.position:
-                print(
-                    f"⚠️ [VERIFY] Cannot assign Unverified because role hierarchy blocks it. "
-                    f"unverified_role={role.name}({role.id}) bot_top={bot_member.top_role.name}({bot_member.top_role.id})"
-                )
-                return False
-        except Exception:
-            print("⚠️ [VERIFY] Failed hierarchy check for Unverified assignment.")
-            return False
-
-        last_error: Optional[Exception] = None
-
-        for attempt in range(1, 4):
-            try:
-                if attempt == 1:
-                    await asyncio.sleep(1.5)
-                else:
-                    await asyncio.sleep(1.0)
-
-                try:
-                    fresh_member = await guild.fetch_member(member.id)
-                except Exception:
-                    fresh_member = member
-
-                if getattr(fresh_member, "bot", False):
-                    return False
-
-                if v_id and _member_has_role_id(fresh_member, v_id):
-                    print(f"ℹ️ [VERIFY] Skip Unverified for {fresh_member.id}; already has Verified.")
-                    return False
-
-                if resident_id and _member_has_role_id(fresh_member, resident_id):
-                    print(f"ℹ️ [VERIFY] Skip Unverified for {fresh_member.id}; already has Resident.")
-                    return False
-
-                if staff_id and _member_has_role_id(fresh_member, staff_id):
-                    print(f"ℹ️ [VERIFY] Skip Unverified for {fresh_member.id}; already has Staff.")
-                    return False
-
-                if stoner_id and _member_has_role_id(fresh_member, stoner_id):
-                    print(f"ℹ️ [VERIFY] Skip Unverified for {fresh_member.id}; already has Stoner.")
-                    return False
-
-                if drunken_id and _member_has_role_id(fresh_member, drunken_id):
-                    print(f"ℹ️ [VERIFY] Skip Unverified for {fresh_member.id}; already has Drunken.")
-                    return False
-
-                if _member_has_role_id(fresh_member, uv_id):
-                    print(f"ℹ️ [VERIFY] Member {fresh_member.id} already has Unverified.")
-                    return True
-
-                await fresh_member.add_roles(
-                    role,
-                    reason="Auto-assign Unverified on join (not Verified)",
-                )
-
-                try:
-                    confirm_member = await guild.fetch_member(member.id)
-                except Exception:
-                    confirm_member = fresh_member
-
-                if _member_has_role_id(confirm_member, uv_id):
-                    print(
-                        f"✅ [VERIFY] Assigned Unverified to {confirm_member} ({confirm_member.id}) "
-                        f"on attempt {attempt}"
-                    )
-                    return True
-
-            except discord.Forbidden as e:
-                last_error = e
-                print(
-                    f"❌ [VERIFY] Forbidden assigning Unverified to {member.id}. "
-                    f"Check role hierarchy + Manage Roles. attempt={attempt} error={repr(e)}"
-                )
-                break
-
-            except discord.HTTPException as e:
-                last_error = e
-                print(
-                    f"⚠️ [VERIFY] HTTPException assigning Unverified to {member.id}. "
-                    f"attempt={attempt} error={repr(e)}"
-                )
-
-            except Exception as e:
-                last_error = e
-                print(
-                    f"⚠️ [VERIFY] Unexpected error assigning Unverified to {member.id}. "
-                    f"attempt={attempt} error={repr(e)}"
-                )
-
-        print(
-            f"❌ [VERIFY] Failed to assign Unverified to {member.id}. "
-            f"last_error={repr(last_error)}"
-        )
-        return False
-
-    except Exception as e:
-        print("⚠️ _ensure_unverified_on_join fatal error:", e)
-        try:
-            traceback.print_exc()
-        except Exception:
-            pass
-        return False
+        bot_user_id = int(getattr(getattr(bot, "user", None), "id", 0) or 0) or None
+    except Exception:
+        bot_user_id = None
+    return await ensure_unverified_on_join(member, bot_user_id=bot_user_id)
 
 
 async def _resolve_unverified_chat_channel(guild: discord.Guild) -> Optional[discord.TextChannel]:
