@@ -1,11 +1,14 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
-"""Apply the member-sync service handoff prep.
+"""Apply the member-sync service handoff.
 
-This script makes the existing members_new.sync_service preserve join risk /
-alt-cluster evidence before events.py legacy member DB fallback bodies are
-removed.
+This script performs the safe next step in the events.py split:
+
+1. Ensure members_new.sync_service preserves join-risk / alt-cluster evidence.
+2. Ensure events._new_sync_member_safe passes risk_profile into that service.
+3. Physically replace the legacy events.py member DB fallback bodies with thin
+   delegates to members_new.sync_service.
 
 It is marker-based on purpose because both files are large and this change must
 be safe to run from Termux/Codespaces.
@@ -203,6 +206,41 @@ EVENTS_SERVICE_CALL = '''                await new_sync_member_to_supabase(
                 )
 '''
 
+SYNC_MEMBER_DELEGATE = '''async def _sync_member_to_supabase(
+    member: discord.Member,
+    in_guild: bool = True,
+    risk_profile: Optional[Dict[str, Any]] = None,
+) -> None:
+    try:
+        if callable(new_sync_member_to_supabase):
+            try:
+                await new_sync_member_to_supabase(
+                    member,
+                    in_guild=in_guild,
+                    risk_profile=risk_profile,
+                )
+            except TypeError:
+                await new_sync_member_to_supabase(member, in_guild=in_guild)
+            return
+        print("⚠️ member sync service unavailable; skipping legacy events DB fallback")
+    except Exception as e:
+        print("⚠️ _sync_member_to_supabase service delegate failed:", repr(e))
+
+
+'''
+
+MARK_LEFT_DELEGATE = '''async def _mark_member_left(member: discord.Member) -> None:
+    try:
+        if callable(new_mark_member_left):
+            await new_mark_member_left(member)
+            return
+        print("⚠️ member-left sync service unavailable; skipping legacy events DB fallback")
+    except Exception as e:
+        print("⚠️ _mark_member_left service delegate failed:", repr(e))
+
+
+'''
+
 
 def read(path: Path) -> str:
     return path.read_text(encoding="utf-8", errors="replace") if path.exists() else ""
@@ -219,6 +257,23 @@ def die(message: str) -> None:
 
 def ok(message: str) -> None:
     print(f"✅ {message}")
+
+
+def replace_function_block(text: str, *, start_marker: str, end_marker: str, replacement: str, label: str) -> tuple[str, bool]:
+    start = text.find(start_marker)
+    if start < 0:
+        if replacement.strip() in text:
+            ok(f"{label} already applied")
+            return text, False
+        die(f"Could not find start marker for {label}: {start_marker!r}")
+    end = text.find(end_marker, start)
+    if end < 0:
+        die(f"Could not find end marker for {label}: {end_marker!r}")
+    current = text[start:end]
+    if replacement.strip() in current:
+        ok(f"{label} already applied")
+        return text, False
+    return text[:start] + replacement + text[end:], True
 
 
 def patch_sync_service(text: str) -> tuple[str, bool]:
@@ -313,10 +368,30 @@ def patch_sync_service(text: str) -> tuple[str, bool]:
 
 def patch_events(text: str) -> tuple[str, bool]:
     changed = False
+
     old = "                await new_sync_member_to_supabase(member, in_guild=in_guild)\n"
     if old in text:
         text = text.replace(old, EVENTS_SERVICE_CALL, 1)
         changed = True
+
+    text, changed_sync_body = replace_function_block(
+        text,
+        start_marker="async def _sync_member_to_supabase(\n",
+        end_marker="async def _mark_member_left(member: discord.Member) -> None:\n",
+        replacement=SYNC_MEMBER_DELEGATE,
+        label="events._sync_member_to_supabase service delegate",
+    )
+    changed = changed or changed_sync_body
+
+    text, changed_left_body = replace_function_block(
+        text,
+        start_marker="async def _mark_member_left(member: discord.Member) -> None:\n",
+        end_marker="async def _initial_member_sync_sweep() -> None:\n",
+        replacement=MARK_LEFT_DELEGATE,
+        label="events._mark_member_left service delegate",
+    )
+    changed = changed or changed_left_body
+
     return text, changed
 
 
@@ -332,8 +407,21 @@ def verify_ready(sync_service: str, events: str) -> list[str]:
     ):
         if marker not in sync_service:
             missing.append(f"sync_service missing {marker}")
-    if "risk_profile=risk_profile" not in events:
-        missing.append("events._new_sync_member_safe does not pass risk_profile to sync service")
+    for marker in (
+        "risk_profile=risk_profile",
+        "member sync service unavailable; skipping legacy events DB fallback",
+        "member-left sync service unavailable; skipping legacy events DB fallback",
+    ):
+        if marker not in events:
+            missing.append(f"events.py missing {marker}")
+    for forbidden in (
+        "await _guild_members_upsert_async(sb, full_payload",
+        "await _guild_members_update_member_async(\n                sb,\n                guild_id,\n                user_id,",
+        "legacy _sync_member_to_supabase fallback failed",
+        "legacy _mark_member_left fallback failed",
+    ):
+        if forbidden in events:
+            missing.append(f"events.py still contains legacy member DB fallback marker: {forbidden}")
     return missing
 
 
@@ -351,7 +439,7 @@ def main() -> int:
 
     missing = verify_ready(sync_text, events_text)
     if missing:
-        print("❌ Member sync handoff prep is incomplete:")
+        print("❌ Member sync handoff is incomplete:")
         for item in missing:
             print(f" - {item}")
         return 1
@@ -364,9 +452,9 @@ def main() -> int:
 
     if changed_events:
         write(EVENTS, events_text)
-        ok("Updated events._new_sync_member_safe to pass risk_profile")
+        ok("Updated events.py member sync fallbacks to service delegates")
     else:
-        ok("events._new_sync_member_safe already passes risk_profile")
+        ok("events.py member sync service delegates already present")
 
     for path in (SYNC_SERVICE, EVENTS, AUDIT_ROLE_TRUTH, AUDIT_EVENT_BOUNDARY):
         if path.exists():
@@ -378,7 +466,7 @@ def main() -> int:
     print("  python tools/apply_member_sync_service_handoff.py")
     print("  python -m py_compile stoney_verify/members_new/sync_service.py stoney_verify/events.py")
     print("  git add stoney_verify/members_new/sync_service.py stoney_verify/events.py")
-    print('  git commit -m "Preserve join risk in member sync service"')
+    print('  git commit -m "Physically hand off member sync events"')
     print("  git push origin main")
     return 0
 
