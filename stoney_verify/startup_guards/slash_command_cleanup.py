@@ -483,8 +483,45 @@ def _should_block_global_clear(guild: Optional[Any]) -> bool:
     return True
 
 
+def _install_command_registration_compat() -> None:
+    """Keep registration-time pruning aligned with pre-sync pruning.
+
+    commands_ext has an earlier registration-phase prune pass that runs before
+    CommandTree.sync. The final pre-sync guard is authoritative, but keeping the
+    registration pass aligned prevents noisy unexpected_remaining logs and makes
+    startup errors meaningful.
+    """
+    try:
+        from stoney_verify import commands_ext
+
+        children = tuple(getattr(commands_ext, "_CONFUSING_STONEY_CHILDREN", ()) or ())
+        if "scoreboard" not in children:
+            setattr(commands_ext, "_CONFUSING_STONEY_CHILDREN", children + ("scoreboard",))
+    except Exception as e:
+        try:
+            print(f"⚠️ slash_command_cleanup could not align commands_ext prune list: {type(e).__name__}: {e}")
+        except Exception:
+            pass
+
+    try:
+        from stoney_verify.commands_ext import public_access_control
+
+        if not hasattr(public_access_control, "register_public_access_control"):
+            def register_public_access_control(bot: Any = None, tree: Any = None) -> bool:
+                return bool(public_access_control.install_public_access_control())
+
+            public_access_control.register_public_access_control = register_public_access_control  # type: ignore[attr-defined]
+    except Exception as e:
+        try:
+            print(f"⚠️ slash_command_cleanup could not add public_access_control registrar: {type(e).__name__}: {e}")
+        except Exception:
+            pass
+
+
 def install_slash_command_cleanup_guard() -> None:
     global _PATCHED, _ORIGINAL_SYNC, _ORIGINAL_CLEAR_COMMANDS
+
+    _install_command_registration_compat()
 
     if _PATCHED:
         return
