@@ -9,6 +9,7 @@ contract needed for Dank Shield's multi-server release:
 - public /dank must only expose the simple owner-facing children by default
 - branding cleanup must wrap public Discord message surfaces
 - public production env defaults must avoid home-guild IDs and duplicate sync
+- command cleanup epoch must force one cleaned global sync after rule changes
 """
 
 import ast
@@ -92,6 +93,13 @@ REQUIRED_LOADER_ORDER = [
     "stoney_verify.startup_guards.dank_shield_branding_guard",
 ]
 
+REQUIRED_COMMAND_CLEANUP_EPOCH_MARKERS = {
+    "COMMAND_CLEANUP_EPOCH",
+    "cleanup_epoch",
+    "state[\"cleanup_epoch\"] = COMMAND_CLEANUP_EPOCH",
+    "and str(state.get(\"cleanup_epoch\", \"\")) == COMMAND_CLEANUP_EPOCH",
+}
+
 
 def read(path: Path) -> str:
     return path.read_text(encoding="utf-8", errors="replace") if path.exists() else ""
@@ -152,6 +160,7 @@ def main() -> int:
         "DANK_GUILD_COMMAND_CLEANUP_IDS",
         "STONEY_SYNC_BETA_GUILD_COMMANDS",
     ]
+    cleanup_required_text.extend(sorted(REQUIRED_COMMAND_CLEANUP_EPOCH_MARKERS))
     for marker in cleanup_required_text:
         if marker not in cleanup_text:
             failures.append(f"slash command cleanup missing marker: {marker}")
@@ -166,9 +175,6 @@ def main() -> int:
         if marker not in loader_text:
             failures.append(f"startup loader missing guard: {marker}")
 
-    # slash cleanup must load before command sync happens. It is okay for branding
-    # to load later because slash cleanup removes/limits commands, while branding
-    # cleans message surfaces.
     slash_pos = loader_text.find("stoney_verify.startup_guards.slash_command_cleanup")
     public_scope_pos = loader_text.find("stoney_verify.startup_guards.public_startup_scope")
     if slash_pos < 0:
