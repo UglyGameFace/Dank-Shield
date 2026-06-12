@@ -57,17 +57,6 @@ except Exception:
     vc_sessions = None  # type: ignore
 
 try:
-    from .tickets_new.service import (
-        find_open_ticket_for_owner,
-        mark_ticket_closed as tickets_mark_ticket_closed,
-        mark_ticket_deleted as tickets_mark_ticket_deleted,
-    )
-except Exception:
-    find_open_ticket_for_owner = None  # type: ignore
-    tickets_mark_ticket_closed = None  # type: ignore
-    tickets_mark_ticket_deleted = None  # type: ignore
-
-try:
     from .channel_cleanup import ensure_channel_cleanup_worker_started
 except Exception:
     async def ensure_channel_cleanup_worker_started() -> bool:
