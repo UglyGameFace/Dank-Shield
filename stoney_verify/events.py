@@ -447,17 +447,12 @@ async def _new_sync_member_safe(
                     in_guild=in_guild,
                     risk_profile=risk_profile,
                 )
-                return
             except TypeError:
-                await new_sync_member_to_supabase(member)  # type: ignore[misc]
-                return
+                await new_sync_member_to_supabase(member, in_guild=in_guild)
+            return
+        print("⚠️ new_sync_member_to_supabase unavailable; member sync skipped")
     except Exception as e:
         print("⚠️ new_sync_member_to_supabase failed:", repr(e))
-
-    try:
-        await _sync_member_to_supabase(member, in_guild=in_guild, risk_profile=risk_profile)
-    except Exception as e:
-        print("⚠️ legacy _sync_member_to_supabase fallback failed:", repr(e))
 
 
 async def _new_mark_member_left_safe(member: discord.Member) -> None:
@@ -465,13 +460,9 @@ async def _new_mark_member_left_safe(member: discord.Member) -> None:
         if callable(new_mark_member_left):
             await new_mark_member_left(member)
             return
+        print("⚠️ new_mark_member_left unavailable; member-left sync skipped")
     except Exception as e:
         print("⚠️ new_mark_member_left failed:", repr(e))
-
-    try:
-        await _mark_member_left(member)
-    except Exception as e:
-        print("⚠️ legacy _mark_member_left fallback failed:", repr(e))
 
 
 # ============================================================
@@ -1032,313 +1023,29 @@ async def _sync_member_to_supabase(
     risk_profile: Optional[Dict[str, Any]] = None,
 ) -> None:
     try:
-        sb = get_supabase()
-        if not sb:
-            return
-
-        guild_id = str(member.guild.id)
-        user_id = str(member.id)
-        existing = await _sync_get_existing_member_row_async(sb, guild_id, user_id) or {}
-
-        username = _safe_member_username(member)
-        display_name = _safe_member_display_name(member)
-        nickname = _safe_member_nickname(member)
-        avatar_url = _safe_member_avatar_url(member)
-        now_iso = _sync_iso_now()
-
-        snap = _member_role_snapshot(member)
-        voice = _member_voice_snapshot(member)
-
-        previous_usernames = _append_unique_history(
-            existing.get("previous_usernames"),
-            str(existing.get("last_seen_username") or existing.get("username") or "")
-        )
-        previous_display_names = _append_unique_history(
-            existing.get("previous_display_names"),
-            str(existing.get("last_seen_display_name") or existing.get("display_name") or "")
-        )
-        previous_nicknames = _append_unique_history(
-            existing.get("previous_nicknames"),
-            str(existing.get("last_seen_nickname") or existing.get("nickname") or "")
-        )
-
-        old_username = str(existing.get("username") or "").strip()
-        old_display = str(existing.get("display_name") or "").strip()
-        old_nick = str(existing.get("nickname") or "").strip()
-
-        if old_username and old_username != username:
-            previous_usernames = _append_unique_history(previous_usernames, old_username)
-        if old_display and old_display != display_name:
-            previous_display_names = _append_unique_history(previous_display_names, old_display)
-        if old_nick and old_nick != nickname:
-            previous_nicknames = _append_unique_history(previous_nicknames, old_nick)
-
-        times_joined = int(existing.get("times_joined") or 0)
-        times_left = int(existing.get("times_left") or 0)
-        rejoined_at = existing.get("rejoined_at")
-        left_at = existing.get("left_at")
-        was_in_guild = existing.get("in_guild")
-
-        if existing:
-            if was_in_guild is False and in_guild:
-                times_joined = max(1, times_joined) + 1
-                rejoined_at = now_iso
-                left_at = None
-            elif times_joined <= 0:
-                times_joined = 1
-        else:
-            times_joined = 1
-
-        merged_risk_payload = (
-            _build_risk_payload_from_profile(risk_profile, now_iso=now_iso)
-            if isinstance(risk_profile, dict)
-            else _extract_existing_risk_payload(existing)
-        )
-
-        full_payload = {
-            "guild_id": guild_id,
-            "user_id": user_id,
-            "username": username,
-            "display_name": display_name,
-            "nickname": nickname,
-            "avatar_url": avatar_url or existing.get("avatar_url") or None,
-            "role_ids": snap["role_ids"],
-            "role_names": snap["role_names"],
-            "roles": snap["roles"],
-            "top_role": snap["top_role"],
-            "highest_role_id": snap["highest_role_id"],
-            "highest_role_name": snap["highest_role_name"],
-            "has_any_role": snap["has_any_role"],
-            "has_unverified": snap["has_unverified"],
-            "has_verified_role": snap["has_verified_role"],
-            "has_staff_role": snap["has_staff_role"],
-            "has_secondary_verified_role": snap["has_secondary_verified_role"],
-            "has_cosmetic_only": snap["has_cosmetic_only"],
-            "role_state": snap["role_state"],
-            "role_state_reason": snap["role_state_reason"],
-            "in_voice": voice["in_voice"],
-            "voice_channel_id": voice["voice_channel_id"],
-            "voice_channel_name": voice["voice_channel_name"],
-            "voice_muted": voice["voice_muted"],
-            "voice_deafened": voice["voice_deafened"],
-            "voice_self_muted": voice["voice_self_muted"],
-            "voice_self_deafened": voice["voice_self_deafened"],
-            "voice_streaming": voice["voice_streaming"],
-            "voice_video": voice["voice_video"],
-            "voice_suppressed": voice["voice_suppressed"],
-            "data_health": "ok" if in_guild else "left_guild",
-            "in_guild": bool(in_guild),
-            "joined_at": member.joined_at.isoformat() if member.joined_at else existing.get("joined_at"),
-            "synced_at": now_iso,
-            "updated_at": now_iso,
-            "first_seen_at": existing.get("first_seen_at") or now_iso,
-            "last_seen_at": now_iso,
-            "left_at": left_at,
-            "rejoined_at": rejoined_at,
-            "times_joined": times_joined,
-            "times_left": times_left,
-            "last_seen_username": username,
-            "last_seen_display_name": display_name,
-            "last_seen_nickname": nickname,
-            "previous_usernames": previous_usernames,
-            "previous_display_names": previous_display_names,
-            "previous_nicknames": previous_nicknames,
-            **merged_risk_payload,
-        }
-
-        try:
-            await _guild_members_upsert_async(sb, full_payload, on_conflict=True)
-            return
-        except TypeError:
+        if callable(new_sync_member_to_supabase):
             try:
-                await _guild_members_upsert_async(sb, full_payload, on_conflict=False)
-                return
-            except Exception as e:
-                if not _is_missing_column_error(e, "in_voice"):
-                    raise
-        except Exception as e:
-            if not _is_missing_column_error(e, "in_voice"):
-                raise
-
-        fallback_payload = _strip_voice_fields(full_payload)
-
-        try:
-            await _guild_members_upsert_async(sb, fallback_payload, on_conflict=True)
+                await new_sync_member_to_supabase(
+                    member,
+                    in_guild=in_guild,
+                    risk_profile=risk_profile,
+                )
+            except TypeError:
+                await new_sync_member_to_supabase(member, in_guild=in_guild)
             return
-        except TypeError:
-            try:
-                await _guild_members_upsert_async(sb, fallback_payload, on_conflict=False)
-                return
-            except Exception:
-                pass
-        except Exception:
-            pass
-
-        minimal = _minimal_member_payload(
-            member,
-            in_guild=in_guild,
-            risk_payload=merged_risk_payload,
-        )
-        minimal = _strip_voice_fields(minimal)
-
-        try:
-            await _guild_members_upsert_async(sb, minimal, on_conflict=True)
-        except TypeError:
-            await _guild_members_upsert_async(sb, minimal, on_conflict=False)
-
+        print("⚠️ member sync service unavailable; member sync skipped")
     except Exception as e:
-        print("⚠️ _sync_member_to_supabase error:", e)
-        try:
-            traceback.print_exc()
-        except Exception:
-            pass
+        print("⚠️ _sync_member_to_supabase service delegate failed:", repr(e))
 
 
 async def _mark_member_left(member: discord.Member) -> None:
     try:
-        sb = get_supabase()
-        if not sb:
+        if callable(new_mark_member_left):
+            await new_mark_member_left(member)
             return
-
-        guild_id = str(member.guild.id)
-        user_id = str(member.id)
-        existing = await _sync_get_existing_member_row_async(sb, guild_id, user_id) or {}
-
-        now_iso = _sync_iso_now()
-
-        username = _safe_member_username(member)
-        display_name = _safe_member_display_name(member)
-        nickname = _safe_member_nickname(member)
-        avatar_url = _safe_member_avatar_url(member)
-
-        previous_usernames = _append_unique_history(
-            existing.get("previous_usernames"),
-            str(existing.get("last_seen_username") or existing.get("username") or "")
-        )
-        previous_display_names = _append_unique_history(
-            existing.get("previous_display_names"),
-            str(existing.get("last_seen_display_name") or existing.get("display_name") or "")
-        )
-        previous_nicknames = _append_unique_history(
-            existing.get("previous_nicknames"),
-            str(existing.get("last_seen_nickname") or existing.get("nickname") or "")
-        )
-
-        if existing.get("username") and str(existing.get("username")).strip() != username:
-            previous_usernames = _append_unique_history(previous_usernames, str(existing.get("username")).strip())
-        if existing.get("display_name") and str(existing.get("display_name")).strip() != display_name:
-            previous_display_names = _append_unique_history(previous_display_names, str(existing.get("display_name")).strip())
-        if existing.get("nickname") and str(existing.get("nickname")).strip() != nickname:
-            previous_nicknames = _append_unique_history(previous_nicknames, str(existing.get("nickname")).strip())
-
-        times_left = int(existing.get("times_left") or 0)
-        if existing.get("in_guild") is not False:
-            times_left += 1
-
-        times_joined = int(existing.get("times_joined") or 0) or 1
-        existing_risk_payload = _extract_existing_risk_payload(existing)
-
-        full_payload = {
-            "guild_id": guild_id,
-            "user_id": user_id,
-            "username": username or existing.get("username") or "",
-            "display_name": display_name or existing.get("display_name") or "",
-            "nickname": nickname or existing.get("nickname") or "",
-            "avatar_url": avatar_url or existing.get("avatar_url") or None,
-            "in_guild": False,
-            "data_health": "left_guild",
-            "synced_at": now_iso,
-            "updated_at": now_iso,
-            "last_seen_at": now_iso,
-            "left_at": now_iso,
-            "times_joined": times_joined,
-            "times_left": times_left,
-            "last_seen_username": username or existing.get("last_seen_username") or existing.get("username") or "",
-            "last_seen_display_name": display_name or existing.get("last_seen_display_name") or existing.get("display_name") or "",
-            "last_seen_nickname": nickname or existing.get("last_seen_nickname") or existing.get("nickname") or "",
-            "previous_usernames": previous_usernames,
-            "previous_display_names": previous_display_names,
-            "previous_nicknames": previous_nicknames,
-            "role_ids": existing.get("role_ids") or [],
-            "role_names": existing.get("role_names") or [],
-            "roles": existing.get("roles") or [],
-            "top_role": existing.get("top_role"),
-            "highest_role_id": existing.get("highest_role_id"),
-            "highest_role_name": existing.get("highest_role_name"),
-            "has_any_role": existing.get("has_any_role") or False,
-            "has_unverified": existing.get("has_unverified") or False,
-            "has_verified_role": existing.get("has_verified_role") or False,
-            "has_staff_role": existing.get("has_staff_role") or False,
-            "has_secondary_verified_role": existing.get("has_secondary_verified_role") or False,
-            "has_cosmetic_only": existing.get("has_cosmetic_only") or False,
-            "in_voice": False,
-            "voice_channel_id": None,
-            "voice_channel_name": None,
-            "voice_muted": False,
-            "voice_deafened": False,
-            "voice_self_muted": False,
-            "voice_self_deafened": False,
-            "voice_streaming": False,
-            "voice_video": False,
-            "voice_suppressed": False,
-            "role_state": "left_guild",
-            "role_state_reason": "Member left or was removed from guild.",
-            **existing_risk_payload,
-        }
-
-        try:
-            await _guild_members_upsert_async(sb, full_payload, on_conflict=True)
-            return
-        except TypeError:
-            try:
-                await _guild_members_upsert_async(sb, full_payload, on_conflict=False)
-                return
-            except Exception as e:
-                if not _is_missing_column_error(e, "in_voice"):
-                    raise
-        except Exception as e:
-            if not _is_missing_column_error(e, "in_voice"):
-                raise
-
-        fallback_payload = _strip_voice_fields(full_payload)
-
-        try:
-            await _guild_members_upsert_async(sb, fallback_payload, on_conflict=True)
-            return
-        except TypeError:
-            try:
-                await _guild_members_upsert_async(sb, fallback_payload, on_conflict=False)
-                return
-            except Exception:
-                pass
-        except Exception:
-            pass
-
-        try:
-            await _guild_members_update_member_async(
-                sb,
-                guild_id,
-                user_id,
-                {
-                    "in_guild": False,
-                    "data_health": "left_guild",
-                    "synced_at": now_iso,
-                    "updated_at": now_iso,
-                    "left_at": now_iso,
-                    "times_left": times_left,
-                    "role_state": "left_guild",
-                    "role_state_reason": "Member left or was removed from guild.",
-                },
-            )
-        except Exception as e2:
-            print("⚠️ _mark_member_left fallback error:", e2)
-
+        print("⚠️ member-left sync service unavailable; member-left sync skipped")
     except Exception as e:
-        print("⚠️ _mark_member_left error:", e)
-        try:
-            traceback.print_exc()
-        except Exception:
-            pass
+        print("⚠️ _mark_member_left service delegate failed:", repr(e))
 
 
 async def _initial_member_sync_sweep() -> None:
