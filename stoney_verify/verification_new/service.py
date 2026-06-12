@@ -378,6 +378,12 @@ def _sync_member_verification_context(
         ticket_channel_id = _ticket_channel_id_value(channel)
         staff_id = str(staff_member.id)
         staff_name = _member_display_name(staff_member) or str(staff_member)
+        truth_meta: Dict[str, Any] = {
+            "entry_truth_quality": "confirmed",
+            "entry_confidence": 95 if ticket_channel_id else 90,
+            "entry_quality_reason": "Verified by explicit staff workflow.",
+            "entry_conflict": False,
+        }
 
         member_patch: Dict[str, Any] = {
             "approved_by": staff_id,
@@ -389,6 +395,7 @@ def _sync_member_verification_context(
             "synced_at": now_iso,
             "source_ticket_id": ticket_channel_id,
             "verification_ticket_id": ticket_channel_id,
+            **truth_meta,
         }
 
         if isinstance(token_info, dict):
@@ -457,6 +464,7 @@ def _sync_member_verification_context(
             "entry_method": entry_method,
             "verification_source": verification_source,
             "source_ticket_id": ticket_channel_id,
+            **truth_meta,
         }
 
         if latest_join_row and latest_join_row.get("id") is not None:
@@ -490,6 +498,7 @@ def _sync_member_verification_context(
             "source_ticket_id": ticket_channel_id,
             "channel_id": ticket_channel_id,
             "channel_name": channel.name if isinstance(channel, discord.TextChannel) else None,
+            **truth_meta,
         }
 
         try:
