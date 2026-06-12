@@ -61,7 +61,7 @@ Approximate time and timezone:
 What happened:
 What should have happened:
 Screenshot or log snippet:
-Output of /stoney health:
+Output of /dank health:
 ```
 
 Do not ask users to share Discord tokens, Supabase keys, API secrets, passwords, or private payment information.
@@ -211,7 +211,7 @@ Next update: when we have a confirmed fix or workaround.
 ```txt
 A mitigation is now live for <issue>.
 Please retry <affected action>.
-If it still fails, send your guild ID, timestamp, and /stoney health output in the support channel.
+If it still fails, send your guild ID, timestamp, and /dank health output in the support channel.
 ```
 
 ### Resolved notice
@@ -258,104 +258,3 @@ Handle case-by-case.
 - [ ] Identify scope: user data, guild config, tickets, transcripts, modlogs, verification records.
 - [ ] Confirm whether deletion is allowed or whether safety/legal retention applies.
 - [ ] Export data first if requested and appropriate.
-- [ ] Delete or anonymize approved records.
-- [ ] Confirm completion without exposing other users' data.
-
-### Export request checklist
-
-- [ ] Verify requester identity/authority.
-- [ ] Export only data they are authorized to receive.
-- [ ] Redact secrets and unrelated users where appropriate.
-- [ ] Use private delivery, not public Discord channels.
-
-## 9. Abuse handling
-
-Abuse examples:
-
-- Server uses bot to harass or target users
-- Server stores doxxing, passwords, payment info, tokens, or illegal content in tickets
-- Server uses moderation features for spam, scams, raids, or evasion
-- Server owner tries to access another server's data
-- User attempts command/API abuse or rate-limit attacks
-
-Abuse response options:
-
-- Warn server owner
-- Disable specific features
-- Remove bot from server
-- Block guild from using public API/dashboard
-- Preserve evidence for legal/platform reporting
-- Report to Discord when appropriate
-
-## 10. Security report handling
-
-Security reports should be private by default.
-
-Required response steps:
-
-1. Acknowledge receipt.
-2. Ask for reproduction details, not secrets.
-3. Reproduce safely in a test environment.
-4. Assess severity.
-5. Patch privately.
-6. Rotate secrets if exposed.
-7. Deploy fix.
-8. Credit reporter only with permission.
-
-Never ask a reporter to test against servers they do not own or administer.
-
-## 11. Operational monitoring checklist
-
-At minimum, monitor logs for:
-
-- `heartbeat blocked`
-- `session has been invalidated`
-- `CommandLimitReached`
-- `BOT_API_REQUIRE_AUTH=true but BOT_API_SHARED_SECRET is missing`
-- `using env fallback for guild`
-- `Could not find the table 'public.guild_configs'`
-- `PGRST` schema cache errors
-- Ticket creation latency warnings
-- Runtime job timeout warnings
-- Duplicate worker startup warnings
-- Permission self-check failures
-
-## 12. Launch support staffing
-
-Before adding outside servers:
-
-- [ ] One support channel exists.
-- [ ] One bug-report format is pinned.
-- [ ] One status channel exists.
-- [ ] Privacy and Terms links are pinned.
-- [ ] Known issues are pinned.
-- [ ] Response expectations are stated.
-- [ ] A backup admin can restart/redeploy if the owner is unavailable.
-
-## 13. Do-not-do list
-
-Do not:
-
-- Ask users for Discord tokens.
-- Ask users for passwords.
-- Ask users for Supabase keys.
-- Debug billing in public channels.
-- Share raw logs containing secrets.
-- Promise legal compliance for every server.
-- Promise 100% spam/raid prevention.
-- Leave unauthenticated sensitive APIs enabled.
-- Let one server's config affect another server.
-- Add public slash commands until checking the global command budget.
-
-## 14. Current beta requirements
-
-Before inviting more than trusted test servers:
-
-- [ ] `guild_configs` migration has been run.
-- [ ] `/dank health` passes in the owner server.
-- [ ] Privacy Policy placeholders are replaced.
-- [ ] Terms placeholders are replaced.
-- [ ] Support channel/contact placeholders are replaced.
-- [ ] Structured API is secure.
-- [ ] Public command profile is active.
-- [ ] No heartbeat-blocking traces appear during normal events.
