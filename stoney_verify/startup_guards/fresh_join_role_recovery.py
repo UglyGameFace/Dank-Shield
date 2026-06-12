@@ -1,13 +1,13 @@
 from __future__ import annotations
 
-"""Fresh join role recovery guard.
+"""Fresh join Unverified-role recovery guard.
 
-The fresh-join kick/ban blocker is a last-resort seatbelt. In a correctly
-configured server, a new human member should receive the configured Unverified
-role quickly and then sit on the normal verification timer. This guard makes
-that true in public servers by doing an immediate per-guild role recovery and by
-turning fail-closed instant removals into role-recovery attempts instead of ugly
-"Fresh Join Kick Blocked" noise.
+This guard has one job: when a new human member joins, make sure the configured
+per-guild Unverified role is applied as early as possible.
+
+Fail-closed kick/removal decisions are owned by
+stoney_verify.members_new.join_removal_safety and routed from events.py by
+startup_guards.event_safety. Do not patch removal handlers here.
 """
 
 import builtins
@@ -22,15 +22,7 @@ if not hasattr(builtins, "_stoney_true_original_import"):
 
 _ORIGINAL_IMPORT = getattr(builtins, "_stoney_true_original_import")
 _ATTACHED = False
-_PATCHED_JOIN_REMOVAL = False
-_PATCHED_EVENTS_FAIL_CLOSED = False
 _PATCHING = False
-
-_FAIL_CLOSED_MARKERS = (
-    "verification fail-closed",
-    "no safe verification role state",
-    "ensured_unverified=false",
-)
 
 
 def _log(message: str) -> None:
@@ -55,18 +47,6 @@ def _safe_int(value: Any, default: int = 0) -> int:
         return int(text) if text else int(default)
     except Exception:
         return int(default)
-
-
-def _reason_text(value: Any) -> str:
-    try:
-        return str(value or "").strip()
-    except Exception:
-        return ""
-
-
-def _is_fail_closed_reason(reason: Any) -> bool:
-    text = _reason_text(reason).lower()
-    return any(marker in text for marker in _FAIL_CLOSED_MARKERS)
 
 
 def _utcnow() -> datetime:
@@ -124,7 +104,12 @@ async def _configured_staff_log_channel(guild: discord.Guild) -> Optional[discor
         from stoney_verify.guild_config import get_guild_config
 
         cfg = await get_guild_config(guild.id)
-        for attr in ("modlog_channel_id", "raidlog_channel_id", "force_verify_log_channel_id", "join_log_channel_id"):
+        for attr in (
+            "modlog_channel_id",
+            "raidlog_channel_id",
+            "force_verify_log_channel_id",
+            "join_log_channel_id",
+        ):
             cid = _safe_int(getattr(cfg, attr, 0), 0)
             if cid <= 0:
                 continue
@@ -157,7 +142,11 @@ async def _post_recovery_log(member: discord.Member, *, title: str, detail: str,
         embed.set_footer(text=f"Guild {member.guild.id} • fresh join role recovery")
         await channel.send(embed=embed, allowed_mentions=discord.AllowedMentions.none())
     except Exception as e:
-        _warn(f"failed sending recovery log guild={getattr(getattr(member, 'guild', None), 'id', None)} user={getattr(member, 'id', None)}: {e!r}")
+        _warn(
+            "failed sending recovery log "
+            f"guild={getattr(getattr(member, 'guild', None), 'id', None)} "
+            f"user={getattr(member, 'id', None)}: {e!r}"
+        )
 
 
 async def ensure_fresh_join_unverified_role(
@@ -191,8 +180,6 @@ async def ensure_fresh_join_unverified_role(
 
         await member.add_roles(role, reason=f"Dank Shield fresh join recovery: {source}"[:512])
 
-        # Local member.roles usually updates immediately, but Discord can lag.
-        # Treat the API success as enough to prevent an instant fail-closed kick.
         detail = f"Assigned {role.mention} to a fresh join before verification automation could fail closed."
         _log(f"assigned unverified role guild={member.guild.id} user={member.id} role={role.id} source={source}")
         if log_success:
@@ -245,110 +232,6 @@ def _maybe_attach_bot() -> None:
             continue
 
 
-def _patch_join_removal_safety() -> None:
-    global _PATCHED_JOIN_REMOVAL
-    if _PATCHED_JOIN_REMOVAL:
-        return
-    try:
-        from stoney_verify.members_new import join_removal_safety as safety
-    except Exception:
-        return
-
-    original = getattr(safety, "block_or_run_bot_removal", None)
-    if not callable(original) or getattr(original, "_fresh_join_role_recovery_wrapped", False):
-        return
-
-    async def _block_or_run_with_role_recovery(*args: Any, **kwargs: Any) -> Any:
-        action = str(kwargs.get("action") or "remove").lower()
-        member = kwargs.get("member")
-        reason = kwargs.get("reason")
-
-        if isinstance(member, discord.Member) and action in {"kick", "ban"} and _is_fail_closed_reason(reason):
-            ok, detail = await ensure_fresh_join_unverified_role(
-                member,
-                source="fail_closed_removal_intercept",
-                log_success=True,
-            )
-            if ok:
-                try:
-                    await safety.clear_persisted_member_wait_timers(
-                        member.guild.id,
-                        member.id,
-                        reason="fresh join role recovered before fail-closed removal",
-                    )
-                except Exception:
-                    pass
-                _log(f"suppressed fail-closed fresh join {action} after role recovery guild={member.guild.id} user={member.id}")
-                return None
-
-            _warn(f"role recovery failed before fail-closed fresh join {action} guild={member.guild.id} user={member.id}: {detail}")
-
-        return await original(*args, **kwargs)
-
-    try:
-        setattr(_block_or_run_with_role_recovery, "_fresh_join_role_recovery_wrapped", True)
-    except Exception:
-        pass
-
-    setattr(safety, "block_or_run_bot_removal", _block_or_run_with_role_recovery)
-    _PATCHED_JOIN_REMOVAL = True
-    _log("patched fresh-join removal safety to recover role state before fail-closed removals")
-
-
-def _patch_events_fail_closed() -> None:
-    """Recover fresh joins before events.py posts the red fail-closed kick warning."""
-    global _PATCHED_EVENTS_FAIL_CLOSED
-    if _PATCHED_EVENTS_FAIL_CLOSED:
-        return
-    try:
-        from stoney_verify import events
-    except Exception:
-        return
-
-    original = getattr(events, "_handle_join_verification_failure", None)
-    if not callable(original) or getattr(original, "_fresh_join_role_recovery_wrapped", False):
-        return
-
-    async def _handle_join_verification_failure_with_recovery(member: discord.Member, reason: str) -> Any:
-        if isinstance(member, discord.Member) and _is_fail_closed_reason(reason):
-            try:
-                from stoney_verify.members_new import join_removal_safety as safety
-
-                if safety.should_block_bot_fresh_join_removal(member, reason=reason):
-                    recovered, detail = await safety.try_recover_unverified_before_removal(
-                        member,
-                        action="kick",
-                        reason=reason,
-                    )
-                    if recovered:
-                        _log(
-                            "suppressed events fail-closed warning after preflight role recovery "
-                            f"guild={member.guild.id} user={member.id}"
-                        )
-                        return None
-                    _warn(
-                        "events fail-closed preflight recovery failed; original fail-closed handler will continue "
-                        f"guild={member.guild.id} user={member.id}: {detail}"
-                    )
-            except Exception as e:
-                _warn(
-                    "events fail-closed preflight recovery crashed; original fail-closed handler will continue "
-                    f"guild={getattr(getattr(member, 'guild', None), 'id', None)} "
-                    f"user={getattr(member, 'id', None)} error={e!r}"
-                )
-
-        return await original(member, reason)
-
-    try:
-        setattr(_handle_join_verification_failure_with_recovery, "_fresh_join_role_recovery_wrapped", True)
-    except Exception:
-        pass
-
-    setattr(events, "_handle_join_verification_failure", _handle_join_verification_failure_with_recovery)
-    _PATCHED_EVENTS_FAIL_CLOSED = True
-    _log("patched events fail-closed handler to recover fresh joins before red kick warnings")
-
-
 def _patch_loaded_once() -> None:
     global _PATCHING
     if _PATCHING:
@@ -356,8 +239,6 @@ def _patch_loaded_once() -> None:
     _PATCHING = True
     try:
         _maybe_attach_bot()
-        _patch_join_removal_safety()
-        _patch_events_fail_closed()
     finally:
         _PATCHING = False
 
@@ -365,20 +246,20 @@ def _patch_loaded_once() -> None:
 def _safe_import(name: str, globals: Any = None, locals: Any = None, fromlist: Any = (), level: int = 0) -> Any:
     module = _ORIGINAL_IMPORT(name, globals, locals, fromlist, level)
     try:
-        if name in {"stoney_verify.globals", "stoney_verify.app"} or name.endswith("stoney_verify.globals") or name.endswith("stoney_verify.app"):
+        if (
+            name in {"stoney_verify.globals", "stoney_verify.app"}
+            or name.endswith("stoney_verify.globals")
+            or name.endswith("stoney_verify.app")
+        ):
             _maybe_attach_bot()
-        if name == "stoney_verify.members_new.join_removal_safety" or name.endswith("members_new.join_removal_safety"):
-            _patch_join_removal_safety()
-        if name == "stoney_verify.events" or name.endswith("stoney_verify.events"):
-            _patch_events_fail_closed()
     except Exception as e:
-        _warn(f"post-import patch failed for {name}: {e!r}")
+        _warn(f"post-import attach failed for {name}: {e!r}")
     return module
 
 
 builtins.__import__ = _safe_import
 _patch_loaded_once()
-_log("loaded; fresh joins recover Unverified role before fail-closed removal")
+_log("loaded; fresh joins recover Unverified role on member join")
 
 
 __all__ = ["ensure_fresh_join_unverified_role"]
