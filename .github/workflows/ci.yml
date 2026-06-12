@@ -41,3 +41,6 @@ jobs:
 
       - name: Audit role truth ownership
         run: python tools/audit_role_truth.py
+
+      - name: Audit event boundary ownership
+        run: python tools/audit_event_boundary.py
