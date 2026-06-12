@@ -3,8 +3,10 @@ from __future__ import annotations
 
 """Remove dead events.py leftovers after physical service handoffs.
 
-This script only removes helper/import blocks when their identifiers are no
-longer referenced outside the removable block. It is intentionally conservative.
+This script removes helper/import blocks when their identifiers are no longer
+referenced outside the removable block. It is conservative but allows partial
+cleanup: if one block is still referenced, that block is skipped instead of
+blocking unrelated cleanup.
 """
 
 import py_compile
@@ -57,11 +59,12 @@ def remove_block_if_unused(
     end_marker: str,
     names: tuple[str, ...],
     label: str,
-) -> tuple[str, bool]:
+    skip_if_still_used: bool = True,
+) -> tuple[str, bool, bool]:
     start = text.find(start_marker)
     if start < 0:
         print(f"✅ {label} already removed")
-        return text, False
+        return text, False, False
 
     end = text.find(end_marker, start)
     if end < 0:
@@ -74,13 +77,15 @@ def remove_block_if_unused(
             leaked.append(name)
 
     if leaked:
-        print(f"❌ {label} still has references outside removable block:")
+        print(f"⚠️ skipped {label}; still referenced outside removable block:")
         for name in leaked:
             print(" -", name)
+        if skip_if_still_used:
+            return text, False, True
         raise SystemExit(1)
 
     print(f"✅ removed {label}")
-    return text[:start] + text[end:], True
+    return text[:start] + text[end:], True, False
 
 
 def main() -> int:
@@ -90,8 +95,9 @@ def main() -> int:
 
     text = read(EVENTS)
     changed = False
+    skipped = False
 
-    text, did = remove_block_if_unused(
+    text, did, was_skipped = remove_block_if_unused(
         text,
         start_marker=TICKET_IMPORT_START,
         end_marker=TICKET_IMPORT_END,
@@ -99,8 +105,9 @@ def main() -> int:
         label="dead ticket cleanup imports",
     )
     changed = changed or did
+    skipped = skipped or was_skipped
 
-    text, did = remove_block_if_unused(
+    text, did, was_skipped = remove_block_if_unused(
         text,
         start_marker=RISK_HELPER_START,
         end_marker=RISK_HELPER_END,
@@ -108,10 +115,13 @@ def main() -> int:
         label="dead risk payload helper block",
     )
     changed = changed or did
+    skipped = skipped or was_skipped
 
     if changed:
         write(EVENTS, text)
         print("✅ updated stoney_verify/events.py")
+    elif skipped:
+        print("✅ no safe removable blocks left; skipped still-used blocks")
     else:
         print("✅ no dead extraction leftovers found")
 
