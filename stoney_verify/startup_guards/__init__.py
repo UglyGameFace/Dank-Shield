@@ -32,6 +32,10 @@ _STARTUP_GUARDS: Tuple[str, ...] = (
     "stoney_verify.startup_guards.command_safety",
     "stoney_verify.startup_guards.slash_command_cleanup",
 
+    # Public command-surface hygiene: stop legacy verify-admin side-effect
+    # commands from registering before events.py imports the old module.
+    "stoney_verify.startup_guards.public_verify_admin_command_skip",
+
     # Optional idempotent DB table/column creation. This only runs when a direct
     # Postgres DSN is configured; Supabase REST cannot create missing tables.
     "stoney_verify.startup_guards.auto_schema_bootstrap",
@@ -158,180 +162,66 @@ _IMPORT_CHATTER_PREFIXES: Tuple[str, ...] = (
     "🔗 ",
     "🧯 raidguard_hard_stop patched",
     "🧪 ",
-    "🧠 ",
-    "🧭 setup_category_modal_compat patched",
-    "🧭 setup_service_modes installed",
-    "🧭 setup_feature_health_scoreboard active",
-    "🛡️ dank_shield_branding_guard active",
-    "🛡️ member_join_removal_safety patched",
-    "🛡️ member_join_removal_safety attached",
-    "🛡️ member_join_removal_safety loaded",
-    "🧾 role_state_compat_guard loaded",
-    "🪄 public_moderation_command_guard loaded",
-    "✅ public_member_update_modlog:",
-    "🧍 member_update_modlog registered",
-    "🧾 resource_modlog_coverage registered",
-    "🧭 guild_config_ticket_guard loaded",
-    "🎫 ticket_creation_category_guard loaded",
-    "🧰 ticket_channel_panel_repair attached",
-    "🧰 ticket_channel_panel_repair loaded",
-    "🎯 ticket_category_enforcer attached",
-    "🎯 ticket_category_enforcer loaded",
-    "🧩 ticket_sync_native_guard loaded",
-    "🧭 ticket_sync_alias_guard loaded",
-    "🧭 api_guild_config_guard loaded",
-    "🛡️ panel_creation_guard_runtime panel denial",
-    "🛡️ panel_creation_guard_runtime ticket creation guard installed",
-    "🎫 ticket_creation_category_guard patched",
-    "🎫 ticket_creation_category_guard updated",
-    "🧰 ticket_channel_panel_repair patched",
-    "🎯 ticket_category_enforcer patched",
-    "🎟️ unverified_ticket_panel_flow patched",
-    "✅ unverified_legacy_panel_patch_disable:",
-    "✅ vc_request_setup_clarity:",
-    "✅ vc_setup_one_press_fix:",
-    "✅ vc_per_guild_access_fix:",
-    "✅ public_no_env_runtime_config:",
-    "✅ legacy_public_ticket_panel_disable:",
-    "✅ ticket_panel_doctor_command:",
-    "✅ ticket_panel_doctor_production_wording:",
-    "✅ public_ticket_panel_clean_hardening:",
-    "✅ external_ticket_history_sequence_guard:",
-    "✅ vc_accept_claim_guard:",
-    "✅ ticket_action_lock_guard:",
-    "✅ ticket_delete_lifecycle_guard:",
-    "🧩 panel_bootstrap_runtime runtime listeners registered",
-    "🧯 event_safety loaded",
-    "🛰️ shard_safety patched",
-    "🛰️ shard_safety loaded",
-    "🧬 job_dedupe loaded",
 )
 
-_IMPORT_CHATTER_CONTAINS: Tuple[str, ...] = (
-    " loaded; ",
-    " patched ",
-    " attached ",
-    " registered ",
-    " enabled ",
+_ERROR_CHATTER_PREFIXES: Tuple[str, ...] = (
+    "⚠️ ",
+    "❌ ",
+    "🛑 ",
 )
 
 
-def _env_str(name: str, default: str = "") -> str:
-    try:
-        value = os.getenv(name)
-        return str(value).strip() if value is not None and str(value).strip() else default
-    except Exception:
-        return default
-
-
-def _startup_log_style() -> str:
-    return _env_str("STONEY_STARTUP_LOG_STYLE", "compact").lower()
-
-
-def _verbose_startup_logs() -> bool:
-    return _startup_log_style() in {"verbose", "debug", "trace", "full"}
-
-
-def _should_suppress_import_line(text: str) -> bool:
-    if _verbose_startup_logs():
-        return False
-    line = str(text or "")
-    if not line:
-        return False
-
-    # Never hide warnings, blockers, crashes, or actual errors.
-    if line.startswith(("⚠️", "🚫", "❌", "Traceback", "RuntimeError", "Error")):
-        return False
-
-    if any(line.startswith(prefix) for prefix in _IMPORT_CHATTER_PREFIXES):
-        return True
-
-    # Only suppress low-value import chatter from startup guard modules. This is
-    # intentionally conservative so runtime health, Discord, DB, and ticket sync
-    # logs still show normally.
-    if any(token in line for token in _IMPORT_CHATTER_CONTAINS):
-        if any(
-            name in line
-            for name in (
-                "safety",
-                "guard",
-                "startup",
-                "ticket_",
-                "guild_config",
-                "raidguard",
-                "panel_bootstrap",
-            )
-        ):
-            return True
-
-    return False
+def _log_style() -> str:
+    return os.getenv("STONEY_STARTUP_LOG_STYLE", "compact").strip().lower()
 
 
 @contextmanager
-def _compact_import_chatter() -> Iterator[None]:
-    if _verbose_startup_logs():
+def _maybe_suppress_import_chatter(module_name: str) -> Iterator[None]:
+    if _log_style() not in {"compact", "quiet"}:
         yield
         return
 
     original_print = builtins.print
 
-    def filtered_print(*args, **kwargs):
+    def filtered_print(*args, **kwargs):  # type: ignore[no-untyped-def]
         try:
-            sep = kwargs.get("sep", " ")
-            text = sep.join(str(arg) for arg in args)
-            if _should_suppress_import_line(text):
-                return None
+            message = " ".join(str(arg) for arg in args)
         except Exception:
-            pass
+            message = ""
+        if any(message.startswith(prefix) for prefix in _ERROR_CHATTER_PREFIXES):
+            return original_print(*args, **kwargs)
+        if any(message.startswith(prefix) for prefix in _IMPORT_CHATTER_PREFIXES):
+            return None
         return original_print(*args, **kwargs)
 
-    builtins.print = filtered_print
+    builtins.print = filtered_print  # type: ignore[assignment]
     try:
         yield
     finally:
-        builtins.print = original_print
+        builtins.print = original_print  # type: ignore[assignment]
 
 
-def load_startup_guard(module_name: str) -> ModuleType:
-    if module_name in _LOADED:
-        return _LOADED[module_name]
-    try:
-        with _compact_import_chatter():
-            module = importlib.import_module(module_name)
-        _LOADED[module_name] = module
-        return module
-    except BaseException as e:  # keep boot resilient; report after pass
-        _ERRORS[module_name] = e
-        raise
-
-
-def load_all_startup_guards(modules: Iterable[str] = _STARTUP_GUARDS) -> Dict[str, ModuleType]:
-    loaded: Dict[str, ModuleType] = {}
-    errors: Dict[str, BaseException] = {}
-
+def load_startup_guards(modules: Iterable[str] = _STARTUP_GUARDS) -> Dict[str, ModuleType]:
     for module_name in modules:
+        if module_name in _LOADED:
+            continue
         try:
-            loaded[module_name] = load_startup_guard(module_name)
-        except BaseException as e:
-            errors[module_name] = e
-            try:
-                print(f"⚠️ startup_guard failed module={module_name}: {e!r}")
-            except Exception:
-                pass
+            with _maybe_suppress_import_chatter(module_name):
+                _LOADED[module_name] = importlib.import_module(module_name)
+        except Exception as exc:  # pragma: no cover - startup diagnostics only
+            _ERRORS[module_name] = exc
+            print(f"⚠️ startup_guard loader failed module={module_name}: {exc!r}")
+    if _log_style() != "quiet":
+        print(f"🧩 startup_guard loader complete loaded={len(_LOADED)}")
+    return dict(_LOADED)
 
-    try:
-        if errors:
-            print(f"⚠️ startup_guard load completed with errors={len(errors)} loaded={len(loaded)}")
-        else:
-            print(f"🧩 startup_guard loader complete loaded={len(loaded)}")
-    except Exception:
-        pass
 
-    return loaded
+def startup_guard_errors() -> Dict[str, BaseException]:
+    return dict(_ERRORS)
 
 
 __all__ = [
-    "load_startup_guard",
-    "load_all_startup_guards",
+    "load_startup_guards",
     "start_process_health_loop",
+    "startup_guard_errors",
 ]
