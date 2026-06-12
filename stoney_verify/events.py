@@ -14,6 +14,7 @@ from typing import Any, Deque, Dict, List, Optional, Tuple
 import discord
 
 from .globals import *
+from . import role_truth
 
 # Split-out admin slash commands
 from . import verify_admin_commands  # noqa: F401
@@ -167,84 +168,20 @@ def _ensure_gid_join_deque(container: Any, gid: int) -> None:
 
 
 def _member_has_role_id(member: discord.Member, role_id: int) -> bool:
-    try:
-        if not role_id:
-            return False
-        return any(int(r.id) == int(role_id) for r in (member.roles or []))
-    except Exception:
-        return False
+    return role_truth.member_has_role_id(member, role_id)
 
 
 def _member_has_any_safe_access_role(member: discord.Member, *, include_unverified: bool = True) -> bool:
-    try:
-        if VERIFIED_ROLE_ID and _member_has_role_id(member, int(VERIFIED_ROLE_ID)):
-            return True
-    except Exception:
-        pass
-
-    try:
-        if RESIDENT_ROLE_ID and _member_has_role_id(member, int(RESIDENT_ROLE_ID)):
-            return True
-    except Exception:
-        pass
-
-    try:
-        if STAFF_ROLE_ID and _member_has_role_id(member, int(STAFF_ROLE_ID)):
-            return True
-    except Exception:
-        pass
-
-    try:
-        if STONER_ROLE_ID and _member_has_role_id(member, int(STONER_ROLE_ID)):
-            return True
-    except Exception:
-        pass
-
-    try:
-        if DRUNKEN_ROLE_ID and _member_has_role_id(member, int(DRUNKEN_ROLE_ID)):
-            return True
-    except Exception:
-        pass
-
-    if include_unverified:
-        try:
-            if UNVERIFIED_ROLE_ID and _member_has_role_id(member, int(UNVERIFIED_ROLE_ID)):
-                return True
-        except Exception:
-            pass
-
-    return False
+    return bool(
+        role_truth.member_has_any_safe_access_role(
+            member,
+            include_unverified=include_unverified,
+        )
+    )
 
 
 def _member_is_pending_verification(member: discord.Member) -> bool:
-    try:
-        if getattr(member, "bot", False):
-            return False
-
-        uv_id = int(UNVERIFIED_ROLE_ID or 0)
-        verified_id = int(VERIFIED_ROLE_ID or 0)
-        resident_id = int(RESIDENT_ROLE_ID or 0) if RESIDENT_ROLE_ID else 0
-        staff_id = int(STAFF_ROLE_ID or 0) if STAFF_ROLE_ID else 0
-        stoner_id = int(STONER_ROLE_ID or 0) if STONER_ROLE_ID else 0
-        drunken_id = int(DRUNKEN_ROLE_ID or 0) if DRUNKEN_ROLE_ID else 0
-
-        has_unverified = _member_has_role_id(member, uv_id) if uv_id else False
-        has_verified = _member_has_role_id(member, verified_id) if verified_id else False
-        has_resident = _member_has_role_id(member, resident_id) if resident_id else False
-        has_staff = _member_has_role_id(member, staff_id) if staff_id else False
-        has_stoner = _member_has_role_id(member, stoner_id) if stoner_id else False
-        has_drunken = _member_has_role_id(member, drunken_id) if drunken_id else False
-
-        return bool(
-            has_unverified
-            and not has_verified
-            and not has_resident
-            and not has_staff
-            and not has_stoner
-            and not has_drunken
-        )
-    except Exception:
-        return False
+    return bool(role_truth.member_is_pending_verification(member))
 
 
 def _as_int(v: Any, default: int = 0) -> int:
