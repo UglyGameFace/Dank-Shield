@@ -6,6 +6,8 @@ This module owns the Discord-facing Channel Builder behavior. API/startup guards
 should call into this service instead of carrying mutation logic inline.
 """
 
+import re
+import unicodedata
 from typing import Any, Optional
 
 import discord
@@ -35,6 +37,115 @@ def safe_int(value: Any, default: int = 0) -> int:
         return int(default)
 
 
+def _range_map(chars: str, start: int) -> dict[str, str]:
+    return {char: chr(start + index) for index, char in enumerate(chars)}
+
+
+def _unicode_map(style: str) -> dict[str, str]:
+    letters_lower = "abcdefghijklmnopqrstuvwxyz"
+    letters_upper = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+    digits = "0123456789"
+    if style == "bold_sans":
+        return {**_range_map(letters_upper, 0x1D5D4), **_range_map(letters_lower, 0x1D5EE), **_range_map(digits, 0x1D7EC)}
+    if style == "italic_sans":
+        return {**_range_map(letters_upper, 0x1D608), **_range_map(letters_lower, 0x1D622)}
+    if style == "bold_italic_sans":
+        return {**_range_map(letters_upper, 0x1D63C), **_range_map(letters_lower, 0x1D656)}
+    if style == "monospace":
+        return {**_range_map(letters_upper, 0x1D670), **_range_map(letters_lower, 0x1D68A), **_range_map(digits, 0x1D7F6)}
+    if style == "fullwidth":
+        return {**_range_map(letters_upper, 0xFF21), **_range_map(letters_lower, 0xFF41), **_range_map(digits, 0xFF10), "-": chr(0xFF0D), " ": chr(0x3000)}
+    if style == "serif_bold":
+        return {**_range_map(letters_upper, 0x1D400), **_range_map(letters_lower, 0x1D41A), **_range_map(digits, 0x1D7CE)}
+    if style == "serif_italic":
+        return {**_range_map(letters_upper, 0x1D434), **_range_map(letters_lower, 0x1D44E)}
+    if style == "serif_bold_italic":
+        return {**_range_map(letters_upper, 0x1D468), **_range_map(letters_lower, 0x1D482)}
+    if style == "small_caps":
+        cps = {"a": 0x1D00, "b": 0x0299, "c": 0x1D04, "d": 0x1D05, "e": 0x1D07, "f": 0xA730, "g": 0x0262, "h": 0x029C, "i": 0x026A, "j": 0x1D0A, "k": 0x1D0B, "l": 0x029F, "m": 0x1D0D, "n": 0x0274, "o": 0x1D0F, "p": 0x1D18, "q": 0x01EB, "r": 0x0280, "s": 0xA731, "t": 0x1D1B, "u": 0x1D1C, "v": 0x1D20, "w": 0x1D21, "x": ord("x"), "y": 0x028F, "z": 0x1D22}
+        return {k: chr(v) for k, v in cps.items()}
+    return {}
+
+
+def _strip_hidden(value: str) -> str:
+    return "".join(ch for ch in str(value or "") if unicodedata.category(ch) != "Cf")
+
+
+def _style_options(value: Any) -> dict[str, Any]:
+    raw = value if isinstance(value, dict) else {}
+    style = safe_str(raw.get("unicodeStyle") or raw.get("unicode_style") or raw.get("font") or "normal").lower().replace("-", "_")
+    if style != "normal" and not _unicode_map(style):
+        style = "normal"
+    scope = safe_str(raw.get("unicodeStyleScope") or raw.get("unicode_style_scope") or raw.get("fontApplyMode") or raw.get("font_apply_mode") or "whole_name").lower().replace("-", "_")
+    if scope not in {"whole_name", "text_only"}:
+        scope = "whole_name"
+    separator = safe_str(raw.get("separator") or chr(0x30FB))
+    if separator == "none":
+        separator = ""
+    return {
+        "emoji": None if raw.get("emoji") is None else safe_str(raw.get("emoji")),
+        "emoji_position": safe_str(raw.get("emojiPosition") or raw.get("emoji_position") or "first").lower(),
+        "separator": separator[:4],
+        "case_mode": safe_str(raw.get("caseMode") or raw.get("case_mode") or "lower").lower(),
+        "style": style,
+        "scope": scope,
+    }
+
+
+def _normalize_base(value: Any, case_mode: str = "lower") -> str:
+    cleaned = unicodedata.normalize("NFKC", _strip_hidden(safe_str(value))).replace("&", " and ")
+    cleaned = cleaned.replace("'", "").replace("`", "").replace(chr(0x2019), "")
+    text = re.sub(r"-+", "-", "".join(ch if ch.isalnum() else "-" for ch in cleaned)).strip("-")
+    if case_mode == "preserve":
+        return text
+    if case_mode == "compact":
+        return text.replace("-", "").lower()
+    if case_mode == "title":
+        return "-".join(part[:1].upper() + part[1:].lower() for part in text.split("-") if part)
+    return text.lower()
+
+
+def _transform(value: str, style: str) -> str:
+    mapping = _unicode_map(style)
+    if not mapping:
+        return value
+    return "".join(mapping.get(ch, ch) for ch in value)
+
+
+def _split_text_decoration(value: Any) -> tuple[str, str, str]:
+    normalized = unicodedata.normalize("NFKC", _strip_hidden(safe_str(value)))
+    chars = [*normalized]
+    first = -1
+    last = -1
+    for index, char in enumerate(chars):
+        if char.isalnum():
+            if first < 0:
+                first = index
+            last = index
+    if first < 0 or last < 0:
+        return "", normalized, ""
+    return "".join(chars[:first]), "".join(chars[first : last + 1]), "".join(chars[last + 1 :])
+
+
+def format_channel_builder_name(value: Any, options: Any = None) -> str:
+    opts = _style_options(options)
+    source = safe_str(value)
+    if not source:
+        return ""
+    if opts["scope"] == "text_only":
+        prefix, text, suffix = _split_text_decoration(source)
+        final = f"{prefix}{_transform(_normalize_base(text or source, opts['case_mode']), opts['style'])}{suffix}"
+    else:
+        core = _transform(_normalize_base(source, opts["case_mode"]), opts["style"])
+        emoji = safe_str(opts.get("emoji"))
+        sep = safe_str(opts.get("separator"))
+        if emoji and opts.get("emoji_position") != "none":
+            final = f"{core}{sep}{emoji}" if opts.get("emoji_position") == "last" else f"{emoji}{sep}{core}"
+        else:
+            final = core
+    return "".join([*_strip_hidden(final)][:100]).rstrip("-" + chr(0x30FB))
+
+
 def normalize_action(value: Any) -> str:
     text = safe_str(value).lower().replace("-", "_")
     if text in {"create", "rename", "keep", "skip", "conflict"}:
@@ -49,9 +160,10 @@ def normalize_channel_type(value: Any) -> str:
     return "text"
 
 
-def normalize_channel_builder_items(raw: Any, *, limit: int = 150) -> list[dict[str, Any]]:
+def normalize_channel_builder_items(raw: Any, *, options: Any = None, limit: int = 150) -> list[dict[str, Any]]:
     if not isinstance(raw, list):
         return []
+    base_options = _style_options(options)
     items: list[dict[str, Any]] = []
     for index, row in enumerate(raw[:limit]):
         if not isinstance(row, dict):
@@ -60,14 +172,19 @@ def normalize_channel_builder_items(raw: Any, *, limit: int = 150) -> list[dict[
         selected = row.get("selected") is not False
         if not selected:
             action = "skip"
+        row_options = {**base_options, **_style_options(row.get("options") or row.get("styleOptions") or row.get("style_options"))}
+        base_name = safe_str(row.get("baseName") or row.get("base_name") or row.get("name"))[:100]
+        final_name = safe_str(row.get("finalName") or row.get("final_name"))[:100]
+        if not final_name:
+            final_name = format_channel_builder_name(base_name or row.get("currentName") or row.get("current_name"), row_options)
         items.append(
             {
                 "index": index,
                 "id": safe_str(row.get("id") or f"row-{index + 1}"),
                 "action": action,
                 "type": normalize_channel_type(row.get("type")),
-                "base_name": safe_str(row.get("baseName") or row.get("base_name") or row.get("name"))[:100],
-                "final_name": safe_str(row.get("finalName") or row.get("final_name"))[:100],
+                "base_name": base_name,
+                "final_name": final_name[:100],
                 "current_name": safe_str(row.get("currentName") or row.get("current_name"))[:100],
                 "current_id": safe_int(
                     row.get("channelId")
@@ -81,6 +198,8 @@ def normalize_channel_builder_items(raw: Any, *, limit: int = 150) -> list[dict[
                 "category": safe_str(row.get("category"))[:100],
                 "protected": bool(row.get("protected")),
                 "selected": selected,
+                "unicode_style": row_options.get("style"),
+                "unicode_style_scope": row_options.get("scope"),
             }
         )
     return items
