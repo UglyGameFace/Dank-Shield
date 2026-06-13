@@ -53,9 +53,10 @@ CHECKS = {
         'channel_builder_rollback',
     ],
     'stoney_verify/startup_guards/channel_builder_api_guard.py': [
-        'channel_builder_routes.register_channel_builder_routes',
+        'AppRunner route injection shim',
         'register_channel_builder_routes(app, server)',
-        'channel_builder_routes=true',
+        'direct Channel Builder route registration detected',
+        'web.AppRunner = app_runner_with_channel_builder',
     ],
     'tools/patch_channel_builder_server_routes.py': [
         'register_channel_builder_routes(app, sys.modules[__name__])',
