@@ -13,6 +13,13 @@ try:
 except Exception:
     pass
 
+try:
+    from stoney_verify.startup_guards import channel_font_exact_unicode_guard as _exact_unicode_guard
+
+    _exact_unicode_guard.apply()
+except Exception:
+    pass
+
 _CONFIG_KEY = "channel_builder_style_options"
 _RUNTIME_FONT_OPTIONS: dict[str, dict[str, str]] = {}
 
