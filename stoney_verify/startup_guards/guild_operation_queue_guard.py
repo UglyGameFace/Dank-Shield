@@ -32,6 +32,7 @@ def _load_integration_guards() -> None:
         "channel_builder_api_guard",
         "channel_builder_runtime_service_guard",
         "channel_builder_rollback_api_guard",
+        "channel_builder_rollback_runtime_service_guard",
         "verification_operation_queue_guard",
         "member_cleanup_operation_queue_guard",
         "spam_guard_operation_queue_guard",
