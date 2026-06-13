@@ -26,9 +26,23 @@ def _warn(message: str) -> None:
         pass
 
 
+def _load_integration_guards() -> None:
+    for module_name in (
+        "verification_operation_queue_guard",
+        "member_cleanup_operation_queue_guard",
+        "spam_guard_operation_queue_guard",
+    ):
+        try:
+            __import__(f"stoney_verify.startup_guards.{module_name}")
+            _log(f"integration guard loaded module={module_name}")
+        except Exception as e:
+            _warn(f"integration guard failed module={module_name}: {e!r}")
+
+
 def install() -> bool:
     global _INSTALLED
     if _INSTALLED:
+        _load_integration_guards()
         return True
     _INSTALLED = True
 
@@ -42,6 +56,7 @@ def install() -> bool:
             f"max_global={global_state.get('max_global')} "
             f"persistence={global_state.get('persistence')}"
         )
+        _load_integration_guards()
         return True
     except Exception as e:
         _warn(f"failed to load operation queue: {e!r}")
