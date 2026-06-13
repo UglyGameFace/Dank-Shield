@@ -11,13 +11,44 @@ _STYLE_LABELS: dict[str, str] = {
     "normal": "Normal",
     "bold_sans": "Bold Sans",
     "italic_sans": "Italic Sans",
+    "bold_italic_sans": "Bold Italic Sans",
     "monospace": "Monospace",
     "fullwidth": "Fullwidth",
+    "serif_bold": "Serif Bold",
+    "serif_italic": "Serif Italic",
+    "serif_bold_italic": "Serif Bold Italic",
+    "script": "Script",
+    "bold_script": "Bold Script",
+    "fraktur": "Fraktur / Gothic",
+    "bold_fraktur": "Bold Fraktur",
+    "circled": "Circled",
+    "parenthesized": "Parenthesized",
     "small_caps": "Small Caps",
+    "upside_down": "Upside Down",
 }
+_RISKY_STYLES = {"script", "bold_script", "fraktur", "bold_fraktur", "circled", "parenthesized", "upside_down"}
 _SCOPE_LABELS: dict[str, str] = {
     "whole_name": "Style generated name",
     "text_only": "Text only — keep emoji",
+}
+_STYLE_EXAMPLES: dict[str, tuple[str, str]] = {
+    "normal": ("gaming-clips", "🔥・general-chat"),
+    "bold_sans": ("𝗴𝗮𝗺𝗶𝗻𝗴-𝗰𝗹𝗶𝗽𝘀", "🔥・𝗴𝗲𝗻𝗲𝗿𝗮𝗹-𝗰𝗵𝗮𝘁"),
+    "italic_sans": ("𝘨𝘢𝘮𝘪𝘯𝘨-𝘤𝘭𝘪𝘱𝘴", "🔥・𝘨𝘦𝘯𝘦𝘳𝘢𝘭-𝘤𝘩𝘢𝘵"),
+    "bold_italic_sans": ("𝙜𝙖𝙢𝙞𝙣𝙜-𝙘𝙡𝙞𝙥𝙨", "🔥・𝙜𝙚𝙣𝙚𝙧𝙖𝙡-𝙘𝙝𝙖𝙩"),
+    "monospace": ("𝚐𝚊𝚖𝚒𝚗𝚐-𝚌𝚕𝚒𝚙𝚜", "🔥・𝚐𝚎𝚗𝚎𝚛𝚊𝚕-𝚌𝚑𝚊𝚝"),
+    "fullwidth": ("ｇａｍｉｎｇ－ｃｌｉｐｓ", "🔥・ｇｅｎｅｒａｌ－ｃｈａｔ"),
+    "serif_bold": ("𝐠𝐚𝐦𝐢𝐧𝐠-𝐜𝐥𝐢𝐩𝐬", "🔥・𝐠𝐞𝐧𝐞𝐫𝐚𝐥-𝐜𝐡𝐚𝐭"),
+    "serif_italic": ("𝑔𝑎𝑚𝑖𝑛𝑔-𝑐𝑙𝑖𝑝𝑠", "🔥・𝑔𝑒𝑛𝑒𝑟𝑎𝑙-𝑐ℎ𝑎𝑡"),
+    "serif_bold_italic": ("𝒈𝒂𝒎𝒊𝒏𝒈-𝒄𝒍𝒊𝒑𝒔", "🔥・𝒈𝒆𝒏𝒆𝒓𝒂𝒍-𝒄𝒉𝒂𝒕"),
+    "script": ("𝑔𝒶𝓂𝒾𝓃𝑔-𝒸𝓁𝒾𝓅𝓈", "🔥・𝑔𝑒𝓃𝑒𝓇𝒶𝓁-𝒸𝒽𝒶𝓉"),
+    "bold_script": ("𝓰𝓪𝓶𝓲𝓷𝓰-𝓬𝓵𝓲𝓹𝓼", "🔥・𝓰𝓮𝓷𝓮𝓻𝓪𝓵-𝓬𝓱𝓪𝓽"),
+    "fraktur": ("𝔤𝔞𝔪𝔦𝔫𝔤-𝔠𝔩𝔦𝔭𝔰", "🔥・𝔤𝔢𝔫𝔢𝔯𝔞𝔩-𝔠𝔥𝔞𝔱"),
+    "bold_fraktur": ("𝖌𝖆𝖒𝖎𝖓𝖌-𝖈𝖑𝖎𝖕𝖘", "🔥・𝖌𝖊𝖓𝖊𝖗𝖆𝖑-𝖈𝖍𝖆𝖙"),
+    "circled": ("ⓖⓐⓜⓘⓝⓖ-ⓒⓛⓘⓟⓢ", "🔥・ⓖⓔⓝⓔⓡⓐⓛ-ⓒⓗⓐⓣ"),
+    "parenthesized": ("⒢⒜⒨⒤⒩⒢-⒞⒧⒤⒫⒮", "🔥・⒢⒠⒩⒠⒭⒜⒧-⒞⒣⒜⒯"),
+    "small_caps": ("ɢᴀᴍɪɴɢ-ᴄʟɪᴘꜱ", "🔥・ɢᴇɴᴇʀᴀʟ-ᴄʜᴀᴛ"),
+    "upside_down": ("ƃuᴉɯɐƃ-sdᴉlɔ", "🔥・ʇɐɥɔ-lɐɹǝuǝƃ"),
 }
 
 
@@ -96,34 +127,50 @@ async def _require_setup(interaction: discord.Interaction) -> bool:
 
 
 def _example(options: dict[str, str]) -> str:
-    scope = options.get("unicodeStyleScope") or "whole_name"
     style = options.get("unicodeStyle") or "normal"
-    if scope == "text_only" and style == "bold_sans":
-        return "🔥・𝗴𝗲𝗻𝗲𝗿𝗮𝗹-𝗰𝗵𝗮𝘁"
-    if scope == "text_only" and style == "small_caps":
-        return "🔥・ɢᴇɴᴇʀᴀʟ-ᴄʜᴀᴛ"
-    if scope == "text_only":
-        return "🔥・general-chat"
-    if style == "bold_sans":
-        return "🎮・𝗴𝗲𝗻𝗲𝗿𝗮𝗹-𝗰𝗵𝗮𝘁"
-    if style == "small_caps":
-        return "🎮・ɢᴇɴᴇʀᴀʟ-ᴄʜᴀᴛ"
-    return "🎮・general-chat"
+    scope = options.get("unicodeStyleScope") or "whole_name"
+    whole, text_only = _STYLE_EXAMPLES.get(style, _STYLE_EXAMPLES["normal"])
+    return text_only if scope == "text_only" else f"🎮・{whole}"
 
 
-async def build_channel_font_embed(guild_id: int) -> discord.Embed:
+def _preview_lines(options: dict[str, str]) -> list[str]:
+    current = options.get("unicodeStyle") or "normal"
+    scope = options.get("unicodeStyleScope") or "whole_name"
+    lines: list[str] = []
+    for style, label in _STYLE_LABELS.items():
+        whole, text_only = _STYLE_EXAMPLES.get(style, _STYLE_EXAMPLES["normal"])
+        preview = text_only if scope == "text_only" else f"🎮・{whole}"
+        marker = "✅" if style == current else "▫️"
+        risk = " ⚠️" if style in _RISKY_STYLES else ""
+        lines.append(f"{marker} **{label}**{risk}: `{preview}`")
+    return lines
+
+
+def _preview_fields(embed: discord.Embed, options: dict[str, str]) -> None:
+    lines = _preview_lines(options)
+    chunks = [lines[:6], lines[6:12], lines[12:]]
+    for index, chunk in enumerate(chunks, start=1):
+        if chunk:
+            embed.add_field(name=f"Preview Gallery {index}", value="\n".join(chunk)[:1024], inline=False)
+
+
+async def build_channel_font_embed(guild_id: int, *, saved_message: str | None = None) -> discord.Embed:
     options = await load_channel_font_options(guild_id)
     embed = discord.Embed(
         title="🔤 Channel Name Fonts",
         description=(
-            "Set the bot-side default for Channel Builder naming.\n\n"
-            "Use **Text only — keep emoji** when a channel already has emoji/decorations and you only want the words changed."
+            "Pick by looking at the preview gallery below — no need to test fonts one by one.\n\n"
+            "**Text only — keep emoji** preserves existing emojis/decorations and changes only the words."
         ),
         color=discord.Color.blurple(),
     )
-    embed.add_field(name="Font style", value=_STYLE_LABELS.get(options["unicodeStyle"], "Normal"), inline=True)
+    if saved_message:
+        embed.add_field(name="Saved", value=saved_message, inline=False)
+    embed.add_field(name="Selected font", value=_STYLE_LABELS.get(options["unicodeStyle"], "Normal"), inline=True)
     embed.add_field(name="Apply mode", value=_SCOPE_LABELS.get(options["unicodeStyleScope"], "Style generated name"), inline=True)
-    embed.add_field(name="Example", value=f"`{_example(options)}`", inline=False)
+    embed.add_field(name="Current example", value=f"`{_example(options)}`", inline=False)
+    embed.add_field(name="Note", value="⚠️ means decorative/high-risk for readability, search, or screen readers. Use readable styles for important channels.", inline=False)
+    _preview_fields(embed, options)
     embed.set_footer(text="Path: /dank setup → More Options → Channel Name Fonts")
     return embed
 
@@ -131,7 +178,12 @@ async def build_channel_font_embed(guild_id: int) -> discord.Embed:
 class FontStyleSelect(discord.ui.Select):
     def __init__(self, current: str) -> None:
         options = [
-            discord.SelectOption(label=label, value=value, default=value == current)
+            discord.SelectOption(
+                label=(f"⚠️ {label}" if value in _RISKY_STYLES else label),
+                value=value,
+                description=("Decorative/high-risk" if value in _RISKY_STYLES else "Readable/recommended" if value != "normal" else "Plain Discord text"),
+                default=value == current,
+            )
             for value, label in _STYLE_LABELS.items()
         ]
         super().__init__(placeholder="Choose font style…", min_values=1, max_values=1, options=options, row=0)
@@ -144,7 +196,11 @@ class FontStyleSelect(discord.ui.Select):
         current = await load_channel_font_options(int(interaction.guild.id))
         current["unicodeStyle"] = str(self.values[0])
         saved = await save_channel_font_options(int(interaction.guild.id), current)
-        await interaction.response.edit_message(embed=await build_channel_font_embed(int(interaction.guild.id)), view=ChannelFontModeView(saved))
+        label = _STYLE_LABELS.get(saved["unicodeStyle"], saved["unicodeStyle"])
+        await interaction.response.edit_message(
+            embed=await build_channel_font_embed(int(interaction.guild.id), saved_message=f"Font style saved as **{label}**."),
+            view=ChannelFontModeView(saved),
+        )
 
 
 class ChannelFontModeView(discord.ui.View):
@@ -152,14 +208,35 @@ class ChannelFontModeView(discord.ui.View):
         super().__init__(timeout=900)
         self.options = normalize_font_options(options)
         self.add_item(FontStyleSelect(self.options["unicodeStyle"]))
+        self._mark_scope_buttons()
+
+    def _mark_scope_buttons(self) -> None:
+        current = self.options.get("unicodeStyleScope") or "whole_name"
+        for child in self.children:
+            cid = str(getattr(child, "custom_id", "") or "")
+            if cid.endswith(":whole"):
+                child.label = ("✅ Style generated name" if current == "whole_name" else "Style generated name")
+                child.style = discord.ButtonStyle.primary if current == "whole_name" else discord.ButtonStyle.secondary
+            if cid.endswith(":text_only"):
+                child.label = ("✅ Text only — keep emoji" if current == "text_only" else "Text only — keep emoji")
+                child.style = discord.ButtonStyle.primary if current == "text_only" else discord.ButtonStyle.secondary
 
     @discord.ui.button(label="Style generated name", emoji="🏷️", style=discord.ButtonStyle.secondary, custom_id="dank_setup_font:whole", row=1)
     async def whole_name(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         await self._set_scope(interaction, "whole_name")
 
-    @discord.ui.button(label="Text only — keep emoji", emoji="🔤", style=discord.ButtonStyle.primary, custom_id="dank_setup_font:text_only", row=1)
+    @discord.ui.button(label="Text only — keep emoji", emoji="🔤", style=discord.ButtonStyle.secondary, custom_id="dank_setup_font:text_only", row=1)
     async def text_only(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         await self._set_scope(interaction, "text_only")
+
+    @discord.ui.button(label="Refresh Preview", emoji="🔄", style=discord.ButtonStyle.secondary, custom_id="dank_setup_font:refresh", row=2)
+    async def refresh(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        if not await _require_setup(interaction):
+            return
+        if interaction.guild is None:
+            return await interaction.response.send_message("❌ This must be used inside a server.", ephemeral=True)
+        options = await load_channel_font_options(int(interaction.guild.id))
+        await interaction.response.edit_message(embed=await build_channel_font_embed(int(interaction.guild.id)), view=ChannelFontModeView(options))
 
     @discord.ui.button(label="Setup Home", emoji="🏠", style=discord.ButtonStyle.secondary, custom_id="dank_setup_font:home", row=2)
     async def home(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
@@ -180,7 +257,10 @@ class ChannelFontModeView(discord.ui.View):
         current = await load_channel_font_options(int(interaction.guild.id))
         current["unicodeStyleScope"] = scope
         saved = await save_channel_font_options(int(interaction.guild.id), current)
-        await interaction.response.edit_message(embed=await build_channel_font_embed(int(interaction.guild.id)), view=ChannelFontModeView(saved))
+        await interaction.response.edit_message(
+            embed=await build_channel_font_embed(int(interaction.guild.id), saved_message=f"Apply mode saved as **{_SCOPE_LABELS.get(scope, scope)}**."),
+            view=ChannelFontModeView(saved),
+        )
 
 
 class ChannelFontsButton(discord.ui.Button):
@@ -197,7 +277,7 @@ class ChannelFontsButton(discord.ui.Button):
 
 
 def apply() -> bool:
-    _log("active; /dank setup exposes Channel Name Fonts controls")
+    _log("active; /dank setup exposes Channel Name Fonts preview gallery")
     return True
 
 
