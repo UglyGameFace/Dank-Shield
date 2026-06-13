@@ -2,13 +2,9 @@ from __future__ import annotations
 
 """Queue-backed channel font rename preview/apply/undo.
 
-This guard intentionally uses stoney_verify.operation_queue so the font rename
-flow meshes with Dank Shield's existing global caps, per-guild concurrency
-locks, duplicate-click protection, and operation metrics.
-
-Channel renames are paced through services.channel_mutation_throttle because
-Discord can route-limit PATCH /channels for several minutes if a server-wide
-rename is fired as a burst.
+Uses Dank Shield's operation queue plus the shared channel mutation throttle.
+Each apply/undo only processes a small paced batch. Attempted rows leave the
+pending plan so the same channels are not retried forever.
 """
 
 import time
@@ -140,9 +136,7 @@ async def build_plan(guild: discord.Guild, options: dict[str, str]) -> list[dict
 def _plan_text(plan: list[dict[str, Any]], limit: int = 12) -> str:
     if not plan:
         return "No rename changes found for the current font settings."
-    rows: list[str] = []
-    for item in plan[:limit]:
-        rows.append(f"**Old:** `{item.get('before')}`\n**New:** `{item.get('after')}`")
+    rows = [f"**Old:** `{item.get('before')}`\n**New:** `{item.get('after')}`" for item in plan[:limit]]
     if len(plan) > limit:
         rows.append(f"…and {len(plan) - limit} more")
     return "\n\n".join(rows)[:3900]
@@ -154,10 +148,7 @@ async def _preview_embed(guild: discord.Guild, user_id: int, options: dict[str, 
     _PENDING[_key(int(guild.id), int(user_id))] = {"created_at": time.time(), "plan": plan, "options": dict(options)}
     embed = discord.Embed(
         title="🔤 Preview Channel Font Renames",
-        description=(
-            "Nothing has been changed yet. This preview is capped and rate-limit safe.\n\n"
-            "Apply runs in small paced batches, not one big server-wide burst."
-        ),
+        description="Nothing has been changed yet. Apply runs in small paced batches, not one big server-wide burst.",
         color=discord.Color.orange() if plan else discord.Color.blurple(),
     )
     embed.add_field(name="Changes found", value=str(len(plan)), inline=True)
@@ -167,13 +158,9 @@ async def _preview_embed(guild: discord.Guild, user_id: int, options: dict[str, 
     return embed, plan
 
 
-def _pending_payload(guild_id: int, user_id: int) -> dict[str, Any]:
-    _purge()
-    return _PENDING.get(_key(guild_id, user_id)) or {}
-
-
 def _remaining_plan(guild_id: int, user_id: int) -> list[dict[str, Any]]:
-    return list((_pending_payload(guild_id, user_id).get("plan") or []))
+    _purge()
+    return list((_PENDING.get(_key(guild_id, user_id)) or {}).get("plan") or [])
 
 
 def _set_remaining_plan(guild_id: int, user_id: int, plan: list[dict[str, Any]]) -> None:
@@ -201,16 +188,15 @@ async def _apply_batch(interaction: discord.Interaction, plan: list[dict[str, An
         if current == after:
             return {"status": "already", "channel_id": str(getattr(channel, "id", "")), "before": before, "after": after}
         if current != before:
-            return {"status": "failed", "error": f"stale `{before}` now `{current}`"}
-        await channel.edit(name=after, reason=f"Dank Shield channel font apply by {user_id}")
-        return {"status": "changed", "channel_id": str(getattr(channel, "id", "")), "before": before, "after": after}
+            return {"status": "skipped", "error": f"stale `{before}` now `{current}`"}
+        try:
+            await channel.edit(name=after, reason=f"Dank Shield channel font apply by {user_id}")
+            return {"status": "changed", "channel_id": str(getattr(channel, "id", "")), "before": before, "after": after}
+        except discord.Forbidden:
+            return {"status": "skipped", "error": f"no access to `{before}`"}
 
     result = await run_paced_channel_mutations(guild_id=int(guild.id), items=plan, mutate_one=mutate_one)
-    changed_ids = {str(item.get("channel_id")) for item in result.changes}
-    attempted_items = plan[:result.attempted]
-    unattempted = plan[result.attempted:]
-    retryable = [item for item in attempted_items if str(item.get("channel_id")) not in changed_ids]
-    remaining = retryable + unattempted
+    remaining = list(plan[result.attempted:])
     _set_remaining_plan(int(guild.id), user_id, remaining)
     if result.changes:
         key = _key(int(guild.id), user_id)
@@ -237,13 +223,15 @@ async def _undo_batch(interaction: discord.Interaction, undo: list[dict[str, Any
         if current == old:
             return {"status": "already", "channel_id": str(getattr(channel, "id", "")), "before": applied, "after": old}
         if current != applied:
-            return {"status": "failed", "error": f"stale `{applied}` now `{current}`"}
-        await channel.edit(name=old, reason=f"Dank Shield channel font undo by {user_id}")
-        return {"status": "changed", "channel_id": str(getattr(channel, "id", "")), "before": applied, "after": old}
+            return {"status": "skipped", "error": f"stale `{applied}` now `{current}`"}
+        try:
+            await channel.edit(name=old, reason=f"Dank Shield channel font undo by {user_id}")
+            return {"status": "changed", "channel_id": str(getattr(channel, "id", "")), "before": applied, "after": old}
+        except discord.Forbidden:
+            return {"status": "skipped", "error": f"no access to `{applied}`"}
 
     result = await run_paced_channel_mutations(guild_id=int(guild.id), items=reverse_plan, mutate_one=mutate_one)
-    changed_ids = {str(item.get("channel_id")) for item in result.changes}
-    remaining_original_order = [item for item in undo if str(item.get("channel_id")) not in changed_ids]
+    remaining_original_order = list(undo[: max(0, len(undo) - result.attempted)])
     key = _key(int(guild.id), user_id)
     if remaining_original_order:
         _LAST_UNDO[key] = {"created_at": time.time(), "undo": remaining_original_order}
@@ -306,6 +294,7 @@ class QueuedFontRenameConfirmView(discord.ui.View):
                 f"Attempted **{int(result.get('attempted', 0) or 0)}**. "
                 f"Changed **{int(result.get('changed', 0) or 0)}**. "
                 f"Already done **{int(result.get('already', 0) or 0)}**. "
+                f"Skipped **{int(result.get('skipped', 0) or 0)}**. "
                 f"Failed **{int(result.get('failed', 0) or 0)}**.\n\n"
                 f"Remaining: **{len(remaining)}**"
             ),
@@ -374,6 +363,7 @@ class QueuedFontRenameDoneView(discord.ui.View):
                 f"Attempted **{int(result.get('attempted', 0) or 0)}**. "
                 f"Restored **{int(result.get('changed', 0) or 0)}**. "
                 f"Already done **{int(result.get('already', 0) or 0)}**. "
+                f"Skipped **{int(result.get('skipped', 0) or 0)}**. "
                 f"Failed **{int(result.get('failed', 0) or 0)}**.\n\n"
                 f"Remaining undo: **{len(remaining_undo)}**"
             ),
