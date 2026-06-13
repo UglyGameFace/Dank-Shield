@@ -3,8 +3,8 @@ from __future__ import annotations
 """Load and advertise the shared guild operation queue.
 
 The actual queue lives in stoney_verify.operation_queue so commands, dashboard
-API handlers, setup guards, and future Channel Builder code can import one
-shared implementation instead of each feature inventing its own locks.
+API handlers, setup guards, and Channel Builder code can import one shared
+implementation instead of each feature inventing its own locks.
 """
 
 from typing import Any
@@ -29,6 +29,7 @@ def _warn(message: str) -> None:
 def _load_integration_guards() -> None:
     for module_name in (
         "command_sync_operation_queue_guard",
+        "channel_builder_api_guard",
         "verification_operation_queue_guard",
         "member_cleanup_operation_queue_guard",
         "spam_guard_operation_queue_guard",
