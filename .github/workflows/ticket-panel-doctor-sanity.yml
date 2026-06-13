@@ -1,0 +1,31 @@
+name: Ticket Panel Doctor Sanity
+
+on:
+  pull_request:
+    paths:
+      - "stoney_verify/startup_guards/ticket_panel_doctor_command.py"
+      - "stoney_verify/startup_guards/ticket_panel_doctor_production_wording.py"
+      - "stoney_verify/startup_guards/ticket_panel_doctor_stability_guard.py"
+      - "stoney_verify/commands_ext/public_ticket_panel_clean.py"
+      - "tools/audit_ticket_panel_doctor.py"
+      - ".github/workflows/ticket-panel-doctor-sanity.yml"
+  push:
+    paths:
+      - "stoney_verify/startup_guards/ticket_panel_doctor_command.py"
+      - "stoney_verify/startup_guards/ticket_panel_doctor_production_wording.py"
+      - "stoney_verify/startup_guards/ticket_panel_doctor_stability_guard.py"
+      - "stoney_verify/commands_ext/public_ticket_panel_clean.py"
+      - "tools/audit_ticket_panel_doctor.py"
+      - ".github/workflows/ticket-panel-doctor-sanity.yml"
+  workflow_dispatch:
+
+jobs:
+  ticket-panel-doctor-sanity:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Audit ticket panel doctor
+        run: python tools/audit_ticket_panel_doctor.py
