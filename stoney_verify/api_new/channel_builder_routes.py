@@ -34,7 +34,7 @@ async def preflight_channel_builder_job(server: Any, request: web.Request):
         return server._json_error("Invalid JSON body")
 
     guild_id = safe_int(data.get("guild_id"), 0)
-    items = normalize_channel_builder_items(data.get("items"))
+    items = normalize_channel_builder_items(data.get("items"), options=data.get("options"))
     if guild_id <= 0:
         return server._json_error("guild_id required")
     if not items:
@@ -65,7 +65,7 @@ async def submit_channel_builder_job(server: Any, request: web.Request):
     actor_id = safe_int(data.get("actor_id") or data.get("staff_id"), 0)
     mode = safe_str(data.get("mode") or "apply_plan").lower()[:60]
     dry_run = str(data.get("dry_run", "false")).strip().lower() in {"1", "true", "yes", "y", "on"}
-    items = normalize_channel_builder_items(data.get("items"))
+    items = normalize_channel_builder_items(data.get("items"), options=data.get("options"))
 
     if guild_id <= 0:
         return server._json_error("guild_id required")
@@ -91,7 +91,7 @@ async def submit_channel_builder_job(server: Any, request: web.Request):
             operation_type="channel_builder_apply_plan" if not dry_run else "channel_builder_dry_run_job",
             risk_level="dangerous" if not dry_run else "moderate",
             source="dashboard",
-            payload={"mode": mode, "items": items, "dry_run": dry_run, "preflight": preflight},
+            payload={"mode": mode, "items": items, "options": data.get("options") or {}, "dry_run": dry_run, "preflight": preflight},
             concurrency_class="channel_mutation",
             concurrency_key="channel_builder",
             timeout_seconds=900.0,
