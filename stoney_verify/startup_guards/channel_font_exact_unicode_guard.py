@@ -66,21 +66,40 @@ def exact_unicode_map(style: str) -> dict[str, str]:
     if style == "serif_bold_italic":
         return _math_letters("BOLD ITALIC")
     if style == "script":
-        return _math_letters("SCRIPT", special={"B": chr(0x212C), "E": chr(0x2130), "F": chr(0x2131), "H": chr(0x210B), "I": chr(0x2110), "L": chr(0x2112), "M": chr(0x2133), "R": chr(0x211B), "e": chr(0x212F), "g": chr(0x210A), "o": chr(0x2134)})
+        return _math_letters(
+            "SCRIPT",
+            special={
+                "B": chr(0x212C), "E": chr(0x2130), "F": chr(0x2131), "H": chr(0x210B),
+                "I": chr(0x2110), "L": chr(0x2112), "M": chr(0x2133), "R": chr(0x211B),
+                "e": chr(0x212F), "g": chr(0x210A), "o": chr(0x2134),
+            },
+        )
     if style == "bold_script":
         return _math_letters("BOLD SCRIPT")
     if style == "fraktur":
-        return _math_letters("FRAKTUR", special={"C": chr(0x212D), "H": chr(0x210C), "I": chr(0x2111), "R": chr(0x211C), "Z": chr(0x2128)})
+        return _math_letters(
+            "FRAKTUR",
+            special={"C": chr(0x212D), "H": chr(0x210C), "I": chr(0x2111), "R": chr(0x211C), "Z": chr(0x2128)},
+        )
     if style == "bold_fraktur":
         return _math_letters("BOLD FRAKTUR")
     if style == "circled":
         return {**_range("ABCDEFGHIJKLMNOPQRSTUVWXYZ", 0x24B6), **_range("abcdefghijklmnopqrstuvwxyz", 0x24D0), "0": chr(0x24EA), "1": chr(0x2460), "2": chr(0x2461), "3": chr(0x2462), "4": chr(0x2463), "5": chr(0x2464), "6": chr(0x2465), "7": chr(0x2466), "8": chr(0x2467), "9": chr(0x2468)}
     if style == "parenthesized":
-        return _explicit([("a", 0x249C), ("b", 0x249D), ("c", 0x249E), ("d", 0x249F), ("e", 0x24A0), ("f", 0x24A1), ("g", 0x24A2), ("h", 0x24A3), ("i", 0x24A4), ("j", 0x24A5), ("k", 0x24A6), ("l", 0x24A7), ("m", 0x24A8), ("n", 0x24A9), ("o", 0x24AA), ("p", 0x24AB), ("q", 0x24AC), ("r", 0x24AD), ("s", 0x24AE), ("t", 0x24AF), ("u", 0x24B0), ("v", 0x24B1), ("w", 0x24B2), ("x", 0x24B3), ("y", 0x24B4), ("z", 0x24B5), ("1", 0x2474), ("2", 0x2475), ("3", 0x2476), ("4", 0x2477), ("5", 0x2478), ("6", 0x2479), ("7", 0x247A), ("8", 0x247B), ("9", 0x247C)])
+        return _explicit([
+            ("a", 0x249C), ("b", 0x249D), ("c", 0x249E), ("d", 0x249F), ("e", 0x24A0), ("f", 0x24A1), ("g", 0x24A2), ("h", 0x24A3), ("i", 0x24A4), ("j", 0x24A5), ("k", 0x24A6), ("l", 0x24A7), ("m", 0x24A8), ("n", 0x24A9), ("o", 0x24AA), ("p", 0x24AB), ("q", 0x24AC), ("r", 0x24AD), ("s", 0x24AE), ("t", 0x24AF), ("u", 0x24B0), ("v", 0x24B1), ("w", 0x24B2), ("x", 0x24B3), ("y", 0x24B4), ("z", 0x24B5),
+            ("1", 0x2474), ("2", 0x2475), ("3", 0x2476), ("4", 0x2477), ("5", 0x2478), ("6", 0x2479), ("7", 0x247A), ("8", 0x247B), ("9", 0x247C),
+        ])
     if style == "small_caps":
-        return _explicit([("a", 0x1D00), ("b", 0x0299), ("c", 0x1D04), ("d", 0x1D05), ("e", 0x1D07), ("f", 0xA730), ("g", 0x0262), ("h", 0x029C), ("i", 0x026A), ("j", 0x1D0A), ("k", 0x1D0B), ("l", 0x029F), ("m", 0x1D0D), ("n", 0x0274), ("o", 0x1D0F), ("p", 0x1D18), ("q", 0x01EB), ("r", 0x0280), ("s", 0xA731), ("t", 0x1D1B), ("u", 0x1D1C), ("v", 0x1D20), ("w", 0x1D21), ("x", "x"), ("y", 0x028F), ("z", 0x1D22)])
+        return _explicit([
+            ("a", 0x1D00), ("b", 0x0299), ("c", 0x1D04), ("d", 0x1D05), ("e", 0x1D07), ("f", 0xA730), ("g", 0x0262), ("h", 0x029C), ("i", 0x026A), ("j", 0x1D0A), ("k", 0x1D0B), ("l", 0x029F), ("m", 0x1D0D), ("n", 0x0274), ("o", 0x1D0F), ("p", 0x1D18), ("q", 0x01EB), ("r", 0x0280), ("s", 0xA731), ("t", 0x1D1B), ("u", 0x1D1C), ("v", 0x1D20), ("w", 0x1D21), ("x", "x"), ("y", 0x028F), ("z", 0x1D22),
+        ])
     if style == "upside_down":
-        return _explicit([("a", 0x0250), ("b", "q"), ("c", 0x0254), ("d", "p"), ("e", 0x01DD), ("f", 0x025F), ("g", 0x0183), ("h", 0x0265), ("i", 0x1D09), ("j", 0x027E), ("k", 0x029E), ("l", "l"), ("m", 0x026F), ("n", "u"), ("o", "o"), ("p", "d"), ("q", "b"), ("r", 0x0279), ("s", "s"), ("t", 0x0287), ("u", "n"), ("v", 0x028C), ("w", 0x028D), ("x", "x"), ("y", 0x028E), ("z", "z"), ("A", 0x2200), ("C", 0x0186), ("E", 0x018E), ("F", 0x2132), ("G", 0x05E4), ("J", 0x017F), ("L", 0x02E5), ("P", 0x0500), ("T", 0x22A5), ("U", 0x0548), ("V", 0x039B), ("W", "M"), ("Y", 0x2144), ("0", "0"), ("1", 0x0196), ("2", 0x1105), ("3", 0x0190), ("4", 0x3123), ("5", 0x03DB), ("6", "9"), ("7", 0x3125), ("8", "8"), ("9", "6")])
+        return _explicit([
+            ("a", 0x0250), ("b", "q"), ("c", 0x0254), ("d", "p"), ("e", 0x01DD), ("f", 0x025F), ("g", 0x0183), ("h", 0x0265), ("i", 0x1D09), ("j", 0x027E), ("k", 0x029E), ("l", "l"), ("m", 0x026F), ("n", "u"), ("o", "o"), ("p", "d"), ("q", "b"), ("r", 0x0279), ("s", "s"), ("t", 0x0287), ("u", "n"), ("v", 0x028C), ("w", 0x028D), ("x", "x"), ("y", 0x028E), ("z", "z"),
+            ("A", 0x2200), ("C", 0x0186), ("E", 0x018E), ("F", 0x2132), ("G", 0x05E4), ("J", 0x017F), ("L", 0x02E5), ("P", 0x0500), ("T", 0x22A5), ("U", 0x0548), ("V", 0x039B), ("W", "M"), ("Y", 0x2144),
+            ("0", "0"), ("1", 0x0196), ("2", 0x1105), ("3", 0x0190), ("4", 0x3123), ("5", 0x03DB), ("6", "9"), ("7", 0x3125), ("8", "8"), ("9", "6"),
+        ])
     return {}
 
 
@@ -88,7 +107,7 @@ def _decode(value: Any) -> str:
     reverse: dict[str, str] = {}
     for style in ("bold_sans", "italic_sans", "bold_italic_sans", "monospace", "fullwidth", "serif_bold", "serif_italic", "serif_bold_italic", "script", "bold_script", "fraktur", "bold_fraktur", "circled", "parenthesized", "small_caps", "upside_down"):
         for plain, styled in exact_unicode_map(style).items():
-            if isinstance(styled, str) and len(styled) == 1:
+            if isinstance(styled, str) and len(styled) == 1 and styled != plain and not (styled.isascii() and styled.isalnum()):
                 reverse[styled] = plain
     return "".join(reverse.get(ch, ch) for ch in unicodedata.normalize("NFKC", str(value or "")) if unicodedata.category(ch) != "Cf")
 
@@ -183,7 +202,7 @@ def apply() -> bool:
             pass
         _patch_live_plan()
         _PATCHED = True
-        print("🔤 channel_font_exact_unicode_guard active; exact maps and decoded live rename plans patched")
+        print("🔤 channel_font_exact_unicode_guard active; exact maps and safe decoded live rename plans patched")
         return True
     except Exception as exc:
         try:
