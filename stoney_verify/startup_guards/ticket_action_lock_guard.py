@@ -181,4 +181,9 @@ def apply() -> bool:
 
 apply()
 
+try:
+    from . import verification_operation_queue_guard as _verification_operation_queue_guard  # noqa: F401
+except Exception as e:
+    _warn(f"verification operation queue guard could not load from ticket guard: {e!r}")
+
 __all__ = ["apply"]
