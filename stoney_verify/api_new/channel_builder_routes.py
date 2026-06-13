@@ -19,6 +19,13 @@ from ..services.channel_builder_runtime import (
 )
 from ..services.channel_builder_rollback_runtime import submit_rollback_job
 
+try:
+    from stoney_verify.startup_guards import channel_builder_full_font_catalog_guard as _full_font_catalog
+
+    _full_font_catalog.apply()
+except Exception:
+    pass
+
 
 async def _style_options_for_request(guild_id: int, data: dict[str, Any]) -> dict[str, Any]:
     explicit = data.get("options")
