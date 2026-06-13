@@ -5,6 +5,10 @@ from __future__ import annotations
 This guard intentionally uses stoney_verify.operation_queue so the font rename
 flow meshes with Dank Shield's existing global caps, per-guild concurrency
 locks, duplicate-click protection, and operation metrics.
+
+Channel renames are paced through services.channel_mutation_throttle because
+Discord can route-limit PATCH /channels for several minutes if a server-wide
+rename is fired as a burst.
 """
 
 import time
@@ -12,7 +16,14 @@ from typing import Any
 
 import discord
 
-MAX_PLAN_ITEMS = 150
+from stoney_verify.services.channel_mutation_throttle import (
+    DEFAULT_BATCH_SIZE,
+    DEFAULT_DELAY_SECONDS,
+    DEFAULT_MAX_ITEMS,
+    run_paced_channel_mutations,
+)
+
+MAX_PLAN_ITEMS = min(150, DEFAULT_MAX_ITEMS)
 MAX_PENDING_SECONDS = 30 * 60
 _PENDING: dict[str, dict[str, Any]] = {}
 _LAST_UNDO: dict[str, dict[str, Any]] = {}
@@ -126,13 +137,15 @@ async def build_plan(guild: discord.Guild, options: dict[str, str]) -> list[dict
     return plan
 
 
-def _plan_text(plan: list[dict[str, Any]], limit: int = 18) -> str:
+def _plan_text(plan: list[dict[str, Any]], limit: int = 12) -> str:
     if not plan:
         return "No rename changes found for the current font settings."
-    rows = [f"`{item.get('before')}` → `{item.get('after')}`" for item in plan[:limit]]
+    rows: list[str] = []
+    for item in plan[:limit]:
+        rows.append(f"**Old:** `{item.get('before')}`\n**New:** `{item.get('after')}`")
     if len(plan) > limit:
         rows.append(f"…and {len(plan) - limit} more")
-    return "\n".join(rows)[:3900]
+    return "\n\n".join(rows)[:3900]
 
 
 async def _preview_embed(guild: discord.Guild, user_id: int, options: dict[str, str]) -> tuple[discord.Embed, list[dict[str, Any]]]:
@@ -141,72 +154,109 @@ async def _preview_embed(guild: discord.Guild, user_id: int, options: dict[str, 
     _PENDING[_key(int(guild.id), int(user_id))] = {"created_at": time.time(), "plan": plan, "options": dict(options)}
     embed = discord.Embed(
         title="🔤 Preview Channel Font Renames",
-        description="This is the actual rename plan. Nothing has been changed yet. Ticket/archive/transcript areas are skipped.",
+        description=(
+            "Nothing has been changed yet. This preview is capped and rate-limit safe.\n\n"
+            "Apply runs in small paced batches, not one big server-wide burst."
+        ),
         color=discord.Color.orange() if plan else discord.Color.blurple(),
     )
     embed.add_field(name="Changes found", value=str(len(plan)), inline=True)
-    embed.add_field(name="Safety cap", value=str(MAX_PLAN_ITEMS), inline=True)
+    embed.add_field(name="Batch size", value=str(DEFAULT_BATCH_SIZE), inline=True)
+    embed.add_field(name="Delay between edits", value=f"{DEFAULT_DELAY_SECONDS:.1f}s", inline=True)
     embed.add_field(name="Preview", value=_plan_text(plan), inline=False)
     return embed, plan
 
 
-async def _apply_plan(interaction: discord.Interaction, plan: list[dict[str, Any]]) -> dict[str, Any]:
+def _pending_payload(guild_id: int, user_id: int) -> dict[str, Any]:
+    _purge()
+    return _PENDING.get(_key(guild_id, user_id)) or {}
+
+
+def _remaining_plan(guild_id: int, user_id: int) -> list[dict[str, Any]]:
+    return list((_pending_payload(guild_id, user_id).get("plan") or []))
+
+
+def _set_remaining_plan(guild_id: int, user_id: int, plan: list[dict[str, Any]]) -> None:
+    key = _key(guild_id, user_id)
+    payload = _PENDING.get(key) or {"created_at": time.time(), "options": {}}
+    payload["plan"] = list(plan)
+    payload["created_at"] = time.time()
+    _PENDING[key] = payload
+
+
+async def _apply_batch(interaction: discord.Interaction, plan: list[dict[str, Any]]) -> dict[str, Any]:
     guild = interaction.guild
     assert guild is not None
-    changed = 0
-    failed: list[str] = []
-    undo: list[dict[str, str]] = []
-    for item in plan[:MAX_PLAN_ITEMS]:
+    user_id = int(interaction.user.id)
+
+    async def mutate_one(item: dict[str, Any]) -> dict[str, Any]:
         channel = guild.get_channel(_safe_int(item.get("channel_id"), 0))
         if channel is None:
-            failed.append(f"missing `{item.get('before')}`")
-            continue
+            return {"status": "failed", "error": f"missing `{item.get('before')}`"}
         current = _safe_str(getattr(channel, "name", ""))
         before = _safe_str(item.get("before"))
         after = _safe_str(item.get("after"))[:100]
-        if not after or current == after:
-            continue
+        if not after:
+            return {"status": "skipped", "error": f"empty target for `{before}`"}
+        if current == after:
+            return {"status": "already", "channel_id": str(getattr(channel, "id", "")), "before": before, "after": after}
         if current != before:
-            failed.append(f"stale `{before}` now `{current}`")
-            continue
-        try:
-            await channel.edit(name=after, reason=f"Dank Shield channel font apply by {int(interaction.user.id)}")
-            changed += 1
-            undo.append({"channel_id": str(getattr(channel, "id", "")), "before": before, "after": after})
-        except Exception as exc:
-            failed.append(f"`{current}`: {type(exc).__name__}")
-    if undo:
-        _LAST_UNDO[_key(int(guild.id), int(interaction.user.id))] = {"created_at": time.time(), "undo": undo}
-    return {"status": "partial" if failed else "succeeded", "changed": changed, "failed": failed[:10], "undo": undo}
+            return {"status": "failed", "error": f"stale `{before}` now `{current}`"}
+        await channel.edit(name=after, reason=f"Dank Shield channel font apply by {user_id}")
+        return {"status": "changed", "channel_id": str(getattr(channel, "id", "")), "before": before, "after": after}
+
+    result = await run_paced_channel_mutations(guild_id=int(guild.id), items=plan, mutate_one=mutate_one)
+    changed_ids = {str(item.get("channel_id")) for item in result.changes}
+    attempted_items = plan[:result.attempted]
+    unattempted = plan[result.attempted:]
+    retryable = [item for item in attempted_items if str(item.get("channel_id")) not in changed_ids]
+    remaining = retryable + unattempted
+    _set_remaining_plan(int(guild.id), user_id, remaining)
+    if result.changes:
+        key = _key(int(guild.id), user_id)
+        existing = list((_LAST_UNDO.get(key) or {}).get("undo") or [])
+        _LAST_UNDO[key] = {"created_at": time.time(), "undo": existing + list(result.changes)}
+    payload = result.to_dict()
+    payload["remaining_plan"] = remaining
+    return payload
 
 
-async def _undo_plan(interaction: discord.Interaction, plan: list[dict[str, Any]]) -> dict[str, Any]:
+async def _undo_batch(interaction: discord.Interaction, undo: list[dict[str, Any]]) -> dict[str, Any]:
     guild = interaction.guild
     assert guild is not None
-    reverted = 0
-    failed: list[str] = []
-    for item in reversed(plan[:MAX_PLAN_ITEMS]):
+    user_id = int(interaction.user.id)
+    reverse_plan = list(reversed(undo))
+
+    async def mutate_one(item: dict[str, Any]) -> dict[str, Any]:
         channel = guild.get_channel(_safe_int(item.get("channel_id"), 0))
         if channel is None:
-            failed.append(f"missing `{item.get('after')}`")
-            continue
+            return {"status": "failed", "error": f"missing `{item.get('after')}`"}
         current = _safe_str(getattr(channel, "name", ""))
         applied = _safe_str(item.get("after"))
         old = _safe_str(item.get("before"))[:100]
+        if current == old:
+            return {"status": "already", "channel_id": str(getattr(channel, "id", "")), "before": applied, "after": old}
         if current != applied:
-            failed.append(f"stale `{applied}` now `{current}`")
-            continue
-        try:
-            await channel.edit(name=old, reason=f"Dank Shield channel font undo by {int(interaction.user.id)}")
-            reverted += 1
-        except Exception as exc:
-            failed.append(f"`{current}`: {type(exc).__name__}")
-    return {"status": "partial" if failed else "succeeded", "reverted": reverted, "failed": failed[:10]}
+            return {"status": "failed", "error": f"stale `{applied}` now `{current}`"}
+        await channel.edit(name=old, reason=f"Dank Shield channel font undo by {user_id}")
+        return {"status": "changed", "channel_id": str(getattr(channel, "id", "")), "before": applied, "after": old}
+
+    result = await run_paced_channel_mutations(guild_id=int(guild.id), items=reverse_plan, mutate_one=mutate_one)
+    changed_ids = {str(item.get("channel_id")) for item in result.changes}
+    remaining_original_order = [item for item in undo if str(item.get("channel_id")) not in changed_ids]
+    key = _key(int(guild.id), user_id)
+    if remaining_original_order:
+        _LAST_UNDO[key] = {"created_at": time.time(), "undo": remaining_original_order}
+    else:
+        _LAST_UNDO.pop(key, None)
+    payload = result.to_dict()
+    payload["remaining_undo"] = remaining_original_order
+    return payload
 
 
 class QueuedFontRenamePreviewButton(discord.ui.Button):
     def __init__(self, *, row: int = 3) -> None:
-        super().__init__(label="Preview Channel Renames", emoji="👀", style=discord.ButtonStyle.success, custom_id="dank_setup_font:preview_renames", row=row)
+        super().__init__(label="Preview & Apply Channel Renames", emoji="👀", style=discord.ButtonStyle.success, custom_id="dank_setup_font:preview_renames", row=row)
 
     async def callback(self, interaction: discord.Interaction) -> None:  # type: ignore[override]
         if not await _require_setup(interaction):
@@ -224,39 +274,51 @@ class QueuedFontRenameConfirmView(discord.ui.View):
         super().__init__(timeout=900)
         self.apply_preview.disabled = not enabled
 
-    @discord.ui.button(label="Apply Previewed Renames", emoji="✅", style=discord.ButtonStyle.danger, custom_id="dank_setup_font:apply_preview", row=0)
+    @discord.ui.button(label="Apply Next Safe Batch", emoji="✅", style=discord.ButtonStyle.danger, custom_id="dank_setup_font:apply_preview", row=0)
     async def apply_preview(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         if not await _require_setup(interaction):
             return
         guild = interaction.guild
         if guild is None:
             return await interaction.response.send_message("❌ This must be used inside a server.", ephemeral=True)
-        pending = _PENDING.get(_key(int(guild.id), int(interaction.user.id))) or {}
-        plan = list(pending.get("plan") or [])
+        plan = _remaining_plan(int(guild.id), int(interaction.user.id))
         if not plan:
-            return await interaction.response.edit_message(content="No saved preview found. Press Preview Channel Renames again.", embed=None, view=None)
+            return await interaction.response.edit_message(content="No saved preview found. Press Preview & Apply Channel Renames again.", embed=None, view=None)
         await interaction.response.defer(ephemeral=True, thinking=False)
         from stoney_verify.operation_queue import run_interaction_exclusive
         result = await run_interaction_exclusive(
             interaction=interaction,
             operation_type="channel_font_rename_apply",
             action_label="Channel font rename apply",
-            factory=lambda: _apply_plan(interaction, plan),
-            fingerprint={"plan": plan},
+            factory=lambda: _apply_batch(interaction, plan),
+            fingerprint={"plan": plan[:DEFAULT_BATCH_SIZE]},
             risk_level="dangerous",
             concurrency_class="channel_mutation",
             concurrency_key="channel_font_rename",
-            timeout_seconds=900.0,
+            timeout_seconds=180.0,
         )
         if result is None:
             return
-        _PENDING.pop(_key(int(guild.id), int(interaction.user.id)), None)
-        embed = discord.Embed(title="✅ Channel Font Renames Applied", description=f"Renamed **{int(result.get('changed', 0) or 0)}** channel(s).", color=discord.Color.green() if not result.get("failed") else discord.Color.orange())
-        if result.get("failed"):
-            embed.add_field(name="Skipped / failed", value="\n".join(result.get("failed")[:10])[:1024], inline=False)
-        if result.get("undo"):
-            embed.add_field(name="Undo available", value="Use **Undo Last Font Rename** if this needs to be rolled back.", inline=False)
-        await interaction.edit_original_response(embed=embed, view=QueuedFontRenameDoneView(can_undo=bool(result.get("undo"))))
+        remaining = list(result.get("remaining_plan") or [])
+        embed = discord.Embed(
+            title="✅ Channel Font Rename Batch Complete",
+            description=(
+                f"Attempted **{int(result.get('attempted', 0) or 0)}**. "
+                f"Changed **{int(result.get('changed', 0) or 0)}**. "
+                f"Already done **{int(result.get('already', 0) or 0)}**. "
+                f"Failed **{int(result.get('failed', 0) or 0)}**.\n\n"
+                f"Remaining: **{len(remaining)}**"
+            ),
+            color=discord.Color.green() if not result.get("failures") else discord.Color.orange(),
+        )
+        failures = list(result.get("failures") or [])
+        if failures:
+            embed.add_field(name="Skipped / failed", value="\n".join(failures[:10])[:1024], inline=False)
+        if remaining:
+            embed.add_field(name="Continue", value="Press **Apply Next Safe Batch** to continue without bursting Discord's channel edit route.", inline=False)
+        if result.get("changes"):
+            embed.add_field(name="Undo available", value="Use **Undo Last Font Rename** to roll back changed batches.", inline=False)
+        await interaction.edit_original_response(embed=embed, view=QueuedFontRenameDoneView(can_undo=bool(result.get("changes")), can_continue=bool(remaining)))
 
     @discord.ui.button(label="Back to Font Settings", emoji="⬅️", style=discord.ButtonStyle.secondary, custom_id="dank_setup_font:back_to_fonts", row=0)
     async def back_to_fonts(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
@@ -270,9 +332,15 @@ class QueuedFontRenameConfirmView(discord.ui.View):
 
 
 class QueuedFontRenameDoneView(discord.ui.View):
-    def __init__(self, *, can_undo: bool = False) -> None:
+    def __init__(self, *, can_undo: bool = False, can_continue: bool = False) -> None:
         super().__init__(timeout=900)
         self.undo_last.disabled = not can_undo
+        self.continue_apply.disabled = not can_continue
+
+    @discord.ui.button(label="Apply Next Safe Batch", emoji="✅", style=discord.ButtonStyle.danger, custom_id="dank_setup_font:continue_apply", row=0)
+    async def continue_apply(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        view = QueuedFontRenameConfirmView(enabled=True)
+        await view.apply_preview.callback(interaction)  # type: ignore[attr-defined]
 
     @discord.ui.button(label="Undo Last Font Rename", emoji="↩️", style=discord.ButtonStyle.danger, custom_id="dank_setup_font:undo_last", row=0)
     async def undo_last(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
@@ -290,22 +358,33 @@ class QueuedFontRenameDoneView(discord.ui.View):
             interaction=interaction,
             operation_type="channel_font_rename_undo",
             action_label="Channel font rename undo",
-            factory=lambda: _undo_plan(interaction, undo),
-            fingerprint={"undo": undo},
+            factory=lambda: _undo_batch(interaction, undo),
+            fingerprint={"undo": undo[:DEFAULT_BATCH_SIZE]},
             risk_level="dangerous",
             concurrency_class="channel_mutation",
             concurrency_key="channel_font_rename",
-            timeout_seconds=900.0,
+            timeout_seconds=180.0,
         )
         if result is None:
             return
-        _LAST_UNDO.pop(_key(int(guild.id), int(interaction.user.id)), None)
-        embed = discord.Embed(title="↩️ Channel Font Rename Undo Complete", description=f"Restored **{int(result.get('reverted', 0) or 0)}** channel name(s).", color=discord.Color.green() if not result.get("failed") else discord.Color.orange())
-        if result.get("failed"):
-            embed.add_field(name="Skipped / failed", value="\n".join(result.get("failed")[:10])[:1024], inline=False)
-        await interaction.edit_original_response(embed=embed, view=QueuedFontRenameDoneView(can_undo=False))
+        remaining_undo = list(result.get("remaining_undo") or [])
+        embed = discord.Embed(
+            title="↩️ Channel Font Rename Undo Batch Complete",
+            description=(
+                f"Attempted **{int(result.get('attempted', 0) or 0)}**. "
+                f"Restored **{int(result.get('changed', 0) or 0)}**. "
+                f"Already done **{int(result.get('already', 0) or 0)}**. "
+                f"Failed **{int(result.get('failed', 0) or 0)}**.\n\n"
+                f"Remaining undo: **{len(remaining_undo)}**"
+            ),
+            color=discord.Color.green() if not result.get("failures") else discord.Color.orange(),
+        )
+        failures = list(result.get("failures") or [])
+        if failures:
+            embed.add_field(name="Skipped / failed", value="\n".join(failures[:10])[:1024], inline=False)
+        await interaction.edit_original_response(embed=embed, view=QueuedFontRenameDoneView(can_undo=bool(remaining_undo), can_continue=bool(_remaining_plan(int(guild.id), int(interaction.user.id)))))
 
-    @discord.ui.button(label="Back to Font Settings", emoji="🔤", style=discord.ButtonStyle.secondary, custom_id="dank_setup_font:done_back", row=0)
+    @discord.ui.button(label="Back to Font Settings", emoji="🔤", style=discord.ButtonStyle.secondary, custom_id="dank_setup_font:done_back", row=1)
     async def done_back(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         if not await _require_setup(interaction):
             return
@@ -337,7 +416,7 @@ def _patch_font_view() -> bool:
 def apply() -> bool:
     _patch_font_view()
     try:
-        print("🔤 channel_font_rename_queue_guard active; font renames use operation_queue channel_mutation locks")
+        print("🔤 channel_font_rename_queue_guard active; font renames use operation_queue and paced channel mutation throttle")
     except Exception:
         pass
     return True
