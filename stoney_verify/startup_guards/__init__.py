@@ -68,8 +68,18 @@ _STARTUP_GUARDS: Tuple[str, ...] = (
     "stoney_verify.startup_guards.job_dedupe",
 )
 
-_IMPORT_CHATTER_PREFIXES: Tuple[str, ...] = ("🧷 ", "🌐 public_startup_scope loaded", "🩹 ", "🔗 ", "🧯 raidguard_hard_stop patched", "🧪 ")
+_IMPORT_CHATTER_PREFIXES: Tuple[str, ...] = (
+    "🧷 ",
+    "🌐 public_startup_scope loaded",
+    "🩹 ",
+    "🔗 ",
+    "🧯 raidguard_hard_stop patched",
+    "🧪 ",
+)
 _ERROR_CHATTER_PREFIXES: Tuple[str, ...] = ("⚠️ ", "❌ ", "🛑 ")
+_ALWAYS_SHOW_PREFIXES: Tuple[str, ...] = (
+    "🛡️ member_activity_notices_db_safety active",
+)
 
 
 def _log_style() -> str:
@@ -89,6 +99,8 @@ def _maybe_suppress_import_chatter(module_name: str) -> Iterator[None]:
         except Exception:
             message = ""
         if any(message.startswith(prefix) for prefix in _ERROR_CHATTER_PREFIXES):
+            return original_print(*args, **kwargs)
+        if any(message.startswith(prefix) for prefix in _ALWAYS_SHOW_PREFIXES):
             return original_print(*args, **kwargs)
         if any(message.startswith(prefix) for prefix in _IMPORT_CHATTER_PREFIXES):
             return None
