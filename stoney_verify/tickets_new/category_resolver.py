@@ -49,10 +49,14 @@ def _safe_int(value: Any, default: int = 0) -> int:
 
 def _setup_hint(label: str) -> str:
     return (
-        f"{label} category is not configured. Run `/dank setup`, then choose "
-        "**Auto-Fix Missing Defaults** to create categories or **Choose Existing Items → Ticket Basics** "
+        f"{label} category is not configured. Run `/dank setup`, then press "
+        "**Start Setup / Fix Missing** to create safe defaults or **Use Existing Roles/Channels → Ticket Basics** "
         "to select your own existing categories."
     )
+
+
+def _ticket_basics_hint() -> str:
+    return "Run `/dank setup` and choose **Use Existing Roles/Channels → Ticket Basics** to select the correct category."
 
 
 def _permission_missing_for_category(
@@ -93,7 +97,7 @@ def _resolve_category_channel(guild: discord.Guild, category_id: int, *, label: 
     if not isinstance(channel, discord.CategoryChannel):
         raise TicketCategoryResolutionError(
             f"Configured {label} category `{category_id}` no longer exists or is not a category. "
-            "Run `/dank setup` and choose **Choose Existing Items → Ticket Basics** to select the correct category."
+            + _ticket_basics_hint()
         )
     return channel
 
@@ -116,7 +120,7 @@ async def resolve_active_ticket_category(
     if missing:
         raise TicketCategoryResolutionError(
             f"I cannot create tickets in `{category.name}`. Missing: {', '.join(missing)}. "
-            "Fix the category permissions or run `/dank setup` and choose **Choose Existing Items → Ticket Basics**."
+            "Fix the category permissions or " + _ticket_basics_hint()
         )
 
     return TicketCategoryResolution(
@@ -146,7 +150,7 @@ async def resolve_archive_ticket_category(
     if missing:
         raise TicketCategoryResolutionError(
             f"I cannot move closed tickets to `{category.name}`. Missing: {', '.join(missing)}. "
-            "Fix the category permissions or run `/dank setup` and choose **Choose Existing Items → Ticket Basics**."
+            "Fix the category permissions or " + _ticket_basics_hint()
         )
 
     return TicketCategoryResolution(
