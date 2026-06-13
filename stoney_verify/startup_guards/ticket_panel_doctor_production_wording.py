@@ -38,10 +38,11 @@ def apply() -> bool:
     identity_ok = _apply_optional_guard("ticket_staff_identity_guard", "ticket staff identity guard")
     voice_notice_ok = _apply_optional_guard("voice_ticket_claim_notice_guard", "voice ticket claim notice guard")
     controls_ok = _apply_optional_guard("ticket_open_controls_status_guard", "open ticket controls status guard")
+    action_refresh_ok = _apply_optional_guard("ticket_action_controls_refresh_guard", "ticket action controls refresh guard")
     repair_ok = _apply_optional_guard("ticket_panel_repair_records_command", "ticket record repair command")
     doctor_ok = _apply_optional_guard("ticket_panel_doctor_stability_guard", "doctor stability guard")
     setup_ok = _apply_optional_guard("setup_check_existing_server_inference_guard", "setup-check inference guard")
-    return bool(epoch_ok and identity_ok and voice_notice_ok and controls_ok and repair_ok and doctor_ok and setup_ok)
+    return bool(epoch_ok and identity_ok and voice_notice_ok and controls_ok and action_refresh_ok and repair_ok and doctor_ok and setup_ok)
 
 
 apply()
