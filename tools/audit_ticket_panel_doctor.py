@@ -16,6 +16,7 @@ FILES = [
     "stoney_verify/startup_guards/ticket_staff_identity_guard.py",
     "stoney_verify/startup_guards/voice_ticket_claim_notice_guard.py",
     "stoney_verify/startup_guards/ticket_open_controls_status_guard.py",
+    "stoney_verify/startup_guards/ticket_action_controls_refresh_guard.py",
     "stoney_verify/startup_guards/setup_feature_health_scoreboard.py",
     "stoney_verify/commands_ext/public_ticket_panel_clean.py",
 ]
@@ -27,9 +28,18 @@ CHECKS = {
         "ticket_staff_identity_guard",
         "voice_ticket_claim_notice_guard",
         "ticket_open_controls_status_guard",
+        "ticket_action_controls_refresh_guard",
         "ticket_panel_repair_records_command",
         "ticket_panel_doctor_stability_guard",
         "setup_check_existing_server_inference_guard",
+    ],
+    "stoney_verify/startup_guards/ticket_action_controls_refresh_guard.py": [
+        "_action_claim",
+        "_action_unclaim",
+        "TransferTicketModal",
+        "SetPriorityModal",
+        "post_or_replace_open_ticket_controls",
+        "_TICKET_ACTION_CONTROLS_REFRESH_GUARD_APPLIED",
     ],
     "stoney_verify/startup_guards/voice_ticket_claim_notice_guard.py": [
         "voice verification approval",
