@@ -14,6 +14,7 @@ FILES = [
     "stoney_verify/startup_guards/ticket_panel_repair_records_command.py",
     "stoney_verify/startup_guards/ticket_panel_command_epoch_guard.py",
     "stoney_verify/startup_guards/ticket_staff_identity_guard.py",
+    "stoney_verify/startup_guards/voice_ticket_claim_notice_guard.py",
     "stoney_verify/startup_guards/ticket_open_controls_status_guard.py",
     "stoney_verify/startup_guards/setup_feature_health_scoreboard.py",
     "stoney_verify/commands_ext/public_ticket_panel_clean.py",
@@ -24,10 +25,17 @@ CHECKS = {
     "stoney_verify/startup_guards/ticket_panel_doctor_production_wording.py": [
         "ticket_panel_command_epoch_guard",
         "ticket_staff_identity_guard",
+        "voice_ticket_claim_notice_guard",
         "ticket_open_controls_status_guard",
         "ticket_panel_repair_records_command",
         "ticket_panel_doctor_stability_guard",
         "setup_check_existing_server_inference_guard",
+    ],
+    "stoney_verify/startup_guards/voice_ticket_claim_notice_guard.py": [
+        "voice verification approval",
+        "Ticket claimed by",
+        "display_name",
+        "_VOICE_TICKET_CLAIM_NOTICE_GUARD_APPLIED",
     ],
     "stoney_verify/startup_guards/ticket_open_controls_status_guard.py": [
         "Claimed By",
