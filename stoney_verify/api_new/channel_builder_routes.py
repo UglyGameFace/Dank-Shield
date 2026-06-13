@@ -20,6 +20,18 @@ from ..services.channel_builder_runtime import (
 from ..services.channel_builder_rollback_runtime import submit_rollback_job
 
 
+async def _style_options_for_request(guild_id: int, data: dict[str, Any]) -> dict[str, Any]:
+    explicit = data.get("options")
+    if isinstance(explicit, dict) and explicit:
+        return dict(explicit)
+    try:
+        from stoney_verify.startup_guards.setup_channel_font_mode_guard import load_channel_font_options
+
+        return await load_channel_font_options(guild_id)
+    except Exception:
+        return {}
+
+
 async def list_channel_builder_channels(server: Any, request: web.Request):
     data = await server._merged_request_data(request) if hasattr(server, "_merged_request_data") else dict(request.query)
     payload, err = await list_channels_payload(server=server, guild_id=data.get("guild_id"))
@@ -34,7 +46,8 @@ async def preflight_channel_builder_job(server: Any, request: web.Request):
         return server._json_error("Invalid JSON body")
 
     guild_id = safe_int(data.get("guild_id"), 0)
-    items = normalize_channel_builder_items(data.get("items"), options=data.get("options"))
+    options = await _style_options_for_request(guild_id, data)
+    items = normalize_channel_builder_items(data.get("items"), options=options)
     if guild_id <= 0:
         return server._json_error("guild_id required")
     if not items:
@@ -53,6 +66,7 @@ async def preflight_channel_builder_job(server: Any, request: web.Request):
         validation_errors=validation_errors,
         preflight=preflight,
         item_count=len(items),
+        options=options,
     )
 
 
@@ -65,7 +79,8 @@ async def submit_channel_builder_job(server: Any, request: web.Request):
     actor_id = safe_int(data.get("actor_id") or data.get("staff_id"), 0)
     mode = safe_str(data.get("mode") or "apply_plan").lower()[:60]
     dry_run = str(data.get("dry_run", "false")).strip().lower() in {"1", "true", "yes", "y", "on"}
-    items = normalize_channel_builder_items(data.get("items"), options=data.get("options"))
+    options = await _style_options_for_request(guild_id, data)
+    items = normalize_channel_builder_items(data.get("items"), options=options)
 
     if guild_id <= 0:
         return server._json_error("guild_id required")
@@ -91,7 +106,7 @@ async def submit_channel_builder_job(server: Any, request: web.Request):
             operation_type="channel_builder_apply_plan" if not dry_run else "channel_builder_dry_run_job",
             risk_level="dangerous" if not dry_run else "moderate",
             source="dashboard",
-            payload={"mode": mode, "items": items, "options": data.get("options") or {}, "dry_run": dry_run, "preflight": preflight},
+            payload={"mode": mode, "items": items, "options": options, "dry_run": dry_run, "preflight": preflight},
             concurrency_class="channel_mutation",
             concurrency_key="channel_builder",
             timeout_seconds=900.0,
@@ -105,7 +120,7 @@ async def submit_channel_builder_job(server: Any, request: web.Request):
                 dry_run=dry_run,
             ),
         )
-        return server._json_ok(queued=True, job=job, preflight=preflight)
+        return server._json_ok(queued=True, job=job, preflight=preflight, options=options)
     except Exception as exc:
         return server._json_error("Failed to queue Channel Builder job", 500, detail=repr(exc))
 
