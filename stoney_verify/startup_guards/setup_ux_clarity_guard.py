@@ -2,8 +2,9 @@ from __future__ import annotations
 
 """Plain-language UX polish for /dank setup.
 
-This guard does not create a second setup flow. It wraps only setup screens and
-makes the copy easier for normal server owners to understand on mobile.
+This guard does not create a second setup flow. It keeps every feature, but makes
+setup screens easier for normal server owners to understand on mobile by reducing
+copy, using one clear recommended action, and marking advanced tools as optional.
 """
 
 from typing import Any
@@ -17,6 +18,7 @@ _SETUP_CUSTOM_ID_PREFIXES = (
     "dank_setup:",
     "setup_",
     "public_setup:",
+    "stoney_setup:",
 )
 _SETUP_TITLE_MARKERS = (
     "setup",
@@ -50,12 +52,23 @@ def _clean_old_words(text: Any) -> Any:
         return text
     out = text
     replacements = {
-        "Use this before Auto-Build if you want Stoney to create missing items with your own names.": "Use this before Auto-Build if you want Dank Shield to create missing roles/channels/categories with your own names.",
+        "Use this before Auto-Build if you want Stoney to create missing items with your own names.": "Use this before Start Setup if you want Dank Shield to create missing roles/channels/categories with your own names.",
         "Use cleanup when setup got messy.": "Use cleanup when setup got messy or you picked the wrong item.",
         "Use `/dank cleanup` for cleanup tools, then return to `/dank setup`.": "Use the cleanup options from this setup screen, then run `/dank setup` again when you are ready to continue.",
-        "Choose how strict setup should be. Keep this simple: pick the closest style, then save prefix/timer only if you need them.": "Choose optional behavior rules. Leave these alone until the main setup is green, then turn on only the features your server actually wants.",
+        "Choose how strict setup should be. Keep this simple: pick the closest style, then save prefix/timer only if you need them.": "Choose optional behavior rules after the main setup is green.",
         "Stoney": "Dank Shield",
         "/stoney": "/dank",
+        "Auto-Build Missing Items": "Start Setup / Fix Missing",
+        "Auto-Build Missing Setup": "Start Setup / Fix Missing",
+        "Name Items Before Build": "Customize Names First",
+        "Choose Names First": "Customize Names First",
+        "Use My Existing Server": "Use Existing Roles/Channels",
+        "Pick Existing Roles/Channels": "Use Existing Roles/Channels",
+        "Ticket Menu Options": "Advanced Ticket Routing",
+        "Ticket Menu Choices": "Advanced Ticket Routing",
+        "Run Health Check": "Health Check",
+        "Check Setup Health": "Health Check",
+        "Behavior Settings": "Optional Rules",
     }
     for old, new in replacements.items():
         out = out.replace(old, new)
@@ -86,32 +99,6 @@ def _view_has_setup_controls(view: Any) -> bool:
             custom_id = str(getattr(child, "custom_id", "") or "")
             if custom_id.startswith(_SETUP_CUSTOM_ID_PREFIXES):
                 return True
-            label = str(getattr(child, "label", "") or "").lower()
-            if label in {
-                "auto-build missing items",
-                "auto-build missing setup",
-                "name items before build",
-                "choose names first",
-                "use my existing server",
-                "pick existing roles/channels",
-                "ticket menu options",
-                "ticket menu choices",
-                "run health check",
-                "check setup health",
-                "start over / cleanup",
-                "fix or clean setup",
-                "ticket basics",
-                "tickets: main setup",
-                "access roles",
-                "roles: member access",
-                "verification channels",
-                "verification: channels",
-                "logs + status",
-                "logs and status",
-                "behavior settings",
-                "optional rules",
-            }:
-                return True
     except Exception:
         pass
     return False
@@ -138,28 +125,31 @@ def _normalize_view_labels(view: Any) -> Any:
         for child in list(getattr(view, "children", []) or []):
             label = str(getattr(child, "label", "") or "")
             placeholder = str(getattr(child, "placeholder", "") or "")
-            if label == "Auto-Build Missing Items":
-                child.label = "Auto-Build Missing Setup"
-            elif label == "Name Items Before Build":
-                child.label = "Choose Names First"
-            elif label == "Use My Existing Server":
-                child.label = "Pick Existing Roles/Channels"
-            elif label == "Ticket Menu Options":
-                child.label = "Ticket Menu Choices"
+            if label in {"Auto-Build Missing Items", "Auto-Build Missing Setup"}:
+                child.label = "Start Setup / Fix Missing"
+                child.emoji = "🚀"
+                child.style = discord.ButtonStyle.success
+            elif label in {"Name Items Before Build", "Choose Names First"}:
+                child.label = "Customize Names First"
+                child.emoji = "✏️"
+            elif label in {"Use My Existing Server", "Pick Existing Roles/Channels"}:
+                child.label = "Use Existing Roles/Channels"
+                child.emoji = "🧩"
+            elif label in {"Ticket Menu Options", "Ticket Menu Choices"}:
+                child.label = "Advanced Ticket Routing"
+                child.emoji = "🗂️"
             elif label == "Set This as Status Channel":
-                child.label = "Use This Channel for Status"
-            elif label == "Run Health Check":
-                child.label = "Check Setup Health"
+                child.label = "Set Status Here"
+            elif label in {"Run Health Check", "Check Setup Health"}:
+                child.label = "Health Check"
             elif label == "Start Over / Cleanup":
                 child.label = "Fix or Clean Setup"
             elif label == "Ticket Basics":
-                child.label = "Tickets: Main Setup"
+                child.label = "Ticket Basics"
             elif label == "Access Roles":
-                child.label = "Roles: Member Access"
-            elif label == "Verification Channels":
-                child.label = "Verification: Channels"
+                child.label = "Access Roles"
             elif label == "Logs + Status":
-                child.label = "Logs and Status"
+                child.label = "Logs + Status"
             elif label == "Behavior Settings":
                 child.label = "Optional Rules"
 
@@ -170,32 +160,60 @@ def _normalize_view_labels(view: Any) -> Any:
     return view
 
 
-def _add_field_once(embed: discord.Embed, *, name: str, value: str) -> None:
+def _field_value(embed: discord.Embed, field_name: str) -> str:
     try:
-        existing = {str(getattr(field, "name", "") or "") for field in getattr(embed, "fields", []) or []}
-        if name not in existing:
-            embed.add_field(name=name, value=value[:1024], inline=False)
+        for field in list(getattr(embed, "fields", []) or []):
+            if str(getattr(field, "name", "") or "") == field_name:
+                return str(getattr(field, "value", "") or "")[:1024]
     except Exception:
         pass
+    return ""
+
+
+def _replace_fields(embed: discord.Embed, fields: list[tuple[str, str]]) -> discord.Embed:
+    try:
+        embed.clear_fields()
+        for name, value in fields:
+            if value:
+                embed.add_field(name=name[:256], value=value[:1024], inline=False)
+    except Exception:
+        pass
+    return embed
 
 
 def _polish_main_embed(embed: discord.Embed) -> discord.Embed:
-    _add_field_once(
-        embed,
-        name="Which button should I press?",
-        value=(
-            "• **Auto-Build Missing Setup**: easiest choice for a new server.\n"
-            "• **Choose Names First**: pick your own role/channel names before auto-build.\n"
-            "• **Pick Existing Roles/Channels**: use channels and roles you already made.\n"
-            "• **Ticket Menu Choices**: edit what members can choose when opening a ticket.\n"
-            "• **Check Setup Health**: shows what is ready, missing, or skipped."
+    embed = _clean_embed(embed)
+    snapshot = _field_value(embed, "Current Setup Snapshot")
+    embed.title = "🚀 Dank Shield Setup"
+    embed.description = (
+        "**Start here.** For most servers, press **🚀 Start Setup / Fix Missing**.\n"
+        "It creates or repairs only missing setup items. It does **not** delete existing roles, channels, tickets, or messages."
+    )
+    fields: list[tuple[str, str]] = [
+        (
+            "Recommended First Step",
+            "🚀 **Start Setup / Fix Missing** — best for new servers or anyone unsure what to press.",
         ),
+    ]
+    if snapshot:
+        fields.append(("Current Snapshot", snapshot))
+    fields.extend(
+        [
+            (
+                "Already Built Your Server?",
+                "🧩 **Use Existing Roles/Channels** to map your current categories, channels, and roles. Names do not matter; Dank Shield saves Discord IDs.",
+            ),
+            (
+                "Optional Advanced Tools",
+                "✏️ **Customize Names First** before auto-creating defaults.\n🗂️ **Advanced Ticket Routing** changes the menu users pick from.\n🩺 **Health Check** shows exactly what is still missing.",
+            ),
+        ]
     )
-    _add_field_once(
-        embed,
-        name="Important rule",
-        value="Dank Shield saves setup per server. Do not put server role/channel IDs in hosting env for public bots.",
-    )
+    _replace_fields(embed, fields)
+    try:
+        embed.set_footer(text="All setup tools are still available; this screen is just organized for first-time users.")
+    except Exception:
+        pass
     return embed
 
 
@@ -206,7 +224,7 @@ def _wrap_payload_builder(solid: Any) -> bool:
 
     async def wrapped_build_main_setup_payload(*args: Any, **kwargs: Any):
         embed, view = await original(*args, **kwargs)
-        embed = _polish_main_embed(_clean_embed(embed))
+        embed = _polish_main_embed(embed)
         view = _normalize_view_labels(view)
         return embed, view
 
