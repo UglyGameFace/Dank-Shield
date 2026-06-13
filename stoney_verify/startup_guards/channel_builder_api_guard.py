@@ -1,17 +1,17 @@
 from __future__ import annotations
 
-"""Compatibility bridge for Channel Builder structured API routes.
+"""Temporary compatibility shim for Channel Builder structured API routes.
 
 The real route handlers live in stoney_verify.api_new.channel_builder_routes.
-This guard only ensures older startup paths still get Channel Builder routes if
-api_new.server has not yet been updated to register them directly.
+This guard no longer rebuilds/copies api_new.server.start_api. Until server.py
+is patched directly, it wraps start_api and injects Channel Builder routes into
+the aiohttp app at AppRunner creation time, then restores aiohttp immediately.
 """
 
 import builtins
 import sys
 from typing import Any
 
-import discord
 from aiohttp import web
 
 _ORIGINAL_IMPORT = builtins.__import__
@@ -31,8 +31,22 @@ def _warn(message: str) -> None:
         pass
 
 
+def _direct_registration_present(server: Any) -> bool:
+    try:
+        start_api = getattr(server, "start_api", None)
+        names = getattr(start_api, "__code__", None).co_names if callable(start_api) and getattr(start_api, "__code__", None) else ()
+        return "register_channel_builder_routes" in set(names or ())
+    except Exception:
+        return False
+
+
 def _patch_server_module(server: Any) -> None:
     if getattr(server, "_CHANNEL_BUILDER_API_GUARD_PATCHED", False):
+        return
+
+    if _direct_registration_present(server):
+        server._CHANNEL_BUILDER_API_GUARD_PATCHED = True
+        _log("direct Channel Builder route registration detected; compatibility shim skipped")
         return
 
     original_start_api = getattr(server, "start_api", None)
@@ -40,61 +54,32 @@ def _patch_server_module(server: Any) -> None:
         _warn("server.start_api missing; cannot add routes")
         return
 
-    async def start_api_with_channel_builder(bot_instance: discord.Client):
-        if getattr(server, "_API_RUNNER", None) is not None:
-            print("⚠️ New structured Bot API already running; skipping duplicate start.")
-            return
+    async def start_api_with_channel_builder(*args: Any, **kwargs: Any):
+        original_app_runner = web.AppRunner
 
-        from stoney_verify.api_new.channel_builder_routes import register_channel_builder_routes
+        def app_runner_with_channel_builder(app: web.Application, *runner_args: Any, **runner_kwargs: Any):
+            try:
+                if not getattr(app, "_dank_shield_channel_builder_routes", False):
+                    from stoney_verify.api_new.channel_builder_routes import register_channel_builder_routes
 
-        server._validate_api_startup_config()
-        app = web.Application(middlewares=[server._auth_middleware])
+                    register_channel_builder_routes(app, server)
+                    setattr(app, "_dank_shield_channel_builder_routes", True)
+                    _log("injected Channel Builder routes into structured API app")
+            except Exception as e:
+                _warn(f"failed to inject Channel Builder routes: {e!r}")
+                raise
+            return original_app_runner(app, *runner_args, **runner_kwargs)
 
-        app.router.add_get("/health", server.health)
-        app.router.add_post("/ticket/create", server.create_ticket)
-        app.router.add_post("/ticket/close", server.close_ticket)
-        app.router.add_post("/ticket/delete", server.delete_ticket)
-        app.router.add_post("/ticket/reopen", server.reopen_ticket_endpoint)
-        app.router.add_post("/ticket/assign", server.assign_ticket_endpoint)
-        if getattr(server, "unclaim_ticket", None) is not None:
-            app.router.add_post("/ticket/unclaim", server.unclaim_ticket_endpoint)
-        if getattr(server, "transfer_ticket", None) is not None:
-            app.router.add_post("/ticket/transfer", server.transfer_ticket_endpoint)
-
-        app.router.add_get("/tickets/queue", server.get_ticket_queue)
-        app.router.add_post("/tickets/queue", server.get_ticket_queue)
-        app.router.add_get("/tickets/unclaimed", server.get_unclaimed_tickets)
-        app.router.add_post("/tickets/unclaimed", server.get_unclaimed_tickets)
-        app.router.add_get("/tickets/claimed", server.get_claimed_tickets)
-        app.router.add_post("/tickets/claimed", server.get_claimed_tickets)
-        app.router.add_get("/tickets/my-claimed", server.get_my_claimed_tickets)
-        app.router.add_post("/tickets/my-claimed", server.get_my_claimed_tickets)
-        app.router.add_post("/tickets/sync-active", server.sync_active_tickets)
-        app.router.add_post("/tickets/sync-one", server.sync_one_ticket)
-
-        app.router.add_post("/members/sync", server.force_member_sync)
-        app.router.add_post("/members/reconcile", server.reconcile_departed)
-        app.router.add_post("/members/role-sync", server.role_member_sync)
-
-        register_channel_builder_routes(app, server)
-
-        runner = web.AppRunner(app)
-        await runner.setup()
-        bind_host = server._api_bind_host()
-        bind_port = server._api_bind_port()
-        site = web.TCPSite(runner, bind_host, bind_port)
-        await site.start()
-        server._API_RUNNER = runner
-        server._API_SITE = site
-        print(
-            f"🌐 New structured Bot API started on {bind_host}:{bind_port} "
-            f"(auth_required={server._should_require_api_auth()}, channel_builder_routes=true)"
-        )
+        web.AppRunner = app_runner_with_channel_builder  # type: ignore[assignment]
+        try:
+            return await original_start_api(*args, **kwargs)
+        finally:
+            web.AppRunner = original_app_runner  # type: ignore[assignment]
 
     setattr(start_api_with_channel_builder, "_channel_builder_api_original", original_start_api)
     server.start_api = start_api_with_channel_builder
     server._CHANNEL_BUILDER_API_GUARD_PATCHED = True
-    _log("patched structured API startup to call channel_builder_routes.register_channel_builder_routes")
+    _log("patched structured API startup with AppRunner route injection shim")
 
 
 def _maybe_patch_loaded() -> None:
@@ -127,7 +112,7 @@ def install() -> bool:
         builtins.__import__ = _safe_import
         setattr(builtins, "_stoney_channel_builder_api_import_hook", True)
         _maybe_patch_loaded()
-        _log("loaded; Channel Builder route bridge active")
+        _log("loaded; Channel Builder route injection shim active")
         return True
     except Exception as e:
         _warn(f"install failed: {e!r}")
