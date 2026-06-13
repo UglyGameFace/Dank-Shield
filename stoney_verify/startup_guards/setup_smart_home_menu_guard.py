@@ -72,6 +72,13 @@ def _choice_summary(choice_text: str) -> str:
     return "\n".join(lines[:3])[:700]
 
 
+def _is_owner_interaction(interaction: discord.Interaction) -> bool:
+    try:
+        return bool(interaction.guild and int(interaction.user.id) == int(interaction.guild.owner_id))
+    except Exception:
+        return False
+
+
 async def _open_services(interaction: discord.Interaction) -> None:
     try:
         from stoney_verify.startup_guards import setup_service_modes as modes
@@ -152,22 +159,28 @@ class SmartSetupHomeView(discord.ui.View):
             color=discord.Color.blurple(),
             timestamp=now_utc(),
         )
-        embed.add_field(
-            name="Common tools",
-            value=(
-                "🧭 **Choose Setup Type** — change Basic / Help Desk / ID / Voice / Custom.\n"
-                "🧭 **Services** — independently toggle Tickets, ID Verify, Voice Verify, SpamGuard, and Logs.\n"
-                "🧾 **Ticket Menu Options** — edit public ticket choices.\n"
-                "❓ **Help / FAQ** — plain-language setup answers."
-            ),
-            inline=False,
+        common = (
+            "🧭 **Choose Setup Type** — change Basic / Help Desk / ID / Voice / Custom.\n"
+            "🧭 **Services** — independently toggle Tickets, ID Verify, Voice Verify, SpamGuard, and Logs.\n"
+            "🧾 **Ticket Menu Options** — edit public ticket choices.\n"
+            "❓ **Help / FAQ** — plain-language setup answers."
         )
-        await fresh._edit_setup_message(interaction, embed=embed, view=SmartSetupToolsView())
+        if _is_owner_interaction(interaction):
+            common += "\n🛡️ **Protected Members** — owner-only selected-member safety list."
+        embed.add_field(name="Common tools", value=common, inline=False)
+        await fresh._edit_setup_message(interaction, embed=embed, view=SmartSetupToolsView(show_owner_tools=_is_owner_interaction(interaction)))
 
 
 class SmartSetupToolsView(discord.ui.View):
-    def __init__(self) -> None:
+    def __init__(self, *, show_owner_tools: bool = False) -> None:
         super().__init__(timeout=900)
+        if show_owner_tools:
+            try:
+                from stoney_verify.startup_guards.owner_safe_members_guard import SafeMembersButton
+
+                self.add_item(SafeMembersButton(row=2))
+            except Exception:
+                pass
 
     @discord.ui.button(label="Choose Setup Type", emoji="🧭", style=discord.ButtonStyle.primary, custom_id="dank_setup_smart_tools:choose", row=0)
     async def choose(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
@@ -266,7 +279,7 @@ def apply() -> bool:
         except Exception:
             solid._build_main_setup_payload = _smart_plain_choice_main_payload
         _PATCHED = True
-        _log("active; /dank setup home is now a smart hub with focused actions")
+        _log("active; /dank setup home is now a smart hub with owner-only protected member tools")
         return True
     except Exception as exc:
         _warn(f"failed: {exc!r}")
