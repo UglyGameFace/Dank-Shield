@@ -6,7 +6,16 @@ from typing import Any
 
 import discord
 
+try:
+    from stoney_verify.startup_guards import channel_builder_full_font_catalog_guard as _font_catalog_guard
+
+    _font_catalog_guard.apply()
+except Exception:
+    pass
+
 _CONFIG_KEY = "channel_builder_style_options"
+_RUNTIME_FONT_OPTIONS: dict[str, dict[str, str]] = {}
+
 _STYLE_LABELS: dict[str, str] = {
     "normal": "Normal",
     "bold_sans": "Bold Sans",
@@ -59,6 +68,13 @@ def _log(message: str) -> None:
         pass
 
 
+def _warn(message: str) -> None:
+    try:
+        print(f"⚠️ setup_channel_font_mode_guard {message}")
+    except Exception:
+        pass
+
+
 def _safe_str(value: Any, default: str = "") -> str:
     try:
         if value is None:
@@ -67,6 +83,13 @@ def _safe_str(value: Any, default: str = "") -> str:
         return text if text else default
     except Exception:
         return default
+
+
+def _cache_key(guild_id: int) -> str:
+    try:
+        return str(int(guild_id))
+    except Exception:
+        return "0"
 
 
 def normalize_font_options(value: Any) -> dict[str, str]:
@@ -81,29 +104,35 @@ def normalize_font_options(value: Any) -> dict[str, str]:
 
 
 async def load_channel_font_options(guild_id: int) -> dict[str, str]:
+    cached = _RUNTIME_FONT_OPTIONS.get(_cache_key(guild_id))
+    if cached:
+        return normalize_font_options(cached)
     try:
         from stoney_verify.guild_config import get_guild_config
 
         cfg = await get_guild_config(guild_id, refresh=True)
         stored = cfg.get(_CONFIG_KEY) if isinstance(cfg, dict) else None
-        if isinstance(stored, dict):
-            return normalize_font_options(stored)
-        return normalize_font_options(
+        loaded = normalize_font_options(stored) if isinstance(stored, dict) else normalize_font_options(
             {
                 "unicodeStyle": cfg.get("channel_builder_unicode_style") if isinstance(cfg, dict) else None,
                 "unicodeStyleScope": cfg.get("channel_builder_unicode_style_scope") if isinstance(cfg, dict) else None,
             }
         )
-    except Exception:
+        if loaded != normalize_font_options({}):
+            _RUNTIME_FONT_OPTIONS[_cache_key(guild_id)] = loaded
+        return loaded
+    except Exception as exc:
+        _warn(f"load failed guild={guild_id}: {exc!r}")
         return normalize_font_options({})
 
 
 async def save_channel_font_options(guild_id: int, options: dict[str, str]) -> dict[str, str]:
     clean = normalize_font_options(options)
+    _RUNTIME_FONT_OPTIONS[_cache_key(guild_id)] = dict(clean)
     try:
         from stoney_verify.guild_config import clear_guild_config_cache, upsert_guild_config
 
-        await upsert_guild_config(
+        cfg = await upsert_guild_config(
             guild_id,
             {
                 _CONFIG_KEY: clean,
@@ -112,8 +141,14 @@ async def save_channel_font_options(guild_id: int, options: dict[str, str]) -> d
             },
         )
         clear_guild_config_cache(guild_id)
-    except Exception:
-        pass
+        try:
+            source = str(cfg.get("source") or "") if isinstance(cfg, dict) else ""
+            if source.startswith("env_fallback") or source.startswith("unconfigured"):
+                _warn(f"DB save unavailable guild={guild_id}; using runtime font options until restart")
+        except Exception:
+            pass
+    except Exception as exc:
+        _warn(f"save failed guild={guild_id}; using runtime font options until restart: {exc!r}")
     return clean
 
 
@@ -154,8 +189,8 @@ def _preview_fields(embed: discord.Embed, options: dict[str, str]) -> None:
             embed.add_field(name=f"Preview Gallery {index}", value="\n".join(chunk)[:1024], inline=False)
 
 
-async def build_channel_font_embed(guild_id: int, *, saved_message: str | None = None) -> discord.Embed:
-    options = await load_channel_font_options(guild_id)
+async def build_channel_font_embed(guild_id: int, *, saved_message: str | None = None, options_override: dict[str, str] | None = None) -> discord.Embed:
+    options = normalize_font_options(options_override) if options_override else await load_channel_font_options(guild_id)
     embed = discord.Embed(
         title="🔤 Channel Name Fonts",
         description=(
@@ -198,7 +233,7 @@ class FontStyleSelect(discord.ui.Select):
         saved = await save_channel_font_options(int(interaction.guild.id), current)
         label = _STYLE_LABELS.get(saved["unicodeStyle"], saved["unicodeStyle"])
         await interaction.response.edit_message(
-            embed=await build_channel_font_embed(int(interaction.guild.id), saved_message=f"Font style saved as **{label}**."),
+            embed=await build_channel_font_embed(int(interaction.guild.id), saved_message=f"Font style saved as **{label}**.", options_override=saved),
             view=ChannelFontModeView(saved),
         )
 
@@ -236,7 +271,7 @@ class ChannelFontModeView(discord.ui.View):
         if interaction.guild is None:
             return await interaction.response.send_message("❌ This must be used inside a server.", ephemeral=True)
         options = await load_channel_font_options(int(interaction.guild.id))
-        await interaction.response.edit_message(embed=await build_channel_font_embed(int(interaction.guild.id)), view=ChannelFontModeView(options))
+        await interaction.response.edit_message(embed=await build_channel_font_embed(int(interaction.guild.id), options_override=options), view=ChannelFontModeView(options))
 
     @discord.ui.button(label="Setup Home", emoji="🏠", style=discord.ButtonStyle.secondary, custom_id="dank_setup_font:home", row=2)
     async def home(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
@@ -258,7 +293,7 @@ class ChannelFontModeView(discord.ui.View):
         current["unicodeStyleScope"] = scope
         saved = await save_channel_font_options(int(interaction.guild.id), current)
         await interaction.response.edit_message(
-            embed=await build_channel_font_embed(int(interaction.guild.id), saved_message=f"Apply mode saved as **{_SCOPE_LABELS.get(scope, scope)}**."),
+            embed=await build_channel_font_embed(int(interaction.guild.id), saved_message=f"Apply mode saved as **{_SCOPE_LABELS.get(scope, scope)}**.", options_override=saved),
             view=ChannelFontModeView(saved),
         )
 
@@ -273,7 +308,7 @@ class ChannelFontsButton(discord.ui.Button):
         if interaction.guild is None:
             return await interaction.response.send_message("❌ This must be used inside a server.", ephemeral=True)
         options = await load_channel_font_options(int(interaction.guild.id))
-        await interaction.response.edit_message(embed=await build_channel_font_embed(int(interaction.guild.id)), view=ChannelFontModeView(options))
+        await interaction.response.edit_message(embed=await build_channel_font_embed(int(interaction.guild.id), options_override=options), view=ChannelFontModeView(options))
 
 
 def apply() -> bool:
