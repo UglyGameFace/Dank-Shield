@@ -3,8 +3,9 @@ from __future__ import annotations
 """Add queued Channel Builder routes to the structured Bot API.
 
 The dashboard must never direct-fire multi-step Discord mutations. These routes
-accept an approved dry-run plan, submit it to the shared operation queue, and
-expose job status for polling/re-attach after refresh.
+accept an approved dry-run plan, submit it to the shared operation queue, expose
+job status for polling/re-attach after refresh, list live channels by ID, and
+return rollback snapshots for every mutation.
 """
 
 import builtins
@@ -87,7 +88,15 @@ def _normalize_items(raw: Any) -> list[dict[str, Any]]:
         final_name = _safe_str(row.get("finalName") or row.get("final_name"))[:100]
         base_name = _safe_str(row.get("baseName") or row.get("base_name") or row.get("name"))[:100]
         current_name = _safe_str(row.get("currentName") or row.get("current_name"))[:100]
-        current_id = _safe_int(row.get("channelId") or row.get("channel_id") or row.get("currentId") or row.get("current_id"), 0)
+        current_id = _safe_int(
+            row.get("channelId")
+            or row.get("channel_id")
+            or row.get("currentChannelId")
+            or row.get("current_channel_id")
+            or row.get("currentId")
+            or row.get("current_id"),
+            0,
+        )
         action = _normalize_action(row.get("action"))
         selected = row.get("selected") is not False
         if not selected:
@@ -152,6 +161,56 @@ async def _get_guild(server: Any, guild_id: Any) -> tuple[Optional[discord.Guild
     return guild, None
 
 
+def _channel_kind(channel: Any) -> str:
+    if isinstance(channel, discord.CategoryChannel):
+        return "category"
+    if isinstance(channel, discord.VoiceChannel):
+        return "voice"
+    if getattr(discord, "ForumChannel", None) and isinstance(channel, discord.ForumChannel):
+        return "forum"
+    if isinstance(channel, discord.TextChannel):
+        return "news" if bool(getattr(channel, "is_news", lambda: False)()) else "text"
+    return _safe_str(getattr(channel, "type", "unknown"), "unknown")
+
+
+def _channel_payload(channel: Any) -> dict[str, Any]:
+    parent = getattr(channel, "category", None)
+    payload = {
+        "id": str(getattr(channel, "id", "")),
+        "name": _safe_str(getattr(channel, "name", "")),
+        "type": _channel_kind(channel),
+        "position": getattr(channel, "position", None),
+        "category_id": str(getattr(parent, "id", "")) if parent else None,
+        "category_name": _safe_str(getattr(parent, "name", "")) if parent else None,
+        "mention": _safe_str(getattr(channel, "mention", "")),
+    }
+    return payload
+
+
+def _snapshot_channel(channel: Any) -> dict[str, Any]:
+    parent = getattr(channel, "category", None)
+    return {
+        "channel_id": str(getattr(channel, "id", "")),
+        "name": _safe_str(getattr(channel, "name", "")),
+        "type": _channel_kind(channel),
+        "category_id": str(getattr(parent, "id", "")) if parent else None,
+        "category_name": _safe_str(getattr(parent, "name", "")) if parent else None,
+        "position": getattr(channel, "position", None),
+        "nsfw": bool(getattr(channel, "nsfw", False)),
+        "slowmode_delay": getattr(channel, "slowmode_delay", None),
+        "sync_permissions": getattr(channel, "permissions_synced", None),
+    }
+
+
+def _sort_channels(channels: list[Any]) -> list[Any]:
+    def key(channel: Any) -> tuple[int, int, str]:
+        parent = getattr(channel, "category", None)
+        parent_pos = getattr(parent, "position", -1) if parent else -1
+        return (int(parent_pos or -1), int(getattr(channel, "position", 0) or 0), _safe_str(getattr(channel, "name", "")))
+
+    return sorted(channels, key=key)
+
+
 def _find_category(guild: discord.Guild, name: str) -> Optional[discord.CategoryChannel]:
     target = _safe_str(name).lower()
     if not target:
@@ -204,6 +263,7 @@ async def _create_channel(guild: discord.Guild, item: dict[str, Any], *, reason:
     else:
         channel = await guild.create_text_channel(name=final_name, category=category, reason=reason)
 
+    snapshot = _snapshot_channel(channel)
     return {
         "ok": True,
         "action": "create",
@@ -211,6 +271,12 @@ async def _create_channel(guild: discord.Guild, item: dict[str, Any], *, reason:
         "channel_id": str(getattr(channel, "id", "")),
         "name": getattr(channel, "name", final_name),
         "type": channel_type,
+        "snapshot_after": snapshot,
+        "rollback": {
+            "action": "delete_created_channel",
+            "channel_id": snapshot.get("channel_id"),
+            "name": snapshot.get("name"),
+        },
     }
 
 
@@ -225,6 +291,7 @@ async def _rename_channel(guild: discord.Guild, item: dict[str, Any], *, reason:
             "current_name": item.get("current_name"),
             "current_id": item.get("current_id"),
         }
+    before_snapshot = _snapshot_channel(channel)
     before = _safe_str(getattr(channel, "name", ""))
     final_name = _safe_str(item.get("final_name"))[:100]
     if before == final_name:
@@ -234,8 +301,10 @@ async def _rename_channel(guild: discord.Guild, item: dict[str, Any], *, reason:
             "row_id": item.get("id"),
             "channel_id": str(getattr(channel, "id", "")),
             "name": before,
+            "snapshot_before": before_snapshot,
         }
     await channel.edit(name=final_name, reason=reason)
+    after_snapshot = _snapshot_channel(channel)
     return {
         "ok": True,
         "action": "rename",
@@ -243,6 +312,15 @@ async def _rename_channel(guild: discord.Guild, item: dict[str, Any], *, reason:
         "channel_id": str(getattr(channel, "id", "")),
         "before": before,
         "after": final_name,
+        "snapshot_before": before_snapshot,
+        "snapshot_after": after_snapshot,
+        "rollback": {
+            "action": "rename_channel",
+            "channel_id": before_snapshot.get("channel_id"),
+            "name": before_snapshot.get("name"),
+            "category_id": before_snapshot.get("category_id"),
+            "position": before_snapshot.get("position"),
+        },
     }
 
 
@@ -262,6 +340,7 @@ async def _execute_channel_builder_plan(
 
     reason = f"Dank Shield Channel Builder {mode} by {actor_id or 'dashboard'}"
     results: list[dict[str, Any]] = []
+    rollback_plan: list[dict[str, Any]] = []
     counts = {"create": 0, "rename": 0, "keep": 0, "skip": 0, "failed": 0}
 
     for item in items:
@@ -276,7 +355,7 @@ async def _execute_channel_builder_plan(
             continue
         if dry_run:
             counts[action if action in counts else "skip"] = counts.get(action, 0) + 1
-            results.append({"ok": True, "dry_run": True, "action": action, "row_id": item.get("id"), "target": item.get("final_name")})
+            results.append({"ok": True, "dry_run": True, "action": action, "row_id": item.get("id"), "target": item.get("final_name"), "channel_id": item.get("current_id") or None})
             continue
         try:
             if action == "create":
@@ -295,8 +374,11 @@ async def _execute_channel_builder_plan(
         except Exception as e:
             counts["failed"] += 1
             result = {"ok": False, "action": action, "row_id": item.get("id"), "error": repr(e)}
+        if isinstance(result, dict) and result.get("rollback"):
+            rollback_plan.append(dict(result["rollback"]))
         results.append(result)
 
+    rollback_plan.reverse()
     status = "partial" if counts["failed"] else "succeeded"
     return {
         "status": status,
@@ -305,7 +387,29 @@ async def _execute_channel_builder_plan(
         "guild_id": str(guild_id),
         "counts": counts,
         "results": results,
+        "rollback_plan": rollback_plan,
+        "rollback_available": bool(rollback_plan),
     }
+
+
+async def list_channel_builder_channels(server: Any, request: web.Request):
+    data = await server._merged_request_data(request) if hasattr(server, "_merged_request_data") else dict(request.query)
+    guild, err = await _get_guild(server, data.get("guild_id"))
+    if err:
+        return err
+    assert guild is not None
+
+    channels = [
+        channel
+        for channel in _sort_channels(list(getattr(guild, "channels", []) or []))
+        if _channel_kind(channel) in {"category", "text", "news", "voice", "forum"}
+    ]
+    return _json_ok(
+        server,
+        guild_id=str(guild.id),
+        channels=[_channel_payload(channel) for channel in channels],
+        total=len(channels),
+    )
 
 
 async def submit_channel_builder_job(server: Any, request: web.Request):
@@ -372,6 +476,8 @@ async def get_operation_job(server: Any, request: web.Request):
 
 
 def _register_channel_builder_routes(server: Any, app: web.Application) -> None:
+    app.router.add_get("/channel-builder/channels", lambda request: list_channel_builder_channels(server, request))
+    app.router.add_post("/channel-builder/channels", lambda request: list_channel_builder_channels(server, request))
     app.router.add_post("/channel-builder/jobs", lambda request: submit_channel_builder_job(server, request))
     app.router.add_get("/operation/{job_id}", lambda request: get_operation_job(server, request))
     app.router.add_get("/operations/{job_id}", lambda request: get_operation_job(server, request))
