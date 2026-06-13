@@ -1,0 +1,25 @@
+name: Bot Ticket Worker Check
+
+on:
+  pull_request:
+    paths:
+      - "stoney_verify/workers/bot_command_worker.py"
+      - "tools/audit_bot_command_create_ticket_worker.py"
+      - ".github/workflows/bot-ticket-worker-check.yml"
+  push:
+    paths:
+      - "stoney_verify/workers/bot_command_worker.py"
+      - "tools/audit_bot_command_create_ticket_worker.py"
+      - ".github/workflows/bot-ticket-worker-check.yml"
+  workflow_dispatch:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Run worker audit
+        run: python tools/audit_bot_command_create_ticket_worker.py
