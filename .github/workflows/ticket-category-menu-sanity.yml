@@ -5,6 +5,7 @@ on:
     paths:
       - "stoney_verify/startup_guards/public_ticket_panel_clean_hardening.py"
       - "stoney_verify/startup_guards/ticket_category_cod_services_guard.py"
+      - "stoney_verify/startup_guards/ticket_category_game_services_guard.py"
       - "stoney_verify/startup_guards/ticket_form_default_templates_guard.py"
       - "stoney_verify/startup_guards/external_ticket_history_sequence_guard.py"
       - "stoney_verify/startup_guards/__init__.py"
@@ -16,6 +17,7 @@ on:
     paths:
       - "stoney_verify/startup_guards/public_ticket_panel_clean_hardening.py"
       - "stoney_verify/startup_guards/ticket_category_cod_services_guard.py"
+      - "stoney_verify/startup_guards/ticket_category_game_services_guard.py"
       - "stoney_verify/startup_guards/ticket_form_default_templates_guard.py"
       - "stoney_verify/startup_guards/external_ticket_history_sequence_guard.py"
       - "stoney_verify/startup_guards/__init__.py"
