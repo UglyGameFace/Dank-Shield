@@ -16,6 +16,7 @@ FILES = [
     "stoney_verify/startup_guards/__init__.py",
     "stoney_verify/commands_ext/ticket_category_admin.py",
     "stoney_verify/tickets_new/intake_service.py",
+    "stoney_verify/tickets_new/panel.py",
 ]
 
 CHECKS = {
@@ -37,6 +38,7 @@ CHECKS = {
         "MWIII",
         "Server owners control exact rules",
         "_install_public_panel_wording",
+        "_install_ticket_panel_bootstrap_category",
         "_install_setup_category",
         "_install_category_admin_type",
         "_install_intake_service_type",
@@ -83,6 +85,12 @@ CHECKS = {
         "_reason_has_cod_legacy_signals",
         "_default_questions_for_intake_type",
         "score_reason_against_category",
+    ],
+    "stoney_verify/tickets_new/panel.py": [
+        "_DEFAULT_BOOTSTRAP_CATEGORIES",
+        "COD Services",
+        "bo6",
+        "warzone",
     ],
 }
 
