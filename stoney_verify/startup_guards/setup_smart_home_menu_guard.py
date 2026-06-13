@@ -1,12 +1,6 @@
 from __future__ import annotations
 
-"""Smarter /dank setup home screen.
-
-The plain setup choice flow is good, but the home screen became a wall of text
-and buttons. This guard keeps every existing setup tool while making the first
-screen behave like a control center: show readiness, show the next best action,
-and move less-common controls behind More Options.
-"""
+"""Smarter /dank setup home screen."""
 
 from typing import Any
 
@@ -155,11 +149,12 @@ class SmartSetupHomeView(discord.ui.View):
             return
         embed = discord.Embed(
             title="🧰 Setup Tools",
-            description="Use these when you need to change the setup type, ticket menu, services, or recovery tools.",
+            description="Use these when you need to change setup type, services, ticket menu, fonts, or recovery tools.",
             color=discord.Color.blurple(),
             timestamp=now_utc(),
         )
         common = (
+            "🔤 **Channel Name Fonts** — choose the default channel font and Text only — keep emoji mode.\n"
             "🧭 **Choose Setup Type** — change Basic / Help Desk / ID / Voice / Custom.\n"
             "🧭 **Services** — independently toggle Tickets, ID Verify, Voice Verify, SpamGuard, and Logs.\n"
             "🧾 **Ticket Menu Options** — edit public ticket choices.\n"
@@ -174,6 +169,12 @@ class SmartSetupHomeView(discord.ui.View):
 class SmartSetupToolsView(discord.ui.View):
     def __init__(self, *, show_owner_tools: bool = False) -> None:
         super().__init__(timeout=900)
+        try:
+            from stoney_verify.startup_guards.setup_channel_font_mode_guard import ChannelFontsButton
+
+            self.add_item(ChannelFontsButton(row=2))
+        except Exception:
+            pass
         if show_owner_tools:
             try:
                 from stoney_verify.startup_guards.owner_safe_members_guard import SafeMembersButton
@@ -234,28 +235,15 @@ async def _smart_plain_choice_main_payload(guild: discord.Guild) -> tuple[discor
 
     embed = discord.Embed(
         title="🚀 Dank Shield Setup",
-        description=(
-            "Smart setup hub for this server. Start with the highlighted action, then use tools only when something needs changing."
-        ),
+        description="Smart setup hub for this server. Start with the highlighted action, then use tools only when something needs changing.",
         color=discord.Color.green() if ready else discord.Color.blurple(),
         timestamp=now_utc(),
     )
-    embed.add_field(
-        name="Status",
-        value=(
-            f"`{done}/{total}` complete • `{_bar(done, total)}`\n"
-            f"{_compact_progress(progress_text)}"
-        )[:1024],
-        inline=False,
-    )
+    embed.add_field(name="Status", value=(f"`{done}/{total}` complete • `{_bar(done, total)}`\n{_compact_progress(progress_text)}")[:1024], inline=False)
     embed.add_field(name="Next Best Action", value=_next_action_text(done, total, next_step)[:1024], inline=False)
     embed.add_field(name="Selected Setup", value=_choice_summary(service_summary), inline=False)
     embed.add_field(name="Health Focus", value=str(service_hint or "Run Setup Check to confirm selected services.")[:1024], inline=False)
-    embed.add_field(
-        name="Tools",
-        value="🛠️ **Fix Permissions** repairs saved setup channel overwrites. **More Options** has setup type, services, ticket menu, and help.",
-        inline=False,
-    )
+    embed.add_field(name="Tools", value="🔤 **Channel Name Fonts** is in More Options. 🛠️ **Fix Permissions** repairs saved setup channel overwrites.", inline=False)
     embed.set_footer(text=f"Guild {guild.id} • /dank setup • smart menu")
     return embed, SmartSetupHomeView(ready=ready)
 
@@ -279,7 +267,7 @@ def apply() -> bool:
         except Exception:
             solid._build_main_setup_payload = _smart_plain_choice_main_payload
         _PATCHED = True
-        _log("active; /dank setup home is now a smart hub with owner-only protected member tools")
+        _log("active; /dank setup home is now a smart hub with visible Channel Name Fonts")
         return True
     except Exception as exc:
         _warn(f"failed: {exc!r}")
