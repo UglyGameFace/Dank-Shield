@@ -19,6 +19,19 @@ REQUIRED_GUARDS = (
 )
 
 
+def _load_visibility_health_guard() -> bool:
+    try:
+        from stoney_verify.startup_guards import setup_visibility_health_guard
+
+        return bool(setup_visibility_health_guard.apply())
+    except Exception as exc:
+        try:
+            print(f"⚠️ guided_setup_self_check visibility health guard failed: {exc!r}")
+        except Exception:
+            pass
+        return False
+
+
 def _has_wrapped_marker(obj: Any, marker: str) -> bool:
     try:
         return bool(getattr(obj, marker, False))
@@ -27,6 +40,7 @@ def _has_wrapped_marker(obj: Any, marker: str) -> bool:
 
 
 def apply() -> bool:
+    visibility_health_ok = _load_visibility_health_guard()
     missing = [name.rsplit(".", 1)[-1] for name in REQUIRED_GUARDS if name not in sys.modules]
     hook_warnings: list[str] = []
 
@@ -55,6 +69,9 @@ def apply() -> bool:
     except Exception as exc:
         hook_warnings.append(f"discord_hook_error:{type(exc).__name__}")
 
+    if not visibility_health_ok:
+        hook_warnings.append("visibility_health_not_loaded")
+
     if missing or hook_warnings:
         print(
             "⚠️ guided_setup_self_check incomplete "
@@ -64,7 +81,7 @@ def apply() -> bool:
 
     print(
         "🧭 guided_setup_self_check ready; "
-        "guided_setup_guards=5 health_actions=ok save_next_steps=ok"
+        "guided_setup_guards=5 health_actions=ok save_next_steps=ok visibility_health=ok"
     )
     return True
 
