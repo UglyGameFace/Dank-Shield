@@ -10,6 +10,7 @@ on:
       - "stoney_verify/startup_guards/ticket_panel_command_epoch_guard.py"
       - "stoney_verify/startup_guards/public_ticket_confirm_hardening_guard.py"
       - "stoney_verify/startup_guards/ticket_lifecycle_action_lock_guard.py"
+      - "stoney_verify/startup_guards/ticket_transcript_post_busy_guard.py"
       - "stoney_verify/startup_guards/ticket_staff_identity_guard.py"
       - "stoney_verify/startup_guards/voice_ticket_claim_notice_guard.py"
       - "stoney_verify/startup_guards/ticket_open_controls_status_guard.py"
@@ -18,6 +19,7 @@ on:
       - "stoney_verify/commands_ext/public_ticket_panel_clean.py"
       - "tools/audit_ticket_panel_doctor.py"
       - "tools/audit_ticket_lifecycle_action_lock.py"
+      - "tools/audit_ticket_transcript_post_busy.py"
       - ".github/workflows/ticket-panel-doctor-sanity.yml"
   push:
     paths:
@@ -28,6 +30,7 @@ on:
       - "stoney_verify/startup_guards/ticket_panel_command_epoch_guard.py"
       - "stoney_verify/startup_guards/public_ticket_confirm_hardening_guard.py"
       - "stoney_verify/startup_guards/ticket_lifecycle_action_lock_guard.py"
+      - "stoney_verify/startup_guards/ticket_transcript_post_busy_guard.py"
       - "stoney_verify/startup_guards/ticket_staff_identity_guard.py"
       - "stoney_verify/startup_guards/voice_ticket_claim_notice_guard.py"
       - "stoney_verify/startup_guards/ticket_open_controls_status_guard.py"
@@ -36,6 +39,7 @@ on:
       - "stoney_verify/commands_ext/public_ticket_panel_clean.py"
       - "tools/audit_ticket_panel_doctor.py"
       - "tools/audit_ticket_lifecycle_action_lock.py"
+      - "tools/audit_ticket_transcript_post_busy.py"
       - ".github/workflows/ticket-panel-doctor-sanity.yml"
   workflow_dispatch:
 
@@ -51,3 +55,5 @@ jobs:
         run: python tools/audit_ticket_panel_doctor.py
       - name: Audit lifecycle action locks
         run: python tools/audit_ticket_lifecycle_action_lock.py
+      - name: Audit transcript post busy guard
+        run: python tools/audit_ticket_transcript_post_busy.py
