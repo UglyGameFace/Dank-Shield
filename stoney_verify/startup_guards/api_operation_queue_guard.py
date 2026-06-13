@@ -4,7 +4,8 @@ from __future__ import annotations
 
 This guard protects dashboard/API calls from duplicate submits, refresh/retry
 storms, and same-guild race conditions without changing the public API response
-shape for successful calls.
+shape for successful calls. It also exposes queue state inside structured API
+health so the dashboard can verify the queue is alive after deploy.
 """
 
 import builtins
