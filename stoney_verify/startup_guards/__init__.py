@@ -31,6 +31,7 @@ _STARTUP_GUARDS: Tuple[str, ...] = (
     "stoney_verify.startup_guards.setup_health_action_buttons_guard",
     "stoney_verify.startup_guards.setup_save_next_step_guard",
     "stoney_verify.startup_guards.setup_permission_repair_guard",
+    "stoney_verify.startup_guards.setup_smart_home_menu_guard",
     "stoney_verify.startup_guards.setup_guided_flow_self_check",
     "stoney_verify.startup_guards.dank_shield_branding_guard",
     "stoney_verify.startup_guards.runtime_safety",
@@ -96,6 +97,7 @@ _ALWAYS_SHOW_PREFIXES: Tuple[str, ...] = (
     "🧭 setup_save_next_step_guard active",
     "🧭 setup_verification_toggle_independence_guard active",
     "🛠️ setup_permission_repair_guard active",
+    "🧭 setup_smart_home_menu_guard active",
     "🧭 guided_setup_self_check ready",
 )
 
