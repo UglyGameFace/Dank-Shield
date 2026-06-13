@@ -43,6 +43,7 @@ _STARTUP_GUARDS: Tuple[str, ...] = (
     "stoney_verify.startup_guards.raidguard_risk_engine_v2",
     "stoney_verify.startup_guards.alt_identity_link_safety",
     "stoney_verify.startup_guards.member_join_removal_safety",
+    "stoney_verify.startup_guards.guild_role_order_guard",
     "stoney_verify.members_new.role_state_compat_guard",
     "stoney_verify.startup_guards.setup_role_safety",
     "stoney_verify.commands_ext.public_moderation_command_guard",
@@ -102,6 +103,7 @@ _ALWAYS_SHOW_PREFIXES: Tuple[str, ...] = (
     "🛠️ setup_permission_repair_guard active",
     "🛠️ setup_permission_repair_modlog_silence_guard active",
     "🧭 setup_smart_home_menu_guard active",
+    "🛡️ role_hierarchy_action_guard active",
     "🧭 guided_setup_self_check ready",
 )
 
