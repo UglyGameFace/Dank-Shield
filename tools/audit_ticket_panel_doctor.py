@@ -13,6 +13,7 @@ FILES = [
     "stoney_verify/startup_guards/ticket_panel_doctor_stability_guard.py",
     "stoney_verify/startup_guards/ticket_panel_repair_records_command.py",
     "stoney_verify/startup_guards/ticket_panel_command_epoch_guard.py",
+    "stoney_verify/startup_guards/public_ticket_confirm_hardening_guard.py",
     "stoney_verify/startup_guards/ticket_staff_identity_guard.py",
     "stoney_verify/startup_guards/voice_ticket_claim_notice_guard.py",
     "stoney_verify/startup_guards/ticket_open_controls_status_guard.py",
@@ -25,6 +26,7 @@ CHECKS = {
     "stoney_verify/startup_guards/ticket_panel_doctor_command.py": ["_doctor_command", "group.get_command"],
     "stoney_verify/startup_guards/ticket_panel_doctor_production_wording.py": [
         "ticket_panel_command_epoch_guard",
+        "public_ticket_confirm_hardening_guard",
         "ticket_staff_identity_guard",
         "voice_ticket_claim_notice_guard",
         "ticket_open_controls_status_guard",
@@ -32,6 +34,12 @@ CHECKS = {
         "ticket_panel_repair_records_command",
         "ticket_panel_doctor_stability_guard",
         "setup_check_existing_server_inference_guard",
+    ],
+    "stoney_verify/startup_guards/public_ticket_confirm_hardening_guard.py": [
+        "Newest menu wins",
+        "Already opening that ticket",
+        "That ticket menu is stale",
+        "_PUBLIC_TICKET_CONFIRM_HARDENING_GUARD_APPLIED",
     ],
     "stoney_verify/startup_guards/ticket_action_controls_refresh_guard.py": [
         "_action_claim",
