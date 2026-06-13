@@ -21,7 +21,7 @@ _GUILD_LOCKS: dict[int, asyncio.Lock] = {}
 
 @dataclass(frozen=True)
 class RepairTarget:
-    channel: discord.abc.GuildChannel
+    channel: Any
     label: str
     overwrites: dict[Any, discord.PermissionOverwrite]
 
@@ -215,8 +215,15 @@ def _voice_verify_overwrites(
     return ow
 
 
+def _can_repair_channel(channel: Any) -> bool:
+    try:
+        return bool(channel is not None and callable(getattr(channel, "set_permissions", None)) and int(getattr(channel, "id", 0) or 0) > 0)
+    except Exception:
+        return False
+
+
 def _add_target(targets: list[RepairTarget], seen: set[int], channel: Any, label: str, overwrites: dict[Any, discord.PermissionOverwrite]) -> None:
-    if not isinstance(channel, discord.abc.GuildChannel):
+    if not _can_repair_channel(channel):
         return
     cid = int(getattr(channel, "id", 0) or 0)
     if cid <= 0 or cid in seen:
