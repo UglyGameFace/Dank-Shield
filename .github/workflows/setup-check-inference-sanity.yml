@@ -1,0 +1,29 @@
+name: Setup Check Inference Sanity
+
+on:
+  pull_request:
+    paths:
+      - "stoney_verify/startup_guards/setup_check_existing_server_inference_guard.py"
+      - "stoney_verify/startup_guards/ticket_panel_doctor_production_wording.py"
+      - "stoney_verify/commands_ext/public_setup_recommend.py"
+      - "tools/audit_setup_check_inference.py"
+      - ".github/workflows/setup-check-inference-sanity.yml"
+  push:
+    paths:
+      - "stoney_verify/startup_guards/setup_check_existing_server_inference_guard.py"
+      - "stoney_verify/startup_guards/ticket_panel_doctor_production_wording.py"
+      - "stoney_verify/commands_ext/public_setup_recommend.py"
+      - "tools/audit_setup_check_inference.py"
+      - ".github/workflows/setup-check-inference-sanity.yml"
+  workflow_dispatch:
+
+jobs:
+  setup-check-inference-sanity:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Audit setup check inference
+        run: python tools/audit_setup_check_inference.py
