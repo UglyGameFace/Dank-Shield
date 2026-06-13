@@ -1,0 +1,28 @@
+name: Channel Builder Queue Sanity
+
+on:
+  pull_request:
+    paths:
+      - 'stoney_verify/operation_queue.py'
+      - 'stoney_verify/startup_guards/guild_operation_queue_guard.py'
+      - 'stoney_verify/startup_guards/channel_builder_api_guard.py'
+      - 'stoney_verify/startup_guards/channel_builder_rollback_api_guard.py'
+      - 'tools/audit_channel_builder_queue.py'
+  push:
+    branches: [main]
+    paths:
+      - 'stoney_verify/operation_queue.py'
+      - 'stoney_verify/startup_guards/guild_operation_queue_guard.py'
+      - 'stoney_verify/startup_guards/channel_builder_api_guard.py'
+      - 'stoney_verify/startup_guards/channel_builder_rollback_api_guard.py'
+      - 'tools/audit_channel_builder_queue.py'
+
+jobs:
+  sanity:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: python tools/audit_channel_builder_queue.py
