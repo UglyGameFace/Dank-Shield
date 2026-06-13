@@ -9,8 +9,10 @@ from aiohttp import web
 from ..operation_queue import get_operation_job, submit_operation
 from ..services.channel_builder_runtime import (
     execute_channel_builder_plan,
+    get_guild_or_response,
     list_channels_payload,
     normalize_channel_builder_items,
+    preflight_channel_builder_plan,
     safe_int,
     safe_str,
     validate_channel_builder_items,
@@ -24,6 +26,34 @@ async def list_channel_builder_channels(server: Any, request: web.Request):
     if err is not None:
         return err
     return server._json_ok(**(payload or {}))
+
+
+async def preflight_channel_builder_job(server: Any, request: web.Request):
+    data = await server._request_data(request)
+    if request.can_read_body and not isinstance(data, dict):
+        return server._json_error("Invalid JSON body")
+
+    guild_id = safe_int(data.get("guild_id"), 0)
+    items = normalize_channel_builder_items(data.get("items"))
+    if guild_id <= 0:
+        return server._json_error("guild_id required")
+    if not items:
+        return server._json_error("items required")
+
+    validation_errors = validate_channel_builder_items(items)
+    guild, err = await get_guild_or_response(server, guild_id)
+    if err is not None:
+        return err
+    assert guild is not None
+
+    preflight = preflight_channel_builder_plan(guild, items)
+    ok = not validation_errors and bool(preflight.get("ok"))
+    return server._json_ok(
+        queueable=ok,
+        validation_errors=validation_errors,
+        preflight=preflight,
+        item_count=len(items),
+    )
 
 
 async def submit_channel_builder_job(server: Any, request: web.Request):
@@ -90,6 +120,7 @@ def register_channel_builder_routes(app: web.Application, server: Any) -> None:
 
     app.router.add_get("/channel-builder/channels", lambda request: list_channel_builder_channels(server, request))
     app.router.add_post("/channel-builder/channels", lambda request: list_channel_builder_channels(server, request))
+    app.router.add_post("/channel-builder/preflight", lambda request: preflight_channel_builder_job(server, request))
     app.router.add_post("/channel-builder/jobs", lambda request: submit_channel_builder_job(server, request))
     app.router.add_post("/channel-builder/rollback", lambda request: submit_rollback_job(server, request))
     app.router.add_get("/operation/{job_id}", lambda request: get_channel_builder_operation(server, request))
