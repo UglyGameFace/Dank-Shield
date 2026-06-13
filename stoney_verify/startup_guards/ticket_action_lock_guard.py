@@ -1,11 +1,11 @@
 from __future__ import annotations
 
-"""Add per-ticket interaction locks around ticket action controls.
+"""Add per-ticket operation safety around ticket action controls.
 
 The ticket channel buttons/select actions already call the canonical service
 functions, but their UI callbacks can be double-clicked or hit by multiple staff
-at once. This guard serializes those actions per channel/action and returns a
-clear ephemeral message instead of letting duplicate messages/state races happen.
+at once. This guard routes ticket controls through the shared operation queue
+and keeps a local fallback lock so duplicate messages/state races do not happen.
 """
 
 import asyncio
