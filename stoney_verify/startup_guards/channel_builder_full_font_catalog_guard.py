@@ -6,6 +6,7 @@ from typing import Any
 
 _PATCHED = False
 _QUEUE_FLOW_LOADED = False
+_MENU_CLARITY_LOADED = False
 
 
 def _log(message: str) -> None:
@@ -88,9 +89,26 @@ def _load_queue_flow() -> None:
             pass
 
 
+def _load_menu_clarity() -> None:
+    global _MENU_CLARITY_LOADED
+    if _MENU_CLARITY_LOADED:
+        return
+    try:
+        from stoney_verify.startup_guards import channel_font_menu_clarity_guard
+
+        channel_font_menu_clarity_guard.apply()
+        _MENU_CLARITY_LOADED = True
+    except Exception as exc:
+        try:
+            print(f"⚠️ channel_builder_full_font_catalog_guard menu clarity failed: {exc!r}")
+        except Exception:
+            pass
+
+
 def apply() -> bool:
     global _PATCHED
     _load_queue_flow()
+    _load_menu_clarity()
     if _PATCHED:
         return True
     try:
