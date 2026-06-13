@@ -28,6 +28,7 @@ def _warn(message: str) -> None:
 
 def _load_integration_guards() -> None:
     for module_name in (
+        "command_sync_operation_queue_guard",
         "verification_operation_queue_guard",
         "member_cleanup_operation_queue_guard",
         "spam_guard_operation_queue_guard",
