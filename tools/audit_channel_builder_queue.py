@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 from pathlib import Path
 import py_compile
+import subprocess
 import sys
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -12,6 +13,7 @@ FILES = [
     'stoney_verify/services/channel_builder_rollback_runtime.py',
     'stoney_verify/startup_guards/guild_operation_queue_guard.py',
     'stoney_verify/startup_guards/channel_builder_api_guard.py',
+    'tools/patch_channel_builder_server_routes.py',
 ]
 
 REMOVED_FILES = [
@@ -55,6 +57,12 @@ CHECKS = {
         'register_channel_builder_routes(app, server)',
         'channel_builder_routes=true',
     ],
+    'tools/patch_channel_builder_server_routes.py': [
+        'register_channel_builder_routes(app, sys.modules[__name__])',
+        '--apply',
+        '--check',
+        'Could not find member routes anchor inside start_api',
+    ],
 }
 
 
@@ -79,6 +87,17 @@ def main() -> int:
             if snippet not in text:
                 print(f'{path} missing {snippet}', file=sys.stderr)
                 return 1
+    check = subprocess.run(
+        [sys.executable, str(ROOT / 'tools' / 'patch_channel_builder_server_routes.py'), '--check'],
+        cwd=str(ROOT),
+        text=True,
+        capture_output=True,
+    )
+    if check.returncode != 0:
+        print(check.stdout, file=sys.stderr)
+        print(check.stderr, file=sys.stderr)
+        return check.returncode
+    print(check.stdout.strip())
     print('Channel Builder queue audit passed')
     return 0
 
