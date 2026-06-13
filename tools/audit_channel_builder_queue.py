@@ -14,6 +14,12 @@ FILES = [
     'stoney_verify/startup_guards/channel_builder_api_guard.py',
 ]
 
+REMOVED_FILES = [
+    'stoney_verify/startup_guards/channel_builder_rollback_api_guard.py',
+    'stoney_verify/startup_guards/channel_builder_runtime_service_guard.py',
+    'stoney_verify/startup_guards/channel_builder_rollback_runtime_service_guard.py',
+]
+
 CHECKS = {
     'stoney_verify/startup_guards/guild_operation_queue_guard.py': [
         'channel_builder_api_guard',
@@ -53,6 +59,10 @@ CHECKS = {
 
 
 def main() -> int:
+    for path in REMOVED_FILES:
+        if (ROOT / path).exists():
+            print(f'obsolete file still exists {path}', file=sys.stderr)
+            return 1
     for path in FILES:
         target = ROOT / path
         if not target.exists():
