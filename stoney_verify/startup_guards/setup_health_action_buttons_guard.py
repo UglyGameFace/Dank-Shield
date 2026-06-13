@@ -46,6 +46,12 @@ def _has_items(value: str) -> bool:
     return "✅ none" not in lowered and lowered not in {"none", "no passing checks reported."}
 
 
+def _status_from_embed(embed: Any) -> tuple[bool, bool]:
+    blockers = _field_value(embed, "Blockers")
+    warnings = _field_value(embed, "Warnings")
+    return _has_items(blockers), _has_items(warnings)
+
+
 def _progress_from_embed(embed: Any) -> tuple[int, int, str]:
     blockers = _field_value(embed, "Blockers")
     warnings = _field_value(embed, "Warnings")
@@ -84,6 +90,7 @@ def _prepend_progress(embed: discord.Embed) -> discord.Embed:
     try:
         if any(str(getattr(field, "name", "") or "") == "Setup Progress" for field in list(getattr(embed, "fields", []) or [])):
             return embed
+        has_blockers, has_warnings = _status_from_embed(embed)
         complete, total, bar = _progress_from_embed(embed)
         percent = int(round((complete / max(1, total)) * 100))
         old_fields = [
@@ -91,11 +98,33 @@ def _prepend_progress(embed: discord.Embed) -> discord.Embed:
             for field in list(getattr(embed, "fields", []) or [])
         ]
         embed.clear_fields()
+        if has_blockers:
+            embed.title = "🧭 Dank Shield Setup Needs Fixes"
+            embed.description = "Fix the blockers below, then press **🔄 Refresh Health**."
+            embed.color = discord.Color.red()
+        elif has_warnings:
+            embed.title = "🟡 Dank Shield Setup Is Almost Ready"
+            embed.description = "No blockers found. Review warnings, then run a safe test."
+            embed.color = discord.Color.orange()
+        else:
+            embed.title = "🎉 Dank Shield Is Ready"
+            embed.description = "Main setup checks are green. Create a test ticket and try the staff controls before inviting everyone in."
+            embed.color = discord.Color.green()
         embed.add_field(
             name="Setup Progress",
             value=f"`{complete}/{total}` complete • `{percent}%`\n`{bar}`",
             inline=False,
         )
+        if not has_blockers and not has_warnings:
+            embed.add_field(
+                name="You Are Done With Basic Setup",
+                value=(
+                    "1. Press **🎫 Create Test Ticket**.\n"
+                    "2. Test claim, close, reopen, transcript, and delete.\n"
+                    "3. Use **Advanced Ticket Routing** later only if you want custom ticket menu options."
+                ),
+                inline=False,
+            )
         for name, value, inline in old_fields[:20]:
             embed.add_field(name=(name or "Status")[:256], value=(value or "—")[:1024], inline=inline)
     except Exception:
@@ -267,7 +296,7 @@ async def _start_setup(interaction: discord.Interaction) -> None:
             pass
         embed = await solid._build_health_embed(guild)
         await interaction.followup.send(
-            embed=embed,
+            embed=_prepend_progress(embed),
             view=HealthActionView(embed=embed),
             ephemeral=True,
             allowed_mentions=discord.AllowedMentions.none(),
@@ -321,6 +350,19 @@ async def _create_test_ticket(interaction: discord.Interaction) -> None:
             await interaction.response.defer(ephemeral=True, thinking=True)
     except Exception:
         pass
+
+    health = await solid._build_health_embed(guild)
+    blockers = _field_value(health, "Blockers")
+    if _has_items(blockers):
+        embed = discord.Embed(
+            title="🚫 Fix Setup Before Creating a Test Ticket",
+            description="A test ticket would probably fail because setup still has blockers. Use the recommended fix button, then refresh health.",
+            color=discord.Color.red(),
+        )
+        embed.add_field(name="Blockers", value=blockers[:1024], inline=False)
+        await interaction.followup.send(embed=embed, view=HealthActionView(embed=health), ephemeral=True, allowed_mentions=discord.AllowedMentions.none())
+        return
+
     try:
         from stoney_verify.tickets_new.service import create_ticket_channel
 
@@ -373,9 +415,18 @@ class RouteButton(discord.ui.Button):
 class HealthActionView(discord.ui.View):
     def __init__(self, *, embed: Optional[discord.Embed] = None) -> None:
         super().__init__(timeout=900)
+        has_blockers, _has_warnings = _status_from_embed(embed) if embed is not None else (False, False)
         route, label, emoji = _route_from_embed(embed) if embed is not None else ("existing", "Fix Missing Items", "🧩")
         self.add_item(RouteButton(route=route, label=label, emoji=emoji, style=discord.ButtonStyle.primary, row=0))
         self.add_item(RouteButton(route="existing", label="All Setup Pickers", emoji="🧩", style=discord.ButtonStyle.secondary, row=0))
+        try:
+            for child in list(getattr(self, "children", []) or []):
+                if str(getattr(child, "custom_id", "") or "") == "stoney_setup_health:test_ticket":
+                    child.disabled = bool(has_blockers)
+                    if has_blockers:
+                        child.label = "Test Ticket Locked"
+        except Exception:
+            pass
 
     @discord.ui.button(label="Start Setup / Fix Missing", emoji="🚀", style=discord.ButtonStyle.success, custom_id="stoney_setup_health:auto", row=1)
     async def start_setup(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
@@ -422,7 +473,7 @@ def apply() -> bool:
         setattr(_wrapped_edit_or_followup, "_health_action_buttons_wrapped", True)
         solid._edit_or_followup = _wrapped_edit_or_followup
         _PATCHED = True
-        print("🧭 setup_health_action_buttons_guard active; health results now include progress, exact fix routes, safe test, and test ticket")
+        print("🧭 setup_health_action_buttons_guard active; health results now include progress, exact fix routes, safe test, gated test ticket, and completion polish")
         return True
     except Exception as exc:
         print(f"⚠️ setup_health_action_buttons_guard failed: {exc!r}")
