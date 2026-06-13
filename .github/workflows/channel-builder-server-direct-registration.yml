@@ -1,0 +1,35 @@
+name: Channel Builder Server Direct Registration
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  patch-server:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Verify codemod is safe
+        run: python tools/patch_channel_builder_server_routes.py --check
+      - name: Apply direct Channel Builder route registration
+        run: python tools/patch_channel_builder_server_routes.py --apply
+      - name: Run Channel Builder queue audit
+        run: python tools/audit_channel_builder_queue.py
+      - name: Commit direct route registration
+        run: |
+          if git diff --quiet; then
+            echo "server.py already patched"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add stoney_verify/api_new/server.py
+          git commit -m "Register Channel Builder routes directly"
+          git push
