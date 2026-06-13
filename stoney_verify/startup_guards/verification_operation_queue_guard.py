@@ -11,6 +11,7 @@ import sys
 from typing import Any
 
 _ORIGINAL_IMPORT = builtins.__import__
+_WAIT_LOGGED = False
 
 
 def _log(message: str) -> None:
@@ -150,8 +151,10 @@ def _wrap_vc(handler_mod: Any) -> bool:
 
 
 def _patch_handlers(handler_mod: Any) -> None:
+    global _WAIT_LOGGED
     if getattr(handler_mod, "_VERIFICATION_OPERATION_QUEUE_GUARD_APPLIED", False):
         return
+
     wrapped = 0
     try:
         if _wrap_standard(handler_mod):
@@ -163,6 +166,17 @@ def _patch_handlers(handler_mod: Any) -> None:
             wrapped += 1
     except Exception as e:
         _warn(f"failed wrapping VC decision handler: {e!r}")
+
+    if wrapped <= 0:
+        # During Python import, interaction_handlers can appear in sys.modules
+        # before its decision functions are defined. Do not mark applied yet;
+        # the import hook will retry after later imports and once the module
+        # finishes loading.
+        if not _WAIT_LOGGED:
+            _WAIT_LOGGED = True
+            _log("waiting for verification decision handlers; will retry when interaction_handlers finishes importing")
+        return
+
     try:
         setattr(handler_mod, "_VERIFICATION_OPERATION_QUEUE_GUARD_APPLIED", True)
     except Exception:
