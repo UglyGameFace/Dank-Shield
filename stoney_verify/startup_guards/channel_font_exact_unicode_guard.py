@@ -2,9 +2,11 @@ from __future__ import annotations
 
 """Exact Unicode font maps for Channel Name Fonts.
 
-Live channel apply is intentionally two-stage:
+Live channel apply is intentionally proof-gated:
 1. safely decode existing styled Unicode back to plain channel words;
-2. apply the currently selected style to that clean word section.
+2. clean spelling into a canonical word section;
+3. apply the selected style to that clean word section;
+4. prove the transform did not leave eligible letters half-styled.
 """
 
 import re
@@ -115,11 +117,39 @@ def plain_live_name(value: Any) -> str:
     return f"{prefix}{middle}{suffix}"[:100]
 
 
-def styled_live_name(value: Any, options: Any) -> str:
+def _style_from_options(options: Any) -> str:
     opts = options if isinstance(options, dict) else {}
     style = str(opts.get("unicodeStyle") or opts.get("unicode_style") or opts.get("font") or "normal").strip().lower().replace("-", "_")
     if style in _UNSAFE_LIVE_STYLES:
-        style = "normal"
+        return "normal"
+    return style
+
+
+def _proof_transform(middle: str, style: str, styled: str) -> tuple[bool, str]:
+    if style == "normal":
+        return True, ""
+    mapping = exact_unicode_map(style)
+    if not mapping:
+        return False, "selected font is unavailable"
+    alpha = [ch for ch in middle if ch.isalpha()]
+    if not alpha:
+        return True, ""
+    missing = [ch for ch in alpha if mapping.get(ch, ch) == ch]
+    if missing:
+        return False, "selected font cannot transform: " + "".join(sorted(set(missing)))[:12]
+    transformed = [ch for ch in styled if ch.isalpha() and not (ch.isascii() and ch.islower())]
+    if not transformed:
+        return False, "selected font did not visibly transform letters"
+    decoded_again = _decode(styled)
+    expected = middle
+    got = re.sub(r"-+", "-", "".join(ch if ch.isalnum() else "-" for ch in decoded_again)).strip("-").lower()
+    if got != expected:
+        return False, f"decode proof mismatch: {got[:32]}"
+    return True, ""
+
+
+def styled_live_name(value: Any, options: Any) -> str:
+    style = _style_from_options(options)
     mapping = exact_unicode_map(style)
     prefix, middle, suffix = _split_clean(value)
     if not middle:
@@ -128,10 +158,23 @@ def styled_live_name(value: Any, options: Any) -> str:
     return f"{prefix}{styled}{suffix}"[:100]
 
 
+def _proof_styled_live_name(value: Any, options: Any) -> tuple[str, str | None]:
+    style = _style_from_options(options)
+    mapping = exact_unicode_map(style)
+    prefix, middle, suffix = _split_clean(value)
+    if not middle:
+        return plain_live_name(value), None
+    styled = "".join(mapping.get(ch, ch) for ch in middle) if mapping else middle
+    ok, reason = _proof_transform(middle, style, styled)
+    if not ok:
+        return f"{prefix}{styled}{suffix}"[:100], reason
+    return f"{prefix}{styled}{suffix}"[:100], None
+
+
 def _patch_live_plan() -> None:
     try:
         from stoney_verify.startup_guards import channel_font_rename_queue_guard as guard
-        if getattr(guard, "_styled_live_names", False):
+        if getattr(guard, "_proofed_styled_live_names", False):
             return
 
         async def parts(guild: Any, options: dict[str, str]):
@@ -152,11 +195,11 @@ def _patch_live_plan() -> None:
                     skipped += 1
                     continue
                 before = guard._safe_str(getattr(channel, "name", ""))
-                after = styled_live_name(before, options)
+                after, proof_error = _proof_styled_live_name(before, options)
                 if not after or after == before:
                     continue
                 row = {"channel_id": str(cid), "before": before, "after": after, "kind": guard._kind(channel)}
-                reason = guard._bot_access_reason(guild, channel)
+                reason = proof_error or guard._bot_access_reason(guild, channel)
                 if reason:
                     row["blocked_reason"] = reason
                     blocked.append(row)
@@ -167,6 +210,7 @@ def _patch_live_plan() -> None:
             return ready, blocked, skipped
 
         guard._build_plan_parts = parts
+        guard._proofed_styled_live_names = True
         guard._styled_live_names = True
         guard._plain_live_names = False
     except Exception as exc:
@@ -200,7 +244,7 @@ def apply() -> bool:
             pass
         _patch_live_plan()
         _PATCHED = True
-        print("🔤 channel_font_exact_unicode_guard active; exact maps and selected-style live rename plans patched")
+        print("🔤 channel_font_exact_unicode_guard active; proof-gated selected-style live rename plans patched")
         return True
     except Exception as exc:
         try:
