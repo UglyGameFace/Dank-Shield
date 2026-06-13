@@ -35,10 +35,11 @@ def _apply_optional_guard(module_name: str, label: str) -> bool:
 
 def apply() -> bool:
     epoch_ok = _apply_optional_guard("ticket_panel_command_epoch_guard", "ticket-panel slash refresh guard")
+    identity_ok = _apply_optional_guard("ticket_staff_identity_guard", "ticket staff identity guard")
     repair_ok = _apply_optional_guard("ticket_panel_repair_records_command", "ticket record repair command")
     doctor_ok = _apply_optional_guard("ticket_panel_doctor_stability_guard", "doctor stability guard")
     setup_ok = _apply_optional_guard("setup_check_existing_server_inference_guard", "setup-check inference guard")
-    return bool(epoch_ok and repair_ok and doctor_ok and setup_ok)
+    return bool(epoch_ok and identity_ok and repair_ok and doctor_ok and setup_ok)
 
 
 apply()
