@@ -5,6 +5,8 @@ from __future__ import annotations
 Some decorative Unicode alphabets have gaps, so simple contiguous ranges leave
 letters unchanged or mapped to the wrong symbol. This guard builds mappings by
 Unicode character name and patches both the runtime and the font catalog guard.
+It also loads the Preview & Apply button guard because the font screen class may
+not exist yet when earlier font guards run.
 """
 
 import unicodedata
@@ -104,8 +106,21 @@ def exact_unicode_map(style: str) -> dict[str, str]:
     return {}
 
 
+def _load_preview_button_guard() -> None:
+    try:
+        from stoney_verify.startup_guards import channel_font_preview_button_guard
+
+        channel_font_preview_button_guard.apply()
+    except Exception as exc:
+        try:
+            print(f"⚠️ channel_font_exact_unicode_guard preview button failed: {exc!r}")
+        except Exception:
+            pass
+
+
 def apply() -> bool:
     global _PATCHED
+    _load_preview_button_guard()
     if _PATCHED:
         return True
     try:
