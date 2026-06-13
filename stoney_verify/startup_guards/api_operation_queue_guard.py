@@ -237,6 +237,45 @@ def _wrap_endpoint(server: Any, endpoint_name: str) -> bool:
     return True
 
 
+def _wrap_health(server: Any) -> bool:
+    original = getattr(server, "health", None)
+    if not callable(original) or getattr(original, "_api_operation_queue_health_wrapped", False):
+        return False
+
+    async def wrapped_health(request: Any):
+        guild_count = 0
+        try:
+            guild_count = len(getattr(server.bot, "guilds", []) or [])
+        except Exception:
+            guild_count = 0
+
+        queue_summary = {}
+        try:
+            from ..operation_queue import operation_queue_health_summary
+
+            queue_summary = operation_queue_health_summary()
+        except Exception:
+            queue_summary = {"status": "unavailable"}
+
+        return server._json_ok(
+            status="online",
+            guild_count=guild_count,
+            api="structured_bot_api",
+            auth_required=server._should_require_api_auth(),
+            bind_host=server._api_bind_host(),
+            bind_port=server._api_bind_port(),
+            operation_queue=queue_summary,
+        )
+
+    try:
+        setattr(wrapped_health, "_api_operation_queue_health_wrapped", True)
+        setattr(wrapped_health, "_api_operation_queue_health_original", original)
+    except Exception:
+        pass
+    setattr(server, "health", wrapped_health)
+    return True
+
+
 def _patch_server_module(server: Any) -> None:
     global _PATCHED
     if getattr(server, "_api_operation_queue_guard_patched", False):
@@ -250,13 +289,19 @@ def _patch_server_module(server: Any) -> None:
         except Exception as e:
             _warn(f"failed wrapping endpoint={name}: {e!r}")
 
+    health_wrapped = False
+    try:
+        health_wrapped = _wrap_health(server)
+    except Exception as e:
+        _warn(f"failed wrapping health endpoint: {e!r}")
+
     try:
         setattr(server, "_api_operation_queue_guard_patched", True)
     except Exception:
         pass
 
     _PATCHED = True
-    _log(f"patched structured API mutation endpoints wrapped={wrapped}")
+    _log(f"patched structured API mutation endpoints wrapped={wrapped} health_wrapped={health_wrapped}")
 
 
 def _maybe_patch_loaded() -> None:
