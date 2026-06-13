@@ -7,15 +7,32 @@ ROOT = Path(__file__).resolve().parents[1]
 
 FILES = [
     'stoney_verify/operation_queue.py',
+    'stoney_verify/services/channel_builder_runtime.py',
     'stoney_verify/startup_guards/guild_operation_queue_guard.py',
     'stoney_verify/startup_guards/channel_builder_api_guard.py',
+    'stoney_verify/startup_guards/channel_builder_runtime_service_guard.py',
     'stoney_verify/startup_guards/channel_builder_rollback_api_guard.py',
 ]
 
 CHECKS = {
     'stoney_verify/startup_guards/guild_operation_queue_guard.py': [
         'channel_builder_api_guard',
+        'channel_builder_runtime_service_guard',
         'channel_builder_rollback_api_guard',
+    ],
+    'stoney_verify/services/channel_builder_runtime.py': [
+        'preflight_channel_builder_plan',
+        'execute_channel_builder_plan',
+        'normalize_channel_builder_items',
+        'validate_channel_builder_items',
+        'Manage Channels permission',
+        'rollback_plan',
+    ],
+    'stoney_verify/startup_guards/channel_builder_runtime_service_guard.py': [
+        'channel_builder_runtime',
+        '_execute_channel_builder_plan',
+        '_normalize_items',
+        'list_channel_builder_channels',
     ],
     'stoney_verify/startup_guards/channel_builder_api_guard.py': [
         'channel_builder_apply_plan',
