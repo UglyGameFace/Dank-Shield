@@ -4,17 +4,21 @@ on:
   pull_request:
     paths:
       - 'stoney_verify/operation_queue.py'
+      - 'stoney_verify/api_new/channel_builder_routes.py'
+      - 'stoney_verify/services/channel_builder_runtime.py'
+      - 'stoney_verify/services/channel_builder_rollback_runtime.py'
       - 'stoney_verify/startup_guards/guild_operation_queue_guard.py'
       - 'stoney_verify/startup_guards/channel_builder_api_guard.py'
-      - 'stoney_verify/startup_guards/channel_builder_rollback_api_guard.py'
       - 'tools/audit_channel_builder_queue.py'
   push:
     branches: [main]
     paths:
       - 'stoney_verify/operation_queue.py'
+      - 'stoney_verify/api_new/channel_builder_routes.py'
+      - 'stoney_verify/services/channel_builder_runtime.py'
+      - 'stoney_verify/services/channel_builder_rollback_runtime.py'
       - 'stoney_verify/startup_guards/guild_operation_queue_guard.py'
       - 'stoney_verify/startup_guards/channel_builder_api_guard.py'
-      - 'stoney_verify/startup_guards/channel_builder_rollback_api_guard.py'
       - 'tools/audit_channel_builder_queue.py'
 
 jobs:
