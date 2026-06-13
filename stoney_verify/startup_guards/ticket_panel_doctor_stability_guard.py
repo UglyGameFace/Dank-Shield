@@ -269,6 +269,101 @@ async def _stable_health_lines(panel_mod: Any, guild: discord.Guild) -> Tuple[Li
     return blockers, warnings, ok
 
 
+def _stable_setup_ticket_score(score_mod: Any, guild: discord.Guild, cfg: Any, enabled: bool):
+    if not enabled:
+        return score_mod.FeatureHealth("Tickets", "🎫", "skipped", "Skipped by selected services.")
+
+    active_cat = score_mod._category(guild, score_mod._cfg_first(cfg, "ticket_category_id", "active_ticket_category_id", "open_ticket_category_id"))
+    archive_cat = score_mod._category(guild, score_mod._cfg_first(cfg, "ticket_archive_category_id", "archive_category_id", "closed_ticket_category_id"))
+    panel_channel = score_mod._text_channel(
+        guild,
+        score_mod._cfg_first(
+            cfg,
+            "ticket_panel_channel_id",
+            "support_channel_id",
+            "ticket_support_channel_id",
+            "public_ticket_panel_channel_id",
+            "panel_channel_id",
+        ),
+    )
+    transcripts = score_mod._text_channel(guild, score_mod._cfg_first(cfg, "transcripts_channel_id", "transcript_channel_id"))
+    staff_role = score_mod._role(guild, score_mod._cfg_first(cfg, "staff_role_id", "ticket_staff_role_id", "support_role_id"))
+
+    blockers: list[str] = []
+    warnings: list[str] = []
+    ready_bits: list[str] = []
+
+    if active_cat is None:
+        blockers.append("Choose or create the active ticket category.")
+    elif not score_mod._can_use_channel(guild, active_cat, manage=True):
+        blockers.append("Bot needs View Channels + Manage Channels on the active ticket category.")
+    else:
+        ready_bits.append(f"active `{active_cat.name}`")
+
+    if staff_role is None:
+        blockers.append("Choose the ticket staff role.")
+    elif staff_role.is_default():
+        blockers.append("Ticket staff role cannot be @everyone.")
+    else:
+        ready_bits.append(f"staff `{staff_role.name}`")
+
+    if panel_channel is None:
+        warnings.append("Public ticket panel/support channel is not saved yet. Ticket creation is still testable after staff repost the panel.")
+    elif not score_mod._can_use_channel(guild, panel_channel):
+        blockers.append("Bot cannot send/read embeds in the saved ticket panel/support channel.")
+    else:
+        ready_bits.append(f"panel `{panel_channel.name}`")
+
+    if archive_cat is None:
+        warnings.append("Archive category is optional and not set. Closed-ticket organization may be limited, but ticket creation is not blocked.")
+    elif not score_mod._can_use_channel(guild, archive_cat, manage=True):
+        warnings.append("Archive category is configured but missing optional bot permissions. Ticket creation is not blocked.")
+    else:
+        ready_bits.append(f"archive `{archive_cat.name}`")
+
+    if transcripts is None:
+        warnings.append("Transcript channel is optional and not set. Ticket creation is not blocked.")
+    elif not score_mod._can_use_channel(guild, transcripts, need_files=True):
+        warnings.append("Transcript channel is configured but missing optional send/read/embed/attach permissions. Ticket creation is not blocked.")
+    else:
+        ready_bits.append(f"transcripts `{transcripts.name}`")
+
+    if active_cat is not None and archive_cat is not None:
+        try:
+            if int(active_cat.id) == int(archive_cat.id):
+                warnings.append("Active and archive ticket categories are the same. Split them later for cleaner staff workflow.")
+        except Exception:
+            pass
+
+    if panel_channel is not None and active_cat is not None:
+        try:
+            parent = getattr(panel_channel, "category", None)
+            if parent is not None and int(parent.id) == int(active_cat.id):
+                warnings.append("Ticket panel/support channel is inside the active ticket category; public panels usually belong in START HERE/public channels.")
+        except Exception:
+            pass
+
+    if blockers:
+        return score_mod.FeatureHealth(
+            "Tickets",
+            "🎫",
+            "blocker",
+            "Needs the ticket creation essentials before testing.",
+            tuple(blockers[:5]),
+            "Open /dank setup → Existing Server → Ticket Basics.",
+        )
+    if warnings:
+        return score_mod.FeatureHealth(
+            "Tickets",
+            "🎫",
+            "warning",
+            "Ticket creation essentials are usable; optional cleanup remains.",
+            tuple(warnings[:5]),
+            "Repost the panel or add optional archive/transcript channels when ready.",
+        )
+    return score_mod.FeatureHealth("Tickets", "🎫", "ready", f"Ticket essentials are ready: {', '.join(ready_bits)}.")
+
+
 async def _stable_doctor_command(doc_mod: Any, panel_mod: Any, interaction: discord.Interaction) -> None:
     if not panel_mod._staff_check(interaction):
         return await panel_mod.reply_once(interaction, {"content": "❌ Staff only.", "ephemeral": True})
@@ -433,6 +528,15 @@ def apply() -> bool:
     except Exception as exc:
         ok = False
         _warn(f"health patch failed: {exc!r}")
+
+    try:
+        from . import setup_feature_health_scoreboard as score_mod
+        score_mod._ticket_score = lambda guild, cfg, enabled: _stable_setup_ticket_score(score_mod, guild, cfg, enabled)
+        setattr(score_mod, "_TICKET_SETUP_SCORE_FALSE_POSITIVE_GUARD", True)
+        _log("patched /dank setup ticket scoreboard false positives")
+    except Exception as exc:
+        ok = False
+        _warn(f"setup scoreboard patch failed: {exc!r}")
 
     try:
         async def doctor(panel_mod_arg: Any, interaction: discord.Interaction) -> None:
