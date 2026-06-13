@@ -41,29 +41,112 @@ def _range_map(chars: str, start: int) -> dict[str, str]:
     return {char: chr(start + index) for index, char in enumerate(chars)}
 
 
+def _lookup(name: str, fallback: str | None = None) -> str | None:
+    try:
+        return unicodedata.lookup(name)
+    except KeyError:
+        return fallback
+
+
+def _math_letters(prefix: str, *, digit_prefix: str | None = None, special: dict[str, str] | None = None) -> dict[str, str]:
+    """Build exact math alphabet maps by Unicode name.
+
+    Several decorative alphabets have gaps in the Unicode block. Range-only maps
+    leave random letters unchanged. Name lookup plus explicit special cases keeps
+    Script/Fraktur/Bold Script/etc. consistent.
+    """
+
+    special = special or {}
+    out: dict[str, str] = {}
+    for ch in "ABCDEFGHIJKLMNOPQRSTUVWXYZ":
+        out[ch] = special.get(ch) or _lookup(f"MATHEMATICAL {prefix} CAPITAL {ch}", ch) or ch
+    for ch in "abcdefghijklmnopqrstuvwxyz":
+        out[ch] = special.get(ch) or _lookup(f"MATHEMATICAL {prefix} SMALL {ch.upper()}", ch) or ch
+    if digit_prefix:
+        for digit, word in (
+            ("0", "ZERO"),
+            ("1", "ONE"),
+            ("2", "TWO"),
+            ("3", "THREE"),
+            ("4", "FOUR"),
+            ("5", "FIVE"),
+            ("6", "SIX"),
+            ("7", "SEVEN"),
+            ("8", "EIGHT"),
+            ("9", "NINE"),
+        ):
+            out[digit] = _lookup(f"MATHEMATICAL {digit_prefix} DIGIT {word}", digit) or digit
+    return out
+
+
+def _explicit(rows: list[tuple[str, int | str]]) -> dict[str, str]:
+    out: dict[str, str] = {}
+    for key, value in rows:
+        out[key] = chr(value) if isinstance(value, int) else value
+    return out
+
+
 def _unicode_map(style: str) -> dict[str, str]:
-    letters_lower = "abcdefghijklmnopqrstuvwxyz"
-    letters_upper = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
-    digits = "0123456789"
+    style = safe_str(style).lower().replace("-", "_")
     if style == "bold_sans":
-        return {**_range_map(letters_upper, 0x1D5D4), **_range_map(letters_lower, 0x1D5EE), **_range_map(digits, 0x1D7EC)}
+        return _math_letters("SANS-SERIF BOLD", digit_prefix="SANS-SERIF BOLD")
     if style == "italic_sans":
-        return {**_range_map(letters_upper, 0x1D608), **_range_map(letters_lower, 0x1D622)}
+        return _math_letters("SANS-SERIF ITALIC")
     if style == "bold_italic_sans":
-        return {**_range_map(letters_upper, 0x1D63C), **_range_map(letters_lower, 0x1D656)}
+        return _math_letters("SANS-SERIF BOLD ITALIC")
     if style == "monospace":
-        return {**_range_map(letters_upper, 0x1D670), **_range_map(letters_lower, 0x1D68A), **_range_map(digits, 0x1D7F6)}
+        return _math_letters("MONOSPACE", digit_prefix="MONOSPACE")
     if style == "fullwidth":
-        return {**_range_map(letters_upper, 0xFF21), **_range_map(letters_lower, 0xFF41), **_range_map(digits, 0xFF10), "-": chr(0xFF0D), " ": chr(0x3000)}
+        return {**_range_map("ABCDEFGHIJKLMNOPQRSTUVWXYZ", 0xFF21), **_range_map("abcdefghijklmnopqrstuvwxyz", 0xFF41), **_range_map("0123456789", 0xFF10), "-": chr(0xFF0D), " ": chr(0x3000)}
     if style == "serif_bold":
-        return {**_range_map(letters_upper, 0x1D400), **_range_map(letters_lower, 0x1D41A), **_range_map(digits, 0x1D7CE)}
+        return _math_letters("BOLD", digit_prefix="BOLD")
     if style == "serif_italic":
-        return {**_range_map(letters_upper, 0x1D434), **_range_map(letters_lower, 0x1D44E)}
+        return _math_letters("ITALIC", special={"h": chr(0x210E)})
     if style == "serif_bold_italic":
-        return {**_range_map(letters_upper, 0x1D468), **_range_map(letters_lower, 0x1D482)}
+        return _math_letters("BOLD ITALIC")
+    if style == "script":
+        return _math_letters(
+            "SCRIPT",
+            special={
+                "B": chr(0x212C),
+                "E": chr(0x2130),
+                "F": chr(0x2131),
+                "H": chr(0x210B),
+                "I": chr(0x2110),
+                "L": chr(0x2112),
+                "M": chr(0x2133),
+                "R": chr(0x211B),
+                "e": chr(0x212F),
+                "g": chr(0x210A),
+                "o": chr(0x2134),
+            },
+        )
+    if style == "bold_script":
+        return _math_letters("BOLD SCRIPT")
+    if style == "fraktur":
+        return _math_letters(
+            "FRAKTUR",
+            special={"C": chr(0x212D), "H": chr(0x210C), "I": chr(0x2111), "R": chr(0x211C), "Z": chr(0x2128)},
+        )
+    if style == "bold_fraktur":
+        return _math_letters("BOLD FRAKTUR")
+    if style == "circled":
+        return {**_range_map("ABCDEFGHIJKLMNOPQRSTUVWXYZ", 0x24B6), **_range_map("abcdefghijklmnopqrstuvwxyz", 0x24D0), "0": chr(0x24EA), "1": chr(0x2460), "2": chr(0x2461), "3": chr(0x2462), "4": chr(0x2463), "5": chr(0x2464), "6": chr(0x2465), "7": chr(0x2466), "8": chr(0x2467), "9": chr(0x2468)}
+    if style == "parenthesized":
+        return _explicit([
+            ("a", 0x249C), ("b", 0x249D), ("c", 0x249E), ("d", 0x249F), ("e", 0x24A0), ("f", 0x24A1), ("g", 0x24A2), ("h", 0x24A3), ("i", 0x24A4), ("j", 0x24A5), ("k", 0x24A6), ("l", 0x24A7), ("m", 0x24A8), ("n", 0x24A9), ("o", 0x24AA), ("p", 0x24AB), ("q", 0x24AC), ("r", 0x24AD), ("s", 0x24AE), ("t", 0x24AF), ("u", 0x24B0), ("v", 0x24B1), ("w", 0x24B2), ("x", 0x24B3), ("y", 0x24B4), ("z", 0x24B5),
+            ("1", 0x2474), ("2", 0x2475), ("3", 0x2476), ("4", 0x2477), ("5", 0x2478), ("6", 0x2479), ("7", 0x247A), ("8", 0x247B), ("9", 0x247C),
+        ])
     if style == "small_caps":
-        cps = {"a": 0x1D00, "b": 0x0299, "c": 0x1D04, "d": 0x1D05, "e": 0x1D07, "f": 0xA730, "g": 0x0262, "h": 0x029C, "i": 0x026A, "j": 0x1D0A, "k": 0x1D0B, "l": 0x029F, "m": 0x1D0D, "n": 0x0274, "o": 0x1D0F, "p": 0x1D18, "q": 0x01EB, "r": 0x0280, "s": 0xA731, "t": 0x1D1B, "u": 0x1D1C, "v": 0x1D20, "w": 0x1D21, "x": ord("x"), "y": 0x028F, "z": 0x1D22}
-        return {k: chr(v) for k, v in cps.items()}
+        return _explicit([
+            ("a", 0x1D00), ("b", 0x0299), ("c", 0x1D04), ("d", 0x1D05), ("e", 0x1D07), ("f", 0xA730), ("g", 0x0262), ("h", 0x029C), ("i", 0x026A), ("j", 0x1D0A), ("k", 0x1D0B), ("l", 0x029F), ("m", 0x1D0D), ("n", 0x0274), ("o", 0x1D0F), ("p", 0x1D18), ("q", 0x01EB), ("r", 0x0280), ("s", 0xA731), ("t", 0x1D1B), ("u", 0x1D1C), ("v", 0x1D20), ("w", 0x1D21), ("x", "x"), ("y", 0x028F), ("z", 0x1D22),
+        ])
+    if style == "upside_down":
+        return _explicit([
+            ("a", 0x0250), ("b", "q"), ("c", 0x0254), ("d", "p"), ("e", 0x01DD), ("f", 0x025F), ("g", 0x0183), ("h", 0x0265), ("i", 0x1D09), ("j", 0x027E), ("k", 0x029E), ("l", "l"), ("m", 0x026F), ("n", "u"), ("o", "o"), ("p", "d"), ("q", "b"), ("r", 0x0279), ("s", "s"), ("t", 0x0287), ("u", "n"), ("v", 0x028C), ("w", 0x028D), ("x", "x"), ("y", 0x028E), ("z", "z"),
+            ("A", 0x2200), ("C", 0x0186), ("E", 0x018E), ("F", 0x2132), ("G", 0x05E4), ("J", 0x017F), ("L", 0x02E5), ("P", 0x0500), ("T", 0x22A5), ("U", 0x0548), ("V", 0x039B), ("W", "M"), ("Y", 0x2144),
+            ("0", "0"), ("1", 0x0196), ("2", 0x1105), ("3", 0x0190), ("4", 0x3123), ("5", 0x03DB), ("6", "9"), ("7", 0x3125), ("8", "8"), ("9", "6"),
+        ])
     return {}
 
 
@@ -260,247 +343,7 @@ def channel_payload(channel: Any) -> dict[str, Any]:
         "id": str(getattr(channel, "id", "")),
         "name": safe_str(getattr(channel, "name", "")),
         "type": channel_kind(channel),
-        "position": getattr(channel, "position", None),
-        "category_id": str(getattr(parent, "id", "")) if parent else None,
-        "category_name": safe_str(getattr(parent, "name", "")) if parent else None,
-        "mention": safe_str(getattr(channel, "mention", "")),
+        "position": safe_int(getattr(channel, "position", 0), 0),
+        "categoryId": str(getattr(parent, "id", "")) if parent else "",
+        "categoryName": safe_str(getattr(parent, "name", "")) if parent else "",
     }
-
-
-def snapshot_channel(channel: Any) -> dict[str, Any]:
-    parent = getattr(channel, "category", None)
-    return {
-        "channel_id": str(getattr(channel, "id", "")),
-        "name": safe_str(getattr(channel, "name", "")),
-        "type": channel_kind(channel),
-        "category_id": str(getattr(parent, "id", "")) if parent else None,
-        "category_name": safe_str(getattr(parent, "name", "")) if parent else None,
-        "position": getattr(channel, "position", None),
-        "nsfw": bool(getattr(channel, "nsfw", False)),
-        "slowmode_delay": getattr(channel, "slowmode_delay", None),
-        "sync_permissions": getattr(channel, "permissions_synced", None),
-    }
-
-
-def sort_channels(channels: list[Any]) -> list[Any]:
-    def key(channel: Any) -> tuple[int, int, str]:
-        parent = getattr(channel, "category", None)
-        parent_pos = getattr(parent, "position", -1) if parent else -1
-        return (int(parent_pos or -1), int(getattr(channel, "position", 0) or 0), safe_str(getattr(channel, "name", "")))
-
-    return sorted(channels, key=key)
-
-
-def find_category(guild: discord.Guild, name: str) -> Optional[discord.CategoryChannel]:
-    target = safe_str(name).lower()
-    if not target:
-        return None
-    for category in getattr(guild, "categories", []) or []:
-        if safe_str(category.name).lower() == target:
-            return category
-    return None
-
-
-async def ensure_category(guild: discord.Guild, name: str, *, reason: str) -> Optional[discord.CategoryChannel]:
-    existing = find_category(guild, name)
-    if existing is not None:
-        return existing
-    if not name:
-        return None
-    return await guild.create_category(name=name[:100], reason=reason)
-
-
-def find_channel(guild: discord.Guild, item: dict[str, Any]) -> Optional[discord.abc.GuildChannel]:
-    current_id = safe_int(item.get("current_id"), 0)
-    if current_id > 0:
-        channel = guild.get_channel(current_id)
-        if channel is not None:
-            return channel
-    current_name = safe_str(item.get("current_name")).lower()
-    if current_name:
-        for channel in getattr(guild, "channels", []) or []:
-            if safe_str(getattr(channel, "name", "")).lower() == current_name:
-                return channel
-    return None
-
-
-def bot_member_for(guild: discord.Guild) -> Optional[discord.Member]:
-    try:
-        member = getattr(guild, "me", None)
-        if member is not None:
-            return member
-        client_user = getattr(getattr(guild, "_state", None), "user", None)
-        return guild.get_member(int(getattr(client_user, "id", 0))) if client_user else None
-    except Exception:
-        return None
-
-
-def preflight_channel_builder_plan(guild: discord.Guild, items: list[dict[str, Any]]) -> dict[str, Any]:
-    errors: list[str] = []
-    warnings: list[str] = []
-    member = bot_member_for(guild)
-    if member is None:
-        errors.append("Bot member could not be resolved in this guild.")
-    elif not getattr(member.guild_permissions, "manage_channels", False):
-        errors.append("Bot is missing Manage Channels permission.")
-
-    create_items = [item for item in items if item.get("action") == "create"]
-    if len(getattr(guild, "channels", []) or []) + len(create_items) > DISCORD_CHANNEL_LIMIT:
-        errors.append("This plan may exceed Discord's guild channel limit.")
-
-    category_adds: dict[str, int] = {}
-    for item in create_items:
-        if item.get("type") == "forum" and not hasattr(guild, "create_forum"):
-            errors.append("Forum channels are not supported by the installed discord.py version.")
-        category = safe_str(item.get("category"))
-        if category:
-            category_adds[category.lower()] = category_adds.get(category.lower(), 0) + 1
-    for category in getattr(guild, "categories", []) or []:
-        count = len(getattr(category, "channels", []) or []) + category_adds.get(safe_str(category.name).lower(), 0)
-        if count > CATEGORY_CHILD_LIMIT:
-            errors.append(f"Category {category.name} may exceed Discord's 50 channel category child limit.")
-
-    for item in items:
-        if item.get("action") == "rename" and find_channel(guild, item) is None:
-            errors.append(f"row {int(item.get('index', 0)) + 1}: existing channel not found for rename")
-
-    return {"ok": not errors, "errors": errors[:25], "warnings": warnings[:25]}
-
-
-async def create_channel(guild: discord.Guild, item: dict[str, Any], *, reason: str) -> dict[str, Any]:
-    channel_type = safe_str(item.get("type"), "text")
-    final_name = safe_str(item.get("final_name"))[:100]
-    category = await ensure_category(guild, safe_str(item.get("category")), reason=reason)
-
-    if channel_type == "voice":
-        channel = await guild.create_voice_channel(name=final_name, category=category, reason=reason)
-    elif channel_type == "forum" and hasattr(guild, "create_forum"):
-        channel = await guild.create_forum(name=final_name, category=category, reason=reason)
-    elif channel_type == "news":
-        try:
-            channel = await guild.create_text_channel(name=final_name, category=category, news=True, reason=reason)
-        except TypeError:
-            channel = await guild.create_text_channel(name=final_name, category=category, reason=reason)
-    elif channel_type == "category":
-        channel = await ensure_category(guild, final_name, reason=reason)
-    else:
-        channel = await guild.create_text_channel(name=final_name, category=category, reason=reason)
-
-    snapshot = snapshot_channel(channel)
-    return {
-        "ok": True,
-        "action": "create",
-        "row_id": item.get("id"),
-        "channel_id": str(getattr(channel, "id", "")),
-        "name": getattr(channel, "name", final_name),
-        "type": channel_type,
-        "snapshot_after": snapshot,
-        "rollback": {"action": "delete_created_channel", "channel_id": snapshot.get("channel_id"), "name": snapshot.get("name")},
-    }
-
-
-async def rename_channel(guild: discord.Guild, item: dict[str, Any], *, reason: str) -> dict[str, Any]:
-    channel = find_channel(guild, item)
-    if channel is None:
-        return {"ok": False, "action": "rename", "row_id": item.get("id"), "error": "existing channel not found"}
-    before_snapshot = snapshot_channel(channel)
-    before = safe_str(getattr(channel, "name", ""))
-    final_name = safe_str(item.get("final_name"))[:100]
-    if before == final_name:
-        return {"ok": True, "action": "keep", "row_id": item.get("id"), "channel_id": str(getattr(channel, "id", "")), "name": before, "snapshot_before": before_snapshot}
-    await channel.edit(name=final_name, reason=reason)
-    after_snapshot = snapshot_channel(channel)
-    return {
-        "ok": True,
-        "action": "rename",
-        "row_id": item.get("id"),
-        "channel_id": str(getattr(channel, "id", "")),
-        "before": before,
-        "after": final_name,
-        "snapshot_before": before_snapshot,
-        "snapshot_after": after_snapshot,
-        "rollback": {
-            "action": "rename_channel",
-            "channel_id": before_snapshot.get("channel_id"),
-            "name": before_snapshot.get("name"),
-            "category_id": before_snapshot.get("category_id"),
-            "position": before_snapshot.get("position"),
-        },
-    }
-
-
-async def execute_channel_builder_plan(*, server: Any, guild_id: int, actor_id: int, items: list[dict[str, Any]], mode: str, dry_run: bool) -> dict[str, Any]:
-    guild, err = await get_guild_or_response(server, guild_id)
-    if err is not None:
-        return {"status": "failed", "error": "guild not found"}
-    assert guild is not None
-
-    preflight = preflight_channel_builder_plan(guild, items)
-    if not preflight.get("ok"):
-        return {"status": "failed", "guild_id": str(guild_id), "preflight": preflight, "error": "Channel Builder preflight failed"}
-
-    reason = f"Dank Shield Channel Builder {mode} by {actor_id or 'dashboard'}"
-    results: list[dict[str, Any]] = []
-    rollback_plan: list[dict[str, Any]] = []
-    counts = {"create": 0, "rename": 0, "keep": 0, "skip": 0, "failed": 0}
-
-    for item in items:
-        action = safe_str(item.get("action"))
-        if action in {"skip", "conflict"}:
-            counts["skip"] += 1
-            results.append({"ok": True, "action": "skip", "row_id": item.get("id")})
-            continue
-        if action == "keep":
-            counts["keep"] += 1
-            results.append({"ok": True, "action": "keep", "row_id": item.get("id"), "name": item.get("final_name")})
-            continue
-        if dry_run:
-            counts[action if action in counts else "skip"] = counts.get(action, 0) + 1
-            results.append({"ok": True, "dry_run": True, "action": action, "row_id": item.get("id"), "target": item.get("final_name"), "channel_id": item.get("current_id") or None})
-            continue
-        try:
-            if action == "create":
-                result = await create_channel(guild, item, reason=reason)
-                counts["create"] += 1
-            elif action == "rename":
-                result = await rename_channel(guild, item, reason=reason)
-                if result.get("ok"):
-                    counts["rename"] += 1 if result.get("action") == "rename" else 0
-                    counts["keep"] += 1 if result.get("action") == "keep" else 0
-                else:
-                    counts["failed"] += 1
-            else:
-                result = {"ok": True, "action": "skip", "row_id": item.get("id")}
-                counts["skip"] += 1
-        except Exception as exc:
-            counts["failed"] += 1
-            result = {"ok": False, "action": action, "row_id": item.get("id"), "error": repr(exc)}
-        if isinstance(result, dict) and result.get("rollback"):
-            rollback_plan.append(dict(result["rollback"]))
-        results.append(result)
-
-    rollback_plan.reverse()
-    return {
-        "status": "partial" if counts["failed"] else "succeeded",
-        "mode": mode,
-        "dry_run": dry_run,
-        "guild_id": str(guild_id),
-        "preflight": preflight,
-        "counts": counts,
-        "results": results,
-        "rollback_plan": rollback_plan,
-        "rollback_available": bool(rollback_plan),
-    }
-
-
-async def list_channels_payload(*, server: Any, guild_id: Any) -> tuple[dict[str, Any] | None, web.Response | None]:
-    guild, err = await get_guild_or_response(server, guild_id)
-    if err is not None:
-        return None, err
-    assert guild is not None
-    channels = [
-        channel
-        for channel in sort_channels(list(getattr(guild, "channels", []) or []))
-        if channel_kind(channel) in {"category", "text", "news", "voice", "forum"}
-    ]
-    return {"guild_id": str(guild.id), "channels": [channel_payload(channel) for channel in channels], "total": len(channels)}, None
