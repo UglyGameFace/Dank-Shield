@@ -13,7 +13,7 @@ instead of freezing setup, slash commands, or interactions.
 import concurrent.futures
 from typing import Any, Mapping, Optional
 
-_NOTICE_DB_TIMEOUT_SECONDS = 6.0
+_NOTICE_DB_TIMEOUT_SECONDS = 2.5
 _NOTICE_SELECT_LIMIT_MAX = 250
 _NOTICE_DB_WORKERS = 4
 _EXECUTOR = concurrent.futures.ThreadPoolExecutor(
@@ -33,12 +33,7 @@ def _safe_int(value: Any, default: int = 0) -> int:
 
 
 def _run_optional_db_call(label: str, fn: Any, *, timeout: float = _NOTICE_DB_TIMEOUT_SECONDS) -> tuple[Any, str]:
-    """Run one synchronous optional DB call with a hard wait budget.
-
-    The underlying sync HTTP request may continue in its worker thread if the
-    remote service is wedged, but the Discord event loop is released quickly and
-    future cycles are capped by the small executor.
-    """
+    """Run one synchronous optional DB call with a hard wait budget."""
 
     future = _EXECUTOR.submit(fn)
     try:
