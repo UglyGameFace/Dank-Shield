@@ -7,13 +7,9 @@ will sometimes feel delayed. Setup operations that create roles/channels or writ
 config need a clear per-server lock so Dank Shield does not create confusing
 followups or race setup state.
 
-This guard focuses on the risky setup paths:
-- Auto-Fix Missing Defaults / customized missing-name repair
-- guided setup config saves
-- guided setup category-menu writes
-
-The operations stay idempotent, but duplicate clicks now get a clear message
-instead of running a second copy at the same time.
+This guard now routes setup actions through the shared guild operation queue.
+The tiny local locks remain only as a fallback if the global queue cannot be
+loaded during startup.
 """
 
 import asyncio
@@ -133,7 +129,7 @@ async def _send_duplicate(interaction: discord.Interaction, action_label: str) -
         pass
 
 
-async def _run_locked(
+async def _run_locked_fallback(
     *,
     interaction: discord.Interaction,
     action: str,
@@ -159,6 +155,39 @@ async def _run_locked(
     async with lock:
         _RECENT[recent_key] = time.monotonic() + _RECENT_SECONDS
         return await coro_factory()
+
+
+async def _run_locked(
+    *,
+    interaction: discord.Interaction,
+    action: str,
+    action_label: str,
+    fingerprint: str,
+    coro_factory: Callable[[], Awaitable[Any]],
+) -> Any:
+    try:
+        from ..operation_queue import run_interaction_exclusive
+
+        return await run_interaction_exclusive(
+            interaction=interaction,
+            operation_type=f"setup_{action}",
+            action_label=action_label,
+            fingerprint=fingerprint,
+            risk_level="dangerous",
+            source="discord_command",
+            concurrency_class="guild_config_write",
+            timeout_seconds=180.0,
+            factory=coro_factory,
+        )
+    except Exception as e:
+        _warn(f"shared operation queue failed for {action}; using fallback lock: {e!r}")
+        return await _run_locked_fallback(
+            interaction=interaction,
+            action=action,
+            action_label=action_label,
+            fingerprint=fingerprint,
+            coro_factory=coro_factory,
+        )
 
 
 def _wrap_repair_specs(module: Any) -> bool:
@@ -206,6 +235,29 @@ def _wrap_seed_categories(module: Any) -> bool:
         return False
 
     async def wrapped_seed(guild: discord.Guild, *args: Any, **kwargs: Any):
+        try:
+            from ..operation_queue import run_exclusive
+
+            state, result, _job = await run_exclusive(
+                guild_id=int(guild.id),
+                actor_id=None,
+                operation_type="setup_seed_categories",
+                risk_level="moderate",
+                source="system",
+                payload={"args": args, "kwargs": kwargs},
+                concurrency_class="guild_config_write",
+                timeout_seconds=180.0,
+                reject_if_busy=True,
+                factory=lambda: original(guild, *args, **kwargs),
+            )
+            if state in {"duplicate", "busy"}:
+                return [], [], "Ticket menu setup is already running for this server. Wait a moment, then refresh."
+            if state == "failed":
+                return [], [], "Ticket menu setup failed before it could finish. Check bot logs, then refresh."
+            return result
+        except Exception as e:
+            _warn(f"shared operation queue failed for setup_seed_categories; using fallback lock: {e!r}")
+
         lock = _lock_for(int(guild.id), "setup_seed_categories")
         if lock.locked():
             return [], [], "Ticket menu setup is already running for this server. Wait a moment, then refresh."
