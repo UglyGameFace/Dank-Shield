@@ -19,6 +19,7 @@ _PRIVILEGED_ROLE_KEYS = {
     "admin", "administrator", "moderator", "mod", "staff", "staffteam", "support", "supportteam",
     "helper", "manager", "servermanager", "botmanager", "ticketstaff", "ticketteam",
 }
+_OWNER_SAFE_REASON = "this member is protected from staff-side actions"
 
 
 class RoleHierarchyActionBlocked(PermissionError):
@@ -158,12 +159,23 @@ def _outranks(actor: discord.Member, target: discord.Member) -> bool:
         return False
 
 
-def _should_block(action: str, guild: discord.Guild, target: Any, reason: Any) -> tuple[bool, str, Optional[discord.Member]]:
+async def _is_owner_safe_member(target: Any) -> bool:
+    try:
+        from stoney_verify.startup_guards.owner_safe_members_guard import is_safe_member
+
+        return bool(await is_safe_member(target))
+    except Exception:
+        return False
+
+
+async def _should_block(action: str, guild: discord.Guild, target: Any, reason: Any) -> tuple[bool, str, Optional[discord.Member]]:
     if not isinstance(target, discord.Member):
         return False, "", None
-    if not _is_privileged_member(target):
-        return False, "", None
     actor = _actor_from_reason(guild, reason)
+    if await _is_owner_safe_member(target):
+        return True, _OWNER_SAFE_REASON, actor
+    if not _is_privileged_member(target):
+        return False, "", actor
     if actor is None:
         return True, "unknown actor for privileged target", None
     if not _is_privileged_member(actor):
@@ -184,23 +196,34 @@ async def _notify_blocked_actor(*, actor: Optional[discord.Member], target: Any,
     if actor is None:
         return
     try:
-        embed = discord.Embed(
-            title="🛡️ Staff Safety Blocked This Action",
-            description=(
+        vague_safe = str(why or "").strip().lower() == _OWNER_SAFE_REASON
+        if vague_safe:
+            description = (
+                f"Dank Shield blocked your **{action}** action against {_member_label(target)}.\n\n"
+                "This member is protected from staff moderation through the bot. "
+                "Ask an authorized senior manager if action is needed."
+            )
+            reason_value = "member safety protection"
+        else:
+            description = (
                 f"Dank Shield blocked your **{action}** action against {_member_label(target)}.\n\n"
                 "Staff/mod/control members cannot be moderated by equal or lower-ranked staff through the bot. "
                 "Ask a higher-ranked manager or the server owner to handle it."
-            ),
+            )
+            reason_value = str(why or "role hierarchy protection")[:1024]
+        embed = discord.Embed(
+            title="🛡️ Staff Safety Blocked This Action",
+            description=description,
             color=discord.Color.orange(),
         )
-        embed.add_field(name="Reason", value=str(why or "role hierarchy protection")[:1024], inline=False)
+        embed.add_field(name="Reason", value=reason_value, inline=False)
         await actor.send(embed=embed)
     except Exception:
         pass
 
 
 async def _block_or_run(action: str, guild: discord.Guild, target: Any, reason: Any, runner: Any) -> Any:
-    blocked, why, actor = _should_block(action, guild, target, reason)
+    blocked, why, actor = await _should_block(action, guild, target, reason)
     if blocked:
         _warn(
             f"blocked hierarchy action={action} guild={getattr(guild, 'id', None)} "
@@ -208,7 +231,7 @@ async def _block_or_run(action: str, guild: discord.Guild, target: Any, reason: 
         )
         await _notify_blocked_actor(actor=actor, target=target, action=action, why=why)
         raise RoleHierarchyActionBlocked(
-            f"Dank Shield blocked {action} against privileged target {getattr(target, 'id', None)}: {why}"
+            f"Dank Shield blocked {action} against protected target {getattr(target, 'id', None)}: {why}"
         )
     return await runner()
 
@@ -259,7 +282,7 @@ def apply() -> bool:
             discord.Member.timeout = member_timeout  # type: ignore[method-assign]
 
         _PATCHED = True
-        _log("active; privileged targets notify actor and require a clearly outranking actor for kick/ban/timeout")
+        _log("active; privileged and selected safe targets notify actor and require approved hierarchy for kick/ban/timeout")
         return True
     except Exception as exc:
         _warn(f"failed: {exc!r}")
