@@ -74,6 +74,10 @@ import stoney_verify.startup_guards.ticket_forms_foundation_guard  # noqa: F401,
 # Store completed form answers for dashboard views when the DB migration exists.
 import stoney_verify.startup_guards.ticket_form_answer_storage_guard  # noqa: F401,E402
 
+# Global safety backbone for all dangerous guild mutations. Setup and future
+# Channel Builder actions use this to prevent spam-click duplicate jobs.
+import stoney_verify.startup_guards.guild_operation_queue_guard  # noqa: F401,E402
+
 # Setup actions can create channels/roles and write config. Load this before the
 # app starts so duplicate taps are blocked instead of racing setup state.
 import stoney_verify.startup_guards.setup_operation_lock_guard  # noqa: F401,E402
