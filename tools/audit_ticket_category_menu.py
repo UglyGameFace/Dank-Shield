@@ -10,6 +10,7 @@ ROOT = Path(__file__).resolve().parents[1]
 FILES = [
     "stoney_verify/startup_guards/public_ticket_panel_clean_hardening.py",
     "stoney_verify/startup_guards/ticket_category_cod_services_guard.py",
+    "stoney_verify/startup_guards/ticket_category_game_services_guard.py",
     "stoney_verify/startup_guards/ticket_form_default_templates_guard.py",
     "stoney_verify/startup_guards/external_ticket_history_sequence_guard.py",
     "stoney_verify/startup_guards/__init__.py",
@@ -35,6 +36,18 @@ CHECKS = {
         "Which COD game?",
         "Platform / console",
     ],
+    "stoney_verify/startup_guards/ticket_category_game_services_guard.py": [
+        "Game Services",
+        "server-owner-defined game service categories",
+        "server owners control the exact services and rules",
+        "_install_public_menu_support",
+        "_install_setup_category",
+        "_install_category_admin_type",
+        "_install_intake_service_type",
+        "_install_form_template_support",
+        "Which game is this for?",
+        "Server owners are responsible for their own rules and services.",
+    ],
     "stoney_verify/startup_guards/ticket_form_default_templates_guard.py": [
         "custom COD/modded-lobby categories are recognized",
         '"cod"',
@@ -50,6 +63,7 @@ CHECKS = {
     "stoney_verify/startup_guards/__init__.py": [
         "public_ticket_panel_clean_hardening",
         "ticket_category_cod_services_guard",
+        "ticket_category_game_services_guard",
         "external_ticket_history_sequence_guard",
     ],
     "stoney_verify/commands_ext/ticket_category_admin.py": [
@@ -68,6 +82,7 @@ CHECKS = {
 ORDERED_STARTUP_SNIPPETS = [
     "public_ticket_panel_clean_hardening",
     "ticket_category_cod_services_guard",
+    "ticket_category_game_services_guard",
     "external_ticket_history_sequence_guard",
 ]
 
