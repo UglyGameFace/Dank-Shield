@@ -1,20 +1,15 @@
 from __future__ import annotations
 
-"""Add a one-press VC setup fixer to the public setup screens.
+"""VC permission repair helpers.
 
-The health check now correctly catches VC verification permission problems. This
-small setup-only guard adds a safe button beside the setup navigation controls so
-server owners can fix the common VC permission mistakes without digging through
-Discord channel settings by hand.
+The old setup flow exposed a standalone "Fix VC Permissions" button. That is
+now redundant because /dank setup uses a task-based workflow:
 
-What the button fixes:
-- locks the configured VC verification voice channel from @everyone
-- prevents the saved waiting/unverified role from connecting without staff
-- gives Stoney the channel-level access it needs on the VC channel
-- gives configured staff/control roles access to the VC channel
-- gives Stoney + staff access to the saved VC queue/status text channel
+- Setup Health reports setup/access problems.
+- Safety & Repair owns permission repair.
 
-It never deletes channels, roles, tickets, or messages.
+This module keeps the VC repair helper available for internal use, but no longer
+injects another visible setup button that competes with Safety & Repair.
 """
 
 from typing import Any, Iterable, Optional
@@ -168,8 +163,8 @@ def _configured_vc_queue_text_ids(cfg: Any) -> list[int]:
         return primary
 
     # Fallback targets are only touched when the owner has no dedicated queue
-    # channel configured. This keeps the button helpful without exposing logs to
-    # @everyone or changing unrelated channels first.
+    # channel configured. This keeps repair helpful without changing unrelated
+    # channels first.
     return _unique_ints(
         [
             _cfg_int(cfg, "modlog_channel_id", "mod_log_channel_id", "raidlog_channel_id"),
@@ -219,11 +214,11 @@ async def _run_vc_permission_fix(interaction: discord.Interaction) -> tuple[list
     cfg = await _get_guild_config(guild)
     bot_member = _bot_member(guild)
     if bot_member is None:
-        return [], ["Stoney could not resolve itself as a member in this server."]
+        return [], ["Dank Shield could not resolve itself as a member in this server."]
 
     vc_id = _configured_vc_channel_id(cfg)
     if vc_id <= 0:
-        return [], ["No VC verification voice channel is saved. Press **Back to Setup** → **Use My Existing Server** → **Verification Channels** first."]
+        return [], ["No VC verification voice channel is saved. Use **Core Setup → Use Existing Roles/Channels → Verification Channels** first."]
 
     vc_channel = guild.get_channel(vc_id)
     if vc_channel is None:
@@ -236,7 +231,7 @@ async def _run_vc_permission_fix(interaction: discord.Interaction) -> tuple[list
 
     changed: list[str] = []
     failed: list[str] = []
-    reason = f"Dank Shield setup one-press VC permission repair by {interaction.user} ({interaction.user.id})"
+    reason = f"Dank Shield setup VC permission repair by {interaction.user} ({interaction.user.id})"
 
     # Voice channel lock + access.
     await _set_overwrite(
@@ -262,7 +257,7 @@ async def _run_vc_permission_fix(interaction: discord.Interaction) -> tuple[list
         reason=reason,
         changed=changed,
         failed=failed,
-        label=f"Allowed Stoney to control {_channel_name(vc_channel)}",
+        label=f"Allowed Dank Shield to control {_channel_name(vc_channel)}",
     )
 
     waiting_role_id = _configured_waiting_role_id(cfg)
@@ -296,7 +291,7 @@ async def _run_vc_permission_fix(interaction: discord.Interaction) -> tuple[list
         )
 
     # Dedicated VC queue/status text channel access. This is where the staff VC
-    # request panel posts, so Stoney and staff both need to see/send/read there.
+    # request panel posts, so Dank Shield and staff both need to see/send/read there.
     for channel_id in _configured_vc_queue_text_ids(cfg):
         text_channel = guild.get_channel(channel_id)
         if text_channel is None:
@@ -320,7 +315,7 @@ async def _run_vc_permission_fix(interaction: discord.Interaction) -> tuple[list
             reason=reason,
             changed=changed,
             failed=failed,
-            label=f"Allowed Stoney to post VC staff panels in {_channel_name(text_channel)}",
+            label=f"Allowed Dank Shield to post VC staff panels in {_channel_name(text_channel)}",
         )
 
         for role in staff_roles:
@@ -338,11 +333,12 @@ async def _run_vc_permission_fix(interaction: discord.Interaction) -> tuple[list
 
 
 async def _handle_fix_button(interaction: discord.Interaction) -> None:
+    """Compatibility handler kept for any already-rendered old buttons."""
     try:
         from stoney_verify.commands_ext import public_setup_solid
         from stoney_verify.commands_ext.public_setup_group import _require_setup_permission
     except Exception as e:
-        return await _send_problem(interaction, "❌ VC Fix Unavailable", f"Setup modules are not loaded yet: `{e!r}`")
+        return await _send_problem(interaction, "❌ VC Repair Unavailable", f"Setup modules are not loaded yet: `{e!r}`")
 
     if not await _require_setup_permission(interaction):
         return
@@ -350,7 +346,7 @@ async def _handle_fix_button(interaction: discord.Interaction) -> None:
     await _defer(interaction)
     guild = interaction.guild
     if guild is None:
-        return await _send_problem(interaction, "❌ VC Fix Failed", "This must be used inside a server.")
+        return await _send_problem(interaction, "❌ VC Repair Failed", "This must be used inside a server.")
 
     changed, failed = await _run_vc_permission_fix(interaction)
 
@@ -361,7 +357,7 @@ async def _handle_fix_button(interaction: discord.Interaction) -> None:
 
     if changed:
         embed.add_field(
-            name="🔒 One-Press VC Fix Applied",
+            name="🔒 VC Permissions Repaired",
             value="\n".join(f"✅ {item}" for item in changed[:10])[:1024],
             inline=False,
         )
@@ -369,8 +365,8 @@ async def _handle_fix_button(interaction: discord.Interaction) -> None:
         embed.add_field(
             name="Still Needs Manual Permission Help",
             value=(
-                "Stoney tried, but Discord denied one or more permission edits. Move the Stoney bot role above the roles/channels it manages, "
-                "then press this button again.\n\n" + "\n".join(f"⚠️ {item}" for item in failed[:8])
+                "Dank Shield tried, but Discord denied one or more permission edits. Move the Dank Shield bot role above the roles/channels it manages, "
+                "then use **Safety & Repair → Preview/Fix Permissions** again.\n\n" + "\n".join(f"⚠️ {item}" for item in failed[:8])
             )[:1024],
             inline=False,
         )
@@ -396,66 +392,18 @@ async def _handle_fix_button(interaction: discord.Interaction) -> None:
 
 
 def patch_setup_nav_with_vc_fix_button() -> bool:
+    """Compatibility no-op.
+
+    The standalone VC button was retired because Safety & Repair is now the
+    single permission-repair surface. Returning True keeps the startup guard
+    healthy without injecting redundant setup UI.
+    """
     global _PATCHED
     if _PATCHED:
         return True
-
-    try:
-        from stoney_verify.commands_ext import public_setup_solid
-    except Exception as e:
-        try:
-            print(f"⚠️ vc_setup_one_press_fix: public_setup_solid import failed: {e!r}")
-        except Exception:
-            pass
-        return False
-
-    setup_nav_view = getattr(public_setup_solid, "SetupNavView", None)
-    if setup_nav_view is None:
-        return False
-
-    original_init = getattr(setup_nav_view, "__init__", None)
-    if not callable(original_init):
-        return False
-    if getattr(original_init, "_stoney_vc_fix_wrapped", False):
-        _PATCHED = True
-        return True
-
-    def wrapped_init(self: discord.ui.View, *args: Any, **kwargs: Any) -> None:
-        original_init(self, *args, **kwargs)
-        try:
-            for child in list(getattr(self, "children", []) or []):
-                if getattr(child, "custom_id", None) == CUSTOM_ID:
-                    return
-
-            button = discord.ui.Button(
-                label="Fix VC Permissions",
-                emoji="🔒",
-                style=discord.ButtonStyle.success,
-                custom_id=CUSTOM_ID,
-                row=3,
-            )
-            button.callback = _handle_fix_button  # type: ignore[method-assign]
-            self.add_item(button)
-        except Exception as e:
-            try:
-                print(f"⚠️ vc_setup_one_press_fix: failed adding setup button: {e!r}")
-            except Exception:
-                pass
-
-    try:
-        setattr(wrapped_init, "_stoney_vc_fix_wrapped", True)
-    except Exception:
-        pass
-
-    setattr(setup_nav_view, "__init__", wrapped_init)
-    try:
-        setattr(public_setup_solid, "BackToSetupView", setup_nav_view)
-    except Exception:
-        pass
-
     _PATCHED = True
     try:
-        print("✅ vc_setup_one_press_fix: setup health VC fix button active")
+        print("✅ vc_setup_one_press_fix: standalone VC fix button retired; use Safety & Repair → Preview/Fix Permissions")
     except Exception:
         pass
     return True
@@ -464,4 +412,4 @@ def patch_setup_nav_with_vc_fix_button() -> bool:
 patch_setup_nav_with_vc_fix_button()
 
 
-__all__ = ["patch_setup_nav_with_vc_fix_button"]
+__all__ = ["patch_setup_nav_with_vc_fix_button", "_run_vc_permission_fix"]
