@@ -7,6 +7,7 @@ safe test, gated test ticket creation, refresh, cleanup, and back. Button sets
 stay compact so users do not get another wall of controls.
 """
 
+import asyncio
 from typing import Any, Optional
 
 import discord
@@ -14,6 +15,7 @@ import discord
 _PATCHED = False
 _ORIGINAL_EDIT_OR_FOLLOWUP: Any = None
 _PROGRESS_FIELDS = ("Blockers", "Warnings", "Passing Checks")
+_TEST_TICKET_LOCKS: dict[tuple[int, int], asyncio.Lock] = {}
 
 
 def _field_value(embed: Any, name: str) -> str:
@@ -250,6 +252,36 @@ async def _safe_test_setup(interaction: discord.Interaction) -> None:
     await solid._edit_or_followup(interaction, embed=embed, view=HealthActionView(embed=health))
 
 
+def _row_channel_id(row: dict[str, Any]) -> int:
+    for key in ("channel_id", "discord_thread_id"):
+        try:
+            value = int(str(row.get(key) or "0") or 0)
+            if value > 0:
+                return value
+        except Exception:
+            continue
+    return 0
+
+
+async def _resolve_row_channel(guild: discord.Guild, row: dict[str, Any]) -> Optional[discord.TextChannel]:
+    channel_id = _row_channel_id(row)
+    if channel_id <= 0:
+        return None
+    try:
+        channel = guild.get_channel(channel_id)
+        if isinstance(channel, discord.TextChannel):
+            return channel
+    except Exception:
+        pass
+    try:
+        fetched = await guild.fetch_channel(channel_id)
+        if isinstance(fetched, discord.TextChannel):
+            return fetched
+    except Exception:
+        pass
+    return None
+
+
 async def _create_test_ticket(interaction: discord.Interaction) -> None:
     from stoney_verify.commands_ext import public_setup_solid as solid
     if not await solid._require_setup_permission(interaction):
@@ -258,38 +290,62 @@ async def _create_test_ticket(interaction: discord.Interaction) -> None:
     member = interaction.user if isinstance(interaction.user, discord.Member) else None
     if guild is None or member is None:
         return await interaction.response.send_message("❌ This must be used inside a server as a server member.", ephemeral=True)
-    try:
-        if not interaction.response.is_done():
-            await interaction.response.defer(ephemeral=True, thinking=True)
-    except Exception:
-        pass
-    health = await solid._build_health_embed(guild)
-    blockers = _field_value(health, "Blockers")
-    if _has_items(blockers):
-        embed = discord.Embed(title="🚫 Fix Setup Before Creating a Test Ticket", description="A test ticket would probably fail because setup still has blockers. Use the recommended fix button, then refresh health.", color=discord.Color.red())
-        embed.add_field(name="Blockers", value=blockers[:1024], inline=False)
-        return await interaction.followup.send(embed=embed, view=HealthActionView(embed=health), ephemeral=True, allowed_mentions=discord.AllowedMentions.none())
-    try:
-        from stoney_verify.tickets_new.service import create_ticket_channel
-        channel = await create_ticket_channel(
-            guild=guild,
-            owner=member,
-            category="setup_test",
-            source="setup_health_test_ticket",
-            opening_message=f"🧪 {member.mention} this is a Dank Shield setup test ticket.\n\nUse this to test claim/close/reopen/transcript/delete controls. Safe to delete when finished.",
-            priority="low",
-            matched_category_slug="setup_test",
-            matched_category_name="Setup Test",
-            matched_intake_type="test",
-            matched_category_reason="Created from /dank setup health test button",
-            matched_category_score=100,
-            category_override=True,
-        )
-        if isinstance(channel, discord.TextChannel):
-            return await interaction.followup.send(f"✅ Test ticket ready: {channel.mention}\nTry the staff buttons, then delete it when done.", ephemeral=True, allowed_mentions=discord.AllowedMentions.none())
-        await interaction.followup.send("🚫 Test ticket could not be created. Press **Health Check** and fix the blockers shown there.", ephemeral=True, allowed_mentions=discord.AllowedMentions.none())
-    except Exception as exc:
-        await interaction.followup.send(f"🚫 Test ticket failed: `{type(exc).__name__}: {str(exc)[:300]}`", ephemeral=True, allowed_mentions=discord.AllowedMentions.none())
+    lock_key = (int(guild.id), int(member.id))
+    lock = _TEST_TICKET_LOCKS.get(lock_key)
+    if lock is None:
+        lock = asyncio.Lock()
+        _TEST_TICKET_LOCKS[lock_key] = lock
+    if lock.locked():
+        return await interaction.response.send_message("⏳ A setup test ticket action is already running for you.", ephemeral=True)
+    async with lock:
+        try:
+            if not interaction.response.is_done():
+                await interaction.response.defer(ephemeral=True, thinking=True)
+        except Exception:
+            pass
+        health = await solid._build_health_embed(guild)
+        blockers = _field_value(health, "Blockers")
+        if _has_items(blockers):
+            embed = discord.Embed(title="🚫 Fix Setup Before Creating a Test Ticket", description="A test ticket would probably fail because setup still has blockers. Use the recommended fix button, then refresh health.", color=discord.Color.red())
+            embed.add_field(name="Blockers", value=blockers[:1024], inline=False)
+            return await interaction.followup.send(embed=embed, view=HealthActionView(embed=health), ephemeral=True, allowed_mentions=discord.AllowedMentions.none())
+        try:
+            from stoney_verify.tickets_new.service import create_ticket_channel, find_open_ticket_for_owner
+            existing = await find_open_ticket_for_owner(guild_id=guild.id, owner_id=member.id, category=None)
+            if isinstance(existing, dict):
+                existing_channel = await _resolve_row_channel(guild, existing)
+                existing_category = str(existing.get("category") or "").strip().lower()
+                if isinstance(existing_channel, discord.TextChannel):
+                    if existing_category == "setup_test":
+                        return await interaction.followup.send(f"✅ Setup test ticket is already open: {existing_channel.mention}", ephemeral=True, allowed_mentions=discord.AllowedMentions.none())
+                    embed = discord.Embed(
+                        title="🎫 Open Ticket Already Exists",
+                        description=(
+                            f"You already have an open ticket: {existing_channel.mention}\n\n"
+                            "Dank Shield will not create a setup test ticket on top of a real open ticket. Close/delete that ticket first, or use it to test the staff controls."
+                        ),
+                        color=discord.Color.orange(),
+                    )
+                    return await interaction.followup.send(embed=embed, ephemeral=True, allowed_mentions=discord.AllowedMentions.none())
+            channel = await create_ticket_channel(
+                guild=guild,
+                owner=member,
+                category="setup_test",
+                source="setup_health_test_ticket",
+                opening_message=f"🧪 {member.mention} this is a Dank Shield setup test ticket.\n\nUse this to test claim/close/reopen/transcript/delete controls. Safe to delete when finished.",
+                priority="low",
+                matched_category_slug="setup_test",
+                matched_category_name="Setup Test",
+                matched_intake_type="test",
+                matched_category_reason="Created from /dank setup health test button",
+                matched_category_score=100,
+                category_override=True,
+            )
+            if isinstance(channel, discord.TextChannel):
+                return await interaction.followup.send(f"✅ Test ticket ready: {channel.mention}\nTry the staff buttons, then delete it when done.", ephemeral=True, allowed_mentions=discord.AllowedMentions.none())
+            await interaction.followup.send("🚫 Test ticket could not be created. Press **Health Check** and fix the blockers shown there.", ephemeral=True, allowed_mentions=discord.AllowedMentions.none())
+        except Exception as exc:
+            await interaction.followup.send(f"🚫 Test ticket failed: `{type(exc).__name__}: {str(exc)[:300]}`", ephemeral=True, allowed_mentions=discord.AllowedMentions.none())
 
 
 class ActionButton(discord.ui.Button):
@@ -361,7 +417,7 @@ def apply() -> bool:
         setattr(_wrapped_edit_or_followup, "_health_action_buttons_wrapped", True)
         solid._edit_or_followup = _wrapped_edit_or_followup
         _PATCHED = True
-        print("🧭 setup_health_action_buttons_guard active; health results now include compact state-aware actions")
+        print("🧭 setup_health_action_buttons_guard active; health results now include compact state-aware actions and collision-safe test tickets")
         return True
     except Exception as exc:
         print(f"⚠️ setup_health_action_buttons_guard failed: {exc!r}")
