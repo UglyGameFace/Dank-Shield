@@ -47,24 +47,12 @@ def _safe_int(value: Any, default: int = 0) -> int:
         return int(default)
 
 
-def _guild_id(interaction: Any, kwargs: dict[str, Any]) -> int:
-    for source in (kwargs.get("guild"), getattr(interaction, "guild", None)):
-        gid = _safe_int(getattr(source, "id", 0), 0)
-        if gid > 0:
-            return gid
-    return 0
-
-
 def _channel_id(interaction: Any, kwargs: dict[str, Any]) -> int:
     for source in (kwargs.get("channel"), kwargs.get("ticket_ch"), getattr(interaction, "channel", None)):
         cid = _safe_int(getattr(source, "id", 0), 0)
         if cid > 0:
             return cid
     return 0
-
-
-def _actor_id(interaction: Any) -> int:
-    return _safe_int(getattr(getattr(interaction, "user", None), "id", 0), 0)
 
 
 def _standard_operation(action: str) -> str:
