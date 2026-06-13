@@ -76,6 +76,14 @@ async def submit_channel_builder_job(server: Any, request: web.Request):
     if errors:
         return server._json_error("Channel Builder plan is not queueable", 409, errors=errors)
 
+    guild, err = await get_guild_or_response(server, guild_id)
+    if err is not None:
+        return err
+    assert guild is not None
+    preflight = preflight_channel_builder_plan(guild, items)
+    if not bool(preflight.get("ok")):
+        return server._json_error("Channel Builder preflight failed", 409, preflight=preflight)
+
     try:
         job = await submit_operation(
             guild_id=guild_id,
@@ -83,7 +91,7 @@ async def submit_channel_builder_job(server: Any, request: web.Request):
             operation_type="channel_builder_apply_plan" if not dry_run else "channel_builder_dry_run_job",
             risk_level="dangerous" if not dry_run else "moderate",
             source="dashboard",
-            payload={"mode": mode, "items": items, "dry_run": dry_run},
+            payload={"mode": mode, "items": items, "dry_run": dry_run, "preflight": preflight},
             concurrency_class="channel_mutation",
             concurrency_key="channel_builder",
             timeout_seconds=900.0,
@@ -97,7 +105,7 @@ async def submit_channel_builder_job(server: Any, request: web.Request):
                 dry_run=dry_run,
             ),
         )
-        return server._json_ok(queued=True, job=job)
+        return server._json_ok(queued=True, job=job, preflight=preflight)
     except Exception as exc:
         return server._json_error("Failed to queue Channel Builder job", 500, detail=repr(exc))
 
