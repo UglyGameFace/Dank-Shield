@@ -64,12 +64,50 @@ def _fmt_owner(owner: Optional[discord.Member], row: Optional[dict[str, Any]]) -
     return _safe_str((row or {}).get("username") or (row or {}).get("owner_name"), "Unknown")
 
 
-def _fmt_claimed(row: Optional[dict[str, Any]]) -> str:
+def _claimed_member(channel: discord.TextChannel, row: Optional[dict[str, Any]]) -> Optional[discord.Member]:
+    claimed_id = _safe_int((row or {}).get("claimed_by") or (row or {}).get("assigned_to") or (row or {}).get("staff_id"), 0)
+    if claimed_id <= 0:
+        return None
+    try:
+        member = channel.guild.get_member(claimed_id)
+        return member if isinstance(member, discord.Member) else None
+    except Exception:
+        return None
+
+
+def _member_display(member: Optional[discord.Member]) -> str:
+    if not isinstance(member, discord.Member):
+        return ""
+    return _safe_str(getattr(member, "display_name", None) or getattr(member, "name", None), "")
+
+
+def _member_avatar_url(member: Optional[discord.Member]) -> str:
+    if not isinstance(member, discord.Member):
+        return ""
+    try:
+        return _safe_str(getattr(getattr(member, "display_avatar", None), "url", None), "")
+    except Exception:
+        return ""
+
+
+def _fmt_claimed(channel: discord.TextChannel, row: Optional[dict[str, Any]]) -> str:
     data = row or {}
+    member = _claimed_member(channel, data)
+    if member is not None:
+        display = _member_display(member)
+        return f"{member.mention}" + (f" — `{display}`" if display else "")
+
     claimed_id = _safe_int(data.get("claimed_by") or data.get("assigned_to") or data.get("staff_id"), 0)
+    claimed_name = _safe_str(
+        data.get("claimed_by_name")
+        or data.get("assigned_to_name")
+        or data.get("claimed_by_display_name"),
+        "",
+    )
+    if claimed_id > 0 and claimed_name:
+        return f"<@{claimed_id}> — `{claimed_name}`"
     if claimed_id > 0:
         return f"<@{claimed_id}>"
-    claimed_name = _safe_str(data.get("claimed_by_name") or data.get("assigned_to_name"), "")
     return claimed_name or "Unclaimed"
 
 
@@ -105,6 +143,7 @@ async def _rich_open_controls(tx: Any, channel: discord.TextChannel) -> Optional
 
         owner = await tx._resolve_ticket_owner(channel)
         row = await tx._ticket_row(channel.id)
+        claimed_member = _claimed_member(channel, row)
 
         embed = discord.Embed(
             title="🟢 Ticket Open",
@@ -116,9 +155,12 @@ async def _rich_open_controls(tx: Any, channel: discord.TextChannel) -> Optional
         embed.add_field(name="Status", value=_fmt_status(row), inline=True)
         embed.add_field(name="Priority", value=_fmt_priority(row), inline=True)
         embed.add_field(name="Owner", value=_fmt_owner(owner, row), inline=True)
-        embed.add_field(name="Claimed By", value=_fmt_claimed(row), inline=True)
+        embed.add_field(name="Claimed By", value=_fmt_claimed(channel, row), inline=True)
         embed.add_field(name="Transcript", value="Saved" if _has_transcript(row) else "Not posted yet", inline=True)
-        embed.set_footer(text=tx._OPEN_CONTROLS_MARKER)
+        avatar_url = _member_avatar_url(claimed_member)
+        if avatar_url:
+            embed.set_thumbnail(url=avatar_url)
+        embed.set_footer(text=f"{tx._OPEN_CONTROLS_MARKER} • staff status refreshes after ticket actions")
 
         view = tx.TicketOpenActionsView()
         existing_messages = await tx._find_bot_control_messages(
