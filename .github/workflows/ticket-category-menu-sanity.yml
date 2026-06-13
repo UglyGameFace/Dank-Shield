@@ -1,0 +1,37 @@
+name: Ticket Category Menu Sanity
+
+on:
+  pull_request:
+    paths:
+      - "stoney_verify/startup_guards/public_ticket_panel_clean_hardening.py"
+      - "stoney_verify/startup_guards/ticket_category_cod_services_guard.py"
+      - "stoney_verify/startup_guards/ticket_form_default_templates_guard.py"
+      - "stoney_verify/startup_guards/external_ticket_history_sequence_guard.py"
+      - "stoney_verify/startup_guards/__init__.py"
+      - "stoney_verify/commands_ext/ticket_category_admin.py"
+      - "stoney_verify/tickets_new/intake_service.py"
+      - "tools/audit_ticket_category_menu.py"
+      - ".github/workflows/ticket-category-menu-sanity.yml"
+  push:
+    paths:
+      - "stoney_verify/startup_guards/public_ticket_panel_clean_hardening.py"
+      - "stoney_verify/startup_guards/ticket_category_cod_services_guard.py"
+      - "stoney_verify/startup_guards/ticket_form_default_templates_guard.py"
+      - "stoney_verify/startup_guards/external_ticket_history_sequence_guard.py"
+      - "stoney_verify/startup_guards/__init__.py"
+      - "stoney_verify/commands_ext/ticket_category_admin.py"
+      - "stoney_verify/tickets_new/intake_service.py"
+      - "tools/audit_ticket_category_menu.py"
+      - ".github/workflows/ticket-category-menu-sanity.yml"
+  workflow_dispatch:
+
+jobs:
+  ticket-category-menu-sanity:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Audit ticket category menu guards
+        run: python tools/audit_ticket_category_menu.py
