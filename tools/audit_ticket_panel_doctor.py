@@ -13,6 +13,7 @@ FILES = [
     "stoney_verify/startup_guards/ticket_panel_doctor_stability_guard.py",
     "stoney_verify/startup_guards/ticket_panel_repair_records_command.py",
     "stoney_verify/startup_guards/ticket_panel_command_epoch_guard.py",
+    "stoney_verify/startup_guards/ticket_staff_identity_guard.py",
     "stoney_verify/startup_guards/setup_feature_health_scoreboard.py",
     "stoney_verify/commands_ext/public_ticket_panel_clean.py",
 ]
@@ -21,9 +22,19 @@ CHECKS = {
     "stoney_verify/startup_guards/ticket_panel_doctor_command.py": ["_doctor_command", "group.get_command"],
     "stoney_verify/startup_guards/ticket_panel_doctor_production_wording.py": [
         "ticket_panel_command_epoch_guard",
+        "ticket_staff_identity_guard",
         "ticket_panel_repair_records_command",
         "ticket_panel_doctor_stability_guard",
         "setup_check_existing_server_inference_guard",
+    ],
+    "stoney_verify/startup_guards/ticket_staff_identity_guard.py": [
+        "_display_name",
+        "_avatar_url",
+        "claimed_by_display_name",
+        "claimed_by_avatar_url",
+        "claim_identity_source",
+        "_TICKET_STAFF_IDENTITY_SERVICE_PATCHED",
+        "_TICKET_STAFF_IDENTITY_REPO_PATCHED",
     ],
     "stoney_verify/startup_guards/ticket_panel_doctor_stability_guard.py": [
         "_stable_doctor_command",
