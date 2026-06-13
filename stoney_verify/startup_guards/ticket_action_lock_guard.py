@@ -9,8 +9,9 @@ clear ephemeral message instead of letting duplicate messages/state races happen
 """
 
 import asyncio
+import json
 import time
-from typing import Any, Awaitable, Callable, Dict, Tuple
+from typing import Any, Dict, Tuple
 
 import discord
 
@@ -52,19 +53,18 @@ def _ids(interaction: discord.Interaction) -> tuple[int, int, int]:
 async def _safe_ephemeral(interaction: discord.Interaction, content: str) -> None:
     try:
         if interaction.response.is_done():
-            await interaction.followup.send(
-                content,
-                ephemeral=True,
-                allowed_mentions=discord.AllowedMentions.none(),
-            )
+            await interaction.followup.send(content, ephemeral=True, allowed_mentions=discord.AllowedMentions.none())
         else:
-            await interaction.response.send_message(
-                content,
-                ephemeral=True,
-                allowed_mentions=discord.AllowedMentions.none(),
-            )
+            await interaction.response.send_message(content, ephemeral=True, allowed_mentions=discord.AllowedMentions.none())
     except Exception:
         pass
+
+
+def _fingerprint(value: Any) -> str:
+    try:
+        return json.dumps(value, sort_keys=True, default=str, separators=(",", ":"))[:500]
+    except Exception:
+        return str(value)[:500]
 
 
 def _prune_recent() -> None:
@@ -87,37 +87,53 @@ def _recent_key(interaction: discord.Interaction, action: str) -> tuple[int, int
     return (guild_id, channel_id, str(action), user_id)
 
 
+async def _fallback_locked(interaction: discord.Interaction, original: Any, friendly_name: str, args: tuple[Any, ...], kwargs: dict[str, Any]) -> Any:
+    _prune_recent()
+    recent_key = _recent_key(interaction, friendly_name)
+    now = time.monotonic()
+
+    if _RECENT.get(recent_key, 0.0) > now:
+        return await _safe_ephemeral(interaction, f"That **{friendly_name}** action was just handled. Blocked the duplicate click.")
+
+    key = _lock_key(interaction, friendly_name)
+    lock = _LOCKS.get(key)
+    if lock is None:
+        lock = asyncio.Lock()
+        _LOCKS[key] = lock
+
+    if lock.locked():
+        return await _safe_ephemeral(interaction, f"A **{friendly_name}** action is already running for this ticket. Try again in a moment.")
+
+    async with lock:
+        _RECENT[recent_key] = time.monotonic() + _RECENT_SECONDS
+        return await original(interaction, *args, **kwargs)
+
+
 def _wrap_action(panel_mod: Any, action_name: str, friendly_name: str) -> bool:
     original = getattr(panel_mod, action_name, None)
     if not callable(original) or getattr(original, "_ticket_action_lock_wrapped", False):
         return False
 
     async def wrapper(interaction: discord.Interaction, *args: Any, **kwargs: Any):
-        _prune_recent()
-        recent_key = _recent_key(interaction, friendly_name)
-        now = time.monotonic()
+        _guild_id, channel_id, _user_id = _ids(interaction)
+        try:
+            from ..operation_queue import run_interaction_exclusive
 
-        if _RECENT.get(recent_key, 0.0) > now:
-            return await _safe_ephemeral(
-                interaction,
-                f"That **{friendly_name}** action was just handled. Blocked the duplicate click.",
+            return await run_interaction_exclusive(
+                interaction=interaction,
+                operation_type=f"ticket_{friendly_name.replace('-', '_')}",
+                action_label=f"ticket {friendly_name}",
+                fingerprint={"channel_id": channel_id, "action": friendly_name, "args": _fingerprint(args), "kwargs": _fingerprint(kwargs)},
+                risk_level="moderate",
+                source="discord_command",
+                concurrency_class="ticket_channel_mutation",
+                concurrency_key=f"channel:{channel_id or 'unknown'}:{friendly_name}",
+                timeout_seconds=180.0,
+                factory=lambda: original(interaction, *args, **kwargs),
             )
-
-        key = _lock_key(interaction, friendly_name)
-        lock = _LOCKS.get(key)
-        if lock is None:
-            lock = asyncio.Lock()
-            _LOCKS[key] = lock
-
-        if lock.locked():
-            return await _safe_ephemeral(
-                interaction,
-                f"A **{friendly_name}** action is already running for this ticket. Try again in a moment.",
-            )
-
-        async with lock:
-            _RECENT[recent_key] = time.monotonic() + _RECENT_SECONDS
-            return await original(interaction, *args, **kwargs)
+        except Exception as e:
+            _warn(f"operation queue unavailable for ticket {friendly_name}; using fallback lock: {e!r}")
+            return await _fallback_locked(interaction, original, friendly_name, args, kwargs)
 
     setattr(wrapper, "_ticket_action_lock_wrapped", True)
     setattr(panel_mod, action_name, wrapper)
@@ -157,7 +173,7 @@ def apply() -> bool:
 
     try:
         setattr(panel_mod, "_TICKET_ACTION_LOCK_GUARD_APPLIED", True)
-        _log(f"wrapped {wrapped} ticket actions with per-ticket locks")
+        _log(f"wrapped {wrapped} ticket actions with per-ticket queue locks")
         return True
     except Exception:
         return wrapped > 0
