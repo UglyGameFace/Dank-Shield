@@ -14,6 +14,7 @@ FILES = [
     'stoney_verify/startup_guards/guild_operation_queue_guard.py',
     'stoney_verify/startup_guards/channel_builder_api_guard.py',
     'tools/patch_channel_builder_server_routes.py',
+    '.github/workflows/channel-builder-server-direct-registration.yml',
 ]
 
 REMOVED_FILES = [
@@ -64,6 +65,12 @@ CHECKS = {
         '--check',
         'Could not find member routes anchor inside start_api',
     ],
+    '.github/workflows/channel-builder-server-direct-registration.yml': [
+        'workflow_dispatch',
+        'contents: write',
+        'patch_channel_builder_server_routes.py --apply',
+        'Register Channel Builder routes directly',
+    ],
 }
 
 
@@ -77,11 +84,12 @@ def main() -> int:
         if not target.exists():
             print(f'missing {path}', file=sys.stderr)
             return 1
-        try:
-            py_compile.compile(str(target), doraise=True)
-        except py_compile.PyCompileError as exc:
-            print(f'compile failed {path}: {exc}', file=sys.stderr)
-            return 1
+        if path.endswith('.py'):
+            try:
+                py_compile.compile(str(target), doraise=True)
+            except py_compile.PyCompileError as exc:
+                print(f'compile failed {path}: {exc}', file=sys.stderr)
+                return 1
     for path, snippets in CHECKS.items():
         text = (ROOT / path).read_text(encoding='utf-8')
         for snippet in snippets:
