@@ -31,6 +31,9 @@ CHECKS = {
     'stoney_verify/api_new/channel_builder_routes.py': [
         'register_channel_builder_routes',
         'submit_channel_builder_job',
+        'preflight_channel_builder_job',
+        '/channel-builder/preflight',
+        'queueable=ok',
         'list_channel_builder_channels',
         'submit_rollback_job',
         'channel_builder_apply_plan',
