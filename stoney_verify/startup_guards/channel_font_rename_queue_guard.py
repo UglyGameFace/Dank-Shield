@@ -3,8 +3,10 @@ from __future__ import annotations
 """Queue-backed channel font rename preview/apply/undo.
 
 Uses Dank Shield's operation queue plus the shared channel mutation throttle.
-Each apply/undo only processes a small paced batch. Attempted rows leave the
-pending plan so the same channels are not retried forever.
+Each apply/undo only processes a small paced batch.
+
+Preview performs a bot-access preflight so channels that Dank Shield cannot edit
+are shown as blocked before Apply, rather than becoming surprise skips later.
 """
 
 import time
@@ -111,26 +113,84 @@ def _skip(channel: Any, ctx: dict[str, Any]) -> bool:
     return "ticket archive" in parent_name or "active tickets" in parent_name or "transcript" in parent_name
 
 
-async def build_plan(guild: discord.Guild, options: dict[str, str]) -> list[dict[str, Any]]:
+def _bot_member(guild: discord.Guild) -> discord.Member | None:
+    try:
+        if isinstance(guild.me, discord.Member):
+            return guild.me
+    except Exception:
+        pass
+    try:
+        state = getattr(guild, "_state", None)
+        user = getattr(state, "user", None)
+        user_id = _safe_int(getattr(user, "id", 0), 0)
+        member = guild.get_member(user_id) if user_id else None
+        return member if isinstance(member, discord.Member) else None
+    except Exception:
+        return None
+
+
+def _bot_access_reason(guild: discord.Guild, channel: Any) -> str | None:
+    me = _bot_member(guild)
+    if me is None:
+        return "bot member is not resolved"
+    try:
+        perms = channel.permissions_for(me)
+    except Exception:
+        return "cannot calculate permissions"
+    if not bool(getattr(perms, "view_channel", False)):
+        return "bot cannot view this channel/category"
+    if not bool(getattr(perms, "manage_channels", False)):
+        return "bot lacks Manage Channels here"
+    parent = getattr(channel, "category", None)
+    if parent is not None:
+        try:
+            parent_perms = parent.permissions_for(me)
+            if not bool(getattr(parent_perms, "view_channel", False)):
+                return "bot cannot view parent category"
+            if not bool(getattr(parent_perms, "manage_channels", False)):
+                return "bot lacks Manage Channels on parent category"
+        except Exception:
+            pass
+    return None
+
+
+async def _build_plan_parts(guild: discord.Guild, options: dict[str, str]) -> tuple[list[dict[str, Any]], list[dict[str, Any]], int]:
     from stoney_verify.services.channel_builder_runtime import format_channel_builder_name
     ctx = await _skip_context(int(guild.id))
     channels = list(getattr(guild, "categories", []) or []) + [c for c in list(getattr(guild, "channels", []) or []) if not isinstance(c, discord.CategoryChannel)]
     seen: set[int] = set()
-    plan: list[dict[str, Any]] = []
+    ready: list[dict[str, Any]] = []
+    blocked: list[dict[str, Any]] = []
+    policy_skipped = 0
     for channel in channels:
         cid = _safe_int(getattr(channel, "id", 0), 0)
         if cid <= 0 or cid in seen:
             continue
         seen.add(cid)
-        if _kind(channel) == "other" or _skip(channel, ctx):
+        if _kind(channel) == "other":
+            continue
+        if _skip(channel, ctx):
+            policy_skipped += 1
             continue
         before = _safe_str(getattr(channel, "name", ""))
         after = _safe_str(format_channel_builder_name(before, {**options, "emoji": None}))[:100]
-        if after and after != before:
-            plan.append({"channel_id": str(cid), "before": before, "after": after, "kind": _kind(channel)})
-        if len(plan) >= MAX_PLAN_ITEMS:
+        if not after or after == before:
+            continue
+        row = {"channel_id": str(cid), "before": before, "after": after, "kind": _kind(channel)}
+        reason = _bot_access_reason(guild, channel)
+        if reason:
+            row["blocked_reason"] = reason
+            blocked.append(row)
+            continue
+        ready.append(row)
+        if len(ready) >= MAX_PLAN_ITEMS:
             break
-    return plan
+    return ready, blocked, policy_skipped
+
+
+async def build_plan(guild: discord.Guild, options: dict[str, str]) -> list[dict[str, Any]]:
+    ready, _blocked, _policy_skipped = await _build_plan_parts(guild, options)
+    return ready
 
 
 def _plan_text(plan: list[dict[str, Any]], limit: int = 12) -> str:
@@ -142,19 +202,35 @@ def _plan_text(plan: list[dict[str, Any]], limit: int = 12) -> str:
     return "\n\n".join(rows)[:3900]
 
 
+def _blocked_text(blocked: list[dict[str, Any]], limit: int = 8) -> str:
+    if not blocked:
+        return "None"
+    rows = [f"`{item.get('before')}` — {item.get('blocked_reason') or 'blocked'}" for item in blocked[:limit]]
+    if len(blocked) > limit:
+        rows.append(f"…and {len(blocked) - limit} more")
+    return "\n".join(rows)[:1024]
+
+
 async def _preview_embed(guild: discord.Guild, user_id: int, options: dict[str, str]) -> tuple[discord.Embed, list[dict[str, Any]]]:
     _purge()
-    plan = await build_plan(guild, options)
-    _PENDING[_key(int(guild.id), int(user_id))] = {"created_at": time.time(), "plan": plan, "options": dict(options)}
+    plan, blocked, policy_skipped = await _build_plan_parts(guild, options)
+    _PENDING[_key(int(guild.id), int(user_id))] = {"created_at": time.time(), "plan": plan, "options": dict(options), "blocked": blocked, "policy_skipped": policy_skipped}
     embed = discord.Embed(
         title="🔤 Preview Channel Font Renames",
-        description="Nothing has been changed yet. Apply runs in small paced batches, not one big server-wide burst.",
-        color=discord.Color.orange() if plan else discord.Color.blurple(),
+        description=(
+            "Nothing has been changed yet. Apply only includes channels marked ready.\n\n"
+            "Blocked channels are not silently skipped — fix bot access first, then run a fresh preview."
+        ),
+        color=discord.Color.orange() if blocked else (discord.Color.green() if plan else discord.Color.blurple()),
     )
-    embed.add_field(name="Changes found", value=str(len(plan)), inline=True)
+    embed.add_field(name="Ready to rename", value=str(len(plan)), inline=True)
+    embed.add_field(name="Blocked by bot access", value=str(len(blocked)), inline=True)
+    embed.add_field(name="Protected by policy", value=str(policy_skipped), inline=True)
     embed.add_field(name="Batch size", value=str(DEFAULT_BATCH_SIZE), inline=True)
     embed.add_field(name="Delay between edits", value=f"{DEFAULT_DELAY_SECONDS:.1f}s", inline=True)
-    embed.add_field(name="Preview", value=_plan_text(plan), inline=False)
+    if blocked:
+        embed.add_field(name="Fix before applying", value=_blocked_text(blocked), inline=False)
+    embed.add_field(name="Ready preview", value=_plan_text(plan), inline=False)
     return embed, plan
 
 
@@ -180,6 +256,9 @@ async def _apply_batch(interaction: discord.Interaction, plan: list[dict[str, An
         channel = guild.get_channel(_safe_int(item.get("channel_id"), 0))
         if channel is None:
             return {"status": "failed", "error": f"missing `{item.get('before')}`"}
+        access_reason = _bot_access_reason(guild, channel)
+        if access_reason:
+            return {"status": "skipped", "error": f"blocked `{item.get('before')}`: {access_reason}"}
         current = _safe_str(getattr(channel, "name", ""))
         before = _safe_str(item.get("before"))
         after = _safe_str(item.get("after"))[:100]
@@ -193,7 +272,7 @@ async def _apply_batch(interaction: discord.Interaction, plan: list[dict[str, An
             await channel.edit(name=after, reason=f"Dank Shield channel font apply by {user_id}")
             return {"status": "changed", "channel_id": str(getattr(channel, "id", "")), "before": before, "after": after}
         except discord.Forbidden:
-            return {"status": "skipped", "error": f"no access to `{before}`"}
+            return {"status": "skipped", "error": f"blocked `{before}`: Discord denied access"}
 
     result = await run_paced_channel_mutations(guild_id=int(guild.id), items=plan, mutate_one=mutate_one)
     remaining = list(plan[result.attempted:])
@@ -217,6 +296,9 @@ async def _undo_batch(interaction: discord.Interaction, undo: list[dict[str, Any
         channel = guild.get_channel(_safe_int(item.get("channel_id"), 0))
         if channel is None:
             return {"status": "failed", "error": f"missing `{item.get('after')}`"}
+        access_reason = _bot_access_reason(guild, channel)
+        if access_reason:
+            return {"status": "skipped", "error": f"blocked `{item.get('after')}`: {access_reason}"}
         current = _safe_str(getattr(channel, "name", ""))
         applied = _safe_str(item.get("after"))
         old = _safe_str(item.get("before"))[:100]
@@ -228,7 +310,7 @@ async def _undo_batch(interaction: discord.Interaction, undo: list[dict[str, Any
             await channel.edit(name=old, reason=f"Dank Shield channel font undo by {user_id}")
             return {"status": "changed", "channel_id": str(getattr(channel, "id", "")), "before": applied, "after": old}
         except discord.Forbidden:
-            return {"status": "skipped", "error": f"no access to `{applied}`"}
+            return {"status": "skipped", "error": f"blocked `{applied}`: Discord denied access"}
 
     result = await run_paced_channel_mutations(guild_id=int(guild.id), items=reverse_plan, mutate_one=mutate_one)
     remaining_original_order = list(undo[: max(0, len(undo) - result.attempted)])
@@ -271,7 +353,7 @@ class QueuedFontRenameConfirmView(discord.ui.View):
             return await interaction.response.send_message("❌ This must be used inside a server.", ephemeral=True)
         plan = _remaining_plan(int(guild.id), int(interaction.user.id))
         if not plan:
-            return await interaction.response.edit_message(content="No saved preview found. Press Preview & Apply Channel Renames again.", embed=None, view=None)
+            return await interaction.response.edit_message(content="No ready rename plan found. Fix blocked access, then press Preview & Apply Channel Renames again.", embed=None, view=None)
         await interaction.response.defer(ephemeral=True, thinking=False)
         from stoney_verify.operation_queue import run_interaction_exclusive
         result = await run_interaction_exclusive(
@@ -296,7 +378,7 @@ class QueuedFontRenameConfirmView(discord.ui.View):
                 f"Already done **{int(result.get('already', 0) or 0)}**. "
                 f"Skipped **{int(result.get('skipped', 0) or 0)}**. "
                 f"Failed **{int(result.get('failed', 0) or 0)}**.\n\n"
-                f"Remaining: **{len(remaining)}**"
+                f"Remaining ready: **{len(remaining)}**"
             ),
             color=discord.Color.green() if not result.get("failures") else discord.Color.orange(),
         )
@@ -406,7 +488,7 @@ def _patch_font_view() -> bool:
 def apply() -> bool:
     _patch_font_view()
     try:
-        print("🔤 channel_font_rename_queue_guard active; font renames use operation_queue and paced channel mutation throttle")
+        print("🔤 channel_font_rename_queue_guard active; font renames preflight bot access and use paced channel mutation throttle")
     except Exception:
         pass
     return True
