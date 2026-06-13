@@ -54,12 +54,12 @@ def _next_action_text(done: int, total: int, next_step: str) -> str:
     step = str(next_step or "Choose Setup Type").strip()
     try:
         if int(done or 0) >= int(total or 1):
-            return "✅ **Ready:** run **Setup Health** after big changes. Use sections below only when you need to change something."
+            return "✅ **Ready:** use **Setup Health** after big server changes. Open only the section you actually need."
     except Exception:
         pass
     if "choose setup type" in step.lower():
-        return "1. Open **Core Setup**.\n2. Choose the setup type.\n3. Run **Setup Health**."
-    return f"1. Fix: **{step}**.\n2. Run **Setup Health** again."
+        return "1. Open **Core Setup**.\n2. Choose the setup type.\n3. Run **Setup Health** from the home screen."
+    return f"1. Fix: **{step}**.\n2. Run **Setup Health** again from the home screen."
 
 
 def _choice_summary(choice_text: str) -> str:
@@ -165,9 +165,9 @@ class SmartSetupHomeView(discord.ui.View):
             return
         embed = _workflow_embed(
             "🚀 Core Setup",
-            "Use this section first. It decides what kind of server setup this guild wants and whether Dank Shield should create missing defaults or use existing channels/roles.",
+            "Use this section first. It controls setup type, enabled services, and whether Dank Shield creates missing defaults or maps existing roles/channels.",
         )
-        embed.add_field(name="Recommended order", value="1. **Choose Setup Type**\n2. **Services**\n3. **Use Existing** or **Create Missing**\n4. **Setup Health**", inline=False)
+        embed.add_field(name="Contains", value="🧭 Choose Setup Type\n🧩 Services\n🔗 Use Existing Roles/Channels\n✨ Create Missing Defaults", inline=False)
         await _edit(interaction, embed=embed, view=CoreSetupView())
 
     @discord.ui.button(label="Safety & Repair", emoji="🛡️", style=discord.ButtonStyle.secondary, custom_id="dank_setup_hub:safety", row=1)
@@ -176,10 +176,10 @@ class SmartSetupHomeView(discord.ui.View):
             return
         embed = _workflow_embed(
             "🛡️ Safety & Repair",
-            "Use this when setup health reports problems, channel access looks wrong, Unverified can see something they should not, or Discord permissions drift after manual edits.",
+            "Use this only when Setup Health or manual inspection shows permission drift. This section previews and repairs saved setup channel overwrites.",
             color=discord.Color.orange(),
         )
-        embed.add_field(name="What this protects", value="• Bot access checks\n• Unverified role visibility\n• Staff/private/log areas\n• Ticket/archive/transcript areas\n• Saved setup channel overwrites", inline=False)
+        embed.add_field(name="Protects", value="Unverified visibility, staff/private/log areas, ticket/archive/transcript areas, and saved setup channel overwrites.", inline=False)
         await _edit(interaction, embed=embed, view=SafetyRepairView())
 
     @discord.ui.button(label="Ticket Setup", emoji="🎫", style=discord.ButtonStyle.secondary, custom_id="dank_setup_hub:tickets", row=1)
@@ -188,9 +188,9 @@ class SmartSetupHomeView(discord.ui.View):
             return
         embed = _workflow_embed(
             "🎫 Ticket Setup",
-            "Use this for public ticket menu choices and ticket-facing configuration. This section does not replace Setup Health or permission repair.",
+            "Use this only for public ticket menu choices and ticket-facing options. Channel/permission repair lives in Safety & Repair.",
         )
-        embed.add_field(name="Main ticket workflow", value="1. Pick ticket menu choices\n2. Run Setup Health\n3. Use Fix Permissions if channel overwrites drift\n4. Test with the public ticket panel", inline=False)
+        embed.add_field(name="Contains", value="🧾 Ticket Menu Choices", inline=False)
         await _edit(interaction, embed=embed, view=TicketSetupView())
 
     @discord.ui.button(label="Advanced Tools", emoji="🧰", style=discord.ButtonStyle.secondary, custom_id="dank_setup_hub:advanced", row=2)
@@ -199,9 +199,9 @@ class SmartSetupHomeView(discord.ui.View):
             return
         embed = _workflow_embed(
             "🧰 Advanced Tools",
-            "Use these after the server is basically working. Advanced tools can change names, owner-only protections, or detailed options. They keep their own preview/confirm/undo safeguards where needed.",
+            "Use these after the server is basically working. Advanced tools either save detailed options or use their own preview/confirm/undo flow before changing Discord.",
         )
-        embed.add_field(name="Important", value="Saving an option is not the same as applying a Discord mutation. Tools that change channels must show a preview before applying.", inline=False)
+        embed.add_field(name="Contains", value="🔤 Channel Name Fonts\n🛡️ Owner-only protected members\n❓ Help / FAQ", inline=False)
         await _edit(interaction, embed=embed, view=AdvancedSetupView(show_owner_tools=_is_owner_interaction(interaction)))
 
 
@@ -247,20 +247,9 @@ class SafetyRepairView(discord.ui.View):
     def __init__(self) -> None:
         super().__init__(timeout=900)
 
-    @discord.ui.button(label="Run Setup Health", emoji="🩺", style=discord.ButtonStyle.primary, custom_id="dank_setup_safety:health", row=0)
-    async def health(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        from stoney_verify.commands_ext import public_setup_fresh_choice as fresh
-        await fresh._open_plain_health(interaction)
-
-    @discord.ui.button(label="Preview/Fix Permissions", emoji="🛠️", style=discord.ButtonStyle.secondary, custom_id="dank_setup_safety:permissions", row=0)
+    @discord.ui.button(label="Preview/Fix Permissions", emoji="🛠️", style=discord.ButtonStyle.primary, custom_id="dank_setup_safety:permissions", row=0)
     async def permissions(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         await _open_permission_repair(interaction)
-
-    @discord.ui.button(label="Core Setup", emoji="🚀", style=discord.ButtonStyle.secondary, custom_id="dank_setup_safety:core", row=1)
-    async def core(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        view = CoreSetupView()
-        embed = _workflow_embed("🚀 Core Setup", "Choose setup type, services, and saved channels/roles before repairing permissions.")
-        await _edit(interaction, embed=embed, view=view)
 
     @discord.ui.button(label="Back to Setup Home", emoji="🏠", style=discord.ButtonStyle.secondary, custom_id="dank_setup_safety:back", row=1)
     async def back(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
@@ -276,21 +265,7 @@ class TicketSetupView(discord.ui.View):
         from stoney_verify.commands_ext import public_setup_fresh_choice as fresh
         await fresh._open_ticket_menu_options(interaction)
 
-    @discord.ui.button(label="Use Existing Ticket Channels", emoji="🔗", style=discord.ButtonStyle.secondary, custom_id="dank_setup_ticket:existing", row=0)
-    async def existing(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        from stoney_verify.commands_ext import public_setup_fresh_choice as fresh
-        await fresh._open_existing_server_setup(interaction)
-
-    @discord.ui.button(label="Run Setup Health", emoji="🩺", style=discord.ButtonStyle.secondary, custom_id="dank_setup_ticket:health", row=1)
-    async def health(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        from stoney_verify.commands_ext import public_setup_fresh_choice as fresh
-        await fresh._open_plain_health(interaction)
-
-    @discord.ui.button(label="Preview/Fix Permissions", emoji="🛠️", style=discord.ButtonStyle.secondary, custom_id="dank_setup_ticket:permissions", row=1)
-    async def permissions(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        await _open_permission_repair(interaction)
-
-    @discord.ui.button(label="Back to Setup Home", emoji="🏠", style=discord.ButtonStyle.secondary, custom_id="dank_setup_ticket:back", row=2)
+    @discord.ui.button(label="Back to Setup Home", emoji="🏠", style=discord.ButtonStyle.secondary, custom_id="dank_setup_ticket:back", row=1)
     async def back(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         await _back_home(interaction)
 
@@ -317,12 +292,7 @@ class AdvancedSetupView(discord.ui.View):
             return
         await interaction.response.edit_message(embed=fresh._build_setup_help_embed(), view=fresh.solid.BackToSetupView())
 
-    @discord.ui.button(label="Run Setup Health", emoji="🩺", style=discord.ButtonStyle.secondary, custom_id="dank_setup_advanced:health", row=1)
-    async def health(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        from stoney_verify.commands_ext import public_setup_fresh_choice as fresh
-        await fresh._open_plain_health(interaction)
-
-    @discord.ui.button(label="Back to Setup Home", emoji="🏠", style=discord.ButtonStyle.secondary, custom_id="dank_setup_advanced:back", row=2)
+    @discord.ui.button(label="Back to Setup Home", emoji="🏠", style=discord.ButtonStyle.secondary, custom_id="dank_setup_advanced:back", row=1)
     async def back(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         await _back_home(interaction)
 
@@ -353,7 +323,7 @@ async def _smart_plain_choice_main_payload(guild: discord.Guild) -> tuple[discor
 
     embed = discord.Embed(
         title="🚀 Dank Shield Setup",
-        description="Follow the workflow sections below. Each section explains whether it saves settings, previews changes, or mutates Discord.",
+        description="Pick one section. No duplicate shortcuts: each setup action lives in exactly one place.",
         color=discord.Color.green() if ready else discord.Color.blurple(),
         timestamp=now_utc(),
     )
@@ -364,14 +334,15 @@ async def _smart_plain_choice_main_payload(guild: discord.Guild) -> tuple[discor
     embed.add_field(
         name="Workflow",
         value=(
+            "🩺 **Setup Health** — only place to run the full setup check.\n"
             "🚀 **Core Setup** — setup type, services, create/use existing defaults.\n"
-            "🛡️ **Safety & Repair** — health checks, Unverified visibility, permission repair.\n"
-            "🎫 **Ticket Setup** — ticket menu choices and ticket-facing setup.\n"
-            "🧰 **Advanced Tools** — channel fonts, owner-only protections, help."
+            "🛡️ **Safety & Repair** — only place to preview/fix permissions.\n"
+            "🎫 **Ticket Setup** — ticket menu choices.\n"
+            "🧰 **Advanced Tools** — fonts, owner-only protections, help."
         ),
         inline=False,
     )
-    embed.set_footer(text=f"Guild {guild.id} • /dank setup • workflow hub")
+    embed.set_footer(text=f"Guild {guild.id} • /dank setup • clean workflow hub")
     return embed, SmartSetupHomeView(ready=ready)
 
 
@@ -394,7 +365,7 @@ def apply() -> bool:
         except Exception:
             solid._build_main_setup_payload = _smart_plain_choice_main_payload
         _PATCHED = True
-        _log("active; /dank setup home is a task-based workflow hub")
+        _log("active; /dank setup home is a clean task-based workflow hub")
         return True
     except Exception as exc:
         _warn(f"failed: {exc!r}")
