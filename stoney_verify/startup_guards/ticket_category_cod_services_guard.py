@@ -15,64 +15,15 @@ _COD_GAME_PLACEHOLDER = "Example: BO2, BO3, MW2, MW3, MW2019, MWII, MWIII, BO6, 
 _COD_SERVICE_PLACEHOLDER = "Describe the COD/Warzone/Zombies question in this server's own terms. Do not include passwords or private account credentials."
 
 _COD_KEYWORDS = [
-    "cod",
-    "call of duty",
-    "call-of-duty",
-    "black ops",
-    "black ops 1",
-    "black ops 2",
-    "black ops 3",
-    "black ops 4",
-    "black ops cold war",
-    "black ops 6",
-    "black ops 7",
-    "bo1",
-    "bo2",
-    "bo3",
-    "bo4",
-    "bocw",
-    "bo6",
-    "bo7",
-    "modern warfare",
-    "modern warfare 2",
-    "modern warfare 3",
-    "modern warfare ii",
-    "modern warfare iii",
-    "mw",
-    "mw2",
-    "mw3",
-    "mw2019",
-    "mwii",
-    "mwiii",
-    "warzone",
-    "wz",
-    "wz2",
-    "world at war",
-    "waw",
-    "ghosts",
-    "advanced warfare",
-    "infinite warfare",
-    "wwii",
-    "vanguard",
-    "zombies",
-    "dmz",
-    "ranked play",
-    "camo",
-    "camos",
-    "unlock",
-    "unlocks",
-    "unlock all",
-    "account",
-    "platform",
-    "lobby",
-    "lobbies",
-    "private lobby",
-    "custom lobby",
-    "modded lobby",
-    "challenge lobby",
-    "recovery",
-    "rgh",
-    "jtag",
+    "cod", "call of duty", "call-of-duty", "black ops", "black ops 1", "black ops 2",
+    "black ops 3", "black ops 4", "black ops cold war", "black ops 6", "black ops 7",
+    "bo1", "bo2", "bo3", "bo4", "bocw", "bo6", "bo7", "modern warfare",
+    "modern warfare 2", "modern warfare 3", "modern warfare ii", "modern warfare iii",
+    "mw", "mw2", "mw3", "mw2019", "mwii", "mwiii", "warzone", "wz", "wz2",
+    "world at war", "waw", "ghosts", "advanced warfare", "infinite warfare", "wwii",
+    "vanguard", "zombies", "dmz", "ranked play", "camo", "camos", "unlock",
+    "unlocks", "unlock all", "account", "platform", "lobby", "lobbies", "private lobby",
+    "custom lobby", "modded lobby", "challenge lobby", "recovery", "rgh", "jtag",
 ]
 
 _COD_CATEGORY: Dict[str, Any] = {
@@ -81,6 +32,7 @@ _COD_CATEGORY: Dict[str, Any] = {
     "description": _COD_DESCRIPTION,
     "intake_type": "cod_services",
     "match_keywords": list(_COD_KEYWORDS),
+    "button_label": "Call of Duty Services",
     "is_default": False,
     "sort_order": 25,
 }
@@ -119,6 +71,19 @@ def _is_cod_row(row: Any) -> bool:
     return any(token in text for token in _COD_KEYWORDS)
 
 
+def _patched_cod_row(row: Dict[str, Any] | None = None) -> Dict[str, Any]:
+    patched = dict(row or {})
+    patched["slug"] = "cod_services"
+    patched["name"] = "Call of Duty Services"
+    patched["button_label"] = "Call of Duty Services"
+    patched["description"] = _COD_DESCRIPTION
+    patched["intake_type"] = "cod_services"
+    patched["match_keywords"] = list(dict.fromkeys([*(patched.get("match_keywords") or []), *_COD_KEYWORDS]))
+    patched["is_default"] = bool(patched.get("is_default", False))
+    patched["sort_order"] = int(patched.get("sort_order") or 25)
+    return patched
+
+
 def _install_public_panel_wording() -> bool:
     try:
         from . import public_ticket_panel_clean_hardening as panel_guard
@@ -144,12 +109,7 @@ def _install_public_panel_wording() -> bool:
         saw_cod = False
         for row in defaults:
             if isinstance(row, dict) and _safe_str(row.get("slug")).lower().replace("-", "_") == "cod_services":
-                patched = dict(row)
-                patched["name"] = "Call of Duty Services"
-                patched["button_label"] = "Call of Duty Services"
-                patched["description"] = _COD_DESCRIPTION
-                patched.setdefault("intake_type", "cod_services")
-                next_rows.append(patched)
+                next_rows.append(_patched_cod_row(row))
                 saw_cod = True
             else:
                 next_rows.append(row)
@@ -163,6 +123,39 @@ def _install_public_panel_wording() -> bool:
         return False
 
 
+def _install_ticket_panel_bootstrap_category() -> bool:
+    try:
+        from ..tickets_new import panel as ticket_panel
+    except Exception as exc:
+        _warn(f"could not import tickets_new.panel: {exc!r}")
+        return False
+
+    try:
+        rows = tuple(getattr(ticket_panel, "_DEFAULT_BOOTSTRAP_CATEGORIES", ()) or ())
+        if not rows:
+            return True
+        next_rows: List[Dict[str, Any]] = []
+        saw_cod = False
+        changed = False
+        for row in rows:
+            if isinstance(row, dict) and _is_cod_row(row):
+                next_rows.append(_patched_cod_row(row))
+                saw_cod = True
+                changed = True
+            else:
+                next_rows.append(row)
+        if not saw_cod:
+            next_rows.append(dict(_COD_CATEGORY))
+            changed = True
+        if changed:
+            ticket_panel._DEFAULT_BOOTSTRAP_CATEGORIES = tuple(next_rows)
+            _log("patched tickets_new panel bootstrap COD category wording")
+        return True
+    except Exception as exc:
+        _warn(f"ticket panel bootstrap COD patch failed: {exc!r}")
+        return False
+
+
 def _install_setup_category() -> bool:
     try:
         from ..commands_ext import public_setup_solid as setup_mod
@@ -173,7 +166,6 @@ def _install_setup_category() -> bool:
     changed = False
     rows = tuple(getattr(setup_mod, "RECOMMENDED_CATEGORIES", ()) or ())
     if not any(_is_cod_row(row) for row in rows):
-        # Keep Support first, Verification second, then COD before moderation flows.
         next_rows: List[Dict[str, Any]] = []
         inserted = False
         for row in rows:
@@ -190,14 +182,7 @@ def _install_setup_category() -> bool:
         patched_rows: List[Dict[str, Any]] = []
         for row in rows:
             if isinstance(row, dict) and _is_cod_row(row):
-                patched = dict(row)
-                patched.setdefault("slug", "cod_services")
-                patched.setdefault("name", "Call of Duty Services")
-                patched["description"] = _COD_DESCRIPTION
-                patched.setdefault("intake_type", "cod_services")
-                keywords = list(patched.get("match_keywords") or [])
-                patched["match_keywords"] = list(dict.fromkeys([*keywords, *_COD_KEYWORDS]))
-                patched_rows.append(patched)
+                patched_rows.append(_patched_cod_row(row))
                 changed = True
             else:
                 patched_rows.append(row)
@@ -234,39 +219,10 @@ def _install_category_admin_type() -> bool:
 def _cod_questions(intake_mod: Any) -> List[Dict[str, Any]]:
     maker = getattr(intake_mod, "_make_question")
     return [
-        maker(
-            key="cod_game",
-            label="Which COD game?",
-            placeholder=_COD_GAME_PLACEHOLDER,
-            style="short",
-            max_length=180,
-            row=0,
-        ),
-        maker(
-            key="cod_service",
-            label="What COD/Warzone/Zombies service or question do you need help with?",
-            placeholder=_COD_SERVICE_PLACEHOLDER,
-            style="paragraph",
-            max_length=1000,
-            row=1,
-        ),
-        maker(
-            key="cod_platform",
-            label="Platform / account type",
-            placeholder="Xbox, PlayStation, PC, Steam, Battle.net, Activision account, etc.",
-            style="short",
-            max_length=180,
-            row=2,
-        ),
-        maker(
-            key="cod_availability",
-            label="Best time to reach you?",
-            placeholder="Timezone and when you are usually available.",
-            style="short",
-            required=False,
-            max_length=200,
-            row=3,
-        ),
+        maker(key="cod_game", label="Which COD game?", placeholder=_COD_GAME_PLACEHOLDER, style="short", max_length=180, row=0),
+        maker(key="cod_service", label="What COD/Warzone/Zombies service or question do you need help with?", placeholder=_COD_SERVICE_PLACEHOLDER, style="paragraph", max_length=1000, row=1),
+        maker(key="cod_platform", label="Platform / account type", placeholder="Xbox, PlayStation, PC, Steam, Battle.net, Activision account, etc.", style="short", max_length=180, row=2),
+        maker(key="cod_availability", label="Best time to reach you?", placeholder="Timezone and when you are usually available.", style="short", required=False, max_length=200, row=3),
     ]
 
 
@@ -307,6 +263,7 @@ def _install_intake_service_type() -> bool:
 def apply() -> bool:
     ok = True
     ok = _install_public_panel_wording() and ok
+    ok = _install_ticket_panel_bootstrap_category() and ok
     ok = _install_setup_category() and ok
     ok = _install_category_admin_type() and ok
     ok = _install_intake_service_type() and ok
