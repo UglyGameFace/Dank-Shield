@@ -80,6 +80,34 @@ def _memory_snapshot() -> str:
         return "rss=unknown"
 
 
+def _operation_queue_snapshot() -> str:
+    try:
+        from ..operation_queue import operation_queue_health_summary
+
+        summary = operation_queue_health_summary()
+        totals = dict(summary.get("totals") or {})
+        global_state = dict(summary.get("global") or {})
+
+        queues = int(totals.get("queues", 0) or 0)
+        queued = int(totals.get("queued", 0) or 0)
+        running = int(totals.get("running", 0) or 0)
+        failed = int(totals.get("failed", 0) or 0)
+        duplicates = int(totals.get("duplicate_hits", 0) or 0)
+        busy = int(totals.get("busy_rejected", 0) or 0)
+
+        if queues <= 0 and queued <= 0 and running <= 0 and failed <= 0 and duplicates <= 0 and busy <= 0:
+            return ""
+
+        return (
+            " opq="
+            f"{summary.get('status')}:{running}run/{queued}q "
+            f"jobs={global_state.get('jobs_tracked')} "
+            f"dup={duplicates} busy={busy} fail={failed}"
+        )
+    except Exception:
+        return ""
+
+
 def _sync_excepthook(exc_type: type[BaseException], exc: BaseException, tb: Any) -> None:
     try:
         _log(f"UNHANDLED_SYNC_EXCEPTION type={getattr(exc_type, '__name__', exc_type)} error={exc!r}")
@@ -130,7 +158,7 @@ def _signal_handler(signum: int, frame: Any) -> None:
 def _atexit() -> None:
     try:
         uptime = time.time() - _BOOT_TS
-        _log(f"PROCESS_EXIT uptime={uptime:.1f}s {_memory_snapshot()}")
+        _log(f"PROCESS_EXIT uptime={uptime:.1f}s {_memory_snapshot()}{_operation_queue_snapshot()}")
     except Exception:
         pass
 
@@ -147,7 +175,7 @@ async def _health_loop() -> None:
                 task_count = len([t for t in asyncio.all_tasks(loop) if not t.done()])
             except Exception:
                 task_count = 0
-            _log(f"heartbeat uptime={uptime:.1f}s tasks={task_count} {_memory_snapshot()}")
+            _log(f"heartbeat uptime={uptime:.1f}s tasks={task_count} {_memory_snapshot()}{_operation_queue_snapshot()}")
         except asyncio.CancelledError:
             raise
         except Exception as e:
@@ -183,7 +211,7 @@ def _attach_ready_listener(bot: Any) -> None:
             user = getattr(bot, "user", None)
             guilds = len(getattr(bot, "guilds", []) or [])
             uptime = time.time() - _BOOT_TS
-            _log(f"on_ready health attached user={user} guilds={guilds} uptime={uptime:.1f}s {_memory_snapshot()}")
+            _log(f"on_ready health attached user={user} guilds={guilds} uptime={uptime:.1f}s {_memory_snapshot()}{_operation_queue_snapshot()}")
         except Exception as e:
             _log(f"on_ready health attach failed: {e!r}")
 
