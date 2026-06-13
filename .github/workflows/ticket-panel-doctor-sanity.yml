@@ -17,6 +17,7 @@ on:
       - "stoney_verify/startup_guards/setup_feature_health_scoreboard.py"
       - "stoney_verify/commands_ext/public_ticket_panel_clean.py"
       - "tools/audit_ticket_panel_doctor.py"
+      - "tools/audit_ticket_lifecycle_action_lock.py"
       - ".github/workflows/ticket-panel-doctor-sanity.yml"
   push:
     paths:
@@ -34,6 +35,7 @@ on:
       - "stoney_verify/startup_guards/setup_feature_health_scoreboard.py"
       - "stoney_verify/commands_ext/public_ticket_panel_clean.py"
       - "tools/audit_ticket_panel_doctor.py"
+      - "tools/audit_ticket_lifecycle_action_lock.py"
       - ".github/workflows/ticket-panel-doctor-sanity.yml"
   workflow_dispatch:
 
@@ -47,3 +49,5 @@ jobs:
           python-version: "3.12"
       - name: Audit ticket panel doctor
         run: python tools/audit_ticket_panel_doctor.py
+      - name: Audit lifecycle action locks
+        run: python tools/audit_ticket_lifecycle_action_lock.py
