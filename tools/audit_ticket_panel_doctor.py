@@ -11,6 +11,7 @@ FILES = [
     "stoney_verify/startup_guards/ticket_panel_doctor_command.py",
     "stoney_verify/startup_guards/ticket_panel_doctor_production_wording.py",
     "stoney_verify/startup_guards/ticket_panel_doctor_stability_guard.py",
+    "stoney_verify/startup_guards/setup_feature_health_scoreboard.py",
     "stoney_verify/commands_ext/public_ticket_panel_clean.py",
 ]
 
@@ -20,12 +21,16 @@ CHECKS = {
     "stoney_verify/startup_guards/ticket_panel_doctor_stability_guard.py": [
         "_stable_doctor_command",
         "_stable_health_lines",
+        "_stable_setup_ticket_score",
         "_saved_panel_message_status",
         "optional and not set",
         "Ticket creation is not blocked",
+        "Ticket creation essentials are usable; optional cleanup remains.",
         "_TICKET_PANEL_HEALTH_FALSE_POSITIVE_GUARD",
+        "_TICKET_SETUP_SCORE_FALSE_POSITIVE_GUARD",
         "_TICKET_PANEL_DOCTOR_STABILITY_GUARD",
     ],
+    "stoney_verify/startup_guards/setup_feature_health_scoreboard.py": ["_ticket_score", "Feature Health Scoreboard"],
     "stoney_verify/commands_ext/public_ticket_panel_clean.py": ["_health_lines", "_ticket_panel_group", "ticket_panel_message_id"],
 }
 
