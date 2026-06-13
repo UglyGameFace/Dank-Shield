@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 _PATCHED = False
+_QUEUE_FLOW_LOADED = False
 
 
 def _log(message: str) -> None:
@@ -71,8 +72,25 @@ def full_unicode_map(style: str) -> dict[str, str]:
     return {}
 
 
+def _load_queue_flow() -> None:
+    global _QUEUE_FLOW_LOADED
+    if _QUEUE_FLOW_LOADED:
+        return
+    try:
+        from stoney_verify.startup_guards import channel_font_rename_queue_guard
+
+        channel_font_rename_queue_guard.apply()
+        _QUEUE_FLOW_LOADED = True
+    except Exception as exc:
+        try:
+            print(f"⚠️ channel_builder_full_font_catalog_guard queue flow failed: {exc!r}")
+        except Exception:
+            pass
+
+
 def apply() -> bool:
     global _PATCHED
+    _load_queue_flow()
     if _PATCHED:
         return True
     try:
