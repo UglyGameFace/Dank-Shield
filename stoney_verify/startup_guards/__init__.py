@@ -26,6 +26,7 @@ _STARTUP_GUARDS: Tuple[str, ...] = (
     "stoney_verify.startup_guards.setup_feature_health_scoreboard",
     "stoney_verify.startup_guards.setup_first_run_ux_guard",
     "stoney_verify.startup_guards.setup_success_next_step_guard",
+    "stoney_verify.startup_guards.setup_health_next_action_guard",
     "stoney_verify.startup_guards.dank_shield_branding_guard",
     "stoney_verify.startup_guards.runtime_safety",
     "stoney_verify.startup_guards.invite_intent_safety",
@@ -83,6 +84,7 @@ _ALWAYS_SHOW_PREFIXES: Tuple[str, ...] = (
     "🛡️ member_activity_notices_db_safety active",
     "🧭 setup_first_run_ux_guard active",
     "🧭 setup_success_next_step_guard active",
+    "🧭 setup_health_next_action_guard active",
 )
 
 
