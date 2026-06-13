@@ -35,6 +35,7 @@ _STARTUP_GUARDS: Tuple[str, ...] = (
     "stoney_verify.members_new.role_state_compat_guard",
     "stoney_verify.startup_guards.setup_role_safety",
     "stoney_verify.commands_ext.public_moderation_command_guard",
+    "stoney_verify.startup_guards.member_activity_notices_db_safety",
     "stoney_verify.startup_guards.member_update_modlog",
     "stoney_verify.startup_guards.resource_modlog_coverage",
     "stoney_verify.tickets_new.guild_config_ticket_guard",
