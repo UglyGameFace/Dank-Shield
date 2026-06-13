@@ -84,7 +84,6 @@ def _guild_id_from_payload(server: Any, endpoint_name: str, data: dict[str, Any]
     gid = _safe_int(data.get("guild_id"), 0)
     if gid > 0:
         return gid
-
     channel_id = _safe_int(data.get("channel_id"), 0)
     if channel_id > 0:
         try:
@@ -95,7 +94,6 @@ def _guild_id_from_payload(server: Any, endpoint_name: str, data: dict[str, Any]
                 return gid
         except Exception:
             pass
-
     return 0
 
 
@@ -130,27 +128,17 @@ def _concurrency(endpoint_name: str, data: dict[str, Any]) -> tuple[str, str]:
     user_id = _safe_str(data.get("user_id"), "").strip()
     category = _safe_str(data.get("category") or "support", "support").strip().lower() or "support"
     role_id = _safe_str(data.get("role_id"), "").strip()
-
     if endpoint_name == "create_ticket":
         return "ticket_channel_mutation", f"open:{user_id or 'unknown'}:{category}"
-
     if endpoint_name in {
-        "close_ticket",
-        "reopen_ticket_endpoint",
-        "assign_ticket_endpoint",
-        "unclaim_ticket_endpoint",
-        "transfer_ticket_endpoint",
-        "delete_ticket",
-        "sync_one_ticket",
+        "close_ticket", "reopen_ticket_endpoint", "assign_ticket_endpoint", "unclaim_ticket_endpoint",
+        "transfer_ticket_endpoint", "delete_ticket", "sync_one_ticket",
     }:
         return "ticket_channel_mutation", f"channel:{channel_id or 'unknown'}"
-
     if endpoint_name == "role_member_sync":
         return "member_role_mutation", f"role:{role_id or 'unknown'}"
-
     if endpoint_name in {"force_member_sync", "reconcile_departed"}:
         return "member_sync", endpoint_name
-
     return "guild_config_write", endpoint_name
 
 
@@ -163,19 +151,10 @@ def _timeout(endpoint_name: str) -> float:
 
 
 def _busy_response(server: Any, *, endpoint_name: str, state: str, job: dict[str, Any] | None):
-    message = (
-        "A matching operation is already running for this server. "
-        "Refresh in a moment and check the latest status."
-    )
     if state == "duplicate":
-        return server._json_ok(
-            duplicate=True,
-            operation_in_progress=True,
-            operation_type=_operation_type(endpoint_name),
-            job=job,
-        )
+        return server._json_ok(duplicate=True, operation_in_progress=True, operation_type=_operation_type(endpoint_name), job=job)
     return server._json_error(
-        message,
+        "A matching operation is already running for this server. Refresh in a moment and check the latest status.",
         409,
         operation_in_progress=True,
         operation_type=_operation_type(endpoint_name),
@@ -194,10 +173,8 @@ def _wrap_endpoint(server: Any, endpoint_name: str) -> bool:
         actor_id = _actor_id_from_payload(data)
         concurrency_class, concurrency_key = _concurrency(endpoint_name, data)
         operation_type = _operation_type(endpoint_name)
-
         try:
             from ..operation_queue import run_exclusive
-
             state, result, job = await run_exclusive(
                 guild_id=guild_id or "global",
                 actor_id=actor_id or None,
@@ -211,29 +188,50 @@ def _wrap_endpoint(server: Any, endpoint_name: str) -> bool:
                 reject_if_busy=True,
                 factory=lambda: original(request),
             )
-
             if state in {"duplicate", "busy"}:
                 return _busy_response(server, endpoint_name=endpoint_name, state=state, job=job)
-
             if state == "failed":
-                return server._json_error(
-                    "Operation failed before it could finish",
-                    500,
-                    operation_type=operation_type,
-                    job=job,
-                )
-
+                return server._json_error("Operation failed before it could finish", 500, operation_type=operation_type, job=job)
             return result
         except Exception as e:
             _warn(f"queue wrapper failed endpoint={endpoint_name}; running original: {e!r}")
             return await original(request)
 
-    try:
-        setattr(wrapped, "_api_operation_queue_wrapped", True)
-        setattr(wrapped, "_api_operation_queue_original", original)
-    except Exception:
-        pass
+    setattr(wrapped, "_api_operation_queue_wrapped", True)
+    setattr(wrapped, "_api_operation_queue_original", original)
     setattr(server, endpoint_name, wrapped)
+    return True
+
+
+def _wrap_health(server: Any) -> bool:
+    original = getattr(server, "health", None)
+    if not callable(original) or getattr(original, "_api_operation_queue_health_wrapped", False):
+        return False
+
+    async def wrapped_health(request: Any):
+        _ = request
+        try:
+            guild_count = len(getattr(server.bot, "guilds", []) or [])
+        except Exception:
+            guild_count = 0
+        try:
+            from ..operation_queue import operation_queue_health_summary
+            queue_summary = operation_queue_health_summary()
+        except Exception:
+            queue_summary = {"status": "unavailable"}
+        return server._json_ok(
+            status="online",
+            guild_count=guild_count,
+            api="structured_bot_api",
+            auth_required=server._should_require_api_auth(),
+            bind_host=server._api_bind_host(),
+            bind_port=server._api_bind_port(),
+            operation_queue=queue_summary,
+        )
+
+    setattr(wrapped_health, "_api_operation_queue_health_wrapped", True)
+    setattr(wrapped_health, "_api_operation_queue_health_original", original)
+    setattr(server, "health", wrapped_health)
     return True
 
 
@@ -241,7 +239,6 @@ def _patch_server_module(server: Any) -> None:
     global _PATCHED
     if getattr(server, "_api_operation_queue_guard_patched", False):
         return
-
     wrapped = 0
     for name in sorted(_MUTATION_ENDPOINTS):
         try:
@@ -249,14 +246,14 @@ def _patch_server_module(server: Any) -> None:
                 wrapped += 1
         except Exception as e:
             _warn(f"failed wrapping endpoint={name}: {e!r}")
-
+    health_wrapped = False
     try:
-        setattr(server, "_api_operation_queue_guard_patched", True)
-    except Exception:
-        pass
-
+        health_wrapped = _wrap_health(server)
+    except Exception as e:
+        _warn(f"failed wrapping health endpoint: {e!r}")
+    setattr(server, "_api_operation_queue_guard_patched", True)
     _PATCHED = True
-    _log(f"patched structured API mutation endpoints wrapped={wrapped}")
+    _log(f"patched structured API mutation endpoints wrapped={wrapped} health_wrapped={health_wrapped}")
 
 
 def _maybe_patch_loaded() -> None:
