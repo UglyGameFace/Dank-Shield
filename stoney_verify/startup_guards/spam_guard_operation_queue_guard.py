@@ -69,7 +69,7 @@ def _wrap_spam_guard(spam_mod: Any) -> bool:
                 concurrency_class="guild_config_write",
                 concurrency_key="spam_guard_settings",
                 timeout_seconds=120.0,
-                reject_if_busy=True,
+                reject_if_busy=False,
                 factory=lambda: original(guild_id, patch, updated_by=updated_by),
             )
             if state in {"succeeded", "partial", "failed"} and result is not None:
