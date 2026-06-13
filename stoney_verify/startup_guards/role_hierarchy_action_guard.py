@@ -21,6 +21,10 @@ _PRIVILEGED_ROLE_KEYS = {
 }
 
 
+class RoleHierarchyActionBlocked(PermissionError):
+    """Raised when Dank Shield blocks a privileged-target moderation action."""
+
+
 def _log(message: str) -> None:
     try:
         print(f"🛡️ role_hierarchy_action_guard {message}")
@@ -154,26 +158,58 @@ def _outranks(actor: discord.Member, target: discord.Member) -> bool:
         return False
 
 
-def _should_block(action: str, guild: discord.Guild, target: Any, reason: Any) -> tuple[bool, str]:
+def _should_block(action: str, guild: discord.Guild, target: Any, reason: Any) -> tuple[bool, str, Optional[discord.Member]]:
     if not isinstance(target, discord.Member):
-        return False, ""
+        return False, "", None
     if not _is_privileged_member(target):
-        return False, ""
+        return False, "", None
     actor = _actor_from_reason(guild, reason)
     if actor is None:
-        return True, "unknown actor for privileged target"
+        return True, "unknown actor for privileged target", None
     if not _is_privileged_member(actor):
-        return True, "non-privileged actor targeting privileged member"
+        return True, "non-privileged actor targeting privileged member", actor
     if not _outranks(actor, target):
-        return True, "actor does not outrank privileged target"
-    return False, ""
+        return True, "actor does not outrank privileged target", actor
+    return False, "", actor
+
+
+def _member_label(member: Any) -> str:
+    try:
+        return f"{getattr(member, 'display_name', None) or getattr(member, 'name', 'member')} (`{getattr(member, 'id', 'unknown')}`)"
+    except Exception:
+        return "that member"
+
+
+async def _notify_blocked_actor(*, actor: Optional[discord.Member], target: Any, action: str, why: str) -> None:
+    if actor is None:
+        return
+    try:
+        embed = discord.Embed(
+            title="🛡️ Staff Safety Blocked This Action",
+            description=(
+                f"Dank Shield blocked your **{action}** action against {_member_label(target)}.\n\n"
+                "Staff/mod/control members cannot be moderated by equal or lower-ranked staff through the bot. "
+                "Ask a higher-ranked manager or the server owner to handle it."
+            ),
+            color=discord.Color.orange(),
+        )
+        embed.add_field(name="Reason", value=str(why or "role hierarchy protection")[:1024], inline=False)
+        await actor.send(embed=embed)
+    except Exception:
+        pass
 
 
 async def _block_or_run(action: str, guild: discord.Guild, target: Any, reason: Any, runner: Any) -> Any:
-    blocked, why = _should_block(action, guild, target, reason)
+    blocked, why, actor = _should_block(action, guild, target, reason)
     if blocked:
-        _warn(f"blocked hierarchy action={action} guild={getattr(guild, 'id', None)} target={getattr(target, 'id', None)} why={why}")
-        return None
+        _warn(
+            f"blocked hierarchy action={action} guild={getattr(guild, 'id', None)} "
+            f"target={getattr(target, 'id', None)} actor={getattr(actor, 'id', None)} why={why}"
+        )
+        await _notify_blocked_actor(actor=actor, target=target, action=action, why=why)
+        raise RoleHierarchyActionBlocked(
+            f"Dank Shield blocked {action} against privileged target {getattr(target, 'id', None)}: {why}"
+        )
     return await runner()
 
 
@@ -223,7 +259,7 @@ def apply() -> bool:
             discord.Member.timeout = member_timeout  # type: ignore[method-assign]
 
         _PATCHED = True
-        _log("active; privileged targets require a clearly outranking actor for kick/ban/timeout")
+        _log("active; privileged targets notify actor and require a clearly outranking actor for kick/ban/timeout")
         return True
     except Exception as exc:
         _warn(f"failed: {exc!r}")
@@ -232,4 +268,4 @@ def apply() -> bool:
 
 apply()
 
-__all__ = ["apply"]
+__all__ = ["apply", "RoleHierarchyActionBlocked"]
