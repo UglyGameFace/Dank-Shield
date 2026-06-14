@@ -4,8 +4,8 @@ from __future__ import annotations
 
 The clean ticket panel already has DB/open-ticket checks. This guard protects the
 member-facing interaction layer so old category menus cannot create tickets,
-Confirm cannot double-submit, and the button disables immediately while the
-create path runs.
+Confirm cannot double-submit, and form-based categories can still open Discord
+modals correctly.
 """
 
 import asyncio
@@ -110,6 +110,39 @@ def _build_category_embed(pt: Any, row: Dict[str, Any]) -> discord.Embed:
         return embed
 
 
+def _form_questions(row: Dict[str, Any]) -> list[dict[str, Any]]:
+    try:
+        from stoney_verify.startup_guards import ticket_forms_foundation_guard as forms
+
+        questions = forms._category_questions(row)
+        return list(questions or [])
+    except Exception:
+        return []
+
+
+async def _open_form_without_consuming_response(pt: Any, i: discord.Interaction, row: Dict[str, Any], questions: list[dict[str, Any]]) -> bool:
+    """Open the dashboard form modal from a Confirm click.
+
+    The old hardening flow edited the message first ("Opening your ticket…"),
+    which consumed the interaction response. Discord modals must be the first
+    response to a component interaction, so form categories failed with
+    "Could not open the ticket form." This path sends the modal first and only
+    marks the old menu stale after Discord accepts it.
+    """
+    try:
+        from stoney_verify.startup_guards import ticket_forms_foundation_guard as forms
+
+        await i.response.send_modal(forms.DashboardTicketFormModal(pt, row, questions))
+        return True
+    except Exception as exc:
+        _warn(f"failed to open ticket form before response consumption: {type(exc).__name__}: {exc}")
+        try:
+            await pt._ephemeral(i, "❌ Could not open the ticket form. Please try again. I did not consume this menu, so you can press Confirm again.")
+        except Exception:
+            pass
+        return False
+
+
 class GuardedTicketConfirmView(discord.ui.View):
     def __init__(self, pt: Any, rows: List[Dict[str, Any]], row: Dict[str, Any], owner_id: int, session_id: str) -> None:
         super().__init__(timeout=_MENU_TTL_SECONDS)
@@ -134,6 +167,16 @@ class GuardedTicketConfirmView(discord.ui.View):
         if lock.locked():
             return await self.pt._ephemeral(i, "Already opening that ticket. Please wait a second.")
         async with lock:
+            if not _session_is_current(guild.id, member.id, self.session_id):
+                return await _stale_reply(self.pt, i)
+
+            questions = _form_questions(self.row)
+            if questions:
+                opened = await _open_form_without_consuming_response(self.pt, i, self.row, questions)
+                if opened:
+                    _consume_session(guild.id, member.id, self.session_id)
+                return None
+
             if not _consume_session(guild.id, member.id, self.session_id):
                 return await _stale_reply(self.pt, i)
             _disable_view(self)
@@ -252,7 +295,7 @@ def apply() -> bool:
     try:
         pt._handle_panel_button = lambda i: _guarded_handle_panel_button(pt, i)
         pt._PUBLIC_TICKET_CONFIRM_HARDENING_GUARD_APPLIED = True
-        _log("patched public ticket menu session and confirm hardening")
+        _log("patched public ticket menu session, confirm hardening, and form-safe modal response flow")
         return True
     except Exception as exc:
         _warn(f"patch failed: {exc!r}")
