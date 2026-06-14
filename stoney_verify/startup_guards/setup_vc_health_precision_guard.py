@@ -1,11 +1,6 @@
 from __future__ import annotations
 
-"""Align VC health with staff-controlled VC repair baseline.
-
-View-only access to the VC verification channel is not the dangerous part.
-Free Connect access is. This filters the older blocker that complained about
-@everyone being able to view after repair had already removed Connect.
-"""
+"""Align VC health with the central setup permission policy."""
 
 from typing import Any
 
@@ -13,6 +8,8 @@ _DONE = False
 
 
 def _filter_blockers(blockers: list[str], warnings: list[str], ok: list[str]) -> list[str]:
+    from stoney_verify.services.setup_permission_policy import vc_view_only_is_blocker
+
     out: list[str] = []
     for line in blockers:
         text = str(line)
@@ -23,11 +20,15 @@ def _filter_blockers(blockers: list[str], warnings: list[str], ok: list[str]) ->
             and "@everyone" in low
             and "can view" in low
             and "connect" not in low
+            and not vc_view_only_is_blocker(None)
         ):
             warnings.append(
-                text.replace("Lock it in setup before testing VC verify.", "View-only access is allowed for onboarding visibility; Connect must remain locked.")
+                text.replace(
+                    "Lock it in setup before testing VC verify.",
+                    "View-only access is allowed by the central onboarding VC policy; Connect must remain locked.",
+                )
             )
-            ok.append("VC verification channel has @everyone view-only access; connect remains the safety-critical lock.")
+            ok.append("VC verification channel follows central policy: view-only is allowed; connect is the safety-critical lock.")
             continue
         out.append(line)
     return out
@@ -58,7 +59,7 @@ def apply() -> bool:
         except Exception:
             pass
         _DONE = True
-        print("🩺 setup_vc_health_precision_guard active; VC view-only access is non-blocking")
+        print("🩺 setup_vc_health_precision_guard active; VC health uses central policy")
         return True
     except Exception as exc:
         try:
