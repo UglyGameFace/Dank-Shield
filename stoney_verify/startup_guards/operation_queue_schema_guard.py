@@ -14,6 +14,7 @@ import discord
 
 _HAS_RUN = False
 _TASK: Optional[asyncio.Task] = None
+MIGRATION_PATH = "supabase/migrations/20260613_bot_operation_jobs.sql"
 
 SCHEMA_SQL = r"""
 create table if not exists public.bot_operation_jobs (
@@ -122,16 +123,15 @@ async def ensure_schema_once() -> bool:
     if not url:
         _warn(
             "cannot auto-create bot_operation_jobs because no direct Postgres URL is set. "
-            "Set SUPABASE_DB_URL or DATABASE_URL to enable persistent operation jobs."
+            f"Set SUPABASE_DB_URL/DATABASE_URL or run {MIGRATION_PATH} in Supabase SQL Editor."
         )
         return False
-
     try:
         await asyncio.to_thread(_execute_schema_sql_sync, url)
         _log("bot_operation_jobs table/indexes verified")
         return True
     except Exception as e:
-        _warn(f"schema bootstrap failed: {type(e).__name__}: {e}")
+        _warn(f"schema bootstrap failed: {type(e).__name__}: {e}; run {MIGRATION_PATH} manually if needed")
         return False
 
 
@@ -141,7 +141,6 @@ def _attach_listener() -> None:
     except Exception as e:
         _warn(f"could not import bot for listener: {e!r}")
         return
-
     if getattr(bot, "_stoney_operation_queue_schema_attached", False):
         return
 
@@ -158,4 +157,4 @@ def _attach_listener() -> None:
 
 _attach_listener()
 
-__all__ = ["ensure_schema_once", "SCHEMA_SQL"]
+__all__ = ["ensure_schema_once", "SCHEMA_SQL", "MIGRATION_PATH"]
