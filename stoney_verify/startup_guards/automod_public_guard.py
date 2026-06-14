@@ -152,6 +152,19 @@ def _normalize_for_filter(value: Any, *, compact: bool) -> str:
     return normalized if not compact else normalized.replace(" ", "")
 
 
+def _has_discord_invite(content: str) -> bool:
+    text = str(content or "")
+    if INVITE_RE.search(text):
+        return True
+    compact = _normalize_for_filter(text, compact=True)
+    return any(marker in compact for marker in ("discordgg", "discordcominvite", "discordappcominvite"))
+
+
+def _has_external_link(content: str) -> bool:
+    text = str(content or "")
+    return bool(LINK_RE.search(text) or _has_discord_invite(text))
+
+
 def _is_staff_like(member: discord.Member) -> bool:
     try:
         perms = member.guild_permissions
@@ -287,11 +300,12 @@ async def _automod_message_listener(message: discord.Message) -> None:
         if bad_hit:
             return await _handle_violation(message, reason=f"blocked word/phrase: {bad_hit}", timeout_minutes=_cfg_int(cfg, "automod_timeout_minutes", 0))
 
-        if _cfg_bool(cfg, "automod_block_invites", False) and INVITE_RE.search(content):
+        if _cfg_bool(cfg, "automod_block_invites", False) and _has_discord_invite(content):
             return await _handle_violation(message, reason="Discord invite link blocked", timeout_minutes=_cfg_int(cfg, "automod_timeout_minutes", 0))
 
-        if _cfg_bool(cfg, "automod_block_links", False) and LINK_RE.search(content):
-            return await _handle_violation(message, reason="external link blocked", timeout_minutes=_cfg_int(cfg, "automod_timeout_minutes", 0))
+        if _cfg_bool(cfg, "automod_block_links", False) and _has_external_link(content):
+            reason = "Discord invite link blocked" if _has_discord_invite(content) else "external link blocked"
+            return await _handle_violation(message, reason=reason, timeout_minutes=_cfg_int(cfg, "automod_timeout_minutes", 0))
 
         max_mentions = _cfg_int(cfg, "automod_max_mentions", 0)
         if max_mentions > 0:
