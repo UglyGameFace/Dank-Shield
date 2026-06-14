@@ -97,6 +97,26 @@ async def _edit(interaction: discord.Interaction, *, embed: discord.Embed, view:
             await interaction.response.edit_message(embed=embed, view=view)
 
 
+async def _send_error(interaction: discord.Interaction, label: str, exc: BaseException) -> None:
+    msg = f"❌ {label}: `{type(exc).__name__}: {str(exc)[:240]}`"
+    try:
+        if interaction.response.is_done():
+            await interaction.followup.send(msg, ephemeral=True, allowed_mentions=discord.AllowedMentions.none())
+        else:
+            await interaction.response.send_message(msg, ephemeral=True, allowed_mentions=discord.AllowedMentions.none())
+    except Exception:
+        pass
+
+
+async def _require_setup(interaction: discord.Interaction) -> bool:
+    try:
+        from stoney_verify.commands_ext import public_setup_solid as solid
+
+        return bool(await solid._require_setup_permission(interaction))
+    except Exception:
+        return False
+
+
 async def _open_services(interaction: discord.Interaction) -> None:
     try:
         from stoney_verify.startup_guards import setup_service_modes as modes
@@ -129,24 +149,58 @@ async def _open_permission_repair(interaction: discord.Interaction) -> None:
         await _send_error(interaction, "Permission repair failed", exc)
 
 
-async def _send_error(interaction: discord.Interaction, label: str, exc: BaseException) -> None:
-    msg = f"❌ {label}: `{type(exc).__name__}: {str(exc)[:240]}`"
+async def _open_protection_center(interaction: discord.Interaction) -> None:
     try:
-        if interaction.response.is_done():
-            await interaction.followup.send(msg, ephemeral=True, allowed_mentions=discord.AllowedMentions.none())
-        else:
-            await interaction.response.send_message(msg, ephemeral=True, allowed_mentions=discord.AllowedMentions.none())
-    except Exception:
-        pass
+        from stoney_verify.commands_ext import public_protection_center as protection
+
+        return await protection.protection_center(interaction)
+    except Exception as exc:
+        await _send_error(interaction, "Protection Center failed", exc)
 
 
-async def _require_setup(interaction: discord.Interaction) -> bool:
+async def _welcome_health(interaction: discord.Interaction) -> None:
     try:
-        from stoney_verify.commands_ext import public_setup_solid as solid
+        from stoney_verify.commands_ext import public_welcome_group as welcome
 
-        return bool(await solid._require_setup_permission(interaction))
-    except Exception:
-        return False
+        return await welcome.welcome_health(interaction)
+    except Exception as exc:
+        await _send_error(interaction, "Welcome health failed", exc)
+
+
+async def _welcome_preview(interaction: discord.Interaction) -> None:
+    try:
+        from stoney_verify.commands_ext import public_welcome_group as welcome
+
+        return await welcome.welcome_preview(interaction)
+    except Exception as exc:
+        await _send_error(interaction, "Welcome preview failed", exc)
+
+
+async def _welcome_post(interaction: discord.Interaction) -> None:
+    try:
+        from stoney_verify.commands_ext import public_welcome_group as welcome
+
+        return await welcome.welcome_post(interaction, channel=None)
+    except Exception as exc:
+        await _send_error(interaction, "Welcome post failed", exc)
+
+
+async def _modlog_health(interaction: discord.Interaction) -> None:
+    try:
+        from stoney_verify.commands_ext import public_modlog_group as modlog
+
+        return await modlog.modlog_health(interaction)
+    except Exception as exc:
+        await _send_error(interaction, "Modlog health failed", exc)
+
+
+async def _modlog_test(interaction: discord.Interaction) -> None:
+    try:
+        from stoney_verify.commands_ext import public_modlog_group as modlog
+
+        return await modlog.modlog_test(interaction)
+    except Exception as exc:
+        await _send_error(interaction, "Modlog test failed", exc)
 
 
 class SmartSetupHomeView(discord.ui.View):
@@ -176,7 +230,7 @@ class SmartSetupHomeView(discord.ui.View):
             return
         embed = _workflow_embed(
             "🛡️ Safety & Repair",
-            "Use this only when Setup Health or manual inspection shows permission drift. This section previews and repairs saved setup channel overwrites.",
+            "Use this when Setup Health shows permission drift. This section previews and repairs saved setup channel overwrites.",
             color=discord.Color.orange(),
         )
         embed.add_field(name="Protects", value="Unverified visibility, staff/private/log areas, ticket/archive/transcript areas, and saved setup channel overwrites.", inline=False)
@@ -188,12 +242,34 @@ class SmartSetupHomeView(discord.ui.View):
             return
         embed = _workflow_embed(
             "🎫 Ticket Setup",
-            "Use this only for public ticket menu choices and ticket-facing options. Channel/permission repair lives in Safety & Repair.",
+            "Use this for public ticket menu choices and ticket-facing options. Channel/permission repair lives in Safety & Repair.",
         )
         embed.add_field(name="Contains", value="🧾 Ticket Menu Choices", inline=False)
         await _edit(interaction, embed=embed, view=TicketSetupView())
 
-    @discord.ui.button(label="Advanced Tools", emoji="🧰", style=discord.ButtonStyle.secondary, custom_id="dank_setup_hub:advanced", row=2)
+    @discord.ui.button(label="Feature Centers", emoji="🧩", style=discord.ButtonStyle.primary, custom_id="dank_setup_hub:features", row=2)
+    async def features(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        if not await _require_setup(interaction):
+            return
+        embed = _workflow_embed(
+            "🧩 Feature Centers",
+            "This is where the ProBot-style modules live inside setup. Use these after Core Setup so everything stays centralized instead of scattered across random commands.",
+        )
+        embed.add_field(
+            name="Contains",
+            value=(
+                "🛡️ Protection Center — Automod, Spam Guard, invite/link shield\n"
+                "👋 Welcome Center — welcome/start-here message + join/leave flow\n"
+                "🎭 Roles Center — pronouns, identity, and self-role panels\n"
+                "🧾 Modlog Center — audit/modlog health and test\n"
+                "📝 Embed Builder — rules/info/announcement messages\n"
+                "🧹 Cleanup + Members — cleanup utilities and member review"
+            ),
+            inline=False,
+        )
+        await _edit(interaction, embed=embed, view=FeatureCentersView())
+
+    @discord.ui.button(label="Advanced Tools", emoji="🧰", style=discord.ButtonStyle.secondary, custom_id="dank_setup_hub:advanced", row=3)
     async def advanced(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         if not await _require_setup(interaction):
             return
@@ -270,6 +346,136 @@ class TicketSetupView(discord.ui.View):
         await _back_home(interaction)
 
 
+class FeatureCentersView(discord.ui.View):
+    def __init__(self) -> None:
+        super().__init__(timeout=900)
+
+    @discord.ui.button(label="Protection Center", emoji="🛡️", style=discord.ButtonStyle.primary, custom_id="dank_setup_features:protection", row=0)
+    async def protection(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        await _open_protection_center(interaction)
+
+    @discord.ui.button(label="Welcome Center", emoji="👋", style=discord.ButtonStyle.secondary, custom_id="dank_setup_features:welcome", row=0)
+    async def welcome(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        if not await _require_setup(interaction):
+            return
+        embed = _workflow_embed(
+            "👋 Welcome Center",
+            "Set up the welcome/start-here message and join/leave messaging from one place.",
+        )
+        embed.add_field(name="Setup path", value="1. Core Setup → Use Existing Roles/Channels → Verification Channels → save welcome/start channel.\n2. Press **Health**.\n3. Press **Preview**.\n4. Press **Post/Update** when ready.", inline=False)
+        await _edit(interaction, embed=embed, view=WelcomeCenterView())
+
+    @discord.ui.button(label="Roles Center", emoji="🎭", style=discord.ButtonStyle.secondary, custom_id="dank_setup_features:roles", row=1)
+    async def roles(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        if not await _require_setup(interaction):
+            return
+        embed = _workflow_embed(
+            "🎭 Roles Center",
+            "Pronoun, identity, and self-role panels are optional cosmetic role tools. They must never control verification, ticket access, moderation, or staff power.",
+        )
+        embed.add_field(name="Recommended", value="Use `/dank roles pronouns channel:#your-channel` for pronouns. Use identity roles only if your community explicitly wants that, and keep them optional.", inline=False)
+        embed.add_field(name="Safety rule", value="Do not force gender/identity roles before access. Keep them self-serve and skippable.", inline=False)
+        await _edit(interaction, embed=embed, view=FeatureBackView())
+
+    @discord.ui.button(label="Modlog Center", emoji="🧾", style=discord.ButtonStyle.secondary, custom_id="dank_setup_features:modlog", row=1)
+    async def modlog(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        if not await _require_setup(interaction):
+            return
+        embed = _workflow_embed(
+            "🧾 Modlog Center",
+            "Check the saved modlog channel, permissions, and audit listener coverage. Use Core Setup → Use Existing Roles/Channels → Logs + Status to save the channel.",
+        )
+        await _edit(interaction, embed=embed, view=ModlogCenterView())
+
+    @discord.ui.button(label="Embed Builder", emoji="📝", style=discord.ButtonStyle.secondary, custom_id="dank_setup_features:embed", row=2)
+    async def embed_builder(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        if not await _require_setup(interaction):
+            return
+        embed = _workflow_embed(
+            "📝 Embed Builder",
+            "Use this for rules, info, announcements, and reusable public messages. This is Dank Shield's ProBot-like message builder lane.",
+        )
+        embed.add_field(name="Where it lives", value="Use `/dank embed` for now. Setup keeps it listed here so admins do not have to remember random command groups.", inline=False)
+        await _edit(interaction, embed=embed, view=FeatureBackView())
+
+    @discord.ui.button(label="Cleanup + Members", emoji="🧹", style=discord.ButtonStyle.secondary, custom_id="dank_setup_features:members", row=2)
+    async def cleanup_members(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        if not await _require_setup(interaction):
+            return
+        embed = _workflow_embed(
+            "🧹 Cleanup + Members",
+            "Member review, inactivity checks, cleanup tools, and safe purge workflows live here conceptually. These are staff/admin utilities, not setup blockers.",
+        )
+        embed.add_field(name="Where it lives", value="Use `/dank members` and `/dank cleanup` for now. Setup centralizes the navigation so the product does not feel scattered.", inline=False)
+        await _edit(interaction, embed=embed, view=FeatureBackView())
+
+    @discord.ui.button(label="Back to Setup Home", emoji="🏠", style=discord.ButtonStyle.secondary, custom_id="dank_setup_features:back", row=3)
+    async def back(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        await _back_home(interaction)
+
+
+class WelcomeCenterView(discord.ui.View):
+    def __init__(self) -> None:
+        super().__init__(timeout=900)
+
+    @discord.ui.button(label="Health", emoji="🩺", style=discord.ButtonStyle.primary, custom_id="dank_setup_welcome:health", row=0)
+    async def health(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        await _welcome_health(interaction)
+
+    @discord.ui.button(label="Preview", emoji="👁️", style=discord.ButtonStyle.secondary, custom_id="dank_setup_welcome:preview", row=0)
+    async def preview(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        await _welcome_preview(interaction)
+
+    @discord.ui.button(label="Post/Update", emoji="📌", style=discord.ButtonStyle.success, custom_id="dank_setup_welcome:post", row=0)
+    async def post(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        await _welcome_post(interaction)
+
+    @discord.ui.button(label="Back to Feature Centers", emoji="↩️", style=discord.ButtonStyle.secondary, custom_id="dank_setup_welcome:back", row=1)
+    async def back(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        await _open_features_home(interaction)
+
+
+class ModlogCenterView(discord.ui.View):
+    def __init__(self) -> None:
+        super().__init__(timeout=900)
+
+    @discord.ui.button(label="Health", emoji="🩺", style=discord.ButtonStyle.primary, custom_id="dank_setup_modlog:health", row=0)
+    async def health(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        await _modlog_health(interaction)
+
+    @discord.ui.button(label="Send Test", emoji="📨", style=discord.ButtonStyle.success, custom_id="dank_setup_modlog:test", row=0)
+    async def test(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        await _modlog_test(interaction)
+
+    @discord.ui.button(label="Back to Feature Centers", emoji="↩️", style=discord.ButtonStyle.secondary, custom_id="dank_setup_modlog:back", row=1)
+    async def back(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        await _open_features_home(interaction)
+
+
+class FeatureBackView(discord.ui.View):
+    def __init__(self) -> None:
+        super().__init__(timeout=900)
+
+    @discord.ui.button(label="Back to Feature Centers", emoji="↩️", style=discord.ButtonStyle.secondary, custom_id="dank_setup_feature_back:features", row=0)
+    async def features(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        await _open_features_home(interaction)
+
+    @discord.ui.button(label="Back to Setup Home", emoji="🏠", style=discord.ButtonStyle.secondary, custom_id="dank_setup_feature_back:home", row=0)
+    async def home(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        await _back_home(interaction)
+
+
+async def _open_features_home(interaction: discord.Interaction) -> None:
+    if not await _require_setup(interaction):
+        return
+    embed = _workflow_embed(
+        "🧩 Feature Centers",
+        "This is the centralized home for the ProBot-style modules Dank Shield has added.",
+    )
+    embed.add_field(name="Sections", value="🛡️ Protection\n👋 Welcome\n🎭 Roles\n🧾 Modlog\n📝 Embeds\n🧹 Cleanup + Members", inline=False)
+    await _edit(interaction, embed=embed, view=FeatureCentersView())
+
+
 class AdvancedSetupView(discord.ui.View):
     def __init__(self, *, show_owner_tools: bool = False) -> None:
         super().__init__(timeout=900)
@@ -338,6 +544,7 @@ async def _smart_plain_choice_main_payload(guild: discord.Guild) -> tuple[discor
             "🚀 **Core Setup** — setup type, services, create/use existing defaults.\n"
             "🛡️ **Safety & Repair** — only place to preview/fix permissions.\n"
             "🎫 **Ticket Setup** — ticket menu choices.\n"
+            "🧩 **Feature Centers** — Protection, Welcome, Roles, Modlog, Embeds, Cleanup + Members.\n"
             "🧰 **Advanced Tools** — fonts, owner-only protections, help."
         ),
         inline=False,
@@ -365,7 +572,7 @@ def apply() -> bool:
         except Exception:
             solid._build_main_setup_payload = _smart_plain_choice_main_payload
         _PATCHED = True
-        _log("active; /dank setup home is a clean task-based workflow hub")
+        _log("active; /dank setup home centralizes core setup, tickets, safety, and ProBot-style feature centers")
         return True
     except Exception as exc:
         _warn(f"failed: {exc!r}")
@@ -374,4 +581,15 @@ def apply() -> bool:
 
 apply()
 
-__all__ = ["apply", "SmartSetupHomeView", "SmartSetupToolsView", "CoreSetupView", "SafetyRepairView", "TicketSetupView", "AdvancedSetupView"]
+__all__ = [
+    "apply",
+    "SmartSetupHomeView",
+    "SmartSetupToolsView",
+    "CoreSetupView",
+    "SafetyRepairView",
+    "TicketSetupView",
+    "FeatureCentersView",
+    "WelcomeCenterView",
+    "ModlogCenterView",
+    "AdvancedSetupView",
+]
