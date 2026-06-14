@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Optional
 
 import discord
+from discord import app_commands
 
 from .public_verify_group import _send
 
@@ -12,7 +13,7 @@ async def verify_panel(interaction: discord.Interaction, channel: Optional[disco
 
 
 def apply() -> bool:
-    return True
+    return bool(app_commands)
 
 
 apply()
