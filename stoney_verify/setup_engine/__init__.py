@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from .diff import build_setup_health_report, build_legacy_health_lists
+from .engine import build_legacy_health_lists, build_setup_health_report
 from .models import (
     FindingSeverity,
     HealthFinding,
