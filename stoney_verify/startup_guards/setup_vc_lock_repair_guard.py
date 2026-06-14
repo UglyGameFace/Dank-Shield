@@ -45,6 +45,17 @@ def _locked_voice_verify_overwrites(
     return ow
 
 
+def _load_label_precision() -> None:
+    try:
+        from stoney_verify.startup_guards import setup_permission_label_precision_guard
+        setup_permission_label_precision_guard.apply()
+    except Exception as exc:
+        try:
+            print(f"⚠️ setup_vc_lock_repair_guard label precision failed: {exc!r}")
+        except Exception:
+            pass
+
+
 def apply() -> bool:
     global _DONE
     if _DONE:
@@ -52,6 +63,7 @@ def apply() -> bool:
     try:
         from stoney_verify.startup_guards import setup_permission_repair_guard as repair
         repair._voice_verify_overwrites = _locked_voice_verify_overwrites
+        _load_label_precision()
         _DONE = True
         print("🛠️ setup_vc_lock_repair_guard active; permission repair locks VC verification connect access")
         return True
