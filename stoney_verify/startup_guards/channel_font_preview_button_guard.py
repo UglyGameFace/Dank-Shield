@@ -16,6 +16,7 @@ import discord
 _PATCHED = False
 _STARTED = False
 _ACCESS_REPAIR_LOADED = False
+_WAITING_LOGGED = False
 
 
 async def _send_problem(interaction: discord.Interaction, exc: BaseException) -> None:
@@ -107,7 +108,7 @@ def _retry(attempt: int = 0) -> None:
 
 
 def apply() -> bool:
-    global _STARTED
+    global _STARTED, _WAITING_LOGGED
     _load_access_repair()
     if _patch():
         try:
@@ -118,10 +119,12 @@ def apply() -> bool:
     if not _STARTED:
         _STARTED = True
         _retry(0)
-    try:
-        print("🔤 channel_font_preview_button_guard waiting for ChannelFontModeView before attaching button")
-    except Exception:
-        pass
+    if not _WAITING_LOGGED:
+        _WAITING_LOGGED = True
+        try:
+            print("🔤 channel_font_preview_button_guard waiting for ChannelFontModeView before attaching button")
+        except Exception:
+            pass
     return True
 
 
