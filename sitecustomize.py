@@ -30,6 +30,11 @@ except Exception as e:
         pass
 
 try:
+    import stoney_verify.commands_ext.public_verify_basic_panel  # noqa: F401
+except Exception:
+    pass
+
+try:
     from stoney_verify.startup_guards import basic_verification_mode_guard
     basic_verification_mode_guard.apply()
 except Exception:
