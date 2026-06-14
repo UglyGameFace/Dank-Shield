@@ -10,6 +10,7 @@ DB work is bounded, and slow optional DB reads/writes degrade to memory-only
 instead of freezing setup, slash commands, or interactions.
 """
 
+import asyncio
 import concurrent.futures
 import time
 from typing import Any, Mapping, Optional
@@ -198,11 +199,29 @@ def _install() -> None:
             if deadline is not None and deadline < now:
                 _patched_update_notice_row(str(row.get("notice_id")), status=mod._NOTICE_STATUS_DEADLINE_PASSED)
 
+    async def _patched_process_due_member_notices(bot: Any, *, one_pass: bool = False) -> None:
+        while True:
+            try:
+                await _patched_expire_passed_notice_deadlines()
+                rows, warning = _patched_due_notice_rows(limit=20)
+                if warning:
+                    _notice_warning(warning)
+                for row in rows:
+                    await mod._send_notice_row(bot, row)
+                    await asyncio.sleep(float(getattr(mod, "_NOTICE_SEND_DELAY_SECONDS", 2.5) or 2.5))
+            except Exception as e:
+                print(f"⚠️ member activity notice worker error: {repr(e)}")
+
+            if one_pass:
+                return
+            await asyncio.sleep(float(getattr(mod, "_NOTICE_WORKER_INTERVAL_SECONDS", 30) or 30))
+
     mod._upsert_notice_row = _patched_upsert_notice_row
     mod._update_notice_row = _patched_update_notice_row
     mod._select_notice_rows = _patched_select_notice_rows
     mod._due_notice_rows = _patched_due_notice_rows
     mod._expire_passed_notice_deadlines = _patched_expire_passed_notice_deadlines
+    mod._process_due_member_notices = _patched_process_due_member_notices
 
     _PATCHED = True
     print(
