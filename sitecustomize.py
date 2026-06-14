@@ -28,3 +28,9 @@ except Exception as e:
         print(f"⚠️ sitecustomize failed to load startup_guards.runtime_safety: {e!r}")
     except Exception:
         pass
+
+try:
+    from stoney_verify.startup_guards import basic_verification_mode_guard
+    basic_verification_mode_guard.apply()
+except Exception:
+    pass
