@@ -49,12 +49,18 @@ def vc_verification_overwrites(
     """Expected staff-controlled VC verification overwrites.
 
     Public/onboarding users may see that the VC flow exists, but they cannot
-    connect freely. Dank Shield/staff grant per-member temporary access during
-    the active VC verification session.
+    connect, speak, or use the voice-channel text chat freely. Dank Shield/staff
+    grant per-member temporary access during the active VC verification session.
     """
 
     ow: dict[object, discord.PermissionOverwrite] = {
-        guild.default_role: discord.PermissionOverwrite(view_channel=True, connect=False, speak=False),
+        guild.default_role: discord.PermissionOverwrite(
+            view_channel=True,
+            connect=False,
+            speak=False,
+            send_messages=False,
+            read_message_history=True,
+        ),
     }
     me = bot_member(guild)
     if me:
@@ -64,13 +70,28 @@ def vc_verification_overwrites(
             speak=True,
             move_members=True,
             manage_channels=True,
+            send_messages=True,
+            read_message_history=True,
         )
     for role in (unverified_role, verified_role, resident_role):
         if role and not role.is_default():
-            ow[role] = discord.PermissionOverwrite(view_channel=True, connect=False, speak=False)
+            ow[role] = discord.PermissionOverwrite(
+                view_channel=True,
+                connect=False,
+                speak=False,
+                send_messages=False,
+                read_message_history=True,
+            )
     for role in (staff_role, control_role):
         if role and not role.is_default():
-            ow[role] = discord.PermissionOverwrite(view_channel=True, connect=True, speak=True, move_members=True)
+            ow[role] = discord.PermissionOverwrite(
+                view_channel=True,
+                connect=True,
+                speak=True,
+                move_members=True,
+                send_messages=True,
+                read_message_history=True,
+            )
     return ow
 
 
