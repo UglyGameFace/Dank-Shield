@@ -1,16 +1,25 @@
 from __future__ import annotations
 
 from typing import Any
+import re
+import unicodedata
 
 import discord
 
 from .models import SetupConfigSnapshot
 from .scanner import all_channel_targets, get_channel, parent_id, target_id, target_name
 
+_SEPARATOR_RE = re.compile(r"[\s_\-–—|｜┃:：/\\]+")
+
 
 def norm_name(value: Any) -> str:
     try:
-        return str(value or "").lower().replace("_", "-").replace(" ", "-")
+        # Discord servers often use fancy Unicode channel names. NFKC folds names
+        # like 𝔯𝔲𝔩𝔢𝔰 back to rules so the safety engine does not mistake a
+        # deliberate public rules channel for an Unverified leak.
+        text = unicodedata.normalize("NFKC", str(value or "")).casefold()
+        text = _SEPARATOR_RE.sub("-", text)
+        return text.strip("-")
     except Exception:
         return ""
 
@@ -26,6 +35,7 @@ def looks_onboarding_public(target: Any) -> bool:
     public_tokens = (
         "welcome",
         "rule",
+        "rules",
         "verify",
         "verification",
         "support",
