@@ -221,6 +221,15 @@ async def _open_roles_center(interaction: discord.Interaction) -> None:
         await _send_error(interaction, "Roles Center failed", exc)
 
 
+async def _open_cleanup_members_center(interaction: discord.Interaction) -> None:
+    try:
+        from stoney_verify import members_cleanup_center_services
+
+        return await members_cleanup_center_services.open_cleanup_members_center(interaction)
+    except Exception as exc:
+        await _send_error(interaction, "Cleanup + Members failed", exc)
+
+
 class SmartSetupHomeView(discord.ui.View):
     def __init__(self, *, ready: bool) -> None:
         super().__init__(timeout=900)
@@ -403,14 +412,7 @@ class FeatureCentersView(discord.ui.View):
 
     @discord.ui.button(label="Cleanup + Members", emoji="🧹", style=discord.ButtonStyle.secondary, custom_id="dank_setup_features:members", row=2)
     async def cleanup_members(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        if not await _require_setup(interaction):
-            return
-        embed = _workflow_embed(
-            "🧹 Cleanup + Members",
-            "Member review, inactivity checks, cleanup tools, and safe purge workflows live here conceptually. These are staff/admin utilities, not setup blockers.",
-        )
-        embed.add_field(name="Where it lives", value="Use `/dank members` and `/dank cleanup` for now. Setup centralizes the navigation so the product does not feel scattered.", inline=False)
-        await _edit(interaction, embed=embed, view=FeatureBackView())
+        await _open_cleanup_members_center(interaction)
 
     @discord.ui.button(label="Back to Setup Home", emoji="🏠", style=discord.ButtonStyle.secondary, custom_id="dank_setup_features:back", row=3)
     async def back(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
