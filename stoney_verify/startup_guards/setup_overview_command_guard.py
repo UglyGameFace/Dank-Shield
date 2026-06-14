@@ -19,6 +19,16 @@ def apply() -> bool:
         register = getattr(public_setup_overview, "register_public_setup_overview_commands", None)
         if callable(register):
             register(None, None)
+
+        # This guard is loaded after the feature command guards, so it is the
+        # safest place to do the final public /dank surface cleanup.
+        try:
+            from stoney_verify.startup_guards import production_command_surface_guard
+
+            production_command_surface_guard.apply()
+        except Exception as prune_exc:
+            print(f"⚠️ setup_overview_command_guard final command prune failed: {type(prune_exc).__name__}: {prune_exc}")
+
         _PATCHED = True
         print("✅ setup_overview_command_guard active; /dank overview is allowed in public setup surface")
         return True
