@@ -17,8 +17,11 @@ DEFAULT_PRONOUN_ROLE_NAMES: tuple[str, ...] = (
     "Pronouns: they/them",
     "Pronouns: he/they",
     "Pronouns: she/they",
+    "Pronouns: it/its",
     "Pronouns: any pronouns",
+    "Pronouns: no pronouns",
     "Pronouns: ask me",
+    "Pronouns: custom",
 )
 
 roles_group = app_commands.Group(
