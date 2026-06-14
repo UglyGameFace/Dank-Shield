@@ -57,6 +57,7 @@ _STARTUP_GUARDS: Tuple[str, ...] = (
     "stoney_verify.tickets_new.sync_native_guard",
     "stoney_verify.tickets_new.sync_alias_guard",
     "stoney_verify.api_new.guild_config_guard",
+    "stoney_verify.startup_guards.channel_builder_runtime_exports_guard",
     "stoney_verify.startup_guards.api_operation_queue_guard",
     "stoney_verify.tickets_new.panel_creation_guard_runtime",
     "stoney_verify.startup_guards.unverified_ticket_panel_flow",
