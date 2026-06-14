@@ -40,7 +40,7 @@ _ORIGINAL_CLEAR_COMMANDS = None
 # Bump this value when public command cleanup rules change and Discord needs one
 # guaranteed global sync after deployment. This avoids stale global /stoney or
 # old dev command cache while still allowing future unchanged syncs to be skipped.
-COMMAND_CLEANUP_EPOCH = "2026-06-12-public-command-surface-v3-scoreboard"
+COMMAND_CLEANUP_EPOCH = "2026-06-14-verify-panel-command-v2"
 
 STALE_TOP_LEVEL_COMMANDS = {
     "stoney",

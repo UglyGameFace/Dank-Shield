@@ -41,6 +41,7 @@ COMMAND_MODULES: List[CommandModuleSpec] = [
     ("public_tickets_group", "register_public_tickets_group_commands", "core: grouped /tickets commands"),
     ("public_ticket_category_group", "register_public_ticket_category_group_commands", "core: grouped /ticket-category commands"),
     ("public_ticket_panel_clean", "register_public_ticket_panel_clean", "core: public Create Ticket panel tools"),
+    ("public_verify_basic_panel", "register_public_verify_basic_panel_commands", "core: /verify panel basic button verification command"),
     ("public_verify_group", "register_public_verify_group_commands", "core: grouped /verify commands"),
     ("public_setup_gate", "register_public_setup_gate", "core: setup readiness gate for ticket commands"),
 
@@ -112,6 +113,7 @@ _PUBLIC_CORE_MODULES: Tuple[str, ...] = (
     "public_tickets_group",
     "public_ticket_category_group",
     "public_ticket_panel_clean",
+    "public_verify_basic_panel",
     "public_verify_group",
     "public_setup_gate",
 )
