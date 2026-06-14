@@ -148,14 +148,7 @@ def _all_channel_targets(guild: discord.Guild) -> list[Any]:
 def _is_onboarding_allowed(target: Any, allowed_ids: set[int]) -> bool:
     try:
         cid = int(getattr(target, "id", 0) or 0)
-        if cid in allowed_ids:
-            return True
-        parent = getattr(target, "category", None)
-        parent_id = int(getattr(parent, "id", 0) or 0) if parent is not None else 0
-        # Only the saved onboarding category itself may be visible by inheritance.
-        # Children still need their own ID in the allowlist, so member/private
-        # channels inside that category are not accidentally allowed.
-        return False
+        return cid in allowed_ids
     except Exception:
         return False
 
@@ -245,8 +238,20 @@ def _check(guild: discord.Guild, cfg: Any, blockers: list[str], warnings: list[s
         warnings.append("Verified/member role privacy check skipped because no Verified/Resident role is saved.")
 
 
+def _load_repair_alignment() -> None:
+    try:
+        from stoney_verify.startup_guards import setup_role_visibility_repair_guard
+        setup_role_visibility_repair_guard.apply()
+    except Exception as exc:
+        try:
+            print(f"⚠️ setup_visibility_health_guard repair alignment failed: {exc!r}")
+        except Exception:
+            pass
+
+
 def apply() -> bool:
     global _DONE
+    _load_repair_alignment()
     if _DONE:
         return True
     try:
