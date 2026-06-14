@@ -166,6 +166,29 @@ def _unverified_leaks(guild: discord.Guild, cfg: Any, unverified: discord.Role |
     return leaks
 
 
+def _vc_category_notice(guild: discord.Guild, cfg: Any, unverified: discord.Role | None, warnings: list[str]) -> None:
+    vc = _target(guild, _first(cfg, ("vc_verify_channel_id", "voice_verify_channel_id")))
+    if vc is None:
+        return
+    parent = getattr(vc, "category", None)
+    if parent is None:
+        return
+    management = _first(cfg, ("management_category_id", "staff_tools_category_id"))
+    private = _private_ids(cfg)
+    parent_id = _i(getattr(parent, "id", 0))
+    if parent_id == management or parent_id in private:
+        warnings.append(
+            f"{_label(vc)} is onboarding-visible VC verification but it is inside {_label(parent)}. "
+            "Discord will show that category to Unverified users because they can see the VC child. "
+            "Move VC verification to a public verification/onboarding category, or run the VC setup/fix flow to place it correctly."
+        )
+    elif unverified is not None and _can_see(vc, unverified) and not _can_see(parent, unverified):
+        warnings.append(
+            f"{_label(vc)} is visible to Unverified but its parent category {_label(parent)} is hidden. "
+            "Discord may show confusing category behavior; prefer placing VC verification in the onboarding category."
+        )
+
+
 def _check(guild: discord.Guild, cfg: Any, blockers: list[str], warnings: list[str], ok: list[str]) -> None:
     unverified = guild.get_role(_first(cfg, ("unverified_role_id",)))
     verified_roles = _roles(
@@ -225,6 +248,8 @@ def _check(guild: discord.Guild, cfg: Any, blockers: list[str], warnings: list[s
         if unverified is not None and _can_see(ch, unverified):
             blockers.append(f"{_label(ch)} is visible to Unverified; member-only areas must be hidden until verification.")
 
+    _vc_category_notice(guild, cfg, unverified, warnings)
+
     leaks = _unverified_leaks(guild, cfg, unverified)
     if leaks:
         shown = ", ".join(_label(item) for item in leaks[:12])
@@ -269,7 +294,7 @@ def apply() -> bool:
         setattr(wrapped, "_visibility_wrapped", True)
         group._build_setup_health = wrapped
         _DONE = True
-        print("🛡️ setup_visibility_health_guard active; setup health scans all channels for Unverified leaks")
+        print("🛡️ setup_visibility_health_guard active; setup health scans all channels for Unverified leaks and VC category placement")
         return True
     except Exception as exc:
         try:
