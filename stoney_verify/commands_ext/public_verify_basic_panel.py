@@ -36,6 +36,11 @@ async def _pick_channel(interaction: discord.Interaction, channel: Optional[disc
 
 
 async def verify_panel(interaction: discord.Interaction, channel: Optional[discord.TextChannel] = None) -> None:
+    try:
+        if not interaction.response.is_done():
+            await interaction.response.defer(ephemeral=True, thinking=True)
+    except Exception:
+        pass
     if not await _staff_only(interaction):
         return
     target = await _pick_channel(interaction, channel)
