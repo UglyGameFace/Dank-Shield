@@ -19,6 +19,7 @@ _STARTUP_GUARDS: Tuple[str, ...] = (
     "stoney_verify.startup_guards.public_verify_admin_command_skip",
     "stoney_verify.startup_guards.auto_schema_bootstrap",
     "stoney_verify.startup_guards.operation_queue_schema_guard",
+    "stoney_verify.startup_guards.operation_queue_persistence_retry_guard",
     "stoney_verify.startup_guards.guild_operation_queue_guard",
     "stoney_verify.startup_guards.guild_config_write_safety",
     "stoney_verify.startup_guards.setup_category_modal_compat",
