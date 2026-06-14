@@ -10,7 +10,7 @@ owners.
 
 import re
 import unicodedata
-from typing import Any, Mapping, Optional
+from typing import Any, Mapping
 
 import discord
 from discord import app_commands
@@ -303,10 +303,8 @@ def _protection_embed(guild: discord.Guild, cfg: Any, spam: dict[str, Any], spam
         inline=False,
     )
     embed.add_field(
-        name="Production command cleanup",
-        value=(
-            "Use **/dank protection** for normal setup. Legacy **/dank automod** and **/dank spam** are being hidden from the public command surface so owners are not command-hunting."
-        ),
+        name="Detailed controls",
+        value="Use **Edit Spam Guard** for exact Spam Guard knobs. Use **Add Filter** and **Test** for bad-word/content filters.",
         inline=False,
     )
     embed.set_footer(text="Protection Center uses existing Automod + Spam Guard settings; no new overlapping config bucket.")
@@ -388,6 +386,17 @@ async def _test_text(interaction: discord.Interaction, text: str) -> None:
     await _send_ephemeral(interaction, f"⚪ Would not block with current bad-word filters.\nNormalized check: `{normalized[:300]}`")
 
 
+async def _open_spamguard_editor(interaction: discord.Interaction) -> None:
+    if not await _require_setup_permission(interaction):
+        return
+    try:
+        from stoney_verify.commands_ext.public_spam_group import open_spamguard_panel
+
+        await open_spamguard_panel(interaction)
+    except Exception as exc:
+        await _send_ephemeral(interaction, f"❌ Could not open Spam Guard editor: `{type(exc).__name__}: {exc}`")
+
+
 class AddFilterModal(discord.ui.Modal, title="Add Automod Filter"):
     word = discord.ui.TextInput(label="Word or phrase to block", max_length=80, required=True, placeholder="Example: scam phrase")
 
@@ -428,6 +437,11 @@ class ProtectionCenterView(discord.ui.View):
         _ = button
         await _apply_protection_preset(interaction, "off")
 
+    @discord.ui.button(label="Edit Spam Guard", emoji="🛠️", style=discord.ButtonStyle.secondary, custom_id="dank_protection:edit_spamguard", row=1)
+    async def edit_spamguard_button(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        await _open_spamguard_editor(interaction)
+
     @discord.ui.button(label="Add Filter", emoji="➕", style=discord.ButtonStyle.secondary, custom_id="dank_protection:add_filter", row=1)
     async def add_filter_button(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
@@ -442,12 +456,22 @@ class ProtectionCenterView(discord.ui.View):
             return
         await interaction.response.send_modal(TestFilterModal())
 
-    @discord.ui.button(label="Refresh", emoji="🔄", style=discord.ButtonStyle.secondary, custom_id="dank_protection:refresh", row=1)
+    @discord.ui.button(label="Refresh", emoji="🔄", style=discord.ButtonStyle.secondary, custom_id="dank_protection:refresh", row=2)
     async def refresh_button(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
         if not await _require_setup_permission(interaction):
             return
         await _refresh_panel(interaction)
+
+    @discord.ui.button(label="Close", emoji="✖️", style=discord.ButtonStyle.secondary, custom_id="dank_protection:close", row=2)
+    async def close_button(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        for child in self.children:
+            try:
+                child.disabled = True
+            except Exception:
+                pass
+        await interaction.response.edit_message(content="Closed Protection Center. Reopen it with `/dank protection`.", view=self)
 
 
 @stoney_group.command(name="protection", description="Open the unified Automod + Spam Guard protection center.")
