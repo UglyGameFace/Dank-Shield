@@ -11,6 +11,7 @@ from .process_health import start_health_loop as start_process_health_loop
 
 _LOADED: Dict[str, ModuleType] = {}
 _ERRORS: Dict[str, BaseException] = {}
+_SEEN_IMPORT_MESSAGES: set[str] = set()
 
 _STARTUP_GUARDS: Tuple[str, ...] = (
     "stoney_verify.startup_guards.process_health",
@@ -108,10 +109,28 @@ _ALWAYS_SHOW_PREFIXES: Tuple[str, ...] = (
     "🛡️ role_hierarchy_action_guard active",
     "🧭 guided_setup_self_check ready",
 )
+_ONCE_ONLY_PREFIXES: Tuple[str, ...] = (
+    "✅ ticket_panel_doctor_stability_guard: patched ticket panel health checks",
+    "✅ ticket_panel_doctor_stability_guard: patched /dank setup ticket scoreboard",
+    "✅ ticket_panel_doctor_stability_guard: patched /ticket-panel doctor",
+    "✅ setup_check_existing_server_inference_guard: patched /dank setup health check setup-type inference",
+    "🔤 channel_font_exact_unicode_guard active;",
+    "🔤 channel_font_rename_queue_guard active;",
+    "🔤 channel_font_preview_button_guard waiting for ChannelFontModeView before attaching button",
+)
 
 
 def _log_style() -> str:
     return os.getenv("STONEY_STARTUP_LOG_STYLE", "compact").strip().lower()
+
+
+def _seen_once(message: str) -> bool:
+    if not any(message.startswith(prefix) for prefix in _ONCE_ONLY_PREFIXES):
+        return False
+    if message in _SEEN_IMPORT_MESSAGES:
+        return True
+    _SEEN_IMPORT_MESSAGES.add(message)
+    return False
 
 
 @contextmanager
@@ -128,6 +147,8 @@ def _maybe_suppress_import_chatter(module_name: str) -> Iterator[None]:
             message = ""
         if any(message.startswith(prefix) for prefix in _ERROR_CHATTER_PREFIXES):
             return original_print(*args, **kwargs)
+        if _seen_once(message):
+            return None
         if any(message.startswith(prefix) for prefix in _ALWAYS_SHOW_PREFIXES):
             return original_print(*args, **kwargs)
         if any(message.startswith(prefix) for prefix in _IMPORT_CHATTER_PREFIXES):
