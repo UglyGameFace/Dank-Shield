@@ -29,6 +29,10 @@ import stoney_verify.startup_guards.setup_role_visibility_repair_guard  # noqa: 
 import stoney_verify.startup_guards.setup_health_precision_guard  # noqa: F401,E402
 import stoney_verify.startup_guards.setup_health_defer_guard  # noqa: F401,E402
 
+# Make late Channel Name Fonts apply() calls repeat their patch work without
+# repeating known-good startup lines.
+import stoney_verify.startup_guards.channel_font_apply_once_guard  # noqa: F401,E402
+
 # Make worker starter return values match the live task they create. This keeps
 # startup logs from saying a worker was not started right before that worker says
 # it started.
