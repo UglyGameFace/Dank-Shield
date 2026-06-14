@@ -6,7 +6,7 @@ import discord
 from discord import app_commands
 
 from ..guild_config import get_guild_config
-from ..verification_new.basic_verify import post_basic_verify_panel
+from ..verification_new.basic_verify import post_basic_verify_panel, register_basic_verify_runtime
 from .public_verify_group import _cfg_value, _safe_int, _send, _staff_only, verify_group
 
 _ATTACHED = False
@@ -82,7 +82,8 @@ def _attach() -> bool:
 
 
 def register_public_verify_basic_panel_commands(bot: Any, tree: Any) -> None:
-    _ = bot, tree
+    _ = tree
+    register_basic_verify_runtime(bot)
     _attach()
 
 
