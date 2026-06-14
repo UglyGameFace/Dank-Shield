@@ -8,7 +8,6 @@ and ticket/archive children, preserves per-user ticket overwrites, and does not
 blindly overwrite unrelated server channels.
 """
 
-import asyncio
 from dataclasses import dataclass
 from typing import Any, Optional
 
@@ -16,7 +15,6 @@ import discord
 
 _PATCHED = False
 _ORIGINAL_BUILD_MAIN: Any = None
-_GUILD_LOCKS: dict[int, asyncio.Lock] = {}
 
 
 @dataclass(frozen=True)
@@ -37,6 +35,11 @@ def _safe_int(value: Any, default: int = 0) -> int:
 
 
 def _target_label(target: Any) -> str:
+    try:
+        from stoney_verify.services.setup_permission_policy import role_label
+        return f"`{role_label(target)}`"
+    except Exception:
+        pass
     try:
         mention = getattr(target, "mention", None)
         if mention:
@@ -71,9 +74,13 @@ def _overwrite_changed(current: discord.PermissionOverwrite, expected: discord.P
 
 def _bot_member(guild: discord.Guild) -> Optional[discord.Member]:
     try:
-        return guild.me
+        from stoney_verify.services.setup_permission_policy import bot_member
+        return bot_member(guild)
     except Exception:
-        return None
+        try:
+            return guild.me
+        except Exception:
+            return None
 
 
 def _role_from_config(guild: discord.Guild, cfg: Any, *attrs: str) -> Optional[discord.Role]:
@@ -198,21 +205,16 @@ def _voice_verify_overwrites(
     verified_role: Optional[discord.Role],
     resident_role: Optional[discord.Role],
 ) -> dict[Any, discord.PermissionOverwrite]:
-    ow: dict[Any, discord.PermissionOverwrite] = {
-        guild.default_role: discord.PermissionOverwrite(view_channel=True, connect=True, speak=False),
-    }
-    me = _bot_member(guild)
-    if me:
-        ow[me] = discord.PermissionOverwrite(view_channel=True, connect=True, speak=True, move_members=True, manage_channels=True)
-    if unverified_role and not unverified_role.is_default():
-        ow[unverified_role] = discord.PermissionOverwrite(view_channel=True, connect=True, speak=False)
-    for role in (verified_role, resident_role):
-        if role and not role.is_default():
-            ow[role] = discord.PermissionOverwrite(view_channel=True, connect=False, speak=False)
-    for role in (staff_role, control_role):
-        if role and not role.is_default():
-            ow[role] = discord.PermissionOverwrite(view_channel=True, connect=True, speak=True, move_members=True)
-    return ow
+    from stoney_verify.services.setup_permission_policy import vc_verification_overwrites
+
+    return vc_verification_overwrites(
+        guild,
+        staff_role=staff_role,
+        control_role=control_role,
+        unverified_role=unverified_role,
+        verified_role=verified_role,
+        resident_role=resident_role,
+    )
 
 
 def _can_repair_channel(channel: Any) -> bool:
@@ -422,22 +424,35 @@ async def _open_permission_repair(interaction: discord.Interaction) -> None:
 
 async def _apply_permission_repair(interaction: discord.Interaction) -> None:
     from stoney_verify.commands_ext import public_setup_solid as solid
+    from stoney_verify.operation_queue import run_interaction_exclusive
 
     if not await solid._require_setup_permission(interaction):
         return
     guild = interaction.guild
     if guild is None:
         return await interaction.response.send_message("❌ This must be used inside a server.", ephemeral=True)
-    lock = _GUILD_LOCKS.setdefault(int(guild.id), asyncio.Lock())
-    if lock.locked():
-        return await interaction.response.send_message("⏳ Permission repair is already running for this server.", ephemeral=True)
     try:
         if not interaction.response.is_done():
             await interaction.response.defer(ephemeral=True, thinking=True)
     except Exception:
         pass
-    async with lock:
-        result = await _preview_or_apply(guild, apply=True)
+
+    async def job():
+        return await _preview_or_apply(guild, apply=True)
+
+    result = await run_interaction_exclusive(
+        interaction=interaction,
+        operation_type="setup_permission_repair",
+        action_label="Setup permission repair",
+        factory=job,
+        fingerprint={"guild_id": int(guild.id), "scope": "saved_setup_permissions"},
+        risk_level="moderate",
+        concurrency_class="guild_config_write",
+        concurrency_key="setup_permission_repair",
+        timeout_seconds=180.0,
+    )
+    if result is None:
+        return
     await interaction.followup.send(embed=_result_embed(result), view=PermissionRepairDoneView(), ephemeral=True, allowed_mentions=discord.AllowedMentions.none())
 
 
@@ -531,7 +546,7 @@ def apply() -> bool:
         setattr(_wrapped_build_main_setup_payload, "_setup_permission_repair_wrapped", True)
         solid._build_main_setup_payload = _wrapped_build_main_setup_payload
         _PATCHED = True
-        print("🛠️ setup_permission_repair_guard active; /dank setup can preview/apply saved-channel permission repairs")
+        print("🛠️ setup_permission_repair_guard active; /dank setup can preview/apply saved-channel permission repairs through central policy + operation_queue")
         return True
     except Exception as exc:
         print(f"⚠️ setup_permission_repair_guard failed: {exc!r}")
