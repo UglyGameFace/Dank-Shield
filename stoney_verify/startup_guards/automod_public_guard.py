@@ -8,6 +8,7 @@ simple content filters that guild owners configure through /dank automod.
 
 import re
 import time
+import unicodedata
 from datetime import timedelta
 from typing import Any, Optional
 
@@ -17,16 +18,56 @@ _PATCHED = False
 _LISTENER_NAME = "_dank_public_automod_listener"
 _LAST_ACTION: dict[tuple[int, int, str], float] = {}
 
+ZERO_WIDTH_RE = re.compile(r"[\u200b\u200c\u200d\u2060\ufeff]")
+SPACE_RE = re.compile(r"\s+")
 INVITE_RE = re.compile(r"(?:discord\.gg|discord(?:app)?\.com/invite)/[A-Za-z0-9-]+", re.I)
 LINK_RE = re.compile(r"https?://[^\s<>()]+", re.I)
 CUSTOM_EMOJI_RE = re.compile(r"<a?:[A-Za-z0-9_]{2,32}:\d{5,25}>")
+
+LEET_MAP = str.maketrans(
+    {
+        "@": "a",
+        "4": "a",
+        "0": "o",
+        "1": "i",
+        "!": "i",
+        "|": "i",
+        "3": "e",
+        "5": "s",
+        "$": "s",
+        "7": "t",
+        "+": "t",
+        "8": "b",
+        "9": "g",
+        "6": "g",
+        "а": "a",  # Cyrillic lookalikes
+        "е": "e",
+        "о": "o",
+        "р": "p",
+        "с": "c",
+        "х": "x",
+        "у": "y",
+        "к": "k",
+        "м": "m",
+        "н": "h",
+        "т": "t",
+    }
+)
+
+
+def _clean_filter_item(value: Any) -> str:
+    text = unicodedata.normalize("NFKC", str(value or ""))
+    text = ZERO_WIDTH_RE.sub("", text)
+    text = text.replace(",", " ")
+    text = SPACE_RE.sub(" ", text).strip().casefold()
+    return text
 
 
 def _csv_items(value: Any) -> list[str]:
     raw = str(value or "")
     parts: list[str] = []
     for chunk in raw.replace("\n", ",").split(","):
-        item = chunk.strip()
+        item = _clean_filter_item(chunk)
         if item and item not in parts:
             parts.append(item)
     return parts
@@ -79,6 +120,22 @@ def _cfg_float(cfg: Any, key: str, default: float = 0.0) -> float:
         return float(default)
 
 
+def _normalize_for_filter(value: Any, *, compact: bool) -> str:
+    text = unicodedata.normalize("NFKC", str(value or "")).casefold()
+    text = ZERO_WIDTH_RE.sub("", text).translate(LEET_MAP)
+    out: list[str] = []
+    last_space = False
+    for ch in text:
+        if ch.isalnum():
+            out.append(ch)
+            last_space = False
+        elif not compact and not last_space:
+            out.append(" ")
+            last_space = True
+    normalized = "".join(out).strip()
+    return normalized if not compact else normalized.replace(" ", "")
+
+
 def _is_staff_like(member: discord.Member) -> bool:
     try:
         perms = member.guild_permissions
@@ -101,21 +158,30 @@ def _caps_ratio(text: str) -> float:
 
 
 def _bad_word_hit(content: str, bad_words: list[str]) -> Optional[str]:
-    lowered = str(content or "").lower()
+    raw_lower = str(content or "").casefold()
+    normalized_spaced = _normalize_for_filter(content, compact=False)
+    normalized_compact = _normalize_for_filter(content, compact=True)
     for word in bad_words:
-        token = str(word or "").strip().lower()
-        if not token or len(token) < 2:
+        token = _clean_filter_item(word)
+        if len(token) < 2:
+            continue
+        token_spaced = _normalize_for_filter(token, compact=False)
+        token_compact = _normalize_for_filter(token, compact=True)
+        if not token_compact:
             continue
         if " " in token:
-            if token in lowered:
+            if token in raw_lower or token_spaced in normalized_spaced or token_compact in normalized_compact:
                 return token
             continue
-        try:
-            if re.search(r"(?<!\w)" + re.escape(token) + r"(?!\w)", lowered):
-                return token
-        except Exception:
-            if token in lowered:
-                return token
+        if len(token_compact) <= 2:
+            try:
+                if re.search(r"(?<!\w)" + re.escape(token_compact) + r"(?!\w)", normalized_spaced):
+                    return token
+            except Exception:
+                pass
+            continue
+        if token_compact in normalized_compact:
+            return token
     return None
 
 
