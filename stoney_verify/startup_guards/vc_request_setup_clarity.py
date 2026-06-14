@@ -282,15 +282,19 @@ def _append_vc_runtime_health(guild: discord.Guild, cfg: Any, blockers: list[str
         ok.append(f"VC verification channel can be controlled by Stoney: {_channel_name(vc_channel)}.")
 
     try:
+        from stoney_verify.services.setup_permission_policy import vc_connect_is_blocker, vc_view_only_is_blocker
+
         everyone_perms = vc_channel.permissions_for(guild.default_role)  # type: ignore[attr-defined]
-        if everyone_perms.view_channel or getattr(everyone_perms, "connect", False):
-            blockers.append(
-                f"VC verification channel {_channel_name(vc_channel)} is not locked. `@everyone` can "
-                f"{'view' if everyone_perms.view_channel else ''}{' and ' if everyone_perms.view_channel and getattr(everyone_perms, 'connect', False) else ''}"
-                f"{'connect' if getattr(everyone_perms, 'connect', False) else ''}. Lock it in setup before testing VC verify."
-            )
+        everyone_can_view = bool(getattr(everyone_perms, "view_channel", False))
+        everyone_can_connect = bool(getattr(everyone_perms, "connect", False))
+        if vc_connect_is_blocker(everyone_perms) and everyone_can_connect:
+            blockers.append(f"VC verification channel {_channel_name(vc_channel)} is not locked. `@everyone` can connect. Lock it in setup before testing VC verify.")
+        elif everyone_can_view and vc_view_only_is_blocker(everyone_perms):
+            blockers.append(f"VC verification channel {_channel_name(vc_channel)} is not locked. `@everyone` can view. Lock it in setup before testing VC verify.")
+        elif everyone_can_view:
+            ok.append("VC verification channel follows central policy: @everyone may see it, but cannot connect.")
         else:
-            ok.append("VC verification channel is locked from @everyone.")
+            ok.append("VC verification channel is hidden/locked from @everyone.")
     except Exception:
         warnings.append("Could not verify whether @everyone is locked out of the VC verification channel.")
 
