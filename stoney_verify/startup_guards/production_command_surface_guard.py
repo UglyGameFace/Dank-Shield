@@ -3,8 +3,8 @@ from __future__ import annotations
 """Final public command surface pruning.
 
 This guard runs after feature guards have attached their commands. It keeps the
-normal public /dank surface small and product-like while leaving the underlying
-engines available to setup buttons, dashboard flows, and public-admin profiles.
+normal public /dank surface product-like without hiding real owner/staff
+workflows. Debug, legacy, duplicate, raw-ID, and migration commands stay hidden.
 """
 
 import os
@@ -12,16 +12,52 @@ from typing import Any
 
 _PATCHED = False
 
-_DEFAULT_KEEP = {"setup", "overview", "protection", "help", "commands"}
-_DEFAULT_HIDE = {
-    "automod",
-    "spam",
-    "cleanup",
-    "members",
+# Real production product areas. These should stay visible because they map to
+# clear owner/staff jobs, not debug internals.
+_DEFAULT_KEEP = {
+    "setup",
+    "overview",
+    "protection",
     "welcome",
     "roles",
     "modlog",
     "embed",
+    "cleanup",
+    "members",
+    "help",
+    "commands",
+}
+
+# Legacy/replaced/noisy /dank children. Automod + Spam Guard are now inside
+# /dank protection; the other names here are setup/debug/repair aliases that
+# should not crowd the normal production surface.
+_DEFAULT_HIDE = {
+    "automod",
+    "spam",
+    "config-cache",
+    "current",
+    "archive-backfill",
+    "cache",
+    "config",
+    "db-check",
+    "health",
+    "launch-check",
+    "modlog-check",
+    "permission-check",
+    "production-audit",
+    "refresh-config",
+    "setup-access",
+    "setup-assistant",
+    "setup-defaults",
+    "setup-find",
+    "setup-logs",
+    "setup-picker",
+    "setup-review",
+    "setup-status",
+    "setup-tickets",
+    "setup-verify",
+    "setup-verify-ids",
+    "tickettool-check",
 }
 
 
@@ -44,6 +80,7 @@ def _enabled() -> bool:
 def _configured_keep() -> set[str]:
     keep = set(_DEFAULT_KEEP)
     keep |= _csv_set(os.getenv("STONEY_PUBLIC_EXTRA_DANK_CHILDREN", "") or "")
+    keep -= _csv_set(os.getenv("STONEY_PUBLIC_HIDE_DANK_CHILDREN", "") or "")
     return {item for item in keep if item}
 
 
@@ -65,7 +102,7 @@ def apply() -> bool:
             return True
 
         keep = _configured_keep()
-        hide = set(_DEFAULT_HIDE) - keep
+        hide = (set(_DEFAULT_HIDE) | _csv_set(os.getenv("STONEY_PUBLIC_FORCE_HIDE_DANK_CHILDREN", "") or "")) - keep
 
         import stoney_verify.commands_ext as commands_ext
 
