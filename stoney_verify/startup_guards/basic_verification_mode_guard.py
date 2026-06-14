@@ -126,15 +126,24 @@ def _patch_verify_group_panel_command() -> bool:
         return True
 
 
+def _run_legacy_guard() -> bool:
+    try:
+        from stoney_verify.startup_guards import id_verify_allowlist_guard
+        return bool(id_verify_allowlist_guard.apply())
+    except Exception:
+        return False
+
+
 def apply() -> bool:
     global _PATCHED
     if _PATCHED:
         return True
+    ok_legacy = _run_legacy_guard()
     ok_interactions = _patch_interaction_router()
     ok_command = _patch_verify_group_panel_command()
-    _PATCHED = bool(ok_interactions or ok_command)
+    _PATCHED = bool(ok_legacy or ok_interactions or ok_command)
     if _PATCHED:
-        _log(f"active interactions={ok_interactions} panel_command={ok_command}")
+        _log(f"active legacy={ok_legacy} interactions={ok_interactions} panel_command={ok_command}")
     return _PATCHED
 
 
