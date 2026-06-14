@@ -76,6 +76,26 @@ def _channel_from_cfg(guild: discord.Guild, cfg: Any, *keys: str) -> Optional[di
     return None
 
 
+def _clean_name(value: str) -> str:
+    return str(value or "").lower().replace("_", "-").replace(" ", "-")
+
+
+def _channel_by_name(guild: discord.Guild, *tokens: str) -> Optional[discord.TextChannel]:
+    wanted = tuple(_clean_name(token) for token in tokens if str(token or "").strip())
+    if not wanted:
+        return None
+    try:
+        for channel in list(getattr(guild, "text_channels", []) or []):
+            if not isinstance(channel, discord.TextChannel):
+                continue
+            name = _clean_name(getattr(channel, "name", ""))
+            if any(token in name for token in wanted):
+                return channel
+    except Exception:
+        pass
+    return None
+
+
 def _role(guild: discord.Guild, role_id: int) -> Optional[discord.Role]:
     try:
         role = guild.get_role(int(role_id or 0)) if int(role_id or 0) > 0 else None
@@ -121,9 +141,9 @@ def _lock_for(guild_id: int, user_id: int) -> asyncio.Lock:
 
 
 def build_basic_verify_embed(guild: discord.Guild, cfg: Any) -> discord.Embed:
-    rules = _channel_from_cfg(guild, cfg, "rules_channel_id", "rule_channel_id", "rules_text_channel_id")
-    verify = _channel_from_cfg(guild, cfg, "verify_channel_id", "verification_channel_id")
-    support = _channel_from_cfg(guild, cfg, "ticket_panel_channel_id", "support_channel_id", "panel_channel_id")
+    rules = _channel_from_cfg(guild, cfg, "rules_channel_id", "rule_channel_id", "rules_text_channel_id") or _channel_by_name(guild, "rules", "rule")
+    verify = _channel_from_cfg(guild, cfg, "verify_channel_id", "verification_channel_id") or _channel_by_name(guild, "verification", "verify")
+    support = _channel_from_cfg(guild, cfg, "ticket_panel_channel_id", "support_channel_id", "panel_channel_id") or _channel_by_name(guild, "support", "ticket")
 
     rules_text = rules.mention if rules else "the rules channel"
     verify_text = verify.mention if verify else "this verification channel"
