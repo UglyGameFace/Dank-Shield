@@ -20,6 +20,11 @@ def _load_polish_guards() -> None:
                 apply_fn()
         except Exception:
             pass
+    try:
+        from stoney_verify.setup_engine import adapter
+        adapter.apply()
+    except Exception:
+        pass
 
 
 def _log(msg: str) -> None:
