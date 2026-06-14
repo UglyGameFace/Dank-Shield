@@ -99,7 +99,7 @@ def snapshot_from_config(guild_id: int, cfg: Any) -> SetupConfigSnapshot:
         member_role_id=cfg_int(cfg, "member_role_id"),
         onboarding_category_id=cfg_int(cfg, "start_category_id", "welcome_category_id", "onboarding_category_id"),
         welcome_channel_id=cfg_int(cfg, "welcome_channel_id"),
-        rules_channel_id=cfg_int(cfg, "rules_channel_id"),
+        rules_channel_id=cfg_int(cfg, "rules_channel_id", "rule_channel_id", "rules_text_channel_id"),
         announcements_channel_id=cfg_int(cfg, "announcements_channel_id", "announcement_channel_id"),
         verify_channel_id=cfg_int(cfg, "verify_channel_id", "verification_channel_id"),
         vc_verify_channel_id=cfg_int(cfg, "vc_verify_channel_id", "voice_verify_channel_id"),
