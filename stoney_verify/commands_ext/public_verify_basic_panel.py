@@ -5,11 +5,47 @@ from typing import Optional
 import discord
 from discord import app_commands
 
-from .public_verify_group import _send, verify_group
+from ..guild_config import get_guild_config
+from ..verification_new.basic_verify import post_basic_verify_panel
+from .public_verify_group import _cfg_value, _safe_int, _send, _staff_only, verify_group
+
+
+def _cfg_int(cfg, *keys: str) -> int:
+    for key in keys:
+        value = _safe_int(_cfg_value(cfg, key), 0)
+        if value > 0:
+            return value
+    return 0
+
+
+async def _pick_channel(interaction: discord.Interaction, channel: Optional[discord.TextChannel]) -> Optional[discord.TextChannel]:
+    if isinstance(channel, discord.TextChannel):
+        return channel
+    guild = interaction.guild
+    if guild is not None:
+        try:
+            cfg = await get_guild_config(guild.id, refresh=True)
+            cid = _cfg_int(cfg, "verify_channel_id", "verification_channel_id")
+            saved = guild.get_channel(cid) if cid > 0 else None
+            if isinstance(saved, discord.TextChannel):
+                return saved
+        except Exception:
+            pass
+    current = interaction.channel
+    return current if isinstance(current, discord.TextChannel) else None
 
 
 async def verify_panel(interaction: discord.Interaction, channel: Optional[discord.TextChannel] = None) -> None:
-    await _send(interaction, "Panel command is registered.")
+    if not await _staff_only(interaction):
+        return
+    target = await _pick_channel(interaction, channel)
+    if target is None:
+        return await _send(interaction, "❌ Pick a text channel or save one in `/dank setup`.")
+    try:
+        result = await post_basic_verify_panel(target, actor_id=int(getattr(interaction.user, "id", 0) or 0))
+        await _send(interaction, f"✅ Panel {result} in {target.mention}.")
+    except Exception as exc:
+        await _send(interaction, f"❌ Could not post panel: `{type(exc).__name__}`")
 
 
 try:
