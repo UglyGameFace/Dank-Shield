@@ -176,6 +176,25 @@ def build_basic_verify_embed(guild: discord.Guild, cfg: Any) -> discord.Embed:
     return embed
 
 
+async def _ack(interaction: discord.Interaction) -> bool:
+    """Acknowledge the button before DB/role work so Discord never times out."""
+    try:
+        if not interaction.response.is_done():
+            await interaction.response.defer(ephemeral=True, thinking=True)
+        return True
+    except Exception as exc:
+        try:
+            print(
+                "basic_verify ack failed "
+                f"guild={getattr(getattr(interaction, 'guild', None), 'id', 0)} "
+                f"user={getattr(getattr(interaction, 'user', None), 'id', 0)} "
+                f"error={type(exc).__name__}: {exc}"
+            )
+        except Exception:
+            pass
+        return False
+
+
 async def _reply(interaction: discord.Interaction, message: str, *, ok: bool) -> None:
     prefix = "✅ " if ok else "❌ "
     try:
@@ -197,6 +216,8 @@ class BasicVerifyButton(discord.ui.Button):
     async def callback(self, interaction: discord.Interaction) -> None:  # type: ignore[override]
         if not interaction.guild or not isinstance(interaction.user, discord.Member):
             await _reply(interaction, "This only works inside the server.", ok=False)
+            return
+        if not await _ack(interaction):
             return
         try:
             ok, message = await apply_basic_verification(interaction.user)
@@ -327,6 +348,8 @@ async def maybe_handle_basic_verify_interaction(interaction: discord.Interaction
             return False
         if not interaction.guild or not isinstance(interaction.user, discord.Member):
             await _reply(interaction, "This only works inside the server.", ok=False)
+            return True
+        if not await _ack(interaction):
             return True
         ok, message = await apply_basic_verification(interaction.user)
         await _reply(interaction, message, ok=ok)
