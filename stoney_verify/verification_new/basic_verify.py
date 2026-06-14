@@ -19,6 +19,7 @@ from stoney_verify.setup_engine.loader import snapshot_from_config
 from stoney_verify.setup_engine.verification_modes import BASIC_VERIFY_CUSTOM_ID, BASIC_VERIFY_FOOTER
 
 _BASIC_VERIFY_LOCKS: dict[str, asyncio.Lock] = {}
+_RUNTIME_VIEW_REGISTERED = False
 
 
 def _safe_int(value: Any, default: int = 0) -> int:
@@ -88,9 +89,9 @@ def _bot_can_manage_role(guild: discord.Guild, role: discord.Role) -> tuple[bool
     if not isinstance(me, discord.Member):
         return False, "Dank Shield could not resolve its bot member."
     try:
-        if not me.guild_permissions.manage_roles:
+        if not me.guild_permissions.manage_roles and not me.guild_permissions.administrator:
             return False, "Dank Shield is missing Manage Roles."
-        if role >= me.top_role and not me.guild_permissions.administrator:
+        if role >= me.top_role:
             return False, f"Dank Shield's role must be above {role.mention}."
     except Exception:
         return False, "Discord role hierarchy could not be checked."
@@ -120,7 +121,7 @@ def _lock_for(guild_id: int, user_id: int) -> asyncio.Lock:
 
 
 def build_basic_verify_embed(guild: discord.Guild, cfg: Any) -> discord.Embed:
-    rules = _channel_from_cfg(guild, cfg, "rules_channel_id")
+    rules = _channel_from_cfg(guild, cfg, "rules_channel_id", "rule_channel_id", "rules_text_channel_id")
     verify = _channel_from_cfg(guild, cfg, "verify_channel_id", "verification_channel_id")
     support = _channel_from_cfg(guild, cfg, "ticket_panel_channel_id", "support_channel_id", "panel_channel_id")
 
@@ -151,21 +152,66 @@ def build_basic_verify_embed(guild: discord.Guild, cfg: Any) -> discord.Embed:
         value=f"If the button is not working, head to {support_text} and open a ticket so a mod can get you sorted out.",
         inline=False,
     )
-    embed.set_footer(text=BASIC_VERIFY_FOOTER)
+    embed.set_footer(text="Dank Shield Basic Verify")
     return embed
+
+
+async def _reply(interaction: discord.Interaction, message: str, *, ok: bool) -> None:
+    prefix = "✅ " if ok else "❌ "
+    try:
+        if not interaction.response.is_done():
+            await interaction.response.send_message(prefix + message, ephemeral=True, allowed_mentions=discord.AllowedMentions.none())
+        else:
+            await interaction.followup.send(prefix + message, ephemeral=True, allowed_mentions=discord.AllowedMentions.none())
+    except Exception as exc:
+        try:
+            print(f"basic_verify reply failed: {type(exc).__name__}: {exc}")
+        except Exception:
+            pass
+
+
+class BasicVerifyButton(discord.ui.Button):
+    def __init__(self) -> None:
+        super().__init__(label="Verify", emoji="✅", style=discord.ButtonStyle.success, custom_id=BASIC_VERIFY_CUSTOM_ID)
+
+    async def callback(self, interaction: discord.Interaction) -> None:  # type: ignore[override]
+        if not interaction.guild or not isinstance(interaction.user, discord.Member):
+            await _reply(interaction, "This only works inside the server.", ok=False)
+            return
+        try:
+            ok, message = await apply_basic_verification(interaction.user)
+            await _reply(interaction, message, ok=ok)
+        except Exception as exc:
+            try:
+                print(f"basic_verify button failed guild={getattr(interaction.guild, 'id', 0)} user={getattr(interaction.user, 'id', 0)} error={type(exc).__name__}: {exc}")
+            except Exception:
+                pass
+            await _reply(interaction, f"Basic verification failed: {type(exc).__name__}. Staff should check setup health.", ok=False)
 
 
 class BasicVerifyView(discord.ui.View):
     def __init__(self) -> None:
         super().__init__(timeout=None)
-        self.add_item(
-            discord.ui.Button(
-                label="Verify",
-                emoji="✅",
-                style=discord.ButtonStyle.success,
-                custom_id=BASIC_VERIFY_CUSTOM_ID,
-            )
-        )
+        self.add_item(BasicVerifyButton())
+
+
+def register_basic_verify_runtime(bot: Any) -> bool:
+    global _RUNTIME_VIEW_REGISTERED
+    if _RUNTIME_VIEW_REGISTERED:
+        return True
+    try:
+        add_view = getattr(bot, "add_view", None)
+        if callable(add_view):
+            add_view(BasicVerifyView())
+            _RUNTIME_VIEW_REGISTERED = True
+            print("✅ basic_verify: persistent Basic Verify button view registered")
+            return True
+    except Exception as exc:
+        try:
+            print(f"⚠️ basic_verify: persistent view registration failed: {type(exc).__name__}: {exc}")
+        except Exception:
+            pass
+    return False
 
 
 async def post_basic_verify_panel(channel: discord.TextChannel, *, actor_id: int = 0) -> str:
@@ -184,7 +230,7 @@ async def post_basic_verify_panel(channel: discord.TextChannel, *, actor_id: int
             if not msg.embeds:
                 continue
             footer_text = str(getattr(getattr(msg.embeds[0], "footer", None), "text", "") or "")
-            if BASIC_VERIFY_FOOTER in footer_text:
+            if BASIC_VERIFY_FOOTER in footer_text or footer_text == "Dank Shield Basic Verify":
                 await msg.edit(embed=embed, view=view)
                 return "updated"
     except Exception:
@@ -260,24 +306,27 @@ async def maybe_handle_basic_verify_interaction(interaction: discord.Interaction
         if custom_id != BASIC_VERIFY_CUSTOM_ID:
             return False
         if not interaction.guild or not isinstance(interaction.user, discord.Member):
-            if not interaction.response.is_done():
-                await interaction.response.send_message("❌ This only works inside the server.", ephemeral=True)
+            await _reply(interaction, "This only works inside the server.", ok=False)
             return True
         ok, message = await apply_basic_verification(interaction.user)
-        if not interaction.response.is_done():
-            await interaction.response.send_message(("✅ " if ok else "❌ ") + message, ephemeral=True, allowed_mentions=discord.AllowedMentions.none())
-        else:
-            await interaction.followup.send(("✅ " if ok else "❌ ") + message, ephemeral=True, allowed_mentions=discord.AllowedMentions.none())
+        await _reply(interaction, message, ok=ok)
         return True
     except Exception as exc:
         try:
-            if not interaction.response.is_done():
-                await interaction.response.send_message(f"❌ Basic verification failed: {type(exc).__name__}.", ephemeral=True)
-            else:
-                await interaction.followup.send(f"❌ Basic verification failed: {type(exc).__name__}.", ephemeral=True)
+            print(f"basic_verify interaction failed guild={getattr(getattr(interaction, 'guild', None), 'id', 0)} user={getattr(getattr(interaction, 'user', None), 'id', 0)} error={type(exc).__name__}: {exc}")
+        except Exception:
+            pass
+        try:
+            await _reply(interaction, f"Basic verification failed: {type(exc).__name__}. Staff should check setup health.", ok=False)
         except Exception:
             pass
         return True
 
 
-__all__ = ["BasicVerifyView", "apply_basic_verification", "post_basic_verify_panel", "maybe_handle_basic_verify_interaction"]
+__all__ = [
+    "BasicVerifyView",
+    "register_basic_verify_runtime",
+    "apply_basic_verification",
+    "post_basic_verify_panel",
+    "maybe_handle_basic_verify_interaction",
+]
