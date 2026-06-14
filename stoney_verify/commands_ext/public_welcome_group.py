@@ -41,27 +41,24 @@ async def _send(interaction: discord.Interaction, content: str = "", **kwargs: A
         pass
 
 
-@welcome_group.command(name="preview", description="Preview this server's current welcome message.")
-async def welcome_preview(interaction: discord.Interaction) -> None:
+async def open_welcome_preview(interaction: discord.Interaction) -> None:
     if not await _require_setup_permission(interaction):
         return
     guild = interaction.guild
     if guild is None:
-        return await _send(interaction, "❌ This command must be used inside a server.")
+        return await _send(interaction, "❌ This must be used inside a server.")
     await _defer(interaction)
     cfg = await get_guild_config(int(guild.id), refresh=True)
     embed = build_welcome_embed(guild, cfg)
-    await interaction.followup.send("Preview only. Press `/dank welcome post` to post/update it.", embed=embed, ephemeral=True)
+    await interaction.followup.send("Preview only. Press **Post/Update** in `/dank setup` → Feature Centers → Welcome Center when ready.", embed=embed, ephemeral=True)
 
 
-@welcome_group.command(name="post", description="Post or update the welcome message without creating duplicates.")
-@app_commands.describe(channel="Optional welcome channel. Defaults to the saved welcome channel.")
-async def welcome_post(interaction: discord.Interaction, channel: Optional[discord.TextChannel] = None) -> None:
+async def post_welcome_message(interaction: discord.Interaction, channel: Optional[discord.TextChannel] = None) -> None:
     if not await _require_setup_permission(interaction):
         return
     guild = interaction.guild
     if guild is None:
-        return await _send(interaction, "❌ This command must be used inside a server.")
+        return await _send(interaction, "❌ This must be used inside a server.")
     await _defer(interaction)
     try:
         result = await post_or_update_welcome_message(guild, channel=channel, actor_id=int(interaction.user.id))
@@ -72,13 +69,11 @@ async def welcome_post(interaction: discord.Interaction, channel: Optional[disco
         await interaction.followup.send(f"❌ Could not post welcome message: `{type(exc).__name__}: {exc}`", ephemeral=True)
 
 
-@welcome_group.command(name="set-channel", description="Save the welcome/start-here channel for this server.")
-@app_commands.describe(channel="The channel where Dank Shield should post the welcome message.")
-async def welcome_set_channel(interaction: discord.Interaction, channel: discord.TextChannel) -> None:
+async def save_welcome_channel(interaction: discord.Interaction, channel: discord.TextChannel) -> None:
     if not await _require_setup_permission(interaction):
         return
     if interaction.guild is None:
-        return await _send(interaction, "❌ This command must be used inside a server.")
+        return await _send(interaction, "❌ This must be used inside a server.")
     await _defer(interaction)
     await _upsert_config(
         int(interaction.guild.id),
@@ -89,52 +84,45 @@ async def welcome_set_channel(interaction: discord.Interaction, channel: discord
         },
     )
     invalidate_guild_config(int(interaction.guild.id))
-    await interaction.followup.send(f"✅ Welcome channel saved as {channel.mention}. Press `/dank welcome post` to post/update the message.", ephemeral=True)
+    await interaction.followup.send(f"✅ Welcome channel saved as {channel.mention}. Press **Post/Update** in Welcome Center to post/update the message.", ephemeral=True)
 
 
-@welcome_group.command(name="template", description="Set a simple custom welcome title/body for this server.")
-@app_commands.describe(
-    title="Optional title. Supports {server_name}.",
-    body="Optional body. Supports {server_name}, {rules}, {verify}, and {support}.",
-)
-async def welcome_template(interaction: discord.Interaction, title: Optional[str] = None, body: Optional[str] = None) -> None:
+async def save_welcome_template_service(interaction: discord.Interaction, title: Optional[str] = None, body: Optional[str] = None) -> None:
     if not await _require_setup_permission(interaction):
         return
     if interaction.guild is None:
-        return await _send(interaction, "❌ This command must be used inside a server.")
+        return await _send(interaction, "❌ This must be used inside a server.")
     if not title and not body:
         return await _send(interaction, "❌ Provide a title and/or body. Example placeholders: `{server_name}`, `{rules}`, `{verify}`, `{support}`.")
     await _defer(interaction)
     await save_welcome_template(int(interaction.guild.id), title=title, body=body, actor_id=int(interaction.user.id))
     cfg = await get_guild_config(int(interaction.guild.id), refresh=True)
     embed = build_welcome_embed(interaction.guild, cfg)
-    await interaction.followup.send("✅ Welcome template saved. Preview below. Press `/dank welcome post` to update the public message.", embed=embed, ephemeral=True)
+    await interaction.followup.send("✅ Welcome template saved. Preview below. Press **Post/Update** in Welcome Center to update the public message.", embed=embed, ephemeral=True)
 
 
-@welcome_group.command(name="reset", description="Reset the welcome message template back to the public default.")
-async def welcome_reset(interaction: discord.Interaction) -> None:
+async def reset_welcome_template_service(interaction: discord.Interaction) -> None:
     if not await _require_setup_permission(interaction):
         return
     if interaction.guild is None:
-        return await _send(interaction, "❌ This command must be used inside a server.")
+        return await _send(interaction, "❌ This must be used inside a server.")
     await _defer(interaction)
     await reset_welcome_template(int(interaction.guild.id), actor_id=int(interaction.user.id))
-    await interaction.followup.send("✅ Welcome template reset to the default. Press `/dank welcome post` to update the public message.", ephemeral=True)
+    await interaction.followup.send("✅ Welcome template reset to the default. Press **Post/Update** in Welcome Center to update the public message.", ephemeral=True)
 
 
-@welcome_group.command(name="health", description="Check whether the welcome message setup is ready.")
-async def welcome_health(interaction: discord.Interaction) -> None:
+async def open_welcome_health(interaction: discord.Interaction) -> None:
     if not await _require_setup_permission(interaction):
         return
     guild = interaction.guild
     if guild is None:
-        return await _send(interaction, "❌ This command must be used inside a server.")
+        return await _send(interaction, "❌ This must be used inside a server.")
     await _defer(interaction)
     cfg = await get_guild_config(int(guild.id), refresh=True)
     channel = welcome_channel_for(guild, cfg)
     lines: list[str] = []
     if channel is None:
-        lines.append("❌ Welcome channel is not set. Use `/dank welcome set-channel`.")
+        lines.append("❌ Welcome channel is not set. Use Core Setup → Use Existing Roles/Channels, or `/dank welcome set-channel`.")
     else:
         lines.append(f"✅ Welcome channel: {channel.mention}")
         me = guild.me
@@ -152,6 +140,39 @@ async def welcome_health(interaction: discord.Interaction) -> None:
             else:
                 lines.append("✅ Bot can post/update the welcome message.")
     await interaction.followup.send("\n".join(lines), ephemeral=True, allowed_mentions=discord.AllowedMentions.none())
+
+
+@welcome_group.command(name="preview", description="Preview this server's current welcome message.")
+async def welcome_preview(interaction: discord.Interaction) -> None:
+    await open_welcome_preview(interaction)
+
+
+@welcome_group.command(name="post", description="Post or update the welcome message without creating duplicates.")
+@app_commands.describe(channel="Optional welcome channel. Defaults to the saved welcome channel.")
+async def welcome_post(interaction: discord.Interaction, channel: Optional[discord.TextChannel] = None) -> None:
+    await post_welcome_message(interaction, channel=channel)
+
+
+@welcome_group.command(name="set-channel", description="Save the welcome/start-here channel for this server.")
+@app_commands.describe(channel="The channel where Dank Shield should post the welcome message.")
+async def welcome_set_channel(interaction: discord.Interaction, channel: discord.TextChannel) -> None:
+    await save_welcome_channel(interaction, channel)
+
+
+@welcome_group.command(name="template", description="Set a simple custom welcome title/body for this server.")
+@app_commands.describe(title="Optional title. Supports {server_name}.", body="Optional body. Supports {server_name}, {rules}, {verify}, and {support}.")
+async def welcome_template(interaction: discord.Interaction, title: Optional[str] = None, body: Optional[str] = None) -> None:
+    await save_welcome_template_service(interaction, title=title, body=body)
+
+
+@welcome_group.command(name="reset", description="Reset the welcome message template back to the public default.")
+async def welcome_reset(interaction: discord.Interaction) -> None:
+    await reset_welcome_template_service(interaction)
+
+
+@welcome_group.command(name="health", description="Check whether the welcome message setup is ready.")
+async def welcome_health(interaction: discord.Interaction) -> None:
+    await open_welcome_health(interaction)
 
 
 def _attach() -> bool:
@@ -188,4 +209,13 @@ def register_public_welcome_group_commands(bot: Any, tree: Any) -> None:
 
 _attach()
 
-__all__ = ["register_public_welcome_group_commands", "welcome_group"]
+__all__ = [
+    "register_public_welcome_group_commands",
+    "welcome_group",
+    "open_welcome_health",
+    "open_welcome_preview",
+    "post_welcome_message",
+    "save_welcome_channel",
+    "save_welcome_template_service",
+    "reset_welcome_template_service",
+]
