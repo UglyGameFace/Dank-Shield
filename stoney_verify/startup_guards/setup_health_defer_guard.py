@@ -11,6 +11,7 @@ def _load_polish_guards() -> None:
     for module_name in (
         "verification_member_role_fallback_guard",
         "setup_picker_permission_error_guard",
+        "setup_permission_repair_preview_clarity_guard",
     ):
         try:
             module = __import__(f"stoney_verify.startup_guards.{module_name}", fromlist=["apply"])
