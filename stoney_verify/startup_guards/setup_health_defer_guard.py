@@ -7,6 +7,20 @@ import discord
 _DONE = False
 
 
+def _load_polish_guards() -> None:
+    for module_name in (
+        "verification_member_role_fallback_guard",
+        "setup_picker_permission_error_guard",
+    ):
+        try:
+            module = __import__(f"stoney_verify.startup_guards.{module_name}", fromlist=["apply"])
+            apply_fn = getattr(module, "apply", None)
+            if callable(apply_fn):
+                apply_fn()
+        except Exception:
+            pass
+
+
 def _log(msg: str) -> None:
     try:
         print(f"🩺 setup_health_defer_guard {msg}")
@@ -45,6 +59,7 @@ def apply() -> bool:
     global _DONE
     if _DONE:
         return True
+    _load_polish_guards()
     try:
         from stoney_verify.commands_ext import public_setup_fresh_choice as fresh
         from stoney_verify.commands_ext import public_setup_solid as solid
