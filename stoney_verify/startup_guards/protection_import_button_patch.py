@@ -5,6 +5,7 @@ from typing import Any
 import discord
 
 _PATCHED = False
+_IMPORT_CUSTOM_IDS = {"dank_protection:import_pack", "dank_protection:manual_import_pack"}
 
 
 async def _open_modal(interaction: discord.Interaction) -> None:
@@ -35,7 +36,7 @@ def apply() -> bool:
             original_init(self, *args, **kwargs)
             try:
                 for item in list(getattr(self, "children", []) or []):
-                    if getattr(item, "custom_id", "") == "dank_protection:manual_import_pack":
+                    if getattr(item, "custom_id", "") in _IMPORT_CUSTOM_IDS:
                         return
                 button = discord.ui.Button(
                     label="Import Pack",
@@ -55,7 +56,7 @@ def apply() -> bool:
         ProtectionCenterView.__init__ = patched_init
         ProtectionCenterView._import_button_init_patched = True
         _PATCHED = True
-        print("✅ protection_import_button_patch active; Import Pack button attaches on new Protection Center views")
+        print("✅ protection_import_button_patch active; Import Pack fallback button available when needed")
         return True
     except Exception as exc:
         try:
