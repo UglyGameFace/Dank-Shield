@@ -139,21 +139,12 @@ def _public_ids(cfg: Any, guild: discord.Guild | None = None) -> set[int]:
     allowed = set(_saved_public_ids(cfg))
     if guild is None:
         return allowed
-
-    # If a saved public onboarding channel lives under a category, that category
-    # header is also allowed to be visible. Otherwise the repair flow can reveal
-    # the parent to fix Discord display behavior, then health immediately reports
-    # the parent as a new leak.
     for cid in list(allowed):
         channel = _target(guild, cid)
         parent = getattr(channel, "category", None)
         parent_id = _i(getattr(parent, "id", 0)) if parent is not None else 0
         if parent_id > 0:
             allowed.add(parent_id)
-
-    # Existing servers commonly expose #rules/#welcome/#verification before they
-    # map every optional setup field. Treat obvious onboarding channels/categories
-    # as public review surface, not as new blockers created by Fix Permissions.
     private = _private_ids(cfg)
     for target in _all_channel_targets(guild):
         tid = _i(getattr(target, "id", 0))
@@ -261,81 +252,10 @@ def _vc_category_notice(guild: discord.Guild, cfg: Any, unverified: discord.Role
 
 
 def _check(guild: discord.Guild, cfg: Any, blockers: list[str], warnings: list[str], ok: list[str]) -> None:
-    unverified = guild.get_role(_first(cfg, ("unverified_role_id",)))
-    verified_roles = _roles(
-        guild,
-        cfg,
-        (
-            ("verified_role_id",),
-            ("resident_role_id", "member_role_id"),
-        ),
-    )
-    if unverified is None:
-        warnings.append("Unverified visibility check skipped because the role is not saved.")
-
-    public = _saved_public_ids(cfg)
-    private = _private_ids(cfg)
-    member_public = _member_ids(cfg)
-
-    public_checked = 0
-    private_checked = 0
-    member_checked = 0
-
-    for cid in public:
-        ch = _target(guild, cid)
-        if ch is None:
-            continue
-        public_checked += 1
-        if unverified is not None:
-            if not _can_see(ch, unverified):
-                warnings.append(
-                    f"{_label(ch)} should be visible to Unverified for onboarding. Smart fix: **Safety & Repair → Fix Permissions** will grant Unverified read-only access to this saved onboarding target."
-                )
-            if _can_talk(ch, unverified):
-                warnings.append(
-                    f"{_label(ch)} lets Unverified send messages; setup default expects read-only. Smart fix: **Safety & Repair → Fix Permissions** will keep it visible but remove Send Messages for Unverified."
-                )
-
-    for cid in private:
-        ch = _target(guild, cid)
-        if ch is None:
-            continue
-        private_checked += 1
-        if unverified is not None:
-            if _can_see(ch, unverified):
-                blockers.append(f"{_label(ch)} is visible to Unverified but should be private/staff controlled. Smart fix: **Safety & Repair → Fix Permissions** will hide it from Unverified.")
-            if _check_parent(ch, unverified):
-                blockers.append(f"{_label(getattr(ch, 'category', None))} category is visible to Unverified. Smart fix: **Safety & Repair → Fix Permissions** will lock this private category.")
-        for role in verified_roles:
-            if _can_see(ch, role):
-                blockers.append(f"{_label(ch)} is visible to {_role_label(role)} but should stay staff/private controlled. Smart fix: **Safety & Repair → Fix Permissions** will hide it from public member roles.")
-            if _check_parent(ch, role):
-                blockers.append(f"{_label(getattr(ch, 'category', None))} category is visible to {_role_label(role)} but should stay private. Smart fix: **Safety & Repair → Fix Permissions** will lock this private category.")
-
-    for cid in member_public:
-        ch = _target(guild, cid)
-        if ch is None:
-            continue
-        member_checked += 1
-        for role in verified_roles:
-            if not _can_see(ch, role):
-                warnings.append(f"{_label(ch)} should be visible to {_role_label(role)} for normal member access. Smart fix: use **Use My Existing Server** to confirm this is a member channel, then run **Fix Permissions**.")
-        if unverified is not None and _can_see(ch, unverified):
-            blockers.append(f"{_label(ch)} is visible to Unverified; member-only areas must be hidden until verification. Smart fix: **Safety & Repair → Fix Permissions** will hide it from Unverified.")
-
-    _vc_category_notice(guild, cfg, unverified, warnings)
-
-    leaks = _unverified_leaks(guild, cfg, unverified)
-    if leaks:
-        shown = ", ".join(_label(item) for item in leaks[:12])
-        extra = f" and {len(leaks) - 12} more" if len(leaks) > 12 else ""
-        blockers.append(f"Unverified visibility leak: {len(leaks)} non-onboarding channels/categories visible ({shown}{extra}). Smart fix: **Safety & Repair → Fix Permissions** will hide saved private/staff/member-only targets from Unverified.")
-
-    ok.append(f"Role visibility checked: onboarding={public_checked}, private={private_checked}, member={member_checked}, full_unverified_scan={len(_all_channel_targets(guild))}.")
-    if verified_roles:
-        ok.append("Verified/member role privacy checks are active for saved private setup targets.")
-    else:
-        warnings.append("Verified/member role privacy check skipped because no Verified/Resident role is saved.")
+    # Deprecated compatibility hook. Canonical setup_engine now owns new setup
+    # health reports; keep this callable for older imports that still use
+    # _unverified_leaks / _public_ids while the cleanup continues.
+    return None
 
 
 def _load_repair_alignment() -> None:
@@ -357,7 +277,13 @@ def apply() -> bool:
     try:
         from stoney_verify.commands_ext import public_setup_group as group
         original = getattr(group, "_build_setup_health", None)
-        if not callable(original) or getattr(original, "_visibility_wrapped", False):
+        if not callable(original):
+            return False
+        if getattr(original, "_canonical_setup_engine", False):
+            _DONE = True
+            print("🛡️ setup_visibility_health_guard deprecated; canonical setup_engine owns Setup Health")
+            return True
+        if getattr(original, "_visibility_wrapped", False):
             return False
         def wrapped(guild: discord.Guild, cfg: Any):
             blockers, warnings, ok = original(guild, cfg)
@@ -369,7 +295,7 @@ def apply() -> bool:
         setattr(wrapped, "_visibility_wrapped", True)
         group._build_setup_health = wrapped
         _DONE = True
-        print("🛡️ setup_visibility_health_guard active; setup health scans all channels for Unverified leaks and VC category placement")
+        print("🛡️ setup_visibility_health_guard compatibility active; canonical engine may override this adapter")
         return True
     except Exception as exc:
         try:
