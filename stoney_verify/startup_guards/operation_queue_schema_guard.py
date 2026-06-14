@@ -121,9 +121,9 @@ async def ensure_schema_once() -> bool:
 
     url = _db_url()
     if not url:
-        _warn(
-            "cannot auto-create bot_operation_jobs because no direct Postgres URL is set. "
-            f"Set SUPABASE_DB_URL/DATABASE_URL or run {MIGRATION_PATH} in Supabase SQL Editor."
+        _log(
+            "direct bootstrap skipped; no SUPABASE_DB_URL/DATABASE_URL set. "
+            f"Manual migration path: {MIGRATION_PATH}. REST persistence health will report table visibility."
         )
         return False
     try:
