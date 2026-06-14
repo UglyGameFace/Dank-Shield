@@ -269,15 +269,26 @@ def _protection_embed(guild: discord.Guild, cfg: Any, spam: dict[str, Any], spam
     bad_words = _csv_items(_cfg_value(cfg, "automod_bad_words", ""))
     automod_on = _cfg_bool(cfg, "automod_enabled", False)
     spam_on = bool(spam.get("enabled"))
+    invite_links_blocked = _cfg_bool(cfg, "automod_block_invites", False) or bool(spam.get("block_external_invites_only"))
+    normal_links_blocked = _cfg_bool(cfg, "automod_block_links", False)
     both_on = automod_on and spam_on
     embed = discord.Embed(
         title="🛡️ Dank Shield Protection Center",
         description=(
-            "One product surface. Two engines underneath:\n"
-            "**Automod** filters message content. **Spam Guard** watches behavior, rate, duplicate messages, and invite floods."
+            "One clean safety menu. **Automod** filters message content. "
+            "**Spam Guard** watches behavior, rate, duplicate messages, and invite floods."
         ),
         color=discord.Color.green() if both_on else discord.Color.gold() if (automod_on or spam_on) else discord.Color.dark_grey(),
         timestamp=discord.utils.utcnow(),
+    )
+    embed.add_field(
+        name="Recommended use",
+        value=(
+            "**Safe** blocks bad-server invite spam while allowing normal links.\n"
+            "**Strict** also blocks all external links for locked-down servers.\n"
+            "Use **Block Server Invites** when people advertise sketchy Discord servers."
+        ),
+        inline=False,
     )
     embed.add_field(
         name="Automod — content filters",
@@ -285,8 +296,8 @@ def _protection_embed(guild: discord.Guild, cfg: Any, spam: dict[str, Any], spam
             f"**Enabled:** {'✅ Yes' if automod_on else '⚪ No'}\n"
             f"**Preset:** `{_cfg_value(cfg, 'automod_preset', 'custom') or 'custom'}`\n"
             f"**Bad-word filters:** `{len(bad_words)}`\n"
-            f"**Invites:** {'blocked' if _cfg_bool(cfg, 'automod_block_invites', False) else 'allowed'} • "
-            f"**Links:** {'blocked' if _cfg_bool(cfg, 'automod_block_links', False) else 'allowed'}\n"
+            f"**Server invite links:** {'blocked' if invite_links_blocked else 'allowed'}\n"
+            f"**All external links:** {'blocked' if normal_links_blocked else 'allowed'}\n"
             f"**Max mentions:** `{_cfg_int(cfg, 'automod_max_mentions', 0) or 'off'}`"
         ),
         inline=False,
@@ -341,6 +352,50 @@ async def _apply_protection_preset(interaction: discord.Interaction, preset: str
     spam_settings, persisted = await _save_spam_settings(int(guild.id), dict(SPAM_PRESETS[preset]), member)
     label = "Off" if preset == "off" else preset.title()
     note = f"✅ Protection preset set to **{label}**. Spam Guard saving: {'DB-backed' if persisted else 'runtime/fallback'}; mode `{spam_settings.get('mode', 'unknown')}`."
+    await _refresh_panel(interaction, content=note)
+
+
+async def _set_server_invite_protection(interaction: discord.Interaction, enabled: bool) -> None:
+    if not await _require_setup_permission(interaction):
+        return
+    guild = interaction.guild
+    if guild is None:
+        return await _send_ephemeral(interaction, "❌ This must be used inside a server.")
+    member = interaction.user if isinstance(interaction.user, discord.Member) else None
+    if enabled:
+        await _save_automod(int(guild.id), {"automod_enabled": True, "automod_block_invites": True, "automod_updated_by_id": str(int(interaction.user.id))})
+        spam_patch = {
+            "enabled": True,
+            "mode": "timeout",
+            "apply_to_verified_users": True,
+            "block_external_invites_only": True,
+            "allow_server_invites": True,
+            "invite_threshold": 1,
+            "multi_invite_immediate": 2,
+        }
+        await _save_spam_settings(int(guild.id), spam_patch, member)
+        note = "✅ Server invite protection is **On**. Discord invite links to outside/bad servers are treated as spam."
+    else:
+        await _save_automod(int(guild.id), {"automod_block_invites": False, "automod_updated_by_id": str(int(interaction.user.id))})
+        await _save_spam_settings(int(guild.id), {"block_external_invites_only": False, "invite_threshold": 12}, member)
+        note = "⚪ Server invite protection is **Off**. Spam Guard still watches normal message-rate spam if enabled."
+    await _refresh_panel(interaction, content=note)
+
+
+async def _set_external_link_filter(interaction: discord.Interaction, enabled: bool) -> None:
+    if not await _require_setup_permission(interaction):
+        return
+    guild = interaction.guild
+    if guild is None:
+        return await _send_ephemeral(interaction, "❌ This must be used inside a server.")
+    updates = {
+        "automod_block_links": bool(enabled),
+        "automod_updated_by_id": str(int(interaction.user.id)),
+    }
+    if enabled:
+        updates["automod_enabled"] = True
+    await _save_automod(int(guild.id), updates)
+    note = "✅ All external links are now **blocked**." if enabled else "⚪ Normal external links are now **allowed**. Server invite links can still be blocked separately."
     await _refresh_panel(interaction, content=note)
 
 
@@ -437,33 +492,53 @@ class ProtectionCenterView(discord.ui.View):
         _ = button
         await _apply_protection_preset(interaction, "off")
 
-    @discord.ui.button(label="Edit Spam Guard", emoji="🛠️", style=discord.ButtonStyle.secondary, custom_id="dank_protection:edit_spamguard", row=1)
+    @discord.ui.button(label="Block Server Invites", emoji="🚫", style=discord.ButtonStyle.secondary, custom_id="dank_protection:block_invites", row=1)
+    async def block_invites_button(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        await _set_server_invite_protection(interaction, True)
+
+    @discord.ui.button(label="Allow Invites", emoji="🔓", style=discord.ButtonStyle.secondary, custom_id="dank_protection:allow_invites", row=1)
+    async def allow_invites_button(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        await _set_server_invite_protection(interaction, False)
+
+    @discord.ui.button(label="Block All Links", emoji="🌐", style=discord.ButtonStyle.secondary, custom_id="dank_protection:block_links", row=1)
+    async def block_links_button(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        await _set_external_link_filter(interaction, True)
+
+    @discord.ui.button(label="Allow Links", emoji="🔗", style=discord.ButtonStyle.secondary, custom_id="dank_protection:allow_links", row=1)
+    async def allow_links_button(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        await _set_external_link_filter(interaction, False)
+
+    @discord.ui.button(label="Edit Spam Guard", emoji="🛠️", style=discord.ButtonStyle.secondary, custom_id="dank_protection:edit_spamguard", row=2)
     async def edit_spamguard_button(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
         await _open_spamguard_editor(interaction)
 
-    @discord.ui.button(label="Add Filter", emoji="➕", style=discord.ButtonStyle.secondary, custom_id="dank_protection:add_filter", row=1)
+    @discord.ui.button(label="Add Filter", emoji="➕", style=discord.ButtonStyle.secondary, custom_id="dank_protection:add_filter", row=2)
     async def add_filter_button(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
         if not await _require_setup_permission(interaction):
             return
         await interaction.response.send_modal(AddFilterModal())
 
-    @discord.ui.button(label="Test", emoji="🧪", style=discord.ButtonStyle.secondary, custom_id="dank_protection:test", row=1)
+    @discord.ui.button(label="Test", emoji="🧪", style=discord.ButtonStyle.secondary, custom_id="dank_protection:test", row=2)
     async def test_button(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
         if not await _require_setup_permission(interaction):
             return
         await interaction.response.send_modal(TestFilterModal())
 
-    @discord.ui.button(label="Refresh", emoji="🔄", style=discord.ButtonStyle.secondary, custom_id="dank_protection:refresh", row=2)
+    @discord.ui.button(label="Refresh", emoji="🔄", style=discord.ButtonStyle.secondary, custom_id="dank_protection:refresh", row=3)
     async def refresh_button(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
         if not await _require_setup_permission(interaction):
             return
         await _refresh_panel(interaction)
 
-    @discord.ui.button(label="Close", emoji="✖️", style=discord.ButtonStyle.secondary, custom_id="dank_protection:close", row=2)
+    @discord.ui.button(label="Close", emoji="✖️", style=discord.ButtonStyle.secondary, custom_id="dank_protection:close", row=3)
     async def close_button(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
         for child in self.children:
