@@ -212,6 +212,15 @@ async def _open_embed_builder_center(interaction: discord.Interaction) -> None:
         await _send_error(interaction, "Embed Builder failed", exc)
 
 
+async def _open_roles_center(interaction: discord.Interaction) -> None:
+    try:
+        from stoney_verify import roles_center_services
+
+        return await roles_center_services.open_roles_center(interaction)
+    except Exception as exc:
+        await _send_error(interaction, "Roles Center failed", exc)
+
+
 class SmartSetupHomeView(discord.ui.View):
     def __init__(self, *, ready: bool) -> None:
         super().__init__(timeout=900)
@@ -376,15 +385,7 @@ class FeatureCentersView(discord.ui.View):
 
     @discord.ui.button(label="Roles Center", emoji="🎭", style=discord.ButtonStyle.secondary, custom_id="dank_setup_features:roles", row=1)
     async def roles(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        if not await _require_setup(interaction):
-            return
-        embed = _workflow_embed(
-            "🎭 Roles Center",
-            "Pronoun, identity, and self-role panels are optional cosmetic role tools. They must never control verification, ticket access, moderation, or staff power.",
-        )
-        embed.add_field(name="Recommended", value="Use `/dank roles pronouns channel:#your-channel` for pronouns. Use identity roles only if your community explicitly wants that, and keep them optional.", inline=False)
-        embed.add_field(name="Safety rule", value="Do not force gender/identity roles before access. Keep them self-serve and skippable.", inline=False)
-        await _edit(interaction, embed=embed, view=FeatureBackView())
+        await _open_roles_center(interaction)
 
     @discord.ui.button(label="Modlog Center", emoji="🧾", style=discord.ButtonStyle.secondary, custom_id="dank_setup_features:modlog", row=1)
     async def modlog(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
