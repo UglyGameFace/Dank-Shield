@@ -1,11 +1,10 @@
 from __future__ import annotations
 
-"""Stop /dank setup Health Check from failing only because setup type is unset.
+"""Keep the plain /dank setup check honest for existing servers.
 
-Some existing servers were configured before the newer "Choose Setup Type" screen
-existed.  If the real ticket pieces are already saved and valid, the plain setup
-check should infer an existing-server/help-desk setup instead of showing a false
-blocker.
+Older servers may not have a saved setup type. This guard can infer the setup
+shape from saved roles/channels, but the plain checklist must not claim the
+server is safe unless the canonical safety health check also passes.
 """
 
 from typing import Any, Tuple
@@ -247,8 +246,37 @@ async def _setup_progress(recommend: Any, guild: discord.Guild) -> tuple[str, in
             next_step = "Press Ticket Menu Options → Create Recommended Ticket Menu."
 
     if done == total:
-        next_step = "Post your ticket panel, then open a test ticket."
+        next_step = "Run Setup Health/Safety, then post your ticket panel and open a test ticket."
     return "\n".join(lines)[:1024], done, total, next_step
+
+
+def _append_unique(dest: list[str], src: list[str], *, prefix: str = "") -> None:
+    existing = {str(x).strip() for x in dest}
+    for item in src:
+        text = str(item).strip()
+        if not text:
+            continue
+        if prefix and not text.startswith(prefix):
+            text = f"{prefix}{text}"
+        if text not in existing:
+            dest.append(text)
+            existing.add(text)
+
+
+def _canonical_health(recommend: Any, guild: discord.Guild, cfg: Any) -> tuple[list[str], list[str], list[str]]:
+    try:
+        from stoney_verify.startup_guards import setup_visibility_health_guard
+        setup_visibility_health_guard.apply()
+    except Exception:
+        pass
+    try:
+        from stoney_verify.commands_ext import public_setup_group as group
+        full = getattr(group, "_build_setup_health", None)
+        if callable(full):
+            return full(guild, cfg)
+    except Exception as exc:
+        return [], [f"Full safety health overlay could not run: {type(exc).__name__}."], []
+    return [], ["Full safety health overlay is unavailable; do not treat this basic check as final."], []
 
 
 async def _build_plain_setup_health_embed(recommend: Any, guild: discord.Guild) -> discord.Embed:
@@ -348,27 +376,45 @@ async def _build_plain_setup_health_embed(recommend: Any, guild: discord.Guild) 
     else:
         blockers.append("Create at least one ticket menu option.")
 
-    ready = not blockers
+    full_blockers, full_warnings, full_ok = _canonical_health(recommend, guild, cfg)
+    _append_unique(blockers, full_blockers, prefix="Safety: ")
+    _append_unique(warnings, full_warnings, prefix="Safety: ")
+    for line in full_ok:
+        text = str(line).strip()
+        if "visibility" in text.lower() or "privacy" in text.lower() or "vc" in text.lower() or "permission" in text.lower():
+            _append_unique(passing, [text], prefix="Safety: ")
+
+    ready = not blockers and not warnings
+    if blockers:
+        desc = "🚫 **Setup is not safe yet. Fix blockers before testing with members.**"
+        color = discord.Color.red()
+    elif warnings:
+        desc = "⚠️ **Core setup exists, but warnings remain. Review before calling this production-ready.**"
+        color = discord.Color.gold()
+    else:
+        desc = "✅ **Ready to test.** Full safety health did not report blockers or warnings."
+        color = discord.Color.green()
     embed = discord.Embed(
-        title="🩺 Setup Check",
-        description="✅ **Ready to test.** Open one test ticket and try the member flow." if ready else "🚫 **A few things still need fixing before this setup is ready.**",
-        color=discord.Color.green() if ready else discord.Color.red(),
+        title="🩺 Setup Safety Check",
+        description=desc,
+        color=color,
         timestamp=recommend.now_utc(),
     )
     embed.add_field(name="Setup Type", value=f"**{choice_label}**", inline=False)
     embed.add_field(name="Needs Fixing", value=_plain_lines(blockers, empty="✅ Nothing required is missing."), inline=False)
     embed.add_field(name="Looks Good", value=_plain_lines(passing, empty="No passing checks yet."), inline=False)
-    embed.add_field(name="Optional Later", value=_plain_lines(warnings, empty="✅ No optional warnings."), inline=False)
+    embed.add_field(name="Warnings / Review", value=_plain_lines(warnings, empty="✅ No warnings."), inline=False)
     embed.add_field(
         name="How to fix this",
         value=(
+            "Press **Safety & Repair → Fix Permissions** for scoped permission repairs.\n"
             "Press **Use My Existing Server** to pick roles/channels you already have.\n"
             "Press **Create Missing Items** if you want Dank Shield to create missing basics.\n"
-            "Press **Help / FAQ** if you are unsure what something means."
+            "Run this check again after every repair."
         ),
         inline=False,
     )
-    embed.set_footer(text=f"Guild {guild.id} • /dank setup • no raw IDs shown")
+    embed.set_footer(text=f"Guild {guild.id} • /dank setup • full safety overlay included • no raw IDs shown")
     return embed
 
 
@@ -405,7 +451,7 @@ def apply() -> bool:
         recommend._saved_choice_text = lambda cfg: _saved_choice_text(recommend, cfg)
         recommend._setup_choice_label = lambda cfg: _setup_choice_label(recommend, cfg)
         setattr(recommend, "_SETUP_CHECK_EXISTING_SERVER_INFERENCE_GUARD", True)
-        _log("patched /dank setup health check setup-type inference")
+        _log("patched /dank setup health check setup-type inference with full safety overlay")
         return True
     except Exception as exc:
         _warn(f"patch failed: {exc!r}")
