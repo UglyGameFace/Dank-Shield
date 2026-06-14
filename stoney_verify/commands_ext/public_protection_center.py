@@ -61,6 +61,7 @@ AUTOMOD_PRESETS: dict[str, dict[str, Any]] = {
         "automod_max_mentions": 0,
         "automod_caps_ratio": 0,
         "automod_max_custom_emojis": 0,
+        "automod_link_policy": "allow_links",
         "automod_preset": "off",
     },
     "safe": {
@@ -70,6 +71,7 @@ AUTOMOD_PRESETS: dict[str, dict[str, Any]] = {
         "automod_max_mentions": 8,
         "automod_caps_ratio": 0.85,
         "automod_max_custom_emojis": 14,
+        "automod_link_policy": "invite_shield",
         "automod_preset": "safe",
     },
     "strict": {
@@ -79,6 +81,7 @@ AUTOMOD_PRESETS: dict[str, dict[str, Any]] = {
         "automod_max_mentions": 5,
         "automod_caps_ratio": 0.75,
         "automod_max_custom_emojis": 10,
+        "automod_link_policy": "link_lockdown",
         "automod_preset": "strict",
     },
 }
@@ -185,6 +188,14 @@ def _cfg_int(cfg: Any, key: str, default: int = 0) -> int:
         return int(default)
 
 
+def _bounded_int(value: Any, *, default: int, minimum: int, maximum: int) -> int:
+    try:
+        parsed = int(float(str(value).strip()))
+    except Exception:
+        parsed = int(default)
+    return max(int(minimum), min(int(maximum), parsed))
+
+
 def _normalize_for_filter(value: Any, *, compact: bool) -> str:
     text = unicodedata.normalize("NFKC", str(value or "")).casefold()
     text = ZERO_WIDTH_RE.sub("", text).translate(LEET_MAP)
@@ -265,28 +276,44 @@ async def _send_ephemeral(interaction: discord.Interaction, content: str = "", *
         pass
 
 
+def _link_policy_label(cfg: Any) -> str:
+    block_links = _cfg_bool(cfg, "automod_block_links", False)
+    block_invites = _cfg_bool(cfg, "automod_block_invites", False)
+    if block_links:
+        return "🔒 Link Lockdown — blocks all external links and Discord invites"
+    if block_invites:
+        return "🛡️ Invite Shield — blocks Discord invite links to other/bad servers"
+    return "⚪ Links allowed — no invite/link blocking"
+
+
 def _protection_embed(guild: discord.Guild, cfg: Any, spam: dict[str, Any], spam_source: str) -> discord.Embed:
     bad_words = _csv_items(_cfg_value(cfg, "automod_bad_words", ""))
     automod_on = _cfg_bool(cfg, "automod_enabled", False)
     spam_on = bool(spam.get("enabled"))
-    invite_links_blocked = _cfg_bool(cfg, "automod_block_invites", False) or bool(spam.get("block_external_invites_only"))
-    normal_links_blocked = _cfg_bool(cfg, "automod_block_links", False)
     both_on = automod_on and spam_on
     embed = discord.Embed(
         title="🛡️ Dank Shield Protection Center",
         description=(
-            "One clean safety menu. **Automod** filters message content. "
-            "**Spam Guard** watches behavior, rate, duplicate messages, and invite floods."
+            "One product surface. Two engines underneath:\n"
+            "**Automod** filters message content and links. **Spam Guard** watches behavior, rate, duplicate messages, and invite floods."
         ),
         color=discord.Color.green() if both_on else discord.Color.gold() if (automod_on or spam_on) else discord.Color.dark_grey(),
         timestamp=discord.utils.utcnow(),
     )
     embed.add_field(
-        name="Recommended use",
+        name="Quick recommendation",
         value=(
-            "**Safe** blocks bad-server invite spam while allowing normal links.\n"
-            "**Strict** also blocks all external links for locked-down servers.\n"
-            "Use **Block Server Invites** when people advertise sketchy Discord servers."
+            "Use **Safe** for normal public servers. It blocks Discord invite spam while allowing normal links.\n"
+            "Use **Block All Links** during raids, raids-after-ping, or if members should not post URLs at all."
+        ),
+        inline=False,
+    )
+    embed.add_field(
+        name="Link Shield — bad server spam",
+        value=(
+            f"**Policy:** {_link_policy_label(cfg)}\n"
+            f"**Discord invites:** {'blocked' if _cfg_bool(cfg, 'automod_block_invites', False) else 'allowed'}\n"
+            f"**All external links:** {'blocked' if _cfg_bool(cfg, 'automod_block_links', False) else 'allowed'}"
         ),
         inline=False,
     )
@@ -296,8 +323,6 @@ def _protection_embed(guild: discord.Guild, cfg: Any, spam: dict[str, Any], spam
             f"**Enabled:** {'✅ Yes' if automod_on else '⚪ No'}\n"
             f"**Preset:** `{_cfg_value(cfg, 'automod_preset', 'custom') or 'custom'}`\n"
             f"**Bad-word filters:** `{len(bad_words)}`\n"
-            f"**Server invite links:** {'blocked' if invite_links_blocked else 'allowed'}\n"
-            f"**All external links:** {'blocked' if normal_links_blocked else 'allowed'}\n"
             f"**Max mentions:** `{_cfg_int(cfg, 'automod_max_mentions', 0) or 'off'}`"
         ),
         inline=False,
@@ -309,13 +334,18 @@ def _protection_embed(guild: discord.Guild, cfg: Any, spam: dict[str, Any], spam
             f"**Mode:** `{spam.get('mode', 'unknown')}`\n"
             f"**Window:** `{spam.get('window_seconds', '—')}s` • **Messages:** `{spam.get('message_threshold', '—')}` • "
             f"**Duplicates:** `{spam.get('duplicate_threshold', '—')}`\n"
-            f"**Invite threshold:** `{spam.get('invite_threshold', '—')}` • **Saving:** `{spam_source}`"
+            f"**Invite threshold:** `{spam.get('invite_threshold', '—')}` • **Timeout:** `{spam.get('timeout_minutes', '—')}m` • **Saving:** `{spam_source}`"
         ),
         inline=False,
     )
     embed.add_field(
-        name="Detailed controls",
-        value="Use **Edit Spam Guard** for exact Spam Guard knobs. Use **Add Filter** and **Test** for bad-word/content filters.",
+        name="What buttons do",
+        value=(
+            "**Edit Spam Guard** = message speed, duplicate messages, invite-flood threshold, timeout length.\n"
+            "**Block Invites** = stop Discord server invite links.\n"
+            "**Block All Links** = stop every URL.\n"
+            "**Add Filter/Test** = banned words and bypass tests."
+        ),
         inline=False,
     )
     embed.set_footer(text="Protection Center uses existing Automod + Spam Guard settings; no new overlapping config bucket.")
@@ -355,48 +385,23 @@ async def _apply_protection_preset(interaction: discord.Interaction, preset: str
     await _refresh_panel(interaction, content=note)
 
 
-async def _set_server_invite_protection(interaction: discord.Interaction, enabled: bool) -> None:
+async def _set_link_policy(interaction: discord.Interaction, policy: str) -> None:
     if not await _require_setup_permission(interaction):
         return
     guild = interaction.guild
     if guild is None:
         return await _send_ephemeral(interaction, "❌ This must be used inside a server.")
-    member = interaction.user if isinstance(interaction.user, discord.Member) else None
-    if enabled:
-        await _save_automod(int(guild.id), {"automod_enabled": True, "automod_block_invites": True, "automod_updated_by_id": str(int(interaction.user.id))})
-        spam_patch = {
-            "enabled": True,
-            "mode": "timeout",
-            "apply_to_verified_users": True,
-            "block_external_invites_only": True,
-            "allow_server_invites": True,
-            "invite_threshold": 1,
-            "multi_invite_immediate": 2,
-        }
-        await _save_spam_settings(int(guild.id), spam_patch, member)
-        note = "✅ Server invite protection is **On**. Discord invite links to outside/bad servers are treated as spam."
+    if policy == "invite_shield":
+        updates = {"automod_enabled": True, "automod_block_invites": True, "automod_block_links": False, "automod_link_policy": "invite_shield", "automod_updated_by_id": str(int(interaction.user.id))}
+        label = "Invite Shield enabled — Discord server invite links are blocked, normal links are allowed."
+    elif policy == "link_lockdown":
+        updates = {"automod_enabled": True, "automod_block_invites": True, "automod_block_links": True, "automod_link_policy": "link_lockdown", "automod_updated_by_id": str(int(interaction.user.id))}
+        label = "Link Lockdown enabled — all external links and Discord invites are blocked."
     else:
-        await _save_automod(int(guild.id), {"automod_block_invites": False, "automod_updated_by_id": str(int(interaction.user.id))})
-        await _save_spam_settings(int(guild.id), {"block_external_invites_only": False, "invite_threshold": 12}, member)
-        note = "⚪ Server invite protection is **Off**. Spam Guard still watches normal message-rate spam if enabled."
-    await _refresh_panel(interaction, content=note)
-
-
-async def _set_external_link_filter(interaction: discord.Interaction, enabled: bool) -> None:
-    if not await _require_setup_permission(interaction):
-        return
-    guild = interaction.guild
-    if guild is None:
-        return await _send_ephemeral(interaction, "❌ This must be used inside a server.")
-    updates = {
-        "automod_block_links": bool(enabled),
-        "automod_updated_by_id": str(int(interaction.user.id)),
-    }
-    if enabled:
-        updates["automod_enabled"] = True
+        updates = {"automod_block_invites": False, "automod_block_links": False, "automod_link_policy": "allow_links", "automod_updated_by_id": str(int(interaction.user.id))}
+        label = "Links allowed — invite/link blocking is off."
     await _save_automod(int(guild.id), updates)
-    note = "✅ All external links are now **blocked**." if enabled else "⚪ Normal external links are now **allowed**. Server invite links can still be blocked separately."
-    await _refresh_panel(interaction, content=note)
+    await _refresh_panel(interaction, content=f"✅ {label}")
 
 
 async def _add_bad_word(interaction: discord.Interaction, word: str) -> None:
@@ -413,11 +418,7 @@ async def _add_bad_word(interaction: discord.Interaction, word: str) -> None:
     existed = cleaned in [x.casefold() for x in items]
     if not existed:
         items.append(cleaned)
-    updates = {
-        "automod_enabled": True,
-        "automod_bad_words": ",".join(items),
-        "automod_updated_by_id": str(int(interaction.user.id)),
-    }
+    updates = {"automod_enabled": True, "automod_bad_words": ",".join(items), "automod_updated_by_id": str(int(interaction.user.id))}
     await _save_automod(int(guild.id), updates)
     verify_cfg = await get_guild_config(int(guild.id), refresh=True)
     saved_items = _csv_items(_cfg_value(verify_cfg, "automod_bad_words", ""))
@@ -441,15 +442,58 @@ async def _test_text(interaction: discord.Interaction, text: str) -> None:
     await _send_ephemeral(interaction, f"⚪ Would not block with current bad-word filters.\nNormalized check: `{normalized[:300]}`")
 
 
+class SpamGuardSettingsModal(discord.ui.Modal):
+    def __init__(self, spam: dict[str, Any]) -> None:
+        super().__init__(title="Edit Spam Guard")
+        self.window_seconds = discord.ui.TextInput(label="Watch window seconds", default=str(spam.get("window_seconds", 12)), min_length=1, max_length=4, required=True)
+        self.message_threshold = discord.ui.TextInput(label="Messages allowed in window", default=str(spam.get("message_threshold", 5)), min_length=1, max_length=3, required=True)
+        self.duplicate_threshold = discord.ui.TextInput(label="Duplicate messages allowed", default=str(spam.get("duplicate_threshold", 3)), min_length=1, max_length=3, required=True)
+        self.invite_threshold = discord.ui.TextInput(label="Invite links allowed in window", default=str(spam.get("invite_threshold", 2)), min_length=1, max_length=3, required=True)
+        self.timeout_minutes = discord.ui.TextInput(label="Timeout minutes when triggered", default=str(spam.get("timeout_minutes", 30)), min_length=1, max_length=4, required=True)
+        for item in (self.window_seconds, self.message_threshold, self.duplicate_threshold, self.invite_threshold, self.timeout_minutes):
+            self.add_item(item)
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        if not await _require_setup_permission(interaction):
+            return
+        guild = interaction.guild
+        if guild is None:
+            return await _send_ephemeral(interaction, "❌ This must be used inside a server.")
+        member = interaction.user if isinstance(interaction.user, discord.Member) else None
+        patch = {
+            "enabled": True,
+            "mode": "timeout",
+            "apply_to_verified_users": True,
+            "block_external_invites_only": True,
+            "allow_server_invites": True,
+            "window_seconds": _bounded_int(self.window_seconds.value, default=12, minimum=5, maximum=60),
+            "message_threshold": _bounded_int(self.message_threshold.value, default=5, minimum=2, maximum=20),
+            "duplicate_threshold": _bounded_int(self.duplicate_threshold.value, default=3, minimum=2, maximum=10),
+            "invite_threshold": _bounded_int(self.invite_threshold.value, default=2, minimum=1, maximum=10),
+            "multi_invite_immediate": 2,
+            "delete_history": 8,
+            "timeout_minutes": _bounded_int(self.timeout_minutes.value, default=30, minimum=1, maximum=10080),
+            "cooldown_seconds": 20,
+        }
+        spam_settings, persisted = await _save_spam_settings(int(guild.id), patch, member)
+        await _refresh_panel(
+            interaction,
+            content=(
+                "✅ Spam Guard updated. "
+                f"Window `{spam_settings.get('window_seconds')}`s, messages `{spam_settings.get('message_threshold')}`, duplicates `{spam_settings.get('duplicate_threshold')}`, "
+                f"invite threshold `{spam_settings.get('invite_threshold')}`, timeout `{spam_settings.get('timeout_minutes')}`m. Saving: {'DB-backed' if persisted else 'runtime/fallback'}."
+            ),
+        )
+
+
 async def _open_spamguard_editor(interaction: discord.Interaction) -> None:
     if not await _require_setup_permission(interaction):
         return
-    try:
-        from stoney_verify.commands_ext.public_spam_group import open_spamguard_panel
-
-        await open_spamguard_panel(interaction)
-    except Exception as exc:
-        await _send_ephemeral(interaction, f"❌ Could not open Spam Guard editor: `{type(exc).__name__}: {exc}`")
+    guild = interaction.guild
+    if guild is None:
+        return await _send_ephemeral(interaction, "❌ This must be used inside a server.")
+    spam, _source = await _load_spam_settings(int(guild.id))
+    await interaction.response.send_modal(SpamGuardSettingsModal(spam))
 
 
 class AddFilterModal(discord.ui.Modal, title="Add Automod Filter"):
@@ -492,30 +536,20 @@ class ProtectionCenterView(discord.ui.View):
         _ = button
         await _apply_protection_preset(interaction, "off")
 
-    @discord.ui.button(label="Block Server Invites", emoji="🚫", style=discord.ButtonStyle.secondary, custom_id="dank_protection:block_invites", row=1)
-    async def block_invites_button(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        _ = button
-        await _set_server_invite_protection(interaction, True)
-
-    @discord.ui.button(label="Allow Invites", emoji="🔓", style=discord.ButtonStyle.secondary, custom_id="dank_protection:allow_invites", row=1)
-    async def allow_invites_button(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        _ = button
-        await _set_server_invite_protection(interaction, False)
-
-    @discord.ui.button(label="Block All Links", emoji="🌐", style=discord.ButtonStyle.secondary, custom_id="dank_protection:block_links", row=1)
-    async def block_links_button(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        _ = button
-        await _set_external_link_filter(interaction, True)
-
-    @discord.ui.button(label="Allow Links", emoji="🔗", style=discord.ButtonStyle.secondary, custom_id="dank_protection:allow_links", row=1)
-    async def allow_links_button(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        _ = button
-        await _set_external_link_filter(interaction, False)
-
-    @discord.ui.button(label="Edit Spam Guard", emoji="🛠️", style=discord.ButtonStyle.secondary, custom_id="dank_protection:edit_spamguard", row=2)
+    @discord.ui.button(label="Edit Spam Guard", emoji="🛠️", style=discord.ButtonStyle.secondary, custom_id="dank_protection:edit_spamguard", row=1)
     async def edit_spamguard_button(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
         await _open_spamguard_editor(interaction)
+
+    @discord.ui.button(label="Block Invites", emoji="🛡️", style=discord.ButtonStyle.secondary, custom_id="dank_protection:block_invites", row=1)
+    async def block_invites_button(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        await _set_link_policy(interaction, "invite_shield")
+
+    @discord.ui.button(label="Block All Links", emoji="🚫", style=discord.ButtonStyle.secondary, custom_id="dank_protection:block_links", row=1)
+    async def block_links_button(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        await _set_link_policy(interaction, "link_lockdown")
 
     @discord.ui.button(label="Add Filter", emoji="➕", style=discord.ButtonStyle.secondary, custom_id="dank_protection:add_filter", row=2)
     async def add_filter_button(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
@@ -530,6 +564,11 @@ class ProtectionCenterView(discord.ui.View):
         if not await _require_setup_permission(interaction):
             return
         await interaction.response.send_modal(TestFilterModal())
+
+    @discord.ui.button(label="Allow Links", emoji="🔓", style=discord.ButtonStyle.secondary, custom_id="dank_protection:allow_links", row=2)
+    async def allow_links_button(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        await _set_link_policy(interaction, "allow_links")
 
     @discord.ui.button(label="Refresh", emoji="🔄", style=discord.ButtonStyle.secondary, custom_id="dank_protection:refresh", row=3)
     async def refresh_button(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
