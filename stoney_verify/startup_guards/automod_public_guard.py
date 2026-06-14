@@ -3,9 +3,11 @@ from __future__ import annotations
 """Public Automod message filters.
 
 This intentionally does not replace Spam Guard or Raid Guard. It only handles
-simple content filters that guild owners configure through /dank automod.
+simple content filters that guild owners configure through /dank protection.
+The legacy /dank automod commands stay hidden unless explicitly enabled by env.
 """
 
+import os
 import re
 import time
 import unicodedata
@@ -53,6 +55,20 @@ LEET_MAP = str.maketrans(
         "т": "t",
     }
 )
+
+
+def _env_bool(name: str, default: bool = False) -> bool:
+    try:
+        raw = os.getenv(name, "")
+        if raw is None or str(raw).strip() == "":
+            return bool(default)
+        return str(raw).strip().lower() in {"1", "true", "yes", "y", "on"}
+    except Exception:
+        return bool(default)
+
+
+def _legacy_automod_commands_enabled() -> bool:
+    return _env_bool("STONEY_EXPOSE_LEGACY_AUTOMOD_COMMANDS", False)
 
 
 def _clean_filter_item(value: Any) -> str:
@@ -206,7 +222,7 @@ async def _modlog(guild: discord.Guild, message: discord.Message, reason: str) -
         content = str(getattr(message, "content", "") or "")
         if content:
             embed.add_field(name="Message", value=content[:1000], inline=False)
-        embed.set_footer(text="Dank Shield Automod • separate from Spam Guard/Raid Guard")
+        embed.set_footer(text="Dank Shield Automod • configured by Protection Center")
         await _post_modlog(guild, embed)
     except Exception as exc:
         try:
@@ -309,6 +325,28 @@ def _listener_registered(bot: Any) -> bool:
         return False
 
 
+def _maybe_expose_legacy_automod(bot: Any) -> None:
+    if not _legacy_automod_commands_enabled():
+        return
+    try:
+        import stoney_verify.commands_ext as commands_ext
+
+        allowed = set(getattr(commands_ext, "_ALLOWED_STONEY_CHILDREN", set()) or set())
+        allowed.add("automod")
+        commands_ext._ALLOWED_STONEY_CHILDREN = allowed
+
+        from stoney_verify.commands_ext import public_automod_group
+
+        register = getattr(public_automod_group, "register_public_automod_group_commands", None)
+        if callable(register):
+            register(bot, getattr(bot, "tree", None))
+    except Exception as exc:
+        try:
+            print(f"⚠️ automod_public_guard legacy automod expose failed: {type(exc).__name__}: {exc}")
+        except Exception:
+            pass
+
+
 def apply(bot: Any = None) -> bool:
     global _PATCHED
     if _PATCHED:
@@ -322,23 +360,11 @@ def apply(bot: Any = None) -> bool:
     if bot is None:
         return False
     try:
-        import stoney_verify.commands_ext as commands_ext
-
-        allowed = set(getattr(commands_ext, "_ALLOWED_STONEY_CHILDREN", set()) or set())
-        allowed.add("automod")
-        commands_ext._ALLOWED_STONEY_CHILDREN = allowed
-
-        from stoney_verify.commands_ext import public_automod_group
-
-        register = getattr(public_automod_group, "register_public_automod_group_commands", None)
-        if callable(register):
-            register(bot, getattr(bot, "tree", None))
-
         if not _listener_registered(bot):
             bot.add_listener(_automod_message_listener, "on_message")
-
+        _maybe_expose_legacy_automod(bot)
         _PATCHED = True
-        print("✅ automod_public_guard active; /dank automod exposed and message filters attached")
+        print(f"✅ automod_public_guard active; message filters attached legacy_commands={_legacy_automod_commands_enabled()}")
         return True
     except Exception as exc:
         try:
