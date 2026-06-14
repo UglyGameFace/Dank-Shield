@@ -109,7 +109,7 @@ create table if not exists public.tickets (
     close_reason text,
     deleted_reason text,
     created_at timestamptz not null default now(),
-    updated_at timestamptz not null default now(),
+    updated_at timestamptz,
     closed_at timestamptz,
     deleted_at timestamptz
 );
@@ -295,9 +295,9 @@ async def ensure_schema_once() -> bool:
 
     url = _db_url()
     if not url:
-        _warn(
-            "cannot auto-create DB tables because no direct Postgres URL is set. "
-            "Set SUPABASE_DB_URL or DATABASE_URL to enable automatic table creation."
+        _log(
+            "direct bootstrap skipped; no SUPABASE_DB_URL/DATABASE_URL set. "
+            "Manual SQL migrations / REST schema health own production table readiness."
         )
         return False
 
