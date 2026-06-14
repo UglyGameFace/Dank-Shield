@@ -8,6 +8,7 @@ simple content filters that guild owners configure through /dank automod.
 
 import re
 import time
+from datetime import timedelta
 from typing import Any, Optional
 
 import discord
@@ -160,7 +161,8 @@ async def _handle_violation(message: discord.Message, *, reason: str, timeout_mi
         pass
     if timeout_minutes > 0:
         try:
-            await message.author.timeout(discord.utils.utcnow() + discord.timedelta(minutes=int(timeout_minutes)), reason=f"Dank Shield automod: {reason}")  # type: ignore[attr-defined]
+            until = discord.utils.utcnow() + timedelta(minutes=int(timeout_minutes))
+            await message.author.timeout(until, reason=f"Dank Shield automod: {reason}")
         except Exception:
             pass
     await _modlog(guild, message, reason)
