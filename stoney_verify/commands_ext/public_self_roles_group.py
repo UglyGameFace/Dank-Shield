@@ -24,6 +24,18 @@ DEFAULT_PRONOUN_ROLE_NAMES: tuple[str, ...] = (
     "Pronouns: custom",
 )
 
+DEFAULT_IDENTITY_ROLE_NAMES: tuple[str, ...] = (
+    "Identity: man",
+    "Identity: woman",
+    "Identity: non-binary",
+    "Identity: genderfluid",
+    "Identity: agender",
+    "Identity: trans",
+    "Identity: questioning",
+    "Identity: prefer not to say",
+    "Identity: custom / ask staff",
+)
+
 roles_group = app_commands.Group(
     name="roles",
     description="Post simple self-assignable role menus.",
@@ -158,12 +170,51 @@ async def _post_panel(interaction: discord.Interaction, channel: discord.TextCha
         timestamp=discord.utils.utcnow(),
     )
     embed.add_field(name="Roles", value="\n".join(f"• {role.mention}" for role in roles)[:1024], inline=False)
+    embed.add_field(
+        name="Safety note",
+        value="These roles are optional and cosmetic only. They should not be used for verification, tickets, moderation, staff permissions, or server access.",
+        inline=False,
+    )
     embed.set_footer(text="Dank Shield self-role panel")
     try:
         await channel.send(embed=embed, view=SelfRolePanelView(roles), allowed_mentions=discord.AllowedMentions.none())
         await interaction.followup.send(f"✅ Self-role panel posted in {channel.mention}.", ephemeral=True)
     except Exception as exc:
         await interaction.followup.send(f"❌ Could not post self-role panel: `{type(exc).__name__}: {exc}`", ephemeral=True)
+
+
+async def _create_reuse_roles(
+    interaction: discord.Interaction,
+    guild: discord.Guild,
+    names: tuple[str, ...],
+    *,
+    reason_label: str,
+) -> tuple[list[discord.Role], list[str], list[str]]:
+    roles: list[discord.Role] = []
+    created: list[str] = []
+    reused: list[str] = []
+    for name in names:
+        before = _find_role_by_name(guild, name)
+        role = await _ensure_role(guild, name, reason=f"Dank Shield {reason_label} self-role setup by {interaction.user} ({interaction.user.id})")
+        check_ok, check_msg = _can_manage(role, guild)
+        if not check_ok:
+            raise RuntimeError(check_msg)
+        roles.append(role)
+        (reused if before else created).append(role.name)
+    return roles, created, reused
+
+
+async def _send_creation_notes(interaction: discord.Interaction, *, created: list[str], reused: list[str]) -> None:
+    notes: list[str] = []
+    if created:
+        notes.append("Created: " + ", ".join(f"`{x}`" for x in created))
+    if reused:
+        notes.append("Reused: " + ", ".join(f"`{x}`" for x in reused))
+    if notes:
+        try:
+            await interaction.followup.send("\n".join(notes)[:1900], ephemeral=True, allowed_mentions=discord.AllowedMentions.none())
+        except Exception:
+            pass
 
 
 @roles_group.command(name="panel", description="Post a simple toggle-role panel with up to five roles.")
@@ -240,18 +291,8 @@ async def roles_pronouns(
     except Exception:
         pass
 
-    roles: list[discord.Role] = []
-    created: list[str] = []
-    reused: list[str] = []
     try:
-        for name in DEFAULT_PRONOUN_ROLE_NAMES:
-            before = _find_role_by_name(guild, name)
-            role = await _ensure_role(guild, name, reason=f"Dank Shield pronoun self-role setup by {interaction.user} ({interaction.user.id})")
-            check_ok, check_msg = _can_manage(role, guild)
-            if not check_ok:
-                return await interaction.followup.send(f"❌ {check_msg}", ephemeral=True, allowed_mentions=discord.AllowedMentions.none())
-            roles.append(role)
-            (reused if before else created).append(role.name)
+        roles, created, reused = await _create_reuse_roles(interaction, guild, DEFAULT_PRONOUN_ROLE_NAMES, reason_label="pronoun")
     except Exception as exc:
         return await interaction.followup.send(f"❌ Could not create/reuse pronoun roles: `{type(exc).__name__}: {exc}`", ephemeral=True)
 
@@ -265,16 +306,49 @@ async def roles_pronouns(
             "These are optional, member-controlled roles. Tap again to remove a role."
         ),
     )
-    notes: list[str] = []
-    if created:
-        notes.append("Created: " + ", ".join(f"`{x}`" for x in created))
-    if reused:
-        notes.append("Reused: " + ", ".join(f"`{x}`" for x in reused))
-    if notes:
-        try:
-            await interaction.followup.send("\n".join(notes)[:1900], ephemeral=True, allowed_mentions=discord.AllowedMentions.none())
-        except Exception:
-            pass
+    await _send_creation_notes(interaction, created=created, reused=reused)
+
+
+@roles_group.command(name="identity", description="Create/reuse optional identity roles and post a separate self-role panel.")
+@app_commands.describe(
+    channel="Where to post the optional identity role panel.",
+    title="Optional panel title.",
+)
+async def roles_identity(
+    interaction: discord.Interaction,
+    channel: discord.TextChannel,
+    title: str = "Optional Identity Roles",
+) -> None:
+    if not await _require_setup_permission(interaction):
+        return
+    guild = interaction.guild
+    if guild is None:
+        return await _reply(interaction, "This command must be used inside a server.", ok=False)
+    ok, why = _bot_can_create_roles(guild)
+    if not ok:
+        return await _reply(interaction, why, ok=False)
+    try:
+        if not interaction.response.is_done():
+            await interaction.response.defer(ephemeral=True, thinking=True)
+    except Exception:
+        pass
+
+    try:
+        roles, created, reused = await _create_reuse_roles(interaction, guild, DEFAULT_IDENTITY_ROLE_NAMES, reason_label="identity")
+    except Exception as exc:
+        return await interaction.followup.send(f"❌ Could not create/reuse identity roles: `{type(exc).__name__}: {exc}`", ephemeral=True)
+
+    await _post_panel(
+        interaction,
+        channel,
+        title,
+        roles,
+        description=(
+            "Optional identity roles are for self-expression only. You can skip this panel entirely, "
+            "pick one, pick multiple if they fit, or use custom / ask staff if your label is not listed."
+        ),
+    )
+    await _send_creation_notes(interaction, created=created, reused=reused)
 
 
 @roles_group.command(name="health", description="Check whether Dank Shield can manage a self-assignable role.")
