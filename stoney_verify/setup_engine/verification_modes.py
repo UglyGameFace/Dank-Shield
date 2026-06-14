@@ -14,7 +14,7 @@ panels never leak into unrelated public servers such as The 420 Lobby.
 import os
 from typing import Any, Mapping
 
-DEFAULT_ID_VERIFY_ALLOWED_GUILD_IDS: frozenset[int] = frozenset({1098088221457514609})
+DEFAULT_ID_VERIFY_ALLOWED_GUILD_IDS: frozenset[int] = frozenset({1357215261001912320})
 DEFAULT_ID_VERIFY_ALLOWED_GUILD_NAMES: frozenset[str] = frozenset({"the stoners paradise"})
 BASIC_VERIFY_CUSTOM_ID = "dank:basic_verify:v1"
 BASIC_VERIFY_FOOTER = "dank_shield:basic_verify:v1"
