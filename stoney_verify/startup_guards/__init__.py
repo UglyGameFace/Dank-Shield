@@ -28,6 +28,7 @@ _STARTUP_GUARDS: Tuple[str, ...] = (
     "stoney_verify.startup_guards.setup_ticket_tool_style_setup_guard",
     "stoney_verify.startup_guards.welcome_message_command_guard",
     "stoney_verify.startup_guards.welcome_member_events_guard",
+    "stoney_verify.startup_guards.modlog_probot_parity_guard",
     "stoney_verify.startup_guards.setup_verification_toggle_independence_guard",
     "stoney_verify.startup_guards.setup_service_navigation_guard",
     "stoney_verify.startup_guards.setup_feature_health_scoreboard",
@@ -113,6 +114,7 @@ _ALWAYS_SHOW_PREFIXES: Tuple[str, ...] = (
     "✅ setup_ticket_tool_style_setup_guard active",
     "✅ welcome_message_command_guard active",
     "✅ welcome_member_events_guard active",
+    "✅ modlog_probot_parity_guard active",
 )
 _ONCE_ONLY_PREFIXES: Tuple[str, ...] = (
     "✅ ticket_panel_doctor_stability_guard: patched ticket panel health checks",
