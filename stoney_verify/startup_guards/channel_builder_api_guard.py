@@ -15,6 +15,7 @@ from typing import Any
 from aiohttp import web
 
 _ORIGINAL_IMPORT = builtins.__import__
+_WAITING_LOGGED = False
 
 
 def _log(message: str) -> None:
@@ -27,6 +28,17 @@ def _log(message: str) -> None:
 def _warn(message: str) -> None:
     try:
         print(f"⚠️ channel_builder_api_guard {message}")
+    except Exception:
+        pass
+
+
+def _waiting(message: str) -> None:
+    global _WAITING_LOGGED
+    if _WAITING_LOGGED:
+        return
+    _WAITING_LOGGED = True
+    try:
+        print(f"🧱 channel_builder_api_guard waiting: {message}")
     except Exception:
         pass
 
@@ -48,10 +60,9 @@ def _patch_server_module(server: Any) -> None:
         server._CHANNEL_BUILDER_API_GUARD_PATCHED = True
         _log("direct Channel Builder route registration detected; compatibility shim skipped")
         return
-
     original_start_api = getattr(server, "start_api", None)
     if not callable(original_start_api):
-        _warn("server.start_api missing; cannot add routes")
+        _waiting("structured server imported before start_api is attached; route injection will retry")
         return
 
     async def start_api_with_channel_builder(*args: Any, **kwargs: Any):
