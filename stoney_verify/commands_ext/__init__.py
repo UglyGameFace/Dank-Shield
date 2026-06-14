@@ -31,8 +31,9 @@ COMMAND_MODULES: List[CommandModuleSpec] = [
     ("public_modlog_coverage", "register_public_modlog_coverage_listeners", "core: supplemental modlog coverage listeners"),
     ("public_setup_group", "register_public_setup_group_commands", "core: /dank command group"),
     ("public_help_group", "register_public_help_group_commands", "core: /dank help and command catalog"),
+    ("public_protection_center", "register_public_protection_center_commands", "core: unified /dank protection center"),
     ("public_cleanup_group", "register_public_cleanup_group_commands", "core: /dank cleanup commands"),
-    ("public_spam_group", "register_public_spam_group_commands", "core: /dank spam commands"),
+    ("public_spam_group", "register_public_spam_group_commands", "admin: legacy /dank spam commands hidden behind /dank protection"),
     ("public_members_group", "register_public_members_group_commands", "core: /dank members activity review commands"),
     ("public_members_cleanup_group", "register_public_members_cleanup_group_commands", "core: confirmed /dank members cleanup command"),
     ("public_mod_group", "register_public_mod_group_commands", "core: grouped /mod moderation commands"),
@@ -72,8 +73,8 @@ COMMAND_MODULES: List[CommandModuleSpec] = [
     ("ticket_admin", "register_ticket_admin_commands", "legacy/dev: ticket admin commands"),
     ("ticket_channel_admin", "register_ticket_channel_admin_commands", "legacy/dev: ticket channel admin commands"),
     ("ticket_intake_admin", "register_ticket_intake_admin_commands", "legacy/dev: ticket intake admin commands"),
-    ("ticket_queue_admin", "register_ticket_queue_admin_commands", "legacy/dev: ticket queue admin commands"),
-    ("ticket_category_admin", "register_ticket_category_admin_commands", "legacy/dev: ticket category admin commands"),
+    ("ticket_queue_admin", "register_ticket_queue_admin_commands", "legacy/dev: ticket queue commands"),
+    ("ticket_category_admin", "register_ticket_category_admin_commands", "legacy/dev: ticket category commands"),
     ("ticket_governance_admin", "register_ticket_governance_admin_commands", "legacy/dev: ticket governance commands"),
     ("ticket_sla_admin", "register_ticket_sla_admin_commands", "legacy/dev: ticket SLA commands"),
     ("ticket_resolution_admin", "register_ticket_resolution_admin_commands", "legacy/dev: ticket resolution commands"),
@@ -103,8 +104,8 @@ _PUBLIC_CORE_MODULES: Tuple[str, ...] = (
     "public_modlog_coverage",
     "public_setup_group",
     "public_help_group",
+    "public_protection_center",
     "public_cleanup_group",
-    "public_spam_group",
     "public_members_group",
     "public_members_cleanup_group",
     "public_mod_group",
@@ -119,6 +120,7 @@ _PUBLIC_CORE_MODULES: Tuple[str, ...] = (
 )
 
 _PUBLIC_ADMIN_EXTRA_MODULES: Tuple[str, ...] = (
+    "public_spam_group",
     "public_setup_start",
     "public_setup_review",
     "public_setup_logs",
@@ -138,7 +140,7 @@ _PUBLIC_ADMIN_EXTRA_MODULES: Tuple[str, ...] = (
 
 COMMAND_PROFILES: Dict[str, Sequence[str]] = {
     "public": _PUBLIC_CORE_MODULES,
-    "minimal": tuple(x for x in _PUBLIC_CORE_MODULES if x not in {"public_spam_group", "public_cleanup_group", "public_members_group", "public_members_cleanup_group"}),
+    "minimal": tuple(x for x in _PUBLIC_CORE_MODULES if x not in {"public_cleanup_group", "public_members_group", "public_members_cleanup_group"}),
     "public-admin": _PUBLIC_CORE_MODULES + _PUBLIC_ADMIN_EXTRA_MODULES,
     "full": _LEGACY_MODULES,
     "dev": _LEGACY_MODULES + _PUBLIC_CORE_MODULES + _PUBLIC_ADMIN_EXTRA_MODULES,
@@ -147,8 +149,10 @@ COMMAND_PROFILES: Dict[str, Sequence[str]] = {
 _STALE_TOP_LEVEL_COMMANDS: Tuple[str, ...] = (
     "stoney",
     "ticket-intake",
+    "spam",
     "spam_guard",
     "spam_guard_status",
+    "automod",
     "fix_unverified",
     "set_verified",
     "set_resident",
@@ -182,6 +186,8 @@ _STALE_TOP_LEVEL_COMMANDS: Tuple[str, ...] = (
 )
 
 _CONFUSING_STONEY_CHILDREN: Tuple[str, ...] = (
+    "automod",
+    "spam",
     "config-cache",
     "current",
     "archive-backfill",
@@ -208,7 +214,7 @@ _CONFUSING_STONEY_CHILDREN: Tuple[str, ...] = (
     "tickettool-check",
 )
 
-_ALLOWED_STONEY_CHILDREN = {"setup", "help", "commands", "cleanup", "spam", "members"}
+_ALLOWED_STONEY_CHILDREN = {"setup", "overview", "protection", "help", "commands", "cleanup", "members", "welcome", "roles", "modlog", "embed"}
 
 _COMPACT_SUPPRESS_PREFIXES: Tuple[str, ...] = (
     "✅ public_",
