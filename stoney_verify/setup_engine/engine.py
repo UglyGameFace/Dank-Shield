@@ -7,7 +7,7 @@ import discord
 from .loader import snapshot_from_config
 from .models import FindingSeverity, HealthFinding, RecommendedAction, SetupHealthReport
 from .policy import allowed_public_ids, private_or_staff_ids, saved_public_ids
-from .scanner import all_channel_targets, bot_member, can_see, can_send, get_channel, get_role, is_voice, parent_id, target_id, target_label
+from .scanner import all_channel_targets, bot_member, can_see, can_send, get_channel, get_role, is_voice, parent_id, permission, target_id, target_label
 
 ENGINE_VERSION = "setup-engine-v1"
 
@@ -114,7 +114,17 @@ def add_visibility(guild: discord.Guild, cfg: Any, findings: list[HealthFinding]
             continue
         if not can_see(channel, unverified):
             findings.append(finding("visibility.onboarding_hidden." + str(cid), FindingSeverity.WARNING, "Onboarding visibility", f"{target_label(channel)} is not visible to {unverified.mention}.", "Unverified should see onboarding entry points.", targets=(cid,), action=RecommendedAction.FIX_PERMISSIONS, repairable=True, plan="repair.onboarding_visibility"))
-        if can_send(channel, unverified):
+        if is_voice(channel):
+            open_bits = []
+            if permission(channel, unverified, "connect"):
+                open_bits.append("Connect")
+            if permission(channel, unverified, "speak"):
+                open_bits.append("Speak")
+            if can_send(channel, unverified):
+                open_bits.append("Send Messages")
+            if open_bits:
+                findings.append(finding("visibility.vc_verify_too_open." + str(cid), FindingSeverity.WARNING, "VC verification access", f"{target_label(channel)} allows {unverified.mention}: {', '.join(open_bits)}.", "Unverified may see VC verification, but cannot freely connect, speak, or send messages there.", targets=(cid,), action=RecommendedAction.FIX_PERMISSIONS, repairable=True, plan="repair.vc_verification_access"))
+        elif can_send(channel, unverified):
             findings.append(finding("visibility.onboarding_writable." + str(cid), FindingSeverity.WARNING, "Onboarding read-only", f"{target_label(channel)} lets {unverified.mention} send messages.", "Unverified onboarding surfaces should be read-only.", targets=(cid,), action=RecommendedAction.FIX_PERMISSIONS, repairable=True, plan="repair.onboarding_readonly"))
         pid = parent_id(channel)
         parent = get_channel(guild, pid)
