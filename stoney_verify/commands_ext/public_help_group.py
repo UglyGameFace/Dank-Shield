@@ -17,7 +17,6 @@ from ..globals import now_utc
 from .common import reply_once
 from .public_setup_group import stoney_group
 
-
 _REGISTERED = False
 
 HELP_SECTION_CHOICES = [
@@ -27,14 +26,16 @@ HELP_SECTION_CHOICES = [
     app_commands.Choice(name="Ticket Panels", value="panels"),
     app_commands.Choice(name="Verification", value="verification"),
     app_commands.Choice(name="Moderation", value="moderation"),
-    app_commands.Choice(name="Cleanup / Spam Protection", value="utilities"),
+    app_commands.Choice(name="Cleanup / Protection", value="utilities"),
     app_commands.Choice(name="Admin / Advanced Tools", value="advanced"),
 ]
 
 STALE_TOP_LEVEL_MOVES = {
     "stoney": "/dank",
-    "spam_guard": "/dank spam panel",
-    "spam_guard_status": "/dank spam status",
+    "spam": "/dank protection",
+    "automod": "/dank protection",
+    "spam_guard": "/dank protection",
+    "spam_guard_status": "/dank protection",
     "fix_unverified": "/verify repair-unverified",
     "set_verified": "/verify set-verified",
     "set_resident": "/verify set-resident",
@@ -150,7 +151,7 @@ def _base_embed(section: str) -> discord.Embed:
         "panels": "🎛️ Ticket Panels",
         "verification": "✅ Verification",
         "moderation": "🛡️ Moderation",
-        "utilities": "🧹 Cleanup / Spam Protection",
+        "utilities": "🧹 Cleanup / Protection",
         "advanced": "🧰 Admin / Advanced Tools",
     }
     embed = discord.Embed(
@@ -171,7 +172,12 @@ def _overview_embed() -> discord.Embed:
     _add_field(
         embed,
         "I am setting up the bot",
-        "Use `/dank setup`. That screen handles server setup, layout repair, health checks, and config tools.",
+        "Use `/dank setup`, then `/dank overview`. Setup handles build/repair; overview shows what is still missing.",
+    )
+    _add_field(
+        embed,
+        "I am securing the server",
+        "Use `/dank protection`. That is the production safety center for Automod content filters and Spam Guard behavior protection.",
     )
     _add_field(
         embed,
@@ -185,18 +191,8 @@ def _overview_embed() -> discord.Embed:
     )
     _add_field(
         embed,
-        "I am staff managing all tickets",
-        "Use `/tickets` for queues/lists and `/ticket-panel` for public panel tools.",
-    )
-    _add_field(
-        embed,
-        "I am fixing verification",
-        "Use `/verify`. Example: `/verify status`, `/verify grant-vr`, or `/verify repair-unverified`.",
-    )
-    _add_field(
-        embed,
         "What the command groups mean",
-        "`/dank` setup/help/cleanup/spam protection\n"
+        "`/dank` setup, overview, protection, help, cleanup, members, welcome, roles, modlog, embed\n"
         "`/ticket` actions for the current ticket\n"
         "`/tickets` server-wide ticket management\n"
         "`/ticket-panel` public Create Ticket panel tools\n"
@@ -217,7 +213,7 @@ def _setup_embed() -> discord.Embed:
         "2. Press **Auto-Build Missing Items**\n"
         "3. Press **Fix Server Layout**\n"
         "4. Press **Run Health Check**\n"
-        "5. Post the ticket panel with `/ticket-panel post`",
+        "5. Run `/dank overview` to see what is still missing",
     )
     _add_field(
         embed,
@@ -226,7 +222,7 @@ def _setup_embed() -> discord.Embed:
         "2. Press **Use My Existing Server**\n"
         "3. Pick your real roles/channels/categories\n"
         "4. Press **Fix Server Layout** if things look messy\n"
-        "5. Press **Run Health Check**",
+        "5. Run `/dank overview`",
     )
     _add_field(
         embed,
@@ -261,7 +257,7 @@ def _tickets_embed() -> discord.Embed:
 def _panels_embed() -> discord.Embed:
     embed = _base_embed("panels")
     embed.description = "The ticket panel is the public message users press to open tickets."
-    _add_field(embed, "Normal panel path", "1. Finish `/dank setup`\n2. Run **Run Health Check**\n3. Run `/ticket-panel post`\n4. Users press **Create Ticket**")
+    _add_field(embed, "Normal panel path", "1. Finish `/dank setup`\n2. Run `/dank overview`\n3. Run `/ticket-panel post`\n4. Users press **Create Ticket**")
     _add_field(embed, "Useful panel commands", "`/ticket-panel post` — post a fresh public panel\n`/ticket-panel list` — list known panels\n`/ticket-panel show` — inspect a panel")
     _add_field(embed, "If a panel button fails", "Run `/dank setup` → **Run Health Check**. If healthy, repost the panel with `/ticket-panel post`. Persistent panel buttons should survive reboot.")
     return embed
@@ -279,18 +275,18 @@ def _verification_embed() -> discord.Embed:
 def _moderation_embed() -> discord.Embed:
     embed = _base_embed("moderation")
     embed.description = "Moderation tools stay under `/mod` so normal setup stays clean."
-    _add_field(embed, "Moderation tools", "`/mod` — grouped moderation commands\nModlog buttons — quick actions on risk/log messages\nRaid/security logs — suspicious joins and security events")
-    _add_field(embed, "Spam protection", "`/dank spam panel` — open spam guard controls\n`/dank spam status` — check spam guard status and saved settings")
-    _add_field(embed, "When moderation feels broken", "Run `/dank setup` → **Run Health Check**. Most mod issues are missing staff roles, missing log channels, or missing bot permissions.")
+    _add_field(embed, "Moderation tools", "`/mod` — grouped moderation commands\n`/dank modlog` — configure/check logging\nRaid/security logs — suspicious joins and security events")
+    _add_field(embed, "Protection Center", "`/dank protection` — one safety surface for Automod content filters and Spam Guard behavior protection")
+    _add_field(embed, "When moderation feels broken", "Run `/dank overview`, then `/dank setup` → **Run Health Check**. Most mod issues are missing staff roles, missing log channels, or missing bot permissions.")
     return embed
 
 
 def _utilities_embed() -> discord.Embed:
     embed = _base_embed("utilities")
-    embed.description = "Cleanup and spam tools are staff/admin utilities. They are separate from normal member workflows."
+    embed.description = "Cleanup and protection tools are staff/admin utilities. They are separate from normal member workflows."
+    _add_field(embed, "Protection", "`/dank protection` — Safe/Strict/Off presets, add content filters, privately test bypass attempts, and see Spam Guard status")
     _add_field(embed, "Cleanup", "`/dank cleanup status` — show cleanup worker/config status\n`/dank cleanup run` — run configured cleanup\n`/dank cleanup purge` — purge selected channel messages")
-    _add_field(embed, "Spam protection", "`/dank spam panel` — interactive spam guard controls\n`/dank spam status` — status and persistence diagnostics")
-    _add_field(embed, "Health / config", "`/dank setup` — setup, repair, and health check\n`/dank commands` — staff-only slash command audit\n`/dank help` — workflow guide")
+    _add_field(embed, "Health / config", "`/dank overview` — all-in-one setup checklist\n`/dank setup` — setup, repair, and health check\n`/dank commands` — staff-only slash command audit\n`/dank help` — workflow guide")
     return embed
 
 
@@ -303,7 +299,7 @@ def _advanced_embed() -> discord.Embed:
     _add_field(
         embed,
         "Normal admins should start here instead",
-        "Use `/dank setup` → **Run Health Check** and **Fix Server Layout** before touching advanced tools.",
+        "Use `/dank overview`, `/dank setup` → **Run Health Check**, and `/dank protection` before touching advanced tools.",
     )
     _add_field(
         embed,
@@ -318,7 +314,8 @@ def _advanced_embed() -> discord.Embed:
         "Developer/debug tools",
         "**Config cache/debug** — inspect cached setup data\n"
         "**Bootstrap/runtime tools** — repair persistent panels/workers\n"
-        "**Rules/bind-category tools** — advanced panel routing customization",
+        "**Rules/bind-category tools** — advanced panel routing customization\n"
+        "**Legacy safety tools** — old spam/automod commands are public-admin only; normal servers use `/dank protection`",
     )
     _add_field(
         embed,
