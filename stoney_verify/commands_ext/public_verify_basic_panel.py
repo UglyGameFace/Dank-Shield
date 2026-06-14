@@ -20,9 +20,7 @@ def _cfg_int(cfg: Any, *keys: str) -> int:
     return 0
 
 
-async def _pick_channel(interaction: discord.Interaction, channel: Optional[discord.TextChannel]) -> Optional[discord.TextChannel]:
-    if isinstance(channel, discord.TextChannel):
-        return channel
+async def _pick_channel(interaction: discord.Interaction) -> Optional[discord.TextChannel]:
     guild = interaction.guild
     if guild is not None:
         try:
@@ -37,7 +35,7 @@ async def _pick_channel(interaction: discord.Interaction, channel: Optional[disc
     return current if isinstance(current, discord.TextChannel) else None
 
 
-async def verify_panel(interaction: discord.Interaction, channel: Optional[discord.TextChannel] = None) -> None:
+async def verify_panel(interaction: discord.Interaction) -> None:
     try:
         if not interaction.response.is_done():
             await interaction.response.defer(ephemeral=True, thinking=True)
@@ -45,7 +43,7 @@ async def verify_panel(interaction: discord.Interaction, channel: Optional[disco
         pass
     if not await _staff_only(interaction):
         return
-    target = await _pick_channel(interaction, channel)
+    target = await _pick_channel(interaction)
     if target is None:
         return await _send(interaction, "Pick a text channel or save one in /dank setup.")
     try:
@@ -70,8 +68,16 @@ def _attach() -> bool:
         command = app_commands.Command(name="panel", description="Post or refresh the server verify panel.", callback=verify_panel)
         verify_group.add_command(command)
         _ATTACHED = True
+        try:
+            print("public_verify_basic_panel attached panel command")
+        except Exception:
+            pass
         return True
-    except Exception:
+    except Exception as exc:
+        try:
+            print(f"public_verify_basic_panel failed: {type(exc).__name__}: {exc}")
+        except Exception:
+            pass
         return False
 
 
