@@ -17,11 +17,18 @@ def apply() -> bool:
 
         from stoney_verify.commands_ext import public_self_roles_group
 
+        bot = None
+        try:
+            from stoney_verify.globals import bot as global_bot
+            bot = global_bot
+        except Exception:
+            bot = None
+
         register = getattr(public_self_roles_group, "register_public_self_roles_group_commands", None)
         if callable(register):
-            register(None, None)
+            register(bot, getattr(bot, "tree", None) if bot is not None else None)
         _PATCHED = True
-        print("✅ self_roles_command_guard active; /dank roles is allowed in public setup surface")
+        print("✅ self_roles_command_guard active; /dank roles and self-role buttons are allowed in public setup surface")
         return True
     except Exception as exc:
         try:
