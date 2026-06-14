@@ -33,10 +33,19 @@ def _role_from_config(guild: discord.Guild, cfg: Any, name: str) -> discord.Role
     return role if isinstance(role, discord.Role) else None
 
 
-def _target_exists(targets: list[Any], channel: Any) -> bool:
+def _target_id(channel: Any) -> int:
     try:
-        cid = int(getattr(channel, "id", 0) or 0)
-        return any(int(getattr(getattr(item, "channel", None), "id", 0) or 0) == cid for item in targets)
+        return int(getattr(channel, "id", 0) or 0)
+    except Exception:
+        return 0
+
+
+def _target_exists(targets: list[Any], channel: Any) -> bool:
+    cid = _target_id(channel)
+    if cid <= 0:
+        return False
+    try:
+        return any(_target_id(getattr(item, "channel", None)) == cid for item in targets)
     except Exception:
         return False
 
@@ -60,6 +69,13 @@ def _can_talk(obj: Any, role: discord.Role | None) -> bool:
         return bool(role and obj and getattr(obj.permissions_for(role), "send_messages", False))
     except Exception:
         return False
+
+
+def _label(obj: Any) -> str:
+    try:
+        return str(getattr(obj, "mention", None) or f"`{getattr(obj, 'name', 'unknown')}`")
+    except Exception:
+        return "`unknown`"
 
 
 def _public_ids(cfg: Any) -> set[int]:
@@ -97,47 +113,68 @@ def _private_ids(cfg: Any) -> set[int]:
     }
 
 
+def _remember_fix(notes: list[str], message: str) -> None:
+    text = str(message or "").strip()
+    if text and text not in notes:
+        notes.append(text)
+
+
+def _add_target_if_needed(targets: list[Any], seen: set[int], repair: Any, channel: Any, label: str, overwrites: dict[Any, discord.PermissionOverwrite]) -> bool:
+    before = len(targets)
+    repair._add_target(targets, seen, channel, label, overwrites)
+    return len(targets) > before
+
+
 def _add_public_readonly_targets(guild: discord.Guild, cfg: Any, targets: list[Any], seen: set[int], repair: Any, waiting_role: discord.Role, notes: list[str]) -> None:
-    added = 0
+    channels_to_fix: list[Any] = []
+    overwrites = {waiting_role: discord.PermissionOverwrite(view_channel=True, send_messages=False, read_message_history=True)}
     for cid in sorted(_public_ids(cfg)):
         channel = _channel(guild, cid)
-        if channel is None or _target_exists(targets, channel):
+        if channel is None:
             continue
         if _can_talk(channel, waiting_role):
-            repair._add_target(
-                targets,
-                seen,
-                channel,
-                "Onboarding read-only channel",
-                {waiting_role: discord.PermissionOverwrite(view_channel=True, send_messages=False, read_message_history=True)},
-            )
-            added += 1
-    if added:
-        notes.append(f"Added {added} read-only onboarding repair target(s) so Unverified can view setup channels without chatting there.")
+            channels_to_fix.append(channel)
+            _add_target_if_needed(targets, seen, repair, channel, "Onboarding read-only channel", overwrites)
+
+    if channels_to_fix:
+        preview = ", ".join(_label(ch) for ch in channels_to_fix[:4])
+        extra = f" and {len(channels_to_fix) - 4} more" if len(channels_to_fix) > 4 else ""
+        _remember_fix(
+            notes,
+            f"Will fix Setup Health warning: Unverified can send messages in onboarding channel(s). Action: keep visible, remove Send Messages for {len(channels_to_fix)} saved onboarding target(s): {preview}{extra}.",
+        )
 
 
 def _add_safe_parent_visibility_targets(guild: discord.Guild, cfg: Any, targets: list[Any], seen: set[int], repair: Any, waiting_role: discord.Role, notes: list[str]) -> None:
-    added = 0
     private_ids = _private_ids(cfg)
+    parent_targets: dict[int, Any] = {}
+    child_count = 0
+    overwrites = {waiting_role: discord.PermissionOverwrite(view_channel=True, send_messages=False, read_message_history=True)}
+
     for cid in sorted(_public_ids(cfg)):
         channel = _channel(guild, cid)
-        parent = getattr(channel, "category", None)
-        if channel is None or parent is None:
+        if channel is None:
             continue
-        parent_id = _int(getattr(parent, "id", 0))
+        parent = getattr(channel, "category", None)
+        if parent is None:
+            continue
+        parent_id = _target_id(parent)
         if parent_id <= 0 or parent_id in private_ids:
             continue
         if _can_see(channel, waiting_role) and not _can_see(parent, waiting_role):
-            repair._add_target(
-                targets,
-                seen,
-                parent,
-                "Onboarding parent category visibility",
-                {waiting_role: discord.PermissionOverwrite(view_channel=True, send_messages=False, read_message_history=True)},
-            )
-            added += 1
-    if added:
-        notes.append(f"Added {added} parent-category visibility repair target(s) so Discord shows onboarding channels in the right category.")
+            child_count += 1
+            parent_targets[parent_id] = parent
+
+    for parent in parent_targets.values():
+        _add_target_if_needed(targets, seen, repair, parent, "Onboarding parent category visibility", overwrites)
+
+    if parent_targets:
+        preview = ", ".join(_label(parent) for parent in list(parent_targets.values())[:3])
+        extra = f" and {len(parent_targets) - 3} more" if len(parent_targets) > 3 else ""
+        _remember_fix(
+            notes,
+            f"Will fix Setup Health warning: onboarding channel is visible but parent category is hidden. Action: reveal only {len(parent_targets)} safe parent category header(s) for Unverified ({preview}{extra}) covering {child_count} child channel(s).",
+        )
 
 
 def apply() -> bool:
@@ -161,7 +198,7 @@ def apply() -> bool:
                 if waiting_role is None:
                     return targets, notes
 
-                seen = {int(getattr(getattr(item, "channel", None), "id", 0) or 0) for item in targets}
+                seen = {_target_id(getattr(item, "channel", None)) for item in targets}
                 _add_public_readonly_targets(guild, cfg, targets, seen, repair, waiting_role, notes)
                 _add_safe_parent_visibility_targets(guild, cfg, targets, seen, repair, waiting_role, notes)
 
@@ -169,14 +206,17 @@ def apply() -> bool:
                 if not items:
                     return targets, notes
                 ow = {waiting_role: discord.PermissionOverwrite(view_channel=False)}
-                added = 0
+                added_targets = 0
                 for channel in items[:150]:
                     if _target_exists(targets, channel):
                         continue
-                    repair._add_target(targets, seen, channel, "Role visibility alignment", ow)
-                    added += 1
-                if added:
-                    notes.append(f"Added {added} role visibility alignment target(s) for the saved Unverified role.")
+                    if _add_target_if_needed(targets, seen, repair, channel, "Role visibility alignment", ow):
+                        added_targets += 1
+                if added_targets:
+                    _remember_fix(
+                        notes,
+                        f"Will fix Setup Health warning: Unverified visibility leak. Action: hide {added_targets} private/staff/member-only target(s) from the saved Unverified role.",
+                    )
             except Exception as exc:
                 notes.append(f"Role visibility alignment scan failed: {type(exc).__name__}.")
             return targets, notes
