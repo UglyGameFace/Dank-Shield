@@ -52,6 +52,17 @@ def _load_health_precision() -> None:
             pass
 
 
+def _load_queue_bridge() -> None:
+    try:
+        from stoney_verify.startup_guards import setup_permission_repair_queue_guard
+        setup_permission_repair_queue_guard.apply()
+    except Exception as exc:
+        try:
+            print(f"⚠️ setup_vc_lock_repair_guard queue bridge failed: {exc!r}")
+        except Exception:
+            pass
+
+
 def apply() -> bool:
     global _DONE
     if _DONE:
@@ -61,6 +72,7 @@ def apply() -> bool:
         repair._voice_verify_overwrites = _locked_voice_verify_overwrites
         _load_label_precision()
         _load_health_precision()
+        _load_queue_bridge()
         _DONE = True
         print("🛠️ setup_vc_lock_repair_guard active; permission repair uses central VC policy")
         return True
