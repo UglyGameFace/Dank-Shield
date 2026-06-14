@@ -82,7 +82,7 @@ def _check_parent(target: Any, role: discord.Role | None) -> bool:
         return False
 
 
-def _public_ids(cfg: Any) -> set[int]:
+def _saved_public_ids(cfg: Any) -> set[int]:
     return {
         x
         for x in {
@@ -96,6 +96,78 @@ def _public_ids(cfg: Any) -> set[int]:
         }
         if x > 0
     }
+
+
+def _name(obj: Any) -> str:
+    try:
+        return str(getattr(obj, "name", "") or "").lower().replace("_", "-").replace(" ", "-")
+    except Exception:
+        return ""
+
+
+def _looks_like_onboarding_public(target: Any) -> bool:
+    name = _name(target)
+    if not name:
+        return False
+    public_tokens = (
+        "welcome",
+        "rule",
+        "verify",
+        "verification",
+        "support",
+        "ticket",
+        "start",
+        "onboard",
+        "onboarding",
+        "central-command",
+        "command",
+    )
+    private_tokens = (
+        "staff",
+        "mod",
+        "admin",
+        "transcript",
+        "log",
+        "archive",
+        "ticket-0",
+        "active-ticket",
+    )
+    return any(token in name for token in public_tokens) and not any(token in name for token in private_tokens)
+
+
+def _public_ids(cfg: Any, guild: discord.Guild | None = None) -> set[int]:
+    allowed = set(_saved_public_ids(cfg))
+    if guild is None:
+        return allowed
+
+    # If a saved public onboarding channel lives under a category, that category
+    # header is also allowed to be visible. Otherwise the repair flow can reveal
+    # the parent to fix Discord display behavior, then health immediately reports
+    # the parent as a new leak.
+    for cid in list(allowed):
+        channel = _target(guild, cid)
+        parent = getattr(channel, "category", None)
+        parent_id = _i(getattr(parent, "id", 0)) if parent is not None else 0
+        if parent_id > 0:
+            allowed.add(parent_id)
+
+    # Existing servers commonly expose #rules/#welcome/#verification before they
+    # map every optional setup field. Treat obvious onboarding channels/categories
+    # as public review surface, not as new blockers created by Fix Permissions.
+    private = _private_ids(cfg)
+    for target in _all_channel_targets(guild):
+        tid = _i(getattr(target, "id", 0))
+        if tid <= 0 or tid in private:
+            continue
+        parent = getattr(target, "category", None)
+        parent_id = _i(getattr(parent, "id", 0)) if parent is not None else 0
+        if parent_id in private:
+            continue
+        if _looks_like_onboarding_public(target):
+            allowed.add(tid)
+            if parent_id > 0:
+                allowed.add(parent_id)
+    return allowed
 
 
 def _private_ids(cfg: Any) -> set[int]:
@@ -156,7 +228,7 @@ def _is_onboarding_allowed(target: Any, allowed_ids: set[int]) -> bool:
 def _unverified_leaks(guild: discord.Guild, cfg: Any, unverified: discord.Role | None) -> list[Any]:
     if unverified is None:
         return []
-    allowed = _public_ids(cfg)
+    allowed = _public_ids(cfg, guild)
     leaks: list[Any] = []
     for target in _all_channel_targets(guild):
         if _is_onboarding_allowed(target, allowed):
@@ -201,7 +273,7 @@ def _check(guild: discord.Guild, cfg: Any, blockers: list[str], warnings: list[s
     if unverified is None:
         warnings.append("Unverified visibility check skipped because the role is not saved.")
 
-    public = _public_ids(cfg)
+    public = _saved_public_ids(cfg)
     private = _private_ids(cfg)
     member_public = _member_ids(cfg)
 
