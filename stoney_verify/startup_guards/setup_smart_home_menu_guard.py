@@ -203,6 +203,15 @@ async def _modlog_test(interaction: discord.Interaction) -> None:
         await _send_error(interaction, "Modlog test failed", exc)
 
 
+async def _open_embed_builder_center(interaction: discord.Interaction) -> None:
+    try:
+        from stoney_verify import embed_builder_services
+
+        return await embed_builder_services.open_embed_builder_center(interaction)
+    except Exception as exc:
+        await _send_error(interaction, "Embed Builder failed", exc)
+
+
 class SmartSetupHomeView(discord.ui.View):
     def __init__(self, *, ready: bool) -> None:
         super().__init__(timeout=900)
@@ -389,14 +398,7 @@ class FeatureCentersView(discord.ui.View):
 
     @discord.ui.button(label="Embed Builder", emoji="📝", style=discord.ButtonStyle.secondary, custom_id="dank_setup_features:embed", row=2)
     async def embed_builder(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        if not await _require_setup(interaction):
-            return
-        embed = _workflow_embed(
-            "📝 Embed Builder",
-            "Use this for rules, info, announcements, and reusable public messages. This is Dank Shield's ProBot-like message builder lane.",
-        )
-        embed.add_field(name="Where it lives", value="Use `/dank embed` for now. Setup keeps it listed here so admins do not have to remember random command groups.", inline=False)
-        await _edit(interaction, embed=embed, view=FeatureBackView())
+        await _open_embed_builder_center(interaction)
 
     @discord.ui.button(label="Cleanup + Members", emoji="🧹", style=discord.ButtonStyle.secondary, custom_id="dank_setup_features:members", row=2)
     async def cleanup_members(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
