@@ -2,14 +2,14 @@ from __future__ import annotations
 
 """Guided permission repair for /dank setup.
 
-This aligns saved Dank Shield setup channels/categories with the permissions the
-setup system expects. It is intentionally scoped: it repairs saved setup items
-and ticket/archive children, preserves per-user ticket overwrites, and does not
-blindly overwrite unrelated server channels.
+This aligns saved Dank Shield setup channels/categories with the same canonical
+permission policy used by Setup Health. It is intentionally scoped: it repairs
+saved setup items and ticket/archive children, preserves per-user ticket
+overwrites, and does not blindly overwrite unrelated server channels.
 """
 
 from dataclasses import dataclass
-from typing import Any, Optional
+from typing import Any, Mapping, Optional
 
 import discord
 
@@ -29,9 +29,50 @@ def _safe_int(value: Any, default: int = 0) -> int:
         if value is None or isinstance(value, bool):
             return int(default)
         text = str(value).strip()
-        return int(text) if text else int(default)
+        if not text or text.lower() in {"none", "null"}:
+            return int(default)
+        return int(text)
     except Exception:
         return int(default)
+
+
+def _cfg_value(cfg: Any, attr: str, default: Any = 0) -> Any:
+    try:
+        value = getattr(cfg, attr, None)
+        if value is not None:
+            return value
+    except Exception:
+        pass
+    try:
+        if hasattr(cfg, "get"):
+            value = cfg.get(attr)
+            if value is not None:
+                return value
+    except Exception:
+        pass
+    for bucket in ("settings", "config", "metadata", "meta"):
+        try:
+            nested = getattr(cfg, bucket, None)
+            if isinstance(nested, Mapping) and nested.get(attr) is not None:
+                return nested.get(attr)
+        except Exception:
+            pass
+        try:
+            if hasattr(cfg, "get"):
+                nested = cfg.get(bucket)
+                if isinstance(nested, Mapping) and nested.get(attr) is not None:
+                    return nested.get(attr)
+        except Exception:
+            pass
+    return default
+
+
+def _cfg_int(cfg: Any, *attrs: str) -> int:
+    for attr in attrs:
+        value = _safe_int(_cfg_value(cfg, attr, 0), 0)
+        if value > 0:
+            return value
+    return 0
 
 
 def _target_label(target: Any) -> str:
@@ -84,23 +125,35 @@ def _bot_member(guild: discord.Guild) -> Optional[discord.Member]:
 
 
 def _role_from_config(guild: discord.Guild, cfg: Any, *attrs: str) -> Optional[discord.Role]:
-    for attr in attrs:
-        role = guild.get_role(_safe_int(getattr(cfg, attr, 0), 0)) if cfg is not None else None
-        if isinstance(role, discord.Role):
-            return role
-    return None
+    role_id = _cfg_int(cfg, *attrs) if cfg is not None else 0
+    role = guild.get_role(role_id) if role_id > 0 else None
+    return role if isinstance(role, discord.Role) else None
 
 
-def _channel_from_config(guild: discord.Guild, cfg: Any, cls: type, *attrs: str) -> Any:
-    for attr in attrs:
-        channel = guild.get_channel(_safe_int(getattr(cfg, attr, 0), 0)) if cfg is not None else None
-        if isinstance(channel, cls):
+def _channel_from_config(guild: discord.Guild, cfg: Any, cls: Any, *attrs: str) -> Any:
+    channel_id = _cfg_int(cfg, *attrs) if cfg is not None else 0
+    channel = guild.get_channel(channel_id) if channel_id > 0 else None
+    if channel is None:
+        return None
+    classes = cls if isinstance(cls, tuple) else (cls,)
+    try:
+        if isinstance(channel, classes):
             return channel
+    except Exception:
+        pass
     return None
+
+
+def _voice_channel_classes() -> tuple[type, ...]:
+    classes: list[type] = [discord.VoiceChannel]
+    stage = getattr(discord, "StageChannel", None)
+    if isinstance(stage, type):
+        classes.append(stage)
+    return tuple(classes)
 
 
 async def _resolve_control_role(guild: discord.Guild, cfg: Any) -> Optional[discord.Role]:
-    role = _role_from_config(guild, cfg, "server_control_role_id", "control_role_id", "perm_role_id")
+    role = _role_from_config(guild, cfg, "server_control_role_id", "control_role_id", "perm_role_id", "bot_manager_role_id")
     if role:
         return role
     try:
@@ -129,27 +182,13 @@ def _public_readonly_overwrites(
     }
     me = _bot_member(guild)
     if me:
-        ow[me] = discord.PermissionOverwrite(
-            view_channel=True,
-            send_messages=True,
-            read_message_history=True,
-            embed_links=True,
-            attach_files=True,
-            manage_messages=True,
-        )
+        ow[me] = discord.PermissionOverwrite(view_channel=True, send_messages=True, read_message_history=True, embed_links=True, attach_files=True, manage_messages=True)
     for role in (unverified_role, verified_role, resident_role):
         if role and not role.is_default():
             ow[role] = discord.PermissionOverwrite(view_channel=True, send_messages=False, read_message_history=True)
     for role in (staff_role, control_role):
         if role and not role.is_default():
-            ow[role] = discord.PermissionOverwrite(
-                view_channel=True,
-                send_messages=True,
-                read_message_history=True,
-                embed_links=True,
-                attach_files=True,
-                manage_messages=True,
-            )
+            ow[role] = discord.PermissionOverwrite(view_channel=True, send_messages=True, read_message_history=True, embed_links=True, attach_files=True, manage_messages=True)
     return ow
 
 
@@ -162,34 +201,13 @@ def _staff_private_overwrites(
     verified_role: Optional[discord.Role],
     resident_role: Optional[discord.Role],
 ) -> dict[Any, discord.PermissionOverwrite]:
-    ow: dict[Any, discord.PermissionOverwrite] = {
-        guild.default_role: discord.PermissionOverwrite(view_channel=False),
-    }
+    ow: dict[Any, discord.PermissionOverwrite] = {guild.default_role: discord.PermissionOverwrite(view_channel=False)}
     me = _bot_member(guild)
     if me:
-        ow[me] = discord.PermissionOverwrite(
-            view_channel=True,
-            send_messages=True,
-            read_message_history=True,
-            embed_links=True,
-            attach_files=True,
-            manage_channels=True,
-            manage_messages=True,
-            manage_threads=True,
-            send_messages_in_threads=True,
-        )
+        ow[me] = discord.PermissionOverwrite(view_channel=True, send_messages=True, read_message_history=True, embed_links=True, attach_files=True, manage_channels=True, manage_messages=True, manage_threads=True, send_messages_in_threads=True)
     for role in (staff_role, control_role):
         if role and not role.is_default():
-            ow[role] = discord.PermissionOverwrite(
-                view_channel=True,
-                send_messages=True,
-                read_message_history=True,
-                embed_links=True,
-                attach_files=True,
-                manage_messages=True,
-                manage_threads=True,
-                send_messages_in_threads=True,
-            )
+            ow[role] = discord.PermissionOverwrite(view_channel=True, send_messages=True, read_message_history=True, embed_links=True, attach_files=True, manage_messages=True, manage_threads=True, send_messages_in_threads=True)
     for role in (unverified_role, verified_role, resident_role):
         if role and not role.is_default() and role not in {staff_role, control_role}:
             ow[role] = discord.PermissionOverwrite(view_channel=False)
@@ -207,14 +225,7 @@ def _voice_verify_overwrites(
 ) -> dict[Any, discord.PermissionOverwrite]:
     from stoney_verify.services.setup_permission_policy import vc_verification_overwrites
 
-    return vc_verification_overwrites(
-        guild,
-        staff_role=staff_role,
-        control_role=control_role,
-        unverified_role=unverified_role,
-        verified_role=verified_role,
-        resident_role=resident_role,
-    )
+    return vc_verification_overwrites(guild, staff_role=staff_role, control_role=control_role, unverified_role=unverified_role, verified_role=verified_role, resident_role=resident_role)
 
 
 def _can_repair_channel(channel: Any) -> bool:
@@ -240,48 +251,29 @@ async def _build_targets(guild: discord.Guild) -> tuple[list[RepairTarget], list
     notes: list[str] = []
     cfg = await get_guild_config(guild.id, refresh=True)
 
-    staff_role = _role_from_config(guild, cfg, "staff_role_id", "vc_staff_role_id")
+    staff_role = _role_from_config(guild, cfg, "staff_role_id", "ticket_staff_role_id", "support_role_id", "vc_staff_role_id")
     control_role = await _resolve_control_role(guild, cfg)
-    unverified_role = _role_from_config(guild, cfg, "unverified_role_id")
-    verified_role = _role_from_config(guild, cfg, "verified_role_id")
-    resident_role = _role_from_config(guild, cfg, "resident_role_id", "member_role_id")
+    unverified_role = _role_from_config(guild, cfg, "unverified_role_id", "pending_role_id", "waiting_role_id")
+    verified_role = _role_from_config(guild, cfg, "verified_role_id", "approved_role_id")
+    resident_role = _role_from_config(guild, cfg, "resident_role_id", "member_role_id", "verified_role_id", "approved_role_id")
 
     if not staff_role:
         notes.append("No saved staff role found. Staff-private repairs will still lock @everyone and bot access, but staff access may be incomplete.")
     if not control_role:
         notes.append("No saved server-control role found. Control-role overwrites were skipped.")
+    if verified_role and resident_role == verified_role:
+        notes.append("Using Verified as the effective Member/Resident role for permission repair.")
 
-    public_ow = _public_readonly_overwrites(
-        guild,
-        staff_role=staff_role,
-        control_role=control_role,
-        unverified_role=unverified_role,
-        verified_role=verified_role,
-        resident_role=resident_role,
-    )
-    staff_ow = _staff_private_overwrites(
-        guild,
-        staff_role=staff_role,
-        control_role=control_role,
-        unverified_role=unverified_role,
-        verified_role=verified_role,
-        resident_role=resident_role,
-    )
-    voice_ow = _voice_verify_overwrites(
-        guild,
-        staff_role=staff_role,
-        control_role=control_role,
-        unverified_role=unverified_role,
-        verified_role=verified_role,
-        resident_role=resident_role,
-    )
+    public_ow = _public_readonly_overwrites(guild, staff_role=staff_role, control_role=control_role, unverified_role=unverified_role, verified_role=verified_role, resident_role=resident_role)
+    staff_ow = _staff_private_overwrites(guild, staff_role=staff_role, control_role=control_role, unverified_role=unverified_role, verified_role=verified_role, resident_role=resident_role)
+    voice_ow = _voice_verify_overwrites(guild, staff_role=staff_role, control_role=control_role, unverified_role=unverified_role, verified_role=verified_role, resident_role=resident_role)
 
     targets: list[RepairTarget] = []
     seen: set[int] = set()
 
-    start_category = _channel_from_config(guild, cfg, discord.CategoryChannel, "start_category_id", "welcome_category_id")
-    ticket_category = _channel_from_config(guild, cfg, discord.CategoryChannel, "ticket_category_id")
-    archive_category = _channel_from_config(guild, cfg, discord.CategoryChannel, "ticket_archive_category_id")
+    start_category = _channel_from_config(guild, cfg, discord.CategoryChannel, "start_category_id", "welcome_category_id", "onboarding_category_id")
+    ticket_category = _channel_from_config(guild, cfg, discord.CategoryChannel, "ticket_category_id", "active_ticket_category_id", "open_ticket_category_id")
+    archive_category = _channel_from_config(guild, cfg, discord.CategoryChannel, "ticket_archive_category_id", "archive_category_id", "closed_ticket_category_id")
     management_category = _channel_from_config(guild, cfg, discord.CategoryChannel, "management_category_id", "staff_tools_category_id")
 
     _add_target(targets, seen, start_category, "Start/public category", public_ow)
@@ -291,23 +283,25 @@ async def _build_targets(guild: discord.Guild) -> tuple[list[RepairTarget], list
 
     for channel, label in (
         (_channel_from_config(guild, cfg, discord.TextChannel, "welcome_channel_id"), "Welcome channel"),
-        (_channel_from_config(guild, cfg, discord.TextChannel, "verify_channel_id"), "Verification start channel"),
-        (_channel_from_config(guild, cfg, discord.TextChannel, "ticket_panel_channel_id", "support_channel_id"), "Ticket panel channel"),
+        (_channel_from_config(guild, cfg, discord.TextChannel, "rules_channel_id"), "Rules channel"),
+        (_channel_from_config(guild, cfg, discord.TextChannel, "announcements_channel_id", "announcement_channel_id"), "Announcements channel"),
+        (_channel_from_config(guild, cfg, discord.TextChannel, "verify_channel_id", "verification_channel_id"), "Verification start channel"),
+        (_channel_from_config(guild, cfg, discord.TextChannel, "ticket_panel_channel_id", "support_channel_id", "panel_channel_id"), "Ticket panel channel"),
     ):
         _add_target(targets, seen, channel, label, public_ow)
 
     for channel, label in (
-        (_channel_from_config(guild, cfg, discord.TextChannel, "vc_verify_queue_channel_id"), "VC verification queue channel"),
-        (_channel_from_config(guild, cfg, discord.TextChannel, "transcripts_channel_id"), "Transcripts channel"),
-        (_channel_from_config(guild, cfg, discord.TextChannel, "modlog_channel_id"), "Modlog channel"),
-        (_channel_from_config(guild, cfg, discord.TextChannel, "raidlog_channel_id"), "Raid/security log channel"),
-        (_channel_from_config(guild, cfg, discord.TextChannel, "join_log_channel_id"), "Join/leave log channel"),
-        (_channel_from_config(guild, cfg, discord.TextChannel, "force_verify_log_channel_id"), "Force-verify log channel"),
+        (_channel_from_config(guild, cfg, discord.TextChannel, "vc_verify_queue_channel_id", "vc_queue_channel_id", "vc_request_channel_id", "vc_verify_requests_channel_id"), "VC verification queue channel"),
+        (_channel_from_config(guild, cfg, discord.TextChannel, "transcripts_channel_id", "transcript_channel_id"), "Transcripts channel"),
+        (_channel_from_config(guild, cfg, discord.TextChannel, "modlog_channel_id", "mod_log_channel_id"), "Modlog channel"),
+        (_channel_from_config(guild, cfg, discord.TextChannel, "raidlog_channel_id", "raid_log_channel_id", "security_log_channel_id"), "Raid/security log channel"),
+        (_channel_from_config(guild, cfg, discord.TextChannel, "join_log_channel_id", "join_leave_log_channel_id", "joinlog_channel_id"), "Join/leave log channel"),
+        (_channel_from_config(guild, cfg, discord.TextChannel, "force_verify_log_channel_id", "forced_verify_log_channel_id"), "Force-verify log channel"),
         (_channel_from_config(guild, cfg, discord.TextChannel, "status_channel_id", "bot_status_channel_id", "uptime_channel_id", "health_channel_id"), "Bot status channel"),
     ):
         _add_target(targets, seen, channel, label, staff_ow)
 
-    vc_channel = _channel_from_config(guild, cfg, discord.VoiceChannel, "vc_verify_channel_id")
+    vc_channel = _channel_from_config(guild, cfg, _voice_channel_classes(), "vc_verify_channel_id", "voice_verify_channel_id")
     _add_target(targets, seen, vc_channel, "Voice verification channel", voice_ow)
 
     for category, label, ow in (
@@ -347,17 +341,27 @@ async def _preview_or_apply(guild: discord.Guild, *, apply: bool) -> dict[str, A
             channel_changes.append(_target_label(target))
             if apply:
                 try:
-                    await channel.set_permissions(
-                        target,
-                        overwrite=expected,
-                        reason="Dank Shield setup permission repair",
-                    )
+                    await channel.set_permissions(target, overwrite=expected, reason="Dank Shield setup permission repair")
                 except Exception as exc:
-                    failed.append(f"{_channel_label(channel)} → {_target_label(target)}: {type(exc).__name__}")
+                    failed.append(f"{_channel_label(channel)} -> {_target_label(target)}: {type(exc).__name__}")
         if channel_changes:
             changed.append(f"{_channel_label(channel)} — {', '.join(channel_changes[:6])}{'…' if len(channel_changes) > 6 else ''}")
         else:
             unchanged.append(_channel_label(channel))
+
+    if apply:
+        try:
+            from stoney_verify.guild_config import get_guild_config
+            from stoney_verify.setup_engine import build_setup_health_report
+            cfg = await get_guild_config(guild.id, refresh=True)
+            report = build_setup_health_report(guild, cfg)
+            remaining = [item for item in report.findings if getattr(item, "repairable", False)]
+            if remaining:
+                notes.insert(0, f"Post-repair scan: {len(remaining)} repairable Setup Health finding(s) still remain. First: {remaining[0].title} — {remaining[0].observed}")
+            else:
+                notes.insert(0, "Post-repair scan: no repairable Setup Health findings remain.")
+        except Exception as exc:
+            notes.insert(0, f"Post-repair scan could not run: {type(exc).__name__}.")
 
     return {
         "ok": not failed,
@@ -391,9 +395,7 @@ def _result_embed(result: dict[str, Any]) -> discord.Embed:
     ok = bool(result.get("ok"))
     embed = discord.Embed(
         title=("🛠️ Permission Repair Applied" if applied else "🛠️ Permission Repair Preview"),
-        description=(
-            "This uses saved `/dank setup` IDs as the source of truth. It repairs configured Dank Shield channels/categories and preserves per-user ticket overwrites."
-        ),
+        description="This uses the same canonical setup policy as Setup Safety Check. It repairs configured Dank Shield channels/categories and preserves per-user ticket overwrites.",
         color=discord.Color.green() if ok else discord.Color.orange(),
     )
     if result.get("error"):
@@ -522,11 +524,7 @@ def _attach_button(view: Any) -> Any:
 async def _wrapped_build_main_setup_payload(guild: discord.Guild):
     embed, view = await _ORIGINAL_BUILD_MAIN(guild)
     try:
-        embed.add_field(
-            name="Permission Repair",
-            value="Use **🛠️ Fix Permissions** if someone changed channel overwrites after setup.",
-            inline=False,
-        )
+        embed.add_field(name="Permission Repair", value="Use **🛠️ Fix Permissions** if someone changed channel overwrites after setup.", inline=False)
     except Exception:
         pass
     return embed, _attach_button(view)
@@ -546,7 +544,7 @@ def apply() -> bool:
         setattr(_wrapped_build_main_setup_payload, "_setup_permission_repair_wrapped", True)
         solid._build_main_setup_payload = _wrapped_build_main_setup_payload
         _PATCHED = True
-        print("🛠️ setup_permission_repair_guard active; /dank setup can preview/apply saved-channel permission repairs through central policy + operation_queue")
+        print("🛠️ setup_permission_repair_guard active; /dank setup can preview/apply canonical permission repairs through operation_queue")
         return True
     except Exception as exc:
         print(f"⚠️ setup_permission_repair_guard failed: {exc!r}")
