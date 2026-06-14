@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Optional
+from typing import Any, Optional
 
 import discord
 from discord import app_commands
@@ -9,8 +9,10 @@ from ..guild_config import get_guild_config
 from ..verification_new.basic_verify import post_basic_verify_panel
 from .public_verify_group import _cfg_value, _safe_int, _send, _staff_only, verify_group
 
+_ATTACHED = False
 
-def _cfg_int(cfg, *keys: str) -> int:
+
+def _cfg_int(cfg: Any, *keys: str) -> int:
     for key in keys:
         value = _safe_int(_cfg_value(cfg, key), 0)
         if value > 0:
@@ -45,22 +47,43 @@ async def verify_panel(interaction: discord.Interaction, channel: Optional[disco
         return
     target = await _pick_channel(interaction, channel)
     if target is None:
-        return await _send(interaction, "❌ Pick a text channel or save one in `/dank setup`.")
+        return await _send(interaction, "Pick a text channel or save one in /dank setup.")
     try:
         result = await post_basic_verify_panel(target, actor_id=int(getattr(interaction.user, "id", 0) or 0))
-        await _send(interaction, f"✅ Panel {result} in {target.mention}.")
+        await _send(interaction, f"Panel {result} in {target.mention}.")
     except Exception as exc:
-        await _send(interaction, f"❌ Could not post panel: `{type(exc).__name__}`")
+        await _send(interaction, f"Could not post panel: {type(exc).__name__}")
 
 
-try:
-    verify_panel = getattr(verify_group, "command")(name="panel", description="Post or refresh the server panel.")(verify_panel)
-except Exception:
-    pass
+def _attach() -> bool:
+    global _ATTACHED
+    if _ATTACHED:
+        return True
+    try:
+        existing = getattr(verify_group, "get_command", lambda _name: None)("panel")
+        if existing is not None:
+            _ATTACHED = True
+            return True
+    except Exception:
+        pass
+    try:
+        command = app_commands.Command(name="panel", description="Post or refresh the server verify panel.", callback=verify_panel)
+        verify_group.add_command(command)
+        _ATTACHED = True
+        return True
+    except Exception:
+        return False
+
+
+def register_public_verify_basic_panel_commands(bot: Any, tree: Any) -> None:
+    _ = bot, tree
+    _attach()
 
 
 def apply() -> bool:
-    return bool(app_commands)
+    return _attach()
 
 
 apply()
+
+__all__ = ["apply", "register_public_verify_basic_panel_commands", "verify_panel"]
