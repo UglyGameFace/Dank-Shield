@@ -7,7 +7,7 @@ Unverified clicks Verify, Dank Shield grants the configured Verified/full-access
 role and removes Unverified.
 
 ID / website upload verification is intentionally special-case. It is only
-available in allowlisted guilds so old Stoney Balonney / Stoners Paradise ID
+available in allowlisted guild IDs so old Stoney Balonney / Stoners Paradise ID
 panels never leak into unrelated public servers such as The 420 Lobby.
 """
 
@@ -15,7 +15,7 @@ import os
 from typing import Any, Mapping
 
 DEFAULT_ID_VERIFY_ALLOWED_GUILD_IDS: frozenset[int] = frozenset({1357215261001912320})
-DEFAULT_ID_VERIFY_ALLOWED_GUILD_NAMES: frozenset[str] = frozenset({"the stoners paradise"})
+DEFAULT_ID_VERIFY_ALLOWED_GUILD_NAMES: frozenset[str] = frozenset()
 BASIC_VERIFY_CUSTOM_ID = "dank:basic_verify:v1"
 BASIC_VERIFY_FOOTER = "dank_shield:basic_verify:v1"
 
@@ -97,8 +97,8 @@ def id_verify_allowed_guild_ids() -> set[int]:
 
 
 def id_verify_allowed_guild_names() -> set[str]:
-    configured = _env_name_set("DANK_ID_VERIFY_ALLOWED_GUILD_NAMES") | _env_name_set("STONEY_ID_VERIFY_ALLOWED_GUILD_NAMES")
-    return set(DEFAULT_ID_VERIFY_ALLOWED_GUILD_NAMES) | configured
+    # Name matching is opt-in only through env. The built-in safety policy is ID-only.
+    return _env_name_set("DANK_ID_VERIFY_ALLOWED_GUILD_NAMES") | _env_name_set("STONEY_ID_VERIFY_ALLOWED_GUILD_NAMES")
 
 
 def guild_id(guild: Any) -> int:
@@ -153,7 +153,7 @@ def id_verify_disabled_reason(guild: Any, cfg: Any = None) -> str:
     name = getattr(guild, "name", "this server")
     return (
         f"ID verification is not enabled for {name} (`{gid}`). "
-        "This server uses Basic Button Verification. ID/web upload verification is restricted to The Stoners Paradise."
+        "This server uses Basic Button Verification. ID/web upload verification is restricted to allowlisted guild IDs."
     )
 
 
