@@ -84,6 +84,8 @@ _STARTUP_GUARDS: Tuple[str, ...] = (
     "stoney_verify.startup_guards.ticket_panel_doctor_command",
     "stoney_verify.startup_guards.ticket_panel_doctor_production_wording",
     "stoney_verify.startup_guards.public_ticket_panel_clean_hardening",
+    "stoney_verify.startup_guards.ticket_forms_foundation_guard",
+    "stoney_verify.startup_guards.public_ticket_confirm_hardening_guard",
     "stoney_verify.startup_guards.ticket_category_cod_services_guard",
     "stoney_verify.startup_guards.ticket_category_game_services_guard",
     "stoney_verify.startup_guards.external_ticket_history_sequence_guard",
@@ -129,6 +131,8 @@ _ALWAYS_SHOW_PREFIXES: Tuple[str, ...] = (
     "✅ setup_overview_command_guard active",
     "✅ protection_pack_manual_import_guard active",
     "✅ protection_import_button_patch active",
+    "✅ ticket_forms_foundation_guard active",
+    "✅ public_ticket_confirm_hardening_guard",
 )
 _ONCE_ONLY_PREFIXES: Tuple[str, ...] = (
     "✅ ticket_panel_doctor_stability_guard: patched ticket panel health checks",
