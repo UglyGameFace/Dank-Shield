@@ -151,16 +151,9 @@ async def _open_permission_repair(interaction: discord.Interaction) -> None:
 
 async def _open_protection_center(interaction: discord.Interaction) -> None:
     try:
-        from stoney_verify.commands_ext import public_protection_center as protection
+        from stoney_verify import protection_center_services
 
-        service = getattr(protection, "open_protection_center", None)
-        if callable(service):
-            return await service(interaction)
-        command = getattr(protection, "protection_center", None)
-        callback = getattr(command, "callback", None)
-        if callable(callback):
-            return await callback(interaction)
-        raise TypeError("Protection Center service unavailable")
+        return await protection_center_services.open_protection_center(interaction)
     except Exception as exc:
         await _send_error(interaction, "Protection Center failed", exc)
 
