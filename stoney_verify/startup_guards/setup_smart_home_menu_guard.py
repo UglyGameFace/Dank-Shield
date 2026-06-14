@@ -153,7 +153,14 @@ async def _open_protection_center(interaction: discord.Interaction) -> None:
     try:
         from stoney_verify.commands_ext import public_protection_center as protection
 
-        return await protection.protection_center(interaction)
+        service = getattr(protection, "open_protection_center", None)
+        if callable(service):
+            return await service(interaction)
+        command = getattr(protection, "protection_center", None)
+        callback = getattr(command, "callback", None)
+        if callable(callback):
+            return await callback(interaction)
+        raise TypeError("Protection Center service unavailable")
     except Exception as exc:
         await _send_error(interaction, "Protection Center failed", exc)
 
@@ -162,7 +169,7 @@ async def _welcome_health(interaction: discord.Interaction) -> None:
     try:
         from stoney_verify.commands_ext import public_welcome_group as welcome
 
-        return await welcome.welcome_health(interaction)
+        return await welcome.open_welcome_health(interaction)
     except Exception as exc:
         await _send_error(interaction, "Welcome health failed", exc)
 
@@ -171,7 +178,7 @@ async def _welcome_preview(interaction: discord.Interaction) -> None:
     try:
         from stoney_verify.commands_ext import public_welcome_group as welcome
 
-        return await welcome.welcome_preview(interaction)
+        return await welcome.open_welcome_preview(interaction)
     except Exception as exc:
         await _send_error(interaction, "Welcome preview failed", exc)
 
@@ -180,7 +187,7 @@ async def _welcome_post(interaction: discord.Interaction) -> None:
     try:
         from stoney_verify.commands_ext import public_welcome_group as welcome
 
-        return await welcome.welcome_post(interaction, channel=None)
+        return await welcome.post_welcome_message(interaction, channel=None)
     except Exception as exc:
         await _send_error(interaction, "Welcome post failed", exc)
 
@@ -189,7 +196,7 @@ async def _modlog_health(interaction: discord.Interaction) -> None:
     try:
         from stoney_verify.commands_ext import public_modlog_group as modlog
 
-        return await modlog.modlog_health(interaction)
+        return await modlog.open_modlog_health(interaction)
     except Exception as exc:
         await _send_error(interaction, "Modlog health failed", exc)
 
@@ -198,7 +205,7 @@ async def _modlog_test(interaction: discord.Interaction) -> None:
     try:
         from stoney_verify.commands_ext import public_modlog_group as modlog
 
-        return await modlog.modlog_test(interaction)
+        return await modlog.send_modlog_test(interaction)
     except Exception as exc:
         await _send_error(interaction, "Modlog test failed", exc)
 
