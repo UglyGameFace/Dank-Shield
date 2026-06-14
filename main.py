@@ -25,6 +25,7 @@ load_all_startup_guards()
 import stoney_verify.startup_guards.full_setup_health_autofix  # noqa: F401,E402
 import stoney_verify.startup_guards.setup_visibility_health_guard  # noqa: F401,E402
 import stoney_verify.startup_guards.setup_role_visibility_repair_guard  # noqa: F401,E402
+import stoney_verify.startup_guards.setup_health_precision_guard  # noqa: F401,E402
 import stoney_verify.startup_guards.setup_check_existing_server_inference_guard  # noqa: F401,E402
 import stoney_verify.startup_guards.setup_health_defer_guard  # noqa: F401,E402
 
