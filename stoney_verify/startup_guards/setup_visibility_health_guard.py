@@ -82,6 +82,97 @@ def _check_parent(target: Any, role: discord.Role | None) -> bool:
         return False
 
 
+def _public_ids(cfg: Any) -> set[int]:
+    return {
+        x
+        for x in {
+            _first(cfg, ("start_category_id", "welcome_category_id")),
+            _first(cfg, ("welcome_channel_id",)),
+            _first(cfg, ("rules_channel_id",)),
+            _first(cfg, ("announcements_channel_id", "announcement_channel_id")),
+            _first(cfg, ("verify_channel_id", "verification_channel_id")),
+            _first(cfg, ("ticket_panel_channel_id", "support_channel_id", "panel_channel_id")),
+            _first(cfg, ("vc_verify_channel_id", "voice_verify_channel_id")),
+        }
+        if x > 0
+    }
+
+
+def _private_ids(cfg: Any) -> set[int]:
+    return {
+        x
+        for x in {
+            _first(cfg, ("ticket_category_id", "active_ticket_category_id", "open_ticket_category_id")),
+            _first(cfg, ("ticket_archive_category_id", "archive_category_id", "closed_ticket_category_id")),
+            _first(cfg, ("management_category_id", "staff_tools_category_id")),
+            _first(cfg, ("transcripts_channel_id", "transcript_channel_id")),
+            _first(cfg, ("modlog_channel_id", "mod_log_channel_id")),
+            _first(cfg, ("raidlog_channel_id", "raid_log_channel_id", "security_log_channel_id")),
+            _first(cfg, ("join_log_channel_id", "join_leave_log_channel_id", "joinlog_channel_id")),
+            _first(cfg, ("force_verify_log_channel_id", "forced_verify_log_channel_id")),
+            _first(cfg, ("status_channel_id", "bot_status_channel_id")),
+            _first(cfg, ("vc_verify_queue_channel_id", "vc_queue_channel_id", "vc_request_channel_id", "vc_verify_requests_channel_id")),
+        }
+        if x > 0
+    }
+
+
+def _member_ids(cfg: Any) -> set[int]:
+    return {
+        x
+        for x in {
+            _first(cfg, ("general_channel_id", "member_chat_channel_id", "lounge_channel_id")),
+        }
+        if x > 0
+    }
+
+
+def _all_channel_targets(guild: discord.Guild) -> list[Any]:
+    targets: list[Any] = []
+    targets.extend(list(getattr(guild, "categories", []) or []))
+    targets.extend(list(getattr(guild, "channels", []) or []))
+    seen: set[int] = set()
+    out: list[Any] = []
+    for item in targets:
+        try:
+            cid = int(getattr(item, "id", 0) or 0)
+        except Exception:
+            cid = 0
+        if cid <= 0 or cid in seen:
+            continue
+        seen.add(cid)
+        out.append(item)
+    return out
+
+
+def _is_onboarding_allowed(target: Any, allowed_ids: set[int]) -> bool:
+    try:
+        cid = int(getattr(target, "id", 0) or 0)
+        if cid in allowed_ids:
+            return True
+        parent = getattr(target, "category", None)
+        parent_id = int(getattr(parent, "id", 0) or 0) if parent is not None else 0
+        # Only the saved onboarding category itself may be visible by inheritance.
+        # Children still need their own ID in the allowlist, so member/private
+        # channels inside that category are not accidentally allowed.
+        return False
+    except Exception:
+        return False
+
+
+def _unverified_leaks(guild: discord.Guild, cfg: Any, unverified: discord.Role | None) -> list[Any]:
+    if unverified is None:
+        return []
+    allowed = _public_ids(cfg)
+    leaks: list[Any] = []
+    for target in _all_channel_targets(guild):
+        if _is_onboarding_allowed(target, allowed):
+            continue
+        if _can_see(target, unverified):
+            leaks.append(target)
+    return leaks
+
+
 def _check(guild: discord.Guild, cfg: Any, blockers: list[str], warnings: list[str], ok: list[str]) -> None:
     unverified = guild.get_role(_first(cfg, ("unverified_role_id",)))
     verified_roles = _roles(
@@ -95,36 +186,15 @@ def _check(guild: discord.Guild, cfg: Any, blockers: list[str], warnings: list[s
     if unverified is None:
         warnings.append("Unverified visibility check skipped because the role is not saved.")
 
-    public = {
-        _first(cfg, ("start_category_id", "welcome_category_id")),
-        _first(cfg, ("welcome_channel_id",)),
-        _first(cfg, ("verify_channel_id", "verification_channel_id")),
-        _first(cfg, ("ticket_panel_channel_id", "support_channel_id", "panel_channel_id")),
-        _first(cfg, ("vc_verify_channel_id", "voice_verify_channel_id")),
-    }
-    private = {
-        _first(cfg, ("ticket_category_id", "active_ticket_category_id", "open_ticket_category_id")),
-        _first(cfg, ("ticket_archive_category_id", "archive_category_id", "closed_ticket_category_id")),
-        _first(cfg, ("management_category_id", "staff_tools_category_id")),
-        _first(cfg, ("transcripts_channel_id", "transcript_channel_id")),
-        _first(cfg, ("modlog_channel_id", "mod_log_channel_id")),
-        _first(cfg, ("raidlog_channel_id", "raid_log_channel_id", "security_log_channel_id")),
-        _first(cfg, ("join_log_channel_id", "join_leave_log_channel_id", "joinlog_channel_id")),
-        _first(cfg, ("force_verify_log_channel_id", "forced_verify_log_channel_id")),
-        _first(cfg, ("status_channel_id", "bot_status_channel_id")),
-        _first(cfg, ("vc_verify_queue_channel_id", "vc_queue_channel_id", "vc_request_channel_id", "vc_verify_requests_channel_id")),
-    }
-    member_public = {
-        _first(cfg, ("general_channel_id", "member_chat_channel_id", "lounge_channel_id")),
-        _first(cfg, ("rules_channel_id",)),
-        _first(cfg, ("announcements_channel_id", "announcement_channel_id")),
-    }
+    public = _public_ids(cfg)
+    private = _private_ids(cfg)
+    member_public = _member_ids(cfg)
 
     public_checked = 0
     private_checked = 0
     member_checked = 0
 
-    for cid in {x for x in public if x > 0}:
+    for cid in public:
         ch = _target(guild, cid)
         if ch is None:
             continue
@@ -135,7 +205,7 @@ def _check(guild: discord.Guild, cfg: Any, blockers: list[str], warnings: list[s
             if _can_talk(ch, unverified):
                 warnings.append(f"{_label(ch)} lets Unverified send messages; setup default expects read-only.")
 
-    for cid in {x for x in private if x > 0}:
+    for cid in private:
         ch = _target(guild, cid)
         if ch is None:
             continue
@@ -151,7 +221,7 @@ def _check(guild: discord.Guild, cfg: Any, blockers: list[str], warnings: list[s
             if _check_parent(ch, role):
                 blockers.append(f"{_label(getattr(ch, 'category', None))} category is visible to {_role_label(role)} but should stay private.")
 
-    for cid in {x for x in member_public if x > 0}:
+    for cid in member_public:
         ch = _target(guild, cid)
         if ch is None:
             continue
@@ -160,9 +230,15 @@ def _check(guild: discord.Guild, cfg: Any, blockers: list[str], warnings: list[s
             if not _can_see(ch, role):
                 warnings.append(f"{_label(ch)} should be visible to {_role_label(role)} for normal member access.")
         if unverified is not None and _can_see(ch, unverified):
-            warnings.append(f"{_label(ch)} is visible to Unverified; if this is member-only, run Safety & Repair.")
+            blockers.append(f"{_label(ch)} is visible to Unverified; member-only areas must be hidden until verification.")
 
-    ok.append(f"Role visibility checked: onboarding={public_checked}, private={private_checked}, member={member_checked}.")
+    leaks = _unverified_leaks(guild, cfg, unverified)
+    if leaks:
+        shown = ", ".join(_label(item) for item in leaks[:12])
+        extra = f" and {len(leaks) - 12} more" if len(leaks) > 12 else ""
+        blockers.append(f"Unverified visibility leak: {len(leaks)} non-onboarding channels/categories visible ({shown}{extra}).")
+
+    ok.append(f"Role visibility checked: onboarding={public_checked}, private={private_checked}, member={member_checked}, full_unverified_scan={len(_all_channel_targets(guild))}.")
     if verified_roles:
         ok.append("Verified/member role privacy checks are active for saved private setup targets.")
     else:
@@ -188,7 +264,7 @@ def apply() -> bool:
         setattr(wrapped, "_visibility_wrapped", True)
         group._build_setup_health = wrapped
         _DONE = True
-        print("🛡️ setup_visibility_health_guard active; setup health checks role visibility privacy")
+        print("🛡️ setup_visibility_health_guard active; setup health scans all channels for Unverified leaks")
         return True
     except Exception as exc:
         try:
@@ -200,4 +276,4 @@ def apply() -> bool:
 
 apply()
 
-__all__ = ["apply"]
+__all__ = ["apply", "_unverified_leaks", "_public_ids"]
