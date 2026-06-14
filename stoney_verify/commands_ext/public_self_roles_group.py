@@ -11,6 +11,16 @@ SELF_ROLE_PREFIX = "dank:selfrole:v1:"
 _ATTACHED = False
 _LISTENER_ATTACHED = False
 
+DEFAULT_PRONOUN_ROLE_NAMES: tuple[str, ...] = (
+    "Pronouns: he/him",
+    "Pronouns: she/her",
+    "Pronouns: they/them",
+    "Pronouns: he/they",
+    "Pronouns: she/they",
+    "Pronouns: any pronouns",
+    "Pronouns: ask me",
+)
+
 roles_group = app_commands.Group(
     name="roles",
     description="Post simple self-assignable role menus.",
@@ -31,6 +41,37 @@ def _can_manage(role: discord.Role, guild: discord.Guild) -> tuple[bool, str]:
     except Exception:
         return False, "Discord role hierarchy could not be checked."
     return True, ""
+
+
+def _bot_can_create_roles(guild: discord.Guild) -> tuple[bool, str]:
+    me = guild.me
+    if not isinstance(me, discord.Member):
+        return False, "Dank Shield could not resolve its bot member."
+    try:
+        if not me.guild_permissions.manage_roles and not me.guild_permissions.administrator:
+            return False, "Dank Shield is missing Manage Roles."
+    except Exception:
+        return False, "Discord role permissions could not be checked."
+    return True, ""
+
+
+def _role_name_key(name: str) -> str:
+    return str(name or "").strip().casefold()
+
+
+def _find_role_by_name(guild: discord.Guild, name: str) -> Optional[discord.Role]:
+    target = _role_name_key(name)
+    for role in list(getattr(guild, "roles", []) or []):
+        if isinstance(role, discord.Role) and _role_name_key(role.name) == target:
+            return role
+    return None
+
+
+async def _ensure_role(guild: discord.Guild, name: str, *, reason: str) -> discord.Role:
+    existing = _find_role_by_name(guild, name)
+    if isinstance(existing, discord.Role):
+        return existing
+    return await guild.create_role(name=name[:100], mentionable=False, reason=reason)
 
 
 async def _reply(interaction: discord.Interaction, content: str, *, ok: bool = True) -> None:
@@ -106,6 +147,22 @@ class SelfRolePanelView(discord.ui.View):
             self.add_item(button)
 
 
+async def _post_panel(interaction: discord.Interaction, channel: discord.TextChannel, title: str, roles: list[discord.Role], *, description: str) -> None:
+    embed = discord.Embed(
+        title=title[:256],
+        description=description[:4000],
+        color=discord.Color.blurple(),
+        timestamp=discord.utils.utcnow(),
+    )
+    embed.add_field(name="Roles", value="\n".join(f"• {role.mention}" for role in roles)[:1024], inline=False)
+    embed.set_footer(text="Dank Shield self-role panel")
+    try:
+        await channel.send(embed=embed, view=SelfRolePanelView(roles), allowed_mentions=discord.AllowedMentions.none())
+        await interaction.followup.send(f"✅ Self-role panel posted in {channel.mention}.", ephemeral=True)
+    except Exception as exc:
+        await interaction.followup.send(f"❌ Could not post self-role panel: `{type(exc).__name__}: {exc}`", ephemeral=True)
+
+
 @roles_group.command(name="panel", description="Post a simple toggle-role panel with up to five roles.")
 @app_commands.describe(
     channel="Where to post the role panel.",
@@ -147,19 +204,74 @@ async def roles_panel(
             await interaction.response.defer(ephemeral=True, thinking=True)
     except Exception:
         pass
-    embed = discord.Embed(
-        title=title[:256],
+    await _post_panel(
+        interaction,
+        channel,
+        title,
+        roles,
         description="Tap a button to toggle the matching role. Tap again to remove it.",
-        color=discord.Color.blurple(),
-        timestamp=discord.utils.utcnow(),
     )
-    embed.add_field(name="Roles", value="\n".join(f"• {role.mention}" for role in roles), inline=False)
-    embed.set_footer(text="Dank Shield self-role panel")
+
+
+@roles_group.command(name="pronouns", description="Create/reuse pronoun roles and post a pronoun self-role panel.")
+@app_commands.describe(
+    channel="Where to post the pronoun role panel.",
+    title="Optional panel title.",
+)
+async def roles_pronouns(
+    interaction: discord.Interaction,
+    channel: discord.TextChannel,
+    title: str = "Pronoun Roles",
+) -> None:
+    if not await _require_setup_permission(interaction):
+        return
+    guild = interaction.guild
+    if guild is None:
+        return await _reply(interaction, "This command must be used inside a server.", ok=False)
+    ok, why = _bot_can_create_roles(guild)
+    if not ok:
+        return await _reply(interaction, why, ok=False)
     try:
-        await channel.send(embed=embed, view=SelfRolePanelView(roles), allowed_mentions=discord.AllowedMentions.none())
-        await interaction.followup.send(f"✅ Self-role panel posted in {channel.mention}.", ephemeral=True)
+        if not interaction.response.is_done():
+            await interaction.response.defer(ephemeral=True, thinking=True)
+    except Exception:
+        pass
+
+    roles: list[discord.Role] = []
+    created: list[str] = []
+    reused: list[str] = []
+    try:
+        for name in DEFAULT_PRONOUN_ROLE_NAMES:
+            before = _find_role_by_name(guild, name)
+            role = await _ensure_role(guild, name, reason=f"Dank Shield pronoun self-role setup by {interaction.user} ({interaction.user.id})")
+            check_ok, check_msg = _can_manage(role, guild)
+            if not check_ok:
+                return await interaction.followup.send(f"❌ {check_msg}", ephemeral=True, allowed_mentions=discord.AllowedMentions.none())
+            roles.append(role)
+            (reused if before else created).append(role.name)
     except Exception as exc:
-        await interaction.followup.send(f"❌ Could not post self-role panel: `{type(exc).__name__}: {exc}`", ephemeral=True)
+        return await interaction.followup.send(f"❌ Could not create/reuse pronoun roles: `{type(exc).__name__}: {exc}`", ephemeral=True)
+
+    await _post_panel(
+        interaction,
+        channel,
+        title,
+        roles,
+        description=(
+            "Pick the pronoun role or roles you want shown on your profile in this server. "
+            "These are optional, member-controlled roles. Tap again to remove a role."
+        ),
+    )
+    notes: list[str] = []
+    if created:
+        notes.append("Created: " + ", ".join(f"`{x}`" for x in created))
+    if reused:
+        notes.append("Reused: " + ", ".join(f"`{x}`" for x in reused))
+    if notes:
+        try:
+            await interaction.followup.send("\n".join(notes)[:1900], ephemeral=True, allowed_mentions=discord.AllowedMentions.none())
+        except Exception:
+            pass
 
 
 @roles_group.command(name="health", description="Check whether Dank Shield can manage a self-assignable role.")
@@ -198,7 +310,7 @@ def _attach_group() -> bool:
 def register_public_self_roles_group_commands(bot: Any, tree: Any) -> None:
     global _LISTENER_ATTACHED
     _ = tree
-    if not _LISTENER_ATTACHED:
+    if bot is not None and not _LISTENER_ATTACHED:
         try:
             bot.add_listener(_self_role_listener, "on_interaction")
             _LISTENER_ATTACHED = True
