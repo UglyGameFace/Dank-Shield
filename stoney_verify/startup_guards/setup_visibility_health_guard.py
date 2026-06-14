@@ -178,14 +178,13 @@ def _vc_category_notice(guild: discord.Guild, cfg: Any, unverified: discord.Role
     parent_id = _i(getattr(parent, "id", 0))
     if parent_id == management or parent_id in private:
         warnings.append(
-            f"{_label(vc)} is onboarding-visible VC verification but it is inside {_label(parent)}. "
-            "Discord will show that category to Unverified users because they can see the VC child. "
-            "Move VC verification to a public verification/onboarding category, or run the VC setup/fix flow to place it correctly."
+            f"{_label(vc)} is an onboarding VC verification channel, but it is inside private/staff category {_label(parent)}. "
+            "Do not let automatic repair expose that category. Smart fix: use **Use My Existing Server → Discord Categories** to pick/create a public onboarding/start category, then move or reselect the VC verification channel there."
         )
     elif unverified is not None and _can_see(vc, unverified) and not _can_see(parent, unverified):
         warnings.append(
             f"{_label(vc)} is visible to Unverified but its parent category {_label(parent)} is hidden. "
-            "Discord may show confusing category behavior; prefer placing VC verification in the onboarding category."
+            "Smart fix: **Safety & Repair → Fix Permissions** can safely reveal only that parent category header to Unverified so Discord displays the VC under the right category."
         )
 
 
@@ -217,9 +216,13 @@ def _check(guild: discord.Guild, cfg: Any, blockers: list[str], warnings: list[s
         public_checked += 1
         if unverified is not None:
             if not _can_see(ch, unverified):
-                warnings.append(f"{_label(ch)} should be visible to Unverified for onboarding.")
+                warnings.append(
+                    f"{_label(ch)} should be visible to Unverified for onboarding. Smart fix: **Safety & Repair → Fix Permissions** will grant Unverified read-only access to this saved onboarding target."
+                )
             if _can_talk(ch, unverified):
-                warnings.append(f"{_label(ch)} lets Unverified send messages; setup default expects read-only.")
+                warnings.append(
+                    f"{_label(ch)} lets Unverified send messages; setup default expects read-only. Smart fix: **Safety & Repair → Fix Permissions** will keep it visible but remove Send Messages for Unverified."
+                )
 
     for cid in private:
         ch = _target(guild, cid)
@@ -228,14 +231,14 @@ def _check(guild: discord.Guild, cfg: Any, blockers: list[str], warnings: list[s
         private_checked += 1
         if unverified is not None:
             if _can_see(ch, unverified):
-                blockers.append(f"{_label(ch)} is visible to Unverified but should be private/staff controlled.")
+                blockers.append(f"{_label(ch)} is visible to Unverified but should be private/staff controlled. Smart fix: **Safety & Repair → Fix Permissions** will hide it from Unverified.")
             if _check_parent(ch, unverified):
-                blockers.append(f"{_label(getattr(ch, 'category', None))} category is visible to Unverified.")
+                blockers.append(f"{_label(getattr(ch, 'category', None))} category is visible to Unverified. Smart fix: **Safety & Repair → Fix Permissions** will lock this private category.")
         for role in verified_roles:
             if _can_see(ch, role):
-                blockers.append(f"{_label(ch)} is visible to {_role_label(role)} but should stay staff/private controlled.")
+                blockers.append(f"{_label(ch)} is visible to {_role_label(role)} but should stay staff/private controlled. Smart fix: **Safety & Repair → Fix Permissions** will hide it from public member roles.")
             if _check_parent(ch, role):
-                blockers.append(f"{_label(getattr(ch, 'category', None))} category is visible to {_role_label(role)} but should stay private.")
+                blockers.append(f"{_label(getattr(ch, 'category', None))} category is visible to {_role_label(role)} but should stay private. Smart fix: **Safety & Repair → Fix Permissions** will lock this private category.")
 
     for cid in member_public:
         ch = _target(guild, cid)
@@ -244,9 +247,9 @@ def _check(guild: discord.Guild, cfg: Any, blockers: list[str], warnings: list[s
         member_checked += 1
         for role in verified_roles:
             if not _can_see(ch, role):
-                warnings.append(f"{_label(ch)} should be visible to {_role_label(role)} for normal member access.")
+                warnings.append(f"{_label(ch)} should be visible to {_role_label(role)} for normal member access. Smart fix: use **Use My Existing Server** to confirm this is a member channel, then run **Fix Permissions**.")
         if unverified is not None and _can_see(ch, unverified):
-            blockers.append(f"{_label(ch)} is visible to Unverified; member-only areas must be hidden until verification.")
+            blockers.append(f"{_label(ch)} is visible to Unverified; member-only areas must be hidden until verification. Smart fix: **Safety & Repair → Fix Permissions** will hide it from Unverified.")
 
     _vc_category_notice(guild, cfg, unverified, warnings)
 
@@ -254,7 +257,7 @@ def _check(guild: discord.Guild, cfg: Any, blockers: list[str], warnings: list[s
     if leaks:
         shown = ", ".join(_label(item) for item in leaks[:12])
         extra = f" and {len(leaks) - 12} more" if len(leaks) > 12 else ""
-        blockers.append(f"Unverified visibility leak: {len(leaks)} non-onboarding channels/categories visible ({shown}{extra}).")
+        blockers.append(f"Unverified visibility leak: {len(leaks)} non-onboarding channels/categories visible ({shown}{extra}). Smart fix: **Safety & Repair → Fix Permissions** will hide saved private/staff/member-only targets from Unverified.")
 
     ok.append(f"Role visibility checked: onboarding={public_checked}, private={private_checked}, member={member_checked}, full_unverified_scan={len(_all_channel_targets(guild))}.")
     if verified_roles:
