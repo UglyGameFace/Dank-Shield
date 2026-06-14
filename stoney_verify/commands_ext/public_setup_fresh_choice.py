@@ -22,6 +22,7 @@ from ..globals import now_utc
 from . import public_setup_recommend as recommend
 from . import public_setup_recovery as recovery
 from . import public_setup_solid as solid
+from ..setup_engine.verification_modes import id_verify_allowed_for_guild
 
 _PATCHED = False
 
@@ -117,8 +118,17 @@ def get_plain_setup_choice(key: Any) -> Optional[PlainSetupChoice]:
     return None
 
 
-def _choice_lines() -> str:
-    return "\n".join(f"{c.emoji} **{c.label}** — {c.short}" for c in SETUP_CHOICES)
+def _choices_for_guild(guild: Optional[discord.Guild]) -> tuple[PlainSetupChoice, ...]:
+    if id_verify_allowed_for_guild(guild):
+        return SETUP_CHOICES
+    return tuple(choice for choice in SETUP_CHOICES if not choice.needs_id)
+
+
+def _choice_lines(guild: Optional[discord.Guild] = None) -> str:
+    lines = "\n".join(f"{c.emoji} **{c.label}** — {c.short}" for c in _choices_for_guild(guild))
+    if not id_verify_allowed_for_guild(guild):
+        lines += "\n\n🔒 ID/web verification is hidden for this server. Basic Button Verification is the default."
+    return lines
 
 
 def _plain_saved_choice_from_cfg(cfg: Any) -> str:
@@ -389,7 +399,7 @@ async def _plain_choice_main_payload(guild: discord.Guild) -> tuple[discord.Embe
         color=discord.Color.blurple(),
         timestamp=now_utc(),
     )
-    embed.add_field(name="Setup Choices", value=_choice_lines()[:1024], inline=False)
+    embed.add_field(name="Setup Choices", value=_choice_lines(guild)[:1024], inline=False)
     embed.add_field(name="Current Choice", value=service_summary[:1024], inline=False)
     embed.add_field(name="Health Check Focus", value=service_hint[:1024], inline=False)
     embed.add_field(name=f"Setup Progress: {done}/{total} complete", value=progress_text or "No setup checks ran.", inline=False)
@@ -417,10 +427,17 @@ class PlainSetupHomeView(discord.ui.View):
             color=discord.Color.blurple(),
             timestamp=now_utc(),
         )
-        for choice in SETUP_CHOICES:
+        choices = _choices_for_guild(interaction.guild)
+        for choice in choices:
             embed.add_field(
                 name=f"{choice.emoji} {choice.label}",
                 value=f"{choice.short}\nMembers see: {choice.member_sees}",
+                inline=False,
+            )
+        if not id_verify_allowed_for_guild(interaction.guild):
+            embed.add_field(
+                name="🔒 ID/web verification hidden",
+                value="This server uses Basic Button Verification. ID/web verification is only available for allowlisted guild IDs.",
                 inline=False,
             )
         await interaction.response.edit_message(embed=embed, view=PlainSetupChoiceView())
@@ -455,6 +472,13 @@ class PlainSetupChoiceView(solid.BackToSetupView):
         guild = interaction.guild
         if guild is None:
             return await interaction.response.send_message("❌ This must be used inside a server.", ephemeral=True)
+
+        if choice.needs_id and not id_verify_allowed_for_guild(guild):
+            return await interaction.response.send_message(
+                "🔒 This server uses Basic Button Verification. ID/web verification is only available for allowlisted guild IDs.",
+                ephemeral=True,
+                allowed_mentions=discord.AllowedMentions.none(),
+            )
 
         await solid._safe_defer_update(interaction)
         await _save_choice(interaction, choice)
