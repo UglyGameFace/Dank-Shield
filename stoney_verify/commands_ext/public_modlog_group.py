@@ -94,9 +94,7 @@ async def _send(interaction: discord.Interaction, content: str = "", **kwargs: A
         pass
 
 
-@modlog_group.command(name="set-channel", description="Save the moderation log channel for this server.")
-@app_commands.describe(channel="Channel where Dank Shield should send moderation/audit logs.")
-async def modlog_set_channel(interaction: discord.Interaction, channel: discord.TextChannel) -> None:
+async def save_modlog_channel(interaction: discord.Interaction, channel: discord.TextChannel) -> None:
     if not await _require_setup_permission(interaction):
         return
     if interaction.guild is None:
@@ -116,8 +114,7 @@ async def modlog_set_channel(interaction: discord.Interaction, channel: discord.
     await interaction.followup.send(f"✅ Modlog channel saved as {channel.mention}.{suffix}", ephemeral=True, allowed_mentions=discord.AllowedMentions.none())
 
 
-@modlog_group.command(name="health", description="Check modlog channel, permissions, and listener coverage.")
-async def modlog_health(interaction: discord.Interaction) -> None:
+async def open_modlog_health(interaction: discord.Interaction) -> None:
     if not await _require_setup_permission(interaction):
         return
     guild = interaction.guild
@@ -128,7 +125,7 @@ async def modlog_health(interaction: discord.Interaction) -> None:
     channel = _modlog_channel(guild, cfg)
     embed = discord.Embed(title="🧾 Modlog Health", color=discord.Color.green() if channel else discord.Color.red(), timestamp=discord.utils.utcnow())
     if channel is None:
-        embed.add_field(name="Channel", value="❌ Not saved. Use `/dank modlog set-channel`.", inline=False)
+        embed.add_field(name="Channel", value="❌ Not saved. Use Core Setup → Use Existing Roles/Channels → Logs + Status, or `/dank modlog set-channel`.", inline=False)
     else:
         missing = _missing_perms(channel, guild.me)
         embed.add_field(name="Channel", value=f"✅ {channel.mention}", inline=False)
@@ -155,8 +152,7 @@ async def modlog_health(interaction: discord.Interaction) -> None:
     await interaction.followup.send(embed=embed, ephemeral=True, allowed_mentions=discord.AllowedMentions.none())
 
 
-@modlog_group.command(name="test", description="Send a test modlog embed to the saved modlog channel.")
-async def modlog_test(interaction: discord.Interaction) -> None:
+async def send_modlog_test(interaction: discord.Interaction) -> None:
     if not await _require_setup_permission(interaction):
         return
     guild = interaction.guild
@@ -166,7 +162,7 @@ async def modlog_test(interaction: discord.Interaction) -> None:
     cfg = await get_guild_config(int(guild.id), refresh=True)
     channel = _modlog_channel(guild, cfg)
     if channel is None:
-        return await interaction.followup.send("❌ No modlog channel saved. Use `/dank modlog set-channel`.", ephemeral=True)
+        return await interaction.followup.send("❌ No modlog channel saved. Use Core Setup → Use Existing Roles/Channels → Logs + Status, or `/dank modlog set-channel`.", ephemeral=True)
     missing = _missing_perms(channel, guild.me)
     if missing:
         return await interaction.followup.send("❌ Missing permissions in saved modlog channel: " + ", ".join(missing), ephemeral=True)
@@ -175,6 +171,22 @@ async def modlog_test(interaction: discord.Interaction) -> None:
     embed.set_footer(text="Dank Shield modlog test")
     await channel.send(embed=embed, allowed_mentions=discord.AllowedMentions.none())
     await interaction.followup.send(f"✅ Test log sent to {channel.mention}.", ephemeral=True, allowed_mentions=discord.AllowedMentions.none())
+
+
+@modlog_group.command(name="set-channel", description="Save the moderation log channel for this server.")
+@app_commands.describe(channel="Channel where Dank Shield should send moderation/audit logs.")
+async def modlog_set_channel(interaction: discord.Interaction, channel: discord.TextChannel) -> None:
+    await save_modlog_channel(interaction, channel)
+
+
+@modlog_group.command(name="health", description="Check modlog channel, permissions, and listener coverage.")
+async def modlog_health(interaction: discord.Interaction) -> None:
+    await open_modlog_health(interaction)
+
+
+@modlog_group.command(name="test", description="Send a test modlog embed to the saved modlog channel.")
+async def modlog_test(interaction: discord.Interaction) -> None:
+    await send_modlog_test(interaction)
 
 
 def _attach() -> bool:
@@ -210,4 +222,10 @@ def register_public_modlog_group_commands(bot: Any, tree: Any) -> None:
 
 _attach()
 
-__all__ = ["register_public_modlog_group_commands", "modlog_group"]
+__all__ = [
+    "register_public_modlog_group_commands",
+    "modlog_group",
+    "open_modlog_health",
+    "send_modlog_test",
+    "save_modlog_channel",
+]
