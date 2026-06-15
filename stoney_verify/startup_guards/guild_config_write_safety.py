@@ -27,7 +27,7 @@ safe writer API.
 
 import inspect
 from datetime import datetime, timezone
-from typing import Any, Mapping, Optional
+from typing import Any, Mapping
 
 
 _PATCHED = False
@@ -35,7 +35,6 @@ _ORIGINAL_UPSERT = None
 
 PROTECTED_CONFIG_KEYS: frozenset[str] = frozenset(
     {
-        # Verification/member roles
         "unverified_role_id",
         "verified_role_id",
         "resident_role_id",
@@ -46,12 +45,10 @@ PROTECTED_CONFIG_KEYS: frozenset[str] = frozenset(
         "control_role_id",
         "perm_role_id",
         "bot_manager_role_id",
-        # Verification channels
         "verify_channel_id",
         "vc_verify_channel_id",
         "vc_verify_queue_channel_id",
         "welcome_channel_id",
-        # Ticket lifecycle channels/categories
         "ticket_category_id",
         "ticket_archive_category_id",
         "ticket_closed_category_id",
@@ -61,7 +58,6 @@ PROTECTED_CONFIG_KEYS: frozenset[str] = frozenset(
         "welcome_category_id",
         "management_category_id",
         "staff_tools_category_id",
-        # Logs/status
         "transcripts_channel_id",
         "modlog_channel_id",
         "raidlog_channel_id",
@@ -73,7 +69,6 @@ PROTECTED_CONFIG_KEYS: frozenset[str] = frozenset(
         "bot_status_channel_id",
         "uptime_channel_id",
         "health_channel_id",
-        # Behavior toggles/settings where silent overwrites are dangerous
         "ticket_prefix",
         "verify_kick_hours",
         "use_env_fallbacks",
@@ -124,6 +119,26 @@ def _warn(message: str) -> None:
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+async def _setup_safe_defer_modal(interaction: Any) -> None:
+    try:
+        response = getattr(interaction, "response", None)
+        if response is not None and not response.is_done():
+            await response.defer(ephemeral=True, thinking=True)
+    except Exception:
+        pass
+
+
+def _patch_setup_modal_defer_helper() -> None:
+    try:
+        from stoney_verify.commands_ext import public_setup_solid as solid
+
+        if not callable(getattr(solid, "_safe_defer_modal", None)):
+            setattr(solid, "_safe_defer_modal", _setup_safe_defer_modal)
+            _log("attached setup modal defer helper")
+    except Exception as exc:
+        _warn(f"could not attach setup modal defer helper: {type(exc).__name__}: {exc}")
 
 
 def _safe_str(value: Any, default: str = "") -> str:
@@ -324,7 +339,6 @@ async def _safe_upsert_guild_config(guild_id: Any, patch: Mapping[str, Any], *ar
 
     clean_patch, blocked, changed = _filter_patch(guild_id, raw_patch, current, source=source, mode=mode)
 
-    # Always keep safe audit metadata when a real write happens.
     if clean_patch:
         clean_patch.setdefault("config_last_write_source", source[:300])
         clean_patch.setdefault("config_last_write_mode", mode)
@@ -353,6 +367,7 @@ async def _safe_upsert_guild_config(guild_id: Any, patch: Mapping[str, Any], *ar
 def patch_guild_config_writer() -> bool:
     global _PATCHED, _ORIGINAL_UPSERT
     if _PATCHED:
+        _patch_setup_modal_defer_helper()
         return True
 
     try:
@@ -365,6 +380,7 @@ def patch_guild_config_writer() -> bool:
 
         if getattr(current, "_config_write_safety_wrapped", False):
             _PATCHED = True
+            _patch_setup_modal_defer_helper()
             return True
 
         _ORIGINAL_UPSERT = current
@@ -373,6 +389,7 @@ def patch_guild_config_writer() -> bool:
         setattr(gc, "upsert_guild_config", _safe_upsert_guild_config)
         _PATCHED = True
         _log("loaded; central guild_config write protection active")
+        _patch_setup_modal_defer_helper()
         return True
     except Exception as e:
         _warn(f"failed to patch guild config writer: {e!r}")
