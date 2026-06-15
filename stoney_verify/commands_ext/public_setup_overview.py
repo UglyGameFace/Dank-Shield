@@ -11,8 +11,9 @@ from typing import Any, Iterable, Mapping, Optional
 
 import discord
 
-from ..guild_config import get_guild_config
-from .public_setup_group import _require_setup_permission, stoney_group
+from ..guild_context import GuildContext, get_guild_context
+from ..interaction_guard import run_guarded_interaction, safe_send_interaction
+from .public_setup_group import stoney_group
 
 _ATTACHED = False
 
@@ -50,6 +51,16 @@ def _safe_int(value: Any, default: int = 0) -> int:
         return int(text) if text else int(default)
     except Exception:
         return int(default)
+
+
+def _admin_or_manage_guild(interaction: discord.Interaction) -> bool:
+    try:
+        if interaction.guild is None or not isinstance(interaction.user, discord.Member):
+            return False
+        perms = interaction.user.guild_permissions
+        return bool(perms.administrator or perms.manage_guild)
+    except Exception:
+        return False
 
 
 def _cfg_value(cfg: Any, key: str, default: Any = None) -> Any:
@@ -168,141 +179,185 @@ def _add_module(embed: discord.Embed, *, name: str, lines: list[str], action: st
     embed.add_field(name=f"{emoji} {name}", value=value[:1024], inline=False)
 
 
+def _guild_context_lines(context: GuildContext) -> list[str]:
+    return [
+        _line("Config source", bool(context.source), f"`{context.source}`"),
+        _line("Public config isolation", context.public_config_isolation, "Enabled" if context.public_config_isolation else "Disabled"),
+        _line("Unsafe to run mutations", not context.unsafe_to_act, "No" if not context.unsafe_to_act else "Yes — run setup first"),
+        _line("Tickets", context.ticket_ready, "Ready" if context.ticket_ready else ", ".join(context.missing_ticket_keys) or "Not ready"),
+        _line("Verification", context.verify_ready, "Ready" if context.verify_ready else ", ".join(context.missing_verify_keys) or "Not ready"),
+        _line("Logging", context.logging_ready, "Ready" if context.logging_ready else ", ".join(context.missing_log_keys) or "Not ready"),
+    ]
+
+
 @stoney_group.command(name="overview", description="Show one clean setup checklist for this server.")
 async def setup_overview(interaction: discord.Interaction) -> None:
-    if not await _require_setup_permission(interaction):
+    if interaction.guild is None:
+        await safe_send_interaction(
+            interaction,
+            content="❌ This command must be used inside a server.",
+            ephemeral=True,
+        )
         return
+
+    if not _admin_or_manage_guild(interaction):
+        await safe_send_interaction(
+            interaction,
+            content="❌ Server setup requires **Administrator** or **Manage Server** permission.",
+            ephemeral=True,
+        )
+        return
+
     guild = interaction.guild
-    if guild is None:
-        return
-    try:
-        if not interaction.response.is_done():
-            await interaction.response.defer(ephemeral=True, thinking=True)
-    except Exception:
-        pass
 
-    cfg = await get_guild_config(int(guild.id), refresh=True)
-    embed = discord.Embed(
-        title="🧭 Dank Shield Setup Overview",
-        description=(
-            f"Server: **{guild.name}** (`{guild.id}`)\n"
-            "This screen is read-only. It does not change settings, create roles, post panels, or overwrite existing config."
-        ),
-        color=discord.Color.blurple(),
-        timestamp=discord.utils.utcnow(),
+    async def _run() -> None:
+        context = await get_guild_context(int(guild.id), refresh=True)
+        cfg = context.config
+        embed = discord.Embed(
+            title="🧭 Dank Shield Setup Overview",
+            description=(
+                f"Server: **{guild.name}** (`{guild.id}`)\n"
+                "This screen is read-only. It does not change settings, create roles, post panels, or overwrite existing config."
+            ),
+            color=discord.Color.red() if context.unsafe_to_act else discord.Color.blurple(),
+            timestamp=discord.utils.utcnow(),
+        )
+
+        _add_module(
+            embed,
+            name="Config Safety",
+            ready=not context.unsafe_to_act,
+            partial=not context.unsafe_to_act,
+            lines=_guild_context_lines(context),
+            action="/dank diagnostics",
+        )
+
+        ticket_category_ok, ticket_category = _channel_ready(guild, cfg, "ticket_category_id", "active_ticket_category_id", "open_ticket_category_id")
+        staff_ok, staff_role = _role_ready(guild, cfg, "staff_role_id", "ticket_staff_role_id", "vc_staff_role_id")
+        transcripts_ok, transcripts = _channel_ready(guild, cfg, "transcripts_channel_id", "ticket_transcripts_channel_id", "transcript_channel_id")
+        tickets_ready = ticket_category_ok and staff_ok
+        _add_module(
+            embed,
+            name="Tickets",
+            ready=tickets_ready,
+            partial=ticket_category_ok or staff_ok or transcripts_ok,
+            lines=[
+                _line("Open category", ticket_category_ok, ticket_category),
+                _line("Staff role", staff_ok, staff_role),
+                _line("Transcripts", transcripts_ok, transcripts),
+            ],
+            action="/ticket-panel health",
+        )
+
+        verify_channel_ok, verify_channel = _channel_ready(guild, cfg, "verify_channel_id", "verification_channel_id")
+        unverified_ok, unverified = _role_ready(guild, cfg, "unverified_role_id")
+        verified_ok, verified = _role_ready(guild, cfg, "verified_role_id")
+        verify_ready = verify_channel_ok and unverified_ok and verified_ok
+        _add_module(
+            embed,
+            name="Verification",
+            ready=verify_ready,
+            partial=verify_channel_ok or unverified_ok or verified_ok,
+            lines=[
+                _line("Verify channel", verify_channel_ok, verify_channel),
+                _line("Unverified role", unverified_ok, unverified),
+                _line("Verified role", verified_ok, verified),
+            ],
+            action="/dank setup",
+        )
+
+        welcome_channel_ok, welcome_channel = _channel_ready(guild, cfg, "welcome_channel_id", "start_channel_id")
+        welcome_msg_ok = _safe_int(_cfg_value(cfg, "welcome_message_id", 0), 0) > 0
+        join_auto_ok = _cfg_bool(cfg, "welcome_join_enabled", "join_welcome_enabled", default=False)
+        _add_module(
+            embed,
+            name="Welcome",
+            ready=welcome_channel_ok and (welcome_msg_ok or join_auto_ok),
+            partial=welcome_channel_ok or welcome_msg_ok or join_auto_ok,
+            lines=[
+                _line("Welcome channel", welcome_channel_ok, welcome_channel),
+                _line("Pinned/start message", welcome_msg_ok, "Saved" if welcome_msg_ok else "Not posted"),
+                _line("Join automation", join_auto_ok, "Enabled" if join_auto_ok else "Disabled"),
+            ],
+            action="/dank welcome health",
+        )
+
+        modlog_ok, modlog = _channel_ready(guild, cfg, "modlog_channel_id", "mod_log_channel_id", "logs_channel_id")
+        modlog_channel = _channel(guild, _cfg_snowflake(cfg, "modlog_channel_id", "mod_log_channel_id", "logs_channel_id"))
+        missing_modlog_perms = _bot_channel_perms(modlog_channel, guild) if modlog_channel is not None else []
+        _add_module(
+            embed,
+            name="Modlog",
+            ready=modlog_ok and not missing_modlog_perms,
+            partial=modlog_ok,
+            lines=[
+                _line("Log channel", modlog_ok, modlog),
+                _line("Bot permissions", not missing_modlog_perms and modlog_ok, "Ready" if not missing_modlog_perms and modlog_ok else ", ".join(missing_modlog_perms) or "Not checked"),
+            ],
+            action="/dank modlog health",
+        )
+
+        pronoun_count = _has_role_named(guild, PRONOUN_ROLE_NAMES)
+        identity_count = _has_role_named(guild, IDENTITY_ROLE_NAMES)
+        self_roles_ready = pronoun_count >= 1 or identity_count >= 1
+        _add_module(
+            embed,
+            name="Self Roles",
+            ready=self_roles_ready,
+            partial=self_roles_ready,
+            lines=[
+                _line("Pronoun roles", pronoun_count > 0, f"{pronoun_count}/{len(PRONOUN_ROLE_NAMES)} found"),
+                _line("Identity roles", identity_count > 0, f"{identity_count}/{len(IDENTITY_ROLE_NAMES)} found"),
+                "✅ Cosmetic-only safety note is included on generated panels.",
+            ],
+            action="/dank roles pronouns",
+        )
+
+        automod_enabled = _cfg_bool(cfg, "automod_enabled", default=False)
+        automod_preset = str(_cfg_value(cfg, "automod_preset", "custom") or "custom")
+        bad_words = [x for x in str(_cfg_value(cfg, "automod_bad_words", "") or "").replace("\n", ",").split(",") if x.strip()]
+        _add_module(
+            embed,
+            name="Automod",
+            ready=automod_enabled,
+            partial=bool(bad_words) or automod_preset != "custom",
+            lines=[
+                _line("Enabled", automod_enabled, "Yes" if automod_enabled else "No"),
+                _line("Preset", automod_preset != "custom", automod_preset),
+                _line("Bad-word filters", bool(bad_words), f"{len(bad_words)} saved"),
+            ],
+            action="/dank automod health",
+        )
+
+        _add_module(
+            embed,
+            name="Embed Builder",
+            ready=True,
+            lines=[
+                "✅ Available as a safe private-preview flow.",
+                "✅ Does not post publicly until staff presses Send Embed.",
+            ],
+            action="/dank embed health",
+        )
+
+        embed.set_footer(text="Dank Shield overview: read-only, per-guild, no hidden config changes")
+        sent = await safe_send_interaction(
+            interaction,
+            embed=embed,
+            ephemeral=True,
+            allowed_mentions=discord.AllowedMentions.none(),
+        )
+        if not sent:
+            raise RuntimeError("Setup overview response could not be sent to Discord.")
+
+    await run_guarded_interaction(
+        interaction,
+        _run,
+        defer=True,
+        ephemeral=True,
+        error_title="❌ Setup overview failed safely",
+        error_guidance="Nothing was changed. Retry `/dank overview`, then check `/dank diagnostics` if it keeps failing.",
     )
-
-    ticket_category_ok, ticket_category = _channel_ready(guild, cfg, "ticket_category_id", "active_ticket_category_id", "open_ticket_category_id")
-    staff_ok, staff_role = _role_ready(guild, cfg, "staff_role_id", "ticket_staff_role_id", "vc_staff_role_id")
-    transcripts_ok, transcripts = _channel_ready(guild, cfg, "transcripts_channel_id", "ticket_transcripts_channel_id", "transcript_channel_id")
-    tickets_ready = ticket_category_ok and staff_ok
-    _add_module(
-        embed,
-        name="Tickets",
-        ready=tickets_ready,
-        partial=ticket_category_ok or staff_ok or transcripts_ok,
-        lines=[
-            _line("Open category", ticket_category_ok, ticket_category),
-            _line("Staff role", staff_ok, staff_role),
-            _line("Transcripts", transcripts_ok, transcripts),
-        ],
-        action="/ticket-panel health",
-    )
-
-    verify_channel_ok, verify_channel = _channel_ready(guild, cfg, "verify_channel_id", "verification_channel_id")
-    unverified_ok, unverified = _role_ready(guild, cfg, "unverified_role_id")
-    verified_ok, verified = _role_ready(guild, cfg, "verified_role_id")
-    verify_ready = verify_channel_ok and unverified_ok and verified_ok
-    _add_module(
-        embed,
-        name="Verification",
-        ready=verify_ready,
-        partial=verify_channel_ok or unverified_ok or verified_ok,
-        lines=[
-            _line("Verify channel", verify_channel_ok, verify_channel),
-            _line("Unverified role", unverified_ok, unverified),
-            _line("Verified role", verified_ok, verified),
-        ],
-        action="/dank setup",
-    )
-
-    welcome_channel_ok, welcome_channel = _channel_ready(guild, cfg, "welcome_channel_id", "start_channel_id")
-    welcome_msg_ok = _safe_int(_cfg_value(cfg, "welcome_message_id", 0), 0) > 0
-    join_auto_ok = _cfg_bool(cfg, "welcome_join_enabled", "join_welcome_enabled", default=False)
-    _add_module(
-        embed,
-        name="Welcome",
-        ready=welcome_channel_ok and (welcome_msg_ok or join_auto_ok),
-        partial=welcome_channel_ok or welcome_msg_ok or join_auto_ok,
-        lines=[
-            _line("Welcome channel", welcome_channel_ok, welcome_channel),
-            _line("Pinned/start message", welcome_msg_ok, "Saved" if welcome_msg_ok else "Not posted"),
-            _line("Join automation", join_auto_ok, "Enabled" if join_auto_ok else "Disabled"),
-        ],
-        action="/dank welcome health",
-    )
-
-    modlog_ok, modlog = _channel_ready(guild, cfg, "modlog_channel_id", "mod_log_channel_id", "logs_channel_id")
-    modlog_channel = _channel(guild, _cfg_snowflake(cfg, "modlog_channel_id", "mod_log_channel_id", "logs_channel_id"))
-    missing_modlog_perms = _bot_channel_perms(modlog_channel, guild) if modlog_channel is not None else []
-    _add_module(
-        embed,
-        name="Modlog",
-        ready=modlog_ok and not missing_modlog_perms,
-        partial=modlog_ok,
-        lines=[
-            _line("Log channel", modlog_ok, modlog),
-            _line("Bot permissions", not missing_modlog_perms and modlog_ok, "Ready" if not missing_modlog_perms and modlog_ok else ", ".join(missing_modlog_perms) or "Not checked"),
-        ],
-        action="/dank modlog health",
-    )
-
-    pronoun_count = _has_role_named(guild, PRONOUN_ROLE_NAMES)
-    identity_count = _has_role_named(guild, IDENTITY_ROLE_NAMES)
-    self_roles_ready = pronoun_count >= 1 or identity_count >= 1
-    _add_module(
-        embed,
-        name="Self Roles",
-        ready=self_roles_ready,
-        partial=self_roles_ready,
-        lines=[
-            _line("Pronoun roles", pronoun_count > 0, f"{pronoun_count}/{len(PRONOUN_ROLE_NAMES)} found"),
-            _line("Identity roles", identity_count > 0, f"{identity_count}/{len(IDENTITY_ROLE_NAMES)} found"),
-            "✅ Cosmetic-only safety note is included on generated panels.",
-        ],
-        action="/dank roles pronouns",
-    )
-
-    automod_enabled = _cfg_bool(cfg, "automod_enabled", default=False)
-    automod_preset = str(_cfg_value(cfg, "automod_preset", "custom") or "custom")
-    bad_words = [x for x in str(_cfg_value(cfg, "automod_bad_words", "") or "").replace("\n", ",").split(",") if x.strip()]
-    _add_module(
-        embed,
-        name="Automod",
-        ready=automod_enabled,
-        partial=bool(bad_words) or automod_preset != "custom",
-        lines=[
-            _line("Enabled", automod_enabled, "Yes" if automod_enabled else "No"),
-            _line("Preset", automod_preset != "custom", automod_preset),
-            _line("Bad-word filters", bool(bad_words), f"{len(bad_words)} saved"),
-        ],
-        action="/dank automod health",
-    )
-
-    embed_ready = True
-    _add_module(
-        embed,
-        name="Embed Builder",
-        ready=embed_ready,
-        lines=[
-            "✅ Available as a safe private-preview flow.",
-            "✅ Does not post publicly until staff presses Send Embed.",
-        ],
-        action="/dank embed health",
-    )
-
-    embed.set_footer(text="Dank Shield overview: read-only, per-guild, no hidden config changes")
-    await interaction.followup.send(embed=embed, ephemeral=True, allowed_mentions=discord.AllowedMentions.none())
 
 
 def register_public_setup_overview_commands(bot: Any, tree: Any) -> None:
@@ -310,9 +365,8 @@ def register_public_setup_overview_commands(bot: Any, tree: Any) -> None:
     global _ATTACHED
     if _ATTACHED:
         return
-    # The command is declared directly on stoney_group at import time. This
-    # function exists so the startup guard can be explicit and consistent with
-    # the other public modules.
+    # The command is declared directly on the Dank Shield command group at import time.
+    # This function exists so registration stays explicit and consistent with the other public modules.
     _ATTACHED = True
     try:
         print("✅ public_setup_overview: attached /dank overview checklist")
