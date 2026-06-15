@@ -2,10 +2,13 @@ from __future__ import annotations
 
 """Immediate external Discord invite deletion for SpamGuard.
 
-The main SpamGuard burst detector is still useful for hacked-account behavior,
-but invite links should not sit in public chat waiting for a burst threshold.
-This guard deletes blocked Discord invite links immediately when SpamGuard is
-actually enabled for that guild.
+Invite links should not sit in public chat waiting for a burst threshold. This
+guard deletes blocked Discord invite links immediately when SpamGuard is enabled.
+
+It also supports strict scopes:
+- target bot/user IDs: include specific bot accounts instead of ignoring all bots
+- target channel IDs: enforce only in selected channels when configured
+- override flags: bypass normal allow/exempt buckets when the owner wants lockdown
 """
 
 import re
@@ -45,7 +48,7 @@ def _safe_bool(value: Any, default: bool = False) -> bool:
         if isinstance(value, bool):
             return value
         if value is None:
-            return default
+            return bool(default)
         text = str(value).strip().lower()
         if text in {"1", "true", "yes", "y", "on", "enabled"}:
             return True
@@ -58,6 +61,16 @@ def _safe_bool(value: Any, default: bool = False) -> bool:
 
 def _override_enabled(settings: dict[str, Any], key: str) -> bool:
     return _safe_bool(settings.get(key, settings.get(f"spam_{key}")), False)
+
+
+def _first_setting(settings: dict[str, Any], *keys: str) -> Any:
+    for key in keys:
+        if key in settings and settings.get(key) is not None:
+            return settings.get(key)
+        spam_key = f"spam_{key}"
+        if spam_key in settings and settings.get(spam_key) is not None:
+            return settings.get(spam_key)
+    return None
 
 
 def _clean_invite_text(content: str) -> str:
@@ -77,9 +90,14 @@ def _extract_codes(content: str) -> list[str]:
 def _normalize_id_list(values: Any) -> set[str]:
     out: set[str] = set()
     try:
-        source = values if isinstance(values, Iterable) and not isinstance(values, (str, bytes, dict)) else [values]
-        for raw in source:
-            text = _safe_str(raw)
+        if isinstance(values, str):
+            raw_items = re.split(r"[\s,;]+", values)
+        elif isinstance(values, Iterable) and not isinstance(values, (bytes, dict)):
+            raw_items = list(values)
+        else:
+            raw_items = [values]
+        for raw in raw_items:
+            text = _safe_str(raw).strip("<@#!&>")
             if text.isdigit():
                 out.add(text)
     except Exception:
@@ -161,8 +179,6 @@ async def _hard_block_invite_message(message: discord.Message) -> None:
         guild = message.guild
         if guild is None or not isinstance(message.author, discord.Member):
             return
-        if getattr(message.author, "bot", False):
-            return
         if not isinstance(message.channel, discord.TextChannel):
             return
 
@@ -170,6 +186,16 @@ async def _hard_block_invite_message(message: discord.Message) -> None:
 
         settings = await spam_guard.get_spam_settings(guild.id)
         if not bool(settings.get("enabled")):
+            return
+
+        target_bot_ids = _normalize_id_list(_first_setting(settings, "invite_hard_block_target_bot_ids", "invite_target_bot_ids"))
+        target_channel_ids = _normalize_id_list(_first_setting(settings, "invite_hard_block_target_channel_ids", "invite_target_channel_ids"))
+
+        # Default: protect against humans everywhere. Bots are ignored unless the
+        # owner explicitly targets that bot/user ID.
+        if getattr(message.author, "bot", False) and str(message.author.id) not in target_bot_ids:
+            return
+        if target_channel_ids and str(message.channel.id) not in target_channel_ids:
             return
 
         codes = _extract_codes(message.content or "")
@@ -212,9 +238,13 @@ async def _hard_block_invite_message(message: discord.Message) -> None:
             override_notes.append("allowed invite codes")
         if override_own_codes:
             override_notes.append("this-server invite codes")
+        if target_bot_ids:
+            override_notes.append(f"target bot/user scope={len(target_bot_ids)}")
+        if target_channel_ids:
+            override_notes.append(f"target channel scope={len(target_channel_ids)}")
         reason = "external Discord invite link"
         if override_notes:
-            reason += "; override bypassed: " + ", ".join(override_notes)
+            reason += "; policy: " + ", ".join(override_notes)
 
         try:
             await message.delete(reason="SpamGuard hard block: external Discord invite link")
