@@ -1,13 +1,17 @@
 from __future__ import annotations
 
-"""Granular invite hard-block override controls for SpamGuard.
+"""Granular invite hard-block controls for SpamGuard.
 
-This adds a visible access-page option for the hard invite blocker. Server owners
-can decide whether invite deletion should ignore the normal allow/exempt buckets:
-exempt users/roles, invite-allowed roles, allowed channels, allowed invite codes,
-and this-server invite codes.
+Adds visible Access-page controls for:
+- override allow/exempt buckets
+- target bot/user IDs
+- target channel IDs
+
+Overrides answer: should the hard blocker ignore normal allow/exempt buckets?
+Scope answers: where/who should the hard blocker target?
 """
 
+import re
 from typing import Any
 
 import discord
@@ -28,6 +32,11 @@ _OVERRIDE_KEYS: tuple[tuple[str, str], ...] = (
     ("invite_override_allowed_codes", "Allowed invite codes"),
     ("invite_override_own_server_invites", "This-server invite codes"),
 )
+_SCOPE_KEYS: tuple[tuple[str, str], ...] = (
+    ("invite_hard_block_target_bot_ids", "Target bot/user IDs"),
+    ("invite_hard_block_target_channel_ids", "Target channel IDs"),
+)
+_ALL_KEYS = tuple(key for key, _label in _OVERRIDE_KEYS) + tuple(key for key, _label in _SCOPE_KEYS)
 
 
 def _safe_bool(value: Any, default: bool = False) -> bool:
@@ -57,6 +66,22 @@ def _parse_yes_no(value: Any, *, label: str) -> bool:
     if text in {"0", "false", "no", "n", "off", "disabled", "allow"}:
         return False
     raise ValueError(f"{label} must be yes/no.")
+
+
+def _parse_ids(value: Any) -> list[str]:
+    text = str(value or "")
+    ids: list[str] = []
+    for part in re.split(r"[\s,;]+", text):
+        item = part.strip().strip("<@#!&>")
+        if item.isdigit() and item not in ids:
+            ids.append(item)
+    return ids[:50]
+
+
+def _ids_text(value: Any) -> str:
+    if isinstance(value, (list, tuple, set)):
+        return ", ".join(str(x) for x in value if str(x).strip())
+    return str(value or "")
 
 
 def _cfg_value(cfg: Any, key: str) -> Any:
@@ -90,20 +115,22 @@ def _cfg_value(cfg: Any, key: str) -> Any:
     return None
 
 
-def _merge_override_settings(settings: dict[str, Any], source: Any) -> dict[str, Any]:
+def _merge_invite_policy(settings: dict[str, Any], source: Any) -> dict[str, Any]:
     data = dict(settings or {})
     for key, _label in _OVERRIDE_KEYS:
-        raw = None
-        if isinstance(source, dict):
-            raw = source.get(f"spam_{key}", source.get(key))
+        raw = source.get(f"spam_{key}", source.get(key)) if isinstance(source, dict) else None
         if raw is None:
             raw = _cfg_value(source, f"spam_{key}")
         if raw is None:
             raw = _cfg_value(source, key)
-        if raw is not None:
-            data[key] = _safe_bool(raw, False)
-        else:
-            data.setdefault(key, False)
+        data[key] = _safe_bool(raw, False) if raw is not None else _safe_bool(data.get(key), False)
+    for key, _label in _SCOPE_KEYS:
+        raw = source.get(f"spam_{key}", source.get(key)) if isinstance(source, dict) else None
+        if raw is None:
+            raw = _cfg_value(source, f"spam_{key}")
+        if raw is None:
+            raw = _cfg_value(source, key)
+        data[key] = _parse_ids(raw if raw is not None else data.get(key))
     return data
 
 
@@ -115,48 +142,60 @@ def _override_summary(settings: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+def _scope_summary(settings: dict[str, Any]) -> str:
+    bot_ids = _parse_ids(settings.get("invite_hard_block_target_bot_ids"))
+    channel_ids = _parse_ids(settings.get("invite_hard_block_target_channel_ids"))
+    return (
+        f"**Target bot/user IDs:** {', '.join(f'`{x}`' for x in bot_ids) if bot_ids else 'Humans only; bots ignored unless listed'}\n"
+        f"**Target channel IDs:** {', '.join(f'`{x}`' for x in channel_ids) if channel_ids else 'All text channels'}"
+    )
+
+
 def _patched_default_settings(guild_id: int) -> dict[str, Any]:
-    data = dict(_ORIGINAL_DEFAULT(guild_id))
-    return _merge_override_settings(data, {})
+    return _merge_invite_policy(dict(_ORIGINAL_DEFAULT(guild_id)), {})
 
 
 def _patched_normalize_settings(guild_id: int, row: Any) -> dict[str, Any]:
-    data = dict(_ORIGINAL_NORMALIZE(guild_id, row))
-    return _merge_override_settings(data, row)
+    return _merge_invite_policy(dict(_ORIGINAL_NORMALIZE(guild_id, row)), row)
 
 
 def _patched_settings_payload_for_db(settings: dict[str, Any], *, updated_by: discord.Member | None = None) -> dict[str, Any]:
-    # Do NOT add new SQL columns here. Existing production installs may not have
-    # them yet. Overrides are persisted in guild_configs below, then merged back
-    # into get_spam_settings().
+    # Keep SQL payload unchanged for compatibility. The new policy is persisted
+    # through guild_configs so deployments without new DB columns do not break.
     return dict(_ORIGINAL_PAYLOAD(settings, updated_by=updated_by))
 
 
-async def _load_override_config(guild_id: int) -> dict[str, bool]:
+async def _load_policy_config(guild_id: int) -> dict[str, Any]:
     try:
         from stoney_verify.guild_config import get_guild_config
 
         cfg = await get_guild_config(int(guild_id), refresh=True)
-        out: dict[str, bool] = {}
-        for key, _label in _OVERRIDE_KEYS:
+        out: dict[str, Any] = {}
+        for key in _ALL_KEYS:
             raw = _cfg_value(cfg, f"spam_{key}")
             if raw is None:
                 raw = _cfg_value(cfg, key)
             if raw is not None:
-                out[key] = _safe_bool(raw, False)
-        return out
+                out[key] = raw
+        return _merge_invite_policy({}, out)
     except Exception:
         return {}
 
 
-async def _save_override_config(guild_id: int, patch: dict[str, Any]) -> bool:
-    wanted = {key: bool(patch[key]) for key, _label in _OVERRIDE_KEYS if key in patch}
+async def _save_policy_config(guild_id: int, patch: dict[str, Any]) -> bool:
+    wanted: dict[str, Any] = {}
+    for key, _label in _OVERRIDE_KEYS:
+        if key in patch:
+            wanted[key] = bool(patch[key])
+    for key, _label in _SCOPE_KEYS:
+        if key in patch:
+            wanted[key] = _parse_ids(patch[key])
     if not wanted:
         return True
     payload: dict[str, Any] = {}
     for key, value in wanted.items():
-        payload[key] = bool(value)
-        payload[f"spam_{key}"] = bool(value)
+        payload[key] = value
+        payload[f"spam_{key}"] = value
     try:
         from stoney_verify.guild_config import invalidate_guild_config, upsert_guild_config
 
@@ -169,29 +208,30 @@ async def _save_override_config(guild_id: int, patch: dict[str, Any]) -> bool:
 
 async def _patched_get_spam_settings(guild_id: int) -> dict[str, Any]:
     settings = dict(await _ORIGINAL_GET(int(guild_id)))
-    overrides = await _load_override_config(int(guild_id))
-    if overrides:
-        settings.update(overrides)
+    policy = await _load_policy_config(int(guild_id))
+    if policy:
+        settings.update(policy)
         try:
             from stoney_verify import spam_guard
             spam_guard._cache_runtime_settings(int(guild_id), settings, source="db+guild_config", persisted=True)
         except Exception:
             pass
-    return _merge_override_settings(settings, overrides)
+    return _merge_invite_policy(settings, policy)
 
 
 async def _patched_save_spam_settings(guild_id: int, patch: dict[str, Any], *, updated_by: discord.Member | None = None):
-    override_patch = {key: bool(patch[key]) for key, _label in _OVERRIDE_KEYS if key in dict(patch or {})}
-    settings, persisted = await _ORIGINAL_SAVE(int(guild_id), dict(patch or {}), updated_by=updated_by)
-    if override_patch:
-        override_saved = await _save_override_config(int(guild_id), override_patch)
-        settings = _merge_override_settings(dict(settings or {}), override_patch)
+    raw_patch = dict(patch or {})
+    policy_patch = {key: raw_patch[key] for key in _ALL_KEYS if key in raw_patch}
+    settings, persisted = await _ORIGINAL_SAVE(int(guild_id), raw_patch, updated_by=updated_by)
+    if policy_patch:
+        policy_saved = await _save_policy_config(int(guild_id), policy_patch)
+        settings = _merge_invite_policy(dict(settings or {}), policy_patch)
         try:
             from stoney_verify import spam_guard
-            spam_guard._cache_runtime_settings(int(guild_id), settings, source="db+guild_config" if override_saved else "runtime", persisted=bool(persisted or override_saved))
+            spam_guard._cache_runtime_settings(int(guild_id), settings, source="db+guild_config" if policy_saved else "runtime", persisted=bool(persisted or policy_saved))
         except Exception:
             pass
-        persisted = bool(persisted or override_saved)
+        persisted = bool(persisted or policy_saved)
     return settings, bool(persisted)
 
 
@@ -201,11 +241,12 @@ def _patched_panel_embed(guild: discord.Guild, settings: dict[str, Any], *, page
         try:
             embed.add_field(
                 name="Invite Hard-Block Overrides",
-                value=(
-                    _override_summary(settings)
-                    + "\n\n🚫 **override** means hard invite deletion ignores that allow/exempt bucket. "
-                    "Use this when no one should be able to post Discord invites except after you turn the override back off."
-                )[:1024],
+                value=(_override_summary(settings) + "\n\n🚫 **override** means hard invite deletion ignores that allow/exempt bucket.")[:1024],
+                inline=False,
+            )
+            embed.add_field(
+                name="Invite Hard-Block Scope",
+                value=(_scope_summary(settings) + "\n\nUse **Invite Scope** to target specific bots/users or only specific channels.")[:1024],
                 inline=False,
             )
         except Exception:
@@ -222,19 +263,12 @@ class InviteOverrideModal(discord.ui.Modal, title="Invite Override Policy"):
         self.return_page = return_page or "access"
         self.fields: dict[str, discord.ui.TextInput] = {}
         for key, label in _OVERRIDE_KEYS:
-            item = discord.ui.TextInput(
-                label=f"Override {label}",
-                placeholder="yes = block anyway, no = honor this allow/exempt bucket",
-                default=_yes_no(settings.get(key)),
-                required=True,
-                max_length=8,
-            )
+            item = discord.ui.TextInput(label=f"Override {label}", placeholder="yes = block anyway, no = honor this bucket", default=_yes_no(settings.get(key)), required=True, max_length=8)
             self.fields[key] = item
             self.add_item(item)
 
     async def on_submit(self, interaction: discord.Interaction) -> None:
         from stoney_verify import spam_guard
-
         if not await spam_guard._ensure_staff_panel_access(interaction):
             return
         guild = interaction.guild
@@ -249,64 +283,90 @@ class InviteOverrideModal(discord.ui.Modal, title="Invite Override Policy"):
             patch = {key: _parse_yes_no(item.value, label=label) for key, label in _OVERRIDE_KEYS for item in [self.fields[key]]}
         except Exception as exc:
             return await spam_guard._reply_ephemeral(interaction, f"❌ {exc}")
-        settings, persisted = await spam_guard.save_spam_settings(
-            self.guild_id,
-            patch,
-            updated_by=interaction.user if isinstance(interaction.user, discord.Member) else None,
-        )
-        channel = guild.get_channel(self.channel_id)
-        if isinstance(channel, discord.TextChannel):
-            await spam_guard._rerender_panel_message(
-                guild=guild,
-                channel=channel,
-                message_id=self.message_id,
-                page=self.return_page,
-                persisted_hint=persisted,
-            )
+        settings, persisted = await spam_guard.save_spam_settings(self.guild_id, patch, updated_by=interaction.user if isinstance(interaction.user, discord.Member) else None)
+        await _rerender_and_reply(interaction, settings, persisted, self.channel_id, self.message_id, self.return_page, "✅ Invite override policy saved.\n" + _override_summary(settings))
+
+
+class InviteScopeModal(discord.ui.Modal, title="Invite Hard-Block Scope"):
+    def __init__(self, guild_id: int, channel_id: int, message_id: int, return_page: str, settings: dict[str, Any]):
+        super().__init__(timeout=300)
+        self.guild_id = int(guild_id)
+        self.channel_id = int(channel_id)
+        self.message_id = int(message_id)
+        self.return_page = return_page or "access"
+        self.bot_ids = discord.ui.TextInput(label="Target bot/user IDs", placeholder="Leave blank = humans only; add bot IDs to police those bots", default=_ids_text(settings.get("invite_hard_block_target_bot_ids")), required=False, style=discord.TextStyle.paragraph, max_length=500)
+        self.channel_ids = discord.ui.TextInput(label="Target channel IDs", placeholder="Leave blank = all text channels", default=_ids_text(settings.get("invite_hard_block_target_channel_ids")), required=False, style=discord.TextStyle.paragraph, max_length=500)
+        self.add_item(self.bot_ids)
+        self.add_item(self.channel_ids)
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        from stoney_verify import spam_guard
+        if not await spam_guard._ensure_staff_panel_access(interaction):
+            return
+        guild = interaction.guild
+        if guild is None:
+            return await spam_guard._reply_ephemeral(interaction, "Invalid context.")
         try:
-            await interaction.followup.send(
-                "✅ Invite override policy saved.\n"
-                + _override_summary(settings)
-                + f"\nPersistence: `{spam_guard._build_persistence_label(self.guild_id, persisted)}`",
-                ephemeral=True,
-                allowed_mentions=discord.AllowedMentions.none(),
-            )
+            if not interaction.response.is_done():
+                await interaction.response.defer(ephemeral=True)
         except Exception:
             pass
+        patch = {
+            "invite_hard_block_target_bot_ids": _parse_ids(self.bot_ids.value),
+            "invite_hard_block_target_channel_ids": _parse_ids(self.channel_ids.value),
+        }
+        settings, persisted = await spam_guard.save_spam_settings(self.guild_id, patch, updated_by=interaction.user if isinstance(interaction.user, discord.Member) else None)
+        await _rerender_and_reply(interaction, settings, persisted, self.channel_id, self.message_id, self.return_page, "✅ Invite hard-block scope saved.\n" + _scope_summary(settings))
+
+
+async def _rerender_and_reply(interaction: discord.Interaction, settings: dict[str, Any], persisted: bool, channel_id: int, message_id: int, page: str, body: str) -> None:
+    from stoney_verify import spam_guard
+    guild = interaction.guild
+    channel = guild.get_channel(channel_id) if guild else None
+    if isinstance(channel, discord.TextChannel):
+        await spam_guard._rerender_panel_message(guild=guild, channel=channel, message_id=message_id, page=page, persisted_hint=persisted)
+    try:
+        await interaction.followup.send(body + f"\nPersistence: `{spam_guard._build_persistence_label(int(getattr(guild, 'id', 0) or 0), persisted)}`", ephemeral=True, allowed_mentions=discord.AllowedMentions.none())
+    except Exception:
+        pass
 
 
 class InviteOverrideButton(discord.ui.Button):
     def __init__(self, page: str):
-        super().__init__(
-            label="Invite Override",
-            emoji="🚫",
-            style=discord.ButtonStyle.danger,
-            custom_id=f"spamguard:{page}:invite_override",
-            row=1,
-        )
+        super().__init__(label="Invite Override", emoji="🚫", style=discord.ButtonStyle.danger, custom_id=f"spamguard:{page}:invite_override", row=1)
         self.page = page
-
     async def callback(self, interaction: discord.Interaction) -> None:
         from stoney_verify import spam_guard
-
         if not await spam_guard._ensure_staff_panel_access(interaction):
             return
-        guild = interaction.guild
-        channel = interaction.channel
-        message = interaction.message
+        guild, channel, message = interaction.guild, interaction.channel, interaction.message
         if guild is None or not isinstance(channel, discord.TextChannel) or message is None:
             return await spam_guard._reply_ephemeral(interaction, "Invalid context.")
-        settings = await spam_guard.get_spam_settings(guild.id)
-        await interaction.response.send_modal(InviteOverrideModal(guild.id, channel.id, message.id, self.page, settings))
+        await interaction.response.send_modal(InviteOverrideModal(guild.id, channel.id, message.id, self.page, await spam_guard.get_spam_settings(guild.id)))
+
+
+class InviteScopeButton(discord.ui.Button):
+    def __init__(self, page: str):
+        super().__init__(label="Invite Scope", emoji="🎯", style=discord.ButtonStyle.primary, custom_id=f"spamguard:{page}:invite_scope", row=1)
+        self.page = page
+    async def callback(self, interaction: discord.Interaction) -> None:
+        from stoney_verify import spam_guard
+        if not await spam_guard._ensure_staff_panel_access(interaction):
+            return
+        guild, channel, message = interaction.guild, interaction.channel, interaction.message
+        if guild is None or not isinstance(channel, discord.TextChannel) or message is None:
+            return await spam_guard._reply_ephemeral(interaction, "Invalid context.")
+        await interaction.response.send_modal(InviteScopeModal(guild.id, channel.id, message.id, self.page, await spam_guard.get_spam_settings(guild.id)))
 
 
 def _patched_view_build(cls, *, page: str, settings: dict[str, Any]):
     view = _ORIGINAL_VIEW_BUILD(page=page, settings=settings)
     if page == "access":
-        try:
-            view.add_item(InviteOverrideButton(page))
-        except Exception:
-            pass
+        for button in (InviteOverrideButton(page), InviteScopeButton(page)):
+            try:
+                view.add_item(button)
+            except Exception:
+                pass
     return view
 
 
@@ -316,7 +376,6 @@ def apply() -> bool:
         return True
     try:
         from stoney_verify import spam_guard
-
         _ORIGINAL_DEFAULT = getattr(spam_guard, "_default_settings")
         _ORIGINAL_NORMALIZE = getattr(spam_guard, "_normalize_settings")
         _ORIGINAL_PAYLOAD = getattr(spam_guard, "_settings_payload_for_db")
@@ -324,7 +383,6 @@ def apply() -> bool:
         _ORIGINAL_SAVE = getattr(spam_guard, "save_spam_settings")
         _ORIGINAL_EMBED = getattr(spam_guard, "_build_panel_embed")
         _ORIGINAL_VIEW_BUILD = getattr(spam_guard.SpamGuardPanelView, "build")
-
         spam_guard._default_settings = _patched_default_settings
         spam_guard._normalize_settings = _patched_normalize_settings
         spam_guard._settings_payload_for_db = _patched_settings_payload_for_db
@@ -332,9 +390,8 @@ def apply() -> bool:
         spam_guard.save_spam_settings = _patched_save_spam_settings
         spam_guard._build_panel_embed = _patched_panel_embed
         spam_guard.SpamGuardPanelView.build = classmethod(_patched_view_build)
-
         _PATCHED = True
-        print("✅ spam_guard_invite_override_options active; access page has Invite Override policy")
+        print("✅ spam_guard_invite_override_options active; access page has Invite Override + Invite Scope policy")
         return True
     except Exception as exc:
         try:
