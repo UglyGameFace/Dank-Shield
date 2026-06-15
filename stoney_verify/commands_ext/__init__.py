@@ -29,6 +29,7 @@ COMMAND_MODULES: List[CommandModuleSpec] = [
     ("public_setup_full_customization", "register_public_setup_full_customization_commands", "core: setup customization picker flow"),
     ("public_status_reporter", "register_public_status_reporter", "core: bot status reports and heartbeat"),
     ("public_modlog_coverage", "register_public_modlog_coverage_listeners", "core: supplemental modlog coverage listeners"),
+    ("public_diagnostics_group", "register_public_diagnostics_group_commands", "core: read-only /dank diagnostics startup health"),
     ("public_setup_group", "register_public_setup_group_commands", "core: /dank command group"),
     ("public_help_group", "register_public_help_group_commands", "core: /dank help and command catalog"),
     ("public_protection_center", "register_public_protection_center_commands", "core: unified /dank protection center"),
@@ -103,6 +104,7 @@ _PUBLIC_CORE_MODULES: Tuple[str, ...] = (
     "public_setup_full_customization",
     "public_status_reporter",
     "public_modlog_coverage",
+    "public_diagnostics_group",
     "public_setup_group",
     "public_help_group",
     "public_protection_center",
@@ -215,7 +217,20 @@ _CONFUSING_STONEY_CHILDREN: Tuple[str, ...] = (
     "tickettool-check",
 )
 
-_ALLOWED_STONEY_CHILDREN = {"setup", "overview", "protection", "help", "commands", "cleanup", "members", "welcome", "roles", "modlog", "embed"}
+_ALLOWED_STONEY_CHILDREN = {
+    "setup",
+    "overview",
+    "diagnostics",
+    "protection",
+    "help",
+    "commands",
+    "cleanup",
+    "members",
+    "welcome",
+    "roles",
+    "modlog",
+    "embed",
+}
 
 _COMPACT_SUPPRESS_PREFIXES: Tuple[str, ...] = (
     "✅ public_",
