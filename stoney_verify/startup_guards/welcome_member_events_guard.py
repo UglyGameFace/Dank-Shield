@@ -121,6 +121,7 @@ def _format(text: str, member: discord.Member) -> str:
         "member": member.mention,
         "user": member.mention,
         "username": str(member),
+        "display_name": str(getattr(member, "display_name", "") or member),
         "member_count": str(getattr(guild, "member_count", "") or ""),
     }
     out = str(text or "")
@@ -154,7 +155,7 @@ async def _send_join(member: discord.Member) -> None:
         channel = _target_channel(member.guild, cfg, kind="join")
         if not isinstance(channel, discord.TextChannel):
             return
-        title = _cfg_str(cfg, "welcome_join_title", default="👋 Welcome, {username}!")
+        title = _cfg_str(cfg, "welcome_join_title", default="Welcome, {display_name}!")
         body = _cfg_str(cfg, "welcome_join_body", default="Welcome to **{server_name}**, {member}! Head to the start-here channels to get settled.")
         await channel.send(embed=_embed(title, body, member), allowed_mentions=discord.AllowedMentions(users=True, roles=False, everyone=False))
     except Exception as exc:
@@ -174,8 +175,8 @@ async def _send_leave(member: discord.Member) -> None:
         channel = _target_channel(member.guild, cfg, kind="leave")
         if not isinstance(channel, discord.TextChannel):
             return
-        title = _cfg_str(cfg, "welcome_leave_title", default="👋 {username} left")
-        body = _cfg_str(cfg, "welcome_leave_body", default="{username} left **{server_name}**. Member count: {member_count}.")
+        title = _cfg_str(cfg, "welcome_leave_title", default="{display_name} left")
+        body = _cfg_str(cfg, "welcome_leave_body", default="{display_name} left **{server_name}**. Member count: {member_count}.")
         await channel.send(embed=_embed(title, body, member, goodbye=True), allowed_mentions=discord.AllowedMentions.none())
     except Exception as exc:
         try:
