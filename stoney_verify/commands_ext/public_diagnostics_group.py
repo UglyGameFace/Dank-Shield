@@ -13,8 +13,8 @@ import discord
 
 from ..globals import now_utc
 from ..guild_context import GuildContext, get_guild_context
+from ..interaction_guard import run_guarded_interaction, safe_send_interaction
 from ..startup_diagnostics import build_startup_health_report
-from .common import safe_defer
 from .public_setup_group import stoney_group
 
 _REGISTERED = False
@@ -157,43 +157,50 @@ def _startup_diagnostics_embed(
 )
 async def diagnostics(interaction: discord.Interaction) -> None:
     if interaction.guild is None:
-        await interaction.response.send_message("❌ This command must be used inside a server.", ephemeral=True)
-        return
-
-    if not _admin_or_manage_guild(interaction):
-        await interaction.response.send_message(
-            "❌ Diagnostics require **Manage Server** or **Administrator** permission.",
+        await safe_send_interaction(
+            interaction,
+            content="❌ This command must be used inside a server.",
             ephemeral=True,
         )
         return
 
-    await safe_defer(interaction, ephemeral=True)
+    if not _admin_or_manage_guild(interaction):
+        await safe_send_interaction(
+            interaction,
+            content="❌ Diagnostics require **Manage Server** or **Administrator** permission.",
+            ephemeral=True,
+        )
+        return
 
-    guild_context: Optional[GuildContext] = None
-    guild_context_error: Optional[BaseException] = None
+    async def _run() -> None:
+        guild_context: Optional[GuildContext] = None
+        guild_context_error: Optional[BaseException] = None
 
-    try:
-        guild_context = await get_guild_context(interaction.guild.id, refresh=True)
-    except Exception as e:
-        guild_context_error = e
+        try:
+            guild_context = await get_guild_context(interaction.guild.id, refresh=True)
+        except Exception as e:
+            guild_context_error = e
 
-    try:
         embed = _startup_diagnostics_embed(
             guild_context=guild_context,
             guild_context_error=guild_context_error,
         )
-    except Exception as e:
-        embed = discord.Embed(
-            title="❌ Diagnostics Failed",
-            description=f"`{type(e).__name__}: {str(e)[:350]}`",
-            color=discord.Color.red(),
-            timestamp=now_utc(),
+        sent = await safe_send_interaction(
+            interaction,
+            embed=embed,
+            ephemeral=True,
+            allowed_mentions=discord.AllowedMentions.none(),
         )
+        if not sent:
+            raise RuntimeError("Diagnostics response could not be sent to Discord.")
 
-    await interaction.followup.send(
-        embed=embed,
+    await run_guarded_interaction(
+        interaction,
+        _run,
+        defer=True,
         ephemeral=True,
-        allowed_mentions=discord.AllowedMentions.none(),
+        error_title="❌ Diagnostics failed safely",
+        error_guidance="Nothing was changed. Retry `/dank diagnostics`, then check bot logs if it keeps failing.",
     )
 
 
