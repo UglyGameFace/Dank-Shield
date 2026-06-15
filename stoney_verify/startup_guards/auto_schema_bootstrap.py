@@ -269,6 +269,66 @@ create index if not exists idx_tickets_discord_thread_id on public.tickets (disc
 create index if not exists idx_tickets_owner on public.tickets (guild_id, owner_id);
 create index if not exists idx_ticket_categories_guild_sort on public.ticket_categories (guild_id, sort_order);
 create index if not exists idx_member_activity_scan_locks_guild_active on public.member_activity_scan_locks (guild_id, active);
+
+-- Ticket production guardrails. These enforce atomicity only when historical
+-- data is clean enough to do so safely. If duplicates already exist, startup
+-- must preserve data and skip the unique index rather than failing boot.
+do $$
+begin
+    if not exists (
+        select 1
+        from (
+            select guild_id, ticket_number
+            from public.tickets
+            where ticket_number is not null
+            group by guild_id, ticket_number
+            having count(*) > 1
+            limit 1
+        ) duplicates
+    ) then
+        execute 'create unique index if not exists uq_tickets_guild_ticket_number on public.tickets (guild_id, ticket_number) where ticket_number is not null';
+    else
+        raise notice 'Skipping uq_tickets_guild_ticket_number because duplicate historical ticket numbers exist.';
+    end if;
+end $$;
+
+do $$
+begin
+    if not exists (
+        select 1
+        from (
+            select channel_id
+            from public.tickets
+            where nullif(channel_id, '') is not null
+            group by channel_id
+            having count(*) > 1
+            limit 1
+        ) duplicates
+    ) then
+        execute 'create unique index if not exists uq_tickets_channel_id on public.tickets (channel_id) where nullif(channel_id, '''') is not null';
+    else
+        raise notice 'Skipping uq_tickets_channel_id because duplicate historical channel IDs exist.';
+    end if;
+end $$;
+
+do $$
+begin
+    if not exists (
+        select 1
+        from (
+            select discord_thread_id
+            from public.tickets
+            where nullif(discord_thread_id, '') is not null
+            group by discord_thread_id
+            having count(*) > 1
+            limit 1
+        ) duplicates
+    ) then
+        execute 'create unique index if not exists uq_tickets_discord_thread_id on public.tickets (discord_thread_id) where nullif(discord_thread_id, '''') is not null';
+    else
+        raise notice 'Skipping uq_tickets_discord_thread_id because duplicate historical thread IDs exist.';
+    end if;
+end $$;
 """
 
 
