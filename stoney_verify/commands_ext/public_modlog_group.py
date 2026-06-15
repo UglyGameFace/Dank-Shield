@@ -5,7 +5,10 @@ from typing import Any, Optional
 import discord
 from discord import app_commands
 
+from ..guild_action_guard import decide_guild_action
 from ..guild_config import get_guild_config, invalidate_guild_config
+from ..guild_context import get_guild_context
+from ..interaction_guard import safe_send_error, safe_send_interaction
 from .public_setup_group import _require_setup_permission, _upsert_config, stoney_group
 
 _ATTACHED = False
@@ -85,13 +88,36 @@ async def _defer(interaction: discord.Interaction) -> None:
 
 
 async def _send(interaction: discord.Interaction, content: str = "", **kwargs: Any) -> None:
+    await safe_send_interaction(interaction, content=content, ephemeral=True, **kwargs)
+
+
+async def _require_safe_modlog_test(interaction: discord.Interaction) -> bool:
+    guild = interaction.guild
+    if guild is None:
+        await safe_send_interaction(interaction, content="❌ This command must be used inside a server.", ephemeral=True)
+        return False
     try:
-        if not interaction.response.is_done():
-            await interaction.response.send_message(content, ephemeral=True, **kwargs)
-        else:
-            await interaction.followup.send(content, ephemeral=True, **kwargs)
-    except Exception:
-        pass
+        context = await get_guild_context(int(guild.id), refresh=True)
+        decision = decide_guild_action(
+            context,
+            action="send modlog test",
+            feature="logging",
+            required_keys=("modlog_channel_id",),
+        )
+    except Exception as exc:
+        await safe_send_interaction(
+            interaction,
+            content=(
+                "❌ Could not verify this server's modlog safety state. "
+                f"Nothing was sent. `{type(exc).__name__}: {str(exc)[:250]}`"
+            ),
+            ephemeral=True,
+        )
+        return False
+    if decision.denied:
+        await safe_send_interaction(interaction, content=decision.user_message(), ephemeral=True)
+        return False
+    return True
 
 
 async def save_modlog_channel(interaction: discord.Interaction, channel: discord.TextChannel) -> None:
@@ -159,6 +185,8 @@ async def send_modlog_test(interaction: discord.Interaction) -> None:
     if guild is None:
         return await _send(interaction, "❌ This command must be used inside a server.")
     await _defer(interaction)
+    if not await _require_safe_modlog_test(interaction):
+        return
     cfg = await get_guild_config(int(guild.id), refresh=True)
     channel = _modlog_channel(guild, cfg)
     if channel is None:
@@ -169,7 +197,17 @@ async def send_modlog_test(interaction: discord.Interaction) -> None:
     embed = discord.Embed(title="✅ Dank Shield Modlog Test", description="If you can see this, this server's modlog channel is wired correctly.", color=discord.Color.green(), timestamp=discord.utils.utcnow())
     embed.add_field(name="Triggered By", value=f"{interaction.user} (`{interaction.user.id}`)", inline=False)
     embed.set_footer(text="Dank Shield modlog test")
-    await channel.send(embed=embed, allowed_mentions=discord.AllowedMentions.none())
+    try:
+        await channel.send(embed=embed, allowed_mentions=discord.AllowedMentions.none())
+    except Exception as exc:
+        await safe_send_error(
+            interaction,
+            exc,
+            title="❌ Could not send modlog test safely",
+            guidance="Nothing else was changed. Check the saved modlog channel permissions, then retry `/dank modlog test`.",
+            ephemeral=True,
+        )
+        return
     await interaction.followup.send(f"✅ Test log sent to {channel.mention}.", ephemeral=True, allowed_mentions=discord.AllowedMentions.none())
 
 
