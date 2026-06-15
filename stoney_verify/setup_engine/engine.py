@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Mapping
 
 import discord
 
@@ -43,6 +43,61 @@ def bot_can_manage_role(guild: discord.Guild, role_id: int) -> tuple[bool, str]:
     except Exception:
         return False, "role hierarchy could not be checked"
     return True, ""
+
+
+def raw_value(cfg: Any, key: str, default: Any = None) -> Any:
+    try:
+        raw = getattr(cfg, "raw", None)
+        if isinstance(raw, Mapping) and raw.get(key) is not None:
+            return raw.get(key)
+    except Exception:
+        pass
+    try:
+        value = getattr(cfg, key, None)
+        if value is not None:
+            return value
+    except Exception:
+        pass
+    return default
+
+
+def raw_bool(cfg: Any, *keys: str, default: bool = False) -> bool:
+    for key in keys:
+        value = raw_value(cfg, key, None)
+        if value is not None:
+            try:
+                return str(value).strip().lower() in {"1", "true", "yes", "y", "on", "enabled"}
+            except Exception:
+                return bool(default)
+    return bool(default)
+
+
+def raw_int(cfg: Any, *keys: str) -> int:
+    for key in keys:
+        value = raw_value(cfg, key, None)
+        try:
+            if value is None or isinstance(value, bool):
+                continue
+            text = str(value).strip()
+            if not text or text.lower() in {"none", "null"}:
+                continue
+            parsed = int(text)
+            if parsed > 0:
+                return parsed
+        except Exception:
+            continue
+    return 0
+
+
+def raw_str(cfg: Any, *keys: str) -> str:
+    for key in keys:
+        try:
+            text = str(raw_value(cfg, key, "") or "").strip()
+            if text:
+                return text
+        except Exception:
+            continue
+    return ""
 
 
 def add_core(guild: discord.Guild, cfg: Any, findings: list[HealthFinding], ok: list[str]) -> None:
@@ -100,6 +155,55 @@ def add_core(guild: discord.Guild, cfg: Any, findings: list[HealthFinding], ok: 
             ok.append(f"{label} is chosen: {target_label(channel)}.")
 
 
+def add_welcome_events(guild: discord.Guild, cfg: Any, findings: list[HealthFinding], ok: list[str]) -> None:
+    me = bot_member(guild)
+    for kind, label, enabled, channel_id, title, body in (
+        (
+            "join",
+            "Join welcome messages",
+            raw_bool(cfg, "welcome_join_enabled", "join_welcome_enabled", default=False),
+            raw_int(cfg, "join_welcome_channel_id", "welcome_channel_id"),
+            raw_str(cfg, "welcome_join_title"),
+            raw_str(cfg, "welcome_join_body"),
+        ),
+        (
+            "leave",
+            "Leave/goodbye messages",
+            raw_bool(cfg, "welcome_leave_enabled", "goodbye_enabled", "leave_message_enabled", default=False),
+            raw_int(cfg, "goodbye_channel_id", "leave_channel_id", "welcome_channel_id"),
+            raw_str(cfg, "welcome_leave_title"),
+            raw_str(cfg, "welcome_leave_body"),
+        ),
+    ):
+        if not enabled:
+            ok.append(f"{label} are disabled until a server admin enables them in Welcome Center.")
+            continue
+        if channel_id <= 0:
+            findings.append(finding("welcome_events." + kind + ".channel_not_set", FindingSeverity.WARNING, label, "Enabled but no channel is saved.", "Choose a channel in /dank setup → Feature Centers → Welcome Center → Join/Leave.", action=RecommendedAction.PICK_EXISTING, manual=("Open Welcome Center → Join/Leave and choose a channel.",)))
+            continue
+        channel = get_channel(guild, channel_id)
+        if not isinstance(channel, discord.TextChannel):
+            findings.append(finding("welcome_events." + kind + ".channel_missing", FindingSeverity.WARNING, label, f"Saved channel `{channel_id}` is missing or is not a text channel.", "Choose a live text channel in Welcome Center → Join/Leave.", targets=(channel_id,), action=RecommendedAction.PICK_EXISTING, manual=("Open Welcome Center → Join/Leave and choose a new channel.",)))
+            continue
+        missing: list[str] = []
+        if not can_see(channel, me):
+            missing.append("View Channel")
+        if not can_send(channel, me):
+            missing.append("Send Messages")
+        if not permission(channel, me, "embed_links"):
+            missing.append("Embed Links")
+        if not permission(channel, me, "read_message_history"):
+            missing.append("Read Message History")
+        if missing:
+            findings.append(finding("welcome_events." + kind + ".bot_permissions", FindingSeverity.WARNING, label, f"{target_label(channel)} is enabled but bot is missing: {', '.join(missing)}.", "Grant bot posting permissions there or choose another channel.", targets=(channel_id,), action=RecommendedAction.FIX_PERMISSIONS, manual=("Give Dank Shield access to the selected join/leave channel, or choose another channel in Welcome Center.",)))
+        else:
+            ok.append(f"{label} are enabled and bot can post in {target_label(channel)}.")
+        if title and not title.strip():
+            findings.append(finding("welcome_events." + kind + ".title_empty", FindingSeverity.WARNING, label, "Saved title template is blank.", "Edit the template in Welcome Center → Join/Leave."))
+        if body and not body.strip():
+            findings.append(finding("welcome_events." + kind + ".body_empty", FindingSeverity.WARNING, label, "Saved body template is blank.", "Edit the template in Welcome Center → Join/Leave."))
+
+
 def add_visibility(guild: discord.Guild, cfg: Any, findings: list[HealthFinding], ok: list[str]) -> None:
     unverified = get_role(guild, cfg.unverified_role_id)
     if unverified is None:
@@ -150,6 +254,7 @@ def build_setup_health_report(guild: discord.Guild, raw_cfg: Any) -> SetupHealth
     add_core(guild, cfg, findings, ok)
     if cfg.uses_verified_as_member:
         ok.append("Verified is the effective Member/Resident role for this server.")
+    add_welcome_events(guild, cfg, findings, ok)
     add_visibility(guild, cfg, findings, ok)
     ok.append(f"Canonical setup engine: {ENGINE_VERSION}.")
     return SetupHealthReport(int(guild.id), ENGINE_VERSION, cfg, tuple(findings), tuple(), tuple(ok))
