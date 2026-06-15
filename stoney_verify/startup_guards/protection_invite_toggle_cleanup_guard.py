@@ -58,6 +58,14 @@ def _safe_bool(value: Any, default: bool = False) -> bool:
     return bool(default)
 
 
+def _safe_int(value: Any, default: int = 0) -> int:
+    try:
+        text = str(value or "").strip()
+        return int(text) if text else int(default)
+    except Exception:
+        return int(default)
+
+
 def _normalize_text(value: Any) -> str:
     text = str(value or "")
     text = text.replace("\u200b", "").replace("\u200c", "").replace("\u200d", "").replace("\ufeff", "")
@@ -161,6 +169,26 @@ def _normalize_codes(values: Any) -> set[str]:
     return out
 
 
+def _channel_id_from_text(value: Any) -> int:
+    text = str(value or "").strip()
+    text = text.strip("<#> ")
+    match = re.search(r"(\d{15,25})", text)
+    return _safe_int(match.group(1), 0) if match else 0
+
+
+async def _resolve_text_channel(guild: discord.Guild, value: Any) -> discord.TextChannel | None:
+    channel_id = _channel_id_from_text(value)
+    if channel_id <= 0:
+        return None
+    channel = guild.get_channel(channel_id)
+    if channel is None:
+        try:
+            channel = await guild.fetch_channel(channel_id)
+        except Exception:
+            channel = None
+    return channel if isinstance(channel, discord.TextChannel) else None
+
+
 async def _own_invite_codes(guild: discord.Guild) -> set[str]:
     try:
         from stoney_verify import spam_guard
@@ -196,6 +224,13 @@ async def _blocked_codes_for_guild(guild: discord.Guild, codes: set[str]) -> tup
     return blocked, allowed_count
 
 
+async def _delete_message(message: discord.Message, *, reason: str) -> None:
+    try:
+        await message.delete(reason=reason)
+    except TypeError:
+        await message.delete()
+
+
 async def _clean_existing_invites(channel: Any, *, limit: int = 100) -> dict[str, Any]:
     result: dict[str, Any] = {"checked": 0, "matched": 0, "allowed": 0, "deleted": 0, "failed": 0, "warning": None}
     if not isinstance(channel, discord.TextChannel):
@@ -207,10 +242,10 @@ async def _clean_existing_invites(channel: Any, *, limit: int = 100) -> dict[str
         return result
     perms = channel.permissions_for(me)
     if not perms.read_message_history:
-        result["warning"] = "Dank Shield needs Read Message History to scan existing messages."
+        result["warning"] = f"Dank Shield needs Read Message History in {channel.mention} to scan existing messages."
         return result
     if not perms.manage_messages:
-        result["warning"] = "Dank Shield needs Manage Messages to remove existing invite links."
+        result["warning"] = f"Dank Shield needs Manage Messages in {channel.mention} to remove existing invite links."
         return result
     try:
         async for message in channel.history(limit=max(1, min(int(limit), 250))):
@@ -227,23 +262,23 @@ async def _clean_existing_invites(channel: Any, *, limit: int = 100) -> dict[str
                     result["allowed"] += 1
                 if not blocked:
                     continue
-                await message.delete(reason="Dank Shield Invite Shield cleanup: external invite")
+                await _delete_message(message, reason="Dank Shield Invite Shield cleanup: external invite")
                 result["deleted"] += 1
             except discord.Forbidden:
                 result["failed"] += 1
-                result["warning"] = "Discord denied deletion. Check Manage Messages and channel permission overrides."
+                result["warning"] = f"Discord denied deletion in {channel.mention}. Check Manage Messages and channel permission overrides."
                 break
             except discord.NotFound:
                 continue
             except Exception as exc:
                 result["failed"] += 1
                 if result.get("warning") is None:
-                    result["warning"] = f"Some matched messages could not be removed: {type(exc).__name__}: {str(exc)[:160]}"
+                    result["warning"] = f"Some matched messages could not be removed in {channel.mention}: {type(exc).__name__}: {str(exc)[:150]}"
                 continue
     except discord.Forbidden:
-        result["warning"] = "Dank Shield cannot read message history in this channel."
+        result["warning"] = f"Dank Shield cannot read message history in {channel.mention}."
     except Exception as exc:
-        result["warning"] = f"Scan failed: {type(exc).__name__}: {str(exc)[:180]}"
+        result["warning"] = f"Scan failed in {channel.mention}: {type(exc).__name__}: {str(exc)[:170]}"
     return result
 
 
@@ -303,7 +338,7 @@ async def _set_invite_shield(interaction: discord.Interaction, *, enabled: bool,
     note = "✅ Invite Shield enabled. Normal links remain allowed." if enabled else "⚪ Invite Shield disabled."
     if enabled and scan_current:
         result = await _clean_existing_invites(interaction.channel, limit=150)
-        note += "\n" + _scan_note("Auto-clean current channel", result)
+        note += "\n" + _scan_note("Auto-clean command channel", result)
     await _refresh_card(center, interaction, note=note)
 
 
@@ -316,16 +351,61 @@ class InviteShieldToggle(discord.ui.Button):
         await _set_invite_shield(interaction, enabled=not self.enabled, scan_current=not self.enabled)
 
 
-class CleanExistingInvites(discord.ui.Button):
+class CleanCurrentChannelInvites(discord.ui.Button):
     def __init__(self) -> None:
-        super().__init__(label="Clean Existing Invites", emoji="🧹", style=discord.ButtonStyle.secondary, custom_id="dank_protection:clean_existing_invites", row=3)
+        super().__init__(label="Clean Command Channel", emoji="🧹", style=discord.ButtonStyle.secondary, custom_id="dank_protection:clean_current_channel_invites", row=3)
 
     async def callback(self, interaction: discord.Interaction) -> None:
         from stoney_verify.commands_ext import public_protection_center as center
         if not await center._require_setup_permission(interaction):
             return
         result = await _clean_existing_invites(interaction.channel, limit=200)
-        await _refresh_card(center, interaction, note=_scan_note("🧹 Clean Existing Invites", result))
+        await _refresh_card(center, interaction, note=_scan_note("🧹 Clean Command Channel", result))
+
+
+class TargetChannelCleanupModal(discord.ui.Modal, title="Clean Invite Links in Channel"):
+    def __init__(self) -> None:
+        super().__init__(timeout=300)
+        self.channel_id = discord.ui.TextInput(
+            label="Channel mention or ID to scan",
+            placeholder="Example: #bot-commands or 123456789012345678",
+            required=True,
+            max_length=120,
+        )
+        self.limit = discord.ui.TextInput(
+            label="Recent messages to check",
+            placeholder="Default 200, max 250",
+            default="200",
+            required=False,
+            max_length=4,
+        )
+        self.add_item(self.channel_id)
+        self.add_item(self.limit)
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        from stoney_verify.commands_ext import public_protection_center as center
+        if not await center._require_setup_permission(interaction):
+            return
+        guild = interaction.guild
+        if guild is None:
+            return await center._send_ephemeral(interaction, "❌ This must be used inside a server.")
+        channel = await _resolve_text_channel(guild, self.channel_id.value)
+        if channel is None:
+            return await _refresh_card(center, interaction, note="⚠️ I could not find that text channel. Paste a channel mention like `<#123>` or the raw channel ID.")
+        limit = max(1, min(_safe_int(self.limit.value, 200), 250))
+        result = await _clean_existing_invites(channel, limit=limit)
+        await _refresh_card(center, interaction, note=_scan_note(f"🧹 Clean {channel.mention}", result))
+
+
+class CleanTargetChannelInvites(discord.ui.Button):
+    def __init__(self) -> None:
+        super().__init__(label="Clean Selected Channel", emoji="🎯", style=discord.ButtonStyle.primary, custom_id="dank_protection:clean_target_channel_invites", row=3)
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        from stoney_verify.commands_ext import public_protection_center as center
+        if not await center._require_setup_permission(interaction):
+            return
+        await interaction.response.send_modal(TargetChannelCleanupModal())
 
 
 def _patch_view() -> bool:
@@ -345,14 +425,22 @@ def _patch_view() -> bool:
                 pass
             for child in list(getattr(self, "children", []) or []):
                 cid = str(getattr(child, "custom_id", "") or "")
-                if cid in {"dank_protection:invite_scope", "dank_protection:block_invites", "dank_protection:invite_shield_toggle"}:
+                if cid in {
+                    "dank_protection:invite_scope",
+                    "dank_protection:block_invites",
+                    "dank_protection:invite_shield_toggle",
+                    "dank_protection:clean_existing_invites",
+                    "dank_protection:clean_current_channel_invites",
+                    "dank_protection:clean_target_channel_invites",
+                }:
                     try:
                         self.remove_item(child)
                     except Exception:
                         pass
             try:
                 self.add_item(InviteShieldToggle(enabled))
-                self.add_item(CleanExistingInvites())
+                self.add_item(CleanCurrentChannelInvites())
+                self.add_item(CleanTargetChannelInvites())
             except Exception:
                 pass
 
@@ -369,7 +457,7 @@ def apply() -> bool:
         return True
     ok = _patch_view()
     _PATCHED = True
-    print("✅ protection_invite_toggle_cleanup_guard active; Invite Shield cleanup respects internal invites and reports failures" if ok else "⚠️ protection_invite_toggle_cleanup_guard loaded but view patch was delayed")
+    print("✅ protection_invite_toggle_cleanup_guard active; Invite Shield cleanup supports target channels and safe delete fallback" if ok else "⚠️ protection_invite_toggle_cleanup_guard loaded but view patch was delayed")
     return ok
 
 
