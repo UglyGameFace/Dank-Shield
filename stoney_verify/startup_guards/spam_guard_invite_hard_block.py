@@ -1,15 +1,6 @@
 from __future__ import annotations
 
-"""Immediate external Discord invite deletion for SpamGuard.
-
-Invite links should not sit in public chat waiting for a burst threshold. This
-guard deletes blocked Discord invite links immediately when SpamGuard is enabled.
-
-It also supports strict scopes:
-- target bot/user IDs: include specific bot accounts instead of ignoring all bots
-- target channel IDs: enforce only in selected channels when configured
-- override flags: bypass normal allow/exempt buckets when the owner wants lockdown
-"""
+"""Immediate external Discord invite deletion for SpamGuard."""
 
 import re
 from typing import Any, Iterable, Set
@@ -50,9 +41,9 @@ def _safe_bool(value: Any, default: bool = False) -> bool:
         if value is None:
             return bool(default)
         text = str(value).strip().lower()
-        if text in {"1", "true", "yes", "y", "on", "enabled"}:
+        if text in {"1", "true", "yes", "y", "on", "enabled", "all"}:
             return True
-        if text in {"0", "false", "no", "n", "off", "disabled"}:
+        if text in {"0", "false", "no", "n", "off", "disabled", "none"}:
             return False
     except Exception:
         pass
@@ -188,14 +179,13 @@ async def _hard_block_invite_message(message: discord.Message) -> None:
         if not bool(settings.get("enabled")):
             return
 
-        target_bot_ids = _normalize_id_list(_first_setting(settings, "invite_hard_block_target_bot_ids", "invite_target_bot_ids"))
-        target_channel_ids = _normalize_id_list(_first_setting(settings, "invite_hard_block_target_channel_ids", "invite_target_channel_ids"))
+        include_all_bots = _safe_bool(_first_setting(settings, "invite_hard_block_target_all_bots", "invite_target_all_bots"), False)
+        include_ids = _normalize_id_list(_first_setting(settings, "invite_hard_block_target_bot_ids", "invite_target_bot_ids"))
+        channel_ids = _normalize_id_list(_first_setting(settings, "invite_hard_block_target_channel_ids", "invite_target_channel_ids"))
 
-        # Default: protect against humans everywhere. Bots are ignored unless the
-        # owner explicitly targets that bot/user ID.
-        if getattr(message.author, "bot", False) and str(message.author.id) not in target_bot_ids:
+        if getattr(message.author, "bot", False) and not include_all_bots and str(message.author.id) not in include_ids:
             return
-        if target_channel_ids and str(message.channel.id) not in target_channel_ids:
+        if channel_ids and str(message.channel.id) not in channel_ids:
             return
 
         codes = _extract_codes(message.content or "")
@@ -227,27 +217,29 @@ async def _hard_block_invite_message(message: discord.Message) -> None:
         if not blocked:
             return
 
-        override_notes = []
+        notes = []
         if override_exempt:
-            override_notes.append("exempt users/roles")
+            notes.append("exempt users/roles ignored")
         if override_allowed_roles:
-            override_notes.append("invite-allowed roles")
+            notes.append("invite-allowed roles ignored")
         if override_allowed_channels:
-            override_notes.append("allowed channels")
+            notes.append("allowed channels ignored")
         if override_allowed_codes:
-            override_notes.append("allowed invite codes")
+            notes.append("allowed invite codes ignored")
         if override_own_codes:
-            override_notes.append("this-server invite codes")
-        if target_bot_ids:
-            override_notes.append(f"target bot/user scope={len(target_bot_ids)}")
-        if target_channel_ids:
-            override_notes.append(f"target channel scope={len(target_channel_ids)}")
+            notes.append("this-server invite codes ignored")
+        if include_all_bots:
+            notes.append("all bots included")
+        elif include_ids:
+            notes.append(f"listed bot/user ids={len(include_ids)}")
+        if channel_ids:
+            notes.append(f"listed channel ids={len(channel_ids)}")
         reason = "external Discord invite link"
-        if override_notes:
-            reason += "; policy: " + ", ".join(override_notes)
+        if notes:
+            reason += "; policy: " + ", ".join(notes)
 
         try:
-            await message.delete(reason="SpamGuard hard block: external Discord invite link")
+            await message.delete(reason="SpamGuard invite protection: external Discord invite link")
             await _modlog(guild, message, blocked, reason)
         except discord.Forbidden:
             await _modlog(guild, message, blocked, "bot lacks Manage Messages in that channel")
