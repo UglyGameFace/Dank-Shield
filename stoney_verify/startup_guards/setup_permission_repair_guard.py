@@ -230,6 +230,28 @@ def _staff_private_overwrites(
     return ow
 
 
+def _bot_post_only_overwrites(guild: discord.Guild) -> dict[Any, discord.PermissionOverwrite]:
+    """Repair only Dank Shield's own posting access and preserve channel privacy.
+
+    Join/leave announcements may intentionally live in private log channels. Do
+    not force @everyone or member roles visible there just because Setup Health
+    says the bot cannot post.
+    """
+    me = _bot_member(guild)
+    if not me:
+        return {}
+    return {
+        me: discord.PermissionOverwrite(
+            view_channel=True,
+            send_messages=True,
+            read_message_history=True,
+            embed_links=True,
+            attach_files=True,
+            manage_messages=True,
+        )
+    }
+
+
 def _voice_verify_overwrites(
     guild: discord.Guild,
     *,
@@ -262,6 +284,8 @@ def _channel_manage_missing(channel: Any, me: Optional[discord.Member]) -> bool:
 
 
 def _add_target(targets: list[RepairTarget], seen: set[int], channel: Any, label: str, overwrites: dict[Any, discord.PermissionOverwrite]) -> None:
+    if not overwrites:
+        return
     if not _can_repair_channel(channel):
         return
     cid = int(getattr(channel, "id", 0) or 0)
@@ -318,6 +342,7 @@ async def _build_targets(guild: discord.Guild) -> tuple[list[RepairTarget], list
 
     public_ow = _public_readonly_overwrites(guild, staff_role=staff_role, control_role=control_role, unverified_role=unverified_role, verified_role=verified_role, resident_role=resident_role)
     staff_ow = _staff_private_overwrites(guild, staff_role=staff_role, control_role=control_role, unverified_role=unverified_role, verified_role=verified_role, resident_role=resident_role)
+    event_post_ow = _bot_post_only_overwrites(guild)
     voice_ow = _voice_verify_overwrites(guild, staff_role=staff_role, control_role=control_role, unverified_role=unverified_role, verified_role=verified_role, resident_role=resident_role)
 
     targets: list[RepairTarget] = []
@@ -335,10 +360,18 @@ async def _build_targets(guild: discord.Guild) -> tuple[list[RepairTarget], list
         TargetSpec("Verification start channel", discord.TextChannel, ("verify_channel_id", "verification_channel_id"), True),
         TargetSpec("Ticket panel/support channel", discord.TextChannel, ("ticket_panel_channel_id", "support_channel_id", "panel_channel_id"), True),
         TargetSpec("Pronouns/roles channel", discord.TextChannel, ("pronouns_channel_id", "self_roles_channel_id", "roles_channel_id")),
-        TargetSpec("Goodbye/leave channel", discord.TextChannel, ("goodbye_channel_id", "leave_channel_id", "leave_message_channel_id")),
     )
     for spec in public_specs:
         _add_configured_target(guild=guild, cfg=cfg, targets=targets, seen=seen, missing_mappings=missing_mappings, spec=spec, overwrites=public_ow)
+
+    event_specs = (
+        TargetSpec("Join event message channel", discord.TextChannel, ("join_welcome_channel_id",)),
+        TargetSpec("Leave/goodbye event message channel", discord.TextChannel, ("goodbye_channel_id", "leave_channel_id", "leave_message_channel_id")),
+    )
+    for spec in event_specs:
+        _add_configured_target(guild=guild, cfg=cfg, targets=targets, seen=seen, missing_mappings=missing_mappings, spec=spec, overwrites=event_post_ow)
+    if event_post_ow:
+        notes.append("Join/leave event channels only repair Dank Shield's own posting overwrite; existing channel visibility is preserved.")
 
     staff_specs = (
         TargetSpec("VC verification queue channel", discord.TextChannel, ("vc_verify_queue_channel_id", "vc_queue_channel_id", "vc_request_channel_id", "vc_verify_requests_channel_id")),
@@ -480,7 +513,7 @@ def _result_embed(result: dict[str, Any]) -> discord.Embed:
         embed.add_field(name="Failed While Applying", value=_line_list(list(result.get("failed") or []), empty="None"), inline=False)
     if result.get("notes"):
         embed.add_field(name="Notes", value=_line_list(list(result.get("notes") or []), empty="None"), inline=False)
-    embed.set_footer(text="Safe scope: saved setup items, ticket/archive/staff-tool children, bot/staff/control/public baselines.")
+    embed.set_footer(text="Safe scope: saved setup items, ticket/archive/staff-tool children, bot/staff/control/public baselines. Join/leave event channels preserve existing visibility.")
     return embed
 
 
