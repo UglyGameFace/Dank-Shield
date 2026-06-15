@@ -40,6 +40,7 @@ COMMAND_MODULES: List[CommandModuleSpec] = [
     ("public_ticket_group_clean", "register_public_ticket_group_clean_commands", "core: grouped /ticket commands"),
     ("public_ticket_delete", "register_public_ticket_delete_commands", "core: /ticket delete command"),
     ("public_tickets_group", "register_public_tickets_group_commands", "core: grouped /tickets commands"),
+    ("public_ticket_intake_group", "register_public_ticket_intake_group_commands", "core: grouped /ticket-intake routing and staff action panel tools"),
     ("public_ticket_category_group", "register_public_ticket_category_group_commands", "core: grouped /ticket-category commands"),
     ("public_ticket_panel_clean", "register_public_ticket_panel_clean", "core: public Create Ticket panel tools"),
     ("public_verify_basic_panel", "register_public_verify_basic_panel_commands", "core: /verify panel basic button verification command"),
@@ -72,7 +73,7 @@ COMMAND_MODULES: List[CommandModuleSpec] = [
     ("vc_flow", "register_vc_flow_commands", "legacy/dev: VC flow commands"),
     ("ticket_admin", "register_ticket_admin_commands", "legacy/dev: ticket admin commands"),
     ("ticket_channel_admin", "register_ticket_channel_admin_commands", "legacy/dev: ticket channel admin commands"),
-    ("ticket_intake_admin", "register_ticket_intake_admin_commands", "legacy/dev: ticket intake admin commands"),
+    ("ticket_intake_admin", "register_ticket_intake_admin_commands", "legacy/dev: ticket intake commands"),
     ("ticket_queue_admin", "register_ticket_queue_admin_commands", "legacy/dev: ticket queue commands"),
     ("ticket_category_admin", "register_ticket_category_admin_commands", "legacy/dev: ticket category commands"),
     ("ticket_governance_admin", "register_ticket_governance_admin_commands", "legacy/dev: ticket governance commands"),
@@ -112,6 +113,7 @@ _PUBLIC_CORE_MODULES: Tuple[str, ...] = (
     "public_ticket_group_clean",
     "public_ticket_delete",
     "public_tickets_group",
+    "public_ticket_intake_group",
     "public_ticket_category_group",
     "public_ticket_panel_clean",
     "public_verify_basic_panel",
@@ -148,7 +150,6 @@ COMMAND_PROFILES: Dict[str, Sequence[str]] = {
 
 _STALE_TOP_LEVEL_COMMANDS: Tuple[str, ...] = (
     "stoney",
-    "ticket-intake",
     "spam",
     "spam_guard",
     "spam_guard_status",
