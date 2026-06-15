@@ -4,6 +4,7 @@ from __future__ import annotations
 
 Adds visible Access-page controls for:
 - override allow/exempt buckets
+- target all-bots toggle
 - target bot/user IDs
 - target channel IDs
 
@@ -32,11 +33,20 @@ _OVERRIDE_KEYS: tuple[tuple[str, str], ...] = (
     ("invite_override_allowed_codes", "Allowed invite codes"),
     ("invite_override_own_server_invites", "This-server invite codes"),
 )
-_SCOPE_KEYS: tuple[tuple[str, str], ...] = (
+_SCOPE_BOOL_KEYS: tuple[tuple[str, str], ...] = (
+    ("invite_hard_block_target_all_bots", "All bots"),
+)
+_SCOPE_ID_KEYS: tuple[tuple[str, str], ...] = (
     ("invite_hard_block_target_bot_ids", "Target bot/user IDs"),
     ("invite_hard_block_target_channel_ids", "Target channel IDs"),
 )
-_ALL_KEYS = tuple(key for key, _label in _OVERRIDE_KEYS) + tuple(key for key, _label in _SCOPE_KEYS)
+# Backward-compatible name used by Protection Center guard code.
+_SCOPE_KEYS = _SCOPE_ID_KEYS
+_ALL_KEYS = (
+    tuple(key for key, _label in _OVERRIDE_KEYS)
+    + tuple(key for key, _label in _SCOPE_BOOL_KEYS)
+    + tuple(key for key, _label in _SCOPE_ID_KEYS)
+)
 
 
 def _safe_bool(value: Any, default: bool = False) -> bool:
@@ -46,9 +56,9 @@ def _safe_bool(value: Any, default: bool = False) -> bool:
         if value is None:
             return bool(default)
         text = str(value).strip().lower()
-        if text in {"1", "true", "yes", "y", "on", "enabled", "override", "block"}:
+        if text in {"1", "true", "yes", "y", "on", "enabled", "override", "block", "all"}:
             return True
-        if text in {"0", "false", "no", "n", "off", "disabled", "allow"}:
+        if text in {"0", "false", "no", "n", "off", "disabled", "allow", "none"}:
             return False
     except Exception:
         pass
@@ -61,9 +71,9 @@ def _yes_no(value: Any) -> str:
 
 def _parse_yes_no(value: Any, *, label: str) -> bool:
     text = str(value or "").strip().lower()
-    if text in {"1", "true", "yes", "y", "on", "enabled", "override", "block"}:
+    if text in {"1", "true", "yes", "y", "on", "enabled", "override", "block", "all"}:
         return True
-    if text in {"0", "false", "no", "n", "off", "disabled", "allow"}:
+    if text in {"0", "false", "no", "n", "off", "disabled", "allow", "none"}:
         return False
     raise ValueError(f"{label} must be yes/no.")
 
@@ -75,7 +85,7 @@ def _parse_ids(value: Any) -> list[str]:
         item = part.strip().strip("<@#!&>")
         if item.isdigit() and item not in ids:
             ids.append(item)
-    return ids[:50]
+    return ids[:100]
 
 
 def _ids_text(value: Any) -> str:
@@ -115,21 +125,25 @@ def _cfg_value(cfg: Any, key: str) -> Any:
     return None
 
 
+def _setting_raw(source: Any, key: str) -> Any:
+    raw = source.get(f"spam_{key}", source.get(key)) if isinstance(source, dict) else None
+    if raw is None:
+        raw = _cfg_value(source, f"spam_{key}")
+    if raw is None:
+        raw = _cfg_value(source, key)
+    return raw
+
+
 def _merge_invite_policy(settings: dict[str, Any], source: Any) -> dict[str, Any]:
     data = dict(settings or {})
     for key, _label in _OVERRIDE_KEYS:
-        raw = source.get(f"spam_{key}", source.get(key)) if isinstance(source, dict) else None
-        if raw is None:
-            raw = _cfg_value(source, f"spam_{key}")
-        if raw is None:
-            raw = _cfg_value(source, key)
+        raw = _setting_raw(source, key)
         data[key] = _safe_bool(raw, False) if raw is not None else _safe_bool(data.get(key), False)
-    for key, _label in _SCOPE_KEYS:
-        raw = source.get(f"spam_{key}", source.get(key)) if isinstance(source, dict) else None
-        if raw is None:
-            raw = _cfg_value(source, f"spam_{key}")
-        if raw is None:
-            raw = _cfg_value(source, key)
+    for key, _label in _SCOPE_BOOL_KEYS:
+        raw = _setting_raw(source, key)
+        data[key] = _safe_bool(raw, False) if raw is not None else _safe_bool(data.get(key), False)
+    for key, _label in _SCOPE_ID_KEYS:
+        raw = _setting_raw(source, key)
         data[key] = _parse_ids(raw if raw is not None else data.get(key))
     return data
 
@@ -143,11 +157,16 @@ def _override_summary(settings: dict[str, Any]) -> str:
 
 
 def _scope_summary(settings: dict[str, Any]) -> str:
+    all_bots = _safe_bool(settings.get("invite_hard_block_target_all_bots"), False)
     bot_ids = _parse_ids(settings.get("invite_hard_block_target_bot_ids"))
     channel_ids = _parse_ids(settings.get("invite_hard_block_target_channel_ids"))
+    bot_line = "All bots included" if all_bots else "Humans only; bots ignored unless listed"
+    if bot_ids:
+        bot_line += "; listed IDs: " + ", ".join(f"`{x}`" for x in bot_ids)
     return (
-        f"**Target bot/user IDs:** {', '.join(f'`{x}`' for x in bot_ids) if bot_ids else 'Humans only; bots ignored unless listed'}\n"
-        f"**Target channel IDs:** {', '.join(f'`{x}`' for x in channel_ids) if channel_ids else 'All text channels'}"
+        f"**All bots:** {'yes' if all_bots else 'no'}\n"
+        f"**Target bot/user IDs:** {bot_line}\n"
+        f"**Target channel IDs:** {', '.join(f'`{x}`' for x in channel_ids) if channel_ids else 'All message channels'}"
     )
 
 
@@ -187,7 +206,10 @@ async def _save_policy_config(guild_id: int, patch: dict[str, Any]) -> bool:
     for key, _label in _OVERRIDE_KEYS:
         if key in patch:
             wanted[key] = bool(patch[key])
-    for key, _label in _SCOPE_KEYS:
+    for key, _label in _SCOPE_BOOL_KEYS:
+        if key in patch:
+            wanted[key] = _safe_bool(patch[key], False)
+    for key, _label in _SCOPE_ID_KEYS:
         if key in patch:
             wanted[key] = _parse_ids(patch[key])
     if not wanted:
@@ -246,7 +268,11 @@ def _patched_panel_embed(guild: discord.Guild, settings: dict[str, Any], *, page
             )
             embed.add_field(
                 name="Invite Hard-Block Scope",
-                value=(_scope_summary(settings) + "\n\nUse **Invite Scope** to target specific bots/users or only specific channels.")[:1024],
+                value=(
+                    _scope_summary(settings)
+                    + "\n\nUse **Invite Scope** to include all bots, target exact bot/user IDs, or target exact channel IDs. "
+                    + "IDs are accepted even when Discord's picker cannot show the item."
+                )[:1024],
                 inline=False,
             )
         except Exception:
@@ -294,8 +320,10 @@ class InviteScopeModal(discord.ui.Modal, title="Invite Hard-Block Scope"):
         self.channel_id = int(channel_id)
         self.message_id = int(message_id)
         self.return_page = return_page or "access"
-        self.bot_ids = discord.ui.TextInput(label="Target bot/user IDs", placeholder="Leave blank = humans only; add bot IDs to police those bots", default=_ids_text(settings.get("invite_hard_block_target_bot_ids")), required=False, style=discord.TextStyle.paragraph, max_length=500)
-        self.channel_ids = discord.ui.TextInput(label="Target channel IDs", placeholder="Leave blank = all text channels", default=_ids_text(settings.get("invite_hard_block_target_channel_ids")), required=False, style=discord.TextStyle.paragraph, max_length=500)
+        self.all_bots = discord.ui.TextInput(label="Target all bots?", placeholder="yes = delete invite posts from any bot; no = only listed bot/user IDs", default=_yes_no(settings.get("invite_hard_block_target_all_bots")), required=True, max_length=8)
+        self.bot_ids = discord.ui.TextInput(label="Target bot/user IDs", placeholder="Comma, space, semicolon, newline, or mentions. Optional when all bots = yes.", default=_ids_text(settings.get("invite_hard_block_target_bot_ids")), required=False, style=discord.TextStyle.paragraph, max_length=800)
+        self.channel_ids = discord.ui.TextInput(label="Target channel IDs", placeholder="Blank = all message channels. Paste any channel ID, even if picker hides it.", default=_ids_text(settings.get("invite_hard_block_target_channel_ids")), required=False, style=discord.TextStyle.paragraph, max_length=800)
+        self.add_item(self.all_bots)
         self.add_item(self.bot_ids)
         self.add_item(self.channel_ids)
 
@@ -311,7 +339,12 @@ class InviteScopeModal(discord.ui.Modal, title="Invite Hard-Block Scope"):
                 await interaction.response.defer(ephemeral=True)
         except Exception:
             pass
+        try:
+            all_bots = _parse_yes_no(self.all_bots.value, label="Target all bots")
+        except Exception as exc:
+            return await spam_guard._reply_ephemeral(interaction, f"❌ {exc}")
         patch = {
+            "invite_hard_block_target_all_bots": all_bots,
             "invite_hard_block_target_bot_ids": _parse_ids(self.bot_ids.value),
             "invite_hard_block_target_channel_ids": _parse_ids(self.channel_ids.value),
         }
@@ -323,7 +356,7 @@ async def _rerender_and_reply(interaction: discord.Interaction, settings: dict[s
     from stoney_verify import spam_guard
     guild = interaction.guild
     channel = guild.get_channel(channel_id) if guild else None
-    if isinstance(channel, discord.TextChannel):
+    if isinstance(channel, discord.abc.Messageable):
         await spam_guard._rerender_panel_message(guild=guild, channel=channel, message_id=message_id, page=page, persisted_hint=persisted)
     try:
         await interaction.followup.send(body + f"\nPersistence: `{spam_guard._build_persistence_label(int(getattr(guild, 'id', 0) or 0), persisted)}`", ephemeral=True, allowed_mentions=discord.AllowedMentions.none())
@@ -333,14 +366,14 @@ async def _rerender_and_reply(interaction: discord.Interaction, settings: dict[s
 
 class InviteOverrideButton(discord.ui.Button):
     def __init__(self, page: str):
-        super().__init__(label="Invite Override", emoji="🚫", style=discord.ButtonStyle.danger, custom_id=f"spamguard:{page}:invite_override", row=1)
+        super().__init__(label="Invite Override", emoji="⚙️", style=discord.ButtonStyle.secondary, custom_id=f"spamguard:{page}:invite_override", row=1)
         self.page = page
     async def callback(self, interaction: discord.Interaction) -> None:
         from stoney_verify import spam_guard
         if not await spam_guard._ensure_staff_panel_access(interaction):
             return
         guild, channel, message = interaction.guild, interaction.channel, interaction.message
-        if guild is None or not isinstance(channel, discord.TextChannel) or message is None:
+        if guild is None or not isinstance(channel, discord.abc.Messageable) or message is None:
             return await spam_guard._reply_ephemeral(interaction, "Invalid context.")
         await interaction.response.send_modal(InviteOverrideModal(guild.id, channel.id, message.id, self.page, await spam_guard.get_spam_settings(guild.id)))
 
@@ -354,7 +387,7 @@ class InviteScopeButton(discord.ui.Button):
         if not await spam_guard._ensure_staff_panel_access(interaction):
             return
         guild, channel, message = interaction.guild, interaction.channel, interaction.message
-        if guild is None or not isinstance(channel, discord.TextChannel) or message is None:
+        if guild is None or not isinstance(channel, discord.abc.Messageable) or message is None:
             return await spam_guard._reply_ephemeral(interaction, "Invalid context.")
         await interaction.response.send_modal(InviteScopeModal(guild.id, channel.id, message.id, self.page, await spam_guard.get_spam_settings(guild.id)))
 
@@ -391,7 +424,7 @@ def apply() -> bool:
         spam_guard._build_panel_embed = _patched_panel_embed
         spam_guard.SpamGuardPanelView.build = classmethod(_patched_view_build)
         _PATCHED = True
-        print("✅ spam_guard_invite_override_options active; access page has Invite Override + Invite Scope policy")
+        print("✅ spam_guard_invite_override_options active; access page has Invite Override + all-bot/channel Invite Scope policy")
         return True
     except Exception as exc:
         try:
