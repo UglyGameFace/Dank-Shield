@@ -151,11 +151,7 @@ async def _modlog(guild: discord.Guild, message: discord.Message, codes: list[st
     try:
         from stoney_verify import spam_guard
 
-        embed = discord.Embed(
-            title="🛡️ Invite Link Blocked",
-            description=f"Deleted Discord invite link from {message.author.mention} in {message.channel.mention}.",
-            color=discord.Color.red(),
-        )
+        embed = discord.Embed(title="🛡️ Invite Link Blocked", description=f"Deleted Discord invite link from {message.author.mention} in {message.channel.mention}.", color=discord.Color.red())
         embed.add_field(name="Codes", value=", ".join(f"`{code}`" for code in codes[:8]) or "—", inline=False)
         embed.add_field(name="Reason", value=reason[:1024], inline=False)
         sender = getattr(spam_guard, "_send_modlog_embed", None)
@@ -267,5 +263,11 @@ def install() -> bool:
 
 
 install()
+
+try:
+    from stoney_verify.startup_guards import spam_guard_invite_scope_pagination_guard as _scope_pagination_guard
+    _scope_pagination_guard.apply()
+except Exception as exc:
+    _log(f"scope pagination guard not applied yet: {type(exc).__name__}: {exc}")
 
 __all__ = ["install"]
