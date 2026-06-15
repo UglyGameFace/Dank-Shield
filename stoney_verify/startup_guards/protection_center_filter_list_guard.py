@@ -52,8 +52,17 @@ class TrackedFiltersButton(discord.ui.Button):
         await interaction.response.send_message(embed=embed, ephemeral=True, allowed_mentions=discord.AllowedMentions.none())
 
 
+def _chain_cleanup_picker() -> None:
+    try:
+        from stoney_verify.startup_guards import protection_invite_cleanup_picker_guard as picker
+        picker.apply()
+    except Exception:
+        pass
+
+
 def apply() -> bool:
     global _PATCHED, _ORIGINAL_INIT
+    _chain_cleanup_picker()
     if _PATCHED:
         return True
     try:
