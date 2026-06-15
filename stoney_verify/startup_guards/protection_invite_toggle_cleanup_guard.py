@@ -10,7 +10,14 @@ import discord
 _PATCHED = False
 _ORIGINAL_INIT: Any = None
 
-INVITE_RE = re.compile(r"(?:https?://)?(?:www\.)?(?:discord(?:app)?\.com/invite|discord\.gg)\s*/\s*[A-Za-z0-9-]+", re.IGNORECASE)
+INVITE_RE = re.compile(
+    r"(?:https?://)?(?:www\.)?(?:discord(?:app)?\.com\s*/\s*invite|discord\.gg)\s*/\s*[A-Za-z0-9-]+",
+    re.IGNORECASE,
+)
+SPACED_INVITE_RE = re.compile(
+    r"(?:discord\s*\.\s*gg|discord(?:app)?\s*\.\s*com\s*/\s*invite)\s*/\s*[A-Za-z0-9-]+",
+    re.IGNORECASE,
+)
 
 
 def _cfg_bool(center: Any, cfg: Any, key: str, default: bool = False) -> bool:
@@ -27,6 +34,29 @@ def _cfg_bool(center: Any, cfg: Any, key: str, default: bool = False) -> bool:
         return str(raw or "").strip().lower() in {"1", "true", "yes", "y", "on", "enabled"}
 
 
+def _normalize_text(value: Any) -> str:
+    text = str(value or "")
+    text = text.replace("\u200b", "").replace("\u200c", "").replace("\u200d", "").replace("\ufeff", "")
+    return text
+
+
+def _component_text(component: Any) -> list[str]:
+    parts: list[str] = []
+    try:
+        for attr in ("url", "label", "custom_id"):
+            value = getattr(component, attr, None)
+            if value:
+                parts.append(str(value))
+    except Exception:
+        pass
+    try:
+        for child in list(getattr(component, "children", []) or []):
+            parts.extend(_component_text(child))
+    except Exception:
+        pass
+    return parts
+
+
 def _message_text(message: discord.Message) -> str:
     parts = [str(getattr(message, "content", "") or "")]
     try:
@@ -38,41 +68,89 @@ def _message_text(message: discord.Message) -> str:
             for field in list(getattr(embed, "fields", []) or []):
                 parts.append(str(getattr(field, "name", "") or ""))
                 parts.append(str(getattr(field, "value", "") or ""))
+            try:
+                footer = getattr(embed, "footer", None)
+                if getattr(footer, "text", None):
+                    parts.append(str(footer.text))
+            except Exception:
+                pass
+            try:
+                author = getattr(embed, "author", None)
+                if getattr(author, "name", None):
+                    parts.append(str(author.name))
+                if getattr(author, "url", None):
+                    parts.append(str(author.url))
+            except Exception:
+                pass
     except Exception:
         pass
-    return "\n".join(part for part in parts if part)
+    try:
+        for row in list(getattr(message, "components", []) or []):
+            parts.extend(_component_text(row))
+    except Exception:
+        pass
+    try:
+        for attachment in list(getattr(message, "attachments", []) or []):
+            for attr in ("url", "proxy_url", "filename", "description"):
+                value = getattr(attachment, attr, None)
+                if value:
+                    parts.append(str(value))
+    except Exception:
+        pass
+    return "\n".join(_normalize_text(part) for part in parts if part)
 
 
-async def _clean_existing_invites(channel: Any, *, limit: int = 100) -> tuple[int, int, str | None]:
+def _has_invite(message: discord.Message) -> bool:
+    text = _message_text(message)
+    if INVITE_RE.search(text) or SPACED_INVITE_RE.search(text):
+        return True
+    compact = re.sub(r"\s+", "", text)
+    return bool(INVITE_RE.search(compact) or SPACED_INVITE_RE.search(compact))
+
+
+async def _clean_existing_invites(channel: Any, *, limit: int = 100) -> dict[str, Any]:
+    result: dict[str, Any] = {"checked": 0, "matched": 0, "deleted": 0, "failed": 0, "warning": None}
     if not isinstance(channel, discord.TextChannel):
-        return 0, 0, "This cleanup can only scan text channels."
-    if not channel.permissions_for(channel.guild.me).read_message_history:
-        return 0, 0, "Dank Shield needs Read Message History to scan existing messages."
-    checked = 0
-    deleted = 0
-    denied: str | None = None
+        result["warning"] = "This cleanup can only scan text channels."
+        return result
+    me = channel.guild.me
+    if me is None:
+        result["warning"] = "Dank Shield could not resolve its own server member, so permissions could not be checked."
+        return result
+    perms = channel.permissions_for(me)
+    if not perms.read_message_history:
+        result["warning"] = "Dank Shield needs Read Message History to scan existing messages."
+        return result
+    if not perms.manage_messages:
+        result["warning"] = "Dank Shield needs Manage Messages to remove existing invite links."
+        return result
     try:
         async for message in channel.history(limit=max(1, min(int(limit), 250))):
-            checked += 1
+            result["checked"] += 1
             try:
-                if message.author == channel.guild.me:
+                if message.author == me:
                     continue
-                if not INVITE_RE.search(_message_text(message)):
+                if not _has_invite(message):
                     continue
+                result["matched"] += 1
                 await message.delete(reason="Dank Shield Invite Shield cleanup")
-                deleted += 1
+                result["deleted"] += 1
             except discord.Forbidden:
-                denied = "Dank Shield needs Manage Messages to delete existing invite links."
+                result["failed"] += 1
+                result["warning"] = "Discord denied deletion. Check Manage Messages and channel permission overrides."
                 break
             except discord.NotFound:
                 continue
-            except Exception:
+            except Exception as exc:
+                result["failed"] += 1
+                if result.get("warning") is None:
+                    result["warning"] = f"Some matched messages could not be removed: {type(exc).__name__}: {str(exc)[:160]}"
                 continue
     except discord.Forbidden:
-        return checked, deleted, "Dank Shield cannot read message history in this channel."
+        result["warning"] = "Dank Shield cannot read message history in this channel."
     except Exception as exc:
-        return checked, deleted, f"Scan failed: {type(exc).__name__}: {str(exc)[:180]}"
-    return checked, deleted, denied
+        result["warning"] = f"Scan failed: {type(exc).__name__}: {str(exc)[:180]}"
+    return result
 
 
 async def _refresh_card(center: Any, interaction: discord.Interaction, *, note: str | None = None) -> None:
@@ -97,6 +175,20 @@ async def _refresh_card(center: Any, interaction: discord.Interaction, *, note: 
             pass
 
 
+def _scan_note(prefix: str, result: dict[str, Any]) -> str:
+    note = (
+        f"{prefix} checked `{int(result.get('checked') or 0)}` recent messages, "
+        f"matched `{int(result.get('matched') or 0)}`, deleted `{int(result.get('deleted') or 0)}`, "
+        f"failed `{int(result.get('failed') or 0)}`."
+    )
+    warning = result.get("warning")
+    if warning:
+        note += f"\n⚠️ {warning}"
+    if int(result.get("matched") or 0) and not int(result.get("deleted") or 0) and not warning:
+        note += "\n⚠️ Matches were found but nothing was removed. Check message age, permissions, and channel overrides."
+    return note
+
+
 async def _set_invite_shield(interaction: discord.Interaction, *, enabled: bool, scan_current: bool = False) -> None:
     from stoney_verify.commands_ext import public_protection_center as center
     if not await center._require_setup_permission(interaction):
@@ -116,10 +208,8 @@ async def _set_invite_shield(interaction: discord.Interaction, *, enabled: bool,
     await center._save_automod(int(guild.id), updates)
     note = "✅ Invite Shield enabled. Normal links remain allowed." if enabled else "⚪ Invite Shield disabled."
     if enabled and scan_current:
-        checked, deleted, warning = await _clean_existing_invites(interaction.channel, limit=100)
-        note += f"\nCleaned current channel: `{deleted}` invite message(s) removed after checking `{checked}` recent messages."
-        if warning:
-            note += f"\n⚠️ {warning}"
+        result = await _clean_existing_invites(interaction.channel, limit=150)
+        note += "\n" + _scan_note("Auto-clean current channel", result)
     await _refresh_card(center, interaction, note=note)
 
 
@@ -140,11 +230,8 @@ class CleanExistingInvites(discord.ui.Button):
         from stoney_verify.commands_ext import public_protection_center as center
         if not await center._require_setup_permission(interaction):
             return
-        checked, deleted, warning = await _clean_existing_invites(interaction.channel, limit=150)
-        note = f"🧹 Clean Existing Invites checked `{checked}` recent messages and removed `{deleted}` invite message(s) in this channel."
-        if warning:
-            note += f"\n⚠️ {warning}"
-        await _refresh_card(center, interaction, note=note)
+        result = await _clean_existing_invites(interaction.channel, limit=200)
+        await _refresh_card(center, interaction, note=_scan_note("🧹 Clean Existing Invites", result))
 
 
 def _patch_view() -> bool:
@@ -156,13 +243,8 @@ def _patch_view() -> bool:
 
         def patched_init(self: Any, *, author_id: int) -> None:
             _ORIGINAL_INIT(self, author_id=author_id)
-            try:
-                state = getattr(center, "_LAST", None)
-            except Exception:
-                state = None
             enabled = False
             try:
-                # protection_center_embed_refresh_guard stores last state in its module.
                 from stoney_verify.startup_guards import protection_center_embed_refresh_guard as live
                 enabled = bool(getattr(live, "_LAST", {}).get("invites"))
             except Exception:
@@ -193,7 +275,7 @@ def apply() -> bool:
         return True
     ok = _patch_view()
     _PATCHED = True
-    print("✅ protection_invite_toggle_cleanup_guard active; Invite Shield toggles independently and can clean existing invites" if ok else "⚠️ protection_invite_toggle_cleanup_guard loaded but view patch was delayed")
+    print("✅ protection_invite_toggle_cleanup_guard active; Invite Shield cleanup matches OneBump embeds/buttons and reports failures" if ok else "⚠️ protection_invite_toggle_cleanup_guard loaded but view patch was delayed")
     return ok
 
 
