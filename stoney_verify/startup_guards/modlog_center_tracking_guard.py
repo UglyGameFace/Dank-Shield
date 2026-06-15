@@ -10,18 +10,31 @@ _PATCHED = False
 _ORIGINAL_FEATURE_INIT: Any = None
 
 CATEGORIES: tuple[tuple[str, str, str], ...] = (
-    ("messages", "💬", "Messages"),
-    ("members", "👥", "Members"),
-    ("moderation", "🔨", "Moderation"),
-    ("voice", "🔊", "Voice"),
-    ("channels", "#️⃣", "Channels"),
-    ("roles", "🎭", "Roles"),
-    ("threads", "🧵", "Threads"),
-    ("invites", "🔗", "Invites"),
-    ("server", "🏠", "Server"),
-    ("assets", "😀", "Emojis/Stickers"),
-    ("webhooks", "🪝", "Webhooks"),
+    ("messages", "💬", "Messages: deletes/edits"),
+    ("members", "👥", "Members: joins/leaves/names"),
+    ("moderation", "🔨", "Moderation: bans/kicks/timeouts"),
+    ("voice", "🔊", "Voice: VC joins/leaves/moves"),
+    ("channels", "#️⃣", "Channels: create/edit/delete"),
+    ("roles", "🎭", "Roles: create/edit/delete/member roles"),
+    ("threads", "🧵", "Threads: create/edit/delete"),
+    ("invites", "🔗", "Invites: create/delete/usage"),
+    ("server", "🏠", "Server: name/icon/settings"),
+    ("assets", "😀", "Emojis/Stickers: changes"),
+    ("webhooks", "🪝", "Webhooks: create/edit/delete"),
 )
+DETAILS: dict[str, str] = {
+    "messages": "Message deletes, edits, purge-style cleanup, and content changes.",
+    "members": "Server joins, server leaves, nickname/name changes, and member state changes.",
+    "moderation": "Bans, unbans, kicks, timeouts, warnings, and staff moderation actions.",
+    "voice": "Voice channel joins, leaves, moves, server mute/deafen, self mute/deafen, stream, and video changes.",
+    "channels": "Text/voice/category/forum channel create, edit, delete, and permission changes when available.",
+    "roles": "Role create, edit, delete, and member role add/remove events.",
+    "threads": "Thread create, archive, unarchive, edit, and delete events.",
+    "invites": "Invite create/delete events and invite-related attribution when available.",
+    "server": "Guild name, icon, moderation-level, and major server-setting changes.",
+    "assets": "Emoji and sticker create, edit, and delete events.",
+    "webhooks": "Webhook create, edit, and delete events.",
+}
 DEFAULT_ON = {key for key, _emoji, _label in CATEGORIES}
 KEY = "modlog_tracking_categories"
 
@@ -94,8 +107,12 @@ async def _tracking_embed(guild: discord.Guild) -> discord.Embed:
         pass
     on_lines: list[str] = []
     off_lines: list[str] = []
+    detail_lines: list[str] = []
     for key, emoji, label in CATEGORIES:
-        (on_lines if key in enabled else off_lines).append(f"{emoji} {label}")
+        line = f"{emoji} {label}"
+        (on_lines if key in enabled else off_lines).append(line)
+        if key in enabled:
+            detail_lines.append(f"{emoji} **{label}** — {DETAILS.get(key, 'Tracked event family.')}")
     embed = discord.Embed(
         title="🧾 Modlog Tracking Center",
         description="Select exactly what Dank Shield tracks. Buttons update this card instantly.",
@@ -103,14 +120,16 @@ async def _tracking_embed(guild: discord.Guild) -> discord.Embed:
         timestamp=discord.utils.utcnow(),
     )
     embed.add_field(name="Saved channel", value=channel_text, inline=False)
-    embed.add_field(name=f"Tracked now ({len(on_lines)}/{len(CATEGORIES)})", value="\n".join(on_lines) or "None", inline=True)
-    embed.add_field(name="Ignored now", value="\n".join(off_lines) or "None", inline=True)
+    embed.add_field(name=f"Tracked now ({len(on_lines)}/{len(CATEGORIES)})", value="\n".join(on_lines) or "None", inline=False)
+    embed.add_field(name="Ignored now", value="\n".join(off_lines) or "None", inline=False)
+    embed.add_field(name="What those toggles mean", value="\n".join(detail_lines[:8])[:1024] or "Nothing is currently enabled.", inline=False)
     return embed
 
 
 class TrackButton(discord.ui.Button):
     def __init__(self, key: str, emoji: str, label: str, enabled: bool, row: int) -> None:
-        super().__init__(label=f"{label}: {'ON' if enabled else 'OFF'}", emoji=emoji, style=discord.ButtonStyle.success if enabled else discord.ButtonStyle.secondary, custom_id=f"dank_modlog_track:{key}", row=row)
+        short = label.split(":", 1)[0]
+        super().__init__(label=f"{short}: {'ON' if enabled else 'OFF'}", emoji=emoji, style=discord.ButtonStyle.success if enabled else discord.ButtonStyle.secondary, custom_id=f"dank_modlog_track:{key}", row=row)
         self.key = key
 
     async def callback(self, interaction: discord.Interaction) -> None:
@@ -212,7 +231,7 @@ def apply() -> bool:
         return True
     ok = _patch_feature_button()
     _PATCHED = True
-    print("✅ modlog_center_tracking_guard active; Modlog Center button opens tracking toggles" if ok else "⚠️ modlog_center_tracking_guard loaded but button patch was delayed")
+    print("✅ modlog_center_tracking_guard active; Modlog Center button opens explicit tracking toggles" if ok else "⚠️ modlog_center_tracking_guard loaded but button patch was delayed")
     return ok
 
 
