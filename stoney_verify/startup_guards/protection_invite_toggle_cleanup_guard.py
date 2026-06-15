@@ -3,7 +3,7 @@ from __future__ import annotations
 """Make Invite Shield an actual toggle and add cleanup for existing invite links."""
 
 import re
-from typing import Any
+from typing import Any, Iterable
 
 import discord
 
@@ -16,6 +16,14 @@ INVITE_RE = re.compile(
 )
 SPACED_INVITE_RE = re.compile(
     r"(?:discord\s*\.\s*gg|discord(?:app)?\s*\.\s*com\s*/\s*invite)\s*/\s*[A-Za-z0-9-]+",
+    re.IGNORECASE,
+)
+INVITE_CODE_RE = re.compile(
+    r"(?:https?://)?(?:www\.)?(?:discord(?:app)?\.com\s*/\s*invite|discord\.gg)\s*/\s*([A-Za-z0-9-]+)",
+    re.IGNORECASE,
+)
+SPACED_CODE_RE = re.compile(
+    r"(?:discord\s*\.\s*gg|discord(?:app)?\s*\.\s*com\s*/\s*invite)\s*/\s*([A-Za-z0-9-]+)",
     re.IGNORECASE,
 )
 
@@ -32,6 +40,22 @@ def _cfg_bool(center: Any, cfg: Any, key: str, default: bool = False) -> bool:
         if isinstance(raw, bool):
             return raw
         return str(raw or "").strip().lower() in {"1", "true", "yes", "y", "on", "enabled"}
+
+
+def _safe_bool(value: Any, default: bool = False) -> bool:
+    try:
+        if isinstance(value, bool):
+            return value
+        if value is None:
+            return bool(default)
+        text = str(value).strip().lower()
+        if text in {"1", "true", "yes", "y", "on", "enabled", "allow", "allowed"}:
+            return True
+        if text in {"0", "false", "no", "n", "off", "disabled", "block", "blocked"}:
+            return False
+    except Exception:
+        pass
+    return bool(default)
 
 
 def _normalize_text(value: Any) -> str:
@@ -100,6 +124,19 @@ def _message_text(message: discord.Message) -> str:
     return "\n".join(_normalize_text(part) for part in parts if part)
 
 
+def _invite_codes(message: discord.Message) -> set[str]:
+    text = _message_text(message)
+    compact = re.sub(r"\s+", "", text)
+    codes: set[str] = set()
+    for source in (text, compact):
+        try:
+            codes.update(code.strip().lower() for code in INVITE_CODE_RE.findall(source) if code.strip())
+            codes.update(code.strip().lower() for code in SPACED_CODE_RE.findall(source) if code.strip())
+        except Exception:
+            pass
+    return codes
+
+
 def _has_invite(message: discord.Message) -> bool:
     text = _message_text(message)
     if INVITE_RE.search(text) or SPACED_INVITE_RE.search(text):
@@ -108,8 +145,59 @@ def _has_invite(message: discord.Message) -> bool:
     return bool(INVITE_RE.search(compact) or SPACED_INVITE_RE.search(compact))
 
 
+def _normalize_codes(values: Any) -> set[str]:
+    out: set[str] = set()
+    try:
+        source = values if isinstance(values, Iterable) and not isinstance(values, (str, bytes, dict)) else [values]
+        for raw in source:
+            text = str(raw or "").lower().strip().strip("/")
+            text = text.replace("https://discord.gg/", "").replace("http://discord.gg/", "")
+            text = text.replace("https://discord.com/invite/", "").replace("http://discord.com/invite/", "")
+            text = text.replace("https://discordapp.com/invite/", "").replace("http://discordapp.com/invite/", "")
+            if text:
+                out.add(text)
+    except Exception:
+        pass
+    return out
+
+
+async def _own_invite_codes(guild: discord.Guild) -> set[str]:
+    try:
+        from stoney_verify import spam_guard
+        getter = getattr(spam_guard, "_fetch_guild_invite_codes", None)
+        if callable(getter):
+            return set(str(code).lower() for code in await getter(guild))
+    except Exception:
+        pass
+    try:
+        return {str(inv.code).lower() for inv in await guild.invites() if getattr(inv, "code", None)}
+    except Exception:
+        return set()
+
+
+async def _spam_settings(guild: discord.Guild) -> dict[str, Any]:
+    try:
+        from stoney_verify import spam_guard
+        return dict(await spam_guard.get_spam_settings(int(guild.id)))
+    except Exception:
+        return {}
+
+
+async def _blocked_codes_for_guild(guild: discord.Guild, codes: set[str]) -> tuple[list[str], int]:
+    settings = await _spam_settings(guild)
+    allowed_codes = _normalize_codes(settings.get("allowed_invite_codes", settings.get("spam_allowed_invite_codes")))
+    override_own = _safe_bool(settings.get("invite_override_own_server_invites", settings.get("spam_invite_override_own_server_invites")), False)
+    allow_own = _safe_bool(settings.get("allow_server_invites", settings.get("spam_allow_server_invites")), True)
+    own_codes: set[str] = set()
+    if allow_own and not override_own:
+        own_codes = await _own_invite_codes(guild)
+    blocked = [code for code in sorted(codes) if code not in allowed_codes and code not in own_codes]
+    allowed_count = max(0, len(codes) - len(blocked))
+    return blocked, allowed_count
+
+
 async def _clean_existing_invites(channel: Any, *, limit: int = 100) -> dict[str, Any]:
-    result: dict[str, Any] = {"checked": 0, "matched": 0, "deleted": 0, "failed": 0, "warning": None}
+    result: dict[str, Any] = {"checked": 0, "matched": 0, "allowed": 0, "deleted": 0, "failed": 0, "warning": None}
     if not isinstance(channel, discord.TextChannel):
         result["warning"] = "This cleanup can only scan text channels."
         return result
@@ -130,10 +218,16 @@ async def _clean_existing_invites(channel: Any, *, limit: int = 100) -> dict[str
             try:
                 if message.author == me:
                     continue
-                if not _has_invite(message):
+                codes = _invite_codes(message)
+                if not codes and not _has_invite(message):
                     continue
                 result["matched"] += 1
-                await message.delete(reason="Dank Shield Invite Shield cleanup")
+                blocked, allowed_count = await _blocked_codes_for_guild(channel.guild, codes)
+                if allowed_count:
+                    result["allowed"] += 1
+                if not blocked:
+                    continue
+                await message.delete(reason="Dank Shield Invite Shield cleanup: external invite")
                 result["deleted"] += 1
             except discord.Forbidden:
                 result["failed"] += 1
@@ -178,13 +272,13 @@ async def _refresh_card(center: Any, interaction: discord.Interaction, *, note: 
 def _scan_note(prefix: str, result: dict[str, Any]) -> str:
     note = (
         f"{prefix} checked `{int(result.get('checked') or 0)}` recent messages, "
-        f"matched `{int(result.get('matched') or 0)}`, deleted `{int(result.get('deleted') or 0)}`, "
-        f"failed `{int(result.get('failed') or 0)}`."
+        f"matched `{int(result.get('matched') or 0)}`, allowed internal/saved `{int(result.get('allowed') or 0)}`, "
+        f"deleted external `{int(result.get('deleted') or 0)}`, failed `{int(result.get('failed') or 0)}`."
     )
     warning = result.get("warning")
     if warning:
         note += f"\n⚠️ {warning}"
-    if int(result.get("matched") or 0) and not int(result.get("deleted") or 0) and not warning:
+    if int(result.get("matched") or 0) and not int(result.get("deleted") or 0) and not int(result.get("allowed") or 0) and not warning:
         note += "\n⚠️ Matches were found but nothing was removed. Check message age, permissions, and channel overrides."
     return note
 
@@ -275,7 +369,7 @@ def apply() -> bool:
         return True
     ok = _patch_view()
     _PATCHED = True
-    print("✅ protection_invite_toggle_cleanup_guard active; Invite Shield cleanup matches OneBump embeds/buttons and reports failures" if ok else "⚠️ protection_invite_toggle_cleanup_guard loaded but view patch was delayed")
+    print("✅ protection_invite_toggle_cleanup_guard active; Invite Shield cleanup respects internal invites and reports failures" if ok else "⚠️ protection_invite_toggle_cleanup_guard loaded but view patch was delayed")
     return ok
 
 
