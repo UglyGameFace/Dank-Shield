@@ -197,9 +197,25 @@ class InviteShieldView(discord.ui.View):
         await interaction.response.edit_message(content="Invite Shield setup closed.", embed=None, view=None)
 
 
+def _chain_extra_guards() -> None:
+    for name in (
+        "protection_center_embed_refresh_guard",
+        "protection_center_filter_list_guard",
+        "vc_verified_health_check_guard",
+    ):
+        try:
+            module = __import__(f"stoney_verify.startup_guards.{name}", fromlist=["apply"])
+            apply_fn = getattr(module, "apply", None)
+            if callable(apply_fn):
+                apply_fn()
+        except Exception:
+            pass
+
+
 def apply() -> bool:
     global _PATCHED, _ORIGINAL_PC_INIT, _ORIGINAL_SCOPE_CALLBACK
     if _PATCHED:
+        _chain_extra_guards()
         return True
     try:
         from stoney_verify.commands_ext import public_protection_center as center
@@ -240,6 +256,7 @@ def apply() -> bool:
         invite_controls.ProtectionInviteScopeButton.callback = patched_scope_callback
         invite_controls.InviteScopeEditorView = InviteShieldView
         _PATCHED = True
+        _chain_extra_guards()
         print("✅ protection_center_invite_simple_flow_guard active; Invite Shield uses a guided setup")
         return True
     except Exception as exc:
