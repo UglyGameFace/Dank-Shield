@@ -1,23 +1,13 @@
 from __future__ import annotations
 
-"""Expose /dank protection as the public safety surface.
+"""Keep the public protection command surface clean.
 
-Migration shim with removal path: once public_protection_center.py defines its
-slash command directly against protection_center_services.open_protection_center,
-remove the command replacement portion here and keep only the legacy automod/spam
-hide list if still needed.
+The owned /dank protection command now lives in public_protection_center.py and
+is loaded through the normal commands_ext public profile. This guard only hides
+legacy automod/spam aliases so it cannot race with the real command registrar.
 """
 
-import discord
-from discord import app_commands
-
 _PATCHED = False
-
-
-async def _owned_protection_command(interaction: discord.Interaction) -> None:
-    from stoney_verify import protection_center_services
-
-    await protection_center_services.open_protection_center(interaction)
 
 
 def apply() -> bool:
@@ -51,24 +41,10 @@ def apply() -> bool:
             except Exception:
                 pass
 
-        try:
-            existing = stoney_group.get_command("protection")
-            if existing is not None:
-                stoney_group.remove_command("protection")
-        except Exception:
-            pass
-
-        owned_command = app_commands.Command(
-            name="protection",
-            description="Open the unified Automod + Spam Guard protection center.",
-            callback=_owned_protection_command,
-        )
-        stoney_group.add_command(owned_command)
-
         _PATCHED = True
         print(
-            "✅ protection_center_command_guard active; /dank protection routes through owned service "
-            f"hidden={hidden_now}"
+            "✅ protection_center_command_guard active; legacy automod/spam aliases hidden "
+            f"hidden={hidden_now}; /dank protection is owned by public_protection_center"
         )
         return True
     except Exception as exc:
