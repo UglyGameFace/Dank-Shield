@@ -185,6 +185,15 @@ async def _welcome_post(interaction: discord.Interaction) -> None:
         await _send_error(interaction, "Welcome post failed", exc)
 
 
+async def _welcome_events(interaction: discord.Interaction) -> None:
+    try:
+        from stoney_verify import welcome_event_services
+
+        return await welcome_event_services.open_welcome_events_center(interaction)
+    except Exception as exc:
+        await _send_error(interaction, "Join/Leave setup failed", exc)
+
+
 async def _modlog_health(interaction: discord.Interaction) -> None:
     try:
         from stoney_verify.commands_ext import public_modlog_group as modlog
@@ -389,7 +398,7 @@ class FeatureCentersView(discord.ui.View):
             "👋 Welcome Center",
             "Set up the welcome/start-here message and join/leave messaging from one place.",
         )
-        embed.add_field(name="Setup path", value="1. Core Setup → Use Existing Roles/Channels → Verification Channels → save welcome/start channel.\n2. Press **Health**.\n3. Press **Preview**.\n4. Press **Post/Update** when ready.", inline=False)
+        embed.add_field(name="Setup path", value="1. Core Setup → Use Existing Roles/Channels → Verification Channels → save welcome/start channel.\n2. Press **Health**.\n3. Press **Preview**.\n4. Press **Post/Update** for the pinned welcome message, or **Join/Leave** for event announcements.", inline=False)
         await _edit(interaction, embed=embed, view=WelcomeCenterView())
 
     @discord.ui.button(label="Roles Center", emoji="🎭", style=discord.ButtonStyle.secondary, custom_id="dank_setup_features:roles", row=1)
@@ -435,7 +444,11 @@ class WelcomeCenterView(discord.ui.View):
     async def post(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         await _welcome_post(interaction)
 
-    @discord.ui.button(label="Back to Feature Centers", emoji="↩️", style=discord.ButtonStyle.secondary, custom_id="dank_setup_welcome:back", row=1)
+    @discord.ui.button(label="Join/Leave", emoji="👋", style=discord.ButtonStyle.secondary, custom_id="dank_setup_welcome:events", row=1)
+    async def events(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        await _welcome_events(interaction)
+
+    @discord.ui.button(label="Back to Feature Centers", emoji="↩️", style=discord.ButtonStyle.secondary, custom_id="dank_setup_welcome:back", row=2)
     async def back(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         await _open_features_home(interaction)
 
