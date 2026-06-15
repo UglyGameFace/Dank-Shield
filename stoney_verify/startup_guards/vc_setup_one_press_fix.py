@@ -133,6 +133,23 @@ def _configured_waiting_role_id(cfg: Any) -> int:
     return _cfg_int(cfg, "unverified_role_id", "waiting_role_id", "pending_role_id")
 
 
+def _configured_verified_role_ids(cfg: Any) -> list[int]:
+    """Roles that should be able to use the saved VC verification channel.
+
+    Public servers often call this role Verified, Member, Approved, or Resident.
+    Repair all saved access-role aliases so a verified member is not locked out
+    after staff approval.
+    """
+    return _unique_ints(
+        [
+            _cfg_int(cfg, "verified_role_id"),
+            _cfg_int(cfg, "member_role_id"),
+            _cfg_int(cfg, "approved_role_id"),
+            _cfg_int(cfg, "resident_role_id"),
+        ]
+    )
+
+
 def _configured_staff_role_ids(cfg: Any) -> list[int]:
     return _unique_ints(
         [
@@ -271,6 +288,22 @@ async def _run_vc_permission_fix(interaction: discord.Interaction) -> tuple[list
             changed=changed,
             failed=failed,
             label=f"Stopped {_role_name(waiting_role)} from connecting before staff approval",
+        )
+
+    for role_id in _configured_verified_role_ids(cfg):
+        if waiting_role_id > 0 and int(role_id) == int(waiting_role_id):
+            continue
+        role = guild.get_role(role_id)
+        if role is None or role.is_default():
+            continue
+        await _set_overwrite(
+            vc_channel,  # type: ignore[arg-type]
+            role,
+            discord.PermissionOverwrite(view_channel=True, connect=True, speak=True, stream=True, use_voice_activation=True),
+            reason=reason,
+            changed=changed,
+            failed=failed,
+            label=f"Allowed verified/member role {_role_name(role)} into {_channel_name(vc_channel)}",
         )
 
     staff_roles: list[discord.Role] = []
