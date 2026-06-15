@@ -88,6 +88,49 @@ def _parse_channel_id(raw: str) -> int:
     return _safe_int(text, 0)
 
 
+def _candidate_score(channel: discord.TextChannel) -> tuple[int, str]:
+    raw_name = str(getattr(channel, "name", "") or "").lower().replace("_", "-").replace(" ", "-")
+    raw_category = str(getattr(getattr(channel, "category", None), "name", "") or "").lower()
+    score = 100
+    if "mod-log" in raw_name or "modlog" in raw_name:
+        score -= 80
+    elif "audit" in raw_name or "log" in raw_name:
+        score -= 60
+    if "staff" in raw_category or "tool" in raw_category or "log" in raw_category:
+        score -= 20
+    if "staff" in raw_name:
+        score -= 10
+    return score, raw_name
+
+
+def _candidate_text_channels(guild: discord.Guild) -> list[discord.TextChannel]:
+    channels: list[discord.TextChannel] = []
+    member = guild.me
+    for channel in list(getattr(guild, "text_channels", []) or []):
+        if not isinstance(channel, discord.TextChannel):
+            continue
+        try:
+            if isinstance(member, discord.Member) and not channel.permissions_for(member).view_channel:
+                continue
+        except Exception:
+            continue
+        channels.append(channel)
+    channels.sort(key=_candidate_score)
+    return channels[:25]
+
+
+def _select_label(channel: discord.TextChannel) -> str:
+    name = str(getattr(channel, "name", "channel") or "channel")
+    return ("#" + name)[:100]
+
+
+def _select_description(channel: discord.TextChannel) -> str:
+    category = str(getattr(getattr(channel, "category", None), "name", "No category") or "No category")
+    missing = _missing_perms(channel, getattr(channel.guild, "me", None))
+    suffix = "Ready" if not missing else "Missing: " + ", ".join(missing[:2])
+    return f"{category} • {suffix}"[:100]
+
+
 async def _resolve_text_channel_by_id(guild: discord.Guild, raw_channel_id: str) -> tuple[Optional[discord.TextChannel], str]:
     channel_id = _parse_channel_id(raw_channel_id)
     if channel_id <= 0:
@@ -179,6 +222,61 @@ async def _save_modlog_channel_config(interaction: discord.Interaction, channel:
     )
 
 
+class ModlogChannelSelect(discord.ui.Select):
+    def __init__(self, channels: list[discord.TextChannel]) -> None:
+        options = [
+            discord.SelectOption(
+                label=_select_label(channel),
+                description=_select_description(channel),
+                value=str(int(channel.id)),
+            )
+            for channel in channels[:25]
+        ]
+        super().__init__(
+            placeholder="Choose the modlog text channel…",
+            min_values=1,
+            max_values=1,
+            options=options,
+        )
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        guild = interaction.guild
+        if guild is None:
+            await safe_send_interaction(interaction, content="❌ This must be used inside a server.", ephemeral=True)
+            return
+        channel_id = self.values[0] if self.values else ""
+        channel, error = await _resolve_text_channel_by_id(guild, channel_id)
+        if channel is None:
+            await safe_send_interaction(interaction, content=error, ephemeral=True)
+            return
+        await _defer(interaction)
+        await _save_modlog_channel_config(interaction, channel)
+        try:
+            if isinstance(self.view, discord.ui.View):
+                for child in self.view.children:
+                    child.disabled = True
+                await interaction.edit_original_response(view=self.view)
+        except Exception:
+            pass
+
+
+class ModlogChannelPickerView(discord.ui.View):
+    def __init__(self, *, author_id: int, channels: list[discord.TextChannel]) -> None:
+        super().__init__(timeout=300)
+        self.author_id = int(author_id)
+        self.add_item(ModlogChannelSelect(channels))
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if int(interaction.user.id) != self.author_id:
+            await safe_send_interaction(
+                interaction,
+                content="Only the staff member who opened this picker can choose the modlog channel.",
+                ephemeral=True,
+            )
+            return False
+        return True
+
+
 async def save_modlog_channel(interaction: discord.Interaction, channel: discord.TextChannel) -> None:
     if not await _require_setup_permission(interaction):
         return
@@ -201,6 +299,38 @@ async def save_modlog_channel_by_id(interaction: discord.Interaction, channel_id
     await _save_modlog_channel_config(interaction, channel)
 
 
+async def open_modlog_channel_picker(interaction: discord.Interaction) -> None:
+    if not await _require_setup_permission(interaction):
+        return
+    guild = interaction.guild
+    if guild is None:
+        return await _send(interaction, "❌ This command must be used inside a server.")
+    channels = _candidate_text_channels(guild)
+    if not channels:
+        await safe_send_interaction(
+            interaction,
+            content=(
+                "❌ I cannot see any text channels to offer. Give Dank Shield **View Channel** "
+                "in the staff category/modlog channel, then retry `/dank modlog pick-channel`."
+            ),
+            ephemeral=True,
+        )
+        return
+    view = ModlogChannelPickerView(author_id=int(interaction.user.id), channels=channels)
+    lines = [
+        "Pick the modlog channel from the private menu below.",
+        "This picker is generated from channels Dank Shield can see, so it avoids the Discord slash-command picker hiding private staff channels.",
+        "If the channel still is not listed, fix **View Channel** for the bot or use `/dank modlog set-channel-id` as fallback.",
+    ]
+    await safe_send_interaction(
+        interaction,
+        content="\n".join(lines),
+        view=view,
+        ephemeral=True,
+        allowed_mentions=discord.AllowedMentions.none(),
+    )
+
+
 async def open_modlog_health(interaction: discord.Interaction) -> None:
     if not await _require_setup_permission(interaction):
         return
@@ -212,7 +342,7 @@ async def open_modlog_health(interaction: discord.Interaction) -> None:
     channel = _modlog_channel(guild, cfg)
     embed = discord.Embed(title="🧾 Modlog Health", color=discord.Color.green() if channel else discord.Color.red(), timestamp=discord.utils.utcnow())
     if channel is None:
-        embed.add_field(name="Channel", value="❌ Not saved. Use Core Setup → Use Existing Roles/Channels → Logs + Status, `/dank modlog set-channel`, or `/dank modlog set-channel-id`.", inline=False)
+        embed.add_field(name="Channel", value="❌ Not saved. Use Core Setup → Use Existing Roles/Channels → Logs + Status, `/dank modlog pick-channel`, `/dank modlog set-channel`, or `/dank modlog set-channel-id`.", inline=False)
     else:
         missing = _missing_perms(channel, guild.me)
         embed.add_field(name="Channel", value=f"✅ {channel.mention}", inline=False)
@@ -251,7 +381,7 @@ async def send_modlog_test(interaction: discord.Interaction) -> None:
     cfg = await get_guild_config(int(guild.id), refresh=True)
     channel = _modlog_channel(guild, cfg)
     if channel is None:
-        return await interaction.followup.send("❌ No modlog channel saved. Use Core Setup → Use Existing Roles/Channels → Logs + Status, `/dank modlog set-channel`, or `/dank modlog set-channel-id`.", ephemeral=True)
+        return await interaction.followup.send("❌ No modlog channel saved. Use Core Setup → Use Existing Roles/Channels → Logs + Status, `/dank modlog pick-channel`, `/dank modlog set-channel`, or `/dank modlog set-channel-id`.", ephemeral=True)
     missing = _missing_perms(channel, guild.me)
     if missing:
         return await interaction.followup.send("❌ Missing permissions in saved modlog channel: " + ", ".join(missing), ephemeral=True)
@@ -278,7 +408,12 @@ async def modlog_set_channel(interaction: discord.Interaction, channel: discord.
     await save_modlog_channel(interaction, channel)
 
 
-@modlog_group.command(name="set-channel-id", description="Save the modlog channel by ID when Discord hides private channels from the picker.")
+@modlog_group.command(name="pick-channel", description="Open a private picker for modlog channels the bot can see.")
+async def modlog_pick_channel(interaction: discord.Interaction) -> None:
+    await open_modlog_channel_picker(interaction)
+
+
+@modlog_group.command(name="set-channel-id", description="Fallback: save the modlog channel by ID if the picker cannot show it.")
 @app_commands.describe(channel_id="Text-channel ID for the modlog channel, such as 123456789012345678.")
 async def modlog_set_channel_id(interaction: discord.Interaction, channel_id: str) -> None:
     await save_modlog_channel_by_id(interaction, channel_id)
@@ -330,6 +465,7 @@ _attach()
 __all__ = [
     "register_public_modlog_group_commands",
     "modlog_group",
+    "open_modlog_channel_picker",
     "open_modlog_health",
     "send_modlog_test",
     "save_modlog_channel",
