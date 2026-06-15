@@ -224,8 +224,17 @@ def _patch_feature_button() -> bool:
         return False
 
 
+def _chain_voice_label_guard() -> None:
+    try:
+        from stoney_verify.startup_guards import vc_join_leave_modlog_labels_guard as voice_labels
+        voice_labels.apply()
+    except Exception:
+        pass
+
+
 def apply() -> bool:
     global _PATCHED
+    _chain_voice_label_guard()
     if _PATCHED:
         _patch_feature_button()
         return True
