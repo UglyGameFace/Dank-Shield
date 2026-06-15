@@ -40,6 +40,26 @@ def _safe_str(value: Any) -> str:
         return ""
 
 
+def _safe_bool(value: Any, default: bool = False) -> bool:
+    try:
+        if isinstance(value, bool):
+            return value
+        if value is None:
+            return default
+        text = str(value).strip().lower()
+        if text in {"1", "true", "yes", "y", "on", "enabled"}:
+            return True
+        if text in {"0", "false", "no", "n", "off", "disabled"}:
+            return False
+    except Exception:
+        pass
+    return bool(default)
+
+
+def _override_enabled(settings: dict[str, Any], key: str) -> bool:
+    return _safe_bool(settings.get(key, settings.get(f"spam_{key}")), False)
+
+
 def _clean_invite_text(content: str) -> str:
     text = _safe_str(content)
     text = text.replace("\u200b", "").replace("\u200c", "").replace("\u200d", "").replace("\ufeff", "")
@@ -156,27 +176,49 @@ async def _hard_block_invite_message(message: discord.Message) -> None:
         if not codes:
             return
 
-        if str(message.author.id) in _normalize_id_list(settings.get("exempt_user_ids")):
+        override_exempt = _override_enabled(settings, "invite_override_exempt_users_roles")
+        override_allowed_roles = _override_enabled(settings, "invite_override_allowed_roles")
+        override_allowed_channels = _override_enabled(settings, "invite_override_allowed_channels")
+        override_allowed_codes = _override_enabled(settings, "invite_override_allowed_codes")
+        override_own_codes = _override_enabled(settings, "invite_override_own_server_invites")
+
+        if not override_exempt:
+            if str(message.author.id) in _normalize_id_list(settings.get("exempt_user_ids")):
+                return
+            if _member_has_any_role(message.author, _normalize_id_list(settings.get("exempt_role_ids"))):
+                return
+        if not override_allowed_roles and _member_has_any_role(message.author, _normalize_id_list(settings.get("invite_allowed_role_ids"))):
             return
-        if _member_has_any_role(message.author, _normalize_id_list(settings.get("exempt_role_ids"))):
-            return
-        if _member_has_any_role(message.author, _normalize_id_list(settings.get("invite_allowed_role_ids"))):
-            return
-        if str(message.channel.id) in _normalize_id_list(settings.get("allowed_channel_ids")):
+        if not override_allowed_channels and str(message.channel.id) in _normalize_id_list(settings.get("allowed_channel_ids")):
             return
 
-        allowed_codes = _normalize_codes(settings.get("allowed_invite_codes"))
+        allowed_codes = set() if override_allowed_codes else _normalize_codes(settings.get("allowed_invite_codes"))
         own_codes = set()
-        if bool(settings.get("allow_server_invites", True)):
+        if bool(settings.get("allow_server_invites", True)) and not override_own_codes:
             own_codes = await _own_invite_codes(guild)
 
         blocked = [code for code in codes if code not in allowed_codes and code not in own_codes]
         if not blocked:
             return
 
+        override_notes = []
+        if override_exempt:
+            override_notes.append("exempt users/roles")
+        if override_allowed_roles:
+            override_notes.append("invite-allowed roles")
+        if override_allowed_channels:
+            override_notes.append("allowed channels")
+        if override_allowed_codes:
+            override_notes.append("allowed invite codes")
+        if override_own_codes:
+            override_notes.append("this-server invite codes")
+        reason = "external Discord invite link"
+        if override_notes:
+            reason += "; override bypassed: " + ", ".join(override_notes)
+
         try:
             await message.delete(reason="SpamGuard hard block: external Discord invite link")
-            await _modlog(guild, message, blocked, "external Discord invite link")
+            await _modlog(guild, message, blocked, reason)
         except discord.Forbidden:
             await _modlog(guild, message, blocked, "bot lacks Manage Messages in that channel")
         except Exception as exc:
