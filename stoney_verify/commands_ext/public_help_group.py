@@ -14,7 +14,7 @@ import discord
 from discord import app_commands
 
 from ..globals import now_utc
-from .common import reply_once
+from ..interaction_guard import run_guarded_interaction, safe_send_interaction
 from .public_setup_group import stoney_group
 
 _REGISTERED = False
@@ -438,17 +438,50 @@ def _command_surface_embed(interaction: discord.Interaction) -> discord.Embed:
 @app_commands.describe(section="Pick the topic you need help with.")
 @app_commands.choices(section=HELP_SECTION_CHOICES)
 async def dank_help_callback(interaction: discord.Interaction, section: Optional[app_commands.Choice[str]] = None) -> None:
-    value = section.value if section is not None else "overview"
-    embed = _embed_for_section(value)
-    if not _is_staff_or_admin(interaction):
-        embed.description = (embed.description or "") + "\n\nSome listed tools are staff/admin-only."
-    await reply_once(interaction, {"embed": embed, "ephemeral": True})
+    async def _run() -> None:
+        value = section.value if section is not None else "overview"
+        embed = _embed_for_section(value)
+        if not _is_staff_or_admin(interaction):
+            embed.description = (embed.description or "") + "\n\nSome listed tools are staff/admin-only."
+        sent = await safe_send_interaction(interaction, embed=embed, ephemeral=True)
+        if not sent:
+            raise RuntimeError("Help response could not be sent to Discord.")
+
+    await run_guarded_interaction(
+        interaction,
+        _run,
+        defer=True,
+        ephemeral=True,
+        error_title="❌ Help failed safely",
+        error_guidance="Nothing was changed. Retry `/dank help`, then check `/dank diagnostics` if it keeps failing.",
+    )
 
 
 async def dank_commands_callback(interaction: discord.Interaction) -> None:
-    if not _is_staff_or_admin(interaction):
-        return await reply_once(interaction, {"content": "❌ Staff only. Ask a server admin or staff member to run this.", "ephemeral": True})
-    await reply_once(interaction, {"embed": _command_surface_embed(interaction), "ephemeral": True})
+    async def _run() -> None:
+        if not _is_staff_or_admin(interaction):
+            sent = await safe_send_interaction(
+                interaction,
+                content="❌ Staff only. Ask a server admin or staff member to run this.",
+                ephemeral=True,
+            )
+        else:
+            sent = await safe_send_interaction(
+                interaction,
+                embed=_command_surface_embed(interaction),
+                ephemeral=True,
+            )
+        if not sent:
+            raise RuntimeError("Command audit response could not be sent to Discord.")
+
+    await run_guarded_interaction(
+        interaction,
+        _run,
+        defer=True,
+        ephemeral=True,
+        error_title="❌ Command audit failed safely",
+        error_guidance="Nothing was changed. Retry `/dank commands`, then check `/dank diagnostics` if it keeps failing.",
+    )
 
 
 def _attach_command_once(name: str, description: str, callback: Any) -> bool:
