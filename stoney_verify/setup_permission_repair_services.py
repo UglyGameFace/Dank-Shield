@@ -7,7 +7,7 @@ It extends the older guard implementation with exact-name discovery and clearer
 fix boundaries, without blindly overwriting unrelated server channels.
 """
 
-from typing import Any, Iterable, Mapping, Optional
+from typing import Any, Optional
 import re
 import unicodedata
 
@@ -102,11 +102,24 @@ def _bot_blockers(guild: discord.Guild) -> list[str]:
     return blockers
 
 
-async def _build_expanded_targets(guild: discord.Guild) -> tuple[list[Any], list[str]]:
+def _split_legacy_targets(raw: Any) -> tuple[list[Any], list[str], list[str], list[str]]:
+    """Accept both old and current setup_permission_repair_guard tuple shapes."""
+    try:
+        items = tuple(raw or ())
+    except Exception:
+        return [], ["Permission repair target builder returned an unreadable result."], [], []
+    targets = list(items[0] if len(items) >= 1 and items[0] is not None else [])
+    notes = list(items[1] if len(items) >= 2 and items[1] is not None else [])
+    missing_mappings = list(items[2] if len(items) >= 3 and items[2] is not None else [])
+    manual_actions = list(items[3] if len(items) >= 4 and items[3] is not None else [])
+    return targets, notes, missing_mappings, manual_actions
+
+
+async def _build_expanded_targets(guild: discord.Guild) -> tuple[list[Any], list[str], list[str], list[str]]:
     from stoney_verify.guild_config import get_guild_config
     from stoney_verify.startup_guards import setup_permission_repair_guard as legacy
 
-    targets, notes = await legacy._build_targets(guild)
+    targets, notes, missing_mappings, manual_actions = _split_legacy_targets(await legacy._build_targets(guild))
     cfg = await get_guild_config(guild.id, refresh=True)
     seen = {int(getattr(item.channel, "id", 0) or 0) for item in targets}
 
@@ -157,7 +170,6 @@ async def _build_expanded_targets(guild: discord.Guild) -> tuple[list[Any], list
         channel = _find_exact_named(guild, legacy._voice_channel_classes(), aliases, notes=notes, label=label)
         legacy._add_target(targets, seen, channel, label, voice_ow)
 
-    # If exact-name category discovery found ticket/archive/staff categories, repair children too.
     for item in list(targets):
         if not isinstance(item.channel, discord.CategoryChannel):
             continue
@@ -167,7 +179,7 @@ async def _build_expanded_targets(guild: discord.Guild) -> tuple[list[Any], list
 
     if not targets:
         notes.append("No saved or exact-name setup channels/categories were found. Run Core Setup first, or use existing-server mapping to save the intended roles/channels.")
-    return targets, notes
+    return targets, notes, missing_mappings, manual_actions
 
 
 async def preview_or_apply(guild: discord.Guild, *, apply: bool) -> dict[str, Any]:
@@ -176,9 +188,9 @@ async def preview_or_apply(guild: discord.Guild, *, apply: bool) -> dict[str, An
     blockers = _bot_blockers(guild)
     hard_blockers = [item for item in blockers if "Manage Channels" in item or "could not be resolved" in item]
     if hard_blockers:
-        return {"ok": False, "error": "Permission repair is blocked by missing bot prerequisites.", "changed": [], "unchanged": [], "failed": [], "notes": blockers, "target_count": 0, "applied": bool(apply)}
+        return {"ok": False, "error": "Permission repair is blocked by missing bot prerequisites.", "changed": [], "unchanged": [], "failed": [], "notes": blockers, "missing_mappings": [], "manual_actions": [], "target_count": 0, "applied": bool(apply)}
 
-    targets, notes = await _build_expanded_targets(guild)
+    targets, notes, missing_mappings, manual_actions = await _build_expanded_targets(guild)
     if blockers:
         notes = blockers + notes
     changed: list[str] = []
@@ -187,6 +199,9 @@ async def preview_or_apply(guild: discord.Guild, *, apply: bool) -> dict[str, An
 
     for item in targets:
         channel = item.channel
+        if legacy._channel_manage_missing(channel, legacy._bot_member(guild)):
+            manual_actions.append(f"{legacy._channel_label(channel)}: bot lacks Manage Channels in this channel/category.")
+            continue
         channel_changes: list[str] = []
         for target, expected in item.overwrites.items():
             try:
@@ -199,6 +214,8 @@ async def preview_or_apply(guild: discord.Guild, *, apply: bool) -> dict[str, An
             if apply:
                 try:
                     await channel.set_permissions(target, overwrite=expected, reason="Dank Shield setup permission repair")
+                except discord.Forbidden:
+                    failed.append(f"{legacy._channel_label(channel)} -> {legacy._target_label(target)}: Discord denied Manage Channels")
                 except Exception as exc:
                     failed.append(f"{legacy._channel_label(channel)} -> {legacy._target_label(target)}: {type(exc).__name__}")
         if channel_changes:
@@ -221,12 +238,14 @@ async def preview_or_apply(guild: discord.Guild, *, apply: bool) -> dict[str, An
             notes.insert(0, f"Post-repair scan could not run: {type(exc).__name__}.")
 
     return {
-        "ok": not failed,
+        "ok": not failed and not manual_actions,
         "error": "" if not failed else "Some permission overwrites could not be repaired.",
         "changed": changed,
         "unchanged": unchanged,
         "failed": failed,
         "notes": notes,
+        "missing_mappings": missing_mappings,
+        "manual_actions": manual_actions,
         "target_count": len(targets),
         "applied": bool(apply),
     }
