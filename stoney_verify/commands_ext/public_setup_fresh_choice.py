@@ -9,8 +9,8 @@ see. It keeps the product rule simple:
 - no one-server assumptions
 - no Stoney Baloney IDs/branding copied into other guilds
 - setup choices use plain words
-- the Stoney Baloney-style ID + voice verification panel is available as an
-  optional choice, not the universal default
+- Basic Button Verification is a first-class public option
+- ID / website upload verification is allowlisted only
 """
 
 from dataclasses import dataclass
@@ -45,18 +45,29 @@ SETUP_CHOICES: tuple[PlainSetupChoice, ...] = (
         key="basic_server",
         label="Basic server",
         emoji="🏠",
-        short="Simple server setup with basic tickets and logs.",
-        member_sees="A simple support button when they need staff help.",
+        short="Simple server setup with support tickets, starter logs, and normal public-server defaults.",
+        member_sees="A clean support button when they need staff help.",
         needs_tickets=True,
         needs_id=False,
         needs_voice=False,
         panel_style="basic",
     ),
     PlainSetupChoice(
+        key="basic_verify",
+        label="Basic verify",
+        emoji="✅",
+        short="Simple Verify button flow: no ID upload, no website token, no voice check, no forced ticket.",
+        member_sees="A Verify button in the verification channel that grants the configured access role and removes the waiting role.",
+        needs_tickets=False,
+        needs_id=False,
+        needs_voice=False,
+        panel_style="basic_verify",
+    ),
+    PlainSetupChoice(
         key="help_desk",
         label="Help desk",
         emoji="🎫",
-        short="Best for support tickets, customers, reports, and appeals.",
+        short="Support-ticket focused setup for help requests, reports, appeals, and staff triage.",
         member_sees="A clean ticket panel with fast support choices.",
         needs_tickets=True,
         needs_id=False,
@@ -64,21 +75,10 @@ SETUP_CHOICES: tuple[PlainSetupChoice, ...] = (
         panel_style="help_desk",
     ),
     PlainSetupChoice(
-        key="id_check",
-        label="ID check",
-        emoji="🪪",
-        short="Members verify with a private upload link.",
-        member_sees="A verification ticket with an Upload ID button.",
-        needs_tickets=True,
-        needs_id=True,
-        needs_voice=False,
-        panel_style="id_check",
-    ),
-    PlainSetupChoice(
         key="voice_check",
         label="Voice check",
         emoji="🎙️",
-        short="Members can ask staff to verify them in voice chat.",
+        short="Members request staff voice verification without ID upload or website upload flow.",
         member_sees="A verification ticket with a Verify in VC option.",
         needs_tickets=True,
         needs_id=False,
@@ -86,10 +86,21 @@ SETUP_CHOICES: tuple[PlainSetupChoice, ...] = (
         panel_style="voice_check",
     ),
     PlainSetupChoice(
+        key="id_check",
+        label="ID check",
+        emoji="🪪",
+        short="Private ID upload verification for allowlisted servers only.",
+        member_sees="A verification ticket with an Upload ID button.",
+        needs_tickets=True,
+        needs_id=True,
+        needs_voice=False,
+        panel_style="id_check",
+    ),
+    PlainSetupChoice(
         key="id_voice_check",
         label="ID + voice check",
         emoji="🔐",
-        short="Upload-link plus voice-check style like your Stoney Baloney setup.",
+        short="Private ID upload plus voice-check workflow for allowlisted servers only.",
         member_sees="Upload ID, Verify in VC, reveal link, regenerate link if enabled, and website button if configured.",
         needs_tickets=True,
         needs_id=True,
@@ -110,24 +121,23 @@ SETUP_CHOICES: tuple[PlainSetupChoice, ...] = (
 )
 
 
+CHOICES_BY_KEY: dict[str, PlainSetupChoice] = {choice.key: choice for choice in SETUP_CHOICES}
+
+
 def get_plain_setup_choice(key: Any) -> Optional[PlainSetupChoice]:
     wanted = str(key or "").strip().lower()
-    for choice in SETUP_CHOICES:
-        if choice.key == wanted:
-            return choice
-    return None
+    return CHOICES_BY_KEY.get(wanted)
 
 
 def _choices_for_guild(guild: Optional[discord.Guild]) -> tuple[PlainSetupChoice, ...]:
-    if id_verify_allowed_for_guild(guild):
-        return SETUP_CHOICES
-    return tuple(choice for choice in SETUP_CHOICES if not choice.needs_id)
+    choices = SETUP_CHOICES if id_verify_allowed_for_guild(guild) else tuple(choice for choice in SETUP_CHOICES if not choice.needs_id)
+    return choices
 
 
 def _choice_lines(guild: Optional[discord.Guild] = None) -> str:
     lines = "\n".join(f"{c.emoji} **{c.label}** — {c.short}" for c in _choices_for_guild(guild))
     if not id_verify_allowed_for_guild(guild):
-        lines += "\n\n🔒 ID/web verification is hidden for this server. Basic Button Verification is the default."
+        lines += "\n\n🔒 ID/web verification choices are hidden for this server. Use **Basic verify** for a simple one-button verification gate."
     return lines
 
 
@@ -182,25 +192,31 @@ async def _service_summary_for_home(guild: discord.Guild) -> tuple[str, str]:
     chosen = _plain_saved_choice_from_cfg(cfg)
     return (
         f"**Chosen:** {chosen}\n"
-        "Tickets: fast by default\n"
+        "Tickets: fast when enabled\n"
+        "Basic verify: available for every server\n"
         "Forms: off unless you turn them on",
         "Pick **Choose Setup Type** first if this is a new server.",
     )
 
 
 def _choice_payload(choice: PlainSetupChoice) -> dict[str, Any]:
+    basic_verify = choice.key == "basic_verify"
     return {
         "setup_choice": choice.key,
         "setup_choice_label": choice.label,
         "setup_choice_description": choice.short,
         "setup_choice_member_sees": choice.member_sees,
-        "setup_template_version": "plain_choices_v1",
+        "setup_template_version": "plain_choices_v2_basic_verify",
         "ticket_service_enabled": bool(choice.needs_tickets),
         "ticket_flow_style": "fast_no_forced_form",
         "ticket_form_mode": "off",
         "ticket_open_requires_modal": False,
         "ticket_open_requires_form": False,
         "verification_panel_style": choice.panel_style,
+        "verification_mode": "basic_button" if basic_verify else choice.panel_style,
+        "verify_mode": "basic_button" if basic_verify else choice.panel_style,
+        "basic_verify_enabled": bool(basic_verify),
+        "basic_button_verify_enabled": bool(basic_verify),
         "verification_requires_id": bool(choice.needs_id),
         "verification_allows_voice": bool(choice.needs_voice),
         "verification_style_label": choice.label,
@@ -214,10 +230,11 @@ async def _save_choice(interaction: discord.Interaction, choice: PlainSetupChoic
 
 
 def _choice_preview_embed(guild: discord.Guild, choice: PlainSetupChoice) -> discord.Embed:
+    basic_verify = choice.key == "basic_verify"
     embed = discord.Embed(
         title=f"{choice.emoji} {choice.label}",
         description=choice.short,
-        color=discord.Color.blurple(),
+        color=discord.Color.green() if basic_verify else discord.Color.blurple(),
         timestamp=now_utc(),
     )
     embed.add_field(name="What members will see", value=choice.member_sees[:1024], inline=False)
@@ -225,20 +242,30 @@ def _choice_preview_embed(guild: discord.Guild, choice: PlainSetupChoice) -> dis
         name="What this turns on",
         value=(
             f"{_bool_icon(choice.needs_tickets)} Tickets\n"
+            f"{_bool_icon(basic_verify)} Basic Verify button\n"
             f"{_bool_icon(choice.needs_id)} ID upload link\n"
             f"{_bool_icon(choice.needs_voice)} Voice check\n"
-            "✅ Fast ticket opening\n"
+            "✅ Fast ticket opening when tickets are enabled\n"
             "✅ Forms off by default"
         ),
         inline=False,
     )
-    if choice.key == "id_voice_check":
+    if basic_verify:
         embed.add_field(
             name="Important",
             value=(
-                "This is the same style as the Stoney Baloney verification flow, "
-                "but it does **not** copy Stoney Baloney channel IDs, role IDs, or branding. "
-                "This server still picks its own roles/channels."
+                "This matches the simple verification style used in your servers: users press **Verify**, "
+                "Dank Shield grants the configured Verified/full-access role, and removes the waiting role. "
+                "No ID upload, website token, or VC check is required."
+            ),
+            inline=False,
+        )
+    elif choice.needs_id:
+        embed.add_field(
+            name="Allowlisted ID/Web Verification",
+            value=(
+                "This is restricted to allowlisted guild IDs so public servers do not accidentally inherit the old ID upload flow. "
+                "This server still picks its own roles, channels, and branding."
             ),
             inline=False,
         )
@@ -261,12 +288,7 @@ async def _edit_setup_message(
     embed: discord.Embed,
     view: discord.ui.View,
 ) -> None:
-    """Edit the current setup message without assuming response state.
-
-    Both the home buttons and the after-choice buttons use this. Keeping it as a
-    helper prevents decorated discord.ui callback methods from being called via
-    `.callback`, which is not valid on the class-level function object.
-    """
+    """Edit the current setup message without assuming response state."""
     if interaction.response.is_done():
         await solid._edit_or_followup(interaction, embed=embed, view=view)
     else:
@@ -290,7 +312,7 @@ async def _open_existing_server_setup(interaction: discord.Interaction) -> None:
         value=(
             "🎫 **Ticket Basics** — ticket folders, staff role, transcripts\n"
             "🎭 **Access Roles** — waiting role, approved role, member role\n"
-            "🎙️ **Verification Channels** — ID/voice check channels\n"
+            "🎙️ **Verification Channels** — basic verify, ID, or voice check channels\n"
             "🧾 **Logs + Status** — modlog, join log, status channel\n"
             "⚙️ **Behavior Settings** — ticket prefix, kick timer, verification style"
         ),
@@ -364,13 +386,18 @@ def _build_setup_help_embed() -> discord.Embed:
         inline=False,
     )
     embed.add_field(
+        name="What is Basic verify?",
+        value="A public-safe Verify button. Members click it, get the configured Verified/full-access role, and lose the waiting role. No ID upload, website token, voice check, or forced ticket.",
+        inline=False,
+    )
+    embed.add_field(
         name="What if my server already has roles/channels?",
         value="Press **Use My Existing Server** and pick what you already use from Discord menus.",
         inline=False,
     )
     embed.add_field(
-        name="What if I want your Stoney Baloney-style verification?",
-        value="Pick **ID + voice check**. It gives the same kind of Upload ID + Verify in VC panel, but this guild keeps its own roles, channels, and branding.",
+        name="What if I want ID upload verification?",
+        value="ID/web upload choices are allowlisted only. Public servers should use **Basic verify**, **Voice check**, **Help desk**, or **Custom setup**.",
         inline=False,
     )
     embed.add_field(
@@ -406,7 +433,7 @@ async def _plain_choice_main_payload(guild: discord.Guild) -> tuple[discord.Embe
     embed.add_field(name="Recommended Next Step", value=str(next_step or "Choose Setup Type")[:1024], inline=False)
     embed.add_field(
         name="Product Rule",
-        value="Tickets open fast. Forms are optional only. Setup stays per-server.",
+        value="Basic verify is public-safe. Tickets open fast. Forms are optional only. Setup stays per-server.",
         inline=False,
     )
     embed.set_footer(text=f"Guild {guild.id} • /dank setup")
@@ -437,10 +464,10 @@ class PlainSetupHomeView(discord.ui.View):
         if not id_verify_allowed_for_guild(interaction.guild):
             embed.add_field(
                 name="🔒 ID/web verification hidden",
-                value="This server uses Basic Button Verification. ID/web verification is only available for allowlisted guild IDs.",
+                value="Use **Basic verify** for simple one-button verification. ID/web upload verification is only available for allowlisted guild IDs.",
                 inline=False,
             )
-        await interaction.response.edit_message(embed=embed, view=PlainSetupChoiceView())
+        await interaction.response.edit_message(embed=embed, view=PlainSetupChoiceView(guild=interaction.guild))
 
     @discord.ui.button(label="Use My Existing Server", emoji="🧩", style=discord.ButtonStyle.primary, custom_id="dank_setup_plain:existing", row=0)
     async def existing(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
@@ -466,6 +493,16 @@ class PlainSetupHomeView(discord.ui.View):
 
 
 class PlainSetupChoiceView(solid.BackToSetupView):
+    def __init__(self, *, guild: Optional[discord.Guild] = None) -> None:
+        super().__init__()
+        if not id_verify_allowed_for_guild(guild):
+            for child in list(getattr(self, "children", []) or []):
+                if str(getattr(child, "custom_id", "") or "") in {"dank_setup_choice:id", "dank_setup_choice:id_voice"}:
+                    try:
+                        self.remove_item(child)
+                    except Exception:
+                        pass
+
     async def _save_and_show(self, interaction: discord.Interaction, choice: PlainSetupChoice) -> None:
         if not await solid._require_setup_permission(interaction):
             return
@@ -487,27 +524,31 @@ class PlainSetupChoiceView(solid.BackToSetupView):
 
     @discord.ui.button(label="Basic server", emoji="🏠", style=discord.ButtonStyle.primary, custom_id="dank_setup_choice:basic", row=0)
     async def basic(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        await self._save_and_show(interaction, SETUP_CHOICES[0])
+        await self._save_and_show(interaction, CHOICES_BY_KEY["basic_server"])
 
-    @discord.ui.button(label="Help desk", emoji="🎫", style=discord.ButtonStyle.primary, custom_id="dank_setup_choice:helpdesk", row=0)
+    @discord.ui.button(label="Basic verify", emoji="✅", style=discord.ButtonStyle.success, custom_id="dank_setup_choice:basic_verify", row=0)
+    async def basic_verify(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        await self._save_and_show(interaction, CHOICES_BY_KEY["basic_verify"])
+
+    @discord.ui.button(label="Help desk", emoji="🎫", style=discord.ButtonStyle.primary, custom_id="dank_setup_choice:helpdesk", row=1)
     async def helpdesk(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        await self._save_and_show(interaction, SETUP_CHOICES[1])
-
-    @discord.ui.button(label="ID check", emoji="🪪", style=discord.ButtonStyle.primary, custom_id="dank_setup_choice:id", row=1)
-    async def id_check(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        await self._save_and_show(interaction, SETUP_CHOICES[2])
+        await self._save_and_show(interaction, CHOICES_BY_KEY["help_desk"])
 
     @discord.ui.button(label="Voice check", emoji="🎙️", style=discord.ButtonStyle.primary, custom_id="dank_setup_choice:voice", row=1)
     async def voice_check(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        await self._save_and_show(interaction, SETUP_CHOICES[3])
+        await self._save_and_show(interaction, CHOICES_BY_KEY["voice_check"])
+
+    @discord.ui.button(label="ID check", emoji="🪪", style=discord.ButtonStyle.primary, custom_id="dank_setup_choice:id", row=2)
+    async def id_check(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        await self._save_and_show(interaction, CHOICES_BY_KEY["id_check"])
 
     @discord.ui.button(label="ID + voice check", emoji="🔐", style=discord.ButtonStyle.success, custom_id="dank_setup_choice:id_voice", row=2)
     async def id_voice_check(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        await self._save_and_show(interaction, SETUP_CHOICES[4])
+        await self._save_and_show(interaction, CHOICES_BY_KEY["id_voice_check"])
 
-    @discord.ui.button(label="Custom setup", emoji="⚙️", style=discord.ButtonStyle.secondary, custom_id="dank_setup_choice:custom", row=2)
+    @discord.ui.button(label="Custom setup", emoji="⚙️", style=discord.ButtonStyle.secondary, custom_id="dank_setup_choice:custom", row=3)
     async def custom(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        await self._save_and_show(interaction, SETUP_CHOICES[5])
+        await self._save_and_show(interaction, CHOICES_BY_KEY["custom_setup"])
 
 
 class AfterChoiceView(solid.BackToSetupView):
@@ -541,7 +582,7 @@ class CreateMissingItemsView(solid.BackToSetupView):
 
                 msg = (
                     "✅ Missing starter items were handled.\n\n"
-                    "**Next:** run `/dank setup`, press **Setup Check**, then post the ticket panel with `/ticket-panel post`."
+                    "**Next:** run `/dank setup`, press **Setup Check**, then post the panel you need: `/verify panel` for Basic Verify or `/ticket-panel post` for tickets."
                 )
                 if error:
                     msg += f"\n\n⚠️ Ticket menu options could not be checked: `{error}`"
@@ -591,4 +632,5 @@ __all__ = [
     "get_plain_setup_choice",
     "PlainSetupChoice",
     "SETUP_CHOICES",
+    "CHOICES_BY_KEY",
 ]
