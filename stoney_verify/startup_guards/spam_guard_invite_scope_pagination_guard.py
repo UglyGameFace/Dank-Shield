@@ -1,11 +1,9 @@
 from __future__ import annotations
 
-"""Bulletproof the Protection Center invite scope editor.
+"""Simple Discord Invite Blocker setup UI.
 
-Discord's native user/channel selects can hide results on mobile or large
-servers. This guard adds server-enumerated paged selects, an explicit All Bots
-mode, all-channel/current-channel shortcuts, and guild-config persistence for the
-All Bots flag.
+This replaces the old scope/pagination wording with staff-facing language:
+what bots/users are watched, what channels are watched, and what each button does.
 """
 
 from typing import Any, Iterable
@@ -25,14 +23,9 @@ def _safe_bool(value: Any, default: bool = False) -> bool:
             return value
         if value is None:
             return bool(default)
-        text = str(value).strip().lower()
-        if text in {"1", "true", "yes", "y", "on", "enabled", "all"}:
-            return True
-        if text in {"0", "false", "no", "n", "off", "disabled", "none"}:
-            return False
+        return str(value).strip().lower() in {"1", "true", "yes", "y", "on", "enabled", "all"}
     except Exception:
-        pass
-    return bool(default)
+        return bool(default)
 
 
 def _as_id_list(value: Any) -> list[str]:
@@ -80,7 +73,6 @@ def _cfg_value(cfg: Any, key: str) -> Any:
 async def _load_all_bots_flag(guild_id: int) -> bool:
     try:
         from stoney_verify.guild_config import get_guild_config
-
         cfg = await get_guild_config(int(guild_id), refresh=True)
         raw = _cfg_value(cfg, f"spam_{_ALL_BOTS_KEY}")
         if raw is None:
@@ -93,7 +85,6 @@ async def _load_all_bots_flag(guild_id: int) -> bool:
 async def _save_all_bots_flag(guild_id: int, value: bool) -> bool:
     try:
         from stoney_verify.guild_config import invalidate_guild_config, upsert_guild_config
-
         await upsert_guild_config(int(guild_id), {_ALL_BOTS_KEY: bool(value), f"spam_{_ALL_BOTS_KEY}": bool(value)})
         invalidate_guild_config(int(guild_id))
         return True
@@ -155,11 +146,9 @@ def _scope_status(policy: Any, settings: dict[str, Any]) -> str:
     all_bots = _safe_bool(settings.get(_ALL_BOTS_KEY, settings.get(f"spam_{_ALL_BOTS_KEY}")), False)
     bot_ids = _as_id_list(settings.get("invite_hard_block_target_bot_ids"))
     channel_ids = _as_id_list(settings.get("invite_hard_block_target_channel_ids"))
-    return (
-        f"**Bot coverage:** {'All bots + humans' if all_bots else ('Listed bots/users + humans' if bot_ids else 'Humans only; bots ignored unless listed')}\n"
-        f"**Listed bots/users:** {', '.join(f'`{x}`' for x in bot_ids[:12]) if bot_ids else 'None'}{'…' if len(bot_ids) > 12 else ''}\n"
-        f"**Channel coverage:** {', '.join(f'`{x}`' for x in channel_ids[:12]) if channel_ids else 'All text channels'}{'…' if len(channel_ids) > 12 else ''}"
-    )
+    bot_line = "Every bot is watched" if all_bots else (f"{len(bot_ids)} selected bot/user ID(s)" if bot_ids else "No bots selected yet")
+    channel_line = f"{len(channel_ids)} selected channel(s)" if channel_ids else "All message channels are watched"
+    return f"**Bots/users:** {bot_line}\n**Channels:** {channel_line}"
 
 
 def _scope_embed(guild: discord.Guild, policy: Any, settings: dict[str, Any], *, bot_page: int, channel_page: int) -> discord.Embed:
@@ -168,20 +157,35 @@ def _scope_embed(guild: discord.Guild, policy: Any, settings: dict[str, Any], *,
     _bot_items, bp, bot_pages = _slice(bots, bot_page)
     _chan_items, cp, channel_pages = _slice(channels, channel_page)
     embed = discord.Embed(
-        title="🎯 Invite Scope Editor",
-        description="This editor does not depend on Discord's search list. It pages through this server's cached bots and text channels, plus manual ID paste for anything Discord does not expose.",
+        title="🚫 Discord Invite Blocker Setup",
+        description=(
+            "Use this when a bot or member is allowed to talk, but Discord invite links should still be handled by Dank Shield.\n\n"
+            "For OneBump: choose **Watch Every Bot** or pick OneBump, then choose **This Channel** or **All Channels**."
+        ),
         color=discord.Color.blurple(),
     )
-    embed.add_field(name="Current scope", value=_scope_status(policy, settings), inline=False)
-    embed.add_field(name="Bot picker", value=f"Bots found in cache: **{len(bots)}** • page **{bp + 1}/{bot_pages}**. Use **All Bots** if you want every bot covered, including bots not convenient to pick one-by-one.", inline=False)
-    embed.add_field(name="Channel picker", value=f"Text channels found: **{len(channels)}** • page **{cp + 1}/{channel_pages}**. Blank channel list means all text channels are covered.", inline=False)
-    embed.add_field(name="Manual ID format", value="Use comma, space, semicolon, or new line. Mentions work too: `<@123>`, `<#123>`. Example: `123, 456 789`.", inline=False)
+    embed.add_field(name="What is watched right now", value=_scope_status(policy, settings), inline=False)
+    embed.add_field(
+        name="Buttons explained",
+        value=(
+            "**Watch Every Bot** = easiest option for bump/listing bots.\n"
+            "**Only Listed Bots** = only selected bot/user IDs.\n"
+            "**This Channel** = only the channel where you opened this setup.\n"
+            "**All Channels** = every message channel Dank Shield can monitor.\n"
+            "**Paste IDs** = bulk paste bot, user, or channel IDs."
+        ),
+        inline=False,
+    )
+    embed.add_field(
+        name="Dropdown pages",
+        value=f"Bot dropdown page `{bp + 1}/{bot_pages}` • Channel dropdown page `{cp + 1}/{channel_pages}`. Use page buttons only if the item is not visible.",
+        inline=False,
+    )
     return embed
 
 
 async def _save_scope(guild: discord.Guild, actor: discord.abc.User, patch: dict[str, Any]) -> dict[str, Any]:
     from stoney_verify import spam_guard
-
     settings, _persisted = await spam_guard.save_spam_settings(int(guild.id), patch, updated_by=actor if isinstance(actor, discord.Member) else None)
     return dict(settings or {})
 
@@ -202,10 +206,10 @@ class BotPageSelect(discord.ui.Select):
         selected = set(_as_id_list(settings.get("invite_hard_block_target_bot_ids")))
         for bot_member in bots:
             label = str(getattr(bot_member, "display_name", bot_member.name))[:90]
-            options.append(discord.SelectOption(label=label, value=str(bot_member.id), description=f"Bot ID {bot_member.id}"[:100], default=str(bot_member.id) in selected))
+            options.append(discord.SelectOption(label=label, value=str(bot_member.id), description=f"Watch invite links from bot ID {bot_member.id}"[:100], default=str(bot_member.id) in selected))
         if not options:
-            options.append(discord.SelectOption(label="No bots cached", value="none", description="Use All Bots or Manual IDs."))
-        super().__init__(placeholder=f"Add bots/users from bot page {safe_page + 1}/{total_pages}", min_values=1, max_values=max(1, min(len(options), 25)), options=options, row=0)
+            options.append(discord.SelectOption(label="No bots cached", value="none", description="Use Watch Every Bot or Paste IDs."))
+        super().__init__(placeholder=f"Pick bot(s) to watch • page {safe_page + 1}/{total_pages}", min_values=1, max_values=max(1, min(len(options), 25)), options=options, row=0)
         self.guild = guild
         self.channel_id = int(channel_id)
         self.message_id = int(message_id)
@@ -236,8 +240,8 @@ class ChannelPageSelect(discord.ui.Select):
             cat = str(getattr(getattr(channel, "category", None), "name", "No category"))[:45]
             options.append(discord.SelectOption(label=label, value=str(channel.id), description=f"{cat} • {channel.id}"[:100], default=str(channel.id) in selected))
         if not options:
-            options.append(discord.SelectOption(label="No text channels cached", value="none", description="Use Manual IDs."))
-        super().__init__(placeholder=f"Add channels from page {safe_page + 1}/{total_pages}", min_values=1, max_values=max(1, min(len(options), 25)), options=options, row=1)
+            options.append(discord.SelectOption(label="No channels cached", value="none", description="Use Paste IDs."))
+        super().__init__(placeholder=f"Pick channel(s) to watch • page {safe_page + 1}/{total_pages}", min_values=1, max_values=max(1, min(len(options), 25)), options=options, row=1)
         self.guild = guild
         self.channel_id = int(channel_id)
         self.message_id = int(message_id)
@@ -258,15 +262,15 @@ class ChannelPageSelect(discord.ui.Select):
         await interaction.response.edit_message(embed=_scope_embed(self.guild, policy, settings, bot_page=self.bot_page, channel_page=self.channel_page), view=PagedInviteScopeView(guild=self.guild, channel_id=self.channel_id, message_id=self.message_id, settings=settings, bot_page=self.bot_page, channel_page=self.channel_page))
 
 
-class ManualScopeModal(discord.ui.Modal, title="Manual Invite Scope IDs"):
+class ManualScopeModal(discord.ui.Modal, title="Paste IDs for Invite Blocker"):
     def __init__(self, *, guild: discord.Guild, channel_id: int, message_id: int, settings: dict[str, Any]) -> None:
         super().__init__(timeout=300)
         from stoney_verify.startup_guards import spam_guard_invite_override_options as policy
         self.guild = guild
         self.channel_id = int(channel_id)
         self.message_id = int(message_id)
-        self.bot_ids = discord.ui.TextInput(label="Bot/user IDs", placeholder="Comma, spaces, semicolon, new lines, <@123>. Blank clears listed IDs.", default=policy._ids_text(settings.get("invite_hard_block_target_bot_ids")), required=False, style=discord.TextStyle.paragraph, max_length=1200)
-        self.channel_ids = discord.ui.TextInput(label="Channel IDs", placeholder="Comma, spaces, semicolon, new lines, <#123>. Blank = all text channels.", default=policy._ids_text(settings.get("invite_hard_block_target_channel_ids")), required=False, style=discord.TextStyle.paragraph, max_length=1200)
+        self.bot_ids = discord.ui.TextInput(label="Bot/user IDs to watch", placeholder="Example: 123, 456 or <@123>. Blank clears selected bot/user IDs.", default=policy._ids_text(settings.get("invite_hard_block_target_bot_ids")), required=False, style=discord.TextStyle.paragraph, max_length=1200)
+        self.channel_ids = discord.ui.TextInput(label="Channel IDs to watch", placeholder="Example: 123, 456 or <#123>. Blank = all message channels.", default=policy._ids_text(settings.get("invite_hard_block_target_channel_ids")), required=False, style=discord.TextStyle.paragraph, max_length=1200)
         self.add_item(self.bot_ids)
         self.add_item(self.channel_ids)
 
@@ -296,32 +300,32 @@ class PagedInviteScopeView(discord.ui.View):
         cp = self.channel_page if channel_page is None else int(channel_page)
         await interaction.response.edit_message(embed=_scope_embed(self.guild, policy, next_settings, bot_page=bp, channel_page=cp), view=PagedInviteScopeView(guild=self.guild, channel_id=self.channel_id, message_id=self.message_id, settings=next_settings, bot_page=bp, channel_page=cp))
 
-    @discord.ui.button(label="◀ Bots", style=discord.ButtonStyle.secondary, row=2)
+    @discord.ui.button(label="◀ Bot Page", style=discord.ButtonStyle.secondary, row=2)
     async def prev_bots(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         await self._redraw(interaction, bot_page=max(0, self.bot_page - 1))
 
-    @discord.ui.button(label="Bots ▶", style=discord.ButtonStyle.secondary, row=2)
+    @discord.ui.button(label="Bot Page ▶", style=discord.ButtonStyle.secondary, row=2)
     async def next_bots(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         total = max(1, (len(_bot_members(self.guild)) + 24) // 25)
         await self._redraw(interaction, bot_page=min(total - 1, self.bot_page + 1))
 
-    @discord.ui.button(label="All Bots", emoji="🤖", style=discord.ButtonStyle.success, row=2)
+    @discord.ui.button(label="Watch Every Bot", emoji="🤖", style=discord.ButtonStyle.success, row=2)
     async def all_bots(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         settings = await _save_scope(self.guild, interaction.user, {_ALL_BOTS_KEY: True})
         await _refresh_center_message(self.guild, int(interaction.user.id), self.channel_id, self.message_id)
         await self._redraw(interaction, settings=settings)
 
-    @discord.ui.button(label="Humans Only", emoji="👤", style=discord.ButtonStyle.secondary, row=2)
+    @discord.ui.button(label="Only Listed Bots", emoji="👤", style=discord.ButtonStyle.secondary, row=2)
     async def humans_only(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         settings = await _save_scope(self.guild, interaction.user, {_ALL_BOTS_KEY: False, "invite_hard_block_target_bot_ids": []})
         await _refresh_center_message(self.guild, int(interaction.user.id), self.channel_id, self.message_id)
         await self._redraw(interaction, settings=settings)
 
-    @discord.ui.button(label="◀ Channels", style=discord.ButtonStyle.secondary, row=3)
+    @discord.ui.button(label="◀ Channel Page", style=discord.ButtonStyle.secondary, row=3)
     async def prev_channels(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         await self._redraw(interaction, channel_page=max(0, self.channel_page - 1))
 
-    @discord.ui.button(label="Channels ▶", style=discord.ButtonStyle.secondary, row=3)
+    @discord.ui.button(label="Channel Page ▶", style=discord.ButtonStyle.secondary, row=3)
     async def next_channels(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         total = max(1, (len(_text_channels(self.guild)) + 24) // 25)
         await self._redraw(interaction, channel_page=min(total - 1, self.channel_page + 1))
@@ -343,13 +347,13 @@ class PagedInviteScopeView(discord.ui.View):
         await _refresh_center_message(self.guild, int(interaction.user.id), self.channel_id, self.message_id)
         await self._redraw(interaction, settings=settings)
 
-    @discord.ui.button(label="Manual IDs", emoji="✍️", style=discord.ButtonStyle.secondary, row=4)
+    @discord.ui.button(label="Paste IDs", emoji="✍️", style=discord.ButtonStyle.secondary, row=4)
     async def manual(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         await interaction.response.send_modal(ManualScopeModal(guild=self.guild, channel_id=self.channel_id, message_id=self.message_id, settings=await _patched_get_spam_settings(int(self.guild.id))))
 
     @discord.ui.button(label="Done", emoji="✅", style=discord.ButtonStyle.success, row=4)
     async def done(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        await interaction.response.edit_message(content="Invite scope editor closed. Reopen it from Protection Center if needed.", embed=None, view=None)
+        await interaction.response.edit_message(content="Discord Invite Blocker setup closed. Reopen it from Protection Center if needed.", embed=None, view=None)
 
 
 def _patch_protection_center_scope() -> None:
@@ -360,17 +364,9 @@ def _patch_protection_center_scope() -> None:
         def patched_format_scope_status(policy_obj: Any, settings: dict[str, Any]) -> str:
             return _scope_status(policy_obj, settings)
 
-        def patched_scope_editor_embed(policy_obj: Any, settings: dict[str, Any]) -> discord.Embed:
-            guild = getattr(pc, "_LAST_SCOPE_GUILD", None)
-            if isinstance(guild, discord.Guild):
-                return _scope_embed(guild, policy_obj, settings, bot_page=0, channel_page=0)
-            embed = discord.Embed(title="🎯 Invite Scope Editor", description="Use Manual IDs if the full guild list is not available in this context.", color=discord.Color.blurple())
-            embed.add_field(name="Current scope", value=_scope_status(policy_obj, settings), inline=False)
-            return embed
-
         class BetterProtectionInviteScopeButton(discord.ui.Button):
             def __init__(self) -> None:
-                super().__init__(label="Invite Scope", emoji="🎯", style=discord.ButtonStyle.primary, custom_id="dank_protection:invite_scope", row=3)
+                super().__init__(label="Discord Invite Blocker", emoji="🚫", style=discord.ButtonStyle.primary, custom_id="dank_protection:invite_scope", row=3)
 
             async def callback(self, interaction: discord.Interaction) -> None:
                 center, spam_guard, _p = pc._patch_helpers()
@@ -381,7 +377,6 @@ def _patch_protection_center_scope() -> None:
                 if guild is None or message is None:
                     return await center._send_ephemeral(interaction, "❌ Invalid Protection Center context.")
                 settings = await spam_guard.get_spam_settings(int(guild.id))
-                pc._LAST_SCOPE_GUILD = guild
                 await interaction.response.send_message(
                     embed=_scope_embed(guild, policy, settings, bot_page=0, channel_page=0),
                     view=PagedInviteScopeView(guild=guild, channel_id=int(getattr(message.channel, "id", 0) or 0), message_id=int(message.id), settings=settings),
@@ -390,7 +385,6 @@ def _patch_protection_center_scope() -> None:
                 )
 
         pc._format_scope_status = patched_format_scope_status
-        pc._scope_editor_embed = patched_scope_editor_embed
         pc.ProtectionInviteScopeButton = BetterProtectionInviteScopeButton
     except Exception:
         pass
@@ -403,7 +397,6 @@ def apply() -> bool:
     try:
         from stoney_verify import spam_guard
         from stoney_verify.startup_guards import spam_guard_invite_override_options as policy
-
         try:
             policy.apply()
         except Exception:
@@ -418,7 +411,7 @@ def apply() -> bool:
             pass
         _patch_protection_center_scope()
         _PATCHED = True
-        print("✅ spam_guard_invite_scope_pagination_guard active; invite scope has paged bots/channels and All Bots mode")
+        print("✅ spam_guard_invite_scope_pagination_guard active; Discord Invite Blocker setup is plain-language")
         return True
     except Exception as exc:
         try:
