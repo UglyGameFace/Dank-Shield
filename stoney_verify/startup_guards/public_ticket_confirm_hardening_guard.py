@@ -4,8 +4,8 @@ from __future__ import annotations
 
 The clean ticket panel already has DB/open-ticket checks. This guard protects the
 member-facing interaction layer so old category menus cannot create tickets,
-Confirm cannot double-submit, and form-based categories can still open Discord
-modals correctly.
+Confirm cannot double-submit, form-based categories can still open Discord
+modals correctly, and broken ticket setup is caught before members waste time.
 """
 
 import asyncio
@@ -120,6 +120,124 @@ def _form_questions(row: Dict[str, Any]) -> list[dict[str, Any]]:
         return []
 
 
+def _short_list(lines: List[str], *, limit: int = 900) -> str:
+    if not lines:
+        return "None"
+    out: List[str] = []
+    size = 0
+    for raw in lines:
+        line = str(raw or "").strip()
+        if not line:
+            continue
+        next_size = size + len(line) + 3
+        if next_size > limit:
+            remaining = max(0, len(lines) - len(out))
+            if remaining:
+                out.append(f"…and {remaining} more")
+            break
+        out.append(f"• {line}")
+        size = next_size
+    return "\n".join(out) or "None"
+
+
+async def _ticket_setup_preflight(pt: Any, guild: discord.Guild) -> tuple[Optional[discord.CategoryChannel], Optional[discord.Role], List[str], List[str]]:
+    blockers: List[str] = []
+    warnings: List[str] = []
+    try:
+        parent = await asyncio.wait_for(pt._active_category(guild), timeout=6.0)
+    except asyncio.TimeoutError:
+        parent = None
+        blockers.append("Active Tickets category lookup timed out.")
+    except Exception as exc:
+        parent = None
+        blockers.append(f"Active Tickets category lookup failed: {type(exc).__name__}.")
+
+    try:
+        staff = await asyncio.wait_for(pt._staff_role(guild), timeout=6.0)
+    except asyncio.TimeoutError:
+        staff = None
+        blockers.append("Ticket staff role lookup timed out.")
+    except Exception as exc:
+        staff = None
+        blockers.append(f"Ticket staff role lookup failed: {type(exc).__name__}.")
+
+    if parent is None:
+        blockers.append("Active Tickets category is not saved or could not be found.")
+    else:
+        try:
+            missing = list(pt._missing_category_perms(parent, guild.me) or [])
+            if missing:
+                blockers.append(f"Dank Shield is missing in **{parent.name}**: {', '.join(missing)}.")
+        except Exception as exc:
+            blockers.append(f"Could not inspect bot permissions on Active Tickets category: {type(exc).__name__}.")
+        try:
+            blockers.extend(list(pt._ticket_category_shape_blockers(parent, staff) or []))
+        except Exception as exc:
+            blockers.append(f"Could not inspect Active Tickets privacy shape: {type(exc).__name__}.")
+
+    if staff is None:
+        blockers.append("Ticket staff role is not saved or could not be found.")
+
+    try:
+        panel = await asyncio.wait_for(pt._panel_channel(guild), timeout=4.0)
+        if isinstance(panel, discord.TextChannel):
+            missing_panel = list(pt._missing_text_perms(panel, guild.me) or [])
+            if missing_panel:
+                warnings.append(f"Ticket panel channel {panel.mention} has bot permission issues: {', '.join(missing_panel)}.")
+    except Exception:
+        pass
+
+    # De-duplicate while preserving order.
+    deduped_blockers: List[str] = []
+    seen: set[str] = set()
+    for line in blockers:
+        key = str(line)
+        if key and key not in seen:
+            seen.add(key)
+            deduped_blockers.append(key)
+    deduped_warnings: List[str] = []
+    seen.clear()
+    for line in warnings:
+        key = str(line)
+        if key and key not in seen:
+            seen.add(key)
+            deduped_warnings.append(key)
+    return parent if isinstance(parent, discord.CategoryChannel) else None, staff if isinstance(staff, discord.Role) else None, deduped_blockers, deduped_warnings
+
+
+def _ticket_setup_problem_embed(guild: discord.Guild, blockers: List[str], warnings: Optional[List[str]] = None) -> discord.Embed:
+    embed = discord.Embed(
+        title="🎫 Ticket Setup Needs Repair",
+        description=(
+            "I stopped before opening the ticket menu because tickets cannot be created safely right now. "
+            "Fix the setup first so members do not hit dead-end forms or failed ticket creation."
+        ),
+        color=discord.Color.orange(),
+        timestamp=discord.utils.utcnow(),
+    )
+    embed.add_field(name="Blockers", value=_short_list(blockers), inline=False)
+    if warnings:
+        embed.add_field(name="Warnings", value=_short_list(list(warnings)), inline=False)
+    embed.add_field(
+        name="Fastest Fix",
+        value="Run `/dank setup` → **Safety & Repair** → **Preview/Fix Permissions**, then run **Setup Health**. If staff/category mappings are missing, use **Core Setup** → **Use Existing Roles/Channels** first.",
+        inline=False,
+    )
+    embed.set_footer(text=f"Guild {guild.id} • Dank Shield ticket preflight")
+    return embed
+
+
+async def _reply_ticket_setup_blocked(pt: Any, i: discord.Interaction, blockers: List[str], warnings: Optional[List[str]] = None) -> None:
+    guild = i.guild
+    if guild is None:
+        return await pt._ephemeral(i, "❌ Ticket setup is not ready.")
+    await pt._ephemeral(
+        i,
+        "❌ Ticket setup needs repair before members can open tickets.",
+        embed=_ticket_setup_problem_embed(guild, blockers, warnings),
+    )
+
+
 async def _open_form_without_consuming_response(pt: Any, i: discord.Interaction, row: Dict[str, Any], questions: list[dict[str, Any]]) -> bool:
     """Open the dashboard form modal from a Confirm click.
 
@@ -169,6 +287,10 @@ class GuardedTicketConfirmView(discord.ui.View):
         async with lock:
             if not _session_is_current(guild.id, member.id, self.session_id):
                 return await _stale_reply(self.pt, i)
+
+            _parent, _staff, blockers, warnings = await _ticket_setup_preflight(self.pt, guild)
+            if blockers:
+                return await _reply_ticket_setup_blocked(self.pt, i, blockers, warnings)
 
             questions = _form_questions(self.row)
             if questions:
@@ -259,6 +381,10 @@ async def _guarded_handle_panel_button(pt: Any, i: discord.Interaction) -> None:
     if existing:
         return await pt._ephemeral(i, f"You already have an open ticket: {existing.mention}")
 
+    _parent, _staff, blockers, warnings = await _ticket_setup_preflight(pt, guild)
+    if blockers:
+        return await _reply_ticket_setup_blocked(pt, i, blockers, warnings)
+
     try:
         rows, warning = await asyncio.wait_for(pt._load_rows(guild), timeout=6.0)
     except asyncio.TimeoutError:
@@ -271,8 +397,11 @@ async def _guarded_handle_panel_button(pt: Any, i: discord.Interaction) -> None:
         color=discord.Color.blurple(),
     )
     embed.set_footer(text="Pick a category. You can review it before anything is created. Newest menu wins.")
+    setup_notices = list(warnings)
     if warning:
-        embed.add_field(name="Setup Notice", value=pt._short(warning, 900), inline=False)
+        setup_notices.append(pt._short(warning, 900))
+    if setup_notices:
+        embed.add_field(name="Setup Notice", value=_short_list(setup_notices), inline=False)
 
     await pt._ephemeral(
         i,
@@ -295,7 +424,7 @@ def apply() -> bool:
     try:
         pt._handle_panel_button = lambda i: _guarded_handle_panel_button(pt, i)
         pt._PUBLIC_TICKET_CONFIRM_HARDENING_GUARD_APPLIED = True
-        _log("patched public ticket menu session, confirm hardening, and form-safe modal response flow")
+        _log("patched public ticket menu session, confirm hardening, form-safe modal response flow, and ticket setup preflight blockers")
         return True
     except Exception as exc:
         _warn(f"patch failed: {exc!r}")
