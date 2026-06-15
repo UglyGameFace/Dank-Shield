@@ -79,6 +79,41 @@ def _missing_perms(channel: discord.TextChannel, member: Optional[discord.Member
     return [name for name, ok in checks.items() if not ok]
 
 
+def _parse_channel_id(raw: str) -> int:
+    text = str(raw or "").strip()
+    if text.startswith("<#") and text.endswith(">"):
+        text = text[2:-1].strip()
+    if not text.isdigit():
+        return 0
+    return _safe_int(text, 0)
+
+
+async def _resolve_text_channel_by_id(guild: discord.Guild, raw_channel_id: str) -> tuple[Optional[discord.TextChannel], str]:
+    channel_id = _parse_channel_id(raw_channel_id)
+    if channel_id <= 0:
+        return None, "❌ Enter a valid text-channel ID. You can enable Developer Mode, long-press the channel, then copy ID."
+
+    channel = guild.get_channel(channel_id)
+    if channel is None:
+        try:
+            fetched = await guild.fetch_channel(channel_id)
+            channel = fetched if isinstance(fetched, discord.abc.GuildChannel) else None
+        except discord.Forbidden:
+            return None, "❌ Dank Shield cannot view that channel. Give the bot **View Channel** in that staff category/channel, then try again."
+        except discord.NotFound:
+            return None, "❌ No channel with that ID exists in this server. Make sure you copied the channel ID, not a message/category ID."
+        except Exception as exc:
+            return None, f"❌ Could not resolve that channel ID: `{type(exc).__name__}: {str(exc)[:250]}`"
+
+    if not isinstance(channel, discord.TextChannel):
+        return None, "❌ That ID does not point to a normal text channel. Pick the actual modlog text channel."
+
+    if int(getattr(channel.guild, "id", 0) or 0) != int(guild.id):
+        return None, "❌ That channel belongs to another server. Modlog channels must be in this server."
+
+    return channel, ""
+
+
 async def _defer(interaction: discord.Interaction) -> None:
     try:
         if not interaction.response.is_done():
@@ -120,24 +155,50 @@ async def _require_safe_modlog_test(interaction: discord.Interaction) -> bool:
     return True
 
 
-async def save_modlog_channel(interaction: discord.Interaction, channel: discord.TextChannel) -> None:
-    if not await _require_setup_permission(interaction):
+async def _save_modlog_channel_config(interaction: discord.Interaction, channel: discord.TextChannel) -> None:
+    guild = interaction.guild
+    if guild is None:
+        await _send(interaction, "❌ This command must be used inside a server.")
         return
-    if interaction.guild is None:
-        return await _send(interaction, "❌ This command must be used inside a server.")
-    await _defer(interaction)
-    missing = _missing_perms(channel, interaction.guild.me)
+
+    missing = _missing_perms(channel, guild.me)
     await _upsert_config(
-        int(interaction.guild.id),
+        int(guild.id),
         {
             "modlog_channel_id": str(int(channel.id)),
             "modlog_enabled": True,
             "modlog_updated_by_id": str(int(interaction.user.id)),
         },
     )
-    invalidate_guild_config(int(interaction.guild.id))
+    invalidate_guild_config(int(guild.id))
     suffix = "" if not missing else "\n⚠️ Still missing: " + ", ".join(missing)
-    await interaction.followup.send(f"✅ Modlog channel saved as {channel.mention}.{suffix}", ephemeral=True, allowed_mentions=discord.AllowedMentions.none())
+    await interaction.followup.send(
+        f"✅ Modlog channel saved as {channel.mention}.{suffix}",
+        ephemeral=True,
+        allowed_mentions=discord.AllowedMentions.none(),
+    )
+
+
+async def save_modlog_channel(interaction: discord.Interaction, channel: discord.TextChannel) -> None:
+    if not await _require_setup_permission(interaction):
+        return
+    if interaction.guild is None:
+        return await _send(interaction, "❌ This command must be used inside a server.")
+    await _defer(interaction)
+    await _save_modlog_channel_config(interaction, channel)
+
+
+async def save_modlog_channel_by_id(interaction: discord.Interaction, channel_id: str) -> None:
+    if not await _require_setup_permission(interaction):
+        return
+    guild = interaction.guild
+    if guild is None:
+        return await _send(interaction, "❌ This command must be used inside a server.")
+    await _defer(interaction)
+    channel, error = await _resolve_text_channel_by_id(guild, channel_id)
+    if channel is None:
+        return await interaction.followup.send(error, ephemeral=True, allowed_mentions=discord.AllowedMentions.none())
+    await _save_modlog_channel_config(interaction, channel)
 
 
 async def open_modlog_health(interaction: discord.Interaction) -> None:
@@ -151,7 +212,7 @@ async def open_modlog_health(interaction: discord.Interaction) -> None:
     channel = _modlog_channel(guild, cfg)
     embed = discord.Embed(title="🧾 Modlog Health", color=discord.Color.green() if channel else discord.Color.red(), timestamp=discord.utils.utcnow())
     if channel is None:
-        embed.add_field(name="Channel", value="❌ Not saved. Use Core Setup → Use Existing Roles/Channels → Logs + Status, or `/dank modlog set-channel`.", inline=False)
+        embed.add_field(name="Channel", value="❌ Not saved. Use Core Setup → Use Existing Roles/Channels → Logs + Status, `/dank modlog set-channel`, or `/dank modlog set-channel-id`.", inline=False)
     else:
         missing = _missing_perms(channel, guild.me)
         embed.add_field(name="Channel", value=f"✅ {channel.mention}", inline=False)
@@ -190,7 +251,7 @@ async def send_modlog_test(interaction: discord.Interaction) -> None:
     cfg = await get_guild_config(int(guild.id), refresh=True)
     channel = _modlog_channel(guild, cfg)
     if channel is None:
-        return await interaction.followup.send("❌ No modlog channel saved. Use Core Setup → Use Existing Roles/Channels → Logs + Status, or `/dank modlog set-channel`.", ephemeral=True)
+        return await interaction.followup.send("❌ No modlog channel saved. Use Core Setup → Use Existing Roles/Channels → Logs + Status, `/dank modlog set-channel`, or `/dank modlog set-channel-id`.", ephemeral=True)
     missing = _missing_perms(channel, guild.me)
     if missing:
         return await interaction.followup.send("❌ Missing permissions in saved modlog channel: " + ", ".join(missing), ephemeral=True)
@@ -215,6 +276,12 @@ async def send_modlog_test(interaction: discord.Interaction) -> None:
 @app_commands.describe(channel="Channel where Dank Shield should send moderation/audit logs.")
 async def modlog_set_channel(interaction: discord.Interaction, channel: discord.TextChannel) -> None:
     await save_modlog_channel(interaction, channel)
+
+
+@modlog_group.command(name="set-channel-id", description="Save the modlog channel by ID when Discord hides private channels from the picker.")
+@app_commands.describe(channel_id="Text-channel ID for the modlog channel, such as 123456789012345678.")
+async def modlog_set_channel_id(interaction: discord.Interaction, channel_id: str) -> None:
+    await save_modlog_channel_by_id(interaction, channel_id)
 
 
 @modlog_group.command(name="health", description="Check modlog channel, permissions, and listener coverage.")
@@ -266,4 +333,5 @@ __all__ = [
     "open_modlog_health",
     "send_modlog_test",
     "save_modlog_channel",
+    "save_modlog_channel_by_id",
 ]
