@@ -2,16 +2,17 @@ from __future__ import annotations
 
 """Public read-only diagnostics for Dank Shield.
 
-This module intentionally exposes only safe startup health details through the
-normal /dank command surface. It does not reload guards, mutate config, touch
-Discord channels, or inspect another guild's data.
+This module intentionally exposes only safe startup and per-guild config health
+through the normal /dank command surface. It does not reload guards, mutate
+config, touch Discord channels, or inspect another guild's data.
 """
 
-from typing import Any
+from typing import Any, Optional
 
 import discord
 
 from ..globals import now_utc
+from ..guild_context import GuildContext, get_guild_context
 from ..startup_diagnostics import build_startup_health_report
 from .common import safe_defer
 from .public_setup_group import stoney_group
@@ -51,7 +52,39 @@ def _field_text(items: list[str], *, empty: str, limit: int = 1000) -> str:
     return "\n".join(out) or empty
 
 
-def _startup_diagnostics_embed() -> discord.Embed:
+def _yes_no(value: bool) -> str:
+    return "Yes" if bool(value) else "No"
+
+
+def _ready_label(value: bool) -> str:
+    return "✅ Ready" if bool(value) else "⚠️ Not ready"
+
+
+def _missing_line(label: str, keys: tuple[str, ...]) -> str:
+    if not keys:
+        return f"{label}: ✅ none missing"
+    return f"{label}: `{', '.join(keys)}`"
+
+
+def _guild_context_field(context: GuildContext) -> str:
+    return (
+        f"Config source: `{context.source}`\n"
+        f"Public config isolation: **{_yes_no(context.public_config_isolation)}**\n"
+        f"Unsafe to run mutations: **{_yes_no(context.unsafe_to_act)}**\n"
+        f"Tickets: {_ready_label(context.ticket_ready)}\n"
+        f"Verification: {_ready_label(context.verify_ready)}\n"
+        f"Logging: {_ready_label(context.logging_ready)}\n"
+        f"{_missing_line('Ticket missing', context.missing_ticket_keys)}\n"
+        f"{_missing_line('Verify missing', context.missing_verify_keys)}\n"
+        f"{_missing_line('Log missing', context.missing_log_keys)}"
+    )
+
+
+def _startup_diagnostics_embed(
+    *,
+    guild_context: Optional[GuildContext] = None,
+    guild_context_error: Optional[BaseException] = None,
+) -> discord.Embed:
     report = build_startup_health_report(load_missing=False)
 
     color = discord.Color.green()
@@ -60,10 +93,16 @@ def _startup_diagnostics_embed() -> discord.Embed:
     elif report.status == "warning":
         color = discord.Color.gold()
 
+    if guild_context is not None and guild_context.unsafe_to_act:
+        color = discord.Color.red()
+    elif guild_context is not None and not (guild_context.ticket_ready and guild_context.verify_ready and guild_context.logging_ready):
+        if color == discord.Color.green():
+            color = discord.Color.gold()
+
     embed = discord.Embed(
         title="🩺 Dank Shield Diagnostics",
         description=(
-            "Read-only startup health report. This does **not** reload guards, "
+            "Read-only startup and guild-config health report. This does **not** reload guards, "
             "change setup, touch tickets, or mutate server config."
         ),
         color=color,
@@ -81,24 +120,40 @@ def _startup_diagnostics_embed() -> discord.Embed:
         ),
         inline=False,
     )
-    embed.add_field(name="Blockers", value=_field_text(report.blockers, empty="✅ None"), inline=False)
-    embed.add_field(name="Warnings", value=_field_text(report.warnings, empty="✅ None"), inline=False)
+
+    if guild_context is not None:
+        embed.add_field(name="Guild Config Safety", value=_guild_context_field(guild_context), inline=False)
+    elif guild_context_error is not None:
+        embed.add_field(
+            name="Guild Config Safety",
+            value=f"⚠️ Could not resolve centralized guild context: `{type(guild_context_error).__name__}: {str(guild_context_error)[:250]}`",
+            inline=False,
+        )
+    else:
+        embed.add_field(
+            name="Guild Config Safety",
+            value="⚠️ Guild context was not checked.",
+            inline=False,
+        )
+
+    embed.add_field(name="Startup Blockers", value=_field_text(report.blockers, empty="✅ None"), inline=False)
+    embed.add_field(name="Startup Warnings", value=_field_text(report.warnings, empty="✅ None"), inline=False)
     embed.add_field(
         name="What this means",
         value=(
             "**BLOCKER** means at least one startup guard failed and the bot may be unsafe to release.\n"
-            "**WARNING** means expected guards are not loaded in this snapshot or optional checks need review.\n"
-            "**OK** means the current startup guard snapshot has no failed or missing expected guards."
+            "**Unsafe to run mutations** means this guild should refuse setup/ticket/protection actions instead of guessing config.\n"
+            "**Not ready** means setup is incomplete, but diagnostics stayed read-only and did not change anything."
         ),
         inline=False,
     )
-    embed.set_footer(text="Dank Shield • diagnostics are per-process and safe to run anytime")
+    embed.set_footer(text="Dank Shield • diagnostics are per-process and per-guild safe to run anytime")
     return embed
 
 
 @stoney_group.command(
     name="diagnostics",
-    description="Show read-only Dank Shield startup diagnostics for this bot process.",
+    description="Show read-only Dank Shield startup and server-config diagnostics.",
 )
 async def diagnostics(interaction: discord.Interaction) -> None:
     if interaction.guild is None:
@@ -114,8 +169,19 @@ async def diagnostics(interaction: discord.Interaction) -> None:
 
     await safe_defer(interaction, ephemeral=True)
 
+    guild_context: Optional[GuildContext] = None
+    guild_context_error: Optional[BaseException] = None
+
     try:
-        embed = _startup_diagnostics_embed()
+        guild_context = await get_guild_context(interaction.guild.id, refresh=True)
+    except Exception as e:
+        guild_context_error = e
+
+    try:
+        embed = _startup_diagnostics_embed(
+            guild_context=guild_context,
+            guild_context_error=guild_context_error,
+        )
     except Exception as e:
         embed = discord.Embed(
             title="❌ Diagnostics Failed",
