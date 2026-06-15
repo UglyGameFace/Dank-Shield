@@ -35,6 +35,7 @@ _STARTUP_GUARDS: Tuple[str, ...] = (
     "stoney_verify.startup_guards.automod_public_guard",
     "stoney_verify.startup_guards.protection_center_command_guard",
     "stoney_verify.startup_guards.protection_center_invite_controls_guard",
+    "stoney_verify.startup_guards.protection_center_clear_categories_guard",
     "stoney_verify.startup_guards.embed_builder_command_guard",
     "stoney_verify.startup_guards.setup_overview_command_guard",
     "stoney_verify.startup_guards.protection_pack_manual_import_guard",
@@ -133,6 +134,7 @@ _ALWAYS_SHOW_PREFIXES: Tuple[str, ...] = (
     "🛡️ spam_guard_invite_hard_block active",
     "✅ spam_guard_invite_override_options active",
     "✅ protection_center_invite_controls_guard active",
+    "✅ protection_center_clear_categories_guard active",
     "✅ welcome_message_command_guard active",
     "✅ welcome_member_events_guard active",
     "✅ self_roles_command_guard active",
@@ -216,10 +218,3 @@ def load_startup_guards(modules: Iterable[str] = _STARTUP_GUARDS) -> Dict[str, M
 
 
 load_all_startup_guards = load_startup_guards
-
-
-def startup_guard_errors() -> Dict[str, BaseException]:
-    return dict(_ERRORS)
-
-
-__all__ = ["load_all_startup_guards", "load_startup_guards", "start_process_health_loop", "startup_guard_errors"]
