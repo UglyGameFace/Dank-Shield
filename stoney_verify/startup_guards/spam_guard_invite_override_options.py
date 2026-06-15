@@ -16,6 +16,8 @@ _PATCHED = False
 _ORIGINAL_DEFAULT: Any = None
 _ORIGINAL_NORMALIZE: Any = None
 _ORIGINAL_PAYLOAD: Any = None
+_ORIGINAL_GET: Any = None
+_ORIGINAL_SAVE: Any = None
 _ORIGINAL_EMBED: Any = None
 _ORIGINAL_VIEW_BUILD: Any = None
 
@@ -57,6 +59,54 @@ def _parse_yes_no(value: Any, *, label: str) -> bool:
     raise ValueError(f"{label} must be yes/no.")
 
 
+def _cfg_value(cfg: Any, key: str) -> Any:
+    try:
+        value = getattr(cfg, key, None)
+        if value is not None:
+            return value
+    except Exception:
+        pass
+    try:
+        if hasattr(cfg, "get"):
+            value = cfg.get(key)
+            if value is not None:
+                return value
+    except Exception:
+        pass
+    for bucket in ("settings", "config", "metadata", "meta"):
+        try:
+            nested = getattr(cfg, bucket, None)
+            if isinstance(nested, dict) and nested.get(key) is not None:
+                return nested.get(key)
+        except Exception:
+            pass
+        try:
+            if hasattr(cfg, "get"):
+                nested = cfg.get(bucket)
+                if isinstance(nested, dict) and nested.get(key) is not None:
+                    return nested.get(key)
+        except Exception:
+            pass
+    return None
+
+
+def _merge_override_settings(settings: dict[str, Any], source: Any) -> dict[str, Any]:
+    data = dict(settings or {})
+    for key, _label in _OVERRIDE_KEYS:
+        raw = None
+        if isinstance(source, dict):
+            raw = source.get(f"spam_{key}", source.get(key))
+        if raw is None:
+            raw = _cfg_value(source, f"spam_{key}")
+        if raw is None:
+            raw = _cfg_value(source, key)
+        if raw is not None:
+            data[key] = _safe_bool(raw, False)
+        else:
+            data.setdefault(key, False)
+    return data
+
+
 def _override_summary(settings: dict[str, Any]) -> str:
     lines: list[str] = []
     for key, label in _OVERRIDE_KEYS:
@@ -67,24 +117,82 @@ def _override_summary(settings: dict[str, Any]) -> str:
 
 def _patched_default_settings(guild_id: int) -> dict[str, Any]:
     data = dict(_ORIGINAL_DEFAULT(guild_id))
-    for key, _label in _OVERRIDE_KEYS:
-        data.setdefault(key, False)
-    return data
+    return _merge_override_settings(data, {})
 
 
 def _patched_normalize_settings(guild_id: int, row: Any) -> dict[str, Any]:
     data = dict(_ORIGINAL_NORMALIZE(guild_id, row))
-    source = row if isinstance(row, dict) else {}
-    for key, _label in _OVERRIDE_KEYS:
-        data[key] = _safe_bool(source.get(f"spam_{key}", source.get(key, data.get(key, False))), False)
-    return data
+    return _merge_override_settings(data, row)
 
 
 def _patched_settings_payload_for_db(settings: dict[str, Any], *, updated_by: discord.Member | None = None) -> dict[str, Any]:
-    payload = dict(_ORIGINAL_PAYLOAD(settings, updated_by=updated_by))
-    for key, _label in _OVERRIDE_KEYS:
-        payload[f"spam_{key}"] = bool(settings.get(key))
-    return payload
+    # Do NOT add new SQL columns here. Existing production installs may not have
+    # them yet. Overrides are persisted in guild_configs below, then merged back
+    # into get_spam_settings().
+    return dict(_ORIGINAL_PAYLOAD(settings, updated_by=updated_by))
+
+
+async def _load_override_config(guild_id: int) -> dict[str, bool]:
+    try:
+        from stoney_verify.guild_config import get_guild_config
+
+        cfg = await get_guild_config(int(guild_id), refresh=True)
+        out: dict[str, bool] = {}
+        for key, _label in _OVERRIDE_KEYS:
+            raw = _cfg_value(cfg, f"spam_{key}")
+            if raw is None:
+                raw = _cfg_value(cfg, key)
+            if raw is not None:
+                out[key] = _safe_bool(raw, False)
+        return out
+    except Exception:
+        return {}
+
+
+async def _save_override_config(guild_id: int, patch: dict[str, Any]) -> bool:
+    wanted = {key: bool(patch[key]) for key, _label in _OVERRIDE_KEYS if key in patch}
+    if not wanted:
+        return True
+    payload: dict[str, Any] = {}
+    for key, value in wanted.items():
+        payload[key] = bool(value)
+        payload[f"spam_{key}"] = bool(value)
+    try:
+        from stoney_verify.guild_config import invalidate_guild_config, upsert_guild_config
+
+        await upsert_guild_config(int(guild_id), payload)
+        invalidate_guild_config(int(guild_id))
+        return True
+    except Exception:
+        return False
+
+
+async def _patched_get_spam_settings(guild_id: int) -> dict[str, Any]:
+    settings = dict(await _ORIGINAL_GET(int(guild_id)))
+    overrides = await _load_override_config(int(guild_id))
+    if overrides:
+        settings.update(overrides)
+        try:
+            from stoney_verify import spam_guard
+            spam_guard._cache_runtime_settings(int(guild_id), settings, source="db+guild_config", persisted=True)
+        except Exception:
+            pass
+    return _merge_override_settings(settings, overrides)
+
+
+async def _patched_save_spam_settings(guild_id: int, patch: dict[str, Any], *, updated_by: discord.Member | None = None):
+    override_patch = {key: bool(patch[key]) for key, _label in _OVERRIDE_KEYS if key in dict(patch or {})}
+    settings, persisted = await _ORIGINAL_SAVE(int(guild_id), dict(patch or {}), updated_by=updated_by)
+    if override_patch:
+        override_saved = await _save_override_config(int(guild_id), override_patch)
+        settings = _merge_override_settings(dict(settings or {}), override_patch)
+        try:
+            from stoney_verify import spam_guard
+            spam_guard._cache_runtime_settings(int(guild_id), settings, source="db+guild_config" if override_saved else "runtime", persisted=bool(persisted or override_saved))
+        except Exception:
+            pass
+        persisted = bool(persisted or override_saved)
+    return settings, bool(persisted)
 
 
 def _patched_panel_embed(guild: discord.Guild, settings: dict[str, Any], *, page: str, persisted_hint: bool | None = None) -> discord.Embed:
@@ -188,7 +296,7 @@ class InviteOverrideButton(discord.ui.Button):
         message = interaction.message
         if guild is None or not isinstance(channel, discord.TextChannel) or message is None:
             return await spam_guard._reply_ephemeral(interaction, "Invalid context.")
-        settings = spam_guard._fast_settings_for_ui(guild.id)
+        settings = await spam_guard.get_spam_settings(guild.id)
         await interaction.response.send_modal(InviteOverrideModal(guild.id, channel.id, message.id, self.page, settings))
 
 
@@ -203,7 +311,7 @@ def _patched_view_build(cls, *, page: str, settings: dict[str, Any]):
 
 
 def apply() -> bool:
-    global _PATCHED, _ORIGINAL_DEFAULT, _ORIGINAL_NORMALIZE, _ORIGINAL_PAYLOAD, _ORIGINAL_EMBED, _ORIGINAL_VIEW_BUILD
+    global _PATCHED, _ORIGINAL_DEFAULT, _ORIGINAL_NORMALIZE, _ORIGINAL_PAYLOAD, _ORIGINAL_GET, _ORIGINAL_SAVE, _ORIGINAL_EMBED, _ORIGINAL_VIEW_BUILD
     if _PATCHED:
         return True
     try:
@@ -212,12 +320,16 @@ def apply() -> bool:
         _ORIGINAL_DEFAULT = getattr(spam_guard, "_default_settings")
         _ORIGINAL_NORMALIZE = getattr(spam_guard, "_normalize_settings")
         _ORIGINAL_PAYLOAD = getattr(spam_guard, "_settings_payload_for_db")
+        _ORIGINAL_GET = getattr(spam_guard, "get_spam_settings")
+        _ORIGINAL_SAVE = getattr(spam_guard, "save_spam_settings")
         _ORIGINAL_EMBED = getattr(spam_guard, "_build_panel_embed")
         _ORIGINAL_VIEW_BUILD = getattr(spam_guard.SpamGuardPanelView, "build")
 
         spam_guard._default_settings = _patched_default_settings
         spam_guard._normalize_settings = _patched_normalize_settings
         spam_guard._settings_payload_for_db = _patched_settings_payload_for_db
+        spam_guard.get_spam_settings = _patched_get_spam_settings
+        spam_guard.save_spam_settings = _patched_save_spam_settings
         spam_guard._build_panel_embed = _patched_panel_embed
         spam_guard.SpamGuardPanelView.build = classmethod(_patched_view_build)
 
