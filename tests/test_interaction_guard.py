@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+
 from stoney_verify.interaction_guard import (
     run_guarded_interaction,
     safe_send_interaction,
@@ -11,6 +13,7 @@ class FakeResponse:
         self.done = False
         self.deferred = False
         self.sent: list[dict] = []
+        self.defer_ephemeral: bool | None = None
 
     def is_done(self) -> bool:
         return self.done
@@ -39,57 +42,71 @@ class FakeInteraction:
         self.followup = FakeFollowup()
 
 
-async def test_safe_send_interaction_uses_initial_response_when_not_done():
-    interaction = FakeInteraction()
+def test_safe_send_interaction_uses_initial_response_when_not_done():
+    async def run() -> None:
+        interaction = FakeInteraction()
 
-    sent = await safe_send_interaction(interaction, content="hello", ephemeral=True)
+        sent = await safe_send_interaction(interaction, content="hello", ephemeral=True)
 
-    assert sent is True
-    assert interaction.response.sent[0]["content"] == "hello"
-    assert interaction.response.sent[0]["ephemeral"] is True
-    assert interaction.followup.sent == []
+        assert sent is True
+        assert interaction.response.sent[0]["content"] == "hello"
+        assert interaction.response.sent[0]["ephemeral"] is True
+        assert interaction.followup.sent == []
 
-
-async def test_safe_send_interaction_uses_followup_after_defer():
-    interaction = FakeInteraction()
-    await interaction.response.defer(ephemeral=True)
-
-    sent = await safe_send_interaction(interaction, content="after defer", ephemeral=True)
-
-    assert sent is True
-    assert interaction.response.sent == []
-    assert interaction.followup.sent[0]["content"] == "after defer"
+    asyncio.run(run())
 
 
-async def test_run_guarded_interaction_defers_and_reports_success():
-    interaction = FakeInteraction()
-    called: list[str] = []
+def test_safe_send_interaction_uses_followup_after_defer():
+    async def run() -> None:
+        interaction = FakeInteraction()
+        await interaction.response.defer(ephemeral=True)
 
-    async def action() -> None:
-        called.append("ran")
+        sent = await safe_send_interaction(interaction, content="after defer", ephemeral=True)
 
-    result = await run_guarded_interaction(interaction, action, defer=True, ephemeral=True)
+        assert sent is True
+        assert interaction.response.sent == []
+        assert interaction.followup.sent[0]["content"] == "after defer"
 
-    assert result.ok is True
-    assert called == ["ran"]
-    assert interaction.response.deferred is True
-    assert interaction.followup.sent == []
+    asyncio.run(run())
 
 
-async def test_run_guarded_interaction_sends_safe_error_on_exception():
-    interaction = FakeInteraction()
+def test_run_guarded_interaction_defers_and_reports_success():
+    async def run() -> None:
+        interaction = FakeInteraction()
+        called: list[str] = []
 
-    async def action() -> None:
-        raise ValueError("bad thing")
+        async def action() -> None:
+            called.append("ran")
 
-    result = await run_guarded_interaction(interaction, action, defer=True, ephemeral=True)
+        result = await run_guarded_interaction(interaction, action, defer=True, ephemeral=True)
 
-    assert result.ok is False
-    assert result.error_type == "ValueError"
-    assert result.error_message == "bad thing"
-    assert interaction.response.deferred is True
-    assert len(interaction.followup.sent) == 1
-    payload = interaction.followup.sent[0]
-    assert payload["ephemeral"] is True
-    assert payload["embed"].title == "❌ Command failed safely"
-    assert "bad thing" in payload["embed"].description
+        assert result.ok is True
+        assert called == ["ran"]
+        assert interaction.response.deferred is True
+        assert interaction.response.defer_ephemeral is True
+        assert interaction.followup.sent == []
+
+    asyncio.run(run())
+
+
+def test_run_guarded_interaction_sends_safe_error_on_exception():
+    async def run() -> None:
+        interaction = FakeInteraction()
+
+        async def action() -> None:
+            raise ValueError("bad thing")
+
+        result = await run_guarded_interaction(interaction, action, defer=True, ephemeral=True)
+
+        assert result.ok is False
+        assert result.error_type == "ValueError"
+        assert result.error_message == "bad thing"
+        assert interaction.response.deferred is True
+        assert interaction.response.defer_ephemeral is True
+        assert len(interaction.followup.sent) == 1
+        payload = interaction.followup.sent[0]
+        assert payload["ephemeral"] is True
+        assert payload["embed"].title == "❌ Command failed safely"
+        assert "bad thing" in payload["embed"].description
+
+    asyncio.run(run())
