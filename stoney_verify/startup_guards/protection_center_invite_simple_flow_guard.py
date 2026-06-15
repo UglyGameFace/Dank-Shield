@@ -203,6 +203,7 @@ def _chain_extra_guards() -> None:
         "protection_center_filter_list_guard",
         "vc_verified_health_check_guard",
         "modlog_center_tracking_guard",
+        "live_guild_name_footer_guard",
     ):
         try:
             module = __import__(f"stoney_verify.startup_guards.{name}", fromlist=["apply"])
