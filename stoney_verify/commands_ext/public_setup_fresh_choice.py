@@ -11,6 +11,7 @@ see. It keeps the product rule simple:
 - setup choices use plain words
 - Basic Button Verification is a first-class public option
 - ID / website upload verification is allowlisted only
+- Custom setup immediately opens service toggles instead of pretending to choose for the owner
 """
 
 from dataclasses import dataclass
@@ -111,9 +112,9 @@ SETUP_CHOICES: tuple[PlainSetupChoice, ...] = (
         key="custom_setup",
         label="Custom setup",
         emoji="⚙️",
-        short="Pick only the parts this server actually needs.",
-        member_sees="Whatever you choose in setup.",
-        needs_tickets=True,
+        short="Choose every service yourself: tickets, Basic Verify, voice verify, SpamGuard, and logs.",
+        member_sees="Whatever services you turn on in the next screen.",
+        needs_tickets=False,
         needs_id=False,
         needs_voice=False,
         panel_style="custom",
@@ -199,24 +200,42 @@ async def _service_summary_for_home(guild: discord.Guild) -> tuple[str, str]:
     )
 
 
+def _service_flags_for_choice(choice: PlainSetupChoice) -> dict[str, bool]:
+    if choice.key == "basic_server":
+        return {"tickets_enabled": True, "verification_enabled": False, "voice_verification_enabled": False, "spam_guard_enabled": False, "moderation_enabled": True}
+    if choice.key == "basic_verify":
+        return {"tickets_enabled": False, "verification_enabled": True, "voice_verification_enabled": False, "spam_guard_enabled": False, "moderation_enabled": False}
+    if choice.key == "help_desk":
+        return {"tickets_enabled": True, "verification_enabled": False, "voice_verification_enabled": False, "spam_guard_enabled": False, "moderation_enabled": True}
+    if choice.key == "voice_check":
+        return {"tickets_enabled": True, "verification_enabled": True, "voice_verification_enabled": True, "spam_guard_enabled": False, "moderation_enabled": True}
+    if choice.key in {"id_check", "id_voice_check"}:
+        return {"tickets_enabled": True, "verification_enabled": True, "voice_verification_enabled": bool(choice.needs_voice), "spam_guard_enabled": False, "moderation_enabled": True}
+    # Custom setup starts with a clean slate so the owner chooses every service.
+    return {"tickets_enabled": False, "verification_enabled": False, "voice_verification_enabled": False, "spam_guard_enabled": False, "moderation_enabled": False}
+
+
 def _choice_payload(choice: PlainSetupChoice) -> dict[str, Any]:
     basic_verify = choice.key == "basic_verify"
+    service_flags = _service_flags_for_choice(choice)
+    verification_mode = "basic_button" if basic_verify else "custom" if choice.key == "custom_setup" else choice.panel_style
     return {
+        **service_flags,
         "setup_choice": choice.key,
         "setup_choice_label": choice.label,
         "setup_choice_description": choice.short,
         "setup_choice_member_sees": choice.member_sees,
-        "setup_template_version": "plain_choices_v2_basic_verify",
-        "ticket_service_enabled": bool(choice.needs_tickets),
+        "setup_template_version": "plain_choices_v3_custom_services",
+        "ticket_service_enabled": bool(service_flags.get("tickets_enabled", False)),
         "ticket_flow_style": "fast_no_forced_form",
         "ticket_form_mode": "off",
         "ticket_open_requires_modal": False,
         "ticket_open_requires_form": False,
         "verification_panel_style": choice.panel_style,
-        "verification_mode": "basic_button" if basic_verify else choice.panel_style,
-        "verify_mode": "basic_button" if basic_verify else choice.panel_style,
-        "basic_verify_enabled": bool(basic_verify),
-        "basic_button_verify_enabled": bool(basic_verify),
+        "verification_mode": verification_mode,
+        "verify_mode": verification_mode,
+        "basic_verify_enabled": bool(basic_verify or (choice.key == "custom_setup" and service_flags.get("verification_enabled", False))),
+        "basic_button_verify_enabled": bool(basic_verify or (choice.key == "custom_setup" and service_flags.get("verification_enabled", False))),
         "verification_requires_id": bool(choice.needs_id),
         "verification_allows_voice": bool(choice.needs_voice),
         "verification_style_label": choice.label,
@@ -231,6 +250,7 @@ async def _save_choice(interaction: discord.Interaction, choice: PlainSetupChoic
 
 def _choice_preview_embed(guild: discord.Guild, choice: PlainSetupChoice) -> discord.Embed:
     basic_verify = choice.key == "basic_verify"
+    custom = choice.key == "custom_setup"
     embed = discord.Embed(
         title=f"{choice.emoji} {choice.label}",
         description=choice.short,
@@ -247,6 +267,13 @@ def _choice_preview_embed(guild: discord.Guild, choice: PlainSetupChoice) -> dis
             f"{_bool_icon(choice.needs_voice)} Voice check\n"
             "✅ Fast ticket opening when tickets are enabled\n"
             "✅ Forms off by default"
+        ) if not custom else (
+            "⬜ Tickets\n"
+            "⬜ Basic Verify button\n"
+            "⬜ Voice check\n"
+            "⬜ SpamGuard\n"
+            "⬜ Logs/Moderation\n"
+            "Next screen lets you turn each one on/off."
         ),
         inline=False,
     )
@@ -258,6 +285,12 @@ def _choice_preview_embed(guild: discord.Guild, choice: PlainSetupChoice) -> dis
                 "Dank Shield grants the configured Verified/full-access role, and removes the waiting role. "
                 "No ID upload, website token, or VC check is required."
             ),
+            inline=False,
+        )
+    elif custom:
+        embed.add_field(
+            name="Important",
+            value="Custom setup does not choose services for you. It opens the service picker so you can turn on exactly what this server uses.",
             inline=False,
         )
     elif choice.needs_id:
@@ -272,6 +305,8 @@ def _choice_preview_embed(guild: discord.Guild, choice: PlainSetupChoice) -> dis
     embed.add_field(
         name="Next",
         value=(
+            "Custom setup opens the service picker next. Turn on exactly what you want, then map roles/channels."
+            if custom else
             "Press **Use My Existing Server** if your roles/channels already exist.\n"
             "Press **Create Missing Items** if you want Dank Shield to create the basic missing pieces.\n"
             "Press **Setup Check** when you are done."
@@ -293,6 +328,26 @@ async def _edit_setup_message(
         await solid._edit_or_followup(interaction, embed=embed, view=view)
     else:
         await interaction.response.edit_message(embed=embed, view=view)
+
+
+async def _open_custom_service_picker(interaction: discord.Interaction, *, saved_message: str = "") -> None:
+    guild = interaction.guild
+    if guild is None:
+        return await interaction.response.send_message("❌ This must be used inside a server.", ephemeral=True)
+    try:
+        from stoney_verify.startup_guards import setup_service_modes as modes
+
+        state = await modes.load_service_state(guild.id)
+        embed = await modes.build_service_picker_embed(
+            guild,
+            state,
+            saved_message=saved_message or "Saved **Custom setup**. Now turn on only the services this server will actually use.",
+        )
+        await solid._edit_or_followup(interaction, embed=embed, view=modes.ServiceModeView(state))
+    except Exception as exc:
+        embed = _choice_preview_embed(guild, CHOICES_BY_KEY["custom_setup"])
+        embed.add_field(name="Service Picker Error", value=f"Could not open service picker: `{type(exc).__name__}: {str(exc)[:220]}`", inline=False)
+        await solid._edit_or_followup(interaction, embed=embed, view=CustomAfterChoiceView())
 
 
 async def _open_existing_server_setup(interaction: discord.Interaction) -> None:
@@ -388,6 +443,11 @@ def _build_setup_help_embed() -> discord.Embed:
     embed.add_field(
         name="What is Basic verify?",
         value="A public-safe Verify button. Members click it, get the configured Verified/full-access role, and lose the waiting role. No ID upload, website token, voice check, or forced ticket.",
+        inline=False,
+    )
+    embed.add_field(
+        name="What if I choose Custom setup?",
+        value="Custom setup opens the service picker immediately. Toggle Tickets, Basic Verify, Voice Verify, SpamGuard, and Logs/Moderation on or off.",
         inline=False,
     )
     embed.add_field(
@@ -519,6 +579,8 @@ class PlainSetupChoiceView(solid.BackToSetupView):
 
         await solid._safe_defer_update(interaction)
         await _save_choice(interaction, choice)
+        if choice.key == "custom_setup":
+            return await _open_custom_service_picker(interaction)
         embed = _choice_preview_embed(guild, choice)
         await solid._edit_or_followup(interaction, embed=embed, view=AfterChoiceView())
 
@@ -549,6 +611,15 @@ class PlainSetupChoiceView(solid.BackToSetupView):
     @discord.ui.button(label="Custom setup", emoji="⚙️", style=discord.ButtonStyle.secondary, custom_id="dank_setup_choice:custom", row=3)
     async def custom(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         await self._save_and_show(interaction, CHOICES_BY_KEY["custom_setup"])
+
+
+class CustomAfterChoiceView(AfterChoiceView if "AfterChoiceView" in globals() else solid.BackToSetupView):
+    @discord.ui.button(label="Customize Services", emoji="🧩", style=discord.ButtonStyle.primary, custom_id="dank_setup_custom:services", row=0)
+    async def customize_services(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        if not await solid._require_setup_permission(interaction):
+            return
+        await solid._safe_defer_update(interaction)
+        await _open_custom_service_picker(interaction)
 
 
 class AfterChoiceView(solid.BackToSetupView):
