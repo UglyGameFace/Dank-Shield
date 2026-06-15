@@ -37,28 +37,31 @@ def _admin_or_manage_guild(interaction: discord.Interaction) -> bool:
 
 async def _require_embed_permission(interaction: discord.Interaction) -> bool:
     if interaction.guild is None:
-        return await safe_send_interaction(
+        await safe_send_interaction(
             interaction,
             content="❌ This command must be used inside a server.",
             ephemeral=True,
         )
+        return False
     if not _admin_or_manage_guild(interaction):
-        return await safe_send_interaction(
+        await safe_send_interaction(
             interaction,
             content="❌ Embed builder requires **Administrator** or **Manage Server** permission.",
             ephemeral=True,
         )
+        return False
     return True
 
 
 async def _require_safe_embed_action(interaction: discord.Interaction, *, action: str) -> bool:
     guild = interaction.guild
     if guild is None:
-        return await safe_send_interaction(
+        await safe_send_interaction(
             interaction,
             content="❌ This must be used inside a server.",
             ephemeral=True,
         )
+        return False
 
     try:
         context = await get_guild_context(int(guild.id), refresh=True)
@@ -68,7 +71,7 @@ async def _require_safe_embed_action(interaction: discord.Interaction, *, action
             feature="setup",
         )
     except Exception as exc:
-        return await safe_send_interaction(
+        await safe_send_interaction(
             interaction,
             content=(
                 "❌ Could not verify this server's safe setup state. "
@@ -76,13 +79,15 @@ async def _require_safe_embed_action(interaction: discord.Interaction, *, action
             ),
             ephemeral=True,
         )
+        return False
 
     if decision.denied:
-        return await safe_send_interaction(
+        await safe_send_interaction(
             interaction,
             content=decision.user_message(),
             ephemeral=True,
         )
+        return False
 
     return True
 
