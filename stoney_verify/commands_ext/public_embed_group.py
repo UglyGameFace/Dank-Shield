@@ -12,7 +12,10 @@ from typing import Any, Optional
 import discord
 from discord import app_commands
 
-from .public_setup_group import _require_setup_permission, stoney_group
+from ..guild_action_guard import decide_guild_action
+from ..guild_context import get_guild_context
+from ..interaction_guard import safe_send_error, safe_send_interaction
+from .public_setup_group import stoney_group
 
 _ATTACHED = False
 
@@ -20,6 +23,68 @@ embed_group = app_commands.Group(
     name="embed",
     description="Build and send polished embed messages safely.",
 )
+
+
+def _admin_or_manage_guild(interaction: discord.Interaction) -> bool:
+    try:
+        if interaction.guild is None or not isinstance(interaction.user, discord.Member):
+            return False
+        perms = interaction.user.guild_permissions
+        return bool(perms.administrator or perms.manage_guild)
+    except Exception:
+        return False
+
+
+async def _require_embed_permission(interaction: discord.Interaction) -> bool:
+    if interaction.guild is None:
+        return await safe_send_interaction(
+            interaction,
+            content="❌ This command must be used inside a server.",
+            ephemeral=True,
+        )
+    if not _admin_or_manage_guild(interaction):
+        return await safe_send_interaction(
+            interaction,
+            content="❌ Embed builder requires **Administrator** or **Manage Server** permission.",
+            ephemeral=True,
+        )
+    return True
+
+
+async def _require_safe_embed_action(interaction: discord.Interaction, *, action: str) -> bool:
+    guild = interaction.guild
+    if guild is None:
+        return await safe_send_interaction(
+            interaction,
+            content="❌ This must be used inside a server.",
+            ephemeral=True,
+        )
+
+    try:
+        context = await get_guild_context(int(guild.id), refresh=True)
+        decision = decide_guild_action(
+            context,
+            action=action,
+            feature="setup",
+        )
+    except Exception as exc:
+        return await safe_send_interaction(
+            interaction,
+            content=(
+                "❌ Could not verify this server's safe setup state. "
+                f"Nothing was sent. `{type(exc).__name__}: {str(exc)[:250]}`"
+            ),
+            ephemeral=True,
+        )
+
+    if decision.denied:
+        return await safe_send_interaction(
+            interaction,
+            content=decision.user_message(),
+            ephemeral=True,
+        )
+
+    return True
 
 
 def _parse_color(value: Optional[str]) -> discord.Color:
@@ -95,16 +160,6 @@ def _missing_send_perms(channel: discord.TextChannel, member: Optional[discord.M
     return [name for name, ok in checks.items() if not ok]
 
 
-async def _send_ephemeral(interaction: discord.Interaction, content: str = "", **kwargs: Any) -> None:
-    try:
-        if not interaction.response.is_done():
-            await interaction.response.send_message(content, ephemeral=True, **kwargs)
-        else:
-            await interaction.followup.send(content, ephemeral=True, **kwargs)
-    except Exception:
-        pass
-
-
 class EmbedConfirmView(discord.ui.View):
     def __init__(self, *, target: discord.TextChannel, embed: discord.Embed, author_id: int) -> None:
         super().__init__(timeout=900)
@@ -114,7 +169,11 @@ class EmbedConfirmView(discord.ui.View):
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if int(interaction.user.id) != self.author_id:
-            await interaction.response.send_message("Only the staff member who drafted this embed can send it.", ephemeral=True)
+            await safe_send_interaction(
+                interaction,
+                content="Only the staff member who drafted this embed can send it.",
+                ephemeral=True,
+            )
             return False
         return True
 
@@ -123,12 +182,20 @@ class EmbedConfirmView(discord.ui.View):
         _ = button
         guild = interaction.guild
         if guild is None:
-            return await interaction.response.send_message("❌ This must be used inside a server.", ephemeral=True)
-        if not await _require_setup_permission(interaction):
+            await safe_send_interaction(interaction, content="❌ This must be used inside a server.", ephemeral=True)
+            return
+        if not await _require_embed_permission(interaction):
+            return
+        if not await _require_safe_embed_action(interaction, action="send public embed"):
             return
         missing = _missing_send_perms(self.target, guild.me)
         if missing:
-            return await interaction.response.send_message("❌ Dank Shield is missing in the target channel: " + ", ".join(missing), ephemeral=True)
+            await safe_send_interaction(
+                interaction,
+                content="❌ Dank Shield is missing in the target channel: " + ", ".join(missing),
+                ephemeral=True,
+            )
+            return
         try:
             await self.target.send(embed=self.embed, allowed_mentions=discord.AllowedMentions.none())
             for child in self.children:
@@ -136,7 +203,13 @@ class EmbedConfirmView(discord.ui.View):
                     child.disabled = True
             await interaction.response.edit_message(content=f"✅ Sent to {self.target.mention}.", embed=self.embed, view=self)
         except Exception as exc:
-            await interaction.response.send_message(f"❌ Could not send embed: `{type(exc).__name__}: {exc}`", ephemeral=True)
+            await safe_send_error(
+                interaction,
+                exc,
+                title="❌ Could not send embed safely",
+                guidance="Nothing else was changed. Check target channel permissions, then retry `/dank embed draft`.",
+                ephemeral=True,
+            )
 
     @discord.ui.button(label="Cancel", emoji="✖️", style=discord.ButtonStyle.secondary, custom_id="dank_embed_builder:cancel")
     async def cancel_button(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
@@ -167,20 +240,29 @@ async def embed_draft(
     image_url: Optional[str] = None,
     thumbnail_url: Optional[str] = None,
 ) -> None:
-    if not await _require_setup_permission(interaction):
+    if not await _require_embed_permission(interaction):
+        return
+    if not await _require_safe_embed_action(interaction, action="draft public embed"):
         return
     if interaction.guild is None:
-        return await _send_ephemeral(interaction, "❌ This command must be used inside a server.")
+        await safe_send_interaction(interaction, content="❌ This command must be used inside a server.", ephemeral=True)
+        return
     missing = _missing_send_perms(channel, interaction.guild.me)
     if missing:
-        return await _send_ephemeral(interaction, "❌ Dank Shield is missing in the target channel: " + ", ".join(missing))
+        await safe_send_interaction(
+            interaction,
+            content="❌ Dank Shield is missing in the target channel: " + ", ".join(missing),
+            ephemeral=True,
+        )
+        return
     embed = _build_embed(title=title, body=body, color=color, footer=footer, image_url=image_url, thumbnail_url=thumbnail_url)
     view = EmbedConfirmView(target=channel, embed=embed, author_id=int(interaction.user.id))
-    await _send_ephemeral(
+    await safe_send_interaction(
         interaction,
-        f"Preview for {channel.mention}. Nothing posts publicly until you press **Send Embed**.",
+        content=f"Preview for {channel.mention}. Nothing posts publicly until you press **Send Embed**.",
         embed=embed,
         view=view,
+        ephemeral=True,
         allowed_mentions=discord.AllowedMentions.none(),
     )
 
@@ -188,14 +270,21 @@ async def embed_draft(
 @embed_group.command(name="health", description="Check whether Dank Shield can send embeds in a channel.")
 @app_commands.describe(channel="Channel to test.")
 async def embed_health(interaction: discord.Interaction, channel: discord.TextChannel) -> None:
-    if not await _require_setup_permission(interaction):
+    if not await _require_embed_permission(interaction):
         return
     if interaction.guild is None:
-        return await _send_ephemeral(interaction, "❌ This command must be used inside a server.")
+        await safe_send_interaction(interaction, content="❌ This command must be used inside a server.", ephemeral=True)
+        return
     missing = _missing_send_perms(channel, interaction.guild.me)
     if missing:
-        return await _send_ephemeral(interaction, "❌ Missing in target channel: " + ", ".join(missing))
-    await _send_ephemeral(interaction, f"✅ Dank Shield can send embed messages in {channel.mention}.", allowed_mentions=discord.AllowedMentions.none())
+        await safe_send_interaction(interaction, content="❌ Missing in target channel: " + ", ".join(missing), ephemeral=True)
+        return
+    await safe_send_interaction(
+        interaction,
+        content=f"✅ Dank Shield can send embed messages in {channel.mention}.",
+        ephemeral=True,
+        allowed_mentions=discord.AllowedMentions.none(),
+    )
 
 
 def _attach() -> bool:
