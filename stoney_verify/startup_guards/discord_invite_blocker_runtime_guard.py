@@ -38,9 +38,14 @@ def _safe_bool(value: Any, default: bool = False) -> bool:
             return value
         if value is None:
             return bool(default)
-        return str(value).strip().lower() in {"1", "true", "yes", "y", "on", "enabled", "all", "block"}
+        text = str(value).strip().lower()
+        if text in {"1", "true", "yes", "y", "on", "enabled", "all", "allow", "allowed"}:
+            return True
+        if text in {"0", "false", "no", "n", "off", "disabled", "none", "block", "blocked"}:
+            return False
     except Exception:
-        return bool(default)
+        pass
+    return bool(default)
 
 
 def _cfg_value(cfg: Any, key: str, default: Any = None) -> Any:
@@ -97,7 +102,31 @@ def _codes_from_text(value: Any) -> list[str]:
     text = text.replace("\u200b", "").replace("\u200c", "").replace("\u200d", "").replace("\ufeff", "")
     text = re.sub(r"discord\s*\.\s*gg", "discord.gg", text, flags=re.IGNORECASE)
     text = re.sub(r"discord(?:app)?\s*\.\s*com\s*/\s*invite", "discord.com/invite", text, flags=re.IGNORECASE)
-    return list(dict.fromkeys(code.strip().lower() for code in INVITE_RE.findall(text) if code.strip()))
+    compact = re.sub(r"\s+", "", text)
+    codes: list[str] = []
+    for source in (text, compact):
+        for code in INVITE_RE.findall(source):
+            cleaned = code.strip().lower()
+            if cleaned and cleaned not in codes:
+                codes.append(cleaned)
+    return codes
+
+
+def _component_text(component: Any) -> list[str]:
+    parts: list[str] = []
+    try:
+        for attr in ("url", "label", "custom_id"):
+            raw = getattr(component, attr, None)
+            if raw:
+                parts.append(str(raw))
+    except Exception:
+        pass
+    try:
+        for child in list(getattr(component, "children", []) or []):
+            parts.extend(_component_text(child))
+    except Exception:
+        pass
+    return parts
 
 
 def _message_text(message: discord.Message) -> str:
@@ -111,6 +140,25 @@ def _message_text(message: discord.Message) -> str:
             for field in list(getattr(embed, "fields", []) or []):
                 parts.append(str(getattr(field, "name", "") or ""))
                 parts.append(str(getattr(field, "value", "") or ""))
+            try:
+                footer = getattr(embed, "footer", None)
+                if getattr(footer, "text", None):
+                    parts.append(str(footer.text))
+            except Exception:
+                pass
+            try:
+                author = getattr(embed, "author", None)
+                if getattr(author, "name", None):
+                    parts.append(str(author.name))
+                if getattr(author, "url", None):
+                    parts.append(str(author.url))
+            except Exception:
+                pass
+    except Exception:
+        pass
+    try:
+        for row in list(getattr(message, "components", []) or []):
+            parts.extend(_component_text(row))
     except Exception:
         pass
     return "\n".join(part for part in parts if part)
@@ -137,6 +185,7 @@ def _normalize_codes(values: Any) -> set[str]:
             text = str(raw or "").lower().strip().strip("/")
             text = text.replace("https://discord.gg/", "").replace("http://discord.gg/", "")
             text = text.replace("https://discord.com/invite/", "").replace("http://discord.com/invite/", "")
+            text = text.replace("https://discordapp.com/invite/", "").replace("http://discordapp.com/invite/", "")
             if text:
                 out.add(text)
     except Exception:
@@ -149,7 +198,7 @@ async def _own_invite_codes(guild: discord.Guild) -> set[str]:
         from stoney_verify import spam_guard
         getter = getattr(spam_guard, "_fetch_guild_invite_codes", None)
         if callable(getter):
-            return set(await getter(guild))
+            return set(str(code).lower() for code in await getter(guild))
     except Exception:
         pass
     try:
@@ -205,6 +254,16 @@ def _target_match(message: discord.Message, settings: dict[str, Any]) -> bool:
     return bool(author_match or channel_match)
 
 
+async def _blocked_codes(guild: discord.Guild, settings: dict[str, Any], codes: list[str]) -> list[str]:
+    allowed_codes = _normalize_codes(settings.get("allowed_invite_codes", settings.get("spam_allowed_invite_codes")))
+    override_own = _safe_bool(settings.get("invite_override_own_server_invites", settings.get("spam_invite_override_own_server_invites")), False)
+    allow_own = _safe_bool(settings.get("allow_server_invites", settings.get("spam_allow_server_invites")), True)
+    own_codes: set[str] = set()
+    if allow_own and not override_own:
+        own_codes = await _own_invite_codes(guild)
+    return [code for code in codes if code not in allowed_codes and code not in own_codes]
+
+
 async def _should_handle(message: discord.Message, cfg: Any, settings: dict[str, Any], codes: list[str]) -> tuple[bool, str, list[str]]:
     guild = message.guild
     if guild is None:
@@ -218,16 +277,12 @@ async def _should_handle(message: discord.Message, cfg: Any, settings: dict[str,
     if not (target_match or automod_invites or automod_links or spam_enabled):
         return False, "invite blocker is off", []
 
-    if target_match:
-        return True, "watched bot/channel matched", codes
-
-    allowed_codes = _normalize_codes(settings.get("allowed_invite_codes"))
-    own_codes: set[str] = set()
-    if bool(settings.get("allow_server_invites", True)):
-        own_codes = await _own_invite_codes(guild)
-    blocked = [code for code in codes if code not in allowed_codes and code not in own_codes]
+    blocked = await _blocked_codes(guild, settings, codes)
     if not blocked:
-        return False, "invite code is allowed", []
+        return False, "invite code is allowed for this server", []
+
+    if target_match:
+        return True, "watched bot/channel matched external invite", blocked
 
     return True, "Discord invite blocker is enabled", blocked
 
