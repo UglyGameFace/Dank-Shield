@@ -22,6 +22,7 @@ except Exception:  # pragma: no cover
 _INSTALLED = False
 _SWEEP_TASKS: dict[tuple[int, int], asyncio.Task] = {}
 _LAST_SWEEP_AT: dict[tuple[int, int], float] = {}
+_POLICY_CACHE: dict[int, tuple[float, Any, dict[str, Any]]] = {}
 _SPLASH_LAST_AT: dict[tuple[int, int], float] = {}
 
 INVITE_RE = re.compile(
@@ -248,6 +249,54 @@ async def _load_policy(guild: discord.Guild) -> tuple[Any, dict[str, Any]]:
     return cfg, settings
 
 
+async def _load_policy_cached(guild: discord.Guild, *, ttl_seconds: float = 8.0) -> tuple[Any, dict[str, Any]]:
+    """Short cache for invite enforcement policy.
+
+    This keeps instant delete fast without hammering config/database reads across
+    large public deployments.
+    """
+
+    gid = int(guild.id)
+    now = time.monotonic()
+    cached = _POLICY_CACHE.get(gid)
+    if cached is not None:
+        saved_at, cfg, settings = cached
+        if now - float(saved_at) <= float(ttl_seconds):
+            return cfg, dict(settings or {})
+
+    cfg, settings = await _load_policy_cached(guild)
+    _POLICY_CACHE[gid] = (now, cfg, dict(settings or {}))
+    return cfg, dict(settings or {})
+
+
+def _looks_invite_related(message: discord.Message) -> bool:
+    """Cheap gate for fallback sweeps.
+
+    Live deletion still handles exact codes immediately. The fallback sweep only
+    runs for messages likely to produce late invite cards/components.
+    """
+
+    try:
+        text = _message_text(message)
+        if _codes_from_text(text):
+            return True
+
+        lowered = str(text or "").lower()
+        if "discord" in lowered or "invite" in lowered or "discord.gg" in lowered:
+            return True
+
+        author_is_bot = bool(getattr(message.author, "bot", False))
+        has_components = bool(getattr(message, "components", None))
+        has_embeds = bool(getattr(message, "embeds", None))
+
+        if author_is_bot and (has_components or has_embeds):
+            return True
+    except Exception:
+        pass
+
+    return False
+
+
 def _target_match(message: discord.Message, settings: dict[str, Any]) -> bool:
     author_id = str(getattr(message.author, "id", "") or "")
     author_is_bot = bool(getattr(message.author, "bot", False))
@@ -364,7 +413,7 @@ async def _send_invite_shield_splash(channel: discord.TextChannel, *, deleted: i
 async def _sweep_channel_recent_invites(channel: discord.TextChannel, *, reason: str = "fallback") -> None:
     try:
         guild = channel.guild
-        cfg, settings = await _load_policy(guild)
+        cfg, settings = await _load_policy_cached(guild)
         if not _invite_shield_runtime_on(cfg, settings):
             return
 
@@ -452,7 +501,7 @@ async def _enforce_message(message: discord.Message, *, source: str = "message")
         if not isinstance(message.channel, discord.TextChannel):
             return
 
-        cfg, settings = await _load_policy(guild)
+        cfg, settings = await _load_policy_cached(guild)
 
         # First inspect the gateway payload.
         codes = _codes_from_text(_message_text(message))
@@ -499,7 +548,8 @@ async def _enforce_message(message: discord.Message, *, source: str = "message")
 
 async def _listener(message: discord.Message) -> None:
     try:
-        _schedule_sweep(getattr(message, "channel", None), reason="create")
+        if _looks_invite_related(message):
+            _schedule_sweep(getattr(message, "channel", None), reason="create")
     except Exception:
         pass
     await _enforce_message(message, source="create")
@@ -508,7 +558,8 @@ async def _listener(message: discord.Message) -> None:
 async def _edit_listener(before: discord.Message, after: discord.Message) -> None:
     _ = before
     try:
-        _schedule_sweep(getattr(after, "channel", None), reason="edit")
+        if _looks_invite_related(after):
+            _schedule_sweep(getattr(after, "channel", None), reason="edit")
     except Exception:
         pass
     await _enforce_message(after, source="edit")
