@@ -30,6 +30,7 @@ from .repository import (
     transfer_ticket as repo_transfer_ticket,
     unclaim_ticket as repo_unclaim_ticket,
 )
+from .orphan_safety import cleanup_unpersisted_ticket_channel
 
 try:
     from .event_service import (
@@ -1869,7 +1870,18 @@ async def create_ticket_channel(
                 print(f"⚠️ Ticket fallback sync failed for {channel.id}: {repr(e)}")
 
         if inserted is None:
-            print("⚠️ Ticket channel created but DB insert/sync failed.")
+            cleaned = await cleanup_unpersisted_ticket_channel(
+                channel,
+                owner_id=owner.id,
+                ticket_number=ticket_number,
+                reason="Ticket creation rolled back because DB insert and fallback sync failed.",
+            )
+            print(
+                "⚠️ Ticket channel created but DB insert/sync failed; "
+                f"orphan_cleanup={'deleted' if cleaned else 'kept_or_failed'} "
+                f"channel={channel.id} owner={owner.id} ticket_number={ticket_number}"
+            )
+            return None
         else:
             print(
                 f"✅ Ticket row inserted/upserted → #{channel.name} ({channel.id}) "
