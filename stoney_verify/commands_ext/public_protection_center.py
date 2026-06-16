@@ -404,6 +404,40 @@ async def _set_link_policy(interaction: discord.Interaction, policy: str) -> Non
     await _refresh_panel(interaction, content=f"✅ {label}")
 
 
+async def _toggle_link_shield(interaction: discord.Interaction) -> None:
+    if not await _require_setup_permission(interaction):
+        return
+    guild = interaction.guild
+    if guild is None:
+        return await _send_ephemeral(interaction, "❌ This must be used inside a server.")
+
+    cfg = await get_guild_config(int(guild.id), refresh=True)
+    links_on = _cfg_bool(cfg, "automod_block_links", False)
+    invites_on = _cfg_bool(cfg, "automod_block_invites", False)
+
+    if links_on:
+        updates = {
+            "automod_enabled": bool(invites_on),
+            "automod_block_invites": bool(invites_on),
+            "automod_block_links": False,
+            "automod_link_policy": "invite_shield" if invites_on else "allow_links",
+            "automod_updated_by_id": str(int(interaction.user.id)),
+        }
+        label = "Link Shield disabled. Normal links are allowed again."
+    else:
+        updates = {
+            "automod_enabled": True,
+            "automod_block_invites": True,
+            "automod_block_links": True,
+            "automod_link_policy": "link_lockdown",
+            "automod_updated_by_id": str(int(interaction.user.id)),
+        }
+        label = "Link Shield enabled. All external links and Discord invites are blocked."
+
+    await _save_automod(int(guild.id), updates)
+    await _refresh_panel(interaction, content=f"✅ {label}")
+
+
 async def _add_bad_word(interaction: discord.Interaction, word: str) -> None:
     if not await _require_setup_permission(interaction):
         return
@@ -546,10 +580,10 @@ class ProtectionCenterView(discord.ui.View):
         _ = button
         await _set_link_policy(interaction, "invite_shield")
 
-    @discord.ui.button(label="Block All Links", emoji="🚫", style=discord.ButtonStyle.secondary, custom_id="dank_protection:block_links", row=1)
+    @discord.ui.button(label="Link Shield", emoji="🔗", style=discord.ButtonStyle.secondary, custom_id="dank_protection:block_links", row=1)
     async def block_links_button(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
-        await _set_link_policy(interaction, "link_lockdown")
+        await _toggle_link_shield(interaction)
 
     @discord.ui.button(label="Add Filter", emoji="➕", style=discord.ButtonStyle.secondary, custom_id="dank_protection:add_filter", row=2)
     async def add_filter_button(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:

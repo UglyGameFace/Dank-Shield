@@ -52,7 +52,8 @@ def _clean_main_view(view: Any) -> None:
         elif cid == "dank_protection:add_filter":
             _set_button(child, label="Bad Word Filter", emoji="🧼", style=discord.ButtonStyle.primary, row=2)
         elif cid == "dank_protection:block_links":
-            _set_button(child, label="Link Shield", emoji="🔗", style=discord.ButtonStyle.secondary, row=2)
+            # Final ON/OFF label/style is applied by protection_center_embed_refresh_guard.
+            _set_button(child, label=getattr(child, "label", "Link Shield: OFF"), emoji="🔗", style=getattr(child, "style", discord.ButtonStyle.secondary), row=2)
         elif cid == "dank_protection:refresh":
             _set_button(child, label="Refresh", emoji="🔄", style=discord.ButtonStyle.secondary, row=4)
         elif cid == "dank_protection:close":

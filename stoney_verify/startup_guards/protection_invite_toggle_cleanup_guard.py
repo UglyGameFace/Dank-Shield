@@ -189,6 +189,25 @@ async def _resolve_text_channel(guild: discord.Guild, value: Any) -> discord.Tex
     return channel if isinstance(channel, discord.TextChannel) else None
 
 
+def _interaction_source_text_channel(interaction: discord.Interaction) -> discord.TextChannel | None:
+    try:
+        message = getattr(interaction, "message", None)
+        channel = getattr(message, "channel", None)
+        if isinstance(channel, discord.TextChannel):
+            return channel
+    except Exception:
+        pass
+
+    try:
+        channel = getattr(interaction, "channel", None)
+        if isinstance(channel, discord.TextChannel):
+            return channel
+    except Exception:
+        pass
+
+    return None
+
+
 async def _own_invite_codes(guild: discord.Guild) -> set[str]:
     try:
         from stoney_verify import spam_guard
@@ -305,15 +324,23 @@ async def _refresh_card(center: Any, interaction: discord.Interaction, *, note: 
 
 
 def _scan_note(prefix: str, result: dict[str, Any]) -> str:
+    checked = int(result.get("checked") or 0)
+    matched = int(result.get("matched") or 0)
+    allowed = int(result.get("allowed") or 0)
+    deleted = int(result.get("deleted") or 0)
+    failed = int(result.get("failed") or 0)
+
     note = (
-        f"{prefix} checked `{int(result.get('checked') or 0)}` recent messages, "
-        f"matched `{int(result.get('matched') or 0)}`, allowed internal/saved `{int(result.get('allowed') or 0)}`, "
-        f"deleted external `{int(result.get('deleted') or 0)}`, failed `{int(result.get('failed') or 0)}`."
+        f"{prefix} checked `{checked}` recent messages, "
+        f"matched `{matched}`, allowed internal/saved `{allowed}`, "
+        f"deleted external `{deleted}`, failed `{failed}`."
     )
     warning = result.get("warning")
     if warning:
         note += f"\n⚠️ {warning}"
-    if int(result.get("matched") or 0) and not int(result.get("deleted") or 0) and not int(result.get("allowed") or 0) and not warning:
+    if checked == 0 and not warning:
+        note += "\n⚠️ Discord returned 0 accessible messages for that channel. Use **Clean Selected Channel** for the exact target channel, and make sure Dank Shield has **View Channel** + **Read Message History** there."
+    if matched and not deleted and not allowed and not warning:
         note += "\n⚠️ Matches were found but nothing was removed. Check message age, permissions, and channel overrides."
     return note
 
@@ -353,14 +380,17 @@ class InviteShieldToggle(discord.ui.Button):
 
 class CleanCurrentChannelInvites(discord.ui.Button):
     def __init__(self) -> None:
-        super().__init__(label="Clean Command Channel", emoji="🧹", style=discord.ButtonStyle.secondary, custom_id="dank_protection:clean_current_channel_invites", row=3)
+        super().__init__(label="Clean This Channel", emoji="🧹", style=discord.ButtonStyle.secondary, custom_id="dank_protection:clean_current_channel_invites", row=3)
 
     async def callback(self, interaction: discord.Interaction) -> None:
         from stoney_verify.commands_ext import public_protection_center as center
         if not await center._require_setup_permission(interaction):
             return
-        result = await _clean_existing_invites(interaction.channel, limit=200)
-        await _refresh_card(center, interaction, note=_scan_note("🧹 Clean Command Channel", result))
+        channel = _interaction_source_text_channel(interaction)
+        if channel is None:
+            return await _refresh_card(center, interaction, note="⚠️ I could not resolve the text channel for this panel. Use **Clean Selected Channel** and paste the target channel ID.")
+        result = await _clean_existing_invites(channel, limit=200)
+        await _refresh_card(center, interaction, note=_scan_note(f"🧹 Clean {channel.mention}", result))
 
 
 class TargetChannelCleanupModal(discord.ui.Modal, title="Clean Invite Links in Channel"):

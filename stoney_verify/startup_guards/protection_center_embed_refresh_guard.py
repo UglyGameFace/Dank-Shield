@@ -95,9 +95,13 @@ def _decorate(view: Any, data: dict[str, Any]) -> None:
                 child.label = "Turn Off" + (" ✅" if off else "")
                 child.style = discord.ButtonStyle.danger if off else discord.ButtonStyle.secondary
             elif cid == "dank_protection:invite_scope":
-                child.label = "Invite Shield" + (" ✅" if data.get("invites") else "")
+                invites_on = bool(data.get("invites"))
+                child.label = f"Invite Shield: {'ON' if invites_on else 'OFF'}"
+                child.style = discord.ButtonStyle.success if invites_on else discord.ButtonStyle.secondary
             elif cid == "dank_protection:block_links":
-                child.label = "Link Shield" + (" ✅" if data.get("links") else "")
+                links_on = bool(data.get("links"))
+                child.label = f"Link Shield: {'ON' if links_on else 'OFF'}"
+                child.style = discord.ButtonStyle.success if links_on else discord.ButtonStyle.secondary
             elif cid == "dank_protection:add_filter":
                 child.label = f"Bad Word Filter ({data.get('filters', 0)})"
         except Exception:
