@@ -65,6 +65,8 @@ FALLBACK_GHOST_CATEGORY = "ghost"
 VALID_PRIORITIES = {"low", "medium", "high", "urgent"}
 
 _PERSISTENT_VIEWS_REGISTERED = False
+_CREATE_IN_PROGRESS: set[tuple[int, int]] = set()
+_CREATE_IN_PROGRESS_LOCK = asyncio.Lock()
 
 _COMMON_STOPWORDS = {
     "a", "an", "the", "and", "or", "for", "to", "of", "in", "on", "at", "by",
@@ -627,6 +629,21 @@ async def _safe_followup(interaction: discord.Interaction, content: str) -> None
                 )
         except Exception:
             pass
+
+
+async def _begin_ticket_create_attempt(guild_id: int, user_id: int) -> bool:
+    key = (int(guild_id), int(user_id))
+    async with _CREATE_IN_PROGRESS_LOCK:
+        if key in _CREATE_IN_PROGRESS:
+            return False
+        _CREATE_IN_PROGRESS.add(key)
+        return True
+
+
+async def _finish_ticket_create_attempt(guild_id: int, user_id: int) -> None:
+    key = (int(guild_id), int(user_id))
+    async with _CREATE_IN_PROGRESS_LOCK:
+        _CREATE_IN_PROGRESS.discard(key)
 
 
 def _resolve_member(interaction: discord.Interaction) -> Optional[discord.Member]:
@@ -1356,78 +1373,88 @@ async def _create_ticket_for_member(
         f"ghost={is_ghost} reason={reason_preview!r} match={match_payload!r}"
     )
 
-    existing_channel = await _resolve_existing_open_ticket_channel(
-        guild=guild,
-        owner_id=user.id,
-    )
-
-    if existing_channel is not None:
-        _debug(
-            f"create blocked existing-open-ticket guild={guild.id} "
-            f"user={user.id} channel={existing_channel.id}"
-        )
+    if not await _begin_ticket_create_attempt(guild.id, user.id):
         await _safe_followup(
             interaction,
-            f"You already have an open ticket: {existing_channel.mention}",
+            "⏳ Your ticket is already being created. Please wait a moment instead of pressing Create Ticket again.",
         )
         return
 
-    parent_category_id = _ticket_parent_category_id()
-    staff_role_ids = _staff_role_ids_for_ticket(guild)
+    try:
+        existing_channel = await _resolve_existing_open_ticket_channel(
+            guild=guild,
+            owner_id=user.id,
+        )
 
-    _debug(
-        f"create resolved parent_category_id={parent_category_id} "
-        f"staff_role_ids={staff_role_ids} guild={guild.id} user={user.id}"
-    )
+        if existing_channel is not None:
+            _debug(
+                f"create blocked existing-open-ticket guild={guild.id} "
+                f"user={user.id} channel={existing_channel.id}"
+            )
+            await _safe_followup(
+                interaction,
+                f"You already have an open ticket: {existing_channel.mention}",
+            )
+            return
 
-    opening_message = _opening_message_for_category(
-        user=user,
-        category=category,
-        category_label=category_label,
-        reason=reason,
-        is_ghost=is_ghost,
-    )
+        parent_category_id = _ticket_parent_category_id()
+        staff_role_ids = _staff_role_ids_for_ticket(guild)
 
-    payload = dict(match_payload or {})
-
-    channel = await create_ticket_channel(
-        guild=guild,
-        owner=user,
-        category=category,
-        source=source,
-        is_ghost=is_ghost,
-        parent_category_id=parent_category_id,
-        staff_role_ids=staff_role_ids,
-        opening_message=opening_message,
-        priority="low" if is_ghost else "medium",
-        matched_category_id=payload.get("matched_category_id"),
-        matched_category_name=payload.get("matched_category_name"),
-        matched_category_slug=payload.get("matched_category_slug"),
-        matched_intake_type=payload.get("matched_intake_type"),
-        matched_category_reason=payload.get("matched_category_reason"),
-        matched_category_score=payload.get("matched_category_score"),
-        category_override=bool(payload.get("category_override", False)),
-        category_id=payload.get("category_id"),
-    )
-
-    if channel is None:
         _debug(
-            f"create failed guild={guild.id} user={user.id} "
-            f"category={category} source={source} ghost={is_ghost}"
+            f"create resolved parent_category_id={parent_category_id} "
+            f"staff_role_ids={staff_role_ids} guild={guild.id} user={user.id}"
         )
-        await _safe_followup(interaction, "Failed to create ticket.")
-        return
 
-    _debug(
-        f"create success guild={guild.id} user={user.id} "
-        f"channel={channel.id} name={channel.name!r} category={category} "
-        f"source={source} matched_slug={payload.get('matched_category_slug')!r}"
-    )
+        opening_message = _opening_message_for_category(
+            user=user,
+            category=category,
+            category_label=category_label,
+            reason=reason,
+            is_ghost=is_ghost,
+        )
 
-    await _safe_followup(
-        interaction,
-        f"Ticket created: {channel.mention}",
-    )
+        payload = dict(match_payload or {})
+
+        channel = await create_ticket_channel(
+            guild=guild,
+            owner=user,
+            category=category,
+            source=source,
+            is_ghost=is_ghost,
+            parent_category_id=parent_category_id,
+            staff_role_ids=staff_role_ids,
+            opening_message=opening_message,
+            priority="low" if is_ghost else "medium",
+            matched_category_id=payload.get("matched_category_id"),
+            matched_category_name=payload.get("matched_category_name"),
+            matched_category_slug=payload.get("matched_category_slug"),
+            matched_intake_type=payload.get("matched_intake_type"),
+            matched_category_reason=payload.get("matched_category_reason"),
+            matched_category_score=payload.get("matched_category_score"),
+            category_override=bool(payload.get("category_override", False)),
+            category_id=payload.get("category_id"),
+        )
+
+        if channel is None:
+            _debug(
+                f"create failed guild={guild.id} user={user.id} "
+                f"category={category} source={source} ghost={is_ghost}"
+            )
+            await _safe_followup(interaction, "Failed to create ticket.")
+            return
+
+        _debug(
+            f"create success guild={guild.id} user={user.id} "
+            f"channel={channel.id} name={channel.name!r} category={category} "
+            f"source={source} matched_slug={payload.get('matched_category_slug')!r}"
+        )
+
+        await _safe_followup(
+            interaction,
+            f"Ticket created: {channel.mention}",
+        )
+    finally:
+        await _finish_ticket_create_attempt(guild.id, user.id)
 
 
 async def _ticket_row_for_channel(channel: discord.TextChannel) -> Optional[Dict[str, Any]]:
