@@ -7,6 +7,8 @@ server enables invite blocking, Discord invite links are handled even when the
 message came from a bot such as a bump/listing bot.
 """
 
+import asyncio
+import time
 import re
 from typing import Any, Iterable
 
@@ -18,6 +20,8 @@ except Exception:  # pragma: no cover
     bot = None  # type: ignore
 
 _INSTALLED = False
+_SWEEP_TASKS: dict[tuple[int, int], asyncio.Task] = {}
+_LAST_SWEEP_AT: dict[tuple[int, int], float] = {}
 
 INVITE_RE = re.compile(
     r"(?:https?://)?(?:www\.)?(?:discord(?:app)?\.com/invite|discord\.gg)\s*/\s*([A-Za-z0-9-]+)",
@@ -287,6 +291,93 @@ async def _should_handle(message: discord.Message, cfg: Any, settings: dict[str,
     return True, "Discord invite blocker is enabled", blocked
 
 
+
+def _invite_shield_runtime_on(cfg: Any, settings: dict[str, Any]) -> bool:
+    try:
+        if _safe_bool(_cfg_value(cfg, "automod_block_invites", False), False):
+            return True
+        if _safe_bool(_cfg_value(cfg, "automod_block_links", False), False):
+            return True
+        if _safe_bool(settings.get("enabled"), False):
+            return True
+        for key in (
+            "invite_shield_enabled",
+            "invite_hard_block_enabled",
+            "automod_block_invites",
+            "block_invites",
+            "spam_invite_shield_enabled",
+            "spam_invite_hard_block_enabled",
+            "spam_automod_block_invites",
+            "spam_block_invites",
+        ):
+            if _safe_bool(settings.get(key), False):
+                return True
+    except Exception:
+        pass
+    return False
+
+
+async def _sweep_channel_recent_invites(channel: discord.TextChannel, *, reason: str = "fallback") -> None:
+    try:
+        guild = channel.guild
+        cfg, settings = await _load_policy(guild)
+        if not _invite_shield_runtime_on(cfg, settings):
+            return
+
+        key = (int(guild.id), int(channel.id))
+        now = time.monotonic()
+        last = float(_LAST_SWEEP_AT.get(key, 0.0) or 0.0)
+        if now - last < 8.0:
+            return
+        _LAST_SWEEP_AT[key] = now
+
+        try:
+            from stoney_verify.startup_guards.protection_invite_toggle_cleanup_guard import _clean_existing_invites
+        except Exception as exc:
+            _log(f"sweep unavailable reason={type(exc).__name__}")
+            return
+
+        result = await _clean_existing_invites(channel, limit=75)
+        deleted = int((result or {}).get("deleted") or 0)
+        matched = int((result or {}).get("matched") or 0)
+        failed = int((result or {}).get("failed") or 0)
+
+        if matched or deleted or failed:
+            _log(
+                "fallback sweep complete "
+                f"guild={guild.id} channel={channel.id} reason={reason} "
+                f"matched={matched} deleted={deleted} failed={failed}"
+            )
+    except Exception as exc:
+        _log(f"fallback sweep failed channel={getattr(channel, 'id', 'unknown')}: {type(exc).__name__}: {exc}")
+
+
+async def _delayed_sweep(channel: discord.TextChannel, *, reason: str = "delayed") -> None:
+    try:
+        await asyncio.sleep(1.5)
+        await _sweep_channel_recent_invites(channel, reason=reason)
+        await asyncio.sleep(4.0)
+        await _sweep_channel_recent_invites(channel, reason=f"{reason}-second-pass")
+    finally:
+        try:
+            _SWEEP_TASKS.pop((int(channel.guild.id), int(channel.id)), None)
+        except Exception:
+            pass
+
+
+def _schedule_sweep(channel: Any, *, reason: str = "message") -> None:
+    try:
+        if not isinstance(channel, discord.TextChannel):
+            return
+        key = (int(channel.guild.id), int(channel.id))
+        task = _SWEEP_TASKS.get(key)
+        if task is not None and not task.done():
+            return
+        loop = asyncio.get_running_loop()
+        _SWEEP_TASKS[key] = loop.create_task(_delayed_sweep(channel, reason=reason))
+    except Exception as exc:
+        _log(f"schedule sweep failed: {type(exc).__name__}: {exc}")
+
 async def _fetch_message_for_enforcement(message: discord.Message) -> discord.Message:
     """Fetch the message back from Discord before deciding it has no invite.
 
@@ -359,11 +450,19 @@ async def _enforce_message(message: discord.Message, *, source: str = "message")
 
 
 async def _listener(message: discord.Message) -> None:
+    try:
+        _schedule_sweep(getattr(message, "channel", None), reason="create")
+    except Exception:
+        pass
     await _enforce_message(message, source="create")
 
 
 async def _edit_listener(before: discord.Message, after: discord.Message) -> None:
     _ = before
+    try:
+        _schedule_sweep(getattr(after, "channel", None), reason="edit")
+    except Exception:
+        pass
     await _enforce_message(after, source="edit")
 
 
