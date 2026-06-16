@@ -107,6 +107,70 @@ def _channel_by_name(guild: discord.Guild, *tokens: str) -> Optional[discord.Tex
     return None
 
 
+
+def _role_from_cfg(guild: discord.Guild, cfg: Any, *keys: str) -> Optional[discord.Role]:
+    for key in keys:
+        try:
+            rid = _safe_int(_cfg_value(cfg, key, None), 0)
+            role = guild.get_role(int(rid or 0)) if int(rid or 0) > 0 else None
+            if isinstance(role, discord.Role):
+                return role
+        except Exception:
+            continue
+    return None
+
+
+def _member_can_view_join_channel(guild: discord.Guild, cfg: Any, channel: Optional[discord.TextChannel]) -> bool:
+    if not isinstance(channel, discord.TextChannel):
+        return False
+    try:
+        unverified = _role_from_cfg(
+            guild,
+            cfg,
+            "unverified_role_id",
+            "verify_unverified_role_id",
+            "verification_unverified_role_id",
+            "member_unverified_role_id",
+        )
+        if isinstance(unverified, discord.Role) and channel.permissions_for(unverified).view_channel:
+            return True
+        everyone = getattr(guild, "default_role", None)
+        if isinstance(everyone, discord.Role) and channel.permissions_for(everyone).view_channel:
+            return True
+    except Exception:
+        pass
+    return False
+
+
+def _member_facing_join_channel(guild: discord.Guild, cfg: Any) -> Optional[discord.TextChannel]:
+    configured = _target_channel(guild, cfg, kind="join")
+    if _member_can_view_join_channel(guild, cfg, configured):
+        return configured
+
+    # Do not force Unverified into staff logs. Fall back to visible onboarding channels.
+    for key in (
+        "verify_channel_id",
+        "verification_channel_id",
+        "welcome_channel_id",
+        "rules_channel_id",
+    ):
+        channel = _text_channel(guild, _safe_int(_cfg_value(cfg, key, None), 0))
+        if _member_can_view_join_channel(guild, cfg, channel):
+            return channel
+
+    for tokens in (
+        ("welcome", "start-here"),
+        ("verification", "verify"),
+        ("rules",),
+        ("support", "ticket"),
+    ):
+        channel = _channel_by_name(guild, *tokens)
+        if _member_can_view_join_channel(guild, cfg, channel):
+            return channel
+
+    return configured
+
+
 def _target_channel(guild: discord.Guild, cfg: Any, *, kind: str) -> Optional[discord.TextChannel]:
     if kind == "leave":
         cid = _safe_int(_cfg_value(cfg, "goodbye_channel_id", None) or _cfg_value(cfg, "leave_channel_id", None) or _cfg_value(cfg, "welcome_channel_id", None), 0)
@@ -305,7 +369,7 @@ async def _send_join(member: discord.Member) -> None:
         cfg = await get_guild_config(int(member.guild.id), refresh=True)
         if not _cfg_bool(cfg, "welcome_join_enabled", "join_welcome_enabled", default=False):
             return
-        channel = _target_channel(member.guild, cfg, kind="join")
+        channel = _member_facing_join_channel(member.guild, cfg)
         if not isinstance(channel, discord.TextChannel):
             return
         title = _cfg_str(cfg, "welcome_join_title", default="Welcome, {display_name}!")

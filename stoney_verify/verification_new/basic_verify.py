@@ -150,29 +150,33 @@ def build_basic_verify_embed(guild: discord.Guild, cfg: Any) -> discord.Embed:
     support_text = support.mention if support else "the support/ticket channel"
 
     embed = discord.Embed(
-        title=f"🎮 Welcome to {guild.name}! 🍁",
+        title="✅ Verify to unlock server access",
         description=(
-            "Hey there! Thanks for dropping into the lobby. Grab a seat, light one up, and get ready to chill.\n\n"
-            "Right now, your access to the server is **limited** because you are currently **Unverified**. "
-            "To prevent bots and keep the vibes immaculate, unlock the full server first."
+            "This button verifies that you are ready to enter the server. "
+            "It is separate from the welcome message and only controls access roles."
         ),
         color=discord.Color.green(),
     )
     embed.add_field(
-        name="🔓 How to Get the Verified Role",
+        name="Before you tap Verify",
+        value=f"Please read {rules_text} first so you understand the server rules.",
+        inline=False,
+    )
+    embed.add_field(
+        name="What happens when you verify",
         value=(
-            f"**Step 1:** Head over to {rules_text} and give the rules a quick read.\n"
-            f"**Step 2:** Click the **Verify** button below in {verify_text}.\n"
-            "**Step 3:** Dank Shield will automatically give you the **Verified** role and open the rest of the server."
+            f"1. Stay in {verify_text}.\n"
+            "2. Tap **Verify** below.\n"
+            "3. Dank Shield gives you the server access role and removes the Unverified role."
         ),
         inline=False,
     )
     embed.add_field(
-        name="⚠️ Need Help?",
-        value=f"If the button is not working, head to {support_text} and open a ticket so a mod can get you sorted out.",
+        name="Need help?",
+        value=f"If the button does not work, go to {support_text} and open a ticket.",
         inline=False,
     )
-    embed.set_footer(text="Dank Shield Basic Verify")
+    embed.set_footer(text="Dank Shield Basic Verify • access only")
     return embed
 
 

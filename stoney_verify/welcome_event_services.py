@@ -228,6 +228,52 @@ def _can_post(channel: discord.TextChannel, me: Optional[discord.Member]) -> lis
     return [name for name, ok in checks.items() if not ok]
 
 
+
+def _role_from_cfg(guild: discord.Guild, cfg: Any, *keys: str) -> Optional[discord.Role]:
+    for key in keys:
+        try:
+            rid = _cfg_int(cfg, key, 0)
+            role = guild.get_role(int(rid or 0)) if int(rid or 0) > 0 else None
+            if isinstance(role, discord.Role):
+                return role
+        except Exception:
+            continue
+    return None
+
+
+def _join_audience_status(guild: discord.Guild, cfg: Any, channel: Optional[discord.TextChannel]) -> str:
+    """Explain whether new/unverified members can see the join welcome.
+
+    Users do not need Read Message History for old staff logs. They need the join
+    welcome posted in a channel they can actually view.
+    """
+
+    if not isinstance(channel, discord.TextChannel):
+        return "⚠️ Pick a public welcome/verification channel"
+
+    try:
+        unverified = _role_from_cfg(
+            guild,
+            cfg,
+            "unverified_role_id",
+            "verify_unverified_role_id",
+            "verification_unverified_role_id",
+            "member_unverified_role_id",
+        )
+        if isinstance(unverified, discord.Role):
+            perms = channel.permissions_for(unverified)
+            if perms.view_channel:
+                return f"✅ New members can see this via {unverified.mention}"
+
+        everyone = getattr(guild, "default_role", None)
+        if isinstance(everyone, discord.Role) and channel.permissions_for(everyone).view_channel:
+            return "✅ New members can see this via @everyone"
+
+        return "⚠️ Staff/private channel — new members may not see this welcome"
+    except Exception:
+        return "⚠️ Could not verify new-member visibility"
+
+
 def _post_status(channel: Optional[discord.TextChannel]) -> str:
     if not isinstance(channel, discord.TextChannel):
         return "⚠️ Pick a channel"
@@ -341,26 +387,27 @@ def _build_center_embed(guild: discord.Guild, cfg: Any, *, last_action: str | No
     leave_channel = _leave_channel(guild, cfg)
 
     embed = discord.Embed(
-        title="👋 Welcome Center",
+        title="👋 Welcome & Join/Leave Center",
         description=(
-            "Set optional messages for people joining and leaving.\n"
-            "Pick a channel first, then use the ON/OFF buttons."
+            "Separate the **member-facing join welcome** from the **private staff join/leave log**.\n"
+            "Do not give Unverified message history in staff logs; pick a public welcome or verification channel for join welcomes."
         ),
         color=discord.Color.green() if (join_enabled or leave_enabled) else discord.Color.blurple(),
         timestamp=discord.utils.utcnow(),
     )
 
     embed.add_field(
-        name="Join Messages",
+        name="Member-Facing Join Welcome",
         value=(
             f"**Status:** {'✅ ON' if join_enabled else '⚪ OFF'}\n"
             f"**Channel:** {join_channel.mention if isinstance(join_channel, discord.TextChannel) else 'not set'}\n"
-            f"**Bot access:** {_post_status(join_channel)}"
+            f"**Bot access:** {_post_status(join_channel)}\n"
+            f"**New-member visibility:** {_join_audience_status(guild, cfg, join_channel)}"
         ),
         inline=False,
     )
     embed.add_field(
-        name="Leave Messages",
+        name="Private Staff Leave Log",
         value=(
             f"**Status:** {'✅ ON' if leave_enabled else '⚪ OFF'}\n"
             f"**Channel:** {leave_channel.mention if isinstance(leave_channel, discord.TextChannel) else 'not set'}\n"
@@ -455,7 +502,12 @@ async def _save_event_channel(interaction: discord.Interaction, channel: discord
     patch["welcome_events_updated_by_id"] = str(int(interaction.user.id))
     await _upsert_config(int(guild.id), patch)
     invalidate_guild_config(int(guild.id))
-    await _refresh_center(interaction, last_action=f"✅ {label} messages are ON and will post in {channel.mention}.")
+    extra = ""
+    if kind != "leave":
+        visibility = _join_audience_status(guild, await __import__("stoney_verify.guild_config", fromlist=["get_guild_config"]).get_guild_config(int(guild.id), refresh=True), channel)
+        if visibility.startswith("⚠️"):
+            extra = f"\n{visibility}"
+    await _refresh_center(interaction, last_action=f"✅ {label} messages are ON and will post in {channel.mention}.{extra}")
 
 
 async def _set_enabled(interaction: discord.Interaction, *, join: Optional[bool] = None, leave: Optional[bool] = None) -> None:
