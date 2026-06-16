@@ -474,6 +474,22 @@ def _schedule_sweep(channel: Any, *, reason: str = "message") -> None:
     except Exception as exc:
         _log(f"schedule sweep failed: {type(exc).__name__}: {exc}")
 
+
+async def _report_invite_shield_block_to_spam_guard(
+    message: discord.Message,
+    codes: list[str],
+    *,
+    source: str,
+) -> None:
+    try:
+        from stoney_verify import spam_guard
+        reporter = getattr(spam_guard, "record_invite_shield_block", None)
+        if callable(reporter):
+            await reporter(message, list(codes or []), source=source)
+    except Exception as exc:
+        _log(f"spam guard bridge failed source={source}: {type(exc).__name__}: {exc}")
+
+
 async def _fetch_message_for_enforcement(message: discord.Message) -> discord.Message:
     """Fetch the message back from Discord before deciding it has no invite.
 
@@ -537,6 +553,7 @@ async def _enforce_message(message: discord.Message, *, source: str = "message")
 
         await _modlog(guild, effective_message, blocked or codes, f"{reason}; source={source}")
         await _send_invite_shield_splash(effective_message.channel, deleted=len(blocked or codes), source=source)
+        await _report_invite_shield_block_to_spam_guard(effective_message, blocked or codes, source=source)
         _log(
             "deleted invite "
             f"guild={guild.id} channel={effective_message.channel.id} message={effective_message.id} "

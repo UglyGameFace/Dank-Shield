@@ -333,6 +333,36 @@ async def _send_invite_splash(channel: discord.TextChannel, *, deleted: int = 1,
             pass
 
 
+
+async def _send_invite_splash(channel: discord.TextChannel, *, deleted: int = 1, source: str = "hard-block") -> None:
+    try:
+        from stoney_verify.startup_guards.discord_invite_blocker_runtime_guard import _send_invite_shield_splash
+        await _send_invite_shield_splash(channel, deleted=deleted, source=source)
+    except Exception as exc:
+        try:
+            _log(f"splash unavailable source={source}: {type(exc).__name__}: {exc}")
+        except Exception:
+            pass
+
+
+async def _report_invite_shield_block_to_spam_guard(
+    message: discord.Message,
+    codes: list[str],
+    *,
+    source: str,
+) -> None:
+    try:
+        from stoney_verify import spam_guard
+        reporter = getattr(spam_guard, "record_invite_shield_block", None)
+        if callable(reporter):
+            await reporter(message, list(codes or []), source=source)
+    except Exception as exc:
+        try:
+            _log(f"spam guard bridge failed source={source}: {type(exc).__name__}: {exc}")
+        except Exception:
+            pass
+
+
 async def _hard_block_invite_message(message: discord.Message) -> None:
     try:
         guild = message.guild

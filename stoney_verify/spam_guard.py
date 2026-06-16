@@ -2319,6 +2319,156 @@ async def _log_trigger(
         await save_quarantine_case(quarantine_case)
 
 
+
+async def record_invite_shield_block(
+    message: discord.Message,
+    codes: List[str],
+    *,
+    source: str = "invite-shield",
+) -> bool:
+    """Record an Invite Shield deletion as Spam Guard evidence.
+
+    This bridges Shield deletion into the incident engine without treating normal
+    emoji/chat spam as a raid. Staff/exempt/bot actors are logged as alert-only
+    so production servers do not accidentally quarantine trusted humans or bots.
+    """
+
+    try:
+        guild = message.guild
+        if guild is None or not isinstance(message.channel, discord.TextChannel):
+            return False
+        if not isinstance(message.author, discord.Member):
+            return False
+
+        member = message.author
+        settings = await get_spam_settings(guild.id)
+        if not bool(settings.get("enabled")):
+            return False
+
+        normalized_codes = [str(c or "").lower().strip() for c in list(codes or []) if str(c or "").strip()]
+        if not normalized_codes:
+            return False
+
+        now_mono = time.monotonic()
+        state_key = f"shield-invite:{guild.id}:{member.id}"
+
+        async with _lock(state_key):
+            _touch_lock(state_key)
+            state = _state_for_user(guild.id, member.id)
+            _cleanup_state(
+                state,
+                now_mono=now_mono,
+                keep_seconds=max(15, int(settings["window_seconds"]) * 4),
+            )
+
+            messages: Deque[Dict[str, Any]] = state["messages"]
+            current_ident = (int(message.channel.id), int(message.id))
+
+            for row in list(messages):
+                if _row_identity(row) == current_ident and "shield_invite_block" in _row_evidence(row):
+                    return False
+
+            messages.append(
+                {
+                    "ts": now_mono,
+                    "channel_id": int(message.channel.id),
+                    "message_id": int(message.id),
+                    "norm": "<shield_blocked_invite>",
+                    "blocked_invites": max(1, len(normalized_codes)),
+                    "allowed_invites": 0,
+                    "invite_count": max(1, len(normalized_codes)),
+                    "non_invite_url_count": 0,
+                    "mention_everyone": False,
+                    "evidence": [EVIDENCE_ANY_INVITE, EVIDENCE_BLOCKED_INVITE, "shield_invite_block"],
+                }
+            )
+
+            recent_cutoff = now_mono - float(settings["window_seconds"])
+            recent_messages = [
+                row for row in list(messages)
+                if float(row.get("ts", 0.0) or 0.0) >= recent_cutoff
+            ]
+
+            shield_rows = [
+                row for row in recent_messages
+                if "shield_invite_block" in _row_evidence(row)
+            ]
+            shield_count = len(shield_rows)
+            shield_channel_count = len(
+                {
+                    int(row.get("channel_id", 0) or 0)
+                    for row in shield_rows
+                    if int(row.get("channel_id", 0) or 0) > 0
+                }
+            )
+
+            threshold = max(1, int(settings.get("invite_threshold", 2) or 2))
+            should_fire = shield_count >= threshold or shield_channel_count >= 2
+
+            if not should_fire:
+                return False
+
+            last_action_at = float(state.get("last_action_at", 0.0) or 0.0)
+            if (now_mono - last_action_at) < float(settings["cooldown_seconds"]):
+                return True
+
+            state["last_action_at"] = now_mono
+
+            exempt_user_ids = list(settings.get("exempt_user_ids") or [])
+            exempt_role_ids = list(settings.get("exempt_role_ids") or [])
+            trusted_or_bot = (
+                bool(getattr(member, "bot", False))
+                or _is_staffish(member)
+                or str(member.id) in exempt_user_ids
+                or _member_has_any_role(member, exempt_role_ids)
+            )
+
+            reasons = [
+                f"Invite Shield blocked `{shield_count}` external invite attempt(s) inside `{int(settings['window_seconds'])}s`",
+                f"source=`{source}`",
+            ]
+            if shield_channel_count >= 2:
+                reasons.append(f"attempts appeared across `{shield_channel_count}` channels")
+            if trusted_or_bot:
+                reasons.append("actor is staff/exempt/bot; action downgraded to alert-only")
+
+            cleanup_refs: List[Dict[str, Any]] = []
+            quarantine_case: Optional[Dict[str, Any]] = None
+
+            if trusted_or_bot:
+                action_taken = "shield-alert-only"
+            else:
+                action_taken, quarantine_case = await _apply_mode_action(
+                    guild=guild,
+                    member=member,
+                    settings=settings,
+                    reason="Spam Guard: repeated external invite attempts blocked by Invite Shield",
+                )
+
+            await _log_trigger(
+                guild=guild,
+                member=member,
+                settings=settings,
+                reasons=reasons,
+                deleted_count=shield_count,
+                action_taken=action_taken,
+                recent_count=len(recent_messages),
+                duplicate_count=0,
+                blocked_invite_count=shield_count,
+                invite_message_count=shield_count,
+                total_invite_count=shield_count,
+                url_message_count=0,
+                channel_count=max(1, shield_channel_count),
+                cleanup_refs=cleanup_refs,
+                quarantine_case=quarantine_case,
+            )
+
+            return True
+    except Exception as e:
+        _debug(f"shield bridge failed source={source} error={repr(e)}")
+        return False
+
+
 async def handle_incoming_spam_message(message: discord.Message) -> bool:
     try:
         if message.guild is None:
