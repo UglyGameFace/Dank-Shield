@@ -69,6 +69,7 @@ VALID_PRIORITIES = {"low", "medium", "high", "urgent"}
 _PERSISTENT_VIEWS_REGISTERED = False
 _CREATE_IN_PROGRESS: set[tuple[int, int]] = set()
 _CREATE_IN_PROGRESS_LOCK = asyncio.Lock()
+_TICKET_ENTRY_GUARD_ACTIVE: set[int] = set()
 
 _COMMON_STOPWORDS = {
     "a", "an", "the", "and", "or", "for", "to", "of", "in", "on", "at", "by",
@@ -497,6 +498,23 @@ async def _run_ticket_panel_action(
             f"guarded ticket action failed label={label!r} "
             f"type={result.error_type!r} message={result.error_message!r}"
         )
+
+
+async def _run_ticket_entry_callback(
+    interaction: discord.Interaction,
+    action: Any,
+    label: str,
+) -> None:
+    key = id(interaction)
+    if key in _TICKET_ENTRY_GUARD_ACTIVE:
+        await action()
+        return
+
+    _TICKET_ENTRY_GUARD_ACTIVE.add(key)
+    try:
+        await _run_ticket_panel_action(interaction, action, label)
+    finally:
+        _TICKET_ENTRY_GUARD_ACTIVE.discard(key)
 
 
 def _member_has_role_id(member: discord.Member, role_id: int) -> bool:
@@ -2762,6 +2780,12 @@ class TicketPanelView(discord.ui.View):
         interaction: discord.Interaction,
         button: discord.ui.Button,
     ):
+        if id(interaction) not in _TICKET_ENTRY_GUARD_ACTIVE:
+            return await _run_ticket_entry_callback(
+                interaction,
+                lambda: self.create_ticket(interaction, button),
+                "create ticket",
+            )
         try:
             guild = interaction.guild
             user = _resolve_member(interaction)
@@ -2827,10 +2851,7 @@ class TicketPanelView(discord.ui.View):
 
         except Exception as e:
             print("❌ Public ticket create failed:", repr(e))
-            await _safe_followup(
-                interaction,
-                "Failed to create ticket. Please try again in a moment.",
-            )
+            raise
 
 
 class StaffGhostTicketView(discord.ui.View):
@@ -2848,6 +2869,12 @@ class StaffGhostTicketView(discord.ui.View):
         interaction: discord.Interaction,
         button: discord.ui.Button,
     ):
+        if id(interaction) not in _TICKET_ENTRY_GUARD_ACTIVE:
+            return await _run_ticket_entry_callback(
+                interaction,
+                lambda: self.create_ghost_ticket(interaction, button),
+                "quick ghost ticket",
+            )
         await _safe_defer(interaction)
 
         try:
@@ -2888,10 +2915,7 @@ class StaffGhostTicketView(discord.ui.View):
 
         except Exception as e:
             print("❌ Quick ghost ticket create failed:", repr(e))
-            await _safe_followup(
-                interaction,
-                "Failed to create ghost ticket. Please try again in a moment.",
-            )
+            raise
 
     @discord.ui.button(
         label="Ghost Ticket With Reason",
@@ -2904,6 +2928,12 @@ class StaffGhostTicketView(discord.ui.View):
         interaction: discord.Interaction,
         button: discord.ui.Button,
     ):
+        if id(interaction) not in _TICKET_ENTRY_GUARD_ACTIVE:
+            return await _run_ticket_entry_callback(
+                interaction,
+                lambda: self.create_ghost_ticket_with_reason(interaction, button),
+                "ghost ticket with reason",
+            )
         try:
             guild = interaction.guild
             user = _resolve_member(interaction)
@@ -2922,10 +2952,7 @@ class StaffGhostTicketView(discord.ui.View):
 
         except Exception as e:
             print("❌ Ghost ticket modal open failed:", repr(e))
-            await _safe_followup(
-                interaction,
-                "Failed to open ghost ticket form. Please try again.",
-            )
+            raise
 
 
 async def send_ticket_panel(channel: discord.TextChannel):
