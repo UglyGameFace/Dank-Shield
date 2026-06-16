@@ -78,6 +78,86 @@ def _extract_codes(content: str) -> list[str]:
     return list(dict.fromkeys(code.strip().lower() for code in INVITE_HARD_RE.findall(text) if code.strip()))
 
 
+def _component_text(component: Any) -> list[str]:
+    parts: list[str] = []
+    try:
+        for attr in ("url", "label", "custom_id"):
+            value = getattr(component, attr, None)
+            if value:
+                parts.append(str(value))
+    except Exception:
+        pass
+    try:
+        for child in list(getattr(component, "children", []) or []):
+            parts.extend(_component_text(child))
+    except Exception:
+        pass
+    return parts
+
+
+def _message_text(message: discord.Message) -> str:
+    parts: list[str] = [str(getattr(message, "content", "") or "")]
+
+    try:
+        for embed in list(getattr(message, "embeds", []) or []):
+            for attr in ("title", "description", "url"):
+                value = getattr(embed, attr, None)
+                if value:
+                    parts.append(str(value))
+
+            for field in list(getattr(embed, "fields", []) or []):
+                parts.append(str(getattr(field, "name", "") or ""))
+                parts.append(str(getattr(field, "value", "") or ""))
+
+            footer = getattr(embed, "footer", None)
+            if getattr(footer, "text", None):
+                parts.append(str(footer.text))
+
+            author = getattr(embed, "author", None)
+            if getattr(author, "name", None):
+                parts.append(str(author.name))
+            if getattr(author, "url", None):
+                parts.append(str(author.url))
+    except Exception:
+        pass
+
+    try:
+        for row in list(getattr(message, "components", []) or []):
+            parts.extend(_component_text(row))
+    except Exception:
+        pass
+
+    try:
+        for attachment in list(getattr(message, "attachments", []) or []):
+            for attr in ("url", "proxy_url", "filename", "description"):
+                value = getattr(attachment, attr, None)
+                if value:
+                    parts.append(str(value))
+    except Exception:
+        pass
+
+    return "\n".join(_clean_invite_text(part) for part in parts if part)
+
+
+def _extract_codes_from_message(message: discord.Message) -> list[str]:
+    """Extract invite codes from content, embeds, components, and attachments."""
+
+    text = _message_text(message)
+    compact = re.sub(r"\s+", "", text)
+
+    codes: list[str] = []
+    for source in (text, compact):
+        try:
+            for code in INVITE_HARD_RE.findall(source or ""):
+                clean = str(code or "").strip().lower()
+                if clean and clean not in codes:
+                    codes.append(clean)
+        except Exception:
+            continue
+
+    return codes
+
+
 def _normalize_id_list(values: Any) -> set[str]:
     out: set[str] = set()
     try:
@@ -120,18 +200,38 @@ def _member_has_any_role(member: discord.Member, role_ids: set[str]) -> bool:
 
 
 async def _own_invite_codes(guild: discord.Guild) -> Set[str]:
+    codes: Set[str] = set()
+
     try:
         from stoney_verify import spam_guard
 
         getter = getattr(spam_guard, "_fetch_guild_invite_codes", None)
         if callable(getter):
-            return set(await getter(guild))
+            codes.update(str(code).lower() for code in await getter(guild) if str(code or "").strip())
     except Exception:
         pass
+
     try:
-        return {str(inv.code).lower() for inv in await guild.invites() if getattr(inv, "code", None)}
+        codes.update(str(inv.code).lower() for inv in await guild.invites() if getattr(inv, "code", None))
     except Exception:
-        return set()
+        pass
+
+    try:
+        vanity_code = getattr(guild, "vanity_url_code", None)
+        if vanity_code:
+            codes.add(str(vanity_code).lower())
+    except Exception:
+        pass
+
+    try:
+        vanity_invite = await guild.vanity_invite()
+        vanity_code = getattr(vanity_invite, "code", None)
+        if vanity_code:
+            codes.add(str(vanity_code).lower())
+    except Exception:
+        pass
+
+    return codes
 
 async def _invite_runtime_state(
     guild: discord.Guild,
@@ -247,7 +347,7 @@ async def _hard_block_invite_message(message: discord.Message) -> None:
         if channel_ids and str(message.channel.id) not in channel_ids:
             return
 
-        codes = _extract_codes(message.content or "")
+        codes = _extract_codes_from_message(message)
         if not codes:
             return
 
@@ -320,6 +420,13 @@ async def _hard_block_invite_message(message: discord.Message) -> None:
         _log(f"handler error: {type(exc).__name__}: {exc}")
 
 
+async def _hard_block_invite_message_edit(before: discord.Message, after: discord.Message) -> None:
+    try:
+        await _hard_block_invite_message(after)
+    except Exception as exc:
+        _log(f"edit handler error: {type(exc).__name__}: {exc}")
+
+
 def install() -> bool:
     global _INSTALLED
     if _INSTALLED:
@@ -329,8 +436,9 @@ def install() -> bool:
         return False
     try:
         bot.add_listener(_hard_block_invite_message, "on_message")
+        bot.add_listener(_hard_block_invite_message_edit, "on_message_edit")
         _INSTALLED = True
-        _log("active; external Discord invite links delete immediately when SpamGuard or Invite Shield is enabled")
+        _log("active; rich external Discord invite links delete on create/edit when SpamGuard or Invite Shield is enabled")
         return True
     except Exception as exc:
         _log(f"install failed: {type(exc).__name__}: {exc}")
