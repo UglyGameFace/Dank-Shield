@@ -22,6 +22,24 @@ except Exception:
         return None
 
 
+def _register_private_verizon_rewards(bot_instance: Any, tree: Any) -> None:
+    """Register the optional private Verizon rewards alert surface.
+
+    This is intentionally kept outside the normal public command profile so the
+    niche/private /verizon command group does not become part of the default
+    public-product command catalog by accident.
+    """
+    try:
+        from .commands_ext.private_verizon_rewards import register_private_verizon_rewards_commands
+
+        register_private_verizon_rewards_commands(bot_instance, tree)
+    except Exception as e:
+        try:
+            print(f"⚠️ commands.py failed to register private Verizon rewards commands: {repr(e)}")
+        except Exception:
+            pass
+
+
 # ============================================================
 # Kick timer bridges
 # events.py imports these from commands.py, so keep them exposed
@@ -78,6 +96,7 @@ except Exception as e:
 # ============================================================
 try:
     register_all_commands(bot, bot.tree)
+    _register_private_verizon_rewards(bot, bot.tree)
 except Exception as e:
     try:
         print(f"⚠️ commands.py failed to register split command modules: {repr(e)}")
@@ -103,6 +122,7 @@ except Exception as e:
 def register_extra_commands(tree) -> None:
     try:
         register_all_commands(bot, tree)
+        _register_private_verizon_rewards(bot, tree)
     except Exception as e:
         try:
             print(f"⚠️ register_extra_commands failed: {repr(e)}")
