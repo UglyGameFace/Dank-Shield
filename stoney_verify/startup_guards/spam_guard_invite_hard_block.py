@@ -133,23 +133,22 @@ async def _own_invite_codes(guild: discord.Guild) -> Set[str]:
     except Exception:
         return set()
 
-
-async def _invite_shield_runtime_enabled(
+async def _invite_runtime_state(
     guild: discord.Guild,
     settings: dict[str, Any],
-) -> bool:
-    """Invite auto-delete is active when Spam Guard or Invite Shield is enabled.
+) -> tuple[bool, bool]:
+    """Return (runtime_enabled, invite_shield_enabled).
 
-    Protection Center stores Invite Shield in guild automod config, while the
-    older Spam Guard engine stores its master toggle in security settings.
-    The live invite listener must honor both without turning every spam rule on.
+    Spam Guard's old master toggle and Protection Center's Invite Shield toggle
+    live in different config stores. Invite Shield ON must enforce invites for
+    every sender, including bots. Legacy Spam Guard-only mode keeps its bot
+    targeting behavior.
     """
 
     try:
-        if _safe_bool(settings.get("enabled"), False):
-            return True
+        spam_guard_enabled = _safe_bool(settings.get("enabled"), False)
+        invite_shield_enabled = False
 
-        # Backward/forward compatible settings keys if another guard cached them.
         for key in (
             "invite_shield_enabled",
             "invite_hard_block_enabled",
@@ -157,27 +156,39 @@ async def _invite_shield_runtime_enabled(
             "block_invites",
         ):
             if key in settings and _safe_bool(settings.get(key), False):
-                return True
+                invite_shield_enabled = True
             spam_key = f"spam_{key}"
             if spam_key in settings and _safe_bool(settings.get(spam_key), False):
-                return True
+                invite_shield_enabled = True
 
-        # Production Protection Center toggle lives in guild config.
         try:
             from stoney_verify.commands_ext import public_protection_center as center
 
-            cfg = await center.get_guild_config(int(guild.id), refresh=True)
+            cfg = await center.get_guild_config(int(guild.id), refresh=False)
             if center._cfg_bool(cfg, "automod_block_invites", False):
-                return True
+                invite_shield_enabled = True
+        except TypeError:
+            try:
+                from stoney_verify.commands_ext import public_protection_center as center
+
+                cfg = await center.get_guild_config(int(guild.id))
+                if center._cfg_bool(cfg, "automod_block_invites", False):
+                    invite_shield_enabled = True
+            except Exception as exc:
+                _log(
+                    "invite shield guild-config check failed "
+                    f"guild={getattr(guild, 'id', 'unknown')} error={type(exc).__name__}"
+                )
         except Exception as exc:
             _log(
                 "invite shield guild-config check failed "
                 f"guild={getattr(guild, 'id', 'unknown')} error={type(exc).__name__}"
             )
 
-        return False
+        return bool(spam_guard_enabled or invite_shield_enabled), bool(invite_shield_enabled)
     except Exception:
-        return False
+        return False, False
+
 
 
 async def _modlog(guild: discord.Guild, message: discord.Message, codes: list[str], reason: str) -> None:
@@ -218,14 +229,20 @@ async def _hard_block_invite_message(message: discord.Message) -> None:
         from stoney_verify import spam_guard
 
         settings = await spam_guard.get_spam_settings(guild.id)
-        if not await _invite_shield_runtime_enabled(guild, settings):
+        runtime_enabled, invite_shield_enabled = await _invite_runtime_state(guild, settings)
+        if not runtime_enabled:
             return
 
         include_all_bots = _safe_bool(_first_setting(settings, "invite_hard_block_target_all_bots", "invite_target_all_bots"), False)
         include_ids = _normalize_id_list(_first_setting(settings, "invite_hard_block_target_bot_ids", "invite_target_bot_ids"))
         channel_ids = _normalize_id_list(_first_setting(settings, "invite_hard_block_target_channel_ids", "invite_target_channel_ids"))
 
-        if getattr(message.author, "bot", False) and not include_all_bots and str(message.author.id) not in include_ids:
+        if (
+            getattr(message.author, "bot", False)
+            and not invite_shield_enabled
+            and not include_all_bots
+            and str(message.author.id) not in include_ids
+        ):
             return
         if channel_ids and str(message.channel.id) not in channel_ids:
             return
@@ -313,7 +330,7 @@ def install() -> bool:
     try:
         bot.add_listener(_hard_block_invite_message, "on_message")
         _INSTALLED = True
-        _log("active; external Discord invite links delete immediately when SpamGuard is enabled")
+        _log("active; external Discord invite links delete immediately when SpamGuard or Invite Shield is enabled")
         return True
     except Exception as exc:
         _log(f"install failed: {type(exc).__name__}: {exc}")
