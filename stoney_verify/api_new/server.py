@@ -16,6 +16,7 @@ from ..globals import (
     TICKET_CATEGORY_ID,
     bot,
 )
+from ..guild_context import get_guild_context
 from ..tickets import find_ticket_owner_retry
 from ..tickets_new.service import (
     assign_ticket,
@@ -95,6 +96,68 @@ def _safe_bool(value: Any, default: bool = False) -> bool:
     if text in {"0", "false", "no", "n", "off"}:
         return False
     return default
+
+
+async def _api_guild_context(guild: discord.Guild) -> Any:
+    try:
+        return await get_guild_context(int(guild.id), refresh=True)
+    except Exception as exc:
+        try:
+            print(f"⚠️ structured API guild context unavailable guild={guild.id}: {repr(exc)}")
+        except Exception:
+            pass
+        return None
+
+
+def _context_id(context: Any, key: str) -> int:
+    try:
+        if context is None:
+            return 0
+        return _safe_int(context.get_id(key, 0), 0)
+    except Exception:
+        return 0
+
+
+def _api_ticket_parent_category_id_from_context(
+    guild: discord.Guild,
+    context: Any,
+) -> Optional[int]:
+    cid = _context_id(context, "ticket_category_id")
+    if cid > 0:
+        try:
+            if isinstance(guild.get_channel(cid), discord.CategoryChannel):
+                return cid
+        except Exception:
+            pass
+    return None
+
+
+def _api_staff_role_ids_from_context(
+    guild: discord.Guild,
+    context: Any,
+) -> Optional[List[int]]:
+    seen: set[int] = set()
+    out: List[int] = []
+
+    def _maybe_add(value: object) -> None:
+        rid = _safe_int(value, 0)
+        if rid <= 0 or rid in seen:
+            return
+        if guild.get_role(rid) is None:
+            return
+        seen.add(rid)
+        out.append(rid)
+
+    for key in (
+        "staff_role_id",
+        "ticket_staff_role_id",
+        "support_role_id",
+        "mod_role_id",
+        "moderator_role_id",
+    ):
+        _maybe_add(_context_id(context, key))
+
+    return out or None
 
 
 def _ticket_status(row: Optional[Dict[str, Any]]) -> str:
@@ -819,6 +882,13 @@ async def create_ticket(request: web.Request):
             if role_id > 0:
                 parsed.append(role_id)
         staff_role_ids = parsed or None
+
+    if parent_category_id is None or staff_role_ids is None:
+        guild_context = await _api_guild_context(guild)
+        if parent_category_id is None:
+            parent_category_id = _api_ticket_parent_category_id_from_context(guild, guild_context)
+        if staff_role_ids is None:
+            staff_role_ids = _api_staff_role_ids_from_context(guild, guild_context)
 
     allow_duplicate = _safe_bool(data.get("allow_duplicate"), False)
     normalized_category = "ghost" if is_ghost else category
