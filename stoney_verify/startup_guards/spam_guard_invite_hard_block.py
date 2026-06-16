@@ -3,6 +3,7 @@ from __future__ import annotations
 """Immediate external Discord invite deletion for SpamGuard."""
 
 import re
+import time
 from typing import Any, Iterable, Set
 
 import discord
@@ -334,15 +335,6 @@ async def _send_invite_splash(channel: discord.TextChannel, *, deleted: int = 1,
 
 
 
-async def _send_invite_splash(channel: discord.TextChannel, *, deleted: int = 1, source: str = "hard-block") -> None:
-    try:
-        from stoney_verify.startup_guards.discord_invite_blocker_runtime_guard import _send_invite_shield_splash
-        await _send_invite_shield_splash(channel, deleted=deleted, source=source)
-    except Exception as exc:
-        try:
-            _log(f"splash unavailable source={source}: {type(exc).__name__}: {exc}")
-        except Exception:
-            pass
 
 
 async def _report_invite_shield_block_to_spam_guard(
@@ -435,7 +427,19 @@ async def _hard_block_invite_message(message: discord.Message) -> None:
         if bool(settings.get("allow_server_invites", True)) and not override_own_codes:
             own_codes = await _own_invite_codes(guild)
 
-        blocked = [code for code in codes if code not in allowed_codes and code not in own_codes]
+        from stoney_verify.startup_guards.invite_shield_sanitize_shared import invite_code_belongs_to_guild, normalize_invite_code
+
+        blocked: list[str] = []
+        for code in codes:
+            clean = normalize_invite_code(code)
+            if not clean:
+                continue
+            if clean in allowed_codes or clean in own_codes:
+                continue
+            if bool(settings.get("allow_server_invites", True)) and not override_own_codes and await invite_code_belongs_to_guild(guild, clean):
+                continue
+            blocked.append(clean)
+
         if not blocked:
             return
 
@@ -467,8 +471,18 @@ async def _hard_block_invite_message(message: discord.Message) -> None:
             reason += "; policy: " + ", ".join(notes)
 
         try:
+            from stoney_verify.startup_guards.invite_shield_sanitize_shared import send_mixed_invite_sanitized_notice, this_guild_invite_codes
+
+            kept_this_server_codes = await this_guild_invite_codes(guild, codes)
             await message.delete(reason="Dank Shield Invite Shield: external Discord invite link")
-            await _send_invite_splash(message.channel, deleted=len(blocked), source="hard-block")
+            sanitized = await send_mixed_invite_sanitized_notice(
+                message,
+                kept_codes=kept_this_server_codes,
+                removed_count=len(blocked),
+                source="hard-block",
+            )
+            if not sanitized:
+                await _send_invite_splash(message.channel, deleted=len(blocked), source="hard-block")
             await _modlog(guild, message, blocked, reason)
             _log(
                 "deleted external invite "

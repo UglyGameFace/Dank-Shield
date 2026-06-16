@@ -3,6 +3,7 @@ from __future__ import annotations
 """Make Invite Shield an actual toggle and add cleanup for existing invite links."""
 
 import re
+import time
 from typing import Any, Iterable
 
 import discord
@@ -387,6 +388,8 @@ async def _spam_settings(guild: discord.Guild) -> dict[str, Any]:
 
 
 async def _blocked_codes_for_guild(guild: discord.Guild, codes: set[str]) -> tuple[list[str], int]:
+    from stoney_verify.startup_guards.invite_shield_sanitize_shared import invite_code_belongs_to_guild, normalize_invite_code
+
     settings = await _spam_settings(guild)
     allowed_codes = _normalize_codes(settings.get("allowed_invite_codes", settings.get("spam_allowed_invite_codes")))
     override_own = _safe_bool(settings.get("invite_override_own_server_invites", settings.get("spam_invite_override_own_server_invites")), False)
@@ -394,8 +397,21 @@ async def _blocked_codes_for_guild(guild: discord.Guild, codes: set[str]) -> tup
     own_codes: set[str] = set()
     if allow_own and not override_own:
         own_codes = await _own_invite_codes(guild)
-    blocked = [code for code in sorted(codes) if code not in allowed_codes and code not in own_codes]
-    allowed_count = max(0, len(codes) - len(blocked))
+
+    blocked: list[str] = []
+    allowed_count = 0
+    for code in sorted(codes):
+        clean = normalize_invite_code(code)
+        if not clean:
+            continue
+        if clean in allowed_codes or clean in own_codes:
+            allowed_count += 1
+            continue
+        if allow_own and not override_own and await invite_code_belongs_to_guild(guild, clean):
+            allowed_count += 1
+            continue
+        blocked.append(clean)
+
     return blocked, allowed_count
 
 
@@ -406,7 +422,7 @@ async def _delete_message(message: discord.Message, *, reason: str) -> None:
         await message.delete()
 
 
-async def _clean_existing_invites(channel: Any, *, limit: int = 100) -> dict[str, Any]:
+async def _clean_existing_invites(channel: Any, *, limit: int = 100, repost_mixed: bool = False) -> dict[str, Any]:
     result: dict[str, Any] = {"checked": 0, "matched": 0, "allowed": 0, "deleted": 0, "failed": 0, "warning": None}
     if not isinstance(channel, discord.TextChannel):
         result["warning"] = "This cleanup can only scan text channels."
@@ -437,8 +453,18 @@ async def _clean_existing_invites(channel: Any, *, limit: int = 100) -> dict[str
                     result["allowed"] += 1
                 if not blocked:
                     continue
+                from stoney_verify.startup_guards.invite_shield_sanitize_shared import send_mixed_invite_sanitized_notice, this_guild_invite_codes
+
+                kept_this_server_codes = await this_guild_invite_codes(channel.guild, codes)
                 await _delete_message(message, reason="Dank Shield Invite Shield cleanup: external invite")
                 result["deleted"] += 1
+                if repost_mixed and kept_this_server_codes:
+                    await send_mixed_invite_sanitized_notice(
+                        message,
+                        kept_codes=kept_this_server_codes,
+                        removed_count=len(blocked),
+                        source="fallback-sweep",
+                    )
             except discord.Forbidden:
                 result["failed"] += 1
                 result["warning"] = f"Discord denied deletion in {channel.mention}. Check Manage Messages and channel permission overrides."

@@ -309,13 +309,26 @@ def _target_match(message: discord.Message, settings: dict[str, Any]) -> bool:
 
 
 async def _blocked_codes(guild: discord.Guild, settings: dict[str, Any], codes: list[str]) -> list[str]:
+    from stoney_verify.startup_guards.invite_shield_sanitize_shared import invite_code_belongs_to_guild, normalize_invite_code
+
     allowed_codes = _normalize_codes(settings.get("allowed_invite_codes", settings.get("spam_allowed_invite_codes")))
     override_own = _safe_bool(settings.get("invite_override_own_server_invites", settings.get("spam_invite_override_own_server_invites")), False)
     allow_own = _safe_bool(settings.get("allow_server_invites", settings.get("spam_allow_server_invites")), True)
     own_codes: set[str] = set()
     if allow_own and not override_own:
         own_codes = await _own_invite_codes(guild)
-    return [code for code in codes if code not in allowed_codes and code not in own_codes]
+
+    blocked: list[str] = []
+    for code in codes:
+        clean = normalize_invite_code(code)
+        if not clean:
+            continue
+        if clean in allowed_codes or clean in own_codes:
+            continue
+        if allow_own and not override_own and await invite_code_belongs_to_guild(guild, clean):
+            continue
+        blocked.append(clean)
+    return blocked
 
 
 async def _should_handle(message: discord.Message, cfg: Any, settings: dict[str, Any], codes: list[str]) -> tuple[bool, str, list[str]]:
@@ -430,7 +443,7 @@ async def _sweep_channel_recent_invites(channel: discord.TextChannel, *, reason:
             _log(f"sweep unavailable reason={type(exc).__name__}")
             return
 
-        result = await _clean_existing_invites(channel, limit=75)
+        result = await _clean_existing_invites(channel, limit=75, repost_mixed=True)
         deleted = int((result or {}).get("deleted") or 0)
         matched = int((result or {}).get("matched") or 0)
         failed = int((result or {}).get("failed") or 0)
@@ -543,6 +556,11 @@ async def _enforce_message(message: discord.Message, *, source: str = "message")
         if not should_handle:
             return
 
+        from stoney_verify.startup_guards.invite_shield_sanitize_shared import send_mixed_invite_sanitized_notice, this_guild_invite_codes
+
+        kept_this_server_codes = await this_guild_invite_codes(guild, codes)
+        removed_count = len(blocked or codes)
+
         try:
             await effective_message.delete(reason=f"Dank Shield Discord Invite Blocker: {reason}")
         except discord.NotFound:
@@ -551,8 +569,16 @@ async def _enforce_message(message: discord.Message, *, source: str = "message")
             await _modlog(guild, effective_message, blocked or codes, "Missing Manage Messages permission")
             return
 
+        sanitized = await send_mixed_invite_sanitized_notice(
+            effective_message,
+            kept_codes=kept_this_server_codes,
+            removed_count=removed_count,
+            source=source,
+        )
+
         await _modlog(guild, effective_message, blocked or codes, f"{reason}; source={source}")
-        await _send_invite_shield_splash(effective_message.channel, deleted=len(blocked or codes), source=source)
+        if not sanitized:
+            await _send_invite_shield_splash(effective_message.channel, deleted=len(blocked or codes), source=source)
         await _report_invite_shield_block_to_spam_guard(effective_message, blocked or codes, source=source)
         _log(
             "deleted invite "
