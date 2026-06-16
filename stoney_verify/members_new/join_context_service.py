@@ -14,6 +14,7 @@ The read-side context aggregator remains tickets_new/member_context_service.py.
 
 import asyncio
 import traceback
+import time
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -31,6 +32,7 @@ except Exception:  # pragma: no cover - defensive fallback for startup import or
 _INVITE_USES_CACHE: Dict[int, Dict[str, int]] = {}
 _INVITE_META_CACHE: Dict[int, Dict[str, Dict[str, Any]]] = {}
 _VANITY_USES_CACHE: Dict[int, Optional[int]] = {}
+_RECENT_JOIN_CONTEXT: Dict[Tuple[int, int], Tuple[float, Dict[str, Any]]] = {}
 
 
 def _log(message: str) -> None:
@@ -227,6 +229,26 @@ def _invite_channel_name(invite: discord.Invite) -> Optional[str]:
     except Exception:
         pass
     return None
+
+
+def get_recent_join_context(guild_id: int, user_id: int, *, max_age_seconds: int = 180) -> Dict[str, Any]:
+    """Return recent invite/join attribution without re-reading Discord invites.
+
+    Welcome messages use this to avoid racing invite cache updates.
+    """
+
+    try:
+        key = (int(guild_id), int(user_id))
+        saved = _RECENT_JOIN_CONTEXT.get(key)
+        if not saved:
+            return {}
+        saved_at, context = saved
+        if time.monotonic() - float(saved_at) > int(max_age_seconds):
+            _RECENT_JOIN_CONTEXT.pop(key, None)
+            return {}
+        return dict(context or {})
+    except Exception:
+        return {}
 
 
 def invite_meta(invite: discord.Invite) -> Dict[str, Any]:
@@ -439,6 +461,10 @@ async def persist_member_join_context(
         now_iso = _sync_iso_now()
         joined_at = member.joined_at.isoformat() if member.joined_at else now_iso
         context = await detect_join_entry_context(member)
+        try:
+            _RECENT_JOIN_CONTEXT[(int(member.guild.id), int(member.id))] = (time.monotonic(), dict(context or {}))
+        except Exception:
+            pass
         risk_payload = _build_risk_payload_from_profile(risk_profile, now_iso=now_iso)
 
         guild_member_patch = {
@@ -579,6 +605,7 @@ async def persist_member_join_context(
 __all__ = [
     "build_join_context",
     "detect_join_entry_context",
+    "get_recent_join_context",
     "invite_meta",
     "join_truth_quality",
     "persist_member_join_context",

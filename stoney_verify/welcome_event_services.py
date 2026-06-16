@@ -264,7 +264,7 @@ def _build_center_embed(guild: discord.Guild, cfg: Any, *, last_action: str | No
 
     embed.add_field(
         name="Placeholders",
-        value="`{member}` ping • `{username}` username • `{display_name}` nickname • `{server_name}` server • `{member_count}` count",
+        value="`{member}` ping • `{account_age}` account age • `{joined_at}` join time • `{rules_channel}` `{verify_channel}` `{support_channel}` • `{random_welcome_line}` • `{invite_code}` `{invite_link}` `{invite_owner}` `{invite_channel}`",
         inline=False,
     )
 
