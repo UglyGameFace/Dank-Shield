@@ -7,9 +7,9 @@ from typing import Any, Mapping, Optional
 import discord
 
 JOIN_TITLE = "Welcome, {username}!"
-JOIN_BODY = "Welcome to **{server_name}**, {member}! Head to the start-here channels to get settled."
+JOIN_BODY = "{random_welcome_line}\n\nStart here: {rules_channel} • Verify: {verify_channel} • Help: {support_channel}"
 LEAVE_TITLE = "{username} left"
-LEAVE_BODY = "{username} left **{server_name}**. Member count: {member_count}."
+LEAVE_BODY = "Members now: {member_count}."
 
 
 async def _send_ephemeral(interaction: discord.Interaction, content: str = "", **kwargs: Any) -> None:
@@ -196,8 +196,11 @@ def _format(text: str, member: discord.Member, *, cfg: Any | None = None) -> str
     guild = member.guild
     pairs = {
         "server_name": str(getattr(guild, "name", "this server") or "this server"),
-        "member": member.mention,
-        "user": member.mention,
+        "member": str(getattr(member, "display_name", "") or member),
+        "member_name": str(getattr(member, "display_name", "") or member),
+        "user": str(getattr(member, "display_name", "") or member),
+        "mention": member.mention,
+        "member_mention": member.mention,
         "username": str(member),
         "display_name": str(getattr(member, "display_name", "") or member),
         "member_count": str(getattr(guild, "member_count", "") or ""),
@@ -313,11 +316,55 @@ def _preview_line(cfg: Any, *, kind: str) -> str:
     return text[:300]
 
 
+
+def _compact_leave_description(title_text: str, body_text: str, member: discord.Member) -> str:
+    """Remove repetitive leave wording like:
+    Title: 'Mason left'
+    Body:  'Mason left Server. Member count: 28.'
+    """
+
+    try:
+        title_l = str(title_text or "").casefold()
+        body = str(body_text or "").strip()
+        if "left" not in title_l:
+            return body
+
+        names = [
+            str(getattr(member, "display_name", "") or "").strip(),
+            str(getattr(member, "name", "") or "").strip(),
+            str(member).strip(),
+        ]
+        names = [name for name in dict.fromkeys(names) if name]
+
+        lowered = body.casefold()
+        if not any(lowered.startswith(f"{name.casefold()} left") for name in names):
+            return body
+
+        match = re.search(r"member count\s*:\s*([0-9,]+)", body, flags=re.I)
+        if match:
+            return f"Members now: {match.group(1)}."
+
+        if "." in body:
+            rest = body.split(".", 1)[1].strip()
+            if rest:
+                return rest
+
+        return body
+    except Exception:
+        return str(body_text or "").strip()
+
+
 def _preview_embed(guild: discord.Guild, member: discord.Member, *, kind: str, cfg: Any | None = None) -> discord.Embed:
     title, body = _templates(cfg, kind=kind) if cfg is not None else ((LEAVE_TITLE, LEAVE_BODY) if kind == "leave" else (JOIN_TITLE, JOIN_BODY))
+    title_text = _format(title, member, cfg=cfg)[:256]
+    body_text = _format(body, member, cfg=cfg)[:4000]
+
+    if kind == "leave":
+        body_text = _compact_leave_description(title_text, body_text, member)[:4000]
+
     embed = discord.Embed(
-        title=_format(title, member, cfg=cfg)[:256],
-        description=_format(body, member, cfg=cfg)[:4000],
+        title=title_text,
+        description=body_text,
         color=discord.Color.dark_grey() if kind == "leave" else discord.Color.green(),
         timestamp=discord.utils.utcnow(),
     )
@@ -427,7 +474,7 @@ def _build_center_embed(guild: discord.Guild, cfg: Any, *, last_action: str | No
 
     embed.add_field(
         name="Placeholders",
-        value="`{member}` ping • `{account_age}` account age • `{joined_at}` join time • `{rules_channel}` `{verify_channel}` `{support_channel}` • `{random_welcome_line}` • `{invite_code}` `{invite_link}` `{invite_owner}` `{invite_channel}`",
+        value="`{member}` visible name • `{member_mention}` ping • `{account_age}` account age • `{joined_at}` join time • `{rules_channel}` `{verify_channel}` `{support_channel}` • `{random_welcome_line}` • `{invite_code}` `{invite_link}` `{invite_owner}` `{invite_channel}`",
         inline=False,
     )
 
@@ -888,7 +935,7 @@ class WelcomePlaceholderHelpButton(discord.ui.Button):
         embed.add_field(
             name="Member",
             value=(
-                "`{member}` pings the member\n"
+                "`{member}` visible display name\n`{member_mention}` pings the member\n"
                 "`{username}` full username\n"
                 "`{display_name}` server nickname\n"
                 "`{account_age}` Discord account age\n"

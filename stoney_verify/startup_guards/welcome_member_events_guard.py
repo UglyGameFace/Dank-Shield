@@ -328,8 +328,11 @@ def _format(text: str, member: discord.Member, *, cfg: Any | None = None, contex
     guild = member.guild
     replacements = {
         "server_name": str(getattr(guild, "name", "this server") or "this server"),
-        "member": member.mention,
-        "user": member.mention,
+        "member": str(getattr(member, "display_name", "") or member),
+        "member_name": str(getattr(member, "display_name", "") or member),
+        "user": str(getattr(member, "display_name", "") or member),
+        "mention": member.mention,
+        "member_mention": member.mention,
         "username": str(member),
         "display_name": str(getattr(member, "display_name", "") or member),
         "member_count": str(getattr(guild, "member_count", "") or ""),
@@ -347,10 +350,54 @@ def _format(text: str, member: discord.Member, *, cfg: Any | None = None, contex
     return out[:1900]
 
 
+
+def _compact_leave_description(title_text: str, body_text: str, member: discord.Member) -> str:
+    """Remove repetitive leave wording like:
+    Title: 'Mason left'
+    Body:  'Mason left Server. Member count: 28.'
+    """
+
+    try:
+        title_l = str(title_text or "").casefold()
+        body = str(body_text or "").strip()
+        if "left" not in title_l:
+            return body
+
+        names = [
+            str(getattr(member, "display_name", "") or "").strip(),
+            str(getattr(member, "name", "") or "").strip(),
+            str(member).strip(),
+        ]
+        names = [name for name in dict.fromkeys(names) if name]
+
+        lowered = body.casefold()
+        if not any(lowered.startswith(f"{name.casefold()} left") for name in names):
+            return body
+
+        match = re.search(r"member count\s*:\s*([0-9,]+)", body, flags=re.I)
+        if match:
+            return f"Members now: {match.group(1)}."
+
+        if "." in body:
+            rest = body.split(".", 1)[1].strip()
+            if rest:
+                return rest
+
+        return body
+    except Exception:
+        return str(body_text or "").strip()
+
+
 def _embed(title: str, body: str, member: discord.Member, *, goodbye: bool = False, cfg: Any | None = None, context: Mapping[str, Any] | None = None) -> discord.Embed:
+    title_text = _format(title, member, cfg=cfg, context=context)[:256]
+    body_text = _format(body, member, cfg=cfg, context=context)[:4000]
+
+    if goodbye:
+        body_text = _compact_leave_description(title_text, body_text, member)[:4000]
+
     embed = discord.Embed(
-        title=_format(title, member, cfg=cfg, context=context)[:256],
-        description=_format(body, member, cfg=cfg, context=context)[:4000],
+        title=title_text,
+        description=body_text,
         color=discord.Color.dark_grey() if goodbye else discord.Color.green(),
         timestamp=datetime.now(timezone.utc),
     )
@@ -373,7 +420,7 @@ async def _send_join(member: discord.Member) -> None:
         if not isinstance(channel, discord.TextChannel):
             return
         title = _cfg_str(cfg, "welcome_join_title", default="Welcome, {display_name}!")
-        body = _cfg_str(cfg, "welcome_join_body", default="Welcome to **{server_name}**, {member}! Head to the start-here channels to get settled.")
+        body = _cfg_str(cfg, "welcome_join_body", default="{random_welcome_line}\n\nStart here: {rules_channel} • Verify: {verify_channel} • Help: {support_channel}")
         context = await _recent_join_context(member)
         await channel.send(embed=_embed(title, body, member, cfg=cfg, context=context), allowed_mentions=discord.AllowedMentions(users=True, roles=False, everyone=False))
     except Exception as exc:
@@ -394,7 +441,7 @@ async def _send_leave(member: discord.Member) -> None:
         if not isinstance(channel, discord.TextChannel):
             return
         title = _cfg_str(cfg, "welcome_leave_title", default="{display_name} left")
-        body = _cfg_str(cfg, "welcome_leave_body", default="{display_name} left **{server_name}**. Member count: {member_count}.")
+        body = _cfg_str(cfg, "welcome_leave_body", default="Members now: {member_count}.")
         await channel.send(embed=_embed(title, body, member, goodbye=True, cfg=cfg, context=None), allowed_mentions=discord.AllowedMentions.none())
     except Exception as exc:
         try:
