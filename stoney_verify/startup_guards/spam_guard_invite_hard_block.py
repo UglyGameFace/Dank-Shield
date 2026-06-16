@@ -319,6 +319,20 @@ async def _modlog(guild: discord.Guild, message: discord.Message, codes: list[st
         pass
 
 
+
+async def _send_invite_splash(channel: discord.TextChannel, *, deleted: int = 1, source: str = "hard-block") -> None:
+    """Share the runtime Invite Shield splash from the fast hard-block listener."""
+
+    try:
+        from stoney_verify.startup_guards.discord_invite_blocker_runtime_guard import _send_invite_shield_splash
+        await _send_invite_shield_splash(channel, deleted=deleted, source=source)
+    except Exception as exc:
+        try:
+            _log(f"splash unavailable source={source}: {type(exc).__name__}: {exc}")
+        except Exception:
+            pass
+
+
 async def _hard_block_invite_message(message: discord.Message) -> None:
     try:
         guild = message.guild
@@ -424,6 +438,7 @@ async def _hard_block_invite_message(message: discord.Message) -> None:
 
         try:
             await message.delete(reason="Dank Shield Invite Shield: external Discord invite link")
+            await _send_invite_splash(message.channel, deleted=len(blocked), source="hard-block")
             await _modlog(guild, message, blocked, reason)
             _log(
                 "deleted external invite "
