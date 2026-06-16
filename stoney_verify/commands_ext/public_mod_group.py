@@ -74,6 +74,45 @@ def _safe_action_value(value: Any, default: str = "auto") -> str:
         return default
 
 
+def _actor_can_moderate_target(
+    *,
+    interaction: discord.Interaction,
+    target: discord.Member,
+    action: str,
+) -> tuple[bool, str]:
+    """Explicit command-level moderation safety.
+
+    This replaces global native Discord method monkey patches. It protects
+    public servers from lower/equal staff moderating higher staff through the bot.
+    """
+
+    guild = interaction.guild
+    actor = interaction.user if isinstance(interaction.user, discord.Member) else None
+    if guild is None or actor is None:
+        return False, "Invalid staff context."
+
+    try:
+        if int(target.id) == int(actor.id):
+            return False, f"You can’t {action} yourself."
+        if int(target.id) == int(getattr(guild, "owner_id", 0) or 0):
+            return False, f"You can’t {action} the server owner."
+        if int(actor.id) == int(getattr(guild, "owner_id", 0) or 0):
+            return True, ""
+    except Exception:
+        pass
+
+    try:
+        if actor.guild_permissions.administrator:
+            return True, ""
+        if actor.top_role <= target.top_role:
+            return False, f"You can’t {action} that member because they have an equal or higher role than you."
+    except Exception:
+        return False, "Could not verify staff role hierarchy."
+
+    return True, ""
+
+
+
 @mod_group.command(name="kick", description="Kick a member from the server.")
 @app_commands.describe(
     member="Mention, ID, username, or display name of the member to kick",
@@ -101,6 +140,10 @@ async def mod_kick_group_command(
     me = guild.me
     if not me.guild_permissions.kick_members:
         return await safe_followup(interaction, "❌ I lack **Kick Members** permission.", ephemeral=True)
+
+    ok, why = _actor_can_moderate_target(interaction=interaction, target=target, action="kick")
+    if not ok:
+        return await safe_followup(interaction, f"❌ {why}", ephemeral=True)
 
     try:
         if int(target.id) == int(interaction.user.id):
@@ -170,6 +213,10 @@ async def mod_timeout_group_command(
     me = guild.me
     if not me.guild_permissions.moderate_members:
         return await safe_followup(interaction, "❌ I lack **Moderate Members** permission.", ephemeral=True)
+
+    ok, why = _actor_can_moderate_target(interaction=interaction, target=target, action="timeout")
+    if not ok:
+        return await safe_followup(interaction, f"❌ {why}", ephemeral=True)
 
     mins = max(1, min(60 * 24 * 28, int(minutes or MOD_TIMEOUT_MINUTES)))
 
@@ -315,6 +362,11 @@ async def mod_ban_unban_group_command(
                 return await safe_followup(interaction, "❌ I can’t ban myself.", ephemeral=True)
         except Exception:
             pass
+
+        if target_member is not None:
+            ok, why = _actor_can_moderate_target(interaction=interaction, target=target_member, action="ban")
+            if not ok:
+                return await safe_followup(interaction, f"❌ {why}", ephemeral=True)
 
         try:
             if target_member is not None and me.top_role <= target_member.top_role and not me.guild_permissions.administrator:

@@ -237,56 +237,18 @@ async def _block_or_run(action: str, guild: discord.Guild, target: Any, reason: 
 
 
 def apply() -> bool:
-    global _PATCHED, _ORIGINAL_GUILD_KICK, _ORIGINAL_MEMBER_KICK, _ORIGINAL_GUILD_BAN, _ORIGINAL_MEMBER_BAN, _ORIGINAL_MEMBER_TIMEOUT
+    """Retired global monkey patch.
+
+    Role hierarchy protection now belongs inside explicit moderation command
+    handlers. Do not patch discord.Guild/discord.Member kick/ban/timeout globally.
+    """
+
+    global _PATCHED
     if _PATCHED:
         return True
-    try:
-        original = getattr(discord.Guild, "kick", None)
-        if callable(original) and not getattr(original, "_role_hierarchy_wrapped", False):
-            async def guild_kick(self: discord.Guild, user: Any, *, reason: Optional[str] = None) -> Any:
-                return await _block_or_run("kick", self, user, reason, lambda: original(self, user, reason=reason))
-            setattr(guild_kick, "_role_hierarchy_wrapped", True)
-            _ORIGINAL_GUILD_KICK = original
-            discord.Guild.kick = guild_kick  # type: ignore[method-assign]
-
-        original = getattr(discord.Member, "kick", None)
-        if callable(original) and not getattr(original, "_role_hierarchy_wrapped", False):
-            async def member_kick(self: discord.Member, *, reason: Optional[str] = None) -> Any:
-                return await _block_or_run("kick", self.guild, self, reason, lambda: original(self, reason=reason))
-            setattr(member_kick, "_role_hierarchy_wrapped", True)
-            _ORIGINAL_MEMBER_KICK = original
-            discord.Member.kick = member_kick  # type: ignore[method-assign]
-
-        original = getattr(discord.Guild, "ban", None)
-        if callable(original) and not getattr(original, "_role_hierarchy_wrapped", False):
-            async def guild_ban(self: discord.Guild, user: Any, *, reason: Optional[str] = None, **kwargs: Any) -> Any:
-                return await _block_or_run("ban", self, user, reason, lambda: original(self, user, reason=reason, **kwargs))
-            setattr(guild_ban, "_role_hierarchy_wrapped", True)
-            _ORIGINAL_GUILD_BAN = original
-            discord.Guild.ban = guild_ban  # type: ignore[method-assign]
-
-        original = getattr(discord.Member, "ban", None)
-        if callable(original) and not getattr(original, "_role_hierarchy_wrapped", False):
-            async def member_ban(self: discord.Member, *, reason: Optional[str] = None, **kwargs: Any) -> Any:
-                return await _block_or_run("ban", self.guild, self, reason, lambda: original(self, reason=reason, **kwargs))
-            setattr(member_ban, "_role_hierarchy_wrapped", True)
-            _ORIGINAL_MEMBER_BAN = original
-            discord.Member.ban = member_ban  # type: ignore[method-assign]
-
-        original = getattr(discord.Member, "timeout", None)
-        if callable(original) and not getattr(original, "_role_hierarchy_wrapped", False):
-            async def member_timeout(self: discord.Member, *args: Any, reason: Optional[str] = None, **kwargs: Any) -> Any:
-                return await _block_or_run("timeout", self.guild, self, reason, lambda: original(self, *args, reason=reason, **kwargs))
-            setattr(member_timeout, "_role_hierarchy_wrapped", True)
-            _ORIGINAL_MEMBER_TIMEOUT = original
-            discord.Member.timeout = member_timeout  # type: ignore[method-assign]
-
-        _PATCHED = True
-        _log("active; privileged and selected safe targets notify actor and require approved hierarchy for kick/ban/timeout")
-        return True
-    except Exception as exc:
-        _warn(f"failed: {exc!r}")
-        return False
+    _PATCHED = True
+    _log("retired; no Discord native moderation methods are monkey-patched")
+    return True
 
 
 apply()

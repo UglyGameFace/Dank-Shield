@@ -291,21 +291,19 @@ def _patch_member_timeout() -> None:
 
 
 def apply() -> bool:
+    """Retired global monkey patch.
+
+    Staff moderation safety now belongs inside explicit command handlers.
+    Patching discord.Guild/discord.Member native methods globally caused
+    kick/ban/timeout wrapper conflicts in production.
+    """
+
     global _PATCHED
     if _PATCHED:
         return True
-    try:
-        _patch_guild_kick()
-        _patch_member_kick()
-        _patch_guild_ban()
-        _patch_member_ban()
-        _patch_member_timeout()
-        _PATCHED = True
-        _log("active; staff targets are protected from kick/ban/timeout unless the actor outranks them")
-        return True
-    except Exception as exc:
-        _warn(f"failed: {exc!r}")
-        return False
+    _PATCHED = True
+    _log("retired; no Discord native moderation methods are monkey-patched")
+    return True
 
 
 apply()
