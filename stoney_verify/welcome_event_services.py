@@ -2,7 +2,7 @@ from __future__ import annotations
 
 """Owned setup service for optional join and leave messages."""
 
-from typing import Any, Optional
+from typing import Any, Mapping, Optional
 
 import discord
 
@@ -84,15 +84,131 @@ def _templates(cfg: Any, *, kind: str) -> tuple[str, str]:
     return _cfg_str(cfg, "welcome_join_title", JOIN_TITLE), _cfg_str(cfg, "welcome_join_body", JOIN_BODY)
 
 
-def _format(text: str, member: discord.Member) -> str:
+def _clean_channel_name(value: Any) -> str:
+    return str(value or "").lower().replace("_", "-").replace(" ", "-")
+
+
+def _channel_by_name(guild: discord.Guild, *tokens: str) -> Optional[discord.TextChannel]:
+    wanted = tuple(_clean_channel_name(token) for token in tokens if str(token or "").strip())
+    if not wanted:
+        return None
+    for channel in list(getattr(guild, "text_channels", []) or []):
+        if not isinstance(channel, discord.TextChannel):
+            continue
+        name = _clean_channel_name(getattr(channel, "name", ""))
+        if any(token in name for token in wanted):
+            return channel
+    return None
+
+
+def _channel_mention(guild: discord.Guild, cfg: Any, *, keys: tuple[str, ...], names: tuple[str, ...]) -> str:
+    for key in keys:
+        channel = guild.get_channel(_cfg_int(cfg, key, 0))
+        if isinstance(channel, discord.TextChannel):
+            return channel.mention
+    channel = _channel_by_name(guild, *names)
+    return channel.mention if isinstance(channel, discord.TextChannel) else "not set"
+
+
+def _age_text(dt: Any) -> str:
+    try:
+        if dt is None:
+            return "unknown"
+        now = discord.utils.utcnow()
+        if getattr(dt, "tzinfo", None) is None:
+            dt = dt.replace(tzinfo=now.tzinfo)
+        days = max(0, int((now - dt).total_seconds()) // 86400)
+        if days >= 365:
+            years = days // 365
+            months = (days % 365) // 30
+            return f"{years}y {months}mo" if months else f"{years}y"
+        if days >= 30:
+            months = days // 30
+            rem = days % 30
+            return f"{months}mo {rem}d" if rem else f"{months}mo"
+        if days >= 1:
+            return f"{days}d"
+        return "today"
+    except Exception:
+        return "unknown"
+
+
+def _discord_time(dt: Any) -> str:
+    try:
+        if dt is None:
+            return "unknown"
+        unix = int(dt.timestamp())
+        return f"<t:{unix}:F> (<t:{unix}:R>)"
+    except Exception:
+        return "unknown"
+
+
+def _server_profile(guild: discord.Guild) -> str:
+    parts = [str(getattr(guild, "name", "") or "")]
+    try:
+        parts.extend(str(c.name or "") for c in getattr(guild, "categories", []) or [])
+        parts.extend(str(c.name or "") for c in getattr(guild, "text_channels", []) or [])
+    except Exception:
+        pass
+
+    haystack = " ".join(parts).lower()
+
+    if any(word in haystack for word in ("game", "gaming", "clips", "lobby", "ranked", "xbox", "playstation", "cod", "minecraft")):
+        return "gaming"
+    if any(word in haystack for word in ("support", "ticket", "help", "docs", "faq")):
+        return "support"
+    if any(word in haystack for word in ("class", "study", "school", "course", "learn", "lesson")):
+        return "education"
+    if any(word in haystack for word in ("shop", "store", "client", "business", "orders", "sales")):
+        return "business"
+    if any(word in haystack for word in ("stream", "creator", "youtube", "twitch", "media", "art")):
+        return "creator"
+    return "community"
+
+
+def _random_line_preview(guild: discord.Guild) -> str:
+    profile = _server_profile(guild)
+    lines = {
+        "gaming": "Welcome in — get verified, find your channels, and enjoy the games.",
+        "support": "Welcome in — check the getting-started info and open a ticket if you need help.",
+        "education": "Welcome in — start with the rules, then check the learning channels.",
+        "business": "Welcome — please review the rules and start-here information before posting.",
+        "creator": "Welcome in — check the rules, introduce yourself, and explore the creator channels.",
+        "community": "Welcome in — start with the rules, verify if needed, and enjoy the community.",
+    }
+    return lines.get(profile, lines["community"])
+
+
+def _preview_invite_values() -> dict[str, str]:
+    return {
+        "invite_code": "real join only",
+        "invite_link": "real join only",
+        "invite_source": "real join only",
+        "invite_channel": "real join only",
+        "invite_owner": "real join only",
+        "invite_inviter": "real join only",
+        "invite_owner_id": "real join only",
+        "invite_inviter_id": "real join only",
+    }
+
+
+def _format(text: str, member: discord.Member, *, cfg: Any | None = None) -> str:
     guild = member.guild
     pairs = {
         "server_name": str(getattr(guild, "name", "this server") or "this server"),
         "member": member.mention,
+        "user": member.mention,
         "username": str(member),
         "display_name": str(getattr(member, "display_name", "") or member),
         "member_count": str(getattr(guild, "member_count", "") or ""),
+        "account_age": _age_text(getattr(member, "created_at", None)),
+        "joined_at": _discord_time(getattr(member, "joined_at", None)),
+        "rules_channel": _channel_mention(guild, cfg, keys=("rules_channel_id", "rules_id"), names=("rules",)) if cfg is not None else "not set",
+        "verify_channel": _channel_mention(guild, cfg, keys=("verify_channel_id", "verification_channel_id", "verify_id"), names=("verification", "verify")) if cfg is not None else "not set",
+        "support_channel": _channel_mention(guild, cfg, keys=("support_channel_id", "ticket_channel_id", "tickets_channel_id", "support_id"), names=("support", "ticket", "help")) if cfg is not None else "not set",
+        "random_welcome_line": _random_line_preview(guild),
     }
+    pairs.update(_preview_invite_values())
     out = str(text or "")
     for key, value in pairs.items():
         out = out.replace("{" + key + "}", value)
@@ -154,8 +270,8 @@ def _preview_line(cfg: Any, *, kind: str) -> str:
 def _preview_embed(guild: discord.Guild, member: discord.Member, *, kind: str, cfg: Any | None = None) -> discord.Embed:
     title, body = _templates(cfg, kind=kind) if cfg is not None else ((LEAVE_TITLE, LEAVE_BODY) if kind == "leave" else (JOIN_TITLE, JOIN_BODY))
     embed = discord.Embed(
-        title=_format(title, member)[:256],
-        description=_format(body, member)[:4000],
+        title=_format(title, member, cfg=cfg)[:256],
+        description=_format(body, member, cfg=cfg)[:4000],
         color=discord.Color.dark_grey() if kind == "leave" else discord.Color.green(),
         timestamp=discord.utils.utcnow(),
     )
@@ -378,6 +494,99 @@ async def _set_enabled(interaction: discord.Interaction, *, join: Optional[bool]
     await _refresh_center(interaction, last_action="✅ " + " • ".join(actions))
 
 
+def _preset_payload(profile: str) -> dict[str, str]:
+    profile = str(profile or "community").strip().lower()
+
+    presets = {
+        "community": {
+            "join_title": "Welcome to {server_name}, {display_name}! 👋",
+            "join_body": "{random_welcome_line}\n\nStart here:\n• Read {rules_channel}\n• Verify in {verify_channel} if required\n• Need help? Go to {support_channel}\n\nAccount age: {account_age}\nInvite: {invite_source}",
+            "leave_title": "{display_name} left",
+            "leave_body": "{display_name} left {server_name}. Member count: {member_count}.",
+        },
+        "gaming": {
+            "join_title": "Welcome to {server_name}, {display_name}! 🎮",
+            "join_body": "{random_welcome_line}\n\nQuick start:\n• Read {rules_channel}\n• Verify in {verify_channel}\n• Need help? Use {support_channel}\n\nInvite: {invite_owner} • {invite_link}",
+            "leave_title": "{display_name} left the lobby",
+            "leave_body": "{display_name} left {server_name}. Member count: {member_count}.",
+        },
+        "support": {
+            "join_title": "Welcome to {server_name}, {display_name}",
+            "join_body": "Welcome in, {member}.\n\nPlease review {rules_channel}, then use {support_channel} if you need help.\n\nJoined: {joined_at}\nInvite: {invite_source}",
+            "leave_title": "{display_name} left",
+            "leave_body": "{display_name} left {server_name}. Member count: {member_count}.",
+        },
+        "creator": {
+            "join_title": "Welcome, {display_name}! ✨",
+            "join_body": "Welcome to {server_name}, {member}.\n\nCheck {rules_channel}, introduce yourself when ready, and use {support_channel} if you need help.\n\n{random_welcome_line}",
+            "leave_title": "{display_name} left",
+            "leave_body": "{display_name} left {server_name}. Member count: {member_count}.",
+        },
+        "business": {
+            "join_title": "Welcome to {server_name}, {display_name}",
+            "join_body": "Welcome, {member}.\n\nPlease review {rules_channel} and use {support_channel} if you need assistance.\n\nJoined: {joined_at}",
+            "leave_title": "{display_name} left",
+            "leave_body": "{display_name} left {server_name}. Member count: {member_count}.",
+        },
+        "education": {
+            "join_title": "Welcome to {server_name}, {display_name}",
+            "join_body": "Welcome, {member}.\n\nStart with {rules_channel}, then check the learning channels. Use {support_channel} if you need help.\n\n{random_welcome_line}",
+            "leave_title": "{display_name} left",
+            "leave_body": "{display_name} left {server_name}. Member count: {member_count}.",
+        },
+    }
+
+    return dict(presets.get(profile) or presets["community"])
+
+
+def _preset_options(guild: discord.Guild) -> list[discord.SelectOption]:
+    recommended = _server_profile(guild)
+    labels = [
+        ("recommended", f"Recommended: {recommended.title()}", "Based on server/category/channel names."),
+        ("community", "General Community", "Neutral default for most servers."),
+        ("gaming", "Gaming / Lobby", "Friendly gaming community tone."),
+        ("support", "Support Server", "Clear support/helpdesk tone."),
+        ("creator", "Creator / Media", "Creator community tone."),
+        ("business", "Business / Client", "Professional and simple."),
+        ("education", "Education / Study", "Learning-focused community."),
+    ]
+    return [
+        discord.SelectOption(label=label[:100], value=value, description=description[:100])
+        for value, label, description in labels
+    ]
+
+
+async def _apply_template_preset(interaction: discord.Interaction, preset: str) -> None:
+    from stoney_verify.commands_ext.public_setup_group import _require_setup_permission, _upsert_config
+    from stoney_verify.guild_config import invalidate_guild_config
+
+    if not await _require_setup_permission(interaction):
+        return
+
+    guild = interaction.guild
+    if guild is None:
+        return await _send_ephemeral(interaction, "This must be used inside a server.")
+
+    selected = str(preset or "community").strip().lower()
+    actual = _server_profile(guild) if selected == "recommended" else selected
+    payload = _preset_payload(actual)
+
+    await _ack_update(interaction)
+
+    patch = {
+        "welcome_join_title": payload["join_title"],
+        "welcome_join_body": payload["join_body"],
+        "welcome_leave_title": payload["leave_title"],
+        "welcome_leave_body": payload["leave_body"],
+        "welcome_events_updated_by_id": str(int(interaction.user.id)),
+        "welcome_template_preset": actual,
+    }
+
+    await _upsert_config(int(guild.id), patch)
+    invalidate_guild_config(int(guild.id))
+    await _refresh_center(interaction, last_action=f"✅ Applied **{actual.title()}** welcome template preset. Channels and ON/OFF settings were not changed.")
+
+
 async def _save_template(interaction: discord.Interaction, *, kind: str, title: str, body: str) -> None:
     from stoney_verify.commands_ext.public_setup_group import _require_setup_permission, _upsert_config
     from stoney_verify.guild_config import invalidate_guild_config
@@ -556,6 +765,115 @@ class WelcomePreviewButton(discord.ui.Button):
         )
 
 
+class WelcomePresetSelect(discord.ui.Select):
+    def __init__(self, *, guild: discord.Guild) -> None:
+        super().__init__(
+            placeholder="Choose a safe starter template...",
+            min_values=1,
+            max_values=1,
+            options=_preset_options(guild),
+            custom_id="dank_setup_welcome_events:preset_select",
+            row=0,
+        )
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        value = (self.values or ["community"])[0]
+        await _apply_template_preset(interaction, value)
+
+
+class WelcomePresetPickerView(discord.ui.View):
+    def __init__(self, *, guild: discord.Guild) -> None:
+        super().__init__(timeout=180)
+        self.add_item(WelcomePresetSelect(guild=guild))
+
+
+class WelcomeTemplatePresetsButton(discord.ui.Button):
+    def __init__(self) -> None:
+        super().__init__(
+            label="Template Presets",
+            emoji="🧩",
+            style=discord.ButtonStyle.secondary,
+            custom_id="dank_setup_welcome_events:template_presets",
+            row=3,
+        )
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        guild = interaction.guild
+        if guild is None:
+            return await _send_ephemeral(interaction, "This must be used inside a server.")
+
+        recommended = _server_profile(guild).title()
+        await interaction.response.send_message(
+            content=(
+                f"🧩 Pick a safe starter template. Recommended for this server: **{recommended}**.\n"
+                "This only changes the join/leave text. It does not change channels or ON/OFF toggles."
+            ),
+            view=WelcomePresetPickerView(guild=guild),
+            ephemeral=True,
+            allowed_mentions=discord.AllowedMentions.none(),
+        )
+
+
+class WelcomePlaceholderHelpButton(discord.ui.Button):
+    def __init__(self) -> None:
+        super().__init__(
+            label="Placeholder Help",
+            emoji="❔",
+            style=discord.ButtonStyle.secondary,
+            custom_id="dank_setup_welcome_events:placeholder_help",
+            row=3,
+        )
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        embed = discord.Embed(
+            title="Welcome Placeholder Help",
+            description=(
+                "Use these inside Join/Leave titles and body text.\n"
+                "Invite placeholders are exact only on real joins when Discord invite tracking is available."
+            ),
+            color=discord.Color.blurple(),
+        )
+        embed.add_field(
+            name="Member",
+            value=(
+                "`{member}` pings the member\n"
+                "`{username}` full username\n"
+                "`{display_name}` server nickname\n"
+                "`{account_age}` Discord account age\n"
+                "`{joined_at}` join timestamp"
+            ),
+            inline=False,
+        )
+        embed.add_field(
+            name="Server Channels",
+            value=(
+                "`{rules_channel}` rules channel\n"
+                "`{verify_channel}` verification channel\n"
+                "`{support_channel}` support/ticket channel\n"
+                "`{server_name}` server name\n"
+                "`{member_count}` member count"
+            ),
+            inline=False,
+        )
+        embed.add_field(
+            name="Invite Attribution",
+            value=(
+                "`{invite_code}` invite code\n"
+                "`{invite_link}` invite URL\n"
+                "`{invite_owner}` invite creator when known\n"
+                "`{invite_channel}` channel the invite was created for\n"
+                "`{invite_source}` source + confidence when known"
+            ),
+            inline=False,
+        )
+        embed.add_field(
+            name="Smart Starter Line",
+            value="`{random_welcome_line}` uses a neutral line picked from safe server categories like community, gaming, support, creator, business, or education.",
+            inline=False,
+        )
+        await _send_ephemeral(interaction, embed=embed, allowed_mentions=discord.AllowedMentions.none())
+
+
 class WelcomeDisableBothButton(discord.ui.Button):
     def __init__(self, *, disabled: bool) -> None:
         super().__init__(
@@ -616,6 +934,8 @@ class WelcomeEventsCenterView(discord.ui.View):
 
         self.add_item(WelcomePreviewButton(kind="join"))
         self.add_item(WelcomePreviewButton(kind="leave"))
+        self.add_item(WelcomeTemplatePresetsButton())
+        self.add_item(WelcomePlaceholderHelpButton())
 
         self.add_item(WelcomeDisableBothButton(disabled=not (join_enabled or leave_enabled)))
         self.add_item(WelcomeRefreshButton())
