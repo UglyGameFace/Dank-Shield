@@ -189,6 +189,162 @@ async def _resolve_text_channel(guild: discord.Guild, value: Any) -> discord.Tex
     return channel if isinstance(channel, discord.TextChannel) else None
 
 
+def _cfg_id(center: Any, cfg: Any, *keys: str) -> int:
+    for key in keys:
+        try:
+            raw = center._cfg_value(cfg, key, None)
+            cid = _channel_id_from_text(raw)
+            if cid > 0:
+                return cid
+        except Exception:
+            continue
+    return 0
+
+
+def _channel_perm_status(channel: discord.TextChannel) -> str:
+    try:
+        me = channel.guild.me
+        if me is None:
+            return "bot member unknown"
+        perms = channel.permissions_for(me)
+        read = "✅" if perms.read_messages else "❌"
+        history = "✅" if perms.read_message_history else "❌"
+        manage = "✅" if perms.manage_messages else "❌"
+        active = "✅" if (perms.read_messages and perms.read_message_history and perms.manage_messages) else "⚠️"
+        return f"Active {active} • View {read} • History {history} • Manage Messages {manage}"
+    except Exception:
+        return "permission check unavailable"
+
+
+async def _configured_command_channel(guild: discord.Guild, cfg: Any, center: Any) -> discord.TextChannel | None:
+    channel_id = _cfg_id(
+        center,
+        cfg,
+        "invite_scan_channel_id",
+        "automod_invite_scan_channel_id",
+        "staff_command_channel_id",
+        "staff_commands_channel_id",
+        "command_channel_id",
+        "commands_channel_id",
+        "bot_command_channel_id",
+        "bot_commands_channel_id",
+        "setup_command_channel_id",
+        "setup_commands_channel_id",
+        "staff_channel_id",
+    )
+    if channel_id <= 0:
+        return None
+    channel = guild.get_channel(channel_id)
+    if channel is None:
+        try:
+            channel = await guild.fetch_channel(channel_id)
+        except Exception:
+            channel = None
+    return channel if isinstance(channel, discord.TextChannel) else None
+
+
+async def _active_invite_scan_channel(interaction: discord.Interaction) -> discord.TextChannel | None:
+    from stoney_verify.commands_ext import public_protection_center as center
+
+    guild = interaction.guild
+    if guild is None:
+        return None
+
+    cfg = await center.get_guild_config(int(guild.id), refresh=True)
+    configured = await _configured_command_channel(guild, cfg, center)
+    if configured is not None:
+        return configured
+
+    channel = getattr(interaction, "channel", None)
+    if isinstance(channel, discord.TextChannel):
+        return channel
+
+    channel_id = _safe_int(getattr(interaction, "channel_id", 0), 0)
+    if channel_id > 0:
+        channel = guild.get_channel(channel_id)
+        if channel is None:
+            try:
+                channel = await guild.fetch_channel(channel_id)
+            except Exception:
+                channel = None
+        if isinstance(channel, discord.TextChannel):
+            return channel
+
+    return None
+
+
+async def _save_invite_scan_channel(interaction: discord.Interaction, channel: discord.TextChannel) -> None:
+    from stoney_verify.commands_ext import public_protection_center as center
+
+    guild = interaction.guild
+    if guild is None:
+        return
+
+    await center._save_automod(
+        int(guild.id),
+        {
+            "automod_invite_scan_channel_id": str(int(channel.id)),
+            "invite_scan_channel_id": str(int(channel.id)),
+            "automod_updated_by_id": str(int(interaction.user.id)),
+        },
+    )
+
+
+def _scan_channel_options(guild: discord.Guild, active_channel_id: int = 0) -> list[discord.SelectOption]:
+    rows = []
+    me = guild.me
+
+    for channel in list(getattr(guild, "text_channels", []) or []):
+        try:
+            if me is None:
+                can_view = True
+                can_history = True
+                can_manage = False
+            else:
+                perms = channel.permissions_for(me)
+                can_view = bool(perms.read_messages)
+                can_history = bool(perms.read_message_history)
+                can_manage = bool(perms.manage_messages)
+
+            if not can_view:
+                continue
+
+            score = 0
+            name_l = str(channel.name or "").lower()
+
+            if int(channel.id) == int(active_channel_id):
+                score += 1000
+            if any(token in name_l for token in ("staff", "command", "cmd", "mod", "log", "admin")):
+                score += 50
+            if can_history:
+                score += 10
+            if can_manage:
+                score += 10
+
+            label = f"#{channel.name}"[:100]
+            description = (
+                ("ACTIVE • " if int(channel.id) == int(active_channel_id) else "")
+                + f"history {'yes' if can_history else 'no'} • delete {'yes' if can_manage else 'no'}"
+            )[:100]
+
+            rows.append(
+                (
+                    score,
+                    channel.position,
+                    discord.SelectOption(
+                        label=label,
+                        value=str(int(channel.id)),
+                        description=description,
+                    ),
+                )
+            )
+        except Exception:
+            continue
+
+    rows.sort(key=lambda row: (-row[0], row[1]))
+    return [option for _score, _pos, option in rows[:25]]
+
+
 def _interaction_source_text_channel(interaction: discord.Interaction) -> discord.TextChannel | None:
     try:
         message = getattr(interaction, "message", None)
@@ -345,6 +501,23 @@ def _scan_note(prefix: str, result: dict[str, Any]) -> str:
     return note
 
 
+async def _active_scan_note(interaction: discord.Interaction) -> str:
+    from stoney_verify.commands_ext import public_protection_center as center
+
+    channel = await _active_invite_scan_channel(interaction)
+    if not isinstance(channel, discord.TextChannel):
+        return "⚠️ Active invite scan channel: not set. Use **Choose Scan Channel**."
+
+    try:
+        cfg = await center.get_guild_config(int(channel.guild.id), refresh=True)
+        configured = await _configured_command_channel(channel.guild, cfg, center)
+        source = "saved/configured" if configured and int(configured.id) == int(channel.id) else "current interaction"
+    except Exception:
+        source = "resolved"
+
+    return f"📍 Active invite scan channel: {channel.mention}\n`{_channel_perm_status(channel)}`\nSource: `{source}`"
+
+
 async def _set_invite_shield(interaction: discord.Interaction, *, enabled: bool, scan_current: bool = False) -> None:
     from stoney_verify.commands_ext import public_protection_center as center
     if not await center._require_setup_permission(interaction):
@@ -364,8 +537,11 @@ async def _set_invite_shield(interaction: discord.Interaction, *, enabled: bool,
     await center._save_automod(int(guild.id), updates)
     note = "✅ Invite Shield enabled. Normal links remain allowed." if enabled else "⚪ Invite Shield disabled."
     if enabled and scan_current:
-        result = await _clean_existing_invites(interaction.channel, limit=150)
-        note += "\n" + _scan_note("Auto-clean command channel", result)
+        channel = await _active_invite_scan_channel(interaction)
+        result = await _clean_existing_invites(channel, limit=150)
+        prefix = f"Invite scan {channel.mention}" if isinstance(channel, discord.TextChannel) else "Invite scan active channel"
+        note += "\n" + _scan_note(prefix, result)
+    note += "\n" + await _active_scan_note(interaction)
     await _refresh_card(center, interaction, note=note)
 
 
@@ -376,6 +552,93 @@ class InviteShieldToggle(discord.ui.Button):
 
     async def callback(self, interaction: discord.Interaction) -> None:
         await _set_invite_shield(interaction, enabled=not self.enabled, scan_current=not self.enabled)
+
+
+class InviteScanChannelSelect(discord.ui.Select):
+    def __init__(self, *, guild: discord.Guild, active_channel_id: int = 0) -> None:
+        options = _scan_channel_options(guild, active_channel_id)
+        if not options:
+            options = [
+                discord.SelectOption(
+                    label="No visible text channels",
+                    value="0",
+                    description="Give Dank Shield access to the staff command channel.",
+                )
+            ]
+        super().__init__(
+            placeholder="Choose the active invite scan channel...",
+            min_values=1,
+            max_values=1,
+            options=options,
+            custom_id="dank_protection:invite_scan_channel_select",
+        )
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        from stoney_verify.commands_ext import public_protection_center as center
+
+        if not await center._require_setup_permission(interaction):
+            return
+
+        guild = interaction.guild
+        if guild is None:
+            return await center._send_ephemeral(interaction, "❌ This must be used inside a server.")
+
+        channel_id = _safe_int((self.values or ["0"])[0], 0)
+        channel = guild.get_channel(channel_id)
+        if channel is None and channel_id > 0:
+            try:
+                channel = await guild.fetch_channel(channel_id)
+            except Exception:
+                channel = None
+
+        if not isinstance(channel, discord.TextChannel):
+            return await center._send_ephemeral(
+                interaction,
+                "❌ That channel could not be selected. Use the ID fallback if it is hidden from the picker.",
+            )
+
+        await _save_invite_scan_channel(interaction, channel)
+        note = f"✅ Active invite scan channel set to {channel.mention}.\n`{_channel_perm_status(channel)}`"
+        await _refresh_card(center, interaction, note=note)
+
+
+class InviteScanChannelPickerView(discord.ui.View):
+    def __init__(self, *, guild: discord.Guild, active_channel_id: int = 0) -> None:
+        super().__init__(timeout=180)
+        self.add_item(InviteScanChannelSelect(guild=guild, active_channel_id=active_channel_id))
+
+
+class ChooseInviteScanChannel(discord.ui.Button):
+    def __init__(self) -> None:
+        super().__init__(
+            label="Choose Scan Channel",
+            emoji="🎯",
+            style=discord.ButtonStyle.primary,
+            custom_id="dank_protection:choose_invite_scan_channel",
+            row=3,
+        )
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        from stoney_verify.commands_ext import public_protection_center as center
+
+        if not await center._require_setup_permission(interaction):
+            return
+
+        guild = interaction.guild
+        if guild is None:
+            return await center._send_ephemeral(interaction, "❌ This must be used inside a server.")
+
+        active = await _active_invite_scan_channel(interaction)
+        active_id = int(active.id) if isinstance(active, discord.TextChannel) else 0
+        await interaction.response.send_message(
+            content=(
+                "🎯 Choose the active channel for Invite Shield scans.\n"
+                "This picker is built by Dank Shield from channels the bot can see, so private staff channels can appear if Dank Shield has access."
+            ),
+            view=InviteScanChannelPickerView(guild=guild, active_channel_id=active_id),
+            ephemeral=True,
+            allowed_mentions=discord.AllowedMentions.none(),
+        )
 
 
 class CleanCurrentChannelInvites(discord.ui.Button):
@@ -390,10 +653,10 @@ class CleanCurrentChannelInvites(discord.ui.Button):
         if channel is None:
             return await _refresh_card(center, interaction, note="⚠️ I could not resolve the text channel for this panel. Use **Clean Selected Channel** and paste the target channel ID.")
         result = await _clean_existing_invites(channel, limit=200)
-        await _refresh_card(center, interaction, note=_scan_note(f"🧹 Clean {channel.mention}", result))
+        await _refresh_card(center, interaction, note=_scan_note(f"🔍 Invite scan {channel.mention}", result))
 
 
-class TargetChannelCleanupModal(discord.ui.Modal, title="Clean Invite Links in Channel"):
+class TargetChannelCleanupModal(discord.ui.Modal, title="Scan Invite Links in Channel"):
     def __init__(self) -> None:
         super().__init__(timeout=300)
         self.channel_id = discord.ui.TextInput(
@@ -424,12 +687,12 @@ class TargetChannelCleanupModal(discord.ui.Modal, title="Clean Invite Links in C
             return await _refresh_card(center, interaction, note="⚠️ I could not find that text channel. Paste a channel mention like `<#123>` or the raw channel ID.")
         limit = max(1, min(_safe_int(self.limit.value, 200), 250))
         result = await _clean_existing_invites(channel, limit=limit)
-        await _refresh_card(center, interaction, note=_scan_note(f"🧹 Clean {channel.mention}", result))
+        await _refresh_card(center, interaction, note=_scan_note(f"🔍 Invite scan {channel.mention}", result))
 
 
 class CleanTargetChannelInvites(discord.ui.Button):
     def __init__(self) -> None:
-        super().__init__(label="Clean Selected Channel", emoji="🎯", style=discord.ButtonStyle.primary, custom_id="dank_protection:clean_target_channel_invites", row=3)
+        super().__init__(label="Scan by ID / Mention", emoji="🆔", style=discord.ButtonStyle.secondary, custom_id="dank_protection:scan_invite_channel_by_id", row=4)
 
     async def callback(self, interaction: discord.Interaction) -> None:
         from stoney_verify.commands_ext import public_protection_center as center
@@ -461,7 +724,10 @@ def _patch_view() -> bool:
                     "dank_protection:invite_shield_toggle",
                     "dank_protection:clean_existing_invites",
                     "dank_protection:clean_current_channel_invites",
+                    "dank_protection:scan_active_invite_channel",
                     "dank_protection:clean_target_channel_invites",
+                    "dank_protection:scan_invite_channel_by_id",
+                    "dank_protection:choose_invite_scan_channel",
                 }:
                     try:
                         self.remove_item(child)
@@ -469,6 +735,7 @@ def _patch_view() -> bool:
                         pass
             try:
                 self.add_item(InviteShieldToggle(enabled))
+                self.add_item(ChooseInviteScanChannel())
                 self.add_item(CleanCurrentChannelInvites())
                 self.add_item(CleanTargetChannelInvites())
             except Exception:
