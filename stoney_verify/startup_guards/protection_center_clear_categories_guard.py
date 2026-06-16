@@ -117,17 +117,45 @@ def _replace_help_fields(embed: discord.Embed) -> discord.Embed:
     return embed
 
 
-def _clarify_buttons(view: Any) -> None:
+def _guard_protection_state(cfg: Any = None, spam: dict[str, Any] | None = None) -> str:
+    try:
+        from stoney_verify.commands_ext import public_protection_center as center
+        return str(center._protection_state(cfg, dict(spam or {})))
+    except Exception:
+        return "custom"
+
+
+def _clarify_buttons(view: Any, *, cfg: Any = None, spam: dict[str, Any] | None = None) -> None:
+    state = _guard_protection_state(cfg, spam)
+
     for child in list(getattr(view, "children", []) or []):
         custom_id = str(getattr(child, "custom_id", "") or "")
         if custom_id == "dank_protection:safe":
-            _set_button(child, label="Safe Defaults", emoji="🟢", style=discord.ButtonStyle.success, row=0)
+            _set_button(
+                child,
+                label=f"Safe Defaults: {'ON' if state == 'safe' else 'OFF'}",
+                emoji="🟢",
+                style=discord.ButtonStyle.success if state == "safe" else discord.ButtonStyle.secondary,
+                row=0,
+            )
         elif custom_id == "dank_protection:strict":
-            _set_button(child, label="Strict Mode", emoji="🔒", style=discord.ButtonStyle.primary, row=0)
+            _set_button(
+                child,
+                label=f"Strict Mode: {'ON' if state == 'strict' else 'OFF'}",
+                emoji="🔒",
+                style=discord.ButtonStyle.success if state == "strict" else discord.ButtonStyle.secondary,
+                row=0,
+            )
         elif custom_id == "dank_protection:off":
-            _set_button(child, label="Turn Off", emoji="⏸️", style=discord.ButtonStyle.secondary, row=0)
+            _set_button(
+                child,
+                label="Protection: OFF" if state == "off" else "Turn Off",
+                emoji="⏸️",
+                style=discord.ButtonStyle.success if state == "off" else discord.ButtonStyle.danger,
+                row=0,
+            )
         elif custom_id == "dank_protection:edit_spamguard":
-            _set_button(child, label="Spam Guard", emoji="🛡️", style=discord.ButtonStyle.primary, row=1)
+            _set_button(child, label="Spam Guard Actions", emoji="🛡️", style=discord.ButtonStyle.primary, row=1)
         elif custom_id == "dank_protection:add_filter":
             _set_button(child, label="Bad Word Filter", emoji="🧼", style=discord.ButtonStyle.primary, row=1)
         elif custom_id == "dank_protection:test":
@@ -139,7 +167,7 @@ def _clarify_buttons(view: Any) -> None:
         elif custom_id == "dank_protection:invite_override":
             _set_button(child, label="Allowed Exceptions", emoji="🔓", style=discord.ButtonStyle.secondary, row=2)
         elif custom_id == "dank_protection:block_links":
-            _set_button(child, label="All Links Lockdown", emoji="🔗", style=discord.ButtonStyle.secondary, row=3)
+            _set_button(child, label="Link Shield", emoji="🔗", style=discord.ButtonStyle.secondary, row=3)
         elif custom_id == "dank_protection:allow_links":
             _set_button(child, label="Allow Normal Links", emoji="🔓", style=discord.ButtonStyle.secondary, row=3)
         elif custom_id == "dank_protection:refresh":
@@ -278,9 +306,9 @@ def apply() -> bool:
             embed = _ORIGINAL_EMBED(guild, cfg, spam, spam_source)
             return _replace_help_fields(embed)
 
-        def patched_init(self, *, author_id: int) -> None:
-            _ORIGINAL_VIEW_INIT(self, author_id=author_id)
-            _clarify_buttons(self)
+        def patched_init(self, *args: Any, **kwargs: Any) -> None:
+            _ORIGINAL_VIEW_INIT(self, *args, **kwargs)
+            _clarify_buttons(self, cfg=kwargs.get("cfg"), spam=kwargs.get("spam"))
             _patch_invite_editor()
 
         center._protection_embed = patched_embed
