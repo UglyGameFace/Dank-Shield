@@ -12,10 +12,13 @@ from typing import Any
 
 import discord
 
+from stoney_verify.interaction_guard import run_guarded_interaction
+
 _PATCHED = False
 _ORIGINAL_EMBED: Any = None
 _ORIGINAL_VIEW_INIT: Any = None
 _PAGE_SIZE = 25
+_INVITE_CONTROL_GUARD_ACTIVE: set[int] = set()
 
 
 def _short(value: Any, limit: int = 220) -> str:
@@ -89,6 +92,45 @@ async def _edit_protection_message(
             )
         except Exception:
             pass
+
+
+async def _run_invite_control_action(
+    interaction: discord.Interaction,
+    action: Any,
+    label: str,
+) -> None:
+    key = id(interaction)
+    if key in _INVITE_CONTROL_GUARD_ACTIVE:
+        await action()
+        return
+
+    _INVITE_CONTROL_GUARD_ACTIVE.add(key)
+    try:
+        async def _runner() -> None:
+            await action()
+
+        result = await run_guarded_interaction(
+            interaction,
+            _runner,
+            defer=False,
+            ephemeral=True,
+            error_title="❌ Invite Shield control failed",
+            error_guidance=(
+                f"Nothing was changed. Try **{label}** again. "
+                "If it keeps happening, run `/dank diagnostics` and check Protection Center logs."
+            ),
+        )
+
+        if not result.ok:
+            try:
+                print(
+                    "⚠️ protection_center_invite_controls guarded callback failed "
+                    f"label={label!r} type={result.error_type!r} message={result.error_message!r}"
+                )
+            except Exception:
+                pass
+    finally:
+        _INVITE_CONTROL_GUARD_ACTIVE.discard(key)
 
 
 def _format_override_status(policy: Any, settings: dict[str, Any]) -> str:
@@ -311,6 +353,12 @@ class BotTargetSelect(discord.ui.Select):
         )
 
     async def callback(self, interaction: discord.Interaction) -> None:
+        if id(interaction) not in _INVITE_CONTROL_GUARD_ACTIVE:
+            return await _run_invite_control_action(
+                interaction,
+                lambda: self.callback(interaction),
+                "add bot/user invite target",
+            )
         center, spam_guard, policy = _patch_helpers()
         if not await center._require_setup_permission(interaction):
             return
@@ -350,6 +398,12 @@ class ChannelTargetSelect(discord.ui.Select):
         )
 
     async def callback(self, interaction: discord.Interaction) -> None:
+        if id(interaction) not in _INVITE_CONTROL_GUARD_ACTIVE:
+            return await _run_invite_control_action(
+                interaction,
+                lambda: self.callback(interaction),
+                "add invite channel target",
+            )
         center, spam_guard, policy = _patch_helpers()
         if not await center._require_setup_permission(interaction):
             return
@@ -402,22 +456,52 @@ class InviteScopeEditorView(discord.ui.View):
 
     @discord.ui.button(label="◀ Bots", style=discord.ButtonStyle.secondary, row=2)
     async def prev_bots(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        if id(interaction) not in _INVITE_CONTROL_GUARD_ACTIVE:
+            return await _run_invite_control_action(
+                interaction,
+                lambda: self.prev_bots(interaction, button),
+                "previous bots page",
+            )
         await self._redraw(interaction, bot_delta=-1)
 
     @discord.ui.button(label="Bots ▶", style=discord.ButtonStyle.secondary, row=2)
     async def next_bots(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        if id(interaction) not in _INVITE_CONTROL_GUARD_ACTIVE:
+            return await _run_invite_control_action(
+                interaction,
+                lambda: self.next_bots(interaction, button),
+                "next bots page",
+            )
         await self._redraw(interaction, bot_delta=1)
 
     @discord.ui.button(label="◀ Channels", style=discord.ButtonStyle.secondary, row=3)
     async def prev_channels(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        if id(interaction) not in _INVITE_CONTROL_GUARD_ACTIVE:
+            return await _run_invite_control_action(
+                interaction,
+                lambda: self.prev_channels(interaction, button),
+                "previous channels page",
+            )
         await self._redraw(interaction, channel_delta=-1)
 
     @discord.ui.button(label="Channels ▶", style=discord.ButtonStyle.secondary, row=3)
     async def next_channels(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        if id(interaction) not in _INVITE_CONTROL_GUARD_ACTIVE:
+            return await _run_invite_control_action(
+                interaction,
+                lambda: self.next_channels(interaction, button),
+                "next channels page",
+            )
         await self._redraw(interaction, channel_delta=1)
 
     @discord.ui.button(label="Manual IDs", emoji="✍️", style=discord.ButtonStyle.primary, row=4)
     async def manual_ids(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        if id(interaction) not in _INVITE_CONTROL_GUARD_ACTIVE:
+            return await _run_invite_control_action(
+                interaction,
+                lambda: self.manual_ids(interaction, button),
+                "manual invite scope IDs",
+            )
         center, spam_guard, _policy = _patch_helpers()
         if not await center._require_setup_permission(interaction):
             return
@@ -429,6 +513,12 @@ class InviteScopeEditorView(discord.ui.View):
 
     @discord.ui.button(label="Clear", emoji="🧹", style=discord.ButtonStyle.danger, row=4)
     async def clear_scope(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        if id(interaction) not in _INVITE_CONTROL_GUARD_ACTIVE:
+            return await _run_invite_control_action(
+                interaction,
+                lambda: self.clear_scope(interaction, button),
+                "clear invite scope",
+            )
         center, spam_guard, policy = _patch_helpers()
         if not await center._require_setup_permission(interaction):
             return
@@ -448,6 +538,12 @@ class InviteScopeEditorView(discord.ui.View):
 
     @discord.ui.button(label="Done", emoji="✅", style=discord.ButtonStyle.success, row=4)
     async def done(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        if id(interaction) not in _INVITE_CONTROL_GUARD_ACTIVE:
+            return await _run_invite_control_action(
+                interaction,
+                lambda: self.done(interaction, button),
+                "close invite scope editor",
+            )
         await interaction.response.edit_message(content="Invite scope editor closed. Reopen it from Protection Center if needed.", embed=None, view=None)
 
 
@@ -462,6 +558,12 @@ class ProtectionInviteOverrideButton(discord.ui.Button):
         )
 
     async def callback(self, interaction: discord.Interaction) -> None:
+        if id(interaction) not in _INVITE_CONTROL_GUARD_ACTIVE:
+            return await _run_invite_control_action(
+                interaction,
+                lambda: self.callback(interaction),
+                "open invite override rules",
+            )
         center, spam_guard, _policy = _patch_helpers()
         if not await center._require_setup_permission(interaction):
             return
@@ -490,6 +592,12 @@ class ProtectionInviteScopeButton(discord.ui.Button):
         )
 
     async def callback(self, interaction: discord.Interaction) -> None:
+        if id(interaction) not in _INVITE_CONTROL_GUARD_ACTIVE:
+            return await _run_invite_control_action(
+                interaction,
+                lambda: self.callback(interaction),
+                "open invite scope",
+            )
         center, spam_guard, policy = _patch_helpers()
         if not await center._require_setup_permission(interaction):
             return
