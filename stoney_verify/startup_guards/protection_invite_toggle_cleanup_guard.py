@@ -495,7 +495,7 @@ def _scan_note(prefix: str, result: dict[str, Any]) -> str:
     if warning:
         note += f"\n⚠️ {warning}"
     if checked == 0 and not warning:
-        note += "\n⚠️ Discord returned 0 accessible messages for that channel. Use **Clean Selected Channel** for the exact target channel, and make sure Dank Shield has **View Channel** + **Read Message History** there."
+        note += "\n⚠️ Discord returned 0 recent messages from the active scan channel. If this is not the channel you expected, press **Choose Scan Channel** and re-select it. If it is correct, there may simply be no recent visible messages in the scan window."
     if matched and not deleted and not allowed and not warning:
         note += "\n⚠️ Matches were found but nothing was removed. Check message age, permissions, and channel overrides."
     return note
@@ -643,17 +643,31 @@ class ChooseInviteScanChannel(discord.ui.Button):
 
 class CleanCurrentChannelInvites(discord.ui.Button):
     def __init__(self) -> None:
-        super().__init__(label="Clean This Channel", emoji="🧹", style=discord.ButtonStyle.secondary, custom_id="dank_protection:clean_current_channel_invites", row=3)
+        super().__init__(
+            label="Scan Active Channel",
+            emoji="🔍",
+            style=discord.ButtonStyle.secondary,
+            custom_id="dank_protection:scan_active_invite_channel",
+            row=3,
+        )
 
     async def callback(self, interaction: discord.Interaction) -> None:
         from stoney_verify.commands_ext import public_protection_center as center
         if not await center._require_setup_permission(interaction):
             return
-        channel = _interaction_source_text_channel(interaction)
+
+        channel = await _active_invite_scan_channel(interaction)
         if channel is None:
-            return await _refresh_card(center, interaction, note="⚠️ I could not resolve the text channel for this panel. Use **Clean Selected Channel** and paste the target channel ID.")
+            return await _refresh_card(
+                center,
+                interaction,
+                note="⚠️ Active invite scan channel is not set. Press **Choose Scan Channel** and select the private channel Dank Shield should scan.",
+            )
+
         result = await _clean_existing_invites(channel, limit=200)
-        await _refresh_card(center, interaction, note=_scan_note(f"🔍 Invite scan {channel.mention}", result))
+        note = _scan_note(f"🔍 Invite scan {channel.mention}", result)
+        note += "\n" + await _active_scan_note(interaction)
+        await _refresh_card(center, interaction, note=note)
 
 
 class TargetChannelCleanupModal(discord.ui.Modal, title="Scan Invite Links in Channel"):
