@@ -176,8 +176,40 @@ def build_basic_verify_embed(guild: discord.Guild, cfg: Any) -> discord.Embed:
         value=f"If the button does not work, go to {support_text} and open a ticket.",
         inline=False,
     )
-    embed.set_footer(text="Dank Shield Basic Verify • access only")
+    embed.set_footer(text=f"{BASIC_VERIFY_FOOTER} • access only")
     return embed
+
+
+def is_basic_verify_panel_embed(embed: discord.Embed) -> bool:
+    """Return true for old or current Basic Verify embeds.
+
+    This lets Dank Shield update stale panels instead of posting duplicates.
+    """
+
+    try:
+        footer_text = str(getattr(getattr(embed, "footer", None), "text", "") or "")
+        if BASIC_VERIFY_FOOTER in footer_text:
+            return True
+        if footer_text.strip() in {"Dank Shield Basic Verify", "Dank Shield Basic Verify • access only"}:
+            return True
+
+        title_text = str(getattr(embed, "title", "") or "").lower()
+        desc_text = str(getattr(embed, "description", "") or "").lower()
+        data_text = str(embed.to_dict()).lower()
+
+        if "basic verify" in footer_text.lower():
+            return True
+
+        # Old panel looked like a welcome message but talked about Verify/Unverified.
+        if "welcome to" in title_text and ("verify" in data_text or "unverified" in data_text):
+            return True
+
+        # New panel is verify-only.
+        if "verify" in title_text and ("server access" in title_text or "server access" in desc_text):
+            return True
+    except Exception:
+        pass
+    return False
 
 
 async def _ack(interaction: discord.Interaction) -> bool:
@@ -274,8 +306,7 @@ async def post_basic_verify_panel(channel: discord.TextChannel, *, actor_id: int
                 continue
             if not msg.embeds:
                 continue
-            footer_text = str(getattr(getattr(msg.embeds[0], "footer", None), "text", "") or "")
-            if BASIC_VERIFY_FOOTER in footer_text or footer_text == "Dank Shield Basic Verify":
+            if is_basic_verify_panel_embed(msg.embeds[0]):
                 await msg.edit(embed=embed, view=view)
                 return "updated"
     except Exception:
