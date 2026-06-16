@@ -22,10 +22,10 @@ async def _send_ephemeral(interaction: discord.Interaction, content: str = "", *
         pass
 
 
-async def _defer(interaction: discord.Interaction) -> None:
+async def _ack_update(interaction: discord.Interaction) -> None:
     try:
         if not interaction.response.is_done():
-            await interaction.response.defer(ephemeral=True, thinking=True)
+            await interaction.response.defer()
     except Exception:
         pass
 
@@ -52,6 +52,8 @@ def _cfg_bool(cfg: Any, key: str, default: bool = False) -> bool:
         raw = _cfg_value(cfg, key, None)
         if raw is None:
             return bool(default)
+        if isinstance(raw, bool):
+            return raw
         return str(raw).strip().lower() in {"1", "true", "yes", "y", "on", "enabled"}
     except Exception:
         return bool(default)
@@ -110,6 +112,45 @@ def _can_post(channel: discord.TextChannel, me: Optional[discord.Member]) -> lis
     return [name for name, ok in checks.items() if not ok]
 
 
+def _post_status(channel: Optional[discord.TextChannel]) -> str:
+    if not isinstance(channel, discord.TextChannel):
+        return "⚠️ Pick a channel"
+    missing = _can_post(channel, channel.guild.me if isinstance(channel.guild.me, discord.Member) else None)
+    if missing:
+        return "⚠️ Missing: " + ", ".join(missing)
+    return "✅ Ready"
+
+
+def _kind_label(kind: str) -> str:
+    return "Leave" if kind == "leave" else "Join"
+
+
+def _join_enabled(cfg: Any) -> bool:
+    return _cfg_bool(cfg, "welcome_join_enabled", False) or _cfg_bool(cfg, "join_welcome_enabled", False)
+
+
+def _leave_enabled(cfg: Any) -> bool:
+    return _cfg_bool(cfg, "welcome_leave_enabled", False) or _cfg_bool(cfg, "goodbye_enabled", False) or _cfg_bool(cfg, "leave_message_enabled", False)
+
+
+def _join_channel(guild: discord.Guild, cfg: Any) -> Optional[discord.TextChannel]:
+    channel = guild.get_channel(_cfg_int(cfg, "join_welcome_channel_id") or _cfg_int(cfg, "welcome_channel_id"))
+    return channel if isinstance(channel, discord.TextChannel) else None
+
+
+def _leave_channel(guild: discord.Guild, cfg: Any) -> Optional[discord.TextChannel]:
+    channel = guild.get_channel(_cfg_int(cfg, "goodbye_channel_id") or _cfg_int(cfg, "leave_channel_id") or _cfg_int(cfg, "welcome_channel_id"))
+    return channel if isinstance(channel, discord.TextChannel) else None
+
+
+def _preview_line(cfg: Any, *, kind: str) -> str:
+    title, body = _templates(cfg, kind=kind)
+    title = str(title or "").replace("\n", " ").strip()
+    body = str(body or "").replace("\n", " ").strip()
+    text = f"**{title[:80]}**\n{body[:180]}"
+    return text[:300]
+
+
 def _preview_embed(guild: discord.Guild, member: discord.Member, *, kind: str, cfg: Any | None = None) -> discord.Embed:
     title, body = _templates(cfg, kind=kind) if cfg is not None else ((LEAVE_TITLE, LEAVE_BODY) if kind == "leave" else (JOIN_TITLE, JOIN_BODY))
     embed = discord.Embed(
@@ -122,8 +163,139 @@ def _preview_embed(guild: discord.Guild, member: discord.Member, *, kind: str, c
         embed.set_thumbnail(url=member.display_avatar.url)
     except Exception:
         pass
-    embed.set_footer(text="Preview • dank_shield:welcome_event:v1")
+    embed.set_footer(text="Preview only • no public message was sent")
     return embed
+
+
+def _channel_options(guild: discord.Guild, *, active_id: int = 0, kind: str) -> list[discord.SelectOption]:
+    rows: list[tuple[int, int, discord.SelectOption]] = []
+    me = guild.me if isinstance(guild.me, discord.Member) else None
+    kind_tokens = ("join", "welcome", "start", "lobby") if kind == "join" else ("leave", "goodbye", "log", "join-leave")
+
+    for channel in list(getattr(guild, "text_channels", []) or []):
+        try:
+            missing = _can_post(channel, me)
+            if me is not None and not channel.permissions_for(me).view_channel:
+                continue
+
+            score = 0
+            name_l = str(channel.name or "").lower()
+            if int(channel.id) == int(active_id):
+                score += 1000
+            if any(token in name_l for token in kind_tokens):
+                score += 80
+            if any(token in name_l for token in ("staff", "command", "cmd", "log", "welcome", "general")):
+                score += 20
+            if not missing:
+                score += 20
+
+            status = "ready" if not missing else "missing " + ", ".join(missing[:2])
+            description = (("ACTIVE • " if int(channel.id) == int(active_id) else "") + status)[:100]
+            rows.append(
+                (
+                    score,
+                    int(getattr(channel, "position", 0) or 0),
+                    discord.SelectOption(
+                        label=f"#{channel.name}"[:100],
+                        value=str(int(channel.id)),
+                        description=description,
+                    ),
+                )
+            )
+        except Exception:
+            continue
+
+    rows.sort(key=lambda item: (-item[0], item[1]))
+    options = [option for _score, _pos, option in rows[:25]]
+    if not options:
+        options = [
+            discord.SelectOption(
+                label="No usable text channels",
+                value="0",
+                description="Give Dank Shield access to a private staff/welcome channel.",
+            )
+        ]
+    return options
+
+
+def _build_center_embed(guild: discord.Guild, cfg: Any, *, last_action: str | None = None) -> discord.Embed:
+    join_enabled = _join_enabled(cfg)
+    leave_enabled = _leave_enabled(cfg)
+    join_channel = _join_channel(guild, cfg)
+    leave_channel = _leave_channel(guild, cfg)
+
+    embed = discord.Embed(
+        title="👋 Welcome Center",
+        description=(
+            "Set optional messages for people joining and leaving.\n"
+            "Pick a channel first, then use the ON/OFF buttons."
+        ),
+        color=discord.Color.green() if (join_enabled or leave_enabled) else discord.Color.blurple(),
+        timestamp=discord.utils.utcnow(),
+    )
+
+    embed.add_field(
+        name="Join Messages",
+        value=(
+            f"**Status:** {'✅ ON' if join_enabled else '⚪ OFF'}\n"
+            f"**Channel:** {join_channel.mention if isinstance(join_channel, discord.TextChannel) else 'not set'}\n"
+            f"**Bot access:** {_post_status(join_channel)}"
+        ),
+        inline=False,
+    )
+    embed.add_field(
+        name="Leave Messages",
+        value=(
+            f"**Status:** {'✅ ON' if leave_enabled else '⚪ OFF'}\n"
+            f"**Channel:** {leave_channel.mention if isinstance(leave_channel, discord.TextChannel) else 'not set'}\n"
+            f"**Bot access:** {_post_status(leave_channel)}"
+        ),
+        inline=False,
+    )
+
+    embed.add_field(
+        name="Current Message Text",
+        value=(
+            f"**Join:**\n{_preview_line(cfg, kind='join')}\n\n"
+            f"**Leave:**\n{_preview_line(cfg, kind='leave')}"
+        ),
+        inline=False,
+    )
+
+    embed.add_field(
+        name="Placeholders",
+        value="`{member}` ping • `{username}` username • `{display_name}` nickname • `{server_name}` server • `{member_count}` count",
+        inline=False,
+    )
+
+    if last_action:
+        embed.add_field(name="Last action", value=last_action[:1024], inline=False)
+
+    embed.set_footer(text="/dank setup • Welcome Center • changes update this panel live")
+    return embed
+
+
+async def _refresh_center(interaction: discord.Interaction, *, last_action: str | None = None) -> None:
+    from stoney_verify.guild_config import get_guild_config
+
+    guild = interaction.guild
+    if guild is None:
+        return await _send_ephemeral(interaction, "This must be used inside a server.")
+
+    cfg = await get_guild_config(int(guild.id), refresh=True)
+    embed = _build_center_embed(guild, cfg, last_action=last_action)
+    view = WelcomeEventsCenterView(guild=guild, cfg=cfg)
+
+    try:
+        if interaction.response.is_done():
+            await interaction.edit_original_response(content=None, embed=embed, view=view)
+        else:
+            await interaction.response.edit_message(content=None, embed=embed, view=view)
+        return
+    except Exception:
+        pass
+
+    await _send_ephemeral(interaction, embed=embed, view=view, allowed_mentions=discord.AllowedMentions.none())
 
 
 async def _save_event_channel(interaction: discord.Interaction, channel: discord.TextChannel, *, kind: str) -> None:
@@ -132,43 +304,78 @@ async def _save_event_channel(interaction: discord.Interaction, channel: discord
 
     if not await _require_setup_permission(interaction):
         return
+
     guild = interaction.guild
     if guild is None:
         return await _send_ephemeral(interaction, "This must be used inside a server.")
-    await _defer(interaction)
+
+    await _ack_update(interaction)
+
     missing = _can_post(channel, guild.me if isinstance(guild.me, discord.Member) else None)
     if missing:
-        return await interaction.followup.send(f"I cannot post in {channel.mention}. Missing: {', '.join(missing)}.", ephemeral=True, allowed_mentions=discord.AllowedMentions.none())
+        return await _send_ephemeral(
+            interaction,
+            f"I cannot use {channel.mention} yet. Missing: {', '.join(missing)}.",
+            allowed_mentions=discord.AllowedMentions.none(),
+        )
+
     if kind == "leave":
-        patch = {"goodbye_channel_id": str(channel.id), "leave_channel_id": str(channel.id), "welcome_leave_enabled": True, "goodbye_enabled": True, "leave_message_enabled": True}
+        patch = {
+            "goodbye_channel_id": str(channel.id),
+            "leave_channel_id": str(channel.id),
+            "welcome_leave_enabled": True,
+            "goodbye_enabled": True,
+            "leave_message_enabled": True,
+        }
         label = "Leave"
     else:
-        patch = {"join_welcome_channel_id": str(channel.id), "welcome_join_enabled": True, "join_welcome_enabled": True}
+        patch = {
+            "join_welcome_channel_id": str(channel.id),
+            "welcome_join_enabled": True,
+            "join_welcome_enabled": True,
+        }
         label = "Join"
+
     patch["welcome_events_updated_by_id"] = str(int(interaction.user.id))
     await _upsert_config(int(guild.id), patch)
     invalidate_guild_config(int(guild.id))
-    await interaction.followup.send(f"{label} messages enabled in {channel.mention}.", ephemeral=True, allowed_mentions=discord.AllowedMentions.none())
+    await _refresh_center(interaction, last_action=f"✅ {label} messages are ON and will post in {channel.mention}.")
 
 
 async def _set_enabled(interaction: discord.Interaction, *, join: Optional[bool] = None, leave: Optional[bool] = None) -> None:
     from stoney_verify.commands_ext.public_setup_group import _require_setup_permission, _upsert_config
-    from stoney_verify.guild_config import invalidate_guild_config
+    from stoney_verify.guild_config import get_guild_config, invalidate_guild_config
 
     if not await _require_setup_permission(interaction):
         return
+
     guild = interaction.guild
     if guild is None:
         return await _send_ephemeral(interaction, "This must be used inside a server.")
-    await _defer(interaction)
+
+    cfg = await get_guild_config(int(guild.id), refresh=True)
+
+    if join is True and not isinstance(_join_channel(guild, cfg), discord.TextChannel):
+        return await _send_ephemeral(interaction, "Pick a **Join** channel first, then turn Join Messages ON.")
+    if leave is True and not isinstance(_leave_channel(guild, cfg), discord.TextChannel):
+        return await _send_ephemeral(interaction, "Pick a **Leave** channel first, then turn Leave Messages ON.")
+
+    await _ack_update(interaction)
+
     patch: dict[str, Any] = {"welcome_events_updated_by_id": str(int(interaction.user.id))}
+    actions: list[str] = []
+
     if join is not None:
         patch.update({"welcome_join_enabled": bool(join), "join_welcome_enabled": bool(join)})
+        actions.append(f"Join Messages {'ON' if join else 'OFF'}")
+
     if leave is not None:
         patch.update({"welcome_leave_enabled": bool(leave), "goodbye_enabled": bool(leave), "leave_message_enabled": bool(leave)})
+        actions.append(f"Leave Messages {'ON' if leave else 'OFF'}")
+
     await _upsert_config(int(guild.id), patch)
     invalidate_guild_config(int(guild.id))
-    await interaction.followup.send("Join/leave settings updated.", ephemeral=True)
+    await _refresh_center(interaction, last_action="✅ " + " • ".join(actions))
 
 
 async def _save_template(interaction: discord.Interaction, *, kind: str, title: str, body: str) -> None:
@@ -177,31 +384,42 @@ async def _save_template(interaction: discord.Interaction, *, kind: str, title: 
 
     if not await _require_setup_permission(interaction):
         return
+
     guild = interaction.guild
     member = interaction.user if isinstance(interaction.user, discord.Member) else None
     if guild is None or member is None:
         return await _send_ephemeral(interaction, "This must be used inside a server.")
+
     clean_title = str(title or "").strip()[:256]
     clean_body = str(body or "").strip()[:1800]
     if not clean_title or not clean_body:
         return await _send_ephemeral(interaction, "Title and body are required.")
-    await _defer(interaction)
+
+    await _ack_update(interaction)
+
     if kind == "leave":
         patch = {"welcome_leave_title": clean_title, "welcome_leave_body": clean_body}
         label = "Leave"
     else:
         patch = {"welcome_join_title": clean_title, "welcome_join_body": clean_body}
         label = "Join"
+
     patch["welcome_events_updated_by_id"] = str(int(interaction.user.id))
     await _upsert_config(int(guild.id), patch)
     invalidate_guild_config(int(guild.id))
-    await interaction.followup.send(f"{label} template saved. Preview below.", embed=_preview_embed(guild, member, kind=kind, cfg=patch), ephemeral=True, allowed_mentions=discord.AllowedMentions.none())
+
+    await _send_ephemeral(
+        interaction,
+        f"✅ {label} message saved. Preview below.",
+        embed=_preview_embed(guild, member, kind=kind, cfg=patch),
+        allowed_mentions=discord.AllowedMentions.none(),
+    )
 
 
 class WelcomeEventTemplateModal(discord.ui.Modal):
     def __init__(self, *, kind: str, current_title: str, current_body: str) -> None:
         self.kind = kind
-        label = "Leave" if kind == "leave" else "Join"
+        label = _kind_label(kind)
         super().__init__(title=f"Edit {label} Message")
         self.title_input = discord.ui.TextInput(label=f"{label} title", default=current_title[:256], required=True, max_length=256)
         self.body_input = discord.ui.TextInput(label=f"{label} body", default=current_body[:1800], style=discord.TextStyle.paragraph, required=True, max_length=1800)
@@ -212,26 +430,92 @@ class WelcomeEventTemplateModal(discord.ui.Modal):
         await _save_template(interaction, kind=self.kind, title=str(self.title_input.value), body=str(self.body_input.value))
 
 
-class JoinLeaveChannelSelect(discord.ui.ChannelSelect):
-    def __init__(self, *, kind: str) -> None:
+class WelcomeEventChannelSelect(discord.ui.Select):
+    def __init__(self, *, guild: discord.Guild, cfg: Any, kind: str) -> None:
         self.kind = kind
-        label = "leave" if kind == "leave" else "join"
-        super().__init__(placeholder=f"Choose channel for {label} messages...", min_values=1, max_values=1, channel_types=[discord.ChannelType.text], custom_id=f"dank_setup_welcome_events:{kind}:channel")
+        active = _leave_channel(guild, cfg) if kind == "leave" else _join_channel(guild, cfg)
+        active_id = int(active.id) if isinstance(active, discord.TextChannel) else 0
+        label = _kind_label(kind)
+        super().__init__(
+            placeholder=f"Choose {label} channel...",
+            min_values=1,
+            max_values=1,
+            options=_channel_options(guild, active_id=active_id, kind=kind),
+            custom_id=f"dank_setup_welcome_events:{kind}:channel",
+            row=0 if kind == "join" else 1,
+        )
 
-    async def callback(self, interaction: discord.Interaction) -> None:  # type: ignore[override]
-        channel = self.values[0] if self.values else None
+    async def callback(self, interaction: discord.Interaction) -> None:
+        from stoney_verify.commands_ext.public_setup_group import _require_setup_permission
+
+        if not await _require_setup_permission(interaction):
+            return
+
+        guild = interaction.guild
+        if guild is None:
+            return await _send_ephemeral(interaction, "This must be used inside a server.")
+
+        channel_id = int((self.values or ["0"])[0] or 0)
+        channel = guild.get_channel(channel_id)
         if not isinstance(channel, discord.TextChannel):
-            return await _send_ephemeral(interaction, "Pick a normal text channel.")
+            try:
+                fetched = await guild.fetch_channel(channel_id)
+                channel = fetched if isinstance(fetched, discord.TextChannel) else None
+            except Exception:
+                channel = None
+
+        if not isinstance(channel, discord.TextChannel):
+            return await _send_ephemeral(interaction, "That channel is not available to Dank Shield. Pick a visible text channel.")
+
         await _save_event_channel(interaction, channel, kind=self.kind)
 
 
-class WelcomeEventsCenterView(discord.ui.View):
-    def __init__(self) -> None:
-        super().__init__(timeout=900)
-        self.add_item(JoinLeaveChannelSelect(kind="join"))
-        self.add_item(JoinLeaveChannelSelect(kind="leave"))
+class WelcomeToggleButton(discord.ui.Button):
+    def __init__(self, *, kind: str, enabled: bool, has_channel: bool) -> None:
+        self.kind = kind
+        self.enabled_state = bool(enabled)
+        label = _kind_label(kind)
+        if not has_channel:
+            button_label = f"{label}: Pick Channel"
+            style = discord.ButtonStyle.secondary
+            emoji = "📍"
+        elif enabled:
+            button_label = f"{label}: ON"
+            style = discord.ButtonStyle.success
+            emoji = "✅"
+        else:
+            button_label = f"{label}: OFF"
+            style = discord.ButtonStyle.secondary
+            emoji = "⚪"
 
-    async def _open_modal(self, interaction: discord.Interaction, *, kind: str) -> None:
+        super().__init__(
+            label=button_label,
+            emoji=emoji,
+            style=style,
+            custom_id=f"dank_setup_welcome_events:toggle_{kind}",
+            row=2,
+        )
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        new_value = not self.enabled_state
+        if self.kind == "leave":
+            await _set_enabled(interaction, leave=new_value)
+        else:
+            await _set_enabled(interaction, join=new_value)
+
+
+class WelcomeEditButton(discord.ui.Button):
+    def __init__(self, *, kind: str) -> None:
+        self.kind = kind
+        super().__init__(
+            label=f"Edit {_kind_label(kind)}",
+            emoji="✏️",
+            style=discord.ButtonStyle.primary,
+            custom_id=f"dank_setup_welcome_events:edit_{kind}",
+            row=2,
+        )
+
+    async def callback(self, interaction: discord.Interaction) -> None:
         from stoney_verify.commands_ext.public_setup_group import _require_setup_permission
         from stoney_verify.guild_config import get_guild_config
 
@@ -239,54 +523,103 @@ class WelcomeEventsCenterView(discord.ui.View):
             return
         if interaction.guild is None:
             return await _send_ephemeral(interaction, "This must be used inside a server.")
+
         cfg = await get_guild_config(int(interaction.guild.id), refresh=True)
-        title, body = _templates(cfg, kind=kind)
-        await interaction.response.send_modal(WelcomeEventTemplateModal(kind=kind, current_title=title, current_body=body))
+        title, body = _templates(cfg, kind=self.kind)
+        await interaction.response.send_modal(WelcomeEventTemplateModal(kind=self.kind, current_title=title, current_body=body))
 
-    @discord.ui.button(label="Edit Join", emoji="✏️", style=discord.ButtonStyle.primary, custom_id="dank_setup_welcome_events:edit_join", row=2)
-    async def edit_join(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        _ = button
-        await self._open_modal(interaction, kind="join")
 
-    @discord.ui.button(label="Edit Leave", emoji="✏️", style=discord.ButtonStyle.primary, custom_id="dank_setup_welcome_events:edit_leave", row=2)
-    async def edit_leave(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        _ = button
-        await self._open_modal(interaction, kind="leave")
+class WelcomePreviewButton(discord.ui.Button):
+    def __init__(self, *, kind: str) -> None:
+        self.kind = kind
+        super().__init__(
+            label=f"Preview {_kind_label(kind)}",
+            emoji="👁️",
+            style=discord.ButtonStyle.secondary,
+            custom_id=f"dank_setup_welcome_events:preview_{kind}",
+            row=3,
+        )
 
-    @discord.ui.button(label="Preview Join", emoji="👁️", style=discord.ButtonStyle.secondary, custom_id="dank_setup_welcome_events:preview_join", row=3)
-    async def preview_join(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        _ = button
+    async def callback(self, interaction: discord.Interaction) -> None:
         from stoney_verify.guild_config import get_guild_config
+
         member = interaction.user if isinstance(interaction.user, discord.Member) else None
         if interaction.guild is None or member is None:
             return await _send_ephemeral(interaction, "This must be used inside a server.")
+
         cfg = await get_guild_config(int(interaction.guild.id), refresh=True)
-        await _send_ephemeral(interaction, "Join preview only.", embed=_preview_embed(interaction.guild, member, kind="join", cfg=cfg), allowed_mentions=discord.AllowedMentions.none())
+        await _send_ephemeral(
+            interaction,
+            f"{_kind_label(self.kind)} preview only. Nothing was posted publicly.",
+            embed=_preview_embed(interaction.guild, member, kind=self.kind, cfg=cfg),
+            allowed_mentions=discord.AllowedMentions.none(),
+        )
 
-    @discord.ui.button(label="Preview Leave", emoji="👁️", style=discord.ButtonStyle.secondary, custom_id="dank_setup_welcome_events:preview_leave", row=3)
-    async def preview_leave(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        _ = button
-        from stoney_verify.guild_config import get_guild_config
-        member = interaction.user if isinstance(interaction.user, discord.Member) else None
-        if interaction.guild is None or member is None:
-            return await _send_ephemeral(interaction, "This must be used inside a server.")
-        cfg = await get_guild_config(int(interaction.guild.id), refresh=True)
-        await _send_ephemeral(interaction, "Leave preview only.", embed=_preview_embed(interaction.guild, member, kind="leave", cfg=cfg), allowed_mentions=discord.AllowedMentions.none())
 
-    @discord.ui.button(label="Disable Join", emoji="🔕", style=discord.ButtonStyle.secondary, custom_id="dank_setup_welcome_events:disable_join", row=4)
-    async def disable_join(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        _ = button
-        await _set_enabled(interaction, join=False)
+class WelcomeDisableBothButton(discord.ui.Button):
+    def __init__(self, *, disabled: bool) -> None:
+        super().__init__(
+            label="Turn Both OFF" if not disabled else "Both OFF",
+            emoji="⏸️",
+            style=discord.ButtonStyle.danger if not disabled else discord.ButtonStyle.secondary,
+            custom_id="dank_setup_welcome_events:disable_both",
+            row=4,
+            disabled=disabled,
+        )
 
-    @discord.ui.button(label="Disable Leave", emoji="🔕", style=discord.ButtonStyle.secondary, custom_id="dank_setup_welcome_events:disable_leave", row=4)
-    async def disable_leave(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        _ = button
-        await _set_enabled(interaction, leave=False)
-
-    @discord.ui.button(label="Disable Both", emoji="⛔", style=discord.ButtonStyle.danger, custom_id="dank_setup_welcome_events:disable_both", row=4)
-    async def disable_both(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        _ = button
+    async def callback(self, interaction: discord.Interaction) -> None:
         await _set_enabled(interaction, join=False, leave=False)
+
+
+class WelcomeRefreshButton(discord.ui.Button):
+    def __init__(self) -> None:
+        super().__init__(label="Refresh", emoji="🔄", style=discord.ButtonStyle.secondary, custom_id="dank_setup_welcome_events:refresh", row=4)
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        await _ack_update(interaction)
+        await _refresh_center(interaction, last_action="🔄 Refreshed.")
+
+
+class WelcomeCloseButton(discord.ui.Button):
+    def __init__(self) -> None:
+        super().__init__(label="Close", emoji="✖️", style=discord.ButtonStyle.secondary, custom_id="dank_setup_welcome_events:close", row=4)
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        for child in self.view.children if self.view else []:
+            try:
+                child.disabled = True
+            except Exception:
+                pass
+        try:
+            await interaction.response.edit_message(content="Closed Welcome Center. Reopen it from `/dank setup`.", view=self.view)
+        except Exception:
+            await _send_ephemeral(interaction, "Closed Welcome Center.")
+
+
+class WelcomeEventsCenterView(discord.ui.View):
+    def __init__(self, *, guild: discord.Guild, cfg: Any) -> None:
+        super().__init__(timeout=900)
+
+        join_enabled = _join_enabled(cfg)
+        leave_enabled = _leave_enabled(cfg)
+        join_channel = _join_channel(guild, cfg)
+        leave_channel = _leave_channel(guild, cfg)
+
+        self.add_item(WelcomeEventChannelSelect(guild=guild, cfg=cfg, kind="join"))
+        self.add_item(WelcomeEventChannelSelect(guild=guild, cfg=cfg, kind="leave"))
+
+        self.add_item(WelcomeToggleButton(kind="join", enabled=join_enabled, has_channel=isinstance(join_channel, discord.TextChannel)))
+        self.add_item(WelcomeToggleButton(kind="leave", enabled=leave_enabled, has_channel=isinstance(leave_channel, discord.TextChannel)))
+
+        self.add_item(WelcomeEditButton(kind="join"))
+        self.add_item(WelcomeEditButton(kind="leave"))
+
+        self.add_item(WelcomePreviewButton(kind="join"))
+        self.add_item(WelcomePreviewButton(kind="leave"))
+
+        self.add_item(WelcomeDisableBothButton(disabled=not (join_enabled or leave_enabled)))
+        self.add_item(WelcomeRefreshButton())
+        self.add_item(WelcomeCloseButton())
 
 
 async def open_welcome_events_center(interaction: discord.Interaction) -> None:
@@ -295,26 +628,23 @@ async def open_welcome_events_center(interaction: discord.Interaction) -> None:
 
     if not await _require_setup_permission(interaction):
         return
+
     guild = interaction.guild
     if guild is None:
         return await _send_ephemeral(interaction, "This must be used inside a server.")
+
     cfg = await get_guild_config(int(guild.id), refresh=True)
-    join_enabled = _cfg_bool(cfg, "welcome_join_enabled", False) or _cfg_bool(cfg, "join_welcome_enabled", False)
-    leave_enabled = _cfg_bool(cfg, "welcome_leave_enabled", False) or _cfg_bool(cfg, "goodbye_enabled", False) or _cfg_bool(cfg, "leave_message_enabled", False)
-    join_channel = guild.get_channel(_cfg_int(cfg, "join_welcome_channel_id") or _cfg_int(cfg, "welcome_channel_id"))
-    leave_channel = guild.get_channel(_cfg_int(cfg, "goodbye_channel_id") or _cfg_int(cfg, "leave_channel_id") or _cfg_int(cfg, "welcome_channel_id"))
-    join_title, join_body = _templates(cfg, kind="join")
-    leave_title, leave_body = _templates(cfg, kind="leave")
-
-    embed = discord.Embed(title="Join / Leave Messages", description="Enable and edit optional join and leave announcements for this server from setup.", color=discord.Color.blurple(), timestamp=discord.utils.utcnow())
-    embed.add_field(name="Join messages", value=f"{'Enabled' if join_enabled else 'Disabled'}\nChannel: {join_channel.mention if isinstance(join_channel, discord.TextChannel) else 'not set'}", inline=True)
-    embed.add_field(name="Leave messages", value=f"{'Enabled' if leave_enabled else 'Disabled'}\nChannel: {leave_channel.mention if isinstance(leave_channel, discord.TextChannel) else 'not set'}", inline=True)
-    embed.add_field(name="Current Join Template", value=f"**{join_title[:120]}**\n{join_body[:400]}", inline=False)
-    embed.add_field(name="Current Leave Template", value=f"**{leave_title[:120]}**\n{leave_body[:400]}", inline=False)
-    embed.add_field(name="Placeholders", value="`{server_name}` `{member}` `{username}` `{display_name}` `{member_count}`", inline=False)
-    embed.add_field(name="How to use", value="Pick a channel to enable that message type. Use Edit Join/Edit Leave to customize text. The channel can be private as long as Dank Shield can post there.", inline=False)
-    embed.set_footer(text="/dank setup • Feature Centers • Welcome Center • Join/Leave")
-    await _send_ephemeral(interaction, embed=embed, view=WelcomeEventsCenterView(), allowed_mentions=discord.AllowedMentions.none())
+    embed = _build_center_embed(guild, cfg)
+    view = WelcomeEventsCenterView(guild=guild, cfg=cfg)
+    await _send_ephemeral(interaction, embed=embed, view=view, allowed_mentions=discord.AllowedMentions.none())
 
 
-__all__ = ["open_welcome_events_center", "WelcomeEventsCenterView", "JoinLeaveChannelSelect", "WelcomeEventTemplateModal"]
+# Backwards-compatible export name for older guards/imports.
+JoinLeaveChannelSelect = WelcomeEventChannelSelect
+
+__all__ = [
+    "open_welcome_events_center",
+    "WelcomeEventsCenterView",
+    "JoinLeaveChannelSelect",
+    "WelcomeEventTemplateModal",
+]
