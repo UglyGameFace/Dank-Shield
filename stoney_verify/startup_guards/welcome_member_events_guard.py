@@ -9,6 +9,7 @@ Default behavior is safe: disabled unless explicitly enabled by setup/commands.
 
 from datetime import datetime, timezone
 import random
+import re
 from typing import Any, Mapping, Optional
 
 import discord
@@ -409,6 +410,135 @@ def _embed(title: str, body: str, member: discord.Member, *, goodbye: bool = Fal
     return embed
 
 
+
+def _bot_can_post(channel: Optional[discord.TextChannel]) -> bool:
+    try:
+        if not isinstance(channel, discord.TextChannel):
+            return False
+        me = channel.guild.me
+        if not isinstance(me, discord.Member):
+            return False
+        perms = channel.permissions_for(me)
+        return bool(perms.view_channel and perms.send_messages and perms.embed_links)
+    except Exception:
+        return False
+
+
+def _staff_join_log_channel(guild: discord.Guild, cfg: Any) -> Optional[discord.TextChannel]:
+    """Private staff audit channel for join/leave records.
+
+    This intentionally prefers leave/log configured channels. It does not require
+    Unverified to see message history.
+    """
+
+    for key in (
+        "welcome_log_channel_id",
+        "join_leave_log_channel_id",
+        "join_leave_channel_id",
+        "member_log_channel_id",
+        "goodbye_channel_id",
+        "leave_channel_id",
+    ):
+        channel = _text_channel(guild, _safe_int(_cfg_value(cfg, key, None), 0))
+        if _bot_can_post(channel):
+            return channel
+
+    for tokens in (
+        ("join-leave-log",),
+        ("join-leave",),
+        ("member-log",),
+        ("welcome-log",),
+        ("leave-log",),
+        ("log",),
+    ):
+        channel = _channel_by_name(guild, *tokens)
+        if _bot_can_post(channel):
+            return channel
+
+    return None
+
+
+def _member_join_audit_embed(
+    member: discord.Member,
+    *,
+    public_channel: Optional[discord.TextChannel],
+    public_message_id: int = 0,
+    context: Mapping[str, Any] | None = None,
+) -> discord.Embed:
+    invite = _invite_placeholder_values(context)
+    account_age = _age_text(getattr(member, "created_at", None))
+    joined_at = _discord_time(getattr(member, "joined_at", None))
+
+    public_text = public_channel.mention if isinstance(public_channel, discord.TextChannel) else "not posted"
+    if isinstance(public_channel, discord.TextChannel) and int(public_message_id or 0) > 0:
+        public_text += f"\nMessage ID: `{int(public_message_id)}`"
+
+    embed = discord.Embed(
+        title=f"👋 {getattr(member, 'display_name', None) or member} joined",
+        description=(
+            f"{member.mention}\n"
+            f"`{int(member.id)}`"
+        ),
+        color=discord.Color.green(),
+        timestamp=datetime.now(timezone.utc),
+    )
+    embed.add_field(name="Public welcome", value=public_text, inline=False)
+    embed.add_field(name="Account", value=f"Age: `{account_age}`\nJoined: {joined_at}", inline=False)
+    embed.add_field(
+        name="Invite/source",
+        value=(
+            f"Source: `{invite.get('invite_source', 'unknown')}`\n"
+            f"Invite: `{invite.get('invite_code', 'unknown')}`\n"
+            f"Creator: {invite.get('invite_owner', 'unknown')}\n"
+            f"Target: `{invite.get('invite_channel', 'unknown')}`"
+        ),
+        inline=False,
+    )
+    try:
+        embed.set_thumbnail(url=member.display_avatar.url)
+    except Exception:
+        pass
+    embed.set_footer(text="dank_shield:staff_join_audit:v1")
+    return embed
+
+
+async def _send_staff_join_audit(
+    member: discord.Member,
+    cfg: Any,
+    *,
+    public_channel: Optional[discord.TextChannel],
+    public_message_id: int = 0,
+    context: Mapping[str, Any] | None = None,
+) -> None:
+    try:
+        log_channel = _staff_join_log_channel(member.guild, cfg)
+        if not isinstance(log_channel, discord.TextChannel):
+            return
+
+        # Avoid duplicate cards if staff intentionally uses the same channel for public welcome and log.
+        if isinstance(public_channel, discord.TextChannel) and int(log_channel.id) == int(public_channel.id):
+            return
+
+        await log_channel.send(
+            embed=_member_join_audit_embed(
+                member,
+                public_channel=public_channel,
+                public_message_id=public_message_id,
+                context=context,
+            ),
+            allowed_mentions=discord.AllowedMentions(users=False, roles=False, everyone=False),
+        )
+    except Exception as exc:
+        try:
+            print(
+                "⚠️ welcome_member_events staff join audit failed "
+                f"guild={getattr(getattr(member, 'guild', None), 'id', 0)} "
+                f"user={getattr(member, 'id', 0)} error={type(exc).__name__}: {exc}"
+            )
+        except Exception:
+            pass
+
+
 async def _send_join(member: discord.Member) -> None:
     try:
         from stoney_verify.guild_config import get_guild_config
@@ -422,7 +552,17 @@ async def _send_join(member: discord.Member) -> None:
         title = _cfg_str(cfg, "welcome_join_title", default="Welcome, {display_name}!")
         body = _cfg_str(cfg, "welcome_join_body", default="{random_welcome_line}\n\nStart here: {rules_channel} • Verify: {verify_channel} • Help: {support_channel}")
         context = await _recent_join_context(member)
-        await channel.send(embed=_embed(title, body, member, cfg=cfg, context=context), allowed_mentions=discord.AllowedMentions(users=True, roles=False, everyone=False))
+        sent = await channel.send(
+            embed=_embed(title, body, member, cfg=cfg, context=context),
+            allowed_mentions=discord.AllowedMentions(users=True, roles=False, everyone=False),
+        )
+        await _send_staff_join_audit(
+            member,
+            cfg,
+            public_channel=channel,
+            public_message_id=int(getattr(sent, "id", 0) or 0),
+            context=context,
+        )
     except Exception as exc:
         try:
             print(f"⚠️ welcome_member_events join failed guild={getattr(getattr(member, 'guild', None), 'id', 0)} user={getattr(member, 'id', 0)} error={type(exc).__name__}: {exc}")

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 """Owned setup service for optional join and leave messages."""
 
+import re
 from typing import Any, Mapping, Optional
 
 import discord
@@ -454,11 +455,12 @@ def _build_center_embed(guild: discord.Guild, cfg: Any, *, last_action: str | No
         inline=False,
     )
     embed.add_field(
-        name="Private Staff Leave Log",
+        name="Private Staff Join/Leave Log",
         value=(
             f"**Status:** {'✅ ON' if leave_enabled else '⚪ OFF'}\n"
             f"**Channel:** {leave_channel.mention if isinstance(leave_channel, discord.TextChannel) else 'not set'}\n"
-            f"**Bot access:** {_post_status(leave_channel)}"
+            f"**Bot access:** {_post_status(leave_channel)}\n"
+            "**Audience:** staff/private audit. Unverified does not need Read Message History here."
         ),
         inline=False,
     )
