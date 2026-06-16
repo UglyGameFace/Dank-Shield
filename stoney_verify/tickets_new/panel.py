@@ -16,6 +16,7 @@ from ..globals import (
     bot,
     get_supabase,
 )
+from ..guild_context import get_guild_context
 from .repository import get_ticket_by_any_channel_id
 from .service import (
     add_internal_note,
@@ -557,6 +558,70 @@ def _staff_role_ids_for_ticket(guild: discord.Guild) -> List[int]:
 def _ticket_parent_category_id() -> Optional[int]:
     cid = _safe_int(TICKET_CATEGORY_ID, 0)
     return cid if cid > 0 else None
+
+
+async def _ticket_panel_guild_context(guild: discord.Guild) -> Any:
+    try:
+        return await get_guild_context(int(guild.id), refresh=True)
+    except Exception as exc:
+        _debug(f"guild context unavailable for ticket panel guild={guild.id}: {repr(exc)}")
+        return None
+
+
+def _context_id(context: Any, key: str) -> int:
+    try:
+        if context is None:
+            return 0
+        value = context.get_id(key, 0)
+        return _safe_int(value, 0)
+    except Exception:
+        return 0
+
+
+def _ticket_parent_category_id_from_context(
+    guild: discord.Guild,
+    context: Any,
+) -> Optional[int]:
+    cid = _context_id(context, "ticket_category_id")
+    if cid > 0:
+        try:
+            if isinstance(guild.get_channel(cid), discord.CategoryChannel):
+                return cid
+        except Exception:
+            pass
+
+    return _ticket_parent_category_id()
+
+
+def _staff_role_ids_for_ticket_from_context(
+    guild: discord.Guild,
+    context: Any,
+) -> List[int]:
+    seen: set[int] = set()
+    out: List[int] = []
+
+    def _maybe_add(value: object) -> None:
+        rid = _safe_int(value, 0)
+        if rid <= 0 or rid in seen:
+            return
+        if guild.get_role(rid) is None:
+            return
+        seen.add(rid)
+        out.append(rid)
+
+    for key in (
+        "staff_role_id",
+        "ticket_staff_role_id",
+        "support_role_id",
+        "mod_role_id",
+        "moderator_role_id",
+    ):
+        _maybe_add(_context_id(context, key))
+
+    if out:
+        return out
+
+    return _staff_role_ids_for_ticket(guild)
 
 
 def _channel_looks_closed(channel: discord.TextChannel) -> bool:
@@ -1397,8 +1462,9 @@ async def _create_ticket_for_member(
             )
             return
 
-        parent_category_id = _ticket_parent_category_id()
-        staff_role_ids = _staff_role_ids_for_ticket(guild)
+        guild_context = await _ticket_panel_guild_context(guild)
+        parent_category_id = _ticket_parent_category_id_from_context(guild, guild_context)
+        staff_role_ids = _staff_role_ids_for_ticket_from_context(guild, guild_context)
 
         _debug(
             f"create resolved parent_category_id={parent_category_id} "
