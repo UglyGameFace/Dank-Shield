@@ -364,8 +364,26 @@ async def _hard_block_invite_message(message: discord.Message) -> None:
                 return
         if not override_allowed_roles and _member_has_any_role(message.author, _normalize_id_list(settings.get("invite_allowed_role_ids"))):
             return
-        if not override_allowed_channels and str(message.channel.id) in _normalize_id_list(settings.get("allowed_channel_ids")):
-            return
+
+        # Invite Shield rule:
+        # Generic allowed_channel_ids are for normal link/staff-command workflows.
+        # They must not bypass external Discord invite deletion when Invite Shield is ON.
+        invite_allowed_channel_ids = _normalize_id_list(
+            _first_setting(
+                settings,
+                "invite_allowed_channel_ids",
+                "allowed_invite_channel_ids",
+                "invite_hard_block_allowed_channel_ids",
+                "invite_target_allowed_channel_ids",
+            )
+        )
+        legacy_allowed_channel_ids = _normalize_id_list(settings.get("allowed_channel_ids"))
+
+        if not override_allowed_channels:
+            if str(message.channel.id) in invite_allowed_channel_ids:
+                return
+            if not invite_shield_enabled and str(message.channel.id) in legacy_allowed_channel_ids:
+                return
 
         allowed_codes = set() if override_allowed_codes else _normalize_codes(settings.get("allowed_invite_codes"))
         own_codes = set()
@@ -383,6 +401,12 @@ async def _hard_block_invite_message(message: discord.Message) -> None:
             notes.append("invite-allowed roles ignored")
         if override_allowed_channels:
             notes.append("allowed channels ignored")
+        elif invite_shield_enabled:
+            try:
+                if str(message.channel.id) in _normalize_id_list(settings.get("allowed_channel_ids")):
+                    notes.append("generic allowed channel ignored by Invite Shield")
+            except Exception:
+                pass
         if override_allowed_codes:
             notes.append("allowed invite codes ignored")
         if override_own_codes:
