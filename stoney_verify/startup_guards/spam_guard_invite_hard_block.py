@@ -6,6 +6,7 @@ import re
 from typing import Any, Iterable, Set
 
 import discord
+from discord import app_commands
 
 try:
     from stoney_verify.globals import bot
@@ -451,6 +452,175 @@ async def _hard_block_invite_message_edit(before: discord.Message, after: discor
         _log(f"edit handler error: {type(exc).__name__}: {exc}")
 
 
+
+async def _invite_shield_doctor(interaction: discord.Interaction, scan_limit: int = 10) -> None:
+    try:
+        if interaction.guild is None or not isinstance(interaction.channel, discord.TextChannel):
+            return await interaction.response.send_message("❌ Run this in a server text channel.", ephemeral=True)
+
+        # Permission gate mirrors staff/setup permission when available.
+        try:
+            from stoney_verify.commands_ext.public_setup_group import _require_setup_permission
+            if not await _require_setup_permission(interaction):
+                return
+        except Exception:
+            perms = interaction.user.guild_permissions if isinstance(interaction.user, discord.Member) else None
+            if not (perms and (perms.manage_guild or perms.administrator)):
+                return await interaction.response.send_message("❌ Manage Server required.", ephemeral=True)
+
+        guild = interaction.guild
+        channel = interaction.channel
+        me = guild.me
+        perms = channel.permissions_for(me) if isinstance(me, discord.Member) else None
+
+        from stoney_verify import spam_guard
+        settings = await spam_guard.get_spam_settings(guild.id)
+        runtime_enabled, invite_shield_enabled = await _invite_runtime_state(guild, settings)
+
+        listener_names = []
+        try:
+            events = list((getattr(bot, "extra_events", {}) or {}).get("on_message") or [])
+            listener_names = [f"{getattr(fn, '__module__', '?')}.{getattr(fn, '__name__', '?')}" for fn in events]
+        except Exception:
+            listener_names = []
+
+        inspected = []
+        codes_seen = []
+        raw_visible = False
+        embeds_seen = False
+        components_seen = False
+
+        try:
+            async for msg in channel.history(limit=max(1, min(int(scan_limit or 10), 25))):
+                raw = str(getattr(msg, "content", "") or "")
+                text = _message_text(msg)
+                codes = _extract_codes_from_message(msg)
+                if raw.strip():
+                    raw_visible = True
+                if getattr(msg, "embeds", None):
+                    embeds_seen = True
+                if getattr(msg, "components", None):
+                    components_seen = True
+                if codes:
+                    codes_seen.extend(codes)
+                inspected.append(
+                    f"• msg `{msg.id}` author `{getattr(msg.author, 'id', '?')}` "
+                    f"bot={bool(getattr(msg.author, 'bot', False))} "
+                    f"content_len={len(raw)} text_len={len(text)} embeds={len(getattr(msg, 'embeds', []) or [])} "
+                    f"components={len(getattr(msg, 'components', []) or [])} codes={','.join(codes) or 'none'}"
+                )
+        except discord.Forbidden:
+            inspected.append("❌ Cannot read recent message history in this channel.")
+        except Exception as exc:
+            inspected.append(f"❌ History scan failed: {type(exc).__name__}")
+
+        embed = discord.Embed(
+            title="🛡️ Invite Shield Doctor",
+            description=f"Channel: {channel.mention}",
+            color=discord.Color.green() if codes_seen else discord.Color.orange(),
+        )
+        embed.add_field(
+            name="Runtime",
+            value=(
+                f"Invite Shield enabled: `{invite_shield_enabled}`\n"
+                f"Runtime enabled: `{runtime_enabled}`\n"
+                f"on_message listeners: `{len(listener_names)}`"
+            ),
+            inline=False,
+        )
+        embed.add_field(
+            name="Bot permissions here",
+            value=(
+                f"View: `{bool(perms and perms.view_channel)}`\n"
+                f"Read history: `{bool(perms and perms.read_message_history)}`\n"
+                f"Send: `{bool(perms and perms.send_messages)}`\n"
+                f"Manage messages: `{bool(perms and perms.manage_messages)}`"
+            ),
+            inline=False,
+        )
+        embed.add_field(
+            name="Message visibility",
+            value=(
+                f"Can see raw content: `{raw_visible}`\n"
+                f"Can see embeds: `{embeds_seen}`\n"
+                f"Can see components: `{components_seen}`\n"
+                f"Invite codes found in last {len(inspected)} messages: `{', '.join(dict.fromkeys(codes_seen)) or 'none'}`"
+            ),
+            inline=False,
+        )
+
+        if not raw_visible and not embeds_seen and not components_seen:
+            embed.add_field(
+                name="Diagnosis",
+                value=(
+                    "❌ Dank Shield is not receiving message content/embed data in this channel. "
+                    "Enable the bot application's Message Content privileged intent in the Discord Developer Portal, then restart the bot."
+                ),
+                inline=False,
+            )
+        elif not codes_seen:
+            embed.add_field(
+                name="Diagnosis",
+                value=(
+                    "⚠️ Dank Shield can read messages, but did not detect invite codes in the recent scan window. "
+                    "Post a fresh invite and run this again immediately."
+                ),
+                inline=False,
+            )
+        elif not bool(perms and perms.manage_messages):
+            embed.add_field(
+                name="Diagnosis",
+                value="❌ Dank Shield can detect invites but cannot delete here because Manage Messages is missing.",
+                inline=False,
+            )
+        else:
+            embed.add_field(
+                name="Diagnosis",
+                value="✅ Dank Shield can see invite codes and has delete permission here. If live delete still fails, listener execution is failing and logs should show it.",
+                inline=False,
+            )
+
+        if listener_names:
+            embed.add_field(name="Listeners", value="\n".join(listener_names[:8])[:1024], inline=False)
+        if inspected:
+            embed.add_field(name="Recent messages inspected", value="\n".join(inspected[:8])[:1024], inline=False)
+
+        if interaction.response.is_done():
+            await interaction.followup.send(embed=embed, ephemeral=True, allowed_mentions=discord.AllowedMentions.none())
+        else:
+            await interaction.response.send_message(embed=embed, ephemeral=True, allowed_mentions=discord.AllowedMentions.none())
+    except Exception as exc:
+        try:
+            await interaction.response.send_message(f"❌ Invite Shield Doctor failed: `{type(exc).__name__}`", ephemeral=True)
+        except Exception:
+            pass
+
+
+def _register_invite_doctor_command() -> None:
+    try:
+        if bot is None:
+            return
+
+        existing = None
+        try:
+            existing = bot.tree.get_command("invite-shield-doctor")
+        except Exception:
+            existing = None
+        if existing is not None:
+            return
+
+        @app_commands.command(
+            name="invite-shield-doctor",
+            description="Diagnose why Discord invite links are not being deleted in this channel.",
+        )
+        async def invite_shield_doctor_command(interaction: discord.Interaction):
+            await _invite_shield_doctor(interaction)
+
+        bot.tree.add_command(invite_shield_doctor_command)
+        _log("registered /invite-shield-doctor")
+    except Exception as exc:
+        _log(f"doctor command registration failed: {type(exc).__name__}: {exc}")
+
 def install() -> bool:
     global _INSTALLED
     if _INSTALLED:
@@ -461,6 +631,7 @@ def install() -> bool:
     try:
         bot.add_listener(_hard_block_invite_message, "on_message")
         bot.add_listener(_hard_block_invite_message_edit, "on_message_edit")
+        _register_invite_doctor_command()
         _INSTALLED = True
         _log("active; rich external Discord invite links delete on create/edit when SpamGuard or Invite Shield is enabled")
         return True
