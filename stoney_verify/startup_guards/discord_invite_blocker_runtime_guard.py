@@ -22,6 +22,7 @@ except Exception:  # pragma: no cover
 _INSTALLED = False
 _SWEEP_TASKS: dict[tuple[int, int], asyncio.Task] = {}
 _LAST_SWEEP_AT: dict[tuple[int, int], float] = {}
+_SPLASH_LAST_AT: dict[tuple[int, int], float] = {}
 
 INVITE_RE = re.compile(
     r"(?:https?://)?(?:www\.)?(?:discord(?:app)?\.com/invite|discord\.gg)\s*/\s*([A-Za-z0-9-]+)",
@@ -317,6 +318,49 @@ def _invite_shield_runtime_on(cfg: Any, settings: dict[str, Any]) -> bool:
     return False
 
 
+
+async def _send_invite_shield_splash(channel: discord.TextChannel, *, deleted: int = 1, source: str = "live") -> None:
+    """Post a short temporary confirmation that Invite Shield handled an invite.
+
+    This avoids silent deletes while staying non-spammy.
+    """
+
+    try:
+        guild = channel.guild
+        key = (int(guild.id), int(channel.id))
+        now = time.monotonic()
+        last = float(_SPLASH_LAST_AT.get(key, 0.0) or 0.0)
+
+        # Prevent spam during raids/bump bursts.
+        if now - last < 12.0:
+            return
+        _SPLASH_LAST_AT[key] = now
+
+        me = guild.me
+        if not isinstance(me, discord.Member):
+            return
+
+        perms = channel.permissions_for(me)
+        if not perms.send_messages:
+            return
+
+        count_text = "an external Discord invite" if int(deleted or 1) <= 1 else f"{int(deleted)} external Discord invites"
+        msg = await channel.send(
+            f"🛡️ **Invite Shield blocked {count_text}.**\n"
+            "Only approved or this-server invite links are allowed here.",
+            allowed_mentions=discord.AllowedMentions.none(),
+        )
+
+        # Clean up the splash if possible. If Manage Messages is missing,
+        # the notice stays, which is still better than silent deletes.
+        try:
+            if perms.manage_messages:
+                await msg.delete(delay=8)
+        except Exception:
+            pass
+    except Exception as exc:
+        _log(f"splash failed source={source}: {type(exc).__name__}: {exc}")
+
 async def _sweep_channel_recent_invites(channel: discord.TextChannel, *, reason: str = "fallback") -> None:
     try:
         guild = channel.guild
@@ -341,6 +385,9 @@ async def _sweep_channel_recent_invites(channel: discord.TextChannel, *, reason:
         deleted = int((result or {}).get("deleted") or 0)
         matched = int((result or {}).get("matched") or 0)
         failed = int((result or {}).get("failed") or 0)
+
+        if deleted > 0:
+            await _send_invite_shield_splash(channel, deleted=deleted, source=reason)
 
         if matched or deleted or failed:
             _log(
@@ -440,6 +487,7 @@ async def _enforce_message(message: discord.Message, *, source: str = "message")
             return
 
         await _modlog(guild, effective_message, blocked or codes, f"{reason}; source={source}")
+        await _send_invite_shield_splash(effective_message.channel, deleted=len(blocked or codes), source=source)
         _log(
             "deleted invite "
             f"guild={guild.id} channel={effective_message.channel.id} message={effective_message.id} "
