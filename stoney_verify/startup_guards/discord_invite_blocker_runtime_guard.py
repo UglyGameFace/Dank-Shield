@@ -287,28 +287,84 @@ async def _should_handle(message: discord.Message, cfg: Any, settings: dict[str,
     return True, "Discord invite blocker is enabled", blocked
 
 
-async def _listener(message: discord.Message) -> None:
+async def _fetch_message_for_enforcement(message: discord.Message) -> discord.Message:
+    """Fetch the message back from Discord before deciding it has no invite.
+
+    Some invite cards/components/embeds are incomplete in the gateway payload, while
+    a REST/history read shows the invite correctly. The Invite Shield Doctor proved
+    that history can see invite codes even when live delete missed them.
+    """
+
+    try:
+        channel = getattr(message, "channel", None)
+        if isinstance(channel, discord.TextChannel):
+            fetched = await channel.fetch_message(int(message.id))
+            if isinstance(fetched, discord.Message):
+                return fetched
+    except Exception:
+        pass
+    return message
+
+
+async def _enforce_message(message: discord.Message, *, source: str = "message") -> None:
     try:
         guild = message.guild
         if guild is None or not isinstance(message.author, discord.Member):
             return
+        if not isinstance(message.channel, discord.TextChannel):
+            return
+
+        cfg, settings = await _load_policy(guild)
+
+        # First inspect the gateway payload.
         codes = _codes_from_text(_message_text(message))
+        effective_message = message
+
+        # If gateway did not expose a code, fetch the exact message through REST
+        # and inspect the hydrated message before giving up.
+        if not codes:
+            fetched = await _fetch_message_for_enforcement(message)
+            if fetched is not message:
+                effective_message = fetched
+                codes = _codes_from_text(_message_text(fetched))
+                if codes:
+                    _log(
+                        "REST fetch recovered invite codes "
+                        f"guild={guild.id} channel={message.channel.id} message={message.id} source={source} codes={','.join(codes[:5])}"
+                    )
+
         if not codes:
             return
-        cfg, settings = await _load_policy(guild)
-        should_handle, reason, blocked = await _should_handle(message, cfg, settings, codes)
+
+        should_handle, reason, blocked = await _should_handle(effective_message, cfg, settings, codes)
         if not should_handle:
             return
+
         try:
-            await message.delete(reason=f"Dank Shield Discord Invite Blocker: {reason}")
+            await effective_message.delete(reason=f"Dank Shield Discord Invite Blocker: {reason}")
         except discord.NotFound:
             return
         except discord.Forbidden:
-            await _modlog(guild, message, blocked or codes, "Missing Manage Messages permission")
+            await _modlog(guild, effective_message, blocked or codes, "Missing Manage Messages permission")
             return
-        await _modlog(guild, message, blocked or codes, reason)
+
+        await _modlog(guild, effective_message, blocked or codes, f"{reason}; source={source}")
+        _log(
+            "deleted invite "
+            f"guild={guild.id} channel={effective_message.channel.id} message={effective_message.id} "
+            f"author={effective_message.author.id} source={source} codes={','.join((blocked or codes)[:5])}"
+        )
     except Exception as exc:
-        _log(f"listener failed: {type(exc).__name__}: {exc}")
+        _log(f"enforcement failed source={source}: {type(exc).__name__}: {exc}")
+
+
+async def _listener(message: discord.Message) -> None:
+    await _enforce_message(message, source="create")
+
+
+async def _edit_listener(before: discord.Message, after: discord.Message) -> None:
+    _ = before
+    await _enforce_message(after, source="edit")
 
 
 def install() -> bool:
@@ -322,8 +378,13 @@ def install() -> bool:
         existing = list((getattr(bot, "extra_events", {}) or {}).get("on_message") or [])
         if not any(getattr(fn, "__name__", "") == "_listener" and getattr(fn, "__module__", "") == __name__ for fn in existing):
             bot.add_listener(_listener, "on_message")
+
+        existing_edits = list((getattr(bot, "extra_events", {}) or {}).get("on_message_edit") or [])
+        if not any(getattr(fn, "__name__", "") == "_edit_listener" and getattr(fn, "__module__", "") == __name__ for fn in existing_edits):
+            bot.add_listener(_edit_listener, "on_message_edit")
+
         _INSTALLED = True
-        _log("active; Discord invite links are handled independently from behavior spam")
+        _log("active; Discord invite links are handled independently from behavior spam using gateway+REST enforcement")
         return True
     except Exception as exc:
         _log(f"install failed: {type(exc).__name__}: {exc}")
