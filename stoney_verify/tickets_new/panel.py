@@ -544,26 +544,75 @@ def _is_staff_member(member: discord.Member) -> bool:
         return False
 
 
-def _is_unverified_only_user(member: discord.Member) -> bool:
+def _is_unverified_only_user(
+    member: discord.Member,
+    context: Any = None,
+) -> bool:
+    """Return True when the member should be routed directly to verification.
+
+    This intentionally ignores neutral roles such as Server Booster. The only
+    roles that block verification routing are configured access/staff roles.
+    """
+
     try:
         if getattr(member, "bot", False):
             return False
 
-        uv_id = _safe_int(UNVERIFIED_ROLE_ID, 0)
-        verified_id = _safe_int(VERIFIED_ROLE_ID, 0)
-        resident_id = _safe_int(RESIDENT_ROLE_ID, 0)
-        staff_id = _safe_int(STAFF_ROLE_ID, 0)
+        unverified_ids: List[int] = []
+        access_or_staff_ids: List[int] = []
 
-        if staff_id and _member_has_role_id(member, staff_id):
-            return False
-        if verified_id and _member_has_role_id(member, verified_id):
-            return False
-        if resident_id and _member_has_role_id(member, resident_id):
-            return False
-        if uv_id and _member_has_role_id(member, uv_id):
-            return True
+        def _add_unique(target: List[int], value: object) -> None:
+            rid = _safe_int(value, 0)
+            if rid > 0 and rid not in target:
+                target.append(rid)
 
-        return False
+        # Prefer per-guild config from GuildContext.
+        for key in (
+            "unverified_role_id",
+            "unverified_id",
+        ):
+            _add_unique(unverified_ids, _context_id(context, key))
+
+        for key in (
+            "verified_role_id",
+            "resident_role_id",
+            "member_role_id",
+            "staff_role_id",
+            "ticket_staff_role_id",
+            "support_role_id",
+            "mod_role_id",
+            "moderator_role_id",
+            "admin_role_id",
+        ):
+            _add_unique(access_or_staff_ids, _context_id(context, key))
+
+        # Legacy fallback remains for existing single-server/env installs.
+        _add_unique(unverified_ids, UNVERIFIED_ROLE_ID)
+        for value in (
+            VERIFIED_ROLE_ID,
+            RESIDENT_ROLE_ID,
+            STAFF_ROLE_ID,
+        ):
+            _add_unique(access_or_staff_ids, value)
+
+        if not unverified_ids:
+            return False
+
+        has_unverified = any(
+            _member_has_role_id(member, rid)
+            for rid in unverified_ids
+        )
+        if not has_unverified:
+            return False
+
+        has_access_or_staff = any(
+            _member_has_role_id(member, rid)
+            for rid in access_or_staff_ids
+        )
+        if has_access_or_staff:
+            return False
+
+        return True
     except Exception:
         return False
 
@@ -2798,7 +2847,8 @@ class TicketPanelView(discord.ui.View):
                 await _safe_followup(interaction, "Bots cannot create tickets.")
                 return
 
-            unverified_only = _is_unverified_only_user(user)
+            guild_context = await _ticket_panel_guild_context(guild)
+            unverified_only = _is_unverified_only_user(user, guild_context)
             _debug(
                 f"public-create click guild={guild.id} user={user.id} "
                 f"unverified_only={unverified_only} "
