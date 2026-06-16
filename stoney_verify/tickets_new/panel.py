@@ -17,6 +17,7 @@ from ..globals import (
     get_supabase,
 )
 from ..guild_context import get_guild_context
+from ..interaction_guard import run_guarded_interaction
 from .repository import get_ticket_by_any_channel_id
 from .service import (
     add_internal_note,
@@ -469,6 +470,33 @@ async def _safe_channel_send(
         return await channel.send(content=content, **kwargs)
     except Exception:
         return None
+
+
+async def _run_ticket_panel_action(
+    interaction: discord.Interaction,
+    action: Any,
+    label: str,
+) -> None:
+    async def _runner() -> None:
+        await action()
+
+    result = await run_guarded_interaction(
+        interaction,
+        _runner,
+        defer=False,
+        ephemeral=True,
+        error_title="❌ Ticket action failed",
+        error_guidance=(
+            f"Nothing was changed. Try **{label}** again. "
+            "If it keeps happening, run `/dank diagnostics` and check ticket logs."
+        ),
+    )
+
+    if not result.ok:
+        _debug(
+            f"guarded ticket action failed label={label!r} "
+            f"type={result.error_type!r} message={result.error_message!r}"
+        )
 
 
 def _member_has_role_id(member: discord.Member, role_id: int) -> bool:
@@ -2553,17 +2581,17 @@ class TicketActionSelect(discord.ui.Select):
         action = str(self.values[0] if self.values else "").strip()
 
         if action == "transfer":
-            return await _action_transfer(interaction)
+            return await _run_ticket_panel_action(interaction, lambda: _action_transfer(interaction), "transfer ticket")
         if action == "priority":
-            return await _action_set_priority(interaction)
+            return await _run_ticket_panel_action(interaction, lambda: _action_set_priority(interaction), "set priority")
         if action == "add_note":
-            return await _action_add_note(interaction)
+            return await _run_ticket_panel_action(interaction, lambda: _action_add_note(interaction), "add internal note")
         if action == "view_notes":
-            return await _action_view_notes(interaction)
+            return await _run_ticket_panel_action(interaction, lambda: _action_view_notes(interaction), "view internal notes")
         if action == "list_macros":
-            return await _action_list_macros(interaction)
+            return await _run_ticket_panel_action(interaction, lambda: _action_list_macros(interaction), "list macros")
         if action == "use_macro":
-            return await _action_use_macro(interaction)
+            return await _run_ticket_panel_action(interaction, lambda: _action_use_macro(interaction), "send macro")
 
         return await _safe_followup(interaction, "That ticket action is not available.")
 
@@ -2585,7 +2613,7 @@ class TicketChannelActionsView(discord.ui.View):
         interaction: discord.Interaction,
         button: discord.ui.Button,
     ):
-        await _action_claim(interaction)
+        await _run_ticket_panel_action(interaction, lambda: _action_claim(interaction), "claim ticket")
 
     @discord.ui.button(
         label="Unclaim",
@@ -2599,7 +2627,7 @@ class TicketChannelActionsView(discord.ui.View):
         interaction: discord.Interaction,
         button: discord.ui.Button,
     ):
-        await _action_unclaim(interaction)
+        await _run_ticket_panel_action(interaction, lambda: _action_unclaim(interaction), "unclaim ticket")
 
     @discord.ui.button(
         label="Ticket Info",
@@ -2613,7 +2641,7 @@ class TicketChannelActionsView(discord.ui.View):
         interaction: discord.Interaction,
         button: discord.ui.Button,
     ):
-        await _action_ticket_info(interaction)
+        await _run_ticket_panel_action(interaction, lambda: _action_ticket_info(interaction), "ticket info")
 
     @discord.ui.button(
         label="Close",
@@ -2627,7 +2655,7 @@ class TicketChannelActionsView(discord.ui.View):
         interaction: discord.Interaction,
         button: discord.ui.Button,
     ):
-        await _action_close(interaction)
+        await _run_ticket_panel_action(interaction, lambda: _action_close(interaction), "close ticket")
 
 
 class LegacyTicketChannelCompatibilityView(discord.ui.View):
@@ -2646,7 +2674,7 @@ class LegacyTicketChannelCompatibilityView(discord.ui.View):
         interaction: discord.Interaction,
         button: discord.ui.Button,
     ):
-        await _action_transfer(interaction)
+        await _run_ticket_panel_action(interaction, lambda: _action_transfer(interaction), "transfer ticket")
 
     @discord.ui.button(
         label="Set Priority",
@@ -2660,7 +2688,7 @@ class LegacyTicketChannelCompatibilityView(discord.ui.View):
         interaction: discord.Interaction,
         button: discord.ui.Button,
     ):
-        await _action_set_priority(interaction)
+        await _run_ticket_panel_action(interaction, lambda: _action_set_priority(interaction), "set priority")
 
     @discord.ui.button(
         label="Add Note",
@@ -2674,7 +2702,7 @@ class LegacyTicketChannelCompatibilityView(discord.ui.View):
         interaction: discord.Interaction,
         button: discord.ui.Button,
     ):
-        await _action_add_note(interaction)
+        await _run_ticket_panel_action(interaction, lambda: _action_add_note(interaction), "add internal note")
 
     @discord.ui.button(
         label="View Notes",
@@ -2688,7 +2716,7 @@ class LegacyTicketChannelCompatibilityView(discord.ui.View):
         interaction: discord.Interaction,
         button: discord.ui.Button,
     ):
-        await _action_view_notes(interaction)
+        await _run_ticket_panel_action(interaction, lambda: _action_view_notes(interaction), "view internal notes")
 
     @discord.ui.button(
         label="List Macros",
@@ -2702,7 +2730,7 @@ class LegacyTicketChannelCompatibilityView(discord.ui.View):
         interaction: discord.Interaction,
         button: discord.ui.Button,
     ):
-        await _action_list_macros(interaction)
+        await _run_ticket_panel_action(interaction, lambda: _action_list_macros(interaction), "list macros")
 
     @discord.ui.button(
         label="Use Macro",
@@ -2716,7 +2744,7 @@ class LegacyTicketChannelCompatibilityView(discord.ui.View):
         interaction: discord.Interaction,
         button: discord.ui.Button,
     ):
-        await _action_use_macro(interaction)
+        await _run_ticket_panel_action(interaction, lambda: _action_use_macro(interaction), "send macro")
 
 
 class TicketPanelView(discord.ui.View):
