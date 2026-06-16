@@ -264,7 +264,7 @@ async def _load_policy_cached(guild: discord.Guild, *, ttl_seconds: float = 8.0)
         if now - float(saved_at) <= float(ttl_seconds):
             return cfg, dict(settings or {})
 
-    cfg, settings = await _load_policy_cached(guild)
+    cfg, settings = await _load_policy(guild)
     _POLICY_CACHE[gid] = (now, cfg, dict(settings or {}))
     return cfg, dict(settings or {})
 
