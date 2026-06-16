@@ -84,6 +84,7 @@ _TRANSCRIPT_ATTACH_LOCKS: Dict[str, asyncio.Lock] = {}
 _LOCK_LAST_USED: Dict[str, float] = {}
 _LOCK_CLEANUP_INTERVAL_SECONDS = 600
 _LAST_LOCK_CLEANUP_AT = 0.0
+_GLOBAL_FALLBACK_WARNINGS: set[tuple[str, str, str]] = set()
 
 TICKET_NUM_RE = re.compile(r"^(?:ticket|closed)-(\d+)$", re.I)
 
@@ -94,6 +95,33 @@ _VALID_TICKET_STATUSES = {"open", "claimed", "closed", "deleted"}
 def _service_debug(msg: str) -> None:
     try:
         print(f"🧩 ticket_service {msg}")
+    except Exception:
+        pass
+
+
+def _warn_global_ticket_fallback(
+    *,
+    guild_id: Optional[int],
+    kind: str,
+    key: str,
+    value: Any,
+) -> None:
+    try:
+        gid = str(int(guild_id)) if guild_id else "unknown"
+    except Exception:
+        gid = "unknown"
+
+    warn_key = (gid, str(kind), str(key))
+    if warn_key in _GLOBAL_FALLBACK_WARNINGS:
+        return
+    _GLOBAL_FALLBACK_WARNINGS.add(warn_key)
+
+    try:
+        print(
+            "⚠️ ticket_service legacy global fallback used "
+            f"kind={kind} guild={gid} key={key} value={value!r}. "
+            "Prefer GuildContext/per-guild config before public release."
+        )
     except Exception:
         pass
 
@@ -840,26 +868,37 @@ def _resolve_ticket_parent_category(
     guild: discord.Guild,
     explicit_parent_category_id: Optional[int] = None,
 ) -> Optional[discord.CategoryChannel]:
-    ids_to_try: list[int] = []
+    ids_to_try: list[tuple[int, str, str]] = []
 
     if explicit_parent_category_id:
-        ids_to_try.append(_safe_int(explicit_parent_category_id, 0))
+        ids_to_try.append((
+            _safe_int(explicit_parent_category_id, 0),
+            "explicit",
+            "explicit_parent_category_id",
+        ))
 
     try:
         env_id = _safe_int(globals().get("TICKET_CATEGORY_ID"), 0)
         if env_id:
-            ids_to_try.append(env_id)
+            ids_to_try.append((env_id, "global", "TICKET_CATEGORY_ID"))
     except Exception:
         pass
 
     seen: set[int] = set()
-    for cid in ids_to_try:
+    for cid, source, key in ids_to_try:
         if not cid or cid in seen:
             continue
         seen.add(cid)
         try:
             maybe = guild.get_channel(int(cid))
             if isinstance(maybe, discord.CategoryChannel):
+                if source == "global":
+                    _warn_global_ticket_fallback(
+                        guild_id=int(guild.id),
+                        kind="ticket_parent_category",
+                        key=key,
+                        value=cid,
+                    )
                 return maybe
         except Exception:
             continue
@@ -1143,7 +1182,7 @@ def _build_overwrites(
     return overwrites
 
 
-def _default_staff_role_ids() -> list[int]:
+def _default_staff_role_ids(guild_id: Optional[int] = None) -> list[int]:
     ids: list[int] = []
 
     for key in ("STAFF_ROLE_ID", "MOD_ROLE_ID", "ADMIN_ROLE_ID"):
@@ -1154,6 +1193,14 @@ def _default_staff_role_ids() -> list[int]:
                 ids.append(rid)
         except Exception:
             continue
+
+    if ids:
+        _warn_global_ticket_fallback(
+            guild_id=guild_id,
+            kind="ticket_staff_roles",
+            key="STAFF_ROLE_ID/MOD_ROLE_ID/ADMIN_ROLE_ID",
+            value=",".join(str(x) for x in ids),
+        )
 
     return ids
 
@@ -1178,7 +1225,7 @@ async def _apply_closed_permissions(
             read_message_history=True,
         )
 
-    roles = staff_role_ids or _default_staff_role_ids()
+    roles = staff_role_ids or _default_staff_role_ids(guild_id=guild.id)
     for role_id in roles:
         role = guild.get_role(int(role_id))
         if role is None:
@@ -1211,7 +1258,7 @@ async def _apply_open_permissions(
     overwrites = _build_overwrites(
         guild,
         owner,
-        staff_role_ids=staff_role_ids or _default_staff_role_ids(),
+        staff_role_ids=staff_role_ids or _default_staff_role_ids(guild_id=guild.id),
         closed=False,
     )
     try:
@@ -1569,7 +1616,7 @@ async def _sync_existing_open_ticket_channel(
         await _apply_open_permissions(
             channel,
             owner,
-            staff_role_ids=_default_staff_role_ids(),
+            staff_role_ids=_default_staff_role_ids(guild_id=channel.guild.id),
         )
     except Exception:
         pass
@@ -1754,7 +1801,7 @@ async def create_ticket_channel(
         )
 
         all_staff_role_ids = list(staff_role_ids or [])
-        for rid in _default_staff_role_ids():
+        for rid in _default_staff_role_ids(guild_id=guild.id):
             if rid not in all_staff_role_ids:
                 all_staff_role_ids.append(rid)
 
@@ -2021,7 +2068,7 @@ async def sync_existing_ticket_channel(
                 await _apply_open_permissions(
                     channel,
                     owner_member,
-                    staff_role_ids=_default_staff_role_ids(),
+                    staff_role_ids=_default_staff_role_ids(guild_id=channel.guild.id),
                 )
                 await _move_ticket_to_active_if_configured(channel)
                 await _refresh_open_ticket_ui(
@@ -2033,7 +2080,7 @@ async def sync_existing_ticket_channel(
                 await _apply_closed_permissions(
                     channel,
                     owner_member,
-                    staff_role_ids=_default_staff_role_ids(),
+                    staff_role_ids=_default_staff_role_ids(guild_id=channel.guild.id),
                 )
                 await _move_ticket_to_archive_if_configured(channel)
         except Exception:
@@ -2100,7 +2147,7 @@ async def mark_ticket_closed(
             await _apply_closed_permissions(
                 channel,
                 owner_member,
-                staff_role_ids=_default_staff_role_ids(),
+                staff_role_ids=_default_staff_role_ids(guild_id=channel.guild.id),
             )
         except Exception as e:
             print(f"⚠️ Failed applying closed permissions for {channel.id}: {repr(e)}")
@@ -2847,7 +2894,7 @@ async def reopen_ticket_channel(
         await _apply_open_permissions(
             channel,
             owner,
-            staff_role_ids=staff_role_ids or _default_staff_role_ids(),
+            staff_role_ids=staff_role_ids or _default_staff_role_ids(guild_id=guild.id),
         )
 
         moved_to_active = False
