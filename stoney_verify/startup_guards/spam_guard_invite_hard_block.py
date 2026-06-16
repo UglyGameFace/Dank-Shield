@@ -134,6 +134,52 @@ async def _own_invite_codes(guild: discord.Guild) -> Set[str]:
         return set()
 
 
+async def _invite_shield_runtime_enabled(
+    guild: discord.Guild,
+    settings: dict[str, Any],
+) -> bool:
+    """Invite auto-delete is active when Spam Guard or Invite Shield is enabled.
+
+    Protection Center stores Invite Shield in guild automod config, while the
+    older Spam Guard engine stores its master toggle in security settings.
+    The live invite listener must honor both without turning every spam rule on.
+    """
+
+    try:
+        if _safe_bool(settings.get("enabled"), False):
+            return True
+
+        # Backward/forward compatible settings keys if another guard cached them.
+        for key in (
+            "invite_shield_enabled",
+            "invite_hard_block_enabled",
+            "automod_block_invites",
+            "block_invites",
+        ):
+            if key in settings and _safe_bool(settings.get(key), False):
+                return True
+            spam_key = f"spam_{key}"
+            if spam_key in settings and _safe_bool(settings.get(spam_key), False):
+                return True
+
+        # Production Protection Center toggle lives in guild config.
+        try:
+            from stoney_verify.commands_ext import public_protection_center as center
+
+            cfg = await center.get_guild_config(int(guild.id), refresh=True)
+            if center._cfg_bool(cfg, "automod_block_invites", False):
+                return True
+        except Exception as exc:
+            _log(
+                "invite shield guild-config check failed "
+                f"guild={getattr(guild, 'id', 'unknown')} error={type(exc).__name__}"
+            )
+
+        return False
+    except Exception:
+        return False
+
+
 async def _modlog(guild: discord.Guild, message: discord.Message, codes: list[str], reason: str) -> None:
     try:
         from stoney_verify.modlog import send_mod_log  # type: ignore
@@ -172,7 +218,7 @@ async def _hard_block_invite_message(message: discord.Message) -> None:
         from stoney_verify import spam_guard
 
         settings = await spam_guard.get_spam_settings(guild.id)
-        if not bool(settings.get("enabled")):
+        if not await _invite_shield_runtime_enabled(guild, settings):
             return
 
         include_all_bots = _safe_bool(_first_setting(settings, "invite_hard_block_target_all_bots", "invite_target_all_bots"), False)
@@ -235,11 +281,23 @@ async def _hard_block_invite_message(message: discord.Message) -> None:
             reason += "; policy: " + ", ".join(notes)
 
         try:
-            await message.delete(reason="SpamGuard invite protection: external Discord invite link")
+            await message.delete(reason="Dank Shield Invite Shield: external Discord invite link")
             await _modlog(guild, message, blocked, reason)
+            _log(
+                "deleted external invite "
+                f"guild={guild.id} channel={message.channel.id} author={message.author.id} codes={','.join(blocked[:5])}"
+            )
         except discord.Forbidden:
+            _log(
+                "delete forbidden "
+                f"guild={guild.id} channel={message.channel.id} author={message.author.id}"
+            )
             await _modlog(guild, message, blocked, "bot lacks Manage Messages in that channel")
         except Exception as exc:
+            _log(
+                "delete failed "
+                f"guild={guild.id} channel={message.channel.id} author={message.author.id} error={type(exc).__name__}"
+            )
             await _modlog(guild, message, blocked, f"delete failed: {type(exc).__name__}")
     except Exception as exc:
         _log(f"handler error: {type(exc).__name__}: {exc}")
