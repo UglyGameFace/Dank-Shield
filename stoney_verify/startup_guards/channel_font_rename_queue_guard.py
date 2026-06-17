@@ -129,6 +129,45 @@ def _bot_member(guild: discord.Guild) -> discord.Member | None:
         return None
 
 
+def _is_font_blocker(reason: Any) -> bool:
+    text = str(reason or "").strip().lower()
+    return (
+        text.startswith("selected font")
+        or "decode proof" in text
+        or "did not visibly transform" in text
+        or "font is unavailable" in text
+    )
+
+
+def _split_blockers(blocked: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    access: list[dict[str, Any]] = []
+    font: list[dict[str, Any]] = []
+    for row in blocked:
+        if _is_font_blocker(row.get("blocked_reason")):
+            font.append(row)
+        else:
+            access.append(row)
+    return access, font
+
+
+def _with_safe_font(options: dict[str, str]) -> dict[str, str]:
+    new_options = dict(options or {})
+    new_options["unicodeStyle"] = "bold_sans"
+    new_options["unicode_style"] = "bold_sans"
+    new_options["font"] = "bold_sans"
+    return new_options
+
+
+def _has_font_blockers_for_user(guild_id: int, user_id: int) -> bool:
+    payload = _PENDING.get(_key(int(guild_id), int(user_id))) or {}
+    return bool(payload.get("blocked_font"))
+
+
+def _has_access_blockers_for_user(guild_id: int, user_id: int) -> bool:
+    payload = _PENDING.get(_key(int(guild_id), int(user_id))) or {}
+    return bool(payload.get("blocked_access"))
+
+
 def _bot_access_reason(guild: discord.Guild, channel: Any) -> str | None:
     me = _bot_member(guild)
     if me is None:
@@ -214,24 +253,49 @@ def _blocked_text(blocked: list[dict[str, Any]], limit: int = 8) -> str:
 async def _preview_embed(guild: discord.Guild, user_id: int, options: dict[str, str]) -> tuple[discord.Embed, list[dict[str, Any]]]:
     _purge()
     plan, blocked, policy_skipped = await _build_plan_parts(guild, options)
-    _PENDING[_key(int(guild.id), int(user_id))] = {"created_at": time.time(), "plan": plan, "options": dict(options), "blocked": blocked, "policy_skipped": policy_skipped}
+    access_blocked, font_blocked = _split_blockers(blocked)
+
+    _PENDING[_key(int(guild.id), int(user_id))] = {
+        "created_at": time.time(),
+        "plan": plan,
+        "options": dict(options),
+        "blocked": blocked,
+        "blocked_access": access_blocked,
+        "blocked_font": font_blocked,
+        "policy_skipped": policy_skipped,
+    }
+
     embed = discord.Embed(
         title="🔤 Preview Channel Font Renames",
         description=(
             "Nothing has been changed yet. Apply only includes channels marked ready.\n\n"
-            "Blocked channels are not silently skipped — fix bot access first, then run a fresh preview."
+            "Bot-access blockers can be repaired. Font blockers mean the selected font cannot safely transform those letters."
         ),
         color=discord.Color.orange() if blocked else (discord.Color.green() if plan else discord.Color.blurple()),
     )
     embed.add_field(name="Ready to rename", value=str(len(plan)), inline=True)
-    embed.add_field(name="Blocked by bot access", value=str(len(blocked)), inline=True)
+    embed.add_field(name="Blocked by bot access", value=str(len(access_blocked)), inline=True)
+    embed.add_field(name="Blocked by selected font", value=str(len(font_blocked)), inline=True)
     embed.add_field(name="Protected by policy", value=str(policy_skipped), inline=True)
     embed.add_field(name="Batch size", value=str(DEFAULT_BATCH_SIZE), inline=True)
     embed.add_field(name="Delay between edits", value=f"{DEFAULT_DELAY_SECONDS:.1f}s", inline=True)
-    if blocked:
-        embed.add_field(name="Fix before applying", value=_blocked_text(blocked), inline=False)
+
+    if access_blocked:
+        embed.add_field(name="Fix bot access before applying", value=_blocked_text(access_blocked), inline=False)
+    if font_blocked:
+        embed.add_field(
+            name="Auto-fix available",
+            value=(
+                "The selected font cannot transform some letters. "
+                "Use **Auto-Fix Unsupported Font** to switch this preview to a safer supported font."
+            ),
+            inline=False,
+        )
+        embed.add_field(name="Font blockers", value=_blocked_text(font_blocked), inline=False)
+
     embed.add_field(name="Ready preview", value=_plan_text(plan), inline=False)
     return embed, plan
+
 
 
 def _remaining_plan(guild_id: int, user_id: int) -> list[dict[str, Any]]:
@@ -336,13 +400,72 @@ class QueuedFontRenamePreviewButton(discord.ui.Button):
         from stoney_verify.startup_guards.setup_channel_font_mode_guard import load_channel_font_options
         options = await load_channel_font_options(int(interaction.guild.id))
         embed, plan = await _preview_embed(interaction.guild, int(interaction.user.id), options)
-        await interaction.response.edit_message(embed=embed, view=QueuedFontRenameConfirmView(enabled=bool(plan)))
+        pending = _PENDING.get(_key(int(interaction.guild.id), int(interaction.user.id))) or {}
+        await interaction.response.edit_message(
+            embed=embed,
+            view=QueuedFontRenameConfirmView(
+                enabled=bool(plan),
+                can_fix_access=bool(pending.get("blocked_access")),
+                can_fix_font=bool(pending.get("blocked_font")),
+            ),
+        )
+
+
+class AutoFixUnsupportedFontButton(discord.ui.Button):
+    def __init__(self) -> None:
+        super().__init__(
+            label="Auto-Fix Unsupported Font",
+            emoji="🧩",
+            style=discord.ButtonStyle.primary,
+            custom_id="dank_setup_font:auto_fix_unsupported_font",
+            row=1,
+        )
+
+    async def callback(self, interaction: discord.Interaction) -> None:  # type: ignore[override]
+        if not await _require_setup(interaction):
+            return
+        guild = interaction.guild
+        if guild is None:
+            return await interaction.response.send_message("❌ This must be used inside a server.", ephemeral=True)
+
+        pending = _PENDING.get(_key(int(guild.id), int(interaction.user.id))) or {}
+        if not pending.get("blocked_font"):
+            return await interaction.response.send_message(
+                "No unsupported-font blockers found. Run a fresh preview first.",
+                ephemeral=True,
+                allowed_mentions=discord.AllowedMentions.none(),
+            )
+
+        fixed_options = _with_safe_font(dict(pending.get("options") or {}))
+        embed, plan = await _preview_embed(guild, int(interaction.user.id), fixed_options)
+        refreshed = _PENDING.get(_key(int(guild.id), int(interaction.user.id))) or {}
+        embed.add_field(
+            name="Auto-fix applied",
+            value="Switched this preview to **Bold Sans**, a safer supported font.",
+            inline=False,
+        )
+        await interaction.response.edit_message(
+            embed=embed,
+            view=QueuedFontRenameConfirmView(
+                enabled=bool(plan),
+                can_fix_access=bool(refreshed.get("blocked_access")),
+                can_fix_font=bool(refreshed.get("blocked_font")),
+            ),
+        )
 
 
 class QueuedFontRenameConfirmView(discord.ui.View):
-    def __init__(self, *, enabled: bool) -> None:
+    def __init__(self, *, enabled: bool, can_fix_access: bool = False, can_fix_font: bool = False) -> None:
         super().__init__(timeout=900)
         self.apply_preview.disabled = not enabled
+        if can_fix_access:
+            try:
+                from stoney_verify.startup_guards.channel_font_access_repair_guard import FontAccessRepairButton
+                self.add_item(FontAccessRepairButton())
+            except Exception:
+                pass
+        if can_fix_font:
+            self.add_item(AutoFixUnsupportedFontButton())
 
     @discord.ui.button(label="Apply Next Safe Batch", emoji="✅", style=discord.ButtonStyle.danger, custom_id="dank_setup_font:apply_preview", row=0)
     async def apply_preview(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
@@ -410,7 +533,7 @@ class QueuedFontRenameDoneView(discord.ui.View):
 
     @discord.ui.button(label="Apply Next Safe Batch", emoji="✅", style=discord.ButtonStyle.danger, custom_id="dank_setup_font:continue_apply", row=0)
     async def continue_apply(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        view = QueuedFontRenameConfirmView(enabled=True)
+        view = QueuedFontRenameConfirmView(enabled=True, can_fix_access=False, can_fix_font=False)
         await view.apply_preview.callback(interaction)  # type: ignore[attr-defined]
 
     @discord.ui.button(label="Undo Last Font Rename", emoji="↩️", style=discord.ButtonStyle.danger, custom_id="dank_setup_font:undo_last", row=0)

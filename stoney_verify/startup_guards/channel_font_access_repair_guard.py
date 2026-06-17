@@ -8,6 +8,7 @@ rename those exact channels/categories.
 """
 
 from typing import Any
+import inspect
 
 import discord
 
@@ -91,9 +92,9 @@ class FontAccessRepairButton(discord.ui.Button):
         if guild is None:
             return await _reply(interaction, "❌ This must be used inside a server.")
         pending = guard._PENDING.get(guard._key(int(guild.id), int(interaction.user.id))) or {}
-        blocked = list(pending.get("blocked") or [])
+        blocked = list(pending.get("blocked_access") or [])
         if not blocked:
-            return await _reply(interaction, "No blocked font targets found. Run a fresh preview first.")
+            return await _reply(interaction, "No bot-access blockers found. If the selected font cannot transform letters, use Auto-Fix Unsupported Font instead.")
         await interaction.response.defer(ephemeral=True, thinking=False)
 
         async def job() -> dict[str, list[str]]:
@@ -140,6 +141,12 @@ def apply() -> bool:
         view_cls = getattr(guard, "QueuedFontRenameConfirmView", None)
         if view_cls is None:
             return False
+        try:
+            if "can_fix_access" in inspect.signature(view_cls.__init__).parameters:
+                _PATCHED = True
+                return True
+        except Exception:
+            pass
         if getattr(view_cls, "_font_access_repair_patched", False):
             _PATCHED = True
             return True
