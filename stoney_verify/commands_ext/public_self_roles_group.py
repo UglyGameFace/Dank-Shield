@@ -8,6 +8,7 @@ from discord import app_commands
 from .public_setup_group import _require_setup_permission, stoney_group
 
 SELF_ROLE_PREFIX = "dank:selfrole:v1:"
+CUSTOM_IDENTITY_ROLE_NAME = "Identity: custom / ask staff"
 _ATTACHED = False
 _LISTENER_ATTACHED = False
 
@@ -100,6 +101,133 @@ async def _reply(interaction: discord.Interaction, content: str, *, ok: bool = T
         pass
 
 
+def _is_custom_identity_role(role: discord.Role) -> bool:
+    try:
+        return _role_name_key(role.name) == _role_name_key(CUSTOM_IDENTITY_ROLE_NAME)
+    except Exception:
+        return False
+
+
+def _clean_custom_identity_label(value: Any) -> str:
+    text = str(value or "").strip()
+    text = text.replace("@everyone", "everyone").replace("@here", "here")
+    text = " ".join(text.split())
+    return text[:80]
+
+
+async def _custom_identity_staff_channel(guild: discord.Guild) -> Optional[discord.TextChannel]:
+    try:
+        from stoney_verify.guild_config import get_guild_config
+        from stoney_verify.commands_ext import public_modlog_group as modlog
+
+        cfg = await get_guild_config(int(guild.id), refresh=True)
+        channel = modlog._modlog_channel(guild, cfg)
+        if isinstance(channel, discord.TextChannel):
+            return channel
+    except Exception:
+        pass
+
+    try:
+        for name in ("mod-log", "modlog", "staff-log", "staff", "support"):
+            for channel in list(getattr(guild, "text_channels", []) or []):
+                raw = str(getattr(channel, "name", "") or "").lower().replace("_", "-").replace(" ", "-")
+                if name in raw and isinstance(channel, discord.TextChannel):
+                    return channel
+    except Exception:
+        pass
+
+    return None
+
+
+async def _send_custom_identity_request(
+    interaction: discord.Interaction,
+    *,
+    requested_label: str,
+    role_id: int,
+) -> None:
+    guild = interaction.guild
+    member = interaction.user if isinstance(interaction.user, discord.Member) else None
+
+    if guild is None or member is None:
+        await _reply(interaction, "This only works inside the server.", ok=False)
+        return
+
+    label = _clean_custom_identity_label(requested_label)
+    if not label:
+        await _reply(interaction, "Enter the custom identity label you want staff to review.", ok=False)
+        return
+
+    channel = await _custom_identity_staff_channel(guild)
+    if not isinstance(channel, discord.TextChannel):
+        await _reply(
+            interaction,
+            "I could not find a staff/modlog channel for custom identity requests. Ask staff directly, or set a modlog channel with `/dank modlog pick-channel`.",
+            ok=False,
+        )
+        return
+
+    try:
+        me = guild.me
+        perms = channel.permissions_for(me) if isinstance(me, discord.Member) else None
+        if perms is None or not perms.view_channel or not perms.send_messages or not perms.embed_links:
+            await _reply(
+                interaction,
+                f"I found {channel.mention}, but I am missing View Channel, Send Messages, or Embed Links there. Staff request was not posted.",
+                ok=False,
+            )
+            return
+    except Exception:
+        pass
+
+    embed = discord.Embed(
+        title="🪪 Custom Identity Role Request",
+        description=(
+            "A member tapped **Identity: custom / ask staff** and requested a custom identity label.\\n\\n"
+            "Staff should review this manually before creating or assigning a new role."
+        ),
+        color=discord.Color.blurple(),
+        timestamp=discord.utils.utcnow(),
+    )
+    embed.add_field(name="Member", value=f"{member.mention}\\n`{member}` (`{member.id}`)", inline=False)
+    embed.add_field(name="Requested label", value=f"`{label}`", inline=False)
+    embed.add_field(
+        name="Staff action",
+        value=(
+            "If approved, create a normal cosmetic role and add it to the role panel later. "
+            "Do not use custom identity roles for staff, tickets, verification, permissions, or access."
+        ),
+        inline=False,
+    )
+    embed.set_footer(text=f"Dank Shield self-role custom identity request • role_id={int(role_id)}")
+
+    try:
+        await channel.send(embed=embed, allowed_mentions=discord.AllowedMentions.none())
+        await _reply(interaction, f"Custom identity request sent to staff: `{label}`", ok=True)
+    except Exception as exc:
+        await _reply(interaction, f"Could not send the custom identity request: {type(exc).__name__}.", ok=False)
+
+
+class CustomIdentityRequestModal(discord.ui.Modal, title="Request Custom Identity"):
+    requested_label = discord.ui.TextInput(
+        label="Custom identity label",
+        placeholder="Example: genderqueer, demigirl, Two-Spirit, questioning, etc.",
+        min_length=2,
+        max_length=80,
+        required=True,
+    )
+
+    def __init__(self, *, role_id: int) -> None:
+        super().__init__(timeout=300)
+        self.role_id = int(role_id)
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        await _send_custom_identity_request(
+            interaction,
+            requested_label=str(self.requested_label.value or ""),
+            role_id=self.role_id,
+        )
+
+
 async def _handle_self_role(interaction: discord.Interaction) -> bool:
     try:
         if interaction.type is not discord.InteractionType.component:
@@ -116,6 +244,16 @@ async def _handle_self_role(interaction: discord.Interaction) -> bool:
         if not isinstance(role, discord.Role):
             await _reply(interaction, "That role no longer exists.", ok=False)
             return True
+        if _is_custom_identity_role(role):
+            try:
+                if not interaction.response.is_done():
+                    await interaction.response.send_modal(CustomIdentityRequestModal(role_id=int(role.id)))
+                else:
+                    await _reply(interaction, "Open the role panel again and tap the custom identity button.", ok=False)
+            except Exception as exc:
+                await _reply(interaction, f"Could not open the custom identity form: {type(exc).__name__}.", ok=False)
+            return True
+
         ok, why = _can_manage(role, interaction.guild)
         if not ok:
             await _reply(interaction, why, ok=False)
@@ -170,6 +308,15 @@ async def _post_panel(interaction: discord.Interaction, channel: discord.TextCha
         timestamp=discord.utils.utcnow(),
     )
     embed.add_field(name="Roles", value="\n".join(f"• {role.mention}" for role in roles)[:1024], inline=False)
+    if any(_is_custom_identity_role(role) for role in roles):
+        embed.add_field(
+            name="Custom identity",
+            value=(
+                "Tap **Identity: custom / ask staff** to privately request a label that is not listed. "
+                "Staff review custom identity requests before adding new roles."
+            ),
+            inline=False,
+        )
     embed.add_field(
         name="Safety note",
         value="These roles are optional and cosmetic only. They should not be used for verification, tickets, moderation, staff permissions, or server access.",
@@ -178,9 +325,9 @@ async def _post_panel(interaction: discord.Interaction, channel: discord.TextCha
     embed.set_footer(text="Dank Shield self-role panel")
     try:
         await channel.send(embed=embed, view=SelfRolePanelView(roles), allowed_mentions=discord.AllowedMentions.none())
-        await interaction.followup.send(f"✅ Self-role panel posted in {channel.mention}.", ephemeral=True)
+        await interaction.followup.send(f"✅ Self-role panel posted in {channel.mention}.", ephemeral=True, allowed_mentions=discord.AllowedMentions.none())
     except Exception as exc:
-        await interaction.followup.send(f"❌ Could not post self-role panel: `{type(exc).__name__}: {exc}`", ephemeral=True)
+        await interaction.followup.send(f"❌ Could not post self-role panel: `{type(exc).__name__}: {str(exc)[:250]}`", ephemeral=True, allowed_mentions=discord.AllowedMentions.none())
 
 
 async def _create_reuse_roles(
@@ -346,6 +493,61 @@ async def roles_identity(
         description=(
             "Optional identity roles are for self-expression only. You can skip this panel entirely, "
             "pick one, pick multiple if they fit, or use custom / ask staff if your label is not listed."
+        ),
+    )
+    await _send_creation_notes(interaction, created=created, reused=reused)
+
+
+@roles_group.command(name="setup", description="Create/reuse pronoun + identity roles and post one complete role picker.")
+@app_commands.describe(
+    channel="Where to post the complete role-picker panel.",
+    title="Optional panel title.",
+)
+async def roles_setup(
+    interaction: discord.Interaction,
+    channel: discord.TextChannel,
+    title: str = "Role Picker",
+) -> None:
+    if not await _require_setup_permission(interaction):
+        return
+    guild = interaction.guild
+    if guild is None:
+        return await _reply(interaction, "This command must be used inside a server.", ok=False)
+
+    ok, why = _bot_can_create_roles(guild)
+    if not ok:
+        return await _reply(interaction, why, ok=False)
+
+    try:
+        if not interaction.response.is_done():
+            await interaction.response.defer(ephemeral=True, thinking=True)
+    except Exception:
+        pass
+
+    try:
+        role_names = DEFAULT_PRONOUN_ROLE_NAMES + DEFAULT_IDENTITY_ROLE_NAMES
+        roles, created, reused = await _create_reuse_roles(
+            interaction,
+            guild,
+            role_names,
+            reason_label="complete pronoun and identity",
+        )
+    except Exception as exc:
+        return await interaction.followup.send(
+            f"❌ Could not create/reuse complete role picker roles: `{type(exc).__name__}: {str(exc)[:250]}`",
+            ephemeral=True,
+            allowed_mentions=discord.AllowedMentions.none(),
+        )
+
+    await _post_panel(
+        interaction,
+        channel,
+        title,
+        roles,
+        description=(
+            "Pick the optional pronoun and identity roles you want shown in this server. "
+            "Tap a role again to remove it. These roles are cosmetic only and never control server access.\\n\\n"
+            "Need a label that is not listed? Tap **Identity: custom / ask staff** and send a private request to staff."
         ),
     )
     await _send_creation_notes(interaction, created=created, reused=reused)
