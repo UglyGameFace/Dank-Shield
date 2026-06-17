@@ -261,20 +261,120 @@ def _role_labels(roles: list[discord.Role]) -> str:
     return ", ".join(_short_role_label(role.name) for role in roles)[:1024]
 
 
-def _profile_card(member: discord.Member) -> discord.Embed:
+PROFILE_CARD_PAGE_SIZE = 8
+PROFILE_CARD_FIELD_SOFT_LIMIT = 900
+
+
+def _profile_role_detail_lines(roles: list[discord.Role]) -> str:
+    if not roles:
+        return "Not set"
+    lines = []
+    for role in roles:
+        lines.append(f"• **{_short_role_label(role.name)}** — {role.mention}")
+    return "\n".join(lines)[:1024]
+
+
+def _profile_role_entries(member: discord.Member) -> list[tuple[str, str, discord.Role]]:
+    entries: list[tuple[str, str, discord.Role]] = []
+
+    for role in _member_profile_roles(member, DEFAULT_PRONOUN_ROLE_NAMES):
+        entries.append(("🪪", "Pronouns", role))
+
+    for role in _member_profile_roles(member, DEFAULT_IDENTITY_ROLE_NAMES):
+        entries.append(("🌈", "Identity", role))
+
+    try:
+        interest_names = DEFAULT_INTEREST_ROLE_NAMES
+    except NameError:
+        interest_names = tuple()
+
+    for role in _member_profile_roles(member, interest_names):
+        entries.append(("🎮", "Interests", role))
+
+    return entries
+
+
+def _profile_card_needs_pagination(member: discord.Member) -> bool:
     pronouns = _member_profile_roles(member, DEFAULT_PRONOUN_ROLE_NAMES)
     identity = _member_profile_roles(member, DEFAULT_IDENTITY_ROLE_NAMES)
-    interests = _member_profile_roles(member, DEFAULT_INTEREST_ROLE_NAMES)
+
+    try:
+        interest_names = DEFAULT_INTEREST_ROLE_NAMES
+    except NameError:
+        interest_names = tuple()
+
+    interests = _member_profile_roles(member, interest_names)
+    all_roles = pronouns + identity + interests
+
+    if len(all_roles) > PROFILE_CARD_PAGE_SIZE:
+        return True
+
+    for role_group in (pronouns, identity, interests):
+        if len(_profile_role_detail_lines(role_group)) > PROFILE_CARD_FIELD_SOFT_LIMIT:
+            return True
+
+    return False
+
+
+def _profile_card_page_count(member: discord.Member) -> int:
+    entries = _profile_role_entries(member)
+    if not entries:
+        return 1
+    return max(1, (len(entries) + PROFILE_CARD_PAGE_SIZE - 1) // PROFILE_CARD_PAGE_SIZE)
+
+
+def _profile_card(member: discord.Member, *, page: int = 0) -> discord.Embed:
+    pronouns = _member_profile_roles(member, DEFAULT_PRONOUN_ROLE_NAMES)
+    identity = _member_profile_roles(member, DEFAULT_IDENTITY_ROLE_NAMES)
+
+    try:
+        interest_names = DEFAULT_INTEREST_ROLE_NAMES
+    except NameError:
+        interest_names = tuple()
+
+    interests = _member_profile_roles(member, interest_names)
+    total_roles = len(pronouns) + len(identity) + len(interests)
+
+    needs_pages = _profile_card_needs_pagination(member)
+    page_count = _profile_card_page_count(member)
+    page = max(0, min(int(page or 0), page_count - 1))
 
     embed = discord.Embed(
         title=f"{member.display_name}'s Profile",
+        description="Profile roles shown below are cosmetic only.",
         color=discord.Color.blurple(),
         timestamp=discord.utils.utcnow(),
     )
-    embed.add_field(name="🪪 Pronouns", value=_role_labels(pronouns), inline=False)
-    embed.add_field(name="🌈 Identity", value=_role_labels(identity), inline=False)
-    embed.add_field(name="🎮 Interests", value=_role_labels(interests), inline=False)
-    embed.add_field(name="Profile roles", value=str(len(pronouns) + len(identity) + len(interests)), inline=True)
+
+    if not needs_pages:
+        embed.add_field(name="🪪 Pronouns", value=_profile_role_detail_lines(pronouns), inline=False)
+        embed.add_field(name="🌈 Identity", value=_profile_role_detail_lines(identity), inline=False)
+        embed.add_field(name="🎮 Interests", value=_profile_role_detail_lines(interests), inline=False)
+    else:
+        entries = _profile_role_entries(member)
+        start = page * PROFILE_CARD_PAGE_SIZE
+        shown = entries[start:start + PROFILE_CARD_PAGE_SIZE]
+
+        if shown:
+            lines = [
+                f"• {emoji} **{section}:** **{_short_role_label(role.name)}** — {role.mention}"
+                for emoji, section, role in shown
+            ]
+            embed.add_field(
+                name=f"Profile roles {start + 1}-{start + len(shown)} of {len(entries)}",
+                value="\n".join(lines)[:1024],
+                inline=False,
+            )
+        else:
+            embed.add_field(name="Profile roles", value="Not set", inline=False)
+
+        embed.add_field(
+            name="Pages",
+            value=f"Page {page + 1}/{page_count}",
+            inline=True,
+        )
+
+    embed.add_field(name="Profile roles", value=str(total_roles), inline=True)
 
     if member.joined_at:
         embed.add_field(name="Joined server", value=discord.utils.format_dt(member.joined_at, style="D"), inline=True)
@@ -287,6 +387,60 @@ def _profile_card(member: discord.Member) -> discord.Embed:
 
     embed.set_footer(text="Dank Shield profile")
     return embed
+
+
+class ProfileCardPageView(discord.ui.View):
+    def __init__(self, *, member_id: int, page: int = 0) -> None:
+        super().__init__(timeout=300)
+        self.member_id = int(member_id)
+        self.page = max(0, int(page or 0))
+
+    async def _flip(self, interaction: discord.Interaction, delta: int) -> None:
+        guild = interaction.guild
+        if guild is None:
+            return await _reply(interaction, "This only works inside the server.", ok=False)
+
+        member = guild.get_member(self.member_id)
+        if not isinstance(member, discord.Member):
+            return await _reply(interaction, "That member is no longer available in this server.", ok=False)
+
+        page_count = _profile_card_page_count(member)
+        next_page = max(0, min(self.page + int(delta), page_count - 1))
+
+        await interaction.response.edit_message(
+            embed=_profile_card(member, page=next_page),
+            view=_profile_card_view(member, page=next_page),
+            allowed_mentions=discord.AllowedMentions.none(),
+        )
+
+    @discord.ui.button(label="Previous", emoji="⬅️", style=discord.ButtonStyle.secondary, custom_id="dank:profile:v1:profile_page_prev", row=0)
+    async def previous_page(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        await self._flip(interaction, -1)
+
+    @discord.ui.button(label="Next", emoji="➡️", style=discord.ButtonStyle.secondary, custom_id="dank:profile:v1:profile_page_next", row=0)
+    async def next_page(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        await self._flip(interaction, 1)
+
+
+def _profile_card_view(member: discord.Member, *, page: int = 0) -> Optional[discord.ui.View]:
+    if not _profile_card_needs_pagination(member):
+        return None
+
+    view = ProfileCardPageView(member_id=int(member.id), page=page)
+    page_count = _profile_card_page_count(member)
+
+    for child in view.children:
+        try:
+            if getattr(child, "custom_id", "") == "dank:profile:v1:profile_page_prev":
+                child.disabled = int(page or 0) <= 0
+            if getattr(child, "custom_id", "") == "dank:profile:v1:profile_page_next":
+                child.disabled = int(page or 0) >= page_count - 1
+        except Exception:
+            pass
+
+    return view
 
 
 def _profile_panel_embed(guild: discord.Guild, *, title: str = "Profile Panel") -> discord.Embed:
@@ -533,7 +687,7 @@ class ProfileMemberListSelect(discord.ui.Select):
 
         await interaction.response.send_message(
             embed=_profile_card(member),
-            view=ProfileCardActionView(member_id=int(member.id)),
+            view=_profile_card_view(member),
             ephemeral=True,
             allowed_mentions=discord.AllowedMentions.none(),
         )
@@ -1034,7 +1188,7 @@ async def _handle_profile_interaction(interaction: discord.Interaction) -> bool:
     if suffix == "view":
         await interaction.response.send_message(
             embed=_profile_card(member),
-            view=ProfileCardActionView(member_id=int(member.id)),
+            view=_profile_card_view(member),
             ephemeral=True,
             allowed_mentions=discord.AllowedMentions.none(),
         )
@@ -1445,8 +1599,8 @@ async def _view_dank_profile_context(interaction: discord.Interaction, member: d
 
     await interaction.response.send_message(
         embed=_profile_card(target),
-        view=ProfileCardActionView(member_id=int(target.id)),
-        ephemeral=True,
+            view=_profile_card_view(target),
+            ephemeral=True,
         allowed_mentions=discord.AllowedMentions.none(),
     )
 
