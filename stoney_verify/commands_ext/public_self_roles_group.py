@@ -9,8 +9,8 @@ from .public_setup_group import _require_setup_permission, stoney_group
 
 SELF_ROLE_PREFIX = "dank:selfrole:v1:"
 ROLE_PICKER_PREFIX = "dank:rolepicker:v2:"
-CUSTOM_IDENTITY_ROLE_NAME = "Identity: custom / ask staff"
-CUSTOM_IDENTITY_ROLE_NAME = "Identity: custom / ask staff"
+CUSTOM_IDENTITY_ROLE_NAME = "Identity: missing / ask staff"
+CUSTOM_IDENTITY_ROLE_NAME = "Identity: missing / ask staff"
 _ATTACHED = False
 _LISTENER_ATTACHED = False
 
@@ -36,7 +36,6 @@ DEFAULT_IDENTITY_ROLE_NAMES: tuple[str, ...] = (
     "Identity: trans",
     "Identity: questioning",
     "Identity: prefer not to say",
-    "Identity: custom / ask staff",
 )
 
 DEFAULT_INTEREST_ROLE_NAMES: tuple[str, ...] = (
@@ -129,7 +128,7 @@ async def _reply(interaction: discord.Interaction, content: str, *, ok: bool = T
 
 def _is_custom_identity_role(role: discord.Role) -> bool:
     try:
-        return _role_name_key(role.name) == _role_name_key(CUSTOM_IDENTITY_ROLE_NAME)
+        return _role_name_key(role.name) in {_role_name_key(CUSTOM_IDENTITY_ROLE_NAME), _role_name_key("Identity: custom / ask staff")}
     except Exception:
         return False
 
@@ -180,14 +179,14 @@ async def _send_custom_identity_request(
 
     label = _clean_custom_identity_label(requested_label)
     if not label:
-        await _reply(interaction, "Enter the custom identity label you want staff to review.", ok=False)
+        await _reply(interaction, "Enter the missing identity label you want staff to review.", ok=False)
         return
 
     channel = await _custom_identity_staff_channel(guild)
     if not isinstance(channel, discord.TextChannel):
         await _reply(
             interaction,
-            "I could not find a staff/modlog channel for custom identity requests. Ask staff directly, or set a modlog channel with `/dank modlog pick-channel`.",
+            "I could not find a staff/modlog channel for missing identity requests. Ask staff directly, or set a modlog channel with `/dank modlog pick-channel`.",
             ok=False,
         )
         return
@@ -206,9 +205,9 @@ async def _send_custom_identity_request(
         pass
 
     embed = discord.Embed(
-        title="🪪 Custom Identity Role Request",
+        title="🪪 Missing Identity Role Request",
         description=(
-            "A member tapped **Identity: custom / ask staff** and requested a custom identity label.\\n\\n"
+            "A member tapped **Identity: custom / ask staff** and requested a missing identity label.\\n\\n"
             "Staff should review this manually before creating or assigning a new role."
         ),
         color=discord.Color.blurple(),
@@ -220,22 +219,22 @@ async def _send_custom_identity_request(
         name="Staff action",
         value=(
             "If approved, create a normal cosmetic role and add it to the role panel later. "
-            "Do not use custom identity roles for staff, tickets, verification, permissions, or access."
+            "Do not use missing identity roles for staff, tickets, verification, permissions, or access."
         ),
         inline=False,
     )
-    embed.set_footer(text=f"Dank Shield self-role custom identity request • role_id={int(role_id)}")
+    embed.set_footer(text=f"Dank Shield self-role missing identity request • role_id={int(role_id)}")
 
     try:
         await channel.send(embed=embed, allowed_mentions=discord.AllowedMentions.none())
-        await _reply(interaction, f"Custom identity request sent to staff: `{label}`", ok=True)
+        await _reply(interaction, f"Missing identity request sent to staff: `{label}`", ok=True)
     except Exception as exc:
-        await _reply(interaction, f"Could not send the custom identity request: {type(exc).__name__}.", ok=False)
+        await _reply(interaction, f"Could not send the missing identity request: {type(exc).__name__}.", ok=False)
 
 
-class CustomIdentityRequestModal(discord.ui.Modal, title="Request Custom Identity"):
+class CustomIdentityRequestModal(discord.ui.Modal, title="Missing Identity?"):
     requested_label = discord.ui.TextInput(
-        label="Custom identity label",
+        label="Missing identity label",
         placeholder="Example: genderqueer, demigirl, Two-Spirit, questioning, etc.",
         min_length=2,
         max_length=80,
@@ -267,7 +266,7 @@ def _all_builder_role_names() -> tuple[str, ...]:
 
 
 def _is_custom_identity_role(role: discord.Role) -> bool:
-    return _role_name_key(role.name) == _role_name_key(CUSTOM_IDENTITY_ROLE_NAME)
+    return _role_name_key(role.name) in {_role_name_key(CUSTOM_IDENTITY_ROLE_NAME), _role_name_key("Identity: custom / ask staff")}
 
 
 def _category_roles(guild: discord.Guild, category_key: str) -> list[discord.Role]:
@@ -355,7 +354,7 @@ def _role_picker_embed(guild: discord.Guild, *, title: str = "Role Picker") -> d
         value="\n".join(f"{emoji} **{label}**" for _k, (emoji, label, _names, _desc) in ROLE_PICKER_CATEGORIES.items()),
         inline=False,
     )
-    embed.add_field(name="Custom identity", value="Use **Request Custom Identity** if your label is not listed. Staff reviews it manually.", inline=False)
+    embed.add_field(name="Missing identity", value="Use **Missing Identity?** if your label is not listed. Staff reviews it manually.", inline=False)
     embed.set_footer(text="Dank Shield role picker")
     return embed
 
@@ -368,7 +367,7 @@ class RolePickerHomeView(discord.ui.View):
         self.add_item(discord.ui.Button(label="Interests", emoji="🎮", custom_id=f"{ROLE_PICKER_PREFIX}open:interests", row=1))
         self.add_item(discord.ui.Button(label="Notifications", emoji="🔔", custom_id=f"{ROLE_PICKER_PREFIX}open:notifications", row=1))
         self.add_item(discord.ui.Button(label="Clear My Roles", emoji="🧹", style=discord.ButtonStyle.danger, custom_id=f"{ROLE_PICKER_PREFIX}clear", row=2))
-        self.add_item(discord.ui.Button(label="Request Custom Identity", emoji="✍️", style=discord.ButtonStyle.primary, custom_id=f"{ROLE_PICKER_PREFIX}custom", row=2))
+        self.add_item(discord.ui.Button(label="Missing Identity?", emoji="✍️", style=discord.ButtonStyle.primary, custom_id=f"{ROLE_PICKER_PREFIX}custom", row=2))
 
 
 class RoleCategorySelectView(discord.ui.View):
@@ -390,8 +389,8 @@ class RoleCategorySelectView(discord.ui.View):
         ))
 
 
-class CustomIdentityRequestModal(discord.ui.Modal, title="Request Custom Identity"):
-    label = discord.ui.TextInput(label="Custom identity label", min_length=2, max_length=80, required=True)
+class CustomIdentityRequestModal(discord.ui.Modal, title="Missing Identity?"):
+    label = discord.ui.TextInput(label="Missing identity label", min_length=2, max_length=80, required=True)
 
     async def on_submit(self, interaction: discord.Interaction) -> None:
         guild = interaction.guild
@@ -401,7 +400,7 @@ class CustomIdentityRequestModal(discord.ui.Modal, title="Request Custom Identit
 
         clean = str(self.label.value or "").replace("@everyone", "everyone").replace("@here", "here").strip()[:80]
         if not clean:
-            return await _reply(interaction, "Custom identity label was empty.", ok=False)
+            return await _reply(interaction, "Missing identity label was empty.", ok=False)
 
         try:
             from stoney_verify.guild_config import get_guild_config
@@ -412,14 +411,14 @@ class CustomIdentityRequestModal(discord.ui.Modal, title="Request Custom Identit
             ch = None
 
         if not isinstance(ch, discord.TextChannel):
-            return await _reply(interaction, "No staff/modlog channel found for custom identity requests.", ok=False)
+            return await _reply(interaction, "No staff/modlog channel found for missing identity requests.", ok=False)
 
-        embed = discord.Embed(title="🪪 Custom Identity Request", color=discord.Color.blurple(), timestamp=discord.utils.utcnow())
+        embed = discord.Embed(title="🪪 Missing Identity Request", color=discord.Color.blurple(), timestamp=discord.utils.utcnow())
         embed.add_field(name="Member", value=f"{member.mention} (`{member.id}`)", inline=False)
         embed.add_field(name="Requested label", value=f"`{clean}`", inline=False)
-        embed.set_footer(text="Review manually before creating/assigning custom roles.")
+        embed.set_footer(text="Review manually before creating/assigning missing identity requests.")
         await ch.send(embed=embed, allowed_mentions=discord.AllowedMentions.none())
-        await _reply(interaction, f"Custom identity request sent to staff: `{clean}`", ok=True)
+        await _reply(interaction, f"Missing identity request sent to staff: `{clean}`", ok=True)
 
 
 class RoleBuilderView(discord.ui.View):
@@ -617,9 +616,9 @@ async def _handle_self_role(interaction: discord.Interaction) -> bool:
                 if not interaction.response.is_done():
                     await interaction.response.send_modal(CustomIdentityRequestModal(role_id=int(role.id)))
                 else:
-                    await _reply(interaction, "Open the role panel again and tap the custom identity button.", ok=False)
+                    await _reply(interaction, "Open the role panel again and tap the missing identity button.", ok=False)
             except Exception as exc:
-                await _reply(interaction, f"Could not open the custom identity form: {type(exc).__name__}.", ok=False)
+                await _reply(interaction, f"Could not open the missing identity form: {type(exc).__name__}.", ok=False)
             return True
 
         if _is_custom_identity_role(role):
@@ -684,10 +683,10 @@ async def _post_panel(interaction: discord.Interaction, channel: discord.TextCha
     embed.add_field(name="Roles", value="\n".join(f"• {role.mention}" for role in roles)[:1024], inline=False)
     if any(_is_custom_identity_role(role) for role in roles):
         embed.add_field(
-            name="Custom identity",
+            name="Missing identity",
             value=(
                 "Tap **Identity: custom / ask staff** to privately request a label that is not listed. "
-                "Staff review custom identity requests before adding new roles."
+                "Staff review missing identity requests before adding new roles."
             ),
             inline=False,
         )
