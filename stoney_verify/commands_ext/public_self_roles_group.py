@@ -16,6 +16,12 @@ PROFILE_PREFIX = "dank:profile:v1:"
 _ATTACHED = False
 _LISTENER_ATTACHED = False
 
+_PROFILE_PANEL_HARD_LOCKS: dict[tuple[int, int], asyncio.Lock] = {}
+_PROFILE_PANEL_BLOCK_UNTIL: dict[tuple[int, int], float] = {}
+_PROFILE_PANEL_LAST_NOTICE: dict[tuple[int, int], float] = {}
+_PROFILE_PANEL_HARD_COOLDOWN_SECONDS = 2.5
+_PROFILE_PANEL_NOTICE_SECONDS = 3.0
+
 _PROFILE_LOCKS: dict[tuple[int, int], asyncio.Lock] = {}
 _PROFILE_LAST_CLICK: dict[tuple[int, int], float] = {}
 _PROFILE_COOLDOWN_SECONDS = 1.0
@@ -846,12 +852,89 @@ async def _handle_self_role(interaction: discord.Interaction) -> bool:
         return True
 
 
+def _panel_guard_custom_id(interaction: discord.Interaction) -> str:
+    try:
+        data = interaction.data if isinstance(interaction.data, dict) else {}
+        return str(data.get("custom_id") or "")
+    except Exception:
+        return ""
+
+
+def _panel_guard_is_profile_action(custom_id: str) -> bool:
+    text = str(custom_id or "")
+    return (
+        text.startswith("dank:profile:v1:")
+        or text.startswith("dank:rolepicker:v2:")
+        or text.startswith("dank:selfrole:v1:")
+    )
+
+
+async def _panel_guard_quiet_reject(interaction: discord.Interaction, key: tuple[int, int]) -> None:
+    now = monotonic()
+    last_notice = float(_PROFILE_PANEL_LAST_NOTICE.get(key, 0.0) or 0.0)
+    _PROFILE_PANEL_LAST_NOTICE[key] = now
+
+    # Show one clear warning, then quietly acknowledge repeat spam so Discord does not stack errors.
+    if now - last_notice >= _PROFILE_PANEL_NOTICE_SECONDS:
+        await _reply(interaction, "Already updating your profile. Wait a couple seconds.", ok=False)
+        return
+
+    try:
+        if not interaction.response.is_done():
+            await interaction.response.defer(ephemeral=True, thinking=False)
+    except Exception:
+        pass
+
+
+async def _panel_guard_acquire(interaction: discord.Interaction, custom_id: str) -> Optional[tuple[int, int]]:
+    if not _panel_guard_is_profile_action(custom_id):
+        return None
+
+    guild_id = int(interaction.guild.id) if interaction.guild else 0
+    user_id = int(interaction.user.id)
+    key = (guild_id, user_id)
+    now = monotonic()
+
+    if len(_PROFILE_PANEL_BLOCK_UNTIL) > 5000:
+        stale = [k for k, until in _PROFILE_PANEL_BLOCK_UNTIL.items() if now - float(until or 0.0) > 120]
+        for stale_key in stale[:1000]:
+            _PROFILE_PANEL_BLOCK_UNTIL.pop(stale_key, None)
+            _PROFILE_PANEL_LAST_NOTICE.pop(stale_key, None)
+            lock = _PROFILE_PANEL_HARD_LOCKS.get(stale_key)
+            if lock is not None and not lock.locked():
+                _PROFILE_PANEL_HARD_LOCKS.pop(stale_key, None)
+
+    lock = _PROFILE_PANEL_HARD_LOCKS.setdefault(key, asyncio.Lock())
+    blocked_until = float(_PROFILE_PANEL_BLOCK_UNTIL.get(key, 0.0) or 0.0)
+
+    if lock.locked() or now < blocked_until:
+        await _panel_guard_quiet_reject(interaction, key)
+        return None
+
+    _PROFILE_PANEL_BLOCK_UNTIL[key] = now + _PROFILE_PANEL_HARD_COOLDOWN_SECONDS
+    await lock.acquire()
+    return key
+
+
+def _panel_guard_release(key: Optional[tuple[int, int]]) -> None:
+    if key is None:
+        return
+    now = monotonic()
+    _PROFILE_PANEL_BLOCK_UNTIL[key] = max(
+        float(_PROFILE_PANEL_BLOCK_UNTIL.get(key, 0.0) or 0.0),
+        now + _PROFILE_PANEL_HARD_COOLDOWN_SECONDS,
+    )
+    lock = _PROFILE_PANEL_HARD_LOCKS.get(key)
+    if lock is not None and lock.locked():
+        lock.release()
+
+
 async def _interaction_listener(interaction: discord.Interaction) -> None:
-    custom_id = _profile_custom_id(interaction)
+    custom_id = _panel_guard_custom_id(interaction)
     gate_key: Optional[tuple[int, int]] = None
 
-    if _is_profile_interaction(custom_id):
-        gate_key = await _acquire_profile_gate(interaction, custom_id)
+    if _panel_guard_is_profile_action(custom_id):
+        gate_key = await _panel_guard_acquire(interaction, custom_id)
         if gate_key is None:
             return
 
@@ -860,8 +943,7 @@ async def _interaction_listener(interaction: discord.Interaction) -> None:
             return
         await _handle_self_role(interaction)
     finally:
-        _release_profile_gate(gate_key)
-
+        _panel_guard_release(gate_key)
 
 class AdvancedSelfRolePanelView(discord.ui.View):
     def __init__(self, roles: list[discord.Role]) -> None:
