@@ -426,21 +426,25 @@ class ProfileCardActionView(discord.ui.View):
         )
 
 
-def _profile_member_search_text(member: discord.Member) -> str:
-    parts = [
-        str(getattr(member, "display_name", "") or ""),
-        str(getattr(member, "name", "") or ""),
-        str(getattr(member, "global_name", "") or ""),
-        str(member),
-        str(getattr(member, "id", "") or ""),
-    ]
-    return " ".join(part for part in parts if part).casefold()
+def _profile_human_members(guild: discord.Guild) -> list[discord.Member]:
+    members: list[discord.Member] = []
+    for member in list(getattr(guild, "members", []) or []):
+        if isinstance(member, discord.Member) and not member.bot:
+            members.append(member)
+
+    def sort_key(member: discord.Member) -> tuple[str, str]:
+        return (
+            str(getattr(member, "display_name", "") or "").casefold(),
+            str(getattr(member, "name", "") or "").casefold(),
+        )
+
+    return sorted(members, key=sort_key)
 
 
 def _profile_member_label(member: discord.Member) -> str:
-    name = str(getattr(member, "display_name", "") or getattr(member, "name", "") or "Member")
+    display = str(getattr(member, "display_name", "") or getattr(member, "name", "") or "Member")
     username = str(getattr(member, "name", "") or member)
-    label = name if name.casefold() == username.casefold() else f"{name} (@{username})"
+    label = display if display.casefold() == username.casefold() else f"{display} (@{username})"
     return label[:100]
 
 
@@ -451,61 +455,48 @@ def _profile_member_description(member: discord.Member) -> str:
             joined = f" • joined {member.joined_at.date().isoformat()}"
     except Exception:
         joined = ""
-    return f"ID {member.id}{joined}"[:100]
+    return f"Human member • ID {member.id}{joined}"[:100]
 
 
-async def _profile_find_human_members(guild: discord.Guild, query: str, *, limit: int = 25) -> list[discord.Member]:
-    raw = str(query or "").strip()
-    lowered = raw.casefold()
-    if not raw:
-        return []
+def _profile_member_page_embed(guild: discord.Guild, *, page: int, per_page: int = 25) -> discord.Embed:
+    members = _profile_human_members(guild)
+    total = len(members)
+    max_page = max(0, (total - 1) // per_page) if total else 0
+    page = max(0, min(int(page or 0), max_page))
 
-    id_match = re.search(r"(\d{15,25})", raw)
-    if id_match:
-        member_id = int(id_match.group(1))
-        member = guild.get_member(member_id)
-        if not isinstance(member, discord.Member):
-            try:
-                fetched = await guild.fetch_member(member_id)
-                member = fetched if isinstance(fetched, discord.Member) else None
-            except Exception:
-                member = None
-        if isinstance(member, discord.Member) and not member.bot:
-            return [member]
-        return []
+    start = page * per_page
+    shown = members[start:start + per_page]
 
-    candidates: dict[int, discord.Member] = {}
+    embed = discord.Embed(
+        title="👥 View Member Profile",
+        description=(
+            "Pick a human member from Dank Shield's list. Bots are hidden.\n"
+            "Use Next / Previous if the member is not on this page."
+        ),
+        color=discord.Color.blurple(),
+        timestamp=discord.utils.utcnow(),
+    )
 
-    for member in list(getattr(guild, "members", []) or []):
-        if not isinstance(member, discord.Member) or member.bot:
-            continue
-        haystack = _profile_member_search_text(member)
-        if lowered in haystack:
-            candidates[int(member.id)] = member
+    if not shown:
+        embed.add_field(
+            name="No human members found",
+            value=(
+                "Dank Shield could not see cached human members. "
+                "Make sure the bot has Server Members Intent enabled and restart the bot."
+            ),
+            inline=False,
+        )
+    else:
+        lines = []
+        for idx, member in enumerate(shown, start=start + 1):
+            lines.append(f"`{idx}.` {member.mention} — `{member.display_name}`")
+        embed.add_field(name=f"Members {start + 1}-{start + len(shown)} of {total}", value="\n".join(lines)[:1024], inline=False)
 
-    if len(candidates) < limit:
-        try:
-            queried = await guild.query_members(raw, limit=limit)
-            for member in queried or []:
-                if isinstance(member, discord.Member) and not member.bot:
-                    candidates[int(member.id)] = member
-        except Exception:
-            pass
-
-    def score(member: discord.Member) -> tuple[int, str]:
-        display = str(getattr(member, "display_name", "") or "").casefold()
-        username = str(getattr(member, "name", "") or "").casefold()
-        global_name = str(getattr(member, "global_name", "") or "").casefold()
-        if lowered in {display, username, global_name}:
-            return (0, display or username)
-        if display.startswith(lowered) or username.startswith(lowered) or global_name.startswith(lowered):
-            return (1, display or username)
-        return (2, display or username)
-
-    return sorted(candidates.values(), key=score)[:limit]
+    embed.set_footer(text=f"Page {page + 1}/{max_page + 1} • human members only")
+    return embed
 
 
-class ProfileMemberSearchResultSelect(discord.ui.Select):
+class ProfileMemberListSelect(discord.ui.Select):
     def __init__(self, members: list[discord.Member]) -> None:
         options = [
             discord.SelectOption(
@@ -516,12 +507,17 @@ class ProfileMemberSearchResultSelect(discord.ui.Select):
             for member in members[:25]
             if not member.bot
         ]
+
+        if not options:
+            options = [discord.SelectOption(label="No human members found", value="0", description="Check bot member intent/cache.")]
+
         super().__init__(
-            placeholder="Pick the member whose profile you want…",
+            placeholder="Pick a member from this page…",
             min_values=1,
             max_values=1,
             options=options,
-            custom_id="dank:profile:v1:member_search_result",
+            custom_id="dank:profile:v1:member_list_select",
+            disabled=options[0].value == "0",
         )
 
     async def callback(self, interaction: discord.Interaction) -> None:
@@ -543,50 +539,59 @@ class ProfileMemberSearchResultSelect(discord.ui.Select):
         )
 
 
-class ProfileMemberSearchResultsView(discord.ui.View):
-    def __init__(self, members: list[discord.Member]) -> None:
-        super().__init__(timeout=180)
-        self.add_item(ProfileMemberSearchResultSelect(members))
+class ProfileMemberListView(discord.ui.View):
+    def __init__(self, guild: discord.Guild, *, page: int = 0, per_page: int = 25) -> None:
+        super().__init__(timeout=300)
+        self.page = max(0, int(page or 0))
+        self.per_page = int(per_page or 25)
 
+        members = _profile_human_members(guild)
+        self.total = len(members)
+        self.max_page = max(0, (self.total - 1) // self.per_page) if self.total else 0
+        self.page = min(self.page, self.max_page)
 
-class ProfileMemberSearchModal(discord.ui.Modal, title="View Member Profile"):
-    query = discord.ui.TextInput(
-        label="Search member",
-        placeholder="Type display name, username, @mention, or user ID",
-        min_length=1,
-        max_length=100,
-        required=True,
-    )
+        start = self.page * self.per_page
+        shown = members[start:start + self.per_page]
 
-    async def on_submit(self, interaction: discord.Interaction) -> None:
+        self.add_item(ProfileMemberListSelect(shown))
+
+    async def _flip(self, interaction: discord.Interaction, delta: int) -> None:
         guild = interaction.guild
         if guild is None:
             return await _reply(interaction, "This only works inside the server.", ok=False)
 
-        matches = await _profile_find_human_members(guild, str(self.query.value or ""), limit=25)
+        next_page = max(0, min(self.page + int(delta), self.max_page))
+        await interaction.response.edit_message(
+            embed=_profile_member_page_embed(guild, page=next_page, per_page=self.per_page),
+            view=ProfileMemberListView(guild, page=next_page, per_page=self.per_page),
+            allowed_mentions=discord.AllowedMentions.none(),
+        )
 
-        if not matches:
-            return await _reply(interaction, "No human members matched that search. Try username, display name, mention, or ID.", ok=False)
+    @discord.ui.button(label="Previous", emoji="⬅️", style=discord.ButtonStyle.secondary, custom_id="dank:profile:v1:member_list_prev", row=1)
+    async def previous_page(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        await self._flip(interaction, -1)
 
-        if len(matches) == 1:
-            member = matches[0]
-            return await interaction.response.send_message(
-                embed=_profile_card(member),
-                view=ProfileCardActionView(member_id=int(member.id)),
-                ephemeral=True,
-                allowed_mentions=discord.AllowedMentions.none(),
-            )
+    @discord.ui.button(label="Next", emoji="➡️", style=discord.ButtonStyle.secondary, custom_id="dank:profile:v1:member_list_next", row=1)
+    async def next_page(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        await self._flip(interaction, 1)
 
-        await interaction.response.send_message(
-            f"Found {len(matches)} human matches. Pick one:",
-            view=ProfileMemberSearchResultsView(matches),
-            ephemeral=True,
+    @discord.ui.button(label="Refresh", emoji="🔄", style=discord.ButtonStyle.secondary, custom_id="dank:profile:v1:member_list_refresh", row=1)
+    async def refresh_page(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        guild = interaction.guild
+        if guild is None:
+            return await _reply(interaction, "This only works inside the server.", ok=False)
+        await interaction.response.edit_message(
+            embed=_profile_member_page_embed(guild, page=self.page, per_page=self.per_page),
+            view=ProfileMemberListView(guild, page=self.page, per_page=self.per_page),
             allowed_mentions=discord.AllowedMentions.none(),
         )
 
 
 class ProfileMemberPickView(discord.ui.View):
-    """Deprecated fallback kept so old in-memory references do not explode."""
+    """Deprecated compatibility wrapper."""
 
     def __init__(self) -> None:
         super().__init__(timeout=180)
@@ -1018,7 +1023,12 @@ async def _handle_profile_interaction(interaction: discord.Interaction) -> bool:
         return True
 
     if suffix == "pick_member":
-        await interaction.response.send_modal(ProfileMemberSearchModal())
+        await interaction.response.send_message(
+            embed=_profile_member_page_embed(guild, page=0),
+            view=ProfileMemberListView(guild, page=0),
+            ephemeral=True,
+            allowed_mentions=discord.AllowedMentions.none(),
+        )
         return True
 
     if suffix == "view":
