@@ -186,7 +186,7 @@ def _category_roles(guild: discord.Guild, category_key: str) -> list[discord.Rol
 
 def _short_role_label(role_name: str) -> str:
     text = str(role_name or "").strip()
-    for prefix in ("Pronouns: ", "Identity: "):
+    for prefix in ("Pronouns: ", "Identity: ", "Interest: "):
         if text.casefold().startswith(prefix.casefold()):
             text = text[len(prefix):]
             break
@@ -317,10 +317,62 @@ def _profile_panel_embed(guild: discord.Guild, *, title: str = "Profile Panel") 
     return embed
 
 
+def _profile_terms_embed() -> discord.Embed:
+    embed = discord.Embed(
+        title="📘 Profile Terms",
+        description=(
+            "These labels are optional. Pick only what fits you, skip anything you do not want to share, "
+            "and use Missing Identity if your label is not listed."
+        ),
+        color=discord.Color.blurple(),
+        timestamp=discord.utils.utcnow(),
+    )
+    embed.add_field(
+        name="🪪 Pronouns",
+        value=(
+            "**Pronouns** are the words people use when referring to you, like he/him, she/her, they/them, or no pronouns.\\n"
+            "Use the option that feels right for this server."
+        ),
+        inline=False,
+    )
+    embed.add_field(
+        name="🌈 Identity",
+        value=(
+            "**Man** — someone who identifies as a man.\\n"
+            "**Woman** — someone who identifies as a woman.\\n"
+            "**Non-binary** — someone whose gender identity is not only man or woman.\\n"
+            "**Genderfluid** — someone whose gender identity may change over time.\\n"
+            "**Agender** — someone who does not identify with a gender, or has little/no gender connection.\\n"
+            "**Trans** — someone whose gender identity differs from what they were assigned at birth.\\n"
+            "**Questioning** — someone still exploring which label fits best.\\n"
+            "**Prefer not to say** — choose this if you do not want to share."
+        ),
+        inline=False,
+    )
+    embed.add_field(
+        name="🎮 Interests",
+        value=(
+            "Interests are conversation tags. They help people find common topics. "
+            "They do not ping you, unlock channels, verify you, or give permissions."
+        ),
+        inline=False,
+    )
+    embed.add_field(
+        name="✍️ Missing Identity / ➕ Missing Interest",
+        value=(
+            "These send a staff review request. They do not create or assign roles automatically."
+        ),
+        inline=False,
+    )
+    embed.set_footer(text="Dank Shield profile help")
+    return embed
+
+
 class ProfilePanelView(discord.ui.View):
     def __init__(self) -> None:
         super().__init__(timeout=None)
         self.add_item(discord.ui.Button(label="View My Profile", emoji="👤", style=discord.ButtonStyle.primary, custom_id=f"{PROFILE_PREFIX}view", row=0))
+        self.add_item(discord.ui.Button(label="Learn Terms", emoji="📘", style=discord.ButtonStyle.secondary, custom_id=f"{PROFILE_PREFIX}learn", row=0))
         self.add_item(discord.ui.Button(label="Pronouns", emoji="🪪", style=discord.ButtonStyle.secondary, custom_id=f"{PROFILE_PREFIX}open:pronouns", row=1))
         self.add_item(discord.ui.Button(label="Identity", emoji="🌈", style=discord.ButtonStyle.secondary, custom_id=f"{PROFILE_PREFIX}open:identity", row=1))
         self.add_item(discord.ui.Button(label="Interests", emoji="🎮", style=discord.ButtonStyle.secondary, custom_id=f"{PROFILE_PREFIX}open:interests", row=2))
@@ -748,6 +800,14 @@ async def _handle_profile_interaction(interaction: discord.Interaction) -> bool:
         )
         return True
 
+    if suffix == "learn":
+        await interaction.response.send_message(
+            embed=_profile_terms_embed(),
+            ephemeral=True,
+            allowed_mentions=discord.AllowedMentions.none(),
+        )
+        return True
+
     if suffix.startswith("open:"):
         category = suffix.split(":", 1)[1]
         payload = PROFILE_CATEGORIES.get(category)
@@ -913,6 +973,7 @@ async def _profile_session_gate(interaction: discord.Interaction, custom_id: str
         "open:identity",
         "open:interests",
         "view",
+        "learn",
     )
     if action_key not in suppress_prefixes:
         return True
