@@ -8,6 +8,8 @@ from discord import app_commands
 from .public_setup_group import _require_setup_permission, stoney_group
 
 SELF_ROLE_PREFIX = "dank:selfrole:v1:"
+ROLE_PICKER_PREFIX = "dank:rolepicker:v2:"
+CUSTOM_IDENTITY_ROLE_NAME = "Identity: custom / ask staff"
 CUSTOM_IDENTITY_ROLE_NAME = "Identity: custom / ask staff"
 _ATTACHED = False
 _LISTENER_ATTACHED = False
@@ -36,6 +38,30 @@ DEFAULT_IDENTITY_ROLE_NAMES: tuple[str, ...] = (
     "Identity: prefer not to say",
     "Identity: custom / ask staff",
 )
+
+DEFAULT_INTEREST_ROLE_NAMES: tuple[str, ...] = (
+    "Interest: gaming",
+    "Interest: memes",
+    "Interest: music",
+    "Interest: movies",
+    "Interest: anime",
+    "Interest: smoke lounge",
+    "Interest: late-night chat",
+)
+
+DEFAULT_NOTIFICATION_ROLE_NAMES: tuple[str, ...] = (
+    "Notify: announcements",
+    "Notify: events",
+    "Notify: giveaways",
+    "Notify: bumps",
+)
+
+ROLE_PICKER_CATEGORIES: dict[str, tuple[str, str, tuple[str, ...], str]] = {
+    "pronouns": ("🪪", "Pronouns", DEFAULT_PRONOUN_ROLE_NAMES, "Pick pronoun roles. Multiple choices are allowed."),
+    "identity": ("🌈", "Identity", DEFAULT_IDENTITY_ROLE_NAMES, "Pick optional identity roles. Multiple choices are allowed."),
+    "interests": ("🎮", "Interests", DEFAULT_INTEREST_ROLE_NAMES, "Pick interests so members can find similar people."),
+    "notifications": ("🔔", "Notifications", DEFAULT_NOTIFICATION_ROLE_NAMES, "Pick optional pings you want."),
+}
 
 roles_group = app_commands.Group(
     name="roles",
@@ -228,6 +254,348 @@ class CustomIdentityRequestModal(discord.ui.Modal, title="Request Custom Identit
         )
 
 
+def _all_builder_role_names() -> tuple[str, ...]:
+    seen: set[str] = set()
+    out: list[str] = []
+    for _key, payload in ROLE_PICKER_CATEGORIES.items():
+        for name in payload[2]:
+            clean = str(name or "").strip()
+            if clean and clean.casefold() not in seen:
+                seen.add(clean.casefold())
+                out.append(clean)
+    return tuple(out)
+
+
+def _is_custom_identity_role(role: discord.Role) -> bool:
+    return _role_name_key(role.name) == _role_name_key(CUSTOM_IDENTITY_ROLE_NAME)
+
+
+def _category_roles(guild: discord.Guild, category_key: str) -> list[discord.Role]:
+    payload = ROLE_PICKER_CATEGORIES.get(str(category_key or "").lower())
+    if not payload:
+        return []
+    roles: list[discord.Role] = []
+    for name in payload[2]:
+        role = _find_role_by_name(guild, name)
+        if isinstance(role, discord.Role):
+            roles.append(role)
+    return roles
+
+
+def _short_role_label(role_name: str) -> str:
+    text = str(role_name or "").strip()
+    for prefix in ("Pronouns: ", "Identity: ", "Interest: ", "Notify: "):
+        if text.casefold().startswith(prefix.casefold()):
+            text = text[len(prefix):]
+            break
+    return text[:100] or "Role"
+
+
+def _builder_channel_missing(guild: discord.Guild, channel: discord.TextChannel) -> list[str]:
+    me = guild.me
+    if not isinstance(me, discord.Member):
+        return ["Resolve bot member"]
+    perms = channel.permissions_for(me)
+    missing: list[str] = []
+    if not perms.view_channel:
+        missing.append("View Channel")
+    if not perms.send_messages:
+        missing.append("Send Messages")
+    if not perms.embed_links:
+        missing.append("Embed Links")
+    return missing
+
+
+def _builder_manual_blockers(guild: discord.Guild) -> list[str]:
+    me = guild.me
+    if not isinstance(me, discord.Member):
+        return ["Dank Shield bot member could not be resolved."]
+    blockers: list[str] = []
+    if not (me.guild_permissions.manage_roles or me.guild_permissions.administrator):
+        blockers.append("Dank Shield is missing Manage Roles.")
+    for role_name in _all_builder_role_names():
+        role = _find_role_by_name(guild, role_name)
+        if isinstance(role, discord.Role):
+            ok, why = _can_manage(role, guild)
+            if not ok:
+                blockers.append(why)
+                break
+    return blockers
+
+
+def _builder_can_fix_channel(guild: discord.Guild) -> bool:
+    me = guild.me
+    if not isinstance(me, discord.Member):
+        return False
+    return bool(me.guild_permissions.manage_channels or me.guild_permissions.administrator)
+
+
+def _builder_status(guild: discord.Guild, channel: discord.TextChannel) -> tuple[bool, list[str], list[str]]:
+    manual = _builder_manual_blockers(guild)
+    channel_missing = _builder_channel_missing(guild, channel)
+    fixable = channel_missing if channel_missing and _builder_can_fix_channel(guild) else []
+    if channel_missing and not fixable:
+        manual.append(f"Missing in {channel.mention}: " + ", ".join(channel_missing))
+    ready = not manual and not channel_missing
+    return ready, fixable, manual
+
+
+def _role_picker_embed(guild: discord.Guild, *, title: str = "Role Picker") -> discord.Embed:
+    embed = discord.Embed(
+        title=title[:256],
+        description=(
+            "Pick optional profile roles using the buttons below. "
+            "These roles are cosmetic only and never control server access."
+        ),
+        color=discord.Color.blurple(),
+        timestamp=discord.utils.utcnow(),
+    )
+    embed.add_field(
+        name="Categories",
+        value="\n".join(f"{emoji} **{label}**" for _k, (emoji, label, _names, _desc) in ROLE_PICKER_CATEGORIES.items()),
+        inline=False,
+    )
+    embed.add_field(name="Custom identity", value="Use **Request Custom Identity** if your label is not listed. Staff reviews it manually.", inline=False)
+    embed.set_footer(text="Dank Shield role picker")
+    return embed
+
+
+class RolePickerHomeView(discord.ui.View):
+    def __init__(self) -> None:
+        super().__init__(timeout=None)
+        self.add_item(discord.ui.Button(label="Pronouns", emoji="🪪", custom_id=f"{ROLE_PICKER_PREFIX}open:pronouns", row=0))
+        self.add_item(discord.ui.Button(label="Identity", emoji="🌈", custom_id=f"{ROLE_PICKER_PREFIX}open:identity", row=0))
+        self.add_item(discord.ui.Button(label="Interests", emoji="🎮", custom_id=f"{ROLE_PICKER_PREFIX}open:interests", row=1))
+        self.add_item(discord.ui.Button(label="Notifications", emoji="🔔", custom_id=f"{ROLE_PICKER_PREFIX}open:notifications", row=1))
+        self.add_item(discord.ui.Button(label="Clear My Roles", emoji="🧹", style=discord.ButtonStyle.danger, custom_id=f"{ROLE_PICKER_PREFIX}clear", row=2))
+        self.add_item(discord.ui.Button(label="Request Custom Identity", emoji="✍️", style=discord.ButtonStyle.primary, custom_id=f"{ROLE_PICKER_PREFIX}custom", row=2))
+
+
+class RoleCategorySelectView(discord.ui.View):
+    def __init__(self, guild: discord.Guild, member: discord.Member, category_key: str) -> None:
+        super().__init__(timeout=300)
+        options: list[discord.SelectOption] = []
+        for role in _category_roles(guild, category_key)[:25]:
+            if _is_custom_identity_role(role):
+                continue
+            options.append(discord.SelectOption(label=_short_role_label(role.name), value=str(role.id), default=role in member.roles))
+        if not options:
+            options.append(discord.SelectOption(label="No roles available", value="0"))
+        self.add_item(discord.ui.Select(
+            placeholder="Pick your choices…",
+            min_values=0,
+            max_values=max(1, len(options)),
+            options=options,
+            custom_id=f"{ROLE_PICKER_PREFIX}select:{category_key}",
+        ))
+
+
+class CustomIdentityRequestModal(discord.ui.Modal, title="Request Custom Identity"):
+    label = discord.ui.TextInput(label="Custom identity label", min_length=2, max_length=80, required=True)
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        guild = interaction.guild
+        member = interaction.user if isinstance(interaction.user, discord.Member) else None
+        if guild is None or member is None:
+            return await _reply(interaction, "This only works inside the server.", ok=False)
+
+        clean = str(self.label.value or "").replace("@everyone", "everyone").replace("@here", "here").strip()[:80]
+        if not clean:
+            return await _reply(interaction, "Custom identity label was empty.", ok=False)
+
+        try:
+            from stoney_verify.guild_config import get_guild_config
+            from stoney_verify.commands_ext import public_modlog_group as modlog
+            cfg = await get_guild_config(int(guild.id), refresh=True)
+            ch = modlog._modlog_channel(guild, cfg)
+        except Exception:
+            ch = None
+
+        if not isinstance(ch, discord.TextChannel):
+            return await _reply(interaction, "No staff/modlog channel found for custom identity requests.", ok=False)
+
+        embed = discord.Embed(title="🪪 Custom Identity Request", color=discord.Color.blurple(), timestamp=discord.utils.utcnow())
+        embed.add_field(name="Member", value=f"{member.mention} (`{member.id}`)", inline=False)
+        embed.add_field(name="Requested label", value=f"`{clean}`", inline=False)
+        embed.set_footer(text="Review manually before creating/assigning custom roles.")
+        await ch.send(embed=embed, allowed_mentions=discord.AllowedMentions.none())
+        await _reply(interaction, f"Custom identity request sent to staff: `{clean}`", ok=True)
+
+
+class RoleBuilderView(discord.ui.View):
+    def __init__(self, *, author_id: int, channel_id: int, ready: bool, fixable: bool, title: str) -> None:
+        super().__init__(timeout=300)
+        self.author_id = int(author_id)
+        self.channel_id = int(channel_id)
+        self.title_text = str(title or "Role Picker")[:80]
+
+        if ready:
+            self.add_item(discord.ui.Button(label="Post Panel", emoji="🌿", style=discord.ButtonStyle.success, custom_id=f"{ROLE_PICKER_PREFIX}builder_post", row=0))
+            self.add_item(discord.ui.Button(label="Preview", emoji="👀", style=discord.ButtonStyle.secondary, custom_id=f"{ROLE_PICKER_PREFIX}builder_preview", row=0))
+        elif fixable:
+            self.add_item(discord.ui.Button(label="Fix Permissions", emoji="🛠️", style=discord.ButtonStyle.primary, custom_id=f"{ROLE_PICKER_PREFIX}builder_fix", row=0))
+
+        self.add_item(discord.ui.Button(label="Health", emoji="🩺", style=discord.ButtonStyle.secondary, custom_id=f"{ROLE_PICKER_PREFIX}builder_health", row=1))
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if int(interaction.user.id) != self.author_id:
+            await _reply(interaction, "Only the staff member who opened this builder can use it.", ok=False)
+            return False
+        return True
+
+
+async def _post_builder(interaction: discord.Interaction, *, title: str = "Role Picker") -> None:
+    guild = interaction.guild
+    channel = interaction.channel
+    if guild is None or not isinstance(channel, discord.TextChannel):
+        return await _reply(interaction, "Run this inside the text channel where the panel should be posted.", ok=False)
+
+    ready, fixable, manual = _builder_status(guild, channel)
+    embed = discord.Embed(title="🌿 Role Picker Builder", color=discord.Color.green() if ready else discord.Color.gold(), timestamp=discord.utils.utcnow())
+    embed.add_field(name="Target channel", value=channel.mention, inline=False)
+    embed.add_field(name="Status", value="✅ Ready" if ready else "⚠️ Not ready", inline=False)
+
+    if fixable:
+        embed.add_field(name="Fixable now", value="\n".join(f"• {x}" for x in fixable), inline=False)
+    if manual:
+        embed.add_field(name="Needs manual fix", value="\n".join(f"• {x}" for x in manual), inline=False)
+
+    await interaction.response.send_message(
+        embed=embed,
+        view=RoleBuilderView(author_id=int(interaction.user.id), channel_id=int(channel.id), ready=ready, fixable=bool(fixable), title=title),
+        ephemeral=True,
+        allowed_mentions=discord.AllowedMentions.none(),
+    )
+
+
+async def _handle_builder_action(interaction: discord.Interaction, action: str) -> bool:
+    guild = interaction.guild
+    channel = interaction.channel
+    if guild is None or not isinstance(channel, discord.TextChannel):
+        await _reply(interaction, "Run builder actions inside the target text channel.", ok=False)
+        return True
+
+    ready, fixable, manual = _builder_status(guild, channel)
+
+    if action == "builder_health":
+        lines = ["✅ Ready"] if ready else []
+        if fixable:
+            lines.append("Fixable: " + ", ".join(fixable))
+        if manual:
+            lines.append("Manual: " + " | ".join(manual))
+        if not lines:
+            lines.append("No status available.")
+        await _reply(interaction, "\n".join(lines), ok=ready)
+        return True
+
+    if action == "builder_fix":
+        if not fixable:
+            await _reply(interaction, "Nothing fixable is missing right now.", ok=True)
+            return True
+        me = guild.me
+        if not isinstance(me, discord.Member):
+            await _reply(interaction, "Dank Shield bot member could not be resolved.", ok=False)
+            return True
+        try:
+            await channel.set_permissions(
+                me,
+                view_channel=True,
+                send_messages=True,
+                embed_links=True,
+                reason=f"Dank Shield role builder permission repair by {interaction.user} ({interaction.user.id})",
+            )
+            await _reply(interaction, "Fixed channel permissions. Reopen `/dank roles builder`.", ok=True)
+        except Exception as exc:
+            await _reply(interaction, f"Could not fix permissions: {type(exc).__name__}.", ok=False)
+        return True
+
+    if action == "builder_preview":
+        await interaction.response.send_message(embed=_role_picker_embed(guild), view=RolePickerHomeView(), ephemeral=True, allowed_mentions=discord.AllowedMentions.none())
+        return True
+
+    if action == "builder_post":
+        if not ready:
+            await _reply(interaction, "Builder is not ready. Use Health to see the exact blocker.", ok=False)
+            return True
+        try:
+            if not interaction.response.is_done():
+                await interaction.response.defer(ephemeral=True, thinking=True)
+        except Exception:
+            pass
+        roles, created, reused = await _create_reuse_roles(interaction, guild, _all_builder_role_names(), reason_label="interactive role picker")
+        await channel.send(embed=_role_picker_embed(guild), view=RolePickerHomeView(), allowed_mentions=discord.AllowedMentions.none())
+        await interaction.followup.send(f"✅ Role picker posted in {channel.mention}.", ephemeral=True, allowed_mentions=discord.AllowedMentions.none())
+        await _send_creation_notes(interaction, created=created, reused=reused)
+        return True
+
+    return False
+
+
+async def _handle_role_picker_interaction(interaction: discord.Interaction) -> bool:
+    data = interaction.data if isinstance(interaction.data, dict) else {}
+    custom_id = str(data.get("custom_id") or "")
+    if not custom_id.startswith(ROLE_PICKER_PREFIX):
+        return False
+    suffix = custom_id[len(ROLE_PICKER_PREFIX):]
+    if suffix.startswith("builder_"):
+        return await _handle_builder_action(interaction, suffix)
+
+    guild = interaction.guild
+    member = interaction.user if isinstance(interaction.user, discord.Member) else None
+    if guild is None or member is None:
+        await _reply(interaction, "This only works inside the server.", ok=False)
+        return True
+
+    if suffix.startswith("open:"):
+        category = suffix.split(":", 1)[1]
+        payload = ROLE_PICKER_CATEGORIES.get(category)
+        title = payload[1] if payload else "Roles"
+        desc = payload[3] if payload else "Pick roles."
+        await interaction.response.send_message(
+            embed=discord.Embed(title=title, description=desc, color=discord.Color.blurple()),
+            view=RoleCategorySelectView(guild, member, category),
+            ephemeral=True,
+            allowed_mentions=discord.AllowedMentions.none(),
+        )
+        return True
+
+    if suffix.startswith("select:"):
+        category = suffix.split(":", 1)[1]
+        values = data.get("values") if isinstance(data.get("values"), list) else []
+        selected = {int(v) for v in values if str(v).isdigit() and int(v) > 0}
+        category_roles = [r for r in _category_roles(guild, category) if not _is_custom_identity_role(r)]
+        add = [r for r in category_roles if int(r.id) in selected and r not in member.roles and _can_manage(r, guild)[0]]
+        remove = [r for r in category_roles if int(r.id) not in selected and r in member.roles and _can_manage(r, guild)[0]]
+        if add:
+            await member.add_roles(*add, reason="Dank Shield role picker")
+        if remove:
+            await member.remove_roles(*remove, reason="Dank Shield role picker")
+        msg = []
+        if add:
+            msg.append("Added: " + ", ".join(r.mention for r in add))
+        if remove:
+            msg.append("Removed: " + ", ".join(r.mention for r in remove))
+        await _reply(interaction, "\n".join(msg) if msg else "No changes needed.", ok=True)
+        return True
+
+    if suffix == "clear":
+        roles = []
+        for key in ROLE_PICKER_CATEGORIES:
+            roles.extend([r for r in _category_roles(guild, key) if r in member.roles and _can_manage(r, guild)[0]])
+        if roles:
+            await member.remove_roles(*roles, reason="Dank Shield role picker clear")
+            await _reply(interaction, "Removed your optional role-picker roles.", ok=True)
+        else:
+            await _reply(interaction, "No optional role-picker roles to remove.", ok=True)
+        return True
+
+    if suffix == "custom":
+        await interaction.response.send_modal(CustomIdentityRequestModal())
+        return True
+
+    return True
+
+
 async def _handle_self_role(interaction: discord.Interaction) -> bool:
     try:
         if interaction.type is not discord.InteractionType.component:
@@ -254,6 +622,10 @@ async def _handle_self_role(interaction: discord.Interaction) -> bool:
                 await _reply(interaction, f"Could not open the custom identity form: {type(exc).__name__}.", ok=False)
             return True
 
+        if _is_custom_identity_role(role):
+            await interaction.response.send_modal(CustomIdentityRequestModal())
+            return True
+
         ok, why = _can_manage(role, interaction.guild)
         if not ok:
             await _reply(interaction, why, ok=False)
@@ -278,6 +650,8 @@ async def _handle_self_role(interaction: discord.Interaction) -> bool:
 
 
 async def _self_role_listener(interaction: discord.Interaction) -> None:
+    if await _handle_role_picker_interaction(interaction):
+        return
     await _handle_self_role(interaction)
 
 
@@ -497,142 +871,15 @@ async def roles_identity(
     )
     await _send_creation_notes(interaction, created=created, reused=reused)
 
-
-@roles_group.command(name="setup", description="Create/reuse pronoun + identity roles and post one complete role picker.")
-@app_commands.describe(
-    channel="Where to post the complete role-picker panel.",
-    title="Optional panel title.",
-)
-async def roles_setup(
-    interaction: discord.Interaction,
-    channel: discord.TextChannel,
-    title: str = "Role Picker",
-) -> None:
-    if not await _require_setup_permission(interaction):
-        return
-    guild = interaction.guild
-    if guild is None:
-        return await _reply(interaction, "This command must be used inside a server.", ok=False)
-
-    ok, why = _bot_can_create_roles(guild)
-    if not ok:
-        return await _reply(interaction, why, ok=False)
-
-    try:
-        if not interaction.response.is_done():
-            await interaction.response.defer(ephemeral=True, thinking=True)
-    except Exception:
-        pass
-
-    try:
-        role_names = DEFAULT_PRONOUN_ROLE_NAMES + DEFAULT_IDENTITY_ROLE_NAMES
-        roles, created, reused = await _create_reuse_roles(
-            interaction,
-            guild,
-            role_names,
-            reason_label="complete pronoun and identity",
-        )
-    except Exception as exc:
-        return await interaction.followup.send(
-            f"❌ Could not create/reuse complete role picker roles: `{type(exc).__name__}: {str(exc)[:250]}`",
-            ephemeral=True,
-            allowed_mentions=discord.AllowedMentions.none(),
-        )
-
-    await _post_panel(
-        interaction,
-        channel,
-        title,
-        roles,
-        description=(
-            "Pick the optional pronoun and identity roles you want shown in this server. "
-            "Tap a role again to remove it. These roles are cosmetic only and never control server access.\\n\\n"
-            "Need a label that is not listed? Tap **Identity: custom / ask staff** and send a private request to staff."
-        ),
-    )
-    await _send_creation_notes(interaction, created=created, reused=reused)
-
-
-@roles_group.command(name="here", description="Create/reuse roles and post the complete role picker in this channel.")
-@app_commands.describe(
-    title="Optional panel title.",
-)
-async def roles_here(
+@roles_group.command(name="builder", description="Open the full role picker builder in this channel.")
+@app_commands.describe(title="Optional panel title.")
+async def roles_builder(
     interaction: discord.Interaction,
     title: str = "Role Picker",
 ) -> None:
     if not await _require_setup_permission(interaction):
         return
-
-    guild = interaction.guild
-    channel = interaction.channel
-
-    if guild is None:
-        return await _reply(interaction, "This command must be used inside a server.", ok=False)
-
-    if not isinstance(channel, discord.TextChannel):
-        return await _reply(interaction, "Run this inside the text channel where the role picker should be posted.", ok=False)
-
-    ok, why = _bot_can_create_roles(guild)
-    if not ok:
-        return await _reply(interaction, why, ok=False)
-
-    try:
-        me = guild.me
-        perms = channel.permissions_for(me) if isinstance(me, discord.Member) else None
-        missing: list[str] = []
-        if perms is None or not perms.view_channel:
-            missing.append("View Channel")
-        if perms is None or not perms.send_messages:
-            missing.append("Send Messages")
-        if perms is None or not perms.embed_links:
-            missing.append("Embed Links")
-        if missing:
-            return await _reply(
-                interaction,
-                (
-                    f"I cannot post the role picker in {channel.mention}. "
-                    f"Missing: {', '.join(missing)}. "
-                    "Fix those channel permissions for Dank Shield, then run `/dank roles here` again."
-                ),
-                ok=False,
-            )
-    except Exception:
-        pass
-
-    try:
-        if not interaction.response.is_done():
-            await interaction.response.defer(ephemeral=True, thinking=True)
-    except Exception:
-        pass
-
-    try:
-        role_names = DEFAULT_PRONOUN_ROLE_NAMES + DEFAULT_IDENTITY_ROLE_NAMES
-        roles, created, reused = await _create_reuse_roles(
-            interaction,
-            guild,
-            role_names,
-            reason_label="bot-only complete pronoun and identity",
-        )
-    except Exception as exc:
-        return await interaction.followup.send(
-            f"❌ Could not create/reuse role picker roles: `{type(exc).__name__}: {str(exc)[:250]}`",
-            ephemeral=True,
-            allowed_mentions=discord.AllowedMentions.none(),
-        )
-
-    await _post_panel(
-        interaction,
-        channel,
-        title,
-        roles,
-        description=(
-            "Pick the optional pronoun and identity roles you want shown in this server. "
-            "Tap a role again to remove it. These roles are cosmetic only and never control server access.\\n\\n"
-            "Need a label that is not listed? Tap **Identity: custom / ask staff** and send a private request to staff."
-        ),
-    )
-    await _send_creation_notes(interaction, created=created, reused=reused)
+    await _post_builder(interaction, title=title)
 
 
 @roles_group.command(name="health", description="Check whether Dank Shield can manage a self-assignable role.")
