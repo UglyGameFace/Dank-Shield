@@ -553,6 +553,88 @@ async def roles_setup(
     await _send_creation_notes(interaction, created=created, reused=reused)
 
 
+@roles_group.command(name="here", description="Create/reuse roles and post the complete role picker in this channel.")
+@app_commands.describe(
+    title="Optional panel title.",
+)
+async def roles_here(
+    interaction: discord.Interaction,
+    title: str = "Role Picker",
+) -> None:
+    if not await _require_setup_permission(interaction):
+        return
+
+    guild = interaction.guild
+    channel = interaction.channel
+
+    if guild is None:
+        return await _reply(interaction, "This command must be used inside a server.", ok=False)
+
+    if not isinstance(channel, discord.TextChannel):
+        return await _reply(interaction, "Run this inside the text channel where the role picker should be posted.", ok=False)
+
+    ok, why = _bot_can_create_roles(guild)
+    if not ok:
+        return await _reply(interaction, why, ok=False)
+
+    try:
+        me = guild.me
+        perms = channel.permissions_for(me) if isinstance(me, discord.Member) else None
+        missing: list[str] = []
+        if perms is None or not perms.view_channel:
+            missing.append("View Channel")
+        if perms is None or not perms.send_messages:
+            missing.append("Send Messages")
+        if perms is None or not perms.embed_links:
+            missing.append("Embed Links")
+        if missing:
+            return await _reply(
+                interaction,
+                (
+                    f"I cannot post the role picker in {channel.mention}. "
+                    f"Missing: {', '.join(missing)}. "
+                    "Fix those channel permissions for Dank Shield, then run `/dank roles here` again."
+                ),
+                ok=False,
+            )
+    except Exception:
+        pass
+
+    try:
+        if not interaction.response.is_done():
+            await interaction.response.defer(ephemeral=True, thinking=True)
+    except Exception:
+        pass
+
+    try:
+        role_names = DEFAULT_PRONOUN_ROLE_NAMES + DEFAULT_IDENTITY_ROLE_NAMES
+        roles, created, reused = await _create_reuse_roles(
+            interaction,
+            guild,
+            role_names,
+            reason_label="bot-only complete pronoun and identity",
+        )
+    except Exception as exc:
+        return await interaction.followup.send(
+            f"❌ Could not create/reuse role picker roles: `{type(exc).__name__}: {str(exc)[:250]}`",
+            ephemeral=True,
+            allowed_mentions=discord.AllowedMentions.none(),
+        )
+
+    await _post_panel(
+        interaction,
+        channel,
+        title,
+        roles,
+        description=(
+            "Pick the optional pronoun and identity roles you want shown in this server. "
+            "Tap a role again to remove it. These roles are cosmetic only and never control server access.\\n\\n"
+            "Need a label that is not listed? Tap **Identity: custom / ask staff** and send a private request to staff."
+        ),
+    )
+    await _send_creation_notes(interaction, created=created, reused=reused)
+
+
 @roles_group.command(name="health", description="Check whether Dank Shield can manage a self-assignable role.")
 @app_commands.describe(role="Role to test.")
 async def roles_health(interaction: discord.Interaction, role: discord.Role) -> None:
