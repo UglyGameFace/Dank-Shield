@@ -21,6 +21,8 @@ _PROFILE_PANEL_BLOCK_UNTIL: dict[tuple[int, int], float] = {}
 _PROFILE_PANEL_LAST_NOTICE: dict[tuple[int, int], float] = {}
 _PROFILE_PANEL_HARD_COOLDOWN_SECONDS = 2.5
 _PROFILE_PANEL_NOTICE_SECONDS = 3.0
+_PROFILE_PANEL_SESSIONS: dict[tuple[int, int, str], float] = {}
+_PROFILE_PANEL_SESSION_TTL_SECONDS = 45.0
 
 _PROFILE_LOCKS: dict[tuple[int, int], asyncio.Lock] = {}
 _PROFILE_LAST_CLICK: dict[tuple[int, int], float] = {}
@@ -886,6 +888,58 @@ async def _panel_guard_quiet_reject(interaction: discord.Interaction, key: tuple
         pass
 
 
+def _profile_action_key_from_custom_id(custom_id: str) -> str:
+    text = str(custom_id or "")
+    if text.startswith("dank:profile:v1:"):
+        suffix = text[len("dank:profile:v1:"):]
+        if suffix.startswith("open:"):
+            return suffix
+        if suffix in {"view", "clear", "missing", "missing_interest"}:
+            return suffix
+    if text.startswith("dank:rolepicker:v2:"):
+        suffix = text[len("dank:rolepicker:v2:"):]
+        if suffix.startswith("open:"):
+            return suffix
+        if suffix in {"clear", "custom"}:
+            return suffix
+    return text[:80]
+
+
+async def _profile_session_gate(interaction: discord.Interaction, custom_id: str) -> bool:
+    # Only suppress actions that create new ephemeral messages/views.
+    action_key = _profile_action_key_from_custom_id(custom_id)
+    suppress_prefixes = (
+        "open:pronouns",
+        "open:identity",
+        "open:interests",
+        "view",
+    )
+    if action_key not in suppress_prefixes:
+        return True
+
+    guild_id = int(interaction.guild.id) if interaction.guild else 0
+    user_id = int(interaction.user.id)
+    key = (guild_id, user_id, action_key)
+    now = monotonic()
+
+    if len(_PROFILE_PANEL_SESSIONS) > 5000:
+        stale = [k for k, until in _PROFILE_PANEL_SESSIONS.items() if now > float(until or 0.0)]
+        for stale_key in stale[:1000]:
+            _PROFILE_PANEL_SESSIONS.pop(stale_key, None)
+
+    active_until = float(_PROFILE_PANEL_SESSIONS.get(key, 0.0) or 0.0)
+    if now < active_until:
+        try:
+            if not interaction.response.is_done():
+                await interaction.response.defer(ephemeral=True, thinking=False)
+        except Exception:
+            pass
+        return False
+
+    _PROFILE_PANEL_SESSIONS[key] = now + _PROFILE_PANEL_SESSION_TTL_SECONDS
+    return True
+
+
 async def _panel_guard_acquire(interaction: discord.Interaction, custom_id: str) -> Optional[tuple[int, int]]:
     if not _panel_guard_is_profile_action(custom_id):
         return None
@@ -934,6 +988,8 @@ async def _interaction_listener(interaction: discord.Interaction) -> None:
     gate_key: Optional[tuple[int, int]] = None
 
     if _panel_guard_is_profile_action(custom_id):
+        if not await _profile_session_gate(interaction, custom_id):
+            return
         gate_key = await _panel_guard_acquire(interaction, custom_id)
         if gate_key is None:
             return
