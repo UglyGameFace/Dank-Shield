@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import re
 from time import monotonic
 from typing import Any, Optional
 
@@ -425,13 +426,102 @@ class ProfileCardActionView(discord.ui.View):
         )
 
 
-class ProfileMemberPickSelect(discord.ui.UserSelect):
-    def __init__(self) -> None:
+def _profile_member_search_text(member: discord.Member) -> str:
+    parts = [
+        str(getattr(member, "display_name", "") or ""),
+        str(getattr(member, "name", "") or ""),
+        str(getattr(member, "global_name", "") or ""),
+        str(member),
+        str(getattr(member, "id", "") or ""),
+    ]
+    return " ".join(part for part in parts if part).casefold()
+
+
+def _profile_member_label(member: discord.Member) -> str:
+    name = str(getattr(member, "display_name", "") or getattr(member, "name", "") or "Member")
+    username = str(getattr(member, "name", "") or member)
+    label = name if name.casefold() == username.casefold() else f"{name} (@{username})"
+    return label[:100]
+
+
+def _profile_member_description(member: discord.Member) -> str:
+    joined = ""
+    try:
+        if member.joined_at:
+            joined = f" • joined {member.joined_at.date().isoformat()}"
+    except Exception:
+        joined = ""
+    return f"ID {member.id}{joined}"[:100]
+
+
+async def _profile_find_human_members(guild: discord.Guild, query: str, *, limit: int = 25) -> list[discord.Member]:
+    raw = str(query or "").strip()
+    lowered = raw.casefold()
+    if not raw:
+        return []
+
+    id_match = re.search(r"(\d{15,25})", raw)
+    if id_match:
+        member_id = int(id_match.group(1))
+        member = guild.get_member(member_id)
+        if not isinstance(member, discord.Member):
+            try:
+                fetched = await guild.fetch_member(member_id)
+                member = fetched if isinstance(fetched, discord.Member) else None
+            except Exception:
+                member = None
+        if isinstance(member, discord.Member) and not member.bot:
+            return [member]
+        return []
+
+    candidates: dict[int, discord.Member] = {}
+
+    for member in list(getattr(guild, "members", []) or []):
+        if not isinstance(member, discord.Member) or member.bot:
+            continue
+        haystack = _profile_member_search_text(member)
+        if lowered in haystack:
+            candidates[int(member.id)] = member
+
+    if len(candidates) < limit:
+        try:
+            queried = await guild.query_members(raw, limit=limit)
+            for member in queried or []:
+                if isinstance(member, discord.Member) and not member.bot:
+                    candidates[int(member.id)] = member
+        except Exception:
+            pass
+
+    def score(member: discord.Member) -> tuple[int, str]:
+        display = str(getattr(member, "display_name", "") or "").casefold()
+        username = str(getattr(member, "name", "") or "").casefold()
+        global_name = str(getattr(member, "global_name", "") or "").casefold()
+        if lowered in {display, username, global_name}:
+            return (0, display or username)
+        if display.startswith(lowered) or username.startswith(lowered) or global_name.startswith(lowered):
+            return (1, display or username)
+        return (2, display or username)
+
+    return sorted(candidates.values(), key=score)[:limit]
+
+
+class ProfileMemberSearchResultSelect(discord.ui.Select):
+    def __init__(self, members: list[discord.Member]) -> None:
+        options = [
+            discord.SelectOption(
+                label=_profile_member_label(member),
+                description=_profile_member_description(member),
+                value=str(member.id),
+            )
+            for member in members[:25]
+            if not member.bot
+        ]
         super().__init__(
-            placeholder="Pick a member to view…",
+            placeholder="Pick the member whose profile you want…",
             min_values=1,
             max_values=1,
-            custom_id="dank:profile:v1:member_select",
+            options=options,
+            custom_id="dank:profile:v1:member_search_result",
         )
 
     async def callback(self, interaction: discord.Interaction) -> None:
@@ -439,12 +529,11 @@ class ProfileMemberPickSelect(discord.ui.UserSelect):
         if guild is None:
             return await _reply(interaction, "This only works inside the server.", ok=False)
 
-        picked = self.values[0] if self.values else None
-        member_id = int(getattr(picked, "id", 0) or 0)
-        member = guild.get_member(member_id)
+        raw = self.values[0] if self.values else "0"
+        member = guild.get_member(int(raw)) if str(raw).isdigit() else None
 
-        if not isinstance(member, discord.Member):
-            return await _reply(interaction, "Could not resolve that member in this server.", ok=False)
+        if not isinstance(member, discord.Member) or member.bot:
+            return await _reply(interaction, "That human member is no longer available.", ok=False)
 
         await interaction.response.send_message(
             embed=_profile_card(member),
@@ -454,10 +543,53 @@ class ProfileMemberPickSelect(discord.ui.UserSelect):
         )
 
 
+class ProfileMemberSearchResultsView(discord.ui.View):
+    def __init__(self, members: list[discord.Member]) -> None:
+        super().__init__(timeout=180)
+        self.add_item(ProfileMemberSearchResultSelect(members))
+
+
+class ProfileMemberSearchModal(discord.ui.Modal, title="View Member Profile"):
+    query = discord.ui.TextInput(
+        label="Search member",
+        placeholder="Type display name, username, @mention, or user ID",
+        min_length=1,
+        max_length=100,
+        required=True,
+    )
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        guild = interaction.guild
+        if guild is None:
+            return await _reply(interaction, "This only works inside the server.", ok=False)
+
+        matches = await _profile_find_human_members(guild, str(self.query.value or ""), limit=25)
+
+        if not matches:
+            return await _reply(interaction, "No human members matched that search. Try username, display name, mention, or ID.", ok=False)
+
+        if len(matches) == 1:
+            member = matches[0]
+            return await interaction.response.send_message(
+                embed=_profile_card(member),
+                view=ProfileCardActionView(member_id=int(member.id)),
+                ephemeral=True,
+                allowed_mentions=discord.AllowedMentions.none(),
+            )
+
+        await interaction.response.send_message(
+            f"Found {len(matches)} human matches. Pick one:",
+            view=ProfileMemberSearchResultsView(matches),
+            ephemeral=True,
+            allowed_mentions=discord.AllowedMentions.none(),
+        )
+
+
 class ProfileMemberPickView(discord.ui.View):
+    """Deprecated fallback kept so old in-memory references do not explode."""
+
     def __init__(self) -> None:
-        super().__init__(timeout=300)
-        self.add_item(ProfileMemberPickSelect())
+        super().__init__(timeout=180)
 
 
 class ProfilePanelView(discord.ui.View):
@@ -886,12 +1018,7 @@ async def _handle_profile_interaction(interaction: discord.Interaction) -> bool:
         return True
 
     if suffix == "pick_member":
-        await interaction.response.send_message(
-            "Pick a member to view their Dank Shield profile.",
-            view=ProfileMemberPickView(),
-            ephemeral=True,
-            allowed_mentions=discord.AllowedMentions.none(),
-        )
+        await interaction.response.send_modal(ProfileMemberSearchModal())
         return True
 
     if suffix == "view":
