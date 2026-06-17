@@ -388,6 +388,14 @@ async def _hard_block_invite_message(message: discord.Message) -> None:
         if not codes:
             return
 
+        from stoney_verify.startup_guards.invite_shield_sanitize_shared import is_trusted_bump_success_receipt
+        if is_trusted_bump_success_receipt(message):
+            _log(
+                "allowed trusted bump success receipt "
+                f"guild={guild.id} channel={message.channel.id} author={message.author.id}"
+            )
+            return
+
         override_exempt = _override_enabled(settings, "invite_override_exempt_users_roles")
         override_allowed_roles = _override_enabled(settings, "invite_override_allowed_roles")
         override_allowed_channels = _override_enabled(settings, "invite_override_allowed_channels")

@@ -552,6 +552,14 @@ async def _enforce_message(message: discord.Message, *, source: str = "message")
         if not codes:
             return
 
+        from stoney_verify.startup_guards.invite_shield_sanitize_shared import is_trusted_bump_success_receipt
+        if is_trusted_bump_success_receipt(effective_message):
+            _log(
+                "allowed trusted bump success receipt "
+                f"guild={guild.id} channel={effective_message.channel.id} message={effective_message.id} source={source}"
+            )
+            return
+
         should_handle, reason, blocked = await _should_handle(effective_message, cfg, settings, codes)
         if not should_handle:
             return

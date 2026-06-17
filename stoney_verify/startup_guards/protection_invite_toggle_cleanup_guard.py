@@ -444,6 +444,9 @@ async def _clean_existing_invites(channel: Any, *, limit: int = 100, repost_mixe
             try:
                 if message.author == me:
                     continue
+                from stoney_verify.startup_guards.invite_shield_sanitize_shared import is_trusted_bump_success_receipt
+                if is_trusted_bump_success_receipt(message):
+                    continue
                 codes = _invite_codes(message)
                 if not codes and not _has_invite(message):
                     continue
