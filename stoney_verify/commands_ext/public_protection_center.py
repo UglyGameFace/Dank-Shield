@@ -17,6 +17,7 @@ from discord import app_commands
 
 from ..guild_config import get_guild_config, invalidate_guild_config, upsert_guild_config
 from .public_setup_group import _require_setup_permission, stoney_group
+from ..interaction_guard import safe_defer_interaction, safe_send_interaction
 
 _ATTACHED = False
 
@@ -938,14 +939,56 @@ class ProtectionCenterView(discord.ui.View):
 async def protection_center(interaction: discord.Interaction) -> None:
     if not await _require_setup_permission(interaction):
         return
-    guild = interaction.guild
-    if guild is None:
-        return
-    cfg = await get_guild_config(int(guild.id), refresh=True)
-    spam, spam_source = await _load_spam_settings(int(guild.id))
-    embed = _protection_embed(guild, cfg, spam, spam_source)
-    view = ProtectionCenterView(author_id=int(interaction.user.id), cfg=cfg, spam=spam)
-    await _send_ephemeral(interaction, embed=embed, view=view, allowed_mentions=discord.AllowedMentions.none())
+
+    await safe_defer_interaction(interaction, ephemeral=True)
+
+    try:
+        guild = interaction.guild
+        if guild is None:
+            await safe_send_interaction(
+                interaction,
+                content="❌ Protection Center must be opened inside a server.",
+                ephemeral=True,
+                allowed_mentions=discord.AllowedMentions.none(),
+            )
+            return
+
+        cfg = await get_guild_config(int(guild.id), refresh=True)
+        spam, spam_source = await _load_spam_settings(int(guild.id))
+        embed = _protection_embed(guild, cfg, spam, spam_source)
+        view = ProtectionCenterView(author_id=int(interaction.user.id), cfg=cfg, spam=spam)
+
+        sent = await safe_send_interaction(
+            interaction,
+            embed=embed,
+            view=view,
+            ephemeral=True,
+            allowed_mentions=discord.AllowedMentions.none(),
+        )
+        if not sent:
+            try:
+                print(f"⚠️ public_protection_center: failed to send Protection Center guild={getattr(guild, 'id', 'unknown')}")
+            except Exception:
+                pass
+
+    except Exception as exc:
+        try:
+            print(
+                "⚠️ public_protection_center open failed "
+                f"guild={getattr(interaction.guild, 'id', 'unknown')}: {type(exc).__name__}: {exc}"
+            )
+        except Exception:
+            pass
+
+        await safe_send_interaction(
+            interaction,
+            content=(
+                "❌ Protection Center could not open safely. Nothing was changed. "
+                "Try again, then check the bot logs or run diagnostics if it keeps happening."
+            ),
+            ephemeral=True,
+            allowed_mentions=discord.AllowedMentions.none(),
+        )
 
 
 def register_public_protection_center_commands(bot: Any, tree: Any) -> None:
