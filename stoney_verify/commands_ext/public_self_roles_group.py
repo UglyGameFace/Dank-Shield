@@ -15,6 +15,7 @@ PROFILE_PREFIX = "dank:profile:v1:"
 
 _ATTACHED = False
 _LISTENER_ATTACHED = False
+_CONTEXT_MENU_ATTACHED = False
 
 _PROFILE_PANEL_HARD_LOCKS: dict[tuple[int, int], asyncio.Lock] = {}
 _PROFILE_PANEL_BLOCK_UNTIL: dict[tuple[int, int], float] = {}
@@ -368,10 +369,102 @@ def _profile_terms_embed() -> discord.Embed:
     return embed
 
 
+def _profile_role_lines(member: discord.Member, names: tuple[str, ...]) -> str:
+    roles = _member_profile_roles(member, names)
+    if not roles:
+        return "None"
+    return "\n".join(f"• {role.mention} — `{role.name}`" for role in roles)[:1024]
+
+
+def _profile_full_roles_embed(member: discord.Member) -> discord.Embed:
+    embed = discord.Embed(
+        title=f"📋 {member.display_name}'s Profile Roles",
+        description="Exact Discord roles currently shown on this member's profile.",
+        color=discord.Color.blurple(),
+        timestamp=discord.utils.utcnow(),
+    )
+    embed.add_field(name="🪪 Pronoun roles", value=_profile_role_lines(member, DEFAULT_PRONOUN_ROLE_NAMES), inline=False)
+    embed.add_field(name="🌈 Identity roles", value=_profile_role_lines(member, DEFAULT_IDENTITY_ROLE_NAMES), inline=False)
+
+    try:
+        interest_names = DEFAULT_INTEREST_ROLE_NAMES
+    except NameError:
+        interest_names = tuple()
+    if interest_names:
+        embed.add_field(name="🎮 Interest roles", value=_profile_role_lines(member, interest_names), inline=False)
+
+    try:
+        embed.set_thumbnail(url=member.display_avatar.url)
+    except Exception:
+        pass
+
+    embed.set_footer(text="Dank Shield profile roles")
+    return embed
+
+
+class ProfileCardActionView(discord.ui.View):
+    def __init__(self, *, member_id: int) -> None:
+        super().__init__(timeout=300)
+        self.member_id = int(member_id)
+
+    @discord.ui.button(label="View Full Profile Roles", emoji="📋", style=discord.ButtonStyle.secondary, custom_id="dank:profile:v1:full_roles", row=0)
+    async def full_roles(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        guild = interaction.guild
+        if guild is None:
+            return await _reply(interaction, "This only works inside the server.", ok=False)
+
+        member = guild.get_member(self.member_id)
+        if not isinstance(member, discord.Member):
+            return await _reply(interaction, "That member is no longer available in this server.", ok=False)
+
+        await interaction.response.send_message(
+            embed=_profile_full_roles_embed(member),
+            ephemeral=True,
+            allowed_mentions=discord.AllowedMentions.none(),
+        )
+
+
+class ProfileMemberPickSelect(discord.ui.UserSelect):
+    def __init__(self) -> None:
+        super().__init__(
+            placeholder="Pick a member to view…",
+            min_values=1,
+            max_values=1,
+            custom_id="dank:profile:v1:member_select",
+        )
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        guild = interaction.guild
+        if guild is None:
+            return await _reply(interaction, "This only works inside the server.", ok=False)
+
+        picked = self.values[0] if self.values else None
+        member_id = int(getattr(picked, "id", 0) or 0)
+        member = guild.get_member(member_id)
+
+        if not isinstance(member, discord.Member):
+            return await _reply(interaction, "Could not resolve that member in this server.", ok=False)
+
+        await interaction.response.send_message(
+            embed=_profile_card(member),
+            view=ProfileCardActionView(member_id=int(member.id)),
+            ephemeral=True,
+            allowed_mentions=discord.AllowedMentions.none(),
+        )
+
+
+class ProfileMemberPickView(discord.ui.View):
+    def __init__(self) -> None:
+        super().__init__(timeout=300)
+        self.add_item(ProfileMemberPickSelect())
+
+
 class ProfilePanelView(discord.ui.View):
     def __init__(self) -> None:
         super().__init__(timeout=None)
         self.add_item(discord.ui.Button(label="View My Profile", emoji="👤", style=discord.ButtonStyle.primary, custom_id=f"{PROFILE_PREFIX}view", row=0))
+        self.add_item(discord.ui.Button(label="View Member Profile", emoji="👥", style=discord.ButtonStyle.secondary, custom_id=f"{PROFILE_PREFIX}pick_member", row=0))
         self.add_item(discord.ui.Button(label="Learn Terms", emoji="📘", style=discord.ButtonStyle.secondary, custom_id=f"{PROFILE_PREFIX}learn", row=0))
         self.add_item(discord.ui.Button(label="Pronouns", emoji="🪪", style=discord.ButtonStyle.secondary, custom_id=f"{PROFILE_PREFIX}open:pronouns", row=1))
         self.add_item(discord.ui.Button(label="Identity", emoji="🌈", style=discord.ButtonStyle.secondary, custom_id=f"{PROFILE_PREFIX}open:identity", row=1))
@@ -792,9 +885,19 @@ async def _handle_profile_interaction(interaction: discord.Interaction) -> bool:
         await _reply(interaction, "This only works inside the server.", ok=False)
         return True
 
+    if suffix == "pick_member":
+        await interaction.response.send_message(
+            "Pick a member to view their Dank Shield profile.",
+            view=ProfileMemberPickView(),
+            ephemeral=True,
+            allowed_mentions=discord.AllowedMentions.none(),
+        )
+        return True
+
     if suffix == "view":
         await interaction.response.send_message(
             embed=_profile_card(member),
+            view=ProfileCardActionView(member_id=int(member.id)),
             ephemeral=True,
             allowed_mentions=discord.AllowedMentions.none(),
         )
@@ -974,6 +1077,7 @@ async def _profile_session_gate(interaction: discord.Interaction, custom_id: str
         "open:interests",
         "view",
         "learn",
+        "pick_member",
     )
     if action_key not in suppress_prefixes:
         return True
@@ -1190,6 +1294,32 @@ async def roles_health(interaction: discord.Interaction, role: discord.Role) -> 
     await _reply(interaction, f"{role.mention} is ready for advanced role panels." if ok else why, ok=ok)
 
 
+async def _view_dank_profile_context(interaction: discord.Interaction, member: discord.Member) -> None:
+    guild = interaction.guild
+    if guild is None:
+        return await _reply(interaction, "This only works inside the server.", ok=False)
+
+    target = member
+    if not isinstance(target, discord.Member):
+        resolved = guild.get_member(int(getattr(member, "id", 0) or 0))
+        if not isinstance(resolved, discord.Member):
+            return await _reply(interaction, "Could not resolve that member in this server.", ok=False)
+        target = resolved
+
+    await interaction.response.send_message(
+        embed=_profile_card(target),
+        view=ProfileCardActionView(member_id=int(target.id)),
+        ephemeral=True,
+        allowed_mentions=discord.AllowedMentions.none(),
+    )
+
+
+view_dank_profile_context_menu = app_commands.ContextMenu(
+    name="View Dank Profile",
+    callback=_view_dank_profile_context,
+)
+
+
 def _attach_groups() -> bool:
     global _ATTACHED
     if _ATTACHED:
@@ -1221,8 +1351,24 @@ def _attach_groups() -> bool:
 
 
 def register_public_self_roles_group_commands(bot: Any, tree: Any) -> None:
-    global _LISTENER_ATTACHED
-    _ = tree
+    global _LISTENER_ATTACHED, _CONTEXT_MENU_ATTACHED
+
+    if tree is not None and not _CONTEXT_MENU_ATTACHED:
+        try:
+            existing = None
+            try:
+                existing = tree.get_command("View Dank Profile", type=discord.AppCommandType.user)
+            except TypeError:
+                existing = tree.get_command("View Dank Profile")
+            if existing is None:
+                tree.add_command(view_dank_profile_context_menu)
+            _CONTEXT_MENU_ATTACHED = True
+            print("✅ public_self_roles_group: attached View Dank Profile context menu")
+        except Exception as exc:
+            try:
+                print(f"⚠️ public_self_roles_group context menu failed: {type(exc).__name__}: {exc}")
+            except Exception:
+                pass
 
     if bot is not None and not _LISTENER_ATTACHED:
         try:
@@ -1243,4 +1389,4 @@ def register_public_self_roles_group_commands(bot: Any, tree: Any) -> None:
 
 _attach_groups()
 
-__all__ = ["register_public_self_roles_group_commands", "profile_group", "roles_group"]
+__all__ = ["register_public_self_roles_group_commands", "profile_group", "roles_group", "view_dank_profile_context_menu"]
