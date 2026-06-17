@@ -713,6 +713,80 @@ def _candidate_modlog_channel_ids(guild: discord.Guild) -> List[int]:
     return out
 
 
+def _cfg_id_value(cfg: Any, *keys: str) -> int:
+    for key in keys:
+        try:
+            raw = getattr(cfg, key, None)
+            val = _safe_int(raw, 0)
+            if val > 0:
+                return val
+        except Exception:
+            pass
+        try:
+            if hasattr(cfg, "get"):
+                raw = cfg.get(key)
+                val = _safe_int(raw, 0)
+                if val > 0:
+                    return val
+        except Exception:
+            pass
+        for bucket in ("settings", "config", "metadata", "meta"):
+            try:
+                nested = getattr(cfg, bucket, None)
+                if isinstance(nested, dict):
+                    val = _safe_int(nested.get(key), 0)
+                    if val > 0:
+                        return val
+            except Exception:
+                pass
+    return 0
+
+
+async def _get_modlog_channel_async(guild: discord.Guild) -> Optional[discord.TextChannel]:
+    """Resolve modlog channel using saved per-guild config first.
+
+    Public multi-server installs must not depend on env globals or channel-name
+    fallback when a guild has explicitly saved modlog_channel_id.
+    """
+
+    try:
+        from .guild_config import get_guild_config
+
+        cfg = await get_guild_config(int(guild.id), refresh=False)
+        cid = _cfg_id_value(cfg, "modlog_channel_id", "mod_log_channel_id", "logs_channel_id")
+        if cid > 0:
+            try:
+                ch = guild.get_channel(int(cid))
+                if _same_guild_text_channel(ch, guild):
+                    return ch
+            except Exception:
+                pass
+
+            try:
+                cached = bot.get_channel(int(cid))
+                if _same_guild_text_channel(cached, guild):
+                    return cached
+            except Exception:
+                pass
+
+            try:
+                fetched = await guild.fetch_channel(int(cid))
+                if _same_guild_text_channel(fetched, guild):
+                    return fetched
+            except Exception as exc:
+                print(
+                    f"⚠️ configured modlog channel unavailable "
+                    f"guild={getattr(guild, 'id', 'unknown')} channel={cid}: {type(exc).__name__}: {exc}"
+                )
+    except Exception as exc:
+        print(
+            f"⚠️ modlog config lookup failed "
+            f"guild={getattr(guild, 'id', 'unknown')}: {type(exc).__name__}: {exc}"
+        )
+
+    return _get_modlog_channel(guild)
+
+
 def _get_modlog_channel(guild: discord.Guild) -> Optional[discord.TextChannel]:
     candidate_ids = _candidate_modlog_channel_ids(guild)
 
@@ -753,13 +827,21 @@ async def _post_modlog(
     embed: discord.Embed,
     view: Optional[discord.ui.View] = None,
 ):
-    ch = _get_modlog_channel(guild)
+    ch = await _get_modlog_channel_async(guild)
     if not ch:
         print(f"⚠️ Modlog channel not found for guild {getattr(guild, 'id', 'unknown')}")
         return
 
     try:
-        await ch.send(embed=embed, view=view)
+        await ch.send(embed=embed, view=view, allowed_mentions=discord.AllowedMentions.none())
+    except TypeError:
+        try:
+            await ch.send(embed=embed, view=view)
+        except Exception as e:
+            print(
+                f"⚠️ Failed sending modlog message guild={getattr(guild, 'id', 'unknown')} "
+                f"channel={getattr(ch, 'id', 'unknown')} error={repr(e)}"
+            )
     except Exception as e:
         print(
             f"⚠️ Failed sending modlog message guild={getattr(guild, 'id', 'unknown')} "

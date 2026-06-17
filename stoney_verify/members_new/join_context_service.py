@@ -450,6 +450,7 @@ async def detect_join_entry_context(member: discord.Member) -> Dict[str, Any]:
 async def persist_member_join_context(
     member: discord.Member,
     risk_profile: Optional[Dict[str, Any]] = None,
+    context: Optional[Dict[str, Any]] = None,
 ) -> None:
     try:
         sb = get_supabase()
@@ -460,7 +461,7 @@ async def persist_member_join_context(
         user_id = str(member.id)
         now_iso = _sync_iso_now()
         joined_at = member.joined_at.isoformat() if member.joined_at else now_iso
-        context = await detect_join_entry_context(member)
+        context = dict(context or await detect_join_entry_context(member) or {})
         try:
             _RECENT_JOIN_CONTEXT[(int(member.guild.id), int(member.id))] = (time.monotonic(), dict(context or {}))
         except Exception:

@@ -432,10 +432,59 @@ async def _detect_join_entry_context(member: discord.Member) -> Dict[str, Any]:
 async def _persist_member_join_context(
     member: discord.Member,
     risk_profile: Optional[Dict[str, Any]] = None,
+    context: Optional[Dict[str, Any]] = None,
 ) -> None:
     from .members_new.join_context_service import persist_member_join_context
 
-    await persist_member_join_context(member, risk_profile=risk_profile)
+    try:
+        await persist_member_join_context(member, risk_profile=risk_profile, context=context)
+    except TypeError:
+        await persist_member_join_context(member, risk_profile=risk_profile)
+
+
+def _join_context_modlog_value(context: Optional[Dict[str, Any]]) -> str:
+    try:
+        ctx = dict(context or {})
+        if not ctx:
+            return ""
+
+        method = str(ctx.get("entry_method") or "unknown_join")
+        quality = str(ctx.get("entry_truth_quality") or "unknown")
+        confidence = str(ctx.get("entry_confidence") or "0")
+        reason = str(ctx.get("entry_quality_reason") or ctx.get("entry_reason") or "").strip()
+
+        lines: List[str] = []
+
+        code = str(ctx.get("invite_code") or "").strip()
+        if code and method not in {"invite_tracking_unavailable", "invite_cache_warming", "invite_unresolved"}:
+            lines.append(f"**Invite:** `discord.gg/{code}`")
+        else:
+            lines.append(f"**Invite:** `{method}`")
+
+        inviter_id = str(ctx.get("invited_by") or "").strip()
+        inviter_name = str(ctx.get("invited_by_name") or "").strip()
+        if inviter_id.isdigit():
+            lines.append(f"**Inviter:** <@{inviter_id}> (`{inviter_name or inviter_id}`)")
+        elif inviter_name:
+            lines.append(f"**Inviter:** `{inviter_name}`")
+
+        channel_id = str(ctx.get("channel_id") or "").strip()
+        channel_name = str(ctx.get("channel_name") or "").strip()
+        if channel_id.isdigit():
+            lines.append(f"**Invite Channel:** <#{channel_id}> (`#{channel_name or channel_id}`)")
+        elif channel_name:
+            lines.append(f"**Invite Channel:** `#{channel_name}`")
+
+        if bool(ctx.get("vanity_used")):
+            lines.append("**Source:** Server vanity invite")
+
+        lines.append(f"**Attribution:** `{quality}` confidence `{confidence}/100`")
+        if reason:
+            lines.append(f"**Note:** {reason[:240]}")
+
+        return "\\n".join(lines)[:1024]
+    except Exception:
+        return ""
 
 
 # ============================================================
@@ -1177,6 +1226,14 @@ async def on_member_join(member: discord.Member):
                     "is_bot_account": bool(getattr(member, "bot", False)),
                 }
 
+            join_context: Dict[str, Any] = {}
+            try:
+                if not getattr(member, "bot", False):
+                    join_context = await _detect_join_entry_context(member)
+            except Exception as e:
+                print(f"⚠️ Failed detecting join invite context for {member.id}: {repr(e)}")
+                join_context = {}
+
             embed = discord.Embed(
                 title="📥 Member Joined",
                 color=discord.Color.green(),
@@ -1214,6 +1271,10 @@ async def on_member_join(member: discord.Member):
                 )
             if member.joined_at:
                 embed.add_field(name="Joined At", value=f"`{member.joined_at}`", inline=False)
+
+            invite_source_text = _join_context_modlog_value(join_context)
+            if invite_source_text:
+                embed.add_field(name="Invite Source", value=invite_source_text, inline=False)
 
             try:
                 embed.set_thumbnail(url=member.display_avatar.url)
@@ -1264,6 +1325,7 @@ async def on_member_join(member: discord.Member):
                     await _persist_member_join_context(
                         member,
                         risk_profile=risk_profile,
+                        context=join_context,
                     )
             except Exception as e:
                 print(f"⚠️ Failed persisting join entry context for {member.id}: {repr(e)}")
