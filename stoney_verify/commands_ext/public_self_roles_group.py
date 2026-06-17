@@ -44,6 +44,16 @@ DEFAULT_IDENTITY_ROLE_NAMES: tuple[str, ...] = (
     "Identity: prefer not to say",
 )
 
+DEFAULT_INTEREST_ROLE_NAMES: tuple[str, ...] = (
+    "Interest: gaming",
+    "Interest: memes",
+    "Interest: music",
+    "Interest: movies",
+    "Interest: anime",
+    "Interest: smoke lounge",
+    "Interest: late-night chat",
+)
+
 PROFILE_CATEGORIES: dict[str, tuple[str, str, tuple[str, ...], str]] = {
     "pronouns": (
         "🪪",
@@ -56,6 +66,12 @@ PROFILE_CATEGORIES: dict[str, tuple[str, str, tuple[str, ...], str]] = {
         "Identity",
         DEFAULT_IDENTITY_ROLE_NAMES,
         "Choose optional identity roles. These are cosmetic only and never control access.",
+    ),
+    "interests": (
+        "🎮",
+        "Interests",
+        DEFAULT_INTEREST_ROLE_NAMES,
+        "Choose interests so other members know what you like talking about. These do not ping you or unlock access.",
     ),
 }
 
@@ -238,6 +254,7 @@ def _role_labels(roles: list[discord.Role]) -> str:
 def _profile_card(member: discord.Member) -> discord.Embed:
     pronouns = _member_profile_roles(member, DEFAULT_PRONOUN_ROLE_NAMES)
     identity = _member_profile_roles(member, DEFAULT_IDENTITY_ROLE_NAMES)
+    interests = _member_profile_roles(member, DEFAULT_INTEREST_ROLE_NAMES)
 
     embed = discord.Embed(
         title=f"{member.display_name}'s Profile",
@@ -246,7 +263,8 @@ def _profile_card(member: discord.Member) -> discord.Embed:
     )
     embed.add_field(name="🪪 Pronouns", value=_role_labels(pronouns), inline=False)
     embed.add_field(name="🌈 Identity", value=_role_labels(identity), inline=False)
-    embed.add_field(name="Profile roles", value=str(len(pronouns) + len(identity)), inline=True)
+    embed.add_field(name="🎮 Interests", value=_role_labels(interests), inline=False)
+    embed.add_field(name="Profile roles", value=str(len(pronouns) + len(identity) + len(interests)), inline=True)
 
     if member.joined_at:
         embed.add_field(name="Joined server", value=discord.utils.format_dt(member.joined_at, style="D"), inline=True)
@@ -265,7 +283,7 @@ def _profile_panel_embed(guild: discord.Guild, *, title: str = "Profile Panel") 
     embed = discord.Embed(
         title=title[:256],
         description=(
-            "Customize your server profile with optional pronoun and identity roles.\\n\\n"
+            "Customize your server profile with optional pronoun, identity, and interest roles.\\n\\n"
             "These roles are cosmetic only. They never control verification, tickets, moderation, staff access, or server permissions."
         ),
         color=discord.Color.blurple(),
@@ -297,8 +315,10 @@ class ProfilePanelView(discord.ui.View):
         self.add_item(discord.ui.Button(label="View My Profile", emoji="👤", style=discord.ButtonStyle.primary, custom_id=f"{PROFILE_PREFIX}view", row=0))
         self.add_item(discord.ui.Button(label="Pronouns", emoji="🪪", style=discord.ButtonStyle.secondary, custom_id=f"{PROFILE_PREFIX}open:pronouns", row=1))
         self.add_item(discord.ui.Button(label="Identity", emoji="🌈", style=discord.ButtonStyle.secondary, custom_id=f"{PROFILE_PREFIX}open:identity", row=1))
-        self.add_item(discord.ui.Button(label="Clear Profile Roles", emoji="🧹", style=discord.ButtonStyle.danger, custom_id=f"{PROFILE_PREFIX}clear", row=2))
-        self.add_item(discord.ui.Button(label="Missing Identity?", emoji="✍️", style=discord.ButtonStyle.secondary, custom_id=f"{PROFILE_PREFIX}missing", row=2))
+        self.add_item(discord.ui.Button(label="Interests", emoji="🎮", style=discord.ButtonStyle.secondary, custom_id=f"{PROFILE_PREFIX}open:interests", row=2))
+        self.add_item(discord.ui.Button(label="Suggest Missing Interest", emoji="➕", style=discord.ButtonStyle.secondary, custom_id=f"{PROFILE_PREFIX}missing_interest", row=2))
+        self.add_item(discord.ui.Button(label="Clear Profile Roles", emoji="🧹", style=discord.ButtonStyle.danger, custom_id=f"{PROFILE_PREFIX}clear", row=3))
+        self.add_item(discord.ui.Button(label="Missing Identity?", emoji="✍️", style=discord.ButtonStyle.secondary, custom_id=f"{PROFILE_PREFIX}missing", row=3))
 
 
 class ProfileCategorySelectView(discord.ui.View):
@@ -399,6 +419,77 @@ async def _staff_review_channel(guild: discord.Guild) -> Optional[discord.TextCh
     return None
 
 
+BANNED_INTEREST_WORDS: set[str] = {
+    "admin", "mod", "moderator", "staff", "owner", "manager",
+    "everyone", "here", "discord", "nitro",
+}
+
+
+def _clean_missing_interest(value: Any) -> tuple[str, str | None]:
+    raw = str(value or "").strip().lower()
+    raw = raw.replace("@everyone", "everyone").replace("@here", "here")
+    raw = " ".join(raw.split())
+    raw = re.sub(r"[^a-z0-9 #+&/.-]", "", raw).strip(" .-/")
+    raw = raw[:32]
+
+    if len(raw) < 2:
+        return "", "Interest is too short."
+    if "http://" in raw or "https://" in raw or "discord.gg" in raw:
+        return "", "Links are not allowed."
+    if any(word in raw.split() for word in BANNED_INTEREST_WORDS):
+        return "", "That interest name is reserved."
+    return raw, None
+
+
+class MissingInterestModal(discord.ui.Modal, title="Suggest Missing Interest"):
+    interest = discord.ui.TextInput(
+        label="Interest missing from the list",
+        placeholder="Example: cars, art, cooking, sports",
+        min_length=2,
+        max_length=32,
+        required=True,
+    )
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        guild = interaction.guild
+        member = interaction.user if isinstance(interaction.user, discord.Member) else None
+        if guild is None or member is None:
+            return await _reply(interaction, "This only works inside the server.", ok=False)
+
+        clean, error = _clean_missing_interest(str(self.interest.value or ""))
+        if error:
+            return await _reply(interaction, error, ok=False)
+
+        channel = await _staff_review_channel(guild)
+        if not isinstance(channel, discord.TextChannel):
+            return await _reply(interaction, "No staff/modlog channel found for missing interest requests.", ok=False)
+
+        embed = discord.Embed(
+            title="🎮 Missing Interest Request",
+            description=(
+                "A member says this interest is missing from the profile list.\\n\\n"
+                "This does not create a role automatically."
+            ),
+            color=discord.Color.blurple(),
+            timestamp=discord.utils.utcnow(),
+        )
+        embed.add_field(name="Member", value=f"{member.mention}\\n`{member}` (`{member.id}`)", inline=False)
+        embed.add_field(name="Requested interest", value=f"`{clean}`", inline=False)
+        embed.add_field(
+            name="Safe staff action",
+            value=(
+                "Approve manually only if appropriate. "
+                "Recommended role name if approved: "
+                f"`Interest: {clean}`"
+            ),
+            inline=False,
+        )
+        embed.set_footer(text="Dank Shield profile builder • staff-reviewed request")
+
+        await channel.send(embed=embed, allowed_mentions=discord.AllowedMentions.none())
+        await _reply(interaction, f"Missing interest request sent to staff: `{clean}`", ok=True)
+
+
 class ProfileBuilderView(discord.ui.View):
     def __init__(self, *, author_id: int, ready: bool, fixable: bool, title: str) -> None:
         super().__init__(timeout=300)
@@ -461,7 +552,7 @@ async def _post_profile_builder(interaction: discord.Interaction, *, title: str 
         timestamp=discord.utils.utcnow(),
     )
     embed.add_field(name="Panel target", value=channel.mention, inline=False)
-    embed.add_field(name="Default profile sections", value="🪪 Pronouns\\n🌈 Identity\\n✍️ Missing Identity request", inline=False)
+    embed.add_field(name="Default profile sections", value="🪪 Pronouns\\n🌈 Identity\\n🎮 Interests\\n✍️ Missing Identity request\\n➕ Missing Interest request", inline=False)
     embed.add_field(name="Status", value="✅ Ready" if ready else "⚠️ Not ready", inline=False)
 
     if fixable:
@@ -711,6 +802,10 @@ async def _handle_profile_interaction(interaction: discord.Interaction) -> bool:
 
     if suffix == "missing":
         await interaction.response.send_modal(MissingIdentityModal())
+        return True
+
+    if suffix == "missing_interest":
+        await interaction.response.send_modal(MissingInterestModal())
         return True
 
     return True
