@@ -270,7 +270,7 @@ def _profile_role_detail_lines(roles: list[discord.Role]) -> str:
         return "Not set"
     lines = []
     for role in roles:
-        lines.append(f"• **{_short_role_label(role.name)}** — {role.mention}")
+        lines.append(f"• {_short_role_label(role.name)}")
     return "\n".join(lines)[:1024]
 
 
@@ -341,7 +341,7 @@ def _profile_card(member: discord.Member, *, page: int = 0) -> discord.Embed:
 
     embed = discord.Embed(
         title=f"{member.display_name}'s Profile",
-        description="Profile roles shown below are cosmetic only.",
+        description="These profile labels are cosmetic only.",
         color=discord.Color.blurple(),
         timestamp=discord.utils.utcnow(),
     )
@@ -357,7 +357,7 @@ def _profile_card(member: discord.Member, *, page: int = 0) -> discord.Embed:
 
         if shown:
             lines = [
-                f"• {emoji} **{section}:** **{_short_role_label(role.name)}** — {role.mention}"
+                f"• {emoji} **{section}:** {_short_role_label(role.name)}"
                 for emoji, section, role in shown
             ]
             embed.add_field(
@@ -528,7 +528,7 @@ def _profile_role_lines(member: discord.Member, names: tuple[str, ...]) -> str:
     roles = _member_profile_roles(member, names)
     if not roles:
         return "None"
-    return "\n".join(f"• {role.mention} — `{role.name}`" for role in roles)[:1024]
+    return "\n".join(f"• {_short_role_label(role.name)}" for role in roles)[:1024]
 
 
 def _profile_full_roles_embed(member: discord.Member) -> discord.Embed:
