@@ -518,7 +518,7 @@ def build_styled_name(
     protection = _protection_mode_for(base, protection_rules)
     result = DesignNameResult(before=before, after=before, base_name=base, kind=kind, protected=protection == "never")
     if result.protected:
-        result.warnings.append("Protected by default safety rules; this item will not be renamed.")
+        result.warnings.append("Safe skip — protected ticket/log/system item. This is intentional and does not block Apply.")
         return result
     try:
         strength = max(1, min(5, int(strength)))
@@ -527,10 +527,19 @@ def build_styled_name(
     use_emoji = strength >= 1
     use_separator = strength >= 2 and protection in {"separator_only", "full", "font_only", "category_frame_only"}
     use_category_frame = kind == "category" and strength in {3, 5} and protection in {"category_frame_only", "full"}
-    use_font = strength >= 4 and protection in {"font_only", "full", "category_frame_only"}
-    chosen_font = safe_str(font or theme.font or "normal").lower().replace("-", "_") if use_font else "normal"
-    if chosen_font not in FONT_STYLES:
-        chosen_font = "normal"
+
+    # A theme-selected font is part of the theme identity. Strength controls how
+    # much structure/clutter is added; it must not silently turn Goth/Clean back
+    # into plain text.
+    requested_font = safe_str(font or theme.font or "normal").lower().replace("-", "_")
+    if requested_font not in FONT_STYLES:
+        requested_font = "normal"
+    use_font = (
+        strength >= 2
+        and requested_font != "normal"
+        and protection in {"font_only", "full", "category_frame_only"}
+    )
+    chosen_font = requested_font if use_font else "normal"
     name_text, substitutions = transform_text_safe(base, chosen_font, fallback_order=fallback_ladder(chosen_font))
     emoji = suggested_icon(base, icon_pack=theme.icon_pack, existing=safe_str(parsed.get("emoji")), mode=icon_mode) if use_emoji else ""
     sep_spec = SEPARATORS_BY_ID.get(separator_id or theme.channel_separator) or SEPARATORS_BY_ID["bar_full"]
@@ -571,7 +580,7 @@ def build_styled_name(
     result.clutter_score = clutter
     result.warnings.extend(score_warnings)
     if substitutions:
-        result.warnings.append("Auto-Safe Transform kept unsupported font characters readable instead of blocking the rename.")
+        result.warnings.append("Auto-Safe Transform used fallback glyphs for unsupported letters; rename can still be applied.")
     return result
 
 

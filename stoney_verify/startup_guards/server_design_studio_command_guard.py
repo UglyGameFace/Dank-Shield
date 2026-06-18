@@ -104,7 +104,7 @@ async def _require_design_permission(interaction: discord.Interaction) -> bool:
 
 
 async def _load_design_options(guild_id: int) -> dict[str, Any]:
-    default = {"theme_id": "gothic_clean", "strength": 2, "icon_mode": "replace_missing", "protection_rules": {}}
+    default = {"theme_id": "gothic_clean", "strength": 4, "icon_mode": "replace_missing", "protection_rules": {}}
     try:
         from stoney_verify.guild_config import get_guild_config
 
@@ -193,8 +193,26 @@ def _home_embed(guild: discord.Guild, options: Mapping[str, Any] | None = None) 
         ),
         color=discord.Color.blurple(),
     )
-    embed.add_field(name="Current Draft", value=f"Theme: **{theme.label}**\nStrength: **{strength}/5**\nDelay: **2 seconds per rename**", inline=False)
-    embed.add_field(name="Fast path", value="Pick a theme → Preview → Apply once → wait until finished. Rollback is available after apply.", inline=False)
+    font_text = str(getattr(theme, "font", "normal") or "normal").replace("_", " ").title()
+    embed.add_field(
+        name="Current Draft",
+        value=(
+            f"Theme: **{theme.label}**\n"
+            f"Theme font: **{font_text}**\n"
+            f"Strength: **{strength}/5**\n"
+            "Apply mode: **one press, paced at 2 seconds per rename**"
+        ),
+        inline=False,
+    )
+    embed.add_field(
+        name="Fast path",
+        value=(
+            "**Preview Selected Design** shows only the important changes first. "
+            "Safe skips are summarized instead of dumped as scary errors. "
+            "Rollback is available after apply."
+        ),
+        inline=False,
+    )
     embed.set_footer(text="/dank design • also reachable from /dank setup Advanced Tools")
     return embed
 
@@ -202,28 +220,89 @@ def _home_embed(guild: discord.Guild, options: Mapping[str, Any] | None = None) 
 def _preview_embed(guild: discord.Guild, items: list[dict[str, Any]], *, title: str = "👁 Server Design Preview") -> discord.Embed:
     summary = studio.summarize_plan(items)
     score = studio.design_score(items)
+    has_failures = bool(summary["failed"])
+
     embed = discord.Embed(
         title=title,
-        description="Nothing has been changed yet. Review this before applying.",
-        color=discord.Color.orange() if summary["failed"] or summary["warnings"] else discord.Color.green(),
+        description=(
+            "Nothing has been changed yet. This preview shows the actual final names that will be applied.\n\n"
+            "Safe skips are intentionally left alone and do not block Apply."
+        ),
+        color=discord.Color.red() if has_failures else discord.Color.green(),
     )
-    embed.add_field(name="Plan", value=f"Changed: **{summary['changed']}**\nProtected: **{summary['protected']}**\nFailed: **{summary['failed']}**\nWarnings: **{summary['warnings']}**", inline=True)
-    embed.add_field(name="Design Score", value=f"Readability: **{score['readability']}/100**\nMobile: **{score['mobile_fit']}/100**\nClutter: **{score['clutter_risk']}**\nAccessibility: **{score['accessibility']}**", inline=True)
-    embed.add_field(name="Preview", value="\n".join(studio.preview_lines(items, limit=12))[:1024], inline=False)
+
+    embed.add_field(
+        name="Plan",
+        value=(
+            f"Ready changes: **{summary['changed']}**\n"
+            f"Safe skips: **{summary['protected']}**\n"
+            f"Must fix: **{summary['failed']}**\n"
+            f"Notes: **{summary['warnings']}**"
+        ),
+        inline=True,
+    )
+    embed.add_field(
+        name="Design Score",
+        value=(
+            f"Readability: **{score['readability']}/100**\n"
+            f"Mobile: **{score['mobile_fit']}/100**\n"
+            f"Clutter: **{score['clutter_risk']}**\n"
+            f"Accessibility: **{score['accessibility']}**"
+        ),
+        inline=True,
+    )
+
+    changed_lines = studio.preview_lines(items, filter_mode="changed", limit=12)
+    if changed_lines == ["No matching preview rows."]:
+        changed_text = "No rename changes are needed for this draft."
+    else:
+        changed_text = "\n".join(changed_lines)[:1024]
+    embed.add_field(name="Will Change", value=changed_text, inline=False)
+
+    if summary["protected"]:
+        embed.add_field(
+            name="Safe Skips",
+            value=(
+                f"**{summary['protected']}** ticket/log/system item(s) are protected by default. "
+                "They are not errors and they will not be renamed unless you later override that policy."
+            ),
+            inline=False,
+        )
+
     failed_lines = studio.preview_lines(items, filter_mode="failed", limit=5)
     if failed_lines and failed_lines != ["No matching preview rows."]:
         embed.add_field(name="Must Fix Before Apply", value="\n".join(failed_lines)[:1024], inline=False)
-    warning_lines = studio.preview_lines(items, filter_mode="warnings", limit=5)
-    if warning_lines and warning_lines != ["No matching preview rows."]:
-        embed.add_field(name="Warnings", value="\n".join(warning_lines)[:1024], inline=False)
-    embed.set_footer(text="Apply is disabled when hard blockers exist. Unsupported font glyphs are warnings, not blockers.")
+
+    if summary["warnings"] and not has_failures:
+        embed.add_field(
+            name="Notes",
+            value=(
+                "Decorative fonts and fallback glyphs are treated as safe notes, not blockers. "
+                "The preview above is still the final rename output."
+            ),
+            inline=False,
+        )
+
+    embed.set_footer(text="Apply is disabled only for real failures. Font fallback notes and safe skips do not block Apply.")
     return embed
+
 
 
 class ThemeSelect(discord.ui.Select):
     def __init__(self, current: str) -> None:
-        options = [discord.SelectOption(label=theme.label[:100], value=theme.id, default=theme.id == current) for theme in studio.THEMES[:25]]
-        super().__init__(placeholder="Choose a server design theme…", min_values=1, max_values=1, options=options, row=0)
+        options = []
+        for theme in studio.THEMES[:25]:
+            font_text = str(getattr(theme, "font", "normal") or "normal").replace("_", " ").title()
+            frame_text = str(getattr(theme, "category_frame", "plain") or "plain").replace("_", " ").title()
+            options.append(
+                discord.SelectOption(
+                    label=theme.label[:100],
+                    value=theme.id,
+                    default=theme.id == current,
+                    description=f"Font: {font_text} • Category frame: {frame_text}"[:100],
+                )
+            )
+        super().__init__(placeholder="Choose a design theme…", min_values=1, max_values=1, options=options, row=0)
 
     async def callback(self, interaction: discord.Interaction) -> None:
         if not await _require_design_permission(interaction):
@@ -231,6 +310,10 @@ class ThemeSelect(discord.ui.Select):
         assert interaction.guild is not None
         options = await _load_design_options(int(interaction.guild.id))
         options["theme_id"] = self.values[0]
+        picked_theme = next((theme for theme in studio.THEMES if theme.id == self.values[0]), None)
+        picked_font = _safe_str(getattr(picked_theme, "font", "normal"), "normal").lower().replace("-", "_") if picked_theme else "normal"
+        if picked_font != "normal" and _safe_int(options.get("strength"), 4) < 4:
+            options["strength"] = 4
         await _save_design_options(int(interaction.guild.id), options)
         await interaction.response.edit_message(embed=_home_embed(interaction.guild, options), view=DesignHomeView(options))
 
@@ -238,14 +321,22 @@ class ThemeSelect(discord.ui.Select):
 class StrengthSelect(discord.ui.Select):
     def __init__(self, current: int) -> None:
         labels = {
-            1: "1 — Emoji only",
-            2: "2 — Emoji + separator",
-            3: "3 — Emoji + separator + category headers",
-            4: "4 — Emoji + separator + font",
-            5: "5 — Full theme",
+            1: ("1 — Minimal", "Emoji only. No font styling."),
+            2: ("2 — Clean", "Emoji + separator. Font themes still keep their font."),
+            3: ("3 — Category style", "Adds category headers where safe."),
+            4: ("4 — Recommended", "Best default for Goth/Clean and other font themes."),
+            5: ("5 — Full theme", "Most decorative option."),
         }
-        options = [discord.SelectOption(label=label, value=str(value), default=value == current) for value, label in labels.items()]
-        super().__init__(placeholder="Choose theme strength…", min_values=1, max_values=1, options=options, row=1)
+        options = [
+            discord.SelectOption(
+                label=label,
+                value=str(value),
+                default=value == current,
+                description=description[:100],
+            )
+            for value, (label, description) in labels.items()
+        ]
+        super().__init__(placeholder="Choose how much styling to apply…", min_values=1, max_values=1, options=options, row=1)
 
     async def callback(self, interaction: discord.Interaction) -> None:
         if not await _require_design_permission(interaction):
@@ -264,7 +355,7 @@ class DesignHomeView(discord.ui.View):
         self.add_item(ThemeSelect(_safe_str(options.get("theme_id"), "gothic_clean")))
         self.add_item(StrengthSelect(_safe_int(options.get("strength"), 2)))
 
-    @discord.ui.button(label="Preview", emoji="👁️", style=discord.ButtonStyle.primary, custom_id="dank_design:preview", row=2)
+    @discord.ui.button(label="Preview Selected Design", emoji="👁️", style=discord.ButtonStyle.primary, custom_id="dank_design:preview", row=2)
     async def preview(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         if not await _require_design_permission(interaction):
             return
