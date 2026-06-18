@@ -411,6 +411,70 @@ class QueuedFontRenamePreviewButton(discord.ui.Button):
         )
 
 
+async def _targeted_preview_embed(
+    guild: discord.Guild,
+    user_id: int,
+    options: dict[str, str],
+    *,
+    target_channel_ids: set[int],
+    title_suffix: str = "",
+) -> tuple[discord.Embed, list[dict[str, Any]]]:
+    """Build a preview/apply plan limited to specific channel ids.
+
+    Used by Auto-Fix Unsupported Font so it repairs only the channels that were
+    blocked by the selected font, instead of rebuilding the whole server plan.
+    """
+    plan, blocked, policy_skipped = await _build_plan_parts(guild, options)
+
+    targets = {int(x) for x in target_channel_ids if int(x) > 0}
+    if targets:
+        plan = [row for row in plan if _safe_int(row.get("channel_id"), 0) in targets]
+        blocked = [row for row in blocked if _safe_int(row.get("channel_id"), 0) in targets]
+        policy_skipped = 0
+
+    access_blocked, font_blocked = _split_blockers(blocked)
+
+    _PENDING[_key(int(guild.id), int(user_id))] = {
+        "created_at": time.time(),
+        "plan": plan,
+        "options": dict(options),
+        "blocked": blocked,
+        "blocked_access": access_blocked,
+        "blocked_font": font_blocked,
+        "policy_skipped": policy_skipped,
+        "target_channel_ids": sorted(targets),
+    }
+
+    embed = discord.Embed(
+        title=("🔤 Preview Channel Font Renames" + str(title_suffix or ""))[:256],
+        description=(
+            "Nothing has been changed yet. Apply only includes channels marked ready.\n\n"
+            "This preview is limited to the channels that previously failed the selected font."
+        ),
+        color=discord.Color.orange() if blocked else (discord.Color.green() if plan else discord.Color.blurple()),
+    )
+    embed.add_field(name="Ready to rename", value=str(len(plan)), inline=True)
+    embed.add_field(name="Blocked by bot access", value=str(len(access_blocked)), inline=True)
+    embed.add_field(name="Blocked by selected font", value=str(len(font_blocked)), inline=True)
+    embed.add_field(name="Protected by policy", value=str(policy_skipped), inline=True)
+    embed.add_field(name="Batch size", value=str(DEFAULT_BATCH_SIZE), inline=True)
+    embed.add_field(name="Delay between edits", value=f"{DEFAULT_DELAY_SECONDS:.1f}s", inline=True)
+
+    if targets:
+        embed.add_field(name="Auto-fix scope", value=f"Only **{len(targets)}** previously font-blocked channel(s).", inline=False)
+    if access_blocked:
+        embed.add_field(name="Fix bot access before applying", value=_blocked_text(access_blocked), inline=False)
+    if font_blocked:
+        embed.add_field(
+            name="Still blocked by selected font",
+            value=_blocked_text(font_blocked),
+            inline=False,
+        )
+
+    embed.add_field(name="Ready preview", value=_plan_text(plan), inline=False)
+    return embed, plan
+
+
 class AutoFixUnsupportedFontButton(discord.ui.Button):
     def __init__(self) -> None:
         super().__init__(
@@ -437,11 +501,34 @@ class AutoFixUnsupportedFontButton(discord.ui.Button):
             )
 
         fixed_options = _with_safe_font(dict(pending.get("options") or {}))
-        embed, plan = await _preview_embed(guild, int(interaction.user.id), fixed_options)
+        target_rows = list(pending.get("blocked_font") or [])
+        target_ids = {
+            _safe_int(row.get("channel_id"), 0)
+            for row in target_rows
+            if _safe_int(row.get("channel_id"), 0) > 0
+        }
+
+        if not target_ids:
+            return await interaction.response.send_message(
+                "No target channels were found for this font auto-fix. Run a fresh preview first.",
+                ephemeral=True,
+                allowed_mentions=discord.AllowedMentions.none(),
+            )
+
+        embed, plan = await _targeted_preview_embed(
+            guild,
+            int(interaction.user.id),
+            fixed_options,
+            target_channel_ids=target_ids,
+            title_suffix=" • Auto-Fix",
+        )
         refreshed = _PENDING.get(_key(int(guild.id), int(interaction.user.id))) or {}
         embed.add_field(
             name="Auto-fix applied",
-            value="Switched this preview to **Bold Sans**, a safer supported font.",
+            value=(
+                "Switched this limited preview to **Bold Sans**. "
+                "Apply will only touch the previously font-blocked channel(s), not the whole server."
+            ),
             inline=False,
         )
         await interaction.response.edit_message(
