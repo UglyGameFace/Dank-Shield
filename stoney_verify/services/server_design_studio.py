@@ -436,6 +436,41 @@ def transform_text_safe(value: Any, font: str, *, fallback_order: Iterable[str] 
     return final or plain, substitutions
 
 
+def _already_semantically_matches_design(before: str, *, base: str, font: str, expected_after: str) -> bool:
+    """Return True when a channel already visually matches the selected design.
+
+    This prevents the preview from trying to re-normalize channels that already
+    have the selected font/base text but differ only by minor separator/frame
+    decoration. Full exact-layout enforcement can be added later as a separate
+    explicit mode; the default design repair should avoid needless churn.
+    """
+
+    before_text = safe_str(before)
+    if not before_text:
+        return False
+
+    before_base = normalize_base_name(before_text, default="")
+    expected_base = normalize_base_name(expected_after, default="")
+    wanted_base = normalize_base_name(base, default="")
+
+    if wanted_base and before_base not in {wanted_base, expected_base}:
+        return False
+
+    clean_font = safe_str(font or "normal").lower().replace("-", "_")
+    if clean_font == "normal":
+        return before_base == expected_base
+
+    expected_font_text, _subs = transform_text_safe(
+        wanted_base or expected_base,
+        clean_font,
+        fallback_order=fallback_ladder(clean_font),
+    )
+
+    # If the already-visible name contains the selected styled base text, the
+    # font/base are already correct. Do not churn just to normalize separators.
+    return bool(expected_font_text and expected_font_text in strip_invisible(before_text))
+
+
 def _theme(theme_id: str | None) -> ThemePreset:
     return THEMES_BY_ID.get(safe_str(theme_id or "gothic_clean"), THEMES_BY_ID["gothic_clean"])
 
@@ -569,7 +604,19 @@ def build_styled_name(
         result.blockers.append("Final name would be empty.")
     readability, mobile, clutter, score_warnings = _readability(before, after, font=chosen_font, frame_clutter=frame_spec.clutter if use_category_frame else 0, separator_clutter=sep_spec.clutter if use_separator else 0)
     result.after = after[:DISCORD_NAME_LIMIT]
-    result.changed = bool(result.after and result.after != before and not result.blockers)
+
+    if (
+        result.after
+        and not result.blockers
+        and result.after != before
+        and _already_semantically_matches_design(before, base=base, font=chosen_font, expected_after=result.after)
+    ):
+        result.after = before
+        result.changed = False
+        result.warnings.append("Already matches the selected font/base; no rename needed.")
+    else:
+        result.changed = bool(result.after and result.after != before and not result.blockers)
+
     result.emoji = emoji
     result.separator_id = sep_spec.id if use_separator else ""
     result.font = chosen_font
