@@ -188,11 +188,53 @@ def _normalize_base(value: Any, case_mode: str = "lower") -> str:
     return text.lower()
 
 
+def _fallback_styles_for(style: str) -> tuple[str, ...]:
+    style = safe_str(style or "normal").lower().replace("-", "_")
+    close: dict[str, tuple[str, ...]] = {
+        "script": ("script", "bold_script", "serif_italic", "serif_bold_italic", "bold_sans", "monospace", "fullwidth"),
+        "bold_script": ("bold_script", "script", "serif_bold_italic", "serif_italic", "bold_sans", "monospace", "fullwidth"),
+        "fraktur": ("fraktur", "bold_fraktur", "serif_bold", "bold_sans", "monospace", "fullwidth"),
+        "bold_fraktur": ("bold_fraktur", "fraktur", "serif_bold", "bold_sans", "monospace", "fullwidth"),
+        "serif_italic": ("serif_italic", "serif_bold_italic", "italic_sans", "bold_italic_sans", "bold_sans", "monospace", "fullwidth"),
+        "serif_bold_italic": ("serif_bold_italic", "serif_italic", "bold_italic_sans", "bold_sans", "monospace", "fullwidth"),
+        "small_caps": ("small_caps", "bold_sans", "monospace", "fullwidth"),
+        "parenthesized": ("parenthesized", "circled", "bold_sans", "monospace", "fullwidth"),
+        "circled": ("circled", "parenthesized", "bold_sans", "monospace", "fullwidth"),
+    }
+    return close.get(style, (style, "bold_sans", "monospace", "fullwidth"))
+
+
+def _fallback_glyph(ch: str, style: str) -> str:
+    if not ch:
+        return ch
+
+    if not ch.isalnum():
+        mapping = _unicode_map(style)
+        return mapping.get(ch, ch) if mapping else ch
+
+    for candidate_style in _fallback_styles_for(style):
+        mapping = _unicode_map(candidate_style)
+        if not mapping:
+            continue
+        glyph = mapping.get(ch, ch)
+        # Critical: unchanged glyphs are NOT success for decorative live fonts.
+        # Keep searching for a related fallback that actually changes the character.
+        if glyph != ch:
+            return glyph
+
+    return ch
+
+
 def _transform(value: str, style: str) -> str:
+    style = safe_str(style or "normal").lower().replace("-", "_")
+    if style == "normal":
+        return value
+
     mapping = _unicode_map(style)
     if not mapping:
         return value
-    return "".join(mapping.get(ch, ch) for ch in value)
+
+    return "".join(_fallback_glyph(ch, style) for ch in value)
 
 
 def _split_text_decoration(value: Any) -> tuple[str, str, str]:
