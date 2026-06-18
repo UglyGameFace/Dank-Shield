@@ -32,6 +32,7 @@ _STARTUP_GUARDS: Tuple[str, ...] = (
     "stoney_verify.startup_guards.setup_ticket_tool_style_setup_guard",
     "stoney_verify.startup_guards.welcome_message_command_guard",
     "stoney_verify.startup_guards.welcome_member_events_guard",
+    "stoney_verify.startup_guards.member_lifecycle_router_guard",
     "stoney_verify.startup_guards.basic_verify_panel_auto_refresh_guard",
     "stoney_verify.startup_guards.self_roles_command_guard",
     "stoney_verify.startup_guards.modlog_probot_parity_guard",
