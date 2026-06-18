@@ -464,7 +464,23 @@ async def _on_raw_message_edit(payload: discord.RawMessageUpdateEvent) -> None:
         channel_id = _safe_int(getattr(payload, "channel_id", 0), 0)
         cached = getattr(payload, "cached_message", None)
         author = getattr(cached, "author", None) if cached is not None else None
+
         if author is not None and _is_own_bot_user(author):
+            return
+
+        # Raw edit events are noisy when Discord gives us no cached message and
+        # no real content. These are commonly bot panel/embed/component edits and
+        # produce useless logs like "New Content: None".
+        raw_author = data.get("author") if isinstance(data.get("author"), dict) else {}
+        raw_author_id = _safe_int(raw_author.get("id") if isinstance(raw_author, dict) else 0, 0)
+        bid = _bot_id()
+        if bid is not None and raw_author_id == int(bid):
+            return
+
+        has_content_key = "content" in data
+        new_content = str(data.get("content") or "").strip() if has_content_key else ""
+
+        if not new_content:
             return
 
         embed = _base_embed("✏️ Message Edited", discord.Color.blurple())
@@ -473,8 +489,9 @@ async def _on_raw_message_edit(payload: discord.RawMessageUpdateEvent) -> None:
         embed.add_field(name="Message ID", value=f"`{message_id}`", inline=True)
         if author is not None:
             embed.add_field(name="Author", value=_user_line(author), inline=False)
-        if "content" in data:
-            embed.add_field(name="New Content", value=_trim(data.get("content"), 1000), inline=False)
+
+        embed.add_field(name="New Content", value=_trim(new_content, 1000), inline=False)
+
         if cached is not None:
             try:
                 embed.add_field(name="Jump", value=f"[Open message]({cached.jump_url})", inline=False)
