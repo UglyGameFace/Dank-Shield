@@ -475,6 +475,107 @@ async def _targeted_preview_embed(
     return embed, plan
 
 
+def _plain_fallback_name(value: Any) -> str:
+    try:
+        from stoney_verify.startup_guards.channel_font_exact_unicode_guard import plain_live_name
+        return _safe_str(plain_live_name(value))[:100]
+    except Exception:
+        text = _safe_str(value)
+        # Very conservative fallback: strip common divider clutter, keep readable words.
+        text = text.replace("─", "-").replace("—", "-").replace("–", "-")
+        while "--" in text:
+            text = text.replace("--", "-")
+        return text.strip("- ").lower()[:100]
+
+
+async def _plain_fallback_preview_embed(
+    guild: discord.Guild,
+    user_id: int,
+    *,
+    target_rows: list[dict[str, Any]],
+) -> tuple[discord.Embed, list[dict[str, Any]]]:
+    plan: list[dict[str, Any]] = []
+    blocked: list[dict[str, Any]] = []
+
+    for row in target_rows:
+        cid = _safe_int(row.get("channel_id"), 0)
+        if cid <= 0:
+            continue
+
+        channel = guild.get_channel(cid)
+        before = _safe_str(row.get("before"))
+        if channel is not None:
+            before = _safe_str(getattr(channel, "name", before))
+
+        after = _plain_fallback_name(before)
+        item = {
+            "channel_id": str(cid),
+            "before": before,
+            "after": after,
+            "kind": _safe_str(row.get("kind"), "text"),
+        }
+
+        if not after or after == before:
+            item["blocked_reason"] = "plain fallback produced no change"
+            blocked.append(item)
+            continue
+
+        if channel is None:
+            item["blocked_reason"] = "channel no longer exists"
+            blocked.append(item)
+            continue
+
+        access_reason = _bot_access_reason(guild, channel)
+        if access_reason:
+            item["blocked_reason"] = access_reason
+            blocked.append(item)
+            continue
+
+        plan.append(item)
+
+    access_blocked, font_blocked = _split_blockers(blocked)
+
+    _PENDING[_key(int(guild.id), int(user_id))] = {
+        "created_at": time.time(),
+        "plan": plan,
+        "options": {"font": "plain_fallback"},
+        "blocked": blocked,
+        "blocked_access": access_blocked,
+        "blocked_font": font_blocked,
+        "policy_skipped": 0,
+        "target_channel_ids": [_safe_int(row.get("channel_id"), 0) for row in target_rows],
+    }
+
+    embed = discord.Embed(
+        title="🔤 Preview Channel Font Renames • Plain Repair",
+        description=(
+            "Bold Sans still could not safely transform those channel names.\n\n"
+            "This fallback will repair only the previously font-blocked channel(s) by normalizing them to plain readable names."
+        ),
+        color=discord.Color.green() if plan else discord.Color.orange(),
+    )
+    embed.add_field(name="Ready to rename", value=str(len(plan)), inline=True)
+    embed.add_field(name="Blocked by bot access", value=str(len(access_blocked)), inline=True)
+    embed.add_field(name="Blocked by selected font", value=str(len(font_blocked)), inline=True)
+    embed.add_field(name="Protected by policy", value="0", inline=True)
+    embed.add_field(name="Batch size", value=str(DEFAULT_BATCH_SIZE), inline=True)
+    embed.add_field(name="Delay between edits", value=f"{DEFAULT_DELAY_SECONDS:.1f}s", inline=True)
+
+    embed.add_field(
+        name="Repair scope",
+        value=f"Only **{len(target_rows)}** previously font-blocked channel(s).",
+        inline=False,
+    )
+
+    if access_blocked:
+        embed.add_field(name="Fix bot access before applying", value=_blocked_text(access_blocked), inline=False)
+    if font_blocked:
+        embed.add_field(name="Still blocked", value=_blocked_text(font_blocked), inline=False)
+
+    embed.add_field(name="Ready preview", value=_plan_text(plan), inline=False)
+    return embed, plan
+
+
 class AutoFixUnsupportedFontButton(discord.ui.Button):
     def __init__(self) -> None:
         super().__init__(
@@ -523,14 +624,34 @@ class AutoFixUnsupportedFontButton(discord.ui.Button):
             title_suffix=" • Auto-Fix",
         )
         refreshed = _PENDING.get(_key(int(guild.id), int(interaction.user.id))) or {}
-        embed.add_field(
-            name="Auto-fix applied",
-            value=(
-                "Switched this limited preview to **Bold Sans**. "
-                "Apply will only touch the previously font-blocked channel(s), not the whole server."
-            ),
-            inline=False,
-        )
+
+        # If Bold Sans still cannot safely transform the already-styled channel
+        # names, fall back to plain readable names for only the same target set.
+        if not plan and refreshed.get("blocked_font"):
+            embed, plan = await _plain_fallback_preview_embed(
+                guild,
+                int(interaction.user.id),
+                target_rows=target_rows,
+            )
+            refreshed = _PENDING.get(_key(int(guild.id), int(interaction.user.id))) or {}
+            embed.add_field(
+                name="Auto-fix fallback applied",
+                value=(
+                    "Bold Sans still failed proof. Switched this limited preview to **plain readable names** "
+                    "so Apply can repair only the previously blocked channel(s)."
+                ),
+                inline=False,
+            )
+        else:
+            embed.add_field(
+                name="Auto-fix applied",
+                value=(
+                    "Switched this limited preview to **Bold Sans**. "
+                    "Apply will only touch the previously font-blocked channel(s), not the whole server."
+                ),
+                inline=False,
+            )
+
         await interaction.response.edit_message(
             embed=embed,
             view=QueuedFontRenameConfirmView(
