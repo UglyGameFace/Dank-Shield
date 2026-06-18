@@ -211,7 +211,7 @@ THEMES: tuple[ThemePreset, ...] = (
 THEMES_BY_ID = {theme.id: theme for theme in THEMES}
 
 ICON_PACKS: dict[str, dict[str, str]] = {
-    "420_lounge": {"announcements": "📢", "welcome": "👋", "rules": "📜", "verification": "🔐", "verify": "🔐", "support": "🎫", "profile": "🎭", "voice": "🎙️", "general": "💬", "high-thoughts": "🧠", "memes": "🤡", "munchies": "🍔", "glass": "📸", "setups": "📸", "smoke": "🌬", "music": "🎧", "lounge": "🍃"},
+    "420_lounge": {"announcements": "📢", "welcome": "👋", "rules": "📜", "verification": "🔐", "verify": "🔐", "support": "🎫", "profile": "🎭", "voice": "🎙️", "general": "💬", "chat": "💬", "high-thoughts": "🧠", "thoughts": "🧠", "memes": "🤡", "munchies": "🍔", "food": "🍔", "glass": "📸", "setups": "📸", "smoke": "🌬", "music": "🎧", "lounge": "🍃"},
     "bot_utility": {"bot": "🤖", "commands": "⌨️", "logs": "📋", "log": "📋", "status": "🟢", "setup": "🛠️", "dashboard": "📊", "tickets": "🎫", "transcripts": "🧾", "archive": "🗄️", "audit": "📋"},
     "lit": {"announcements": "🚨", "general": "🔥", "media": "📸", "clips": "🎬", "events": "🎉", "wins": "🏆"},
     "gothic": {"rules": "📜", "announcements": "🕯️", "general": "🌙", "lounge": "🦇", "staff": "🛡️", "archive": "⚰️"},
@@ -308,20 +308,26 @@ def _reverse_font_map() -> dict[str, str]:
     reverse: dict[str, str] = {}
     for style in FONT_STYLES:
         for plain, glyph in _runtime_unicode_map(style).items():
-            if glyph and glyph != plain:
+            # Critical bug fix: some styles intentionally use ASCII letters as
+            # glyphs, e.g. upside-down maps b -> q and u -> n. Mapping ASCII
+            # glyphs back would corrupt normal names like announcements into
+            # unreadable text. Only reverse non-ASCII styled glyphs.
+            if glyph and glyph != plain and not glyph.isascii():
                 reverse.setdefault(glyph, plain)
     return reverse
 
 
 def strip_known_unicode_fonts(value: Any) -> str:
     raw = strip_invisible(value)
-    normalized = unicodedata.normalize("NFKC", raw)
     reverse = _reverse_font_map()
-    return "".join(reverse.get(ch, ch) for ch in normalized)
+    partially_reversed = "".join(reverse.get(ch, ch) for ch in raw)
+    return unicodedata.normalize("NFKC", partially_reversed)
 
 
 def _all_separator_values() -> list[str]:
-    return sorted({spec.value for spec in SEPARATOR_LIBRARY if spec.value}, key=len, reverse=True)
+    values = {spec.value for spec in SEPARATOR_LIBRARY if spec.value}
+    values.update({"|", "┃", "│", "｜", "・", "·", "•", "﹒", "✦", "✧", "⋆", "⟡", "▸", "▹", "▷", "▶", "›", "»"})
+    return sorted(values, key=len, reverse=True)
 
 
 def _strip_category_frame(value: str) -> str:
@@ -472,13 +478,21 @@ def _readability(before: str, after: str, *, font: str, frame_clutter: int = 0, 
     readability = 100
     mobile = 100
     if length > 32:
-        readability -= 10; mobile -= 15; warnings.append("Long name may be cramped on mobile.")
+        readability -= 10
+        mobile -= 15
+        warnings.append("Long name may be cramped on mobile.")
     if length > 60:
-        readability -= 20; mobile -= 25; warnings.append("Very long name should use normal text or a lighter frame.")
+        readability -= 20
+        mobile -= 25
+        warnings.append("Very long name should use normal text or a lighter frame.")
     if font in RISKY_FONTS:
-        readability -= 18; mobile -= 10; warnings.append("Decorative font may be harder to read or search.")
+        readability -= 18
+        mobile -= 10
+        warnings.append("Decorative font may be harder to read or search.")
     if clutter >= 4:
-        readability -= 12; mobile -= 12; warnings.append("This style is visually busy; Safe Mode is recommended for important channels.")
+        readability -= 12
+        mobile -= 12
+        warnings.append("This style is visually busy; Safe Mode is recommended for important channels.")
     if len(after) > len(before) + 20:
         mobile -= 8
     return max(0, readability), max(0, mobile), clutter, warnings
