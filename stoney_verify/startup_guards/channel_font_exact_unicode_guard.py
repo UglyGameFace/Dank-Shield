@@ -125,26 +125,93 @@ def _style_from_options(options: Any) -> str:
     return style
 
 
+def _fallback_styles_for(style: str) -> tuple[str, ...]:
+    style = str(style or "normal").strip().lower().replace("-", "_")
+
+    close: dict[str, tuple[str, ...]] = {
+        "script": ("script", "bold_script", "serif_italic", "serif_bold_italic", "bold_sans", "monospace", "fullwidth"),
+        "bold_script": ("bold_script", "script", "serif_bold_italic", "serif_italic", "bold_sans", "monospace", "fullwidth"),
+        "fraktur": ("fraktur", "bold_fraktur", "serif_bold", "bold_sans", "monospace", "fullwidth"),
+        "bold_fraktur": ("bold_fraktur", "fraktur", "serif_bold", "bold_sans", "monospace", "fullwidth"),
+        "serif_italic": ("serif_italic", "serif_bold_italic", "italic_sans", "bold_italic_sans", "bold_sans", "monospace", "fullwidth"),
+        "serif_bold_italic": ("serif_bold_italic", "serif_italic", "bold_italic_sans", "bold_sans", "monospace", "fullwidth"),
+        "small_caps": ("small_caps", "bold_sans", "monospace", "fullwidth"),
+        "parenthesized": ("parenthesized", "circled", "bold_sans", "monospace", "fullwidth"),
+        "circled": ("circled", "parenthesized", "bold_sans", "monospace", "fullwidth"),
+    }
+
+    return close.get(style, (style, "bold_sans", "monospace", "fullwidth"))
+
+
+def _fallback_glyph(ch: str, style: str) -> str:
+    if not ch:
+        return ch
+
+    if not ch.isalnum():
+        mapping = exact_unicode_map(style)
+        return mapping.get(ch, ch)
+
+    for candidate_style in _fallback_styles_for(style):
+        mapping = exact_unicode_map(candidate_style)
+        glyph = mapping.get(ch, ch)
+        if glyph != ch:
+            return glyph
+
+    return ch
+
+
+def _style_middle_with_fallbacks(middle: str, style: str) -> str:
+    if style == "normal":
+        return middle
+    return "".join(_fallback_glyph(ch, style) for ch in middle)
+
+
+def live_font_missing_after_fallback(style: str, required_chars: str = "abcdefghijklmnopqrstuvwxyz0123456789") -> str:
+    style = str(style or "normal").strip().lower().replace("-", "_")
+    if style == "normal":
+        return ""
+    missing = []
+    for ch in required_chars:
+        if _fallback_glyph(ch, style) == ch:
+            missing.append(ch)
+    return "".join(missing)
+
+
 def _proof_transform(middle: str, style: str, styled: str) -> tuple[bool, str]:
     if style == "normal":
         return True, ""
-    mapping = exact_unicode_map(style)
-    if not mapping:
+
+    if not exact_unicode_map(style):
         return False, "selected font is unavailable"
-    alpha = [ch for ch in middle if ch.isalpha()]
-    if not alpha:
-        return True, ""
-    missing = [ch for ch in alpha if mapping.get(ch, ch) == ch]
-    if missing:
-        return False, "selected font cannot transform: " + "".join(sorted(set(missing)))[:12]
+
+    # True fix-all behavior:
+    # selected style may miss a glyph, but the final styled output may use a
+    # compatible fallback glyph. Only block if the final output leaves a normal
+    # eligible letter unchanged.
+    still_plain = []
+    for idx, ch in enumerate(middle):
+        if not ch.isalpha():
+            continue
+        try:
+            styled_ch = styled[idx]
+        except Exception:
+            styled_ch = ""
+        if styled_ch == ch:
+            still_plain.append(ch)
+
+    if still_plain:
+        return False, "selected font and fallbacks cannot transform: " + "".join(sorted(set(still_plain)))[:12]
+
     transformed = [ch for ch in styled if ch.isalpha() and not (ch.isascii() and ch.islower())]
     if not transformed:
         return False, "selected font did not visibly transform letters"
+
     decoded_again = _decode(styled)
     expected = middle
     got = re.sub(r"-+", "-", "".join(ch if ch.isalnum() else "-" for ch in decoded_again)).strip("-").lower()
     if got != expected:
         return False, f"decode proof mismatch: {got[:32]}"
+
     return True, ""
 
 
@@ -154,7 +221,7 @@ def styled_live_name(value: Any, options: Any) -> str:
     prefix, middle, suffix = _split_clean(value)
     if not middle:
         return plain_live_name(value)
-    styled = "".join(mapping.get(ch, ch) for ch in middle) if mapping else middle
+    styled = _style_middle_with_fallbacks(middle, style) if mapping else middle
     return f"{prefix}{styled}{suffix}"[:100]
 
 
@@ -164,7 +231,7 @@ def _proof_styled_live_name(value: Any, options: Any) -> tuple[str, str | None]:
     prefix, middle, suffix = _split_clean(value)
     if not middle:
         return plain_live_name(value), None
-    styled = "".join(mapping.get(ch, ch) for ch in middle) if mapping else middle
+    styled = _style_middle_with_fallbacks(middle, style) if mapping else middle
     ok, reason = _proof_transform(middle, style, styled)
     if not ok:
         return f"{prefix}{styled}{suffix}"[:100], reason
