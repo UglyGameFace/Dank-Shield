@@ -144,6 +144,204 @@ def _bot_missing_manage(channel: discord.abc.GuildChannel, bot_member: discord.M
     return ""
 
 
+def _utc_iso_design() -> str:
+    try:
+        return discord.utils.utcnow().isoformat()
+    except Exception:
+        return ""
+
+
+def _theme_from_options(options: Mapping[str, Any]) -> Any:
+    theme_id = _safe_str(options.get("theme_id"), "gothic_clean")
+    return next((theme for theme in studio.THEMES if theme.id == theme_id), studio.THEMES[1])
+
+
+def _current_format_lock(options: Mapping[str, Any], *, scope: str = "global") -> dict[str, Any]:
+    """Build a reusable lock from the current draft.
+
+    The lock stores exact format pieces, not just a theme label. That lets the
+    consistency scanner reuse the chosen emoji mode, separator, font, category
+    frame, and strength without making the user re-pick them for each channel.
+    """
+
+    theme = _theme_from_options(options)
+    strength = max(1, min(5, _safe_int(options.get("strength"), 4)))
+    font = _safe_str(getattr(theme, "font", "normal"), "normal").lower().replace("-", "_")
+
+    # Font-based themes should not accidentally lock as a plain cleanup pass.
+    if font != "normal" and strength < 4:
+        strength = 4
+
+    return {
+        "scope": scope,
+        "theme_id": _safe_str(getattr(theme, "id", "gothic_clean"), "gothic_clean"),
+        "strength": strength,
+        "font": font,
+        "separator_id": _safe_str(getattr(theme, "channel_separator", "bar_full"), "bar_full"),
+        "category_frame_id": _safe_str(getattr(theme, "category_frame", "line"), "line"),
+        "icon_mode": _safe_str(options.get("icon_mode"), "replace_missing"),
+        "locked_at": _utc_iso_design(),
+    }
+
+
+def _mapping_dict(value: Any) -> dict[str, Any]:
+    return dict(value) if isinstance(value, Mapping) else {}
+
+
+def _lock_count(options: Mapping[str, Any]) -> dict[str, int]:
+    global_lock = _mapping_dict(options.get("format_lock_global"))
+    category_locks = _mapping_dict(options.get("category_format_locks"))
+    channel_locks = _mapping_dict(options.get("channel_format_locks"))
+    return {
+        "global": 1 if global_lock.get("enabled") else 0,
+        "categories": len(category_locks),
+        "channels": len(channel_locks),
+    }
+
+
+def _effective_format_options(
+    options: Mapping[str, Any],
+    *,
+    channel_id: int,
+    category_id: int,
+) -> dict[str, Any]:
+    """Resolve format priority for one channel/category.
+
+    Priority:
+    1. channel override lock
+    2. category format lock
+    3. global format lock
+    4. ordinary auto theme draft
+    """
+
+    effective = dict(options)
+    scope = "auto"
+
+    channel_locks = _mapping_dict(options.get("channel_format_locks"))
+    category_locks = _mapping_dict(options.get("category_format_locks"))
+    global_lock = _mapping_dict(options.get("format_lock_global"))
+
+    chosen = None
+    channel_key = str(int(channel_id or 0))
+    category_key = str(int(category_id or 0))
+
+    if channel_key in channel_locks and isinstance(channel_locks.get(channel_key), Mapping):
+        chosen = dict(channel_locks[channel_key])
+        scope = "channel"
+    elif category_key in category_locks and isinstance(category_locks.get(category_key), Mapping):
+        chosen = dict(category_locks[category_key])
+        scope = "category"
+    elif global_lock.get("enabled"):
+        chosen = dict(global_lock)
+        scope = "global"
+
+    if chosen:
+        for key in ("theme_id", "strength", "icon_mode", "font", "separator_id", "category_frame_id"):
+            if chosen.get(key) is not None:
+                effective[key] = chosen.get(key)
+        effective["__format_lock_scope"] = scope
+    else:
+        effective["__format_lock_scope"] = "auto"
+
+    return effective
+
+
+async def _save_options(interaction: discord.Interaction, options: Mapping[str, Any]) -> None:
+    guild = interaction.guild
+    if guild is None:
+        raise RuntimeError("This must be used inside a server.")
+    await _save_design_options(int(guild.id), dict(options))
+
+
+async def _save_global_lock(interaction: discord.Interaction) -> dict[str, Any]:
+    assert interaction.guild is not None
+    options = await _load_design_options(int(interaction.guild.id))
+    options["format_lock_global"] = {**_current_format_lock(options, scope="global"), "enabled": True}
+    await _save_options(interaction, options)
+    return options
+
+
+async def _save_category_lock(interaction: discord.Interaction, category_id: int) -> dict[str, Any]:
+    assert interaction.guild is not None
+    options = await _load_design_options(int(interaction.guild.id))
+    locks = _mapping_dict(options.get("category_format_locks"))
+    locks[str(int(category_id))] = _current_format_lock(options, scope="category")
+    options["category_format_locks"] = locks
+    await _save_options(interaction, options)
+    return options
+
+
+async def _save_channel_lock(interaction: discord.Interaction, channel_id: int) -> dict[str, Any]:
+    assert interaction.guild is not None
+    options = await _load_design_options(int(interaction.guild.id))
+    locks = _mapping_dict(options.get("channel_format_locks"))
+    locks[str(int(channel_id))] = _current_format_lock(options, scope="channel")
+    options["channel_format_locks"] = locks
+    await _save_options(interaction, options)
+    return options
+
+
+async def _clear_global_lock(interaction: discord.Interaction) -> dict[str, Any]:
+    assert interaction.guild is not None
+    options = await _load_design_options(int(interaction.guild.id))
+    options["format_lock_global"] = {}
+    await _save_options(interaction, options)
+    return options
+
+
+async def _clear_all_locks(interaction: discord.Interaction) -> dict[str, Any]:
+    assert interaction.guild is not None
+    options = await _load_design_options(int(interaction.guild.id))
+    options["format_lock_global"] = {}
+    options["category_format_locks"] = {}
+    options["channel_format_locks"] = {}
+    await _save_options(interaction, options)
+    return options
+
+
+def _format_locks_embed(guild: discord.Guild, options: Mapping[str, Any]) -> discord.Embed:
+    counts = _lock_count(options)
+    theme = _theme_from_options(options)
+    current_lock = _current_format_lock(options)
+
+    embed = discord.Embed(
+        title="🔒 Server Design Format Locks",
+        description=(
+            "Lock a selected layout once, then reuse it for categories or channels.\\n\\n"
+            "Future previews and consistency checks will compare names against these saved locks instead of guessing from one global auto design."
+        ),
+        color=discord.Color.blurple(),
+    )
+    embed.add_field(
+        name="Current draft format",
+        value=(
+            f"Theme: **{getattr(theme, 'label', 'Gothic Clean')}**\\n"
+            f"Font: **{_safe_str(current_lock.get('font'), 'normal').replace('_', ' ').title()}**\\n"
+            f"Separator: **{_safe_str(current_lock.get('separator_id'), 'bar_full').replace('_', ' ').title()}**\\n"
+            f"Category frame: **{_safe_str(current_lock.get('category_frame_id'), 'line').replace('_', ' ').title()}**\\n"
+            f"Strength: **{_safe_int(current_lock.get('strength'), 4)}/5**"
+        ),
+        inline=False,
+    )
+    embed.add_field(
+        name="Saved locks",
+        value=(
+            f"Global: **{'On' if counts['global'] else 'Off'}**\\n"
+            f"Categories: **{counts['categories']}**\\n"
+            f"Channels: **{counts['channels']}**"
+        ),
+        inline=True,
+    )
+    embed.add_field(
+        name="Priority",
+        value="Protected item → Channel lock → Category lock → Global lock → Auto theme",
+        inline=False,
+    )
+    embed.set_footer(text="Use Find & Fix Inconsistencies after saving locks.")
+    return embed
+
+
+
 async def build_design_plan(guild: discord.Guild, options: Mapping[str, Any]) -> list[dict[str, Any]]:
     bot_member = guild.me if isinstance(guild.me, discord.Member) else None
     theme_id = _safe_str(options.get("theme_id"), "gothic_clean")
@@ -154,17 +352,25 @@ async def build_design_plan(guild: discord.Guild, options: Mapping[str, Any]) ->
     for channel in _editable_channels(guild):
         kind = _kind(channel)
         current_name = _safe_str(getattr(channel, "name", ""))
+        parent = getattr(channel, "category", None)
+        channel_id = _safe_int(getattr(channel, "id", 0), 0)
+        category_id = channel_id if kind == "category" else _safe_int(getattr(parent, "id", 0), 0)
+        effective_options = _effective_format_options(options, channel_id=channel_id, category_id=category_id)
+
         result = studio.build_styled_name(
             current_name,
             kind="category" if kind == "category" else "text",
-            theme_id=theme_id,
-            strength=strength,
-            icon_mode=icon_mode,
+            theme_id=_safe_str(effective_options.get("theme_id"), theme_id),
+            strength=_safe_int(effective_options.get("strength"), strength),
+            icon_mode=_safe_str(effective_options.get("icon_mode"), icon_mode),
             protection_rules=protection_rules,
+            separator_id=_safe_str(effective_options.get("separator_id")) or None,
+            category_frame_id=_safe_str(effective_options.get("category_frame_id")) or None,
+            font=_safe_str(effective_options.get("font")) or None,
         )
-        parent = getattr(channel, "category", None)
         item = result.to_plan_item(channel_id=getattr(channel, "id", ""), category_id=getattr(parent, "id", ""))
         item["kind"] = kind
+        item["format_lock_scope"] = _safe_str(effective_options.get("__format_lock_scope"), "auto")
         missing = _bot_missing_manage(channel, bot_member)
         if missing and item.get("status") != "protected":
             item.setdefault("blockers", []).append(missing)
@@ -210,6 +416,16 @@ def _home_embed(guild: discord.Guild, options: Mapping[str, Any] | None = None) 
             "**Preview Selected Design** shows only the important changes first. "
             "Safe skips are summarized instead of dumped as scary errors. "
             "Rollback is available after apply."
+        ),
+        inline=False,
+    )
+    counts = _lock_count(options)
+    embed.add_field(
+        name="Format Locks",
+        value=(
+            f"Global: **{'On' if counts['global'] else 'Off'}** • "
+            f"Categories: **{counts['categories']}** • "
+            f"Channels: **{counts['channels']}**"
         ),
         inline=False,
     )
@@ -438,6 +654,185 @@ def _consistency_embed(guild: discord.Guild, items: list[dict[str, Any]], option
     return embed
 
 
+class FormatLocksButton(discord.ui.Button):
+    def __init__(self, *, row: int = 4) -> None:
+        super().__init__(
+            label="Format Locks",
+            emoji="🔒",
+            style=discord.ButtonStyle.primary,
+            custom_id="dank_design:format_locks",
+            row=row,
+        )
+
+    async def callback(self, interaction: discord.Interaction) -> None:  # type: ignore[override]
+        if not await _require_design_permission(interaction):
+            return
+        guild = interaction.guild
+        assert guild is not None
+        options = await _load_design_options(int(guild.id))
+        await interaction.response.edit_message(embed=_format_locks_embed(guild, options), view=FormatLocksView())
+
+
+class CategoryFormatLockSelect(discord.ui.ChannelSelect):
+    def __init__(self) -> None:
+        super().__init__(
+            placeholder="Lock current format to one category",
+            min_values=1,
+            max_values=1,
+            channel_types=[discord.ChannelType.category],
+            custom_id="dank_design:lock_category_select",
+            row=0,
+        )
+
+    async def callback(self, interaction: discord.Interaction) -> None:  # type: ignore[override]
+        if not await _require_design_permission(interaction):
+            return
+        guild = interaction.guild
+        assert guild is not None
+        category = self.values[0]
+        options = await _save_category_lock(interaction, int(category.id))
+        embed = _format_locks_embed(guild, options)
+        embed.title = "✅ Category Format Lock Saved"
+        embed.description = f"Saved the current draft format for {category.mention}. Future scans will use this lock for the category and its children unless a channel override exists."
+        await interaction.response.edit_message(embed=embed, view=FormatLocksView())
+
+
+class ChannelFormatLockSelect(discord.ui.ChannelSelect):
+    def __init__(self) -> None:
+        channel_types = [discord.ChannelType.text, discord.ChannelType.voice]
+        try:
+            channel_types.append(discord.ChannelType.category)
+        except Exception:
+            pass
+        try:
+            channel_types.append(discord.ChannelType.forum)
+        except Exception:
+            pass
+        try:
+            channel_types.append(discord.ChannelType.stage_voice)
+        except Exception:
+            pass
+        super().__init__(
+            placeholder="Lock current format to one channel/category override",
+            min_values=1,
+            max_values=1,
+            channel_types=channel_types,
+            custom_id="dank_design:lock_channel_select",
+            row=0,
+        )
+
+    async def callback(self, interaction: discord.Interaction) -> None:  # type: ignore[override]
+        if not await _require_design_permission(interaction):
+            return
+        guild = interaction.guild
+        assert guild is not None
+        channel = self.values[0]
+        options = await _save_channel_lock(interaction, int(channel.id))
+        embed = _format_locks_embed(guild, options)
+        embed.title = "✅ Channel Override Lock Saved"
+        embed.description = f"Saved the current draft format as an exact override for {channel.mention}."
+        await interaction.response.edit_message(embed=embed, view=FormatLocksView())
+
+
+class CategoryFormatLockPickerView(discord.ui.View):
+    def __init__(self) -> None:
+        super().__init__(timeout=900)
+        self.add_item(CategoryFormatLockSelect())
+
+    @discord.ui.button(label="Back to Format Locks", emoji="⬅️", style=discord.ButtonStyle.secondary, custom_id="dank_design:format_locks_back_from_category", row=1)
+    async def back(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        if not await _require_design_permission(interaction):
+            return
+        assert interaction.guild is not None
+        options = await _load_design_options(int(interaction.guild.id))
+        await interaction.response.edit_message(embed=_format_locks_embed(interaction.guild, options), view=FormatLocksView())
+
+
+class ChannelFormatLockPickerView(discord.ui.View):
+    def __init__(self) -> None:
+        super().__init__(timeout=900)
+        self.add_item(ChannelFormatLockSelect())
+
+    @discord.ui.button(label="Back to Format Locks", emoji="⬅️", style=discord.ButtonStyle.secondary, custom_id="dank_design:format_locks_back_from_channel", row=1)
+    async def back(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        if not await _require_design_permission(interaction):
+            return
+        assert interaction.guild is not None
+        options = await _load_design_options(int(interaction.guild.id))
+        await interaction.response.edit_message(embed=_format_locks_embed(interaction.guild, options), view=FormatLocksView())
+
+
+class FormatLocksView(discord.ui.View):
+    def __init__(self) -> None:
+        super().__init__(timeout=900)
+
+    @discord.ui.button(label="Lock Current as Global", emoji="🔒", style=discord.ButtonStyle.success, custom_id="dank_design:lock_global", row=0)
+    async def lock_global(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        if not await _require_design_permission(interaction):
+            return
+        guild = interaction.guild
+        assert guild is not None
+        options = await _save_global_lock(interaction)
+        embed = _format_locks_embed(guild, options)
+        embed.title = "✅ Global Format Lock Saved"
+        embed.description = "Future scans will use this format as the server default unless a category or channel override exists."
+        await interaction.response.edit_message(embed=embed, view=FormatLocksView())
+
+    @discord.ui.button(label="Lock Category", emoji="🗂️", style=discord.ButtonStyle.primary, custom_id="dank_design:open_category_lock", row=1)
+    async def open_category_lock(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        if not await _require_design_permission(interaction):
+            return
+        embed = discord.Embed(
+            title="🗂️ Lock Format to Category",
+            description="Pick a category. The current draft format will become the desired format for that category and its children.",
+            color=discord.Color.blurple(),
+        )
+        await interaction.response.edit_message(embed=embed, view=CategoryFormatLockPickerView())
+
+    @discord.ui.button(label="Lock Channel Override", emoji="#️⃣", style=discord.ButtonStyle.primary, custom_id="dank_design:open_channel_lock", row=1)
+    async def open_channel_lock(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        if not await _require_design_permission(interaction):
+            return
+        embed = discord.Embed(
+            title="#️⃣ Lock Format to Channel",
+            description="Pick one channel/category. The current draft format will override global/category rules for that item.",
+            color=discord.Color.blurple(),
+        )
+        await interaction.response.edit_message(embed=embed, view=ChannelFormatLockPickerView())
+
+    @discord.ui.button(label="Clear Global Lock", emoji="🧹", style=discord.ButtonStyle.secondary, custom_id="dank_design:clear_global_lock", row=2)
+    async def clear_global(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        if not await _require_design_permission(interaction):
+            return
+        guild = interaction.guild
+        assert guild is not None
+        options = await _clear_global_lock(interaction)
+        embed = _format_locks_embed(guild, options)
+        embed.title = "🧹 Global Format Lock Cleared"
+        await interaction.response.edit_message(embed=embed, view=FormatLocksView())
+
+    @discord.ui.button(label="Clear All Locks", emoji="⚠️", style=discord.ButtonStyle.danger, custom_id="dank_design:clear_all_locks", row=2)
+    async def clear_all(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        if not await _require_design_permission(interaction):
+            return
+        guild = interaction.guild
+        assert guild is not None
+        options = await _clear_all_locks(interaction)
+        embed = _format_locks_embed(guild, options)
+        embed.title = "🧹 All Format Locks Cleared"
+        embed.description = "Global, category, and channel format locks were cleared. Auto theme rules are active again."
+        await interaction.response.edit_message(embed=embed, view=FormatLocksView())
+
+    @discord.ui.button(label="Back to Design Studio", emoji="🎨", style=discord.ButtonStyle.secondary, custom_id="dank_design:format_locks_back", row=4)
+    async def back_to_studio(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        if not await _require_design_permission(interaction):
+            return
+        assert interaction.guild is not None
+        options = await _load_design_options(int(interaction.guild.id))
+        await interaction.response.edit_message(embed=_home_embed(interaction.guild, options), view=DesignHomeView(options))
+
+
+
 
 class DesignHomeView(discord.ui.View):
     def __init__(self, options: Mapping[str, Any] | None = None) -> None:
@@ -445,6 +840,9 @@ class DesignHomeView(discord.ui.View):
         options = options or {}
         self.add_item(ThemeSelect(_safe_str(options.get("theme_id"), "gothic_clean")))
         self.add_item(StrengthSelect(_safe_int(options.get("strength"), 2)))
+        existing_ids = {str(getattr(child, "custom_id", "")) for child in getattr(self, "children", []) or []}
+        if "dank_design:format_locks" not in existing_ids:
+            self.add_item(FormatLocksButton(row=4))
 
     @discord.ui.button(label="Preview Selected Design", emoji="👁️", style=discord.ButtonStyle.primary, custom_id="dank_design:preview", row=2)
     async def preview(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
