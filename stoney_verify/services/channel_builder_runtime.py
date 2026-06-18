@@ -246,9 +246,20 @@ def _fallback_styles_for(style: str) -> tuple[str, ...]:
     return close.get(style, (style, "bold_sans", "monospace", "fullwidth"))
 
 
+_FORCED_ASCII_FALLBACK: dict[str, str] = {
+    **{chr(ord("a") + i): chr(0x1D5EE + i) for i in range(26)},  # mathematical sans-serif bold lowercase
+    **{chr(ord("A") + i): chr(0x1D5D4 + i) for i in range(26)},  # mathematical sans-serif bold uppercase
+    **{str(i): chr(0x1D7EC + i) for i in range(10)},             # mathematical sans-serif bold digits
+}
+
+
+def _forced_ascii_fallback(ch: str) -> str:
+    return _FORCED_ASCII_FALLBACK.get(ch, ch)
+
+
 def _fallback_glyph(ch: str, style: str) -> str:
     if not ch:
-        return ch
+        return _forced_ascii_fallback(ch) if ch.isalnum() else ch
 
     if not ch.isalnum():
         mapping = _unicode_map(style)

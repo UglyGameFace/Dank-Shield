@@ -132,6 +132,8 @@ def _decode(value: Any) -> str:
         for plain, styled in exact_unicode_map(style).items():
             if isinstance(styled, str) and len(styled) == 1 and styled != plain and not (styled.isascii() and styled.isalnum()):
                 reverse[styled] = plain
+    for plain, styled in _FORCED_ASCII_FALLBACK.items():
+        reverse[styled] = plain
     return "".join(reverse.get(ch, ch) for ch in unicodedata.normalize("NFKC", str(value or "")) if unicodedata.category(ch) != "Cf")
 
 
@@ -185,9 +187,20 @@ def _fallback_styles_for(style: str) -> tuple[str, ...]:
     return close.get(style, (style, "bold_sans", "monospace", "fullwidth"))
 
 
+_FORCED_ASCII_FALLBACK: dict[str, str] = {
+    **{chr(ord("a") + i): chr(0x1D5EE + i) for i in range(26)},  # mathematical sans-serif bold lowercase
+    **{chr(ord("A") + i): chr(0x1D5D4 + i) for i in range(26)},  # mathematical sans-serif bold uppercase
+    **{str(i): chr(0x1D7EC + i) for i in range(10)},             # mathematical sans-serif bold digits
+}
+
+
+def _forced_ascii_fallback(ch: str) -> str:
+    return _FORCED_ASCII_FALLBACK.get(ch, ch)
+
+
 def _fallback_glyph(ch: str, style: str) -> str:
     if not ch:
-        return ch
+        return _forced_ascii_fallback(ch) if ch.isalnum() else ch
 
     if not ch.isalnum():
         mapping = exact_unicode_map(style)
@@ -232,7 +245,7 @@ def _proof_transform(middle: str, style: str, styled: str) -> tuple[bool, str]:
     # eligible letter unchanged.
     still_plain = []
     for idx, ch in enumerate(middle):
-        if not ch.isalpha():
+        if not ch.isalnum():
             continue
         try:
             styled_ch = styled[idx]
