@@ -41,6 +41,7 @@ _STARTUP_GUARDS: Tuple[str, ...] = (
     "stoney_verify.startup_guards.protection_center_clear_categories_guard",
     "stoney_verify.startup_guards.protection_center_invite_simple_flow_guard",
     "stoney_verify.startup_guards.embed_builder_command_guard",
+    "stoney_verify.startup_guards.share_router_guard",
     "stoney_verify.startup_guards.setup_overview_command_guard",
     "stoney_verify.startup_guards.server_design_command_module_guard",
     "stoney_verify.startup_guards.protection_pack_manual_import_guard",
