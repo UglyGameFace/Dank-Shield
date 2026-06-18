@@ -347,6 +347,23 @@ async def _apply_batch(interaction: discord.Interaction, plan: list[dict[str, An
         _LAST_UNDO[key] = {"created_at": time.time(), "undo": existing + list(result.changes)}
     payload = result.to_dict()
     payload["remaining_plan"] = remaining
+
+    try:
+        key = _key(int(guild.id), user_id)
+        pending = _PENDING.get(key) or {}
+        if pending.get("plain_repair") and not remaining:
+            scope = _safe_str(pending.get("plain_repair_scope"), "whole_name")
+            if scope not in {"whole_name", "text_only"}:
+                scope = "whole_name"
+            from stoney_verify.startup_guards.setup_channel_font_mode_guard import save_channel_font_options
+            await save_channel_font_options(
+                int(guild.id),
+                {"unicodeStyle": "normal", "unicodeStyleScope": scope},
+            )
+            payload["font_options_reset"] = True
+    except Exception as exc:
+        payload["font_options_reset_failed"] = type(exc).__name__
+
     return payload
 
 
@@ -493,7 +510,20 @@ async def _plain_fallback_preview_embed(
     user_id: int,
     *,
     target_rows: list[dict[str, Any]],
+    options: dict[str, str] | None = None,
 ) -> tuple[discord.Embed, list[dict[str, Any]]]:
+    original_options = dict(options or {})
+    scope = _safe_str(
+        original_options.get("unicodeStyleScope")
+        or original_options.get("unicode_style_scope")
+        or original_options.get("fontApplyMode")
+        or original_options.get("font_apply_mode")
+        or original_options.get("scope"),
+        "whole_name",
+    )
+    if scope not in {"whole_name", "text_only"}:
+        scope = "whole_name"
+
     plan: list[dict[str, Any]] = []
     blocked: list[dict[str, Any]] = []
 
@@ -538,7 +568,13 @@ async def _plain_fallback_preview_embed(
     _PENDING[_key(int(guild.id), int(user_id))] = {
         "created_at": time.time(),
         "plan": plan,
-        "options": {"font": "plain_fallback"},
+        "options": {
+            "unicodeStyle": "normal",
+            "unicodeStyleScope": scope,
+            "font": "normal",
+        },
+        "plain_repair": True,
+        "plain_repair_scope": scope,
         "blocked": blocked,
         "blocked_access": access_blocked,
         "blocked_font": font_blocked,
@@ -549,8 +585,9 @@ async def _plain_fallback_preview_embed(
     embed = discord.Embed(
         title="🔤 Preview Channel Font Renames • Plain Repair",
         description=(
-            "Bold Sans still could not safely transform those channel names.\n\n"
-            "This fallback will repair only the previously font-blocked channel(s) by normalizing them to plain readable names."
+            "The selected font still could not safely transform those channel names.\n\n"
+            "This fallback will repair only the previously font-blocked channel(s) by normalizing them to plain readable names. "
+            "After Apply finishes, the saved channel font setting will be reset to **Normal** so this does not loop."
         ),
         color=discord.Color.green() if plan else discord.Color.orange(),
     )
@@ -627,11 +664,12 @@ class AutoFixUnsupportedFontButton(discord.ui.Button):
 
         # If Bold Sans still cannot safely transform the already-styled channel
         # names, fall back to plain readable names for only the same target set.
-        if not plan and refreshed.get("blocked_font"):
+        if refreshed.get("blocked_font"):
             embed, plan = await _plain_fallback_preview_embed(
                 guild,
                 int(interaction.user.id),
                 target_rows=target_rows,
+                options=fixed_options,
             )
             refreshed = _PENDING.get(_key(int(guild.id), int(interaction.user.id))) or {}
             embed.add_field(
@@ -716,6 +754,20 @@ class QueuedFontRenameConfirmView(discord.ui.View):
         failures = list(result.get("failures") or [])
         if failures:
             embed.add_field(name="Skipped / failed", value="\n".join(failures[:10])[:1024], inline=False)
+
+        if result.get("font_options_reset"):
+            embed.add_field(
+                name="Font setting reset",
+                value="Saved channel font setting is now **Normal** to prevent unsupported-font preview loops.",
+                inline=False,
+            )
+        elif result.get("font_options_reset_failed"):
+            embed.add_field(
+                name="Font setting reset warning",
+                value=f"Could not save Normal font setting: `{result.get('font_options_reset_failed')}`",
+                inline=False,
+            )
+
         if remaining:
             embed.add_field(name="Continue", value="Press **Apply Next Safe Batch** to continue without bursting Discord's channel edit route.", inline=False)
         if result.get("changes"):
