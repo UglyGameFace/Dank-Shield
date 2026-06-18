@@ -17,6 +17,7 @@ _PATCHED = False
 _DEFAULT_KEEP = {
     "setup",
     "overview",
+    "design",
     "protection",
     "welcome",
     "roles",
