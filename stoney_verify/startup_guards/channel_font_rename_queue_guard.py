@@ -151,12 +151,67 @@ def _split_blockers(blocked: list[dict[str, Any]]) -> tuple[list[dict[str, Any]]
     return access, font
 
 
-def _with_safe_font(options: dict[str, str]) -> dict[str, str]:
+def _selected_style(options: dict[str, str]) -> str:
+    return _safe_str(
+        (options or {}).get("unicodeStyle")
+        or (options or {}).get("unicode_style")
+        or (options or {}).get("font")
+        or "normal",
+        "normal",
+    ).lower().replace("-", "_")
+
+
+def _font_label(style: str) -> str:
+    labels = {
+        "normal": "Normal",
+        "bold_sans": "Bold Sans",
+        "italic_sans": "Italic Sans",
+        "bold_italic_sans": "Bold Italic Sans",
+        "monospace": "Monospace",
+        "fullwidth": "Fullwidth",
+        "serif_bold": "Serif Bold",
+        "serif_italic": "Serif Italic",
+        "serif_bold_italic": "Serif Bold Italic",
+        "script": "Script",
+        "bold_script": "Bold Script",
+        "fraktur": "Fraktur",
+        "bold_fraktur": "Bold Fraktur",
+        "circled": "Circled",
+        "parenthesized": "Parenthesized",
+        "small_caps": "Small Caps",
+    }
+    return labels.get(_safe_str(style, "normal").lower().replace("-", "_"), _safe_str(style, "Normal"))
+
+
+def _compatible_font_chain(options: dict[str, str]) -> tuple[str, ...]:
+    style = _selected_style(options)
+    chains: dict[str, tuple[str, ...]] = {
+        "script": ("bold_script", "serif_italic", "serif_bold_italic", "bold_sans", "monospace", "fullwidth"),
+        "bold_script": ("script", "serif_bold_italic", "serif_italic", "bold_sans", "monospace", "fullwidth"),
+        "fraktur": ("bold_fraktur", "serif_bold", "bold_sans", "monospace", "fullwidth"),
+        "bold_fraktur": ("fraktur", "serif_bold", "bold_sans", "monospace", "fullwidth"),
+        "small_caps": ("bold_sans", "monospace", "fullwidth"),
+        "parenthesized": ("circled", "bold_sans", "monospace", "fullwidth"),
+        "circled": ("bold_sans", "monospace", "fullwidth"),
+        "serif_italic": ("serif_bold_italic", "italic_sans", "bold_italic_sans", "bold_sans", "monospace", "fullwidth"),
+        "serif_bold_italic": ("serif_italic", "bold_italic_sans", "bold_sans", "monospace", "fullwidth"),
+    }
+    chain = chains.get(style, ("bold_sans", "monospace", "fullwidth"))
+    # Do not retry the exact same style first. Auto-Fix is for alternatives.
+    return tuple(dict.fromkeys(x for x in chain if x and x != style))
+
+
+def _with_font_style(options: dict[str, str], style: str) -> dict[str, str]:
     new_options = dict(options or {})
-    new_options["unicodeStyle"] = "bold_sans"
-    new_options["unicode_style"] = "bold_sans"
-    new_options["font"] = "bold_sans"
+    new_options["unicodeStyle"] = style
+    new_options["unicode_style"] = style
+    new_options["font"] = style
     return new_options
+
+
+def _with_safe_font(options: dict[str, str]) -> dict[str, str]:
+    chain = _compatible_font_chain(options)
+    return _with_font_style(options, chain[0] if chain else "bold_sans")
 
 
 def _has_font_blockers_for_user(guild_id: int, user_id: int) -> bool:
@@ -650,7 +705,7 @@ class AutoFixUnsupportedFontButton(discord.ui.Button):
                 allowed_mentions=discord.AllowedMentions.none(),
             )
 
-        fixed_options = _with_safe_font(dict(pending.get("options") or {}))
+        original_options = dict(pending.get("options") or {})
         target_rows = list(pending.get("blocked_font") or [])
         target_ids = {
             _safe_int(row.get("channel_id"), 0)
@@ -665,39 +720,64 @@ class AutoFixUnsupportedFontButton(discord.ui.Button):
                 allowed_mentions=discord.AllowedMentions.none(),
             )
 
-        embed, plan = await _targeted_preview_embed(
-            guild,
-            int(interaction.user.id),
-            fixed_options,
-            target_channel_ids=target_ids,
-            title_suffix=" • Auto-Fix",
-        )
-        refreshed = _PENDING.get(_key(int(guild.id), int(interaction.user.id))) or {}
+        selected = _selected_style(original_options)
+        chain = _compatible_font_chain(original_options)
 
-        # If Bold Sans still cannot safely transform the already-styled channel
-        # names, fall back to plain readable names for only the same target set.
-        if refreshed.get("blocked_font"):
-            embed, plan = await _plain_fallback_preview_embed(
+        embed: discord.Embed | None = None
+        plan: list[dict[str, Any]] = []
+        refreshed: dict[str, Any] = {}
+        chosen_style = ""
+
+        for candidate_style in chain:
+            fixed_options = _with_font_style(original_options, candidate_style)
+            embed, plan = await _targeted_preview_embed(
                 guild,
                 int(interaction.user.id),
-                target_rows=target_rows,
-                options=fixed_options,
+                fixed_options,
+                target_channel_ids=target_ids,
+                title_suffix=f" • {_font_label(candidate_style)} Auto-Fix",
             )
             refreshed = _PENDING.get(_key(int(guild.id), int(interaction.user.id))) or {}
-            embed.add_field(
-                name="Auto-fix fallback applied",
-                value=(
-                    "Bold Sans still failed proof. Switched this limited preview to **plain readable names** "
-                    "so Apply can repair only the previously blocked channel(s)."
-                ),
-                inline=False,
+
+            # Success means no remaining font blockers. Access blockers are still
+            # handled separately by the access repair button.
+            if not refreshed.get("blocked_font"):
+                chosen_style = candidate_style
+                break
+
+        if embed is None:
+            embed = discord.Embed(
+                title="🔤 Font Auto-Fix Failed",
+                description="No compatible font candidates were available for this selection.",
+                color=discord.Color.orange(),
             )
+
+        if chosen_style:
+            if plan:
+                embed.add_field(
+                    name="Compatible font selected",
+                    value=(
+                        f"Original font **{_font_label(selected)}** could not safely transform these names. "
+                        f"Switched this limited preview to **{_font_label(chosen_style)}**. "
+                        "Apply will only touch the previously font-blocked channel(s)."
+                    ),
+                    inline=False,
+                )
+            else:
+                embed.add_field(
+                    name="Compatible font checked",
+                    value=(
+                        f"Checked **{_font_label(chosen_style)}** for the previously blocked channels, "
+                        "but there are no rename changes for the current names."
+                    ),
+                    inline=False,
+                )
         else:
             embed.add_field(
-                name="Auto-fix applied",
+                name="No compatible live font found",
                 value=(
-                    "Switched this limited preview to **Bold Sans**. "
-                    "Apply will only touch the previously font-blocked channel(s), not the whole server."
+                    "The selected style and compatible live-font alternatives still could not create a safe rename plan. "
+                    "Use **Back to Font Settings** and choose **Normal** or a clearly complete style like **Bold Sans**."
                 ),
                 inline=False,
             )
@@ -707,7 +787,7 @@ class AutoFixUnsupportedFontButton(discord.ui.Button):
             view=QueuedFontRenameConfirmView(
                 enabled=bool(plan),
                 can_fix_access=bool(refreshed.get("blocked_access")),
-                can_fix_font=bool(refreshed.get("blocked_font")),
+                can_fix_font=bool(refreshed.get("blocked_font")) and not bool(chosen_style),
             ),
         )
 
