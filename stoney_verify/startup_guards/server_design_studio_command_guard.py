@@ -347,6 +347,97 @@ class StrengthSelect(discord.ui.Select):
         await _save_design_options(int(interaction.guild.id), options)
         await interaction.response.edit_message(embed=_home_embed(interaction.guild, options), view=DesignHomeView(options))
 
+def _consistency_summary(items: list[dict[str, Any]]) -> dict[str, int]:
+    out = {"matches": 0, "needs_fix": 0, "protected": 0, "failed": 0, "notes": 0}
+    for item in items:
+        status = _safe_str(item.get("status"), "unchanged")
+        if status == "changed":
+            out["needs_fix"] += 1
+        elif status == "protected":
+            out["protected"] += 1
+        elif status == "failed":
+            out["failed"] += 1
+        else:
+            out["matches"] += 1
+        if item.get("warnings"):
+            out["notes"] += 1
+    return out
+
+
+def _consistency_lines(items: list[dict[str, Any]], *, limit: int = 12) -> list[str]:
+    rows: list[str] = []
+    for item in items:
+        if item.get("status") != "changed":
+            continue
+        before = _safe_str(item.get("before"))
+        after = _safe_str(item.get("after"))
+        kind = _safe_str(item.get("kind"), "channel")
+        rows.append(f"🧩 `{before}` → `{after}` · `{kind}`"[:260])
+        if len(rows) >= limit:
+            break
+    return rows or ["No inconsistent channel names found."]
+
+
+def _consistency_embed(guild: discord.Guild, items: list[dict[str, Any]], options: Mapping[str, Any]) -> discord.Embed:
+    summary = _consistency_summary(items)
+    theme_id = _safe_str(options.get("theme_id"), "gothic_clean")
+    strength = _safe_int(options.get("strength"), 4)
+    theme = next((t for t in studio.THEMES if t.id == theme_id), studio.THEMES[1])
+    font_text = str(getattr(theme, "font", "normal") or "normal").replace("_", " ").title()
+
+    embed = discord.Embed(
+        title="🧭 Server Design Consistency Check",
+        description=(
+            "Dank Shield compared the current channel/category names against the saved design draft.\\n\\n"
+            "Use **Fix All Inconsistencies** to repair only names that drifted from the saved format."
+        ),
+        color=discord.Color.green() if not summary["failed"] else discord.Color.orange(),
+    )
+    embed.add_field(
+        name="Saved design",
+        value=(
+            f"Theme: **{theme.label}**\\n"
+            f"Font: **{font_text}**\\n"
+            f"Strength: **{strength}/5**\\n"
+            "Delay: **2 seconds per rename**"
+        ),
+        inline=False,
+    )
+    embed.add_field(
+        name="Results",
+        value=(
+            f"Matches saved design: **{summary['matches']}**\\n"
+            f"Needs fix: **{summary['needs_fix']}**\\n"
+            f"Protected safe skips: **{summary['protected']}**\\n"
+            f"Cannot fix yet: **{summary['failed']}**\\n"
+            f"Notes: **{summary['notes']}**"
+        ),
+        inline=True,
+    )
+    embed.add_field(
+        name="What will be fixed",
+        value="\\n".join(_consistency_lines(items, limit=12))[:1024],
+        inline=False,
+    )
+
+    if summary["protected"]:
+        embed.add_field(
+            name="Protected safe skips",
+            value=(
+                "Ticket/log/system names are intentionally protected unless you override them later. "
+                "They are not treated as failures."
+            ),
+            inline=False,
+        )
+
+    failed_lines = studio.preview_lines(items, filter_mode="failed", limit=5)
+    if failed_lines and failed_lines != ["No matching preview rows."]:
+        embed.add_field(name="Cannot fix yet", value="\\n".join(failed_lines)[:1024], inline=False)
+
+    embed.set_footer(text="Fix uses the same one-press apply flow and rollback snapshot.")
+    return embed
+
+
 
 class DesignHomeView(discord.ui.View):
     def __init__(self, options: Mapping[str, Any] | None = None) -> None:
@@ -367,6 +458,28 @@ class DesignHomeView(discord.ui.View):
         _PENDING[_key(int(guild.id), int(interaction.user.id))] = {"created_at": time.time(), "items": items, "options": dict(options)}
         has_blockers = any(item.get("status") == "failed" for item in items)
         await interaction.edit_original_response(embed=_preview_embed(guild, items), view=DesignPreviewView(can_apply=not has_blockers and any(item.get("status") == "changed" for item in items)))
+
+    @discord.ui.button(label="Find & Fix Inconsistencies", emoji="🧭", style=discord.ButtonStyle.success, custom_id="dank_design:consistency_check", row=3)
+    async def consistency_check(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        if not await _require_design_permission(interaction):
+            return
+        guild = interaction.guild
+        assert guild is not None
+
+        await interaction.response.defer(ephemeral=True, thinking=True)
+
+        options = await _load_design_options(int(guild.id))
+        items = await build_design_plan(guild, options)
+        key = _key(int(guild.id), int(interaction.user.id))
+        _PENDING[key] = {"created_at": time.time(), "items": items, "options": dict(options), "mode": "consistency_check"}
+
+        has_blockers = any(item.get("status") == "failed" for item in items)
+        has_changes = any(item.get("status") == "changed" for item in items)
+
+        await interaction.edit_original_response(
+            embed=_consistency_embed(guild, items, options),
+            view=DesignPreviewView(can_apply=not has_blockers and has_changes),
+        )
 
     @discord.ui.button(label="Rollback", emoji="↩️", style=discord.ButtonStyle.secondary, custom_id="dank_design:rollback_home", row=2)
     async def rollback_home(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
@@ -389,7 +502,7 @@ class DesignPreviewView(discord.ui.View):
         super().__init__(timeout=900)
         self.apply.disabled = not can_apply
 
-    @discord.ui.button(label="Apply Previewed Design", emoji="🚀", style=discord.ButtonStyle.danger, custom_id="dank_design:apply", row=0)
+    @discord.ui.button(label="Apply / Fix All", emoji="✅", style=discord.ButtonStyle.danger, custom_id="dank_design:apply", row=0)
     async def apply(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         if not await _require_design_permission(interaction):
             return
@@ -441,9 +554,16 @@ class DesignPreviewView(discord.ui.View):
             _LAST_SNAPSHOTS.setdefault(_guild_key(int(guild.id)), []).append({"created_at": time.time(), "items": snapshot, "admin_id": str(int(interaction.user.id))})
             _LAST_SNAPSHOTS[_guild_key(int(guild.id))] = _LAST_SNAPSHOTS[_guild_key(int(guild.id))][-5:]
         _PENDING.pop(key, None)
+        mode = _safe_str(payload.get("mode"), "preview")
+        complete_title = "✅ Design Inconsistencies Fixed" if mode == "consistency_check" else "✅ Server Design Apply Complete"
+        complete_description = (
+            f"Changed **{changed}** item(s). Skipped **{skipped}**. Failed **{len(failed)}**."
+            if mode != "consistency_check"
+            else f"Repaired **{changed}** inconsistent name(s). Safe skipped **{skipped}**. Failed **{len(failed)}**."
+        )
         embed = discord.Embed(
-            title="✅ Server Design Apply Complete",
-            description=f"Changed **{changed}** item(s). Skipped **{skipped}**. Failed **{len(failed)}**.",
+            title=complete_title,
+            description=complete_description,
             color=discord.Color.green() if not failed else discord.Color.orange(),
         )
         if failed:
