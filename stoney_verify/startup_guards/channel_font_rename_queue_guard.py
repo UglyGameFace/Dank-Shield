@@ -136,6 +136,7 @@ def _is_font_blocker(reason: Any) -> bool:
         or "decode proof" in text
         or "did not visibly transform" in text
         or "font is unavailable" in text
+        or "plain fallback" in text
     )
 
 
