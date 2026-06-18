@@ -263,6 +263,7 @@ async def _preview_embed(guild: discord.Guild, user_id: int, options: dict[str, 
         "blocked": blocked,
         "blocked_access": access_blocked,
         "blocked_font": font_blocked,
+        "plain_repair_no_change": no_change,
         "policy_skipped": policy_skipped,
     }
 
@@ -281,6 +282,12 @@ async def _preview_embed(guild: discord.Guild, user_id: int, options: dict[str, 
     embed.add_field(name="Batch size", value=str(DEFAULT_BATCH_SIZE), inline=True)
     embed.add_field(name="Delay between edits", value=f"{DEFAULT_DELAY_SECONDS:.1f}s", inline=True)
 
+    if no_change:
+        embed.add_field(
+            name="Already plain / no repair needed",
+            value="\n".join(f"`{item.get('before')}`" for item in no_change[:8])[:1024],
+            inline=False,
+        )
     if access_blocked:
         embed.add_field(name="Fix bot access before applying", value=_blocked_text(access_blocked), inline=False)
     if font_blocked:
@@ -527,6 +534,7 @@ async def _plain_fallback_preview_embed(
 
     plan: list[dict[str, Any]] = []
     blocked: list[dict[str, Any]] = []
+    no_change: list[dict[str, Any]] = []
 
     for row in target_rows:
         cid = _safe_int(row.get("channel_id"), 0)
@@ -546,14 +554,17 @@ async def _plain_fallback_preview_embed(
             "kind": _safe_str(row.get("kind"), "text"),
         }
 
-        if not after or after == before:
-            item["blocked_reason"] = "plain fallback produced no change"
+        if not after:
+            item["blocked_reason"] = "plain fallback produced no safe name"
             blocked.append(item)
             continue
 
+        if after == before:
+            no_change.append(item)
+            continue
+
         if channel is None:
-            item["blocked_reason"] = "channel no longer exists"
-            blocked.append(item)
+            no_change.append(item)
             continue
 
         access_reason = _bot_access_reason(guild, channel)

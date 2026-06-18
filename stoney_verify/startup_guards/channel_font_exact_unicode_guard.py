@@ -25,16 +25,58 @@ def _u(name: str, fallback: str | None = None) -> str | None:
         return fallback
 
 
+_MATH_ALPHA_BASES: dict[str, tuple[int, int]] = {
+    "BOLD": (0x1D400, 0x1D41A),
+    "ITALIC": (0x1D434, 0x1D44E),
+    "BOLD ITALIC": (0x1D468, 0x1D482),
+    "SANS-SERIF BOLD": (0x1D5D4, 0x1D5EE),
+    "SANS-SERIF ITALIC": (0x1D608, 0x1D622),
+    "SANS-SERIF BOLD ITALIC": (0x1D63C, 0x1D656),
+    "MONOSPACE": (0x1D670, 0x1D68A),
+    "BOLD SCRIPT": (0x1D4D0, 0x1D4EA),
+    "BOLD FRAKTUR": (0x1D56C, 0x1D586),
+}
+
+_MATH_DIGIT_BASES: dict[str, int] = {
+    "BOLD": 0x1D7CE,
+    "SANS-SERIF BOLD": 0x1D7EC,
+    "MONOSPACE": 0x1D7F6,
+}
+
+
 def _math_letters(prefix: str, *, digit_prefix: str | None = None, special: dict[str, str] | None = None) -> dict[str, str]:
     special = special or {}
     out: dict[str, str] = {}
-    for ch in "ABCDEFGHIJKLMNOPQRSTUVWXYZ":
-        out[ch] = special.get(ch) or _u(f"MATHEMATICAL {prefix} CAPITAL {ch}", ch) or ch
-    for ch in "abcdefghijklmnopqrstuvwxyz":
-        out[ch] = special.get(ch) or _u(f"MATHEMATICAL {prefix} SMALL {ch.upper()}", ch) or ch
+    cap_base, small_base = _MATH_ALPHA_BASES.get(prefix, (0, 0))
+
+    for index, ch in enumerate("ABCDEFGHIJKLMNOPQRSTUVWXYZ"):
+        looked = special.get(ch) or _u(f"MATHEMATICAL {prefix} CAPITAL {ch}", None)
+        if looked and looked != ch:
+            out[ch] = looked
+        elif cap_base:
+            out[ch] = chr(cap_base + index)
+        else:
+            out[ch] = ch
+
+    for index, ch in enumerate("abcdefghijklmnopqrstuvwxyz"):
+        looked = special.get(ch) or _u(f"MATHEMATICAL {prefix} SMALL {ch.upper()}", None)
+        if looked and looked != ch:
+            out[ch] = looked
+        elif small_base:
+            out[ch] = chr(small_base + index)
+        else:
+            out[ch] = ch
+
     if digit_prefix:
-        for digit, word in (("0", "ZERO"), ("1", "ONE"), ("2", "TWO"), ("3", "THREE"), ("4", "FOUR"), ("5", "FIVE"), ("6", "SIX"), ("7", "SEVEN"), ("8", "EIGHT"), ("9", "NINE")):
-            out[digit] = _u(f"MATHEMATICAL {digit_prefix} DIGIT {word}", digit) or digit
+        digit_base = _MATH_DIGIT_BASES.get(digit_prefix, 0)
+        for index, (digit, word) in enumerate((("0", "ZERO"), ("1", "ONE"), ("2", "TWO"), ("3", "THREE"), ("4", "FOUR"), ("5", "FIVE"), ("6", "SIX"), ("7", "SEVEN"), ("8", "EIGHT"), ("9", "NINE"))):
+            looked = _u(f"MATHEMATICAL {digit_prefix} DIGIT {word}", None)
+            if looked and looked != digit:
+                out[digit] = looked
+            elif digit_base:
+                out[digit] = chr(digit_base + index)
+            else:
+                out[digit] = digit
     return out
 
 
