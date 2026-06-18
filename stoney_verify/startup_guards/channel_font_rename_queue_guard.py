@@ -610,6 +610,12 @@ async def _plain_fallback_preview_embed(
         inline=False,
     )
 
+    if no_change:
+        embed.add_field(
+            name="Already plain / no repair needed",
+            value="\n".join(f"`{item.get('before')}`" for item in no_change[:8])[:1024],
+            inline=False,
+        )
     if access_blocked:
         embed.add_field(name="Fix bot access before applying", value=_blocked_text(access_blocked), inline=False)
     if font_blocked:
