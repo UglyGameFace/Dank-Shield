@@ -833,6 +833,500 @@ class FormatLocksView(discord.ui.View):
 
 
 
+# ---------------------------------------------------------------------------
+# Category / Channel Design Editor
+# Bot-owned picker. Do not use Discord ChannelSelect here because styled names
+# can be hard to search/select from mobile share/picker UI.
+# ---------------------------------------------------------------------------
+
+EDITOR_PAGE_SIZE = 8
+
+
+def _short_label(value: Any, limit: int = 64) -> str:
+    text = _safe_str(value, "Unnamed")
+    return text if len(text) <= limit else text[: max(1, limit - 1)] + "…"
+
+
+def _channel_display_line(channel: discord.abc.GuildChannel) -> str:
+    kind = _kind(channel)
+    icon = {
+        "category": "🗂️",
+        "text": "#️⃣",
+        "voice": "🔊",
+        "stage": "🎙️",
+        "forum": "💬",
+    }.get(kind, "▫️")
+    return f"{icon} {_safe_str(getattr(channel, 'name', 'unnamed'))}"
+
+
+def _category_channels(guild: discord.Guild, category_id: int) -> list[discord.abc.GuildChannel]:
+    category = guild.get_channel(int(category_id))
+    if not isinstance(category, discord.CategoryChannel):
+        return []
+    out: list[discord.abc.GuildChannel] = []
+    for channel in [category] + list(getattr(category, "channels", []) or []):
+        if _kind(channel) != "other":
+            out.append(channel)
+    return out
+
+
+def _all_editor_channels(guild: discord.Guild) -> list[discord.abc.GuildChannel]:
+    out: list[discord.abc.GuildChannel] = []
+    seen: set[int] = set()
+    for category in list(getattr(guild, "categories", []) or []):
+        cid = _safe_int(getattr(category, "id", 0), 0)
+        if cid > 0 and cid not in seen:
+            seen.add(cid)
+            out.append(category)
+        for child in list(getattr(category, "channels", []) or []):
+            child_id = _safe_int(getattr(child, "id", 0), 0)
+            if child_id > 0 and child_id not in seen and _kind(child) != "other":
+                seen.add(child_id)
+                out.append(child)
+    for channel in list(getattr(guild, "channels", []) or []):
+        cid = _safe_int(getattr(channel, "id", 0), 0)
+        if cid > 0 and cid not in seen and _kind(channel) != "other":
+            seen.add(cid)
+            out.append(channel)
+    return out[: studio.MAX_PLAN_ITEMS]
+
+
+def _filter_plan_for_category(items: list[dict[str, Any]], category_id: int) -> list[dict[str, Any]]:
+    wanted = str(int(category_id))
+    out: list[dict[str, Any]] = []
+    for item in items:
+        kind = _safe_str(item.get("kind"))
+        channel_id = str(item.get("channel_id") or "")
+        item_category_id = str(item.get("category_id") or "")
+        if kind == "category" and channel_id == wanted:
+            out.append(item)
+        elif item_category_id == wanted:
+            out.append(item)
+    return out
+
+
+def _filter_plan_for_channel(items: list[dict[str, Any]], channel_id: int) -> list[dict[str, Any]]:
+    wanted = str(int(channel_id))
+    return [item for item in items if str(item.get("channel_id") or "") == wanted]
+
+
+async def _preview_scope(
+    interaction: discord.Interaction,
+    *,
+    scope_title: str,
+    mode: str,
+    category_id: int | None = None,
+    channel_id: int | None = None,
+) -> None:
+    if not await _require_design_permission(interaction):
+        return
+    guild = interaction.guild
+    assert guild is not None
+
+    await interaction.response.defer(ephemeral=True, thinking=True)
+
+    options = await _load_design_options(int(guild.id))
+    all_items = await build_design_plan(guild, options)
+
+    if category_id is not None:
+        items = _filter_plan_for_category(all_items, int(category_id))
+    elif channel_id is not None:
+        items = _filter_plan_for_channel(all_items, int(channel_id))
+    else:
+        items = all_items
+
+    key = _key(int(guild.id), int(interaction.user.id))
+    _PENDING[key] = {
+        "created_at": time.time(),
+        "items": items,
+        "options": dict(options),
+        "mode": mode,
+        "scope_title": scope_title,
+    }
+
+    has_blockers = any(item.get("status") == "failed" for item in items)
+    has_changes = any(item.get("status") == "changed" for item in items)
+    await interaction.edit_original_response(
+        embed=_preview_embed(guild, items, title=scope_title),
+        view=DesignPreviewView(can_apply=not has_blockers and has_changes),
+    )
+
+
+class DesignCategoryEditorButton(discord.ui.Button):
+    def __init__(self, *, row: int = 3) -> None:
+        super().__init__(
+            label="Category Editor",
+            emoji="🗂️",
+            style=discord.ButtonStyle.primary,
+            custom_id="dank_design:category_editor",
+            row=row,
+        )
+
+    async def callback(self, interaction: discord.Interaction) -> None:  # type: ignore[override]
+        if not await _require_design_permission(interaction):
+            return
+        guild = interaction.guild
+        assert guild is not None
+        await interaction.response.edit_message(
+            embed=_category_editor_embed(guild, page=0),
+            view=CategoryEditorPickerView(guild, page=0),
+        )
+
+
+class DesignChannelEditorButton(discord.ui.Button):
+    def __init__(self, *, row: int = 3) -> None:
+        super().__init__(
+            label="Channel Editor",
+            emoji="#️⃣",
+            style=discord.ButtonStyle.primary,
+            custom_id="dank_design:channel_editor",
+            row=row,
+        )
+
+    async def callback(self, interaction: discord.Interaction) -> None:  # type: ignore[override]
+        if not await _require_design_permission(interaction):
+            return
+        guild = interaction.guild
+        assert guild is not None
+        await interaction.response.edit_message(
+            embed=_channel_editor_embed(guild, page=0),
+            view=ChannelEditorPickerView(guild, page=0),
+        )
+
+
+def _category_editor_embed(guild: discord.Guild, *, page: int) -> discord.Embed:
+    categories = list(getattr(guild, "categories", []) or [])
+    total_pages = max(1, (len(categories) + EDITOR_PAGE_SIZE - 1) // EDITOR_PAGE_SIZE)
+    page = max(0, min(page, total_pages - 1))
+    start = page * EDITOR_PAGE_SIZE
+    chunk = categories[start:start + EDITOR_PAGE_SIZE]
+
+    embed = discord.Embed(
+        title="🗂️ Category Design Editor",
+        description=(
+            "Pick a category using the buttons below.\\n\\n"
+            "This is Dank Shield's own picker, built for styled names and mobile use."
+        ),
+        color=discord.Color.blurple(),
+    )
+    if not chunk:
+        embed.add_field(name="Categories", value="No categories found.", inline=False)
+    else:
+        lines = []
+        for index, category in enumerate(chunk, start=1):
+            child_count = len(list(getattr(category, "channels", []) or []))
+            lines.append(f"**{index}.** `{_safe_str(getattr(category, 'name', 'unnamed'))}` · {child_count} child channel(s)")
+        embed.add_field(name=f"Categories page {page + 1}/{total_pages}", value="\\n".join(lines)[:1024], inline=False)
+    embed.set_footer(text="Select a category to preview, lock format, or open its channels.")
+    return embed
+
+
+def _channel_editor_embed(guild: discord.Guild, *, page: int, category_id: int | None = None) -> discord.Embed:
+    if category_id is not None:
+        source = _category_channels(guild, int(category_id))
+        category = guild.get_channel(int(category_id))
+        title = f"#️⃣ Channel Editor · {_safe_str(getattr(category, 'name', 'Category'))}"
+    else:
+        source = _all_editor_channels(guild)
+        title = "#️⃣ Channel Design Editor"
+
+    total_pages = max(1, (len(source) + EDITOR_PAGE_SIZE - 1) // EDITOR_PAGE_SIZE)
+    page = max(0, min(page, total_pages - 1))
+    start = page * EDITOR_PAGE_SIZE
+    chunk = source[start:start + EDITOR_PAGE_SIZE]
+
+    embed = discord.Embed(
+        title=title,
+        description=(
+            "Pick a channel/category using the buttons below.\\n\\n"
+            "This is Dank Shield's own picker, not Discord's native picker."
+        ),
+        color=discord.Color.blurple(),
+    )
+    if not chunk:
+        embed.add_field(name="Channels", value="No channels found.", inline=False)
+    else:
+        lines = []
+        for index, channel in enumerate(chunk, start=1):
+            lines.append(f"**{index}.** `{_channel_display_line(channel)}`")
+        embed.add_field(name=f"Items page {page + 1}/{total_pages}", value="\\n".join(lines)[:1024], inline=False)
+    embed.set_footer(text="Select an item to preview, lock format, or fix only that item.")
+    return embed
+
+
+class CategoryPickButton(discord.ui.Button):
+    def __init__(self, category: discord.CategoryChannel, *, display_index: int, row: int) -> None:
+        super().__init__(
+            label=f"{display_index}. {_short_label(getattr(category, 'name', 'Category'), 54)}",
+            emoji="🗂️",
+            style=discord.ButtonStyle.secondary,
+            custom_id=f"dank_design:pick_category:{int(category.id)}",
+            row=row,
+        )
+        self.category_id = int(category.id)
+
+    async def callback(self, interaction: discord.Interaction) -> None:  # type: ignore[override]
+        if not await _require_design_permission(interaction):
+            return
+        guild = interaction.guild
+        assert guild is not None
+        category = guild.get_channel(self.category_id)
+        if not isinstance(category, discord.CategoryChannel):
+            return await interaction.response.send_message("That category no longer exists.", ephemeral=True)
+        await interaction.response.edit_message(
+            embed=_category_action_embed(category),
+            view=CategoryEditorActionView(self.category_id),
+        )
+
+
+class ChannelPickButton(discord.ui.Button):
+    def __init__(self, channel: discord.abc.GuildChannel, *, display_index: int, row: int, category_id: int | None = None) -> None:
+        super().__init__(
+            label=f"{display_index}. {_short_label(getattr(channel, 'name', 'Channel'), 54)}",
+            emoji={"category": "🗂️", "voice": "🔊", "text": "#️⃣", "forum": "💬", "stage": "🎙️"}.get(_kind(channel), "#️⃣"),
+            style=discord.ButtonStyle.secondary,
+            custom_id=f"dank_design:pick_channel:{int(channel.id)}",
+            row=row,
+        )
+        self.channel_id = int(channel.id)
+        self.category_id = int(category_id) if category_id is not None else None
+
+    async def callback(self, interaction: discord.Interaction) -> None:  # type: ignore[override]
+        if not await _require_design_permission(interaction):
+            return
+        guild = interaction.guild
+        assert guild is not None
+        channel = guild.get_channel(self.channel_id)
+        if channel is None:
+            return await interaction.response.send_message("That channel no longer exists.", ephemeral=True)
+        await interaction.response.edit_message(
+            embed=_channel_action_embed(channel),
+            view=ChannelEditorActionView(self.channel_id, category_id=self.category_id),
+        )
+
+
+class CategoryEditorPickerView(discord.ui.View):
+    def __init__(self, guild: discord.Guild, *, page: int = 0) -> None:
+        super().__init__(timeout=900)
+        categories = list(getattr(guild, "categories", []) or [])
+        total_pages = max(1, (len(categories) + EDITOR_PAGE_SIZE - 1) // EDITOR_PAGE_SIZE)
+        page = max(0, min(page, total_pages - 1))
+        start = page * EDITOR_PAGE_SIZE
+        chunk = categories[start:start + EDITOR_PAGE_SIZE]
+
+        for offset, category in enumerate(chunk):
+            self.add_item(CategoryPickButton(category, display_index=offset + 1, row=offset // 2))
+
+        nav_row = 4
+        if page > 0:
+            self.add_item(CategoryPageButton(page - 1, label="Prev", emoji="⬅️", row=nav_row))
+        if page < total_pages - 1:
+            self.add_item(CategoryPageButton(page + 1, label="Next", emoji="➡️", row=nav_row))
+        self.add_item(BackToDesignButton(row=nav_row))
+
+
+class CategoryPageButton(discord.ui.Button):
+    def __init__(self, page: int, *, label: str, emoji: str, row: int) -> None:
+        super().__init__(label=label, emoji=emoji, style=discord.ButtonStyle.secondary, custom_id=f"dank_design:category_page:{page}", row=row)
+        self.page = int(page)
+
+    async def callback(self, interaction: discord.Interaction) -> None:  # type: ignore[override]
+        if not await _require_design_permission(interaction):
+            return
+        guild = interaction.guild
+        assert guild is not None
+        await interaction.response.edit_message(embed=_category_editor_embed(guild, page=self.page), view=CategoryEditorPickerView(guild, page=self.page))
+
+
+class ChannelEditorPickerView(discord.ui.View):
+    def __init__(self, guild: discord.Guild, *, page: int = 0, category_id: int | None = None) -> None:
+        super().__init__(timeout=900)
+        source = _category_channels(guild, int(category_id)) if category_id is not None else _all_editor_channels(guild)
+        total_pages = max(1, (len(source) + EDITOR_PAGE_SIZE - 1) // EDITOR_PAGE_SIZE)
+        page = max(0, min(page, total_pages - 1))
+        start = page * EDITOR_PAGE_SIZE
+        chunk = source[start:start + EDITOR_PAGE_SIZE]
+
+        for offset, channel in enumerate(chunk):
+            self.add_item(ChannelPickButton(channel, display_index=offset + 1, row=offset // 2, category_id=category_id))
+
+        nav_row = 4
+        if page > 0:
+            self.add_item(ChannelPageButton(page - 1, label="Prev", emoji="⬅️", row=nav_row, category_id=category_id))
+        if page < total_pages - 1:
+            self.add_item(ChannelPageButton(page + 1, label="Next", emoji="➡️", row=nav_row, category_id=category_id))
+        if category_id is not None:
+            self.add_item(BackToCategoryButton(int(category_id), row=nav_row))
+        else:
+            self.add_item(BackToDesignButton(row=nav_row))
+
+
+class ChannelPageButton(discord.ui.Button):
+    def __init__(self, page: int, *, label: str, emoji: str, row: int, category_id: int | None = None) -> None:
+        super().__init__(label=label, emoji=emoji, style=discord.ButtonStyle.secondary, custom_id=f"dank_design:channel_page:{page}", row=row)
+        self.page = int(page)
+        self.category_id = int(category_id) if category_id is not None else None
+
+    async def callback(self, interaction: discord.Interaction) -> None:  # type: ignore[override]
+        if not await _require_design_permission(interaction):
+            return
+        guild = interaction.guild
+        assert guild is not None
+        await interaction.response.edit_message(
+            embed=_channel_editor_embed(guild, page=self.page, category_id=self.category_id),
+            view=ChannelEditorPickerView(guild, page=self.page, category_id=self.category_id),
+        )
+
+
+def _category_action_embed(category: discord.CategoryChannel) -> discord.Embed:
+    embed = discord.Embed(
+        title=f"🗂️ Edit Category · {_safe_str(getattr(category, 'name', 'Category'))}",
+        description=(
+            "Use the current draft format on this category, preview/fix only this category, or open its child channels."
+        ),
+        color=discord.Color.blurple(),
+    )
+    embed.add_field(name="Category", value=f"{category.mention} (`{category.id}`)", inline=False)
+    embed.add_field(name="Options", value="Lock format, preview/fix this category scope, or edit child channels.", inline=False)
+    return embed
+
+
+def _channel_action_embed(channel: discord.abc.GuildChannel) -> discord.Embed:
+    embed = discord.Embed(
+        title=f"#️⃣ Edit Channel · {_safe_str(getattr(channel, 'name', 'Channel'))}",
+        description="Lock the current draft format to this item, or preview/fix only this item.",
+        color=discord.Color.blurple(),
+    )
+    mention = getattr(channel, "mention", f"`{getattr(channel, 'id', '')}`")
+    embed.add_field(name="Item", value=f"{mention} (`{getattr(channel, 'id', '')}`)", inline=False)
+    embed.add_field(name="Kind", value=_kind(channel), inline=True)
+    return embed
+
+
+class CategoryEditorActionView(discord.ui.View):
+    def __init__(self, category_id: int) -> None:
+        super().__init__(timeout=900)
+        self.category_id = int(category_id)
+
+    @discord.ui.button(label="Lock Current Format Here", emoji="🔒", style=discord.ButtonStyle.success, custom_id="dank_design:category_lock_here", row=0)
+    async def lock_here(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        if not await _require_design_permission(interaction):
+            return
+        guild = interaction.guild
+        assert guild is not None
+        category = guild.get_channel(self.category_id)
+        if not isinstance(category, discord.CategoryChannel):
+            return await interaction.response.send_message("That category no longer exists.", ephemeral=True)
+        options = await _save_category_lock(interaction, self.category_id)
+        embed = _category_action_embed(category)
+        embed.title = "✅ Category Format Locked"
+        embed.description = "Saved the current draft format for this category and its children."
+        counts = _lock_count(options)
+        embed.add_field(name="Saved locks", value=f"Global: {counts['global']} • Categories: {counts['categories']} • Channels: {counts['channels']}", inline=False)
+        await interaction.response.edit_message(embed=embed, view=CategoryEditorActionView(self.category_id))
+
+    @discord.ui.button(label="Preview / Fix This Category", emoji="👁️", style=discord.ButtonStyle.primary, custom_id="dank_design:category_preview_scope", row=1)
+    async def preview_category(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        await _preview_scope(
+            interaction,
+            scope_title="👁 Category Design Preview",
+            mode="category_editor",
+            category_id=self.category_id,
+        )
+
+    @discord.ui.button(label="Edit Child Channels", emoji="#️⃣", style=discord.ButtonStyle.secondary, custom_id="dank_design:category_children", row=2)
+    async def edit_children(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        if not await _require_design_permission(interaction):
+            return
+        guild = interaction.guild
+        assert guild is not None
+        await interaction.response.edit_message(
+            embed=_channel_editor_embed(guild, page=0, category_id=self.category_id),
+            view=ChannelEditorPickerView(guild, page=0, category_id=self.category_id),
+        )
+
+    @discord.ui.button(label="Back to Categories", emoji="⬅️", style=discord.ButtonStyle.secondary, custom_id="dank_design:category_action_back", row=4)
+    async def back(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        if not await _require_design_permission(interaction):
+            return
+        guild = interaction.guild
+        assert guild is not None
+        await interaction.response.edit_message(embed=_category_editor_embed(guild, page=0), view=CategoryEditorPickerView(guild, page=0))
+
+
+class ChannelEditorActionView(discord.ui.View):
+    def __init__(self, channel_id: int, *, category_id: int | None = None) -> None:
+        super().__init__(timeout=900)
+        self.channel_id = int(channel_id)
+        self.category_id = int(category_id) if category_id is not None else None
+
+    @discord.ui.button(label="Lock Current Format to This", emoji="🔒", style=discord.ButtonStyle.success, custom_id="dank_design:channel_lock_here", row=0)
+    async def lock_here(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        if not await _require_design_permission(interaction):
+            return
+        guild = interaction.guild
+        assert guild is not None
+        channel = guild.get_channel(self.channel_id)
+        if channel is None:
+            return await interaction.response.send_message("That channel no longer exists.", ephemeral=True)
+        options = await _save_channel_lock(interaction, self.channel_id)
+        embed = _channel_action_embed(channel)
+        embed.title = "✅ Channel Override Locked"
+        embed.description = "Saved the current draft format as an override for this item."
+        counts = _lock_count(options)
+        embed.add_field(name="Saved locks", value=f"Global: {counts['global']} • Categories: {counts['categories']} • Channels: {counts['channels']}", inline=False)
+        await interaction.response.edit_message(embed=embed, view=ChannelEditorActionView(self.channel_id, category_id=self.category_id))
+
+    @discord.ui.button(label="Preview / Fix This Only", emoji="👁️", style=discord.ButtonStyle.primary, custom_id="dank_design:channel_preview_scope", row=1)
+    async def preview_channel(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        await _preview_scope(
+            interaction,
+            scope_title="👁 Channel Design Preview",
+            mode="channel_editor",
+            channel_id=self.channel_id,
+        )
+
+    @discord.ui.button(label="Back", emoji="⬅️", style=discord.ButtonStyle.secondary, custom_id="dank_design:channel_action_back", row=4)
+    async def back(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        if not await _require_design_permission(interaction):
+            return
+        guild = interaction.guild
+        assert guild is not None
+        await interaction.response.edit_message(
+            embed=_channel_editor_embed(guild, page=0, category_id=self.category_id),
+            view=ChannelEditorPickerView(guild, page=0, category_id=self.category_id),
+        )
+
+
+class BackToDesignButton(discord.ui.Button):
+    def __init__(self, *, row: int) -> None:
+        super().__init__(label="Back", emoji="⬅️", style=discord.ButtonStyle.secondary, custom_id="dank_design:editor_back_home", row=row)
+
+    async def callback(self, interaction: discord.Interaction) -> None:  # type: ignore[override]
+        if not await _require_design_permission(interaction):
+            return
+        assert interaction.guild is not None
+        options = await _load_design_options(int(interaction.guild.id))
+        await interaction.response.edit_message(embed=_home_embed(interaction.guild, options), view=DesignHomeView(options))
+
+
+class BackToCategoryButton(discord.ui.Button):
+    def __init__(self, category_id: int, *, row: int) -> None:
+        super().__init__(label="Category", emoji="🗂️", style=discord.ButtonStyle.secondary, custom_id="dank_design:editor_back_category", row=row)
+        self.category_id = int(category_id)
+
+    async def callback(self, interaction: discord.Interaction) -> None:  # type: ignore[override]
+        if not await _require_design_permission(interaction):
+            return
+        guild = interaction.guild
+        assert guild is not None
+        category = guild.get_channel(self.category_id)
+        if not isinstance(category, discord.CategoryChannel):
+            return await interaction.response.edit_message(embed=_category_editor_embed(guild, page=0), view=CategoryEditorPickerView(guild, page=0))
+        await interaction.response.edit_message(embed=_category_action_embed(category), view=CategoryEditorActionView(self.category_id))
+
+
+
 
 class DesignHomeView(discord.ui.View):
     def __init__(self, options: Mapping[str, Any] | None = None) -> None:
@@ -840,6 +1334,11 @@ class DesignHomeView(discord.ui.View):
         options = options or {}
         self.add_item(ThemeSelect(_safe_str(options.get("theme_id"), "gothic_clean")))
         self.add_item(StrengthSelect(_safe_int(options.get("strength"), 2)))
+        existing_ids = {str(getattr(child, "custom_id", "")) for child in getattr(self, "children", []) or []}
+        if "dank_design:category_editor" not in existing_ids:
+            self.add_item(DesignCategoryEditorButton(row=3))
+        if "dank_design:channel_editor" not in existing_ids:
+            self.add_item(DesignChannelEditorButton(row=3))
         existing_ids = {str(getattr(child, "custom_id", "")) for child in getattr(self, "children", []) or []}
         if "dank_design:format_locks" not in existing_ids:
             self.add_item(FormatLocksButton(row=4))
