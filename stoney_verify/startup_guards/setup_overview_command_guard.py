@@ -11,7 +11,7 @@ def apply() -> bool:
         import stoney_verify.commands_ext as commands_ext
 
         allowed = set(getattr(commands_ext, "_ALLOWED_STONEY_CHILDREN", set()) or set())
-        allowed.add("overview")
+        allowed.update({"overview", "design"})
         commands_ext._ALLOWED_STONEY_CHILDREN = allowed
 
         from stoney_verify.commands_ext import public_setup_overview
@@ -19,6 +19,13 @@ def apply() -> bool:
         register = getattr(public_setup_overview, "register_public_setup_overview_commands", None)
         if callable(register):
             register(None, None)
+
+        try:
+            from stoney_verify.startup_guards import server_design_studio_command_guard
+
+            server_design_studio_command_guard.apply()
+        except Exception as design_exc:
+            print(f"⚠️ setup_overview_command_guard design command attach failed: {type(design_exc).__name__}: {design_exc}")
 
         # This guard is loaded after the feature command guards, so it is the
         # safest place to do the final public /dank surface cleanup.
@@ -30,7 +37,7 @@ def apply() -> bool:
             print(f"⚠️ setup_overview_command_guard final command prune failed: {type(prune_exc).__name__}: {prune_exc}")
 
         _PATCHED = True
-        print("✅ setup_overview_command_guard active; /dank overview is allowed in public setup surface")
+        print("✅ setup_overview_command_guard active; /dank overview and /dank design are allowed in public setup surface")
         return True
     except Exception as exc:
         try:
