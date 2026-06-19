@@ -90,3 +90,27 @@ def test_gothic_clean_default_uses_single_stroke_medium_separator():
     assert result.after.startswith("🎮❘")
     assert "｜" not in result.after
     assert "┃" not in result.after
+
+
+def test_legacy_gothic_saved_locks_are_normalized_to_single_stroke_separator():
+    options = {
+        "theme_id": "gothic_clean",
+        "format_lock_global": {
+            "enabled": True,
+            "theme_id": "gothic_clean",
+            "font": "fraktur",
+            "separator_id": "bar_full",
+        },
+        "category_format_locks": {
+            "123": {"theme_id": "gothic_clean", "font": "fraktur", "separator_id": "bar_full"},
+        },
+        "channel_format_locks": {
+            "456": {"theme_id": "gothic_clean", "font": "fraktur", "separator_id": "bar_heavy"},
+        },
+    }
+
+    normalized = server_design_strict_layout_guard._normalize_gothic_design_options(options)
+
+    assert normalized["format_lock_global"]["separator_id"] == "bar_medium"
+    assert normalized["category_format_locks"]["123"]["separator_id"] == "bar_medium"
+    assert normalized["channel_format_locks"]["456"]["separator_id"] == "bar_medium"
