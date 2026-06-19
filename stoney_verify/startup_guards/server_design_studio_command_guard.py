@@ -1526,10 +1526,10 @@ async def _save_exact_and_preview(interaction: discord.Interaction, *, scope: st
 
     if scope == "category":
         items = _filter_plan_for_category(all_items, int(target_id))
-        title = "👁 Category Format Preview"
+        title = "👁️ Category Format Preview"
     else:
         items = _filter_plan_for_channel(all_items, int(target_id))
-        title = "👁 Channel Format Preview"
+        title = "👁️ Channel Format Preview"
 
     key = _key(int(guild.id), int(interaction.user.id))
     _PENDING[key] = {
@@ -1756,6 +1756,7 @@ async def _preview_scope(
 ) -> None:
     if not await _require_design_permission(interaction):
         return
+
     guild = interaction.guild
     assert guild is not None
 
@@ -1765,8 +1766,6 @@ async def _preview_scope(
     repair_options = dict(options)
 
     if mode in {"category_editor", "channel_editor"}:
-        # Scoped repair previews should copy the live server majority,
-        # not blindly force the saved draft/theme.
         repair_options["__use_live_majority_layout"] = True
 
     all_items = await build_design_plan(guild, repair_options)
@@ -1789,10 +1788,12 @@ async def _preview_scope(
 
     has_blockers = any(item.get("status") == "failed" for item in items)
     has_changes = any(item.get("status") == "changed" for item in items)
+
     await interaction.edit_original_response(
         embed=_preview_embed(guild, items, title=scope_title),
         view=DesignPreviewView(can_apply=not has_blockers and has_changes),
     )
+
 
 
 class DesignCategoryEditorButton(discord.ui.Button):
