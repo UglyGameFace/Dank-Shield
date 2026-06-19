@@ -33,6 +33,20 @@ _FRAME_SIGNATURES: tuple[tuple[str, str, str], ...] = (
     ("dreamy", "⋆｡°✩", "✩°｡⋆"),
 )
 
+# These are normal Discord channels from a visual-design standpoint. They are
+# safe to rename because Dank Design only changes names and still creates a
+# rollback snapshot. Keep destructive/operational ticket/archive channels
+# protected unless the user explicitly overrides them later.
+_RENAME_SAFE_DEFAULT_PROTECTED_NAMES = {
+    "audit-log",
+    "bot-commands",
+    "logs",
+    "mod-log",
+    "setup",
+    "staff",
+    "staff-chat",
+}
+
 
 def _clean_text(value: Any) -> str:
     try:
@@ -53,6 +67,15 @@ def _frame_signature(studio: Any, value: Any) -> str:
         if text.startswith(prefix) and text.endswith(suffix):
             return frame_id
     return ""
+
+
+def _relax_visual_name_defaults(studio: Any) -> None:
+    try:
+        protected = getattr(studio, "DEFAULT_PROTECTED_NAMES", None)
+        if isinstance(protected, set):
+            protected.difference_update(_RENAME_SAFE_DEFAULT_PROTECTED_NAMES)
+    except Exception:
+        pass
 
 
 def _make_strict_match(original: Callable[..., bool], studio: Any) -> Callable[..., bool]:
@@ -95,6 +118,8 @@ def apply() -> bool:
 
     try:
         from stoney_verify.services import server_design_studio as studio
+
+        _relax_visual_name_defaults(studio)
 
         if getattr(studio, "_DANK_STRICT_LAYOUT_MATCH_ACTIVE", False):
             _PATCHED = True
