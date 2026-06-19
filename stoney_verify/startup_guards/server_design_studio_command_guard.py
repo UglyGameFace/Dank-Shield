@@ -1667,6 +1667,10 @@ class CategoryEditorActionView(discord.ui.View):
         embed.add_field(name="Saved locks", value=f"Global: {counts['global']} • Categories: {counts['categories']} • Channels: {counts['channels']}", inline=False)
         await interaction.response.edit_message(embed=embed, view=CategoryEditorActionView(self.category_id))
 
+    @discord.ui.button(label="Protection Mode", emoji="🛡️", style=discord.ButtonStyle.secondary, custom_id="dank_design:category_protection_mode", row=2)
+    async def protection_mode(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        await _open_protection_mode_editor(interaction, channel_id=self.category_id)
+
     @discord.ui.button(label="Preview / Fix This Category", emoji="👁️", style=discord.ButtonStyle.primary, custom_id="dank_design:category_preview_scope", row=1)
     async def preview_category(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         await _preview_scope(
@@ -1722,6 +1726,10 @@ class ChannelEditorActionView(discord.ui.View):
         counts = _lock_count(options)
         embed.add_field(name="Saved locks", value=f"Global: {counts['global']} • Categories: {counts['categories']} • Channels: {counts['channels']}", inline=False)
         await interaction.response.edit_message(embed=embed, view=ChannelEditorActionView(self.channel_id, category_id=self.category_id))
+
+    @discord.ui.button(label="Protection Mode", emoji="🛡️", style=discord.ButtonStyle.secondary, custom_id="dank_design:channel_protection_mode", row=2)
+    async def protection_mode(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        await _open_protection_mode_editor(interaction, channel_id=self.channel_id)
 
     @discord.ui.button(label="Preview / Fix This Only", emoji="👁️", style=discord.ButtonStyle.primary, custom_id="dank_design:channel_preview_scope", row=1)
     async def preview_channel(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
@@ -2333,6 +2341,243 @@ class BackToLocksOrDesignButton(discord.ui.Button):
 
 
 
+# ---------------------------------------------------------------------------
+# Protection Manager
+# ---------------------------------------------------------------------------
+
+PROTECTION_LABELS: dict[str, tuple[str, str]] = {
+    "never": ("Never rename", "Fully protected. Bot will not rename it."),
+    "emoji_only": ("Emoji only", "Allow emoji cleanup/suggestion only."),
+    "separator_only": ("Separator only", "Allow emoji + separator/layout, no font."),
+    "font_only": ("Font only", "Allow font styling without category frame."),
+    "category_frame_only": ("Category frame only", "Allow category frame styling."),
+    "full": ("Full styling", "Allow full design formatting."),
+}
+
+
+def _base_for_channel(channel: discord.abc.GuildChannel) -> str:
+    try:
+        parsed = studio.parse_channel_name(_safe_str(getattr(channel, "name", "")), kind="category" if isinstance(channel, discord.CategoryChannel) else "text")
+        return studio.normalize_base_name(parsed.get("base_name") or getattr(channel, "name", ""))
+    except Exception:
+        return studio.normalize_base_name(_safe_str(getattr(channel, "name", "")))
+
+
+def _protection_rules(options: Mapping[str, Any]) -> dict[str, str]:
+    raw = options.get("protection_rules")
+    if not isinstance(raw, Mapping):
+        return {}
+    out: dict[str, str] = {}
+    for key, value in raw.items():
+        base = studio.normalize_base_name(_safe_str(key))
+        mode = _safe_str(value).lower().replace("-", "_")
+        if base and mode in PROTECTION_LABELS:
+            out[base] = mode
+    return out
+
+
+def _protection_mode_label(mode: str) -> str:
+    return PROTECTION_LABELS.get(mode, ("Unknown", ""))[0]
+
+
+async def _save_protection_rule(interaction: discord.Interaction, *, base_name: str, mode: str | None) -> dict[str, Any]:
+    guild = interaction.guild
+    assert guild is not None
+
+    options = await _load_design_options(int(guild.id))
+    rules = _protection_rules(options)
+    base = studio.normalize_base_name(base_name)
+
+    if mode is None:
+        rules.pop(base, None)
+    else:
+        clean = _safe_str(mode).lower().replace("-", "_")
+        if clean not in PROTECTION_LABELS:
+            clean = "never"
+        rules[base] = clean
+
+    options["protection_rules"] = rules
+    await _save_options(interaction, options) if "_save_options" in globals() else await _save_design_options(int(guild.id), options)
+    return options
+
+
+def _protection_manager_embed(guild: discord.Guild, options: Mapping[str, Any]) -> discord.Embed:
+    rules = _protection_rules(options)
+
+    embed = discord.Embed(
+        title="🛡️ Server Design Protection Manager",
+        description=(
+            "Control which ticket/log/system items are protected and which ones may be styled.\\n\\n"
+            "Use the Category/Channel Editor to pick an exact item, then set its protection mode."
+        ),
+        color=discord.Color.blurple(),
+    )
+
+    default_lines = []
+    for name in sorted(studio.DEFAULT_PROTECTED_NAMES)[:16]:
+        override = rules.get(studio.normalize_base_name(name))
+        if override:
+            default_lines.append(f"• `{name}` → **{_protection_mode_label(override)}**")
+        else:
+            default_lines.append(f"• `{name}` → **Never rename**")
+    embed.add_field(name="Default protected names", value="\\n".join(default_lines)[:1024], inline=False)
+
+    if rules:
+        lines = []
+        for base, mode in sorted(rules.items()):
+            lines.append(f"• `{base}` → **{_protection_mode_label(mode)}**")
+        embed.add_field(name="Saved overrides", value="\\n".join(lines[:20])[:1024], inline=False)
+    else:
+        embed.add_field(name="Saved overrides", value="None yet.", inline=False)
+
+    embed.add_field(
+        name="Modes",
+        value=(
+            "**Never rename** = safest\\n"
+            "**Emoji only / Separator only / Font only** = partial styling\\n"
+            "**Full styling** = allow all design formatting"
+        ),
+        inline=False,
+    )
+    embed.set_footer(text="Protected items do not block Apply. They are safe skips unless overridden.")
+    return embed
+
+
+class ProtectionManagerButton(discord.ui.Button):
+    def __init__(self, *, row: int = 4) -> None:
+        super().__init__(
+            label="Protection Manager",
+            emoji="🛡️",
+            style=discord.ButtonStyle.secondary,
+            custom_id="dank_design:protection_manager",
+            row=row,
+        )
+
+    async def callback(self, interaction: discord.Interaction) -> None:  # type: ignore[override]
+        if not await _require_design_permission(interaction):
+            return
+        guild = interaction.guild
+        assert guild is not None
+        options = await _load_design_options(int(guild.id))
+        await interaction.response.edit_message(
+            embed=_protection_manager_embed(guild, options),
+            view=ProtectionManagerView(),
+        )
+
+
+class ProtectionManagerView(discord.ui.View):
+    def __init__(self) -> None:
+        super().__init__(timeout=900)
+
+    @discord.ui.button(label="Pick Item with Editor", emoji="#️⃣", style=discord.ButtonStyle.primary, custom_id="dank_design:protection_pick_item", row=0)
+    async def pick_item(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        if not await _require_design_permission(interaction):
+            return
+        guild = interaction.guild
+        assert guild is not None
+        if "ChannelEditorPickerView" not in globals():
+            return await interaction.response.send_message("Channel Editor is not installed yet.", ephemeral=True)
+        await interaction.response.edit_message(
+            embed=_channel_editor_embed(guild, page=0),
+            view=ChannelEditorPickerView(guild, page=0),
+        )
+
+    @discord.ui.button(label="Back to Design Studio", emoji="🎨", style=discord.ButtonStyle.secondary, custom_id="dank_design:protection_back", row=4)
+    async def back(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        if not await _require_design_permission(interaction):
+            return
+        assert interaction.guild is not None
+        options = await _load_design_options(int(interaction.guild.id))
+        await interaction.response.edit_message(embed=_home_embed(interaction.guild, options), view=DesignHomeView(options))
+
+
+class ProtectionModeSelect(discord.ui.Select):
+    def __init__(self, *, channel_id: int, current: str | None = None) -> None:
+        current = _safe_str(current or "")
+        options = [
+            discord.SelectOption(
+                label=label,
+                value=mode,
+                default=mode == current,
+                description=description[:100],
+            )
+            for mode, (label, description) in PROTECTION_LABELS.items()
+        ]
+        options.append(discord.SelectOption(label="Clear override", value="__clear__", description="Return this item to default protection behavior."))
+        super().__init__(placeholder="Choose protection mode for this item", min_values=1, max_values=1, options=options[:25], row=0)
+        self.channel_id = int(channel_id)
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        if not await _require_design_permission(interaction):
+            return
+        guild = interaction.guild
+        assert guild is not None
+        channel = guild.get_channel(self.channel_id)
+        if channel is None:
+            return await interaction.response.send_message("That channel/category no longer exists.", ephemeral=True)
+
+        base = _base_for_channel(channel)
+        selected = self.values[0]
+        mode = None if selected == "__clear__" else selected
+
+        options = await _save_protection_rule(interaction, base_name=base, mode=mode)
+        embed = _channel_action_embed(channel) if "_channel_action_embed" in globals() else discord.Embed(title="🛡️ Protection Updated", color=discord.Color.green())
+        embed.title = "✅ Protection Rule Updated"
+        embed.description = (
+            f"`{base}` now uses **{_protection_mode_label(mode or 'never') if mode else 'default protection'}**."
+        )
+        embed.add_field(
+            name="Next step",
+            value="Run **Find & Fix Inconsistencies** or **Preview / Fix This Only** to see the result.",
+            inline=False,
+        )
+        await interaction.response.edit_message(embed=embed, view=ChannelEditorActionView(self.channel_id) if "ChannelEditorActionView" in globals() else None)
+
+
+class ProtectionModeView(discord.ui.View):
+    def __init__(self, *, channel_id: int, current: str | None = None) -> None:
+        super().__init__(timeout=900)
+        self.channel_id = int(channel_id)
+        self.add_item(ProtectionModeSelect(channel_id=self.channel_id, current=current))
+
+    @discord.ui.button(label="Back", emoji="⬅️", style=discord.ButtonStyle.secondary, custom_id="dank_design:protection_mode_back", row=1)
+    async def back(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        if not await _require_design_permission(interaction):
+            return
+        guild = interaction.guild
+        assert guild is not None
+        channel = guild.get_channel(self.channel_id)
+        if channel is None:
+            return await interaction.response.edit_message(embed=_protection_manager_embed(guild, await _load_design_options(int(guild.id))), view=ProtectionManagerView())
+        await interaction.response.edit_message(embed=_channel_action_embed(channel), view=ChannelEditorActionView(self.channel_id))
+
+async def _open_protection_mode_editor(interaction: discord.Interaction, *, channel_id: int) -> None:
+    if not await _require_design_permission(interaction):
+        return
+    guild = interaction.guild
+    assert guild is not None
+    channel = guild.get_channel(int(channel_id))
+    if channel is None:
+        return await interaction.response.send_message("That channel/category no longer exists.", ephemeral=True)
+
+    options = await _load_design_options(int(guild.id))
+    rules = _protection_rules(options)
+    base = _base_for_channel(channel)
+    current = rules.get(base)
+
+    embed = discord.Embed(
+        title=f"🛡️ Protection Mode · {_safe_str(getattr(channel, 'name', 'Channel'))}",
+        description=(
+            f"Base name: `{base}`\\n\\n"
+            "Choose how much the design engine may change this item."
+        ),
+        color=discord.Color.blurple(),
+    )
+    embed.add_field(name="Current mode", value=f"**{_protection_mode_label(current or 'never') if current else 'Default'}**", inline=False)
+    await interaction.response.edit_message(embed=embed, view=ProtectionModeView(channel_id=int(channel.id), current=current))
+
+
+
 
 class DesignHomeView(discord.ui.View):
     def __init__(self, options: Mapping[str, Any] | None = None) -> None:
@@ -2345,6 +2590,8 @@ class DesignHomeView(discord.ui.View):
             self.add_item(DesignDoctorButton(row=4))
         if "dank_design:manage_locks" not in existing_ids:
             self.add_item(LockManagerButton(row=4))
+        if "dank_design:protection_manager" not in existing_ids:
+            self.add_item(ProtectionManagerButton(row=4))
         existing_ids = {str(getattr(child, "custom_id", "")) for child in getattr(self, "children", []) or []}
         if "dank_design:category_editor" not in existing_ids:
             self.add_item(DesignCategoryEditorButton(row=3))
