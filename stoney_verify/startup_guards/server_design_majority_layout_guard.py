@@ -1,11 +1,6 @@
 from __future__ import annotations
 
-"""Live-majority repair bridge for Dank Design.
-
-The parser and detector live in stoney_verify.services.server_design_majority_layout.
-This bridge keeps the existing /dank design command flow and only changes the
-Find & Fix Inconsistencies naming plan.
-"""
+"""Guided live-majority repair bridge for Dank Design."""
 
 from collections.abc import Mapping
 import inspect
@@ -37,121 +32,316 @@ def _is_consistency_repair(options: Mapping[str, Any]) -> bool:
 
 
 def _records_for_guild(command_guard: Any, guild: Any) -> list[dict[str, Any]]:
-    records: list[dict[str, Any]] = []
+    rows: list[dict[str, Any]] = []
     for channel in list(command_guard._editable_channels(guild) or []):
-        kind = command_guard._kind(channel)
         parent = getattr(channel, "category", None)
-        records.append(
-            {
-                "id": str(getattr(channel, "id", "")),
-                "category_id": str(getattr(parent, "id", "")),
-                "kind": kind,
-                "name": _text(getattr(channel, "name", "")),
-            }
-        )
-    return records
+        rows.append({
+            "id": str(getattr(channel, "id", "")),
+            "category_id": str(getattr(parent, "id", "")),
+            "kind": command_guard._kind(channel),
+            "name": _text(getattr(channel, "name", "")),
+        })
+    return rows
 
 
-def _change_lines(command_guard: Any, items: list[dict[str, Any]], *, limit: int = 12) -> list[str]:
+def _analysis_summary(analysis: Mapping[str, Any]) -> dict[str, str]:
+    separator = analysis.get("separator") if isinstance(analysis.get("separator"), Mapping) else {}
+    frame = analysis.get("category_frame") if isinstance(analysis.get("category_frame"), Mapping) else {}
+    font = analysis.get("font") if isinstance(analysis.get("font"), Mapping) else {}
+    emoji = analysis.get("leading_emoji") if isinstance(analysis.get("leading_emoji"), Mapping) else {}
+    return {
+        "separator": _text(separator.get("label"), "mixed/unknown"),
+        "category_frame": _text(frame.get("label"), "mixed/unknown"),
+        "font": _text(font.get("label"), "mixed/unknown"),
+        "leading_emoji": _text(emoji.get("label"), "mixed/unknown"),
+    }
+
+
+def _counts(command_guard: Any, items: list[dict[str, Any]]) -> dict[str, int]:
     try:
-        return command_guard._consistency_lines(items, limit=limit)
+        summary = command_guard._consistency_summary(items)
+        return {key: int(summary.get(key, 0)) for key in ("matches", "needs_fix", "protected", "failed", "notes")}
     except Exception:
-        rows: list[str] = []
-        for item in items:
-            if item.get("status") != "changed":
-                continue
-            before = _text(item.get("before"))
-            after = _text(item.get("after"))
-            rows.append(f"🧩 `{before}` → `{after}`"[:240])
-            if len(rows) >= limit:
-                break
-        return rows or ["No inconsistent channel names found."]
+        return {
+            "matches": sum(1 for item in items if item.get("status") == "unchanged"),
+            "needs_fix": sum(1 for item in items if item.get("status") == "changed"),
+            "protected": sum(1 for item in items if item.get("status") == "protected"),
+            "failed": sum(1 for item in items if item.get("status") == "failed"),
+            "notes": sum(1 for item in items if item.get("warnings")),
+        }
+
+
+def _change_lines(items: list[dict[str, Any]], *, limit: int = 8) -> list[str]:
+    out: list[str] = []
+    for item in items:
+        if item.get("status") != "changed":
+            continue
+        before = _text(item.get("before"), "unnamed")
+        after = _text(item.get("after"), "unnamed")
+        out.append(f"• `{before}`\n  → `{after}`"[:240])
+        if len(out) >= limit:
+            break
+    return out or ["No repair rows for this target."]
+
+
+def _saved_rule_count(options: Mapping[str, Any]) -> int:
+    total = 0
+    global_rule = options.get("format_lock_global")
+    if isinstance(global_rule, Mapping) and global_rule.get("enabled"):
+        total += 1
+    for key in ("category_format_locks", "channel_format_locks"):
+        value = options.get(key)
+        if isinstance(value, Mapping):
+            total += len(value)
+    return total
 
 
 def _patch_consistency_embed(command_guard: Any, majority: Any, discord: Any) -> None:
-    if getattr(command_guard, "_DANK_MAJORITY_LAYOUT_EMBED_ACTIVE", False):
-        return
-
     def _majority_consistency_embed(guild: Any, items: list[dict[str, Any]], options: Mapping[str, Any]) -> Any:
-        try:
-            summary = command_guard._consistency_summary(items)
-        except Exception:
-            summary = {"matches": 0, "needs_fix": 0, "protected": 0, "failed": 0, "notes": 0}
-
+        counts = _counts(command_guard, items)
         detected = majority.majority_summary_from_items(items) or {
             "separator": "mixed/unknown",
             "category_frame": "mixed/unknown",
             "font": "mixed/unknown",
             "leading_emoji": "mixed/unknown",
         }
-        majority_first_count, saved_first_count = majority.lock_notice_from_items(items)
-        has_failures = bool(summary.get("failed"))
         embed = discord.Embed(
-            title="🧭 Server Design Consistency Check",
+            title="✅ Live Majority Repair Preview",
             description=(
-                "Dank Shield compared the current live server layout and will repair only names that drift from the majority.\n\n"
-                "Nothing has been changed yet. Review the before/after list, then press Apply if it looks right."
+                "**Step 2 of 2 — review before apply.**\n"
+                "Target: the layout most channels/categories already use here.\n\n"
+                "Apply only renames the safe rows in this preview."
             ),
-            color=discord.Color.orange() if has_failures else discord.Color.green(),
+            color=discord.Color.orange() if counts.get("failed") else discord.Color.green(),
         )
         embed.add_field(
-            name="Live majority detected",
+            name="Detected target layout",
             value=(
-                f"Majority separator detected: **{detected.get('separator', 'mixed/unknown')}**\n"
-                f"Majority category frame detected: **{detected.get('category_frame', 'mixed/unknown')}**\n"
-                f"Majority font/style detected: **{detected.get('font', 'mixed/unknown')}**\n"
-                f"Leading emoji usage: **{detected.get('leading_emoji', 'mixed/unknown')}**"
+                f"Separator: **{detected.get('separator', 'mixed/unknown')}**\n"
+                f"Category frame: **{detected.get('category_frame', 'mixed/unknown')}**\n"
+                f"Font/style: **{detected.get('font', 'mixed/unknown')}**\n"
+                f"Leading emoji: **{detected.get('leading_emoji', 'mixed/unknown')}**"
             )[:1024],
             inline=False,
         )
         embed.add_field(
-            name="Results",
+            name="Summary",
             value=(
-                f"Channels matching: **{summary.get('matches', 0)}**\n"
-                f"Channels needing repair: **{summary.get('needs_fix', 0)}**\n"
-                f"Protected/skipped: **{summary.get('protected', 0)}**\n"
-                f"Cannot fix yet: **{summary.get('failed', 0)}**\n"
-                f"Notes: **{summary.get('notes', 0)}**"
+                f"Already matching: **{counts.get('matches', 0)}**\n"
+                f"Safe repairs: **{counts.get('needs_fix', 0)}**\n"
+                f"Skipped: **{counts.get('protected', 0)}**\n"
+                f"Cannot repair: **{counts.get('failed', 0)}**\n"
+                f"Notes: **{counts.get('notes', 0)}**"
             ),
             inline=True,
         )
-        embed.add_field(name="What will be fixed", value="\n".join(_change_lines(command_guard, items, limit=12))[:1024], inline=False)
-
-        skipped = majority.skipped_lines(items, limit=6)
+        embed.add_field(name="Sample safe repairs", value="\n".join(_change_lines(items, limit=8))[:1024], inline=False)
+        skipped = majority.skipped_lines(items, limit=5)
         if skipped:
-            embed.add_field(name="Protected / skipped", value="\n".join(skipped)[:1024], inline=False)
-
-        if majority_first_count:
-            embed.add_field(
-                name="Saved layout note",
-                value=(
-                    f"**{majority_first_count}** saved layout rule(s) were present. For this repair preview, the live majority layout is taking precedence so hand-built servers can be normalized. "
-                    "Use **Manage Locks** when a saved layout should intentionally win."
-                )[:1024],
-                inline=False,
-            )
-        elif saved_first_count:
-            embed.add_field(
-                name="Saved layout rule active",
-                value=(
-                    f"**{saved_first_count}** saved layout rule(s) are taking precedence over live majority detection. "
-                    "Clear that saved rule when you want the majority layout copied instead."
-                )[:1024],
-                inline=False,
-            )
-
-        try:
-            failed_lines = command_guard.studio.preview_lines(items, filter_mode="failed", limit=5)
-        except Exception:
-            failed_lines = []
-        if failed_lines and failed_lines != ["No matching preview rows."]:
-            embed.add_field(name="Cannot fix yet", value="\n".join(failed_lines)[:1024], inline=False)
-
-        embed.set_footer(text="Fix uses preview first, names only, and the existing rollback snapshot before apply.")
+            embed.add_field(name="Skipped on purpose", value="\n".join(skipped)[:1024], inline=False)
+        found, active = majority.lock_notice_from_items(items)
+        if found:
+            embed.add_field(name="Saved rules found", value=f"{found} saved rule(s) exist. This preview uses **Live Majority** because you chose it.", inline=False)
+        elif active:
+            embed.add_field(name="Saved rules active", value=f"{active} saved rule(s) are active for this preview.", inline=False)
+        embed.set_footer(text="Names only • Preview first • Rollback snapshot kept before apply")
         return command_guard._clean_design_embed(embed)
 
     command_guard._consistency_embed = _majority_consistency_embed
     command_guard._DANK_MAJORITY_LAYOUT_EMBED_ACTIVE = True
+
+
+def _patch_guided_flow(command_guard: Any, majority: Any, studio: Any, discord: Any) -> None:
+    if getattr(command_guard, "_DANK_GUIDED_MAJORITY_REPAIR_ACTIVE", False):
+        return
+
+    async def _load_options(guild_id: int) -> dict[str, Any]:
+        return await command_guard._load_design_options(int(guild_id))
+
+    async def _majority_items(guild: Any, options: Mapping[str, Any]) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+        requested = dict(options)
+        requested["__use_live_majority_layout"] = True
+        items = await command_guard.build_design_plan(guild, requested)
+        return items, requested
+
+    def _target_embed(guild: Any, options: Mapping[str, Any], items: list[dict[str, Any]]) -> Any:
+        counts = _counts(command_guard, items)
+        detected = majority.majority_summary_from_items(items)
+        if not detected:
+            analysis = majority.infer_live_majority_layout(studio, _records_for_guild(command_guard, guild))
+            detected = _analysis_summary(analysis)
+        embed = discord.Embed(
+            title="🧭 Choose Repair Target",
+            description="**Step 1 of 2.** Pick what Dank Design should copy before any apply button appears.",
+            color=discord.Color.blurple(),
+        )
+        embed.add_field(
+            name="Live majority detected",
+            value=(
+                f"Separator: **{detected.get('separator', 'mixed/unknown')}**\n"
+                f"Category frame: **{detected.get('category_frame', 'mixed/unknown')}**\n"
+                f"Font/style: **{detected.get('font', 'mixed/unknown')}**\n"
+                f"Leading emoji: **{detected.get('leading_emoji', 'mixed/unknown')}**"
+            )[:1024],
+            inline=False,
+        )
+        embed.add_field(
+            name="Using live majority would",
+            value=(
+                f"Keep matching: **{counts.get('matches', 0)}**\n"
+                f"Repair: **{counts.get('needs_fix', 0)}**\n"
+                f"Skip: **{counts.get('protected', 0)}**\n"
+                f"Need attention: **{counts.get('failed', 0)}**"
+            ),
+            inline=True,
+        )
+        embed.add_field(
+            name="Saved rules",
+            value=f"Saved rules found: **{_saved_rule_count(options)}**\nUse saved rules only when those are intentionally correct.",
+            inline=True,
+        )
+        embed.add_field(name="Recommended", value="For hand-built servers, choose **Use Live Majority**.", inline=False)
+        embed.set_footer(text="Read-only screen. Choose a target to generate the final preview.")
+        return command_guard._clean_design_embed(embed)
+
+    def _saved_embed(items: list[dict[str, Any]]) -> Any:
+        counts = _counts(command_guard, items)
+        embed = discord.Embed(
+            title="🔒 Saved Layout Preview",
+            description="**Step 2 of 2 — review before apply.** Target: saved theme/rules.",
+            color=discord.Color.orange() if counts.get("failed") else discord.Color.blurple(),
+        )
+        embed.add_field(
+            name="Summary",
+            value=(
+                f"Matches saved layout: **{counts.get('matches', 0)}**\n"
+                f"Safe repairs: **{counts.get('needs_fix', 0)}**\n"
+                f"Skipped: **{counts.get('protected', 0)}**\n"
+                f"Cannot repair: **{counts.get('failed', 0)}**"
+            ),
+            inline=True,
+        )
+        embed.add_field(name="Sample safe repairs", value="\n".join(_change_lines(items, limit=8))[:1024], inline=False)
+        embed.set_footer(text="Names only • Preview first • Rollback snapshot kept before apply")
+        return command_guard._clean_design_embed(embed)
+
+    class RepairTargetView(discord.ui.View):
+        def __init__(self) -> None:
+            super().__init__(timeout=900)
+
+        @discord.ui.button(label="Use Live Majority", emoji="✅", style=discord.ButtonStyle.success, custom_id="dank_design:majority_use_live", row=0)
+        async def use_live_majority(self, interaction: Any, button: Any) -> None:
+            if not await command_guard._require_design_permission(interaction):
+                return
+            guild = interaction.guild
+            assert guild is not None
+            await interaction.response.defer(ephemeral=True, thinking=True)
+            options = await _load_options(int(guild.id))
+            items, requested = await _majority_items(guild, options)
+            counts = _counts(command_guard, items)
+            command_guard._PENDING[command_guard._key(int(guild.id), int(interaction.user.id))] = {
+                "created_at": command_guard.time.time(),
+                "items": items,
+                "options": dict(requested),
+                "mode": "consistency_live_majority",
+            }
+            await interaction.edit_original_response(
+                embed=command_guard._consistency_embed(guild, items, requested),
+                view=command_guard.DesignPreviewView(can_apply=not counts.get("failed") and bool(counts.get("needs_fix"))),
+            )
+
+        @discord.ui.button(label="Use Saved Layout", emoji="🔒", style=discord.ButtonStyle.secondary, custom_id="dank_design:majority_use_saved", row=0)
+        async def use_saved_layout(self, interaction: Any, button: Any) -> None:
+            if not await command_guard._require_design_permission(interaction):
+                return
+            guild = interaction.guild
+            assert guild is not None
+            await interaction.response.defer(ephemeral=True, thinking=True)
+            options = await _load_options(int(guild.id))
+            items = await command_guard.build_design_plan(guild, options)
+            counts = _counts(command_guard, items)
+            command_guard._PENDING[command_guard._key(int(guild.id), int(interaction.user.id))] = {
+                "created_at": command_guard.time.time(),
+                "items": items,
+                "options": dict(options),
+                "mode": "consistency_saved_layout",
+            }
+            await interaction.edit_original_response(
+                embed=_saved_embed(items),
+                view=command_guard.DesignPreviewView(can_apply=not counts.get("failed") and bool(counts.get("needs_fix"))),
+            )
+
+        @discord.ui.button(label="Preview Only", emoji="👁️", style=discord.ButtonStyle.secondary, custom_id="dank_design:majority_preview_only", row=1)
+        async def preview_only(self, interaction: Any, button: Any) -> None:
+            if not await command_guard._require_design_permission(interaction):
+                return
+            guild = interaction.guild
+            assert guild is not None
+            await interaction.response.defer(ephemeral=True, thinking=True)
+            options = await _load_options(int(guild.id))
+            items, requested = await _majority_items(guild, options)
+            await interaction.edit_original_response(embed=command_guard._consistency_embed(guild, items, requested), view=RepairTargetView())
+
+        @discord.ui.button(label="Manual Editor", emoji="🎛️", style=discord.ButtonStyle.primary, custom_id="dank_design:majority_manual", row=1)
+        async def manual_editor(self, interaction: Any, button: Any) -> None:
+            if not await command_guard._require_design_permission(interaction):
+                return
+            guild = interaction.guild
+            assert guild is not None
+            await interaction.response.edit_message(embed=command_guard._channel_editor_embed(guild, page=0), view=command_guard.ChannelEditorPickerView(guild, page=0))
+
+        @discord.ui.button(label="Cancel", emoji="⬅️", style=discord.ButtonStyle.secondary, custom_id="dank_design:majority_cancel", row=4)
+        async def cancel(self, interaction: Any, button: Any) -> None:
+            if not await command_guard._require_design_permission(interaction):
+                return
+            guild = interaction.guild
+            assert guild is not None
+            options = await _load_options(int(guild.id))
+            items = await command_guard.build_design_plan(guild, options)
+            await interaction.response.edit_message(embed=command_guard._doctor_embed(guild, options, items), view=GuidedDesignDoctorView())
+
+    class GuidedDesignDoctorView(discord.ui.View):
+        def __init__(self) -> None:
+            super().__init__(timeout=900)
+
+        @discord.ui.button(label="Review Design Repairs", emoji="🧭", style=discord.ButtonStyle.success, custom_id="dank_design:doctor_consistency", row=0)
+        async def consistency(self, interaction: Any, button: Any) -> None:
+            if not await command_guard._require_design_permission(interaction):
+                return
+            guild = interaction.guild
+            assert guild is not None
+            await interaction.response.defer(ephemeral=True, thinking=True)
+            options = await _load_options(int(guild.id))
+            items, _requested = await _majority_items(guild, options)
+            await interaction.edit_original_response(embed=_target_embed(guild, options, items), view=RepairTargetView())
+
+        @discord.ui.button(label="Category Editor", emoji="🗂️", style=discord.ButtonStyle.primary, custom_id="dank_design:doctor_category", row=1)
+        async def category_editor(self, interaction: Any, button: Any) -> None:
+            if not await command_guard._require_design_permission(interaction):
+                return
+            guild = interaction.guild
+            assert guild is not None
+            await interaction.response.edit_message(embed=command_guard._category_editor_embed(guild, page=0), view=command_guard.CategoryEditorPickerView(guild, page=0))
+
+        @discord.ui.button(label="Channel Editor", emoji="#️⃣", style=discord.ButtonStyle.primary, custom_id="dank_design:doctor_channel", row=1)
+        async def channel_editor(self, interaction: Any, button: Any) -> None:
+            if not await command_guard._require_design_permission(interaction):
+                return
+            guild = interaction.guild
+            assert guild is not None
+            await interaction.response.edit_message(embed=command_guard._channel_editor_embed(guild, page=0), view=command_guard.ChannelEditorPickerView(guild, page=0))
+
+        @discord.ui.button(label="Back to Design Studio", emoji="🎨", style=discord.ButtonStyle.secondary, custom_id="dank_design:doctor_back", row=4)
+        async def back(self, interaction: Any, button: Any) -> None:
+            if not await command_guard._require_design_permission(interaction):
+                return
+            guild = interaction.guild
+            assert guild is not None
+            options = await _load_options(int(guild.id))
+            await interaction.response.edit_message(embed=command_guard._home_embed(guild, options), view=command_guard.DesignHomeView(options))
+
+    command_guard.DesignDoctorView = GuidedDesignDoctorView
+    command_guard._DANK_GUIDED_MAJORITY_REPAIR_ACTIVE = True
 
 
 def apply() -> bool:
@@ -169,6 +359,7 @@ def apply() -> bool:
             return False
         if getattr(command_guard, "_DANK_MAJORITY_LAYOUT_PLAN_ACTIVE", False):
             _patch_consistency_embed(command_guard, majority, command_guard.discord)
+            _patch_guided_flow(command_guard, majority, studio, command_guard.discord)
             _PATCHED = True
             return True
 
@@ -189,8 +380,9 @@ def apply() -> bool:
         command_guard.build_design_plan = _build_design_plan_with_majority
         command_guard._DANK_MAJORITY_LAYOUT_PLAN_ACTIVE = True
         _patch_consistency_embed(command_guard, majority, command_guard.discord)
+        _patch_guided_flow(command_guard, majority, studio, command_guard.discord)
         _PATCHED = True
-        print("✅ server_design_majority_layout_guard active; Fix Mismatches copies the live majority layout")
+        print("✅ server_design_majority_layout_guard active; guided repair target choices use live majority layout")
         return True
     except Exception as exc:
         try:
