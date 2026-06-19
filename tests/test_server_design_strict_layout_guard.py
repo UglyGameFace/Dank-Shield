@@ -73,3 +73,20 @@ def test_strict_layout_guard_allows_visual_log_channel_repair():
     assert not result.protected
     assert result.status == "changed"
     assert "｜" in result.after
+
+
+def test_gothic_clean_default_uses_single_stroke_medium_separator():
+    server_design_strict_layout_guard.apply()
+
+    theme = studio.THEMES_BY_ID["gothic_clean"]
+    result = studio.build_styled_name(
+        "free-games",
+        theme_id="gothic_clean",
+        strength=5,
+    )
+
+    assert theme.channel_separator == "bar_medium"
+    assert result.status == "changed"
+    assert result.after.startswith("🎮❘")
+    assert "｜" not in result.after
+    assert "┃" not in result.after
