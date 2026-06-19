@@ -17,6 +17,7 @@ _STARTUP_GUARDS: Tuple[str, ...] = (
     "stoney_verify.startup_guards.process_health",
     "stoney_verify.startup_guards.command_safety",
     "stoney_verify.startup_guards.app_command_error_response_guard",
+    "stoney_verify.startup_guards.interaction_response_timeout_guard",
     "stoney_verify.startup_guards.slash_command_cleanup",
     "stoney_verify.startup_guards.public_verify_admin_command_skip",
     "stoney_verify.startup_guards.auto_schema_bootstrap",
@@ -165,6 +166,7 @@ _ALWAYS_SHOW_PREFIXES: Tuple[str, ...] = (
     "✅ server_design_strict_layout_guard active",
     "✅ server_design_majority_layout_guard active",
     "✅ app_command_error_response_guard active",
+    "✅ interaction_response_timeout_guard active",
     "✅ ban_target_resolution_guard active",
     "✅ production_command_surface_guard active",
 )
