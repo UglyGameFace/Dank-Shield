@@ -19,9 +19,12 @@ def register_public_design_group_commands(bot: Any = None, tree: Any = None) -> 
         return
 
     # Load the strict layout consistency guard before the design command module
-    # builds previews. This makes missing/different separators count as real
-    # drift instead of being hidden by the smart font/base semantic skip.
+    # builds previews. Then run it again after importing the command module so it
+    # can normalize already-saved guild format locks as they are loaded.
     from stoney_verify.startup_guards import server_design_strict_layout_guard as strict_layout
+
+    strict_layout.apply()
+
     from stoney_verify.startup_guards import server_design_studio_command_guard as design
 
     strict_layout.apply()
