@@ -36,6 +36,15 @@ def _warn(message: str) -> None:
         pass
 
 
+def _apply_ban_target_resolver() -> None:
+    try:
+        from stoney_verify.startup_guards import ban_target_resolution_guard
+
+        ban_target_resolution_guard.apply()
+    except Exception:
+        pass
+
+
 def _remove_existing_global_command(tree: Any, name: str) -> None:
     try:
         tree.remove_command(name, guild=None)
@@ -51,10 +60,12 @@ def _remove_existing_global_command(tree: Any, name: str) -> None:
 def _patch_moderation_module(module: Any) -> None:
     global _PATCHED
     if _PATCHED:
+        _apply_ban_target_resolver()
         return
 
     original = getattr(module, "register_moderation_commands", None)
     if not callable(original) or getattr(original, "_clean_public_moderation_wrapped", False):
+        _apply_ban_target_resolver()
         return
 
     def register_moderation_commands_patched(bot: Any, tree: Any) -> None:
@@ -68,6 +79,7 @@ def _patch_moderation_module(module: Any) -> None:
             from stoney_verify.commands_ext.public_ban_unban_patch import register_public_ban_unban_patch
 
             register_public_ban_unban_patch(bot, tree)
+            _apply_ban_target_resolver()
         except Exception as e:
             _warn(f"failed replacing ban command: {e!r}")
 
@@ -78,6 +90,7 @@ def _patch_moderation_module(module: Any) -> None:
 
     setattr(module, "register_moderation_commands", register_moderation_commands_patched)
     _PATCHED = True
+    _apply_ban_target_resolver()
     _log("patched commands_ext.moderation.register_moderation_commands for clean public moderation commands")
 
 
@@ -86,6 +99,7 @@ def _maybe_patch_loaded() -> None:
         module = sys.modules.get("stoney_verify.commands_ext.moderation")
         if module is not None:
             _patch_moderation_module(module)
+        _apply_ban_target_resolver()
     except Exception:
         pass
 
