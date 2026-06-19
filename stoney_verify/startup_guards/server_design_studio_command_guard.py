@@ -20,6 +20,7 @@ _PATCHED = False
 _PENDING: dict[str, dict[str, Any]] = {}
 _LAST_SNAPSHOTS: dict[str, list[dict[str, Any]]] = {}
 _LOCKS: dict[str, asyncio.Lock] = {}
+_FORMAT_EDITOR_DRAFTS: dict[str, dict[str, Any]] = {}
 
 
 def _safe_int(value: Any, default: int = 0) -> int:
@@ -179,6 +180,7 @@ def _current_format_lock(options: Mapping[str, Any], *, scope: str = "global") -
         "font": font,
         "separator_id": _safe_str(getattr(theme, "channel_separator", "bar_full"), "bar_full"),
         "category_frame_id": _safe_str(getattr(theme, "category_frame", "line"), "line"),
+        "emoji_override": _safe_str(options.get("emoji_override"), ""),
         "icon_mode": _safe_str(options.get("icon_mode"), "replace_missing"),
         "locked_at": _utc_iso_design(),
     }
@@ -236,7 +238,7 @@ def _effective_format_options(
         scope = "global"
 
     if chosen:
-        for key in ("theme_id", "strength", "icon_mode", "font", "separator_id", "category_frame_id"):
+        for key in ("theme_id", "strength", "icon_mode", "font", "separator_id", "category_frame_id", "emoji_override"):
             if chosen.get(key) is not None:
                 effective[key] = chosen.get(key)
         effective["__format_lock_scope"] = scope
@@ -367,6 +369,7 @@ async def build_design_plan(guild: discord.Guild, options: Mapping[str, Any]) ->
             separator_id=_safe_str(effective_options.get("separator_id")) or None,
             category_frame_id=_safe_str(effective_options.get("category_frame_id")) or None,
             font=_safe_str(effective_options.get("font")) or None,
+            emoji_override=_safe_str(effective_options.get("emoji_override")) or None,
         )
         item = result.to_plan_item(channel_id=getattr(channel, "id", ""), category_id=getattr(parent, "id", ""))
         item["kind"] = kind
@@ -834,6 +837,363 @@ class FormatLocksView(discord.ui.View):
 
 
 # ---------------------------------------------------------------------------
+# Exact Format Editor
+# ---------------------------------------------------------------------------
+
+EDITOR_SEPARATOR_IDS = (
+    "none", "bar_full", "bar_thin", "bar_heavy", "dash", "en_dash", "em_dash",
+    "middle_dot", "bullet", "katakana_dot", "colon", "single_angle",
+    "tri_right", "tri_small", "premium_sparkle", "premium_thin_sparkle",
+    "sparkle_small", "small_dot", "presentation_bar", "bracket_corner",
+    "bracket_lenticular",
+)
+
+EDITOR_FONT_IDS = (
+    "normal", "fraktur", "bold_fraktur", "bold_sans", "serif_bold",
+    "monospace", "fullwidth", "small_caps", "script", "bold_script",
+    "italic_sans", "bold_italic_sans", "serif_italic", "serif_bold_italic",
+    "circled", "parenthesized",
+)
+
+
+def _format_editor_key(guild_id: int, user_id: int, scope: str, target_id: int) -> str:
+    return f"{int(guild_id)}:{int(user_id)}:{scope}:{int(target_id)}"
+
+
+def _target_label(guild: discord.Guild, scope: str, target_id: int) -> str:
+    ch = guild.get_channel(int(target_id))
+    if ch is None:
+        return f"{scope} `{target_id}`"
+    return f"{scope} `{_safe_str(getattr(ch, 'name', target_id))}`"
+
+
+def _initial_editor_lock(options: Mapping[str, Any], *, scope: str, target_id: int) -> dict[str, Any]:
+    if scope == "category":
+        locks = _mapping_dict(options.get("category_format_locks"))
+    elif scope == "channel":
+        locks = _mapping_dict(options.get("channel_format_locks"))
+    else:
+        locks = {}
+    existing = locks.get(str(int(target_id)))
+    if isinstance(existing, Mapping):
+        lock = dict(existing)
+    else:
+        lock = _current_format_lock(options, scope=scope)
+
+    lock.setdefault("scope", scope)
+    lock.setdefault("theme_id", _safe_str(options.get("theme_id"), "gothic_clean"))
+    lock.setdefault("strength", max(4, _safe_int(options.get("strength"), 4)))
+    lock.setdefault("font", _safe_str(lock.get("font") or _theme_from_options(options).font, "normal").lower().replace("-", "_"))
+    lock.setdefault("separator_id", _safe_str(lock.get("separator_id"), "bar_full"))
+    lock.setdefault("category_frame_id", _safe_str(lock.get("category_frame_id"), "line"))
+    lock.setdefault("icon_mode", _safe_str(lock.get("icon_mode"), "replace_missing"))
+    lock.setdefault("emoji_override", _safe_str(lock.get("emoji_override"), ""))
+    return lock
+
+
+async def _open_exact_format_editor(interaction: discord.Interaction, *, scope: str, target_id: int) -> None:
+    if not await _require_design_permission(interaction):
+        return
+    guild = interaction.guild
+    assert guild is not None
+
+    options = await _load_design_options(int(guild.id))
+    lock = _initial_editor_lock(options, scope=scope, target_id=int(target_id))
+    key = _format_editor_key(int(guild.id), int(interaction.user.id), scope, int(target_id))
+    _FORMAT_EDITOR_DRAFTS[key] = lock
+
+    await interaction.response.edit_message(
+        embed=_exact_format_embed(guild, scope=scope, target_id=int(target_id), lock=lock),
+        view=ExactFormatEditorView(scope=scope, target_id=int(target_id)),
+    )
+
+
+def _exact_format_embed(guild: discord.Guild, *, scope: str, target_id: int, lock: Mapping[str, Any]) -> discord.Embed:
+    font = _safe_str(lock.get("font"), "normal")
+    sep = _safe_str(lock.get("separator_id"), "bar_full")
+    frame = _safe_str(lock.get("category_frame_id"), "line")
+    strength = _safe_int(lock.get("strength"), 4)
+    icon_mode = _safe_str(lock.get("icon_mode"), "replace_missing")
+    emoji_override = _safe_str(lock.get("emoji_override"), "")
+
+    embed = discord.Embed(
+        title="🎛️ Exact Format Editor",
+        description=(
+            f"Editing **{_target_label(guild, scope, target_id)}**\\n\\n"
+            "Pick the exact pieces once, then save them as the desired format for this scope."
+        ),
+        color=discord.Color.blurple(),
+    )
+    embed.add_field(
+        name="Current exact format",
+        value=(
+            f"Font: **{font.replace('_', ' ').title()}**\\n"
+            f"Separator: **{sep.replace('_', ' ').title()}**\\n"
+            f"Category frame: **{frame.replace('_', ' ').title()}**\\n"
+            f"Strength: **{strength}/5**\\n"
+            f"Icon mode: **{icon_mode.replace('_', ' ').title()}**\\n"
+            f"Custom emoji: **{emoji_override or 'None'}**"
+        ),
+        inline=False,
+    )
+    embed.add_field(
+        name="Preview sample",
+        value="\\n".join(_exact_format_sample_lines(guild, scope=scope, target_id=target_id, lock=lock))[:1024],
+        inline=False,
+    )
+    embed.set_footer(text="Save Lock, then Preview/Fix that category or channel.")
+    return embed
+
+
+def _exact_format_sample_lines(guild: discord.Guild, *, scope: str, target_id: int, lock: Mapping[str, Any]) -> list[str]:
+    if scope == "category":
+        channels = _category_channels(guild, int(target_id))[:5]
+    else:
+        ch = guild.get_channel(int(target_id))
+        channels = [ch] if ch is not None else []
+
+    if not channels:
+        return ["No preview item found."]
+
+    lines: list[str] = []
+    for ch in channels:
+        kind = _kind(ch)
+        try:
+            result = studio.build_styled_name(
+                _safe_str(getattr(ch, "name", "")),
+                kind="category" if kind == "category" else "text",
+                theme_id=_safe_str(lock.get("theme_id"), "gothic_clean"),
+                strength=_safe_int(lock.get("strength"), 4),
+                icon_mode=_safe_str(lock.get("icon_mode"), "replace_missing"),
+                protection_rules={},
+                separator_id=_safe_str(lock.get("separator_id")) or None,
+                category_frame_id=_safe_str(lock.get("category_frame_id")) or None,
+                font=_safe_str(lock.get("font")) or None,
+                emoji_override=_safe_str(lock.get("emoji_override")) or None,
+            )
+            lines.append(f"`{result.before}` → `{result.after}`")
+        except Exception as exc:
+            lines.append(f"`{getattr(ch, 'name', ch)}` → preview failed: {type(exc).__name__}")
+    return lines
+
+
+async def _save_exact_lock(interaction: discord.Interaction, *, scope: str, target_id: int) -> dict[str, Any]:
+    guild = interaction.guild
+    assert guild is not None
+    key = _format_editor_key(int(guild.id), int(interaction.user.id), scope, int(target_id))
+    lock = dict(_FORMAT_EDITOR_DRAFTS.get(key) or {})
+    if not lock:
+        options = await _load_design_options(int(guild.id))
+        lock = _initial_editor_lock(options, scope=scope, target_id=target_id)
+
+    options = await _load_design_options(int(guild.id))
+    lock["scope"] = scope
+    lock["locked_at"] = _utc_iso_design()
+
+    if scope == "category":
+        locks = _mapping_dict(options.get("category_format_locks"))
+        locks[str(int(target_id))] = lock
+        options["category_format_locks"] = locks
+    else:
+        locks = _mapping_dict(options.get("channel_format_locks"))
+        locks[str(int(target_id))] = lock
+        options["channel_format_locks"] = locks
+
+    await _save_options(interaction, options)
+    return options
+
+
+class ExactFontSelect(discord.ui.Select):
+    def __init__(self, scope: str, target_id: int, current: str) -> None:
+        options = [
+            discord.SelectOption(
+                label=font.replace("_", " ").title(),
+                value=font,
+                default=font == current,
+                description=("Plain searchable text" if font == "normal" else f"Use {font.replace('_', ' ')} font with fallback glyphs")[:100],
+            )
+            for font in EDITOR_FONT_IDS
+        ]
+        super().__init__(placeholder="Choose font", min_values=1, max_values=1, options=options[:25], row=0)
+        self.scope = scope
+        self.target_id = int(target_id)
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        await _update_exact_draft(interaction, scope=self.scope, target_id=self.target_id, patch={"font": self.values[0]})
+
+
+class ExactSeparatorSelect(discord.ui.Select):
+    def __init__(self, scope: str, target_id: int, current: str) -> None:
+        options = []
+        for sep_id in EDITOR_SEPARATOR_IDS:
+            spec = studio.SEPARATORS_BY_ID.get(sep_id)
+            if spec is None:
+                continue
+            options.append(
+                discord.SelectOption(
+                    label=f"{spec.label} ({sep_id})"[:100],
+                    value=sep_id,
+                    default=sep_id == current,
+                    description=f"Example: {studio.separator_preview(sep_id, emoji='🎮', name='gaming-news')}"[:100],
+                )
+            )
+        super().__init__(placeholder="Choose separator/layout", min_values=1, max_values=1, options=options[:25], row=1)
+        self.scope = scope
+        self.target_id = int(target_id)
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        await _update_exact_draft(interaction, scope=self.scope, target_id=self.target_id, patch={"separator_id": self.values[0]})
+
+
+class ExactFrameSelect(discord.ui.Select):
+    def __init__(self, scope: str, target_id: int, current: str) -> None:
+        options = [
+            discord.SelectOption(
+                label=frame.label[:100],
+                value=frame.id,
+                default=frame.id == current,
+                description=studio.category_frame_preview(frame.id, emoji="🎮", name="gaming")[:100],
+            )
+            for frame in studio.CATEGORY_FRAMES[:25]
+        ]
+        super().__init__(placeholder="Choose category frame", min_values=1, max_values=1, options=options, row=2)
+        self.scope = scope
+        self.target_id = int(target_id)
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        await _update_exact_draft(interaction, scope=self.scope, target_id=self.target_id, patch={"category_frame_id": self.values[0]})
+
+
+class ExactStrengthSelect(discord.ui.Select):
+    def __init__(self, scope: str, target_id: int, current: int) -> None:
+        labels = {
+            1: "1 Minimal",
+            2: "2 Clean",
+            3: "3 Category Style",
+            4: "4 Recommended",
+            5: "5 Full Theme",
+        }
+        options = [
+            discord.SelectOption(label=label, value=str(value), default=value == current)
+            for value, label in labels.items()
+        ]
+        super().__init__(placeholder="Choose styling strength", min_values=1, max_values=1, options=options, row=3)
+        self.scope = scope
+        self.target_id = int(target_id)
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        await _update_exact_draft(interaction, scope=self.scope, target_id=self.target_id, patch={"strength": _safe_int(self.values[0], 4)})
+
+
+class CustomEmojiModal(discord.ui.Modal, title="Set Custom Emoji"):
+    emoji = discord.ui.TextInput(
+        label="Emoji",
+        placeholder="Example: 🎮 — leave blank to clear",
+        required=False,
+        max_length=16,
+    )
+
+    def __init__(self, *, scope: str, target_id: int) -> None:
+        super().__init__()
+        self.scope = scope
+        self.target_id = int(target_id)
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        raw = _safe_str(self.emoji.value, "")
+        await _update_exact_draft(interaction, scope=self.scope, target_id=self.target_id, patch={"emoji_override": raw})
+
+
+async def _update_exact_draft(
+    interaction: discord.Interaction,
+    *,
+    scope: str,
+    target_id: int,
+    patch: Mapping[str, Any],
+) -> None:
+    if not await _require_design_permission(interaction):
+        return
+    guild = interaction.guild
+    assert guild is not None
+    key = _format_editor_key(int(guild.id), int(interaction.user.id), scope, int(target_id))
+    current = dict(_FORMAT_EDITOR_DRAFTS.get(key) or {})
+    if not current:
+        options = await _load_design_options(int(guild.id))
+        current = _initial_editor_lock(options, scope=scope, target_id=target_id)
+    current.update(dict(patch))
+    _FORMAT_EDITOR_DRAFTS[key] = current
+    await interaction.response.edit_message(
+        embed=_exact_format_embed(guild, scope=scope, target_id=target_id, lock=current),
+        view=ExactFormatEditorView(scope=scope, target_id=target_id),
+    )
+
+
+class ExactFormatEditorView(discord.ui.View):
+    def __init__(self, *, scope: str, target_id: int) -> None:
+        super().__init__(timeout=900)
+        self.scope = scope
+        self.target_id = int(target_id)
+
+    async def _ensure_selects(self, interaction: discord.Interaction) -> None:
+        # Not used directly. Selects are built in factory below.
+        pass
+
+    @discord.ui.button(label="Save Lock", emoji="✅", style=discord.ButtonStyle.success, custom_id="dank_design:exact_save", row=4)
+    async def save_lock(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        if not await _require_design_permission(interaction):
+            return
+        guild = interaction.guild
+        assert guild is not None
+        options = await _save_exact_lock(interaction, scope=self.scope, target_id=self.target_id)
+        counts = _lock_count(options)
+        key = _format_editor_key(int(guild.id), int(interaction.user.id), self.scope, self.target_id)
+        lock = dict(_FORMAT_EDITOR_DRAFTS.get(key) or {})
+        embed = _exact_format_embed(guild, scope=self.scope, target_id=self.target_id, lock=lock)
+        embed.title = "✅ Exact Format Lock Saved"
+        embed.add_field(
+            name="Saved locks",
+            value=f"Global: {counts['global']} • Categories: {counts['categories']} • Channels: {counts['channels']}",
+            inline=False,
+        )
+        await interaction.response.edit_message(embed=embed, view=ExactFormatEditorViewFactory(guild, self.scope, self.target_id, lock))
+
+    @discord.ui.button(label="Set Emoji", emoji="😀", style=discord.ButtonStyle.secondary, custom_id="dank_design:exact_emoji", row=4)
+    async def set_emoji(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        if not await _require_design_permission(interaction):
+            return
+        await interaction.response.send_modal(CustomEmojiModal(scope=self.scope, target_id=self.target_id))
+
+    @discord.ui.button(label="Back", emoji="⬅️", style=discord.ButtonStyle.secondary, custom_id="dank_design:exact_back", row=4)
+    async def back(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        if not await _require_design_permission(interaction):
+            return
+        guild = interaction.guild
+        assert guild is not None
+        if self.scope == "category":
+            category = guild.get_channel(self.target_id)
+            if isinstance(category, discord.CategoryChannel):
+                await interaction.response.edit_message(embed=_category_action_embed(category), view=CategoryEditorActionView(self.target_id))
+            else:
+                await interaction.response.edit_message(embed=_category_editor_embed(guild, page=0), view=CategoryEditorPickerView(guild, page=0))
+        else:
+            channel = guild.get_channel(self.target_id)
+            if channel is not None:
+                await interaction.response.edit_message(embed=_channel_action_embed(channel), view=ChannelEditorActionView(self.target_id))
+            else:
+                await interaction.response.edit_message(embed=_channel_editor_embed(guild, page=0), view=ChannelEditorPickerView(guild, page=0))
+
+
+def ExactFormatEditorViewFactory(guild: discord.Guild, scope: str, target_id: int, lock: Mapping[str, Any]) -> ExactFormatEditorView:
+    view = ExactFormatEditorView(scope=scope, target_id=target_id)
+    # Insert selects before buttons. Discord allows max 5 rows; four selects + row-4 buttons.
+    view.add_item(ExactFontSelect(scope, target_id, _safe_str(lock.get("font"), "normal")))
+    view.add_item(ExactSeparatorSelect(scope, target_id, _safe_str(lock.get("separator_id"), "bar_full")))
+    view.add_item(ExactFrameSelect(scope, target_id, _safe_str(lock.get("category_frame_id"), "line")))
+    view.add_item(ExactStrengthSelect(scope, target_id, _safe_int(lock.get("strength"), 4)))
+    return view
+
+
+
+# ---------------------------------------------------------------------------
 # Category / Channel Design Editor
 # Bot-owned picker. Do not use Discord ChannelSelect here because styled names
 # can be hard to search/select from mobile share/picker UI.
@@ -1208,6 +1568,10 @@ class CategoryEditorActionView(discord.ui.View):
         super().__init__(timeout=900)
         self.category_id = int(category_id)
 
+    @discord.ui.button(label="Edit Exact Format", emoji="🎛️", style=discord.ButtonStyle.primary, custom_id="dank_design:category_exact_format", row=0)
+    async def edit_exact_format(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        await _open_exact_format_editor(interaction, scope="category", target_id=self.category_id)
+
     @discord.ui.button(label="Lock Current Format Here", emoji="🔒", style=discord.ButtonStyle.success, custom_id="dank_design:category_lock_here", row=0)
     async def lock_here(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         if not await _require_design_permission(interaction):
@@ -1259,6 +1623,10 @@ class ChannelEditorActionView(discord.ui.View):
         super().__init__(timeout=900)
         self.channel_id = int(channel_id)
         self.category_id = int(category_id) if category_id is not None else None
+
+    @discord.ui.button(label="Edit Exact Format", emoji="🎛️", style=discord.ButtonStyle.primary, custom_id="dank_design:channel_exact_format", row=0)
+    async def edit_exact_format(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        await _open_exact_format_editor(interaction, scope="channel", target_id=self.channel_id)
 
     @discord.ui.button(label="Lock Current Format to This", emoji="🔒", style=discord.ButtonStyle.success, custom_id="dank_design:channel_lock_here", row=0)
     async def lock_here(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:

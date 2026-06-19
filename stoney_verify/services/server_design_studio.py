@@ -545,6 +545,7 @@ def build_styled_name(
     separator_id: str | None = None,
     category_frame_id: str | None = None,
     font: str | None = None,
+    emoji_override: str | None = None,
 ) -> DesignNameResult:
     before = safe_str(current_name)
     parsed = parse_channel_name(before, kind=kind)
@@ -576,7 +577,10 @@ def build_styled_name(
     )
     chosen_font = requested_font if use_font else "normal"
     name_text, substitutions = transform_text_safe(base, chosen_font, fallback_order=fallback_ladder(chosen_font))
-    emoji = suggested_icon(base, icon_pack=theme.icon_pack, existing=safe_str(parsed.get("emoji")), mode=icon_mode) if use_emoji else ""
+    if use_emoji and emoji_override is not None:
+        emoji = strip_invisible(safe_str(emoji_override))[:16]
+    else:
+        emoji = suggested_icon(base, icon_pack=theme.icon_pack, existing=safe_str(parsed.get("emoji")), mode=icon_mode) if use_emoji else ""
     sep_spec = SEPARATORS_BY_ID.get(separator_id or theme.channel_separator) or SEPARATORS_BY_ID["bar_full"]
     frame_spec = CATEGORY_FRAMES_BY_ID.get(category_frame_id or theme.category_frame) or CATEGORY_FRAMES_BY_ID["line"]
     ok, sep_warnings = validate_separator(sep_spec)
