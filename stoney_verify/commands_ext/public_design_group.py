@@ -17,8 +17,14 @@ def register_public_design_group_commands(bot: Any = None, tree: Any = None) -> 
     global _REGISTERED
     if _REGISTERED:
         return
+
+    # Load the strict layout consistency guard before the design command module
+    # builds previews. This makes missing/different separators count as real
+    # drift instead of being hidden by the smart font/base semantic skip.
+    from stoney_verify.startup_guards import server_design_strict_layout_guard as strict_layout
     from stoney_verify.startup_guards import server_design_studio_command_guard as design
 
+    strict_layout.apply()
     design.apply()
     _REGISTERED = True
     print("✅ public_design_group registered /dank design")
