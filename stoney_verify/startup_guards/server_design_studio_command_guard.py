@@ -9,7 +9,10 @@ archive settings, or category placement.
 """
 
 import asyncio
+import json
+import os
 import time
+from pathlib import Path
 from typing import Any, Mapping
 
 import discord
@@ -20,6 +23,13 @@ _PATCHED = False
 _PENDING: dict[str, dict[str, Any]] = {}
 _LAST_SNAPSHOTS: dict[str, list[dict[str, Any]]] = {}
 _LOCKS: dict[str, asyncio.Lock] = {}
+_ROLLBACK_LOCK = asyncio.Lock()
+ROLLBACK_FILE = Path(
+    os.getenv(
+        "STONEY_SERVER_DESIGN_ROLLBACK_FILE",
+        str(Path(os.getenv("STONEY_DATA_DIR", "data")) / "server_design_rollback_snapshots.json"),
+    )
+)
 _FORMAT_EDITOR_DRAFTS: dict[str, dict[str, Any]] = {}
 
 
@@ -56,6 +66,74 @@ def _lock_for(guild_id: int) -> asyncio.Lock:
         lock = asyncio.Lock()
         _LOCKS[key] = lock
     return lock
+
+
+def _load_rollback_store_unlocked() -> dict[str, Any]:
+    try:
+        if not ROLLBACK_FILE.exists():
+            return {}
+        data = json.loads(ROLLBACK_FILE.read_text())
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+def _save_rollback_store_unlocked(data: dict[str, Any]) -> None:
+    ROLLBACK_FILE.parent.mkdir(parents=True, exist_ok=True)
+    tmp = ROLLBACK_FILE.with_suffix(".tmp")
+    tmp.write_text(json.dumps(data, indent=2, sort_keys=True))
+    tmp.replace(ROLLBACK_FILE)
+
+
+async def _persist_rollback_snapshot(guild_id: int, snapshot: dict[str, Any]) -> None:
+    async with _ROLLBACK_LOCK:
+        data = _load_rollback_store_unlocked()
+        key = _guild_key(int(guild_id))
+        rows = data.get(key)
+        if not isinstance(rows, list):
+            rows = []
+        rows.append(dict(snapshot))
+        data[key] = rows[-10:]
+        _save_rollback_store_unlocked(data)
+
+
+async def _latest_rollback_snapshot(guild_id: int) -> dict[str, Any] | None:
+    key = _guild_key(int(guild_id))
+    memory_rows = _LAST_SNAPSHOTS.get(key) or []
+    if memory_rows:
+        latest = memory_rows[-1]
+        return dict(latest) if isinstance(latest, dict) else None
+
+    async with _ROLLBACK_LOCK:
+        data = _load_rollback_store_unlocked()
+        rows = data.get(key)
+        if not isinstance(rows, list) or not rows:
+            return None
+        latest = rows[-1]
+        return dict(latest) if isinstance(latest, dict) else None
+
+
+async def _pop_latest_rollback_snapshot(guild_id: int) -> dict[str, Any] | None:
+    key = _guild_key(int(guild_id))
+    popped: dict[str, Any] | None = None
+
+    memory_rows = _LAST_SNAPSHOTS.get(key) or []
+    if memory_rows:
+        latest = memory_rows.pop()
+        popped = dict(latest) if isinstance(latest, dict) else None
+
+    async with _ROLLBACK_LOCK:
+        data = _load_rollback_store_unlocked()
+        rows = data.get(key)
+        if isinstance(rows, list) and rows:
+            latest = rows.pop()
+            if popped is None and isinstance(latest, dict):
+                popped = dict(latest)
+            data[key] = rows[-10:]
+            _save_rollback_store_unlocked(data)
+
+    return popped
+
 
 
 def _kind(channel: Any) -> str:
@@ -1908,13 +1986,30 @@ class DesignDoctorView(discord.ui.View):
 
     @discord.ui.button(label="Find & Fix Inconsistencies", emoji="🧭", style=discord.ButtonStyle.success, custom_id="dank_design:doctor_consistency", row=0)
     async def consistency(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        if "DesignHomeView" not in globals():
-            return await interaction.response.send_message("Design view is not loaded yet.", ephemeral=True)
-        view = DesignHomeView({})
-        callback = getattr(view, "consistency_check", None)
-        if callback is None:
-            return await interaction.response.send_message("Consistency check is not installed yet.", ephemeral=True)
-        await callback.callback(interaction)  # type: ignore[attr-defined]
+        if not await _require_design_permission(interaction):
+            return
+        guild = interaction.guild
+        assert guild is not None
+
+        await interaction.response.defer(ephemeral=True, thinking=True)
+
+        options = await _load_design_options(int(guild.id))
+        items = await build_design_plan(guild, options)
+        key = _key(int(guild.id), int(interaction.user.id))
+        _PENDING[key] = {"created_at": time.time(), "items": items, "options": dict(options), "mode": "consistency_check"}
+
+        has_blockers = any(item.get("status") == "failed" for item in items)
+        has_changes = any(item.get("status") == "changed" for item in items)
+
+        if "_consistency_embed" in globals():
+            embed = _consistency_embed(guild, items, options)
+        else:
+            embed = _preview_embed(guild, items, title="🧭 Server Design Consistency Check")
+
+        await interaction.edit_original_response(
+            embed=embed,
+            view=DesignPreviewView(can_apply=not has_blockers and has_changes),
+        )
 
     @discord.ui.button(label="Category Editor", emoji="🗂️", style=discord.ButtonStyle.primary, custom_id="dank_design:doctor_category", row=1)
     async def category_editor(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
@@ -2070,8 +2165,10 @@ class DesignPreviewView(discord.ui.View):
                 except Exception as exc:
                     failed.append(f"`{current}`: {type(exc).__name__}")
         if snapshot:
-            _LAST_SNAPSHOTS.setdefault(_guild_key(int(guild.id)), []).append({"created_at": time.time(), "items": snapshot, "admin_id": str(int(interaction.user.id))})
-            _LAST_SNAPSHOTS[_guild_key(int(guild.id))] = _LAST_SNAPSHOTS[_guild_key(int(guild.id))][-5:]
+            snapshot_payload = {"created_at": time.time(), "items": snapshot, "admin_id": str(int(interaction.user.id))}
+            _LAST_SNAPSHOTS.setdefault(_guild_key(int(guild.id)), []).append(snapshot_payload)
+            _LAST_SNAPSHOTS[_guild_key(int(guild.id))] = _LAST_SNAPSHOTS[_guild_key(int(guild.id))][-10:]
+            await _persist_rollback_snapshot(int(guild.id), snapshot_payload)
         _PENDING.pop(key, None)
         mode = _safe_str(payload.get("mode"), "preview")
         complete_title = "✅ Design Inconsistencies Fixed" if mode == "consistency_check" else "✅ Server Design Apply Complete"
@@ -2123,11 +2220,10 @@ async def _open_rollback(interaction: discord.Interaction) -> None:
         return
     guild = interaction.guild
     assert guild is not None
-    snapshots = _LAST_SNAPSHOTS.get(_guild_key(int(guild.id))) or []
-    if not snapshots:
-        await interaction.response.send_message("No rollback snapshot is available for this server in the current bot session.", ephemeral=True)
+    latest = await _latest_rollback_snapshot(int(guild.id))
+    if not latest:
+        await interaction.response.send_message("No rollback snapshot is available for this server.", ephemeral=True)
         return
-    latest = snapshots[-1]
     items = list(latest.get("items") or [])
     preview = []
     for item in reversed(items[-10:]):
@@ -2152,11 +2248,10 @@ class RollbackConfirmView(discord.ui.View):
         if lock.locked():
             await interaction.response.send_message("⏳ A design job is already running for this server. Wait for it to finish.", ephemeral=True)
             return
-        snapshots = _LAST_SNAPSHOTS.get(_guild_key(int(guild.id))) or []
-        if not snapshots:
+        latest = await _latest_rollback_snapshot(int(guild.id))
+        if not latest:
             await interaction.response.send_message("No rollback snapshot found.", ephemeral=True)
             return
-        latest = snapshots[-1]
         items = list(latest.get("items") or [])
         await interaction.response.defer(ephemeral=True, thinking=False)
         reverted = 0
@@ -2179,7 +2274,7 @@ class RollbackConfirmView(discord.ui.View):
                     await asyncio.sleep(studio.DEFAULT_DELAY_SECONDS)
                 except Exception as exc:
                     failed.append(f"`{current}`: {type(exc).__name__}")
-        snapshots.pop()
+        await _pop_latest_rollback_snapshot(int(guild.id))
         embed = discord.Embed(title="↩️ Rollback Complete", description=f"Restored **{reverted}** item(s). Failed **{len(failed)}**.", color=discord.Color.green() if not failed else discord.Color.orange())
         if failed:
             embed.add_field(name="Skipped / Failed", value="\n".join(failed[:10])[:1024], inline=False)
