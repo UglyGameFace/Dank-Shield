@@ -2041,6 +2041,298 @@ class DesignDoctorView(discord.ui.View):
 
 
 
+# ---------------------------------------------------------------------------
+# Format Lock Manager
+# ---------------------------------------------------------------------------
+
+LOCK_MANAGER_PAGE_SIZE = 8
+
+
+def _lock_manager_rows(guild: discord.Guild, options: Mapping[str, Any]) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+
+    global_lock = _mapping_dict(options.get("format_lock_global")) if "_mapping_dict" in globals() else {}
+    if global_lock.get("enabled"):
+        rows.append({
+            "scope": "global",
+            "target_id": "0",
+            "label": "Global default format",
+            "exists": True,
+            "font": _safe_str(global_lock.get("font"), "normal"),
+            "separator_id": _safe_str(global_lock.get("separator_id"), ""),
+            "strength": _safe_int(global_lock.get("strength"), 4),
+        })
+
+    category_locks = _mapping_dict(options.get("category_format_locks")) if "_mapping_dict" in globals() else {}
+    for raw_id, lock in sorted(category_locks.items(), key=lambda pair: str(pair[0])):
+        cid = _safe_int(raw_id, 0)
+        channel = guild.get_channel(cid)
+        label = _safe_str(getattr(channel, "name", ""), f"Deleted category {cid}")
+        lock_map = _mapping_dict(lock)
+        rows.append({
+            "scope": "category",
+            "target_id": str(cid),
+            "label": label,
+            "exists": isinstance(channel, discord.CategoryChannel),
+            "font": _safe_str(lock_map.get("font"), "normal"),
+            "separator_id": _safe_str(lock_map.get("separator_id"), ""),
+            "strength": _safe_int(lock_map.get("strength"), 4),
+        })
+
+    channel_locks = _mapping_dict(options.get("channel_format_locks")) if "_mapping_dict" in globals() else {}
+    for raw_id, lock in sorted(channel_locks.items(), key=lambda pair: str(pair[0])):
+        cid = _safe_int(raw_id, 0)
+        channel = guild.get_channel(cid)
+        label = _safe_str(getattr(channel, "name", ""), f"Deleted channel {cid}")
+        lock_map = _mapping_dict(lock)
+        rows.append({
+            "scope": "channel",
+            "target_id": str(cid),
+            "label": label,
+            "exists": channel is not None,
+            "font": _safe_str(lock_map.get("font"), "normal"),
+            "separator_id": _safe_str(lock_map.get("separator_id"), ""),
+            "strength": _safe_int(lock_map.get("strength"), 4),
+        })
+
+    return rows
+
+
+def _format_lock_manager_embed(guild: discord.Guild, options: Mapping[str, Any], *, page: int = 0) -> discord.Embed:
+    rows = _lock_manager_rows(guild, options)
+    total_pages = max(1, (len(rows) + LOCK_MANAGER_PAGE_SIZE - 1) // LOCK_MANAGER_PAGE_SIZE)
+    page = max(0, min(int(page), total_pages - 1))
+    start = page * LOCK_MANAGER_PAGE_SIZE
+    chunk = rows[start:start + LOCK_MANAGER_PAGE_SIZE]
+
+    stale_count = sum(1 for row in rows if not row.get("exists"))
+    embed = discord.Embed(
+        title="🔐 Format Lock Manager",
+        description=(
+            "Review saved global/category/channel locks, remove individual overrides, or clean stale locks."
+        ),
+        color=discord.Color.blurple() if not stale_count else discord.Color.orange(),
+    )
+
+    if not rows:
+        embed.add_field(
+            name="Saved locks",
+            value="No format locks saved yet. Use **Category Editor** or **Channel Editor** to create locks.",
+            inline=False,
+        )
+    else:
+        lines: list[str] = []
+        for index, row in enumerate(chunk, start=1):
+            exists = "✅" if row.get("exists") else "⚠️"
+            scope = _safe_str(row.get("scope"), "lock").title()
+            label = _safe_str(row.get("label"), "Unknown")
+            font = _safe_str(row.get("font"), "normal").replace("_", " ").title()
+            sep = _safe_str(row.get("separator_id"), "none").replace("_", " ").title()
+            strength = _safe_int(row.get("strength"), 4)
+            lines.append(f"**{index}.** {exists} **{scope}** `{label}` · Font: `{font}` · Sep: `{sep}` · Strength: `{strength}`")
+        embed.add_field(name=f"Locks page {page + 1}/{total_pages}", value="\\n".join(lines)[:1024], inline=False)
+
+    embed.add_field(
+        name="Priority order",
+        value="Protected item → Channel override → Category lock → Global lock → Auto theme",
+        inline=False,
+    )
+
+    if stale_count:
+        embed.add_field(
+            name="Stale locks found",
+            value=f"**{stale_count}** saved lock(s) point to deleted/missing channels or categories.",
+            inline=False,
+        )
+
+    embed.set_footer(text="Use the numbered buttons to remove one lock, or clean stale locks only.")
+    return embed
+
+
+async def _remove_format_lock(interaction: discord.Interaction, *, scope: str, target_id: int) -> dict[str, Any]:
+    guild = interaction.guild
+    assert guild is not None
+
+    options = await _load_design_options(int(guild.id))
+    scope = _safe_str(scope).lower()
+
+    if scope == "global":
+        options["format_lock_global"] = {}
+    elif scope == "category":
+        locks = _mapping_dict(options.get("category_format_locks"))
+        locks.pop(str(int(target_id)), None)
+        options["category_format_locks"] = locks
+    elif scope == "channel":
+        locks = _mapping_dict(options.get("channel_format_locks"))
+        locks.pop(str(int(target_id)), None)
+        options["channel_format_locks"] = locks
+
+    await _save_options(interaction, options)
+    return options
+
+
+async def _clean_stale_format_locks(interaction: discord.Interaction) -> tuple[dict[str, Any], int]:
+    guild = interaction.guild
+    assert guild is not None
+
+    options = await _load_design_options(int(guild.id))
+    removed = 0
+
+    category_locks = _mapping_dict(options.get("category_format_locks"))
+    for raw_id in list(category_locks.keys()):
+        channel = guild.get_channel(_safe_int(raw_id, 0))
+        if not isinstance(channel, discord.CategoryChannel):
+            category_locks.pop(raw_id, None)
+            removed += 1
+    options["category_format_locks"] = category_locks
+
+    channel_locks = _mapping_dict(options.get("channel_format_locks"))
+    for raw_id in list(channel_locks.keys()):
+        channel = guild.get_channel(_safe_int(raw_id, 0))
+        if channel is None:
+            channel_locks.pop(raw_id, None)
+            removed += 1
+    options["channel_format_locks"] = channel_locks
+
+    await _save_options(interaction, options)
+    return options, removed
+
+
+class LockManagerButton(discord.ui.Button):
+    def __init__(self, *, row: int = 4) -> None:
+        super().__init__(
+            label="Manage Locks",
+            emoji="🔐",
+            style=discord.ButtonStyle.secondary,
+            custom_id="dank_design:manage_locks",
+            row=row,
+        )
+
+    async def callback(self, interaction: discord.Interaction) -> None:  # type: ignore[override]
+        if not await _require_design_permission(interaction):
+            return
+        guild = interaction.guild
+        assert guild is not None
+        options = await _load_design_options(int(guild.id))
+        await interaction.response.edit_message(
+            embed=_format_lock_manager_embed(guild, options, page=0),
+            view=LockManagerView(guild, options, page=0),
+        )
+
+
+class LockRemoveButton(discord.ui.Button):
+    def __init__(self, row_data: Mapping[str, Any], *, display_index: int, row: int) -> None:
+        scope = _safe_str(row_data.get("scope"), "lock")
+        label = _safe_str(row_data.get("label"), "Unknown")
+        emoji = {"global": "🌐", "category": "🗂️", "channel": "#️⃣"}.get(scope, "🔒")
+        super().__init__(
+            label=f"Remove {display_index}. {_short_label(label, 46) if '_short_label' in globals() else label[:46]}",
+            emoji=emoji,
+            style=discord.ButtonStyle.danger if not row_data.get("exists") else discord.ButtonStyle.secondary,
+            custom_id=f"dank_design:remove_lock:{scope}:{row_data.get('target_id')}",
+            row=row,
+        )
+        self.scope = scope
+        self.target_id = _safe_int(row_data.get("target_id"), 0)
+
+    async def callback(self, interaction: discord.Interaction) -> None:  # type: ignore[override]
+        if not await _require_design_permission(interaction):
+            return
+        guild = interaction.guild
+        assert guild is not None
+        options = await _remove_format_lock(interaction, scope=self.scope, target_id=self.target_id)
+        embed = _format_lock_manager_embed(guild, options, page=0)
+        embed.title = "🗑️ Format Lock Removed"
+        await interaction.response.edit_message(embed=embed, view=LockManagerView(guild, options, page=0))
+
+
+class LockManagerPageButton(discord.ui.Button):
+    def __init__(self, page: int, *, label: str, emoji: str, row: int) -> None:
+        super().__init__(
+            label=label,
+            emoji=emoji,
+            style=discord.ButtonStyle.secondary,
+            custom_id=f"dank_design:lock_manager_page:{page}",
+            row=row,
+        )
+        self.page = int(page)
+
+    async def callback(self, interaction: discord.Interaction) -> None:  # type: ignore[override]
+        if not await _require_design_permission(interaction):
+            return
+        guild = interaction.guild
+        assert guild is not None
+        options = await _load_design_options(int(guild.id))
+        await interaction.response.edit_message(
+            embed=_format_lock_manager_embed(guild, options, page=self.page),
+            view=LockManagerView(guild, options, page=self.page),
+        )
+
+
+class LockManagerView(discord.ui.View):
+    def __init__(self, guild: discord.Guild, options: Mapping[str, Any], *, page: int = 0) -> None:
+        super().__init__(timeout=900)
+
+        rows = _lock_manager_rows(guild, options)
+        total_pages = max(1, (len(rows) + LOCK_MANAGER_PAGE_SIZE - 1) // LOCK_MANAGER_PAGE_SIZE)
+        page = max(0, min(int(page), total_pages - 1))
+        start = page * LOCK_MANAGER_PAGE_SIZE
+        chunk = rows[start:start + LOCK_MANAGER_PAGE_SIZE]
+
+        for offset, row_data in enumerate(chunk):
+            self.add_item(LockRemoveButton(row_data, display_index=offset + 1, row=offset // 2))
+
+        nav_row = 4
+        if page > 0:
+            self.add_item(LockManagerPageButton(page - 1, label="Prev", emoji="⬅️", row=nav_row))
+        if page < total_pages - 1:
+            self.add_item(LockManagerPageButton(page + 1, label="Next", emoji="➡️", row=nav_row))
+        self.add_item(CleanStaleLocksButton(row=nav_row))
+        self.add_item(BackToLocksOrDesignButton(row=nav_row))
+
+
+class CleanStaleLocksButton(discord.ui.Button):
+    def __init__(self, *, row: int) -> None:
+        super().__init__(
+            label="Clean Stale",
+            emoji="🧹",
+            style=discord.ButtonStyle.secondary,
+            custom_id="dank_design:clean_stale_locks",
+            row=row,
+        )
+
+    async def callback(self, interaction: discord.Interaction) -> None:  # type: ignore[override]
+        if not await _require_design_permission(interaction):
+            return
+        guild = interaction.guild
+        assert guild is not None
+        options, removed = await _clean_stale_format_locks(interaction)
+        embed = _format_lock_manager_embed(guild, options, page=0)
+        embed.title = "🧹 Stale Format Locks Cleaned"
+        embed.description = f"Removed **{removed}** stale lock(s)."
+        await interaction.response.edit_message(embed=embed, view=LockManagerView(guild, options, page=0))
+
+
+class BackToLocksOrDesignButton(discord.ui.Button):
+    def __init__(self, *, row: int) -> None:
+        super().__init__(
+            label="Back",
+            emoji="⬅️",
+            style=discord.ButtonStyle.secondary,
+            custom_id="dank_design:locks_manager_back",
+            row=row,
+        )
+
+    async def callback(self, interaction: discord.Interaction) -> None:  # type: ignore[override]
+        if not await _require_design_permission(interaction):
+            return
+        guild = interaction.guild
+        assert guild is not None
+        options = await _load_design_options(int(guild.id))
+        await interaction.response.edit_message(embed=_format_locks_embed(guild, options), view=FormatLocksView() if "FormatLocksView" in globals() else DesignHomeView(options))
+
+
+
 
 class DesignHomeView(discord.ui.View):
     def __init__(self, options: Mapping[str, Any] | None = None) -> None:
@@ -2051,6 +2343,8 @@ class DesignHomeView(discord.ui.View):
         existing_ids = {str(getattr(child, "custom_id", "")) for child in getattr(self, "children", []) or []}
         if "dank_design:doctor" not in existing_ids:
             self.add_item(DesignDoctorButton(row=4))
+        if "dank_design:manage_locks" not in existing_ids:
+            self.add_item(LockManagerButton(row=4))
         existing_ids = {str(getattr(child, "custom_id", "")) for child in getattr(self, "children", []) or []}
         if "dank_design:category_editor" not in existing_ids:
             self.add_item(DesignCategoryEditorButton(row=3))
