@@ -259,6 +259,7 @@ def _current_format_lock(options: Mapping[str, Any], *, scope: str = "global") -
         "separator_id": _safe_str(getattr(theme, "channel_separator", "bar_full"), "bar_full"),
         "category_frame_id": _safe_str(getattr(theme, "category_frame", "line"), "line"),
         "emoji_override": _safe_str(options.get("emoji_override"), ""),
+        "exact_match": bool(options.get("exact_match", False)),
         "icon_mode": _safe_str(options.get("icon_mode"), "replace_missing"),
         "locked_at": _utc_iso_design(),
     }
@@ -316,7 +317,7 @@ def _effective_format_options(
         scope = "global"
 
     if chosen:
-        for key in ("theme_id", "strength", "icon_mode", "font", "separator_id", "category_frame_id", "emoji_override"):
+        for key in ("theme_id", "strength", "icon_mode", "font", "separator_id", "category_frame_id", "emoji_override", "exact_match"):
             if chosen.get(key) is not None:
                 effective[key] = chosen.get(key)
         effective["__format_lock_scope"] = scope
@@ -448,6 +449,7 @@ async def build_design_plan(guild: discord.Guild, options: Mapping[str, Any]) ->
             category_frame_id=_safe_str(effective_options.get("category_frame_id")) or None,
             font=_safe_str(effective_options.get("font")) or None,
             emoji_override=_safe_str(effective_options.get("emoji_override")) or None,
+            exact_match=bool(effective_options.get("exact_match", False)),
         )
         item = result.to_plan_item(channel_id=getattr(channel, "id", ""), category_id=getattr(parent, "id", ""))
         item["kind"] = kind
@@ -549,8 +551,15 @@ def _preview_embed(guild: discord.Guild, items: list[dict[str, Any]], *, title: 
         inline=True,
     )
 
-    changed_lines = studio.preview_lines(items, filter_mode="changed", limit=12)
-    if changed_lines == ["No matching preview rows."]:
+    changed_items = [item for item in items if item.get("status") == "changed"]
+    changed_lines = []
+    for item in changed_items[:12]:
+        before = _safe_str(item.get("before"))
+        after = _safe_str(item.get("after"))
+        scope = _safe_str(item.get("format_lock_scope"), "auto")
+        changed_lines.append(f"✅ `{before}` → `{after}` · `{scope}`"[:240])
+
+    if not changed_lines:
         changed_text = "No rename changes are needed for this draft."
     else:
         changed_text = "\n".join(changed_lines)[:1024]
@@ -571,12 +580,29 @@ def _preview_embed(guild: discord.Guild, items: list[dict[str, Any]], *, title: 
         embed.add_field(name="Must Fix Before Apply", value="\n".join(failed_lines)[:1024], inline=False)
 
     if summary["warnings"] and not has_failures:
+        warning_kinds = []
+        seen_warning_kinds = set()
+        for item in items:
+            for warning in list(item.get("warnings") or []):
+                text = _safe_str(warning)
+                if not text:
+                    continue
+                if "Decorative font" in text:
+                    label = "Decorative font readability note"
+                elif "fallback glyph" in text or "Auto-Safe Transform" in text:
+                    label = "Unsupported glyph fallback note"
+                elif "Already matches" in text:
+                    label = "Already styled skip note"
+                elif "Safe skip" in text:
+                    label = "Protected safe-skip note"
+                else:
+                    label = text[:80]
+                if label not in seen_warning_kinds:
+                    seen_warning_kinds.add(label)
+                    warning_kinds.append(f"• {label}")
         embed.add_field(
             name="Notes",
-            value=(
-                "Decorative fonts and fallback glyphs are treated as safe notes, not blockers. "
-                "The preview above is still the final rename output."
-            ),
+            value=("\\n".join(warning_kinds[:6]) if warning_kinds else "Safe notes only; no blockers.")[:1024],
             inline=False,
         )
 
@@ -1010,7 +1036,8 @@ def _exact_format_embed(guild: discord.Guild, *, scope: str, target_id: int, loc
             f"Category frame: **{frame.replace('_', ' ').title()}**\\n"
             f"Strength: **{strength}/5**\\n"
             f"Icon mode: **{icon_mode.replace('_', ' ').title()}**\\n"
-            f"Custom emoji: **{emoji_override or 'None'}**"
+            f"Custom emoji: **{emoji_override or 'None'}**\\n"
+            f"Preview mode: **{'Exact Enforce' if bool(lock.get('exact_match', False)) else 'Smart Fix'}**"
         ),
         inline=False,
     )
@@ -1048,6 +1075,7 @@ def _exact_format_sample_lines(guild: discord.Guild, *, scope: str, target_id: i
                 category_frame_id=_safe_str(lock.get("category_frame_id")) or None,
                 font=_safe_str(lock.get("font")) or None,
                 emoji_override=_safe_str(lock.get("emoji_override")) or None,
+                exact_match=bool(lock.get("exact_match", False)),
             )
             lines.append(f"`{result.before}` → `{result.after}`")
         except Exception as exc:
@@ -1233,6 +1261,24 @@ class ExactFormatEditorView(discord.ui.View):
             inline=False,
         )
         await interaction.response.edit_message(embed=embed, view=ExactFormatEditorViewFactory(guild, self.scope, self.target_id, lock))
+
+    @discord.ui.button(label="Toggle Smart/Exact", emoji="🎯", style=discord.ButtonStyle.secondary, custom_id="dank_design:exact_toggle_mode", row=4)
+    async def toggle_mode(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        if not await _require_design_permission(interaction):
+            return
+        guild = interaction.guild
+        assert guild is not None
+        key = _format_editor_key(int(guild.id), int(interaction.user.id), self.scope, self.target_id)
+        current = dict(_FORMAT_EDITOR_DRAFTS.get(key) or {})
+        if not current:
+            options = await _load_design_options(int(guild.id))
+            current = _initial_editor_lock(options, scope=self.scope, target_id=self.target_id)
+        current["exact_match"] = not bool(current.get("exact_match", False))
+        _FORMAT_EDITOR_DRAFTS[key] = current
+        await interaction.response.edit_message(
+            embed=_exact_format_embed(guild, scope=self.scope, target_id=self.target_id, lock=current),
+            view=ExactFormatEditorViewFactory(guild, self.scope, self.target_id, current),
+        )
 
     @discord.ui.button(label="Set Emoji", emoji="😀", style=discord.ButtonStyle.secondary, custom_id="dank_design:exact_emoji", row=4)
     async def set_emoji(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:

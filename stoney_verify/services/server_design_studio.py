@@ -546,6 +546,7 @@ def build_styled_name(
     category_frame_id: str | None = None,
     font: str | None = None,
     emoji_override: str | None = None,
+    exact_match: bool = False,
 ) -> DesignNameResult:
     before = safe_str(current_name)
     parsed = parse_channel_name(before, kind=kind)
@@ -613,6 +614,7 @@ def build_styled_name(
         result.after
         and not result.blockers
         and result.after != before
+        and not bool(exact_match)
         and _already_semantically_matches_design(before, base=base, font=chosen_font, expected_after=result.after)
     ):
         result.after = before
