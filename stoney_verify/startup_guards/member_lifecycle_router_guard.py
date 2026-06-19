@@ -291,6 +291,7 @@ def _avatar_url(member: discord.Member) -> str:
 
 async def _send_public_join(member: discord.Member, channel: Optional[discord.TextChannel]) -> None:
     if not _bot_can_send(channel):
+        _log(f"public join skipped guild={member.guild.id} member={member.id}: target missing or not writable")
         return
 
     embed = discord.Embed(
@@ -308,6 +309,7 @@ async def _send_public_join(member: discord.Member, channel: Optional[discord.Te
 
 async def _send_public_leave(member: discord.Member, channel: Optional[discord.TextChannel]) -> None:
     if not _bot_can_send(channel):
+        _log(f"public leave skipped guild={member.guild.id} member={member.id}: join/leave target missing or not writable")
         return
 
     embed = discord.Embed(
@@ -389,10 +391,17 @@ PUBLIC_WELCOME_KEYS = (
 )
 
 JOIN_LEAVE_KEYS = (
+    # New explicit names.
     "join_leave_log_channel_id",
     "member_join_leave_log_channel_id",
-    "welcome_exit_channel_id",
     "member_lifecycle_log_channel_id",
+
+    # Legacy/setup aliases used by older setup flows and setup health.
+    "join_log_channel_id",
+    "joinlog_channel_id",
+
+    # Friendly names used by some setup templates.
+    "welcome_exit_channel_id",
     "leave_channel_id",
 )
 
@@ -416,12 +425,26 @@ async def _join_listener(member: discord.Member) -> None:
         join_leave_channel = _resolve_channel(guild, cfg, JOIN_LEAVE_KEYS)
         staff_channel = _resolve_channel(guild, cfg, STAFF_AUDIT_KEYS)
 
-        # Public join goes to public welcome; if unset, fallback to join/leave.
-        public_target = public_channel or join_leave_channel
+        # Public welcome and join/leave logs are separate products.
+        # If both are configured, send the friendly welcome to public welcome
+        # and a public-safe join card to join/leave-log too. If only join/leave
+        # is configured, it still receives the join.
         invite = await _detect_invite(member)
 
-        await _send_public_join(member, public_target)
-        await _send_staff_join_audit(member, staff_channel, public_target, invite)
+        public_targets: list[discord.TextChannel] = []
+        if isinstance(public_channel, discord.TextChannel):
+            public_targets.append(public_channel)
+        if isinstance(join_leave_channel, discord.TextChannel) and all(int(join_leave_channel.id) != int(ch.id) for ch in public_targets):
+            public_targets.append(join_leave_channel)
+
+        if not public_targets and isinstance(join_leave_channel, discord.TextChannel):
+            public_targets.append(join_leave_channel)
+
+        for target in public_targets:
+            await _send_public_join(member, target)
+
+        audit_public_channel = public_channel or join_leave_channel
+        await _send_staff_join_audit(member, staff_channel, audit_public_channel, invite)
     except Exception as exc:
         _log(f"join failed guild={getattr(member.guild, 'id', 'unknown')} member={getattr(member, 'id', 'unknown')}: {type(exc).__name__}: {exc}")
 
@@ -528,8 +551,14 @@ async def _member_logs_command(
             payload["welcome_channel_id"] = str(public_welcome.id)
 
         if join_leave_log is not None:
+            # Write all aliases so every setup/read path agrees.
             payload["join_leave_log_channel_id"] = str(join_leave_log.id)
+            payload["member_join_leave_log_channel_id"] = str(join_leave_log.id)
             payload["member_lifecycle_log_channel_id"] = str(join_leave_log.id)
+            payload["join_log_channel_id"] = str(join_leave_log.id)
+            payload["joinlog_channel_id"] = str(join_leave_log.id)
+            payload["welcome_exit_channel_id"] = str(join_leave_log.id)
+            payload["leave_channel_id"] = str(join_leave_log.id)
 
         if staff_audit_log is not None:
             payload["staff_join_audit_channel_id"] = str(staff_audit_log.id)
