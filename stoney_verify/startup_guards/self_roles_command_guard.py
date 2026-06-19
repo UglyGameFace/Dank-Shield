@@ -16,6 +16,9 @@ def apply() -> bool:
             commands_ext._ALLOWED_STONEY_CHILDREN = allowed
 
         from stoney_verify.commands_ext import public_self_roles_group
+        from stoney_verify.startup_guards import profile_terms_newline_guard
+
+        profile_terms_newline_guard.apply()
 
         bot = None
         try:
