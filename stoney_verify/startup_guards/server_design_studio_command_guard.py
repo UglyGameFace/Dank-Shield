@@ -565,36 +565,47 @@ def _home_embed(guild: discord.Guild, options: Mapping[str, Any] | None = None) 
 
 
 
-def _preview_embed(guild: discord.Guild, items: list[dict[str, Any]], *, title: str = "👁 Server Design Preview") -> discord.Embed:
+def _preview_embed(guild: discord.Guild, items: list[dict[str, Any]], *, title: str = "👁️ Server Design Preview") -> discord.Embed:
     summary = studio.summarize_plan(items)
     score = studio.design_score(items)
     has_failures = bool(summary["failed"])
+    has_changes = bool(summary["changed"])
+
+    if has_failures:
+        status_line = "⚠️ Review the blockers below before you can apply."
+        color = discord.Color.orange()
+    elif has_changes:
+        status_line = "✅ Ready. Review the name changes, then press **Apply Reviewed Changes**."
+        color = discord.Color.green()
+    else:
+        status_line = "✅ Everything already matches. No rename is needed."
+        color = discord.Color.green()
 
     embed = discord.Embed(
         title=title,
         description=(
-            "Nothing has been changed yet. This preview shows the actual final names that will be applied.\n\n"
-            "Safe skips are intentionally left alone and do not block Apply."
+            "Nothing changed yet. This is a review screen.\n"
+            f"{status_line}"
         ),
-        color=discord.Color.red() if has_failures else discord.Color.green(),
+        color=color,
     )
 
     embed.add_field(
-        name="Plan",
+        name="Decision summary",
         value=(
-            f"Ready changes: **{summary['changed']}**\n"
-            f"Safe skips: **{summary['protected']}**\n"
-            f"Must fix: **{summary['failed']}**\n"
+            f"Ready to rename: **{summary['changed']}**\n"
+            f"Protected/skipped: **{summary['protected']}**\n"
+            f"Needs attention: **{summary['failed']}**\n"
             f"Notes: **{summary['warnings']}**"
         ),
         inline=True,
     )
     embed.add_field(
-        name="Design Score",
+        name="Mobile/accessibility check",
         value=(
             f"Readability: **{score['readability']}/100**\n"
-            f"Mobile: **{score['mobile_fit']}/100**\n"
-            f"Clutter: **{score['clutter_risk']}**\n"
+            f"Mobile fit: **{score['mobile_fit']}/100**\n"
+            f"Clutter risk: **{score['clutter_risk']}**\n"
             f"Accessibility: **{score['accessibility']}**"
         ),
         inline=True,
@@ -602,30 +613,34 @@ def _preview_embed(guild: discord.Guild, items: list[dict[str, Any]], *, title: 
 
     changed_items = [item for item in items if item.get("status") == "changed"]
     changed_lines = []
-    for item in changed_items[:12]:
+    for item in changed_items[:10]:
         before = _safe_str(item.get("before"))
         after = _safe_str(item.get("after"))
-        changed_lines.append(f"✅ `{before}` → `{after}`"[:240])
+        changed_lines.append(f"• `{before}`\n  → `{after}`"[:240])
 
-    if not changed_lines:
-        changed_text = "No rename changes are needed for this draft."
-    else:
-        changed_text = "\n".join(changed_lines)[:1024]
-    embed.add_field(name="Will Change", value=changed_text, inline=False)
+    embed.add_field(
+        name="Before → After",
+        value=("\n".join(changed_lines) if changed_lines else "No rename changes are needed.")[:1024],
+        inline=False,
+    )
 
     if summary["protected"]:
         embed.add_field(
-            name="Safe Skips",
+            name="Skipped on purpose",
             value=(
-                f"**{summary['protected']}** ticket/log/system item(s) are protected by default. "
-                "They are not errors and they will not be renamed unless you later override that policy."
+                f"**{summary['protected']}** protected ticket/log/system item(s) will stay unchanged. "
+                "They are skipped by design, not broken."
             ),
             inline=False,
         )
 
     failed_lines = studio.preview_lines(items, filter_mode="failed", limit=5)
     if failed_lines and failed_lines != ["No matching preview rows."]:
-        embed.add_field(name="Must Fix Before Apply", value="\n".join(failed_lines)[:1024], inline=False)
+        embed.add_field(
+            name="Needs attention before Apply",
+            value="\n".join(failed_lines)[:1024],
+            inline=False,
+        )
 
     if summary["warnings"] and not has_failures:
         warning_kinds = []
@@ -636,25 +651,25 @@ def _preview_embed(guild: discord.Guild, items: list[dict[str, Any]], *, title: 
                 if not text:
                     continue
                 if "Decorative font" in text:
-                    label = "Decorative font readability note"
+                    label = "Decorative font may be harder to read for some users"
                 elif "fallback glyph" in text or "Auto-Safe Transform" in text:
-                    label = "Unsupported glyph fallback note"
+                    label = "Some letters used safe fallback styling"
                 elif "Already matches" in text:
-                    label = "Already styled skip note"
+                    label = "Some items already matched and were left alone"
                 elif "Safe skip" in text:
-                    label = "Protected safe-skip note"
+                    label = "Protected items were skipped"
                 else:
                     label = text[:80]
                 if label not in seen_warning_kinds:
                     seen_warning_kinds.add(label)
                     warning_kinds.append(f"• {label}")
         embed.add_field(
-            name="Notes",
-            value=("\n".join(warning_kinds[:6]) if warning_kinds else "Safe notes only; no blockers.")[:1024],
+            name="Plain-English notes",
+            value=("\n".join(warning_kinds[:6]) if warning_kinds else "No blockers.")[:1024],
             inline=False,
         )
 
-    embed.set_footer(text="Apply is disabled only for real failures. Font fallback notes and safe skips do not block Apply.")
+    embed.set_footer(text="Apply button appears only after preview • Rollback snapshot is saved after Apply")
     return _clean_design_embed(embed)
 
 
@@ -1075,7 +1090,7 @@ def _exact_format_embed(guild: discord.Guild, *, scope: str, target_id: int, loc
             "**1. Choose** font, separator/layout, frame, and strength.\n"
             "**2. Optional:** set an emoji.\n"
             "**3. Press Save & Preview.**\n"
-            "**4. Press Apply These Changes** on the preview."
+            "**4. Press Apply Reviewed Changes** on the preview."
         ),
         color=discord.Color.blurple(),
     )
@@ -3169,7 +3184,7 @@ def _start_here_embed() -> discord.Embed:
             "**1.** Pick a theme and strength.\n"
             "**2.** Press **Preview Design**.\n"
             "**3.** Review the preview.\n"
-            "**4.** Press **Apply These Changes** on the preview."
+            "**4.** Press **Apply Reviewed Changes** on the preview."
         ),
         inline=False,
     )
@@ -3178,7 +3193,7 @@ def _start_here_embed() -> discord.Embed:
         value=(
             "**1.** Press **Fix Inconsistencies**.\n"
             "**2.** Review what drifted.\n"
-            "**3.** Press **Apply These Changes**."
+            "**3.** Press **Apply Reviewed Changes**."
         ),
         inline=False,
     )
@@ -3190,11 +3205,11 @@ def _start_here_embed() -> discord.Embed:
             "**3.** Press **Edit Exact Format**.\n"
             "**4.** Choose font/separator/frame/strength.\n"
             "**5.** Press **Save & Preview**.\n"
-            "**6.** Press **Apply These Changes**."
+            "**6.** Press **Apply Reviewed Changes**."
         ),
         inline=False,
     )
-    embed.set_footer(text="Nothing applies until you reach a preview and press Apply These Changes.")
+    embed.set_footer(text="Nothing applies until you reach a preview and press Apply Reviewed Changes.")
     return _clean_design_embed(embed)
 
 
@@ -3258,7 +3273,7 @@ def _editors_locks_embed(guild: discord.Guild, options: Mapping[str, Any]) -> di
             "2. Pick an item using Dank Shield buttons.\n"
             "3. Press **Edit Exact Format**.\n"
             "4. Press **Save & Preview**.\n"
-            "5. Press **Apply These Changes**."
+            "5. Press **Apply Reviewed Changes**."
         ),
         inline=False,
     )
@@ -3389,7 +3404,7 @@ def _design_help_embed() -> discord.Embed:
         name="How to apply changes",
         value=(
             "Changes are never applied from the home screen.\n"
-            "**Preview Server** or **Save & Preview** first, then press **Apply These Changes**."
+            "**Preview Server** or **Save & Preview** first, then press **Apply Reviewed Changes**."
         ),
         inline=False,
     )
@@ -3599,7 +3614,7 @@ class DesignPreviewView(discord.ui.View):
         super().__init__(timeout=900)
         self.apply.disabled = not can_apply
 
-    @discord.ui.button(label="Apply These Changes", emoji="✅", style=discord.ButtonStyle.danger, custom_id="dank_design:apply", row=0)
+    @discord.ui.button(label="Apply Reviewed Changes", emoji="✅", style=discord.ButtonStyle.success, custom_id="dank_design:apply", row=0)
     async def apply(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         if not await _require_design_permission(interaction):
             return
