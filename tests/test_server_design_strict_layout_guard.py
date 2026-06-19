@@ -57,3 +57,19 @@ def test_strict_layout_guard_allows_exact_separator_match_to_remain_unchanged():
 
     assert result.status == "unchanged"
     assert result.after == current
+
+
+def test_strict_layout_guard_allows_visual_log_channel_repair():
+    server_design_strict_layout_guard.apply()
+
+    result = studio.build_styled_name(
+        "mod-log",
+        theme_id="gothic_clean",
+        strength=5,
+        separator_id="bar_full",
+        font="fraktur",
+    )
+
+    assert not result.protected
+    assert result.status == "changed"
+    assert "｜" in result.after
