@@ -18,17 +18,16 @@ def register_public_design_group_commands(bot: Any = None, tree: Any = None) -> 
     if _REGISTERED:
         return
 
-    # Load the strict layout consistency guard before the design command module
-    # builds previews. Then run it again after importing the command module so it
-    # can normalize already-saved guild format locks as they are loaded.
     from stoney_verify.startup_guards import server_design_strict_layout_guard as strict_layout
 
     strict_layout.apply()
 
     from stoney_verify.startup_guards import server_design_studio_command_guard as design
+    from stoney_verify.startup_guards import server_design_majority_layout_guard as majority_layout
 
     strict_layout.apply()
     design.apply()
+    majority_layout.apply()
     _REGISTERED = True
     print("✅ public_design_group registered /dank design")
 
