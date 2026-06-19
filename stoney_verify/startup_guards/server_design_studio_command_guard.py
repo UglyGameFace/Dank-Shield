@@ -1090,7 +1090,7 @@ def _exact_format_embed(guild: discord.Guild, *, scope: str, target_id: int, loc
     )
     embed.add_field(
         name="Current layout example",
-        value=f"`{_separator_example_text(sep)}`",
+        value=f"`{_separator_example_text(sep, lock)}`",
         inline=False,
     )
     embed.add_field(
@@ -1210,117 +1210,6 @@ def _separator_gallery_embed(*, page: int, current: str) -> discord.Embed:
 
     embed.set_footer(text="Tap a numbered example to select that separator/layout.")
     return _clean_design_embed(embed)
-
-
-class SeparatorExampleButton(discord.ui.Button):
-    def __init__(self, *, scope: str, target_id: int, sep_id: str, display_index: int, row: int) -> None:
-        example = _separator_example_text(sep_id)
-        super().__init__(
-            label=f"{display_index}. {example}"[:80],
-            emoji="🧩",
-            style=discord.ButtonStyle.secondary,
-            custom_id=f"dank_design:sep_example:{sep_id}",
-            row=row,
-        )
-        self.scope = scope
-        self.target_id = int(target_id)
-        self.sep_id = sep_id
-
-    async def callback(self, interaction: discord.Interaction) -> None:
-        await _update_exact_draft(
-            interaction,
-            scope=self.scope,
-            target_id=self.target_id,
-            patch={"separator_id": self.sep_id},
-        )
-
-
-class SeparatorGalleryPageButton(discord.ui.Button):
-    def __init__(self, *, scope: str, target_id: int, page: int, label: str, emoji: str, row: int) -> None:
-        super().__init__(
-            label=label,
-            emoji=emoji,
-            style=discord.ButtonStyle.secondary,
-            custom_id=f"dank_design:sep_page:{page}",
-            row=row,
-        )
-        self.scope = scope
-        self.target_id = int(target_id)
-        self.page = int(page)
-
-    async def callback(self, interaction: discord.Interaction) -> None:
-        if not await _require_design_permission(interaction):
-            return
-        guild = interaction.guild
-        assert guild is not None
-        key = _format_editor_key(int(guild.id), int(interaction.user.id), self.scope, self.target_id)
-        lock = dict(_FORMAT_EDITOR_DRAFTS.get(key) or {})
-        if not lock:
-            options = await _load_design_options(int(guild.id))
-            lock = _initial_editor_lock(options, scope=self.scope, target_id=self.target_id)
-            _FORMAT_EDITOR_DRAFTS[key] = lock
-        current = _safe_str(lock.get("separator_id"), "bar_full")
-        await interaction.response.edit_message(
-            embed=_separator_gallery_embed(page=self.page, current=current),
-            view=SeparatorGalleryView(scope=self.scope, target_id=self.target_id, page=self.page, current=current),
-        )
-
-
-class SeparatorGalleryBackButton(discord.ui.Button):
-    def __init__(self, *, scope: str, target_id: int, row: int) -> None:
-        super().__init__(
-            label="Back to Exact Format",
-            emoji="⬅️",
-            style=discord.ButtonStyle.secondary,
-            custom_id="dank_design:sep_back_exact",
-            row=row,
-        )
-        self.scope = scope
-        self.target_id = int(target_id)
-
-    async def callback(self, interaction: discord.Interaction) -> None:
-        if not await _require_design_permission(interaction):
-            return
-        guild = interaction.guild
-        assert guild is not None
-        key = _format_editor_key(int(guild.id), int(interaction.user.id), self.scope, self.target_id)
-        lock = dict(_FORMAT_EDITOR_DRAFTS.get(key) or {})
-        if not lock:
-            options = await _load_design_options(int(guild.id))
-            lock = _initial_editor_lock(options, scope=self.scope, target_id=self.target_id)
-            _FORMAT_EDITOR_DRAFTS[key] = lock
-
-        await interaction.response.edit_message(
-            embed=_exact_format_embed(guild, scope=self.scope, target_id=self.target_id, lock=lock),
-            view=ExactFormatEditorViewFactory(guild, self.scope, self.target_id, lock),
-        )
-
-
-class SeparatorGalleryView(discord.ui.View):
-    def __init__(self, *, scope: str, target_id: int, page: int = 0, current: str = "bar_full") -> None:
-        super().__init__(timeout=900)
-        ids = _separator_gallery_ids()
-        total_pages = max(1, (len(ids) + SEPARATOR_GALLERY_PAGE_SIZE - 1) // SEPARATOR_GALLERY_PAGE_SIZE)
-        page = max(0, min(int(page), total_pages - 1))
-        chunk = ids[page * SEPARATOR_GALLERY_PAGE_SIZE : page * SEPARATOR_GALLERY_PAGE_SIZE + SEPARATOR_GALLERY_PAGE_SIZE]
-
-        for offset, sep_id in enumerate(chunk):
-            self.add_item(
-                SeparatorExampleButton(
-                    scope=scope,
-                    target_id=target_id,
-                    sep_id=sep_id,
-                    display_index=offset + 1,
-                    row=offset // 2,
-                )
-            )
-
-        nav_row = 4
-        if page > 0:
-            self.add_item(SeparatorGalleryPageButton(scope=scope, target_id=target_id, page=page - 1, label="Prev", emoji="⬅️", row=nav_row))
-        if page < total_pages - 1:
-            self.add_item(SeparatorGalleryPageButton(scope=scope, target_id=target_id, page=page + 1, label="Next", emoji="➡️", row=nav_row))
-        self.add_item(SeparatorGalleryBackButton(scope=scope, target_id=target_id, row=nav_row))
 
 
 
@@ -1632,19 +1521,15 @@ async def _save_exact_and_preview(interaction: discord.Interaction, *, scope: st
 
     options = await _load_design_options(int(guild.id))
     repair_options = dict(options)
-    if mode in {"category_editor", "channel_editor"}:
-        # Single-item repair previews should copy the live server majority,
-        # not blindly force the saved draft/theme.
-        repair_options["__use_live_majority_layout"] = True
 
     all_items = await build_design_plan(guild, repair_options)
 
     if scope == "category":
         items = _filter_plan_for_category(all_items, int(target_id))
-        title = "👁 Category Format Preview"
+        title = "👁️ Category Format Preview"
     else:
         items = _filter_plan_for_channel(all_items, int(target_id))
-        title = "👁 Channel Format Preview"
+        title = "👁️ Channel Format Preview"
 
     key = _key(int(guild.id), int(interaction.user.id))
     _PENDING[key] = {
@@ -1686,10 +1571,9 @@ class ExactFormatEditorView(discord.ui.View):
             options = await _load_design_options(int(guild.id))
             lock = _initial_editor_lock(options, scope=self.scope, target_id=self.target_id)
             _FORMAT_EDITOR_DRAFTS[key] = lock
-        current = _safe_str(lock.get("separator_id"), "bar_full")
         await interaction.response.edit_message(
-            embed=_separator_gallery_embed(page=0, current=current),
-            view=SeparatorGalleryView(scope=self.scope, target_id=self.target_id, page=0, current=current),
+            embed=_separator_gallery_embed(guild, scope=self.scope, target_id=self.target_id, lock=lock, page=0),
+            view=SeparatorExamplesView(guild, scope=self.scope, target_id=self.target_id, lock=lock, page=0),
         )
 
     @discord.ui.button(label="Save & Preview", emoji="👁️", style=discord.ButtonStyle.primary, custom_id="dank_design:exact_save_preview", row=4)
@@ -1872,13 +1756,19 @@ async def _preview_scope(
 ) -> None:
     if not await _require_design_permission(interaction):
         return
+
     guild = interaction.guild
     assert guild is not None
 
     await interaction.response.defer(ephemeral=True, thinking=True)
 
     options = await _load_design_options(int(guild.id))
-    all_items = await build_design_plan(guild, options)
+    repair_options = dict(options)
+
+    if mode in {"category_editor", "channel_editor"}:
+        repair_options["__use_live_majority_layout"] = True
+
+    all_items = await build_design_plan(guild, repair_options)
 
     if category_id is not None:
         items = _filter_plan_for_category(all_items, int(category_id))
@@ -1891,17 +1781,19 @@ async def _preview_scope(
     _PENDING[key] = {
         "created_at": time.time(),
         "items": items,
-        "options": dict(options),
+        "options": dict(repair_options),
         "mode": mode,
         "scope_title": scope_title,
     }
 
     has_blockers = any(item.get("status") == "failed" for item in items)
     has_changes = any(item.get("status") == "changed" for item in items)
+
     await interaction.edit_original_response(
         embed=_preview_embed(guild, items, title=scope_title),
         view=DesignPreviewView(can_apply=not has_blockers and has_changes),
     )
+
 
 
 class DesignCategoryEditorButton(discord.ui.Button):
