@@ -1,164 +1,157 @@
 from __future__ import annotations
 
-"""Majority-layout repair for Dank Design.
+"""Live-majority repair bridge for Dank Design.
 
-When a server was hand-built, Fix Mismatches should learn the common visible
-layout from the current channel list and repair outliers to that layout instead
-of forcing a generic draft.
+The parser and detector live in stoney_verify.services.server_design_majority_layout.
+This bridge keeps the existing /dank design command flow and only changes the
+Find & Fix Inconsistencies naming plan.
 """
 
-from collections import Counter
 from collections.abc import Mapping
-import re
+import inspect
 from typing import Any
 
 _PATCHED = False
-_PIPE_ID = "pipe_spaced"
-_PIPE_TOKENS = {"|", "｜", "│", "┃", "❘", "❙", "❚", "┆", "┊", "╏", "╎", "︱", "〢"}
-_FRAME_SIGS = (
-    ("premium_line", "✦────", "────✦"),
-    ("heavy_line", "━━━", "━━━"),
-    ("line", "───", "───"),
-    ("top_box", "╭──", "──╮"),
-    ("bottom_box", "╰──", "──╯"),
-    ("box", "╔══", "══╗"),
-    ("lenticular", "【", "】"),
-    ("corner", "「", "」"),
-)
 
 
-def _text(value: Any) -> str:
+def _text(value: Any, default: str = "") -> str:
     try:
-        return str(value or "").strip()
+        if value is None:
+            return default
+        text = str(value).strip()
+        return text if text else default
     except Exception:
-        return ""
+        return default
 
 
-def _key(value: Any) -> str:
-    return _text(value).lower().replace("-", "_")
-
-
-def _ensure_pipe(studio: Any) -> None:
-    if _PIPE_ID in getattr(studio, "SEPARATORS_BY_ID", {}):
-        return
-    spec = studio.SeparatorSpec(_PIPE_ID, "Spaced Pipe", "Clean Vertical", " | ")
-    studio.SEPARATOR_LIBRARY = (spec, *tuple(getattr(studio, "SEPARATOR_LIBRARY", tuple()) or tuple()))
-    studio.SEPARATORS_BY_ID = {item.id: item for item in studio.SEPARATOR_LIBRARY}
-
-
-def _has_locks(options: Mapping[str, Any]) -> bool:
-    global_lock = options.get("format_lock_global")
-    if isinstance(global_lock, Mapping) and bool(global_lock.get("enabled")):
+def _is_consistency_repair(options: Mapping[str, Any]) -> bool:
+    if bool(options.get("__use_live_majority_layout")):
         return True
-    for name in ("category_format_locks", "channel_format_locks"):
-        locks = options.get(name)
-        if isinstance(locks, Mapping) and bool(locks):
-            return True
+    try:
+        for frame in inspect.stack(context=0)[1:10]:
+            if frame.function == "consistency" and "server_design_studio_command_guard" in frame.filename:
+                return True
+    except Exception:
+        pass
     return False
 
 
-def _sep_id_for_token(studio: Any, raw: Any) -> str:
-    token = _text(raw)
-    if not token:
-        return ""
-    compact = re.sub(r"\s+", "", token)
-    if "|" in compact or any(mark in compact for mark in _PIPE_TOKENS):
-        _ensure_pipe(studio)
-        return _PIPE_ID
-    stripped = token.strip()
-    for sep in tuple(getattr(studio, "SEPARATOR_LIBRARY", tuple()) or tuple()):
-        if _text(getattr(sep, "value", "")).strip() == stripped:
-            return _text(getattr(sep, "id", ""))
-    return ""
-
-
-def _seen_separator(studio: Any, name: Any) -> str:
-    raw_name = _text(name)
-    if not raw_name:
-        return ""
-    try:
-        parsed = studio.parse_channel_name(raw_name)
-        parsed_sep = _sep_id_for_token(studio, parsed.get("separator"))
-        if parsed_sep:
-            return parsed_sep
-
-        visible = studio.strip_known_unicode_fonts(raw_name)
-        emoji = _text(parsed.get("emoji"))
-        if emoji and visible.startswith(emoji):
-            visible = visible[len(emoji):]
-        visible = visible.lstrip()
-        match = re.match(r"^([^A-Za-z0-9\s]+(?:\s*[^A-Za-z0-9\s]+)*)", visible)
-        return _sep_id_for_token(studio, match.group(1) if match else "")
-    except Exception:
-        return ""
-
-
-def _frame_id(studio: Any, name: Any) -> str:
-    text = _text(name)
-    if not text:
-        return ""
-    try:
-        text = studio.strip_known_unicode_fonts(text).strip()
-    except Exception:
-        pass
-    for frame_id, prefix, suffix in _FRAME_SIGS:
-        if text.startswith(prefix) and text.endswith(suffix):
-            return frame_id
-    return "plain"
-
-
-def _top(counter: Counter[str]) -> str:
-    if not counter:
-        return ""
-    value, count = counter.most_common(1)[0]
-    return value if count >= 2 else ""
-
-
-def _infer_options(command_guard: Any, studio: Any, guild: Any, options: Mapping[str, Any]) -> dict[str, Any]:
-    out = dict(options)
-    if _has_locks(out):
-        return out
-
-    separators: Counter[str] = Counter()
-    frames: Counter[str] = Counter()
-    styled = 0
-    normal = 0
-
+def _records_for_guild(command_guard: Any, guild: Any) -> list[dict[str, Any]]:
+    records: list[dict[str, Any]] = []
     for channel in list(command_guard._editable_channels(guild) or []):
         kind = command_guard._kind(channel)
-        name = _text(getattr(channel, "name", ""))
-        if not name:
-            continue
-        try:
-            parsed = studio.parse_channel_name(name, kind="category" if kind == "category" else "text")
-            styled += 1 if parsed.get("styled_unicode_name") else 0
-            normal += 0 if parsed.get("styled_unicode_name") else 1
-        except Exception:
-            pass
-        if kind == "category":
-            frame_id = _frame_id(studio, name)
-            if frame_id:
-                frames[frame_id] += 1
-        else:
-            sep_id = _seen_separator(studio, name)
-            if sep_id:
-                separators[sep_id] += 1
+        parent = getattr(channel, "category", None)
+        records.append(
+            {
+                "id": str(getattr(channel, "id", "")),
+                "category_id": str(getattr(parent, "id", "")),
+                "kind": kind,
+                "name": _text(getattr(channel, "name", "")),
+            }
+        )
+    return records
 
-    sep_id = _top(separators)
-    frame_id = _top(frames)
-    if sep_id:
-        out["separator_id"] = sep_id
-    if frame_id:
-        out["category_frame_id"] = frame_id
-    if styled > normal:
-        out.setdefault("font", "fraktur")
+
+def _change_lines(command_guard: Any, items: list[dict[str, Any]], *, limit: int = 12) -> list[str]:
+    try:
+        return command_guard._consistency_lines(items, limit=limit)
+    except Exception:
+        rows: list[str] = []
+        for item in items:
+            if item.get("status") != "changed":
+                continue
+            before = _text(item.get("before"))
+            after = _text(item.get("after"))
+            rows.append(f"🧩 `{before}` → `{after}`"[:240])
+            if len(rows) >= limit:
+                break
+        return rows or ["No inconsistent channel names found."]
+
+
+def _patch_consistency_embed(command_guard: Any, majority: Any, discord: Any) -> None:
+    if getattr(command_guard, "_DANK_MAJORITY_LAYOUT_EMBED_ACTIVE", False):
+        return
+
+    def _majority_consistency_embed(guild: Any, items: list[dict[str, Any]], options: Mapping[str, Any]) -> Any:
         try:
-            out["strength"] = max(4, int(out.get("strength") or 4))
+            summary = command_guard._consistency_summary(items)
         except Exception:
-            out["strength"] = 4
-    if sep_id or frame_id:
-        out["__majority_layout_inferred"] = True
-    return out
+            summary = {"matches": 0, "needs_fix": 0, "protected": 0, "failed": 0, "notes": 0}
+
+        detected = majority.majority_summary_from_items(items) or {
+            "separator": "mixed/unknown",
+            "category_frame": "mixed/unknown",
+            "font": "mixed/unknown",
+            "leading_emoji": "mixed/unknown",
+        }
+        majority_first_count, saved_first_count = majority.lock_notice_from_items(items)
+        has_failures = bool(summary.get("failed"))
+        embed = discord.Embed(
+            title="🧭 Server Design Consistency Check",
+            description=(
+                "Dank Shield compared the current live server layout and will repair only names that drift from the majority.\n\n"
+                "Nothing has been changed yet. Review the before/after list, then press Apply if it looks right."
+            ),
+            color=discord.Color.orange() if has_failures else discord.Color.green(),
+        )
+        embed.add_field(
+            name="Live majority detected",
+            value=(
+                f"Majority separator detected: **{detected.get('separator', 'mixed/unknown')}**\n"
+                f"Majority category frame detected: **{detected.get('category_frame', 'mixed/unknown')}**\n"
+                f"Majority font/style detected: **{detected.get('font', 'mixed/unknown')}**\n"
+                f"Leading emoji usage: **{detected.get('leading_emoji', 'mixed/unknown')}**"
+            )[:1024],
+            inline=False,
+        )
+        embed.add_field(
+            name="Results",
+            value=(
+                f"Channels matching: **{summary.get('matches', 0)}**\n"
+                f"Channels needing repair: **{summary.get('needs_fix', 0)}**\n"
+                f"Protected/skipped: **{summary.get('protected', 0)}**\n"
+                f"Cannot fix yet: **{summary.get('failed', 0)}**\n"
+                f"Notes: **{summary.get('notes', 0)}**"
+            ),
+            inline=True,
+        )
+        embed.add_field(name="What will be fixed", value="\n".join(_change_lines(command_guard, items, limit=12))[:1024], inline=False)
+
+        skipped = majority.skipped_lines(items, limit=6)
+        if skipped:
+            embed.add_field(name="Protected / skipped", value="\n".join(skipped)[:1024], inline=False)
+
+        if majority_first_count:
+            embed.add_field(
+                name="Saved layout note",
+                value=(
+                    f"**{majority_first_count}** saved layout rule(s) were present. For this repair preview, the live majority layout is taking precedence so hand-built servers can be normalized. "
+                    "Use **Manage Locks** when a saved layout should intentionally win."
+                )[:1024],
+                inline=False,
+            )
+        elif saved_first_count:
+            embed.add_field(
+                name="Saved layout rule active",
+                value=(
+                    f"**{saved_first_count}** saved layout rule(s) are taking precedence over live majority detection. "
+                    "Clear that saved rule when you want the majority layout copied instead."
+                )[:1024],
+                inline=False,
+            )
+
+        try:
+            failed_lines = command_guard.studio.preview_lines(items, filter_mode="failed", limit=5)
+        except Exception:
+            failed_lines = []
+        if failed_lines and failed_lines != ["No matching preview rows."]:
+            embed.add_field(name="Cannot fix yet", value="\n".join(failed_lines)[:1024], inline=False)
+
+        embed.set_footer(text="Fix uses preview first, names only, and the existing rollback snapshot before apply.")
+        return command_guard._clean_design_embed(embed)
+
+    command_guard._consistency_embed = _majority_consistency_embed
+    command_guard._DANK_MAJORITY_LAYOUT_EMBED_ACTIVE = True
 
 
 def apply() -> bool:
@@ -167,27 +160,37 @@ def apply() -> bool:
         return True
     try:
         import sys
+
+        from stoney_verify.services import server_design_majority_layout as majority
         from stoney_verify.services import server_design_studio as studio
 
-        _ensure_pipe(studio)
         command_guard = sys.modules.get("stoney_verify.startup_guards.server_design_studio_command_guard")
         if command_guard is None:
             return False
         if getattr(command_guard, "_DANK_MAJORITY_LAYOUT_PLAN_ACTIVE", False):
+            _patch_consistency_embed(command_guard, majority, command_guard.discord)
             _PATCHED = True
             return True
+
         original = getattr(command_guard, "build_design_plan", None)
         if not callable(original):
             return False
 
         async def _build_design_plan_with_majority(guild: Any, options: Mapping[str, Any]) -> list[dict[str, Any]]:
-            inferred = _infer_options(command_guard, studio, guild, options)
-            return await original(guild, inferred)
+            if not _is_consistency_repair(options):
+                return await original(guild, options)
+
+            records = _records_for_guild(command_guard, guild)
+            analysis = majority.infer_live_majority_layout(studio, records)
+            inferred = majority.apply_majority_to_options(studio, options, analysis, respect_locks=False)
+            items = await original(guild, inferred)
+            return majority.annotate_plan_items(items, analysis, inferred)
 
         command_guard.build_design_plan = _build_design_plan_with_majority
         command_guard._DANK_MAJORITY_LAYOUT_PLAN_ACTIVE = True
+        _patch_consistency_embed(command_guard, majority, command_guard.discord)
         _PATCHED = True
-        print("✅ server_design_majority_layout_guard active; Fix Mismatches copies the majority visible layout")
+        print("✅ server_design_majority_layout_guard active; Fix Mismatches copies the live majority layout")
         return True
     except Exception as exc:
         try:
