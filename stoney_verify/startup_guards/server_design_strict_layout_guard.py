@@ -14,7 +14,7 @@ show up as changed items so the normal preview/apply/rollback path can repair
 it.
 """
 
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import replace
 from typing import Any
 
@@ -48,12 +48,22 @@ _RENAME_SAFE_DEFAULT_PROTECTED_NAMES = {
     "staff-chat",
 }
 
+# Existing guild configs may already have locks saved with the old Gothic Clean
+# separator. Normalize those at load time so Fix Mismatches reflects the new
+# single-stroke Gothic layout immediately instead of reusing stale bar_full.
+_LEGACY_GOTHIC_SEPARATOR_IDS = {"bar_full", "bar_heavy", "bar_block"}
+_GOTHIC_FONTS = {"fraktur", "bold_fraktur"}
+
 
 def _clean_text(value: Any) -> str:
     try:
         return str(value or "").strip()
     except Exception:
         return ""
+
+
+def _clean_key(value: Any) -> str:
+    return _clean_text(value).lower().replace("-", "_")
 
 
 def _frame_signature(studio: Any, value: Any) -> str:
@@ -106,6 +116,72 @@ def _normalize_theme_defaults(studio: Any) -> None:
         pass
 
 
+def _lock_looks_gothic(lock: Mapping[str, Any], *, fallback_theme_id: str = "") -> bool:
+    theme_id = _clean_key(lock.get("theme_id") or fallback_theme_id)
+    font = _clean_key(lock.get("font"))
+    return theme_id == "gothic_clean" or font in _GOTHIC_FONTS
+
+
+def _normalize_gothic_lock(lock: Any, *, fallback_theme_id: str = "") -> Any:
+    if not isinstance(lock, Mapping):
+        return lock
+    out = dict(lock)
+    if _lock_looks_gothic(out, fallback_theme_id=fallback_theme_id):
+        separator = _clean_key(out.get("separator_id"))
+        if separator in _LEGACY_GOTHIC_SEPARATOR_IDS:
+            out["separator_id"] = "bar_medium"
+    return out
+
+
+def _normalize_gothic_design_options(options: Any) -> dict[str, Any]:
+    out = dict(options) if isinstance(options, Mapping) else {}
+    fallback_theme_id = _clean_key(out.get("theme_id")) or "gothic_clean"
+
+    if fallback_theme_id == "gothic_clean" and _clean_key(out.get("separator_id")) in _LEGACY_GOTHIC_SEPARATOR_IDS:
+        out["separator_id"] = "bar_medium"
+
+    global_lock = _normalize_gothic_lock(out.get("format_lock_global"), fallback_theme_id=fallback_theme_id)
+    if isinstance(global_lock, Mapping):
+        out["format_lock_global"] = dict(global_lock)
+
+    for key in ("category_format_locks", "channel_format_locks"):
+        locks = out.get(key)
+        if not isinstance(locks, Mapping):
+            continue
+        out[key] = {
+            str(lock_id): _normalize_gothic_lock(lock, fallback_theme_id=fallback_theme_id)
+            for lock_id, lock in dict(locks).items()
+        }
+
+    return out
+
+
+def _patch_command_guard_options() -> None:
+    try:
+        import sys
+
+        command_guard = sys.modules.get("stoney_verify.startup_guards.server_design_studio_command_guard")
+        if command_guard is None or getattr(command_guard, "_DANK_GOTHIC_LOCK_NORMALIZER_ACTIVE", False):
+            return
+
+        original_load = getattr(command_guard, "_load_design_options", None)
+        original_save = getattr(command_guard, "_save_design_options", None)
+        if not callable(original_load) or not callable(original_save):
+            return
+
+        async def _load_design_options_normalized(guild_id: int) -> dict[str, Any]:
+            return _normalize_gothic_design_options(await original_load(guild_id))
+
+        async def _save_design_options_normalized(guild_id: int, options: Mapping[str, Any]) -> None:
+            await original_save(guild_id, _normalize_gothic_design_options(options))
+
+        command_guard._load_design_options = _load_design_options_normalized
+        command_guard._save_design_options = _save_design_options_normalized
+        command_guard._DANK_GOTHIC_LOCK_NORMALIZER_ACTIVE = True
+    except Exception:
+        pass
+
+
 def _make_strict_match(original: Callable[..., bool], studio: Any) -> Callable[..., bool]:
     def _strict_already_semantically_matches_design(
         before: str,
@@ -142,6 +218,7 @@ def _make_strict_match(original: Callable[..., bool], studio: Any) -> Callable[.
 def apply() -> bool:
     global _PATCHED, _ORIGINAL
     if _PATCHED:
+        _patch_command_guard_options()
         return True
 
     try:
@@ -150,18 +227,17 @@ def apply() -> bool:
         _relax_visual_name_defaults(studio)
         _normalize_theme_defaults(studio)
 
-        if getattr(studio, "_DANK_STRICT_LAYOUT_MATCH_ACTIVE", False):
-            _PATCHED = True
-            return True
-
         original = getattr(studio, "_already_semantically_matches_design", None)
         if not callable(original):
             return False
 
-        _ORIGINAL = original
-        studio._already_semantically_matches_design = _make_strict_match(original, studio)  # type: ignore[attr-defined]
-        studio._DANK_STRICT_LAYOUT_MATCH_ACTIVE = True
+        if not getattr(studio, "_DANK_STRICT_LAYOUT_MATCH_ACTIVE", False):
+            _ORIGINAL = original
+            studio._already_semantically_matches_design = _make_strict_match(original, studio)  # type: ignore[attr-defined]
+            studio._DANK_STRICT_LAYOUT_MATCH_ACTIVE = True
+
         _PATCHED = True
+        _patch_command_guard_options()
         print("✅ server_design_strict_layout_guard active; separator/layout drift now counts as design mismatch")
         return True
     except Exception as exc:
