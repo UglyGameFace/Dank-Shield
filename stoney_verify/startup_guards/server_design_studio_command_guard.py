@@ -1763,6 +1763,7 @@ async def _preview_scope(
 
     options = await _load_design_options(int(guild.id))
     repair_options = dict(options)
+
     if mode in {"category_editor", "channel_editor"}:
         # Scoped repair previews should copy the live server majority,
         # not blindly force the saved draft/theme.
