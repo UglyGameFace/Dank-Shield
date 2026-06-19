@@ -21,6 +21,7 @@ from typing import Any
 _PATCHED = False
 _ORIGINAL: Callable[..., bool] | None = None
 
+_GOTHIC_CLEAN_SEPARATOR_ID = "pipe_spaced"
 
 _FRAME_SIGNATURES: tuple[tuple[str, str, str], ...] = (
     ("premium_line", "✦────", "────✦"),
@@ -50,8 +51,9 @@ _RENAME_SAFE_DEFAULT_PROTECTED_NAMES = {
 
 # Existing guild configs may already have locks saved with the old Gothic Clean
 # separator. Normalize those at load time so Fix Mismatches reflects the new
-# single-stroke Gothic layout immediately instead of reusing stale bar_full.
-_LEGACY_GOTHIC_SEPARATOR_IDS = {"bar_full", "bar_heavy", "bar_block"}
+# clear spaced-pipe Gothic layout immediately instead of reusing stale vertical
+# bars that look doubled on Discord mobile.
+_LEGACY_GOTHIC_SEPARATOR_IDS = {"bar_full", "bar_heavy", "bar_block", "bar_medium", "bar_bold"}
 _GOTHIC_FONTS = {"fraktur", "bold_fraktur"}
 
 
@@ -89,29 +91,51 @@ def _relax_visual_name_defaults(studio: Any) -> None:
         pass
 
 
-def _normalize_theme_defaults(studio: Any) -> None:
-    """Use a one-stroke Gothic separator that does not look like doubled bars.
+def _ensure_spaced_pipe_separator(studio: Any) -> None:
+    """Install the plain visible separator used by Gothic Clean.
 
-    Discord mobile can make fullwidth/heavy bars look like `||` beside fraktur
-    letters. Gothic Clean should still look strong, but the default separator
-    must be visually unambiguous.
+    This deliberately uses ordinary ASCII with spaces because it renders clearly
+    on Discord mobile and cannot be mistaken for a doubled unicode bar.
     """
 
-    if getattr(studio, "_DANK_GOTHIC_SINGLE_BAR_ACTIVE", False):
+    try:
+        if _GOTHIC_CLEAN_SEPARATOR_ID in getattr(studio, "SEPARATORS_BY_ID", {}):
+            return
+        spec = studio.SeparatorSpec(
+            _GOTHIC_CLEAN_SEPARATOR_ID,
+            "Spaced Pipe",
+            "Clean Vertical",
+            " | ",
+        )
+        studio.SEPARATOR_LIBRARY = (spec, *tuple(getattr(studio, "SEPARATOR_LIBRARY", tuple()) or tuple()))
+        studio.SEPARATORS_BY_ID = {separator.id: separator for separator in studio.SEPARATOR_LIBRARY}
+    except Exception:
+        pass
+
+
+def _normalize_theme_defaults(studio: Any) -> None:
+    """Use a plain spaced pipe for Gothic Clean.
+
+    Discord mobile can make fullwidth/heavy unicode bars look like `||` beside
+    fraktur letters. Gothic Clean should be clear first, decorative second.
+    """
+
+    if getattr(studio, "_DANK_GOTHIC_SPACED_PIPE_ACTIVE", False):
         return
 
     try:
+        _ensure_spaced_pipe_separator(studio)
         themes = []
         changed = False
         for theme in tuple(getattr(studio, "THEMES", tuple()) or tuple()):
-            if getattr(theme, "id", "") == "gothic_clean" and getattr(theme, "channel_separator", "") != "bar_medium":
-                theme = replace(theme, channel_separator="bar_medium")
+            if getattr(theme, "id", "") == "gothic_clean" and getattr(theme, "channel_separator", "") != _GOTHIC_CLEAN_SEPARATOR_ID:
+                theme = replace(theme, channel_separator=_GOTHIC_CLEAN_SEPARATOR_ID)
                 changed = True
             themes.append(theme)
         if changed:
             studio.THEMES = tuple(themes)
             studio.THEMES_BY_ID = {theme.id: theme for theme in studio.THEMES}
-        studio._DANK_GOTHIC_SINGLE_BAR_ACTIVE = True
+        studio._DANK_GOTHIC_SPACED_PIPE_ACTIVE = True
     except Exception:
         pass
 
@@ -129,7 +153,7 @@ def _normalize_gothic_lock(lock: Any, *, fallback_theme_id: str = "") -> Any:
     if _lock_looks_gothic(out, fallback_theme_id=fallback_theme_id):
         separator = _clean_key(out.get("separator_id"))
         if separator in _LEGACY_GOTHIC_SEPARATOR_IDS:
-            out["separator_id"] = "bar_medium"
+            out["separator_id"] = _GOTHIC_CLEAN_SEPARATOR_ID
     return out
 
 
@@ -138,7 +162,7 @@ def _normalize_gothic_design_options(options: Any) -> dict[str, Any]:
     fallback_theme_id = _clean_key(out.get("theme_id")) or "gothic_clean"
 
     if fallback_theme_id == "gothic_clean" and _clean_key(out.get("separator_id")) in _LEGACY_GOTHIC_SEPARATOR_IDS:
-        out["separator_id"] = "bar_medium"
+        out["separator_id"] = _GOTHIC_CLEAN_SEPARATOR_ID
 
     global_lock = _normalize_gothic_lock(out.get("format_lock_global"), fallback_theme_id=fallback_theme_id)
     if isinstance(global_lock, Mapping):
@@ -238,7 +262,7 @@ def apply() -> bool:
 
         _PATCHED = True
         _patch_command_guard_options()
-        print("✅ server_design_strict_layout_guard active; separator/layout drift now counts as design mismatch")
+        print("✅ server_design_strict_layout_guard active; Gothic Clean uses clear spaced pipe and strict drift detection")
         return True
     except Exception as exc:
         try:
