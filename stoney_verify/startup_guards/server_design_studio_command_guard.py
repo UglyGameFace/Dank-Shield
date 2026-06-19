@@ -1047,6 +1047,11 @@ def _exact_format_embed(guild: discord.Guild, *, scope: str, target_id: int, loc
         inline=False,
     )
     embed.add_field(
+        name="Current layout example",
+        value=f"`{_separator_example_text(sep)}`",
+        inline=False,
+    )
+    embed.add_field(
         name="Preview sample",
         value="\n".join(_exact_format_sample_lines(guild, scope=scope, target_id=target_id, lock=lock))[:1024],
         inline=False,
