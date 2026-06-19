@@ -518,45 +518,49 @@ def _home_embed(guild: discord.Guild, options: Mapping[str, Any] | None = None) 
     counts = _lock_count(options)
 
     embed = discord.Embed(
-        title="🎨 Dank Design",
+        title="🎨 Dank Design Studio",
         description=(
-            "Choose a style, preview it, then apply only after review.\n\n"
-            "**Nothing changes until you press Apply These Changes on a preview.**"
+            "Design channel/category names without touching permissions, roles, topics, order, tickets, or verification.\n\n"
+            "**Safe workflow:** review first → preview exact names → apply only when you approve."
         ),
         color=discord.Color.blurple(),
     )
     embed.add_field(
-        name="Step 1 — Current style",
+        name="Recommended",
+        value=(
+            "🧭 **Review Repairs** — best for hand-built servers. Copies the live majority layout and repairs only outliers.\n"
+            "👁️ **Preview Server** — shows a full-server style preview without changing anything."
+        ),
+        inline=False,
+    )
+    embed.add_field(
+        name="Edit one thing",
+        value=(
+            "🗂️ **Category Editor** — preview, rename, or style one category.\n"
+            "#️⃣ **Channel Editor** — preview, rename, or style one channel."
+        ),
+        inline=False,
+    )
+    embed.add_field(
+        name="Current style",
         value=(
             f"Theme: **{theme.label}**\n"
             f"Font: **{font_text}**\n"
             f"Strength: **{strength}/5**\n"
-            "Apply speed: **2 seconds per rename**"
+            "Rename speed: **2 seconds per item**"
         ),
-        inline=False,
+        inline=True,
     )
     embed.add_field(
-        name="Step 2 — Choose your path",
+        name="Saved rules",
         value=(
-            "🧭 **Start Here** if you are unsure.\n"
-            "👁 **Preview & Apply** for a full server pass.\n"
-            "🧩 **Fix Mismatches** to repair only drift.\n"
-            "🗂 **Category Editor** for category-level control.\n"
-            "#️⃣ **Channel Editor** for one exact item.\n"
-            "⚙️ **Advanced Tools** for locks, protection, rollback, and diagnostics."
-        ),
-        inline=False,
-    )
-    embed.add_field(
-        name="Saved layout locks",
-        value=(
-            f"Global: **{'On' if counts['global'] else 'Off'}** • "
-            f"Categories: **{counts['categories']}** • "
+            f"Global: **{'On' if counts['global'] else 'Off'}**\n"
+            f"Categories: **{counts['categories']}**\n"
             f"Channels: **{counts['channels']}**"
         ),
-        inline=False,
+        inline=True,
     )
-    embed.set_footer(text="/dank design • names only • preview before apply")
+    embed.set_footer(text="Names only • Review before Apply • Use Advanced only for locks, protection, rollback, and help")
     return _clean_design_embed(embed)
 
 
@@ -3101,7 +3105,7 @@ class ProtectionModeSelect(discord.ui.Select):
         )
         embed.add_field(
             name="Next step",
-            value="Run **Find & Fix Inconsistencies** or **Preview Repairs** to see the result.",
+            value="Run **Review Repairs** or **Preview Server** to see the result.",
             inline=False,
         )
         await interaction.response.edit_message(embed=embed, view=ChannelEditorActionView(self.channel_id) if "ChannelEditorActionView" in globals() else None)
@@ -3385,15 +3389,15 @@ def _design_help_embed() -> discord.Embed:
         name="How to apply changes",
         value=(
             "Changes are never applied from the home screen.\n"
-            "**Preview & Apply** or **Save & Preview** first, then press **Apply These Changes**."
+            "**Preview Server** or **Save & Preview** first, then press **Apply These Changes**."
         ),
         inline=False,
     )
     embed.add_field(
         name="Best workflow",
         value=(
-            "**Quick server style:** Preview & Apply\n"
-            "**Fix drift:** Fix Mismatches\n"
+            "**Quick server style:** Preview Server\n"
+            "**Fix drift:** Review Repairs\n"
             "**Exact control:** Category Editor or Channel Editor → Edit Exact Format → Save & Preview"
         ),
         inline=False,
@@ -3414,7 +3418,7 @@ def _advanced_tools_embed() -> discord.Embed:
         title="⚙️ Dank Design Advanced Tools",
         description=(
             "These tools are useful after the basic workflow. "
-            "Most users only need Preview & Apply, Fix Mismatches, Category Editor, or Channel Editor."
+            "Most users only need Preview Server, Review Repairs, Category Editor, or Channel Editor."
         ),
         color=discord.Color.blurple(),
     )
@@ -3503,29 +3507,7 @@ class DesignHomeView(discord.ui.View):
         self.add_item(ThemeSelect(_safe_str(options.get("theme_id"), "gothic_clean")))
         self.add_item(StrengthSelect(_safe_int(options.get("strength"), 2)))
 
-    @discord.ui.button(label="Start Here", emoji="🧭", style=discord.ButtonStyle.success, custom_id="dank_design:start_here", row=2)
-    async def start_here(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        if not await _require_design_permission(interaction):
-            return
-        await interaction.response.edit_message(embed=_start_here_embed(), view=StartHereView())
-
-    @discord.ui.button(label="Preview & Apply", emoji="👁️", style=discord.ButtonStyle.primary, custom_id="dank_design:preview", row=2)
-    async def preview(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        if not await _require_design_permission(interaction):
-            return
-        guild = interaction.guild
-        assert guild is not None
-        await interaction.response.defer(ephemeral=True, thinking=True)
-        options = await _load_design_options(int(guild.id))
-        items = await build_design_plan(guild, options)
-        _PENDING[_key(int(guild.id), int(interaction.user.id))] = {"created_at": time.time(), "items": items, "options": dict(options)}
-        has_blockers = any(item.get("status") == "failed" for item in items)
-        await interaction.edit_original_response(
-            embed=_preview_embed(guild, items),
-            view=DesignPreviewView(can_apply=not has_blockers and any(item.get("status") == "changed" for item in items)),
-        )
-
-    @discord.ui.button(label="Fix Mismatches", emoji="🧩", style=discord.ButtonStyle.success, custom_id="dank_design:consistency_check", row=3)
+    @discord.ui.button(label="Review Repairs", emoji="🧭", style=discord.ButtonStyle.success, custom_id="dank_design:consistency_check", row=2)
     async def consistency_check(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         if not await _require_design_permission(interaction):
             return
@@ -3535,16 +3517,45 @@ class DesignHomeView(discord.ui.View):
         await interaction.response.defer(ephemeral=True, thinking=True)
 
         options = await _load_design_options(int(guild.id))
-        items = await build_design_plan(guild, options)
+        repair_options = dict(options)
+        repair_options["__use_live_majority_layout"] = True
+
+        items = await build_design_plan(guild, repair_options)
         key = _key(int(guild.id), int(interaction.user.id))
-        _PENDING[key] = {"created_at": time.time(), "items": items, "options": dict(options), "mode": "consistency_check"}
+        _PENDING[key] = {
+            "created_at": time.time(),
+            "items": items,
+            "options": dict(repair_options),
+            "mode": "consistency_check",
+        }
 
         has_blockers = any(item.get("status") == "failed" for item in items)
         has_changes = any(item.get("status") == "changed" for item in items)
 
         await interaction.edit_original_response(
-            embed=_consistency_embed(guild, items, options),
+            embed=_consistency_embed(guild, items, repair_options),
             view=DesignPreviewView(can_apply=not has_blockers and has_changes),
+        )
+
+    @discord.ui.button(label="Preview Server", emoji="👁️", style=discord.ButtonStyle.primary, custom_id="dank_design:preview", row=2)
+    async def preview(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        if not await _require_design_permission(interaction):
+            return
+        guild = interaction.guild
+        assert guild is not None
+        await interaction.response.defer(ephemeral=True, thinking=True)
+        options = await _load_design_options(int(guild.id))
+        items = await build_design_plan(guild, options)
+        _PENDING[_key(int(guild.id), int(interaction.user.id))] = {
+            "created_at": time.time(),
+            "items": items,
+            "options": dict(options),
+            "mode": "preview_server",
+        }
+        has_blockers = any(item.get("status") == "failed" for item in items)
+        await interaction.edit_original_response(
+            embed=_preview_embed(guild, items, title="👁️ Server Design Preview"),
+            view=DesignPreviewView(can_apply=not has_blockers and any(item.get("status") == "changed" for item in items)),
         )
 
     @discord.ui.button(label="Category Editor", emoji="🗂️", style=discord.ButtonStyle.primary, custom_id="dank_design:category_editor", row=3)
@@ -3569,7 +3580,13 @@ class DesignHomeView(discord.ui.View):
             view=ChannelEditorPickerView(guild, page=0),
         )
 
-    @discord.ui.button(label="Advanced Tools", emoji="⚙️", style=discord.ButtonStyle.secondary, custom_id="dank_design:advanced_tools", row=4)
+    @discord.ui.button(label="Guide", emoji="❓", style=discord.ButtonStyle.secondary, custom_id="dank_design:start_here", row=4)
+    async def guide(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        if not await _require_design_permission(interaction):
+            return
+        await interaction.response.edit_message(embed=_start_here_embed(), view=StartHereView())
+
+    @discord.ui.button(label="Advanced", emoji="⚙️", style=discord.ButtonStyle.secondary, custom_id="dank_design:advanced_tools", row=4)
     async def advanced_tools(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         if not await _require_design_permission(interaction):
             return
@@ -3592,7 +3609,7 @@ class DesignPreviewView(discord.ui.View):
         payload = _PENDING.get(key) or {}
         items = list(payload.get("items") or [])
         if not items:
-            await interaction.response.send_message("No saved preview found. Press **Preview / Apply** first.", ephemeral=True)
+            await interaction.response.send_message("No saved preview found. Press **Preview Server** first.", ephemeral=True)
             return
         if any(item.get("status") == "failed" for item in items):
             await interaction.response.send_message("❌ This preview has hard blockers. Fix them before applying.", ephemeral=True)
