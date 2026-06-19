@@ -51,6 +51,46 @@ def _safe_str(value: Any, default: str = "") -> str:
         return default
 
 
+def _clean_visible_design_text(value: Any) -> str:
+    text = _safe_str(value)
+    if not text:
+        return text
+
+    # Catch every visible newline marker variant users reported:
+    # "\\n", "\n" as literal text, "/n", "/N", and accidental double escaping.
+    for bad in ("\\\\n", "\\\\N", "\\n", "\\N", "/n", "/N"):
+        text = text.replace(bad, "\n")
+
+    while "\n\n\n" in text:
+        text = text.replace("\n\n\n", "\n\n")
+
+    return text.strip()
+
+
+def _clean_design_embed(embed: discord.Embed) -> discord.Embed:
+    try:
+        if getattr(embed, "title", None):
+            embed.title = _clean_visible_design_text(embed.title)
+        if getattr(embed, "description", None):
+            embed.description = _clean_visible_design_text(embed.description)
+
+        for index, field in enumerate(list(getattr(embed, "fields", []) or [])):
+            embed.set_field_at(
+                index,
+                name=_clean_visible_design_text(getattr(field, "name", "")),
+                value=_clean_visible_design_text(getattr(field, "value", "")),
+                inline=bool(getattr(field, "inline", False)),
+            )
+
+        footer_text = _safe_str(getattr(getattr(embed, "footer", None), "text", ""))
+        if footer_text:
+            embed.set_footer(text=_clean_visible_design_text(footer_text))
+    except Exception:
+        pass
+    return embed
+
+
+
 def _key(guild_id: int, user_id: int) -> str:
     return f"{int(guild_id)}:{int(user_id)}"
 
@@ -419,7 +459,7 @@ def _format_locks_embed(guild: discord.Guild, options: Mapping[str, Any]) -> dis
         inline=False,
     )
     embed.set_footer(text="Use Find & Fix Inconsistencies after saving locks.")
-    return embed
+    return _clean_design_embed(embed)
 
 
 
@@ -513,7 +553,7 @@ def _home_embed(guild: discord.Guild, options: Mapping[str, Any] | None = None) 
         inline=False,
     )
     embed.set_footer(text="/dank design • also reachable from /dank setup Advanced Tools")
-    return embed
+    return _clean_design_embed(embed)
 
 
 def _preview_embed(guild: discord.Guild, items: list[dict[str, Any]], *, title: str = "👁 Server Design Preview") -> discord.Embed:
@@ -607,7 +647,7 @@ def _preview_embed(guild: discord.Guild, items: list[dict[str, Any]], *, title: 
         )
 
     embed.set_footer(text="Apply is disabled only for real failures. Font fallback notes and safe skips do not block Apply.")
-    return embed
+    return _clean_design_embed(embed)
 
 
 
@@ -758,7 +798,7 @@ def _consistency_embed(guild: discord.Guild, items: list[dict[str, Any]], option
         embed.add_field(name="Cannot fix yet", value="\n".join(failed_lines)[:1024], inline=False)
 
     embed.set_footer(text="Fix uses the same one-press apply flow and rollback snapshot.")
-    return embed
+    return _clean_design_embed(embed)
 
 
 class FormatLocksButton(discord.ui.Button):
@@ -1024,7 +1064,10 @@ def _exact_format_embed(guild: discord.Guild, *, scope: str, target_id: int, loc
         title="🎛️ Exact Format Editor",
         description=(
             f"Editing **{_target_label(guild, scope, target_id)}**\n\n"
-            "Pick the exact pieces once, then save them as the desired format for this scope."
+            "**1. Choose** font, separator/layout, frame, and strength.\n"
+            "**2. Optional:** set an emoji.\n"
+            "**3. Press Save & Preview.**\n"
+            "**4. Press Apply These Changes** on the preview."
         ),
         color=discord.Color.blurple(),
     )
@@ -1057,7 +1100,7 @@ def _exact_format_embed(guild: discord.Guild, *, scope: str, target_id: int, loc
         inline=False,
     )
     embed.set_footer(text="Save Lock, then Preview/Fix that category or channel.")
-    return embed
+    return _clean_design_embed(embed)
 
 
 def _exact_format_sample_lines(guild: discord.Guild, *, scope: str, target_id: int, lock: Mapping[str, Any]) -> list[str]:
@@ -1167,7 +1210,7 @@ def _separator_gallery_embed(*, page: int, current: str) -> discord.Embed:
         embed.add_field(name=f"Examples page {page + 1}/{total_pages}", value="\n".join(lines)[:1024], inline=False)
 
     embed.set_footer(text="Tap a numbered example to select that separator/layout.")
-    return embed
+    return _clean_design_embed(embed)
 
 
 class SeparatorExampleButton(discord.ui.Button):
@@ -1406,6 +1449,216 @@ async def _update_exact_draft(
     )
 
 
+SEP_EXAMPLE_PAGE_SIZE = 6
+
+
+def _exact_lock_for_user(guild: discord.Guild, user_id: int, scope: str, target_id: int) -> dict[str, Any]:
+    key = _format_editor_key(int(guild.id), int(user_id), scope, int(target_id))
+    lock = dict(_FORMAT_EDITOR_DRAFTS.get(key) or {})
+    if lock:
+        return lock
+
+    return {
+        "scope": scope,
+        "theme_id": "gothic_clean",
+        "strength": 4,
+        "font": "fraktur",
+        "separator_id": "bar_full",
+        "category_frame_id": "line",
+        "icon_mode": "replace_missing",
+        "emoji_override": "",
+    }
+
+
+def _separator_example_text(sep_id: str, lock: Mapping[str, Any]) -> str:
+    spec = studio.SEPARATORS_BY_ID.get(sep_id)
+    if spec is None:
+        return sep_id
+
+    emoji = _safe_str(lock.get("emoji_override"), "") or "🎮"
+    font = _safe_str(lock.get("font"), "normal")
+    name_text, _subs = studio.transform_text_safe(
+        "gaming-news",
+        font,
+        fallback_order=studio.fallback_ladder(font),
+    )
+
+    try:
+        return spec.template.format(emoji=emoji, separator=spec.value, name=name_text).strip()
+    except Exception:
+        return studio.separator_preview(sep_id, emoji=emoji, name=name_text)
+
+
+def _separator_gallery_embed(
+    guild: discord.Guild,
+    *,
+    scope: str,
+    target_id: int,
+    lock: Mapping[str, Any],
+    page: int = 0,
+) -> discord.Embed:
+    separators = list(studio.SEPARATOR_LIBRARY)
+    total_pages = max(1, (len(separators) + SEP_EXAMPLE_PAGE_SIZE - 1) // SEP_EXAMPLE_PAGE_SIZE)
+    page = max(0, min(int(page), total_pages - 1))
+    chunk = separators[page * SEP_EXAMPLE_PAGE_SIZE:(page + 1) * SEP_EXAMPLE_PAGE_SIZE]
+
+    embed = discord.Embed(
+        title="🧩 Separator / Layout Examples",
+        description=(
+            f"Editing **{_target_label(guild, scope, target_id)}**\n\n"
+            "Pick the example that looks closest to what you want. "
+            "This changes the draft only; press **Save & Preview** after."
+        ),
+        color=discord.Color.blurple(),
+    )
+
+    lines = []
+    current = _safe_str(lock.get("separator_id"), "bar_full")
+    for index, spec in enumerate(chunk, start=1):
+        marker = "✅" if spec.id == current else "▫️"
+        lines.append(f"**{index}.** {marker} `{spec.label}` → `{_separator_example_text(spec.id, lock)}`")
+
+    embed.add_field(name=f"Examples page {page + 1}/{total_pages}", value="\n".join(lines)[:1024], inline=False)
+    embed.set_footer(text="Use the numbered buttons below. Examples use your selected font and emoji.")
+    return _clean_design_embed(embed)
+
+
+class SeparatorExamplePickButton(discord.ui.Button):
+    def __init__(self, sep_id: str, *, label: str, display_index: int, row: int) -> None:
+        super().__init__(
+            label=f"{display_index}. {_short_label(label, 46) if '_short_label' in globals() else label[:46]}",
+            emoji="🧩",
+            style=discord.ButtonStyle.secondary,
+            custom_id=f"dank_design:sep_example:{sep_id}",
+            row=row,
+        )
+        self.sep_id = sep_id
+
+    async def callback(self, interaction: discord.Interaction) -> None:  # type: ignore[override]
+        view = getattr(self, "view", None)
+        scope = getattr(view, "scope", "channel")
+        target_id = int(getattr(view, "target_id", 0))
+        await _update_exact_draft(interaction, scope=scope, target_id=target_id, patch={"separator_id": self.sep_id})
+
+
+class SeparatorExamplesPageButton(discord.ui.Button):
+    def __init__(self, page: int, *, label: str, emoji: str, row: int) -> None:
+        super().__init__(
+            label=label,
+            emoji=emoji,
+            style=discord.ButtonStyle.secondary,
+            custom_id=f"dank_design:sep_examples_page:{page}",
+            row=row,
+        )
+        self.page = int(page)
+
+    async def callback(self, interaction: discord.Interaction) -> None:  # type: ignore[override]
+        if not await _require_design_permission(interaction):
+            return
+
+        guild = interaction.guild
+        assert guild is not None
+
+        view = getattr(self, "view", None)
+        scope = getattr(view, "scope", "channel")
+        target_id = int(getattr(view, "target_id", 0))
+        lock = _exact_lock_for_user(guild, int(interaction.user.id), scope, target_id)
+
+        await interaction.response.edit_message(
+            embed=_separator_gallery_embed(guild, scope=scope, target_id=target_id, lock=lock, page=self.page),
+            view=SeparatorExamplesView(guild, scope=scope, target_id=target_id, lock=lock, page=self.page),
+        )
+
+
+class SeparatorExamplesBackButton(discord.ui.Button):
+    def __init__(self, *, row: int) -> None:
+        super().__init__(
+            label="Back to Exact Format",
+            emoji="⬅️",
+            style=discord.ButtonStyle.secondary,
+            custom_id="dank_design:sep_examples_back",
+            row=row,
+        )
+
+    async def callback(self, interaction: discord.Interaction) -> None:  # type: ignore[override]
+        if not await _require_design_permission(interaction):
+            return
+
+        guild = interaction.guild
+        assert guild is not None
+
+        view = getattr(self, "view", None)
+        scope = getattr(view, "scope", "channel")
+        target_id = int(getattr(view, "target_id", 0))
+        lock = _exact_lock_for_user(guild, int(interaction.user.id), scope, target_id)
+
+        await interaction.response.edit_message(
+            embed=_exact_format_embed(guild, scope=scope, target_id=target_id, lock=lock),
+            view=ExactFormatEditorViewFactory(guild, scope, target_id, lock),
+        )
+
+
+class SeparatorExamplesView(discord.ui.View):
+    def __init__(self, guild: discord.Guild, *, scope: str, target_id: int, lock: Mapping[str, Any], page: int = 0) -> None:
+        super().__init__(timeout=900)
+        self.scope = scope
+        self.target_id = int(target_id)
+
+        separators = list(studio.SEPARATOR_LIBRARY)
+        total_pages = max(1, (len(separators) + SEP_EXAMPLE_PAGE_SIZE - 1) // SEP_EXAMPLE_PAGE_SIZE)
+        page = max(0, min(int(page), total_pages - 1))
+        chunk = separators[page * SEP_EXAMPLE_PAGE_SIZE:(page + 1) * SEP_EXAMPLE_PAGE_SIZE]
+
+        for offset, spec in enumerate(chunk):
+            self.add_item(SeparatorExamplePickButton(spec.id, label=spec.label, display_index=offset + 1, row=offset // 2))
+
+        nav_row = 4
+        if page > 0:
+            self.add_item(SeparatorExamplesPageButton(page - 1, label="Prev", emoji="⬅️", row=nav_row))
+        if page < total_pages - 1:
+            self.add_item(SeparatorExamplesPageButton(page + 1, label="Next", emoji="➡️", row=nav_row))
+        self.add_item(SeparatorExamplesBackButton(row=nav_row))
+
+
+async def _save_exact_and_preview(interaction: discord.Interaction, *, scope: str, target_id: int) -> None:
+    if not await _require_design_permission(interaction):
+        return
+
+    guild = interaction.guild
+    assert guild is not None
+
+    await interaction.response.defer(ephemeral=True, thinking=True)
+
+    await _save_exact_lock(interaction, scope=scope, target_id=int(target_id))
+
+    options = await _load_design_options(int(guild.id))
+    all_items = await build_design_plan(guild, options)
+
+    if scope == "category":
+        items = _filter_plan_for_category(all_items, int(target_id))
+        title = "👁 Category Format Preview"
+    else:
+        items = _filter_plan_for_channel(all_items, int(target_id))
+        title = "👁 Channel Format Preview"
+
+    key = _key(int(guild.id), int(interaction.user.id))
+    _PENDING[key] = {
+        "created_at": time.time(),
+        "items": items,
+        "options": dict(options),
+        "mode": f"{scope}_exact_format",
+    }
+
+    has_blockers = any(item.get("status") == "failed" for item in items)
+    has_changes = any(item.get("status") == "changed" for item in items)
+
+    await interaction.edit_original_response(
+        embed=_preview_embed(guild, items, title=title),
+        view=DesignPreviewView(can_apply=not has_blockers and has_changes),
+    )
+
+
+
 class ExactFormatEditorView(discord.ui.View):
     def __init__(self, *, scope: str, target_id: int) -> None:
         super().__init__(timeout=900)
@@ -1434,7 +1687,26 @@ class ExactFormatEditorView(discord.ui.View):
             view=SeparatorGalleryView(scope=self.scope, target_id=self.target_id, page=0, current=current),
         )
 
-    @discord.ui.button(label="Save Lock", emoji="✅", style=discord.ButtonStyle.success, custom_id="dank_design:exact_save", row=4)
+    @discord.ui.button(label="Save & Preview", emoji="👁️", style=discord.ButtonStyle.primary, custom_id="dank_design:exact_save_preview", row=4)
+    async def save_and_preview(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        await _save_exact_and_preview(interaction, scope=self.scope, target_id=self.target_id)
+
+    @discord.ui.button(label="Examples", emoji="🧩", style=discord.ButtonStyle.secondary, custom_id="dank_design:exact_separator_examples", row=4)
+    async def separator_examples(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        if not await _require_design_permission(interaction):
+            return
+
+        guild = interaction.guild
+        assert guild is not None
+
+        lock = _exact_lock_for_user(guild, int(interaction.user.id), self.scope, self.target_id)
+
+        await interaction.response.edit_message(
+            embed=_separator_gallery_embed(guild, scope=self.scope, target_id=self.target_id, lock=lock, page=0),
+            view=SeparatorExamplesView(guild, scope=self.scope, target_id=self.target_id, lock=lock, page=0),
+        )
+
+    @discord.ui.button(label="Save", emoji="✅", style=discord.ButtonStyle.success, custom_id="dank_design:exact_save", row=4)
     async def save_lock(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         if not await _require_design_permission(interaction):
             return
@@ -1471,7 +1743,7 @@ class ExactFormatEditorView(discord.ui.View):
             view=ExactFormatEditorViewFactory(guild, self.scope, self.target_id, current),
         )
 
-    @discord.ui.button(label="Set/Clear Emoji", emoji="😀", style=discord.ButtonStyle.secondary, custom_id="dank_design:exact_emoji", row=4)
+    @discord.ui.button(label="Emoji", emoji="😀", style=discord.ButtonStyle.secondary, custom_id="dank_design:exact_emoji", row=4)
     async def set_emoji(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         if not await _require_design_permission(interaction):
             return
@@ -1693,7 +1965,7 @@ def _category_editor_embed(guild: discord.Guild, *, page: int) -> discord.Embed:
             lines.append(f"**{index}.** `{_safe_str(getattr(category, 'name', 'unnamed'))}` · {child_count} child channel(s)")
         embed.add_field(name=f"Categories page {page + 1}/{total_pages}", value="\n".join(lines)[:1024], inline=False)
     embed.set_footer(text="Select a category to preview, lock format, or open its channels.")
-    return embed
+    return _clean_design_embed(embed)
 
 
 def _channel_editor_embed(guild: discord.Guild, *, page: int, category_id: int | None = None) -> discord.Embed:
@@ -1726,7 +1998,7 @@ def _channel_editor_embed(guild: discord.Guild, *, page: int, category_id: int |
             lines.append(f"**{index}.** `{_channel_display_line(channel)}`")
         embed.add_field(name=f"Items page {page + 1}/{total_pages}", value="\n".join(lines)[:1024], inline=False)
     embed.set_footer(text="Select an item to preview, lock format, or fix only that item.")
-    return embed
+    return _clean_design_embed(embed)
 
 
 class CategoryPickButton(discord.ui.Button):
@@ -1863,7 +2135,7 @@ def _category_action_embed(category: discord.CategoryChannel) -> discord.Embed:
     )
     embed.add_field(name="Category", value=f"{category.mention} (`{category.id}`)", inline=False)
     embed.add_field(name="Options", value="Lock format, preview/fix this category scope, or edit child channels.", inline=False)
-    return embed
+    return _clean_design_embed(embed)
 
 
 def _channel_action_embed(channel: discord.abc.GuildChannel) -> discord.Embed:
@@ -1875,7 +2147,7 @@ def _channel_action_embed(channel: discord.abc.GuildChannel) -> discord.Embed:
     mention = getattr(channel, "mention", f"`{getattr(channel, 'id', '')}`")
     embed.add_field(name="Item", value=f"{mention} (`{getattr(channel, 'id', '')}`)", inline=False)
     embed.add_field(name="Kind", value=_kind(channel), inline=True)
-    return embed
+    return _clean_design_embed(embed)
 
 
 class CategoryEditorActionView(discord.ui.View):
@@ -2200,7 +2472,7 @@ def _doctor_embed(guild: discord.Guild, options: Mapping[str, Any], items: list[
         )
 
     embed.set_footer(text="Doctor checks saved design rules, locks, drift, duplicates, protected skips, and edit blockers.")
-    return embed
+    return _clean_design_embed(embed)
 
 
 class DesignDoctorButton(discord.ui.Button):
@@ -2391,7 +2663,7 @@ def _format_lock_manager_embed(guild: discord.Guild, options: Mapping[str, Any],
         )
 
     embed.set_footer(text="Use the numbered buttons to remove one lock, or clean stale locks only.")
-    return embed
+    return _clean_design_embed(embed)
 
 
 async def _remove_format_lock(interaction: discord.Interaction, *, scope: str, target_id: int) -> dict[str, Any]:
@@ -2677,7 +2949,7 @@ def _protection_manager_embed(guild: discord.Guild, options: Mapping[str, Any]) 
         inline=False,
     )
     embed.set_footer(text="Protected items do not block Apply. They are safe skips unless overridden.")
-    return embed
+    return _clean_design_embed(embed)
 
 
 class ProtectionManagerButton(discord.ui.Button):
@@ -2815,6 +3087,79 @@ async def _open_protection_mode_editor(interaction: discord.Interaction, *, chan
 
 
 
+def _start_here_embed() -> discord.Embed:
+    embed = discord.Embed(
+        title="🧭 Dank Design Start Here",
+        description=(
+            "Use this order when you want a clean server design without guessing."
+        ),
+        color=discord.Color.blurple(),
+    )
+    embed.add_field(
+        name="Fast whole-server design",
+        value=(
+            "**1.** Pick a theme and strength.\n"
+            "**2.** Press **Preview Design**.\n"
+            "**3.** Review the preview.\n"
+            "**4.** Press **Apply These Changes** on the preview."
+        ),
+        inline=False,
+    )
+    embed.add_field(
+        name="Fix only messy/inconsistent names",
+        value=(
+            "**1.** Press **Fix Inconsistencies**.\n"
+            "**2.** Review what drifted.\n"
+            "**3.** Press **Apply These Changes**."
+        ),
+        inline=False,
+    )
+    embed.add_field(
+        name="Edit one category or channel",
+        value=(
+            "**1.** Open **Category Editor** or **Channel Editor**.\n"
+            "**2.** Pick the item using Dank Shield's buttons.\n"
+            "**3.** Press **Edit Exact Format**.\n"
+            "**4.** Choose font/separator/frame/strength.\n"
+            "**5.** Press **Save & Preview**.\n"
+            "**6.** Press **Apply These Changes**."
+        ),
+        inline=False,
+    )
+    embed.set_footer(text="Nothing applies until you reach a preview and press Apply These Changes.")
+    return _clean_design_embed(embed)
+
+
+class StartHereButton(discord.ui.Button):
+    def __init__(self, *, row: int = 2) -> None:
+        super().__init__(
+            label="Start Here",
+            emoji="🧭",
+            style=discord.ButtonStyle.success,
+            custom_id="dank_design:start_here",
+            row=row,
+        )
+
+    async def callback(self, interaction: discord.Interaction) -> None:  # type: ignore[override]
+        if not await _require_design_permission(interaction):
+            return
+        await interaction.response.edit_message(embed=_start_here_embed(), view=StartHereView())
+
+
+class StartHereView(discord.ui.View):
+    def __init__(self) -> None:
+        super().__init__(timeout=900)
+
+    @discord.ui.button(label="Back to Design Studio", emoji="🎨", style=discord.ButtonStyle.secondary, custom_id="dank_design:start_here_back", row=4)
+    async def back(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        if not await _require_design_permission(interaction):
+            return
+        assert interaction.guild is not None
+        options = await _load_design_options(int(interaction.guild.id))
+        await interaction.response.edit_message(embed=_home_embed(interaction.guild, options), view=DesignHomeView(options))
+
+
+
 
 class DesignHomeView(discord.ui.View):
     def __init__(self, options: Mapping[str, Any] | None = None) -> None:
@@ -2822,6 +3167,9 @@ class DesignHomeView(discord.ui.View):
         options = options or {}
         self.add_item(ThemeSelect(_safe_str(options.get("theme_id"), "gothic_clean")))
         self.add_item(StrengthSelect(_safe_int(options.get("strength"), 2)))
+        existing_ids = {str(getattr(child, "custom_id", "")) for child in getattr(self, "children", []) or []}
+        if "dank_design:start_here" not in existing_ids:
+            self.add_item(StartHereButton(row=2))
         existing_ids = {str(getattr(child, "custom_id", "")) for child in getattr(self, "children", []) or []}
         if "dank_design:doctor" not in existing_ids:
             self.add_item(DesignDoctorButton(row=4))
@@ -2894,7 +3242,7 @@ class DesignPreviewView(discord.ui.View):
         super().__init__(timeout=900)
         self.apply.disabled = not can_apply
 
-    @discord.ui.button(label="Apply / Fix All", emoji="✅", style=discord.ButtonStyle.danger, custom_id="dank_design:apply", row=0)
+    @discord.ui.button(label="Apply These Changes", emoji="✅", style=discord.ButtonStyle.danger, custom_id="dank_design:apply", row=0)
     async def apply(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         if not await _require_design_permission(interaction):
             return
