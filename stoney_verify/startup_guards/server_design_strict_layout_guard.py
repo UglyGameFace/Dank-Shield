@@ -15,6 +15,7 @@ it.
 """
 
 from collections.abc import Callable
+from dataclasses import replace
 from typing import Any
 
 _PATCHED = False
@@ -78,6 +79,33 @@ def _relax_visual_name_defaults(studio: Any) -> None:
         pass
 
 
+def _normalize_theme_defaults(studio: Any) -> None:
+    """Use a one-stroke Gothic separator that does not look like doubled bars.
+
+    Discord mobile can make fullwidth/heavy bars look like `||` beside fraktur
+    letters. Gothic Clean should still look strong, but the default separator
+    must be visually unambiguous.
+    """
+
+    if getattr(studio, "_DANK_GOTHIC_SINGLE_BAR_ACTIVE", False):
+        return
+
+    try:
+        themes = []
+        changed = False
+        for theme in tuple(getattr(studio, "THEMES", tuple()) or tuple()):
+            if getattr(theme, "id", "") == "gothic_clean" and getattr(theme, "channel_separator", "") != "bar_medium":
+                theme = replace(theme, channel_separator="bar_medium")
+                changed = True
+            themes.append(theme)
+        if changed:
+            studio.THEMES = tuple(themes)
+            studio.THEMES_BY_ID = {theme.id: theme for theme in studio.THEMES}
+        studio._DANK_GOTHIC_SINGLE_BAR_ACTIVE = True
+    except Exception:
+        pass
+
+
 def _make_strict_match(original: Callable[..., bool], studio: Any) -> Callable[..., bool]:
     def _strict_already_semantically_matches_design(
         before: str,
@@ -120,6 +148,7 @@ def apply() -> bool:
         from stoney_verify.services import server_design_studio as studio
 
         _relax_visual_name_defaults(studio)
+        _normalize_theme_defaults(studio)
 
         if getattr(studio, "_DANK_STRICT_LAYOUT_MATCH_ACTIVE", False):
             _PATCHED = True
