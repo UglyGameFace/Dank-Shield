@@ -1695,6 +1695,257 @@ class BackToCategoryButton(discord.ui.Button):
 
 
 
+# ---------------------------------------------------------------------------
+# Design Doctor
+# ---------------------------------------------------------------------------
+
+def _guild_categories(guild: discord.Guild) -> list[discord.CategoryChannel]:
+    return list(getattr(guild, "categories", []) or [])
+
+
+def _guild_category_ids(guild: discord.Guild) -> set[str]:
+    return {str(int(getattr(category, "id", 0))) for category in _guild_categories(guild) if _safe_int(getattr(category, "id", 0), 0) > 0}
+
+
+def _doctor_missing_category_locks(guild: discord.Guild, options: Mapping[str, Any]) -> list[str]:
+    if "_mapping_dict" not in globals():
+        return []
+    category_locks = _mapping_dict(options.get("category_format_locks"))
+    existing = _guild_category_ids(guild)
+    missing: list[str] = []
+    for category in _guild_categories(guild):
+        cid = str(int(category.id))
+        if cid not in existing:
+            continue
+        if cid not in category_locks:
+            missing.append(f"• `{_safe_str(getattr(category, 'name', 'Category'))}`")
+    return missing
+
+
+def _doctor_stale_lock_lines(guild: discord.Guild, options: Mapping[str, Any]) -> list[str]:
+    if "_mapping_dict" not in globals():
+        return []
+    lines: list[str] = []
+    category_locks = _mapping_dict(options.get("category_format_locks"))
+    channel_locks = _mapping_dict(options.get("channel_format_locks"))
+
+    for cid in list(category_locks.keys()):
+        if guild.get_channel(_safe_int(cid, 0)) is None:
+            lines.append(f"• stale category lock `{cid}`")
+    for cid in list(channel_locks.keys()):
+        if guild.get_channel(_safe_int(cid, 0)) is None:
+            lines.append(f"• stale channel lock `{cid}`")
+    return lines
+
+
+def _doctor_top_changed(items: list[dict[str, Any]], *, limit: int = 8) -> list[str]:
+    lines: list[str] = []
+    for item in items:
+        if item.get("status") != "changed":
+            continue
+        scope = _safe_str(item.get("format_lock_scope"), "auto")
+        lines.append(f"• `{item.get('before')}` → `{item.get('after')}` · `{scope}`"[:220])
+        if len(lines) >= limit:
+            break
+    return lines
+
+
+def _doctor_permission_blockers(items: list[dict[str, Any]], *, limit: int = 8) -> list[str]:
+    lines: list[str] = []
+    for item in items:
+        if item.get("status") != "failed":
+            continue
+        blockers = list(item.get("blockers") or [])
+        reason = _safe_str(blockers[0] if blockers else "Unknown blocker")
+        lines.append(f"• `{item.get('before')}` — {reason}"[:220])
+        if len(lines) >= limit:
+            break
+    return lines
+
+
+def _doctor_scope_counts(items: list[dict[str, Any]]) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for item in items:
+        scope = _safe_str(item.get("format_lock_scope"), "auto")
+        counts[scope] = counts.get(scope, 0) + 1
+    return counts
+
+
+def _doctor_embed(guild: discord.Guild, options: Mapping[str, Any], items: list[dict[str, Any]]) -> discord.Embed:
+    summary = studio.summarize_plan(items)
+    score = studio.design_score(items)
+    duplicates = studio.detect_duplicate_outputs(items)
+    counts = _lock_count(options) if "_lock_count" in globals() else {"global": 0, "categories": 0, "channels": 0}
+    scope_counts = _doctor_scope_counts(items)
+
+    missing_locks = _doctor_missing_category_locks(guild, options)
+    stale_locks = _doctor_stale_lock_lines(guild, options)
+    changed = _doctor_top_changed(items)
+    blockers = _doctor_permission_blockers(items)
+
+    health_points = 100
+    health_points -= min(30, summary.get("failed", 0) * 10)
+    health_points -= min(20, len(duplicates) * 10)
+    health_points -= min(20, summary.get("changed", 0))
+    health_points -= 10 if stale_locks else 0
+    health_points -= 10 if counts.get("global", 0) == 0 and counts.get("categories", 0) == 0 else 0
+    health_points = max(0, min(100, health_points))
+
+    if summary.get("failed", 0) or duplicates:
+        status = "Needs fixes before apply"
+        color = discord.Color.orange()
+    elif summary.get("changed", 0):
+        status = "Ready to repair drift"
+        color = discord.Color.blurple()
+    else:
+        status = "Looks consistent"
+        color = discord.Color.green()
+
+    embed = discord.Embed(
+        title="🩺 Server Design Doctor",
+        description=(
+            f"Design health: **{health_points}/100** · **{status}**\\n\\n"
+            "This is a read-only audit. Nothing has been renamed."
+        ),
+        color=color,
+    )
+
+    embed.add_field(
+        name="Plan health",
+        value=(
+            f"Already matching: **{summary.get('unchanged', 0)}**\\n"
+            f"Needs repair: **{summary.get('changed', 0)}**\\n"
+            f"Protected safe skips: **{summary.get('protected', 0)}**\\n"
+            f"Must fix: **{summary.get('failed', 0)}**\\n"
+            f"Notes: **{summary.get('warnings', 0)}**"
+        ),
+        inline=True,
+    )
+    embed.add_field(
+        name="Saved locks",
+        value=(
+            f"Global: **{'On' if counts.get('global') else 'Off'}**\\n"
+            f"Category locks: **{counts.get('categories', 0)}**\\n"
+            f"Channel overrides: **{counts.get('channels', 0)}**"
+        ),
+        inline=True,
+    )
+    embed.add_field(
+        name="Design score",
+        value=(
+            f"Readability: **{score['readability']}/100**\\n"
+            f"Mobile: **{score['mobile_fit']}/100**\\n"
+            f"Clutter: **{score['clutter_risk']}**\\n"
+            f"Accessibility: **{score['accessibility']}**"
+        ),
+        inline=True,
+    )
+
+    scope_line = " • ".join(f"{k}: {v}" for k, v in sorted(scope_counts.items())) or "No scoped items."
+    embed.add_field(name="Rule coverage", value=scope_line[:1024], inline=False)
+
+    if missing_locks:
+        embed.add_field(
+            name="Unlocked categories",
+            value=("\\n".join(missing_locks[:8]) + (f"\\n…and {len(missing_locks) - 8} more" if len(missing_locks) > 8 else ""))[:1024],
+            inline=False,
+        )
+
+    if changed:
+        embed.add_field(name="Top drift to repair", value="\\n".join(changed)[:1024], inline=False)
+
+    if blockers:
+        embed.add_field(name="Must fix first", value="\\n".join(blockers)[:1024], inline=False)
+
+    if duplicates:
+        embed.add_field(name="Duplicate output risk", value="\\n".join(f"• {x}" for x in duplicates[:5])[:1024], inline=False)
+
+    if stale_locks:
+        embed.add_field(name="Stale saved locks", value="\\n".join(stale_locks[:8])[:1024], inline=False)
+
+    if not changed and not blockers and not duplicates and not stale_locks:
+        embed.add_field(
+            name="Next step",
+            value="Everything looks aligned. Use Category/Channel Editor only when you want to intentionally change the design.",
+            inline=False,
+        )
+    else:
+        embed.add_field(
+            name="Recommended next step",
+            value="Use **Find & Fix Inconsistencies** for drift, or **Category/Channel Editor** to lock missing categories.",
+            inline=False,
+        )
+
+    embed.set_footer(text="Doctor checks saved design rules, locks, drift, duplicates, protected skips, and edit blockers.")
+    return embed
+
+
+class DesignDoctorButton(discord.ui.Button):
+    def __init__(self, *, row: int = 4) -> None:
+        super().__init__(
+            label="Design Doctor",
+            emoji="🩺",
+            style=discord.ButtonStyle.secondary,
+            custom_id="dank_design:doctor",
+            row=row,
+        )
+
+    async def callback(self, interaction: discord.Interaction) -> None:  # type: ignore[override]
+        if not await _require_design_permission(interaction):
+            return
+        guild = interaction.guild
+        assert guild is not None
+
+        await interaction.response.defer(ephemeral=True, thinking=True)
+        options = await _load_design_options(int(guild.id))
+        items = await build_design_plan(guild, options)
+        await interaction.edit_original_response(embed=_doctor_embed(guild, options, items), view=DesignDoctorView())
+
+
+class DesignDoctorView(discord.ui.View):
+    def __init__(self) -> None:
+        super().__init__(timeout=900)
+
+    @discord.ui.button(label="Find & Fix Inconsistencies", emoji="🧭", style=discord.ButtonStyle.success, custom_id="dank_design:doctor_consistency", row=0)
+    async def consistency(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        if "DesignHomeView" not in globals():
+            return await interaction.response.send_message("Design view is not loaded yet.", ephemeral=True)
+        view = DesignHomeView({})
+        callback = getattr(view, "consistency_check", None)
+        if callback is None:
+            return await interaction.response.send_message("Consistency check is not installed yet.", ephemeral=True)
+        await callback.callback(interaction)  # type: ignore[attr-defined]
+
+    @discord.ui.button(label="Category Editor", emoji="🗂️", style=discord.ButtonStyle.primary, custom_id="dank_design:doctor_category", row=1)
+    async def category_editor(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        if not await _require_design_permission(interaction):
+            return
+        guild = interaction.guild
+        assert guild is not None
+        if "CategoryEditorPickerView" not in globals():
+            return await interaction.response.send_message("Category Editor is not installed yet.", ephemeral=True)
+        await interaction.response.edit_message(embed=_category_editor_embed(guild, page=0), view=CategoryEditorPickerView(guild, page=0))
+
+    @discord.ui.button(label="Channel Editor", emoji="#️⃣", style=discord.ButtonStyle.primary, custom_id="dank_design:doctor_channel", row=1)
+    async def channel_editor(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        if not await _require_design_permission(interaction):
+            return
+        guild = interaction.guild
+        assert guild is not None
+        if "ChannelEditorPickerView" not in globals():
+            return await interaction.response.send_message("Channel Editor is not installed yet.", ephemeral=True)
+        await interaction.response.edit_message(embed=_channel_editor_embed(guild, page=0), view=ChannelEditorPickerView(guild, page=0))
+
+    @discord.ui.button(label="Back to Design Studio", emoji="🎨", style=discord.ButtonStyle.secondary, custom_id="dank_design:doctor_back", row=4)
+    async def back(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        if not await _require_design_permission(interaction):
+            return
+        assert interaction.guild is not None
+        options = await _load_design_options(int(interaction.guild.id))
+        await interaction.response.edit_message(embed=_home_embed(interaction.guild, options), view=DesignHomeView(options))
+
+
+
 
 class DesignHomeView(discord.ui.View):
     def __init__(self, options: Mapping[str, Any] | None = None) -> None:
@@ -1702,6 +1953,9 @@ class DesignHomeView(discord.ui.View):
         options = options or {}
         self.add_item(ThemeSelect(_safe_str(options.get("theme_id"), "gothic_clean")))
         self.add_item(StrengthSelect(_safe_int(options.get("strength"), 2)))
+        existing_ids = {str(getattr(child, "custom_id", "")) for child in getattr(self, "children", []) or []}
+        if "dank_design:doctor" not in existing_ids:
+            self.add_item(DesignDoctorButton(row=4))
         existing_ids = {str(getattr(child, "custom_id", "")) for child in getattr(self, "children", []) or []}
         if "dank_design:category_editor" not in existing_ids:
             self.add_item(DesignCategoryEditorButton(row=3))
