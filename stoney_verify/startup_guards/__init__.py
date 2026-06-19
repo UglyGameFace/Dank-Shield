@@ -16,6 +16,7 @@ _SEEN_IMPORT_MESSAGES: set[str] = set()
 _STARTUP_GUARDS: Tuple[str, ...] = (
     "stoney_verify.startup_guards.process_health",
     "stoney_verify.startup_guards.command_safety",
+    "stoney_verify.startup_guards.app_command_error_response_guard",
     "stoney_verify.startup_guards.slash_command_cleanup",
     "stoney_verify.startup_guards.public_verify_admin_command_skip",
     "stoney_verify.startup_guards.auto_schema_bootstrap",
@@ -46,6 +47,7 @@ _STARTUP_GUARDS: Tuple[str, ...] = (
     "stoney_verify.startup_guards.setup_overview_command_guard",
     "stoney_verify.startup_guards.server_design_command_module_guard",
     "stoney_verify.startup_guards.server_design_strict_layout_guard",
+    "stoney_verify.startup_guards.server_design_majority_layout_guard",
     "stoney_verify.startup_guards.protection_pack_manual_import_guard",
     "stoney_verify.startup_guards.protection_import_button_patch",
     "stoney_verify.startup_guards.setup_verification_toggle_independence_guard",
@@ -76,6 +78,7 @@ _STARTUP_GUARDS: Tuple[str, ...] = (
     "stoney_verify.members_new.role_state_compat_guard",
     "stoney_verify.startup_guards.setup_role_safety",
     "stoney_verify.commands_ext.public_moderation_command_guard",
+    "stoney_verify.startup_guards.ban_target_resolution_guard",
     "stoney_verify.startup_guards.member_activity_notices_db_safety",
     "stoney_verify.startup_guards.member_update_modlog",
     "stoney_verify.startup_guards.resource_modlog_coverage",
@@ -160,6 +163,9 @@ _ALWAYS_SHOW_PREFIXES: Tuple[str, ...] = (
     "✅ public_ticket_confirm_hardening_guard",
     "✅ server_design_command_module_guard active",
     "✅ server_design_strict_layout_guard active",
+    "✅ server_design_majority_layout_guard active",
+    "✅ app_command_error_response_guard active",
+    "✅ ban_target_resolution_guard active",
     "✅ production_command_surface_guard active",
 )
 _ONCE_ONLY_PREFIXES: Tuple[str, ...] = (
