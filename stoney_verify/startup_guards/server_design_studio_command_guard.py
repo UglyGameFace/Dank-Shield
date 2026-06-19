@@ -514,37 +514,41 @@ def _home_embed(guild: discord.Guild, options: Mapping[str, Any] | None = None) 
     theme_id = _safe_str(options.get("theme_id"), "gothic_clean")
     strength = _safe_int(options.get("strength"), 2)
     theme = next((t for t in studio.THEMES if t.id == theme_id), studio.THEMES[1])
+    font_text = str(getattr(theme, "font", "normal") or "normal").replace("_", " ").title()
+    counts = _lock_count(options)
+
     embed = discord.Embed(
-        title="🎨 Dank Shield Server Design Studio",
+        title="🎨 Dank Design",
         description=(
-            "Customize visible channel/category naming parts: emojis, separators, fonts, category frames, cleanup, preview, apply, and rollback.\n\n"
-            "This tool only changes names. It never changes permissions, overwrites, topics, order, slowmode, NSFW, archive settings, or category placement."
+            "Choose a style, preview it, then apply only after review.\n\n"
+            "**Nothing changes until you press Apply These Changes on a preview.**"
         ),
         color=discord.Color.blurple(),
     )
-    font_text = str(getattr(theme, "font", "normal") or "normal").replace("_", " ").title()
     embed.add_field(
-        name="Current Draft",
+        name="Step 1 — Current style",
         value=(
             f"Theme: **{theme.label}**\n"
-            f"Theme font: **{font_text}**\n"
+            f"Font: **{font_text}**\n"
             f"Strength: **{strength}/5**\n"
-            "Apply mode: **one press, paced at 2 seconds per rename**"
+            "Apply speed: **2 seconds per rename**"
         ),
         inline=False,
     )
     embed.add_field(
-        name="Fast path",
+        name="Step 2 — Choose your path",
         value=(
-            "**Preview Selected Design** shows only the important changes first. "
-            "Safe skips are summarized instead of dumped as scary errors. "
-            "Rollback is available after apply."
+            "🧭 **Start Here** if you are unsure.\n"
+            "👁 **Preview & Apply** for a full server pass.\n"
+            "🧩 **Fix Mismatches** to repair only drift.\n"
+            "🗂 **Category Editor** for category-level control.\n"
+            "#️⃣ **Channel Editor** for one exact item.\n"
+            "⚙️ **Advanced Tools** for locks, protection, rollback, and diagnostics."
         ),
         inline=False,
     )
-    counts = _lock_count(options)
     embed.add_field(
-        name="Format Locks",
+        name="Saved layout locks",
         value=(
             f"Global: **{'On' if counts['global'] else 'Off'}** • "
             f"Categories: **{counts['categories']}** • "
@@ -552,8 +556,9 @@ def _home_embed(guild: discord.Guild, options: Mapping[str, Any] | None = None) 
         ),
         inline=False,
     )
-    embed.set_footer(text="/dank design • also reachable from /dank setup Advanced Tools")
+    embed.set_footer(text="/dank design • names only • preview before apply")
     return _clean_design_embed(embed)
+
 
 
 def _preview_embed(guild: discord.Guild, items: list[dict[str, Any]], *, title: str = "👁 Server Design Preview") -> discord.Embed:
@@ -596,8 +601,7 @@ def _preview_embed(guild: discord.Guild, items: list[dict[str, Any]], *, title: 
     for item in changed_items[:12]:
         before = _safe_str(item.get("before"))
         after = _safe_str(item.get("after"))
-        scope = _safe_str(item.get("format_lock_scope"), "auto")
-        changed_lines.append(f"✅ `{before}` → `{after}` · `{scope}`"[:240])
+        changed_lines.append(f"✅ `{before}` → `{after}`"[:240])
 
     if not changed_lines:
         changed_text = "No rename changes are needed for this draft."
@@ -735,7 +739,7 @@ def _consistency_lines(items: list[dict[str, Any]], *, limit: int = 12) -> list[
         before = _safe_str(item.get("before"))
         after = _safe_str(item.get("after"))
         kind = _safe_str(item.get("kind"), "channel")
-        rows.append(f"🧩 `{before}` → `{after}` · `{kind}`"[:260])
+        rows.append(f"🧩 `{before}` → `{after}`"[:240])
         if len(rows) >= limit:
             break
     return rows or ["No inconsistent channel names found."]
@@ -1082,11 +1086,6 @@ def _exact_format_embed(guild: discord.Guild, *, scope: str, target_id: int, loc
             f"Custom emoji: **{emoji_override or 'None'}**\n"
             f"Preview mode: **{'Exact Enforce' if bool(lock.get('exact_match', False)) else 'Smart Fix'}**"
         ),
-        inline=False,
-    )
-    embed.add_field(
-        name="Current layout example",
-        value=f"`{_separator_example_text(sep)}`",
         inline=False,
     )
     embed.add_field(
@@ -2339,7 +2338,7 @@ def _doctor_top_changed(items: list[dict[str, Any]], *, limit: int = 8) -> list[
         if item.get("status") != "changed":
             continue
         scope = _safe_str(item.get("format_lock_scope"), "auto")
-        lines.append(f"• `{item.get('before')}` → `{item.get('after')}` · `{scope}`"[:220])
+        lines.append(f"• `{item.get('before')}` → `{item.get('after')}`"[:220])
         if len(lines) >= limit:
             break
     return lines
@@ -3308,24 +3307,144 @@ class EditorsLocksView(discord.ui.View):
 
 
 
+def _design_help_embed() -> discord.Embed:
+    embed = discord.Embed(
+        title="❓ Dank Design Help",
+        description=(
+            "Dank Design only changes visible channel/category names. "
+            "It never changes permissions, topics, order, slowmode, NSFW, archive settings, or category placement."
+        ),
+        color=discord.Color.blurple(),
+    )
+    embed.add_field(
+        name="How to apply changes",
+        value=(
+            "Changes are never applied from the home screen.\n"
+            "**Preview & Apply** or **Save & Preview** first, then press **Apply These Changes**."
+        ),
+        inline=False,
+    )
+    embed.add_field(
+        name="Best workflow",
+        value=(
+            "**Quick server style:** Preview & Apply\n"
+            "**Fix drift:** Fix Mismatches\n"
+            "**Exact control:** Category Editor or Channel Editor → Edit Exact Format → Save & Preview"
+        ),
+        inline=False,
+    )
+    embed.add_field(
+        name="Font fallback",
+        value=(
+            "If one font cannot style a letter, Dank Shield tries safe fallback glyphs instead of blocking the rename."
+        ),
+        inline=False,
+    )
+    embed.set_footer(text="Use Advanced Tools only for doctor checks, locks, protection, rollback, and help.")
+    return _clean_design_embed(embed)
+
+
+def _advanced_tools_embed() -> discord.Embed:
+    embed = discord.Embed(
+        title="⚙️ Dank Design Advanced Tools",
+        description=(
+            "These tools are useful after the basic workflow. "
+            "Most users only need Preview & Apply, Fix Mismatches, Category Editor, or Channel Editor."
+        ),
+        color=discord.Color.blurple(),
+    )
+    embed.add_field(
+        name="Tools",
+        value=(
+            "🩺 **Design Doctor** — audit saved rules, drift, duplicates, blockers.\n"
+            "🔒 **Format Locks / Layouts** — save reusable layouts.\n"
+            "🔐 **Manage Saved Locks** — remove old overrides or stale locks.\n"
+            "🛡 **Protection Manager** — choose what should never be renamed.\n"
+            "↩️ **Rollback** — undo the last applied rename batch.\n"
+            "❓ **Help** — explain the workflow."
+        ),
+        inline=False,
+    )
+    return _clean_design_embed(embed)
+
+
+class AdvancedToolsView(discord.ui.View):
+    def __init__(self) -> None:
+        super().__init__(timeout=900)
+
+    @discord.ui.button(label="Design Doctor", emoji="🩺", style=discord.ButtonStyle.secondary, custom_id="dank_design:advanced_doctor", row=0)
+    async def doctor(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        if not await _require_design_permission(interaction):
+            return
+        guild = interaction.guild
+        assert guild is not None
+        await interaction.response.defer(ephemeral=True, thinking=True)
+        options = await _load_design_options(int(guild.id))
+        items = await build_design_plan(guild, options)
+        await interaction.edit_original_response(embed=_doctor_embed(guild, options, items), view=DesignDoctorView())
+
+    @discord.ui.button(label="Format Locks / Layouts", emoji="🔒", style=discord.ButtonStyle.primary, custom_id="dank_design:advanced_format_locks", row=0)
+    async def format_locks(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        if not await _require_design_permission(interaction):
+            return
+        guild = interaction.guild
+        assert guild is not None
+        options = await _load_design_options(int(guild.id))
+        await interaction.response.edit_message(embed=_format_locks_embed(guild, options), view=FormatLocksView())
+
+    @discord.ui.button(label="Manage Saved Locks", emoji="🔐", style=discord.ButtonStyle.secondary, custom_id="dank_design:advanced_manage_locks", row=1)
+    async def manage_locks(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        if not await _require_design_permission(interaction):
+            return
+        guild = interaction.guild
+        assert guild is not None
+        options = await _load_design_options(int(guild.id))
+        await interaction.response.edit_message(embed=_format_lock_manager_embed(guild, options, page=0), view=LockManagerView(guild, options, page=0))
+
+    @discord.ui.button(label="Protection Manager", emoji="🛡️", style=discord.ButtonStyle.secondary, custom_id="dank_design:advanced_protection", row=1)
+    async def protection(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        if not await _require_design_permission(interaction):
+            return
+        guild = interaction.guild
+        assert guild is not None
+        options = await _load_design_options(int(guild.id))
+        await interaction.response.edit_message(embed=_protection_manager_embed(guild, options), view=ProtectionManagerView())
+
+    @discord.ui.button(label="Rollback", emoji="↩️", style=discord.ButtonStyle.danger, custom_id="dank_design:advanced_rollback", row=2)
+    async def rollback(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        await _open_rollback(interaction)
+
+    @discord.ui.button(label="Help", emoji="❓", style=discord.ButtonStyle.secondary, custom_id="dank_design:advanced_help", row=2)
+    async def help(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        if not await _require_design_permission(interaction):
+            return
+        await interaction.response.edit_message(embed=_design_help_embed(), view=AdvancedToolsView())
+
+    @discord.ui.button(label="Back to Design Studio", emoji="⬅️", style=discord.ButtonStyle.primary, custom_id="dank_design:advanced_back", row=4)
+    async def back(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        if not await _require_design_permission(interaction):
+            return
+        assert interaction.guild is not None
+        options = await _load_design_options(int(interaction.guild.id))
+        await interaction.response.edit_message(embed=_home_embed(interaction.guild, options), view=DesignHomeView(options))
+
+
+
 
 class DesignHomeView(discord.ui.View):
     def __init__(self, options: Mapping[str, Any] | None = None) -> None:
         super().__init__(timeout=900)
         options = options or {}
-
-        # Keep the home screen intentionally small:
-        # choose draft → preview/apply OR fix drift OR open editors.
         self.add_item(ThemeSelect(_safe_str(options.get("theme_id"), "gothic_clean")))
-        self.add_item(StrengthSelect(_safe_int(options.get("strength"), 4)))
+        self.add_item(StrengthSelect(_safe_int(options.get("strength"), 2)))
 
-    @discord.ui.button(label="Start Here", emoji="🧭", style=discord.ButtonStyle.success, custom_id="dank_design:start_here_home", row=2)
+    @discord.ui.button(label="Start Here", emoji="🧭", style=discord.ButtonStyle.success, custom_id="dank_design:start_here", row=2)
     async def start_here(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         if not await _require_design_permission(interaction):
             return
         await interaction.response.edit_message(embed=_start_here_embed(), view=StartHereView())
 
-    @discord.ui.button(label="Preview / Apply", emoji="👁️", style=discord.ButtonStyle.primary, custom_id="dank_design:preview", row=2)
+    @discord.ui.button(label="Preview & Apply", emoji="👁️", style=discord.ButtonStyle.primary, custom_id="dank_design:preview", row=2)
     async def preview(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         if not await _require_design_permission(interaction):
             return
@@ -3341,7 +3460,7 @@ class DesignHomeView(discord.ui.View):
             view=DesignPreviewView(can_apply=not has_blockers and any(item.get("status") == "changed" for item in items)),
         )
 
-    @discord.ui.button(label="Fix Drift", emoji="🧹", style=discord.ButtonStyle.success, custom_id="dank_design:consistency_check", row=3)
+    @discord.ui.button(label="Fix Mismatches", emoji="🧩", style=discord.ButtonStyle.success, custom_id="dank_design:consistency_check", row=3)
     async def consistency_check(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         if not await _require_design_permission(interaction):
             return
@@ -3363,44 +3482,33 @@ class DesignHomeView(discord.ui.View):
             view=DesignPreviewView(can_apply=not has_blockers and has_changes),
         )
 
-    @discord.ui.button(label="Editors & Locks", emoji="🧰", style=discord.ButtonStyle.primary, custom_id="dank_design:editors_locks_home", row=3)
-    async def editors_locks(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+    @discord.ui.button(label="Category Editor", emoji="🗂️", style=discord.ButtonStyle.primary, custom_id="dank_design:category_editor", row=3)
+    async def category_editor(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         if not await _require_design_permission(interaction):
             return
         guild = interaction.guild
         assert guild is not None
-        options = await _load_design_options(int(guild.id))
         await interaction.response.edit_message(
-            embed=_editors_locks_embed(guild, options),
-            view=EditorsLocksView(),
+            embed=_category_editor_embed(guild, page=0),
+            view=CategoryEditorPickerView(guild, page=0),
         )
 
-    @discord.ui.button(label="Undo Last Apply", emoji="↩️", style=discord.ButtonStyle.secondary, custom_id="dank_design:rollback_home", row=4)
-    async def rollback_home(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        await _open_rollback(interaction)
+    @discord.ui.button(label="Channel Editor", emoji="#️⃣", style=discord.ButtonStyle.primary, custom_id="dank_design:channel_editor", row=3)
+    async def channel_editor(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        if not await _require_design_permission(interaction):
+            return
+        guild = interaction.guild
+        assert guild is not None
+        await interaction.response.edit_message(
+            embed=_channel_editor_embed(guild, page=0),
+            view=ChannelEditorPickerView(guild, page=0),
+        )
 
-    @discord.ui.button(label="Help", emoji="❓", style=discord.ButtonStyle.secondary, custom_id="dank_design:help", row=4)
-    async def help(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        embed = discord.Embed(
-            title="❓ Dank Design Help",
-            description=(
-                "**Fast path:** choose a theme → Preview / Apply → Apply These Changes.\n\n"
-                "**Fix messy names:** Fix Drift → Apply These Changes.\n\n"
-                "**Exact control:** Editors & Locks → Category/Channel Editor → Edit Exact Format → Save & Preview → Apply These Changes."
-            ),
-            color=discord.Color.blurple(),
-        )
-        embed.add_field(
-            name="Font guarantee",
-            value="If a letter cannot transform, Dank Shield uses Auto-Safe Transform: requested font → fallback font → readable normal text.",
-            inline=False,
-        )
-        embed.add_field(
-            name="Safety",
-            value="This only renames channels/categories. Permissions, order, topics, slowmode, NSFW, and archives are not changed.",
-            inline=False,
-        )
-        await interaction.response.send_message(embed=_clean_design_embed(embed), ephemeral=True)
+    @discord.ui.button(label="Advanced Tools", emoji="⚙️", style=discord.ButtonStyle.secondary, custom_id="dank_design:advanced_tools", row=4)
+    async def advanced_tools(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        if not await _require_design_permission(interaction):
+            return
+        await interaction.response.edit_message(embed=_advanced_tools_embed(), view=AdvancedToolsView())
 
 
 
