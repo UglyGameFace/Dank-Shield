@@ -434,7 +434,7 @@ def _format_locks_embed(guild: discord.Guild, options: Mapping[str, Any]) -> dis
         color=discord.Color.blurple(),
     )
     embed.add_field(
-        name="Current draft format",
+        name="Saved design rule",
         value=(
             f"Theme: **{getattr(theme, 'label', 'Gothic Clean')}**\n"
             f"Font: **{_safe_str(current_lock.get('font'), 'normal').replace('_', ' ').title()}**\n"
@@ -844,7 +844,7 @@ class CategoryFormatLockSelect(discord.ui.ChannelSelect):
         options = await _save_category_lock(interaction, int(category.id))
         embed = _format_locks_embed(guild, options)
         embed.title = "✅ Category Format Lock Saved"
-        embed.description = f"Saved the current draft format for {category.mention}. Future scans will use this lock for the category and its children unless a channel override exists."
+        embed.description = f"Saved the saved design rule for {category.mention}. Future scans will use this lock for the category and its children unless a channel override exists."
         await interaction.response.edit_message(embed=embed, view=FormatLocksView())
 
 
@@ -881,7 +881,7 @@ class ChannelFormatLockSelect(discord.ui.ChannelSelect):
         options = await _save_channel_lock(interaction, int(channel.id))
         embed = _format_locks_embed(guild, options)
         embed.title = "✅ Channel Override Lock Saved"
-        embed.description = f"Saved the current draft format as an exact override for {channel.mention}."
+        embed.description = f"Saved the saved design rule as an exact override for {channel.mention}."
         await interaction.response.edit_message(embed=embed, view=FormatLocksView())
 
 
@@ -935,7 +935,7 @@ class FormatLocksView(discord.ui.View):
             return
         embed = discord.Embed(
             title="🗂️ Lock Format to Category",
-            description="Pick a category. The current draft format will become the desired format for that category and its children.",
+            description="Pick a category. The saved design rule will become the desired format for that category and its children.",
             color=discord.Color.blurple(),
         )
         await interaction.response.edit_message(embed=embed, view=CategoryFormatLockPickerView())
@@ -946,7 +946,7 @@ class FormatLocksView(discord.ui.View):
             return
         embed = discord.Embed(
             title="#️⃣ Lock Format to Channel",
-            description="Pick one channel/category. The current draft format will override global/category rules for that item.",
+            description="Pick one channel/category. The saved design rule will override global/category rules for that item.",
             color=discord.Color.blurple(),
         )
         await interaction.response.edit_message(embed=embed, view=ChannelFormatLockPickerView())
@@ -1631,7 +1631,13 @@ async def _save_exact_and_preview(interaction: discord.Interaction, *, scope: st
     await _save_exact_lock(interaction, scope=scope, target_id=int(target_id))
 
     options = await _load_design_options(int(guild.id))
-    all_items = await build_design_plan(guild, options)
+    repair_options = dict(options)
+    if mode in {"category_editor", "channel_editor"}:
+        # Single-item repair previews should copy the live server majority,
+        # not blindly force the saved draft/theme.
+        repair_options["__use_live_majority_layout"] = True
+
+    all_items = await build_design_plan(guild, repair_options)
 
     if scope == "category":
         items = _filter_plan_for_category(all_items, int(target_id))
@@ -1644,7 +1650,7 @@ async def _save_exact_and_preview(interaction: discord.Interaction, *, scope: st
     _PENDING[key] = {
         "created_at": time.time(),
         "items": items,
-        "options": dict(options),
+        "options": dict(repair_options),
         "mode": f"{scope}_exact_format",
     }
 
@@ -1950,8 +1956,8 @@ def _category_editor_embed(guild: discord.Guild, *, page: int) -> discord.Embed:
     embed = discord.Embed(
         title="🗂️ Category Design Editor",
         description=(
-            "Pick a category using the buttons below.\n\n"
-            "This is Dank Shield's own picker, built for styled names and mobile use."
+            "Pick one category below.\n\n"
+            "Choose one category to review. You can preview repairs, rename it, or edit channels inside."
         ),
         color=discord.Color.blurple(),
     )
@@ -1963,7 +1969,7 @@ def _category_editor_embed(guild: discord.Guild, *, page: int) -> discord.Embed:
             child_count = len(list(getattr(category, "channels", []) or []))
             lines.append(f"**{index}.** `{_safe_str(getattr(category, 'name', 'unnamed'))}` · {child_count} child channel(s)")
         embed.add_field(name=f"Categories page {page + 1}/{total_pages}", value="\n".join(lines)[:1024], inline=False)
-    embed.set_footer(text="Select a category to preview, lock format, or open its channels.")
+    embed.set_footer(text="Step 1: pick a category. Step 2: preview, rename, or edit channels inside.")
     return _clean_design_embed(embed)
 
 
@@ -1984,8 +1990,8 @@ def _channel_editor_embed(guild: discord.Guild, *, page: int, category_id: int |
     embed = discord.Embed(
         title=title,
         description=(
-            "Pick a channel/category using the buttons below.\n\n"
-            "This is Dank Shield's own picker, not Discord's native picker."
+            "Pick one channel or category below.\n\n"
+            "Choose one item to review. You can preview repairs, rename it, or edit its rule."
         ),
         color=discord.Color.blurple(),
     )
@@ -1996,7 +2002,7 @@ def _channel_editor_embed(guild: discord.Guild, *, page: int, category_id: int |
         for index, channel in enumerate(chunk, start=1):
             lines.append(f"**{index}.** `{_channel_display_line(channel)}`")
         embed.add_field(name=f"Items page {page + 1}/{total_pages}", value="\n".join(lines)[:1024], inline=False)
-    embed.set_footer(text="Select an item to preview, lock format, or preview that item before applying repairs.")
+    embed.set_footer(text="Step 1: pick an item. Step 2: preview, rename, or edit its rule.")
     return _clean_design_embed(embed)
 
 
