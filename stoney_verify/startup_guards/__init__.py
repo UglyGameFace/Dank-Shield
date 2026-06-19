@@ -46,6 +46,7 @@ _STARTUP_GUARDS: Tuple[str, ...] = (
     "stoney_verify.startup_guards.setup_overview_command_guard",
     "stoney_verify.startup_guards.server_design_command_module_guard",
     "stoney_verify.startup_guards.server_design_strict_layout_guard",
+    "stoney_verify.startup_guards.server_design_majority_layout_guard",
     "stoney_verify.startup_guards.protection_pack_manual_import_guard",
     "stoney_verify.startup_guards.protection_import_button_patch",
     "stoney_verify.startup_guards.setup_verification_toggle_independence_guard",
@@ -160,6 +161,7 @@ _ALWAYS_SHOW_PREFIXES: Tuple[str, ...] = (
     "✅ public_ticket_confirm_hardening_guard",
     "✅ server_design_command_module_guard active",
     "✅ server_design_strict_layout_guard active",
+    "✅ server_design_majority_layout_guard active",
     "✅ production_command_surface_guard active",
 )
 _ONCE_ONLY_PREFIXES: Tuple[str, ...] = (
