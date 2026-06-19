@@ -11,6 +11,7 @@ setup config.
 from collections import Counter
 from collections.abc import Iterable, Mapping
 import re
+import unicodedata
 from typing import Any
 
 VERTICAL_SEPARATOR_TOKENS: tuple[str, ...] = ("|", "｜", "│", "┃", "❘", "❙", "❚")
@@ -27,7 +28,6 @@ _TOKEN_BASE_IDS: dict[str, str] = {
 
 _FRAME_CHARS = "─━═-╭╮╰╯╔╗【】「」✦⋆｡°✩"
 _FRAME_DYNAMIC_PREFIX = "majority_"
-_SEPARATOR_DYNAMIC_PREFIX = "majority_"
 
 
 def _text(value: Any, default: str = "") -> str:
@@ -84,13 +84,80 @@ def _parse_with(studio: Any, name: str, *, kind: str = "text") -> dict[str, Any]
         return {}
 
 
+def _separator_values_for(studio: Any) -> tuple[str, ...]:
+    values = set(VERTICAL_SEPARATOR_TOKENS)
+    try:
+        values.update(str(spec.value) for spec in tuple(getattr(studio, "SEPARATOR_LIBRARY", tuple()) or tuple()) if getattr(spec, "value", ""))
+    except Exception:
+        pass
+    return tuple(sorted((value for value in values if value), key=len, reverse=True))
+
+
+def _starts_with_separator(text: str, separators: tuple[str, ...]) -> bool:
+    return any(text.startswith(sep) for sep in separators if sep)
+
+
+def _is_emojiish_not_separator(ch: str) -> bool:
+    if not ch or ch in VERTICAL_SEPARATOR_TOKENS:
+        return False
+    cp = ord(ch)
+    return unicodedata.category(ch) == "So" or 0x1F000 <= cp <= 0x1FAFF or 0x2600 <= cp <= 0x27BF
+
+
+def _split_leading_emoji(studio: Any, value: Any, *, preserve_remainder_spaces: bool) -> tuple[str, str]:
+    text = _strip_invisible_with(studio, value)
+    separators = _separator_values_for(studio)
+    bracket_match = re.match(r"^([「『〔【〖꒰]\s*[^\w\s-]+\s*[」』〕】〗꒱])\s*(.*)$", text)
+    if bracket_match:
+        icon = re.sub(r"[「『〔【〖꒰」』〕】〗꒱\s]", "", bracket_match.group(1))
+        remainder = bracket_match.group(2)
+        return icon, remainder if preserve_remainder_spaces else remainder.strip()
+
+    chars = list(text)
+    icon_chars: list[str] = []
+    index = 0
+    variation = chr(0xFE0F)
+    joiner = chr(0x200D)
+    while index < len(chars):
+        remaining = "".join(chars[index:])
+        if _starts_with_separator(remaining, separators):
+            break
+        ch = chars[index]
+        if _is_emojiish_not_separator(ch) or (icon_chars and ch in {variation, joiner}):
+            icon_chars.append(ch)
+            index += 1
+            continue
+        break
+
+    remainder = "".join(chars[index:])
+    return "".join(icon_chars).strip(), remainder if preserve_remainder_spaces else remainder.strip()
+
+
+def install_separator_safe_parser(studio: Any) -> None:
+    """Keep visual separator bars from being swallowed as part of an emoji.
+
+    The existing parser treats Unicode symbols as emoji-ish. Box/vertical bar
+    separators are also Unicode symbols, so names such as `🎭│profile` can be
+    misread as emoji=`🎭│` with no separator. The repair path installs this
+    parser before building the rename plan so separator drift can be detected and
+    repaired accurately.
+    """
+
+    if getattr(studio, "_DANK_SEPARATOR_SAFE_ICON_PARSE_ACTIVE", False):
+        return
+
+    def _separator_safe_strip_leading_icon(value: str) -> tuple[str, str]:
+        return _split_leading_emoji(studio, value, preserve_remainder_spaces=False)
+
+    try:
+        studio._strip_leading_icon = _separator_safe_strip_leading_icon  # type: ignore[attr-defined]
+        studio._DANK_SEPARATOR_SAFE_ICON_PARSE_ACTIVE = True
+    except Exception:
+        pass
+
+
 def _remove_leading_emoji(studio: Any, raw: str, *, kind: str = "text") -> tuple[str, str]:
-    parsed = _parse_with(studio, raw, kind=kind)
-    emoji = _text(parsed.get("emoji"))
-    body = _strip_invisible_with(studio, raw)
-    if emoji and body.startswith(emoji):
-        return emoji, body[len(emoji) :]
-    return emoji, body
+    return _split_leading_emoji(studio, raw, preserve_remainder_spaces=True)
 
 
 def _separator_label(token: str, spacing: str) -> str:
@@ -252,6 +319,7 @@ def _separator_key(parts: Mapping[str, Any]) -> tuple[str, str]:
 def infer_live_majority_layout(studio: Any, records: Iterable[Any]) -> dict[str, Any]:
     """Infer the majority visible layout from live category/channel names."""
 
+    install_separator_safe_parser(studio)
     separator_counts: Counter[tuple[str, str]] = Counter()
     separator_examples: dict[tuple[str, str], dict[str, Any]] = {}
     frame_counts: Counter[str] = Counter()
@@ -410,6 +478,7 @@ def apply_majority_to_options(
 ) -> dict[str, Any]:
     """Return design options that repair toward the live majority layout."""
 
+    install_separator_safe_parser(studio)
     out = dict(options)
     counts = _lock_counts(options)
     lock_total = counts["global"] + counts["categories"] + counts["channels"]
@@ -512,6 +581,7 @@ __all__ = [
     "ensure_category_frame_spec",
     "ensure_separator_spec",
     "infer_live_majority_layout",
+    "install_separator_safe_parser",
     "lock_notice_from_items",
     "majority_summary_from_items",
     "skipped_lines",
