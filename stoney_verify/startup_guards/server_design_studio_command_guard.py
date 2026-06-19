@@ -1996,7 +1996,7 @@ def _channel_editor_embed(guild: discord.Guild, *, page: int, category_id: int |
         for index, channel in enumerate(chunk, start=1):
             lines.append(f"**{index}.** `{_channel_display_line(channel)}`")
         embed.add_field(name=f"Items page {page + 1}/{total_pages}", value="\n".join(lines)[:1024], inline=False)
-    embed.set_footer(text="Select an item to preview, lock format, or fix only that item.")
+    embed.set_footer(text="Select an item to preview, lock format, or preview that item before applying repairs.")
     return _clean_design_embed(embed)
 
 
@@ -2124,42 +2124,163 @@ class ChannelPageButton(discord.ui.Button):
         )
 
 
+class DirectRenameModal(discord.ui.Modal):
+    def __init__(self, *, target_id: int, scope: str, current_name: str, category_id: int | None = None) -> None:
+        super().__init__(title=f"Rename {scope.title()}")
+        self.target_id = int(target_id)
+        self.scope = str(scope)
+        self.category_id = int(category_id) if category_id is not None else None
+        self.new_name = discord.ui.TextInput(
+            label="New channel/category name",
+            placeholder="Example: staff-commands",
+            default=_short_label(current_name, 90),
+            min_length=1,
+            max_length=100,
+            required=True,
+        )
+        self.add_item(self.new_name)
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        if not await _require_design_permission(interaction):
+            return
+
+        guild = interaction.guild
+        assert guild is not None
+
+        channel = guild.get_channel(self.target_id)
+        if channel is None:
+            return await interaction.response.send_message("That item no longer exists.", ephemeral=True)
+
+        old_name = _safe_str(getattr(channel, "name", ""), "unknown")
+        new_name = _safe_str(self.new_name.value, "")
+
+        if not new_name:
+            return await interaction.response.send_message("Name cannot be blank.", ephemeral=True)
+
+        try:
+            await channel.edit(
+                name=new_name,
+                reason=f"Dank Design direct rename by {interaction.user} ({interaction.user.id})",
+            )
+        except discord.Forbidden:
+            return await interaction.response.send_message(
+                "❌ I cannot rename that. I need **Manage Channels**, and my role must be high enough.",
+                ephemeral=True,
+            )
+        except discord.HTTPException as exc:
+            return await interaction.response.send_message(
+                f"❌ Discord rejected that rename: `{exc}`",
+                ephemeral=True,
+            )
+
+        refreshed = guild.get_channel(self.target_id) or channel
+
+        if self.scope == "category" and isinstance(refreshed, discord.CategoryChannel):
+            embed = _category_action_embed(refreshed)
+            view = CategoryEditorActionView(self.target_id)
+        else:
+            embed = _channel_action_embed(refreshed)
+            view = ChannelEditorActionView(self.target_id, category_id=self.category_id)
+
+        embed.title = "✅ Name Updated"
+        embed.add_field(name="Renamed", value=f"`{old_name}`\n→ `{new_name}`", inline=False)
+
+        try:
+            await interaction.response.edit_message(embed=embed, view=view)
+        except Exception:
+            await interaction.response.send_message(f"✅ Renamed `{old_name}` → `{new_name}`", ephemeral=True)
+
+
 def _category_action_embed(category: discord.CategoryChannel) -> discord.Embed:
+    child_count = len(list(getattr(category, "channels", []) or []))
     embed = discord.Embed(
-        title=f"🗂️ Edit Category · {_safe_str(getattr(category, 'name', 'Category'))}",
+        title="🗂️ Category Design",
         description=(
-            "Use the current draft format on this category, preview/fix only this category, or open its child channels."
+            "Start with **Preview Repairs**. Nothing changes until the next screen shows an Apply button.\n\n"
+            "Use **Rename** when you want to directly change the category's actual Discord name."
         ),
         color=discord.Color.blurple(),
     )
-    embed.add_field(name="Category", value=f"{category.mention} (`{category.id}`)", inline=False)
-    embed.add_field(name="Options", value="Lock format, preview/fix this category scope, or edit child channels.", inline=False)
+    embed.add_field(
+        name="Selected category",
+        value=(
+            f"Name: `{_safe_str(getattr(category, 'name', 'Category'))}`\n"
+            f"Children: **{child_count}** channel(s)\n"
+            f"ID: `{getattr(category, 'id', '')}`"
+        ),
+        inline=False,
+    )
+    embed.add_field(
+        name="Recommended next step",
+        value="Press **Preview Repairs** to see exactly what would change before anything is renamed.",
+        inline=False,
+    )
+    embed.add_field(
+        name="Advanced options",
+        value=(
+            "**Exact Format** = choose font/separator/frame manually.\n"
+            "**Save Category Rule** = remember a special rule for this category.\n"
+            "**Protection Settings** = control whether this category is skipped."
+        ),
+        inline=False,
+    )
+    embed.set_footer(text="Preview first • Apply later • Rename is direct")
     return _clean_design_embed(embed)
-
 
 def _channel_action_embed(channel: discord.abc.GuildChannel) -> discord.Embed:
+    kind = _kind(channel)
+    mention = getattr(channel, "mention", f"`{getattr(channel, 'id', '')}`")
     embed = discord.Embed(
-        title=f"#️⃣ Edit Channel · {_safe_str(getattr(channel, 'name', 'Channel'))}",
-        description="Lock the current draft format to this item, or preview/fix only this item.",
+        title="#️⃣ Channel Design",
+        description=(
+            "Start with **Preview Repairs**. Nothing changes until the next screen shows an Apply button.\n\n"
+            "Use **Rename** when you want to directly change this channel's actual Discord name."
+        ),
         color=discord.Color.blurple(),
     )
-    mention = getattr(channel, "mention", f"`{getattr(channel, 'id', '')}`")
-    embed.add_field(name="Item", value=f"{mention} (`{getattr(channel, 'id', '')}`)", inline=False)
-    embed.add_field(name="Kind", value=_kind(channel), inline=True)
+    embed.add_field(
+        name="Selected item",
+        value=(
+            f"Name: `{_safe_str(getattr(channel, 'name', 'Channel'))}`\n"
+            f"Kind: **{kind}**\n"
+            f"Channel: {mention}\n"
+            f"ID: `{getattr(channel, 'id', '')}`"
+        ),
+        inline=False,
+    )
+    embed.add_field(
+        name="Recommended next step",
+        value="Press **Preview Repairs** to check this item only.",
+        inline=False,
+    )
+    embed.add_field(
+        name="Advanced options",
+        value=(
+            "**Exact Format** = choose this item's exact look.\n"
+            "**Save Channel Rule** = remember a special rule for this item.\n"
+            "**Protection Settings** = control whether this item is skipped."
+        ),
+        inline=False,
+    )
+    embed.set_footer(text="Preview first • Apply later • Rename is direct")
     return _clean_design_embed(embed)
-
 
 class CategoryEditorActionView(discord.ui.View):
     def __init__(self, category_id: int) -> None:
         super().__init__(timeout=900)
         self.category_id = int(category_id)
 
-    @discord.ui.button(label="Edit Exact Format", emoji="🎛️", style=discord.ButtonStyle.primary, custom_id="dank_design:category_exact_format", row=0)
-    async def edit_exact_format(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        await _open_exact_format_editor(interaction, scope="category", target_id=self.category_id)
+    @discord.ui.button(label="Preview Repairs", emoji="👁️", style=discord.ButtonStyle.success, custom_id="dank_design:category_preview_scope", row=0)
+    async def preview_category(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        await _preview_scope(
+            interaction,
+            scope_title="👁️ Category Repair Preview",
+            mode="category_editor",
+            category_id=self.category_id,
+        )
 
-    @discord.ui.button(label="Lock Current Format Here", emoji="🔒", style=discord.ButtonStyle.success, custom_id="dank_design:category_lock_here", row=0)
-    async def lock_here(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+    @discord.ui.button(label="Rename", emoji="✏️", style=discord.ButtonStyle.primary, custom_id="dank_design:category_rename", row=0)
+    async def rename_category(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         if not await _require_design_permission(interaction):
             return
         guild = interaction.guild
@@ -2167,28 +2288,15 @@ class CategoryEditorActionView(discord.ui.View):
         category = guild.get_channel(self.category_id)
         if not isinstance(category, discord.CategoryChannel):
             return await interaction.response.send_message("That category no longer exists.", ephemeral=True)
-        options = await _save_category_lock(interaction, self.category_id)
-        embed = _category_action_embed(category)
-        embed.title = "✅ Category Format Locked"
-        embed.description = "Saved the current draft format for this category and its children."
-        counts = _lock_count(options)
-        embed.add_field(name="Saved locks", value=f"Global: {counts['global']} • Categories: {counts['categories']} • Channels: {counts['channels']}", inline=False)
-        await interaction.response.edit_message(embed=embed, view=CategoryEditorActionView(self.category_id))
-
-    @discord.ui.button(label="Protection Mode", emoji="🛡️", style=discord.ButtonStyle.secondary, custom_id="dank_design:category_protection_mode", row=2)
-    async def protection_mode(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        await _open_protection_mode_editor(interaction, channel_id=self.category_id)
-
-    @discord.ui.button(label="Preview / Fix This Category", emoji="👁️", style=discord.ButtonStyle.primary, custom_id="dank_design:category_preview_scope", row=1)
-    async def preview_category(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        await _preview_scope(
-            interaction,
-            scope_title="👁 Category Design Preview",
-            mode="category_editor",
-            category_id=self.category_id,
+        await interaction.response.send_modal(
+            DirectRenameModal(
+                target_id=self.category_id,
+                scope="category",
+                current_name=getattr(category, "name", ""),
+            )
         )
 
-    @discord.ui.button(label="Edit Child Channels", emoji="#️⃣", style=discord.ButtonStyle.secondary, custom_id="dank_design:category_children", row=2)
+    @discord.ui.button(label="Edit Channels Inside", emoji="#️⃣", style=discord.ButtonStyle.primary, custom_id="dank_design:category_children", row=1)
     async def edit_children(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         if not await _require_design_permission(interaction):
             return
@@ -2199,7 +2307,41 @@ class CategoryEditorActionView(discord.ui.View):
             view=ChannelEditorPickerView(guild, page=0, category_id=self.category_id),
         )
 
-    @discord.ui.button(label="Back to Categories", emoji="⬅️", style=discord.ButtonStyle.secondary, custom_id="dank_design:category_action_back", row=4)
+    @discord.ui.button(label="Exact Format", emoji="🎛️", style=discord.ButtonStyle.secondary, custom_id="dank_design:category_exact_format", row=2)
+    async def edit_exact_format(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        await _open_exact_format_editor(interaction, scope="category", target_id=self.category_id)
+
+    @discord.ui.button(label="Save Category Rule", emoji="🔒", style=discord.ButtonStyle.secondary, custom_id="dank_design:category_lock_here", row=2)
+    async def lock_here(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        if not await _require_design_permission(interaction):
+            return
+        guild = interaction.guild
+        assert guild is not None
+        try:
+            category = guild.get_channel(self.category_id)
+            if not isinstance(category, discord.CategoryChannel):
+                return await interaction.response.send_message("That category no longer exists.", ephemeral=True)
+            options = await _save_category_lock(interaction, self.category_id)
+            counts = _lock_count(options)
+            embed = _category_action_embed(category)
+            embed.title = "✅ Category Rule Saved"
+            embed.add_field(
+                name="Saved rules",
+                value=f"Global: {counts['global']} • Categories: {counts['categories']} • Channels: {counts['channels']}",
+                inline=False,
+            )
+            await interaction.response.edit_message(embed=embed, view=CategoryEditorActionView(self.category_id))
+        except Exception as exc:
+            if interaction.response.is_done():
+                await interaction.followup.send(f"❌ Could not save category rule: `{type(exc).__name__}: {_safe_str(exc)[:120]}`", ephemeral=True)
+            else:
+                await interaction.response.send_message(f"❌ Could not save category rule: `{type(exc).__name__}: {_safe_str(exc)[:120]}`", ephemeral=True)
+
+    @discord.ui.button(label="Protection Settings", emoji="🛡️", style=discord.ButtonStyle.secondary, custom_id="dank_design:category_protection_mode", row=3)
+    async def protection_mode(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        await _open_protection_mode_editor(interaction, channel_id=self.category_id)
+
+    @discord.ui.button(label="Back", emoji="⬅️", style=discord.ButtonStyle.secondary, custom_id="dank_design:category_action_back", row=4)
     async def back(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         if not await _require_design_permission(interaction):
             return
@@ -2207,19 +2349,23 @@ class CategoryEditorActionView(discord.ui.View):
         assert guild is not None
         await interaction.response.edit_message(embed=_category_editor_embed(guild, page=0), view=CategoryEditorPickerView(guild, page=0))
 
-
 class ChannelEditorActionView(discord.ui.View):
     def __init__(self, channel_id: int, *, category_id: int | None = None) -> None:
         super().__init__(timeout=900)
         self.channel_id = int(channel_id)
         self.category_id = int(category_id) if category_id is not None else None
 
-    @discord.ui.button(label="Edit Exact Format", emoji="🎛️", style=discord.ButtonStyle.primary, custom_id="dank_design:channel_exact_format", row=0)
-    async def edit_exact_format(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        await _open_exact_format_editor(interaction, scope="channel", target_id=self.channel_id)
+    @discord.ui.button(label="Preview Repairs", emoji="👁️", style=discord.ButtonStyle.success, custom_id="dank_design:channel_preview_scope", row=0)
+    async def preview_channel(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        await _preview_scope(
+            interaction,
+            scope_title="👁️ Channel Repair Preview",
+            mode="channel_editor",
+            channel_id=self.channel_id,
+        )
 
-    @discord.ui.button(label="Lock Current Format to This", emoji="🔒", style=discord.ButtonStyle.success, custom_id="dank_design:channel_lock_here", row=0)
-    async def lock_here(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+    @discord.ui.button(label="Rename", emoji="✏️", style=discord.ButtonStyle.primary, custom_id="dank_design:channel_rename", row=0)
+    async def rename_channel(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         if not await _require_design_permission(interaction):
             return
         guild = interaction.guild
@@ -2227,26 +2373,48 @@ class ChannelEditorActionView(discord.ui.View):
         channel = guild.get_channel(self.channel_id)
         if channel is None:
             return await interaction.response.send_message("That channel no longer exists.", ephemeral=True)
-        options = await _save_channel_lock(interaction, self.channel_id)
-        embed = _channel_action_embed(channel)
-        embed.title = "✅ Channel Override Locked"
-        embed.description = "Saved the current draft format as an override for this item."
-        counts = _lock_count(options)
-        embed.add_field(name="Saved locks", value=f"Global: {counts['global']} • Categories: {counts['categories']} • Channels: {counts['channels']}", inline=False)
-        await interaction.response.edit_message(embed=embed, view=ChannelEditorActionView(self.channel_id, category_id=self.category_id))
+        await interaction.response.send_modal(
+            DirectRenameModal(
+                target_id=self.channel_id,
+                scope="channel",
+                current_name=getattr(channel, "name", ""),
+                category_id=self.category_id,
+            )
+        )
 
-    @discord.ui.button(label="Protection Mode", emoji="🛡️", style=discord.ButtonStyle.secondary, custom_id="dank_design:channel_protection_mode", row=2)
+    @discord.ui.button(label="Exact Format", emoji="🎛️", style=discord.ButtonStyle.secondary, custom_id="dank_design:channel_exact_format", row=1)
+    async def edit_exact_format(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        await _open_exact_format_editor(interaction, scope="channel", target_id=self.channel_id)
+
+    @discord.ui.button(label="Save Channel Rule", emoji="🔒", style=discord.ButtonStyle.secondary, custom_id="dank_design:channel_lock_here", row=1)
+    async def lock_here(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        if not await _require_design_permission(interaction):
+            return
+        guild = interaction.guild
+        assert guild is not None
+        try:
+            channel = guild.get_channel(self.channel_id)
+            if channel is None:
+                return await interaction.response.send_message("That channel no longer exists.", ephemeral=True)
+            options = await _save_channel_lock(interaction, self.channel_id)
+            counts = _lock_count(options)
+            embed = _channel_action_embed(channel)
+            embed.title = "✅ Channel Rule Saved"
+            embed.add_field(
+                name="Saved rules",
+                value=f"Global: {counts['global']} • Categories: {counts['categories']} • Channels: {counts['channels']}",
+                inline=False,
+            )
+            await interaction.response.edit_message(embed=embed, view=ChannelEditorActionView(self.channel_id, category_id=self.category_id))
+        except Exception as exc:
+            if interaction.response.is_done():
+                await interaction.followup.send(f"❌ Could not save channel rule: `{type(exc).__name__}: {_safe_str(exc)[:120]}`", ephemeral=True)
+            else:
+                await interaction.response.send_message(f"❌ Could not save channel rule: `{type(exc).__name__}: {_safe_str(exc)[:120]}`", ephemeral=True)
+
+    @discord.ui.button(label="Protection Settings", emoji="🛡️", style=discord.ButtonStyle.secondary, custom_id="dank_design:channel_protection_mode", row=2)
     async def protection_mode(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         await _open_protection_mode_editor(interaction, channel_id=self.channel_id)
-
-    @discord.ui.button(label="Preview / Fix This Only", emoji="👁️", style=discord.ButtonStyle.primary, custom_id="dank_design:channel_preview_scope", row=1)
-    async def preview_channel(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        await _preview_scope(
-            interaction,
-            scope_title="👁 Channel Design Preview",
-            mode="channel_editor",
-            channel_id=self.channel_id,
-        )
 
     @discord.ui.button(label="Back", emoji="⬅️", style=discord.ButtonStyle.secondary, custom_id="dank_design:channel_action_back", row=4)
     async def back(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
@@ -2258,7 +2426,6 @@ class ChannelEditorActionView(discord.ui.View):
             embed=_channel_editor_embed(guild, page=0, category_id=self.category_id),
             view=ChannelEditorPickerView(guild, page=0, category_id=self.category_id),
         )
-
 
 class BackToDesignButton(discord.ui.Button):
     def __init__(self, *, row: int) -> None:
@@ -3036,7 +3203,7 @@ class ProtectionModeSelect(discord.ui.Select):
         )
         embed.add_field(
             name="Next step",
-            value="Run **Find & Fix Inconsistencies** or **Preview / Fix This Only** to see the result.",
+            value="Run **Find & Fix Inconsistencies** or **Preview Repairs** to see the result.",
             inline=False,
         )
         await interaction.response.edit_message(embed=embed, view=ChannelEditorActionView(self.channel_id) if "ChannelEditorActionView" in globals() else None)
