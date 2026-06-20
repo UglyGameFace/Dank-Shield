@@ -1888,7 +1888,7 @@ async def _save_exact_and_preview(interaction: discord.Interaction, *, scope: st
 
     await interaction.edit_original_response(
         embed=_preview_embed(guild, items, title=title),
-        view=DesignPreviewView(can_apply=not has_blockers and has_changes),
+        view=StyleChangePreviewView(can_apply=not has_blockers and has_changes, has_blockers=has_blockers),
     )
 
 
@@ -4286,6 +4286,11 @@ def _style_change_preview_embed(guild: discord.Guild, items: list[dict[str, Any]
     failed_lines = studio.preview_lines(items, filter_mode="failed", limit=5)
     if failed_lines and failed_lines != ["No matching preview rows."]:
         embed.add_field(name="Needs review", value="\n".join(failed_lines)[:1024], inline=False)
+        embed.add_field(
+            name="How to fix",
+            value="\n".join(_style_change_issue_lines(items))[:1024],
+            inline=False,
+        )
 
     embed.set_footer(text="Names only • Channel separator only • Apply creates rollback snapshot")
     return _clean_design_embed(embed)
@@ -4314,6 +4319,7 @@ class StyleChangeSeparatorSelect(discord.ui.Select):
             embed=_style_change_embed(guild, options, separator_id=selected),
             view=StyleChangeView(separator_id=selected),
         )
+
 
 
 class StyleChangeView(discord.ui.View):
@@ -4347,7 +4353,7 @@ class StyleChangeView(discord.ui.View):
 
         await interaction.edit_original_response(
             embed=_style_change_preview_embed(guild, items, separator_id=self.separator_id),
-            view=DesignPreviewView(can_apply=not has_blockers and has_changes),
+            view=StyleChangePreviewView(can_apply=not has_blockers and has_changes, has_blockers=has_blockers),
         )
 
     @discord.ui.button(label="Back to Design Studio", emoji="⬅️", style=discord.ButtonStyle.secondary, custom_id="dank_design:style_change_back", row=4)
@@ -4564,6 +4570,284 @@ class DesignPreviewView(discord.ui.View):
         assert interaction.guild is not None
         options = await _load_design_options(int(interaction.guild.id))
         await interaction.response.edit_message(embed=_home_embed(interaction.guild, options), view=DesignHomeView(options))
+
+
+
+def _style_change_missing_emoji_items(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    out: list[dict[str, Any]] = []
+    for item in items:
+        if item.get("status") != "failed":
+            continue
+        blockers = " ".join(_safe_str(x) for x in list(item.get("blockers") or []))
+        if "No leading emoji found" in blockers:
+            out.append(item)
+    return out
+
+
+def _style_change_issue_lines(items: list[dict[str, Any]]) -> list[str]:
+    lines: list[str] = []
+    missing_emoji = _style_change_missing_emoji_items(items)
+
+    if missing_emoji:
+        lines.append(
+            f"• **{len(missing_emoji)} missing emoji** — use **Fix Missing Emojis** or leave them skipped."
+        )
+
+    permission_count = 0
+    length_count = 0
+    duplicate_count = 0
+    other_count = 0
+
+    for item in items:
+        if item.get("status") != "failed":
+            continue
+
+        blockers = " ".join(_safe_str(x) for x in list(item.get("blockers") or []))
+
+        if "No leading emoji found" in blockers:
+            continue
+        if "Manage Channels" in blockers or "cannot view" in blockers or "permission" in blockers.lower():
+            permission_count += 1
+        elif "too long" in blockers:
+            length_count += 1
+        elif "Duplicate" in blockers or "duplicate" in blockers:
+            duplicate_count += 1
+        else:
+            other_count += 1
+
+    if permission_count:
+        lines.append(f"• **{permission_count} permission issue(s)** — fix bot access/role order, then preview again.")
+    if length_count:
+        lines.append(f"• **{length_count} name too long** — use Channel Editor → Rename to shorten first.")
+    if duplicate_count:
+        lines.append(f"• **{duplicate_count} duplicate output risk** — rename one conflicting channel first.")
+    if other_count:
+        lines.append(f"• **{other_count} other issue(s)** — open Channel Editor and fix individually.")
+
+    return lines or ["No fixable issues found."]
+
+
+def _style_change_after_with_manual_emoji(
+    current_name: str,
+    separator_id: str,
+    manual_emoji: str,
+) -> tuple[str, list[str], list[str]]:
+    before = _safe_str(current_name).strip()
+    parsed = studio.parse_channel_name(before, kind="text")
+    body = _style_change_visible_name_body(before, parsed)
+    emoji = _style_change_clean_leading_emoji(manual_emoji)
+
+    warnings: list[str] = ["Added the emoji you chose, then changed only the channel separator."]
+    blockers: list[str] = []
+
+    if not emoji:
+        blockers.append("No emoji entered.")
+        return before, warnings, blockers
+
+    spec = _style_change_separator_spec(separator_id)
+    if spec is None:
+        blockers.append("Selected separator does not exist.")
+        return before, warnings, blockers
+
+    if separator_id == "none":
+        after = f"{emoji}{body}".strip()
+    else:
+        template = _safe_str(getattr(spec, "template", "{emoji}{separator}{name}"))
+        after = template.format(
+            emoji=emoji,
+            separator=_safe_str(getattr(spec, "value", ""), ""),
+            name=body,
+        ).strip()
+
+    after = strip_invisible(after).strip() if "strip_invisible" in globals() else after.strip()
+
+    if not after:
+        blockers.append("Final name would be empty.")
+    elif len(after) > studio.DISCORD_NAME_LIMIT:
+        blockers.append(f"Final name is too long for Discord ({len(after)}/{studio.DISCORD_NAME_LIMIT}).")
+
+    return after[: studio.DISCORD_NAME_LIMIT], warnings, blockers
+
+
+def _style_change_rebuild_preview_response(
+    guild: discord.Guild,
+    pending: dict[str, Any],
+) -> tuple[discord.Embed, discord.ui.View]:
+    items = list(pending.get("items") or [])
+    separator_id = _safe_str(pending.get("separator_id"), "none")
+    has_blockers = any(item.get("status") == "failed" for item in items)
+    has_changes = any(item.get("status") == "changed" for item in items)
+    embed = _style_change_preview_embed(guild, items, separator_id=separator_id)
+    return embed, StyleChangePreviewView(can_apply=not has_blockers and has_changes, has_blockers=has_blockers)
+
+
+class StyleChangeFixMissingEmojiModal(discord.ui.Modal):
+    def __init__(self, *, items: list[dict[str, Any]], separator_id: str) -> None:
+        super().__init__(title="Fix Missing Emojis")
+        self.separator_id = _safe_str(separator_id, "none")
+        self.item_keys: list[str] = []
+
+        for index, item in enumerate(items[:5], start=1):
+            channel_id = _safe_str(item.get("channel_id"), "")
+            self.item_keys.append(channel_id)
+            before = _safe_str(item.get("before"), "channel")
+            base = _safe_str(item.get("base_name"), before)
+            field = discord.ui.TextInput(
+                label=f"{index}. Emoji for {base}"[:45],
+                placeholder=f"Example: 🎮 for {before}"[:100],
+                min_length=1,
+                max_length=12,
+                required=True,
+            )
+            self.add_item(field)
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        if not await _require_design_permission(interaction):
+            return
+
+        guild = interaction.guild
+        assert guild is not None
+
+        key = _key(int(guild.id), int(interaction.user.id))
+        pending = _PENDING.get(key)
+        if not pending:
+            return await interaction.response.send_message("This preview expired. Run Style Change again.", ephemeral=True)
+
+        items = list(pending.get("items") or [])
+        separator_id = _safe_str(pending.get("separator_id"), self.separator_id)
+
+        values_by_channel: dict[str, str] = {}
+        for channel_id, child in zip(self.item_keys, self.children):
+            values_by_channel[channel_id] = _safe_str(getattr(child, "value", ""), "")
+
+        for item in items:
+            channel_id = _safe_str(item.get("channel_id"), "")
+            if channel_id not in values_by_channel:
+                continue
+
+            manual_emoji = values_by_channel[channel_id]
+            after, warnings, blockers = _style_change_after_with_manual_emoji(
+                _safe_str(item.get("before"), ""),
+                separator_id,
+                manual_emoji,
+            )
+
+            item["after"] = after
+            item["warnings"] = warnings
+            item["blockers"] = blockers
+            item["status"] = "failed" if blockers else ("changed" if after != item.get("before") else "unchanged")
+            item["style_change_manual_emoji"] = manual_emoji
+
+        pending["items"] = items
+        _PENDING[key] = pending
+
+        embed, view = _style_change_rebuild_preview_response(guild, pending)
+        await interaction.response.edit_message(embed=embed, view=view)
+
+
+class StyleChangeApplySafeOnlyButton(discord.ui.Button):
+    def __init__(self, *, row: int = 2) -> None:
+        super().__init__(
+            label="Skip Issues",
+            emoji="✅",
+            style=discord.ButtonStyle.secondary,
+            custom_id="dank_design:style_change_skip_issues",
+            row=row,
+        )
+
+    async def callback(self, interaction: discord.Interaction) -> None:  # type: ignore[override]
+        if not await _require_design_permission(interaction):
+            return
+
+        guild = interaction.guild
+        assert guild is not None
+
+        key = _key(int(guild.id), int(interaction.user.id))
+        pending = _PENDING.get(key)
+        if not pending:
+            return await interaction.response.send_message("This preview expired. Run Style Change again.", ephemeral=True)
+
+        items = list(pending.get("items") or [])
+        safe_items: list[dict[str, Any]] = []
+
+        for item in items:
+            if item.get("status") == "failed":
+                skipped = dict(item)
+                skipped["after"] = skipped.get("before")
+                skipped["status"] = "protected"
+                skipped["protected"] = True
+                skipped["warnings"] = ["Skipped by user from Style Change issues review."]
+                skipped["blockers"] = []
+                safe_items.append(skipped)
+            else:
+                safe_items.append(item)
+
+        pending["items"] = safe_items
+        pending["style_change_skipped_issues"] = True
+        _PENDING[key] = pending
+
+        separator_id = _safe_str(pending.get("separator_id"), "none")
+        embed = _style_change_preview_embed(guild, safe_items, separator_id=separator_id)
+        embed.title = "👁️ Style Change Preview · Safe Changes Only"
+        embed.add_field(
+            name="Skipped issues",
+            value="Needs-review rows were left untouched. Apply will only rename safe rows.",
+            inline=False,
+        )
+
+        await interaction.response.edit_message(
+            embed=embed,
+            view=StyleChangePreviewView(can_apply=True, has_blockers=False),
+        )
+
+
+class StyleChangeFixMissingEmojiButton(discord.ui.Button):
+    def __init__(self, *, row: int = 2) -> None:
+        super().__init__(
+            label="Fix Missing Emojis",
+            emoji="😀",
+            style=discord.ButtonStyle.primary,
+            custom_id="dank_design:style_change_fix_missing_emojis",
+            row=row,
+        )
+
+    async def callback(self, interaction: discord.Interaction) -> None:  # type: ignore[override]
+        if not await _require_design_permission(interaction):
+            return
+
+        guild = interaction.guild
+        assert guild is not None
+
+        key = _key(int(guild.id), int(interaction.user.id))
+        pending = _PENDING.get(key)
+        if not pending:
+            return await interaction.response.send_message("This preview expired. Run Style Change again.", ephemeral=True)
+
+        items = list(pending.get("items") or [])
+        missing = _style_change_missing_emoji_items(items)
+
+        if not missing:
+            return await interaction.response.send_message("No missing-emoji rows found in this preview.", ephemeral=True)
+
+        if len(missing) > 5:
+            return await interaction.response.send_message(
+                "Too many missing-emoji rows for one modal. Use **Skip Issues** to apply safe rows first, then fix the rest from Channel Editor.",
+                ephemeral=True,
+            )
+
+        separator_id = _safe_str(pending.get("separator_id"), "none")
+        await interaction.response.send_modal(
+            StyleChangeFixMissingEmojiModal(items=missing, separator_id=separator_id)
+        )
+
+
+class StyleChangePreviewView(DesignPreviewView):
+    def __init__(self, *, can_apply: bool, has_blockers: bool = False) -> None:
+        super().__init__(can_apply=can_apply)
+
+        if has_blockers:
+            self.add_item(StyleChangeFixMissingEmojiButton(row=2))
+            self.add_item(StyleChangeApplySafeOnlyButton(row=2))
 
 
 class DesignDoneView(discord.ui.View):
