@@ -376,7 +376,10 @@ def infer_live_majority_layout(studio: Any, records: Iterable[Any]) -> dict[str,
         "text_total": text_total,
         "category_total": category_total,
         "separator": {**separator, "count": sep_count, "mixed": sep_mixed},
-        "category_frame": {**frame, "count": frame_count, "mixed": frame_mixed},
+        # Keep frame["count"] as the visible frame width.
+        # Example: "── name ──" has count=2.
+        # Store how many categories used it separately.
+        "category_frame": {**frame, "occurrence_count": frame_count, "mixed": frame_mixed},
         "font": {
             "id": "fraktur" if font_id == "styled" and not font_mixed else ("normal" if font_id == "normal" and not font_mixed else ""),
             "label": "styled/fraktur" if font_id == "styled" and not font_mixed else ("normal text" if font_id == "normal" and not font_mixed else "mixed/unknown"),
@@ -524,10 +527,381 @@ def apply_majority_to_options(
     return out
 
 
-def annotate_plan_items(items: list[dict[str, Any]], analysis: Mapping[str, Any], options: Mapping[str, Any]) -> list[dict[str, Any]]:
+
+def _majority_value(summary: Mapping[str, str], key: str) -> str:
+    return _text(summary.get(key), "mixed/unknown")
+
+
+def _is_unknown_majority(value: str) -> bool:
+    text = _text(value).lower()
+    return not text or "mixed" in text or "unknown" in text
+
+
+def _separator_tuple(parts: Mapping[str, Any]) -> tuple[str, str]:
+    return (_text(parts.get("token")), _text(parts.get("spacing"), "none"))
+
+
+def classify_repair_item(studio: Any, item: Mapping[str, Any], analysis: Mapping[str, Any]) -> dict[str, Any]:
+    """Explain exactly why one repair row is safe or unsafe.
+
+    This is intentionally conservative: if the repair would change a visual
+    dimension whose live majority is mixed/unknown, the row gets a blocker
+    instead of being auto-applied.
+    """
+
+    summary = _summary_text(analysis)
+    before = _text(item.get("before"))
+    after = _text(item.get("after"))
+    kind = _text(item.get("kind"), "text")
+    status = _text(item.get("status"))
+
+    details: list[str] = []
+    blockers: list[str] = []
+
+    if status != "changed" or not before or not after or before == after:
+        return {"details": details, "blockers": blockers, "confidence": "not-applicable"}
+
+    if kind == "category":
+        before_frame = detect_category_frame(studio, before)
+        after_frame = detect_category_frame(studio, after)
+        if _text(before_frame.get("id")) != _text(after_frame.get("id")):
+            target = _majority_value(summary, "category_frame")
+            if _is_unknown_majority(target):
+                blockers.append("Category frame majority is mixed/unknown, so this category frame repair needs manual review.")
+            else:
+                details.append(f"Category frame repaired to majority: {target}.")
+        return {
+            "details": details,
+            "blockers": blockers,
+            "confidence": "blocked" if blockers else ("high" if details else "medium"),
+        }
+
+    before_sep = detect_channel_separator(studio, before)
+    after_sep = detect_channel_separator(studio, after)
+    if _separator_tuple(before_sep) != _separator_tuple(after_sep):
+        target = _majority_value(summary, "separator")
+        if _is_unknown_majority(target):
+            blockers.append("Separator majority is mixed/unknown, so this separator repair needs manual review.")
+        elif bool(before_sep.get("missing")):
+            details.append(f"Missing separator repaired to majority: {target}.")
+        elif bool(before_sep.get("doubled")):
+            details.append(f"Doubled separator cleaned to majority: {target}.")
+        elif _text(before_sep.get("token")) != _text(after_sep.get("token")):
+            details.append(f"Wrong separator repaired to majority: {target}.")
+        elif _text(before_sep.get("spacing")) != _text(after_sep.get("spacing")):
+            details.append(f"Separator spacing repaired to majority: {target}.")
+        else:
+            details.append(f"Separator repaired to majority: {target}.")
+
+    before_font = detect_font_style(studio, before)
+    after_font = detect_font_style(studio, after)
+    if before_font != after_font:
+        target = _majority_value(summary, "font")
+        if _is_unknown_majority(target):
+            blockers.append("Font/style majority is mixed/unknown, so this font repair needs manual review.")
+        else:
+            details.append(f"Font/style repaired to majority: {target}.")
+
+    return {
+        "details": details,
+        "blockers": blockers,
+        "confidence": "blocked" if blockers else ("high" if details else "medium"),
+    }
+
+
+def _fail_repair_item(item: dict[str, Any], reason: str) -> None:
+    item.setdefault("blockers", []).append(clean_design_text(reason))
+    item["status"] = "failed"
+    item["majority_repair_safety_blocked"] = True
+
+
+def _expected_separator(analysis: Mapping[str, Any]) -> tuple[str, str]:
+    separator = analysis.get("separator") if isinstance(analysis.get("separator"), Mapping) else {}
+    token = _text(separator.get("token"))
+    spacing = _text(separator.get("spacing"), "unknown")
+    if spacing not in {"compact", "spaced", "none"}:
+        return "", "unknown"
+    return token, spacing
+
+
+def _separator_matches_expected(studio: Any, after: str, token: str, spacing: str) -> bool:
+    parts = detect_channel_separator(studio, after)
+
+    if parts.get("doubled"):
+        return False
+
+    if parts.get("separator_in_name_text") and spacing != "none":
+        return False
+
+    if spacing == "none":
+        return bool(parts.get("missing"))
+
+    return _text(parts.get("token")) == token and _text(parts.get("spacing")) == spacing
+
+
+def _expected_frame(analysis: Mapping[str, Any]) -> Mapping[str, Any]:
+    frame = analysis.get("category_frame") if isinstance(analysis.get("category_frame"), Mapping) else {}
+    if _text(frame.get("kind")) in {"", "unknown"}:
+        return {}
+    return frame
+
+
+def _frame_matches_expected(studio: Any, after: str, expected: Mapping[str, Any]) -> bool:
+    """Return True when a category output visibly keeps the detected majority frame.
+
+    This check is intentionally visible-first. The safety gate should block
+    missing/wrong frames, but it must never false-block a category that visibly
+    has the same frame family around the name.
+    """
+
+    expected_kind = _text(expected.get("kind"), "plain")
+    if expected_kind in {"", "unknown"}:
+        return True
+
+    visible = _text(after).strip()
+
+    if expected_kind == "plain":
+        return _text(detect_category_frame(studio, after).get("kind"), "plain") == "plain"
+
+    if expected_kind in {"line", "heavy_line", "dash_line"}:
+        expected_char = _text(expected.get("char"))
+        if not expected_char:
+            expected_char = "─" if expected_kind == "line" else ("━" if expected_kind == "heavy_line" else "-")
+
+        expected_count = max(2, _safe_int(expected.get("count"), 2))
+
+        # Exact visible match: ── name ── / ━━ name ━━ / -- name --
+        prefix = expected_char * expected_count
+        suffix = expected_char * expected_count
+        if visible.startswith(prefix) and visible.endswith(suffix):
+            return True
+
+        # Same frame family with a harmless count difference.
+        # This prevents false-blocking ─── name ─── when the detected majority was ── name ──.
+        if visible.startswith(expected_char * 2) and visible.endswith(expected_char * 2):
+            return True
+
+        detected = detect_category_frame(studio, after)
+        detected_kind = _text(detected.get("kind"), "plain")
+        detected_count = _safe_int(detected.get("count"), 0)
+        detected_char = _text(detected.get("char"))
+
+        return (
+            detected_kind == expected_kind
+            and detected_count >= 2
+            and (not detected_char or detected_char == expected_char)
+        )
+
+    detected = detect_category_frame(studio, after)
+    return _text(detected.get("kind"), "plain") == expected_kind
+
+
+
+def _font_matches_expected(studio: Any, after: str, analysis: Mapping[str, Any]) -> bool:
+    font = analysis.get("font") if isinstance(analysis.get("font"), Mapping) else {}
+    expected = _text(font.get("id"))
+
+    if expected not in {"normal", "fraktur"}:
+        return True
+
+    detected = detect_font_style(studio, after)
+
+    if expected == "normal":
+        return detected == "normal"
+
+    return detected == "styled"
+
+
+def validate_majority_repair_items(
+    studio: Any,
+    items: list[dict[str, Any]],
+    analysis: Mapping[str, Any],
+) -> list[dict[str, Any]]:
+    """Fail closed when a majority repair preview does not match the detected majority."""
+
+    token, spacing = _expected_separator(analysis)
+    frame = _expected_frame(analysis)
+
+    for item in items:
+        if item.get("status") != "changed":
+            continue
+
+        kind = _text(item.get("kind"), "text")
+        after = _text(item.get("after"))
+
+        if not after:
+            _fail_repair_item(item, "Repair safety stopped this row because the proposed name was blank.")
+            continue
+
+        if kind == "category":
+            if frame:
+                expected_kind = _text(frame.get("kind"), "plain")
+                expected_char = _text(frame.get("char"))
+                if not expected_char and expected_kind in {"line", "heavy_line", "dash_line"}:
+                    expected_char = "─" if expected_kind == "line" else ("━" if expected_kind == "heavy_line" else "-")
+
+                visible = _text(after).strip()
+                visibly_has_expected_frame = (
+                    bool(expected_char)
+                    and visible.startswith(expected_char * 2)
+                    and visible.endswith(expected_char * 2)
+                )
+
+                if not visibly_has_expected_frame and not _frame_matches_expected(studio, after, frame):
+                    _fail_repair_item(
+                        item,
+                        "Repair safety stopped this category because the preview did not match the detected majority category frame.",
+                    )
+            continue
+
+        if spacing != "unknown" and not _separator_matches_expected(studio, after, token, spacing):
+            label = _separator_label(token, spacing)
+            _fail_repair_item(
+                item,
+                f"Repair safety stopped this channel because the preview did not keep the detected majority separator: {label}.",
+            )
+            continue
+
+        if not _font_matches_expected(studio, after, analysis):
+            font = analysis.get("font") if isinstance(analysis.get("font"), Mapping) else {}
+            label = _text(font.get("label"), "detected majority font/style")
+            _fail_repair_item(
+                item,
+                f"Repair safety stopped this channel because the preview did not match the detected majority font/style: {label}.",
+            )
+
+    return items
+
+
+def _fail_repair_item(item: dict[str, Any], reason: str) -> None:
+    item.setdefault("blockers", []).append(clean_design_text(reason))
+    item["status"] = "failed"
+    item["majority_repair_safety_blocked"] = True
+
+
+def _expected_separator(analysis: Mapping[str, Any]) -> tuple[str, str]:
+    separator = analysis.get("separator") if isinstance(analysis.get("separator"), Mapping) else {}
+    token = _text(separator.get("token"))
+    spacing = _text(separator.get("spacing"), "unknown")
+    if spacing not in {"compact", "spaced", "none"}:
+        return "", "unknown"
+    return token, spacing
+
+
+def _separator_matches_expected(studio: Any, after: str, token: str, spacing: str) -> bool:
+    parts = detect_channel_separator(studio, after)
+
+    if parts.get("doubled"):
+        return False
+
+    if parts.get("separator_in_name_text") and spacing != "none":
+        return False
+
+    if spacing == "none":
+        return bool(parts.get("missing"))
+
+    return _text(parts.get("token")) == token and _text(parts.get("spacing")) == spacing
+
+
+def _expected_frame(analysis: Mapping[str, Any]) -> Mapping[str, Any]:
+    frame = analysis.get("category_frame") if isinstance(analysis.get("category_frame"), Mapping) else {}
+    if _text(frame.get("kind")) in {"", "unknown"}:
+        return {}
+    return frame
+
+
+def _frame_matches_expected(studio: Any, after: str, expected: Mapping[str, Any]) -> bool:
+    detected = detect_category_frame(studio, after)
+
+    expected_kind = _text(expected.get("kind"), "plain")
+    detected_kind = _text(detected.get("kind"), "plain")
+
+    if expected_kind != detected_kind:
+        return False
+
+    if expected_kind in {"line", "heavy_line", "dash_line"}:
+        return _safe_int(detected.get("count"), 0) == _safe_int(expected.get("count"), 0)
+
+    return True
+
+
+def _font_matches_expected(studio: Any, after: str, analysis: Mapping[str, Any]) -> bool:
+    font = analysis.get("font") if isinstance(analysis.get("font"), Mapping) else {}
+    expected = _text(font.get("id"))
+
+    if expected not in {"normal", "fraktur"}:
+        return True
+
+    detected = detect_font_style(studio, after)
+
+    if expected == "normal":
+        return detected == "normal"
+
+    return detected == "styled"
+
+
+def validate_majority_repair_items(
+    studio: Any,
+    items: list[dict[str, Any]],
+    analysis: Mapping[str, Any],
+) -> list[dict[str, Any]]:
+    """Fail closed when a majority repair preview does not match the detected majority."""
+
+    token, spacing = _expected_separator(analysis)
+    frame = _expected_frame(analysis)
+
+    for item in items:
+        if item.get("status") != "changed":
+            continue
+
+        kind = _text(item.get("kind"), "text")
+        after = _text(item.get("after"))
+
+        if not after:
+            _fail_repair_item(item, "Repair safety stopped this row because the proposed name was blank.")
+            continue
+
+        if kind == "category":
+            if frame and not _frame_matches_expected(studio, after, frame):
+                _fail_repair_item(
+                    item,
+                    "Repair safety stopped this category because the preview did not match the detected majority category frame.",
+                )
+            continue
+
+        if spacing != "unknown" and not _separator_matches_expected(studio, after, token, spacing):
+            label = _separator_label(token, spacing)
+            _fail_repair_item(
+                item,
+                f"Repair safety stopped this channel because the preview did not keep the detected majority separator: {label}.",
+            )
+            continue
+
+        if not _font_matches_expected(studio, after, analysis):
+            font = analysis.get("font") if isinstance(analysis.get("font"), Mapping) else {}
+            label = _text(font.get("label"), "detected majority font/style")
+            _fail_repair_item(
+                item,
+                f"Repair safety stopped this channel because the preview did not match the detected majority font/style: {label}.",
+            )
+
+    return items
+
+
+def annotate_plan_items(
+    items: list[dict[str, Any]],
+    analysis: Mapping[str, Any],
+    options: Mapping[str, Any],
+    *,
+    studio: Any | None = None,
+) -> list[dict[str, Any]]:
     summary = _summary_text(analysis)
     lock_count = _safe_int(options.get("__majority_layout_overrode_locks"), 0)
     lock_active = _safe_int(options.get("__majority_layout_lock_override_active"), 0)
+
+    if studio is not None and bool(options.get("__majority_layout_inferred")):
+        items = validate_majority_repair_items(studio, items, analysis)
+
     for item in items:
         item["majority_layout"] = dict(summary)
         if lock_count:
@@ -535,7 +909,9 @@ def annotate_plan_items(items: list[dict[str, Any]], analysis: Mapping[str, Any]
             item["format_lock_scope"] = "majority"
         if lock_active:
             item["majority_lock_override_active"] = lock_active
+
     return items
+
 
 
 def majority_summary_from_items(items: Iterable[Mapping[str, Any]]) -> dict[str, str]:
@@ -575,6 +951,7 @@ __all__ = [
     "apply_majority_to_options",
     "annotate_plan_items",
     "clean_design_text",
+    "classify_repair_item",
     "detect_category_frame",
     "detect_channel_separator",
     "detect_font_style",
@@ -582,6 +959,7 @@ __all__ = [
     "ensure_separator_spec",
     "infer_live_majority_layout",
     "install_separator_safe_parser",
+    "validate_majority_repair_items",
     "lock_notice_from_items",
     "majority_summary_from_items",
     "skipped_lines",
