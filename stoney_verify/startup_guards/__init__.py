@@ -16,6 +16,7 @@ _SEEN_IMPORT_MESSAGES: set[str] = set()
 _STARTUP_GUARDS: Tuple[str, ...] = (
     "stoney_verify.startup_guards.process_health",
     "stoney_verify.startup_guards.command_safety",
+    "stoney_verify.startup_guards.global_interaction_trace_guard",
     "stoney_verify.startup_guards.slash_command_cleanup",
     "stoney_verify.startup_guards.public_verify_admin_command_skip",
     "stoney_verify.startup_guards.auto_schema_bootstrap",
