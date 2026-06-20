@@ -40,6 +40,20 @@ def test_action_lock_detects_duplicate_in_flight():
         assert phrase in SOURCE
 
 
+def test_action_lock_detects_post_action_cooldown_duplicates():
+    required = [
+        "DANK_SHIELD_INTERACTION_ACTION_COOLDOWN_SECONDS",
+        "_RECENT_RELEASES",
+        "_COOLDOWN_COUNTS",
+        "_cooldown_seconds",
+        "duplicate_cooldown",
+        "This action was just used",
+    ]
+
+    for phrase in required:
+        assert phrase in SOURCE
+
+
 def test_action_lock_is_not_spam_guard_or_punishment():
     forbidden = [
         "timeout(",

@@ -36,6 +36,8 @@ class _ActionLock:
 
 _ACTIVE_LOCKS: dict[str, _ActionLock] = {}
 _DUPLICATE_COUNTS: dict[str, int] = {}
+_RECENT_RELEASES: dict[str, float] = {}
+_COOLDOWN_COUNTS: dict[str, int] = {}
 
 
 def _mode() -> str:
@@ -56,6 +58,13 @@ def _ttl_seconds() -> float:
         return max(3.0, float(os.getenv("DANK_SHIELD_INTERACTION_ACTION_LOCK_TTL_SECONDS", "45")))
     except Exception:
         return 45.0
+
+
+def _cooldown_seconds() -> float:
+    try:
+        return max(0.0, float(os.getenv("DANK_SHIELD_INTERACTION_ACTION_COOLDOWN_SECONDS", "2.5")))
+    except Exception:
+        return 2.5
 
 
 def _trace_id(interaction: discord.Interaction | None = None) -> str:
@@ -162,10 +171,17 @@ def _lock_key(interaction: discord.Interaction | None, item: Any = None) -> str:
 def _cleanup_expired() -> None:
     now = time.monotonic()
     ttl = _ttl_seconds()
+    cooldown = _cooldown_seconds()
+
     expired = [key for key, lock in _ACTIVE_LOCKS.items() if now - lock.created_at > ttl]
     for key in expired:
         _ACTIVE_LOCKS.pop(key, None)
         _DUPLICATE_COUNTS.pop(key, None)
+
+    old_recent = [key for key, released_at in _RECENT_RELEASES.items() if now - released_at > cooldown]
+    for key in old_recent:
+        _RECENT_RELEASES.pop(key, None)
+        _COOLDOWN_COUNTS.pop(key, None)
 
 
 def _log(event: str, interaction: discord.Interaction | None, item: Any = None, **details: Any) -> None:
@@ -188,9 +204,9 @@ def _log(event: str, interaction: discord.Interaction | None, item: Any = None, 
         pass
 
 
-def _try_acquire(interaction: discord.Interaction | None, item: Any = None) -> tuple[bool, str]:
+def _try_acquire(interaction: discord.Interaction | None, item: Any = None) -> tuple[bool, str, str]:
     if interaction is None:
-        return True, ""
+        return True, "", "acquired"
 
     _cleanup_expired()
 
@@ -206,7 +222,24 @@ def _try_acquire(interaction: discord.Interaction | None, item: Any = None) -> t
             owner_trace=existing.trace,
             duplicate_count=_DUPLICATE_COUNTS[key],
         )
-        return False, key
+        return False, key, "in_flight"
+
+    released_at = _RECENT_RELEASES.get(key)
+    cooldown = _cooldown_seconds()
+
+    if released_at is not None and cooldown > 0:
+        age = time.monotonic() - released_at
+        if age <= cooldown:
+            _COOLDOWN_COUNTS[key] = _COOLDOWN_COUNTS.get(key, 1) + 1
+            _log(
+                "duplicate_cooldown",
+                interaction,
+                item,
+                duplicate_count=_COOLDOWN_COUNTS[key],
+                cooldown_s=cooldown,
+                age_ms=int(age * 1000),
+            )
+            return False, key, "cooldown"
 
     _ACTIVE_LOCKS[key] = _ActionLock(
         key=key,
@@ -217,7 +250,7 @@ def _try_acquire(interaction: discord.Interaction | None, item: Any = None) -> t
     )
     _DUPLICATE_COUNTS[key] = 1
     _log("acquired", interaction, item)
-    return True, key
+    return True, key, "acquired"
 
 
 def _release(interaction: discord.Interaction | None, key: str, item: Any = None) -> None:
@@ -228,14 +261,18 @@ def _release(interaction: discord.Interaction | None, key: str, item: Any = None
     count = _DUPLICATE_COUNTS.pop(key, 0)
 
     if lock is not None:
-        _log("released", interaction, item, total_count=count)
+        _RECENT_RELEASES[key] = time.monotonic()
+        _log("released", interaction, item, total_count=count, cooldown_s=_cooldown_seconds())
 
 
-async def _send_already_running(interaction: discord.Interaction | None) -> None:
+async def _send_already_running(interaction: discord.Interaction | None, reason: str = "in_flight") -> None:
     if interaction is None:
         return
 
-    message = "⏳ This action is already running. Please wait a moment."
+    if reason == "cooldown":
+        message = "⏳ This action was just used. Please wait a moment."
+    else:
+        message = "⏳ This action is already running. Please wait a moment."
 
     try:
         if _response_done(interaction):
@@ -286,12 +323,13 @@ def _patch_view_scheduled_task() -> bool:
 
         acquired = True
         key = ""
+        reason = "acquired"
 
         try:
-            acquired, key = _try_acquire(interaction, item)
+            acquired, key, reason = _try_acquire(interaction, item)
 
             if not acquired and _mode() == "block":
-                await _send_already_running(interaction)
+                await _send_already_running(interaction, reason)
                 return None
 
             # Observe mode intentionally calls original even for duplicates.
