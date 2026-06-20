@@ -31,6 +31,7 @@ from .repository import (
     unclaim_ticket as repo_unclaim_ticket,
 )
 from .orphan_safety import cleanup_unpersisted_ticket_channel
+from ..services.server_design_ticket_naming import build_ticket_channel_name
 
 try:
     from .event_service import (
@@ -796,6 +797,44 @@ def _format_ticket_channel_name(number: int, closed: bool = False) -> str:
     return f"{prefix}-{int(number):04d}"
 
 
+async def _server_design_ticket_options(guild_id: int) -> Optional[Dict[str, Any]]:
+    """Load Dank Design options only when the server has actually saved them."""
+
+    try:
+        from ..guild_config import get_guild_config
+
+        cfg = await get_guild_config(int(guild_id), refresh=True)
+        raw = cfg.get("server_design_studio_options") if isinstance(cfg, dict) else None
+        return dict(raw) if isinstance(raw, dict) and raw else None
+    except Exception:
+        return None
+
+
+async def _format_ticket_channel_name_for_guild(
+    guild: discord.Guild,
+    number: int,
+    *,
+    closed: bool = False,
+    parent: Optional[discord.CategoryChannel] = None,
+) -> str:
+    plain = _format_ticket_channel_name(number, closed=closed)
+    options = await _server_design_ticket_options(int(guild.id))
+    if not options:
+        return plain
+
+    try:
+        parent_id = int(parent.id) if parent is not None else None
+    except Exception:
+        parent_id = None
+
+    return build_ticket_channel_name(
+        int(number),
+        closed=closed,
+        options=options,
+        parent_category_id=parent_id,
+    )
+
+
 def _topic_for_ticket(
     *,
     owner_id: int,
@@ -1533,7 +1572,7 @@ async def _reserve_unique_ticket_number_and_name(
 ) -> Tuple[int, str]:
     for _ in range(max_attempts):
         number = await _next_ticket_number(guild, parent=parent)
-        name = _format_ticket_channel_name(number, closed=False)
+        name = await _format_ticket_channel_name_for_guild(guild, number, closed=False, parent=parent)
         if not _channel_name_exists(guild, channel_name=name, parent=parent):
             return number, name
 
@@ -1541,7 +1580,7 @@ async def _reserve_unique_ticket_number_and_name(
         _db_max_ticket_number(int(guild.id)),
         _channel_scan_max_ticket_number(guild, parent=parent),
     ) + 1
-    return fallback, _format_ticket_channel_name(fallback, closed=False)
+    return fallback, await _format_ticket_channel_name_for_guild(guild, fallback, closed=False, parent=parent)
 
 
 async def _ensure_channel_identity(
@@ -1565,7 +1604,12 @@ async def _ensure_channel_identity(
         ticket_number=resolved_number,
     )
 
-    desired_name = _format_ticket_channel_name(resolved_number, closed=closed)
+    desired_name = await _format_ticket_channel_name_for_guild(
+        channel.guild,
+        resolved_number,
+        closed=closed,
+        parent=channel.category,
+    )
 
     try:
         edits: Dict[str, Any] = {}
@@ -2131,7 +2175,12 @@ async def mark_ticket_closed(
                 repo_close_ok = False
 
         if ticket_number is not None:
-            new_name = _format_ticket_channel_name(ticket_number, closed=True)
+            new_name = await _format_ticket_channel_name_for_guild(
+                channel.guild,
+                ticket_number,
+                closed=True,
+                parent=channel.category,
+            )
             try:
                 if channel.name != new_name and not _channel_name_exists(
                     channel.guild,
