@@ -728,7 +728,14 @@ class MemberActivityNoticeDMView(discord.ui.View):
         custom_id="dank_member_notice_still_active",
     )
     async def still_active(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        notice = _latest_pending_notice_for_user(int(interaction.user.id))
+        try:
+            notice = await asyncio.wait_for(
+                asyncio.to_thread(_latest_pending_notice_for_user, int(interaction.user.id)),
+                timeout=8.0,
+            )
+        except Exception as exc:
+            print(f"⚠️ member_activity_notices pending notice lookup skipped: {exc!r}")
+            notice = None
         if notice is None:
             return await interaction.response.send_message(
                 "You’re all set — I don’t see an active cleanup notice for you anymore.",
@@ -742,7 +749,8 @@ class MemberActivityNoticeDMView(discord.ui.View):
         except Exception:
             guild_id = 0
 
-        _update_notice_row(
+        await asyncio.to_thread(
+            _update_notice_row,
             str(notice.get("notice_id")),
             status=_NOTICE_STATUS_RESPONDED_STAYING,
             responded_at=_utcnow().isoformat(),
@@ -773,7 +781,14 @@ class MemberActivityNoticeDMView(discord.ui.View):
         custom_id="dank_member_notice_what_is_this",
     )
     async def what_is_this(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        notice = _latest_pending_notice_for_user(int(interaction.user.id))
+        try:
+            notice = await asyncio.wait_for(
+                asyncio.to_thread(_latest_pending_notice_for_user, int(interaction.user.id)),
+                timeout=8.0,
+            )
+        except Exception as exc:
+            print(f"⚠️ member_activity_notices pending notice lookup skipped: {exc!r}")
+            notice = None
         guild_name = str((notice or {}).get("guild_name") or "that server")
         await interaction.response.send_message(
             "This message was sent because the server staff is checking inactive verified members before cleanup.\n\n"
@@ -789,9 +804,17 @@ class MemberActivityNoticeDMView(discord.ui.View):
         custom_id="dank_member_notice_ok_leaving",
     )
     async def okay_leaving(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        notice = _latest_pending_notice_for_user(int(interaction.user.id))
+        try:
+            notice = await asyncio.wait_for(
+                asyncio.to_thread(_latest_pending_notice_for_user, int(interaction.user.id)),
+                timeout=8.0,
+            )
+        except Exception as exc:
+            print(f"⚠️ member_activity_notices pending notice lookup skipped: {exc!r}")
+            notice = None
         if notice is not None:
-            _update_notice_row(
+            await asyncio.to_thread(
+                _update_notice_row,
                 str(notice.get("notice_id")),
                 status=_NOTICE_STATUS_OK_LEAVING,
                 responded_at=_utcnow().isoformat(),
@@ -812,7 +835,7 @@ async def _send_notice_row(bot: Any, row: dict[str, Any]) -> None:
         guild_id = int(str(row.get("guild_id")))
         user_id = int(str(row.get("user_id")))
     except Exception:
-        _update_notice_row(notice_id, status=_NOTICE_STATUS_FAILED, error="Invalid guild_id/user_id")
+        await asyncio.to_thread(_update_notice_row, notice_id, status=_NOTICE_STATUS_FAILED, error="Invalid guild_id/user_id")
         return
 
     guild = None
@@ -828,7 +851,7 @@ async def _send_notice_row(bot: Any, row: dict[str, Any]) -> None:
         if user is None:
             user = await bot.fetch_user(user_id)
     except Exception as e:
-        _update_notice_row(notice_id, status=_NOTICE_STATUS_FAILED, error=f"Could not resolve user: {type(e).__name__}")
+        await asyncio.to_thread(_update_notice_row, notice_id, status=_NOTICE_STATUS_FAILED, error=f"Could not resolve user: {type(e).__name__}")
         return
 
     try:
@@ -837,7 +860,8 @@ async def _send_notice_row(bot: Any, row: dict[str, Any]) -> None:
             view=MemberActivityNoticeDMView(),
             allowed_mentions=discord.AllowedMentions.none(),
         )
-        _update_notice_row(
+        await asyncio.to_thread(
+            _update_notice_row,
             notice_id,
             status=_NOTICE_STATUS_DELIVERED,
             sent_at=_utcnow().isoformat(),
@@ -845,14 +869,16 @@ async def _send_notice_row(bot: Any, row: dict[str, Any]) -> None:
             error=None,
         )
     except discord.Forbidden:
-        _update_notice_row(
+        await asyncio.to_thread(
+            _update_notice_row,
             notice_id,
             status=_NOTICE_STATUS_DM_BLOCKED,
             attempted_at=_utcnow().isoformat(),
             error="User has DMs closed or blocked the bot.",
         )
     except Exception as e:
-        _update_notice_row(
+        await asyncio.to_thread(
+            _update_notice_row,
             notice_id,
             status=_NOTICE_STATUS_FAILED,
             attempted_at=_utcnow().isoformat(),
@@ -862,21 +888,39 @@ async def _send_notice_row(bot: Any, row: dict[str, Any]) -> None:
 
 async def _expire_passed_notice_deadlines() -> None:
     now = _utcnow()
-    rows, _warning = _select_notice_rows(limit=1000)
+    try:
+        rows, _warning = await asyncio.wait_for(
+            asyncio.to_thread(_select_notice_rows, limit=1000),
+            timeout=8.0,
+        )
+    except Exception as exc:
+        print(f"⚠️ member_activity_notices deadline scan skipped: {exc!r}")
+        return
     for row in rows:
         status = str(row.get("status") or "")
         if status not in {_NOTICE_STATUS_DELIVERED, _NOTICE_STATUS_SCHEDULED}:
             continue
         deadline = _coerce_utc(row.get("deadline_at"))
         if deadline is not None and deadline < now:
-            _update_notice_row(str(row.get("notice_id")), status=_NOTICE_STATUS_DEADLINE_PASSED)
+            await asyncio.to_thread(
+            _update_notice_row,
+            str(row.get("notice_id")),
+            status=_NOTICE_STATUS_DEADLINE_PASSED,
+        )
 
 
 async def _process_due_member_notices(bot: Any, *, one_pass: bool = False) -> None:
     while True:
         try:
             await _expire_passed_notice_deadlines()
-            rows, warning = _due_notice_rows(limit=20)
+            try:
+                rows, warning = await asyncio.wait_for(
+                    asyncio.to_thread(_due_notice_rows, limit=20),
+                    timeout=8.0,
+                )
+            except Exception as exc:
+                print(f"⚠️ member_activity_notices due scan skipped: {exc!r}")
+                rows, warning = [], "Due notice scan timed out or failed."
             if warning:
                 print(f"⚠️ member activity notices: {warning}")
             for row in rows:
@@ -1623,7 +1667,13 @@ class MemberActivityReviewView(discord.ui.View):
             return
         if interaction.guild is None:
             return
-        await interaction.response.send_message(embed=_notice_results_embed(interaction.guild), ephemeral=True)
+        await interaction.response.send_message(
+            embed=await asyncio.wait_for(
+                asyncio.to_thread(_notice_results_embed, interaction.guild),
+                timeout=8.0,
+            ),
+            ephemeral=True,
+        )
 
     async def _show_data_notes(self, interaction: discord.Interaction) -> None:
         if not await _require_review_permission(interaction):
@@ -1760,7 +1810,10 @@ async def members_notices(interaction: discord.Interaction) -> None:
     if interaction.guild is None:
         return
     await interaction.response.send_message(
-        embed=_notice_results_embed(interaction.guild),
+        embed=await asyncio.wait_for(
+            asyncio.to_thread(_notice_results_embed, interaction.guild),
+            timeout=8.0,
+        ),
         ephemeral=True,
         allowed_mentions=discord.AllowedMentions.none(),
     )
