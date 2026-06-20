@@ -509,13 +509,87 @@ async def build_design_plan(guild: discord.Guild, options: Mapping[str, Any]) ->
     return items
 
 
-def _home_embed(guild: discord.Guild, options: Mapping[str, Any] | None = None) -> discord.Embed:
-    options = options or {}
+def _live_majority_records_for_design(guild: discord.Guild) -> list[dict[str, Any]]:
+    records: list[dict[str, Any]] = []
+
+    for channel in _editable_channels(guild):
+        name = _safe_str(getattr(channel, "name", ""))
+        if not name:
+            continue
+
+        kind = _kind(channel)
+        if kind == "other":
+            continue
+
+        parent = getattr(channel, "category", None)
+        records.append(
+            {
+                "id": str(getattr(channel, "id", "")),
+                "category_id": str(getattr(parent, "id", "")),
+                "kind": "category" if kind == "category" else "text",
+                "name": name,
+            }
+        )
+
+    return records
+
+
+def _infer_live_majority_context(
+    guild: discord.Guild,
+    options: Mapping[str, Any],
+) -> tuple[dict[str, Any], dict[str, Any], dict[str, str]]:
+    """Return analysis, repair options, and readable summary for the live server style."""
+
+    try:
+        from stoney_verify.services import server_design_majority_layout as majority
+
+        records = _live_majority_records_for_design(guild)
+        analysis = majority.infer_live_majority_layout(studio, records)
+        repair_options = majority.apply_majority_to_options(studio, options, analysis, respect_locks=False)
+        summary = dict(repair_options.get("__majority_layout_summary") or {})
+        if not summary:
+            summary = {
+                "separator": "mixed/unknown",
+                "category_frame": "mixed/unknown",
+                "font": "mixed/unknown",
+                "leading_emoji": "mixed/unknown",
+            }
+        return dict(analysis), dict(repair_options), {str(k): _safe_str(v, "mixed/unknown") for k, v in summary.items()}
+    except Exception:
+        return {}, dict(options), {
+            "separator": "unavailable",
+            "category_frame": "unavailable",
+            "font": "unavailable",
+            "leading_emoji": "unavailable",
+        }
+
+
+def _saved_style_summary(options: Mapping[str, Any]) -> dict[str, str]:
     theme_id = _safe_str(options.get("theme_id"), "gothic_clean")
     strength = _safe_int(options.get("strength"), 2)
     theme = next((t for t in studio.THEMES if t.id == theme_id), studio.THEMES[1])
     font_text = str(getattr(theme, "font", "normal") or "normal").replace("_", " ").title()
+    return {
+        "theme": _safe_str(getattr(theme, "label", "Gothic Clean"), "Gothic Clean"),
+        "font": font_text,
+        "strength": f"{strength}/5",
+    }
+
+
+def _majority_confidence_line(summary: Mapping[str, str]) -> str:
+    values = [_safe_str(summary.get(key), "mixed/unknown").lower() for key in ("separator", "category_frame", "font", "leading_emoji")]
+    if any("unavailable" in value for value in values):
+        return "Detection unavailable — saved style is shown as fallback."
+    if any("mixed" in value or "unknown" in value for value in values):
+        return "Mixed style detected — preview before applying."
+    return "Clear majority detected."
+
+
+def _home_embed(guild: discord.Guild, options: Mapping[str, Any] | None = None) -> discord.Embed:
+    options = options or {}
     counts = _lock_count(options)
+    live_analysis, live_options, live_summary = _infer_live_majority_context(guild, options)
+    saved = _saved_style_summary(options)
 
     embed = discord.Embed(
         title="🎨 Dank Design Studio",
@@ -529,7 +603,7 @@ def _home_embed(guild: discord.Guild, options: Mapping[str, Any] | None = None) 
         name="Recommended",
         value=(
             "🧭 **Review Repairs** — best for hand-built servers. Copies the live majority layout and repairs only outliers.\n"
-            "👁️ **Preview Server** — shows a full-server style preview without changing anything."
+            "👁️ **Preview Server** — shows a saved-rule preview without changing anything."
         ),
         inline=False,
     )
@@ -542,12 +616,23 @@ def _home_embed(guild: discord.Guild, options: Mapping[str, Any] | None = None) 
         inline=False,
     )
     embed.add_field(
-        name="Current style",
+        name="Detected live style",
         value=(
-            f"Theme: **{theme.label}**\n"
-            f"Font: **{font_text}**\n"
-            f"Strength: **{strength}/5**\n"
-            "Rename speed: **2 seconds per item**"
+            f"Separator: **{_safe_str(live_summary.get('separator'), 'mixed/unknown')}**\n"
+            f"Categories: **{_safe_str(live_summary.get('category_frame'), 'mixed/unknown')}**\n"
+            f"Font/style: **{_safe_str(live_summary.get('font'), 'mixed/unknown')}**\n"
+            f"Leading emoji: **{_safe_str(live_summary.get('leading_emoji'), 'mixed/unknown')}**\n"
+            f"Confidence: **{_majority_confidence_line(live_summary)}**"
+        )[:1024],
+        inline=False,
+    )
+    embed.add_field(
+        name="Saved design rule",
+        value=(
+            f"Theme: **{saved['theme']}**\n"
+            f"Font: **{saved['font']}**\n"
+            f"Strength: **{saved['strength']}**\n"
+            "Used by **Preview Server** and manual saved rules."
         ),
         inline=True,
     )
@@ -556,11 +641,12 @@ def _home_embed(guild: discord.Guild, options: Mapping[str, Any] | None = None) 
         value=(
             f"Global: **{'On' if counts['global'] else 'Off'}**\n"
             f"Categories: **{counts['categories']}**\n"
-            f"Channels: **{counts['channels']}**"
+            f"Channels: **{counts['channels']}**\n"
+            "Review Repairs ignores these unless you choose saved layout."
         ),
         inline=True,
     )
-    embed.set_footer(text="Names only • Review before Apply • Use Advanced only for locks, protection, rollback, and help")
+    embed.set_footer(text="Names only • Review Repairs follows live style • Preview Server follows saved rules")
     return _clean_design_embed(embed)
 
 
@@ -751,40 +837,64 @@ def _consistency_lines(items: list[dict[str, Any]], *, limit: int = 12) -> list[
 
 def _consistency_embed(guild: discord.Guild, items: list[dict[str, Any]], options: Mapping[str, Any]) -> discord.Embed:
     summary = _consistency_summary(items)
-    theme_id = _safe_str(options.get("theme_id"), "gothic_clean")
-    strength = _safe_int(options.get("strength"), 4)
-    theme = next((t for t in studio.THEMES if t.id == theme_id), studio.THEMES[1])
-    font_text = str(getattr(theme, "font", "normal") or "normal").replace("_", " ").title()
+    is_live = bool(options.get("__majority_layout_inferred") or options.get("__use_live_majority_layout"))
+    live_summary = options.get("__majority_layout_summary") if isinstance(options.get("__majority_layout_summary"), Mapping) else {}
+
+    if not live_summary:
+        _analysis, _repair_options, detected = _infer_live_majority_context(guild, options)
+        live_summary = detected
+
+    title = "✅ Live Majority Repair Preview" if is_live else "🧭 Saved Layout Consistency Check"
+    description = (
+        "**Review before apply.** Dank Shield copied the layout most channels/categories already use here.\n\n"
+        "Apply only renames safe outliers shown in this preview."
+        if is_live
+        else "Dank Shield compared channel/category names against the saved design rule.\n\n"
+        "Use this when your saved rules are intentionally correct."
+    )
 
     embed = discord.Embed(
-        title="🧭 Server Design Consistency Check",
-        description=(
-            "Dank Shield compared the current channel/category names against the saved design draft.\n\n"
-            "Use **Fix All Inconsistencies** to repair only names that drifted from the saved format."
-        ),
-        color=discord.Color.green() if not summary["failed"] else discord.Color.orange(),
+        title=title,
+        description=description,
+        color=discord.Color.orange() if summary["failed"] else discord.Color.green(),
     )
+
     embed.add_field(
-        name="Saved design",
+        name="Detected target layout" if is_live else "Saved target layout",
         value=(
-            f"Theme: **{theme.label}**\n"
-            f"Font: **{font_text}**\n"
-            f"Strength: **{strength}/5**\n"
-            "Delay: **2 seconds per rename**"
-        ),
+            f"Separator: **{_safe_str(live_summary.get('separator'), 'mixed/unknown')}**\n"
+            f"Category frame: **{_safe_str(live_summary.get('category_frame'), 'mixed/unknown')}**\n"
+            f"Font/style: **{_safe_str(live_summary.get('font'), 'mixed/unknown')}**\n"
+            f"Leading emoji: **{_safe_str(live_summary.get('leading_emoji'), 'mixed/unknown')}**"
+        )[:1024],
         inline=False,
     )
+
     embed.add_field(
         name="Results",
         value=(
-            f"Matches saved design: **{summary['matches']}**\n"
-            f"Needs fix: **{summary['needs_fix']}**\n"
-            f"Protected safe skips: **{summary['protected']}**\n"
-            f"Cannot fix yet: **{summary['failed']}**\n"
+            f"Already matching: **{summary['matches']}**\n"
+            f"Safe repairs: **{summary['needs_fix']}**\n"
+            f"Protected/skipped: **{summary['protected']}**\n"
+            f"Cannot repair yet: **{summary['failed']}**\n"
             f"Notes: **{summary['notes']}**"
         ),
         inline=True,
     )
+
+    if options.get("__majority_layout_overrode_locks"):
+        embed.add_field(
+            name="Saved rules ignored for this repair",
+            value=f"Review Repairs ignored **{_safe_int(options.get('__majority_layout_overrode_locks'), 0)}** saved rule(s) so it could copy the live majority.",
+            inline=False,
+        )
+    elif options.get("__majority_layout_lock_override_active"):
+        embed.add_field(
+            name="Saved rules active",
+            value=f"**{_safe_int(options.get('__majority_layout_lock_override_active'), 0)}** saved rule(s) are active for this preview.",
+            inline=False,
+        )
+
     embed.add_field(
         name="What will be fixed",
         value="\n".join(_consistency_lines(items, limit=12))[:1024],
@@ -805,8 +915,9 @@ def _consistency_embed(guild: discord.Guild, items: list[dict[str, Any]], option
     if failed_lines and failed_lines != ["No matching preview rows."]:
         embed.add_field(name="Cannot fix yet", value="\n".join(failed_lines)[:1024], inline=False)
 
-    embed.set_footer(text="Fix uses the same one-press apply flow and rollback snapshot.")
+    embed.set_footer(text="Names only • Preview first • Rollback snapshot kept before Apply")
     return _clean_design_embed(embed)
+
 
 
 class FormatLocksButton(discord.ui.Button):
@@ -3856,10 +3967,16 @@ class DesignHomeView(discord.ui.View):
         await interaction.response.defer(ephemeral=True, thinking=True)
 
         options = await _load_design_options(int(guild.id))
-        repair_options = dict(options)
-        repair_options["__use_live_majority_layout"] = True
+        try:
+            from stoney_verify.services import server_design_majority_layout as majority
 
-        items = await build_design_plan(guild, repair_options)
+            analysis, repair_options, _summary = _infer_live_majority_context(guild, options)
+            items = await build_design_plan(guild, repair_options)
+            items = majority.annotate_plan_items(items, analysis, repair_options, studio=studio)
+        except Exception:
+            repair_options = dict(options)
+            repair_options["__use_live_majority_layout"] = True
+            items = await build_design_plan(guild, repair_options)
         key = _key(int(guild.id), int(interaction.user.id))
         _PENDING[key] = {
             "created_at": time.time(),
