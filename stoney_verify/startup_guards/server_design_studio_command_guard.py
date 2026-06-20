@@ -4071,6 +4071,82 @@ def _style_change_visible_name_body(current_name: str, parsed: Mapping[str, Any]
     return body or "channel"
 
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+def _style_change_failed_icon_placeholders() -> set[str]:
+    return {"□", "▢", "▣", "◻", "◻️", "◽", "▫", "⬜", "🔲"}
+
+
+def _style_change_separator_chars() -> set[str]:
+    return set("|｜│┃❘❙❚⎮¦︱-–—―━─═·•∙⋅*✦✧✪✫✬✭❖◆◇▪▫▬[]{}()<>【】「」『』〔〕〖〗꒰꒱")
+
+
+def _style_change_icon_base(icon: str) -> str:
+    return (
+        _safe_str(icon)
+        .replace("\ufe0e", "")
+        .replace("\ufe0f", "")
+        .replace("\u20e3", "")
+        .strip()
+    )
+
+
+def _style_change_is_unsafe_channel_icon(icon: str) -> bool:
+    raw = _safe_str(icon).strip()
+    base = _style_change_icon_base(raw)
+
+    if not raw:
+        return False
+
+    # #️⃣ is built from literal # and can degrade badly in Discord channel names.
+    if "#" in raw or base == "#":
+        return True
+
+    placeholders = _style_change_failed_icon_placeholders()
+    if raw in placeholders or base in placeholders:
+        return True
+
+    return False
+
+
+def _style_change_starts_with_failed_icon_placeholder(text: str) -> bool:
+    raw = _safe_str(text).strip()
+    if not raw:
+        return False
+
+    placeholders = _style_change_failed_icon_placeholders()
+    for icon in placeholders:
+        if raw.startswith(icon):
+            return True
+
+    return _style_change_is_unsafe_channel_icon(raw[0])
+
+
+def _style_change_bad_icon_message() -> str:
+    return (
+        "Leading icon looks like a failed/unsupported #️⃣ placeholder. "
+        "Choose a real emoji/icon first."
+    )
+
+
 def _style_change_clean_leading_emoji(raw: str) -> str:
     emoji = _safe_str(raw).strip()
     if not emoji:
@@ -4080,7 +4156,7 @@ def _style_change_clean_leading_emoji(raw: str) -> str:
     if bracket_match:
         emoji = bracket_match.group(1).strip()
 
-    separator_chars = set("|｜│┃❘❙❚⎮¦︱-–—―━─═·•∙⋅*✦✧✪✫✬✭❖◆◇▪▫▬[]{}()<>【】「」『』〔〕〖〗꒰꒱")
+    separator_chars = _style_change_separator_chars()
 
     while emoji:
         ch = emoji[-1]
@@ -4089,16 +4165,84 @@ def _style_change_clean_leading_emoji(raw: str) -> str:
             continue
         break
 
+    if _style_change_is_unsafe_channel_icon(emoji):
+        return ""
+
     return emoji.strip()
+
+
+def _style_change_first_visual_icon(text: str) -> tuple[str, str]:
+    raw = _safe_str(text).strip()
+    if not raw:
+        return "", ""
+
+    first = raw[0]
+
+    if first in _style_change_separator_chars():
+        return "", raw
+
+    if _style_change_is_unsafe_channel_icon(first):
+        return "", raw
+
+    category = unicodedata.category(first)
+    if not category.startswith("S"):
+        return "", raw
+
+    icon = first
+    index = 1
+
+    while index < len(raw):
+        ch = raw[index]
+        code = ord(ch)
+        cat = unicodedata.category(ch)
+
+        if code in {0xFE0E, 0xFE0F} or 0x1F3FB <= code <= 0x1F3FF:
+            icon += ch
+            index += 1
+            continue
+
+        if ch == "\u200d" and index + 1 < len(raw):
+            icon += ch + raw[index + 1]
+            index += 2
+            continue
+
+        if cat.startswith("M"):
+            icon += ch
+            index += 1
+            continue
+
+        break
+
+    if _style_change_is_unsafe_channel_icon(icon):
+        return "", raw
+
+    return icon.strip(), raw[index:].strip()
+
+
+def _style_change_icon_and_body(current_name: str, parsed: Mapping[str, Any]) -> tuple[str, str]:
+    before = _safe_str(current_name).strip()
+
+    emoji = _style_change_clean_leading_emoji(_safe_str(parsed.get("emoji"), ""))
+    body = _style_change_visible_name_body(before, parsed)
+
+    if emoji:
+        return emoji, body
+
+    visual_icon, rest = _style_change_first_visual_icon(before)
+    if visual_icon:
+        body = _style_change_strip_current_separator(rest)
+        if not body:
+            body = _safe_str(parsed.get("base_name"), "channel")
+        return visual_icon, body.strip() or "channel"
+
+    return "", body
 
 
 def _style_change_separator_after(current_name: str, separator_id: str) -> tuple[str, list[str], list[str]]:
     before = _safe_str(current_name).strip()
     parsed = studio.parse_channel_name(before, kind="text")
 
-    raw_emoji = _safe_str(parsed.get("emoji"), "")
-    emoji = _style_change_clean_leading_emoji(raw_emoji)
-    body = _style_change_visible_name_body(before, parsed)
+    emoji, body = _style_change_icon_and_body(before, parsed)
 
     warnings: list[str] = ["Style Change only touched the channel separator; emoji/name/font were preserved."]
     blockers: list[str] = []
@@ -4109,7 +4253,10 @@ def _style_change_separator_after(current_name: str, separator_id: str) -> tuple
         return before, warnings, blockers
 
     if separator_id != "none" and not emoji:
-        blockers.append("No leading emoji found. Separator-only change keeps emoji behavior unchanged.")
+        if _style_change_starts_with_failed_icon_placeholder(before):
+            blockers.append(_style_change_bad_icon_message())
+        else:
+            blockers.append("No leading emoji/icon found. Separator-only change keeps emoji behavior unchanged.")
         return before, warnings, blockers
 
     if separator_id == "none":
@@ -4130,7 +4277,6 @@ def _style_change_separator_after(current_name: str, separator_id: str) -> tuple
         blockers.append(f"Final name is too long for Discord ({len(after)}/{studio.DISCORD_NAME_LIMIT}).")
 
     return after[: studio.DISCORD_NAME_LIMIT], warnings, blockers
-
 
 def _build_channel_separator_style_change_plan(
     guild: discord.Guild,
@@ -4578,11 +4724,17 @@ def _style_change_missing_emoji_items(items: list[dict[str, Any]]) -> list[dict[
     for item in items:
         if item.get("status") != "failed":
             continue
-        blockers = " ".join(_safe_str(x) for x in list(item.get("blockers") or []))
-        if "No leading emoji found" in blockers:
-            out.append(item)
-    return out
 
+        blockers = " ".join(_safe_str(x) for x in list(item.get("blockers") or []))
+        if (
+            "No leading emoji" in blockers
+            or "No leading emoji/icon" in blockers
+            or "failed/unsupported #️⃣ placeholder" in blockers
+            or "not safe channel-name icons" in blockers
+        ):
+            out.append(item)
+
+    return out
 
 def _style_change_issue_lines(items: list[dict[str, Any]]) -> list[str]:
     lines: list[str] = []
@@ -4641,7 +4793,10 @@ def _style_change_after_with_manual_emoji(
     blockers: list[str] = []
 
     if not emoji:
-        blockers.append("No emoji entered.")
+        if _style_change_is_unsafe_channel_icon(manual_emoji):
+            blockers.append("#️⃣ and square placeholder icons are not safe channel-name icons. Pick a real emoji/icon.")
+        else:
+            blockers.append("No emoji/icon entered.")
         return before, warnings, blockers
 
     spec = _style_change_separator_spec(separator_id)
@@ -4667,7 +4822,6 @@ def _style_change_after_with_manual_emoji(
         blockers.append(f"Final name is too long for Discord ({len(after)}/{studio.DISCORD_NAME_LIMIT}).")
 
     return after[: studio.DISCORD_NAME_LIMIT], warnings, blockers
-
 
 def _style_change_rebuild_preview_response(
     guild: discord.Guild,

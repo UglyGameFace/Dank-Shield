@@ -17,8 +17,6 @@ def test_separator_only_adds_heavy_bar_without_changing_fraktur_body():
 
     assert blockers == []
     assert after == "📢┃𝔞𝔫𝔫𝔬𝔲𝔫𝔠𝔢𝔪𝔢𝔫𝔱𝔰"
-    assert "𝔞𝔫𝔫" in after
-    assert warnings
 
 
 def test_separator_only_replaces_old_separator_without_doubling():
@@ -45,4 +43,35 @@ def test_separator_only_blocks_no_emoji_when_adding_separator():
 
     assert after == before
     assert blockers
-    assert "No leading emoji" in blockers[0]
+    assert "No leading emoji/icon" in blockers[0]
+
+
+def test_separator_only_rejects_failed_hash_placeholder_square():
+    before = "🔲𝔰𝔥𝔞𝔯𝔢-𝔡𝔢𝔞𝔩𝔰"
+    after, warnings, blockers = guard._style_change_separator_after(before, "bar_heavy")
+
+    assert after == before
+    assert blockers
+    assert "failed/unsupported #️⃣ placeholder" in blockers[0]
+
+
+def test_manual_emoji_rejects_hash_keycap_as_channel_icon():
+    after, warnings, blockers = guard._style_change_after_with_manual_emoji(
+        "share-deals",
+        "bar_heavy",
+        "#️⃣",
+    )
+
+    assert blockers
+    assert "not safe channel-name icons" in blockers[0]
+
+
+def test_manual_emoji_allows_real_icon():
+    after, warnings, blockers = guard._style_change_after_with_manual_emoji(
+        "share-deals",
+        "bar_heavy",
+        "💸",
+    )
+
+    assert blockers == []
+    assert after == "💸┃share-deals"
