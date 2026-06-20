@@ -1075,7 +1075,7 @@ def _exact_format_embed(guild: discord.Guild, *, scope: str, target_id: int, loc
             "**1. Choose** font, separator/layout, frame, and strength.\n"
             "**2. Optional:** set an emoji.\n"
             "**3. Press Save & Preview.**\n"
-            "**4. Press Apply These Changes** on the preview."
+            "**4. Press Apply Reviewed Changes** on the preview."
         ),
         color=discord.Color.blurple(),
     )
@@ -1102,7 +1102,7 @@ def _exact_format_embed(guild: discord.Guild, *, scope: str, target_id: int, loc
         value="\n".join(_exact_format_sample_lines(guild, scope=scope, target_id=target_id, lock=lock))[:1024],
         inline=False,
     )
-    embed.set_footer(text="Save Lock, then Preview/Fix that category or channel.")
+    embed.set_footer(text="Save & Preview first. Nothing is renamed until the preview screen shows Apply.")
     return _clean_design_embed(embed)
 
 
@@ -1163,58 +1163,6 @@ async def _save_exact_lock(interaction: discord.Interaction, *, scope: str, targ
 
     await _save_options(interaction, options)
     return options
-
-
-SEPARATOR_GALLERY_PAGE_SIZE = 8
-
-
-def _separator_gallery_ids() -> list[str]:
-    ids: list[str] = []
-    for sep_id in EDITOR_SEPARATOR_IDS:
-        if sep_id in studio.SEPARATORS_BY_ID and sep_id not in ids:
-            ids.append(sep_id)
-    return ids
-
-
-def _separator_example_text(sep_id: str) -> str:
-    try:
-        return studio.separator_preview(sep_id, emoji="🎮", name="gaming-news")
-    except Exception:
-        spec = studio.SEPARATORS_BY_ID.get(sep_id)
-        if not spec:
-            return sep_id
-        return spec.template.format(emoji="🎮", separator=spec.value, name="gaming-news").strip()
-
-
-def _separator_gallery_embed(*, page: int, current: str) -> discord.Embed:
-    ids = _separator_gallery_ids()
-    total_pages = max(1, (len(ids) + SEPARATOR_GALLERY_PAGE_SIZE - 1) // SEPARATOR_GALLERY_PAGE_SIZE)
-    page = max(0, min(page, total_pages - 1))
-    chunk = ids[page * SEPARATOR_GALLERY_PAGE_SIZE : page * SEPARATOR_GALLERY_PAGE_SIZE + SEPARATOR_GALLERY_PAGE_SIZE]
-
-    embed = discord.Embed(
-        title="🧩 Separator / Layout Examples",
-        description=(
-            "Pick by looking at the actual output. This is easier than reading a dropdown description.\n\n"
-            f"Current selected separator: **{current.replace('_', ' ').title()}**"
-        ),
-        color=discord.Color.blurple(),
-    )
-
-    if not chunk:
-        embed.add_field(name="Examples", value="No separator examples found.", inline=False)
-    else:
-        lines: list[str] = []
-        for index, sep_id in enumerate(chunk, start=1):
-            spec = studio.SEPARATORS_BY_ID.get(sep_id)
-            label = getattr(spec, "label", sep_id)
-            marker = "✅ " if sep_id == current else ""
-            lines.append(f"**{index}.** {marker}`{_separator_example_text(sep_id)}` — {label}")
-        embed.add_field(name=f"Examples page {page + 1}/{total_pages}", value="\n".join(lines)[:1024], inline=False)
-
-    embed.set_footer(text="Tap a numbered example to select that separator/layout.")
-    return _clean_design_embed(embed)
-
 
 
 class ExactFontSelect(discord.ui.Select):
@@ -1584,20 +1532,6 @@ class ExactFormatEditorView(discord.ui.View):
     async def save_and_preview(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         await _save_exact_and_preview(interaction, scope=self.scope, target_id=self.target_id)
 
-    @discord.ui.button(label="Examples", emoji="🧩", style=discord.ButtonStyle.secondary, custom_id="dank_design:exact_separator_examples", row=4)
-    async def separator_examples(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        if not await _require_design_permission(interaction):
-            return
-
-        guild = interaction.guild
-        assert guild is not None
-
-        lock = _exact_lock_for_user(guild, int(interaction.user.id), self.scope, self.target_id)
-
-        await interaction.response.edit_message(
-            embed=_separator_gallery_embed(guild, scope=self.scope, target_id=self.target_id, lock=lock, page=0),
-            view=SeparatorExamplesView(guild, scope=self.scope, target_id=self.target_id, lock=lock, page=0),
-        )
 
     @discord.ui.button(label="Save", emoji="✅", style=discord.ButtonStyle.success, custom_id="dank_design:exact_save", row=4)
     async def save_lock(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
@@ -3308,7 +3242,7 @@ def _start_here_embed() -> discord.Embed:
             "**1.** Pick a theme and strength.\n"
             "**2.** Press **Preview Design**.\n"
             "**3.** Review the preview.\n"
-            "**4.** Press **Apply These Changes** on the preview."
+            "**4.** Press **Apply Reviewed Changes** on the preview screen."
         ),
         inline=False,
     )
@@ -3317,7 +3251,7 @@ def _start_here_embed() -> discord.Embed:
         value=(
             "**1.** Press **Fix Inconsistencies**.\n"
             "**2.** Review what drifted.\n"
-            "**3.** Press **Apply These Changes**."
+            "**3.** Press **Apply Reviewed Changes**."
         ),
         inline=False,
     )
@@ -3329,11 +3263,11 @@ def _start_here_embed() -> discord.Embed:
             "**3.** Press **Edit Exact Format**.\n"
             "**4.** Choose font/separator/frame/strength.\n"
             "**5.** Press **Save & Preview**.\n"
-            "**6.** Press **Apply These Changes**."
+            "**6.** Press **Apply Reviewed Changes**."
         ),
         inline=False,
     )
-    embed.set_footer(text="Nothing applies until you reach a preview and press Apply These Changes.")
+    embed.set_footer(text="Nothing applies until you reach a preview and press Apply Reviewed Changes.")
     return _clean_design_embed(embed)
 
 
@@ -3397,7 +3331,7 @@ def _editors_locks_embed(guild: discord.Guild, options: Mapping[str, Any]) -> di
             "2. Pick an item using Dank Shield buttons.\n"
             "3. Press **Edit Exact Format**.\n"
             "4. Press **Save & Preview**.\n"
-            "5. Press **Apply These Changes**."
+            "5. Press **Apply Reviewed Changes**."
         ),
         inline=False,
     )
@@ -3528,7 +3462,7 @@ def _design_help_embed() -> discord.Embed:
         name="How to apply changes",
         value=(
             "Changes are never applied from the home screen.\n"
-            "**Preview Server** or **Save & Preview** first, then press **Apply These Changes**."
+            "**Preview Server** or **Save & Preview** first, then press **Apply Reviewed Changes**."
         ),
         inline=False,
     )
@@ -3738,7 +3672,7 @@ class DesignPreviewView(discord.ui.View):
         super().__init__(timeout=900)
         self.apply.disabled = not can_apply
 
-    @discord.ui.button(label="Apply These Changes", emoji="✅", style=discord.ButtonStyle.danger, custom_id="dank_design:apply", row=0)
+    @discord.ui.button(label="Apply Reviewed Changes", emoji="✅", style=discord.ButtonStyle.success, custom_id="dank_design:apply", row=0)
     async def apply(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         if not await _require_design_permission(interaction):
             return
