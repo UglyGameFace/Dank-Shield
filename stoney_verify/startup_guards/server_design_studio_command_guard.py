@@ -1019,25 +1019,177 @@ def _target_label(guild: discord.Guild, scope: str, target_id: int) -> str:
     return f"{scope} `{_safe_str(getattr(ch, 'name', target_id))}`"
 
 
-def _initial_editor_lock(options: Mapping[str, Any], *, scope: str, target_id: int) -> dict[str, Any]:
+def _live_design_records_for_exact_format(guild: discord.Guild) -> list[dict[str, str]]:
+    records: list[dict[str, str]] = []
+
+    for category in list(getattr(guild, "categories", []) or []):
+        name = _safe_str(getattr(category, "name", ""))
+        if name:
+            records.append({"name": name, "kind": "category"})
+
+    for channel in list(getattr(guild, "channels", []) or []):
+        kind = _kind(channel)
+        if kind in {"text", "voice", "stage"}:
+            name = _safe_str(getattr(channel, "name", ""))
+            if name:
+                records.append({"name": name, "kind": "text"})
+
+    return records
+
+
+def _live_majority_exact_lock(
+    guild: discord.Guild | None,
+    options: Mapping[str, Any],
+    *,
+    scope: str,
+    target_id: int,
+) -> dict[str, Any]:
+    if guild is None:
+        return {}
+
+    try:
+        from stoney_verify.services import server_design_majority_layout as majority
+
+        records = _live_design_records_for_exact_format(guild)
+        if not records:
+            return {}
+
+        analysis = majority.infer_live_majority_layout(studio, records)
+        inferred = majority.apply_majority_to_options(studio, options, analysis, respect_locks=False)
+        summary = dict(inferred.get("__majority_layout_summary") or {})
+
+        return {
+            "scope": scope,
+            "theme_id": _safe_str(inferred.get("theme_id"), _safe_str(options.get("theme_id"), "gothic_clean")),
+            "strength": _safe_int(inferred.get("strength"), _safe_int(options.get("strength"), 4)),
+            "font": _safe_str(inferred.get("font"), "normal").lower().replace("-", "_"),
+            "separator_id": _safe_str(inferred.get("separator_id"), "none"),
+            "category_frame_id": _safe_str(inferred.get("category_frame_id"), "plain"),
+            "icon_mode": _safe_str(inferred.get("icon_mode"), "replace_missing"),
+            "emoji_override": "",
+            "exact_match": False,
+            "__source": "live_majority",
+            "__majority_layout_summary": summary,
+            "__majority_separator_id": _safe_str(inferred.get("separator_id"), ""),
+            "__majority_font": _safe_str(inferred.get("font"), ""),
+            "__majority_category_frame_id": _safe_str(inferred.get("category_frame_id"), ""),
+            "__majority_icon_mode": _safe_str(inferred.get("icon_mode"), ""),
+        }
+    except Exception:
+        return {}
+
+
+def _separator_choice_label(sep_id: Any) -> str:
+    sep_id = _safe_str(sep_id, "none")
+    if sep_id == "none":
+        return "No separator"
+    spec = getattr(studio, "SEPARATORS_BY_ID", {}).get(sep_id)
+    if spec is not None:
+        return _safe_str(getattr(spec, "label", sep_id), sep_id)
+    return sep_id.replace("_", " ").title()
+
+
+def _category_frame_choice_label(frame_id: Any) -> str:
+    frame_id = _safe_str(frame_id, "plain")
+    if frame_id == "plain":
+        return "Plain category names"
+    spec = getattr(studio, "CATEGORY_FRAMES_BY_ID", {}).get(frame_id)
+    if spec is not None:
+        return _safe_str(getattr(spec, "label", frame_id), frame_id)
+    return frame_id.replace("_", " ").title()
+
+
+def _font_choice_label(font_id: Any) -> str:
+    return _safe_str(font_id, "normal").replace("_", " ").title()
+
+
+def _exact_format_conflicts(lock: Mapping[str, Any]) -> list[str]:
+    source = _safe_str(lock.get("__source"), "")
+    if source == "live_majority":
+        return []
+
+    conflicts: list[str] = []
+
+    majority_sep = _safe_str(lock.get("__majority_separator_id"), "")
+    majority_font = _safe_str(lock.get("__majority_font"), "")
+    majority_frame = _safe_str(lock.get("__majority_category_frame_id"), "")
+    majority_icon = _safe_str(lock.get("__majority_icon_mode"), "")
+
+    current_sep = _safe_str(lock.get("separator_id"), "none")
+    current_font = _safe_str(lock.get("font"), "normal")
+    current_frame = _safe_str(lock.get("category_frame_id"), "plain")
+    current_icon = _safe_str(lock.get("icon_mode"), "replace_missing")
+
+    if majority_sep and current_sep != majority_sep:
+        conflicts.append(
+            f"Separator differs: rule uses **{_separator_choice_label(current_sep)}**, live server uses **{_separator_choice_label(majority_sep)}**."
+        )
+
+    if majority_font and current_font != majority_font:
+        conflicts.append(
+            f"Font differs: rule uses **{_font_choice_label(current_font)}**, live server uses **{_font_choice_label(majority_font)}**."
+        )
+
+    if majority_frame and current_frame != majority_frame:
+        conflicts.append(
+            f"Category frame differs: rule uses **{_category_frame_choice_label(current_frame)}**, live server uses **{_category_frame_choice_label(majority_frame)}**."
+        )
+
+    if majority_icon and current_icon != majority_icon:
+        conflicts.append(
+            f"Emoji behavior differs: rule uses **{current_icon.replace('_', ' ').title()}**, live server uses **{majority_icon.replace('_', ' ').title()}**."
+        )
+
+    return conflicts[:4]
+
+
+def _persistable_exact_lock(lock: Mapping[str, Any]) -> dict[str, Any]:
+    return {str(k): v for k, v in dict(lock).items() if not str(k).startswith("__")}
+
+
+def _initial_editor_lock(
+    options: Mapping[str, Any],
+    *,
+    scope: str,
+    target_id: int,
+    guild: discord.Guild | None = None,
+) -> dict[str, Any]:
+    majority_lock = _live_majority_exact_lock(guild, options, scope=scope, target_id=target_id)
+
     if scope == "category":
         locks = _mapping_dict(options.get("category_format_locks"))
     elif scope == "channel":
         locks = _mapping_dict(options.get("channel_format_locks"))
     else:
         locks = {}
+
     existing = locks.get(str(int(target_id)))
     if isinstance(existing, Mapping):
         lock = dict(existing)
+        lock["__source"] = "saved_exact_rule"
+
+        # Keep the warning/comparison data from live majority without changing the saved rule.
+        for key in (
+            "__majority_layout_summary",
+            "__majority_separator_id",
+            "__majority_font",
+            "__majority_category_frame_id",
+            "__majority_icon_mode",
+        ):
+            if majority_lock.get(key) is not None:
+                lock[key] = majority_lock.get(key)
+    elif majority_lock:
+        lock = dict(majority_lock)
     else:
         lock = _current_format_lock(options, scope=scope)
+        lock["__source"] = "saved_design_rule"
 
     lock.setdefault("scope", scope)
     lock.setdefault("theme_id", _safe_str(options.get("theme_id"), "gothic_clean"))
-    lock.setdefault("strength", max(4, _safe_int(options.get("strength"), 4)))
+    lock.setdefault("strength", max(2, _safe_int(options.get("strength"), 4)))
     lock.setdefault("font", _safe_str(lock.get("font") or _theme_from_options(options).font, "normal").lower().replace("-", "_"))
-    lock.setdefault("separator_id", _safe_str(lock.get("separator_id"), "bar_full"))
-    lock.setdefault("category_frame_id", _safe_str(lock.get("category_frame_id"), "line"))
+    lock.setdefault("separator_id", _safe_str(lock.get("separator_id"), "none"))
+    lock.setdefault("category_frame_id", _safe_str(lock.get("category_frame_id"), "plain"))
     lock.setdefault("icon_mode", _safe_str(lock.get("icon_mode"), "replace_missing"))
     lock.setdefault("emoji_override", _safe_str(lock.get("emoji_override"), ""))
     return lock
@@ -1052,7 +1204,7 @@ async def _open_exact_format_editor(interaction: discord.Interaction, *, scope: 
 
     try:
         options = await _load_design_options(int(guild.id))
-        lock = _initial_editor_lock(options, scope=scope, target_id=int(target_id))
+        lock = _initial_editor_lock(options, scope=scope, target_id=int(target_id), guild=guild)
         key = _format_editor_key(int(guild.id), int(interaction.user.id), scope, int(target_id))
         _FORMAT_EDITOR_DRAFTS[key] = lock
 
@@ -1093,17 +1245,50 @@ def _exact_format_embed(guild: discord.Guild, *, scope: str, target_id: int, loc
         ),
         color=discord.Color.blurple(),
     )
+    source_label = {
+        "live_majority": "Live server majority",
+        "saved_exact_rule": "Saved exact rule",
+        "saved_design_rule": "Saved design rule",
+        "manual_override": "Manual draft override",
+    }.get(_safe_str(lock.get("__source")), "Current draft")
+
+    majority_summary = lock.get("__majority_layout_summary") if isinstance(lock.get("__majority_layout_summary"), Mapping) else {}
+    conflicts = _exact_format_conflicts(lock)
+
+    selected_value = (
+        f"Source: **{source_label}**\n"
+        f"Font: **{font.replace('_', ' ').title()}**\n"
+        f"Separator: **{_separator_choice_label(sep)}**\n"
+        f"Category frame: **{_category_frame_choice_label(frame)}**\n"
+        f"Strength: **{strength}/5**\n"
+        f"Icon mode: **{icon_mode.replace('_', ' ').title()}**\n"
+        f"Custom emoji: **{emoji_override or 'None'}**\n"
+        f"Preview mode: **{'Exact Enforce' if bool(lock.get('exact_match', False)) else 'Smart Fix'}**"
+    )
+
+    if majority_summary:
+        selected_value += (
+            "\n\nDetected server style:"
+            f"\nSeparator: **{_safe_str(majority_summary.get('separator'), 'mixed/unknown')}**"
+            f"\nCategories: **{_safe_str(majority_summary.get('category_frame'), 'mixed/unknown')}**"
+            f"\nFont: **{_safe_str(majority_summary.get('font'), 'mixed/unknown')}**"
+        )
+
     embed.add_field(
         name="Selected format",
+        value=selected_value[:1024],
+        inline=False,
+    )
+
+    embed.add_field(
+        name="Conflict check",
         value=(
-            f"Font: **{font.replace('_', ' ').title()}**\n"
-            f"Separator: **{sep.replace('_', ' ').title()}**\n"
-            f"Category frame: **{frame.replace('_', ' ').title()}**\n"
-            f"Strength: **{strength}/5**\n"
-            f"Icon mode: **{icon_mode.replace('_', ' ').title()}**\n"
-            f"Custom emoji: **{emoji_override or 'None'}**\n"
-            f"Preview mode: **{'Exact Enforce' if bool(lock.get('exact_match', False)) else 'Smart Fix'}**"
-        ),
+            "✅ No conflicts found. This follows the detected server style."
+            if not conflicts
+            else "⚠️ This draft differs from the detected server style.\n"
+            + "\n".join(f"• {line}" for line in conflicts)
+            + "\n\nUse **Server Style** to reset this draft, or **Save & Preview** to keep the override."
+        )[:1024],
         inline=False,
     )
     embed.add_field(
@@ -1160,19 +1345,20 @@ async def _save_exact_lock(interaction: discord.Interaction, *, scope: str, targ
     lock = dict(_FORMAT_EDITOR_DRAFTS.get(key) or {})
     if not lock:
         options = await _load_design_options(int(guild.id))
-        lock = _initial_editor_lock(options, scope=scope, target_id=target_id)
+        lock = _initial_editor_lock(options, scope=scope, target_id=target_id, guild=guild)
 
     options = await _load_design_options(int(guild.id))
     lock["scope"] = scope
     lock["locked_at"] = _utc_iso_design()
+    persist_lock = _persistable_exact_lock(lock)
 
     if scope == "category":
         locks = _mapping_dict(options.get("category_format_locks"))
-        locks[str(int(target_id))] = lock
+        locks[str(int(target_id))] = persist_lock
         options["category_format_locks"] = locks
     else:
         locks = _mapping_dict(options.get("channel_format_locks"))
-        locks[str(int(target_id))] = lock
+        locks[str(int(target_id))] = persist_lock
         options["channel_format_locks"] = locks
 
     await _save_options(interaction, options)
@@ -1294,8 +1480,10 @@ async def _update_exact_draft(
     current = dict(_FORMAT_EDITOR_DRAFTS.get(key) or {})
     if not current:
         options = await _load_design_options(int(guild.id))
-        current = _initial_editor_lock(options, scope=scope, target_id=target_id)
+        current = _initial_editor_lock(options, scope=scope, target_id=target_id, guild=guild)
     current.update(dict(patch))
+    if any(not str(key).startswith("__") for key in dict(patch)):
+        current["__source"] = "manual_override"
     _FORMAT_EDITOR_DRAFTS[key] = current
     await interaction.response.edit_message(
         embed=_exact_format_embed(guild, scope=scope, target_id=target_id, lock=current),
@@ -1535,7 +1723,7 @@ class ExactFormatEditorView(discord.ui.View):
         lock = dict(_FORMAT_EDITOR_DRAFTS.get(key) or {})
         if not lock:
             options = await _load_design_options(int(guild.id))
-            lock = _initial_editor_lock(options, scope=self.scope, target_id=self.target_id)
+            lock = _initial_editor_lock(options, scope=self.scope, target_id=self.target_id, guild=guild)
             _FORMAT_EDITOR_DRAFTS[key] = lock
         await interaction.response.edit_message(
             embed=_separator_gallery_embed(guild, scope=self.scope, target_id=self.target_id, lock=lock, page=0),
@@ -1547,19 +1735,24 @@ class ExactFormatEditorView(discord.ui.View):
         await _save_exact_and_preview(interaction, scope=self.scope, target_id=self.target_id)
 
 
-    @discord.ui.button(label="Toggle Smart/Exact", emoji="🎯", style=discord.ButtonStyle.secondary, custom_id="dank_design:exact_toggle_mode", row=4)
-    async def toggle_mode(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+    @discord.ui.button(label="Server Style", emoji="🧭", style=discord.ButtonStyle.secondary, custom_id="dank_design:exact_use_majority", row=4)
+    async def use_server_style(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         if not await _require_design_permission(interaction):
             return
         guild = interaction.guild
         assert guild is not None
-        key = _format_editor_key(int(guild.id), int(interaction.user.id), self.scope, self.target_id)
-        current = dict(_FORMAT_EDITOR_DRAFTS.get(key) or {})
+
+        options = await _load_design_options(int(guild.id))
+        current = _live_majority_exact_lock(guild, options, scope=self.scope, target_id=self.target_id)
         if not current:
-            options = await _load_design_options(int(guild.id))
-            current = _initial_editor_lock(options, scope=self.scope, target_id=self.target_id)
-        current["exact_match"] = not bool(current.get("exact_match", False))
+            return await interaction.response.send_message(
+                "I could not detect a clear server style yet. Use Save & Preview before applying.",
+                ephemeral=True,
+            )
+
+        key = _format_editor_key(int(guild.id), int(interaction.user.id), self.scope, self.target_id)
         _FORMAT_EDITOR_DRAFTS[key] = current
+
         await interaction.response.edit_message(
             embed=_exact_format_embed(guild, scope=self.scope, target_id=self.target_id, lock=current),
             view=ExactFormatEditorViewFactory(guild, self.scope, self.target_id, current),
