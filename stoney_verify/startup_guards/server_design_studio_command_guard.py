@@ -1046,18 +1046,32 @@ def _initial_editor_lock(options: Mapping[str, Any], *, scope: str, target_id: i
 async def _open_exact_format_editor(interaction: discord.Interaction, *, scope: str, target_id: int) -> None:
     if not await _require_design_permission(interaction):
         return
+
     guild = interaction.guild
     assert guild is not None
 
-    options = await _load_design_options(int(guild.id))
-    lock = _initial_editor_lock(options, scope=scope, target_id=int(target_id))
-    key = _format_editor_key(int(guild.id), int(interaction.user.id), scope, int(target_id))
-    _FORMAT_EDITOR_DRAFTS[key] = lock
+    try:
+        options = await _load_design_options(int(guild.id))
+        lock = _initial_editor_lock(options, scope=scope, target_id=int(target_id))
+        key = _format_editor_key(int(guild.id), int(interaction.user.id), scope, int(target_id))
+        _FORMAT_EDITOR_DRAFTS[key] = lock
 
-    await interaction.response.edit_message(
-        embed=_exact_format_embed(guild, scope=scope, target_id=int(target_id), lock=lock),
-        view=ExactFormatEditorViewFactory(guild, scope, int(target_id), lock),
-    )
+        embed = _exact_format_embed(guild, scope=scope, target_id=int(target_id), lock=lock)
+        view = ExactFormatEditorViewFactory(guild, scope, int(target_id), lock)
+
+        await interaction.response.edit_message(embed=embed, view=view)
+    except Exception as exc:
+        message = (
+            "❌ Exact Format could not open. "
+            f"`{type(exc).__name__}: {_safe_str(exc)[:160]}`"
+        )
+        try:
+            if interaction.response.is_done():
+                await interaction.followup.send(message, ephemeral=True)
+            else:
+                await interaction.response.send_message(message, ephemeral=True)
+        except Exception:
+            raise
 
 
 def _exact_format_embed(guild: discord.Guild, *, scope: str, target_id: int, lock: Mapping[str, Any]) -> discord.Embed:
@@ -1094,7 +1108,7 @@ def _exact_format_embed(guild: discord.Guild, *, scope: str, target_id: int, loc
     )
     embed.add_field(
         name="Current layout example",
-        value=f"`{_separator_example_text(sep, lock)}`",
+        value=f"`{_exact_separator_example_text(sep, lock)}`",
         inline=False,
     )
     embed.add_field(
@@ -1310,7 +1324,7 @@ def _exact_lock_for_user(guild: discord.Guild, user_id: int, scope: str, target_
     }
 
 
-def _separator_example_text(sep_id: str, lock: Mapping[str, Any]) -> str:
+def _exact_separator_example_text(sep_id: str, lock: Mapping[str, Any]) -> str:
     spec = studio.SEPARATORS_BY_ID.get(sep_id)
     if spec is None:
         return sep_id
@@ -1356,7 +1370,7 @@ def _separator_gallery_embed(
     current = _safe_str(lock.get("separator_id"), "bar_full")
     for index, spec in enumerate(chunk, start=1):
         marker = "✅" if spec.id == current else "▫️"
-        lines.append(f"**{index}.** {marker} `{spec.label}` → `{_separator_example_text(spec.id, lock)}`")
+        lines.append(f"**{index}.** {marker} `{spec.label}` → `{_exact_separator_example_text(spec.id, lock)}`")
 
     embed.add_field(name=f"Examples page {page + 1}/{total_pages}", value="\n".join(lines)[:1024], inline=False)
     embed.set_footer(text="Use the numbered buttons below. Examples use your selected font and emoji.")
