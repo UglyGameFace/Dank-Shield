@@ -1547,25 +1547,6 @@ class ExactFormatEditorView(discord.ui.View):
         await _save_exact_and_preview(interaction, scope=self.scope, target_id=self.target_id)
 
 
-    @discord.ui.button(label="Save", emoji="✅", style=discord.ButtonStyle.success, custom_id="dank_design:exact_save", row=4)
-    async def save_lock(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        if not await _require_design_permission(interaction):
-            return
-        guild = interaction.guild
-        assert guild is not None
-        options = await _save_exact_lock(interaction, scope=self.scope, target_id=self.target_id)
-        counts = _lock_count(options)
-        key = _format_editor_key(int(guild.id), int(interaction.user.id), self.scope, self.target_id)
-        lock = dict(_FORMAT_EDITOR_DRAFTS.get(key) or {})
-        embed = _exact_format_embed(guild, scope=self.scope, target_id=self.target_id, lock=lock)
-        embed.title = "✅ Exact Format Lock Saved"
-        embed.add_field(
-            name="Saved locks",
-            value=f"Global: {counts['global']} • Categories: {counts['categories']} • Channels: {counts['channels']}",
-            inline=False,
-        )
-        await interaction.response.edit_message(embed=embed, view=ExactFormatEditorViewFactory(guild, self.scope, self.target_id, lock))
-
     @discord.ui.button(label="Toggle Smart/Exact", emoji="🎯", style=discord.ButtonStyle.secondary, custom_id="dank_design:exact_toggle_mode", row=4)
     async def toggle_mode(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         if not await _require_design_permission(interaction):
@@ -1581,7 +1562,7 @@ class ExactFormatEditorView(discord.ui.View):
         _FORMAT_EDITOR_DRAFTS[key] = current
         await interaction.response.edit_message(
             embed=_exact_format_embed(guild, scope=self.scope, target_id=self.target_id, lock=current),
-            view=ExactFormatEditorViewFactory(guild, self.scope, self.target_id, lock),
+            view=ExactFormatEditorViewFactory(guild, self.scope, self.target_id, current),
         )
 
     @discord.ui.button(label="Emoji", emoji="😀", style=discord.ButtonStyle.secondary, custom_id="dank_design:exact_emoji", row=4)
