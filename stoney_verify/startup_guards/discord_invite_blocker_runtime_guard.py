@@ -570,7 +570,7 @@ async def _enforce_message(message: discord.Message, *, source: str = "message")
         removed_count = len(blocked or codes)
 
         try:
-            await effective_message.delete(reason=f"Dank Shield Discord Invite Blocker: {reason}")
+            await effective_message.delete()
         except discord.NotFound:
             return
         except discord.Forbidden:

@@ -482,7 +482,7 @@ async def _hard_block_invite_message(message: discord.Message) -> None:
             from stoney_verify.startup_guards.invite_shield_sanitize_shared import send_mixed_invite_sanitized_notice, this_guild_invite_codes
 
             kept_this_server_codes = await this_guild_invite_codes(guild, codes)
-            await message.delete(reason="Dank Shield Invite Shield: external Discord invite link")
+            await message.delete()
             sanitized = await send_mixed_invite_sanitized_notice(
                 message,
                 kept_codes=kept_this_server_codes,
