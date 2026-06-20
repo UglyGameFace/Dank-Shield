@@ -143,12 +143,29 @@ def _member_can_view_join_channel(guild: discord.Guild, cfg: Any, channel: Optio
     return False
 
 
-def _member_facing_join_channel(guild: discord.Guild, cfg: Any) -> Optional[discord.TextChannel]:
+def _join_channel_resolution(guild: discord.Guild, cfg: Any) -> tuple[Optional[discord.TextChannel], str]:
+    """Resolve the exact public Join welcome target.
+
+    A user-selected Join channel must be authoritative. If it is private or
+    invalid, do not silently post somewhere else; that makes setup look broken.
+    """
+    explicit_id = _safe_int(_cfg_value(cfg, "join_welcome_channel_id", None), 0)
+
+    if explicit_id > 0:
+        channel = _text_channel(guild, explicit_id)
+        if not isinstance(channel, discord.TextChannel):
+            return None, f"configured Join channel id {explicit_id} is not a visible text channel"
+
+        if not _member_can_view_join_channel(guild, cfg, channel):
+            return None, f"configured Join channel #{channel.name} is private for new members"
+
+        return channel, f"configured Join channel #{channel.name}"
+
+    # Legacy compatibility only when no explicit Join channel was selected.
     configured = _target_channel(guild, cfg, kind="join")
     if _member_can_view_join_channel(guild, cfg, configured):
-        return configured
+        return configured, "legacy welcome channel"
 
-    # Do not force Unverified into staff logs. Fall back to visible onboarding channels.
     for key in (
         "verify_channel_id",
         "verification_channel_id",
@@ -157,7 +174,7 @@ def _member_facing_join_channel(guild: discord.Guild, cfg: Any) -> Optional[disc
     ):
         channel = _text_channel(guild, _safe_int(_cfg_value(cfg, key, None), 0))
         if _member_can_view_join_channel(guild, cfg, channel):
-            return channel
+            return channel, f"legacy fallback via {key}"
 
     for tokens in (
         ("welcome", "start-here"),
@@ -167,10 +184,14 @@ def _member_facing_join_channel(guild: discord.Guild, cfg: Any) -> Optional[disc
     ):
         channel = _channel_by_name(guild, *tokens)
         if _member_can_view_join_channel(guild, cfg, channel):
-            return channel
+            return channel, f"legacy fallback by name: {'/'.join(tokens)}"
 
-    return configured
+    return configured, "legacy target was not visible to new members"
 
+
+def _member_facing_join_channel(guild: discord.Guild, cfg: Any) -> Optional[discord.TextChannel]:
+    channel, _reason = _join_channel_resolution(guild, cfg)
+    return channel
 
 def _target_channel(guild: discord.Guild, cfg: Any, *, kind: str) -> Optional[discord.TextChannel]:
     if kind == "leave":
@@ -546,8 +567,16 @@ async def _send_join(member: discord.Member) -> None:
         cfg = await get_guild_config(int(member.guild.id), refresh=True)
         if not _cfg_bool(cfg, "welcome_join_enabled", "join_welcome_enabled", default=False):
             return
-        channel = _member_facing_join_channel(member.guild, cfg)
+        channel, route_reason = _join_channel_resolution(member.guild, cfg)
         if not isinstance(channel, discord.TextChannel):
+            try:
+                print(
+                    "⚠️ welcome_member_events join target unavailable "
+                    f"guild={getattr(member.guild, 'id', 0)} user={getattr(member, 'id', 0)} "
+                    f"reason={route_reason}"
+                )
+            except Exception:
+                pass
             return
         title = _cfg_str(cfg, "welcome_join_title", default="Welcome, {display_name}!")
         body = _cfg_str(cfg, "welcome_join_body", default="{random_welcome_line}\n\nStart here: {rules_channel} • Verify: {verify_channel} • Help: {support_channel}")

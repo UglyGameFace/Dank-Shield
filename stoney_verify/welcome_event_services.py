@@ -438,7 +438,7 @@ def _build_center_embed(guild: discord.Guild, cfg: Any, *, last_action: str | No
         title="👋 Welcome & Join/Leave Center",
         description=(
             "Separate the **member-facing join welcome** from the **private staff join/leave log**.\n"
-            "Do not give Unverified message history in staff logs; pick a public welcome or verification channel for join welcomes."
+            "Join channel selection is exact: if the selected Join channel is private, join welcomes pause instead of posting somewhere else. Keep staff join/leave logs separate."
         ),
         color=discord.Color.green() if (join_enabled or leave_enabled) else discord.Color.blurple(),
         timestamp=discord.utils.utcnow(),
@@ -555,7 +555,9 @@ async def _save_event_channel(interaction: discord.Interaction, channel: discord
     if kind != "leave":
         visibility = _join_audience_status(guild, await __import__("stoney_verify.guild_config", fromlist=["get_guild_config"]).get_guild_config(int(guild.id), refresh=True), channel)
         if visibility.startswith("⚠️"):
-            extra = f"\n{visibility}"
+            extra = f"\n{visibility}\nJoin welcomes will pause instead of posting to another channel."
+            return await _refresh_center(interaction, last_action=f"⚠️ Join channel saved as {channel.mention}, but new members may not see it.{extra}")
+
     await _refresh_center(interaction, last_action=f"✅ {label} messages are ON and will post in {channel.mention}.{extra}")
 
 
