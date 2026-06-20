@@ -1,4 +1,6 @@
 from __future__ import annotations
+import re
+import unicodedata
 
 """Public /dank design command for the Server Design Studio.
 
@@ -588,64 +590,71 @@ def _majority_confidence_line(summary: Mapping[str, str]) -> str:
 def _home_embed(guild: discord.Guild, options: Mapping[str, Any] | None = None) -> discord.Embed:
     options = options or {}
     counts = _lock_count(options)
-    live_analysis, live_options, live_summary = _infer_live_majority_context(guild, options)
+    _live_analysis, _live_options, live_summary = _infer_live_majority_context(guild, options)
     saved = _saved_style_summary(options)
 
     embed = discord.Embed(
         title="🎨 Dank Design Studio",
-        description=(
-            "Design channel/category names without touching permissions, roles, topics, order, tickets, or verification.\n\n"
-            "**Safe workflow:** review first → preview exact names → apply only when you approve."
-        ),
+        description=" ".join((
+            "Design channel/category names without touching permissions, roles, topics, order, tickets, or verification.",
+            "Safe workflow: review first → preview exact names → apply only when you approve.",
+        )),
         color=discord.Color.blurple(),
     )
+
     embed.add_field(
         name="Recommended",
-        value=(
-            "🧭 **Review Repairs** — best for hand-built servers. Copies the live majority layout and repairs only outliers.\n"
-            "👁️ **Preview Server** — shows a saved-rule preview without changing anything."
-        ),
+        value="\n".join((
+            "🧭 **Review Repairs** — best for hand-built servers. Copies the live majority layout and repairs only outliers.",
+            "⚡ **Style Change** — intentionally change one rule, like adding a separator, while keeping everything else.",
+            "👁️ **Preview Server** — shows a saved-rule preview without changing anything.",
+        )),
         inline=False,
     )
+
     embed.add_field(
         name="Edit one thing",
-        value=(
-            "🗂️ **Category Editor** — preview, rename, or style one category.\n"
-            "#️⃣ **Channel Editor** — preview, rename, or style one channel."
-        ),
+        value="\n".join((
+            "🗂️ **Category Editor** — preview, rename, or style one category.",
+            "#️⃣ **Channel Editor** — preview, rename, or style one channel.",
+        )),
         inline=False,
     )
+
     embed.add_field(
         name="Detected live style",
-        value=(
-            f"Separator: **{_safe_str(live_summary.get('separator'), 'mixed/unknown')}**\n"
-            f"Categories: **{_safe_str(live_summary.get('category_frame'), 'mixed/unknown')}**\n"
-            f"Font/style: **{_safe_str(live_summary.get('font'), 'mixed/unknown')}**\n"
-            f"Leading emoji: **{_safe_str(live_summary.get('leading_emoji'), 'mixed/unknown')}**\n"
-            f"Confidence: **{_majority_confidence_line(live_summary)}**"
-        )[:1024],
+        value="\n".join((
+            f"Separator: **{_safe_str(live_summary.get('separator'), 'mixed/unknown')}**",
+            f"Categories: **{_safe_str(live_summary.get('category_frame'), 'mixed/unknown')}**",
+            f"Font/style: **{_safe_str(live_summary.get('font'), 'mixed/unknown')}**",
+            f"Leading emoji: **{_safe_str(live_summary.get('leading_emoji'), 'mixed/unknown')}**",
+            f"Confidence: **{_majority_confidence_line(live_summary)}**",
+        ))[:1024],
         inline=False,
     )
+
     embed.add_field(
         name="Saved design rule",
-        value=(
-            f"Theme: **{saved['theme']}**\n"
-            f"Font: **{saved['font']}**\n"
-            f"Strength: **{saved['strength']}**\n"
-            "Used by **Preview Server** and manual saved rules."
-        ),
+        value="\n".join((
+            f"Theme: **{saved['theme']}**",
+            f"Font: **{saved['font']}**",
+            f"Strength: **{saved['strength']}**",
+            "Used by Preview Server and manual saved rules.",
+        )),
         inline=True,
     )
+
     embed.add_field(
         name="Saved rules",
-        value=(
-            f"Global: **{'On' if counts['global'] else 'Off'}**\n"
-            f"Categories: **{counts['categories']}**\n"
-            f"Channels: **{counts['channels']}**\n"
-            "Review Repairs ignores these unless you choose saved layout."
-        ),
+        value="\n".join((
+            f"Global: **{'On' if counts['global'] else 'Off'}**",
+            f"Categories: **{counts['categories']}**",
+            f"Channels: **{counts['channels']}**",
+            "Review Repairs ignores these unless you choose saved layout.",
+        )),
         inline=True,
     )
+
     embed.set_footer(text="Names only • Review Repairs follows live style • Preview Server follows saved rules")
     return _clean_design_embed(embed)
 
@@ -3950,6 +3959,412 @@ class AdvancedToolsView(discord.ui.View):
 
 
 
+STYLE_CHANGE_SEPARATOR_IDS: tuple[str, ...] = (
+    "none",
+    "bar_heavy",
+    "bar_thin",
+    "bar_full",
+    "bar_medium",
+    "bar_bold",
+    "bar_block",
+    "dash",
+    "middle_dot",
+    "sparkle",
+    "bracket_corner",
+    "bracket_lenticular",
+)
+
+
+def _style_change_separator_options(selected_id: str) -> list[discord.SelectOption]:
+    options: list[discord.SelectOption] = []
+
+    for sep_id in STYLE_CHANGE_SEPARATOR_IDS:
+        spec = getattr(studio, "SEPARATORS_BY_ID", {}).get(sep_id)
+        if spec is None:
+            continue
+
+        label = _safe_str(getattr(spec, "label", sep_id), sep_id)
+        value = _safe_str(getattr(spec, "value", ""), "")
+        desc = "Remove separators" if sep_id == "none" else f"Example: 🎮{value}gaming-news"[:100]
+
+        options.append(
+            discord.SelectOption(
+                label=label[:100],
+                value=sep_id,
+                description=desc,
+                default=sep_id == selected_id,
+            )
+        )
+
+    return options[:25]
+
+
+def _style_change_separator_spec(separator_id: str) -> Any:
+    return getattr(studio, "SEPARATORS_BY_ID", {}).get(separator_id) or getattr(studio, "SEPARATORS_BY_ID", {}).get("none")
+
+
+def _style_change_separator_label(separator_id: str) -> str:
+    spec = _style_change_separator_spec(separator_id)
+    if spec is None:
+        return "No Separator"
+    return _safe_str(getattr(spec, "label", separator_id), separator_id)
+
+
+def _style_change_separator_values() -> list[str]:
+    values = []
+    for spec in tuple(getattr(studio, "SEPARATOR_LIBRARY", tuple()) or tuple()):
+        value = _safe_str(getattr(spec, "value", ""), "")
+        if value:
+            values.append(value)
+
+    values.extend(["|", "｜", "│", "┃", "❘", "❙", "❚", "-", "–", "—", "•", "·"])
+    return sorted({value for value in values if value}, key=len, reverse=True)
+
+
+def _style_change_strip_current_separator(text: str) -> str:
+    body = _safe_str(text).strip()
+
+    # This runs AFTER the leading emoji is removed.
+    # Strip separator/punctuation/symbol noise until the real readable name starts.
+    # This catches box bars, pipes, brackets, dashes, dots, and weird lookalikes.
+    for _ in range(40):
+        before = body
+        body = body.strip()
+
+        while body:
+            ch = body[0]
+            category = unicodedata.category(ch)
+
+            if ch.isspace():
+                body = body[1:].strip()
+                continue
+
+            # P = punctuation, S = symbol. Box drawing separators are usually S.
+            if category[:1] in {"P", "S"}:
+                body = body[1:].strip()
+                continue
+
+            break
+
+        if body == before:
+            break
+
+    return body.strip()
+
+
+def _style_change_visible_name_body(current_name: str, parsed: Mapping[str, Any]) -> str:
+    before = _safe_str(current_name).strip()
+    body = before
+    emoji = _safe_str(parsed.get("emoji"), "")
+
+    bracket_match = re.match(r"^([「『〔【〖꒰]\s*.*?[」』〕】〗꒱])\s*(.*)$", body)
+    if bracket_match:
+        body = bracket_match.group(2).strip()
+    elif emoji and body.startswith(emoji):
+        body = body[len(emoji):].strip()
+
+    body = _style_change_strip_current_separator(body)
+
+    if not body:
+        body = _style_change_strip_current_separator(_safe_str(parsed.get("base_name"), ""))
+
+    return body or "channel"
+
+
+def _style_change_clean_leading_emoji(raw: str) -> str:
+    emoji = _safe_str(raw).strip()
+    if not emoji:
+        return ""
+
+    bracket_match = re.match(r"^[「『〔【〖꒰]\s*(.*?)\s*[」』〕】〗꒱]$", emoji)
+    if bracket_match:
+        emoji = bracket_match.group(1).strip()
+
+    separator_chars = set("|｜│┃❘❙❚⎮¦︱-–—―━─═·•∙⋅*✦✧✪✫✬✭❖◆◇▪▫▬[]{}()<>【】「」『』〔〕〖〗꒰꒱")
+
+    while emoji:
+        ch = emoji[-1]
+        if ch in separator_chars or unicodedata.category(ch).startswith("P"):
+            emoji = emoji[:-1].strip()
+            continue
+        break
+
+    return emoji.strip()
+
+
+def _style_change_separator_after(current_name: str, separator_id: str) -> tuple[str, list[str], list[str]]:
+    before = _safe_str(current_name).strip()
+    parsed = studio.parse_channel_name(before, kind="text")
+
+    raw_emoji = _safe_str(parsed.get("emoji"), "")
+    emoji = _style_change_clean_leading_emoji(raw_emoji)
+    body = _style_change_visible_name_body(before, parsed)
+
+    warnings: list[str] = ["Style Change only touched the channel separator; emoji/name/font were preserved."]
+    blockers: list[str] = []
+
+    spec = _style_change_separator_spec(separator_id)
+    if spec is None:
+        blockers.append("Selected separator does not exist.")
+        return before, warnings, blockers
+
+    if separator_id != "none" and not emoji:
+        blockers.append("No leading emoji found. Separator-only change keeps emoji behavior unchanged.")
+        return before, warnings, blockers
+
+    if separator_id == "none":
+        after = f"{emoji}{body}".strip()
+    else:
+        template = _safe_str(getattr(spec, "template", "{emoji}{separator}{name}"))
+        after = template.format(
+            emoji=emoji,
+            separator=_safe_str(getattr(spec, "value", ""), ""),
+            name=body,
+        ).strip()
+
+    after = strip_invisible(after).strip() if "strip_invisible" in globals() else after.strip()
+
+    if not after:
+        blockers.append("Final name would be empty.")
+    elif len(after) > studio.DISCORD_NAME_LIMIT:
+        blockers.append(f"Final name is too long for Discord ({len(after)}/{studio.DISCORD_NAME_LIMIT}).")
+
+    return after[: studio.DISCORD_NAME_LIMIT], warnings, blockers
+
+
+def _build_channel_separator_style_change_plan(
+    guild: discord.Guild,
+    options: Mapping[str, Any],
+    *,
+    separator_id: str,
+) -> list[dict[str, Any]]:
+    rules = _protection_rules(options)
+    items: list[dict[str, Any]] = []
+
+    for channel in _editable_channels(guild):
+        kind = _kind(channel)
+        if kind == "category" or kind == "other":
+            continue
+
+        before = _safe_str(getattr(channel, "name", ""))
+        if not before:
+            continue
+
+        base = _base_for_channel(channel)
+        protection = rules.get(studio.normalize_base_name(base))
+
+        if protection == "never" or (not protection and studio.normalize_base_name(base) in studio.DEFAULT_PROTECTED_NAMES):
+            items.append(
+                {
+                    "channel_id": str(getattr(channel, "id", "")),
+                    "category_id": str(getattr(getattr(channel, "category", None), "id", "")),
+                    "kind": kind,
+                    "before": before,
+                    "after": before,
+                    "base_name": base,
+                    "status": "protected",
+                    "protected": True,
+                    "warnings": ["Safe skip — protected ticket/log/system item."],
+                    "blockers": [],
+                    "substitutions": [],
+                    "readability_score": 100,
+                    "mobile_score": 100,
+                    "clutter_score": 0,
+                }
+            )
+            continue
+
+        after, warnings, blockers = _style_change_separator_after(before, separator_id)
+        status = "failed" if blockers else ("changed" if after != before else "unchanged")
+        spec = _style_change_separator_spec(separator_id)
+
+        items.append(
+            {
+                "channel_id": str(getattr(channel, "id", "")),
+                "category_id": str(getattr(getattr(channel, "category", None), "id", "")),
+                "kind": kind,
+                "before": before,
+                "after": after,
+                "base_name": base,
+                "status": status,
+                "protected": False,
+                "warnings": warnings,
+                "blockers": blockers,
+                "substitutions": [],
+                "readability_score": 100,
+                "mobile_score": 100,
+                "clutter_score": _safe_int(getattr(spec, "clutter", 0), 0) if spec is not None else 0,
+                "style_change_dimension": "channel_separator",
+            }
+        )
+
+        if len(items) >= studio.MAX_PLAN_ITEMS:
+            break
+
+    return items
+
+
+def _style_change_embed(guild: discord.Guild, options: Mapping[str, Any], *, separator_id: str) -> discord.Embed:
+    _analysis, _repair_options, live_summary = _infer_live_majority_context(guild, options)
+
+    embed = discord.Embed(
+        title="⚡ Change One Style",
+        description=(
+            "Change **one visual rule** while keeping the rest of the server style the same.\n\n"
+            "**Current tool:** Channel Separator"
+        ),
+        color=discord.Color.blurple(),
+    )
+    embed.add_field(
+        name="Detected live style",
+        value=(
+            f"Separator now: **{_safe_str(live_summary.get('separator'), 'mixed/unknown')}**\n"
+            f"Font/style: **{_safe_str(live_summary.get('font'), 'mixed/unknown')}**\n"
+            f"Leading emoji: **{_safe_str(live_summary.get('leading_emoji'), 'mixed/unknown')}**\n"
+            f"Categories: **{_safe_str(live_summary.get('category_frame'), 'mixed/unknown')}**"
+        )[:1024],
+        inline=False,
+    )
+    embed.add_field(
+        name="Will change",
+        value=(
+            f"Channel separator → **{_style_change_separator_label(separator_id)}**\n\n"
+            "Everything else stays as-is: emoji, current styled text, category frames, channel order, permissions, tickets, and verification."
+        ),
+        inline=False,
+    )
+
+    items = _build_channel_separator_style_change_plan(guild, options, separator_id=separator_id)
+    changed = sum(1 for item in items if item.get("status") == "changed")
+    protected = sum(1 for item in items if item.get("status") == "protected")
+    failed = sum(1 for item in items if item.get("status") == "failed")
+
+    embed.add_field(
+        name="Preview impact",
+        value=(
+            f"Would change: **{changed}**\n"
+            f"Protected/skipped: **{protected}**\n"
+            f"Needs review: **{failed}**"
+        ),
+        inline=True,
+    )
+    embed.add_field(
+        name="Examples",
+        value="\n".join(studio.preview_lines(items, filter_mode="changed", limit=5))[:1024],
+        inline=False,
+    )
+    embed.set_footer(text="Preview first • Apply later • Rollback snapshot kept")
+    return _clean_design_embed(embed)
+
+
+def _style_change_preview_embed(guild: discord.Guild, items: list[dict[str, Any]], *, separator_id: str) -> discord.Embed:
+    summary = studio.summarize_plan(items)
+    embed = discord.Embed(
+        title="👁️ Style Change Preview",
+        description=(
+            f"Changing only **channel separator** to **{_style_change_separator_label(separator_id)}**.\n\n"
+            "Review these exact names before applying."
+        ),
+        color=discord.Color.green() if not summary.get("failed") else discord.Color.orange(),
+    )
+    embed.add_field(
+        name="Results",
+        value=(
+            f"Will change: **{summary.get('changed', 0)}**\n"
+            f"Already OK: **{summary.get('unchanged', 0)}**\n"
+            f"Protected/skipped: **{summary.get('protected', 0)}**\n"
+            f"Needs review: **{summary.get('failed', 0)}**"
+        ),
+        inline=True,
+    )
+    embed.add_field(
+        name="What will change",
+        value="\n".join(studio.preview_lines(items, filter_mode="changed", limit=12))[:1024],
+        inline=False,
+    )
+
+    failed_lines = studio.preview_lines(items, filter_mode="failed", limit=5)
+    if failed_lines and failed_lines != ["No matching preview rows."]:
+        embed.add_field(name="Needs review", value="\n".join(failed_lines)[:1024], inline=False)
+
+    embed.set_footer(text="Names only • Channel separator only • Apply creates rollback snapshot")
+    return _clean_design_embed(embed)
+
+
+class StyleChangeSeparatorSelect(discord.ui.Select):
+    def __init__(self, selected_id: str) -> None:
+        self.selected_id = _safe_str(selected_id, "bar_heavy")
+        super().__init__(
+            placeholder="Choose channel separator",
+            min_values=1,
+            max_values=1,
+            options=_style_change_separator_options(self.selected_id),
+            row=0,
+        )
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        if not await _require_design_permission(interaction):
+            return
+        guild = interaction.guild
+        assert guild is not None
+
+        selected = _safe_str(self.values[0], "bar_heavy")
+        options = await _load_design_options(int(guild.id))
+        await interaction.response.edit_message(
+            embed=_style_change_embed(guild, options, separator_id=selected),
+            view=StyleChangeView(separator_id=selected),
+        )
+
+
+class StyleChangeView(discord.ui.View):
+    def __init__(self, *, separator_id: str = "bar_heavy") -> None:
+        super().__init__(timeout=900)
+        self.separator_id = _safe_str(separator_id, "bar_heavy")
+        self.add_item(StyleChangeSeparatorSelect(self.separator_id))
+
+    @discord.ui.button(label="Preview Separator Change", emoji="👁️", style=discord.ButtonStyle.success, custom_id="dank_design:style_change_preview_separator", row=1)
+    async def preview_separator_change(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        if not await _require_design_permission(interaction):
+            return
+        guild = interaction.guild
+        assert guild is not None
+
+        await interaction.response.defer(ephemeral=True, thinking=True)
+
+        options = await _load_design_options(int(guild.id))
+        items = _build_channel_separator_style_change_plan(guild, options, separator_id=self.separator_id)
+        has_blockers = any(item.get("status") == "failed" for item in items)
+        has_changes = any(item.get("status") == "changed" for item in items)
+
+        _PENDING[_key(int(guild.id), int(interaction.user.id))] = {
+            "created_at": time.time(),
+            "items": items,
+            "options": dict(options),
+            "mode": "style_change_separator",
+            "style_change_dimension": "channel_separator",
+            "separator_id": self.separator_id,
+        }
+
+        await interaction.edit_original_response(
+            embed=_style_change_preview_embed(guild, items, separator_id=self.separator_id),
+            view=DesignPreviewView(can_apply=not has_blockers and has_changes),
+        )
+
+    @discord.ui.button(label="Back to Design Studio", emoji="⬅️", style=discord.ButtonStyle.secondary, custom_id="dank_design:style_change_back", row=4)
+    async def back(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        if not await _require_design_permission(interaction):
+            return
+        guild = interaction.guild
+        assert guild is not None
+        options = await _load_design_options(int(guild.id))
+        await interaction.response.edit_message(
+            embed=_home_embed(guild, options),
+            view=DesignHomeView(options),
+        )
+
+
+
+
 class DesignHomeView(discord.ui.View):
     def __init__(self, options: Mapping[str, Any] | None = None) -> None:
         super().__init__(timeout=900)
@@ -3991,6 +4406,21 @@ class DesignHomeView(discord.ui.View):
         await interaction.edit_original_response(
             embed=_consistency_embed(guild, items, repair_options),
             view=DesignPreviewView(can_apply=not has_blockers and has_changes),
+        )
+
+    @discord.ui.button(label="Style Change", emoji="⚡", style=discord.ButtonStyle.secondary, custom_id="dank_design:style_change", row=2)
+    async def style_change(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        if not await _require_design_permission(interaction):
+            return
+        guild = interaction.guild
+        assert guild is not None
+        options = await _load_design_options(int(guild.id))
+        _analysis, repair_options, _summary = _infer_live_majority_context(guild, options)
+        current_sep = _safe_str(repair_options.get("separator_id"), "none")
+        selected = "bar_heavy" if current_sep == "none" else current_sep
+        await interaction.response.edit_message(
+            embed=_style_change_embed(guild, options, separator_id=selected),
+            view=StyleChangeView(separator_id=selected),
         )
 
     @discord.ui.button(label="Preview Server", emoji="👁️", style=discord.ButtonStyle.primary, custom_id="dank_design:preview", row=2)
@@ -4110,11 +4540,11 @@ class DesignPreviewView(discord.ui.View):
             await _persist_rollback_snapshot(int(guild.id), snapshot_payload)
         _PENDING.pop(key, None)
         mode = _safe_str(payload.get("mode"), "preview")
-        complete_title = "✅ Design Inconsistencies Fixed" if mode == "consistency_check" else "✅ Server Design Apply Complete"
+        complete_title = "✅ Design Inconsistencies Fixed" if mode == "consistency_check" else ("✅ Style Change Applied" if mode.startswith("style_change") else "✅ Server Design Apply Complete")
         complete_description = (
             f"Changed **{changed}** item(s). Skipped **{skipped}**. Failed **{len(failed)}**."
-            if mode != "consistency_check"
-            else f"Repaired **{changed}** inconsistent name(s). Safe skipped **{skipped}**. Failed **{len(failed)}**."
+            if mode not in {"consistency_check", "style_change_separator"}
+            else (f"Repaired **{changed}** inconsistent name(s). Safe skipped **{skipped}**. Failed **{len(failed)}**." if mode == "consistency_check" else f"Changed separator on **{changed}** channel(s). Skipped **{skipped}**. Failed **{len(failed)}**.")
         )
         embed = discord.Embed(
             title=complete_title,
