@@ -1,6 +1,11 @@
 from __future__ import annotations
 
-"""Simplify Protection Center invite setup into a guided flow."""
+"""Simplify Protection Center invite setup into a guided flow.
+
+This version is compatible with the newer ProtectionCenterView(author_id, cfg,
+spam) signature and then loads the final invite policy compatibility guard so
+/dank protection works from both the slash command and /dank setup.
+"""
 
 from typing import Any
 
@@ -52,8 +57,13 @@ def _clean_main_view(view: Any) -> None:
         elif cid == "dank_protection:add_filter":
             _set_button(child, label="Bad Word Filter", emoji="🧼", style=discord.ButtonStyle.primary, row=2)
         elif cid == "dank_protection:block_links":
-            # Final ON/OFF label/style is applied by protection_center_embed_refresh_guard.
-            _set_button(child, label=getattr(child, "label", "Link Shield: OFF"), emoji="🔗", style=getattr(child, "style", discord.ButtonStyle.secondary), row=2)
+            _set_button(
+                child,
+                label=getattr(child, "label", "Link Shield: OFF"),
+                emoji="🔗",
+                style=getattr(child, "style", discord.ButtonStyle.secondary),
+                row=2,
+            )
         elif cid == "dank_protection:refresh":
             _set_button(child, label="Refresh", emoji="🔄", style=discord.ButtonStyle.secondary, row=4)
         elif cid == "dank_protection:close":
@@ -61,17 +71,22 @@ def _clean_main_view(view: Any) -> None:
         children.append(child)
     try:
         view.clear_items()
-        order = {cid: idx for idx, cid in enumerate([
-            "dank_protection:safe",
-            "dank_protection:strict",
-            "dank_protection:off",
-            "dank_protection:edit_spamguard",
-            "dank_protection:invite_scope",
-            "dank_protection:add_filter",
-            "dank_protection:block_links",
-            "dank_protection:refresh",
-            "dank_protection:close",
-        ])}
+        order = {
+            cid: idx
+            for idx, cid in enumerate(
+                [
+                    "dank_protection:safe",
+                    "dank_protection:strict",
+                    "dank_protection:off",
+                    "dank_protection:edit_spamguard",
+                    "dank_protection:invite_scope",
+                    "dank_protection:add_filter",
+                    "dank_protection:block_links",
+                    "dank_protection:refresh",
+                    "dank_protection:close",
+                ]
+            )
+        }
         for child in sorted(children, key=lambda c: order.get(str(getattr(c, "custom_id", "") or ""), 999)):
             view.add_item(child)
     except Exception:
@@ -88,16 +103,36 @@ def _as_ids(policy: Any, value: Any) -> list[str]:
 async def _turn_on_invite_shield(guild: discord.Guild) -> None:
     try:
         from stoney_verify.guild_config import invalidate_guild_config, upsert_guild_config
-        await upsert_guild_config(int(guild.id), {"automod_block_invites": True, "automod_block_links": False})
+
+        await upsert_guild_config(
+            int(guild.id),
+            {
+                "automod_enabled": True,
+                "automod_block_invites": True,
+                "automod_block_links": False,
+                "automod_link_policy": "invite_shield",
+            },
+        )
         invalidate_guild_config(int(guild.id))
+        try:
+            from stoney_verify import invite_policy_engine
+
+            invite_policy_engine.invalidate_invite_policy(int(guild.id))
+        except Exception:
+            pass
     except Exception:
         pass
 
 
 async def _save(guild: discord.Guild, actor: discord.abc.User, patch: dict[str, Any]) -> dict[str, Any]:
     from stoney_verify import spam_guard
+
     await _turn_on_invite_shield(guild)
-    settings, _persisted = await spam_guard.save_spam_settings(int(guild.id), patch, updated_by=actor if isinstance(actor, discord.Member) else None)
+    settings, _persisted = await spam_guard.save_spam_settings(
+        int(guild.id),
+        patch,
+        updated_by=actor if isinstance(actor, discord.Member) else None,
+    )
     return dict(settings or {})
 
 
@@ -140,21 +175,44 @@ class InviteShieldIdsModal(discord.ui.Modal, title="Paste Invite Shield IDs"):
     def __init__(self, *, guild: discord.Guild, channel_id: int, message_id: int, settings: dict[str, Any]) -> None:
         super().__init__(timeout=300)
         from stoney_verify.startup_guards import spam_guard_invite_override_options as policy
+
         self.guild = guild
         self.channel_id = int(channel_id)
         self.message_id = int(message_id)
-        self.bot_ids = discord.ui.TextInput(label="Bot/user IDs", placeholder="Comma, space, or new line separated. Blank clears selected IDs.", default=policy._ids_text(settings.get("invite_hard_block_target_bot_ids")), required=False, style=discord.TextStyle.paragraph, max_length=1200)
-        self.channel_ids = discord.ui.TextInput(label="Channel IDs", placeholder="Blank means all message channels.", default=policy._ids_text(settings.get("invite_hard_block_target_channel_ids")), required=False, style=discord.TextStyle.paragraph, max_length=1200)
+        self.bot_ids = discord.ui.TextInput(
+            label="Bot/user IDs",
+            placeholder="Comma, space, or new line separated. Blank clears selected IDs.",
+            default=policy._ids_text(settings.get("invite_hard_block_target_bot_ids")),
+            required=False,
+            style=discord.TextStyle.paragraph,
+            max_length=1200,
+        )
+        self.channel_ids = discord.ui.TextInput(
+            label="Channel IDs",
+            placeholder="Blank means all message channels.",
+            default=policy._ids_text(settings.get("invite_hard_block_target_channel_ids")),
+            required=False,
+            style=discord.TextStyle.paragraph,
+            max_length=1200,
+        )
         self.add_item(self.bot_ids)
         self.add_item(self.channel_ids)
 
     async def on_submit(self, interaction: discord.Interaction) -> None:
         from stoney_verify.startup_guards import spam_guard_invite_override_options as policy
-        settings = await _save(self.guild, interaction.user, {
-            "invite_hard_block_target_bot_ids": policy._parse_ids(self.bot_ids.value),
-            "invite_hard_block_target_channel_ids": policy._parse_ids(self.channel_ids.value),
-        })
-        await interaction.response.edit_message(embed=_embed(policy, self.guild, settings), view=InviteShieldView(guild=self.guild, channel_id=self.channel_id, message_id=self.message_id, settings=settings))
+
+        settings = await _save(
+            self.guild,
+            interaction.user,
+            {
+                "invite_hard_block_target_bot_ids": policy._parse_ids(self.bot_ids.value),
+                "invite_hard_block_target_channel_ids": policy._parse_ids(self.channel_ids.value),
+            },
+        )
+        await interaction.response.edit_message(
+            embed=_embed(policy, self.guild, settings),
+            view=InviteShieldView(guild=self.guild, channel_id=self.channel_id, message_id=int(self.message_id), settings=settings),
+        )
 
 
 class InviteShieldView(discord.ui.View):
@@ -167,35 +225,69 @@ class InviteShieldView(discord.ui.View):
 
     async def _redraw(self, interaction: discord.Interaction, settings: dict[str, Any]) -> None:
         from stoney_verify.startup_guards import spam_guard_invite_override_options as policy
-        await interaction.response.edit_message(embed=_embed(policy, self.guild, settings), view=InviteShieldView(guild=self.guild, channel_id=self.channel_id, message_id=self.message_id, settings=settings))
+
+        await interaction.response.edit_message(
+            embed=_embed(policy, self.guild, settings),
+            view=InviteShieldView(guild=self.guild, channel_id=self.channel_id, message_id=int(self.message_id), settings=settings),
+        )
 
     @discord.ui.button(label="Fix This Channel", emoji="✅", style=discord.ButtonStyle.success, row=0)
     async def fix_channel(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        settings = await _save(self.guild, interaction.user, {"invite_hard_block_target_all_bots": True, "invite_hard_block_target_channel_ids": [str(self.channel_id)]})
+        _ = button
+        settings = await _save(
+            self.guild,
+            interaction.user,
+            {
+                "invite_hard_block_target_all_bots": True,
+                "invite_hard_block_target_channel_ids": [str(self.channel_id)],
+                "invite_protected_poster_rule_enabled": True,
+            },
+        )
         await self._redraw(interaction, settings)
 
     @discord.ui.button(label="Watch Every Bot", emoji="🤖", style=discord.ButtonStyle.primary, row=1)
     async def all_bots(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        settings = await _save(self.guild, interaction.user, {"invite_hard_block_target_all_bots": True})
+        _ = button
+        settings = await _save(
+            self.guild,
+            interaction.user,
+            {
+                "invite_hard_block_target_all_bots": True,
+                "invite_protected_poster_rule_enabled": True,
+            },
+        )
         await self._redraw(interaction, settings)
 
     @discord.ui.button(label="All Channels", emoji="🌐", style=discord.ButtonStyle.primary, row=1)
     async def all_channels(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
         settings = await _save(self.guild, interaction.user, {"invite_hard_block_target_channel_ids": []})
         await self._redraw(interaction, settings)
 
     @discord.ui.button(label="Only This Channel", emoji="#️⃣", style=discord.ButtonStyle.secondary, row=2)
     async def this_channel(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
         settings = await _save(self.guild, interaction.user, {"invite_hard_block_target_channel_ids": [str(self.channel_id)]})
         await self._redraw(interaction, settings)
 
     @discord.ui.button(label="Paste IDs", emoji="✍️", style=discord.ButtonStyle.secondary, row=2)
     async def paste_ids(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        await interaction.response.send_modal(InviteShieldIdsModal(guild=self.guild, channel_id=self.channel_id, message_id=self.message_id, settings=self.settings))
+        _ = button
+        await interaction.response.send_modal(
+            InviteShieldIdsModal(guild=self.guild, channel_id=self.channel_id, message_id=int(self.message_id), settings=self.settings)
+        )
 
     @discord.ui.button(label="Done", emoji="✅", style=discord.ButtonStyle.success, row=3)
     async def done(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
         await interaction.response.edit_message(content="Invite Shield setup closed.", embed=None, view=None)
+
+
+def _author_id_from(args: tuple[Any, ...], kwargs: dict[str, Any]) -> int:
+    try:
+        return int(kwargs.get("author_id") if kwargs.get("author_id") is not None else args[0])
+    except Exception:
+        return 0
 
 
 def _chain_extra_guards() -> None:
@@ -206,6 +298,7 @@ def _chain_extra_guards() -> None:
         "modlog_center_tracking_guard",
         "live_guild_name_footer_guard",
         "protection_invite_toggle_cleanup_guard",
+        "invite_policy_runtime_compat_guard",
     ):
         try:
             module = __import__(f"stoney_verify.startup_guards.{name}", fromlist=["apply"])
@@ -235,8 +328,14 @@ def apply() -> bool:
         _ORIGINAL_PC_INIT = center.ProtectionCenterView.__init__
         _ORIGINAL_SCOPE_CALLBACK = invite_controls.ProtectionInviteScopeButton.callback
 
-        def patched_pc_init(self: Any, *, author_id: int) -> None:
-            _ORIGINAL_PC_INIT(self, author_id=author_id)
+        def patched_pc_init(self: Any, *args: Any, **kwargs: Any) -> None:
+            try:
+                _ORIGINAL_PC_INIT(self, *args, **kwargs)
+            except TypeError as exc:
+                text = str(exc)
+                if "cfg" not in text and "spam" not in text and "unexpected keyword" not in text:
+                    raise
+                _ORIGINAL_PC_INIT(self, author_id=_author_id_from(args, kwargs))
             _clean_main_view(self)
 
         async def patched_scope_callback(self: Any, interaction: discord.Interaction) -> None:
