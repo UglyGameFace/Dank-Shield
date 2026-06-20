@@ -12,3 +12,5 @@ build/
 .pytest_cache/
 .repair_backup/
 *.bak
+.dank_login_backoff_until
+.dank_command_sync_state.json

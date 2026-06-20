@@ -963,11 +963,66 @@ async def on_command_error(ctx: ext_commands.Context, error: Exception) -> None:
         print("⚠️ on_command_error handler failed:", repr(e))
 
 
+def _dank_login_backoff_state_file() -> str:
+    import os as _os
+    return _os.getenv("DANK_LOGIN_BACKOFF_STATE_FILE", ".dank_login_backoff_until")
+
+def _dank_login_429_backoff_seconds() -> int:
+    import os as _os
+    raw = _os.getenv("DANK_LOGIN_429_BACKOFF_SECONDS", "1800")
+    try:
+        return max(300, int(raw))
+    except Exception:
+        return 1800
+
+def _dank_is_login_rate_limited(exc: BaseException) -> bool:
+    status = getattr(getattr(exc, "response", None), "status", None)
+    raw = str(exc).lower()
+    return status == 429 or "429" in raw or "too many requests" in raw or "global rate" in raw
+
+def _dank_sleep_if_login_backoff_active() -> None:
+    import os as _os
+    import time as _time
+
+    path = _dank_login_backoff_state_file()
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            until = float((fh.read() or "0").strip())
+    except Exception:
+        return
+
+    remaining = int(until - _time.time())
+    if remaining > 0:
+        print(f"🧯 Dank Shield login backoff active; sleeping {remaining}s before Discord login")
+        _time.sleep(remaining)
+
+def _dank_record_login_rate_limit_and_sleep(exc: BaseException) -> None:
+    import time as _time
+
+    seconds = _dank_login_429_backoff_seconds()
+    until = _time.time() + seconds
+
+    try:
+        with open(_dank_login_backoff_state_file(), "w", encoding="utf-8") as fh:
+            fh.write(str(until))
+    except Exception:
+        pass
+
+    print(f"🧯 Dank Shield hit Discord login 429; sleeping {seconds}s before allowing restart")
+    print(f"🧯 Discord said: {exc!r}")
+    _time.sleep(seconds)
+
+
 def run() -> None:
     if not DISCORD_TOKEN:
         raise RuntimeError("DISCORD_TOKEN is missing.")
-    bot.run(DISCORD_TOKEN)
-
-
+    _dank_sleep_if_login_backoff_active()
+    try:
+        bot.run(DISCORD_TOKEN)
+    except discord.HTTPException as exc:
+        if _dank_is_login_rate_limited(exc):
+            _dank_record_login_rate_limit_and_sleep(exc)
+            return
+        raise
 if __name__ == "__main__":
     run()
