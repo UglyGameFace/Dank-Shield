@@ -76,3 +76,18 @@ from stoney_verify.startup_guards import (
 #     setup_vc_health_precision_guard,
 #     # ... (many more commented out for safety)
 # )
+
+# =====================================================
+# DISCORD BOT ENTRYPOINT
+# Discloud starts main.py, so main.py must hand off to
+# stoney_verify.app where bot.run(DISCORD_TOKEN) lives.
+# =====================================================
+
+def main() -> None:
+    from stoney_verify.app import run as _run_dank_shield
+    _run_dank_shield()
+
+
+if __name__ == "__main__":
+    main()
+
