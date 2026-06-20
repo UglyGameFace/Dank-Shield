@@ -1,4 +1,9 @@
 from __future__ import annotations
+import os
+
+def _dank_disable_runtime_command_prune() -> bool:
+    return str(os.getenv("DANK_DISABLE_RUNTIME_COMMAND_PRUNE", "true")).strip().lower() in {"1", "true", "yes", "on"}
+
 
 """Prevent duplicate global+guild slash command surfaces in production.
 
@@ -20,7 +25,6 @@ skips itself when beta guild command syncing is explicitly enabled.
 """
 
 import asyncio
-import os
 from typing import Any
 
 import discord
@@ -132,7 +136,11 @@ async def _clear_one_guild_copy(guild_id: int) -> bool:
         return False
     try:
         guild_obj = discord.Object(id=int(guild_id))
-        bot.tree.clear_commands(guild=guild_obj)
+        (
+            bot.tree.clear_commands(guild=guild_obj)
+            if not _dank_disable_runtime_command_prune()
+            else print("🧭 Dank Shield skipped guild command clear; stable command surface active")
+        )
         synced = await bot.tree.sync(guild=guild_obj)
         _log(f"cleared guild-scoped slash command copy guild={guild_id} remaining={len(synced)}")
         return True

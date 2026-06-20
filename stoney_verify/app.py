@@ -126,6 +126,13 @@ _IGNORED_FOREIGN_PREFIX_COMMANDS = {
 }
 
 
+
+def _dank_disable_runtime_command_prune() -> bool:
+    return _env_true("DANK_DISABLE_RUNTIME_COMMAND_PRUNE", True)
+
+def _dank_allow_dangerous_global_clear() -> bool:
+    return _env_true("DANK_DANGEROUS_CLEAR_ALL_GLOBAL_COMMANDS_ON_BOOT", False)
+
 def _env_true(name: str, default: bool = False) -> bool:
     try:
         raw = os.getenv(name, "")
@@ -660,7 +667,11 @@ async def _run_slash_maintenance_once() -> None:
             if _env_true("CLEAR_GLOBAL_COMMANDS_ON_BOOT", default=False) and not _DID_GLOBAL_COMMAND_CLEANUP:
                 _DID_GLOBAL_COMMAND_CLEANUP = True
                 try:
-                    bot.tree.clear_commands(guild=None)
+                    (
+                        bot.tree.clear_commands(guild=None)
+                        if _dank_allow_dangerous_global_clear()
+                        else print("🧭 Dank Shield skipped global command clear; stable command surface active")
+                    )
                     await bot.tree.sync()
                     print("🧹 Cleared old global Discord application commands.")
                 except Exception as e:
@@ -683,7 +694,11 @@ async def _run_slash_maintenance_once() -> None:
             if _env_true("CLEAR_GLOBAL_COMMANDS_ON_BOOT", default=False) and not _DID_GLOBAL_COMMAND_CLEANUP:
                 _DID_GLOBAL_COMMAND_CLEANUP = True
                 try:
-                    bot.tree.clear_commands(guild=None)
+                    (
+                        bot.tree.clear_commands(guild=None)
+                        if _dank_allow_dangerous_global_clear()
+                        else print("🧭 Dank Shield skipped global command clear; stable command surface active")
+                    )
                     await bot.tree.sync()
                     print("🧹 Cleared old global Discord application commands.")
                 except Exception as e:

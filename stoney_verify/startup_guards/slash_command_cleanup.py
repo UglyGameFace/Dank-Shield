@@ -1,4 +1,9 @@
 from __future__ import annotations
+import os
+
+def _dank_disable_runtime_command_prune() -> bool:
+    return str(os.getenv("DANK_DISABLE_RUNTIME_COMMAND_PRUNE", "true")).strip().lower() in {"1", "true", "yes", "on"}
+
 
 """Slash command cleanup guard for Dank Shield.
 
@@ -26,7 +31,6 @@ Why this exists:
 
 import hashlib
 import json
-import os
 from pathlib import Path
 from typing import Any, Optional
 

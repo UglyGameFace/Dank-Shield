@@ -1,4 +1,9 @@
 from __future__ import annotations
+import os
+
+def _dank_disable_runtime_command_prune() -> bool:
+    return str(os.getenv("DANK_DISABLE_RUNTIME_COMMAND_PRUNE", "true")).strip().lower() in {"1", "true", "yes", "on"}
+
 
 """
 Public startup-scope guard.
@@ -13,7 +18,6 @@ repo root.
 
 import asyncio
 import builtins
-import os
 import sys
 from typing import Any
 
@@ -131,7 +135,11 @@ async def _clear_stale_beta_guild_commands(module: Any, guild_id: int) -> None:
     guild_obj = _guild_object(guild_id)
 
     try:
-        bot.tree.clear_commands(guild=guild_obj)
+        (
+            bot.tree.clear_commands(guild=guild_obj)
+            if not _dank_disable_runtime_command_prune()
+            else print("🧭 Dank Shield skipped guild command clear; stable command surface active")
+        )
         synced = await bot.tree.sync(guild=guild_obj)
         _log(
             "cleared stale beta guild slash commands to prevent duplicate commands "

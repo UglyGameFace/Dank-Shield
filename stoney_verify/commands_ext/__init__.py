@@ -390,7 +390,25 @@ def _child_names(group: Any) -> list[str]:
         return []
 
 
+
+def _runtime_command_prune_disabled() -> bool:
+    """Disable production command pruning to prevent Discord 'command is outdated' churn."""
+    try:
+        if _env_bool("DANK_DISABLE_RUNTIME_COMMAND_PRUNE", True):
+            return True
+        mode = _deployment_mode()
+        profile = _command_profile()
+        if mode in {"prod", "production", "public"} and profile == "public":
+            return True
+    except Exception:
+        return True
+    return False
+
 def _remove_stale_top_level_commands(tree: Any, *, reason: str) -> list[str]:
+    if _runtime_command_prune_disabled():
+        print("🧭 Dank Shield stale top-level command removal skipped; stable command surface active")
+        return []
+
     removed: list[str] = []
     for name in _STALE_TOP_LEVEL_COMMANDS:
         try:
@@ -405,6 +423,10 @@ def _remove_stale_top_level_commands(tree: Any, *, reason: str) -> list[str]:
 
 
 def _prune_public_dank_children(*, profile: str, reason: str) -> list[str]:
+    if _runtime_command_prune_disabled():
+        print("🧭 Dank Shield /dank child prune skipped; stable command surface active")
+        return []
+
     if not _public_profile_like(profile):
         return []
     try:
