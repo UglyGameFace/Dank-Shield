@@ -375,7 +375,7 @@ def apply() -> bool:
             analysis = majority.infer_live_majority_layout(studio, records)
             inferred = majority.apply_majority_to_options(studio, options, analysis, respect_locks=False)
             items = await original(guild, inferred)
-            return majority.annotate_plan_items(items, analysis, inferred)
+            return majority.annotate_plan_items(items, analysis, inferred, studio=studio)
 
         command_guard.build_design_plan = _build_design_plan_with_majority
         command_guard._DANK_MAJORITY_LAYOUT_PLAN_ACTIVE = True
