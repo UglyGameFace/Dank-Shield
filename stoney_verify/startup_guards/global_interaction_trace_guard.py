@@ -1,13 +1,19 @@
 from __future__ import annotations
 
-"""Dank Shield evidence-only interaction tracing.
+"""Dank Shield Elite Error Logger.
 
-This guard does not fix behavior. It proves whether Discord interactions reach
-this process, whether Discord.py dispatch starts, whether command callbacks run,
-and whether failures are global, group-level, or command-specific.
+Production-safe interaction error logger with optional deep tracing.
+
+Safety rules:
+- Does not rename internal modules, packages, workers, or legacy process names.
+- Error logging is always on.
+- Verbose interaction tracing is off by default.
+- Deep trace can be enabled with DANK_SHIELD_INTERACTION_TRACE=true.
 """
 
 import asyncio
+import hashlib
+import inspect
 import os
 import time
 import traceback
@@ -17,22 +23,63 @@ import discord
 from discord import app_commands
 
 _PATCHED = False
+_ERROR_COUNTS: dict[str, tuple[float, int]] = {}
+
+
+def _env_bool(name: str, default: bool = False) -> bool:
+    value = os.getenv(name)
+    if value is None:
+        return bool(default)
+    return value.strip().lower() not in {"0", "false", "off", "no", ""}
 
 
 def _trace_enabled() -> bool:
-    value = os.getenv("DANK_SHIELD_INTERACTION_TRACE", "true").strip().lower()
-    return value not in {"0", "false", "off", "no"}
+    return _env_bool("DANK_SHIELD_INTERACTION_TRACE", False)
 
 
-def _trace_id(interaction: discord.Interaction) -> str:
+def _error_logger_enabled() -> bool:
+    return _env_bool("DANK_SHIELD_ELITE_ERROR_LOGGER", True)
+
+
+def _component_trace_enabled() -> bool:
+    return _env_bool("DANK_SHIELD_COMPONENT_TRACE", False) or _trace_enabled()
+
+
+def _slow_ms() -> int:
     try:
-        iid = int(getattr(interaction, "id", 0) or 0)
-        return str(iid)[-8:] if iid else str(int(time.time() * 1000))[-8:]
+        return max(250, int(os.getenv("DANK_SHIELD_SLOW_INTERACTION_MS", "2500")))
     except Exception:
-        return str(int(time.time() * 1000))[-8:]
+        return 2500
 
 
-def _interaction_names(interaction: discord.Interaction) -> list[str]:
+def _rate_limit_window_seconds() -> int:
+    try:
+        return max(10, int(os.getenv("DANK_SHIELD_ERROR_RATE_WINDOW_SECONDS", "60")))
+    except Exception:
+        return 60
+
+
+def _rate_limit_max() -> int:
+    try:
+        return max(1, int(os.getenv("DANK_SHIELD_ERROR_RATE_MAX", "8")))
+    except Exception:
+        return 8
+
+
+def _trace_id(interaction: discord.Interaction | None = None) -> str:
+    try:
+        if interaction is not None:
+            iid = int(getattr(interaction, "id", 0) or 0)
+            if iid:
+                return str(iid)[-8:]
+    except Exception:
+        pass
+    return str(int(time.time() * 1000))[-8:]
+
+
+def _interaction_names(interaction: discord.Interaction | None) -> list[str]:
+    if interaction is None:
+        return []
     try:
         data = getattr(interaction, "data", None) or {}
         names: list[str] = []
@@ -49,6 +96,42 @@ def _interaction_names(interaction: discord.Interaction) -> list[str]:
         return names
     except Exception:
         return []
+
+
+def _command_path(interaction: discord.Interaction | None) -> str:
+    names = _interaction_names(interaction)
+    if names:
+        return "/".join(names)
+    if interaction is None:
+        return "unknown"
+    try:
+        data = getattr(interaction, "data", None) or {}
+        custom_id = data.get("custom_id")
+        if custom_id:
+            return f"component:{custom_id}"
+    except Exception:
+        pass
+    return "unknown"
+
+
+def _component_custom_id(interaction: discord.Interaction | None) -> str:
+    if interaction is None:
+        return ""
+    try:
+        data = getattr(interaction, "data", None) or {}
+        return str(data.get("custom_id") or "")
+    except Exception:
+        return ""
+
+
+def _component_type(interaction: discord.Interaction | None) -> str:
+    if interaction is None:
+        return ""
+    try:
+        data = getattr(interaction, "data", None) or {}
+        return str(data.get("component_type") or "")
+    except Exception:
+        return ""
 
 
 def _response_done(interaction: discord.Interaction | None) -> bool:
@@ -78,50 +161,131 @@ def _command_label(command: Any) -> str:
     )
 
 
-def _log(stage: str, interaction: discord.Interaction | None, **details: Any) -> None:
+def _safe_detail(value: Any, limit: int = 220) -> str:
+    try:
+        text = str(value).replace("\n", "\\n").replace("\r", "\\r")
+    except Exception:
+        text = "<unprintable>"
+    return text[:limit]
+
+
+def _base_fields(interaction: discord.Interaction | None) -> dict[str, Any]:
+    return {
+        "trace": _trace_id(interaction),
+        "cmd": _command_path(interaction),
+        "guild": getattr(getattr(interaction, "guild", None), "id", 0) if interaction is not None else 0,
+        "channel": getattr(getattr(interaction, "channel", None), "id", 0) if interaction is not None else 0,
+        "user": getattr(getattr(interaction, "user", None), "id", 0) if interaction is not None else 0,
+        "response_done": _response_done(interaction),
+    }
+
+
+def _print_event(prefix: str, fields: Mapping[str, Any]) -> None:
+    try:
+        parts = [f"{key}={_safe_detail(value)}" for key, value in fields.items()]
+        print(f"{prefix} " + " ".join(parts))
+    except Exception:
+        pass
+
+
+def _trace(stage: str, interaction: discord.Interaction | None, **details: Any) -> None:
     if not _trace_enabled():
         return
+    fields = _base_fields(interaction)
+    fields.update({"stage": stage})
+    fields.update(details)
+    _print_event("🧪 dank_interaction_trace", fields)
+
+
+def _component_trace(stage: str, interaction: discord.Interaction | None, **details: Any) -> None:
+    if not _component_trace_enabled():
+        return
+    fields = _base_fields(interaction)
+    fields.update(
+        {
+            "stage": stage,
+            "custom_id": _component_custom_id(interaction),
+            "component_type": _component_type(interaction),
+        }
+    )
+    fields.update(details)
+    _print_event("🧪 dank_component_trace", fields)
+
+
+def _error_id(interaction: discord.Interaction | None, error: BaseException | None = None, stage: str = "unknown") -> str:
+    raw = "|".join(
+        [
+            stage,
+            _command_path(interaction),
+            str(getattr(getattr(interaction, "guild", None), "id", 0) if interaction is not None else 0),
+            str(type(error).__name__ if error is not None else "NoError"),
+            str(error)[:160] if error is not None else "",
+            str(int(time.time() // 60)),
+        ]
+    )
+    digest = hashlib.sha1(raw.encode("utf-8", "replace")).hexdigest()[:8].upper()
+    return f"DANK-{digest}"
+
+
+def _rate_limited(error_id: str) -> bool:
+    now = time.time()
+    window = _rate_limit_window_seconds()
+    max_count = _rate_limit_max()
+
+    first_seen, count = _ERROR_COUNTS.get(error_id, (now, 0))
+    if now - first_seen > window:
+        _ERROR_COUNTS[error_id] = (now, 1)
+        return False
+
+    count += 1
+    _ERROR_COUNTS[error_id] = (first_seen, count)
+    return count > max_count
+
+
+def _log_error(
+    stage: str,
+    interaction: discord.Interaction | None,
+    error: BaseException,
+    *,
+    extra: Mapping[str, Any] | None = None,
+) -> str:
+    if not _error_logger_enabled():
+        return _error_id(interaction, error, stage)
+
+    eid = _error_id(interaction, error, stage)
+    fields = _base_fields(interaction)
+    fields.update(
+        {
+            "error_id": eid,
+            "stage": stage,
+            "error_type": type(error).__name__,
+            "error": _safe_detail(error, 320),
+        }
+    )
+    if extra:
+        fields.update(extra)
+
+    if not _rate_limited(eid):
+        _print_event("🚨 dank_error", fields)
+        try:
+            print("🚨 dank_error traceback_start", f"error_id={eid}")
+            print("".join(traceback.format_exception(type(error), error, error.__traceback__)))
+            print("🚨 dank_error traceback_end", f"error_id={eid}")
+        except Exception:
+            pass
+    else:
+        _print_event("🚨 dank_error_suppressed", {"error_id": eid, "stage": stage, "cmd": _command_path(interaction)})
+
+    return eid
+
+
+async def _send_clean_failure(interaction: discord.Interaction | None, error_id: str) -> None:
+    if interaction is None:
+        return
+
+    msg = f"⚠️ Dank Shield hit an error while running this action. Error ID: `{error_id}`"
 
     try:
-        guild_id = getattr(getattr(interaction, "guild", None), "id", 0) if interaction is not None else 0
-        channel_id = getattr(getattr(interaction, "channel", None), "id", 0) if interaction is not None else 0
-        user_id = getattr(getattr(interaction, "user", None), "id", 0) if interaction is not None else 0
-        names = "/".join(_interaction_names(interaction)) if interaction is not None else "unknown"
-        names = names or "unknown"
-        trace = _trace_id(interaction) if interaction is not None else str(int(time.time() * 1000))[-8:]
-        detail_text = " ".join(f"{k}={v}" for k, v in details.items())
-
-        print(
-            "🧪 interaction_trace "
-            f"trace={trace} "
-            f"stage={stage} "
-            f"type={getattr(interaction, 'type', None) if interaction is not None else None} "
-            f"cmd={names} "
-            f"guild={guild_id} "
-            f"channel={channel_id} "
-            f"user={user_id} "
-            f"response_done={_response_done(interaction)} "
-            f"{detail_text}".strip()
-        )
-    except Exception:
-        pass
-
-
-async def _on_interaction(interaction: discord.Interaction) -> None:
-    _log("received", interaction)
-
-
-async def _tree_on_error(interaction: discord.Interaction, error: BaseException) -> None:
-    _log("tree_error", interaction, error=f"{type(error).__name__}: {str(error)[:240]}")
-    try:
-        print("🧪 interaction_trace traceback_start")
-        print("".join(traceback.format_exception(type(error), error, error.__traceback__)))
-        print("🧪 interaction_trace traceback_end")
-    except Exception:
-        pass
-
-    try:
-        msg = "⚠️ This command failed before it could finish. The error was logged for staff to diagnose."
         if _response_done(interaction):
             await interaction.followup.send(msg, ephemeral=True)
         else:
@@ -130,10 +294,26 @@ async def _tree_on_error(interaction: discord.Interaction, error: BaseException)
         pass
 
 
+async def _on_interaction(interaction: discord.Interaction) -> None:
+    # Slash commands are covered by dispatch trace. Component events get separate IDs.
+    try:
+        if getattr(interaction, "type", None) == discord.InteractionType.component:
+            _component_trace("received", interaction)
+        else:
+            _trace("received", interaction)
+    except Exception:
+        pass
+
+
+async def _tree_on_error(interaction: discord.Interaction, error: BaseException) -> None:
+    error_id = _log_error("tree_error", interaction, error)
+    await _send_clean_failure(interaction, error_id)
+
+
 def _patch_tree_call() -> bool:
     tree_cls = app_commands.CommandTree
 
-    if getattr(tree_cls, "_dank_shield_trace_tree_call_wrapped", False):
+    if getattr(tree_cls, "_dank_shield_elite_tree_call_wrapped", False):
         return False
 
     original = getattr(tree_cls, "_call", None)
@@ -142,36 +322,26 @@ def _patch_tree_call() -> bool:
 
     async def traced_tree_call(self: app_commands.CommandTree, interaction: discord.Interaction) -> Any:
         started = time.monotonic()
-        _log("tree_call_start", interaction)
+        _trace("tree_call_start", interaction)
 
         async def watchdog() -> None:
-            await asyncio.sleep(2.5)
-            _log("tree_call_slow_unacked", interaction, age_ms=int((time.monotonic() - started) * 1000))
+            await asyncio.sleep(_slow_ms() / 1000)
+            _trace("tree_call_slow_unacked", interaction, age_ms=int((time.monotonic() - started) * 1000))
 
         task = asyncio.create_task(watchdog())
         try:
             result = await original(self, interaction)
-            _log("tree_call_ok", interaction, age_ms=int((time.monotonic() - started) * 1000))
+            _trace("tree_call_ok", interaction, age_ms=int((time.monotonic() - started) * 1000))
             return result
         except Exception as exc:
-            _log(
-                "tree_call_exception",
-                interaction,
-                age_ms=int((time.monotonic() - started) * 1000),
-                error=f"{type(exc).__name__}: {str(exc)[:240]}",
-            )
-            try:
-                print("🧪 interaction_trace tree_call_traceback_start")
-                print(traceback.format_exc())
-                print("🧪 interaction_trace tree_call_traceback_end")
-            except Exception:
-                pass
+            _trace("tree_call_exception", interaction, age_ms=int((time.monotonic() - started) * 1000), error=type(exc).__name__)
+            _log_error("tree_call_exception", interaction, exc)
             raise
         finally:
             task.cancel()
 
-    setattr(tree_cls, "_dank_shield_trace_original_tree_call", original)
-    setattr(tree_cls, "_dank_shield_trace_tree_call_wrapped", True)
+    setattr(tree_cls, "_dank_shield_elite_original_tree_call", original)
+    setattr(tree_cls, "_dank_shield_elite_tree_call_wrapped", True)
     setattr(tree_cls, "_call", traced_tree_call)
     return True
 
@@ -180,8 +350,8 @@ def _patch_command_method(cls: Any, method_name: str, start_stage: str, ok_stage
     if cls is None:
         return False
 
-    wrapped_marker = f"_dank_shield_trace_{method_name}_wrapped"
-    original_marker = f"_dank_shield_trace_original_{method_name}"
+    wrapped_marker = f"_dank_shield_elite_{method_name}_wrapped"
+    original_marker = f"_dank_shield_elite_original_{method_name}"
 
     if getattr(cls, wrapped_marker, False):
         return False
@@ -194,31 +364,20 @@ def _patch_command_method(cls: Any, method_name: str, start_stage: str, ok_stage
         interaction = _find_interaction(args, kwargs)
         label = _command_label(self)
         started = time.monotonic()
-        _log(start_stage, interaction, command=label)
+        _trace(start_stage, interaction, command=label)
 
         async def watchdog() -> None:
-            await asyncio.sleep(2.5)
-            _log(f"{start_stage}_slow_unacked", interaction, command=label, age_ms=int((time.monotonic() - started) * 1000))
+            await asyncio.sleep(_slow_ms() / 1000)
+            _trace(f"{start_stage}_slow_unacked", interaction, command=label, age_ms=int((time.monotonic() - started) * 1000))
 
         task = asyncio.create_task(watchdog()) if interaction is not None else None
         try:
             result = await original(self, *args, **kwargs)
-            _log(ok_stage, interaction, command=label, age_ms=int((time.monotonic() - started) * 1000))
+            _trace(ok_stage, interaction, command=label, age_ms=int((time.monotonic() - started) * 1000))
             return result
         except Exception as exc:
-            _log(
-                exception_stage,
-                interaction,
-                command=label,
-                age_ms=int((time.monotonic() - started) * 1000),
-                error=f"{type(exc).__name__}: {str(exc)[:240]}",
-            )
-            try:
-                print(f"🧪 interaction_trace {method_name}_traceback_start")
-                print(traceback.format_exc())
-                print(f"🧪 interaction_trace {method_name}_traceback_end")
-            except Exception:
-                pass
+            _trace(exception_stage, interaction, command=label, age_ms=int((time.monotonic() - started) * 1000), error=type(exc).__name__)
+            _log_error(exception_stage, interaction, exc, extra={"command": label})
             raise
         finally:
             if task is not None:
@@ -230,6 +389,79 @@ def _patch_command_method(cls: Any, method_name: str, start_stage: str, ok_stage
     return True
 
 
+def _patch_component_dispatch() -> dict[str, bool]:
+    patched: dict[str, bool] = {}
+
+    try:
+        view_cls = discord.ui.View
+        original = getattr(view_cls, "_scheduled_task", None)
+        if original is not None and not getattr(view_cls, "_dank_shield_elite_view_scheduled_wrapped", False):
+
+            async def traced_scheduled_task(self: discord.ui.View, item: Any, interaction: discord.Interaction) -> Any:
+                started = time.monotonic()
+                _component_trace(
+                    "view_item_start",
+                    interaction,
+                    item_type=type(item).__name__,
+                    item_custom_id=getattr(item, "custom_id", ""),
+                )
+
+                async def watchdog() -> None:
+                    await asyncio.sleep(_slow_ms() / 1000)
+                    _component_trace(
+                        "view_item_slow_unacked",
+                        interaction,
+                        item_type=type(item).__name__,
+                        item_custom_id=getattr(item, "custom_id", ""),
+                        age_ms=int((time.monotonic() - started) * 1000),
+                    )
+
+                task = asyncio.create_task(watchdog())
+                try:
+                    result = await original(self, item, interaction)
+                    _component_trace(
+                        "view_item_ok",
+                        interaction,
+                        item_type=type(item).__name__,
+                        item_custom_id=getattr(item, "custom_id", ""),
+                        age_ms=int((time.monotonic() - started) * 1000),
+                    )
+                    return result
+                except Exception as exc:
+                    _component_trace(
+                        "view_item_exception",
+                        interaction,
+                        item_type=type(item).__name__,
+                        item_custom_id=getattr(item, "custom_id", ""),
+                        age_ms=int((time.monotonic() - started) * 1000),
+                        error=type(exc).__name__,
+                    )
+                    _log_error(
+                        "component_view_item_exception",
+                        interaction,
+                        exc,
+                        extra={
+                            "item_type": type(item).__name__,
+                            "item_custom_id": getattr(item, "custom_id", ""),
+                        },
+                    )
+                    raise
+                finally:
+                    task.cancel()
+
+            setattr(view_cls, "_dank_shield_elite_original_view_scheduled", original)
+            setattr(view_cls, "_dank_shield_elite_view_scheduled_wrapped", True)
+            setattr(view_cls, "_scheduled_task", traced_scheduled_task)
+            patched["view_scheduled_task"] = True
+        else:
+            patched["view_scheduled_task"] = False
+    except Exception as exc:
+        patched["view_scheduled_task"] = False
+        print(f"⚠️ Dank Shield component dispatch trace patch failed: {type(exc).__name__}: {exc}")
+
+    return patched
+
+
 def _patch_framework_dispatch() -> dict[str, bool]:
     try:
         from discord.app_commands import commands as command_module
@@ -239,7 +471,7 @@ def _patch_framework_dispatch() -> dict[str, bool]:
     command_cls = getattr(command_module, "Command", None)
     group_cls = getattr(command_module, "Group", None)
 
-    results = {
+    patched = {
         "tree_call": _patch_tree_call(),
         "command_invoke": _patch_command_method(
             command_cls,
@@ -263,16 +495,18 @@ def _patch_framework_dispatch() -> dict[str, bool]:
             "group_invoke_exception",
         ),
     }
-    return results
+    patched.update(_patch_component_dispatch())
+    return patched
 
 
 def _get_bot() -> Any:
+    # Internal package imports stay unchanged for safety.
     try:
-        from stoney_verify import client as bot  # internal legacy package name
+        from stoney_verify import client as bot  # type: ignore
         return bot
     except Exception:
         try:
-            from stoney_verify.globals import bot  # internal legacy package name
+            from stoney_verify.globals import bot  # type: ignore
             return bot
         except Exception:
             return None
@@ -286,7 +520,7 @@ def apply() -> bool:
 
     bot = _get_bot()
     if bot is None:
-        print("⚠️ Dank Shield interaction trace waiting: bot unavailable")
+        print("⚠️ Dank Shield Elite Error Logger waiting: bot unavailable")
         return False
 
     try:
@@ -311,10 +545,10 @@ def apply() -> bool:
         patched = _patch_framework_dispatch()
 
         _PATCHED = True
-        print(f"✅ Dank Shield interaction evidence logger active; patched={patched}")
+        print(f"✅ Dank Shield Elite Error Logger active; trace={_trace_enabled()} component_trace={_component_trace_enabled()} patched={patched}")
         return True
     except Exception as exc:
-        print(f"⚠️ Dank Shield interaction evidence logger failed: {type(exc).__name__}: {exc}")
+        print(f"⚠️ Dank Shield Elite Error Logger failed: {type(exc).__name__}: {exc}")
         return False
 
 

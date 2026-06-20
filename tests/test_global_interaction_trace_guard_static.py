@@ -4,18 +4,21 @@ from pathlib import Path
 SOURCE = Path("stoney_verify/startup_guards/global_interaction_trace_guard.py").read_text()
 
 
-def test_global_trace_logs_all_interactions_not_only_design():
-    assert "interaction_trace" in SOURCE
-    assert "cmd={names}" in SOURCE
-    assert "_on_interaction" in SOURCE
-    assert 'bot.add_listener(_on_interaction, "on_interaction")' in SOURCE
+def test_elite_logger_name_and_safe_defaults():
+    assert "Dank Shield Elite Error Logger" in SOURCE
+    assert 'DANK_SHIELD_ELITE_ERROR_LOGGER' in SOURCE
+    assert 'DANK_SHIELD_INTERACTION_TRACE' in SOURCE
+    assert 'DANK_SHIELD_COMPONENT_TRACE' in SOURCE
+    assert 'os.getenv("DANK_SHIELD_INTERACTION_TRACE", "true")' not in SOURCE
+    assert 'os.getenv("DANK_SHIELD_INTERACTION_TRACE", "false")' not in SOURCE
 
 
-def test_global_trace_captures_app_command_errors():
-    assert "_tree_on_error" in SOURCE
-    assert "tree_error" in SOURCE
-    assert "traceback_start" in SOURCE
-    assert "tree.on_error = chained_on_error" in SOURCE
+def test_trace_logs_are_optional_but_errors_are_supported():
+    assert "def _trace_enabled" in SOURCE
+    assert "def _error_logger_enabled" in SOURCE
+    assert "🚨 dank_error" in SOURCE
+    assert "DANK-" in SOURCE
+    assert "Error ID" in SOURCE
 
 
 def test_global_trace_wraps_discord_dispatch_layer():
@@ -35,11 +38,21 @@ def test_global_trace_wraps_discord_dispatch_layer():
         assert phrase in SOURCE
 
 
-def test_trace_uses_dank_shield_public_name():
-    assert "Dank Shield interaction evidence logger active" in SOURCE
-    assert "STONEY" not in SOURCE
+def test_component_trace_wraps_view_dispatch():
+    required = [
+        "_patch_component_dispatch",
+        "_scheduled_task",
+        "view_item_start",
+        "view_item_slow_unacked",
+        "view_item_exception",
+        "component_view_item_exception",
+        "dank_component_trace",
+    ]
+
+    for phrase in required:
+        assert phrase in SOURCE
 
 
-def test_guard_is_evidence_only():
-    assert "does not fix behavior" in SOURCE
-    assert "evidence-only" in SOURCE.lower()
+def test_no_risky_full_rebrand():
+    assert "from stoney_verify import client" in SOURCE
+    assert "Internal package imports stay unchanged for safety." in SOURCE
