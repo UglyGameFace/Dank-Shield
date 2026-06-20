@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 import inspect
+import re
 from typing import Any
 
 _PATCHED = False
@@ -84,6 +85,88 @@ def _change_lines(items: list[dict[str, Any]], *, limit: int = 8) -> list[str]:
     return out or ["No repair rows for this target."]
 
 
+_DECORATIVE_HEADING_MARKS = set("─━═╭╮╰╯╔╗【】「」✦⋆｡°✩🏁🛠🛡🎫📦")
+
+
+def _looks_display_heading(value: Any) -> bool:
+    text = _text(value)
+    if not text:
+        return False
+
+    if any(ch in _DECORATIVE_HEADING_MARKS for ch in text):
+        return True
+
+    if " " in text or "/" in text:
+        return True
+
+    # Styled unicode letters are common in hand-designed category names.
+    if any(ord(ch) > 127 and ch.isalpha() for ch in text):
+        return True
+
+    letters = [ch for ch in text if ch.isalpha()]
+    if len(letters) >= 3:
+        upper_ratio = sum(1 for ch in letters if ch.isupper()) / max(1, len(letters))
+        if upper_ratio >= 0.55:
+            return True
+
+    # Multiple non-word marks usually means this is a visual heading, not a slug.
+    marks = re.findall(r"[^\w\s-]", text, flags=re.UNICODE)
+    return len(marks) >= 2
+
+
+def _looks_plain_slug(value: Any) -> bool:
+    text = _text(value).strip()
+    if not text:
+        return False
+
+    # Ignore a leading emoji/icon when deciding if the rest became a slug.
+    core = re.sub(r"^[^\w#]+", "", text, flags=re.UNICODE).strip()
+    if not core:
+        return False
+
+    return (
+        " " not in core
+        and core == core.lower()
+        and ("-" in core or core.islower())
+        and not any(ch in _DECORATIVE_HEADING_MARKS for ch in core)
+    )
+
+
+def _visual_downgrade_items(items: list[dict[str, Any]], *, limit: int = 6) -> list[str]:
+    """Rows where Live Majority would make a designed section/category plainer."""
+
+    out: list[str] = []
+    for item in items:
+        if item.get("status") != "changed":
+            continue
+
+        kind = _text(item.get("kind"), "text")
+        before = _text(item.get("before"))
+        after = _text(item.get("after"))
+
+        if not before or not after or before == after:
+            continue
+
+        if kind == "category" and _looks_display_heading(before) and _looks_plain_slug(after):
+            out.append(f"• `{before}`\n  → `{after}`"[:240])
+            if len(out) >= limit:
+                break
+
+    return out
+
+
+def _majority_apply_blocked(items: list[dict[str, Any]]) -> bool:
+    """Block Apply when the preview mostly simplifies hand-designed sections."""
+
+    downgrade_count = len(_visual_downgrade_items(items, limit=50))
+    changed_count = sum(1 for item in items if item.get("status") == "changed")
+
+    if downgrade_count >= 3:
+        return True
+
+    return bool(changed_count and downgrade_count >= max(2, changed_count // 3))
+
+
 def _saved_rule_count(options: Mapping[str, Any]) -> int:
     total = 0
     global_rule = options.get("format_lock_global")
@@ -105,14 +188,22 @@ def _patch_consistency_embed(command_guard: Any, majority: Any, discord: Any) ->
             "font": "mixed/unknown",
             "leading_emoji": "mixed/unknown",
         }
+        downgrade_lines = _visual_downgrade_items(items, limit=6)
+        apply_blocked = _majority_apply_blocked(items)
+
         embed = discord.Embed(
-            title="✅ Live Majority Repair Preview",
+            title="⚠️ Live Majority Needs Review" if apply_blocked else "✅ Live Majority Repair Preview",
             description=(
                 "**Step 2 of 2 — review before apply.**\n"
                 "Target: the layout most channels/categories already use here.\n\n"
-                "Apply only renames the safe rows in this preview."
+                + (
+                    "Apply is blocked because this preview would simplify styled section names. "
+                    "Use **Manual Editor** or **Saved Layout** instead."
+                    if apply_blocked
+                    else "Apply only renames the safer rows in this preview."
+                )
             ),
-            color=discord.Color.orange() if counts.get("failed") else discord.Color.green(),
+            color=discord.Color.orange() if apply_blocked or counts.get("failed") else discord.Color.green(),
         )
         embed.add_field(
             name="Detected target layout",
@@ -136,6 +227,15 @@ def _patch_consistency_embed(command_guard: Any, majority: Any, discord: Any) ->
             inline=True,
         )
         embed.add_field(name="Sample safe repairs", value="\n".join(_change_lines(items, limit=8))[:1024], inline=False)
+        if apply_blocked and downgrade_lines:
+            embed.add_field(
+                name="Apply blocked — would simplify this server",
+                value=(
+                    "These look like designed section/category names, not mistakes:\n"
+                    + "\n".join(downgrade_lines)
+                )[:1024],
+                inline=False,
+            )
         skipped = majority.skipped_lines(items, limit=5)
         if skipped:
             embed.add_field(name="Skipped on purpose", value="\n".join(skipped)[:1024], inline=False)
@@ -144,7 +244,7 @@ def _patch_consistency_embed(command_guard: Any, majority: Any, discord: Any) ->
             embed.add_field(name="Saved rules found", value=f"{found} saved rule(s) exist. This preview uses **Live Majority** because you chose it.", inline=False)
         elif active:
             embed.add_field(name="Saved rules active", value=f"{active} saved rule(s) are active for this preview.", inline=False)
-        embed.set_footer(text="Names only • Preview first • Rollback snapshot kept before apply")
+        embed.set_footer(text="Names only • Preview first • Apply blocked when it would simplify a designed server")
         return command_guard._clean_design_embed(embed)
 
     command_guard._consistency_embed = _majority_consistency_embed
@@ -200,7 +300,14 @@ def _patch_guided_flow(command_guard: Any, majority: Any, studio: Any, discord: 
             value=f"Saved rules found: **{_saved_rule_count(options)}**\nUse saved rules only when those are intentionally correct.",
             inline=True,
         )
-        embed.add_field(name="Recommended", value="For hand-built servers, choose **Use Live Majority**.", inline=False)
+        embed.add_field(
+            name="Recommended",
+            value=(
+                "Use **Live Majority** only when the preview keeps the server's look. "
+                "If it would flatten styled names, choose **Manual Editor** or **Saved Layout**."
+            ),
+            inline=False,
+        )
         embed.set_footer(text="Read-only screen. Choose a target to generate the final preview.")
         return command_guard._clean_design_embed(embed)
 
@@ -247,7 +354,13 @@ def _patch_guided_flow(command_guard: Any, majority: Any, studio: Any, discord: 
             }
             await interaction.edit_original_response(
                 embed=command_guard._consistency_embed(guild, items, requested),
-                view=command_guard.DesignPreviewView(can_apply=not counts.get("failed") and bool(counts.get("needs_fix"))),
+                view=command_guard.DesignPreviewView(
+                    can_apply=(
+                        not counts.get("failed")
+                        and bool(counts.get("needs_fix"))
+                        and not _majority_apply_blocked(items)
+                    )
+                ),
             )
 
         @discord.ui.button(label="Use Saved Layout", emoji="🔒", style=discord.ButtonStyle.secondary, custom_id="dank_design:majority_use_saved", row=0)
