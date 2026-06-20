@@ -476,3 +476,10 @@ __all__ = [
     "scoped_is_server_control",
     "scoped_is_ticket_staff",
 ]
+
+# Compatibility entrypoint for the public commands_ext loader.
+# The setup-access command is already attached by this module during import,
+# so this function intentionally does not attach it again.
+def register_public_access_control(*args, **kwargs) -> None:
+    return None
+
