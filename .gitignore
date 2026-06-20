@@ -10,3 +10,5 @@ ENV/
 dist/
 build/
 .pytest_cache/
+.repair_backup/
+*.bak
