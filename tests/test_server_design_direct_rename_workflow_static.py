@@ -6,8 +6,11 @@ SOURCE = Path("stoney_verify/startup_guards/server_design_studio_command_guard.p
 
 def test_rename_copy_says_direct_and_no_apply():
     assert "Rename applies immediately. No Apply button appears after Rename." in SOURCE
-    assert "Rename is instant • Preview/Style Change/Exact Format use Apply later" in SOURCE
     assert "Applied immediately. No Apply button is needed after Rename." in SOURCE
+    assert "Discord result:" in SOURCE
+
+    assert "Rename is instant • Preview/Change One Style/Custom Format use Apply later" in SOURCE
+    assert "Rename is instant • Preview/Style Change/Exact Format use Apply later" not in SOURCE
 
 
 def test_rename_has_refresh_buttons():

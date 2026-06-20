@@ -1109,7 +1109,7 @@ class FormatLocksView(discord.ui.View):
 
 
 # ---------------------------------------------------------------------------
-# Exact Format Editor
+# Custom Format Editor
 # ---------------------------------------------------------------------------
 
 EDITOR_SEPARATOR_IDS = (
@@ -1334,7 +1334,7 @@ async def _open_exact_format_editor(interaction: discord.Interaction, *, scope: 
         await interaction.response.edit_message(embed=embed, view=view)
     except Exception as exc:
         message = (
-            "❌ Exact Format could not open. "
+            "❌ Custom Format could not open. "
             f"`{type(exc).__name__}: {_safe_str(exc)[:160]}`"
         )
         try:
@@ -1406,7 +1406,7 @@ def _exact_selected_format_lines(scope: str, lock: Mapping[str, Any]) -> list[st
         f"Strength: **{strength}/5**",
         f"Icon mode: **{icon_mode.replace('_', ' ').title()}**",
         f"Custom emoji: **{emoji_override or 'None'}**",
-        f"Preview mode: **{'Exact Enforce' if bool(lock.get('exact_match', False)) else 'Smart Fix'}**",
+        f"Preview mode: **{'Exact Match' if bool(lock.get('exact_match', False)) else 'Smart Fix'}**",
     ])
 
     return lines
@@ -1421,12 +1421,12 @@ def _exact_format_embed(guild: discord.Guild, *, scope: str, target_id: int, loc
     emoji_override = _safe_str(lock.get("emoji_override"), "")
 
     embed = discord.Embed(
-        title="🎛️ Exact Format Editor",
+        title="🎛️ Custom Format",
         description=(
             f"Editing **{_target_label(guild, scope, target_id)}**\n\n"
-            "**1. Choose** font, separator/layout, frame, and strength.\n"
-            "**2. Optional:** set an emoji.\n"
-            "**3. Press Save & Preview.**\n"
+            "**1. Choose** how this item should look.\n"
+            "**2. Optional:** set an emoji/icon.\n"
+            "**3. Press Save Rule & Preview.**\n"
             "**4. Press Apply Reviewed Changes** on the preview."
         ),
         color=discord.Color.blurple(),
@@ -1467,7 +1467,7 @@ def _exact_format_embed(guild: discord.Guild, *, scope: str, target_id: int, loc
             if not conflicts
             else "⚠️ This draft differs from the detected server style.\n"
             + "\n".join(f"• {line}" for line in conflicts)
-            + "\n\nUse **Server Style** to reset this draft, or **Save & Preview** to keep the override."
+            + "\n\nUse **Server Style** to reset this draft, or **Save Rule & Preview** to keep the override."
         )[:1024],
         inline=False,
     )
@@ -1481,7 +1481,7 @@ def _exact_format_embed(guild: discord.Guild, *, scope: str, target_id: int, loc
         value="\n".join(_exact_format_sample_lines(guild, scope=scope, target_id=target_id, lock=lock))[:1024],
         inline=False,
     )
-    embed.set_footer(text="Save & Preview first. Nothing is renamed until the preview screen shows Apply.")
+    embed.set_footer(text="Save Rule & Preview first. Nothing is renamed until the preview screen shows Apply.")
     return _clean_design_embed(embed)
 
 
@@ -1555,24 +1555,122 @@ async def _save_exact_lock(interaction: discord.Interaction, *, scope: str, targ
     return options
 
 
+def _exact_font_example_text(font_id: str) -> str:
+    font_id = _safe_str(font_id, "normal").lower().replace("-", "_")
+    try:
+        text, _subs = studio.transform_text_safe(
+            "gaming-news",
+            font_id,
+            fallback_order=studio.fallback_ladder(font_id),
+        )
+        return _safe_str(text, "gaming-news")[:48]
+    except Exception:
+        return "gaming-news"
+
+
+def _exact_font_option_label(font_id: str) -> str:
+    font_id = _safe_str(font_id, "normal").lower().replace("-", "_")
+    labels = {
+        "normal": "Normal Text",
+        "fraktur": "Gothic / Fraktur",
+        "bold_fraktur": "Bold Gothic",
+        "bold_sans": "Bold Clean",
+        "serif_bold": "Bold Serif",
+        "monospace": "Monospace",
+        "fullwidth": "Full-width",
+        "small_caps": "Small Caps",
+        "script": "Script",
+        "bold_script": "Bold Script",
+        "italic_sans": "Italic Clean",
+        "bold_italic_sans": "Bold Italic Clean",
+        "serif_italic": "Italic Serif",
+        "serif_bold_italic": "Bold Italic Serif",
+        "circled": "Circled",
+        "parenthesized": "Parenthesized",
+    }
+    return labels.get(font_id, font_id.replace("_", " ").title())[:100]
+
+
+def _exact_font_option_description(font_id: str) -> str:
+    font_id = _safe_str(font_id, "normal").lower().replace("-", "_")
+    example = _exact_font_example_text(font_id)
+    if font_id == "normal":
+        return "Most readable/searchable. Example: gaming-news"
+    return f"Example: {example}"[:100]
+
+
+def _exact_separator_preview_text(separator_id: str, *, emoji: str = "🎮", name: str = "gaming-news") -> str:
+    try:
+        return studio.separator_preview(separator_id, emoji=emoji, name=name)[:100]
+    except Exception:
+        spec = getattr(studio, "SEPARATORS_BY_ID", {}).get(_safe_str(separator_id, "none"))
+        if spec is None:
+            return f"{emoji}{name}"
+        template = _safe_str(getattr(spec, "template", "{emoji}{separator}{name}"))
+        return template.format(
+            emoji=emoji,
+            separator=_safe_str(getattr(spec, "value", ""), ""),
+            name=name,
+        )[:100]
+
+
+def _exact_separator_option_label(separator_id: str) -> str:
+    separator_id = _safe_str(separator_id, "none")
+    label = _separator_choice_label(separator_id)
+    preview = _exact_separator_preview_text(separator_id)
+    if separator_id == "none":
+        return f"No Separator · {preview}"[:100]
+    return f"{label} · {preview}"[:100]
+
+
+def _exact_separator_option_description(separator_id: str) -> str:
+    separator_id = _safe_str(separator_id, "none")
+    if separator_id == "none":
+        return "Remove the separator. Result: 🎮gaming-news"
+    return f"Result: {_exact_separator_preview_text(separator_id)}"[:100]
+
+
+def _exact_frame_option_description(frame_id: str) -> str:
+    try:
+        return f"Result: {studio.category_frame_preview(frame_id, emoji='🎮', name='gaming')}"[:100]
+    except Exception:
+        return "Category header preview"
+
+
+def _exact_strength_description(value: int) -> str:
+    descriptions = {
+        1: "Lightest: mostly icon/name.",
+        2: "Clean: font + separator for channels.",
+        3: "Adds category header styling.",
+        4: "Recommended balance for most servers.",
+        5: "Full theme: strongest visual style.",
+    }
+    return descriptions.get(int(value), "Choose how strong the style should be.")[:100]
+
+
 class ExactFontSelect(discord.ui.Select):
     def __init__(self, scope: str, target_id: int, current: str) -> None:
         options = [
             discord.SelectOption(
-                label=font.replace("_", " ").title(),
+                label=_exact_font_option_label(font),
                 value=font,
                 default=font == current,
-                description=("Plain searchable text" if font == "normal" else f"Use {font.replace('_', ' ')} font with fallback glyphs")[:100],
+                description=_exact_font_option_description(font),
             )
             for font in EDITOR_FONT_IDS
         ]
-        super().__init__(placeholder="1) Choose font style", min_values=1, max_values=1, options=options[:25], row=0)
+        super().__init__(
+            placeholder="1) Choose text style",
+            min_values=1,
+            max_values=1,
+            options=options[:25],
+            row=0,
+        )
         self.scope = scope
         self.target_id = int(target_id)
 
     async def callback(self, interaction: discord.Interaction) -> None:
         await _update_exact_draft(interaction, scope=self.scope, target_id=self.target_id, patch={"font": self.values[0]})
-
 
 class ExactSeparatorSelect(discord.ui.Select):
     def __init__(self, scope: str, target_id: int, current: str) -> None:
@@ -1583,59 +1681,80 @@ class ExactSeparatorSelect(discord.ui.Select):
                 continue
             options.append(
                 discord.SelectOption(
-                    label=f"{spec.label} ({sep_id})"[:100],
+                    label=_exact_separator_option_label(sep_id),
                     value=sep_id,
                     default=sep_id == current,
-                    description=f"Example: {studio.separator_preview(sep_id, emoji='🎮', name='gaming-news')}"[:100],
+                    description=_exact_separator_option_description(sep_id),
                 )
             )
-        super().__init__(placeholder=("2) Child channel separator" if scope == "category" else "2) Choose separator / layout"), min_values=1, max_values=1, options=options[:25], row=1)
+
+        super().__init__(
+            placeholder=("2) Choose child-channel separator" if scope == "category" else "2) Choose channel separator"),
+            min_values=1,
+            max_values=1,
+            options=options[:25],
+            row=1,
+        )
         self.scope = scope
         self.target_id = int(target_id)
 
     async def callback(self, interaction: discord.Interaction) -> None:
         await _update_exact_draft(interaction, scope=self.scope, target_id=self.target_id, patch={"separator_id": self.values[0]})
 
-
 class ExactFrameSelect(discord.ui.Select):
     def __init__(self, scope: str, target_id: int, current: str) -> None:
         options = [
             discord.SelectOption(
-                label=frame.label[:100],
+                label=_category_frame_choice_label(frame.id)[:100],
                 value=frame.id,
                 default=frame.id == current,
-                description=studio.category_frame_preview(frame.id, emoji="🎮", name="gaming")[:100],
+                description=_exact_frame_option_description(frame.id),
             )
             for frame in studio.CATEGORY_FRAMES[:25]
         ]
-        super().__init__(placeholder="3) Choose category header frame", min_values=1, max_values=1, options=options, row=2)
+        super().__init__(
+            placeholder="3) Choose category header style",
+            min_values=1,
+            max_values=1,
+            options=options,
+            row=2,
+        )
         self.scope = scope
         self.target_id = int(target_id)
 
     async def callback(self, interaction: discord.Interaction) -> None:
         await _update_exact_draft(interaction, scope=self.scope, target_id=self.target_id, patch={"category_frame_id": self.values[0]})
 
-
 class ExactStrengthSelect(discord.ui.Select):
     def __init__(self, scope: str, target_id: int, current: int) -> None:
         labels = {
-            1: "1 Minimal",
-            2: "2 Clean",
-            3: "3 Category Style",
-            4: "4 Recommended",
-            5: "5 Full Theme",
+            1: "1 — Light",
+            2: "2 — Clean",
+            3: "3 — Category Style",
+            4: "4 — Recommended",
+            5: "5 — Full Theme",
         }
         options = [
-            discord.SelectOption(label=label, value=str(value), default=value == current)
+            discord.SelectOption(
+                label=label,
+                value=str(value),
+                default=value == current,
+                description=_exact_strength_description(value),
+            )
             for value, label in labels.items()
         ]
-        super().__init__(placeholder="4) Choose styling strength", min_values=1, max_values=1, options=options, row=3)
+        super().__init__(
+            placeholder="4) Pick how much styling to use",
+            min_values=1,
+            max_values=1,
+            options=options,
+            row=3,
+        )
         self.scope = scope
         self.target_id = int(target_id)
 
     async def callback(self, interaction: discord.Interaction) -> None:
-        await _update_exact_draft(interaction, scope=self.scope, target_id=self.target_id, patch={"strength": _safe_int(self.values[0], 4)})
-
+        await _update_exact_draft(interaction, scope=self.scope, target_id=self.target_id, patch={"strength": int(self.values[0])})
 
 class CustomEmojiModal(discord.ui.Modal, title="Set Custom Emoji"):
     emoji = discord.ui.TextInput(
@@ -1739,7 +1858,7 @@ def _separator_gallery_embed(
         description=(
             f"Editing **{_target_label(guild, scope, target_id)}**\n\n"
             "Pick the example that looks closest to what you want. "
-            "This changes the draft only; press **Save & Preview** after."
+            "This changes the draft only; press **Save Rule & Preview** after."
         ),
         color=discord.Color.blurple(),
     )
@@ -1805,7 +1924,7 @@ class SeparatorExamplesPageButton(discord.ui.Button):
 class SeparatorExamplesBackButton(discord.ui.Button):
     def __init__(self, *, row: int) -> None:
         super().__init__(
-            label="Back to Exact Format",
+            label="Back to Custom Format",
             emoji="⬅️",
             style=discord.ButtonStyle.secondary,
             custom_id="dank_design:sep_examples_back",
@@ -1936,7 +2055,7 @@ class ExactFormatEditorView(discord.ui.View):
         current = _live_majority_exact_lock(guild, options, scope=self.scope, target_id=self.target_id)
         if not current:
             return await interaction.response.send_message(
-                "I could not detect a clear server style yet. Use Save & Preview before applying.",
+                "I could not detect a clear server style yet. Use Save Rule & Preview before applying.",
                 ephemeral=True,
             )
 
@@ -2650,7 +2769,7 @@ def _category_action_embed(category: discord.CategoryChannel) -> discord.Embed:
         ),
         inline=False,
     )
-    embed.set_footer(text="Rename is instant • Preview/Style Change/Exact Format use Apply later")
+    embed.set_footer(text="Rename is instant • Preview/Change One Style/Custom Format use Apply later")
     return _clean_design_embed(embed)
 
 def _channel_action_embed(channel: discord.abc.GuildChannel) -> discord.Embed:
@@ -2688,7 +2807,7 @@ def _channel_action_embed(channel: discord.abc.GuildChannel) -> discord.Embed:
         ),
         inline=False,
     )
-    embed.set_footer(text="Rename is instant • Preview/Style Change/Exact Format use Apply later")
+    embed.set_footer(text="Rename is instant • Preview/Change One Style/Custom Format use Apply later")
     return _clean_design_embed(embed)
 
 class CategoryEditorActionView(discord.ui.View):
@@ -3741,9 +3860,9 @@ def _start_here_embed() -> discord.Embed:
         value=(
             "**1.** Open **Category Editor** or **Channel Editor**.\n"
             "**2.** Pick the item using Dank Shield's buttons.\n"
-            "**3.** Press **Edit Exact Format**.\n"
+            "**3.** Press **Edit Custom Format**.\n"
             "**4.** Choose font/separator/frame/strength.\n"
-            "**5.** Press **Save & Preview**.\n"
+            "**5.** Press **Save Rule & Preview**.\n"
             "**6.** Press **Apply Reviewed Changes**."
         ),
         inline=False,
@@ -3810,8 +3929,8 @@ def _editors_locks_embed(guild: discord.Guild, options: Mapping[str, Any]) -> di
         value=(
             "1. Open **Category Editor** or **Channel Editor**.\n"
             "2. Pick an item using Dank Shield buttons.\n"
-            "3. Press **Edit Exact Format**.\n"
-            "4. Press **Save & Preview**.\n"
+            "3. Press **Edit Custom Format**.\n"
+            "4. Press **Save Rule & Preview**.\n"
             "5. Press **Apply Reviewed Changes**."
         ),
         inline=False,
@@ -3943,7 +4062,7 @@ def _design_help_embed() -> discord.Embed:
         name="How to apply changes",
         value=(
             "Changes are never applied from the home screen.\n"
-            "**Preview Saved Design** or **Save & Preview** first, then press **Apply Reviewed Changes**."
+            "**Preview Saved Design** or **Save Rule & Preview** first, then press **Apply Reviewed Changes**."
         ),
         inline=False,
     )
@@ -3952,7 +4071,7 @@ def _design_help_embed() -> discord.Embed:
         value=(
             "**Quick server style:** Preview Server\n"
             "**Fix drift:** Review Repairs\n"
-            "**Exact control:** Category Editor or Channel Editor → Edit Exact Format → Save & Preview"
+            "**Exact control:** Category Editor or Channel Editor → Edit Custom Format → Save Rule & Preview"
         ),
         inline=False,
     )

@@ -122,7 +122,7 @@ def test_hash_keycap_is_not_allowed_as_channel_name_icon():
 
 
 def test_exact_format_is_preview_first_and_has_no_old_dead_copy():
-    assert "Save & Preview" in SOURCE
+    assert "Save Rule & Preview" in SOURCE
     assert "Apply Reviewed Changes" in SOURCE
     assert "Layout Examples" in SOURCE
 
