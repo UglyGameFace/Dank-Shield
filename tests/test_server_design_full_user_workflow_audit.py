@@ -33,14 +33,14 @@ def test_home_screen_explains_safe_scope_and_main_paths():
     assert "tickets" in SOURCE
     assert "verification" in SOURCE
 
-    assert "Review Repairs" in SOURCE
-    assert "Style Change" in SOURCE
-    assert "Preview Server" in SOURCE
+    assert "Fix Mismatched Names" in SOURCE
+    assert "Change One Style" in SOURCE
+    assert "Preview Saved Design" in SOURCE
     assert "Category Editor" in SOURCE
     assert "Channel Editor" in SOURCE
 
-    assert "Review Repairs follows live style" in SOURCE
-    assert "Preview Server follows saved rules" in SOURCE
+    assert "Fix Mismatched Names follows live style" in SOURCE
+    assert "Preview Saved Design follows saved rules" in SOURCE
 
 
 def test_rename_workflow_is_not_confused_with_apply_workflow():
@@ -63,12 +63,12 @@ def test_preview_apply_workflow_is_clearly_separate_from_rename():
 def test_category_editor_has_complete_local_workflow():
     block = _block("class CategoryEditorActionView", "class ChannelEditorActionView")
 
-    assert "Preview Repairs" in block
+    assert "Preview Fixes" in block
     assert "Rename" in block
-    assert "Edit Channels Inside" in block
-    assert "Exact Format" in block
-    assert "Save Category Rule" in block
-    assert "Protection Settings" in block
+    assert "Edit Channels Here" in block
+    assert "Custom Format" in block
+    assert "Save Category Layout" in block
+    assert "Rename Protection" in block
     assert "Refresh" in block
     assert "Back" in block
 
@@ -76,11 +76,11 @@ def test_category_editor_has_complete_local_workflow():
 def test_channel_editor_has_complete_local_workflow():
     block = _block("class ChannelEditorActionView", "class BackToDesignButton")
 
-    assert "Preview Repairs" in block
+    assert "Preview Fixes" in block
     assert "Rename" in block
-    assert "Exact Format" in block
-    assert "Save Channel Rule" in block
-    assert "Protection Settings" in block
+    assert "Custom Format" in block
+    assert "Save Channel Layout" in block
+    assert "Rename Protection" in block
     assert "Refresh" in block
     assert "Back" in block
 
@@ -102,8 +102,8 @@ def test_review_repairs_uses_live_majority_from_editors_not_saved_rule_blindly()
 
 def test_style_change_has_fix_paths_not_dead_end_preview():
     assert "class StyleChangePreviewView" in SOURCE
-    assert "Fix Missing Emojis" in SOURCE
-    assert "Skip Issues" in SOURCE
+    assert "Choose Missing Icons" in SOURCE
+    assert "Apply Safe Ones Only" in SOURCE
     assert "How to fix" in SOURCE
     assert "Needs-review rows were left untouched" in SOURCE
 
@@ -135,7 +135,7 @@ def test_exact_format_is_preview_first_and_has_no_old_dead_copy():
         "Save Lock, then Preview/Fix",
     ]
     for phrase in banned:
-        assert phrase not in SOURCE, f"Old confusing Exact Format copy still exists: {phrase}"
+        assert phrase not in SOURCE, f"Old confusing Custom Format copy still exists: {phrase}"
 
 
 def test_no_visible_newline_artifacts_in_user_copy():
@@ -198,7 +198,7 @@ def test_every_action_error_message_tells_user_what_to_fix():
 
 
 def test_protection_and_skips_are_explained_not_silent():
-    assert "Protection Settings" in SOURCE
+    assert "Rename Protection" in SOURCE
     assert "skipped" in SOURCE.lower()
     assert "protected" in SOURCE.lower()
 
