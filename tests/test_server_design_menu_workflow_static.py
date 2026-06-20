@@ -36,4 +36,5 @@ def test_scoped_preview_uses_live_majority_not_saved_draft():
 
 def test_picker_copy_explains_workflow():
     assert "Step 1: pick a category. Step 2: preview, rename, or edit channels inside." in SOURCE
-    assert "Step 1: pick an item. Step 2: preview, rename, or edit its rule." in SOURCE
+    assert "This page shows one category and the channels inside it." in SOURCE
+    assert "Pick a channel to preview repairs, rename it, or edit its rule." in SOURCE
