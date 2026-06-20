@@ -28,7 +28,7 @@ from ..globals import get_supabase, now_utc
 # ============================================================
 
 
-stoney_group = app_commands.Group(
+dank_group = app_commands.Group(
     name="dank",
     description="Dank Shield setup, help, and server configuration.",
 )
@@ -114,7 +114,7 @@ def _config_table_name() -> str:
     try:
         import os
 
-        return (os.getenv("STONEY_GUILD_CONFIG_TABLE") or "guild_configs").strip() or "guild_configs"
+        return (os.getenv("DANK_GUILD_CONFIG_TABLE") or "guild_configs").strip() or "guild_configs"
     except Exception:
         return "guild_configs"
 
@@ -1888,7 +1888,7 @@ def _health_embed(guild: discord.Guild, cfg: Any) -> discord.Embed:
 # ============================================================
 
 
-@stoney_group.command(
+@dank_group.command(
     name="setup-tickets",
     description="Configure ticket categories, staff role, transcripts, and prefix for this server.",
 )
@@ -1961,7 +1961,7 @@ async def setup_tickets(
     )
 
 
-@stoney_group.command(
+@dank_group.command(
     name="setup-verify",
     description="Configure verification channels and roles for this server.",
 )
@@ -2041,7 +2041,7 @@ async def setup_verify(
     )
 
 
-@stoney_group.command(
+@dank_group.command(
     name="setup-logs",
     description="Configure moderation, security, join/exit, and forced-verification log channels.",
 )
@@ -2110,7 +2110,7 @@ async def setup_logs(
     )
 
 
-@stoney_group.command(
+@dank_group.command(
     name="health",
     description="Run a setup health check for this server.",
 )
@@ -2140,7 +2140,7 @@ async def health(interaction: discord.Interaction) -> None:
     )
 
 
-@stoney_group.command(
+@dank_group.command(
     name="current",
     description="Show the current saved Dank Shield setup for this server.",
 )
@@ -2170,7 +2170,7 @@ async def current(interaction: discord.Interaction) -> None:
     )
 
 
-@stoney_group.command(
+@dank_group.command(
     name="config-cache",
     description="Show setup config cache diagnostics for this server.",
 )
@@ -2254,14 +2254,14 @@ def _ensure_solid_setup_command() -> None:
     It does not delete/recreate the top-level /dank command from Discord.
     """
     try:
-        existing = stoney_group.get_command("setup")
+        existing = dank_group.get_command("setup")
         if existing is not None:
-            stoney_group.remove_command("setup")
+            dank_group.remove_command("setup")
     except Exception:
         pass
 
     try:
-        stoney_group.command(
+        dank_group.command(
             name="setup",
             description="Open Dank Shield setup, health checks, layout repair, and configuration tools.",
         )(_dank_shield_solid_setup_entry)
@@ -2280,9 +2280,9 @@ def register_public_setup_group_commands(bot: Any, tree: Any) -> None:
     """Register the clean public Dank Shield command group.
 
     Important:
-    - Keep internal variable name stoney_group for compatibility.
+    - Keep internal variable name dank_group for compatibility.
     - Expose Discord command as /dank.
-    - Remove only stale /stoney from the local tree.
+    - Remove only stale /dank from the local tree.
     - Do NOT remove/recreate /dank every boot.
     """
     _ensure_solid_setup_command()
@@ -2295,17 +2295,17 @@ def register_public_setup_group_commands(bot: Any, tree: Any) -> None:
         pass
 
     try:
-        tree.add_command(stoney_group, override=True)
+        tree.add_command(dank_group, override=True)
     except TypeError:
         # Older discord.py fallback.
-        existing = tree.get_command(stoney_group.name, guild=None)
+        existing = tree.get_command(dank_group.name, guild=None)
         if existing is None:
-            tree.add_command(stoney_group)
+            tree.add_command(dank_group)
 
     try:
         children = sorted(
             str(getattr(cmd, "name", ""))
-            for cmd in getattr(stoney_group, "commands", [])
+            for cmd in getattr(dank_group, "commands", [])
             if getattr(cmd, "name", "")
         )
         print(f"✅ public_setup_group registered /dank command group children={children}")

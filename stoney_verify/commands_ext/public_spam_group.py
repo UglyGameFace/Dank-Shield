@@ -23,7 +23,7 @@ import discord
 from discord import app_commands
 
 from .common import _staff_check, reply_once
-from .public_setup_group import stoney_group
+from .public_setup_group import dank_group
 
 
 _REGISTERED = False
@@ -284,8 +284,8 @@ def register_public_spam_group_commands(bot: Any, tree: Any) -> None:
             removed.append(legacy_name)
 
     try:
-        if stoney_group.get_command("spam") is None:
-            stoney_group.add_command(spam_group)
+        if dank_group.get_command("spam") is None:
+            dank_group.add_command(spam_group)
             print("✅ public_spam_group: attached /dank spam simple setup commands")
         else:
             print("✅ public_spam_group: /dank spam already attached")

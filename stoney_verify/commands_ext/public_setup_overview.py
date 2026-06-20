@@ -13,7 +13,7 @@ import discord
 
 from ..guild_context import GuildContext, get_guild_context
 from ..interaction_guard import run_guarded_interaction, safe_send_interaction
-from .public_setup_group import stoney_group
+from .public_setup_group import dank_group
 
 _ATTACHED = False
 
@@ -190,7 +190,7 @@ def _guild_context_lines(context: GuildContext) -> list[str]:
     ]
 
 
-@stoney_group.command(name="overview", description="Show one clean setup checklist for this server.")
+@dank_group.command(name="overview", description="Show one clean setup checklist for this server.")
 async def setup_overview(interaction: discord.Interaction) -> None:
     if interaction.guild is None:
         await safe_send_interaction(

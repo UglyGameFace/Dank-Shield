@@ -13,7 +13,7 @@ from .public_setup_group import (
     _field_text,
     _require_setup_permission,
     _safe_str,
-    stoney_group,
+    dank_group,
 )
 from ..globals import get_supabase
 from ..guild_config import get_guild_config, guild_config_cache_snapshot
@@ -137,7 +137,7 @@ def attach_setup_review_commands() -> None:
 
     if not _REVIEW_COMMAND_ATTACHED:
         try:
-            @stoney_group.command(name="setup-review", description="Read-only review of this server's Dank Shield setup")
+            @dank_group.command(name="setup-review", description="Read-only review of this server's Dank Shield setup")
             async def setup_review(interaction: discord.Interaction) -> None:
                 if interaction.guild is None:
                     return await interaction.response.send_message("❌ Run this inside a server.", ephemeral=True)
@@ -155,7 +155,7 @@ def attach_setup_review_commands() -> None:
 
     if not _DB_CHECK_COMMAND_ATTACHED:
         try:
-            @stoney_group.command(name="db-check", description="Check whether this server's setup row is visible to the bot")
+            @dank_group.command(name="db-check", description="Check whether this server's setup row is visible to the bot")
             async def db_check(interaction: discord.Interaction) -> None:
                 if interaction.guild is None:
                     return await interaction.response.send_message("❌ Run this inside a server.", ephemeral=True)

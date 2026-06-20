@@ -3,7 +3,7 @@ from __future__ import annotations
 """
 TicketTool parity readiness check.
 
-This is a focused audit for the product goal: make the public Stoney ticket
+This is a focused audit for the product goal: make the public Dank Shield ticket
 workflow at least as easy and reliable as TicketTool before expanding into
 MEE6/ProBot-style features.
 
@@ -23,7 +23,7 @@ from .public_setup_group import (
     _require_setup_permission,
     _safe_int,
     _safe_str,
-    stoney_group,
+    dank_group,
 )
 from ..guild_config import get_guild_config
 
@@ -361,7 +361,7 @@ def _expectation_lines(blockers: list[str], warnings: list[str]) -> list[str]:
 def _parity_embed(guild: discord.Guild, cfg: Any, blockers: list[str], warnings: list[str], ok: list[str]) -> discord.Embed:
     status, color, desc = _overall(blockers, warnings)
     embed = discord.Embed(
-        title="🎫 Stoney TicketTool Parity Check",
+        title="🎫 Dank Shield TicketTool Parity Check",
         description=(
             f"{desc}\n\n"
             f"Status: `{status}`\n"
@@ -428,7 +428,7 @@ def _attach_tickettool_check_command() -> None:
         return
 
     try:
-        existing = stoney_group.get_command("tickettool-check")
+        existing = dank_group.get_command("tickettool-check")
     except Exception:
         existing = None
     if existing is not None:
@@ -440,7 +440,7 @@ def _attach_tickettool_check_command() -> None:
         description="Audit whether the ticket workflow is ready to compete with TicketTool.",
         callback=_tickettool_check_callback,
     )
-    stoney_group.add_command(command)
+    dank_group.add_command(command)
     _ATTACHED = True
 
 

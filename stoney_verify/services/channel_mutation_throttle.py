@@ -14,10 +14,10 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable, Iterable, Optional
 
-DEFAULT_BATCH_SIZE = max(1, min(10, int(os.getenv("STONEY_CHANNEL_MUTATION_BATCH_SIZE", "3") or "3")))
-DEFAULT_DELAY_SECONDS = max(0.0, min(30.0, float(os.getenv("STONEY_CHANNEL_MUTATION_DELAY_SECONDS", "2") or "2")))
-DEFAULT_TIMEOUT_SECONDS = max(8.0, min(120.0, float(os.getenv("STONEY_CHANNEL_MUTATION_TIMEOUT_SECONDS", "45") or "45")))
-DEFAULT_MAX_ITEMS = max(1, min(500, int(os.getenv("STONEY_CHANNEL_MUTATION_MAX_ITEMS", "150") or "150")))
+DEFAULT_BATCH_SIZE = max(1, min(10, int(os.getenv("DANK_CHANNEL_MUTATION_BATCH_SIZE", "3") or "3")))
+DEFAULT_DELAY_SECONDS = max(0.0, min(30.0, float(os.getenv("DANK_CHANNEL_MUTATION_DELAY_SECONDS", "2") or "2")))
+DEFAULT_TIMEOUT_SECONDS = max(8.0, min(120.0, float(os.getenv("DANK_CHANNEL_MUTATION_TIMEOUT_SECONDS", "45") or "45")))
+DEFAULT_MAX_ITEMS = max(1, min(500, int(os.getenv("DANK_CHANNEL_MUTATION_MAX_ITEMS", "150") or "150")))
 
 _GUILD_LOCKS: dict[str, asyncio.Lock] = {}
 _LAST_EDIT_AT: dict[str, float] = {}

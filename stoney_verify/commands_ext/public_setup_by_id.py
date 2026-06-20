@@ -18,7 +18,7 @@ from .public_setup_group import (
     _validate_verify_setup,
     invalidate_guild_config,
     get_guild_config,
-    stoney_group,
+    dank_group,
 )
 
 
@@ -188,7 +188,7 @@ def _attach_verify_ids_command() -> None:
         return
 
     try:
-        existing = stoney_group.get_command("setup-verify-ids")
+        existing = dank_group.get_command("setup-verify-ids")
     except Exception:
         existing = None
 
@@ -201,7 +201,7 @@ def _attach_verify_ids_command() -> None:
         description="Configure verification using pasted channel/role IDs when Discord role picker hides roles.",
         callback=_setup_verify_ids_callback,
     )
-    stoney_group.add_command(command)
+    dank_group.add_command(command)
     _VERIFY_IDS_COMMAND_ATTACHED = True
 
 

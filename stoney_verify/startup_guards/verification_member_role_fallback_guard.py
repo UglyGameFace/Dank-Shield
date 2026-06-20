@@ -221,7 +221,7 @@ def _patch_full_setup_health() -> bool:
             if label in {"Unverified/waiting role", "Verified role", "Resident/member role"}:
                 if not health._can_manage_role(me, role):
                     result.add_blocker(
-                        f"Bot cannot manage {label} {health._mention(role)}. Move Stoney's bot role above it and make sure Manage Roles is enabled.",
+                        f"Bot cannot manage {label} {health._mention(role)}. Move Dank Shield's bot role above it and make sure Manage Roles is enabled.",
                         manual=True,
                     )
                 else:

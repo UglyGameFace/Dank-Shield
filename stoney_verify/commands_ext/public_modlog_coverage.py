@@ -747,7 +747,7 @@ async def _modlog_check(interaction: discord.Interaction) -> None:
                 missing.append(f"⚠️ `{name}`")
 
         embed = discord.Embed(
-            title="🧾 Stoney Modlog Coverage Check",
+            title="🧾 Dank Shield Modlog Coverage Check",
             color=discord.Color.green() if channel is not None and not missing else discord.Color.gold(),
             timestamp=_utcnow(),
         )
@@ -772,11 +772,11 @@ def _register_modlog_check_command() -> None:
     if _COMMAND_REGISTERED:
         return
     try:
-        from .public_setup_group import stoney_group
+        from .public_setup_group import dank_group
 
-        existing = {cmd.name for cmd in stoney_group.commands}
+        existing = {cmd.name for cmd in dank_group.commands}
         if "modlog-check" not in existing:
-            stoney_group.add_command(
+            dank_group.add_command(
                 app_commands.Command(
                     name="modlog-check",
                     description="Check whether modlog listeners and raw fallbacks are registered.",
@@ -785,7 +785,7 @@ def _register_modlog_check_command() -> None:
             )
         _COMMAND_REGISTERED = True
     except Exception as e:
-        print(f"⚠️ public_modlog_coverage could not attach /stoney modlog-check: {repr(e)}")
+        print(f"⚠️ public_modlog_coverage could not attach /dank modlog-check: {repr(e)}")
 
 
 def _add_listeners(bot: Any, pairs: Iterable[tuple[Any, str]]) -> None:

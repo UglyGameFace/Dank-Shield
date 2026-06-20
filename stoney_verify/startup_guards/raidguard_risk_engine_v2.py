@@ -151,7 +151,7 @@ def _ranked(current: str, desired: str, order: Tuple[str, ...]) -> str:
 
 
 def _env_keywords() -> set[str]:
-    raw = _safe_str(os.getenv("STONEY_LISTING_SOURCE_KEYWORDS"))
+    raw = _safe_str(os.getenv("DANK_LISTING_SOURCE_KEYWORDS"))
     if not raw:
         return set(LISTING_SOURCE_KEYWORDS)
     values = {part.strip().lower() for part in raw.split(",") if part.strip()}

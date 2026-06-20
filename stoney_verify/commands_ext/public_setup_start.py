@@ -5,7 +5,7 @@ from typing import Any, Iterable, Optional
 import discord
 
 from .common import safe_defer
-from .public_setup_group import _require_setup_permission, stoney_group
+from .public_setup_group import _require_setup_permission, dank_group
 from ..guild_config import get_guild_config, invalidate_guild_config
 
 
@@ -23,11 +23,11 @@ _LEGACY_COMMAND_REPLACEMENTS = {
     "/dank setup-verify": "/dank setup",
     "/dank setup-verify-ids": "/dank setup",
     "/dank setup-access": "/dank setup",
-    "/stoney permission-check": "/dank setup",
+    "/dank permission-check": "/dank setup",
     "/dank launch-check": "/dank setup",
-    "/stoney production-audit": "/dank setup",
+    "/dank production-audit": "/dank setup",
     "/dank tickettool-check": "/dank setup",
-    "/stoney db-check": "/dank setup",
+    "/dank db-check": "/dank setup",
     "`/dank setup-picker`": "`/dank setup`",
     "`/dank setup-assistant`": "`/dank setup`",
     "`/dank setup-defaults`": "`/dank setup`",
@@ -167,7 +167,7 @@ async def _edit_setup_message(interaction: discord.Interaction, *, embed: discor
 
 def _install_cleaners(module: Any) -> None:
     try:
-        if getattr(module, "_STONEY_SETUP_CLEANERS_INSTALLED", False):
+        if getattr(module, "_DANK_SETUP_CLEANERS_INSTALLED", False):
             return
 
         original_health = getattr(module, "_health_embed", None)
@@ -178,17 +178,17 @@ def _install_cleaners(module: Any) -> None:
 
         original_payload = getattr(module, "_build_assistant_payload", None)
         if callable(original_payload):
-            module._STONEY_ORIGINAL_BUILD_ASSISTANT_PAYLOAD = original_payload
+            module._DANK_ORIGINAL_BUILD_ASSISTANT_PAYLOAD = original_payload
 
             async def cleaned_payload(guild: discord.Guild):
                 embed, _old_view = await original_payload(guild)
                 embed = _clean_embed(embed)
                 has_missing = bool(await _current_missing_specs(guild, module))
-                return embed, StoneySetupView(has_missing=has_missing)
+                return embed, DankSetupView(has_missing=has_missing)
 
             module._build_assistant_payload = cleaned_payload
 
-        module._STONEY_SETUP_CLEANERS_INSTALLED = True
+        module._DANK_SETUP_CLEANERS_INSTALLED = True
     except Exception as e:
         try:
             print(f"⚠️ public_setup_start cleaner install failed: {repr(e)}")
@@ -196,11 +196,11 @@ def _install_cleaners(module: Any) -> None:
             pass
 
 
-async def _build_main_setup_payload(guild: discord.Guild, *, title: str = "🚀 Stoney Quick Setup") -> tuple[discord.Embed, "StoneySetupView"]:
+async def _build_main_setup_payload(guild: discord.Guild, *, title: str = "🚀 Dank Shield Quick Setup") -> tuple[discord.Embed, "DankSetupView"]:
     from . import public_setup_assistant
 
     _install_cleaners(public_setup_assistant)
-    original_payload = getattr(public_setup_assistant, "_STONEY_ORIGINAL_BUILD_ASSISTANT_PAYLOAD", None)
+    original_payload = getattr(public_setup_assistant, "_DANK_ORIGINAL_BUILD_ASSISTANT_PAYLOAD", None)
     if callable(original_payload):
         embed, _old_view = await original_payload(guild)
     else:
@@ -216,7 +216,7 @@ async def _build_main_setup_payload(guild: discord.Guild, *, title: str = "🚀 
         "🗂️ **Manage Ticket Categories** lets you add/edit/delete routing categories without memorizing commands.\n\n"
         f"{embed.description or ''}"
     )[:4096]
-    return _clean_embed(embed), StoneySetupView(has_missing=bool(await _current_missing_specs(guild, public_setup_assistant)))
+    return _clean_embed(embed), DankSetupView(has_missing=bool(await _current_missing_specs(guild, public_setup_assistant)))
 
 
 async def _category_rows(guild: discord.Guild) -> list[dict[str, Any]]:
@@ -364,7 +364,7 @@ class BackToSetupView(discord.ui.View):
         await _edit_setup_message(interaction, embed=embed, view=view)
 
 
-class StoneySetupView(discord.ui.View):
+class DankSetupView(discord.ui.View):
     def __init__(self, *, has_missing: bool) -> None:
         super().__init__(timeout=900)
         if not bool(has_missing):
@@ -398,7 +398,7 @@ class StoneySetupView(discord.ui.View):
             title="✏️ Customize Setup Names",
             description=(
                 "Discord modals can only show 5 text fields at a time, so setup names are split into simple pages.\n\n"
-                "Use this when you want Stoney to create channels/roles, but **not** with the default names."
+                "Use this when you want Dank Shield to create channels/roles, but **not** with the default names."
             ),
             color=discord.Color.blurple(),
         )
@@ -420,7 +420,7 @@ class StoneySetupView(discord.ui.View):
         embed = discord.Embed(
             title="🧩 Choose Existing Items",
             description=(
-                "Use this when the server already has roles/channels and you do **not** want Stoney to create new defaults.\n\n"
+                "Use this when the server already has roles/channels and you do **not** want Dank Shield to create new defaults.\n\n"
                 "Pick a setup section below. Each picker saves immediately and stays inside `/dank setup`."
             ),
             color=discord.Color.blurple(),
@@ -867,11 +867,11 @@ def _attach() -> None:
     if _ATTACHED:
         return
     try:
-        existing = stoney_group.get_command("setup")
+        existing = dank_group.get_command("setup")
     except Exception:
         existing = None
     if existing is None:
-        stoney_group.add_command(discord.app_commands.Command(name="setup", description="Start the guided Dank Shield setup flow.", callback=_setup_callback))
+        dank_group.add_command(discord.app_commands.Command(name="setup", description="Start the guided Dank Shield setup flow.", callback=_setup_callback))
     _ATTACHED = True
 
 

@@ -9,9 +9,9 @@ will see, and then guide the owner through only the settings that choice needs.
 
 Product rule:
 - Keep labels simple.
-- Do not assume every guild wants the Stoney Baloney flow.
-- Keep the Stoney Baloney-style ID + voice flow available as a choice.
-- Never hardcode Stoney Baloney role IDs, channel IDs, or server branding.
+- Do not assume every guild wants the legacy single-server flow.
+- Keep the legacy single-server style ID + voice flow available as a choice.
+- Never hardcode legacy single-server role IDs, channel IDs, or server branding.
 """
 
 from dataclasses import dataclass
@@ -115,7 +115,7 @@ SETUP_TEMPLATE_CHOICES: tuple[SetupTemplateChoice, ...] = (
         emoji="🛡️",
         short_description="Upload link plus optional voice check, like your current setup.",
         member_preview="Members open a verification ticket, use the upload link, or ask for voice verification.",
-        staff_preview="Best for servers that want the Stoney Baloney-style verification flow without hardcoded branding.",
+        staff_preview="Best for servers that want the legacy single-server style verification flow without hardcoded branding.",
         stores={
             "setup_choice": "id_voice_check",
             "setup_choice_label": "ID + voice check",

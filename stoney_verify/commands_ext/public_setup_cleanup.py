@@ -9,7 +9,7 @@ categories, or all detected bot-created setup items.
 UX rule:
 - "Reset Saved Setup Only" means database/config reset only.
 - "Full Start Over + Remove Bot Items" means database/config reset PLUS deleting
-  detected Stoney-created Discord setup channels/categories/roles.
+  detected Dank Shield-created Discord setup channels/categories/roles.
 
 Safety rules:
 - Exact default setup names only. No guessing custom channels/roles.
@@ -117,7 +117,7 @@ def _role_block_reason(guild: discord.Guild, role: discord.Role) -> str:
         return "Bot is missing Manage Roles."
     try:
         if role >= me.top_role and guild.owner_id != me.id:
-            return "Role is above/equal to the bot role. Move Stoney higher first."
+            return "Role is above/equal to the bot role. Move Dank Shield higher first."
     except Exception:
         return "Could not verify bot role hierarchy."
     return ""
@@ -150,14 +150,14 @@ def collect_setup_cleanup_candidates(guild: discord.Guild) -> tuple[list[Cleanup
         if not _exact_name(ch, DEFAULT_TEXT_CHANNEL_NAMES):
             continue
         blocked = _channel_block_reason(guild, ch)
-        item = CleanupCandidate("text_channel", int(ch.id), str(ch.name), _mention(ch), not blocked, "Exact Stoney default text channel name.", blocked)
+        item = CleanupCandidate("text_channel", int(ch.id), str(ch.name), _mention(ch), not blocked, "Exact Dank Shield default text channel name.", blocked)
         (skipped if blocked else candidates).append(item)
 
     for ch in list(getattr(guild, "voice_channels", []) or []):
         if not _exact_name(ch, DEFAULT_VOICE_CHANNEL_NAMES):
             continue
         blocked = _channel_block_reason(guild, ch)
-        item = CleanupCandidate("voice_channel", int(ch.id), str(ch.name), _mention(ch), not blocked, "Exact Stoney default voice channel name.", blocked)
+        item = CleanupCandidate("voice_channel", int(ch.id), str(ch.name), _mention(ch), not blocked, "Exact Dank Shield default voice channel name.", blocked)
         (skipped if blocked else candidates).append(item)
 
     for category in list(getattr(guild, "categories", []) or []):
@@ -168,7 +168,7 @@ def collect_setup_cleanup_candidates(guild: discord.Guild) -> tuple[list[Cleanup
         if non_default_children:
             names = ", ".join(f"#{getattr(ch, 'name', ch.id)}" for ch in non_default_children[:5])
             blocked = f"Contains non-default channels: {names}. Move/delete those manually first."
-        item = CleanupCandidate("category", int(category.id), str(category.name), f"`{category.name}`", not blocked, "Exact Stoney default category name.", blocked)
+        item = CleanupCandidate("category", int(category.id), str(category.name), f"`{category.name}`", not blocked, "Exact Dank Shield default category name.", blocked)
         (skipped if blocked else candidates).append(item)
 
     for role in list(getattr(guild, "roles", []) or []):
@@ -180,7 +180,7 @@ def collect_setup_cleanup_candidates(guild: discord.Guild) -> tuple[list[Cleanup
             members = len(role.members)
         except Exception:
             members = 0
-        reason = "Exact Stoney default role name."
+        reason = "Exact Dank Shield default role name."
         if members:
             reason += f" Assigned to {members} member(s); deleting removes that role from them."
         item = CleanupCandidate("role", int(role.id), str(role.name), _mention(role), not blocked, reason, blocked)
@@ -277,7 +277,7 @@ async def _delete_candidates(guild: discord.Guild, user: discord.abc.User, items
     deleted: list[str] = []
     failed: list[str] = []
     deleted_ids: set[int] = set()
-    reason = f"Stoney selective setup cleanup requested by {user} ({getattr(user, 'id', 'unknown')})"
+    reason = f"Dank Shield selective setup cleanup requested by {user} ({getattr(user, 'id', 'unknown')})"
 
     ordered = sorted(items, key=lambda x: (_KIND_ORDER.get(x.kind, 99), x.name.casefold()))
     for item in ordered:
@@ -329,7 +329,7 @@ async def build_cleanup_preview_embed(guild: discord.Guild, *, title: str = "�
     embed = discord.Embed(
         title=title,
         description=(
-            "This finds Discord items that match Stoney's default fresh-server setup names.\n"
+            "This finds Discord items that match Dank Shield's default fresh-server setup names.\n"
             "Use selective cleanup when you only want to remove one thing or one type of thing."
         ),
         color=discord.Color.orange(),
@@ -584,7 +584,7 @@ async def patched_recovery_embed(guild: discord.Guild, *, title: str = "🛟 Set
     embed = discord.Embed(
         title=title,
         description=(
-            "Use this when setup got messy, the wrong things were picked, or the owner wants to undo what Stoney created.\n\n"
+            "Use this when setup got messy, the wrong things were picked, or the owner wants to undo what Dank Shield created.\n\n"
             "Pick the action that matches what you actually want. The red full-start-over button removes detected bot-created Discord setup items."
         ),
         color=discord.Color.gold(),
@@ -593,7 +593,7 @@ async def patched_recovery_embed(guild: discord.Guild, *, title: str = "🛟 Set
     embed.add_field(
         name="🧨 Full Start Over + Remove Bot Items",
         value=(
-            "Deletes detected Stoney default setup channels/categories/roles **and** clears saved setup.\n"
+            "Deletes detected Dank Shield default setup channels/categories/roles **and** clears saved setup.\n"
             "Use this when Fresh Server made channels/roles you do not want. Requires typing `DELETE SETUP`."
         ),
         inline=False,
@@ -609,7 +609,7 @@ async def patched_recovery_embed(guild: discord.Guild, *, title: str = "🛟 Set
     embed.add_field(
         name="🧽 Reset Saved Setup Only",
         value=(
-            "Clears Stoney's saved setup database values only.\n"
+            "Clears Dank Shield's saved setup database values only.\n"
             "It **does not** delete Discord channels, roles, categories, tickets, messages, or transcripts."
         ),
         inline=False,

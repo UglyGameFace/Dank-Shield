@@ -173,7 +173,7 @@ Legacy unauthenticated APIs must be disabled in public deployment.
 Required public env:
 
 ```env
-STONEY_DISABLE_LEGACY_API=true
+DANK_DISABLE_LEGACY_API=true
 ```
 
 If a legacy API has to remain enabled temporarily, it must not expose sensitive actions publicly.
@@ -324,18 +324,18 @@ Before public repo or public launch:
 Required public/beta env:
 
 ```env
-STONEY_DEPLOYMENT=public
-STONEY_COMMAND_PROFILE=public
+DANK_DEPLOYMENT=public
+DANK_COMMAND_PROFILE=public
 BOT_API_REQUIRE_AUTH=true
 BOT_API_ALLOW_INSECURE=false
 BOT_API_SHARED_SECRET=<strong random 32+ character value>
-STONEY_DISABLE_LEGACY_API=true
+DANK_DISABLE_LEGACY_API=true
 ```
 
 Recommended runtime limits:
 
 ```env
-STONEY_RUNTIME_JOBS_MAX_CONCURRENT=8
+DANK_RUNTIME_JOBS_MAX_CONCURRENT=8
 ```
 
 For large scale, review separately before enabling:

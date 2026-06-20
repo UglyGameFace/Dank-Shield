@@ -8,8 +8,8 @@ Production command rules:
 - Role-targeting repair tools use Discord's native role picker
 - Heavy repair tools acknowledge immediately so Discord never shows
   "The application did not respond"
-- Existing customer roles are valid. Stoney does not require roles to have been
-  created by Stoney, and staff can explicitly pick any role their server uses.
+- Existing customer roles are valid. Dank Shield does not require roles to have been
+  created by Dank Shield, and staff can explicitly pick any role their server uses.
 - Setup builder stays the source of truth. Saved config wins unless staff uses
   an explicit role picker override, which is saved back to guild_configs.
 - No-role users are never left stuck because a server forgot to save/create a
@@ -343,7 +343,7 @@ def _bot_can_manage_role(guild: discord.Guild, role: Optional[discord.Role]) -> 
         return False, "bot is missing Manage Roles"
     try:
         if me.top_role <= role and not me.guild_permissions.administrator:
-            return False, f"Stoney's highest role is below or equal to {role.name}"
+            return False, f"Dank Shield's highest role is below or equal to {role.name}"
     except Exception:
         pass
     return True, "ok"
@@ -367,7 +367,7 @@ async def _selected_role_override(
     if not ok:
         return None, (
             f"❌ I cannot use {role.mention} as the **{label}** role: {why}.\n\n"
-            "What to do next: move Stoney's bot role above that role, enable Manage Roles, "
+            "What to do next: move Dank Shield's bot role above that role, enable Manage Roles, "
             "or pick a different role."
         )
 
@@ -442,7 +442,7 @@ async def _ensure_pending_role(
         )
         return created, f"created and saved default Pending / Unverified role {created.mention}", True
     except discord.Forbidden:
-        return None, "Forbidden while creating Pending / Unverified role. Move Stoney's bot role higher and grant Manage Roles.", False
+        return None, "Forbidden while creating Pending / Unverified role. Move Dank Shield's bot role higher and grant Manage Roles.", False
     except Exception as e:
         return None, f"failed to create Pending / Unverified role: {type(e).__name__}: {_truncate(e, 240)}", False
 
@@ -536,7 +536,7 @@ async def _apply_role_change(
         return await _send(
             interaction,
             f"❌ I cannot manage {role.mention}: {why}.\n\n"
-            "What to do next: move Stoney's bot role higher than that role and make sure Manage Roles is enabled.",
+            "What to do next: move Dank Shield's bot role higher than that role and make sure Manage Roles is enabled.",
         )
 
     try:
@@ -554,7 +554,7 @@ async def _apply_role_change(
         return await _send(
             interaction,
             "❌ Forbidden. Discord blocked the role change.\n\n"
-            "What to do next: check **Manage Roles** and make sure Stoney's bot role is above the target role.",
+            "What to do next: check **Manage Roles** and make sure Dank Shield's bot role is above the target role.",
         )
     except Exception as e:
         return await _send(interaction, f"❌ Failed: {_truncate(e, 300)}")
@@ -804,7 +804,7 @@ async def verify_grant_vr(
             return await _send(
                 interaction,
                 f"❌ I cannot manage {target_role.mention}: {why}.\n\n"
-                "What to do next: move Stoney's bot role above that role, then try again.",
+                "What to do next: move Dank Shield's bot role above that role, then try again.",
             )
 
     added: list[discord.Role] = []
@@ -834,7 +834,7 @@ async def verify_grant_vr(
         await _send(
             interaction,
             "❌ Forbidden. Check Manage Roles and role hierarchy.\n\n"
-            "What to do next: move Stoney's bot role above the roles it grants/removes.",
+            "What to do next: move Dank Shield's bot role above the roles it grants/removes.",
         )
     except Exception as e:
         await _send(interaction, f"❌ Failed: {_truncate(e, 300)}")
@@ -883,7 +883,7 @@ async def verify_fix_member(
             return await _send(
                 interaction,
                 f"❌ I cannot manage {target_role.mention}: {why}.\n\n"
-                "What to do next: move Stoney's bot role above that role and try again.",
+                "What to do next: move Dank Shield's bot role above that role and try again.",
             )
 
     added: list[discord.Role] = []
@@ -915,7 +915,7 @@ async def verify_fix_member(
         await _send(
             interaction,
             "❌ Forbidden. Check Manage Roles and role hierarchy.\n\n"
-            "What to do next: move Stoney's bot role above the target role and try again.",
+            "What to do next: move Dank Shield's bot role above the target role and try again.",
         )
     except Exception as e:
         await _send(interaction, f"❌ Failed: {_truncate(e, 300)}")
@@ -958,7 +958,7 @@ async def verify_repair_unverified(
             return await _send(
                 interaction,
                 f"❌ I found {pending.mention}, but I cannot manage it: {why}.\n\n"
-                "What to do next: move Stoney's bot role above that role, or use the `role` option to pick a manageable role.",
+                "What to do next: move Dank Shield's bot role above that role, or use the `role` option to pick a manageable role.",
             )
 
         chunk_ok = False

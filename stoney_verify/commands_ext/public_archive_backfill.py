@@ -7,7 +7,7 @@ import discord
 from discord import app_commands
 
 from .common import safe_defer
-from .public_setup_group import _require_setup_permission, stoney_group
+from .public_setup_group import _require_setup_permission, dank_group
 from ..guild_config import get_guild_config
 
 try:
@@ -157,7 +157,7 @@ async def _move_to_archive(channel: discord.TextChannel, archive_category: disco
             channel.edit(
                 category=archive_category,
                 sync_permissions=False,
-                reason="Stoney archive backfill: move closed ticket to archive category",
+                reason="Dank Shield archive backfill: move closed ticket to archive category",
             ),
             timeout=_PER_CHANNEL_EDIT_TIMEOUT_SECONDS,
         )
@@ -309,7 +309,7 @@ async def _run_archive_backfill(
     return embed
 
 
-@stoney_group.command(name="archive-backfill", description="Move old closed ticket channels into the configured archive category.")
+@dank_group.command(name="archive-backfill", description="Move old closed ticket channels into the configured archive category.")
 @app_commands.describe(
     dry_run="Preview only when true. Set false to actually move channels.",
     limit="Maximum number of text channels to scan. Default 250, max 500.",
@@ -350,7 +350,7 @@ def register_public_archive_backfill_commands(bot: Any, tree: Any) -> None:
     _ = bot
     _ = tree
     try:
-        print("✅ public_archive_backfill: attached /stoney archive-backfill command")
+        print("✅ public_archive_backfill: attached /dank archive-backfill command")
     except Exception:
         pass
 

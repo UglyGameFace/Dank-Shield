@@ -86,45 +86,45 @@ def _env_str(name: str, default: str = "") -> str:
 
 
 def _enabled() -> bool:
-    return _env_bool("STONEY_STATUS_REPORT_ENABLED", True)
+    return _env_bool("DANK_STATUS_REPORT_ENABLED", True)
 
 
 def _heartbeat_enabled() -> bool:
-    return _env_bool("STONEY_STATUS_HEARTBEAT_ENABLED", True)
+    return _env_bool("DANK_STATUS_HEARTBEAT_ENABLED", True)
 
 
 def _report_on_ready_enabled() -> bool:
-    return _env_bool("STONEY_STATUS_REPORT_ON_READY", True)
+    return _env_bool("DANK_STATUS_REPORT_ON_READY", True)
 
 
 def _heartbeat_interval_seconds() -> int:
-    return max(30, _env_int("STONEY_STATUS_HEARTBEAT_SECONDS", 120))
+    return max(30, _env_int("DANK_STATUS_HEARTBEAT_SECONDS", 120))
 
 
 def _startup_report_delay_seconds() -> int:
-    return max(8, _env_int("STONEY_STATUS_STARTUP_REPORT_DELAY_SECONDS", 20))
+    return max(8, _env_int("DANK_STATUS_STARTUP_REPORT_DELAY_SECONDS", 20))
 
 
 def _report_cooldown_seconds() -> int:
-    return max(60, _env_int("STONEY_STATUS_REPORT_COOLDOWN_SECONDS", 600))
+    return max(60, _env_int("DANK_STATUS_REPORT_COOLDOWN_SECONDS", 600))
 
 
 def _auto_save_discovered_config_enabled() -> bool:
-    return _env_bool("STONEY_STATUS_AUTO_SAVE_DISCOVERED_CONFIG", True)
+    return _env_bool("DANK_STATUS_AUTO_SAVE_DISCOVERED_CONFIG", True)
 
 
 def _treat_env_fallback_as_ok() -> bool:
-    return _env_bool("STONEY_STATUS_TREAT_ENV_FALLBACK_OK", False)
+    return _env_bool("DANK_STATUS_TREAT_ENV_FALLBACK_OK", False)
 
 
 def _supabase_probe_cache_seconds() -> int:
-    return max(60, _env_int("STONEY_SUPABASE_PROBE_CACHE_SECONDS", 300))
+    return max(60, _env_int("DANK_SUPABASE_PROBE_CACHE_SECONDS", 300))
 
 
 def _supabase_probe_timeout_seconds() -> float:
     # This is intentionally short. A status card should not wait on a slow DB.
     try:
-        raw = float(_env_str("STONEY_SUPABASE_PROBE_TIMEOUT_SECONDS", "2.5") or "2.5")
+        raw = float(_env_str("DANK_SUPABASE_PROBE_TIMEOUT_SECONDS", "2.5") or "2.5")
         return max(0.75, min(raw, 5.0))
     except Exception:
         return 2.5
@@ -132,14 +132,14 @@ def _supabase_probe_timeout_seconds() -> float:
 
 def _heartbeat_write_timeout_seconds() -> float:
     try:
-        raw = float(_env_str("STONEY_STATUS_HEARTBEAT_WRITE_TIMEOUT_SECONDS", "3.0") or "3.0")
+        raw = float(_env_str("DANK_STATUS_HEARTBEAT_WRITE_TIMEOUT_SECONDS", "3.0") or "3.0")
         return max(0.75, min(raw, 6.0))
     except Exception:
         return 3.0
 
 
 def _bot_status_id(bot: Any) -> str:
-    explicit = _env_str("STONEY_STATUS_BOT_ID", "")
+    explicit = _env_str("DANK_STATUS_BOT_ID", "")
     if explicit:
         return explicit
 
@@ -200,7 +200,7 @@ def _cfg_get(cfg: Any, key: str, default: Any = None) -> Any:
 
 
 def _primary_config_table_name() -> str:
-    return _env_str("STONEY_GUILD_CONFIG_TABLE", "guild_config") or "guild_config"
+    return _env_str("DANK_GUILD_CONFIG_TABLE", "guild_config") or "guild_config"
 
 
 def _config_table_names() -> tuple[str, ...]:
@@ -857,12 +857,12 @@ async def _setup_status_callback(interaction: discord.Interaction, status_channe
 
 def _attach_setup_status_command() -> None:
     try:
-        from .public_setup_group import stoney_group
+        from .public_setup_group import dank_group
     except Exception:
         return
 
     try:
-        existing = stoney_group.get_command("setup-status")
+        existing = dank_group.get_command("setup-status")
     except Exception:
         existing = None
 
@@ -881,7 +881,7 @@ def _attach_setup_status_command() -> None:
         pass
 
     try:
-        stoney_group.add_command(command)
+        dank_group.add_command(command)
     except Exception as e:
         try:
             print(f"⚠️ status_reporter failed adding /dank setup-status: {repr(e)}")

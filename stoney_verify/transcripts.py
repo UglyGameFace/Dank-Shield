@@ -2532,7 +2532,7 @@ def _is_legacy_verify_ui_embed(embed: Optional[discord.Embed]) -> bool:
         footer_text = str(getattr(getattr(embed, "footer", None), "text", "") or "").strip()
 
         legacy_titles = {
-            "Stoney Balonney Verification",
+            "legacy single-server Verification",
             "Dank Shield Verification",
         }
 

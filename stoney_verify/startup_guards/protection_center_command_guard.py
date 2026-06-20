@@ -19,24 +19,24 @@ def apply() -> bool:
 
         old_a = "automod"
         old_b = "sp" + "am"
-        allowed = set(getattr(commands_ext, "_ALLOWED_STONEY_CHILDREN", set()) or set())
+        allowed = set(getattr(commands_ext, "_ALLOWED_DANK_CHILDREN", set()) or set())
         allowed.discard(old_a)
         allowed.discard(old_b)
         allowed.add("protection")
-        commands_ext._ALLOWED_STONEY_CHILDREN = allowed
+        commands_ext._ALLOWED_DANK_CHILDREN = allowed
 
-        hidden = set(getattr(commands_ext, "_CONFUSING_STONEY_CHILDREN", tuple()) or tuple())
+        hidden = set(getattr(commands_ext, "_CONFUSING_DANK_CHILDREN", tuple()) or tuple())
         hidden.update({old_a, old_b})
-        commands_ext._CONFUSING_STONEY_CHILDREN = tuple(sorted(hidden))
+        commands_ext._CONFUSING_DANK_CHILDREN = tuple(sorted(hidden))
 
-        from stoney_verify.commands_ext.public_setup_group import stoney_group
+        from stoney_verify.commands_ext.public_setup_group import dank_group
 
         hidden_now: list[str] = []
         for child in (old_a, old_b):
             try:
-                command = stoney_group.get_command(child)
+                command = dank_group.get_command(child)
                 if command is not None:
-                    stoney_group.remove_command(child)
+                    dank_group.remove_command(child)
                     hidden_now.append(child)
             except Exception:
                 pass

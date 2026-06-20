@@ -48,7 +48,7 @@ from .globals import (
 # - DB config remains authoritative, .env remains fallback only.
 # ============================================================
 
-GUILD_CONFIG_TABLE = (os.getenv("STONEY_GUILD_CONFIG_TABLE") or "guild_configs").strip() or "guild_configs"
+GUILD_CONFIG_TABLE = (os.getenv("DANK_GUILD_CONFIG_TABLE") or "guild_configs").strip() or "guild_configs"
 GUILD_CONFIG_TABLE_FALLBACKS = tuple(
     dict.fromkeys(
         name
@@ -166,21 +166,21 @@ def public_config_isolation_enabled() -> bool:
     this stable helper.
     """
     try:
-        explicit = os.getenv("STONEY_PUBLIC_CONFIG_ISOLATION")
+        explicit = os.getenv("DANK_PUBLIC_CONFIG_ISOLATION")
         if explicit is not None and str(explicit).strip():
             return _safe_bool(explicit, True)
 
-        deployment = str(os.getenv("STONEY_DEPLOYMENT_MODE") or "").strip().lower()
+        deployment = str(os.getenv("DANK_DEPLOYMENT_MODE") or "").strip().lower()
         if deployment in {"public", "prod", "production"}:
             return True
 
-        if _safe_bool(os.getenv("STONEY_PUBLIC_MODE"), False):
+        if _safe_bool(os.getenv("DANK_PUBLIC_MODE"), False):
             return True
-        if _safe_bool(os.getenv("STONEY_PRODUCTION_MODE"), False):
+        if _safe_bool(os.getenv("DANK_PRODUCTION_MODE"), False):
             return True
 
         # Safe default: isolate unless someone explicitly disables it.
-        return not _safe_bool(os.getenv("STONEY_DISABLE_PUBLIC_CONFIG_ISOLATION"), False)
+        return not _safe_bool(os.getenv("DANK_DISABLE_PUBLIC_CONFIG_ISOLATION"), False)
     except Exception:
         return True
 

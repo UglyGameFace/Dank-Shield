@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-"""Normalize remaining public-facing Stoney Verify branding to Dank Shield.
+"""Normalize remaining public-facing Dank Shield branding to Dank Shield.
 
 This guard is intentionally text-only. It does not rename the Python package,
 Supabase tables, legacy env vars, or internal module names because that would be
@@ -16,23 +16,23 @@ _PATCHED = False
 _DISCORD_PATCHED = False
 
 _REPLACEMENTS: tuple[tuple[str, str], ...] = (
-    ("/stoney setup", "/dank setup"),
-    ("`/stoney setup`", "`/dank setup`"),
-    ("/stoney", "/dank"),
-    ("`/stoney`", "`/dank`"),
-    ("Stoney Verify", "Dank Shield"),
-    ("StoneyVerify", "DankShield"),
-    ("Stoney setup", "Dank Shield setup"),
-    ("Stoney Setup", "Dank Shield Setup"),
-    ("Stoney Quick Setup", "Dank Shield Quick Setup"),
-    ("Stoney Setup Assistant", "Dank Shield Setup Assistant"),
-    ("Stoney is", "Dank Shield is"),
-    ("Stoney lacks", "Dank Shield lacks"),
-    ("Stoney ticket", "Dank Shield ticket"),
-    ("Stoney panel", "Dank Shield panel"),
-    ("Stoney's", "Dank Shield's"),
-    ("Stoney’s", "Dank Shield’s"),
-    ("Stoney", "Dank Shield"),
+    ("/dank setup", "/dank setup"),
+    ("`/dank setup`", "`/dank setup`"),
+    ("/dank", "/dank"),
+    ("`/dank`", "`/dank`"),
+    ("Dank Shield", "Dank Shield"),
+    ("DankShield", "DankShield"),
+    ("Dank Shield setup", "Dank Shield setup"),
+    ("Dank Shield Setup", "Dank Shield Setup"),
+    ("Dank Shield Quick Setup", "Dank Shield Quick Setup"),
+    ("Dank Shield Setup Assistant", "Dank Shield Setup Assistant"),
+    ("Dank Shield is", "Dank Shield is"),
+    ("Dank Shield lacks", "Dank Shield lacks"),
+    ("Dank Shield ticket", "Dank Shield ticket"),
+    ("Dank Shield panel", "Dank Shield panel"),
+    ("Dank Shield's", "Dank Shield's"),
+    ("Dank Shield’s", "Dank Shield’s"),
+    ("Dank Shield", "Dank Shield"),
 )
 
 

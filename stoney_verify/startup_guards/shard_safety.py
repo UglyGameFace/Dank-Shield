@@ -96,8 +96,8 @@ def _bot_shard_snapshot(bot: Any) -> dict[str, Any]:
         "observed_shards": sorted([str(x) for x in shard_ids]),
         "latency_ms": int(float(latency or 0.0) * 1000) if latency is not None else 0,
         "auto_shard_enabled_env": _env_bool("DISCORD_AUTO_SHARD", False),
-        "warn_guild_threshold": _env_int("STONEY_SHARD_WARN_GUILDS", 400),
-        "critical_guild_threshold": _env_int("STONEY_SHARD_CRITICAL_GUILDS", 900),
+        "warn_guild_threshold": _env_int("DANK_SHARD_WARN_GUILDS", 400),
+        "critical_guild_threshold": _env_int("DANK_SHARD_CRITICAL_GUILDS", 900),
     }
 
 
@@ -140,8 +140,8 @@ def _log_snapshot(bot: Any, *, reason: str, force: bool = False) -> None:
         _LAST_LOG_MONOTONIC = now
         _warn(message + " status=warning; start AutoShardedBot testing and command consolidation now")
     else:
-        ok_interval = max(900, _env_int("STONEY_SHARD_OK_LOG_INTERVAL_SECONDS", 3600))
-        if force or _env_bool("STONEY_SHARD_LOG_HEALTHY_PERIODIC", False) or (now - _LAST_OK_LOG_MONOTONIC) >= ok_interval:
+        ok_interval = max(900, _env_int("DANK_SHARD_OK_LOG_INTERVAL_SECONDS", 3600))
+        if force or _env_bool("DANK_SHARD_LOG_HEALTHY_PERIODIC", False) or (now - _LAST_OK_LOG_MONOTONIC) >= ok_interval:
             _LAST_OK_LOG_MONOTONIC = now
             _LAST_LOG_MONOTONIC = now
             _log(message + " status=ok")

@@ -76,7 +76,7 @@ class RuntimeJobManager:
         # Global backpressure. Per-guild queues prevent one server from starving
         # another; this cap prevents 100+ guild workers from stampeding upstreams.
         self._max_concurrent_jobs = _env_int(
-            "STONEY_RUNTIME_JOBS_MAX_CONCURRENT",
+            "DANK_RUNTIME_JOBS_MAX_CONCURRENT",
             8,
             minimum=1,
             maximum=64,
@@ -97,7 +97,7 @@ class RuntimeJobManager:
                 print(
                     "📊 runtime_jobs global concurrency cap active "
                     f"max_concurrent={self._max_concurrent_jobs} "
-                    "env=STONEY_RUNTIME_JOBS_MAX_CONCURRENT"
+                    "env=DANK_RUNTIME_JOBS_MAX_CONCURRENT"
                 )
             except Exception:
                 pass

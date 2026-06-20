@@ -10,10 +10,10 @@ def apply() -> bool:
     try:
         import stoney_verify.commands_ext as commands_ext
 
-        allowed = set(getattr(commands_ext, "_ALLOWED_STONEY_CHILDREN", set()) or set())
+        allowed = set(getattr(commands_ext, "_ALLOWED_DANK_CHILDREN", set()) or set())
         if "roles" not in allowed:
             allowed.add("roles")
-            commands_ext._ALLOWED_STONEY_CHILDREN = allowed
+            commands_ext._ALLOWED_DANK_CHILDREN = allowed
 
         from stoney_verify.commands_ext import public_self_roles_group
         from stoney_verify.startup_guards import profile_terms_newline_guard

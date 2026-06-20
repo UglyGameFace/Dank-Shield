@@ -7,7 +7,7 @@ Unverified clicks Verify, Dank Shield grants the configured Verified/full-access
 role and removes Unverified.
 
 ID / website upload verification is intentionally special-case. It is only
-available in allowlisted guild IDs so old Stoney Balonney / Stoners Paradise ID
+available in allowlisted guild IDs so old legacy single-server / Stoners Paradise ID
 panels never leak into unrelated public servers such as The 420 Lobby.
 """
 
@@ -92,13 +92,13 @@ def _env_name_set(name: str) -> set[str]:
 
 
 def id_verify_allowed_guild_ids() -> set[int]:
-    configured = _env_id_set("DANK_ID_VERIFY_ALLOWED_GUILD_IDS") | _env_id_set("STONEY_ID_VERIFY_ALLOWED_GUILD_IDS")
+    configured = _env_id_set("DANK_ID_VERIFY_ALLOWED_GUILD_IDS") | _env_id_set("DANK_ID_VERIFY_ALLOWED_GUILD_IDS")
     return set(DEFAULT_ID_VERIFY_ALLOWED_GUILD_IDS) | configured
 
 
 def id_verify_allowed_guild_names() -> set[str]:
     # Name matching is opt-in only through env. The built-in safety policy is ID-only.
-    return _env_name_set("DANK_ID_VERIFY_ALLOWED_GUILD_NAMES") | _env_name_set("STONEY_ID_VERIFY_ALLOWED_GUILD_NAMES")
+    return _env_name_set("DANK_ID_VERIFY_ALLOWED_GUILD_NAMES") | _env_name_set("DANK_ID_VERIFY_ALLOWED_GUILD_NAMES")
 
 
 def guild_id(guild: Any) -> int:
@@ -119,7 +119,7 @@ def id_verify_allowed_for_guild(guild: Any, cfg: Any = None) -> bool:
 
     # Do not allow a random guild_config field to enable ID verification outside
     # the allowlist. That prevents public servers from accidentally inheriting an
-    # old Stoney Balonney web panel.
+    # old legacy single-server web panel.
     _ = cfg
     return False
 

@@ -498,7 +498,7 @@ def _auth_candidates(request: web.Request) -> List[str]:
     if bearer:
         out.append(bearer)
 
-    for header_name in ("X-API-Key", "X-Stoney-Internal-Auth"):
+    for header_name in ("X-API-Key", "X-Dank-Internal-Auth"):
         candidate = _safe_str(request.headers.get(header_name, "")).strip()
         if candidate:
             out.append(candidate)

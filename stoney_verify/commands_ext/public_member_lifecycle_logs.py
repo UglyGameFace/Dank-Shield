@@ -168,7 +168,7 @@ def _target_matches_member(entry: discord.AuditLogEntry, member: discord.Member)
         return False
 
 
-def _is_stoney_actor(guild: discord.Guild, actor: Optional[discord.abc.User]) -> bool:
+def _is_dank_actor(guild: discord.Guild, actor: Optional[discord.abc.User]) -> bool:
     try:
         return bool(actor is not None and guild.me is not None and int(actor.id) == int(guild.me.id))
     except Exception:
@@ -185,7 +185,7 @@ def _removal_info_default(status: str, label: str, detail: str) -> Dict[str, Any
         "reason": None,
         "audit_age_seconds": None,
         "confidence": "not_confirmed_by_audit_log",
-        "stoney_actor": False,
+        "dank_actor": False,
     }
 
 
@@ -240,7 +240,7 @@ async def _resolve_member_remove_cause(member: discord.Member) -> Dict[str, Any]
                 "reason": getattr(banned, "reason", None),
                 "audit_age_seconds": _entry_age_seconds(banned),
                 "confidence": "exact_recent_audit_match",
-                "stoney_actor": _is_stoney_actor(guild, actor),
+                "dank_actor": _is_dank_actor(guild, actor),
             }
 
         kicked = await _find_matching_audit_entry(guild, member, discord.AuditLogAction.kick)
@@ -255,7 +255,7 @@ async def _resolve_member_remove_cause(member: discord.Member) -> Dict[str, Any]
                 "reason": getattr(kicked, "reason", None),
                 "audit_age_seconds": _entry_age_seconds(kicked),
                 "confidence": "exact_recent_audit_match",
-                "stoney_actor": _is_stoney_actor(guild, actor),
+                "dank_actor": _is_dank_actor(guild, actor),
             }
 
         return _removal_info_default(
@@ -388,7 +388,7 @@ def _member_staff_leave_embed(member: discord.Member, removal_info: Optional[Dic
     title = "🍂 Member Left"
     if status == "kicked":
         title = "👢 Member Kicked"
-        color = discord.Color.red() if bool(info.get("stoney_actor")) else discord.Color.orange()
+        color = discord.Color.red() if bool(info.get("dank_actor")) else discord.Color.orange()
     elif status == "banned":
         title = "🔨 Member Banned"
         color = discord.Color.red()
@@ -420,7 +420,7 @@ def _member_staff_leave_embed(member: discord.Member, removal_info: Optional[Dic
     actor = info.get("actor")
     if actor is not None:
         actor_title = "Actor"
-        if bool(info.get("stoney_actor")):
+        if bool(info.get("dank_actor")):
             actor_title = "Actor — Dank Shield"
         embed.add_field(name=actor_title, value=_display_actor(actor), inline=False)
 

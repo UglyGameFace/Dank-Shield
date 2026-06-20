@@ -90,7 +90,7 @@ def install_guard() -> None:
         return
 
     _ORIGINAL_BUILD_MAIN_SETUP_PAYLOAD = setup_start._build_main_setup_payload
-    _ORIGINAL_SETUP_VIEW_INIT = setup_start.StoneySetupView.__init__
+    _ORIGINAL_SETUP_VIEW_INIT = setup_start.DankSetupView.__init__
 
     def patched_setup_view_init(self: Any, *, has_missing: bool) -> None:
         _ORIGINAL_SETUP_VIEW_INIT(self, has_missing=has_missing)
@@ -100,7 +100,7 @@ def install_guard() -> None:
         setup_start._install_cleaners(public_setup_assistant)
         missing = await setup_start._current_missing_specs(guild, public_setup_assistant)
         has_missing = bool(missing)
-        view = setup_start.StoneySetupView(has_missing=has_missing)
+        view = setup_start.DankSetupView(has_missing=has_missing)
 
         color = discord.Color.green() if not has_missing else discord.Color.blurple()
         embed = discord.Embed(
@@ -134,7 +134,7 @@ def install_guard() -> None:
         embed.set_footer(text="For the full organized workflow, run /dank setup and use Core Setup, Safety & Repair, Ticket Setup, and Advanced Tools.")
         return embed, view
 
-    setup_start.StoneySetupView.__init__ = patched_setup_view_init
+    setup_start.DankSetupView.__init__ = patched_setup_view_init
     setup_start._build_main_setup_payload = patched_build_main_setup_payload
     _PATCHED = True
     print("🧭 setup_first_run_ux_guard active; /dank setup first-run labels match workflow hub")

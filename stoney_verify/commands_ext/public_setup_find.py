@@ -18,7 +18,7 @@ from .public_setup_group import (
     _utc_iso,
     get_guild_config,
     invalidate_guild_config,
-    stoney_group,
+    dank_group,
 )
 
 
@@ -351,7 +351,7 @@ class SetupSearchResultView(discord.ui.View):
         await interaction.response.edit_message(embed=embed, view=None)
 
 
-@stoney_group.command(name="setup-find", description="Search all channels/roles by name or ID and save a setup value.")
+@dank_group.command(name="setup-find", description="Search all channels/roles by name or ID and save a setup value.")
 @app_commands.describe(
     target="The setup field to configure.",
     query="Part of a channel/role name, or the full Discord ID.",

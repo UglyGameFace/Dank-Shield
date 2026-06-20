@@ -15,7 +15,7 @@ from discord import app_commands
 from ..guild_action_guard import decide_guild_action
 from ..guild_context import get_guild_context
 from ..interaction_guard import safe_send_error, safe_send_interaction
-from .public_setup_group import stoney_group
+from .public_setup_group import dank_group
 
 _ATTACHED = False
 
@@ -297,13 +297,13 @@ def _attach() -> bool:
     if _ATTACHED:
         return True
     try:
-        if stoney_group.get_command("embed") is not None:
+        if dank_group.get_command("embed") is not None:
             _ATTACHED = True
             return True
     except Exception:
         pass
     try:
-        stoney_group.add_command(embed_group)
+        dank_group.add_command(embed_group)
         _ATTACHED = True
         return True
     except Exception as exc:

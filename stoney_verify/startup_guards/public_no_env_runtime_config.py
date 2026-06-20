@@ -259,7 +259,7 @@ async def _grant(guild: discord.Guild, member: discord.Member, token: str, *modu
     if not _is_voice(vc):
         return False, "VC verification channel is not configured as a real voice channel for this server. Run `/dank setup` → Health Check."
     if not _can_manage(guild.me, vc):
-        return False, f"Stoney needs View Channel + Manage Channels on {getattr(vc, 'mention', '#voice')}."
+        return False, f"Dank Shield needs View Channel + Manage Channels on {getattr(vc, 'mention', '#voice')}."
     try:
         ow = vc.overwrites_for(member)  # type: ignore[union-attr]
         ow.view_channel = True
@@ -269,7 +269,7 @@ async def _grant(guild: discord.Guild, member: discord.Member, token: str, *modu
         await vc.set_permissions(member, overwrite=ow, reason=f"VC verify access token={token}")  # type: ignore[union-attr]
         return True, "Temporary VC access granted."
     except discord.Forbidden:
-        return False, "Discord denied the VC permission edit. Move Stoney's bot role higher and run the one-press setup fix."
+        return False, "Discord denied the VC permission edit. Move Dank Shield's bot role higher and run the one-press setup fix."
     except Exception as e:
         return False, f"Failed to edit VC permissions: {type(e).__name__}: {str(e)[:180]}"
 
@@ -505,9 +505,9 @@ def _role_manage_error(guild: discord.Guild, roles: list[discord.Role]) -> str:
         return "Bot member is missing in this server."
     try:
         if not (me.guild_permissions.administrator or me.guild_permissions.manage_roles):
-            return "Stoney needs **Manage Roles** to approve verification."
+            return "Dank Shield needs **Manage Roles** to approve verification."
     except Exception:
-        return "Could not read Stoney's role permissions."
+        return "Could not read Dank Shield's role permissions."
 
     bad: list[str] = []
     for role in roles:
@@ -517,7 +517,7 @@ def _role_manage_error(guild: discord.Guild, roles: list[discord.Role]) -> str:
         except Exception:
             continue
     if bad:
-        return "Move Stoney's bot role above these roles: " + ", ".join(bad)
+        return "Move Dank Shield's bot role above these roles: " + ", ".join(bad)
     return ""
 
 
@@ -595,13 +595,13 @@ async def _direct_vc_approve(interaction: discord.Interaction, token: str) -> bo
         try:
             to_add = [role for role in grant_roles if role not in owner.roles]
             if to_add:
-                await owner.add_roles(*to_add, reason=f"Stoney VC verification approved by {staff} ({staff.id})")
+                await owner.add_roles(*to_add, reason=f"Dank Shield VC verification approved by {staff} ({staff.id})")
             removed_unverified = False
             if isinstance(unverified_role, discord.Role) and unverified_role in owner.roles:
-                await owner.remove_roles(unverified_role, reason=f"Stoney VC verification cleanup by {staff} ({staff.id})")
+                await owner.remove_roles(unverified_role, reason=f"Dank Shield VC verification cleanup by {staff} ({staff.id})")
                 removed_unverified = True
         except discord.Forbidden:
-            await _send_ephemeral(interaction, "❌ Discord denied role assignment. Move Stoney's bot role higher and make sure it has Manage Roles.")
+            await _send_ephemeral(interaction, "❌ Discord denied role assignment. Move Dank Shield's bot role higher and make sure it has Manage Roles.")
             return True
         except Exception as e:
             await _send_ephemeral(interaction, f"❌ Role assignment failed: `{type(e).__name__}: {str(e)[:160]}`")

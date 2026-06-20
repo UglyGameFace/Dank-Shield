@@ -24,9 +24,9 @@ except Exception:  # pragma: no cover
     bot = None  # type: ignore
 
 try:
-    from stoney_verify.commands_ext.public_setup_group import stoney_group
+    from stoney_verify.commands_ext.public_setup_group import dank_group
 except Exception:  # pragma: no cover
-    stoney_group = None  # type: ignore
+    dank_group = None  # type: ignore
 
 
 _INSTALLED = False
@@ -617,11 +617,11 @@ async def _member_logs_command(
 
 
 def _install_command() -> bool:
-    if stoney_group is None:
-        _log("stoney_group unavailable; /dank member-logs not installed")
+    if dank_group is None:
+        _log("dank_group unavailable; /dank member-logs not installed")
         return False
     try:
-        existing = {getattr(command, "name", "") for command in getattr(stoney_group, "commands", []) or []}
+        existing = {getattr(command, "name", "") for command in getattr(dank_group, "commands", []) or []}
         if "member-logs" in existing:
             return True
 
@@ -636,7 +636,7 @@ def _install_command() -> bool:
         except Exception:
             pass
 
-        stoney_group.command(
+        dank_group.command(
             name="member-logs",
             description="Configure where joins, leaves, and invite-source audits are sent.",
         )(decorated)

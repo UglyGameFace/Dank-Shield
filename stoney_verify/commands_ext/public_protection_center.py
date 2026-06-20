@@ -16,7 +16,7 @@ import discord
 from discord import app_commands
 
 from ..guild_config import get_guild_config, invalidate_guild_config, upsert_guild_config
-from .public_setup_group import _require_setup_permission, stoney_group
+from .public_setup_group import _require_setup_permission, dank_group
 from ..interaction_guard import safe_defer_interaction, safe_send_interaction
 
 _ATTACHED = False
@@ -935,7 +935,7 @@ class ProtectionCenterView(discord.ui.View):
         await interaction.response.edit_message(content="Closed Protection Center. Reopen it with `/dank protection`.", view=self)
 
 
-@stoney_group.command(name="protection", description="Open the unified Automod + Spam Guard protection center.")
+@dank_group.command(name="protection", description="Open the unified Automod + Spam Guard protection center.")
 async def protection_center(interaction: discord.Interaction) -> None:
     if not await _require_setup_permission(interaction):
         return

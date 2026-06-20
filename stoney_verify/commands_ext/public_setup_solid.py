@@ -32,7 +32,7 @@ from .public_setup_group import (
     _safe_str,
     _text_channel_missing_perms,
     _utc_iso,
-    stoney_group,
+    dank_group,
 )
 from ..globals import get_supabase, now_utc
 from ..guild_config import get_guild_config, invalidate_guild_config
@@ -334,7 +334,7 @@ async def _clear_config_keys(interaction: discord.Interaction, keys: Iterable[st
         try:
             import os
 
-            table = (os.getenv("STONEY_GUILD_CONFIG_TABLE") or table).strip() or table
+            table = (os.getenv("DANK_GUILD_CONFIG_TABLE") or table).strip() or table
         except Exception:
             pass
 
@@ -703,7 +703,7 @@ class SolidSetupView(SetupNavView):
             embed = discord.Embed(
                 title="✏️ Name Items Before Build",
                 description=(
-                    "Use this before Auto-Build if you want Stoney to create missing items with your own names.\n\n"
+                    "Use this before Auto-Build if you want Dank Shield to create missing items with your own names.\n\n"
                     "Names are split into small pages so the form is easier to read. Nothing is created until you submit a page."
                 ),
                 color=discord.Color.blurple(),
@@ -797,7 +797,7 @@ class SolidSetupView(SetupNavView):
             title="🧹 Start Over / Cleanup",
             description=(
                 "Use cleanup when setup got messy.\n\n"
-                "**Safe rule:** cleanup should only remove things Stoney created or things you explicitly pick. "
+                "**Safe rule:** cleanup should only remove things Dank Shield created or things you explicitly pick. "
                 "It should not delete unrelated server channels, roles, tickets, or messages.\n\n"
                 "Use `/dank cleanup` for cleanup tools, then return to `/dank setup`."
             ),
@@ -934,7 +934,7 @@ class SaveRoleSelect(discord.ui.RoleSelect):
             embed = discord.Embed(
                 title="🚫 Role Not Saved",
                 description="\n".join(f"• {x}" for x in blockers)
-                + "\n\nWhat to do next: pick a different role, or move Stoney's bot role above that role and try again.",
+                + "\n\nWhat to do next: pick a different role, or move Dank Shield's bot role above that role and try again.",
                 color=discord.Color.red(),
             )
             return await interaction.response.send_message(embed=embed, ephemeral=True, allowed_mentions=discord.AllowedMentions.none())
@@ -945,7 +945,7 @@ class SaveRoleSelect(discord.ui.RoleSelect):
             title="✅ Saved Setup Role",
             description=(
                 f"Saved {_mention(role)}.\n\n"
-                "Names do not matter. Stoney saved the role ID.\n\n"
+                "Names do not matter. Dank Shield saved the role ID.\n\n"
                 "Next: pick another item, press Back to Setup, or Run Health Check."
             ),
             color=discord.Color.green(),
@@ -1011,7 +1011,7 @@ class SaveChannelSelect(discord.ui.ChannelSelect):
             embed = discord.Embed(
                 title="🚫 Channel Not Saved",
                 description="\n".join(f"• {x}" for x in blockers)
-                + "\n\nWhat to do next: pick a different channel, or fix Stoney's permissions in that channel and try again.",
+                + "\n\nWhat to do next: pick a different channel, or fix Dank Shield's permissions in that channel and try again.",
                 color=discord.Color.red(),
             )
             return await interaction.response.send_message(embed=embed, ephemeral=True, allowed_mentions=discord.AllowedMentions.none())
@@ -1022,7 +1022,7 @@ class SaveChannelSelect(discord.ui.ChannelSelect):
             title="✅ Saved Setup Channel",
             description=(
                 f"Saved {_mention(channel)}.\n\n"
-                "Names do not matter. Stoney saved the channel ID.\n\n"
+                "Names do not matter. Dank Shield saved the channel ID.\n\n"
                 "Next: pick another item, press Back to Setup, or Run Health Check."
             ),
             color=discord.Color.green(),
@@ -1210,7 +1210,7 @@ class VerificationModeSelect(discord.ui.Select):
             discord.SelectOption(
                 label="No access roles",
                 value="none",
-                description="Stoney will not require a waiting/approved/member role style.",
+                description="Dank Shield will not require a waiting/approved/member role style.",
                 emoji="🚫",
             ),
             discord.SelectOption(
@@ -1276,7 +1276,7 @@ class BehaviorSettingsView(SetupNavView):
             title="✅ Optional Access Roles Cleared",
             description=(
                 "Cleared the saved new/waiting, approved, and full-access role slots.\n\n"
-                "This did not delete any Discord roles. It only removed Stoney's saved choices."
+                "This did not delete any Discord roles. It only removed Dank Shield's saved choices."
             ),
             color=discord.Color.green(),
         )
@@ -1371,7 +1371,7 @@ async def _build_category_manager_payload(
             value=(
                 "• **Name** is what staff/users see.\n"
                 "• **Keywords** help the bot recommend the right option.\n"
-                "• **Default** is used when Stoney is unsure."
+                "• **Default** is used when Dank Shield is unsure."
             ),
             inline=False,
         )
@@ -1677,13 +1677,13 @@ def _attach() -> None:
         return
 
     try:
-        existing = stoney_group.get_command("setup")
+        existing = dank_group.get_command("setup")
     except Exception:
         existing = None
 
     if existing is not None:
         try:
-            stoney_group.remove_command("setup")
+            dank_group.remove_command("setup")
         except Exception:
             # If the command cannot be removed, keep startup safe and do not add a duplicate.
             _ATTACHED = True
@@ -1694,7 +1694,7 @@ def _attach() -> None:
         description="Simple guided setup for this server.",
         callback=_setup_callback,
     )
-    stoney_group.add_command(command)
+    dank_group.add_command(command)
     _ATTACHED = True
 
 

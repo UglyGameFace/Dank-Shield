@@ -15,7 +15,7 @@ from ..globals import now_utc
 from ..guild_context import GuildContext, get_guild_context
 from ..interaction_guard import run_guarded_interaction, safe_send_interaction
 from ..startup_diagnostics import build_startup_health_report
-from .public_setup_group import stoney_group
+from .public_setup_group import dank_group
 
 _REGISTERED = False
 
@@ -151,7 +151,7 @@ def _startup_diagnostics_embed(
     return embed
 
 
-@stoney_group.command(
+@dank_group.command(
     name="diagnostics",
     description="Show read-only Dank Shield startup and server-config diagnostics.",
 )

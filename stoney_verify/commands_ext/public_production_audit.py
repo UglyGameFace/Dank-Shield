@@ -24,7 +24,7 @@ from .public_setup_group import (
     _require_setup_permission,
     _safe_int,
     _safe_str,
-    stoney_group,
+    dank_group,
 )
 from ..guild_config import get_guild_config, guild_config_cache_snapshot, public_config_isolation_enabled
 from ..globals import get_supabase
@@ -66,8 +66,8 @@ _CRITICAL_NATIVE_CLEANUP_TARGETS: tuple[str, ...] = (
 )
 
 _REQUIRED_PUBLIC_ENV: tuple[str, ...] = (
-    "STONEY_DEPLOYMENT_MODE",
-    "STONEY_COMMAND_PROFILE",
+    "DANK_DEPLOYMENT_MODE",
+    "DANK_COMMAND_PROFILE",
     "BOT_API_REQUIRE_AUTH",
     "BOT_API_SHARED_SECRET",
 )
@@ -252,8 +252,8 @@ def _bot_can_manage_role(guild: discord.Guild, role_id: int) -> bool:
 
 
 def _append_env_audit(blockers: list[str], warnings: list[str], ok: list[str]) -> None:
-    profile = _env_str("STONEY_COMMAND_PROFILE", "public").lower()
-    deployment = _env_str("STONEY_DEPLOYMENT_MODE", "").lower()
+    profile = _env_str("DANK_COMMAND_PROFILE", "public").lower()
+    deployment = _env_str("DANK_DEPLOYMENT_MODE", "").lower()
     require_auth = _env_bool("BOT_API_REQUIRE_AUTH", True)
     allow_insecure = _env_bool("BOT_API_ALLOW_INSECURE", False)
     shared_secret = _env_str("BOT_API_SHARED_SECRET", "")
@@ -265,7 +265,7 @@ def _append_env_audit(blockers: list[str], warnings: list[str], ok: list[str]) -
         ok.append(f"Command profile is public-safe: `{profile}`.")
 
     if deployment not in {"public", "prod", "production"}:
-        warnings.append("`STONEY_DEPLOYMENT_MODE` is not public/production. That is okay for dev, not okay for public rollout.")
+        warnings.append("`DANK_DEPLOYMENT_MODE` is not public/production. That is okay for dev, not okay for public rollout.")
     else:
         ok.append(f"Deployment mode is public-safe: `{deployment}`.")
 
@@ -460,7 +460,7 @@ def _status(blockers: list[str], warnings: list[str]) -> tuple[str, discord.Colo
 def _make_embed(guild: discord.Guild, blockers: list[str], warnings: list[str], ok: list[str]) -> discord.Embed:
     status, color, description = _status(blockers, warnings)
     embed = discord.Embed(
-        title="🧪 Stoney Public Production Audit",
+        title="🧪 Dank Shield Public Production Audit",
         description=(
             f"{description}\n\n"
             f"Status: `{status}`\n"
@@ -523,7 +523,7 @@ def _attach() -> None:
         return
 
     try:
-        existing = stoney_group.get_command("production-audit")
+        existing = dank_group.get_command("production-audit")
     except Exception:
         existing = None
     if existing is not None:
@@ -535,7 +535,7 @@ def _attach() -> None:
         description="Brutally audit whether this server/bot setup is ready for public production.",
         callback=_production_audit_callback,
     )
-    stoney_group.add_command(command)
+    dank_group.add_command(command)
     _ATTACHED = True
 
 
@@ -548,7 +548,7 @@ def register_public_production_audit_commands(bot: Any, tree: Any) -> None:
     _TREE = tree
     _attach()
     try:
-        print("✅ public_production_audit: attached /stoney production-audit command")
+        print("✅ public_production_audit: attached /dank production-audit command")
     except Exception:
         pass
 

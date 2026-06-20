@@ -15,7 +15,7 @@ from discord import app_commands
 
 from ..globals import now_utc
 from ..interaction_guard import run_guarded_interaction, safe_send_interaction
-from .public_setup_group import stoney_group
+from .public_setup_group import dank_group
 
 _REGISTERED = False
 
@@ -486,9 +486,9 @@ async def dank_commands_callback(interaction: discord.Interaction) -> None:
 
 def _attach_command_once(name: str, description: str, callback: Any) -> bool:
     try:
-        if stoney_group.get_command(name) is not None:
+        if dank_group.get_command(name) is not None:
             return False
-        stoney_group.add_command(app_commands.Command(name=name, description=description, callback=callback))
+        dank_group.add_command(app_commands.Command(name=name, description=description, callback=callback))
         return True
     except Exception:
         raise

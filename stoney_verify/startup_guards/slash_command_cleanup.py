@@ -4,7 +4,7 @@ from __future__ import annotations
 
 Why this exists:
 - During the TicketTool-style command consolidation, old top-level commands like
-  /spam_guard, /grant_vr, /ticket_panel_rules_set, and the old /stoney root were
+  /spam_guard, /grant_vr, /ticket_panel_rules_set, and the old /dank root were
   replaced by grouped public commands such as /dank setup, /dank spam,
   /verify grant-vr, and /ticket-panel post.
 - Discord keeps previously synced global or guild commands until the next
@@ -21,7 +21,7 @@ Why this exists:
   change, the epoch forces one clean global sync so Discord receives the pruned
   command surface even if the command hash is unchanged.
 - A dangerous emergency wipe still exists behind
-  STONEY_DANGEROUS_CLEAR_ALL_GLOBAL_COMMANDS_ON_BOOT=true.
+  DANK_DANGEROUS_CLEAR_ALL_GLOBAL_COMMANDS_ON_BOOT=true.
 """
 
 import hashlib
@@ -38,7 +38,7 @@ _ORIGINAL_SYNC = None
 _ORIGINAL_CLEAR_COMMANDS = None
 
 # Bump this value when public command cleanup rules change and Discord needs one
-# guaranteed global sync after deployment. This avoids stale global /stoney or
+# guaranteed global sync after deployment. This avoids stale global /dank or
 # old dev command cache while still allowing future unchanged syncs to be skipped.
 COMMAND_CLEANUP_EPOCH = "2026-06-14-verify-panel-command-v2"
 
@@ -113,8 +113,8 @@ ALLOWED_DANK_CHILDREN = {
     "members",
 }
 
-CONFUSING_STONEY_CHILDREN = CONFUSING_DANK_CHILDREN
-ALLOWED_STONEY_CHILDREN = ALLOWED_DANK_CHILDREN
+CONFUSING_DANK_CHILDREN = CONFUSING_DANK_CHILDREN
+ALLOWED_DANK_CHILDREN = ALLOWED_DANK_CHILDREN
 
 
 def _env_true(name: str, default: bool = False) -> bool:
@@ -170,12 +170,12 @@ def _env_int_set(name: str) -> set[int]:
 
 
 def _public_scope_enabled() -> bool:
-    profile = _env_str("STONEY_COMMAND_PROFILE", "public").lower()
-    deployment = _env_str("STONEY_DEPLOYMENT_MODE", "").lower()
+    profile = _env_str("DANK_COMMAND_PROFILE", "public").lower()
+    deployment = _env_str("DANK_DEPLOYMENT_MODE", "").lower()
     if not deployment:
-        if _env_true("STONEY_PRODUCTION_MODE", False):
+        if _env_true("DANK_PRODUCTION_MODE", False):
             deployment = "production"
-        elif _env_true("STONEY_PUBLIC_MODE", False):
+        elif _env_true("DANK_PUBLIC_MODE", False):
             deployment = "public"
         else:
             deployment = "development"
@@ -215,12 +215,12 @@ def _guild_command_cleanup_allowlist() -> set[int]:
     Defaulting to GUILD_ID keeps cleanup limited to the configured beta/home
     guild instead of touching every public guild the bot is installed in.
     Additional IDs can be listed in DANK_GUILD_COMMAND_CLEANUP_IDS or
-    STONEY_GUILD_COMMAND_CLEANUP_IDS.
+    DANK_GUILD_COMMAND_CLEANUP_IDS.
     """
     allowed: set[int] = set()
     allowed |= _env_int_set("DANK_GUILD_COMMAND_CLEANUP_IDS")
-    allowed |= _env_int_set("STONEY_GUILD_COMMAND_CLEANUP_IDS")
-    for name in ("GUILD_ID", "STONEY_BETA_GUILD_ID", "DANK_BETA_GUILD_ID"):
+    allowed |= _env_int_set("DANK_GUILD_COMMAND_CLEANUP_IDS")
+    for name in ("GUILD_ID", "DANK_BETA_GUILD_ID", "DANK_BETA_GUILD_ID"):
         allowed |= _env_int_set(name)
     return {gid for gid in allowed if gid > 0}
 
@@ -339,7 +339,7 @@ def _should_clear_public_guild_command_copy(guild: Optional[Any]) -> bool:
         return False
     if not _public_scope_enabled():
         return False
-    if _env_explicit_true("STONEY_SYNC_BETA_GUILD_COMMANDS"):
+    if _env_explicit_true("DANK_SYNC_BETA_GUILD_COMMANDS"):
         return False
     gid = _guild_id(guild)
     if gid <= 0:
@@ -478,7 +478,7 @@ def _should_block_global_clear(guild: Optional[Any]) -> bool:
         return False
     if not _env_true("CLEAR_GLOBAL_COMMANDS_ON_BOOT", False):
         return False
-    if _env_true("STONEY_DANGEROUS_CLEAR_ALL_GLOBAL_COMMANDS_ON_BOOT", False):
+    if _env_true("DANK_DANGEROUS_CLEAR_ALL_GLOBAL_COMMANDS_ON_BOOT", False):
         return False
     return True
 
@@ -494,9 +494,9 @@ def _install_command_registration_compat() -> None:
     try:
         from stoney_verify import commands_ext
 
-        children = tuple(getattr(commands_ext, "_CONFUSING_STONEY_CHILDREN", ()) or ())
+        children = tuple(getattr(commands_ext, "_CONFUSING_DANK_CHILDREN", ()) or ())
         if "scoreboard" not in children:
-            setattr(commands_ext, "_CONFUSING_STONEY_CHILDREN", children + ("scoreboard",))
+            setattr(commands_ext, "_CONFUSING_DANK_CHILDREN", children + ("scoreboard",))
     except Exception as e:
         try:
             print(f"⚠️ slash_command_cleanup could not align commands_ext prune list: {type(e).__name__}: {e}")
@@ -539,7 +539,7 @@ def install_slash_command_cleanup_guard() -> None:
                 print(
                     "🧹 slash_command_cleanup cleared allowed guild-scoped command copy in public mode "
                     f"scope={_scope_label(guild)} commands={len(result)} "
-                    "set STONEY_SYNC_BETA_GUILD_COMMANDS=true only for intentional test-guild copies"
+                    "set DANK_SYNC_BETA_GUILD_COMMANDS=true only for intentional test-guild copies"
                 )
                 return result
             except Exception as e:
@@ -583,7 +583,7 @@ def install_slash_command_cleanup_guard() -> None:
             try:
                 print(
                     "🛑 slash_command_cleanup blocked CLEAR_GLOBAL_COMMANDS_ON_BOOT in public scope. "
-                    "Use STONEY_DANGEROUS_CLEAR_ALL_GLOBAL_COMMANDS_ON_BOOT=true for an intentional one-time wipe."
+                    "Use DANK_DANGEROUS_CLEAR_ALL_GLOBAL_COMMANDS_ON_BOOT=true for an intentional one-time wipe."
                 )
             except Exception:
                 pass
@@ -608,10 +608,10 @@ install_slash_command_cleanup_guard()
 
 __all__ = [
     "ALLOWED_DANK_CHILDREN",
-    "ALLOWED_STONEY_CHILDREN",
+    "ALLOWED_DANK_CHILDREN",
     "COMMAND_CLEANUP_EPOCH",
     "CONFUSING_DANK_CHILDREN",
-    "CONFUSING_STONEY_CHILDREN",
+    "CONFUSING_DANK_CHILDREN",
     "STALE_TOP_LEVEL_COMMANDS",
     "install_slash_command_cleanup_guard",
     "prune_public_stoney_children",

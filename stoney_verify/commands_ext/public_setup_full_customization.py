@@ -9,7 +9,7 @@ setting with Discord pickers and simple modals.
 
 This is intentionally an integration module, not a new public command surface:
 - no new top-level slash commands
-- no extra /stoney children
+- no extra /dank children
 - plugs into the existing public_setup_solid/public_setup_start setup cards
 """
 
@@ -173,7 +173,7 @@ def _role_manage_warning(guild: discord.Guild, role: discord.Role, *, require_ma
             if not me.guild_permissions.manage_roles:
                 (blockers if require_manage else warnings).append("Bot is missing Manage Roles.")
             elif me.top_role <= role and not me.guild_permissions.administrator:
-                (blockers if require_manage else warnings).append(f"Bot role is not above {role.mention}. Move Stoney higher in Server Settings → Roles.")
+                (blockers if require_manage else warnings).append(f"Bot role is not above {role.mention}. Move Dank Shield higher in Server Settings → Roles.")
         except Exception:
             pass
 
@@ -230,7 +230,7 @@ class FullChooseExistingView(SetupBackView):
             return
         embed = discord.Embed(
             title="👥 Customize Roles",
-            description="Pick the exact roles this server uses. Names do not matter; the saved role IDs are what Stoney uses.",
+            description="Pick the exact roles this server uses. Names do not matter; the saved role IDs are what Dank Shield uses.",
             color=discord.Color.blurple(),
         )
         embed.add_field(name="Included", value="Server-control, ticket staff, Pending / Unverified, Verified, Member / Resident, and VC staff fallback.", inline=False)
@@ -242,7 +242,7 @@ class FullChooseExistingView(SetupBackView):
             return
         embed = discord.Embed(
             title="📁 Customize Discord Categories",
-            description="Pick the actual Discord channel categories Stoney should use. These are not the logical ticket routing categories.",
+            description="Pick the actual Discord channel categories Dank Shield should use. These are not the logical ticket routing categories.",
             color=discord.Color.blurple(),
         )
         await interaction.response.edit_message(embed=embed, view=DiscordCategoryCustomizationView())
@@ -264,7 +264,7 @@ class FullChooseExistingView(SetupBackView):
             return
         embed = discord.Embed(
             title="🧾 Customize Logs + Status",
-            description="Pick where Stoney sends moderation, security, join/leave, transcript, and health/status messages.",
+            description="Pick where Dank Shield sends moderation, security, join/leave, transcript, and health/status messages.",
             color=discord.Color.blurple(),
         )
         await interaction.response.edit_message(embed=embed, view=LogStatusCustomizationView())
@@ -294,7 +294,7 @@ class SaveRoleSelect(discord.ui.RoleSelect):
         ok, messages = _role_manage_warning(guild, role, require_manage=self.require_manage)
         if not ok:
             embed = discord.Embed(title="🚫 Role Not Saved", description="\n".join(f"• {x}" for x in messages), color=discord.Color.red())
-            embed.add_field(name="What To Do", value="Pick a different role, or move Stoney's bot role above this role in Server Settings → Roles.", inline=False)
+            embed.add_field(name="What To Do", value="Pick a different role, or move Dank Shield's bot role above this role in Server Settings → Roles.", inline=False)
             return await interaction.response.send_message(embed=embed, ephemeral=True)
 
         payload = {column: _snowflake(role) for column in self.columns + self.also_same}

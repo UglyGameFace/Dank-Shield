@@ -279,7 +279,7 @@ def _append_vc_runtime_health(guild: discord.Guild, cfg: Any, blockers: list[str
     if missing_vc:
         blockers.append(f"VC verification channel {_channel_name(vc_channel)} is missing bot permissions: {', '.join(missing_vc)}.")
     else:
-        ok.append(f"VC verification channel can be controlled by Stoney: {_channel_name(vc_channel)}.")
+        ok.append(f"VC verification channel can be controlled by Dank Shield: {_channel_name(vc_channel)}.")
 
     try:
         from stoney_verify.services.setup_permission_policy import vc_connect_is_blocker, vc_view_only_is_blocker
@@ -738,13 +738,13 @@ def _looks_like_staff_panel_post_failure(message: Any) -> bool:
 def _clear_vc_setup_message(original: Any = "") -> str:
     original_text = str(original or "").strip()
     details = (
-        "VC verification is not ready yet because Stoney could not post the **staff VC request panel**.\n\n"
+        "VC verification is not ready yet because Dank Shield could not post the **staff VC request panel**.\n\n"
         "Staff should run `/dank setup` → **Run Health Check**. It now checks the same VC queue/channel permissions this button needs.\n\n"
         "Fix the first blocker shown under Health Check, especially:\n"
         "• **VC queue/status text channel** exists and is writable.\n"
-        "• Stoney has **View Channel**, **Send Messages**, **Embed Links**, and **Read Message History** in that channel.\n"
+        "• Dank Shield has **View Channel**, **Send Messages**, **Embed Links**, and **Read Message History** in that channel.\n"
         "• The **VC verification voice channel** is locked from `@everyone`.\n"
-        "• Stoney has **Manage Channels** on the VC verification voice channel."
+        "• Dank Shield has **Manage Channels** on the VC verification voice channel."
     )
     if original_text:
         details += f"\n\nOriginal error: `{original_text[:500]}`"

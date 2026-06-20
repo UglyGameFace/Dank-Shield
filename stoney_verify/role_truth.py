@@ -113,7 +113,7 @@ def get_guild_role_config(guild_id: int) -> dict[str, Any]:
         if sb is None:
             _CFG_CACHE[gid] = (now, {})
             return {}
-        table = (os.getenv("STONEY_GUILD_CONFIG_TABLE") or "guild_configs").strip() or "guild_configs"
+        table = (os.getenv("DANK_GUILD_CONFIG_TABLE") or "guild_configs").strip() or "guild_configs"
         res = sb.table(table).select("*").eq("guild_id", str(gid)).limit(1).execute()
         rows = getattr(res, "data", None) or []
         if rows and isinstance(rows[0], Mapping):

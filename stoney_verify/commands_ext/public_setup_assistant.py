@@ -27,7 +27,7 @@ from .public_setup_group import (
     _require_setup_permission,
     _upsert_config,
     _utc_iso,
-    stoney_group,
+    dank_group,
 )
 from ..guild_config import get_guild_config, invalidate_guild_config
 
@@ -130,7 +130,7 @@ def _clean_name(value: Any, default: str) -> str:
 
 def _table_name() -> str:
     try:
-        return (os.getenv("STONEY_GUILD_CONFIG_TABLE") or "guild_configs").strip() or "guild_configs"
+        return (os.getenv("DANK_GUILD_CONFIG_TABLE") or "guild_configs").strip() or "guild_configs"
     except Exception:
         return "guild_configs"
 
@@ -708,14 +708,14 @@ def _attach() -> None:
     if _ATTACHED:
         return
     try:
-        existing = stoney_group.get_command("setup-assistant")
+        existing = dank_group.get_command("setup-assistant")
     except Exception:
         existing = None
     if existing is not None:
         _ATTACHED = True
         return
     command = discord.app_commands.Command(name="setup-assistant", description="Show missing setup pieces and choose automatic, custom, or existing setup.", callback=_setup_assistant_callback)
-    stoney_group.add_command(command)
+    dank_group.add_command(command)
     _ATTACHED = True
 
 

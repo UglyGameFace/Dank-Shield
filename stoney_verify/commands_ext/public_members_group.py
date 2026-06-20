@@ -22,7 +22,7 @@ import discord
 from discord import app_commands
 
 from .common import reply_once
-from .public_setup_group import stoney_group
+from .public_setup_group import dank_group
 from stoney_verify.members_new.activity_service import (
     InactiveScanOptions,
     InactiveMemberCandidate,
@@ -1846,8 +1846,8 @@ def register_public_members_group_commands(bot: Any, tree: Any) -> None:
         return
 
     try:
-        if stoney_group.get_command("members") is None:
-            stoney_group.add_command(members_group)
+        if dank_group.get_command("members") is None:
+            dank_group.add_command(members_group)
             print("✅ public_members_group: attached /dank members post-verification activity review commands")
         else:
             print("✅ public_members_group: /dank members already attached")

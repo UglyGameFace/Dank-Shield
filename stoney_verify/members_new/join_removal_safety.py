@@ -3,7 +3,7 @@ from __future__ import annotations
 """
 Native fresh-join removal safety helpers.
 
-Public/listing-site servers can receive noisy-looking joins. Stoney must not
+Public/listing-site servers can receive noisy-looking joins. Dank Shield must not
 instantly kick/ban a brand-new human member unless the server owner explicitly
 enables that behavior or a staff-confirmed moderation flow opts into it.
 

@@ -6,7 +6,7 @@ This keeps the first setup screen Ticket Tool-style:
 - normal public guilds only see choices they can actually use
 - ID/web upload verification is hidden unless the guild ID is allowlisted
 - choosing an ID-only option in a non-allowlisted guild is blocked
-- setup help text no longer advertises Stoney-style ID verification everywhere
+- setup help text no longer advertises Dank Shield-style ID verification everywhere
 """
 
 from typing import Any, Optional

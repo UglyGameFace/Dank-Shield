@@ -14,7 +14,7 @@ module stub so the side-effect module is never imported and the commands never
 enter the local global command surface.
 
 Dev/admin profiles can still opt in with DANK_EXPOSE_VERIFY_ADMIN_COMMANDS=true
-or STONEY_COMMAND_PROFILE=dev/full/public-admin.
+or DANK_COMMAND_PROFILE=dev/full/public-admin.
 """
 
 import os
@@ -45,18 +45,18 @@ def _env_str(name: str, default: str = "") -> str:
 
 
 def _deployment_mode() -> str:
-    raw = _env_str("STONEY_DEPLOYMENT_MODE", "").lower()
+    raw = _env_str("DANK_DEPLOYMENT_MODE", "").lower()
     if raw:
         return raw
-    if _env_true("STONEY_PRODUCTION_MODE", False):
+    if _env_true("DANK_PRODUCTION_MODE", False):
         return "production"
-    if _env_true("STONEY_PUBLIC_MODE", False):
+    if _env_true("DANK_PUBLIC_MODE", False):
         return "public"
     return "development"
 
 
 def _public_like() -> bool:
-    profile = _env_str("STONEY_COMMAND_PROFILE", "public").lower()
+    profile = _env_str("DANK_COMMAND_PROFILE", "public").lower()
     deployment = _deployment_mode()
     return profile in {"public", "minimal"} or deployment in {"public", "prod", "production"}
 
@@ -64,7 +64,7 @@ def _public_like() -> bool:
 def _admin_commands_allowed() -> bool:
     if _env_true("DANK_EXPOSE_VERIFY_ADMIN_COMMANDS", False):
         return True
-    profile = _env_str("STONEY_COMMAND_PROFILE", "public").lower()
+    profile = _env_str("DANK_COMMAND_PROFILE", "public").lower()
     return profile in {"public-admin", "dev", "full"}
 
 

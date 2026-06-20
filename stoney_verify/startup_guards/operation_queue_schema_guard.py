@@ -115,8 +115,8 @@ async def ensure_schema_once() -> bool:
         return True
     _HAS_RUN = True
 
-    if not _env_bool("STONEY_AUTO_SCHEMA_BOOTSTRAP", True):
-        _log("disabled by STONEY_AUTO_SCHEMA_BOOTSTRAP=false")
+    if not _env_bool("DANK_AUTO_SCHEMA_BOOTSTRAP", True):
+        _log("disabled by DANK_AUTO_SCHEMA_BOOTSTRAP=false")
         return False
 
     url = _db_url()

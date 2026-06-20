@@ -74,14 +74,14 @@ def _env_bool(name: str, default: bool = False) -> bool:
 
 
 def _enabled() -> bool:
-    raw = str(os.getenv("STONEY_PUBLIC_COMMAND_SURFACE", "clean") or "clean").strip().lower()
-    return raw in {"clean", "production", "prod", "minimal"} and not _env_bool("STONEY_DISABLE_PRODUCTION_COMMAND_SURFACE_GUARD", False)
+    raw = str(os.getenv("DANK_PUBLIC_COMMAND_SURFACE", "clean") or "clean").strip().lower()
+    return raw in {"clean", "production", "prod", "minimal"} and not _env_bool("DANK_DISABLE_PRODUCTION_COMMAND_SURFACE_GUARD", False)
 
 
 def _configured_keep() -> set[str]:
     keep = set(_DEFAULT_KEEP)
-    keep |= _csv_set(os.getenv("STONEY_PUBLIC_EXTRA_DANK_CHILDREN", "") or "")
-    keep -= _csv_set(os.getenv("STONEY_PUBLIC_HIDE_DANK_CHILDREN", "") or "")
+    keep |= _csv_set(os.getenv("DANK_PUBLIC_EXTRA_DANK_CHILDREN", "") or "")
+    keep -= _csv_set(os.getenv("DANK_PUBLIC_HIDE_DANK_CHILDREN", "") or "")
     return {item for item in keep if item}
 
 
@@ -103,27 +103,27 @@ def apply() -> bool:
             return True
 
         keep = _configured_keep()
-        hide = (set(_DEFAULT_HIDE) | _csv_set(os.getenv("STONEY_PUBLIC_FORCE_HIDE_DANK_CHILDREN", "") or "")) - keep
+        hide = (set(_DEFAULT_HIDE) | _csv_set(os.getenv("DANK_PUBLIC_FORCE_HIDE_DANK_CHILDREN", "") or "")) - keep
 
         import stoney_verify.commands_ext as commands_ext
 
-        commands_ext._ALLOWED_STONEY_CHILDREN = set(keep)
-        confusing = set(getattr(commands_ext, "_CONFUSING_STONEY_CHILDREN", tuple()) or tuple())
+        commands_ext._ALLOWED_DANK_CHILDREN = set(keep)
+        confusing = set(getattr(commands_ext, "_CONFUSING_DANK_CHILDREN", tuple()) or tuple())
         confusing.update(hide)
-        commands_ext._CONFUSING_STONEY_CHILDREN = tuple(sorted(confusing))
+        commands_ext._CONFUSING_DANK_CHILDREN = tuple(sorted(confusing))
 
-        from stoney_verify.commands_ext.public_setup_group import stoney_group
+        from stoney_verify.commands_ext.public_setup_group import dank_group
 
-        before = _child_names(stoney_group)
+        before = _child_names(dank_group)
         removed: list[str] = []
         for child in sorted(hide):
             try:
-                if stoney_group.get_command(child) is not None:
-                    stoney_group.remove_command(child)
+                if dank_group.get_command(child) is not None:
+                    dank_group.remove_command(child)
                     removed.append(child)
             except Exception:
                 pass
-        after = _child_names(stoney_group)
+        after = _child_names(dank_group)
         unexpected = [child for child in after if child not in keep]
         _PATCHED = True
         print(

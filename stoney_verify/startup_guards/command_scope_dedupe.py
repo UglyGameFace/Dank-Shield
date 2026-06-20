@@ -10,7 +10,7 @@ For a public production bot, global commands should be the normal command surfac
 Guild-scoped copies are only for intentional beta/test servers.
 
 This guard:
-1. Defaults STONEY_SYNC_BETA_GUILD_COMMANDS to false unless explicitly set.
+1. Defaults DANK_SYNC_BETA_GUILD_COMMANDS to false unless explicitly set.
 2. After startup sync finishes, clears old guild-scoped command copies only for
    explicitly configured cleanup guild IDs such as GUILD_ID or
    DANK_GUILD_COMMAND_CLEANUP_IDS.
@@ -93,12 +93,12 @@ def _env_int_set(name: str) -> set[int]:
 
 
 def _public_scope_enabled() -> bool:
-    profile = _env_str("STONEY_COMMAND_PROFILE", "public").lower()
-    deployment = _env_str("STONEY_DEPLOYMENT_MODE", "").lower()
+    profile = _env_str("DANK_COMMAND_PROFILE", "public").lower()
+    deployment = _env_str("DANK_DEPLOYMENT_MODE", "").lower()
     if not deployment:
-        if _env_true("STONEY_PRODUCTION_MODE", False):
+        if _env_true("DANK_PRODUCTION_MODE", False):
             deployment = "production"
-        elif _env_true("STONEY_PUBLIC_MODE", False):
+        elif _env_true("DANK_PUBLIC_MODE", False):
             deployment = "public"
         else:
             deployment = "development"
@@ -106,15 +106,15 @@ def _public_scope_enabled() -> bool:
 
 
 def _beta_guild_sync_explicitly_enabled() -> bool:
-    return _env_explicit("STONEY_SYNC_BETA_GUILD_COMMANDS") and _env_true("STONEY_SYNC_BETA_GUILD_COMMANDS", False)
+    return _env_explicit("DANK_SYNC_BETA_GUILD_COMMANDS") and _env_true("DANK_SYNC_BETA_GUILD_COMMANDS", False)
 
 
 def _cleanup_guild_ids() -> set[int]:
     ids: set[int] = set()
     ids |= _env_int_set("DANK_GUILD_COMMAND_CLEANUP_IDS")
-    ids |= _env_int_set("STONEY_GUILD_COMMAND_CLEANUP_IDS")
+    ids |= _env_int_set("DANK_GUILD_COMMAND_CLEANUP_IDS")
     ids |= _env_int_set("GUILD_ID")
-    ids |= _env_int_set("STONEY_BETA_GUILD_ID")
+    ids |= _env_int_set("DANK_BETA_GUILD_ID")
     ids |= _env_int_set("DANK_BETA_GUILD_ID")
     return {gid for gid in ids if gid > 0}
 
@@ -122,9 +122,9 @@ def _cleanup_guild_ids() -> set[int]:
 def _default_beta_sync_off() -> None:
     # Old behavior defaulted this on, which creates global+guild duplicates in
     # production. Keep explicit env values respected for beta testing.
-    if not _env_explicit("STONEY_SYNC_BETA_GUILD_COMMANDS"):
-        os.environ["STONEY_SYNC_BETA_GUILD_COMMANDS"] = "false"
-        _log("defaulted STONEY_SYNC_BETA_GUILD_COMMANDS=false to avoid duplicate slash commands")
+    if not _env_explicit("DANK_SYNC_BETA_GUILD_COMMANDS"):
+        os.environ["DANK_SYNC_BETA_GUILD_COMMANDS"] = "false"
+        _log("defaulted DANK_SYNC_BETA_GUILD_COMMANDS=false to avoid duplicate slash commands")
 
 
 async def _clear_one_guild_copy(guild_id: int) -> bool:
@@ -157,7 +157,7 @@ async def _late_cleanup_task() -> None:
         return
 
     if _beta_guild_sync_explicitly_enabled():
-        _log("skipped guild command copy cleanup because STONEY_SYNC_BETA_GUILD_COMMANDS=true")
+        _log("skipped guild command copy cleanup because DANK_SYNC_BETA_GUILD_COMMANDS=true")
         return
 
     if _env_true("DANK_DISABLE_GUILD_COMMAND_COPY_CLEANUP", False):

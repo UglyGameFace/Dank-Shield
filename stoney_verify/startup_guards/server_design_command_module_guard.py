@@ -8,7 +8,7 @@ selected/synced. This guard injects the public_design_group module into
 commands_ext before app.py runs command registration, so the command is visible
 on the next sync/restart.
 
-It also handles deployments that use STONEY_COMMAND_MODULES as an explicit allow
+It also handles deployments that use DANK_COMMAND_MODULES as an explicit allow
 list. In that mode commands_ext normally ignores profile additions, so this guard
 wraps the selector and appends the design module unless it was explicitly skipped.
 """
@@ -46,7 +46,7 @@ def _install_selected_module_wrapper(commands_ext: Any) -> None:
         try:
             import os
 
-            skipped = _csv_set(os.getenv("STONEY_COMMAND_MODULES_SKIP", ""))
+            skipped = _csv_set(os.getenv("DANK_COMMAND_MODULES_SKIP", ""))
             if _SPEC[0] in skipped:
                 return selected
         except Exception:
@@ -76,9 +76,9 @@ def apply() -> bool:
             modules.insert(insert_at, _SPEC)
             commands_ext.COMMAND_MODULES = modules
 
-        allowed = set(getattr(commands_ext, "_ALLOWED_STONEY_CHILDREN", set()) or set())
+        allowed = set(getattr(commands_ext, "_ALLOWED_DANK_CHILDREN", set()) or set())
         allowed.add("design")
-        commands_ext._ALLOWED_STONEY_CHILDREN = allowed
+        commands_ext._ALLOWED_DANK_CHILDREN = allowed
 
         core = _append_unique_tuple(getattr(commands_ext, "_PUBLIC_CORE_MODULES", tuple()), _SPEC[0])
         commands_ext._PUBLIC_CORE_MODULES = core

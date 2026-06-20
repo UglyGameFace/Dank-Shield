@@ -69,7 +69,7 @@ def _env_bool(name: str, default: bool = False) -> bool:
 
 
 def _legacy_automod_commands_enabled() -> bool:
-    return _env_bool("STONEY_EXPOSE_LEGACY_AUTOMOD_COMMANDS", False)
+    return _env_bool("DANK_EXPOSE_LEGACY_AUTOMOD_COMMANDS", False)
 
 
 def _clean_filter_item(value: Any) -> str:
@@ -385,9 +385,9 @@ def _maybe_expose_legacy_automod(bot: Any) -> None:
     try:
         import stoney_verify.commands_ext as commands_ext
 
-        allowed = set(getattr(commands_ext, "_ALLOWED_STONEY_CHILDREN", set()) or set())
+        allowed = set(getattr(commands_ext, "_ALLOWED_DANK_CHILDREN", set()) or set())
         allowed.add("automod")
-        commands_ext._ALLOWED_STONEY_CHILDREN = allowed
+        commands_ext._ALLOWED_DANK_CHILDREN = allowed
 
         from stoney_verify.commands_ext import public_automod_group
 

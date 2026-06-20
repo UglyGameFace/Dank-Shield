@@ -171,7 +171,7 @@ def _role_safety_notes(
         if powerful_staff:
             warnings.append(
                 f"{label} role {_mention(role)} looks like a Discord {preset} preset and has elevated server permissions: "
-                f"{', '.join(powerful_staff)}. That can be intentional, but Stoney only needs the role for bot access checks."
+                f"{', '.join(powerful_staff)}. That can be intentional, but Dank Shield only needs the role for bot access checks."
             )
         else:
             ok.append(f"{label} role {_mention(role)} is a safe plain/access role ({preset}).")
@@ -180,7 +180,7 @@ def _role_safety_notes(
 
     if _role_is_above_bot(guild, role):
         if grantable_to_members:
-            blockers.append(f"{label} role {_mention(role)} is above/equal to the bot role. Move the bot role above it so Stoney can manage verification roles.")
+            blockers.append(f"{label} role {_mention(role)} is above/equal to the bot role. Move the bot role above it so Dank Shield can manage verification roles.")
         elif setup_control_or_staff:
             warnings.append(f"{label} role {_mention(role)} is above/equal to the bot role. This is okay for access checks, but the bot cannot edit/assign that role.")
 
@@ -327,7 +327,7 @@ def _patch_setup_defaults(module: Any) -> None:
             role = await original(guild, name, create_missing_roles=create_missing_roles, notes=notes, created=created, reused=reused)
             try:
                 if role is not None and len(created) > before_created:
-                    notes.append(f"Created `{name}` as a plain safe role with no Discord Moderator/Manager permissions. Staff/control access is enforced by Stoney config, not by overpowering the role.")
+                    notes.append(f"Created `{name}` as a plain safe role with no Discord Moderator/Manager permissions. Staff/control access is enforced by Dank Shield config, not by overpowering the role.")
             except Exception:
                 pass
             return role

@@ -14,7 +14,7 @@ from .public_setup_group import (
     _field_text,
     _require_setup_permission,
     _safe_str,
-    stoney_group,
+    dank_group,
 )
 from ..guild_config import get_guild_config
 
@@ -32,7 +32,7 @@ from ..guild_config import get_guild_config
 #   verify/log channels, and manageable roles.
 #
 # This module stays inside the public grouped command surface:
-# - /stoney permission-check is read-only.
+# - /dank permission-check is read-only.
 # - An on_ready background check prints per-guild findings and optionally posts
 #   findings to the configured modlog channel.
 # - It does not rely on one env GUILD_ID.
@@ -118,7 +118,7 @@ def _permission_check_embed(guild: discord.Guild, cfg: Any, blockers: list[str],
     status, color = _health_status(blockers, warnings)
     source = _safe_str(getattr(cfg, "source", "unknown"), "unknown")
     embed = discord.Embed(
-        title="🩺 Stoney Runtime Permission Check",
+        title="🩺 Dank Shield Runtime Permission Check",
         description=(
             f"{_status_description(blockers, warnings)}\n\n"
             f"Status: `{status}`\n"
@@ -166,8 +166,8 @@ def _print_health(guild: discord.Guild, cfg: Any, blockers: list[str], warnings:
 
 async def _post_health_if_needed(guild: discord.Guild, cfg: Any, blockers: list[str], warnings: list[str], ok: list[str]) -> None:
     try:
-        post_modlog = _env_bool("STONEY_SETUP_HEALTH_POST_MODLOG", True)
-        post_ok = _env_bool("STONEY_SETUP_HEALTH_POST_OK", False)
+        post_modlog = _env_bool("DANK_SETUP_HEALTH_POST_MODLOG", True)
+        post_ok = _env_bool("DANK_SETUP_HEALTH_POST_OK", False)
         if not post_modlog:
             return
         if not blockers and not warnings and not post_ok:
@@ -199,12 +199,12 @@ async def _run_guild_permission_check(guild: discord.Guild, *, refresh: bool = T
 
 
 async def _run_startup_permission_checks(bot: Any) -> None:
-    if not _env_bool("STONEY_SETUP_HEALTH_ON_READY", True):
+    if not _env_bool("DANK_SETUP_HEALTH_ON_READY", True):
         return
 
     async with _STARTUP_RUN_LOCK:
         try:
-            max_guilds = max(1, _env_int("STONEY_SETUP_HEALTH_MAX_GUILDS_PER_READY", 50))
+            max_guilds = max(1, _env_int("DANK_SETUP_HEALTH_MAX_GUILDS_PER_READY", 50))
             guilds = list(getattr(bot, "guilds", []) or [])[:max_guilds]
             if not guilds:
                 print("ℹ️ Runtime setup permission self-check skipped: no cached guilds yet.")
@@ -213,7 +213,7 @@ async def _run_startup_permission_checks(bot: Any) -> None:
             for guild in guilds:
                 try:
                     gid = int(guild.id)
-                    if gid in _STARTUP_CHECKED_GUILDS and not _env_bool("STONEY_SETUP_HEALTH_REPEAT_ON_READY", False):
+                    if gid in _STARTUP_CHECKED_GUILDS and not _env_bool("DANK_SETUP_HEALTH_REPEAT_ON_READY", False):
                         continue
                     _STARTUP_CHECKED_GUILDS.add(gid)
 
@@ -254,7 +254,7 @@ def _attach_permission_check_command() -> None:
         return
 
     try:
-        existing = stoney_group.get_command("permission-check")
+        existing = dank_group.get_command("permission-check")
     except Exception:
         existing = None
 
@@ -267,7 +267,7 @@ def _attach_permission_check_command() -> None:
         description="Check saved channels, categories, and role hierarchy without changing anything.",
         callback=_permission_check_callback,
     )
-    stoney_group.add_command(command)
+    dank_group.add_command(command)
     _PERMISSION_COMMAND_ATTACHED = True
 
 
@@ -277,7 +277,7 @@ def _attach_startup_listener(bot: Any) -> None:
         return
 
     async def _on_ready_setup_health() -> None:
-        delay = max(0.0, _env_float("STONEY_SETUP_HEALTH_READY_DELAY_SECONDS", 8.0))
+        delay = max(0.0, _env_float("DANK_SETUP_HEALTH_READY_DELAY_SECONDS", 8.0))
         if delay:
             await asyncio.sleep(delay)
         await _run_startup_permission_checks(bot)
@@ -297,7 +297,7 @@ def register_public_permission_check_commands(bot: Any, tree: Any) -> None:
     _attach_permission_check_command()
     _attach_startup_listener(bot)
     try:
-        print("✅ public_permission_check: attached /stoney permission-check command + startup setup health listener")
+        print("✅ public_permission_check: attached /dank permission-check command + startup setup health listener")
     except Exception:
         pass
 

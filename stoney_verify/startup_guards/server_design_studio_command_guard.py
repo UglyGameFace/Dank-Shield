@@ -28,8 +28,8 @@ _LOCKS: dict[str, asyncio.Lock] = {}
 _ROLLBACK_LOCK = asyncio.Lock()
 ROLLBACK_FILE = Path(
     os.getenv(
-        "STONEY_SERVER_DESIGN_ROLLBACK_FILE",
-        str(Path(os.getenv("STONEY_DATA_DIR", "data")) / "server_design_rollback_snapshots.json"),
+        "DANK_SERVER_DESIGN_ROLLBACK_FILE",
+        str(Path(os.getenv("DANK_DATA_DIR", "data")) / "server_design_rollback_snapshots.json"),
     )
 )
 _FORMAT_EDITOR_DRAFTS: dict[str, dict[str, Any]] = {}
@@ -5343,15 +5343,15 @@ async def open_design_studio(interaction: discord.Interaction) -> None:
 
 def _register_command() -> None:
     import stoney_verify.commands_ext as commands_ext
-    from stoney_verify.commands_ext.public_setup_group import stoney_group
+    from stoney_verify.commands_ext.public_setup_group import dank_group
 
-    allowed = set(getattr(commands_ext, "_ALLOWED_STONEY_CHILDREN", set()) or set())
+    allowed = set(getattr(commands_ext, "_ALLOWED_DANK_CHILDREN", set()) or set())
     allowed.add("design")
-    commands_ext._ALLOWED_STONEY_CHILDREN = allowed
-    if stoney_group.get_command("design") is not None:
+    commands_ext._ALLOWED_DANK_CHILDREN = allowed
+    if dank_group.get_command("design") is not None:
         return
 
-    @stoney_group.command(name="design", description="Open the Server Design Studio for channel/category name styling.")
+    @dank_group.command(name="design", description="Open the Server Design Studio for channel/category name styling.")
     async def dank_design(interaction: discord.Interaction) -> None:
         await open_design_studio(interaction)
 

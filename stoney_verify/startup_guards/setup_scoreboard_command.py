@@ -52,18 +52,18 @@ def _env_str(name: str, default: str = "") -> str:
 
 
 def _deployment_mode() -> str:
-    raw = _env_str("STONEY_DEPLOYMENT_MODE", "").lower()
+    raw = _env_str("DANK_DEPLOYMENT_MODE", "").lower()
     if raw:
         return raw
-    if _env_true("STONEY_PRODUCTION_MODE", False):
+    if _env_true("DANK_PRODUCTION_MODE", False):
         return "production"
-    if _env_true("STONEY_PUBLIC_MODE", False):
+    if _env_true("DANK_PUBLIC_MODE", False):
         return "public"
     return "development"
 
 
 def _public_like() -> bool:
-    profile = _env_str("STONEY_COMMAND_PROFILE", "public").lower()
+    profile = _env_str("DANK_COMMAND_PROFILE", "public").lower()
     deployment = _deployment_mode()
     return profile in {"public", "minimal"} or deployment in {"public", "prod", "production"}
 
@@ -71,7 +71,7 @@ def _public_like() -> bool:
 def _direct_scoreboard_enabled() -> bool:
     if _env_true("DANK_EXPOSE_SETUP_SCOREBOARD_COMMAND", False):
         return True
-    profile = _env_str("STONEY_COMMAND_PROFILE", "public").lower()
+    profile = _env_str("DANK_COMMAND_PROFILE", "public").lower()
     return profile in {"public-admin", "dev", "full"}
 
 
@@ -156,13 +156,13 @@ def apply() -> bool:
         return True
 
     try:
-        from stoney_verify.commands_ext.public_setup_group import _require_setup_permission, stoney_group
+        from stoney_verify.commands_ext.public_setup_group import _require_setup_permission, dank_group
 
-        if stoney_group.get_command("scoreboard") is not None:
+        if dank_group.get_command("scoreboard") is not None:
             _PATCHED = True
             return True
 
-        @stoney_group.command(name="scoreboard", description="Show a clear setup readiness scoreboard for this server.")
+        @dank_group.command(name="scoreboard", description="Show a clear setup readiness scoreboard for this server.")
         async def setup_scoreboard(interaction: discord.Interaction) -> None:
             if not await _require_setup_permission(interaction):
                 return

@@ -24,7 +24,7 @@ from .public_setup_group import (
     _role_value,
     _upsert_config,
     _utc_iso,
-    stoney_group,
+    dank_group,
 )
 from ..guild_config import get_guild_config, invalidate_guild_config
 
@@ -596,7 +596,7 @@ def _attach() -> None:
     if _ATTACHED:
         return
     try:
-        existing = stoney_group.get_command("setup-defaults")
+        existing = dank_group.get_command("setup-defaults")
     except Exception:
         existing = None
     if existing is not None:
@@ -614,7 +614,7 @@ def _attach() -> None:
         command._params["apply_channel_permissions"].description = "Also repairs safe bot/staff/control overwrites on reused setup items."
     except Exception:
         pass
-    stoney_group.add_command(command)
+    dank_group.add_command(command)
     _ATTACHED = True
 
 

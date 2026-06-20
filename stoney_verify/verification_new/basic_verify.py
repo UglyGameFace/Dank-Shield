@@ -6,7 +6,7 @@ This is the default public-server verification flow:
 - new members keep the configured Unverified role
 - the verification channel shows a Verify button
 - clicking Verify grants Verified / effective Member access and removes Unverified
-- no ID upload website, token, ticket, or old Stoney panel is involved
+- no ID upload website, token, ticket, or old Dank Shield panel is involved
 """
 
 import asyncio

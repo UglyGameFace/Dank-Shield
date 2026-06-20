@@ -8,7 +8,7 @@ from typing import Any, Optional
 import discord
 from discord import app_commands
 
-from .public_setup_group import _require_setup_permission, stoney_group
+from .public_setup_group import _require_setup_permission, dank_group
 
 
 SELF_ROLE_PREFIX = "dank:selfrole:v1:"
@@ -1618,8 +1618,8 @@ def _attach_groups() -> bool:
 
     ok = True
     try:
-        if stoney_group.get_command("profile") is None:
-            stoney_group.add_command(profile_group)
+        if dank_group.get_command("profile") is None:
+            dank_group.add_command(profile_group)
     except Exception as exc:
         ok = False
         try:
@@ -1628,8 +1628,8 @@ def _attach_groups() -> bool:
             pass
 
     try:
-        if stoney_group.get_command("roles") is None:
-            stoney_group.add_command(roles_group)
+        if dank_group.get_command("roles") is None:
+            dank_group.add_command(roles_group)
     except Exception as exc:
         ok = False
         try:

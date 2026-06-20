@@ -56,25 +56,25 @@ def _env_bool(name: str, default: bool = False) -> bool:
 
 
 def _public_mode() -> bool:
-    profile = _safe_str(os.getenv("STONEY_COMMAND_PROFILE"), "public").lower()
-    deployment = _safe_str(os.getenv("STONEY_DEPLOYMENT_MODE"), "").lower()
+    profile = _safe_str(os.getenv("DANK_COMMAND_PROFILE"), "public").lower()
+    deployment = _safe_str(os.getenv("DANK_DEPLOYMENT_MODE"), "").lower()
     if not deployment:
         deployment = _safe_str(os.getenv("DEPLOYMENT_ENV"), "production").lower()
     return bool(
         profile in {"public", "minimal"}
         or deployment in {"public", "prod", "production"}
-        or _env_bool("STONEY_PUBLIC_MODE", True)
-        or _env_bool("STONEY_PRODUCTION_MODE", False)
+        or _env_bool("DANK_PUBLIC_MODE", True)
+        or _env_bool("DANK_PRODUCTION_MODE", False)
     )
 
 
 def _allow_server_env_ids() -> bool:
-    explicit = os.getenv("STONEY_ALLOW_SERVER_ENV_IDS")
+    explicit = os.getenv("DANK_ALLOW_SERVER_ENV_IDS")
     if explicit is not None and _safe_str(explicit):
-        return _env_bool("STONEY_ALLOW_SERVER_ENV_IDS", False)
-    legacy = os.getenv("STONEY_SERVER_ENV_IDS_ENABLED")
+        return _env_bool("DANK_ALLOW_SERVER_ENV_IDS", False)
+    legacy = os.getenv("DANK_SERVER_ENV_IDS_ENABLED")
     if legacy is not None and _safe_str(legacy):
-        return _env_bool("STONEY_SERVER_ENV_IDS_ENABLED", False)
+        return _env_bool("DANK_SERVER_ENV_IDS_ENABLED", False)
     return not _public_mode()
 
 

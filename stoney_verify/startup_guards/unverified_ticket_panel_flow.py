@@ -21,7 +21,7 @@ Hardening:
 - Treat bot + owner access as critical. Staff overwrite failures are warnings,
   not a reason to leave the member with a blank ticket.
 - Before routing a verification-needed member, repair the configured VC verify
-  channel into a locked waiting-room state. If Discord will not let Stoney lock
+  channel into a locked waiting-room state. If Discord will not let Dank Shield lock
   it, the flow stops instead of running half-configured.
 """
 
@@ -784,7 +784,7 @@ async def _open_fresh_verification_ticket(interaction: discord.Interaction, guil
         _warn(f"verification ticket auto-route missing permissions guild={getattr(guild, 'id', None)} user={getattr(member, 'id', None)}: {e!r}")
         await _reply(
             interaction,
-            "❌ I could not open your verification ticket because Stoney is missing **Manage Channels** for ticket creation. "
+            "❌ I could not open your verification ticket because Dank Shield is missing **Manage Channels** for ticket creation. "
             "Staff should run `/dank setup` → **Health Check** and fix the bot/category permissions.",
         )
         return True
@@ -792,7 +792,7 @@ async def _open_fresh_verification_ticket(interaction: discord.Interaction, guil
         _warn(f"verification ticket auto-route missing permissions guild={getattr(guild, 'id', None)} user={getattr(member, 'id', None)}: {e!r}")
         await _reply(
             interaction,
-            "❌ I could not open your verification ticket because Discord denied Stoney permission to create the private ticket. "
+            "❌ I could not open your verification ticket because Discord denied Dank Shield permission to create the private ticket. "
             "Staff should run `/dank setup` → **Health Check** and fix the bot/category permissions.",
         )
         return True
@@ -809,7 +809,7 @@ async def _open_fresh_verification_ticket(interaction: discord.Interaction, guil
     if posted:
         await _reply(interaction, f"✅ Opened your verification ticket: {channel.mention}\nUse the verification buttons inside that ticket.")
     else:
-        await _reply(interaction, f"⚠️ Opened your verification ticket: {channel.mention}\nBut I could not post the verification panel because Stoney lacks access inside that channel.")
+        await _reply(interaction, f"⚠️ Opened your verification ticket: {channel.mention}\nBut I could not post the verification panel because Dank Shield lacks access inside that channel.")
     return True
 
 

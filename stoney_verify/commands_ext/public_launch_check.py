@@ -4,7 +4,7 @@ from __future__ import annotations
 Public launch readiness command.
 
 /dank launch-check is the one-screen production checklist admins should run
-before relying on Stoney in a real server. It combines:
+before relying on Dank Shield in a real server. It combines:
 
 - per-guild setup health
 - raw DB config completeness checks
@@ -29,7 +29,7 @@ from .public_setup_group import (
     _field_text,
     _require_setup_permission,
     _safe_str,
-    stoney_group,
+    dank_group,
 )
 from ..guild_config import get_guild_config
 from ..globals import get_supabase
@@ -118,22 +118,22 @@ def _masked_secret_state(value: str) -> str:
 
 
 def _deployment_mode() -> str:
-    raw = _env_str("STONEY_DEPLOYMENT_MODE", "").lower()
+    raw = _env_str("DANK_DEPLOYMENT_MODE", "").lower()
     if raw:
         return raw
-    if _env_bool("STONEY_PRODUCTION_MODE", False):
+    if _env_bool("DANK_PRODUCTION_MODE", False):
         return "production"
-    if _env_bool("STONEY_PUBLIC_MODE", False):
+    if _env_bool("DANK_PUBLIC_MODE", False):
         return "public"
     return "development"
 
 
 def _command_profile() -> str:
-    return _env_str("STONEY_COMMAND_PROFILE", "public").lower() or "public"
+    return _env_str("DANK_COMMAND_PROFILE", "public").lower() or "public"
 
 
 def _config_table_name() -> str:
-    return _env_str("STONEY_GUILD_CONFIG_TABLE", "guild_configs") or "guild_configs"
+    return _env_str("DANK_GUILD_CONFIG_TABLE", "guild_configs") or "guild_configs"
 
 
 def _tree_counts_for_guild(guild_id: int) -> tuple[int, int]:
@@ -261,7 +261,7 @@ def _runtime_checks(guild: discord.Guild, cfg: Any) -> tuple[list[str], list[str
         ok.append(f"Command profile is public-safe: `{profile}`.")
 
     if deployment not in {"public", "prod", "production"}:
-        warnings.append(f"Deployment mode is `{deployment}`. For public launch use `STONEY_DEPLOYMENT_MODE=public` or `production`.")
+        warnings.append(f"Deployment mode is `{deployment}`. For public launch use `DANK_DEPLOYMENT_MODE=public` or `production`.")
     else:
         ok.append(f"Deployment mode is public-safe: `{deployment}`.")
 
@@ -276,10 +276,10 @@ def _runtime_checks(guild: discord.Guild, cfg: Any) -> tuple[list[str], list[str
     if global_count >= 95:
         warnings.append(f"Global command count is high: `{global_count}/100`.")
 
-    sync_beta = _env_bool("STONEY_SYNC_BETA_GUILD_COMMANDS", False)
-    clear_beta = _env_bool("STONEY_CLEAR_BETA_GUILD_COMMANDS_ON_BOOT", True)
+    sync_beta = _env_bool("DANK_SYNC_BETA_GUILD_COMMANDS", False)
+    clear_beta = _env_bool("DANK_CLEAR_BETA_GUILD_COMMANDS_ON_BOOT", True)
     if sync_beta:
-        warnings.append("`STONEY_SYNC_BETA_GUILD_COMMANDS=true` can cause duplicate commands beside global commands. Keep it false for public launch.")
+        warnings.append("`DANK_SYNC_BETA_GUILD_COMMANDS=true` can cause duplicate commands beside global commands. Keep it false for public launch.")
     else:
         ok.append("Beta guild command sync is disabled, so public/global commands stay clean.")
 
@@ -289,7 +289,7 @@ def _runtime_checks(guild: discord.Guild, cfg: Any) -> tuple[list[str], list[str
         ok.append("No local guild-scoped command copies are registered for this server.")
 
     if not clear_beta and _env_str("GUILD_ID", ""):
-        warnings.append("`STONEY_CLEAR_BETA_GUILD_COMMANDS_ON_BOOT=false`. That is fine after cleanup, but turn it on once if duplicate guild commands return.")
+        warnings.append("`DANK_CLEAR_BETA_GUILD_COMMANDS_ON_BOOT=false`. That is fine after cleanup, but turn it on once if duplicate guild commands return.")
 
     require_auth = _env_bool("BOT_API_REQUIRE_AUTH", True)
     allow_insecure = _env_bool("BOT_API_ALLOW_INSECURE", False)
@@ -316,7 +316,7 @@ def _runtime_checks(guild: discord.Guild, cfg: Any) -> tuple[list[str], list[str
     elif require_auth:
         ok.append("Bot API shared secret length looks production-safe.")
 
-    expected_guilds = _env_int("STONEY_EXPECTED_PUBLIC_GUILDS", 1)
+    expected_guilds = _env_int("DANK_EXPECTED_PUBLIC_GUILDS", 1)
     auto_shard = _env_bool("DISCORD_AUTO_SHARD", False)
     if expected_guilds >= 100 and not auto_shard:
         warnings.append("Expected public guild count is 100+, but `DISCORD_AUTO_SHARD` is not enabled yet.")
@@ -346,7 +346,7 @@ def _launch_embed(guild: discord.Guild, cfg: Any, setup_blockers: list[str], set
     status, color, description = _overall_status(blockers, warnings)
 
     embed = discord.Embed(
-        title="🚀 Stoney Launch Check",
+        title="🚀 Dank Shield Launch Check",
         description=(
             f"{description}\n\n"
             f"Status: `{status}`\n"
@@ -408,7 +408,7 @@ def _attach_launch_check_command() -> None:
         return
 
     try:
-        existing = stoney_group.get_command("launch-check")
+        existing = dank_group.get_command("launch-check")
     except Exception:
         existing = None
 
@@ -421,7 +421,7 @@ def _attach_launch_check_command() -> None:
         description="Run a production launch checklist for setup, isolation, commands, API, and scaling.",
         callback=_launch_check_callback,
     )
-    stoney_group.add_command(command)
+    dank_group.add_command(command)
     _LAUNCH_CHECK_ATTACHED = True
 
 

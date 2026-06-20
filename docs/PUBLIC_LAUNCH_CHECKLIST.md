@@ -47,7 +47,7 @@ spam
 These must not appear in public autocomplete:
 
 ```text
-/stoney
+/dank
 /dank scoreboard
 /dank setup-status
 /dank db-check
@@ -77,7 +77,7 @@ Never use these for normal public cleanup:
 
 ```env
 CLEAR_GLOBAL_COMMANDS_ON_BOOT=true
-STONEY_DANGEROUS_CLEAR_ALL_GLOBAL_COMMANDS_ON_BOOT=true
+DANK_DANGEROUS_CLEAR_ALL_GLOBAL_COMMANDS_ON_BOOT=true
 ```
 
 ## Public production environment
@@ -87,18 +87,18 @@ The deployment must not contain server-specific Discord IDs. Roles, channels, ca
 Required public defaults:
 
 ```env
-STONEY_DEPLOYMENT_MODE=production
-STONEY_PUBLIC_MODE=true
-STONEY_PRODUCTION_MODE=true
-STONEY_COMMAND_PROFILE=public
-STONEY_SYNC_BETA_GUILD_COMMANDS=false
+DANK_DEPLOYMENT_MODE=production
+DANK_PUBLIC_MODE=true
+DANK_PRODUCTION_MODE=true
+DANK_COMMAND_PROFILE=public
+DANK_SYNC_BETA_GUILD_COMMANDS=false
 CLEAR_GLOBAL_COMMANDS_ON_BOOT=false
-STONEY_DANGEROUS_CLEAR_ALL_GLOBAL_COMMANDS_ON_BOOT=false
+DANK_DANGEROUS_CLEAR_ALL_GLOBAL_COMMANDS_ON_BOOT=false
 DANK_SKIP_UNCHANGED_GLOBAL_SYNC=true
 DANK_FORCE_COMMAND_SYNC_ON_BOOT=false
-STONEY_PUBLIC_CONFIG_ISOLATION=true
-STONEY_ALLOW_SERVER_ENV_IDS=false
-STONEY_SERVER_ENV_IDS_ENABLED=false
+DANK_PUBLIC_CONFIG_ISOLATION=true
+DANK_ALLOW_SERVER_ENV_IDS=false
+DANK_SERVER_ENV_IDS_ENABLED=false
 BOT_DISPLAY_NAME=Dank Shield
 ```
 

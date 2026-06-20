@@ -89,18 +89,18 @@ def _debug(message: str) -> None:
 
 
 def _deployment_mode() -> str:
-    raw = _env_str("STONEY_DEPLOYMENT_MODE", "").lower()
+    raw = _env_str("DANK_DEPLOYMENT_MODE", "").lower()
     if raw:
         return raw
-    if _env_true("STONEY_PRODUCTION_MODE", False):
+    if _env_true("DANK_PRODUCTION_MODE", False):
         return "production"
-    if _env_true("STONEY_PUBLIC_MODE", False):
+    if _env_true("DANK_PUBLIC_MODE", False):
         return "public"
     return "development"
 
 
 def _command_profile() -> str:
-    return _env_str("STONEY_COMMAND_PROFILE", "public").lower()
+    return _env_str("DANK_COMMAND_PROFILE", "public").lower()
 
 
 def _public_like_mode() -> bool:
@@ -111,31 +111,31 @@ def _public_like_mode() -> bool:
 
 
 def _bootstrap_enabled() -> bool:
-    return _env_true("STONEY_PANEL_BOOTSTRAP_ENABLED", True)
+    return _env_true("DANK_PANEL_BOOTSTRAP_ENABLED", True)
 
 
 def _bootstrap_recurring_enabled() -> bool:
-    return _env_true("STONEY_PANEL_BOOTSTRAP_RECURRING", True)
+    return _env_true("DANK_PANEL_BOOTSTRAP_RECURRING", True)
 
 
 def _bootstrap_on_guild_join_enabled() -> bool:
-    return _env_true("STONEY_PANEL_BOOTSTRAP_ON_GUILD_JOIN", True)
+    return _env_true("DANK_PANEL_BOOTSTRAP_ON_GUILD_JOIN", True)
 
 
 def _bootstrap_save_discovery_enabled() -> bool:
-    return _env_true("STONEY_PANEL_BOOTSTRAP_SAVE_DISCOVERY", True)
+    return _env_true("DANK_PANEL_BOOTSTRAP_SAVE_DISCOVERY", True)
 
 
 def _bootstrap_seed_default_panel_enabled() -> bool:
-    return _env_true("STONEY_PANEL_BOOTSTRAP_SEED_DEFAULT_PANEL", True)
+    return _env_true("DANK_PANEL_BOOTSTRAP_SEED_DEFAULT_PANEL", True)
 
 
 def _bootstrap_interval_seconds() -> int:
-    return max(300, _env_int("STONEY_PANEL_BOOTSTRAP_INTERVAL_SECONDS", 1800))
+    return max(300, _env_int("DANK_PANEL_BOOTSTRAP_INTERVAL_SECONDS", 1800))
 
 
 def _guild_join_delay_seconds() -> float:
-    return float(max(0, _env_int("STONEY_PANEL_BOOTSTRAP_GUILD_JOIN_DELAY_SECONDS", 8)))
+    return float(max(0, _env_int("DANK_PANEL_BOOTSTRAP_GUILD_JOIN_DELAY_SECONDS", 8)))
 
 
 # ============================================================
@@ -187,7 +187,7 @@ async def _start_panel_bootstrap_after_ready() -> None:
 
     if not _bootstrap_enabled():
         _RUNTIME_STARTED = True
-        _debug("startup disabled by STONEY_PANEL_BOOTSTRAP_ENABLED=false")
+        _debug("startup disabled by DANK_PANEL_BOOTSTRAP_ENABLED=false")
         return
 
     if not claim_startup_flag("panel_bootstrap_runtime"):

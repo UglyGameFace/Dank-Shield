@@ -24,12 +24,12 @@ def _env_bool(name: str, default: bool = False) -> bool:
 
 
 def _deployment_mode() -> str:
-    explicit = _env("STONEY_DEPLOYMENT_MODE", "").lower()
+    explicit = _env("DANK_DEPLOYMENT_MODE", "").lower()
     if explicit:
         return explicit
-    if _env_bool("STONEY_PRODUCTION_MODE", False):
+    if _env_bool("DANK_PRODUCTION_MODE", False):
         return "production"
-    if _env_bool("STONEY_PUBLIC_MODE", False):
+    if _env_bool("DANK_PUBLIC_MODE", False):
         return "public"
     return "development"
 
@@ -49,7 +49,7 @@ async def _health(_: web.Request) -> web.Response:
     return web.json_response(
         {
             "ok": True,
-            "service": "stoney-verify-legacy-bot-actions-disabled",
+            "service": "dank-shield-legacy-bot-actions-disabled",
             "legacy_api_enabled": False,
         }
     )

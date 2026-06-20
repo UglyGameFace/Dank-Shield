@@ -245,7 +245,7 @@ def _source_from_stack() -> str:
             func = str(getattr(frame, "function", "") or "")
             if "guild_config_write_safety" in filename or "guild_config.py" in filename:
                 continue
-            short = filename.replace("\\", "/").split("/stoney_verify/")[-1]
+            short = filename.replace("\\", "/").split("/dank_verify/")[-1]
             parts.append(f"{short}:{func}")
             if len(parts) >= 3:
                 break

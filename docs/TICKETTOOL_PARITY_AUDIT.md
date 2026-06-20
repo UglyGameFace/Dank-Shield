@@ -50,8 +50,8 @@ Every setup option should answer these questions in plain English:
 - Public setup should explain what is enabled, what is missing, and how to fix it.
 - Multi-guild isolation must remain strict.
 - Caching/scaling work comes after TicketTool parity is solid.
-- Do not assume every server wants the Stoney Baloney service flow.
-- Stoney Baloney-style verification must be available as an optional setup choice, not the only default.
+- Do not assume every server wants the one specific server flow.
+- legacy single-server style verification must be available as an optional setup choice, not the only default.
 - Setup wording must be clear enough for young users, new Discord users, tired moderators, and users who need extra-simple instructions.
 
 ## Active TicketTool parity audit
@@ -156,7 +156,7 @@ Required behavior:
 - [ ] Every ticket lookup is guild-scoped.
 - [ ] Every panel config is guild-scoped.
 - [ ] Every staff role/category/log channel is guild-scoped.
-- [ ] No Stoney Verify branding remains in public scope.
+- [ ] No Dank Shield branding remains in public scope.
 - [ ] No guild-specific hardcoded channel/role IDs in public workflows.
 
 Acceptance:
@@ -182,7 +182,7 @@ Acceptance:
 
 ### 8. Plain setup choices
 
-Goal: stop assuming every server wants the same setup while keeping the Stoney Baloney-style verification panel available as a simple choice.
+Goal: stop assuming every server wants the same setup while keeping the legacy single-server style verification panel available as a simple choice.
 
 Setup choices should use plain labels:
 
@@ -190,7 +190,7 @@ Setup choices should use plain labels:
 - [ ] Help desk — ticket support for members/customers.
 - [ ] ID check — users need to verify with an upload link.
 - [ ] Voice check — users can ask staff to verify them in voice chat.
-- [ ] ID + voice check — same style as the Stoney Baloney setup, but without hardcoded server branding.
+- [ ] ID + voice check — same style as the legacy single-server setup, but without hardcoded server branding.
 - [ ] Custom setup — choose only what this server needs.
 
 Required behavior:
@@ -199,14 +199,14 @@ Required behavior:
 - [ ] Each choice has a one-sentence explanation.
 - [ ] Each choice has Preview before Publish.
 - [ ] Verification panel style is stored per guild.
-- [ ] Stoney Baloney-style setup is selectable but not assumed.
-- [ ] Template choice must not hardcode Stoney Baloney channel IDs, role IDs, or branding into other guilds.
+- [ ] legacy single-server style setup is selectable but not assumed.
+- [ ] Template choice must not hardcode server-specific channel IDs, role IDs, or branding into other guilds.
 - [ ] Switching setup choices should not erase existing config without explicit confirmation.
 
 Acceptance:
 
 - A new server owner can choose a setup without knowing bot/developer terminology.
-- The Stoney Baloney-style verification panel can still be selected and published when desired.
+- The legacy single-server style verification panel can still be selected and published when desired.
 - Setup remains button/select driven and avoids forms unless absolutely necessary.
 
 ## Already handled / removed from active TODO
@@ -236,7 +236,7 @@ These are important, but they should not distract from ticket parity first:
 - Do not force ticket users into forms by default.
 - Do not use confusing setup labels when plain words work.
 - Do not assume one server’s verification/service setup is the universal default.
-- Do not hardcode Stoney Baloney-specific branding, channel IDs, or role IDs into public guild workflows.
+- Do not hardcode server-specific branding, channel IDs, or role IDs into public guild workflows.
 - Do not add tiny patch files for core ticket behavior.
 - Update existing owner files when behavior is wrong.
 - Keep server-specific configuration isolated.

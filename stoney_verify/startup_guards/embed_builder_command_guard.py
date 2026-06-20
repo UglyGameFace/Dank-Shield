@@ -12,9 +12,9 @@ def apply() -> bool:
     try:
         import stoney_verify.commands_ext as commands_ext
 
-        allowed = set(getattr(commands_ext, "_ALLOWED_STONEY_CHILDREN", set()) or set())
+        allowed = set(getattr(commands_ext, "_ALLOWED_DANK_CHILDREN", set()) or set())
         allowed.add("embed")
-        commands_ext._ALLOWED_STONEY_CHILDREN = allowed
+        commands_ext._ALLOWED_DANK_CHILDREN = allowed
 
         from stoney_verify.commands_ext import public_embed_group
 

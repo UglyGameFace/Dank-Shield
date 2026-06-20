@@ -242,7 +242,7 @@ def _configured_overflow_ids(config: Dict[str, Any]) -> List[int]:
     ids = _config_values(config, keys)
     for env_name in (
         "DANK_TICKET_OVERFLOW_CATEGORY_IDS",
-        "STONEY_TICKET_OVERFLOW_CATEGORY_IDS",
+        "DANK_TICKET_OVERFLOW_CATEGORY_IDS",
         "TICKET_OVERFLOW_CATEGORY_IDS",
     ):
         for cid in _parse_ids(os.getenv(env_name, "")):

@@ -385,7 +385,7 @@ def _clean_public_rows(panel_mod: Any, raw: Any) -> List[Dict[str, Any]]:
 
     # Fill any missing standard rows from the public defaults so the menu never
     # becomes half-old/half-new. COD Services is intentionally included here for
-    # Stoney Balonney's older-COD lobby support flow.
+    # legacy single-server's older-COD lobby support flow.
     for default in _DEFAULT_PUBLIC_ROWS:
         key = _canonical_menu_key(panel_mod, default)
         if key in _ALLOWED_MENU_KEYS and key not in by_key:

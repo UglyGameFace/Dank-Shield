@@ -379,7 +379,7 @@ async def _build_recovery_embed(guild: discord.Guild, *, title: str = "🛟 Setu
         title=title,
         description=(
             "Use this when setup got messy, the wrong channels were picked, or the owner wants to start over.\n\n"
-            "Safe recovery does **not** delete Discord channels, roles, messages, or tickets. It only clears what Stoney has saved for this server."
+            "Safe recovery does **not** delete Discord channels, roles, messages, or tickets. It only clears what Dank Shield has saved for this server."
         ),
         color=discord.Color.gold(),
         timestamp=now_utc(),

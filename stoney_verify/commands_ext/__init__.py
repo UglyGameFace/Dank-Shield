@@ -49,7 +49,7 @@ COMMAND_MODULES: List[CommandModuleSpec] = [
     ("public_setup_gate", "register_public_setup_gate", "core: setup readiness gate for ticket commands"),
 
     # Advanced/admin repair modules. These are intentionally NOT in the public
-    # profile. Load them with STONEY_COMMAND_PROFILE=public-admin only when an
+    # profile. Load them with DANK_COMMAND_PROFILE=public-admin only when an
     # owner/admin needs direct repair commands outside /dank setup.
     ("public_setup_start", "register_public_setup_start_commands", "admin: legacy /dank setup quick-start fallback"),
     ("public_setup_review", "register_public_setup_review_commands", "admin: setup review diagnostic command"),
@@ -188,7 +188,7 @@ _STALE_TOP_LEVEL_COMMANDS: Tuple[str, ...] = (
     "ticket_panel_bootstrap_stop",
 )
 
-_CONFUSING_STONEY_CHILDREN: Tuple[str, ...] = (
+_CONFUSING_DANK_CHILDREN: Tuple[str, ...] = (
     "automod",
     "spam",
     "config-cache",
@@ -217,7 +217,7 @@ _CONFUSING_STONEY_CHILDREN: Tuple[str, ...] = (
     "tickettool-check",
 )
 
-_ALLOWED_STONEY_CHILDREN = {
+_ALLOWED_DANK_CHILDREN = {
     "setup",
     "overview",
     "diagnostics",
@@ -288,11 +288,11 @@ def _env_str(name: str, default: str = "") -> str:
 
 
 def _command_profile() -> str:
-    return _env_str("STONEY_COMMAND_PROFILE", DEFAULT_COMMAND_PROFILE).lower() or DEFAULT_COMMAND_PROFILE
+    return _env_str("DANK_COMMAND_PROFILE", DEFAULT_COMMAND_PROFILE).lower() or DEFAULT_COMMAND_PROFILE
 
 
 def _command_log_style() -> str:
-    return _env_str("STONEY_COMMAND_LOG_STYLE", _env_str("STONEY_STARTUP_LOG_STYLE", "compact")).lower()
+    return _env_str("DANK_COMMAND_LOG_STYLE", _env_str("DANK_STARTUP_LOG_STYLE", "compact")).lower()
 
 
 def _verbose_command_logs() -> bool:
@@ -339,12 +339,12 @@ def _compact_command_print_filter() -> Iterator[None]:
 
 
 def _deployment_mode() -> str:
-    raw = _env_str("STONEY_DEPLOYMENT_MODE", "").lower()
+    raw = _env_str("DANK_DEPLOYMENT_MODE", "").lower()
     if raw:
         return raw
-    if _env_bool("STONEY_PRODUCTION_MODE", False):
+    if _env_bool("DANK_PRODUCTION_MODE", False):
         return "production"
-    if _env_bool("STONEY_PUBLIC_MODE", False):
+    if _env_bool("DANK_PUBLIC_MODE", False):
         return "public"
     return "development"
 
@@ -355,14 +355,14 @@ def _public_profile_like(profile: str) -> bool:
 
 def _selected_command_modules() -> List[CommandModuleSpec]:
     profile = _command_profile()
-    explicit = _env_csv_set("STONEY_COMMAND_MODULES")
-    extra = _env_csv_set("STONEY_COMMAND_MODULES_EXTRA")
-    skip = _env_csv_set("STONEY_COMMAND_MODULES_SKIP")
+    explicit = _env_csv_set("DANK_COMMAND_MODULES")
+    extra = _env_csv_set("DANK_COMMAND_MODULES_EXTRA")
+    skip = _env_csv_set("DANK_COMMAND_MODULES_SKIP")
     known = {name for name, _fn, _label in COMMAND_MODULES}
     selected = {name for name in explicit if name in known} if explicit else set(COMMAND_PROFILES.get(profile, COMMAND_PROFILES[DEFAULT_COMMAND_PROFILE]))
     selected |= known.intersection(extra)
     selected -= known.intersection(skip)
-    for label, values in (("STONEY_COMMAND_MODULES", explicit), ("STONEY_COMMAND_MODULES_EXTRA", extra), ("STONEY_COMMAND_MODULES_SKIP", skip)):
+    for label, values in (("DANK_COMMAND_MODULES", explicit), ("DANK_COMMAND_MODULES_EXTRA", extra), ("DANK_COMMAND_MODULES_SKIP", skip)):
         unknown = sorted(values - known)
         if unknown:
             print(f"⚠️ commands_ext: unknown {label} ignored: {unknown}")
@@ -404,24 +404,24 @@ def _remove_stale_top_level_commands(tree: Any, *, reason: str) -> list[str]:
     return removed
 
 
-def _prune_public_stoney_children(*, profile: str, reason: str) -> list[str]:
+def _prune_public_dank_children(*, profile: str, reason: str) -> list[str]:
     if not _public_profile_like(profile):
         return []
     try:
-        from .public_setup_group import stoney_group
+        from .public_setup_group import dank_group
     except Exception:
         return []
-    before = _child_names(stoney_group)
+    before = _child_names(dank_group)
     removed: list[str] = []
-    for name in _CONFUSING_STONEY_CHILDREN:
+    for name in _CONFUSING_DANK_CHILDREN:
         try:
-            if stoney_group.get_command(name) is not None:
-                stoney_group.remove_command(name)
+            if dank_group.get_command(name) is not None:
+                dank_group.remove_command(name)
                 removed.append(name)
         except Exception:
             pass
-    after = _child_names(stoney_group)
-    unexpected = [name for name in after if name not in _ALLOWED_STONEY_CHILDREN]
+    after = _child_names(dank_group)
+    unexpected = [name for name in after if name not in _ALLOWED_DANK_CHILDREN]
     if unexpected or (removed and _verbose_command_logs()):
         print(f"🧹 commands_ext pruned /dank during registration reason={reason} before={before} after={after} removed={removed} unexpected_remaining={unexpected}")
     return removed
@@ -452,11 +452,11 @@ def _register_one_module(*, bot: Any, tree: Any, module_name: str, function_name
         return 0, 0
 
 
-def _log_stoney_setup_surface() -> tuple[list[str], list[str]]:
+def _log_dank_setup_surface() -> tuple[list[str], list[str]]:
     try:
-        from .public_setup_group import stoney_group
-        child_names = _child_names(stoney_group)
-        advanced = [name for name in child_names if name in _CONFUSING_STONEY_CHILDREN]
+        from .public_setup_group import dank_group
+        child_names = _child_names(dank_group)
+        advanced = [name for name in child_names if name in _CONFUSING_DANK_CHILDREN]
         if advanced or _verbose_command_logs():
             print(f"🧭 commands_ext /dank surface setup_present={'setup' in child_names} advanced_aliases={advanced} direct_children={child_names}")
         return child_names, advanced
@@ -473,13 +473,13 @@ def _public_guard_findings(profile: str) -> tuple[list[str], list[str]]:
     allow_insecure = _env_bool("BOT_API_ALLOW_INSECURE", False)
     secret = _env_str("BOT_API_SHARED_SECRET", "")
     host = _env_str("BOT_API_BIND_HOST", "127.0.0.1")
-    expected_guilds = _env_int("STONEY_EXPECTED_PUBLIC_GUILDS", 1)
+    expected_guilds = _env_int("DANK_EXPECTED_PUBLIC_GUILDS", 1)
     production_like = deployment in {"public", "prod", "production"}
 
     if profile in {"full", "dev"}:
-        (blockers if production_like else warnings).append(f"STONEY_COMMAND_PROFILE={profile!r} exposes legacy/dev command surfaces.")
+        (blockers if production_like else warnings).append(f"DANK_COMMAND_PROFILE={profile!r} exposes legacy/dev command surfaces.")
     if profile == "public-admin":
-        warnings.append("STONEY_COMMAND_PROFILE='public-admin' exposes advanced admin repair commands. Use 'public' for normal release.")
+        warnings.append("DANK_COMMAND_PROFILE='public-admin' exposes advanced admin repair commands. Use 'public' for normal release.")
     if not require_auth:
         (blockers if production_like else warnings).append("BOT_API_REQUIRE_AUTH=false leaves the structured bot API unauthenticated.")
     if allow_insecure:
@@ -489,7 +489,7 @@ def _public_guard_findings(profile: str) -> tuple[list[str], list[str]]:
     if host in {"0.0.0.0", "::"} and not require_auth:
         blockers.append("BOT_API_BIND_HOST is public-facing while API auth is disabled.")
     if expected_guilds >= 100 and not _env_bool("DISCORD_AUTO_SHARD", False):
-        warnings.append("STONEY_EXPECTED_PUBLIC_GUILDS is 100+ but DISCORD_AUTO_SHARD is not enabled.")
+        warnings.append("DANK_EXPECTED_PUBLIC_GUILDS is 100+ but DISCORD_AUTO_SHARD is not enabled.")
     if _env_bool("CLEAR_GLOBAL_COMMANDS_ON_BOOT", False):
         warnings.append("CLEAR_GLOBAL_COMMANDS_ON_BOOT=true is legacy and ignored in public mode.")
     if _env_str("GUILD_ID", ""):
@@ -499,7 +499,7 @@ def _public_guard_findings(profile: str) -> tuple[list[str], list[str]]:
 
 def _run_public_startup_guard(profile: str) -> None:
     blockers, warnings = _public_guard_findings(profile)
-    strict = _env_bool("STONEY_STRICT_PUBLIC_GUARD", False) or _deployment_mode() in {"prod", "production"}
+    strict = _env_bool("DANK_STRICT_PUBLIC_GUARD", False) or _deployment_mode() in {"prod", "production"}
     print(f"🧯 public_startup_guard deployment={_deployment_mode()} profile={profile} strict={strict} blockers={len(blockers)} warnings={len(warnings)}")
     for item in blockers:
         print(f"🚫 public_startup_guard blocker: {item}")
@@ -537,12 +537,12 @@ def register_all_commands(bot: Any, tree: Any) -> None:
         delta_global, delta_guild = _register_one_module(bot=bot, tree=tree, module_name=module_name, function_name=function_name, label=label, errors=errors)
         total_global_delta += delta_global
         total_guild_delta += delta_guild
-        removed = _prune_public_stoney_children(profile=profile, reason=f"after_{module_name}")
+        removed = _prune_public_dank_children(profile=profile, reason=f"after_{module_name}")
         prune_removed += len(removed)
 
-    child_names, advanced = _log_stoney_setup_surface()
+    child_names, advanced = _log_dank_setup_surface()
     post_removed = _remove_stale_top_level_commands(tree, reason="after_module_registration")
-    removed = _prune_public_stoney_children(profile=profile, reason="after_module_registration")
+    removed = _prune_public_dank_children(profile=profile, reason="after_module_registration")
     prune_removed += len(removed)
     _COMMANDS_EXT_REGISTERED = True
     final_global, final_guild = _tree_command_counts(tree)

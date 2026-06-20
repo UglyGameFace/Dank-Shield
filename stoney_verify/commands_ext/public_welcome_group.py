@@ -13,7 +13,7 @@ from ..welcome_message import (
     save_welcome_template,
     welcome_channel_for,
 )
-from .public_setup_group import _require_setup_permission, _upsert_config, stoney_group
+from .public_setup_group import _require_setup_permission, _upsert_config, dank_group
 
 _ATTACHED = False
 
@@ -275,14 +275,14 @@ def _attach() -> bool:
     if _ATTACHED:
         return True
     try:
-        existing = stoney_group.get_command("welcome")
+        existing = dank_group.get_command("welcome")
         if existing is not None:
             _ATTACHED = True
             return True
     except Exception:
         pass
     try:
-        stoney_group.add_command(welcome_group)
+        dank_group.add_command(welcome_group)
         _ATTACHED = True
         return True
     except Exception as exc:

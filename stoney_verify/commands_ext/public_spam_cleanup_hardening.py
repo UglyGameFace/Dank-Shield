@@ -352,7 +352,7 @@ async def _delete_message_object(message: discord.Message) -> bool:
         guild = message.guild
         if guild is None or not _channel_manageable(message.channel, guild):
             return False
-        await message.delete(reason="Stoney Spam Guard burst cleanup sweep")
+        await message.delete(reason="Dank Shield Spam Guard burst cleanup sweep")
         return True
     except discord.NotFound:
         return False

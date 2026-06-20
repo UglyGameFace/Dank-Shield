@@ -366,7 +366,7 @@ async def _grant(
         return False, "VC verification channel is not saved as a real voice channel. Run `/dank setup` → Health Check."
 
     if not _can_manage(guild.me, vc):
-        return False, f"Stoney needs **View Channel** and **Manage Channels** on {getattr(vc, 'mention', '#voice')}."
+        return False, f"Dank Shield needs **View Channel** and **Manage Channels** on {getattr(vc, 'mention', '#voice')}."
 
     try:
         ow = vc.overwrites_for(member)  # type: ignore[union-attr]
@@ -376,7 +376,7 @@ async def _grant(
         ow.use_voice_activation = True
         await vc.set_permissions(member, overwrite=ow, reason=f"VC verify access key={key}")  # type: ignore[union-attr]
     except discord.Forbidden:
-        return False, "Discord denied the VC permission edit. Move Stoney's bot role higher and rerun the one-press VC fix."
+        return False, "Discord denied the VC permission edit. Move Dank Shield's bot role higher and rerun the one-press VC fix."
     except Exception as e:
         return False, f"Failed to edit VC permissions: {type(e).__name__}: {str(e)[:180]}"
 

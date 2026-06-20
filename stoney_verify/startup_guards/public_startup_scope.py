@@ -93,12 +93,12 @@ def _env_bool(name: str, default: bool = False) -> bool:
 
 
 def _public_scope_enabled() -> bool:
-    profile = _env_str("STONEY_COMMAND_PROFILE", "public").lower()
-    deployment = _env_str("STONEY_DEPLOYMENT_MODE", "").lower()
+    profile = _env_str("DANK_COMMAND_PROFILE", "public").lower()
+    deployment = _env_str("DANK_DEPLOYMENT_MODE", "").lower()
     if not deployment:
-        if _env_bool("STONEY_PRODUCTION_MODE", False):
+        if _env_bool("DANK_PRODUCTION_MODE", False):
             deployment = "production"
-        elif _env_bool("STONEY_PUBLIC_MODE", False):
+        elif _env_bool("DANK_PUBLIC_MODE", False):
             deployment = "public"
         else:
             deployment = "development"
@@ -106,11 +106,11 @@ def _public_scope_enabled() -> bool:
 
 
 def _sync_beta_guild_commands_enabled() -> bool:
-    return _env_bool("STONEY_SYNC_BETA_GUILD_COMMANDS", False)
+    return _env_bool("DANK_SYNC_BETA_GUILD_COMMANDS", False)
 
 
 def _clear_beta_guild_commands_enabled() -> bool:
-    return _env_bool("STONEY_CLEAR_BETA_GUILD_COMMANDS_ON_BOOT", True)
+    return _env_bool("DANK_CLEAR_BETA_GUILD_COMMANDS_ON_BOOT", True)
 
 
 def _guild_object(guild_id: int) -> discord.Object:
@@ -156,7 +156,7 @@ async def _sync_beta_guild_commands_if_requested(module: Any, guild_id: int) -> 
         await _clear_stale_beta_guild_commands(module, guild_id)
         _log(
             "beta guild slash sync skipped; using global commands only "
-            f"guild={guild_id} set STONEY_SYNC_BETA_GUILD_COMMANDS=true for dev-only instant guild sync"
+            f"guild={guild_id} set DANK_SYNC_BETA_GUILD_COMMANDS=true for dev-only instant guild sync"
         )
         return
 

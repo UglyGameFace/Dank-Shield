@@ -6,7 +6,7 @@ This module patches the hardened setup flow from public_setup_solid.py into a
 simple first-run screen. It deliberately avoids developer/product terms.
 
 Public language rules:
-- Say Dank Shield, not Stoney/Stoney Verify.
+- Say Dank Shield, not Dank Shield.
 - Use plain labels: Basic server, Help desk, ID check, Voice check,
   ID + voice check, Custom setup.
 - No forced forms by default.
@@ -265,10 +265,10 @@ def _build_setup_help_embed() -> discord.Embed:
     embed.add_field(name="What should I press first?", value="Press **Choose Setup Type**. Pick the option closest to your server. You can change it later.", inline=False)
     embed.add_field(name="What if I already made my roles/channels?", value="Press **Use My Existing Server**. Then pick your existing roles and channels from Discord menus.", inline=False)
     embed.add_field(name="What if I do not have roles/channels yet?", value="Press **Create Missing Items**. Dank Shield creates missing basics only. It does not delete your server setup.", inline=False)
-    embed.add_field(name="What is ID + voice check?", value="That is the upload-link plus voice-check style like your current Stoney Baloney setup, but without hardcoded server names, role IDs, or channel IDs.", inline=False)
+    embed.add_field(name="What is ID + voice check?", value="That is the upload-link plus voice-check style like your current legacy single-server setup, but without hardcoded server names, role IDs, or channel IDs.", inline=False)
     embed.add_field(name="What if setup says owner/admin role is missing?", value="That is optional. It came from older server-specific setup. Pick a new owner/admin role only if you want that feature.", inline=False)
     embed.add_field(name="Will this force forms on members?", value="No. Ticket flow stays fast by default. Forms are optional only.", inline=False)
-    embed.add_field(name="Will this copy Stoney Baloney settings to other servers?", value="No. Every server saves its own setup. No Stoney Baloney IDs or branding should be used for other guilds.", inline=False)
+    embed.add_field(name="Will this copy legacy single-server settings to other servers?", value="No. Every server saves its own setup. No legacy single-server IDs or branding should be used for other guilds.", inline=False)
     return embed
 
 

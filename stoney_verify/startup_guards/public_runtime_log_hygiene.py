@@ -30,7 +30,7 @@ def _env_str(name: str, default: str = "") -> str:
 
 
 def _compact_logs_enabled() -> bool:
-    style = _env_str("STONEY_STARTUP_LOG_STYLE", "compact").lower()
+    style = _env_str("DANK_STARTUP_LOG_STYLE", "compact").lower()
     return style not in {"verbose", "debug", "trace", "full"}
 
 

@@ -8,7 +8,7 @@ import discord
 from discord import app_commands
 
 from ..guild_config import get_guild_config, invalidate_guild_config, upsert_guild_config
-from .public_setup_group import _require_setup_permission, _upsert_config, stoney_group
+from .public_setup_group import _require_setup_permission, _upsert_config, dank_group
 
 _ATTACHED = False
 
@@ -421,13 +421,13 @@ def _attach() -> bool:
     if _ATTACHED:
         return True
     try:
-        if stoney_group.get_command("automod") is not None:
+        if dank_group.get_command("automod") is not None:
             _ATTACHED = True
             return True
     except Exception:
         pass
     try:
-        stoney_group.add_command(automod_group)
+        dank_group.add_command(automod_group)
         _ATTACHED = True
         return True
     except Exception as exc:

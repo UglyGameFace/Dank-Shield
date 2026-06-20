@@ -331,9 +331,9 @@ class GuildOperationQueue:
         self._lock = asyncio.Lock()
         self._persistence = _OperationPersistence()
 
-        self._max_global = _env_int("STONEY_OPERATION_QUEUE_MAX_GLOBAL", 16, minimum=1, maximum=256)
-        self._max_queue_per_key = _env_int("STONEY_OPERATION_QUEUE_MAX_PER_KEY", 100, minimum=1, maximum=5000)
-        self._summary_interval = _env_int("STONEY_OPERATION_QUEUE_SUMMARY_SECONDS", 300, minimum=30, maximum=3600)
+        self._max_global = _env_int("DANK_OPERATION_QUEUE_MAX_GLOBAL", 16, minimum=1, maximum=256)
+        self._max_queue_per_key = _env_int("DANK_OPERATION_QUEUE_MAX_PER_KEY", 100, minimum=1, maximum=5000)
+        self._summary_interval = _env_int("DANK_OPERATION_QUEUE_SUMMARY_SECONDS", 300, minimum=30, maximum=3600)
         self._global_semaphore: asyncio.Semaphore | None = None
         self._global_loop: asyncio.AbstractEventLoop | None = None
         self._global_running = 0
@@ -350,7 +350,7 @@ class GuildOperationQueue:
             try:
                 print(
                     "🧱 operation_queue global cap active "
-                    f"max_global={self._max_global} env=STONEY_OPERATION_QUEUE_MAX_GLOBAL"
+                    f"max_global={self._max_global} env=DANK_OPERATION_QUEUE_MAX_GLOBAL"
                 )
             except Exception:
                 pass

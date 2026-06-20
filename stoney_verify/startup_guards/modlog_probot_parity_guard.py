@@ -184,9 +184,9 @@ def apply(bot: Any = None) -> bool:
         # Slash command surface: /dank modlog set-channel/health/test.
         import stoney_verify.commands_ext as commands_ext
 
-        allowed = set(getattr(commands_ext, "_ALLOWED_STONEY_CHILDREN", set()) or set())
+        allowed = set(getattr(commands_ext, "_ALLOWED_DANK_CHILDREN", set()) or set())
         allowed.add("modlog")
-        commands_ext._ALLOWED_STONEY_CHILDREN = allowed
+        commands_ext._ALLOWED_DANK_CHILDREN = allowed
         from stoney_verify.commands_ext import public_modlog_group
 
         register = getattr(public_modlog_group, "register_public_modlog_group_commands", None)

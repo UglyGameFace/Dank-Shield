@@ -79,7 +79,7 @@ def _safe_int(value: Any, default: int = 0) -> int:
 
 def _config_table_name() -> str:
     try:
-        return (os.getenv("STONEY_GUILD_CONFIG_TABLE") or "guild_configs").strip() or "guild_configs"
+        return (os.getenv("DANK_GUILD_CONFIG_TABLE") or "guild_configs").strip() or "guild_configs"
     except Exception:
         return "guild_configs"
 

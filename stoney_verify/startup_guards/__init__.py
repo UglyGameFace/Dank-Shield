@@ -179,7 +179,7 @@ _ONCE_ONLY_PREFIXES: Tuple[str, ...] = (
 
 
 def _log_style() -> str:
-    return os.getenv("STONEY_STARTUP_LOG_STYLE", "compact").strip().lower()
+    return os.getenv("DANK_STARTUP_LOG_STYLE", "compact").strip().lower()
 
 
 def _seen_once(message: str) -> bool:

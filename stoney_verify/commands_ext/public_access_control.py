@@ -49,8 +49,8 @@ _CONTROL_ROLE_LIST_KEYS: tuple[str, ...] = (
 )
 
 _ENV_CONTROL_ROLE_KEYS: tuple[str, ...] = (
-    "STONEY_SERVER_CONTROL_ROLE_ID",
-    "STONEY_CONTROL_ROLE_ID",
+    "DANK_SERVER_CONTROL_ROLE_ID",
+    "DANK_CONTROL_ROLE_ID",
     "SERVER_CONTROL_ROLE_ID",
     "CONTROL_ROLE_ID",
     "PERM_ROLE_ID",
@@ -59,8 +59,8 @@ _ENV_CONTROL_ROLE_KEYS: tuple[str, ...] = (
 )
 
 _ENV_CONTROL_ROLE_LIST_KEYS: tuple[str, ...] = (
-    "STONEY_SERVER_CONTROL_ROLE_IDS",
-    "STONEY_CONTROL_ROLE_IDS",
+    "DANK_SERVER_CONTROL_ROLE_IDS",
+    "DANK_CONTROL_ROLE_IDS",
     "SERVER_CONTROL_ROLE_IDS",
     "CONTROL_ROLE_IDS",
     "PERM_ROLE_IDS",
@@ -96,7 +96,7 @@ def _safe_str(value: Any, default: str = "") -> str:
 
 def _table_name() -> str:
     try:
-        return (os.getenv("STONEY_GUILD_CONFIG_TABLE") or "guild_configs").strip() or "guild_configs"
+        return (os.getenv("DANK_GUILD_CONFIG_TABLE") or "guild_configs").strip() or "guild_configs"
     except Exception:
         return "guild_configs"
 
@@ -428,9 +428,9 @@ def _attach_setup_access_command() -> None:
     if _ATTACHED:
         return
     try:
-        from .public_setup_group import stoney_group
+        from .public_setup_group import dank_group
 
-        @stoney_group.command(name="setup-access", description="Set the role allowed to configure Dank Shield")
+        @dank_group.command(name="setup-access", description="Set the role allowed to configure Dank Shield")
         async def setup_access(
             interaction: discord.Interaction,
             control_role: discord.Role,

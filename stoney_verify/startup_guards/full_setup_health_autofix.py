@@ -424,7 +424,7 @@ def _audit_roles(guild: discord.Guild, cfg: Any, result: AuditResult) -> dict[st
         if label in {"Unverified/waiting role", "Verified role", "Resident/member role"}:
             if not _can_manage_role(me, role):
                 result.add_blocker(
-                    f"Bot cannot manage {label} {_mention(role)}. Move Stoney's bot role above it and make sure Manage Roles is enabled.",
+                    f"Bot cannot manage {label} {_mention(role)}. Move Dank Shield's bot role above it and make sure Manage Roles is enabled.",
                     manual=True,
                 )
             else:
@@ -458,7 +458,7 @@ def _audit_categories(guild: discord.Guild, cfg: Any, result: AuditResult, roles
                 fixable=True,
             )
         else:
-            result.ok.append(f"{label} is controllable by Stoney: {_mention(cat)}.")
+            result.ok.append(f"{label} is controllable by Dank Shield: {_mention(cat)}.")
 
         default_perms = _perms(cat, guild.default_role)
         try:
@@ -523,7 +523,7 @@ def _audit_text_channels(guild: discord.Guild, cfg: Any, result: AuditResult, ro
                 fixable=True,
             )
         else:
-            result.ok.append(f"{label} is writable by Stoney: {_mention(channel)}.")
+            result.ok.append(f"{label} is writable by Dank Shield: {_mention(channel)}.")
 
         if label in {"Transcript channel", "Mod/security log channel", "Join/exit log channel", "VC queue/status channel"}:
             default_perms = _perms(channel, guild.default_role)
@@ -575,7 +575,7 @@ def _audit_voice_channels(guild: discord.Guild, cfg: Any, result: AuditResult, r
                 fixable=True,
             )
         else:
-            result.ok.append(f"{label} can be controlled by Stoney: {_mention(vc)}.")
+            result.ok.append(f"{label} can be controlled by Dank Shield: {_mention(vc)}.")
 
         everyone = _perms(vc, guild.default_role)
         try:
@@ -770,7 +770,7 @@ async def _set_permissions_safe(
         await channel.set_permissions(target, overwrite=overwrite, reason=reason)
         changed.append(label)
     except discord.Forbidden:
-        failed.append(f"{label}: Discord denied the permission edit. Move Stoney's bot role higher and make sure it has Manage Channels.")
+        failed.append(f"{label}: Discord denied the permission edit. Move Dank Shield's bot role higher and make sure it has Manage Channels.")
     except Exception as e:
         failed.append(f"{label}: {type(e).__name__}: {str(e)[:180]}")
 
@@ -816,7 +816,7 @@ async def _repair_category(
             reason="Dank Shield setup one-press repair: bot ticket category permissions",
             changed=changed,
             failed=failed,
-            label=f"Repaired Stoney permissions in {_mention(category)}",
+            label=f"Repaired Dank Shield permissions in {_mention(category)}",
         )
 
     if isinstance(staff, discord.Role):
@@ -882,7 +882,7 @@ async def _repair_text(
             reason="Dank Shield setup one-press repair: bot text permissions",
             changed=changed,
             failed=failed,
-            label=f"Repaired Stoney text permissions in {_mention(channel)}",
+            label=f"Repaired Dank Shield text permissions in {_mention(channel)}",
         )
 
     if staff_needed and isinstance(staff, discord.Role):
@@ -958,7 +958,7 @@ async def _repair_vc(
             reason="Dank Shield setup one-press repair: bot VC permissions",
             changed=changed,
             failed=failed,
-            label=f"Repaired Stoney VC permissions in {_mention(channel)}",
+            label=f"Repaired Dank Shield VC permissions in {_mention(channel)}",
         )
 
     for role in (staff, control):
@@ -1027,7 +1027,7 @@ async def _repair_existing_tickets(
                     reason="Dank Shield setup one-press repair: existing ticket bot permissions",
                     changed=changed,
                     failed=failed,
-                    label=f"Repaired Stoney permissions in existing ticket {_mention(channel)}",
+                    label=f"Repaired Dank Shield permissions in existing ticket {_mention(channel)}",
                 )
 
             if isinstance(staff, discord.Role):
@@ -1118,7 +1118,7 @@ async def build_full_health_embed(guild: discord.Guild) -> discord.Embed:
     description = (
         "✅ **Ready to test.** Health Check now matched the runtime VC/ticket paths."
         if result.ready
-        else "🚫 **Fix the blockers first.** Press **Fix Detected Issues** for everything Discord allows Stoney to repair."
+        else "🚫 **Fix the blockers first.** Press **Fix Detected Issues** for everything Discord allows Dank Shield to repair."
     )
 
     embed = discord.Embed(

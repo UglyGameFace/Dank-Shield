@@ -13,7 +13,7 @@ from .public_setup_group import (
     _upsert_config,
     _utc_iso,
     _validate_log_setup,
-    stoney_group,
+    dank_group,
 )
 from ..guild_config import get_guild_config, invalidate_guild_config
 
@@ -21,7 +21,7 @@ from ..guild_config import get_guild_config, invalidate_guild_config
 # ============================================================
 # public_setup_logs.py
 # ------------------------------------------------------------
-# Adds /dank setup-logs to the existing public /stoney group.
+# Adds /dank setup-logs to the existing public /dank group.
 #
 # Production goals:
 # - log-channel config is saved per guild_id, not env
@@ -124,7 +124,7 @@ def _attach_setup_logs_command() -> None:
         return
 
     try:
-        existing = stoney_group.get_command("setup-logs")
+        existing = dank_group.get_command("setup-logs")
     except Exception:
         existing = None
 
@@ -146,7 +146,7 @@ def _attach_setup_logs_command() -> None:
     except Exception:
         pass
 
-    stoney_group.add_command(command)
+    dank_group.add_command(command)
     _SETUP_LOGS_ATTACHED = True
 
 

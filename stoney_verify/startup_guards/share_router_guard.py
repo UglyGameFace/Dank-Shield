@@ -30,9 +30,9 @@ except Exception:  # pragma: no cover
     bot = None  # type: ignore
 
 try:
-    from stoney_verify.commands_ext.public_setup_group import stoney_group
+    from stoney_verify.commands_ext.public_setup_group import dank_group
 except Exception:  # pragma: no cover
-    stoney_group = None  # type: ignore
+    dank_group = None  # type: ignore
 
 
 _INSTALLED = False
@@ -48,8 +48,8 @@ DEFAULT_SHARE_CHANNELS: tuple[str, ...] = (
 
 ROUTES_FILE = Path(
     os.getenv(
-        "STONEY_SHARE_ROUTES_FILE",
-        str(Path(os.getenv("STONEY_DATA_DIR", "data")) / "share_routes.json"),
+        "DANK_SHARE_ROUTES_FILE",
+        str(Path(os.getenv("DANK_DATA_DIR", "data")) / "share_routes.json"),
     )
 )
 
@@ -656,12 +656,12 @@ async def _share_router_command(
 
 
 def _install_command() -> bool:
-    if stoney_group is None:
-        _log("stoney_group unavailable; /dank share-router not installed")
+    if dank_group is None:
+        _log("dank_group unavailable; /dank share-router not installed")
         return False
 
     try:
-        existing = {getattr(command, "name", "") for command in getattr(stoney_group, "commands", []) or []}
+        existing = {getattr(command, "name", "") for command in getattr(dank_group, "commands", []) or []}
         if "share-router" in existing:
             return True
 
@@ -677,7 +677,7 @@ def _install_command() -> bool:
         except Exception:
             pass
 
-        stoney_group.command(
+        dank_group.command(
             name="share-router",
             description="Configure hidden share channels that route posts into fancy public channels.",
         )(decorated)

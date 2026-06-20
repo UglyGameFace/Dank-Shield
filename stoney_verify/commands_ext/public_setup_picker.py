@@ -20,7 +20,7 @@ from .public_setup_group import (
     _validate_verify_setup,
     get_guild_config,
     invalidate_guild_config,
-    stoney_group,
+    dank_group,
 )
 
 
@@ -504,7 +504,7 @@ class LogPicker(OwnerOnlyView):
         await _edit_or_send(interaction, embed=_home_embed(guild, cfg), view=view)
 
 
-@stoney_group.command(name="setup-picker", description="Open an interactive setup wizard with channel and role dropdowns.")
+@dank_group.command(name="setup-picker", description="Open an interactive setup wizard with channel and role dropdowns.")
 async def setup_picker(interaction: discord.Interaction) -> None:
     if not await _require_setup_permission(interaction):
         return
@@ -518,8 +518,8 @@ async def setup_picker(interaction: discord.Interaction) -> None:
 
 
 def register_public_setup_picker_commands(bot: Any, tree: Any) -> None:
-    # The command is attached to stoney_group by the decorator above.
-    # public_setup_group registers the shared /stoney group with the tree.
+    # The command is attached to dank_group by the decorator above.
+    # public_setup_group registers the shared /dank group with the tree.
     _ = bot
     _ = tree
     apply_public_setup_writer_patch()

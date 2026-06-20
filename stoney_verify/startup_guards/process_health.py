@@ -22,8 +22,8 @@ from pathlib import Path
 from typing import Any
 
 _BOOT_TS = time.time()
-_BOOT_STATE_PATH = Path(os.getenv("STONEY_PROCESS_BOOT_STATE", "/tmp/stoney_process_boot_state.txt"))
-_HEALTH_INTERVAL_SECONDS = int(os.getenv("STONEY_PROCESS_HEALTH_INTERVAL_SECONDS", "120") or "120")
+_BOOT_STATE_PATH = Path(os.getenv("DANK_PROCESS_BOOT_STATE", "/tmp/dank_process_boot_state.txt"))
+_HEALTH_INTERVAL_SECONDS = int(os.getenv("DANK_PROCESS_HEALTH_INTERVAL_SECONDS", "120") or "120")
 _HEALTH_TASK_STARTED = False
 _READY_LISTENER_ATTACHED = False
 _PREVIOUS_EXCEPTHOOK = sys.excepthook

@@ -94,14 +94,14 @@ def install_global_command_sync_guard() -> None:
     async def _guarded_sync(self: Any, *args: Any, **kwargs: Any) -> Any:
         if _sync_is_global(kwargs):
             count = _global_command_count(self)
-            limit = max(1, _env_int("STONEY_GLOBAL_COMMAND_SYNC_LIMIT", 25))
-            allow_large = _env_bool("STONEY_ALLOW_LARGE_GLOBAL_COMMAND_SYNC", False)
+            limit = max(1, _env_int("DANK_GLOBAL_COMMAND_SYNC_LIMIT", 25))
+            allow_large = _env_bool("DANK_ALLOW_LARGE_GLOBAL_COMMAND_SYNC", False)
 
             if count > limit and not allow_large:
                 _warn(
                     "blocked large global slash sync "
                     f"commands={count} limit={limit}. "
-                    "Set STONEY_ALLOW_LARGE_GLOBAL_COMMAND_SYNC=true only after command consolidation."
+                    "Set DANK_ALLOW_LARGE_GLOBAL_COMMAND_SYNC=true only after command consolidation."
                 )
                 return []
 

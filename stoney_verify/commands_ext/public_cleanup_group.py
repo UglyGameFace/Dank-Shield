@@ -1,10 +1,10 @@
 from __future__ import annotations
 
-"""Public /stoney cleanup command family.
+"""Public /dank cleanup command family.
 
 Boring/professional command strategy:
 - No top-level cleanup command spam.
-- Cleanup admin utilities live under /stoney cleanup ...
+- Cleanup admin utilities live under /dank cleanup ...
 - The old channel_cleanup_admin module can remain as a legacy fallback, but it
   does not need to be loaded for normal public startup.
 """
@@ -16,7 +16,7 @@ from discord import app_commands
 
 from ..globals import now_utc
 from .common import _staff_check, reply_once, safe_defer
-from .public_setup_group import stoney_group
+from .public_setup_group import dank_group
 
 try:
     from ..channel_cleanup import ensure_channel_cleanup_worker_started
@@ -119,7 +119,7 @@ async def _guild_or_reply(interaction: discord.Interaction) -> Optional[discord.
 
 
 # ============================================================
-# /stoney cleanup commands
+# /dank cleanup commands
 # ============================================================
 
 @cleanup_group.command(name="status", description="Show configured cleanup channels and cleanup worker status.")
@@ -209,7 +209,7 @@ async def cleanup_run(
         try:
             started = await ensure_channel_cleanup_worker_started()
             try:
-                print(f"🧹 Manual /stoney cleanup run started cleanup worker: started={started}")
+                print(f"🧹 Manual /dank cleanup run started cleanup worker: started={started}")
             except Exception:
                 pass
         except Exception:
@@ -324,13 +324,13 @@ def register_public_cleanup_group_commands(bot: Any, tree: Any) -> None:
         return
 
     try:
-        if stoney_group.get_command("cleanup") is None:
-            stoney_group.add_command(cleanup_group)
-            print("✅ public_cleanup_group: attached /stoney cleanup commands")
+        if dank_group.get_command("cleanup") is None:
+            dank_group.add_command(cleanup_group)
+            print("✅ public_cleanup_group: attached /dank cleanup commands")
         else:
-            print("✅ public_cleanup_group: /stoney cleanup already attached")
+            print("✅ public_cleanup_group: /dank cleanup already attached")
     except Exception as e:
-        print(f"⚠️ public_cleanup_group failed attaching /stoney cleanup: {repr(e)}")
+        print(f"⚠️ public_cleanup_group failed attaching /dank cleanup: {repr(e)}")
         raise
 
     _REGISTERED = True

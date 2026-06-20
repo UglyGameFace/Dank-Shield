@@ -156,12 +156,12 @@ def _env_int(name: str, default: int = 0) -> int:
 
 
 def _public_scope_enabled() -> bool:
-    profile = _env_str("STONEY_COMMAND_PROFILE", "public").lower()
-    deployment = _env_str("STONEY_DEPLOYMENT_MODE", "").lower()
+    profile = _env_str("DANK_COMMAND_PROFILE", "public").lower()
+    deployment = _env_str("DANK_DEPLOYMENT_MODE", "").lower()
     if not deployment:
-        if _env_true("STONEY_PRODUCTION_MODE", False):
+        if _env_true("DANK_PRODUCTION_MODE", False):
             deployment = "production"
-        elif _env_true("STONEY_PUBLIC_MODE", False):
+        elif _env_true("DANK_PUBLIC_MODE", False):
             deployment = "public"
         else:
             deployment = "development"
@@ -276,7 +276,7 @@ async def _resolve_runtime_guilds() -> list[discord.Guild]:
     another server after public invite.
     """
     if _public_scope_enabled():
-        max_guilds = max(1, _env_int("STONEY_STARTUP_MAX_GUILDS", 50))
+        max_guilds = max(1, _env_int("DANK_STARTUP_MAX_GUILDS", 50))
         guilds = _unique_guilds(list(getattr(bot, "guilds", []) or []))[:max_guilds]
         configured: list[discord.Guild] = []
 
@@ -618,7 +618,7 @@ async def _maybe_run_ticket_sync_once() -> None:
 async def _sync_beta_guild_commands_if_requested(guild_id_int: int) -> None:
     if guild_id_int <= 0:
         return
-    if not _env_true("STONEY_SYNC_BETA_GUILD_COMMANDS", True):
+    if not _env_true("DANK_SYNC_BETA_GUILD_COMMANDS", True):
         return
 
     guild_obj = discord.Object(id=int(guild_id_int))
