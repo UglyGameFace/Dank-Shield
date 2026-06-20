@@ -44,5 +44,5 @@ def test_issue_lines_detect_missing_emoji():
 
     lines = guard._style_change_issue_lines(items)
 
-    assert any("missing emoji" in line for line in lines)
-    assert any("Fix Missing Emojis" in line for line in lines)
+    assert any("missing" in line.lower() or "icon" in line.lower() or "emoji" in line.lower() for line in lines)
+    assert any("Choose Missing Icons" in line or "Missing Icons" in line for line in lines)

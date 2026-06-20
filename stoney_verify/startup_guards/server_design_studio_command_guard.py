@@ -4108,7 +4108,7 @@ def _style_change_separator_options(selected_id: str) -> list[discord.SelectOpti
             continue
 
         if sep_id == "none":
-            desc = "Remove channel separators. Example: 🎮gaming-news"
+            desc = "Remove channel separators. Result: 🎮gaming-news"
         else:
             desc = f"Result: {_style_change_separator_preview_text(sep_id)}"
 

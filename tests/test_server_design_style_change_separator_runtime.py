@@ -96,3 +96,24 @@ def test_style_change_square_bracket_separator_applies_template():
 def test_style_change_separator_preview_text_shows_brackets():
     assert guard._style_change_separator_preview_text("bracket_corner") == "「🎮」gaming-news"
     assert guard._style_change_separator_preview_text("bracket_lenticular") == "【🎮】gaming-news"
+
+
+def test_style_change_corner_bracket_separator_applies_template():
+    before = "🎮gaming-news"
+    after, warnings, blockers = guard._style_change_separator_after(before, "bracket_corner")
+
+    assert blockers == []
+    assert after == "「🎮」gaming-news"
+
+
+def test_style_change_square_bracket_separator_applies_template():
+    before = "🎮gaming-news"
+    after, warnings, blockers = guard._style_change_separator_after(before, "bracket_lenticular")
+
+    assert blockers == []
+    assert after == "【🎮】gaming-news"
+
+
+def test_style_change_separator_preview_text_shows_brackets():
+    assert guard._style_change_separator_preview_text("bracket_corner") == "「🎮」gaming-news"
+    assert guard._style_change_separator_preview_text("bracket_lenticular") == "【🎮】gaming-news"

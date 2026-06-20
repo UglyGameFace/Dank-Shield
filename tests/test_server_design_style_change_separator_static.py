@@ -19,7 +19,7 @@ def _block(name: str) -> str:
 
 def test_home_has_style_change_workflow_button():
     block = _block("class DesignHomeView")
-    assert 'label="Style Change"' in block
+    assert 'label="Change One Style"' in block
     assert 'custom_id="dank_design:style_change"' in block
     assert "StyleChangeView" in block
 
@@ -39,5 +39,5 @@ def test_style_change_copy_says_it_preserves_other_systems():
 
 
 def test_style_change_apply_has_custom_completion_title():
-    assert "✅ Style Change Applied" in SOURCE
+    assert "✅ Change One Style Applied" in SOURCE
     assert "Changed separator on **{changed}** channel(s)" in SOURCE
