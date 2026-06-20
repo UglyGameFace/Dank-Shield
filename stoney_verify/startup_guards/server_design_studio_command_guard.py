@@ -1704,7 +1704,7 @@ def _category_channels(guild: discord.Guild, category_id: int) -> list[discord.a
     if not isinstance(category, discord.CategoryChannel):
         return []
     out: list[discord.abc.GuildChannel] = []
-    for channel in [category] + list(getattr(category, "channels", []) or []):
+    for channel in list(getattr(category, "channels", []) or []):
         if _kind(channel) != "other":
             out.append(channel)
     return out
@@ -1729,6 +1729,75 @@ def _all_editor_channels(guild: discord.Guild) -> list[discord.abc.GuildChannel]
             seen.add(cid)
             out.append(channel)
     return out[: studio.MAX_PLAN_ITEMS]
+
+
+
+def _channel_editor_groups(guild: discord.Guild) -> list[dict[str, Any]]:
+    """Return Channel Editor pages grouped by category.
+
+    Each page is one category and a chunk of channels inside it. This keeps the
+    Channel Editor from feeling like a random flat list.
+    """
+
+    groups: list[dict[str, Any]] = []
+    seen: set[int] = set()
+
+    for category in list(getattr(guild, "categories", []) or []):
+        category_id = _safe_int(getattr(category, "id", 0), 0)
+        children = [
+            channel
+            for channel in list(getattr(category, "channels", []) or [])
+            if _kind(channel) != "other"
+        ]
+
+        chunks = [children[i:i + EDITOR_PAGE_SIZE] for i in range(0, len(children), EDITOR_PAGE_SIZE)] or [[]]
+        for part_index, chunk in enumerate(chunks, start=1):
+            groups.append({
+                "category": category,
+                "category_id": category_id,
+                "channels": chunk,
+                "part": part_index,
+                "parts": len(chunks),
+                "label": _safe_str(getattr(category, "name", "Category"), "Category"),
+            })
+            seen.add(category_id)
+            for channel in chunk:
+                cid = _safe_int(getattr(channel, "id", 0), 0)
+                if cid > 0:
+                    seen.add(cid)
+
+    uncategorized = []
+    for channel in list(getattr(guild, "channels", []) or []):
+        cid = _safe_int(getattr(channel, "id", 0), 0)
+        if cid <= 0 or cid in seen:
+            continue
+        if _kind(channel) in {"category", "other"}:
+            continue
+        if getattr(channel, "category", None) is not None:
+            continue
+        uncategorized.append(channel)
+        seen.add(cid)
+
+    for part_index, start in enumerate(range(0, len(uncategorized), EDITOR_PAGE_SIZE), start=1):
+        chunk = uncategorized[start:start + EDITOR_PAGE_SIZE]
+        groups.append({
+            "category": None,
+            "category_id": None,
+            "channels": chunk,
+            "part": part_index,
+            "parts": max(1, (len(uncategorized) + EDITOR_PAGE_SIZE - 1) // EDITOR_PAGE_SIZE),
+            "label": "No Category",
+        })
+
+    return groups or [{
+        "category": None,
+        "category_id": None,
+        "channels": [],
+        "part": 1,
+        "parts": 1,
+        "label": "No Category",
+    }]
+
 
 
 def _filter_plan_for_category(items: list[dict[str, Any]], category_id: int) -> list[dict[str, Any]]:
@@ -1870,36 +1939,62 @@ def _category_editor_embed(guild: discord.Guild, *, page: int) -> discord.Embed:
 
 
 def _channel_editor_embed(guild: discord.Guild, *, page: int, category_id: int | None = None) -> discord.Embed:
-    if category_id is not None:
-        source = _category_channels(guild, int(category_id))
-        category = guild.get_channel(int(category_id))
-        title = f"#️⃣ Channel Editor · {_safe_str(getattr(category, 'name', 'Category'))}"
-    else:
-        source = _all_editor_channels(guild)
-        title = "#️⃣ Channel Design Editor"
+    category = guild.get_channel(int(category_id)) if category_id is not None else None
 
-    total_pages = max(1, (len(source) + EDITOR_PAGE_SIZE - 1) // EDITOR_PAGE_SIZE)
-    page = max(0, min(page, total_pages - 1))
-    start = page * EDITOR_PAGE_SIZE
-    chunk = source[start:start + EDITOR_PAGE_SIZE]
+    if category_id is not None and isinstance(category, discord.CategoryChannel):
+        source = _category_channels(guild, int(category_id))
+        total_pages = max(1, (len(source) + EDITOR_PAGE_SIZE - 1) // EDITOR_PAGE_SIZE)
+        page = max(0, min(page, total_pages - 1))
+        start = page * EDITOR_PAGE_SIZE
+        chunk = source[start:start + EDITOR_PAGE_SIZE]
+        category_label = _safe_str(getattr(category, "name", "Category"), "Category")
+        part_text = f" · channels {page + 1}/{total_pages}" if total_pages > 1 else ""
+    else:
+        groups = _channel_editor_groups(guild)
+        total_pages = max(1, len(groups))
+        page = max(0, min(page, total_pages - 1))
+        group = groups[page]
+        category = group.get("category")
+        category_id = _safe_int(group.get("category_id"), 0) or None
+        chunk = list(group.get("channels") or [])
+        category_label = _safe_str(group.get("label"), "No Category")
+        part = _safe_int(group.get("part"), 1)
+        parts = _safe_int(group.get("parts"), 1)
+        part_text = f" · part {part}/{parts}" if parts > 1 else ""
 
     embed = discord.Embed(
-        title=title,
+        title=f"#️⃣ Channel Editor · {category_label}",
         description=(
-            "Pick one channel or category below.\n\n"
-            "Choose one item to review. You can preview repairs, rename it, or edit its rule."
+            "This page shows one category and the channels inside it.\n\n"
+            "Pick a channel to preview repairs, rename it, or edit its rule."
         ),
         color=discord.Color.blurple(),
     )
+
+    if category is not None:
+        embed.add_field(
+            name="Category on this page",
+            value=f"🗂️ `{_safe_str(getattr(category, 'name', 'Category'))}`\nUse **Edit This Category** for the category name/rules.",
+            inline=False,
+        )
+    else:
+        embed.add_field(
+            name="Category on this page",
+            value="No category. These are uncategorized channels.",
+            inline=False,
+        )
+
     if not chunk:
-        embed.add_field(name="Channels", value="No channels found.", inline=False)
+        embed.add_field(name=f"Channels page {page + 1}/{total_pages}{part_text}", value="No child channels found here.", inline=False)
     else:
         lines = []
         for index, channel in enumerate(chunk, start=1):
             lines.append(f"**{index}.** `{_channel_display_line(channel)}`")
-        embed.add_field(name=f"Items page {page + 1}/{total_pages}", value="\n".join(lines)[:1024], inline=False)
-    embed.set_footer(text="Step 1: pick an item. Step 2: preview, rename, or edit its rule.")
+        embed.add_field(name=f"Channels page {page + 1}/{total_pages}{part_text}", value="\n".join(lines)[:1024], inline=False)
+
+    embed.set_footer(text="Each page is grouped by category. Use Category Editor for the full category list.")
     return _clean_design_embed(embed)
+
 
 
 class CategoryPickButton(discord.ui.Button):
@@ -1912,6 +2007,31 @@ class CategoryPickButton(discord.ui.Button):
             row=row,
         )
         self.category_id = int(category.id)
+
+    async def callback(self, interaction: discord.Interaction) -> None:  # type: ignore[override]
+        if not await _require_design_permission(interaction):
+            return
+        guild = interaction.guild
+        assert guild is not None
+        category = guild.get_channel(self.category_id)
+        if not isinstance(category, discord.CategoryChannel):
+            return await interaction.response.send_message("That category no longer exists.", ephemeral=True)
+        await interaction.response.edit_message(
+            embed=_category_action_embed(category),
+            view=CategoryEditorActionView(self.category_id),
+        )
+
+
+class EditCategoryFromChannelEditorButton(discord.ui.Button):
+    def __init__(self, category_id: int, *, row: int = 4) -> None:
+        super().__init__(
+            label="Edit This Category",
+            emoji="🗂️",
+            style=discord.ButtonStyle.secondary,
+            custom_id=f"dank_design:channel_editor_edit_category:{int(category_id)}",
+            row=row,
+        )
+        self.category_id = int(category_id)
 
     async def callback(self, interaction: discord.Interaction) -> None:  # type: ignore[override]
         if not await _require_design_permission(interaction):
@@ -1989,24 +2109,43 @@ class CategoryPageButton(discord.ui.Button):
 class ChannelEditorPickerView(discord.ui.View):
     def __init__(self, guild: discord.Guild, *, page: int = 0, category_id: int | None = None) -> None:
         super().__init__(timeout=900)
-        source = _category_channels(guild, int(category_id)) if category_id is not None else _all_editor_channels(guild)
-        total_pages = max(1, (len(source) + EDITOR_PAGE_SIZE - 1) // EDITOR_PAGE_SIZE)
-        page = max(0, min(page, total_pages - 1))
-        start = page * EDITOR_PAGE_SIZE
-        chunk = source[start:start + EDITOR_PAGE_SIZE]
+
+        active_category_id: int | None = int(category_id) if category_id is not None else None
+
+        if category_id is not None:
+            source = _category_channels(guild, int(category_id))
+            total_pages = max(1, (len(source) + EDITOR_PAGE_SIZE - 1) // EDITOR_PAGE_SIZE)
+            page = max(0, min(page, total_pages - 1))
+            start = page * EDITOR_PAGE_SIZE
+            chunk = source[start:start + EDITOR_PAGE_SIZE]
+            active_category_id = int(category_id)
+        else:
+            groups = _channel_editor_groups(guild)
+            total_pages = max(1, len(groups))
+            page = max(0, min(page, total_pages - 1))
+            group = groups[page]
+            chunk = list(group.get("channels") or [])
+            group_category_id = _safe_int(group.get("category_id"), 0)
+            active_category_id = group_category_id if group_category_id > 0 else None
 
         for offset, channel in enumerate(chunk):
-            self.add_item(ChannelPickButton(channel, display_index=offset + 1, row=offset // 2, category_id=category_id))
+            self.add_item(ChannelPickButton(channel, display_index=offset + 1, row=offset // 2, category_id=active_category_id))
 
         nav_row = 4
+
+        if active_category_id is not None:
+            self.add_item(EditCategoryFromChannelEditorButton(active_category_id, row=nav_row))
+
         if page > 0:
             self.add_item(ChannelPageButton(page - 1, label="Prev", emoji="⬅️", row=nav_row, category_id=category_id))
         if page < total_pages - 1:
             self.add_item(ChannelPageButton(page + 1, label="Next", emoji="➡️", row=nav_row, category_id=category_id))
+
         if category_id is not None:
             self.add_item(BackToCategoryButton(int(category_id), row=nav_row))
         else:
             self.add_item(BackToDesignButton(row=nav_row))
+
 
 
 class ChannelPageButton(discord.ui.Button):
