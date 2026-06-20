@@ -1,22 +1,27 @@
 from __future__ import annotations
 
-"""Evidence-only interaction tracing for slash-command failures.
+"""Dank Shield evidence-only interaction tracing.
 
 This guard does not fix behavior. It proves whether Discord interactions reach
-this process, whether command callbacks start, whether they hang, and whether
-errors are global or isolated.
+this process, whether Discord.py dispatch starts, whether command callbacks run,
+and whether failures are global, group-level, or command-specific.
 """
 
 import asyncio
-import inspect
+import os
 import time
 import traceback
 from typing import Any, Mapping
 
 import discord
+from discord import app_commands
 
 _PATCHED = False
-_CALLBACKS_WRAPPED = False
+
+
+def _trace_enabled() -> bool:
+    value = os.getenv("DANK_SHIELD_INTERACTION_TRACE", "true").strip().lower()
+    return value not in {"0", "false", "off", "no"}
 
 
 def _trace_id(interaction: discord.Interaction) -> str:
@@ -46,14 +51,16 @@ def _interaction_names(interaction: discord.Interaction) -> list[str]:
         return []
 
 
-def _response_done(interaction: discord.Interaction) -> bool:
+def _response_done(interaction: discord.Interaction | None) -> bool:
+    if interaction is None:
+        return False
     try:
         return bool(interaction.response.is_done())
     except Exception:
         return False
 
 
-def _find_interaction(args: tuple[Any, ...], kwargs: dict[str, Any]) -> discord.Interaction | None:
+def _find_interaction(args: tuple[Any, ...], kwargs: Mapping[str, Any]) -> discord.Interaction | None:
     for value in args:
         if isinstance(value, discord.Interaction):
             return value
@@ -63,19 +70,32 @@ def _find_interaction(args: tuple[Any, ...], kwargs: dict[str, Any]) -> discord.
     return None
 
 
-def _log(stage: str, interaction: discord.Interaction, **details: Any) -> None:
+def _command_label(command: Any) -> str:
+    return str(
+        getattr(command, "qualified_name", None)
+        or getattr(command, "name", None)
+        or type(command).__name__
+    )
+
+
+def _log(stage: str, interaction: discord.Interaction | None, **details: Any) -> None:
+    if not _trace_enabled():
+        return
+
     try:
-        guild_id = getattr(getattr(interaction, "guild", None), "id", 0)
-        channel_id = getattr(getattr(interaction, "channel", None), "id", 0)
-        user_id = getattr(getattr(interaction, "user", None), "id", 0)
-        names = "/".join(_interaction_names(interaction)) or "unknown"
+        guild_id = getattr(getattr(interaction, "guild", None), "id", 0) if interaction is not None else 0
+        channel_id = getattr(getattr(interaction, "channel", None), "id", 0) if interaction is not None else 0
+        user_id = getattr(getattr(interaction, "user", None), "id", 0) if interaction is not None else 0
+        names = "/".join(_interaction_names(interaction)) if interaction is not None else "unknown"
+        names = names or "unknown"
+        trace = _trace_id(interaction) if interaction is not None else str(int(time.time() * 1000))[-8:]
         detail_text = " ".join(f"{k}={v}" for k, v in details.items())
 
         print(
             "🧪 interaction_trace "
-            f"trace={_trace_id(interaction)} "
+            f"trace={trace} "
             f"stage={stage} "
-            f"type={getattr(interaction, 'type', None)} "
+            f"type={getattr(interaction, 'type', None) if interaction is not None else None} "
             f"cmd={names} "
             f"guild={guild_id} "
             f"channel={channel_id} "
@@ -88,10 +108,7 @@ def _log(stage: str, interaction: discord.Interaction, **details: Any) -> None:
 
 
 async def _on_interaction(interaction: discord.Interaction) -> None:
-    try:
-        _log("received", interaction)
-    except Exception:
-        pass
+    _log("received", interaction)
 
 
 async def _tree_on_error(interaction: discord.Interaction, error: BaseException) -> None:
@@ -113,116 +130,149 @@ async def _tree_on_error(interaction: discord.Interaction, error: BaseException)
         pass
 
 
-def _command_label(command: Any) -> str:
-    return str(
-        getattr(command, "qualified_name", None)
-        or getattr(command, "name", None)
-        or type(command).__name__
-    )
+def _patch_tree_call() -> bool:
+    tree_cls = app_commands.CommandTree
 
-
-def _wrap_one_command(command: Any) -> bool:
-    callback = getattr(command, "callback", None)
-    if not callable(callback):
-        return False
-    if getattr(command, "_dank_trace_wrapped", False):
+    if getattr(tree_cls, "_dank_shield_trace_tree_call_wrapped", False):
         return False
 
-    label = _command_label(command)
+    original = getattr(tree_cls, "_call", None)
+    if original is None:
+        return False
 
-    async def traced_callback(*args: Any, **kwargs: Any) -> Any:
-        interaction = _find_interaction(args, kwargs)
+    async def traced_tree_call(self: app_commands.CommandTree, interaction: discord.Interaction) -> Any:
         started = time.monotonic()
-        finished = False
-
-        if interaction is not None:
-            _log("callback_start", interaction, callback=label)
+        _log("tree_call_start", interaction)
 
         async def watchdog() -> None:
             await asyncio.sleep(2.5)
-            if not finished and interaction is not None:
-                age_ms = int((time.monotonic() - started) * 1000)
-                _log("callback_slow_unacked", interaction, callback=label, age_ms=age_ms)
+            _log("tree_call_slow_unacked", interaction, age_ms=int((time.monotonic() - started) * 1000))
 
-        watchdog_task = asyncio.create_task(watchdog()) if interaction is not None else None
-
+        task = asyncio.create_task(watchdog())
         try:
-            result = callback(*args, **kwargs)
-            if inspect.isawaitable(result):
-                result = await result
-
-            if interaction is not None:
-                age_ms = int((time.monotonic() - started) * 1000)
-                _log("callback_ok", interaction, callback=label, age_ms=age_ms)
-
+            result = await original(self, interaction)
+            _log("tree_call_ok", interaction, age_ms=int((time.monotonic() - started) * 1000))
             return result
         except Exception as exc:
-            if interaction is not None:
-                age_ms = int((time.monotonic() - started) * 1000)
-                _log("callback_exception", interaction, callback=label, age_ms=age_ms, error=f"{type(exc).__name__}: {str(exc)[:240]}")
+            _log(
+                "tree_call_exception",
+                interaction,
+                age_ms=int((time.monotonic() - started) * 1000),
+                error=f"{type(exc).__name__}: {str(exc)[:240]}",
+            )
             try:
-                print("🧪 interaction_trace callback_traceback_start")
+                print("🧪 interaction_trace tree_call_traceback_start")
                 print(traceback.format_exc())
-                print("🧪 interaction_trace callback_traceback_end")
+                print("🧪 interaction_trace tree_call_traceback_end")
             except Exception:
                 pass
             raise
         finally:
-            finished = True
-            if watchdog_task is not None:
-                watchdog_task.cancel()
+            task.cancel()
 
-    try:
-        command.callback = traced_callback
-        command._dank_trace_wrapped = True
-        return True
-    except Exception:
+    setattr(tree_cls, "_dank_shield_trace_original_tree_call", original)
+    setattr(tree_cls, "_dank_shield_trace_tree_call_wrapped", True)
+    setattr(tree_cls, "_call", traced_tree_call)
+    return True
+
+
+def _patch_command_method(cls: Any, method_name: str, start_stage: str, ok_stage: str, exception_stage: str) -> bool:
+    if cls is None:
         return False
 
+    wrapped_marker = f"_dank_shield_trace_{method_name}_wrapped"
+    original_marker = f"_dank_shield_trace_original_{method_name}"
 
-def _wrap_registered_commands(bot: Any, *, reason: str) -> int:
-    global _CALLBACKS_WRAPPED
+    if getattr(cls, wrapped_marker, False):
+        return False
 
-    tree = getattr(bot, "tree", None)
-    if tree is None:
-        return 0
+    original = getattr(cls, method_name, None)
+    if original is None:
+        return False
 
-    wrapped = 0
-    try:
-        commands = list(tree.walk_commands())
-    except Exception:
+    async def traced_method(self: Any, *args: Any, **kwargs: Any) -> Any:
+        interaction = _find_interaction(args, kwargs)
+        label = _command_label(self)
+        started = time.monotonic()
+        _log(start_stage, interaction, command=label)
+
+        async def watchdog() -> None:
+            await asyncio.sleep(2.5)
+            _log(f"{start_stage}_slow_unacked", interaction, command=label, age_ms=int((time.monotonic() - started) * 1000))
+
+        task = asyncio.create_task(watchdog()) if interaction is not None else None
         try:
-            commands = list(tree.get_commands())
-        except Exception:
-            commands = []
+            result = await original(self, *args, **kwargs)
+            _log(ok_stage, interaction, command=label, age_ms=int((time.monotonic() - started) * 1000))
+            return result
+        except Exception as exc:
+            _log(
+                exception_stage,
+                interaction,
+                command=label,
+                age_ms=int((time.monotonic() - started) * 1000),
+                error=f"{type(exc).__name__}: {str(exc)[:240]}",
+            )
+            try:
+                print(f"🧪 interaction_trace {method_name}_traceback_start")
+                print(traceback.format_exc())
+                print(f"🧪 interaction_trace {method_name}_traceback_end")
+            except Exception:
+                pass
+            raise
+        finally:
+            if task is not None:
+                task.cancel()
 
-    for command in commands:
-        if _wrap_one_command(command):
-            wrapped += 1
-
-    if wrapped:
-        _CALLBACKS_WRAPPED = True
-        print(f"🧪 interaction_trace callback wrappers attached count={wrapped} reason={reason}")
-
-    return wrapped
+    setattr(cls, original_marker, original)
+    setattr(cls, wrapped_marker, True)
+    setattr(cls, method_name, traced_method)
+    return True
 
 
-async def _on_ready_wrap_callbacks() -> None:
+def _patch_framework_dispatch() -> dict[str, bool]:
     try:
-        bot = _get_bot()
-        if bot is not None:
-            _wrap_registered_commands(bot, reason="on_ready")
-    except Exception as exc:
-        print(f"⚠️ interaction_trace callback wrap on_ready failed: {type(exc).__name__}: {exc}")
+        from discord.app_commands import commands as command_module
+    except Exception:
+        command_module = None
+
+    command_cls = getattr(command_module, "Command", None)
+    group_cls = getattr(command_module, "Group", None)
+
+    results = {
+        "tree_call": _patch_tree_call(),
+        "command_invoke": _patch_command_method(
+            command_cls,
+            "_invoke_with_namespace",
+            "command_invoke_start",
+            "command_invoke_ok",
+            "command_invoke_exception",
+        ),
+        "command_do_call": _patch_command_method(
+            command_cls,
+            "_do_call",
+            "command_do_call_start",
+            "command_do_call_ok",
+            "command_do_call_exception",
+        ),
+        "group_invoke": _patch_command_method(
+            group_cls,
+            "_invoke_with_namespace",
+            "group_invoke_start",
+            "group_invoke_ok",
+            "group_invoke_exception",
+        ),
+    }
+    return results
 
 
 def _get_bot() -> Any:
     try:
-        from stoney_verify import client as bot  # type: ignore
+        from stoney_verify import client as bot  # internal legacy package name
         return bot
     except Exception:
         try:
-            from stoney_verify.globals import bot  # type: ignore
+            from stoney_verify.globals import bot  # internal legacy package name
             return bot
         except Exception:
             return None
@@ -236,12 +286,11 @@ def apply() -> bool:
 
     bot = _get_bot()
     if bot is None:
-        print("⚠️ global_interaction_trace_guard waiting: bot unavailable")
+        print("⚠️ Dank Shield interaction trace waiting: bot unavailable")
         return False
 
     try:
         bot.add_listener(_on_interaction, "on_interaction")
-        bot.add_listener(_on_ready_wrap_callbacks, "on_ready")
 
         tree = getattr(bot, "tree", None)
         if tree is not None:
@@ -259,13 +308,13 @@ def apply() -> bool:
 
             tree.on_error = chained_on_error
 
-        _wrap_registered_commands(bot, reason="apply")
+        patched = _patch_framework_dispatch()
 
         _PATCHED = True
-        print("🧪 global_interaction_trace_guard active; slash interaction and callback evidence logging attached")
+        print(f"✅ Dank Shield interaction evidence logger active; patched={patched}")
         return True
     except Exception as exc:
-        print(f"⚠️ global_interaction_trace_guard failed: {type(exc).__name__}: {exc}")
+        print(f"⚠️ Dank Shield interaction evidence logger failed: {type(exc).__name__}: {exc}")
         return False
 
 
