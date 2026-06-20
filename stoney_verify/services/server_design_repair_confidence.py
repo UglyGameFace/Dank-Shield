@@ -16,6 +16,8 @@ import re
 import unicodedata
 from typing import Any
 
+from stoney_verify.services import server_design_style_zones as style_zones
+
 MAX_DISCORD_CHANNEL_NAME_LENGTH = 100
 
 SAFE_AUTO_FIX = "SAFE_AUTO_FIX"
@@ -40,6 +42,13 @@ _SYSTEM_WORDS = {
     "welcome-exit",
     "logs",
     "log",
+}
+
+
+_REVIEW_ZONES = {
+    "verification",
+    "support_tickets",
+    "safety_logs",
 }
 
 
@@ -215,6 +224,8 @@ def score_repair_item(item: Mapping[str, Any], *, context: str = "generic") -> d
             "after": after,
         }
 
+    zone = style_zones.zone_for_item(item)
+
     if len(after) > MAX_DISCORD_CHANNEL_NAME_LENGTH:
         return {
             "classification": BLOCKED_DISCORD_LIMIT,
@@ -233,13 +244,15 @@ def score_repair_item(item: Mapping[str, Any], *, context: str = "generic") -> d
             "after": after,
         }
 
-    if _looks_system_surface(before):
+    zone = style_zones.zone_for_item(item)
+    if _looks_system_surface(before) or zone in _REVIEW_ZONES:
         return {
             "classification": REVIEW_ONLY,
             "confidence": 55,
-            "reason": "System/ticket/log-looking surface needs review before rename.",
+            "reason": f"{style_zones.zone_label(zone)} zone needs review before rename.",
             "before": before,
             "after": after,
+            "zone": zone,
         }
 
     ratio = _similarity(before, after)
