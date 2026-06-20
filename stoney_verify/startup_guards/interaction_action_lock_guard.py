@@ -17,6 +17,7 @@ It provides central evidence first, then we migrate old blockers safely.
 import asyncio
 import os
 import time
+from fnmatch import fnmatchcase
 from dataclasses import dataclass
 from typing import Any, Mapping
 
@@ -166,6 +167,33 @@ def _lock_key(interaction: discord.Interaction | None, item: Any = None) -> str:
             _custom_id(interaction, item),
         ]
     )
+
+
+def _block_targets() -> list[str]:
+    """Component custom_id patterns allowed to be blocked in block mode.
+
+    Empty list means observe/log all duplicates but block none.
+    This prevents a risky global cutover.
+    """
+
+    raw = os.getenv("DANK_SHIELD_INTERACTION_ACTION_LOCK_BLOCK_TARGETS", "")
+    return [part.strip().lower() for part in raw.split(",") if part.strip()]
+
+
+def _component_targeted_for_block(interaction: discord.Interaction | None, item: Any = None) -> bool:
+    targets = _block_targets()
+    if not targets:
+        return False
+
+    custom_id = (_custom_id(interaction, item) or "").lower()
+    if not custom_id:
+        return False
+
+    for pattern in targets:
+        if fnmatchcase(custom_id, pattern):
+            return True
+
+    return False
 
 
 def _cleanup_expired() -> None:
@@ -329,10 +357,14 @@ def _patch_view_scheduled_task() -> bool:
             acquired, key, reason = _try_acquire(interaction, item)
 
             if not acquired and _mode() == "block":
-                await _send_already_running(interaction, reason)
-                return None
+                if _component_targeted_for_block(interaction, item):
+                    _log("duplicate_blocked", interaction, item, reason=reason)
+                    await _send_already_running(interaction, reason)
+                    return None
 
-            # Observe mode intentionally calls original even for duplicates.
+                _log("duplicate_allowed_not_targeted", interaction, item, reason=reason)
+
+            # Observe mode, and untargeted block mode, intentionally call original.
             return await original(self, *args, **kwargs)
         except Exception as exc:
             _log("guard_exception_fail_open", interaction, item, error=f"{type(exc).__name__}: {_safe(exc, 220)}")

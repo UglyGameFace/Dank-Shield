@@ -74,4 +74,23 @@ def test_action_lock_is_not_spam_guard_or_punishment():
 
 def test_action_lock_fail_open_behavior_is_visible():
     assert "guard_exception_fail_open" in SOURCE
-    assert "Observe mode intentionally calls original even for duplicates." in SOURCE
+    assert "intentionally call original" in SOURCE
+
+
+
+def test_action_lock_block_mode_is_targeted_not_global():
+    required = [
+        "DANK_SHIELD_INTERACTION_ACTION_LOCK_BLOCK_TARGETS",
+        "_block_targets",
+        "_component_targeted_for_block",
+        "fnmatchcase",
+        "duplicate_blocked",
+        "duplicate_allowed_not_targeted",
+        "Empty list means observe/log all duplicates but block none.",
+    ]
+
+    for phrase in required:
+        assert phrase in SOURCE
+
+    assert 'os.getenv("DANK_SHIELD_INTERACTION_ACTION_LOCK_BLOCK_TARGETS", "")' in SOURCE
+
