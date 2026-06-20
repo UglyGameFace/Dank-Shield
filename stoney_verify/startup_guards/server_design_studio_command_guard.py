@@ -1594,11 +1594,19 @@ class ExactFormatEditorView(discord.ui.View):
 
 def ExactFormatEditorViewFactory(guild: discord.Guild, scope: str, target_id: int, lock: Mapping[str, Any]) -> ExactFormatEditorView:
     view = ExactFormatEditorView(scope=scope, target_id=target_id)
-    # Insert selects before buttons. Discord allows max 5 rows; four selects + row-4 buttons.
-    view.add_item(ExactFontSelect(scope, target_id, _safe_str(lock.get("font"), "normal")))
-    view.add_item(ExactSeparatorSelect(scope, target_id, _safe_str(lock.get("separator_id"), "bar_full")))
-    view.add_item(ExactFrameSelect(scope, target_id, _safe_str(lock.get("category_frame_id"), "line")))
-    view.add_item(ExactStrengthSelect(scope, target_id, _safe_int(lock.get("strength"), 4)))
+
+    # Decorator buttons are attached during View init. Trim first so optional
+    # buttons can never crash the editor with row width overflow.
+    _trim_view_component_overflow(view)
+
+    # Discord allows max 5 rows; selects occupy a full row each.
+    _safe_add_item(view, ExactFontSelect(scope, target_id, _safe_str(lock.get("font"), "normal")), preferred_row=0)
+    _safe_add_item(view, ExactSeparatorSelect(scope, target_id, _safe_str(lock.get("separator_id"), "bar_full")), preferred_row=1)
+    _safe_add_item(view, ExactFrameSelect(scope, target_id, _safe_str(lock.get("category_frame_id"), "line")), preferred_row=2)
+    _safe_add_item(view, ExactStrengthSelect(scope, target_id, _safe_int(lock.get("strength"), 4)), preferred_row=3)
+
+    _trim_view_component_overflow(view)
+    _assert_design_view_component_budget(view)
     return view
 
 
@@ -1610,6 +1618,161 @@ def ExactFormatEditorViewFactory(guild: discord.Guild, scope: str, target_id: in
 # ---------------------------------------------------------------------------
 
 EDITOR_PAGE_SIZE = 8
+
+
+
+def _component_width(item: Any) -> int:
+    """Discord action-row width: selects are 5, normal buttons are 1."""
+    try:
+        if isinstance(item, discord.ui.Select):
+            return 5
+    except Exception:
+        pass
+    try:
+        if isinstance(item, discord.ui.ChannelSelect):
+            return 5
+    except Exception:
+        pass
+    try:
+        if isinstance(item, discord.ui.RoleSelect):
+            return 5
+    except Exception:
+        pass
+    try:
+        if isinstance(item, discord.ui.UserSelect):
+            return 5
+    except Exception:
+        pass
+    try:
+        if isinstance(item, discord.ui.MentionableSelect):
+            return 5
+    except Exception:
+        pass
+    return 1
+
+
+def _safe_add_item(view: discord.ui.View, item: discord.ui.Item, *, preferred_row: int | None = None) -> bool:
+    """Add a component only if it fits Discord's 5-row/5-width limits.
+
+    This prevents ValueError: item would not fit at row X (6 > 5 width).
+    It is intentionally conservative: if a component cannot fit, it is skipped
+    instead of crashing the whole interaction.
+    """
+
+    rows: dict[int, int] = {}
+    for child in list(getattr(view, "children", []) or []):
+        row = getattr(child, "row", None)
+        if row is None:
+            row = 0
+        try:
+            row = int(row)
+        except Exception:
+            row = 0
+        rows[row] = rows.get(row, 0) + _component_width(child)
+
+    width = _component_width(item)
+
+    candidate_rows: list[int] = []
+    if preferred_row is not None:
+        candidate_rows.append(int(preferred_row))
+
+    existing_row = getattr(item, "row", None)
+    if existing_row is not None:
+        try:
+            candidate_rows.append(int(existing_row))
+        except Exception:
+            pass
+
+    candidate_rows.extend(range(0, 5))
+
+    seen: set[int] = set()
+    for row in candidate_rows:
+        if row in seen or row < 0 or row > 4:
+            continue
+        seen.add(row)
+        if rows.get(row, 0) + width <= 5:
+            try:
+                item.row = row
+            except Exception:
+                pass
+            view.add_item(item)
+            return True
+
+    return False
+
+
+def _trim_view_component_overflow(view: discord.ui.View) -> discord.ui.View:
+    """Last-resort safety pass for decorator-created buttons.
+
+    Discord may already attach @discord.ui.button children during View __init__.
+    If a row exceeds width 5, remove the lowest-priority extras so the view opens
+    instead of throwing interaction failed.
+    """
+
+    children = list(getattr(view, "children", []) or [])
+    rows: dict[int, list[Any]] = {}
+
+    for child in children:
+        row = getattr(child, "row", None)
+        try:
+            row = int(row) if row is not None else 0
+        except Exception:
+            row = 0
+        rows.setdefault(row, []).append(child)
+
+    def priority(child: Any) -> int:
+        cid = _safe_str(getattr(child, "custom_id", ""))
+        label = _safe_str(getattr(child, "label", ""))
+
+        # Keep navigation and core safe workflow before optional helpers.
+        if "save_preview" in cid or label == "Save & Preview":
+            return 0
+        if "layout_examples" in cid or label == "Layout Examples":
+            return 1
+        if "toggle" in cid or label.startswith("Toggle"):
+            return 2
+        if "emoji" in cid or label == "Emoji":
+            return 3
+        if "back" in cid or label == "Back":
+            return 4
+        if "exact_save" in cid or label == "Save":
+            return 99
+        return 50
+
+    keep: set[int] = set()
+    for row, row_children in rows.items():
+        used = 0
+        for child in sorted(row_children, key=priority):
+            width = _component_width(child)
+            if used + width <= 5:
+                keep.add(id(child))
+                used += width
+
+    for child in children:
+        if id(child) not in keep:
+            try:
+                view.remove_item(child)
+            except Exception:
+                pass
+
+    return view
+
+
+def _assert_design_view_component_budget(view: discord.ui.View) -> None:
+    """Debug/test helper: raise if any Discord row is over budget."""
+
+    rows: dict[int, int] = {}
+    for child in list(getattr(view, "children", []) or []):
+        row = getattr(child, "row", None)
+        try:
+            row = int(row) if row is not None else 0
+        except Exception:
+            row = 0
+        rows[row] = rows.get(row, 0) + _component_width(child)
+
+    bad = {row: width for row, width in rows.items() if row < 0 or row > 4 or width > 5}
+    if bad:
+        raise ValueError(f"Discord component row overflow: {bad}")
 
 
 def _short_label(value: Any, limit: int = 64) -> str:
