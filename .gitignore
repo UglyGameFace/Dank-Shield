@@ -10,3 +10,6 @@ ENV/
 dist/
 build/
 .pytest_cache/
+.repair_backup/
+.dank_login_backoff_until
+.dank_command_sync_state.json
