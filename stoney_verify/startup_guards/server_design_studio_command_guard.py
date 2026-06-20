@@ -1103,7 +1103,7 @@ def _font_choice_label(font_id: Any) -> str:
     return _safe_str(font_id, "normal").replace("_", " ").title()
 
 
-def _exact_format_conflicts(lock: Mapping[str, Any]) -> list[str]:
+def _exact_format_conflicts(lock: Mapping[str, Any], *, scope: str = "channel") -> list[str]:
     source = _safe_str(lock.get("__source"), "")
     if source == "live_majority":
         return []
@@ -1130,7 +1130,7 @@ def _exact_format_conflicts(lock: Mapping[str, Any]) -> list[str]:
             f"Font differs: rule uses **{_font_choice_label(current_font)}**, live server uses **{_font_choice_label(majority_font)}**."
         )
 
-    if majority_frame and current_frame != majority_frame:
+    if _exact_format_applies_category_frame(scope) and majority_frame and current_frame != majority_frame:
         conflicts.append(
             f"Category frame differs: rule uses **{_category_frame_choice_label(current_frame)}**, live server uses **{_category_frame_choice_label(majority_frame)}**."
         )
@@ -1226,6 +1226,72 @@ async def _open_exact_format_editor(interaction: discord.Interaction, *, scope: 
             raise
 
 
+def _exact_format_applies_category_frame(scope: str) -> bool:
+    return _safe_str(scope) == "category"
+
+
+def _exact_format_applies_separator(scope: str) -> bool:
+    # Category rules can still style child channels, so separator matters there too.
+    return _safe_str(scope) in {"category", "channel"}
+
+
+def _exact_current_layout_example(
+    guild: discord.Guild,
+    *,
+    scope: str,
+    target_id: int,
+    lock: Mapping[str, Any],
+) -> str:
+    sep = _safe_str(lock.get("separator_id"), "none")
+    frame = _safe_str(lock.get("category_frame_id"), "plain")
+    emoji = _safe_str(lock.get("emoji_override"), "") or "🎮"
+    font = _safe_str(lock.get("font"), "normal")
+
+    name_text, _subs = studio.transform_text_safe(
+        "gaming-news",
+        font,
+        fallback_order=studio.fallback_ladder(font),
+    )
+
+    if _exact_format_applies_category_frame(scope):
+        category_example = studio.category_frame_preview(frame, emoji=emoji, name=name_text)
+        child_example = _exact_separator_example_text(sep, lock)
+        return f"Category: `{category_example}`\nChild channel: `{child_example}`"
+
+    return f"`{_exact_separator_example_text(sep, lock)}`"
+
+
+def _exact_selected_format_lines(scope: str, lock: Mapping[str, Any]) -> list[str]:
+    font = _safe_str(lock.get("font"), "normal")
+    sep = _safe_str(lock.get("separator_id"), "none")
+    frame = _safe_str(lock.get("category_frame_id"), "plain")
+    strength = _safe_int(lock.get("strength"), 4)
+    icon_mode = _safe_str(lock.get("icon_mode"), "replace_missing")
+    emoji_override = _safe_str(lock.get("emoji_override"), "")
+
+    lines = [
+        f"Font: **{font.replace('_', ' ').title()}**",
+    ]
+
+    if _exact_format_applies_separator(scope):
+        label = "Child separator" if scope == "category" else "Separator"
+        lines.append(f"{label}: **{_separator_choice_label(sep)}**")
+
+    if _exact_format_applies_category_frame(scope):
+        lines.append(f"Category frame: **{_category_frame_choice_label(frame)}**")
+    else:
+        lines.append("Category frame: **Not used for channels**")
+
+    lines.extend([
+        f"Strength: **{strength}/5**",
+        f"Icon mode: **{icon_mode.replace('_', ' ').title()}**",
+        f"Custom emoji: **{emoji_override or 'None'}**",
+        f"Preview mode: **{'Exact Enforce' if bool(lock.get('exact_match', False)) else 'Smart Fix'}**",
+    ])
+
+    return lines
+
+
 def _exact_format_embed(guild: discord.Guild, *, scope: str, target_id: int, lock: Mapping[str, Any]) -> discord.Embed:
     font = _safe_str(lock.get("font"), "normal")
     sep = _safe_str(lock.get("separator_id"), "bar_full")
@@ -1253,17 +1319,11 @@ def _exact_format_embed(guild: discord.Guild, *, scope: str, target_id: int, loc
     }.get(_safe_str(lock.get("__source")), "Current draft")
 
     majority_summary = lock.get("__majority_layout_summary") if isinstance(lock.get("__majority_layout_summary"), Mapping) else {}
-    conflicts = _exact_format_conflicts(lock)
+    conflicts = _exact_format_conflicts(lock, scope=scope)
 
     selected_value = (
         f"Source: **{source_label}**\n"
-        f"Font: **{font.replace('_', ' ').title()}**\n"
-        f"Separator: **{_separator_choice_label(sep)}**\n"
-        f"Category frame: **{_category_frame_choice_label(frame)}**\n"
-        f"Strength: **{strength}/5**\n"
-        f"Icon mode: **{icon_mode.replace('_', ' ').title()}**\n"
-        f"Custom emoji: **{emoji_override or 'None'}**\n"
-        f"Preview mode: **{'Exact Enforce' if bool(lock.get('exact_match', False)) else 'Smart Fix'}**"
+        + "\n".join(_exact_selected_format_lines(scope, lock))
     )
 
     if majority_summary:
@@ -1293,7 +1353,7 @@ def _exact_format_embed(guild: discord.Guild, *, scope: str, target_id: int, loc
     )
     embed.add_field(
         name="Current layout example",
-        value=f"`{_exact_separator_example_text(sep, lock)}`",
+        value=_exact_current_layout_example(guild, scope=scope, target_id=target_id, lock=lock),
         inline=False,
     )
     embed.add_field(
@@ -1306,22 +1366,30 @@ def _exact_format_embed(guild: discord.Guild, *, scope: str, target_id: int, loc
 
 
 def _exact_format_sample_lines(guild: discord.Guild, *, scope: str, target_id: int, lock: Mapping[str, Any]) -> list[str]:
+    preview_items: list[discord.abc.GuildChannel] = []
+
     if scope == "category":
-        channels = _category_channels(guild, int(target_id))[:5]
+        category = guild.get_channel(int(target_id))
+        if category is not None:
+            preview_items.append(category)
+        preview_items.extend(_category_channels(guild, int(target_id))[:4])
     else:
         ch = guild.get_channel(int(target_id))
-        channels = [ch] if ch is not None else []
+        if ch is not None:
+            preview_items = [ch]
 
-    if not channels:
+    if not preview_items:
         return ["No preview item found."]
 
     lines: list[str] = []
-    for ch in channels:
+    for ch in preview_items:
         kind = _kind(ch)
+        design_kind = "category" if kind == "category" else "text"
+
         try:
             result = studio.build_styled_name(
                 _safe_str(getattr(ch, "name", "")),
-                kind="category" if kind == "category" else "text",
+                kind=design_kind,
                 theme_id=_safe_str(lock.get("theme_id"), "gothic_clean"),
                 strength=_safe_int(lock.get("strength"), 4),
                 icon_mode=_safe_str(lock.get("icon_mode"), "replace_missing"),
@@ -1332,9 +1400,11 @@ def _exact_format_sample_lines(guild: discord.Guild, *, scope: str, target_id: i
                 emoji_override=_safe_str(lock.get("emoji_override")) or None,
                 exact_match=bool(lock.get("exact_match", False)),
             )
-            lines.append(f"`{result.before}` → `{result.after}`")
+            label = "Category" if design_kind == "category" else "Channel"
+            lines.append(f"**{label}:** `{result.before}` → `{result.after}`")
         except Exception as exc:
             lines.append(f"`{getattr(ch, 'name', ch)}` → preview failed: {type(exc).__name__}")
+
     return lines
 
 
@@ -1399,7 +1469,7 @@ class ExactSeparatorSelect(discord.ui.Select):
                     description=f"Example: {studio.separator_preview(sep_id, emoji='🎮', name='gaming-news')}"[:100],
                 )
             )
-        super().__init__(placeholder="2) Choose separator / layout", min_values=1, max_values=1, options=options[:25], row=1)
+        super().__init__(placeholder=("2) Child channel separator" if scope == "category" else "2) Choose separator / layout"), min_values=1, max_values=1, options=options[:25], row=1)
         self.scope = scope
         self.target_id = int(target_id)
 
@@ -1418,7 +1488,7 @@ class ExactFrameSelect(discord.ui.Select):
             )
             for frame in studio.CATEGORY_FRAMES[:25]
         ]
-        super().__init__(placeholder="3) Choose category frame", min_values=1, max_values=1, options=options, row=2)
+        super().__init__(placeholder="3) Choose category header frame", min_values=1, max_values=1, options=options, row=2)
         self.scope = scope
         self.target_id = int(target_id)
 
@@ -1786,11 +1856,19 @@ class ExactFormatEditorView(discord.ui.View):
 
 def ExactFormatEditorViewFactory(guild: discord.Guild, scope: str, target_id: int, lock: Mapping[str, Any]) -> ExactFormatEditorView:
     view = ExactFormatEditorView(scope=scope, target_id=target_id)
-    # Insert selects before buttons. Discord allows max 5 rows; four selects + row-4 buttons.
+
+    # Discord allows max 5 rows. Row 4 is reserved for buttons.
     view.add_item(ExactFontSelect(scope, target_id, _safe_str(lock.get("font"), "normal")))
-    view.add_item(ExactSeparatorSelect(scope, target_id, _safe_str(lock.get("separator_id"), "bar_full")))
-    view.add_item(ExactFrameSelect(scope, target_id, _safe_str(lock.get("category_frame_id"), "line")))
-    view.add_item(ExactStrengthSelect(scope, target_id, _safe_int(lock.get("strength"), 4)))
+    view.add_item(ExactSeparatorSelect(scope, target_id, _safe_str(lock.get("separator_id"), "none")))
+
+    if _exact_format_applies_category_frame(scope):
+        view.add_item(ExactFrameSelect(scope, target_id, _safe_str(lock.get("category_frame_id"), "plain")))
+        view.add_item(ExactStrengthSelect(scope, target_id, _safe_int(lock.get("strength"), 4)))
+    else:
+        strength = ExactStrengthSelect(scope, target_id, _safe_int(lock.get("strength"), 4))
+        strength.row = 2
+        view.add_item(strength)
+
     return view
 
 
