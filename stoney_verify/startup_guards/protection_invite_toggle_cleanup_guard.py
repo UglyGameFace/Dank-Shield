@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import re
 import time
-from typing import Any, Iterable
+from typing import Any, Iterable, List
 
 import discord
 
@@ -387,33 +387,24 @@ async def _spam_settings(guild: discord.Guild) -> dict[str, Any]:
         return {}
 
 
-async def _blocked_codes_for_guild(guild: discord.Guild, codes: set[str]) -> tuple[list[str], int]:
-    from stoney_verify.startup_guards.invite_shield_sanitize_shared import invite_code_belongs_to_guild, normalize_invite_code
+async def _blocked_codes_for_guild(guild: Any, codes: List[str]) -> tuple[List[str], int]:
+    """Return invite codes that should be blocked for this guild.
 
-    settings = await _spam_settings(guild)
-    allowed_codes = _normalize_codes(settings.get("allowed_invite_codes", settings.get("spam_allowed_invite_codes")))
-    override_own = _safe_bool(settings.get("invite_override_own_server_invites", settings.get("spam_invite_override_own_server_invites")), False)
-    allow_own = _safe_bool(settings.get("allow_server_invites", settings.get("spam_allow_server_invites")), True)
-    own_codes: set[str] = set()
-    if allow_own and not override_own:
-        own_codes = await _own_invite_codes(guild)
+    This wrapper prefers the clean centralized invite service.
+    If that service fails during migration, it fails open so Discord
+    invites are not deleted for no reason.
+    """
+    if _USE_CLEAN_INVITE_SERVICE:
+        try:
+            return await get_blocked_invite_codes(guild, codes)
+        except Exception:
+            pass
 
-    blocked: list[str] = []
+    # Safe fallback during migration:
+    # do not guess, do not delete invites, and do not cross guilds.
+    blocked: List[str] = []
     allowed_count = 0
-    for code in sorted(codes):
-        clean = normalize_invite_code(code)
-        if not clean:
-            continue
-        if clean in allowed_codes or clean in own_codes:
-            allowed_count += 1
-            continue
-        if allow_own and not override_own and await invite_code_belongs_to_guild(guild, clean):
-            allowed_count += 1
-            continue
-        blocked.append(clean)
-
     return blocked, allowed_count
-
 
 async def _delete_message(message: discord.Message, *, reason: str) -> None:
     try:
