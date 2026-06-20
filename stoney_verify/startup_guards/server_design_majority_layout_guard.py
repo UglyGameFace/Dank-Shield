@@ -7,6 +7,8 @@ import inspect
 import re
 from typing import Any
 
+from stoney_verify.services import server_design_repair_confidence as repair_confidence
+
 _PATCHED = False
 
 
@@ -179,9 +181,19 @@ def _saved_rule_count(options: Mapping[str, Any]) -> int:
     return total
 
 
+
+def _repair_mode_recommendation_text() -> str:
+    return (
+        "Start with **Fix Only Obvious Mistakes** for styled servers. "
+        "Use **Live Majority** only when the preview keeps the current server look. "
+        "Use **Saved Layout** when this server already has approved Dank Design rules."
+    )
+
 def _patch_consistency_embed(command_guard: Any, majority: Any, discord: Any) -> None:
     def _majority_consistency_embed(guild: Any, items: list[dict[str, Any]], options: Mapping[str, Any]) -> Any:
         counts = _counts(command_guard, items)
+        confidence = options.get('__repair_confidence_result') if isinstance(options.get('__repair_confidence_result'), dict) else repair_confidence.evaluate_repair_plan(items, context='live_majority')
+        confidence_apply_allowed = bool(confidence.get('apply_allowed'))
         detected = majority.majority_summary_from_items(items) or {
             "separator": "mixed/unknown",
             "category_frame": "mixed/unknown",
@@ -192,7 +204,7 @@ def _patch_consistency_embed(command_guard: Any, majority: Any, discord: Any) ->
         apply_blocked = _majority_apply_blocked(items)
 
         embed = discord.Embed(
-            title="⚠️ Live Majority Needs Review" if apply_blocked else "✅ Live Majority Repair Preview",
+            title="✅ Live Majority Repair Preview" if confidence_apply_allowed else "⚠️ Live Majority Needs Review",
             description=(
                 "**Step 2 of 2 — review before apply.**\n"
                 "Target: the layout most channels/categories already use here.\n\n"
@@ -226,6 +238,13 @@ def _patch_consistency_embed(command_guard: Any, majority: Any, discord: Any) ->
             ),
             inline=True,
         )
+        embed.add_field(name="Repair confidence", value=repair_confidence.confidence_summary_text(confidence), inline=True)
+        blocked_lines = list(confidence.get("blocked_lines") or [])
+        review_lines = list(confidence.get("review_lines") or [])
+        if blocked_lines:
+            embed.add_field(name="Blocked by design safety", value="\n".join(str(line) for line in blocked_lines)[:1024], inline=False)
+        if review_lines:
+            embed.add_field(name="Needs review", value="\n".join(str(line) for line in review_lines)[:1024], inline=False)
         embed.add_field(name="Sample safe repairs", value="\n".join(_change_lines(items, limit=8))[:1024], inline=False)
         if apply_blocked and downgrade_lines:
             embed.add_field(
@@ -244,7 +263,7 @@ def _patch_consistency_embed(command_guard: Any, majority: Any, discord: Any) ->
             embed.add_field(name="Saved rules found", value=f"{found} saved rule(s) exist. This preview uses **Live Majority** because you chose it.", inline=False)
         elif active:
             embed.add_field(name="Saved rules active", value=f"{active} saved rule(s) are active for this preview.", inline=False)
-        embed.set_footer(text="Names only • Preview first • Apply blocked when it would simplify a designed server")
+        embed.set_footer(text="Names only • Preview first • Apply disabled when confidence is low")
         return command_guard._clean_design_embed(embed)
 
     command_guard._consistency_embed = _majority_consistency_embed
@@ -308,6 +327,7 @@ def _patch_guided_flow(command_guard: Any, majority: Any, studio: Any, discord: 
             ),
             inline=False,
         )
+        embed.add_field(name="Recommended", value=_repair_mode_recommendation_text(), inline=False)
         embed.set_footer(text="Read-only screen. Choose a target to generate the final preview.")
         return command_guard._clean_design_embed(embed)
 
@@ -345,6 +365,14 @@ def _patch_guided_flow(command_guard: Any, majority: Any, studio: Any, discord: 
             await interaction.response.defer(ephemeral=True, thinking=True)
             options = await _load_options(int(guild.id))
             items, requested = await _majority_items(guild, options)
+            confidence = repair_confidence.evaluate_repair_plan(items, context='live_majority')
+            requested['__repair_confidence_result'] = dict(confidence)
+            if not bool(confidence.get('apply_allowed')):
+                for _item in items:
+                    if _item.get('status') == 'changed':
+                        _item.setdefault('blockers', []).append('Repair confidence blocked automatic apply. Review this row or use Manual Editor/Saved Layout.')
+                        _item['status'] = 'failed'
+                        _item['repair_confidence_blocked'] = True
             counts = _counts(command_guard, items)
             command_guard._PENDING[command_guard._key(int(guild.id), int(interaction.user.id))] = {
                 "created_at": command_guard.time.time(),
