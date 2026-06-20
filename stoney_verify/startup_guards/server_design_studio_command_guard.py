@@ -1888,7 +1888,7 @@ async def _save_exact_and_preview(interaction: discord.Interaction, *, scope: st
 
     await interaction.edit_original_response(
         embed=_preview_embed(guild, items, title=title),
-        view=DesignPreviewView(can_apply=not has_blockers and has_changes),
+        view=StyleChangePreviewView(can_apply=not has_blockers and has_changes, has_blockers=has_blockers),
     )
 
 
@@ -2485,15 +2485,60 @@ class ChannelPageButton(discord.ui.Button):
         )
 
 
+def _direct_rename_has_unsafe_channel_icon(name: str) -> bool:
+    raw = _safe_str(name).strip()
+    if not raw:
+        return False
+
+    # #️⃣ starts with the literal # codepoint. Discord channel names already use
+    # # as the channel marker, so this can degrade into broken square placeholders.
+    if raw.startswith("#"):
+        return True
+
+    failed = {"□", "▢", "▣", "◻", "◻️", "◽", "▫", "⬜", "🔲"}
+    return any(raw.startswith(icon) for icon in failed)
+
+
+async def _direct_rename_fetch_target(
+    guild: discord.Guild,
+    target_id: int,
+    fallback: Any,
+) -> Any:
+    cached = guild.get_channel(int(target_id))
+    if cached is not None:
+        return cached
+
+    try:
+        return await guild.fetch_channel(int(target_id))
+    except Exception:
+        return fallback
+
+
+def _direct_rename_result_value(old_name: str, requested_name: str, actual_name: str) -> str:
+    lines = [
+        f"Old: `{old_name}`",
+        f"Typed: `{requested_name}`",
+        f"Discord result: `{actual_name}`",
+        "",
+        "**Applied immediately. No Apply button is needed after Rename.**",
+    ]
+
+    if actual_name != requested_name:
+        lines.append("")
+        lines.append("⚠️ Discord returned a different final name. The screen now shows the live Discord result.")
+
+    return "\n".join(lines)[:1024]
+
+
 class DirectRenameModal(discord.ui.Modal):
     def __init__(self, *, target_id: int, scope: str, current_name: str, category_id: int | None = None) -> None:
-        super().__init__(title=f"Rename {scope.title()}")
+        super().__init__(title=f"Rename {scope.title()} Now")
         self.target_id = int(target_id)
         self.scope = str(scope)
         self.category_id = int(category_id) if category_id is not None else None
         self.new_name = discord.ui.TextInput(
-            label="New channel/category name",
-            placeholder="Example: staff-commands",
+            label="New Discord name",
+            placeholder="This applies immediately after Submit",
             default=_short_label(current_name, 90),
             min_length=1,
             max_length=100,
@@ -2513,14 +2558,21 @@ class DirectRenameModal(discord.ui.Modal):
             return await interaction.response.send_message("That item no longer exists.", ephemeral=True)
 
         old_name = _safe_str(getattr(channel, "name", ""), "unknown")
-        new_name = _safe_str(self.new_name.value, "")
+        requested_name = _safe_str(self.new_name.value, "").strip()
 
-        if not new_name:
+        if not requested_name:
             return await interaction.response.send_message("Name cannot be blank.", ephemeral=True)
+
+        if self.scope != "category" and _direct_rename_has_unsafe_channel_icon(requested_name):
+            return await interaction.response.send_message(
+                "❌ That icon is unsafe for channel names. `#️⃣` and square placeholder icons can break into blocks. "
+                "Pick a real emoji/icon, or use it on a category only.",
+                ephemeral=True,
+            )
 
         try:
             await channel.edit(
-                name=new_name,
+                name=requested_name,
                 reason=f"Dank Design direct rename by {interaction.user} ({interaction.user.id})",
             )
         except discord.Forbidden:
@@ -2534,31 +2586,44 @@ class DirectRenameModal(discord.ui.Modal):
                 ephemeral=True,
             )
 
-        refreshed = guild.get_channel(self.target_id) or channel
+        refreshed = await _direct_rename_fetch_target(guild, self.target_id, channel)
+        actual_name = _safe_str(getattr(refreshed, "name", requested_name), requested_name)
 
         if self.scope == "category" and isinstance(refreshed, discord.CategoryChannel):
             embed = _category_action_embed(refreshed)
             view = CategoryEditorActionView(self.target_id)
+            embed.title = "✅ Category Renamed"
         else:
             embed = _channel_action_embed(refreshed)
             view = ChannelEditorActionView(self.target_id, category_id=self.category_id)
+            embed.title = "✅ Channel Renamed"
 
-        embed.title = "✅ Name Updated"
-        embed.add_field(name="Renamed", value=f"`{old_name}`\n→ `{new_name}`", inline=False)
+        embed.add_field(
+            name="Applied immediately",
+            value=_direct_rename_result_value(old_name, requested_name, actual_name),
+            inline=False,
+        )
+        embed.add_field(
+            name="Next",
+            value="Use **Refresh** to reload the live Discord name, or use **Preview Repairs** only if you want a preview/apply workflow.",
+            inline=False,
+        )
 
         try:
             await interaction.response.edit_message(embed=embed, view=view)
         except Exception:
-            await interaction.response.send_message(f"✅ Renamed `{old_name}` → `{new_name}`", ephemeral=True)
-
+            await interaction.response.send_message(
+                f"✅ Renamed immediately: `{old_name}` → `{actual_name}`",
+                ephemeral=True,
+            )
 
 def _category_action_embed(category: discord.CategoryChannel) -> discord.Embed:
     child_count = len(list(getattr(category, "channels", []) or []))
     embed = discord.Embed(
         title="🗂️ Category Design",
         description=(
-            "Start with **Preview Repairs**. Nothing changes until the next screen shows an Apply button.\n\n"
-            "Use **Rename** when you want to directly change the category's actual Discord name."
+            "**Rename applies immediately. No Apply button appears after Rename.**\n\n"
+            "Use **Preview Repairs** when you want to review changes first and apply later."
         ),
         color=discord.Color.blurple(),
     )
@@ -2573,7 +2638,7 @@ def _category_action_embed(category: discord.CategoryChannel) -> discord.Embed:
     )
     embed.add_field(
         name="Recommended next step",
-        value="Press **Preview Repairs** to see exactly what would change before anything is renamed.",
+        value="Use **Rename** for an instant direct name change. Use **Preview Repairs** only when you want Apply later.",
         inline=False,
     )
     embed.add_field(
@@ -2585,7 +2650,7 @@ def _category_action_embed(category: discord.CategoryChannel) -> discord.Embed:
         ),
         inline=False,
     )
-    embed.set_footer(text="Preview first • Apply later • Rename is direct")
+    embed.set_footer(text="Rename is instant • Preview/Style Change/Exact Format use Apply later")
     return _clean_design_embed(embed)
 
 def _channel_action_embed(channel: discord.abc.GuildChannel) -> discord.Embed:
@@ -2594,8 +2659,8 @@ def _channel_action_embed(channel: discord.abc.GuildChannel) -> discord.Embed:
     embed = discord.Embed(
         title="#️⃣ Channel Design",
         description=(
-            "Start with **Preview Repairs**. Nothing changes until the next screen shows an Apply button.\n\n"
-            "Use **Rename** when you want to directly change this channel's actual Discord name."
+            "**Rename applies immediately. No Apply button appears after Rename.**\n\n"
+            "Use **Preview Repairs** when you want to review changes first and apply later."
         ),
         color=discord.Color.blurple(),
     )
@@ -2611,7 +2676,7 @@ def _channel_action_embed(channel: discord.abc.GuildChannel) -> discord.Embed:
     )
     embed.add_field(
         name="Recommended next step",
-        value="Press **Preview Repairs** to check this item only.",
+        value="Use **Rename** for an instant direct name change. Use **Preview Repairs** only when you want Apply later.",
         inline=False,
     )
     embed.add_field(
@@ -2623,7 +2688,7 @@ def _channel_action_embed(channel: discord.abc.GuildChannel) -> discord.Embed:
         ),
         inline=False,
     )
-    embed.set_footer(text="Preview first • Apply later • Rename is direct")
+    embed.set_footer(text="Rename is instant • Preview/Style Change/Exact Format use Apply later")
     return _clean_design_embed(embed)
 
 class CategoryEditorActionView(discord.ui.View):
@@ -2702,6 +2767,21 @@ class CategoryEditorActionView(discord.ui.View):
     async def protection_mode(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         await _open_protection_mode_editor(interaction, channel_id=self.category_id)
 
+
+    @discord.ui.button(label="Refresh", emoji="🔄", style=discord.ButtonStyle.secondary, custom_id="dank_design:category_action_refresh", row=4)
+    async def refresh_category(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        if not await _require_design_permission(interaction):
+            return
+        guild = interaction.guild
+        assert guild is not None
+        category = await _direct_rename_fetch_target(guild, self.category_id, guild.get_channel(self.category_id))
+        if not isinstance(category, discord.CategoryChannel):
+            return await interaction.response.send_message("That category no longer exists.", ephemeral=True)
+        await interaction.response.edit_message(
+            embed=_category_action_embed(category),
+            view=CategoryEditorActionView(self.category_id),
+        )
+
     @discord.ui.button(label="Back", emoji="⬅️", style=discord.ButtonStyle.secondary, custom_id="dank_design:category_action_back", row=4)
     async def back(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         if not await _require_design_permission(interaction):
@@ -2776,6 +2856,21 @@ class ChannelEditorActionView(discord.ui.View):
     @discord.ui.button(label="Protection Settings", emoji="🛡️", style=discord.ButtonStyle.secondary, custom_id="dank_design:channel_protection_mode", row=2)
     async def protection_mode(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         await _open_protection_mode_editor(interaction, channel_id=self.channel_id)
+
+
+    @discord.ui.button(label="Refresh", emoji="🔄", style=discord.ButtonStyle.secondary, custom_id="dank_design:channel_action_refresh", row=4)
+    async def refresh_channel(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        if not await _require_design_permission(interaction):
+            return
+        guild = interaction.guild
+        assert guild is not None
+        channel = await _direct_rename_fetch_target(guild, self.channel_id, guild.get_channel(self.channel_id))
+        if channel is None:
+            return await interaction.response.send_message("That channel no longer exists.", ephemeral=True)
+        await interaction.response.edit_message(
+            embed=_channel_action_embed(channel),
+            view=ChannelEditorActionView(self.channel_id, category_id=self.category_id),
+        )
 
     @discord.ui.button(label="Back", emoji="⬅️", style=discord.ButtonStyle.secondary, custom_id="dank_design:channel_action_back", row=4)
     async def back(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
@@ -4071,6 +4166,82 @@ def _style_change_visible_name_body(current_name: str, parsed: Mapping[str, Any]
     return body or "channel"
 
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+def _style_change_failed_icon_placeholders() -> set[str]:
+    return {"□", "▢", "▣", "◻", "◻️", "◽", "▫", "⬜", "🔲"}
+
+
+def _style_change_separator_chars() -> set[str]:
+    return set("|｜│┃❘❙❚⎮¦︱-–—―━─═·•∙⋅*✦✧✪✫✬✭❖◆◇▪▫▬[]{}()<>【】「」『』〔〕〖〗꒰꒱")
+
+
+def _style_change_icon_base(icon: str) -> str:
+    return (
+        _safe_str(icon)
+        .replace("\ufe0e", "")
+        .replace("\ufe0f", "")
+        .replace("\u20e3", "")
+        .strip()
+    )
+
+
+def _style_change_is_unsafe_channel_icon(icon: str) -> bool:
+    raw = _safe_str(icon).strip()
+    base = _style_change_icon_base(raw)
+
+    if not raw:
+        return False
+
+    # #️⃣ is built from literal # and can degrade badly in Discord channel names.
+    if "#" in raw or base == "#":
+        return True
+
+    placeholders = _style_change_failed_icon_placeholders()
+    if raw in placeholders or base in placeholders:
+        return True
+
+    return False
+
+
+def _style_change_starts_with_failed_icon_placeholder(text: str) -> bool:
+    raw = _safe_str(text).strip()
+    if not raw:
+        return False
+
+    placeholders = _style_change_failed_icon_placeholders()
+    for icon in placeholders:
+        if raw.startswith(icon):
+            return True
+
+    return _style_change_is_unsafe_channel_icon(raw[0])
+
+
+def _style_change_bad_icon_message() -> str:
+    return (
+        "Leading icon looks like a failed/unsupported #️⃣ placeholder. "
+        "Choose a real emoji/icon first."
+    )
+
+
 def _style_change_clean_leading_emoji(raw: str) -> str:
     emoji = _safe_str(raw).strip()
     if not emoji:
@@ -4080,7 +4251,7 @@ def _style_change_clean_leading_emoji(raw: str) -> str:
     if bracket_match:
         emoji = bracket_match.group(1).strip()
 
-    separator_chars = set("|｜│┃❘❙❚⎮¦︱-–—―━─═·•∙⋅*✦✧✪✫✬✭❖◆◇▪▫▬[]{}()<>【】「」『』〔〕〖〗꒰꒱")
+    separator_chars = _style_change_separator_chars()
 
     while emoji:
         ch = emoji[-1]
@@ -4089,16 +4260,84 @@ def _style_change_clean_leading_emoji(raw: str) -> str:
             continue
         break
 
+    if _style_change_is_unsafe_channel_icon(emoji):
+        return ""
+
     return emoji.strip()
+
+
+def _style_change_first_visual_icon(text: str) -> tuple[str, str]:
+    raw = _safe_str(text).strip()
+    if not raw:
+        return "", ""
+
+    first = raw[0]
+
+    if first in _style_change_separator_chars():
+        return "", raw
+
+    if _style_change_is_unsafe_channel_icon(first):
+        return "", raw
+
+    category = unicodedata.category(first)
+    if not category.startswith("S"):
+        return "", raw
+
+    icon = first
+    index = 1
+
+    while index < len(raw):
+        ch = raw[index]
+        code = ord(ch)
+        cat = unicodedata.category(ch)
+
+        if code in {0xFE0E, 0xFE0F} or 0x1F3FB <= code <= 0x1F3FF:
+            icon += ch
+            index += 1
+            continue
+
+        if ch == "\u200d" and index + 1 < len(raw):
+            icon += ch + raw[index + 1]
+            index += 2
+            continue
+
+        if cat.startswith("M"):
+            icon += ch
+            index += 1
+            continue
+
+        break
+
+    if _style_change_is_unsafe_channel_icon(icon):
+        return "", raw
+
+    return icon.strip(), raw[index:].strip()
+
+
+def _style_change_icon_and_body(current_name: str, parsed: Mapping[str, Any]) -> tuple[str, str]:
+    before = _safe_str(current_name).strip()
+
+    emoji = _style_change_clean_leading_emoji(_safe_str(parsed.get("emoji"), ""))
+    body = _style_change_visible_name_body(before, parsed)
+
+    if emoji:
+        return emoji, body
+
+    visual_icon, rest = _style_change_first_visual_icon(before)
+    if visual_icon:
+        body = _style_change_strip_current_separator(rest)
+        if not body:
+            body = _safe_str(parsed.get("base_name"), "channel")
+        return visual_icon, body.strip() or "channel"
+
+    return "", body
 
 
 def _style_change_separator_after(current_name: str, separator_id: str) -> tuple[str, list[str], list[str]]:
     before = _safe_str(current_name).strip()
     parsed = studio.parse_channel_name(before, kind="text")
 
-    raw_emoji = _safe_str(parsed.get("emoji"), "")
-    emoji = _style_change_clean_leading_emoji(raw_emoji)
-    body = _style_change_visible_name_body(before, parsed)
+    emoji, body = _style_change_icon_and_body(before, parsed)
 
     warnings: list[str] = ["Style Change only touched the channel separator; emoji/name/font were preserved."]
     blockers: list[str] = []
@@ -4109,7 +4348,10 @@ def _style_change_separator_after(current_name: str, separator_id: str) -> tuple
         return before, warnings, blockers
 
     if separator_id != "none" and not emoji:
-        blockers.append("No leading emoji found. Separator-only change keeps emoji behavior unchanged.")
+        if _style_change_starts_with_failed_icon_placeholder(before):
+            blockers.append(_style_change_bad_icon_message())
+        else:
+            blockers.append("No leading emoji/icon found. Separator-only change keeps emoji behavior unchanged.")
         return before, warnings, blockers
 
     if separator_id == "none":
@@ -4130,7 +4372,6 @@ def _style_change_separator_after(current_name: str, separator_id: str) -> tuple
         blockers.append(f"Final name is too long for Discord ({len(after)}/{studio.DISCORD_NAME_LIMIT}).")
 
     return after[: studio.DISCORD_NAME_LIMIT], warnings, blockers
-
 
 def _build_channel_separator_style_change_plan(
     guild: discord.Guild,
@@ -4286,6 +4527,11 @@ def _style_change_preview_embed(guild: discord.Guild, items: list[dict[str, Any]
     failed_lines = studio.preview_lines(items, filter_mode="failed", limit=5)
     if failed_lines and failed_lines != ["No matching preview rows."]:
         embed.add_field(name="Needs review", value="\n".join(failed_lines)[:1024], inline=False)
+        embed.add_field(
+            name="How to fix",
+            value="\n".join(_style_change_issue_lines(items))[:1024],
+            inline=False,
+        )
 
     embed.set_footer(text="Names only • Channel separator only • Apply creates rollback snapshot")
     return _clean_design_embed(embed)
@@ -4314,6 +4560,7 @@ class StyleChangeSeparatorSelect(discord.ui.Select):
             embed=_style_change_embed(guild, options, separator_id=selected),
             view=StyleChangeView(separator_id=selected),
         )
+
 
 
 class StyleChangeView(discord.ui.View):
@@ -4347,7 +4594,7 @@ class StyleChangeView(discord.ui.View):
 
         await interaction.edit_original_response(
             embed=_style_change_preview_embed(guild, items, separator_id=self.separator_id),
-            view=DesignPreviewView(can_apply=not has_blockers and has_changes),
+            view=StyleChangePreviewView(can_apply=not has_blockers and has_changes, has_blockers=has_blockers),
         )
 
     @discord.ui.button(label="Back to Design Studio", emoji="⬅️", style=discord.ButtonStyle.secondary, custom_id="dank_design:style_change_back", row=4)
@@ -4564,6 +4811,292 @@ class DesignPreviewView(discord.ui.View):
         assert interaction.guild is not None
         options = await _load_design_options(int(interaction.guild.id))
         await interaction.response.edit_message(embed=_home_embed(interaction.guild, options), view=DesignHomeView(options))
+
+
+
+def _style_change_missing_emoji_items(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    out: list[dict[str, Any]] = []
+    for item in items:
+        if item.get("status") != "failed":
+            continue
+
+        blockers = " ".join(_safe_str(x) for x in list(item.get("blockers") or []))
+        if (
+            "No leading emoji" in blockers
+            or "No leading emoji/icon" in blockers
+            or "failed/unsupported #️⃣ placeholder" in blockers
+            or "not safe channel-name icons" in blockers
+        ):
+            out.append(item)
+
+    return out
+
+def _style_change_issue_lines(items: list[dict[str, Any]]) -> list[str]:
+    lines: list[str] = []
+    missing_emoji = _style_change_missing_emoji_items(items)
+
+    if missing_emoji:
+        lines.append(
+            f"• **{len(missing_emoji)} missing emoji** — use **Fix Missing Emojis** or leave them skipped."
+        )
+
+    permission_count = 0
+    length_count = 0
+    duplicate_count = 0
+    other_count = 0
+
+    for item in items:
+        if item.get("status") != "failed":
+            continue
+
+        blockers = " ".join(_safe_str(x) for x in list(item.get("blockers") or []))
+
+        if "No leading emoji found" in blockers:
+            continue
+        if "Manage Channels" in blockers or "cannot view" in blockers or "permission" in blockers.lower():
+            permission_count += 1
+        elif "too long" in blockers:
+            length_count += 1
+        elif "Duplicate" in blockers or "duplicate" in blockers:
+            duplicate_count += 1
+        else:
+            other_count += 1
+
+    if permission_count:
+        lines.append(f"• **{permission_count} permission issue(s)** — fix bot access/role order, then preview again.")
+    if length_count:
+        lines.append(f"• **{length_count} name too long** — use Channel Editor → Rename to shorten first.")
+    if duplicate_count:
+        lines.append(f"• **{duplicate_count} duplicate output risk** — rename one conflicting channel first.")
+    if other_count:
+        lines.append(f"• **{other_count} other issue(s)** — open Channel Editor and fix individually.")
+
+    return lines or ["No fixable issues found."]
+
+
+def _style_change_after_with_manual_emoji(
+    current_name: str,
+    separator_id: str,
+    manual_emoji: str,
+) -> tuple[str, list[str], list[str]]:
+    before = _safe_str(current_name).strip()
+    parsed = studio.parse_channel_name(before, kind="text")
+    body = _style_change_visible_name_body(before, parsed)
+    emoji = _style_change_clean_leading_emoji(manual_emoji)
+
+    warnings: list[str] = ["Added the emoji you chose, then changed only the channel separator."]
+    blockers: list[str] = []
+
+    if not emoji:
+        if _style_change_is_unsafe_channel_icon(manual_emoji):
+            blockers.append("#️⃣ and square placeholder icons are not safe channel-name icons. Pick a real emoji/icon.")
+        else:
+            blockers.append("No emoji/icon entered.")
+        return before, warnings, blockers
+
+    spec = _style_change_separator_spec(separator_id)
+    if spec is None:
+        blockers.append("Selected separator does not exist.")
+        return before, warnings, blockers
+
+    if separator_id == "none":
+        after = f"{emoji}{body}".strip()
+    else:
+        template = _safe_str(getattr(spec, "template", "{emoji}{separator}{name}"))
+        after = template.format(
+            emoji=emoji,
+            separator=_safe_str(getattr(spec, "value", ""), ""),
+            name=body,
+        ).strip()
+
+    after = strip_invisible(after).strip() if "strip_invisible" in globals() else after.strip()
+
+    if not after:
+        blockers.append("Final name would be empty.")
+    elif len(after) > studio.DISCORD_NAME_LIMIT:
+        blockers.append(f"Final name is too long for Discord ({len(after)}/{studio.DISCORD_NAME_LIMIT}).")
+
+    return after[: studio.DISCORD_NAME_LIMIT], warnings, blockers
+
+def _style_change_rebuild_preview_response(
+    guild: discord.Guild,
+    pending: dict[str, Any],
+) -> tuple[discord.Embed, discord.ui.View]:
+    items = list(pending.get("items") or [])
+    separator_id = _safe_str(pending.get("separator_id"), "none")
+    has_blockers = any(item.get("status") == "failed" for item in items)
+    has_changes = any(item.get("status") == "changed" for item in items)
+    embed = _style_change_preview_embed(guild, items, separator_id=separator_id)
+    return embed, StyleChangePreviewView(can_apply=not has_blockers and has_changes, has_blockers=has_blockers)
+
+
+class StyleChangeFixMissingEmojiModal(discord.ui.Modal):
+    def __init__(self, *, items: list[dict[str, Any]], separator_id: str) -> None:
+        super().__init__(title="Fix Missing Emojis")
+        self.separator_id = _safe_str(separator_id, "none")
+        self.item_keys: list[str] = []
+
+        for index, item in enumerate(items[:5], start=1):
+            channel_id = _safe_str(item.get("channel_id"), "")
+            self.item_keys.append(channel_id)
+            before = _safe_str(item.get("before"), "channel")
+            base = _safe_str(item.get("base_name"), before)
+            field = discord.ui.TextInput(
+                label=f"{index}. Emoji for {base}"[:45],
+                placeholder=f"Example: 🎮 for {before}"[:100],
+                min_length=1,
+                max_length=12,
+                required=True,
+            )
+            self.add_item(field)
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        if not await _require_design_permission(interaction):
+            return
+
+        guild = interaction.guild
+        assert guild is not None
+
+        key = _key(int(guild.id), int(interaction.user.id))
+        pending = _PENDING.get(key)
+        if not pending:
+            return await interaction.response.send_message("This preview expired. Run Style Change again.", ephemeral=True)
+
+        items = list(pending.get("items") or [])
+        separator_id = _safe_str(pending.get("separator_id"), self.separator_id)
+
+        values_by_channel: dict[str, str] = {}
+        for channel_id, child in zip(self.item_keys, self.children):
+            values_by_channel[channel_id] = _safe_str(getattr(child, "value", ""), "")
+
+        for item in items:
+            channel_id = _safe_str(item.get("channel_id"), "")
+            if channel_id not in values_by_channel:
+                continue
+
+            manual_emoji = values_by_channel[channel_id]
+            after, warnings, blockers = _style_change_after_with_manual_emoji(
+                _safe_str(item.get("before"), ""),
+                separator_id,
+                manual_emoji,
+            )
+
+            item["after"] = after
+            item["warnings"] = warnings
+            item["blockers"] = blockers
+            item["status"] = "failed" if blockers else ("changed" if after != item.get("before") else "unchanged")
+            item["style_change_manual_emoji"] = manual_emoji
+
+        pending["items"] = items
+        _PENDING[key] = pending
+
+        embed, view = _style_change_rebuild_preview_response(guild, pending)
+        await interaction.response.edit_message(embed=embed, view=view)
+
+
+class StyleChangeApplySafeOnlyButton(discord.ui.Button):
+    def __init__(self, *, row: int = 2) -> None:
+        super().__init__(
+            label="Skip Issues",
+            emoji="✅",
+            style=discord.ButtonStyle.secondary,
+            custom_id="dank_design:style_change_skip_issues",
+            row=row,
+        )
+
+    async def callback(self, interaction: discord.Interaction) -> None:  # type: ignore[override]
+        if not await _require_design_permission(interaction):
+            return
+
+        guild = interaction.guild
+        assert guild is not None
+
+        key = _key(int(guild.id), int(interaction.user.id))
+        pending = _PENDING.get(key)
+        if not pending:
+            return await interaction.response.send_message("This preview expired. Run Style Change again.", ephemeral=True)
+
+        items = list(pending.get("items") or [])
+        safe_items: list[dict[str, Any]] = []
+
+        for item in items:
+            if item.get("status") == "failed":
+                skipped = dict(item)
+                skipped["after"] = skipped.get("before")
+                skipped["status"] = "protected"
+                skipped["protected"] = True
+                skipped["warnings"] = ["Skipped by user from Style Change issues review."]
+                skipped["blockers"] = []
+                safe_items.append(skipped)
+            else:
+                safe_items.append(item)
+
+        pending["items"] = safe_items
+        pending["style_change_skipped_issues"] = True
+        _PENDING[key] = pending
+
+        separator_id = _safe_str(pending.get("separator_id"), "none")
+        embed = _style_change_preview_embed(guild, safe_items, separator_id=separator_id)
+        embed.title = "👁️ Style Change Preview · Safe Changes Only"
+        embed.add_field(
+            name="Skipped issues",
+            value="Needs-review rows were left untouched. Apply will only rename safe rows.",
+            inline=False,
+        )
+
+        await interaction.response.edit_message(
+            embed=embed,
+            view=StyleChangePreviewView(can_apply=True, has_blockers=False),
+        )
+
+
+class StyleChangeFixMissingEmojiButton(discord.ui.Button):
+    def __init__(self, *, row: int = 2) -> None:
+        super().__init__(
+            label="Fix Missing Emojis",
+            emoji="😀",
+            style=discord.ButtonStyle.primary,
+            custom_id="dank_design:style_change_fix_missing_emojis",
+            row=row,
+        )
+
+    async def callback(self, interaction: discord.Interaction) -> None:  # type: ignore[override]
+        if not await _require_design_permission(interaction):
+            return
+
+        guild = interaction.guild
+        assert guild is not None
+
+        key = _key(int(guild.id), int(interaction.user.id))
+        pending = _PENDING.get(key)
+        if not pending:
+            return await interaction.response.send_message("This preview expired. Run Style Change again.", ephemeral=True)
+
+        items = list(pending.get("items") or [])
+        missing = _style_change_missing_emoji_items(items)
+
+        if not missing:
+            return await interaction.response.send_message("No missing-emoji rows found in this preview.", ephemeral=True)
+
+        if len(missing) > 5:
+            return await interaction.response.send_message(
+                "Too many missing-emoji rows for one modal. Use **Skip Issues** to apply safe rows first, then fix the rest from Channel Editor.",
+                ephemeral=True,
+            )
+
+        separator_id = _safe_str(pending.get("separator_id"), "none")
+        await interaction.response.send_modal(
+            StyleChangeFixMissingEmojiModal(items=missing, separator_id=separator_id)
+        )
+
+
+class StyleChangePreviewView(DesignPreviewView):
+    def __init__(self, *, can_apply: bool, has_blockers: bool = False) -> None:
+        super().__init__(can_apply=can_apply)
+
+        if has_blockers:
+            self.add_item(StyleChangeFixMissingEmojiButton(row=2))
+            self.add_item(StyleChangeApplySafeOnlyButton(row=2))
 
 
 class DesignDoneView(discord.ui.View):
