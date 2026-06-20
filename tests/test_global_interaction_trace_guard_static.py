@@ -56,3 +56,21 @@ def test_component_trace_wraps_view_dispatch():
 def test_no_risky_full_rebrand():
     assert "from stoney_verify import client" in SOURCE
     assert "Internal package imports stay unchanged for safety." in SOURCE
+
+
+def test_button_spam_tracking_is_evidence_only():
+    required = [
+        "DANK_SHIELD_BUTTON_SPAM_WATCH",
+        "DANK_SHIELD_BUTTON_SPAM_WINDOW_SECONDS",
+        "DANK_SHIELD_BUTTON_SPAM_THRESHOLD",
+        "DANK_SHIELD_BUTTON_SPAM_LOG_COOLDOWN_SECONDS",
+        "_track_button_spam",
+        "dank_button_spam",
+        "This does not block, defer, punish, or mutate behavior.",
+    ]
+
+    for phrase in required:
+        assert phrase in SOURCE
+
+    assert "_track_button_spam(interaction)" in SOURCE
+

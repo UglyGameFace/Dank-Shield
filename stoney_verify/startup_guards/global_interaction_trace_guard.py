@@ -24,6 +24,8 @@ from discord import app_commands
 
 _PATCHED = False
 _ERROR_COUNTS: dict[str, tuple[float, int]] = {}
+_BUTTON_SPAM_WINDOWS: dict[str, list[float]] = {}
+_BUTTON_SPAM_LAST_LOG: dict[str, float] = {}
 
 
 def _env_bool(name: str, default: bool = False) -> bool:
@@ -50,6 +52,83 @@ def _slow_ms() -> int:
         return max(250, int(os.getenv("DANK_SHIELD_SLOW_INTERACTION_MS", "2500")))
     except Exception:
         return 2500
+
+
+def _button_spam_watch_enabled() -> bool:
+    return _env_bool("DANK_SHIELD_BUTTON_SPAM_WATCH", True)
+
+
+def _button_spam_window_seconds() -> float:
+    try:
+        return max(1.0, float(os.getenv("DANK_SHIELD_BUTTON_SPAM_WINDOW_SECONDS", "8")))
+    except Exception:
+        return 8.0
+
+
+def _button_spam_threshold() -> int:
+    try:
+        return max(2, int(os.getenv("DANK_SHIELD_BUTTON_SPAM_THRESHOLD", "5")))
+    except Exception:
+        return 5
+
+
+def _button_spam_log_cooldown_seconds() -> float:
+    try:
+        return max(1.0, float(os.getenv("DANK_SHIELD_BUTTON_SPAM_LOG_COOLDOWN_SECONDS", "15")))
+    except Exception:
+        return 15.0
+
+
+def _component_spam_key(interaction: discord.Interaction) -> str:
+    guild_id = getattr(getattr(interaction, "guild", None), "id", 0)
+    user_id = getattr(getattr(interaction, "user", None), "id", 0)
+    custom_id = _component_custom_id(interaction) or "unknown_component"
+    return f"{guild_id}:{user_id}:{custom_id}"
+
+
+def _track_button_spam(interaction: discord.Interaction) -> None:
+    """Evidence-only repeated button/select click detector.
+
+    This does not block, defer, punish, or mutate behavior.
+    It only logs when one user repeatedly hits the same component quickly.
+    """
+
+    if not _button_spam_watch_enabled():
+        return
+
+    try:
+        key = _component_spam_key(interaction)
+        now = time.monotonic()
+        window_s = _button_spam_window_seconds()
+        threshold = _button_spam_threshold()
+
+        hits = [stamp for stamp in _BUTTON_SPAM_WINDOWS.get(key, []) if now - stamp <= window_s]
+        hits.append(now)
+        _BUTTON_SPAM_WINDOWS[key] = hits
+
+        count = len(hits)
+        if count < threshold:
+            return
+
+        last_log = _BUTTON_SPAM_LAST_LOG.get(key, 0.0)
+        if now - last_log < _button_spam_log_cooldown_seconds():
+            return
+
+        _BUTTON_SPAM_LAST_LOG[key] = now
+
+        fields = _base_fields(interaction)
+        fields.update(
+            {
+                "custom_id": _component_custom_id(interaction),
+                "component_type": _component_type(interaction),
+                "count": count,
+                "threshold": threshold,
+                "window_s": window_s,
+            }
+        )
+        _print_event("⚠️ dank_button_spam", fields)
+    except Exception:
+        pass
 
 
 def _rate_limit_window_seconds() -> int:
@@ -298,6 +377,7 @@ async def _on_interaction(interaction: discord.Interaction) -> None:
     # Slash commands are covered by dispatch trace. Component events get separate IDs.
     try:
         if getattr(interaction, "type", None) == discord.InteractionType.component:
+            _track_button_spam(interaction)
             _component_trace("received", interaction)
         else:
             _trace("received", interaction)
