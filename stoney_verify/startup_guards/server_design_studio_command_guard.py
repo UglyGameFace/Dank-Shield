@@ -2485,15 +2485,60 @@ class ChannelPageButton(discord.ui.Button):
         )
 
 
+def _direct_rename_has_unsafe_channel_icon(name: str) -> bool:
+    raw = _safe_str(name).strip()
+    if not raw:
+        return False
+
+    # #️⃣ starts with the literal # codepoint. Discord channel names already use
+    # # as the channel marker, so this can degrade into broken square placeholders.
+    if raw.startswith("#"):
+        return True
+
+    failed = {"□", "▢", "▣", "◻", "◻️", "◽", "▫", "⬜", "🔲"}
+    return any(raw.startswith(icon) for icon in failed)
+
+
+async def _direct_rename_fetch_target(
+    guild: discord.Guild,
+    target_id: int,
+    fallback: Any,
+) -> Any:
+    cached = guild.get_channel(int(target_id))
+    if cached is not None:
+        return cached
+
+    try:
+        return await guild.fetch_channel(int(target_id))
+    except Exception:
+        return fallback
+
+
+def _direct_rename_result_value(old_name: str, requested_name: str, actual_name: str) -> str:
+    lines = [
+        f"Old: `{old_name}`",
+        f"Typed: `{requested_name}`",
+        f"Discord result: `{actual_name}`",
+        "",
+        "**Applied immediately. No Apply button is needed after Rename.**",
+    ]
+
+    if actual_name != requested_name:
+        lines.append("")
+        lines.append("⚠️ Discord returned a different final name. The screen now shows the live Discord result.")
+
+    return "\n".join(lines)[:1024]
+
+
 class DirectRenameModal(discord.ui.Modal):
     def __init__(self, *, target_id: int, scope: str, current_name: str, category_id: int | None = None) -> None:
-        super().__init__(title=f"Rename {scope.title()}")
+        super().__init__(title=f"Rename {scope.title()} Now")
         self.target_id = int(target_id)
         self.scope = str(scope)
         self.category_id = int(category_id) if category_id is not None else None
         self.new_name = discord.ui.TextInput(
-            label="New channel/category name",
-            placeholder="Example: staff-commands",
+            label="New Discord name",
+            placeholder="This applies immediately after Submit",
             default=_short_label(current_name, 90),
             min_length=1,
             max_length=100,
@@ -2513,14 +2558,21 @@ class DirectRenameModal(discord.ui.Modal):
             return await interaction.response.send_message("That item no longer exists.", ephemeral=True)
 
         old_name = _safe_str(getattr(channel, "name", ""), "unknown")
-        new_name = _safe_str(self.new_name.value, "")
+        requested_name = _safe_str(self.new_name.value, "").strip()
 
-        if not new_name:
+        if not requested_name:
             return await interaction.response.send_message("Name cannot be blank.", ephemeral=True)
+
+        if self.scope != "category" and _direct_rename_has_unsafe_channel_icon(requested_name):
+            return await interaction.response.send_message(
+                "❌ That icon is unsafe for channel names. `#️⃣` and square placeholder icons can break into blocks. "
+                "Pick a real emoji/icon, or use it on a category only.",
+                ephemeral=True,
+            )
 
         try:
             await channel.edit(
-                name=new_name,
+                name=requested_name,
                 reason=f"Dank Design direct rename by {interaction.user} ({interaction.user.id})",
             )
         except discord.Forbidden:
@@ -2534,31 +2586,44 @@ class DirectRenameModal(discord.ui.Modal):
                 ephemeral=True,
             )
 
-        refreshed = guild.get_channel(self.target_id) or channel
+        refreshed = await _direct_rename_fetch_target(guild, self.target_id, channel)
+        actual_name = _safe_str(getattr(refreshed, "name", requested_name), requested_name)
 
         if self.scope == "category" and isinstance(refreshed, discord.CategoryChannel):
             embed = _category_action_embed(refreshed)
             view = CategoryEditorActionView(self.target_id)
+            embed.title = "✅ Category Renamed"
         else:
             embed = _channel_action_embed(refreshed)
             view = ChannelEditorActionView(self.target_id, category_id=self.category_id)
+            embed.title = "✅ Channel Renamed"
 
-        embed.title = "✅ Name Updated"
-        embed.add_field(name="Renamed", value=f"`{old_name}`\n→ `{new_name}`", inline=False)
+        embed.add_field(
+            name="Applied immediately",
+            value=_direct_rename_result_value(old_name, requested_name, actual_name),
+            inline=False,
+        )
+        embed.add_field(
+            name="Next",
+            value="Use **Refresh** to reload the live Discord name, or use **Preview Repairs** only if you want a preview/apply workflow.",
+            inline=False,
+        )
 
         try:
             await interaction.response.edit_message(embed=embed, view=view)
         except Exception:
-            await interaction.response.send_message(f"✅ Renamed `{old_name}` → `{new_name}`", ephemeral=True)
-
+            await interaction.response.send_message(
+                f"✅ Renamed immediately: `{old_name}` → `{actual_name}`",
+                ephemeral=True,
+            )
 
 def _category_action_embed(category: discord.CategoryChannel) -> discord.Embed:
     child_count = len(list(getattr(category, "channels", []) or []))
     embed = discord.Embed(
         title="🗂️ Category Design",
         description=(
-            "Start with **Preview Repairs**. Nothing changes until the next screen shows an Apply button.\n\n"
-            "Use **Rename** when you want to directly change the category's actual Discord name."
+            "**Rename applies immediately. No Apply button appears after Rename.**\n\n"
+            "Use **Preview Repairs** when you want to review changes first and apply later."
         ),
         color=discord.Color.blurple(),
     )
@@ -2573,7 +2638,7 @@ def _category_action_embed(category: discord.CategoryChannel) -> discord.Embed:
     )
     embed.add_field(
         name="Recommended next step",
-        value="Press **Preview Repairs** to see exactly what would change before anything is renamed.",
+        value="Use **Rename** for an instant direct name change. Use **Preview Repairs** only when you want Apply later.",
         inline=False,
     )
     embed.add_field(
@@ -2585,7 +2650,7 @@ def _category_action_embed(category: discord.CategoryChannel) -> discord.Embed:
         ),
         inline=False,
     )
-    embed.set_footer(text="Preview first • Apply later • Rename is direct")
+    embed.set_footer(text="Rename is instant • Preview/Style Change/Exact Format use Apply later")
     return _clean_design_embed(embed)
 
 def _channel_action_embed(channel: discord.abc.GuildChannel) -> discord.Embed:
@@ -2594,8 +2659,8 @@ def _channel_action_embed(channel: discord.abc.GuildChannel) -> discord.Embed:
     embed = discord.Embed(
         title="#️⃣ Channel Design",
         description=(
-            "Start with **Preview Repairs**. Nothing changes until the next screen shows an Apply button.\n\n"
-            "Use **Rename** when you want to directly change this channel's actual Discord name."
+            "**Rename applies immediately. No Apply button appears after Rename.**\n\n"
+            "Use **Preview Repairs** when you want to review changes first and apply later."
         ),
         color=discord.Color.blurple(),
     )
@@ -2611,7 +2676,7 @@ def _channel_action_embed(channel: discord.abc.GuildChannel) -> discord.Embed:
     )
     embed.add_field(
         name="Recommended next step",
-        value="Press **Preview Repairs** to check this item only.",
+        value="Use **Rename** for an instant direct name change. Use **Preview Repairs** only when you want Apply later.",
         inline=False,
     )
     embed.add_field(
@@ -2623,7 +2688,7 @@ def _channel_action_embed(channel: discord.abc.GuildChannel) -> discord.Embed:
         ),
         inline=False,
     )
-    embed.set_footer(text="Preview first • Apply later • Rename is direct")
+    embed.set_footer(text="Rename is instant • Preview/Style Change/Exact Format use Apply later")
     return _clean_design_embed(embed)
 
 class CategoryEditorActionView(discord.ui.View):
@@ -2702,6 +2767,21 @@ class CategoryEditorActionView(discord.ui.View):
     async def protection_mode(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         await _open_protection_mode_editor(interaction, channel_id=self.category_id)
 
+
+    @discord.ui.button(label="Refresh", emoji="🔄", style=discord.ButtonStyle.secondary, custom_id="dank_design:category_action_refresh", row=4)
+    async def refresh_category(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        if not await _require_design_permission(interaction):
+            return
+        guild = interaction.guild
+        assert guild is not None
+        category = await _direct_rename_fetch_target(guild, self.category_id, guild.get_channel(self.category_id))
+        if not isinstance(category, discord.CategoryChannel):
+            return await interaction.response.send_message("That category no longer exists.", ephemeral=True)
+        await interaction.response.edit_message(
+            embed=_category_action_embed(category),
+            view=CategoryEditorActionView(self.category_id),
+        )
+
     @discord.ui.button(label="Back", emoji="⬅️", style=discord.ButtonStyle.secondary, custom_id="dank_design:category_action_back", row=4)
     async def back(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         if not await _require_design_permission(interaction):
@@ -2776,6 +2856,21 @@ class ChannelEditorActionView(discord.ui.View):
     @discord.ui.button(label="Protection Settings", emoji="🛡️", style=discord.ButtonStyle.secondary, custom_id="dank_design:channel_protection_mode", row=2)
     async def protection_mode(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         await _open_protection_mode_editor(interaction, channel_id=self.channel_id)
+
+
+    @discord.ui.button(label="Refresh", emoji="🔄", style=discord.ButtonStyle.secondary, custom_id="dank_design:channel_action_refresh", row=4)
+    async def refresh_channel(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        if not await _require_design_permission(interaction):
+            return
+        guild = interaction.guild
+        assert guild is not None
+        channel = await _direct_rename_fetch_target(guild, self.channel_id, guild.get_channel(self.channel_id))
+        if channel is None:
+            return await interaction.response.send_message("That channel no longer exists.", ephemeral=True)
+        await interaction.response.edit_message(
+            embed=_channel_action_embed(channel),
+            view=ChannelEditorActionView(self.channel_id, category_id=self.category_id),
+        )
 
     @discord.ui.button(label="Back", emoji="⬅️", style=discord.ButtonStyle.secondary, custom_id="dank_design:channel_action_back", row=4)
     async def back(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
