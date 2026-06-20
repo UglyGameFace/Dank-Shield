@@ -122,7 +122,7 @@ class DesignNameResult:
 
 
 SEPARATOR_LIBRARY: tuple[SeparatorSpec, ...] = (
-    SeparatorSpec("bar_full", "Fullwidth Bar", "Clean Vertical", "｜"),
+    SeparatorSpec("bar_full", "Full-width Bar", "Clean Vertical", "｜"),
     SeparatorSpec("bar_thin", "Thin Bar", "Clean Vertical", "│"),
     SeparatorSpec("bar_heavy", "Heavy Bar", "Clean Vertical", "┃", clutter=1),
     SeparatorSpec("bar_dashed", "Dashed Bar", "Clean Vertical", "┆", clutter=1),
@@ -157,8 +157,8 @@ SEPARATOR_LIBRARY: tuple[SeparatorSpec, ...] = (
     SeparatorSpec("bracket_corner", "Corner Brackets", "Brackets", template="「{emoji}」{name}", clutter=1),
     SeparatorSpec("bracket_white_corner", "White Corner Brackets", "Brackets", template="『{emoji}』{name}", clutter=1),
     SeparatorSpec("bracket_tortoise", "Tortoise Brackets", "Brackets", template="〔{emoji}〕{name}", clutter=1),
-    SeparatorSpec("bracket_lenticular", "Lenticular Brackets", "Brackets", template="【{emoji}】{name}", clutter=1),
-    SeparatorSpec("bracket_white_lenticular", "White Lenticular Brackets", "Brackets", template="〖{emoji}〗{name}", safety="balanced", clutter=2),
+    SeparatorSpec("bracket_lenticular", "Square Brackets", "Brackets", template="【{emoji}】{name}", clutter=1),
+    SeparatorSpec("bracket_white_lenticular", "White Square Brackets", "Brackets", template="〖{emoji}〗{name}", safety="balanced", clutter=2),
     SeparatorSpec("bracket_soft", "Soft Brackets", "Brackets", template="꒰{emoji}꒱{name}", safety="balanced", clutter=2),
     SeparatorSpec("tri_right", "Right Triangle", "Gaming / Tech", "▸", clutter=1),
     SeparatorSpec("tri_small", "Small Triangle", "Gaming / Tech", "▹", clutter=1),

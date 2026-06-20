@@ -4070,6 +4070,35 @@ STYLE_CHANGE_SEPARATOR_IDS: tuple[str, ...] = (
 )
 
 
+def _style_change_separator_preview_text(separator_id: str, *, emoji: str = "🎮", name: str = "gaming-news") -> str:
+    try:
+        return studio.separator_preview(separator_id, emoji=emoji, name=name)[:100]
+    except Exception:
+        spec = _style_change_separator_spec(separator_id)
+        if spec is None:
+            return f"{emoji}{name}"
+        template = _safe_str(getattr(spec, "template", "{emoji}{separator}{name}"), "{emoji}{separator}{name}")
+        return template.format(
+            emoji=emoji,
+            separator=_safe_str(getattr(spec, "value", ""), ""),
+            name=name,
+        )[:100]
+
+
+def _style_change_separator_option_label(separator_id: str) -> str:
+    spec = _style_change_separator_spec(separator_id)
+    if spec is None:
+        return separator_id.replace("_", " ").title()
+
+    label = _safe_str(getattr(spec, "label", separator_id), separator_id)
+    if separator_id == "none":
+        return "No Separator"
+
+    preview = _style_change_separator_preview_text(separator_id)
+    # Keep labels short but show enough that brackets/bars are obvious before opening preview.
+    return f"{label} · {preview}"[:100]
+
+
 def _style_change_separator_options(selected_id: str) -> list[discord.SelectOption]:
     options: list[discord.SelectOption] = []
 
@@ -4078,21 +4107,21 @@ def _style_change_separator_options(selected_id: str) -> list[discord.SelectOpti
         if spec is None:
             continue
 
-        label = _safe_str(getattr(spec, "label", sep_id), sep_id)
-        value = _safe_str(getattr(spec, "value", ""), "")
-        desc = "Remove separators" if sep_id == "none" else f"Example: 🎮{value}gaming-news"[:100]
+        if sep_id == "none":
+            desc = "Remove channel separators. Example: 🎮gaming-news"
+        else:
+            desc = f"Result: {_style_change_separator_preview_text(sep_id)}"
 
         options.append(
             discord.SelectOption(
-                label=label[:100],
+                label=_style_change_separator_option_label(sep_id),
                 value=sep_id,
-                description=desc,
+                description=desc[:100],
                 default=sep_id == selected_id,
             )
         )
 
     return options[:25]
-
 
 def _style_change_separator_spec(separator_id: str) -> Any:
     return getattr(studio, "SEPARATORS_BY_ID", {}).get(separator_id) or getattr(studio, "SEPARATORS_BY_ID", {}).get("none")
@@ -4452,7 +4481,8 @@ def _style_change_embed(guild: discord.Guild, options: Mapping[str, Any], *, sep
         title="⚡ Change One Style",
         description=(
             "Change **one visual rule** while keeping the rest of the server style the same.\n\n"
-            "**Current tool:** Channel Separator"
+            "**Current tool:** Channel Separator\n"
+            "Choosing a separator only updates this draft. Use **Preview This Change** next, then **Apply Reviewed Changes**."
         ),
         color=discord.Color.blurple(),
     )
@@ -4469,7 +4499,8 @@ def _style_change_embed(guild: discord.Guild, options: Mapping[str, Any], *, sep
     embed.add_field(
         name="Will change",
         value=(
-            f"Channel separator → **{_style_change_separator_label(separator_id)}**\n\n"
+            f"Channel separator → **{_style_change_separator_label(separator_id)}**\n"
+            f"Example result → `{_style_change_separator_preview_text(separator_id)}`\n\n"
             "Everything else stays as-is: emoji, current styled text, category frames, channel order, permissions, tickets, and verification."
         ),
         inline=False,
@@ -4569,7 +4600,7 @@ class StyleChangeView(discord.ui.View):
         self.separator_id = _safe_str(separator_id, "bar_heavy")
         self.add_item(StyleChangeSeparatorSelect(self.separator_id))
 
-    @discord.ui.button(label="Preview Separator Change", emoji="👁️", style=discord.ButtonStyle.success, custom_id="dank_design:style_change_preview_separator", row=1)
+    @discord.ui.button(label="Preview This Change", emoji="👁️", style=discord.ButtonStyle.success, custom_id="dank_design:style_change_preview_separator", row=1)
     async def preview_separator_change(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         if not await _require_design_permission(interaction):
             return
