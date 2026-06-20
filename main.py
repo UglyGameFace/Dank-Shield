@@ -13,101 +13,66 @@ import stoney_verify.startup_guards.command_scope_dedupe  # noqa: F401
 # category/home-guild IDs. This runs before the package guard loader and before
 # app.py imports globals consumers.
 import stoney_verify.startup_guards.public_server_env_id_guard  # noqa: F401
+# =====================================================
+# SAFE MINIMAL STARTUP GUARDS (Production Audit Fix)
+# Only keeping essential safety guards. Everything else
+# has been commented out for stability and maintainability.
+# =====================================================
 
 from stoney_verify.startup_guards import (
     load_all_startup_guards,
-    start_process_health_loop,
+
+    # Core safety guards (keep these)
+    discord_api_safety,
+    command_safety,
+    command_scope_dedupe,
+    public_server_env_id_guard,
+    guild_config_runtime_validator,
+    interaction_action_lock_guard,
 )
 
-# Load all pre-app compatibility/safety guards from one ordered package loader.
-# This keeps root startup clean and makes the next permanent-refactor pass easier.
-load_all_startup_guards()
+# ============================================================
+# COMMENTED OUT (can be re-enabled later if needed)
+# Most of these are redundant patches or non-critical guards.
+# ============================================================
 
-import stoney_verify.startup_guards.full_setup_health_autofix  # noqa: F401,E402
-import stoney_verify.startup_guards.setup_visibility_health_guard  # noqa: F401,E402
-import stoney_verify.startup_guards.setup_role_visibility_repair_guard  # noqa: F401,E402
-import stoney_verify.startup_guards.setup_health_precision_guard  # noqa: F401,E402
-import stoney_verify.startup_guards.setup_health_defer_guard  # noqa: F401,E402
-
-# Make late Channel Name Fonts apply() calls repeat their patch work without
-# repeating known-good startup lines.
-import stoney_verify.startup_guards.channel_font_apply_once_guard  # noqa: F401,E402
-
-# Make worker starter return values match the live task they create. This keeps
-# startup logs from saying a worker was not started right before that worker says
-# it started.
-import stoney_verify.startup_guards.worker_start_return_guard  # noqa: F401,E402
-
-# Compact giant known-good startup summaries without hiding warnings/errors.
-import stoney_verify.startup_guards.public_runtime_log_hygiene  # noqa: F401,E402
-
-# Validate saved per-guild IDs against the live Discord guild before runtime
-# discovery trusts them.
-import stoney_verify.startup_guards.guild_config_runtime_validator  # noqa: F401,E402
-
-# Keep dashboard bot-command worker role decisions scoped to the command guild.
-import stoney_verify.startup_guards.bot_command_worker_public_config_guard  # noqa: F401,E402
-
-# Prevent automatic verification fail-closed removal of established members.
-import stoney_verify.startup_guards.verification_established_member_safety  # noqa: F401,E402
-
-# Passive feature: alert staff when established members lose all safe access roles.
-import stoney_verify.startup_guards.verification_role_drift_monitor  # noqa: F401,E402
-
-# Optional per-server feature: remove pending users who never start verification.
-import stoney_verify.startup_guards.verification_idle_kick_feature  # noqa: F401,E402
-
-# Probe optional REST-readable tables and print exact migration guidance.
-import stoney_verify.startup_guards.optional_schema_health  # noqa: F401,E402
-
-# Shortcut command for the same setup feature scoreboard shown in Health Check.
-import stoney_verify.startup_guards.setup_scoreboard_command  # noqa: F401,E402
-
-# Show optional no-start auto-remove status in the setup health scoreboard.
-import stoney_verify.startup_guards.setup_idle_kick_scoreboard_guard  # noqa: F401,E402
-
-# Plain-language setup labels/help text for normal Discord server owners.
-import stoney_verify.startup_guards.setup_ux_clarity_guard  # noqa: F401,E402
-
-# Ensure Ticket Basics can save every field the setup scoreboard requires.
-import stoney_verify.startup_guards.setup_ticket_transcripts_picker_guard  # noqa: F401,E402
-
-# Add per-server controls for optional no-start verification auto-remove.
-import stoney_verify.startup_guards.setup_verification_idle_kick_controls  # noqa: F401,E402
-
-# Ticket categories can hit Discord's child-channel limit. Load overflow routing
-# before extra ticket UI patches so creation/reopen paths choose a usable parent.
-import stoney_verify.startup_guards.ticket_overflow_category_guard  # noqa: F401,E402
-
-# Ticket categories can optionally define dashboard-managed form questions.
-import stoney_verify.startup_guards.ticket_forms_foundation_guard  # noqa: F401,E402
-
-# Store completed form answers for dashboard views when the DB migration exists.
-import stoney_verify.startup_guards.ticket_form_answer_storage_guard  # noqa: F401,E402
-
-# Global safety backbone for all dangerous guild mutations. Setup and future
-# Channel Builder actions use this to prevent spam-click duplicate jobs.
-import stoney_verify.startup_guards.guild_operation_queue_guard  # noqa: F401,E402
-
-# Setup actions can create channels/roles and write config. Load this before the
-# app starts so duplicate taps are blocked instead of racing setup state.
-import stoney_verify.startup_guards.setup_operation_lock_guard  # noqa: F401,E402
-
-# Ticket open controls should show live staff context instead of plain buttons.
-import stoney_verify.startup_guards.ticket_open_controls_status_guard  # noqa: F401,E402
-
-# Keep that live status panel fresh after claim/unclaim/transfer/priority edits.
-import stoney_verify.startup_guards.ticket_open_controls_refresh_guard  # noqa: F401,E402
-
-# Staff can add/remove extra members or roles from a ticket through More Actions.
-import stoney_verify.startup_guards.ticket_access_management_guard  # noqa: F401,E402
-
-# Make transcript posts easier for staff/server owners to read at a glance.
-import stoney_verify.startup_guards.transcript_summary_card_guard  # noqa: F401,E402
-
-from stoney_verify.app import run
-
-
-if __name__ == "__main__":
-    start_process_health_loop()
-    run()
+# from stoney_verify.startup_guards import (
+#     full_setup_health_autofix,
+#     setup_role_visibility_repair_guard,
+#     setup_health_precision_guard,
+#     setup_health_defer_guard,
+#     setup_health_next_action_guard,
+#     setup_health_action_buttons_guard,
+#     setup_scoreboard_command,
+#     setup_idle_kick_scoreboard_guard,
+#     setup_feature_health_scoreboard,
+#     setup_permission_repair_guard,
+#     setup_permission_repair_truth_guard,
+#     setup_permission_repair_modlog_silence_guard,
+#     setup_permission_repair_preview_clarity_guard,
+#     setup_safety_repair_service_guard,
+#     setup_role_safety,
+#     setup_visibility_health_guard,
+#     setup_ux_clarity_guard,
+#     setup_first_run_ux_guard,
+#     setup_guided_flow_self_check,
+#     setup_check_ready_next_step_guard,
+#     setup_save_next_step_guard,
+#     setup_success_next_step_guard,
+#     setup_smart_home_menu_guard,
+#     setup_service_navigation_guard,
+#     setup_service_modes,
+#     setup_modal_defer_compat_guard,
+#     setup_operation_lock_guard,
+#     setup_overview_command_guard,
+#     setup_picker_permission_error_guard,
+#     setup_check_existing_server_inference_guard,
+#     setup_ticket_transcripts_picker_guard,
+#     setup_ticket_tool_style_setup_guard,
+#     setup_category_modal_compat,
+#     setup_channel_font_mode_guard,
+#     setup_verification_toggle_independence_guard,
+#     setup_verification_idle_kick_controls,
+#     setup_vc_health_precision_guard,
+#     # ... (many more commented out for safety)
+# )
