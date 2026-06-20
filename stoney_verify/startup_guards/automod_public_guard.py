@@ -2,9 +2,9 @@ from __future__ import annotations
 
 """Public Automod message filters.
 
-This intentionally does not replace Spam Guard or Raid Guard. It only handles
-simple content filters that guild owners configure through /dank protection.
-The legacy /dank automod commands stay hidden unless explicitly enabled by env.
+Automod handles explicit content filters and normal Link Shield.  Discord invite
+links are routed through ``invite_policy_engine`` so same-server invites are not
+deleted by accident and Spam Guard cannot masquerade as invite blocking.
 """
 
 import os
@@ -16,13 +16,14 @@ from typing import Any, Optional
 
 import discord
 
+from stoney_verify import invite_policy_engine as invite_policy
+
 _PATCHED = False
 _LISTENER_NAME = "_dank_public_automod_listener"
 _LAST_ACTION: dict[tuple[int, int, str], float] = {}
 
 ZERO_WIDTH_RE = re.compile(r"[\u200b\u200c\u200d\u2060\ufeff]")
 SPACE_RE = re.compile(r"\s+")
-INVITE_RE = re.compile(r"(?:discord\.gg|discord(?:app)?\.com/invite)/[A-Za-z0-9-]+", re.I)
 LINK_RE = re.compile(r"https?://[^\s<>()]+", re.I)
 CUSTOM_EMOJI_RE = re.compile(r"<a?:[A-Za-z0-9_]{2,32}:\d{5,25}>")
 
@@ -42,7 +43,7 @@ LEET_MAP = str.maketrans(
         "8": "b",
         "9": "g",
         "6": "g",
-        "а": "a",  # Cyrillic lookalikes
+        "а": "a",
         "е": "e",
         "о": "o",
         "р": "p",
@@ -152,17 +153,14 @@ def _normalize_for_filter(value: Any, *, compact: bool) -> str:
     return normalized if not compact else normalized.replace(" ", "")
 
 
-def _has_discord_invite(content: str) -> bool:
-    text = str(content or "")
-    if INVITE_RE.search(text):
-        return True
-    compact = _normalize_for_filter(text, compact=True)
-    return any(marker in compact for marker in ("discordgg", "discordcominvite", "discordappcominvite"))
-
-
-def _has_external_link(content: str) -> bool:
-    text = str(content or "")
-    return bool(LINK_RE.search(text) or _has_discord_invite(text))
+def _normal_links_without_discord_invites(content: str) -> list[str]:
+    urls = [u.strip() for u in LINK_RE.findall(str(content or "")) if u.strip()]
+    out: list[str] = []
+    for url in urls:
+        if invite_policy.extract_invite_codes_from_text(url):
+            continue
+        out.append(url)
+    return list(dict.fromkeys(out))
 
 
 def _is_staff_like(member: discord.Member) -> bool:
@@ -271,6 +269,30 @@ async def _handle_violation(message: discord.Message, *, reason: str, timeout_mi
         pass
 
 
+async def _handle_invite_policy(message: discord.Message, *, source: str) -> bool:
+    """Return True when the invite policy consumed the message."""
+
+    if not invite_policy.extract_invite_codes_from_message(message):
+        return False
+
+    decision = await invite_policy.decide_invite_message(message, source=source)
+    if not decision.should_delete:
+        return False
+
+    deleted = await invite_policy.delete_message_if_allowed(message, decision)
+    await invite_policy.send_invite_decision_modlog(message, decision)
+    if deleted:
+        try:
+            await message.channel.send(
+                f"🛡️ {message.author.mention}, your invite was removed: **{decision.feature_owner}**.",
+                delete_after=8,
+                allowed_mentions=discord.AllowedMentions(users=True, roles=False, everyone=False),
+            )
+        except Exception:
+            pass
+    return bool(deleted)
+
+
 async def _automod_message_listener(message: discord.Message) -> None:
     try:
         guild = message.guild
@@ -295,17 +317,31 @@ async def _automod_message_listener(message: discord.Message) -> None:
             return
 
         content = str(message.content or "")
+
         bad_words = _csv_items(_cfg_value(cfg, "automod_bad_words", ""))
         bad_hit = _bad_word_hit(content, bad_words)
         if bad_hit:
-            return await _handle_violation(message, reason=f"blocked word/phrase: {bad_hit}", timeout_minutes=_cfg_int(cfg, "automod_timeout_minutes", 0))
+            return await _handle_violation(
+                message,
+                reason=f"blocked word/phrase: {bad_hit}",
+                timeout_minutes=_cfg_int(cfg, "automod_timeout_minutes", 0),
+            )
 
-        if _cfg_bool(cfg, "automod_block_invites", False) and _has_discord_invite(content):
-            return await _handle_violation(message, reason="Discord invite link blocked", timeout_minutes=_cfg_int(cfg, "automod_timeout_minutes", 0))
+        if invite_policy.extract_invite_codes_from_message(message):
+            invite_consumed = await _handle_invite_policy(message, source="automod")
+            if invite_consumed:
+                return
 
-        if _cfg_bool(cfg, "automod_block_links", False) and _has_external_link(content):
-            reason = "Discord invite link blocked" if _has_discord_invite(content) else "external link blocked"
-            return await _handle_violation(message, reason=reason, timeout_minutes=_cfg_int(cfg, "automod_timeout_minutes", 0))
+        # Normal Link Shield is explicit.  A message is never deleted merely for
+        # containing a URL unless this guild has turned Link Shield ON.
+        if _cfg_bool(cfg, "automod_block_links", False):
+            normal_links = _normal_links_without_discord_invites(content)
+            if normal_links:
+                return await _handle_violation(
+                    message,
+                    reason="external link blocked by Link Shield",
+                    timeout_minutes=_cfg_int(cfg, "automod_timeout_minutes", 0),
+                )
 
         max_mentions = _cfg_int(cfg, "automod_max_mentions", 0)
         if max_mentions > 0:
@@ -313,7 +349,11 @@ async def _automod_message_listener(message: discord.Message) -> None:
             if getattr(message, "mention_everyone", False):
                 mentions += 10
             if mentions >= max_mentions:
-                return await _handle_violation(message, reason=f"too many mentions ({mentions}/{max_mentions})", timeout_minutes=_cfg_int(cfg, "automod_timeout_minutes", 0))
+                return await _handle_violation(
+                    message,
+                    reason=f"too many mentions ({mentions}/{max_mentions})",
+                    timeout_minutes=_cfg_int(cfg, "automod_timeout_minutes", 0),
+                )
 
         caps_limit = _cfg_float(cfg, "automod_caps_ratio", 0.0)
         if caps_limit > 0 and len(content) >= 18 and _caps_ratio(content) >= caps_limit:
@@ -368,6 +408,7 @@ def apply(bot: Any = None) -> bool:
     if bot is None:
         try:
             from stoney_verify.globals import bot as global_bot
+
             bot = global_bot
         except Exception:
             bot = None
