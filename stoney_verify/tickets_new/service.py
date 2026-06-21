@@ -1378,11 +1378,127 @@ def _member_has_role_id(member: discord.Member, role_id: int) -> bool:
         return False
 
 
-def _should_auto_post_verification(owner: discord.Member, *, is_ghost: bool) -> bool:
+def _guild_cfg_lookup(cfg: Any, key: str, default: Any = None) -> Any:
+    try:
+        if hasattr(cfg, "get"):
+            value = cfg.get(key)
+            if value is not None:
+                return value
+    except Exception:
+        pass
+
+    try:
+        value = getattr(cfg, key, None)
+        if value is not None:
+            return value
+    except Exception:
+        pass
+
+    try:
+        for bucket in ("settings", "config", "metadata", "meta"):
+            nested = None
+            if hasattr(cfg, "get"):
+                nested = cfg.get(bucket)
+            else:
+                nested = getattr(cfg, bucket, None)
+            if isinstance(nested, dict) and nested.get(key) is not None:
+                return nested.get(key)
+    except Exception:
+        pass
+
+    return default
+
+
+async def _id_verify_panel_enabled_for_guild(guild: discord.Guild) -> bool:
+    """True only when this guild explicitly selected ID/web verification.
+
+    Basic Verify and Voice Verify must never leak the ID/web verify panel into
+    tickets. This gate is runtime-side, so even stale panels/buttons cannot
+    bypass setup intent.
+    """
+
+    cfg = None
+    try:
+        from ..guild_config import get_guild_config
+
+        cfg = await get_guild_config(int(guild.id), refresh=True)
+    except Exception as e:
+        try:
+            print(f"⚠️ ID verify panel setup check failed guild={guild.id}: {repr(e)}")
+        except Exception:
+            pass
+        return False
+
+    setup_choice = _safe_str(_guild_cfg_lookup(cfg, "setup_choice", "")).strip().lower()
+    verification_mode = _safe_str(_guild_cfg_lookup(cfg, "verification_mode", "")).strip().lower()
+    verify_mode = _safe_str(_guild_cfg_lookup(cfg, "verify_mode", "")).strip().lower()
+    panel_style = _safe_str(_guild_cfg_lookup(cfg, "verification_panel_style", "")).strip().lower()
+
+    requires_id = _safe_bool(_guild_cfg_lookup(cfg, "verification_requires_id", False), False)
+
+    explicit_id_enabled = any(
+        _safe_bool(_guild_cfg_lookup(cfg, key, False), False)
+        for key in (
+            "id_verification_enabled",
+            "id_verify_enabled",
+            "web_verify_enabled",
+            "id_upload_enabled",
+            "verification_id_upload_enabled",
+        )
+    )
+
+    id_modes = {
+        "id_check",
+        "id_voice_check",
+        "id",
+        "id_upload",
+        "id_verify",
+        "id_web",
+        "web_id",
+        "stoney_id",
+    }
+
+    selected_id_flow = bool(
+        requires_id
+        or explicit_id_enabled
+        or setup_choice in {"id_check", "id_voice_check"}
+        or verification_mode in id_modes
+        or verify_mode in id_modes
+        or panel_style in {"id_check", "id_voice_check", "id_upload"}
+    )
+
+    if not selected_id_flow:
+        try:
+            print(
+                "🪪 ID verify panel skipped by setup "
+                f"guild={guild.id} setup_choice={setup_choice or '-'} "
+                f"verification_mode={verification_mode or '-'} "
+                f"panel_style={panel_style or '-'} requires_id={requires_id}"
+            )
+        except Exception:
+            pass
+        return False
+
+    try:
+        from ..setup_engine.verification_modes import id_verify_allowed_for_guild
+
+        if not id_verify_allowed_for_guild(guild):
+            print(f"🪪 ID verify panel blocked: guild={guild.id} is not ID-verify allowlisted")
+            return False
+    except Exception:
+        return False
+
+    return True
+
+
+async def _should_auto_post_verification(owner: discord.Member, *, is_ghost: bool) -> bool:
     try:
         if is_ghost:
             return False
         if getattr(owner, "bot", False):
+            return False
+
+        if not await _id_verify_panel_enabled_for_guild(owner.guild):
             return False
 
         uv_id = int(UNVERIFIED_ROLE_ID or 0)
@@ -1411,7 +1527,7 @@ async def _maybe_post_verification_ui(
     is_ghost: bool,
 ) -> None:
     try:
-        if not _should_auto_post_verification(owner, is_ghost=is_ghost):
+        if not await _should_auto_post_verification(owner, is_ghost=is_ghost):
             print(
                 f"🧩 verification UI skipped -> ticket={channel.id} owner={owner.id} "
                 f"ghost={is_ghost}"
