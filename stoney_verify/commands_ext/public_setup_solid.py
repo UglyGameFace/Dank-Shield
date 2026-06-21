@@ -440,6 +440,26 @@ def _category_list_text(rows: list[dict[str, Any]], *, empty: str = "No ticket m
     return "\n".join(lines)[:1024] or empty
 
 
+
+def _category_member_preview_text(rows: list[dict[str, Any]]) -> str:
+    """Plain preview of what members/staff will see in the ticket menu."""
+
+    if not rows:
+        return "No choices yet. Press **Create Missing Recommended Options** to add safe defaults."
+
+    lines: list[str] = []
+    for idx, row in enumerate(rows[:10], start=1):
+        name = _short(row.get("name") or row.get("slug") or "Ticket choice", 42)
+        desc = _short(row.get("description") or "No description set.", 72)
+        default = " ⭐ default fallback" if bool(row.get("is_default")) else ""
+        lines.append(f"{idx}. **{name}**{default}\\n   ↳ {desc}")
+
+    if len(rows) > 10:
+        lines.append(f"…and {len(rows) - 10} more choices")
+
+    return "\\n".join(lines)[:1024] or "No choices yet."
+
+
 def _category_governance_text(rows: list[dict[str, Any]]) -> str:
     warnings: list[str] = []
     if not rows:
@@ -2060,12 +2080,14 @@ async def _build_category_manager_payload(
     embed = discord.Embed(
         title=title,
         description=(
-            "These are the choices users see when they open a ticket, like Support, Appeal, or Report.\n"
-            "This is not where ticket channels are stored. Use **Ticket Basics** for open/closed ticket folders."
+            "**This controls the choices users see when opening a ticket.**\n"
+            "It does **not** move ticket channels, change ticket folders, or delete tickets.\n"
+            "Use **Tickets → Ticket Basics** for open/archive categories and staff role."
         ),
         color=discord.Color.blurple() if not load.error else discord.Color.red(),
         timestamp=now_utc(),
     )
+
     if load.error:
         embed.add_field(name="Database Problem", value=load.error[:1024], inline=False)
         embed.add_field(
@@ -2074,17 +2096,20 @@ async def _build_category_manager_payload(
             inline=False,
         )
     else:
-        embed.add_field(name="Current Ticket Menu Options", value=_category_list_text(load.rows), inline=False)
-        embed.add_field(name="Safety", value=_category_governance_text(load.rows), inline=False)
+        embed.add_field(name="Member Preview", value=_category_member_preview_text(load.rows), inline=False)
+        embed.add_field(name="Saved Ticket Choices", value=_category_list_text(load.rows), inline=False)
+        embed.add_field(name="Safety Check", value=_category_governance_text(load.rows), inline=False)
         embed.add_field(
-            name="Plain Meaning",
+            name="Button Meaning",
             value=(
-                "• **Name** is what staff/users see.\n"
-                "• **Keywords** help the bot recommend the right option.\n"
-                "• **Default** is used when Dank Shield is unsure."
+                "✨ **Create Missing Recommended Options** adds safe default choices only when missing.\n"
+                "➕ **Add Custom Ticket Choice** adds one new user-facing choice.\n"
+                "✏️ **Edit an Existing Choice** changes the label/keywords/type for one choice.\n"
+                "⭐ **Choose Default Fallback** picks where unclear tickets go."
             ),
             inline=False,
         )
+
     return embed, CategoryManagerView(rows=load.rows, db_error=load.error)
 
 
@@ -2247,9 +2272,30 @@ class CategoryManagerView(SetupNavView):
         super().__init__()
         self.rows = rows
         self.db_error = db_error
-        if not db_error:
-            self.add_item(CategorySelect(rows, action="edit", placeholder="Edit a ticket menu option", row=0))
-            self.add_item(CategorySelect(rows, action="default", placeholder="Pick the default ticket option", row=1))
+
+        # Only show edit/default dropdowns when real choices exist.
+        # Showing fake empty dropdowns caused users to think setup was broken.
+        if not db_error and rows:
+            self.add_item(CategorySelect(rows, action="edit", placeholder="✏️ Edit an existing ticket choice", row=0))
+            self.add_item(CategorySelect(rows, action="default", placeholder="⭐ Choose default fallback ticket choice", row=1))
+
+        # Make the create button truthful after recommended choices already exist.
+        try:
+            existing = {str(row.get("slug") or "").strip().lower() for row in rows}
+            recommended = {_slugify(item.get("slug") or item.get("name")) for item in RECOMMENDED_CATEGORIES}
+            all_recommended_exist = bool(recommended) and recommended.issubset(existing)
+            for child in list(getattr(self, "children", []) or []):
+                custom_id = str(getattr(child, "custom_id", "") or "")
+                if custom_id == "stoney_solid:cat_seed":
+                    child.label = "Check Recommended Options" if all_recommended_exist else "Create Missing Recommended Options"
+                    child.emoji = "✅" if all_recommended_exist else "✨"
+                    child.style = discord.ButtonStyle.secondary if all_recommended_exist else discord.ButtonStyle.success
+                elif custom_id == "stoney_solid:cat_add":
+                    child.label = "Add Custom Ticket Choice"
+                elif custom_id == "stoney_solid:cat_refresh":
+                    child.label = "Refresh Menu Options"
+        except Exception:
+            pass
 
     @discord.ui.button(label="Create Recommended", emoji="✨", style=discord.ButtonStyle.success, custom_id="stoney_solid:cat_seed", row=2)
     async def seed(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
@@ -2268,8 +2314,15 @@ class CategoryManagerView(SetupNavView):
             )
             return await _edit_or_followup(interaction, embed=embed, view=SetupNavView())
         embed, view = await _build_category_manager_payload(guild, title="✅ Ticket Menu Options Checked")
-        embed.add_field(name="Created", value=_line_list([f"`{x}`" for x in created], empty="Nothing new created."), inline=False)
-        embed.add_field(name="Already Existed", value=_line_list([f"`{x}`" for x in skipped], empty="None"), inline=False)
+        embed.add_field(
+            name="What Changed",
+            value=(
+                f"Created: {_line_list([f'`{x}`' for x in created], empty='Nothing new created.')}\n"
+                f"Already existed: {_line_list([f'`{x}`' for x in skipped], empty='None')}\n\n"
+                "No ticket channels, categories, roles, or existing tickets were changed."
+            )[:1024],
+            inline=False,
+        )
         await _edit_or_followup(interaction, embed=embed, view=view)
 
     @discord.ui.button(label="Add Custom Option", emoji="➕", style=discord.ButtonStyle.primary, custom_id="stoney_solid:cat_add", row=2)
