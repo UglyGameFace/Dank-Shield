@@ -668,3 +668,92 @@ async def _globals_log_startup_once() -> None:
         _log_supabase_status_once_per_change(force=True)
     except Exception as e:
         _log_warn(f"failed to initialize supabase diagnostics: {repr(e)}")
+
+
+# Dank Shield guaranteed central invite enforcer fallback
+# This is intentionally attached from globals.py because globals.py is guaranteed
+# to run when the bot starts. It does not create a second policy. It calls the
+# central invite_policy_engine and deletes only if that engine says delete.
+def _install_dank_globals_invite_enforcer() -> None:
+    try:
+        import builtins as _builtins
+
+        flag = "_dank_invite_live_enforcer_guard_installed"
+        if getattr(_builtins, flag, False):
+            print("🛡️ invite_live_enforcer already active; globals fallback skipped")
+            return
+
+        @bot.listen("on_message")
+        async def _dank_globals_live_invite_enforcer(message: discord.Message) -> None:
+            try:
+                guild = getattr(message, "guild", None)
+                if guild is None:
+                    return
+
+                try:
+                    if getattr(message, "author", None) and getattr(bot, "user", None):
+                        if int(getattr(message.author, "id", 0) or 0) == int(getattr(bot.user, "id", 0) or 0):
+                            return
+                except Exception:
+                    pass
+
+                from stoney_verify.invite_policy_engine import (
+                    decide_invite_message,
+                    delete_message_if_allowed,
+                    extract_invite_codes_from_message,
+                    send_invite_decision_modlog,
+                )
+
+                codes = extract_invite_codes_from_message(message)
+                if not codes:
+                    return
+
+                decision = await decide_invite_message(
+                    message,
+                    source="globals_live_enforcer",
+                    refresh_policy=True,
+                )
+
+                if decision.should_delete:
+                    deleted = await delete_message_if_allowed(message, decision)
+                    print(
+                        "🛡️ invite_live_enforcer decision "
+                        f"guild={getattr(guild, 'id', 0)} "
+                        f"channel={getattr(getattr(message, 'channel', None), 'id', 0)} "
+                        f"author={getattr(getattr(message, 'author', None), 'id', 0)} "
+                        f"codes={','.join(decision.codes[:5])} "
+                        f"blocked={','.join(decision.blocked_codes[:5])} "
+                        f"rule={decision.rule_id} "
+                        f"action={decision.action} "
+                        f"deleted={deleted} "
+                        f"error={decision.delete_error or '-'}"
+                    )
+                    try:
+                        await send_invite_decision_modlog(message, decision)
+                    except Exception:
+                        pass
+                    return
+
+                print(
+                    "🛡️ invite_live_enforcer allowed "
+                    f"guild={getattr(guild, 'id', 0)} "
+                    f"codes={','.join(decision.codes[:5])} "
+                    f"rule={decision.rule_id} "
+                    f"action={decision.action} "
+                    f"invite_shield={decision.invite_shield_enabled} "
+                    f"link_shield={decision.link_shield_enabled} "
+                    f"reason={decision.reason[:180]}"
+                )
+
+            except Exception as exc:
+                print(f"🛡️ invite_live_enforcer globals_error: {type(exc).__name__}: {exc}")
+
+        setattr(_builtins, flag, True)
+        print("🛡️ invite_live_enforcer active via globals; live messages now call central invite policy engine")
+
+    except Exception as exc:
+        print(f"🛡️ invite_live_enforcer install_failed via globals: {type(exc).__name__}: {exc}")
+
+
+_install_dank_globals_invite_enforcer()
+
