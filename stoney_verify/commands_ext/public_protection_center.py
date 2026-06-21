@@ -256,14 +256,43 @@ async def _save_spam_settings(guild_id: int, patch: dict[str, Any], member: disc
         from stoney_verify.spam_guard import save_spam_settings
 
         settings, persisted = await save_spam_settings(int(guild_id), dict(patch), updated_by=member)
+        _invalidate_invite_policy_cache(int(guild_id))
         return dict(settings or {}), bool(persisted)
     except Exception:
         return dict(patch), False
 
 
+
+def _invalidate_invite_policy_cache(guild_id: int) -> None:
+    """Make invite blocker changes live immediately."""
+    try:
+        from stoney_verify.invite_policy_engine import invalidate_invite_policy
+
+        invalidate_invite_policy(int(guild_id))
+    except Exception:
+        pass
+
+
+def _invite_shield_enabled_for_ui(cfg: Any, spam: dict[str, Any] | None = None) -> bool:
+    spam = dict(spam or {})
+    return bool(
+        _cfg_bool(cfg, "automod_block_invites", False)
+        or spam.get("invite_shield_enabled")
+        or spam.get("invite_hard_block_enabled")
+        or spam.get("automod_block_invites")
+        or spam.get("block_invites")
+    )
+
+
+def _link_shield_enabled_for_ui(cfg: Any, spam: dict[str, Any] | None = None) -> bool:
+    spam = dict(spam or {})
+    return bool(_cfg_bool(cfg, "automod_block_links", False) or spam.get("automod_block_links"))
+
+
 async def _save_automod(guild_id: int, updates: dict[str, Any]) -> Any:
     saved = await upsert_guild_config(int(guild_id), dict(updates))
     invalidate_guild_config(int(guild_id))
+    _invalidate_invite_policy_cache(int(guild_id))
     return saved
 
 
@@ -343,7 +372,7 @@ def _protection_embed(guild: discord.Guild, cfg: Any, spam: dict[str, Any], spam
         name="What buttons do",
         value=(
             "**Edit Spam Guard** = message speed, duplicate messages, invite-flood threshold, timeout length.\n"
-            "**Block Invites** = stop Discord server invite links.\n"
+            "**Invite Blocker** = live ON/OFF for Discord invite links.\n"
             "**Block All Links** = stop every URL.\n"
             "**Add Filter/Test** = banned words and bypass tests."
         ),
@@ -422,6 +451,8 @@ def _protection_state(cfg: Any, spam: dict[str, Any]) -> str:
 
 def _decorate_quick_mode_buttons(view: discord.ui.View, cfg: Any, spam: dict[str, Any]) -> None:
     state = _protection_state(cfg, spam or {})
+    invite_on = _invite_shield_enabled_for_ui(cfg, spam or {})
+    links_on = _link_shield_enabled_for_ui(cfg, spam or {})
     for child in list(getattr(view, "children", []) or []):
         custom_id = str(getattr(child, "custom_id", "") or "")
 
@@ -439,6 +470,16 @@ def _decorate_quick_mode_buttons(view: discord.ui.View, cfg: Any, spam: dict[str
             child.label = "Protection: OFF" if state == "off" else "Turn Off"
             child.style = discord.ButtonStyle.success if state == "off" else discord.ButtonStyle.danger
             child.emoji = "⏸️"
+
+        elif custom_id == "dank_protection:block_invites":
+            child.label = f"Invite Blocker: {'ON' if invite_on else 'OFF'}"
+            child.style = discord.ButtonStyle.success if invite_on else discord.ButtonStyle.secondary
+            child.emoji = "🛡️" if invite_on else "⚪"
+
+        elif custom_id == "dank_protection:block_links":
+            child.label = f"All Links: {'ON' if links_on else 'OFF'}"
+            child.style = discord.ButtonStyle.success if links_on else discord.ButtonStyle.secondary
+            child.emoji = "🔗" if links_on else "⚪"
 
         elif custom_id == "dank_protection:edit_spamguard":
             child.label = "Spam Guard Actions"
@@ -502,6 +543,61 @@ async def _set_link_policy(interaction: discord.Interaction, policy: str) -> Non
     await _save_automod(int(guild.id), updates)
     await _refresh_panel(interaction, content=f"✅ {label}")
 
+
+async def _toggle_invite_shield(interaction: discord.Interaction) -> None:
+    """Live ON/OFF toggle for Discord invite blocking.
+
+    ON: block Discord invite links while allowing normal links.
+    OFF: allow Discord invite links again. If all-link lockdown was on, it is
+    also turned off because all-link lockdown necessarily blocks invites too.
+    """
+    if not await _require_setup_permission(interaction):
+        return
+    guild = interaction.guild
+    if guild is None:
+        return await _send_ephemeral(interaction, "❌ This must be used inside a server.")
+
+    cfg = await get_guild_config(int(guild.id), refresh=True)
+    spam, _spam_source = await _load_spam_settings(int(guild.id))
+    invite_on = _invite_shield_enabled_for_ui(cfg, spam)
+    member = interaction.user if isinstance(interaction.user, discord.Member) else None
+
+    if invite_on:
+        automod_updates = {
+            "automod_enabled": False,
+            "automod_block_invites": False,
+            "automod_block_links": False,
+            "automod_link_policy": "allow_links",
+            "automod_updated_by_id": str(int(interaction.user.id)),
+        }
+        spam_patch = {
+            "invite_shield_enabled": False,
+            "invite_hard_block_enabled": False,
+            "automod_block_invites": False,
+            "block_invites": False,
+        }
+        label = "Discord Invite Blocker is now **OFF**. Discord invite links are allowed again."
+    else:
+        automod_updates = {
+            "automod_enabled": True,
+            "automod_block_invites": True,
+            "automod_block_links": False,
+            "automod_link_policy": "invite_shield",
+            "automod_updated_by_id": str(int(interaction.user.id)),
+        }
+        spam_patch = {
+            "invite_shield_enabled": True,
+            "invite_hard_block_enabled": True,
+            "automod_block_invites": True,
+            "block_invites": True,
+            "block_external_invites_only": True,
+            "allow_server_invites": True,
+        }
+        label = "Discord Invite Blocker is now **ON**. External Discord invite links are blocked; this server's invites stay allowed."
+
+    await _save_automod(int(guild.id), automod_updates)
+    _settings, persisted = await _save_spam_settings(int(guild.id), spam_patch, member)
+    await _refresh_panel(interaction, content=f"✅ {label} Saving: {'DB-backed' if persisted else 'runtime/fallback'}.")
 
 async def _toggle_link_shield(interaction: discord.Interaction) -> None:
     if not await _require_setup_permission(interaction):
@@ -888,10 +984,10 @@ class ProtectionCenterView(discord.ui.View):
         _ = button
         await _open_spamguard_editor(interaction)
 
-    @discord.ui.button(label="Block Invites", emoji="🛡️", style=discord.ButtonStyle.secondary, custom_id="dank_protection:block_invites", row=1)
+    @discord.ui.button(label="Invite Blocker", emoji="🛡️", style=discord.ButtonStyle.secondary, custom_id="dank_protection:block_invites", row=0)
     async def block_invites_button(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
-        await _set_link_policy(interaction, "invite_shield")
+        await _toggle_invite_shield(interaction)
 
     @discord.ui.button(label="Link Shield", emoji="🔗", style=discord.ButtonStyle.secondary, custom_id="dank_protection:block_links", row=1)
     async def block_links_button(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
