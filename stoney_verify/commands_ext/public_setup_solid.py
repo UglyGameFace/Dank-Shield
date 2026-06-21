@@ -1504,14 +1504,29 @@ class CategorySelect(discord.ui.Select):
             return await interaction.response.send_message("That ticket menu option was not found. Press Refresh and try again.", ephemeral=True)
 
         if self.action == "edit":
-            await interaction.response.send_modal(CategoryModal(existing=item))
+            try:
+                await interaction.response.send_modal(CategoryModal(existing=item))
+            except Exception as e:
+                embed = discord.Embed(
+                    title="🚫 Edit Menu Did Not Open",
+                    description=(
+                        f"`{type(e).__name__}: {str(e)[:250]}`\n\n"
+                        "Nothing was changed. Press **Refresh**, then try again."
+                    ),
+                    color=discord.Color.red(),
+                )
+                if interaction.response.is_done():
+                    await interaction.followup.send(embed=embed, ephemeral=True, allowed_mentions=discord.AllowedMentions.none())
+                else:
+                    await interaction.response.send_message(embed=embed, ephemeral=True, allowed_mentions=discord.AllowedMentions.none())
             return
 
         if self.action == "default":
+            await _safe_defer_update(interaction)
             ok, msg = await _write_category(guild, {**item, "is_default": True}, set_default=True)
             if not ok:
                 embed = discord.Embed(title="🚫 Default Not Saved", description=msg, color=discord.Color.red())
-                return await interaction.response.send_message(embed=embed, ephemeral=True)
+                return await _edit_or_followup(interaction, embed=embed, view=CategoryManagerView(rows=self.rows))
             embed, view = await _build_category_manager_payload(guild, title="✅ Default Ticket Option Saved")
             await _edit_or_followup(interaction, embed=embed, view=view)
             return
@@ -1600,8 +1615,8 @@ class CategoryModal(discord.ui.Modal, title="Ticket Menu Option"):
             max_length=200,
         )
         self.type_input = discord.ui.TextInput(
-            label="Type: support/report/appeal/question/bug/custom",
-            placeholder="support",
+            label="Ticket type",
+            placeholder="support, verification, appeal, report, question, bug, custom",
             default=str(self.existing.get("intake_type") or "custom")[:30],
             required=False,
             max_length=30,
