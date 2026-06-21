@@ -1888,6 +1888,84 @@ def _health_embed(guild: discord.Guild, cfg: Any) -> discord.Embed:
 # ============================================================
 
 
+_DANK_PUBLIC_ADVANCED_CHILD_DENYLIST = {
+    "config-cache",
+    "current",
+    "db-check",
+    "health",
+    "modlog-check",
+    "setup-access",
+    "setup-find",
+    "setup-logs",
+    "setup-picker",
+    "setup-review",
+    "setup-status",
+    "setup-tickets",
+    "setup-verify",
+    "setup-verify-ids",
+}
+
+
+def _dank_expose_advanced_children() -> bool:
+    import os
+
+    allow = str(os.getenv("DANK_EXPOSE_ADVANCED_DANK_COMMANDS", "false")).strip().lower()
+    if allow in {"1", "true", "yes", "on"}:
+        return True
+
+    profile = str(os.getenv("DANK_COMMAND_PROFILE", "public")).strip().lower()
+    if profile in {"dev", "full", "admin", "public-admin", "maintenance"}:
+        return True
+
+    return False
+
+
+def _install_dank_public_child_gate() -> None:
+    """Prevent advanced /dank child commands from registering in public mode.
+
+    This blocks the commands before sync instead of registering them and pruning
+    them later, which keeps the public slash surface stable.
+    """
+    if _dank_expose_advanced_children():
+        return
+
+    original_command = getattr(dank_group, "command", None)
+    if callable(original_command) and not getattr(original_command, "_dank_public_child_gate", False):
+
+        def guarded_command(*args, **kwargs):
+            name = kwargs.get("name")
+            if isinstance(name, str) and name in _DANK_PUBLIC_ADVANCED_CHILD_DENYLIST:
+                def decorator(func):
+                    print(f"🧭 Dank Shield skipped advanced /dank {name} in public mode")
+                    return func
+                return decorator
+            return original_command(*args, **kwargs)
+
+        setattr(guarded_command, "_dank_public_child_gate", True)
+        try:
+            dank_group.command = guarded_command  # type: ignore[assignment]
+        except Exception as exc:
+            print(f"⚠️ Could not install /dank command decorator gate: {exc!r}")
+
+    original_add_command = getattr(dank_group, "add_command", None)
+    if callable(original_add_command) and not getattr(original_add_command, "_dank_public_child_gate", False):
+
+        def guarded_add_command(command, *args, **kwargs):
+            name = getattr(command, "name", None)
+            if isinstance(name, str) and name in _DANK_PUBLIC_ADVANCED_CHILD_DENYLIST:
+                print(f"🧭 Dank Shield blocked advanced /dank {name} in public mode")
+                return None
+            return original_add_command(command, *args, **kwargs)
+
+        setattr(guarded_add_command, "_dank_public_child_gate", True)
+        try:
+            dank_group.add_command = guarded_add_command  # type: ignore[assignment]
+        except Exception as exc:
+            print(f"⚠️ Could not install /dank add_command gate: {exc!r}")
+
+
+_install_dank_public_child_gate()
+
 @dank_group.command(
     name="setup-tickets",
     description="Configure ticket categories, staff role, transcripts, and prefix for this server.",
