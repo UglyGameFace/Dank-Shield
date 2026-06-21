@@ -448,7 +448,7 @@ def _profile_panel_embed(guild: discord.Guild, *, title: str = "Profile Panel") 
     embed = discord.Embed(
         title=title[:256],
         description=(
-            "Customize your server profile with optional pronoun, identity, and interest roles.\\n\\n"
+            "Customize your server profile with optional pronoun, identity, and interest roles.\n\n"
             "These roles are cosmetic only. They never control verification, tickets, moderation, staff access, or server permissions."
         ),
         color=discord.Color.blurple(),
@@ -456,7 +456,7 @@ def _profile_panel_embed(guild: discord.Guild, *, title: str = "Profile Panel") 
     )
     embed.add_field(
         name="Available profile sections",
-        value="\\n".join(
+        value="\n".join(
             f"{emoji} **{label}**"
             for _key, (emoji, label, _names, _desc) in PROFILE_CATEGORIES.items()
         ),
@@ -487,7 +487,7 @@ def _profile_terms_embed() -> discord.Embed:
     embed.add_field(
         name="🪪 Pronouns",
         value=(
-            "**Pronouns** are the words people use when referring to you, like he/him, she/her, they/them, or no pronouns.\\n"
+            "**Pronouns** are the words people use when referring to you, like he/him, she/her, they/them, or no pronouns.\n"
             "Use the option that feels right for this server."
         ),
         inline=False,
@@ -495,13 +495,13 @@ def _profile_terms_embed() -> discord.Embed:
     embed.add_field(
         name="🌈 Identity",
         value=(
-            "**Man** — someone who identifies as a man.\\n"
-            "**Woman** — someone who identifies as a woman.\\n"
-            "**Non-binary** — someone whose gender identity is not only man or woman.\\n"
-            "**Genderfluid** — someone whose gender identity may change over time.\\n"
-            "**Agender** — someone who does not identify with a gender, or has little/no gender connection.\\n"
-            "**Trans** — someone whose gender identity differs from what they were assigned at birth.\\n"
-            "**Questioning** — someone still exploring which label fits best.\\n"
+            "**Man** — someone who identifies as a man.\n"
+            "**Woman** — someone who identifies as a woman.\n"
+            "**Non-binary** — someone whose gender identity is not only man or woman.\n"
+            "**Genderfluid** — someone whose gender identity may change over time.\n"
+            "**Agender** — someone who does not identify with a gender, or has little/no gender connection.\n"
+            "**Trans** — someone whose gender identity differs from what they were assigned at birth.\n"
+            "**Questioning** — someone still exploring which label fits best.\n"
             "**Prefer not to say** — choose this if you do not want to share."
         ),
         inline=False,
@@ -851,7 +851,7 @@ class MissingIdentityModal(discord.ui.Modal, title="Missing Identity?"):
             color=discord.Color.blurple(),
             timestamp=discord.utils.utcnow(),
         )
-        embed.add_field(name="Member", value=f"{member.mention}\\n`{member}` (`{member.id}`)", inline=False)
+        embed.add_field(name="Member", value=f"{member.mention}\n`{member}` (`{member.id}`)", inline=False)
         embed.add_field(name="Requested label", value=f"`{clean}`", inline=False)
         embed.add_field(
             name="Important",
@@ -935,13 +935,13 @@ class MissingInterestModal(discord.ui.Modal, title="Suggest Missing Interest"):
         embed = discord.Embed(
             title="🎮 Missing Interest Request",
             description=(
-                "A member says this interest is missing from the profile list.\\n\\n"
+                "A member says this interest is missing from the profile list.\n\n"
                 "This does not create a role automatically."
             ),
             color=discord.Color.blurple(),
             timestamp=discord.utils.utcnow(),
         )
-        embed.add_field(name="Member", value=f"{member.mention}\\n`{member}` (`{member.id}`)", inline=False)
+        embed.add_field(name="Member", value=f"{member.mention}\n`{member}` (`{member.id}`)", inline=False)
         embed.add_field(name="Requested interest", value=f"`{clean}`", inline=False)
         embed.add_field(
             name="Safe staff action",
@@ -1012,7 +1012,7 @@ async def _post_profile_builder(interaction: discord.Interaction, *, title: str 
     embed = discord.Embed(
         title="🌿 Profile Builder",
         description=(
-            "**Nothing has been created or posted yet.**\\n\\n"
+            "**Nothing has been created or posted yet.**\n\n"
             "This builder uses the current channel as the panel target. "
             "When ready, press **Create / Repair Roles + Post Panel**."
         ),
@@ -1020,13 +1020,13 @@ async def _post_profile_builder(interaction: discord.Interaction, *, title: str 
         timestamp=discord.utils.utcnow(),
     )
     embed.add_field(name="Panel target", value=channel.mention, inline=False)
-    embed.add_field(name="Default profile sections", value="🪪 Pronouns\\n🌈 Identity\\n🎮 Interests\\n✍️ Missing Identity request\\n➕ Missing Interest request", inline=False)
+    embed.add_field(name="Default profile sections", value="🪪 Pronouns\n🌈 Identity\n🎮 Interests\n✍️ Missing Identity request\n➕ Missing Interest request", inline=False)
     embed.add_field(name="Status", value="✅ Ready" if ready else "⚠️ Not ready", inline=False)
 
     if fixable:
-        embed.add_field(name="Bot can fix now", value="\\n".join(f"• {x}" for x in fixable), inline=False)
+        embed.add_field(name="Bot can fix now", value="\n".join(f"• {x}" for x in fixable), inline=False)
     if manual:
-        embed.add_field(name="Needs manual fix", value="\\n".join(f"• {x}" for x in manual), inline=False)
+        embed.add_field(name="Needs manual fix", value="\n".join(f"• {x}" for x in manual), inline=False)
 
     await interaction.response.send_message(
         embed=embed,
@@ -1059,7 +1059,7 @@ async def _handle_builder_action(interaction: discord.Interaction, action: str) 
             lines.append("Fixable: " + ", ".join(fixable))
         if manual:
             lines.append("Manual: " + " | ".join(manual))
-        await _reply(interaction, "\\n".join(lines) if lines else "No status found.", ok=ready)
+        await _reply(interaction, "\n".join(lines) if lines else "No status found.", ok=ready)
         return True
 
     if action == "fix":
@@ -1265,7 +1265,7 @@ async def _handle_profile_interaction(interaction: discord.Interaction) -> bool:
         if to_remove:
             changes.append("Removed: " + ", ".join(role.mention for role in to_remove))
 
-        await _reply(interaction, "\\n".join(changes) if changes else "No profile changes needed.", ok=True)
+        await _reply(interaction, "\n".join(changes) if changes else "No profile changes needed.", ok=True)
         return True
 
     if suffix == "clear":
@@ -1384,40 +1384,19 @@ def _profile_action_key_from_custom_id(custom_id: str) -> str:
 
 
 async def _profile_session_gate(interaction: discord.Interaction, custom_id: str) -> bool:
-    # Only suppress actions that create new ephemeral messages/views.
-    action_key = _profile_action_key_from_custom_id(custom_id)
-    suppress_prefixes = (
-        "open:pronouns",
-        "open:identity",
-        "open:interests",
-        "view",
-        "learn",
-        "pick_member",
-    )
-    if action_key not in suppress_prefixes:
-        return True
+    """Allow profile actions to reopen after a user dismisses an ephemeral message.
 
-    guild_id = int(interaction.guild.id) if interaction.guild else 0
-    user_id = int(interaction.user.id)
-    key = (guild_id, user_id, action_key)
-    now = monotonic()
+    Discord does not tell the bot when a user dismisses an ephemeral response.
+    The old 45-second session suppression caused a button click to silently defer
+    instead of reopening the panel. The hard interaction lock/cooldown still
+    protects against double-click spam, so this gate should not suppress normal
+    repeated clicks.
+    """
 
-    if len(_PROFILE_PANEL_SESSIONS) > 5000:
-        stale = [k for k, until in _PROFILE_PANEL_SESSIONS.items() if now > float(until or 0.0)]
-        for stale_key in stale[:1000]:
-            _PROFILE_PANEL_SESSIONS.pop(stale_key, None)
-
-    active_until = float(_PROFILE_PANEL_SESSIONS.get(key, 0.0) or 0.0)
-    if now < active_until:
-        try:
-            if not interaction.response.is_done():
-                await interaction.response.defer(ephemeral=True, thinking=False)
-        except Exception:
-            pass
-        return False
-
-    _PROFILE_PANEL_SESSIONS[key] = now + _PROFILE_PANEL_SESSION_TTL_SECONDS
+    _ = interaction
+    _ = custom_id
     return True
+
 
 
 async def _panel_guard_acquire(interaction: discord.Interaction, custom_id: str) -> Optional[tuple[int, int]]:
@@ -1534,7 +1513,7 @@ async def _post_advanced_panel(interaction: discord.Interaction, channel: discor
         color=discord.Color.blurple(),
         timestamp=discord.utils.utcnow(),
     )
-    embed.add_field(name="Roles", value="\\n".join(f"• {role.mention}" for role in roles)[:1024], inline=False)
+    embed.add_field(name="Roles", value="\n".join(f"• {role.mention}" for role in roles)[:1024], inline=False)
     embed.add_field(
         name="Safety note",
         value="Use this only for cosmetic roles. Do not use these buttons for verification, staff access, tickets, moderation, or permissions.",
