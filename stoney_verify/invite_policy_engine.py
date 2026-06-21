@@ -425,10 +425,14 @@ async def _invite_code_belongs_to_guild(guild: discord.Guild, code: str) -> tupl
     if not clean:
         return "unknown", ""
 
+    current_guild_id = str(getattr(guild, "id", "") or "")
+
+    # First prove same-server invites from the current guild's known invite list.
+    # This is what prevents this-server invites from being deleted.
     try:
         own_codes = await _guild_invite_codes(guild)
         if clean in own_codes:
-            return "internal", str(getattr(guild, "id", ""))
+            return "internal", current_guild_id
     except Exception:
         pass
 
@@ -436,19 +440,42 @@ async def _invite_code_belongs_to_guild(guild: discord.Guild, code: str) -> tupl
         from stoney_verify.startup_guards.invite_shield_sanitize_shared import invite_code_belongs_to_guild
 
         if await invite_code_belongs_to_guild(guild, clean):
-            return "internal", str(getattr(guild, "id", ""))
+            return "internal", current_guild_id
     except Exception:
         pass
 
-    # Best effort target resolution.  Requires the bot to be able to fetch the
-    # invite.  When this fails, policy must not assume external unless strict
-    # unknown invite handling is enabled.
+    # Prefer discord.py's public client API for target lookup.
+    try:
+        state = getattr(guild, "_state", None)
+        get_client = getattr(state, "_get_client", None)
+        client = get_client() if callable(get_client) else None
+        fetch_invite = getattr(client, "fetch_invite", None)
+
+        if callable(fetch_invite):
+            try:
+                invite_obj = await fetch_invite(clean, with_counts=False, with_expiration=False)
+            except TypeError:
+                invite_obj = await fetch_invite(clean)
+
+            target_guild = getattr(invite_obj, "guild", None)
+            target_id = str(getattr(target_guild, "id", "") or "")
+            target_name = str(getattr(target_guild, "name", "") or "")
+
+            if target_id and target_id == current_guild_id:
+                return "internal", target_name or target_id
+            if target_id:
+                return "external", target_name or target_id
+    except Exception:
+        pass
+
+    # Low-level fallback if client.fetch_invite is unavailable.
     try:
         invite = await guild._state.http.get_invite(clean, with_counts=False, with_expiration=False)  # type: ignore[attr-defined]
         target = invite.get("guild") if isinstance(invite, dict) else None
         target_id = str((target or {}).get("id") or "")
         target_name = str((target or {}).get("name") or "")
-        if target_id and target_id == str(getattr(guild, "id", "")):
+
+        if target_id and target_id == current_guild_id:
             return "internal", target_name or target_id
         if target_id:
             return "external", target_name or target_id
@@ -556,6 +583,16 @@ async def decide_invite_message(
         or _setting_bool(settings, "invite_strict_unknown_targets", False)
         or _setting_bool(settings, "strict_unknown_invites", False)
     )
+
+    # Unknown means the invite was detected, but Discord did not prove it is
+    # this server's invite. While Invite Shield/Link Shield is protecting the
+    # server, unknown invite targets must not fail-open.
+    block_unknown_when_protected = bool(
+        strict_unknown
+        or invite_shield
+        or link_shield
+        or protected_active
+    )
     block_internal = (
         _cfg_bool(cfg, "automod_block_internal_invites", False)
         or _setting_bool(settings, "block_internal_invites", False)
@@ -575,7 +612,7 @@ async def decide_invite_message(
     decision.spam_invite_burst_action = _spam_invite_burst_action(settings)
     decision.protected_poster_rule_enabled = bool(protected_rule_enabled)
     decision.protected_poster_matched = bool(protected_match)
-    decision.strict_unknown_invites = bool(strict_unknown)
+    decision.strict_unknown_invites = bool(block_unknown_when_protected)
 
     if str(decision.author_id) in exempt_users:
         decision.rule_id = "exempt_user"
@@ -638,7 +675,7 @@ async def decide_invite_message(
             continue
 
         decision.unknown_codes.append(code)
-        if strict_unknown:
+        if block_unknown_when_protected:
             unknown_blocked.append(code)
             blocked.append(code)
         else:
@@ -654,8 +691,8 @@ async def decide_invite_message(
         elif decision.unknown_codes:
             decision.action = "log_only"
             decision.rule_id = "unknown_invite_target_allowed"
-            decision.reason = "Invite target could not be verified, so Dank Shield did not delete it."
-            decision.fix_hint = "Enable strict unknown invite handling only if you want unknown invite targets removed."
+            decision.reason = "Invite target could not be verified, and no invite-blocking feature required deletion."
+            decision.fix_hint = "Enable Invite Shield or strict unknown invite handling if you want unknown invite targets removed."
         else:
             decision.reason = "Invite code is allowed by policy."
             decision.fix_hint = "No action needed."
