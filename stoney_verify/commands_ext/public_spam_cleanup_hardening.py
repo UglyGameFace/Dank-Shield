@@ -352,6 +352,19 @@ async def _delete_message_object(message: discord.Message) -> bool:
         guild = message.guild
         if guild is None or not _channel_manageable(message.channel, guild):
             return False
+
+        # Invite-containing messages must never be deleted by this cleanup
+        # helper directly. The central invite policy owns that decision.
+        try:
+            from stoney_verify import invite_policy_engine as policy
+            if policy.extract_invite_codes_from_message(message):
+                decision = await policy.decide_invite_message(message, source="spam-cleanup-hardening")
+                if not decision.should_delete:
+                    return False
+                return await policy.delete_message_if_allowed(message, decision)
+        except Exception:
+            return False
+
         await message.delete(reason="Dank Shield Spam Guard burst cleanup sweep")
         return True
     except discord.NotFound:
@@ -362,6 +375,7 @@ async def _delete_message_object(message: discord.Message) -> bool:
         return False
     except Exception:
         return False
+
 
 
 async def _history_candidates(

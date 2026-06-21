@@ -76,10 +76,11 @@ def _normalize_text(value: Any) -> str:
 def _component_text(component: Any) -> list[str]:
     parts: list[str] = []
     try:
-        for attr in ("url", "label", "custom_id"):
-            value = getattr(component, attr, None)
-            if value:
-                parts.append(str(value))
+        # Only actual component URLs are link content.
+        # Labels/custom_ids are UI text and must never trigger invite deletion.
+        value = getattr(component, "url", None)
+        if value:
+            parts.append(str(value))
     except Exception:
         pass
     try:
@@ -134,24 +135,21 @@ def _message_text(message: discord.Message) -> str:
 
 
 def _invite_codes(message: discord.Message) -> set[str]:
-    text = _message_text(message)
-    compact = re.sub(r"\s+", "", text)
-    codes: set[str] = set()
-    for source in (text, compact):
-        try:
-            codes.update(code.strip().lower() for code in INVITE_CODE_RE.findall(source) if code.strip())
-            codes.update(code.strip().lower() for code in SPACED_CODE_RE.findall(source) if code.strip())
-        except Exception:
-            pass
-    return codes
+    try:
+        from stoney_verify import invite_policy_engine as policy
+        return set(policy.extract_invite_codes_from_message(message))
+    except Exception:
+        return set()
+
 
 
 def _has_invite(message: discord.Message) -> bool:
-    text = _message_text(message)
-    if INVITE_RE.search(text) or SPACED_INVITE_RE.search(text):
-        return True
-    compact = re.sub(r"\s+", "", text)
-    return bool(INVITE_RE.search(compact) or SPACED_INVITE_RE.search(compact))
+    try:
+        from stoney_verify import invite_policy_engine as policy
+        return bool(policy.extract_invite_codes_from_message(message))
+    except Exception:
+        return False
+
 
 
 def _normalize_codes(values: Any) -> set[str]:
@@ -407,74 +405,36 @@ async def _blocked_codes_for_guild(guild: Any, codes: List[str]) -> tuple[List[s
     return blocked, allowed_count
 
 async def _delete_message(message: discord.Message, *, reason: str) -> None:
-    try:
-        await message.delete(reason=reason)
-    except TypeError:
-        await message.delete()
+    raise RuntimeError("Direct invite cleanup delete is disabled. Use invite_policy_engine.delete_message_if_allowed().")
+
 
 
 async def _clean_existing_invites(channel: Any, *, limit: int = 100, repost_mixed: bool = False) -> dict[str, Any]:
-    result: dict[str, Any] = {"checked": 0, "matched": 0, "allowed": 0, "deleted": 0, "failed": 0, "warning": None}
-    if not isinstance(channel, discord.TextChannel):
-        result["warning"] = "This cleanup can only scan text channels."
-        return result
-    me = channel.guild.me
-    if me is None:
-        result["warning"] = "Dank Shield could not resolve its own server member, so permissions could not be checked."
-        return result
-    perms = channel.permissions_for(me)
-    if not perms.read_message_history:
-        result["warning"] = f"Dank Shield needs Read Message History in {channel.mention} to scan existing messages."
-        return result
-    if not perms.manage_messages:
-        result["warning"] = f"Dank Shield needs Manage Messages in {channel.mention} to remove existing invite links."
-        return result
-    try:
-        async for message in channel.history(limit=max(1, min(int(limit), 250))):
-            result["checked"] += 1
-            try:
-                if message.author == me:
-                    continue
-                from stoney_verify.startup_guards.invite_shield_sanitize_shared import is_trusted_bump_success_receipt
-                if is_trusted_bump_success_receipt(message):
-                    continue
-                codes = _invite_codes(message)
-                if not codes and not _has_invite(message):
-                    continue
-                result["matched"] += 1
-                blocked, allowed_count = await _blocked_codes_for_guild(channel.guild, codes)
-                if allowed_count:
-                    result["allowed"] += 1
-                if not blocked:
-                    continue
-                from stoney_verify.startup_guards.invite_shield_sanitize_shared import send_mixed_invite_sanitized_notice, this_guild_invite_codes
+    """Scan existing messages using the central invite policy engine only.
 
-                kept_this_server_codes = await this_guild_invite_codes(channel.guild, codes)
-                await _delete_message(message, reason="Dank Shield Invite Shield cleanup: external invite")
-                result["deleted"] += 1
-                if repost_mixed and kept_this_server_codes:
-                    await send_mixed_invite_sanitized_notice(
-                        message,
-                        kept_codes=kept_this_server_codes,
-                        removed_count=len(blocked),
-                        source="fallback-sweep",
-                    )
-            except discord.Forbidden:
-                result["failed"] += 1
-                result["warning"] = f"Discord denied deletion in {channel.mention}. Check Manage Messages and channel permission overrides."
-                break
-            except discord.NotFound:
-                continue
-            except Exception as exc:
-                result["failed"] += 1
-                if result.get("warning") is None:
-                    result["warning"] = f"Some matched messages could not be removed in {channel.mention}: {type(exc).__name__}: {str(exc)[:150]}"
-                continue
-    except discord.Forbidden:
-        result["warning"] = f"Dank Shield cannot read message history in {channel.mention}."
+    This intentionally does not use local invite regexes or direct message.delete.
+    The central policy engine decides what is an invite and whether deletion is
+    allowed for this guild/channel/user/config.
+    """
+
+    try:
+        from stoney_verify import invite_policy_engine as policy
+
+        return await policy.scan_channel_invites(
+            channel,
+            limit=max(1, min(int(limit or 100), 250)),
+            repost_mixed=bool(repost_mixed),
+            source="protection-center-invite-scan",
+        )
     except Exception as exc:
-        result["warning"] = f"Scan failed in {channel.mention}: {type(exc).__name__}: {str(exc)[:170]}"
-    return result
+        return {
+            "checked": 0,
+            "matched": 0,
+            "allowed": 0,
+            "deleted": 0,
+            "failed": 1,
+            "warning": f"Central invite scan failed: {type(exc).__name__}: {str(exc)[:170]}",
+        }
 
 
 async def _refresh_card(center: Any, interaction: discord.Interaction, *, note: str | None = None) -> None:
@@ -555,7 +515,16 @@ async def _set_invite_shield(interaction: discord.Interaction, *, enabled: bool,
         "automod_updated_by_id": str(int(interaction.user.id)),
     }
     await center._save_automod(int(guild.id), updates)
-    note = "✅ Invite Shield enabled. Normal links remain allowed." if enabled else "⚪ Invite Shield disabled."
+    if enabled:
+        if link_on:
+            note = (
+                "✅ Invite Shield enabled.\n"
+                "⚠️ Link Shield is also ON, so normal links may still be removed by Link Shield."
+            )
+        else:
+            note = "✅ Invite Shield enabled. Normal links remain allowed."
+    else:
+        note = "⚪ Invite Shield disabled."
     if enabled and scan_current:
         channel = await _active_invite_scan_channel(interaction)
         result = await _clean_existing_invites(channel, limit=150)

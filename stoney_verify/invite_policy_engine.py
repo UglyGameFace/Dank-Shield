@@ -22,12 +22,15 @@ from typing import Any, Iterable, Mapping
 import discord
 
 INVITE_RE = re.compile(
-    r"(?<![A-Za-z0-9])(?:https?://)?(?:www\.)?"
+    # Do not match discord.gg inside another URL path/query like:
+    # https://example.com/redirect/discord.gg/code
+    r"(?<![A-Za-z0-9._~:/?#@!$&()*+,;=%-])(?:https?://)?(?:www\.)?"
     r"(?:discord(?:app)?\.com\s*/\s*invite|discord\.gg)\s*/\s*"
     r"([A-Za-z0-9-]{2,32})"
     r"(?=$|[\s<>\]\[(){}\"'`.,!?;]|[/?#&])",
     re.IGNORECASE,
 )
+
 
 _POLICY_CACHE: dict[int, tuple[float, Any, dict[str, Any]]] = {}
 _POLICY_CACHE_TTL_SECONDS = 8.0
