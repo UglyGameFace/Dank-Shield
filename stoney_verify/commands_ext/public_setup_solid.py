@@ -776,9 +776,9 @@ async def _add_saved_setup_section(embed: discord.Embed, guild: discord.Guild, s
     elif section == "logs_status":
         value = (
             f"Mod/security log: {_channel_or_not_set(guild, _cfg_value(cfg, 'modlog_channel_id') or _cfg_value(cfg, 'raidlog_channel_id') or _cfg_value(cfg, 'raid_log_channel_id'))}\n"
+            f"Ticket transcripts: {_channel_or_not_set(guild, _cfg_value(cfg, 'transcripts_channel_id') or _cfg_value(cfg, 'transcript_channel_id'))}\n"
             f"Join/leave log: {_channel_or_not_set(guild, _cfg_value(cfg, 'join_log_channel_id') or _cfg_value(cfg, 'join_exit_log_channel_id'))}\n"
-            f"Bot status: {_channel_or_not_set(guild, _cfg_value(cfg, 'status_channel_id') or _cfg_value(cfg, 'bot_status_channel_id') or _cfg_value(cfg, 'health_channel_id'))}\n"
-            f"Bans/blacklist: {_channel_or_not_set(guild, _cfg_value(cfg, 'bans_channel_id') or _cfg_value(cfg, 'blacklist_channel_id'))}"
+            f"Bot status: {_channel_or_not_set(guild, _cfg_value(cfg, 'status_channel_id') or _cfg_value(cfg, 'bot_status_channel_id') or _cfg_value(cfg, 'health_channel_id'))}"
         )
     elif section == "behavior":
         value = (
@@ -1249,7 +1249,7 @@ class SolidSetupView(discord.ui.View):
         )
         if interaction.guild is not None:
             await _add_saved_setup_section(embed, interaction.guild, "logs_status")
-        await interaction.response.edit_message(embed=embed, view=LogsStatusPickerView())
+        await interaction.response.edit_message(embed=embed, view=LogsSetupHubView())
 
     @discord.ui.button(label="Ticket Menu Options", emoji="🗂️", style=discord.ButtonStyle.secondary, custom_id="stoney_solid:dashboard_categories", row=3)
     async def categories(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
@@ -1488,7 +1488,7 @@ class ChooseExistingView(SetupNavView):
         )
         if interaction.guild is not None:
             await _add_saved_setup_section(embed, interaction.guild, "logs_status")
-        await interaction.response.edit_message(embed=embed, view=LogsStatusPickerView())
+        await interaction.response.edit_message(embed=embed, view=LogsSetupHubView())
 
     @discord.ui.button(label="Behavior Settings", emoji="⚙️", style=discord.ButtonStyle.secondary, custom_id="stoney_solid:existing_behavior", row=3)
     async def behavior(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
@@ -1884,6 +1884,70 @@ class VerificationChannelsPickerView(SetupNavView):
         )
 
 
+
+class LogsSetupHubView(SetupNavView):
+    @discord.ui.button(label="Core Logs + Status", emoji="🧾", style=discord.ButtonStyle.primary, custom_id="stoney_solid:logs_core", row=0)
+    async def core(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        if not await _require_setup_permission(interaction):
+            return
+        embed = discord.Embed(
+            title="🧾 Core Logs + Status",
+            description=(
+                "Pick the channels used every day: moderation/security logs, ticket transcripts, join/leave logs, and bot status."
+            ),
+            color=discord.Color.blurple(),
+        )
+        if interaction.guild is not None:
+            await _add_saved_setup_section(embed, interaction.guild, "logs_status")
+        await interaction.response.edit_message(embed=embed, view=LogsSetupHubView())
+
+    @discord.ui.button(label="Advanced Logs", emoji="📚", style=discord.ButtonStyle.secondary, custom_id="stoney_solid:logs_advanced", row=0)
+    async def advanced(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        if not await _require_setup_permission(interaction):
+            return
+
+        embed = discord.Embed(
+            title="📚 Advanced Logs",
+            description="Optional logs most servers do not need right away.",
+            color=discord.Color.blurple(),
+        )
+
+        if interaction.guild is not None:
+            try:
+                cfg = await get_guild_config(interaction.guild.id, refresh=True)
+                embed.add_field(
+                    name="Currently Saved",
+                    value=(
+                        f"Bans / blacklist: {_channel_or_not_set(interaction.guild, _cfg_value(cfg, 'bans_channel_id') or _cfg_value(cfg, 'blacklist_channel_id'))}"
+                    )[:1024],
+                    inline=False,
+                )
+            except Exception as e:
+                embed.add_field(name="Currently Saved", value=f"Could not load saved setup: `{type(e).__name__}`", inline=False)
+
+        embed.add_field(
+            name="Safe Rule",
+            value="This only saves the selected Discord channel ID. It does not delete or move anything.",
+            inline=False,
+        )
+        await interaction.response.edit_message(embed=embed, view=AdvancedLogsPickerView())
+
+
+class AdvancedLogsPickerView(SetupNavView):
+    def __init__(self) -> None:
+        super().__init__()
+        self.add_item(
+            SaveChannelSelect(
+                placeholder="Bans / blacklist channel, if used",
+                columns=("bans_channel_id",),
+                also_same=("blacklist_channel_id",),
+                channel_types=[discord.ChannelType.text],
+                row=0,
+                require_text=True,
+            )
+        )
+
+
 class LogsStatusPickerView(SetupNavView):
     def __init__(self) -> None:
         super().__init__()
@@ -1899,11 +1963,22 @@ class LogsStatusPickerView(SetupNavView):
         )
         self.add_item(
             SaveChannelSelect(
+                placeholder="Where ticket transcripts go",
+                columns=("transcripts_channel_id",),
+                also_same=("transcript_channel_id",),
+                channel_types=[discord.ChannelType.text],
+                row=1,
+                require_text=True,
+                require_files=True,
+            )
+        )
+        self.add_item(
+            SaveChannelSelect(
                 placeholder="Where join/leave logs go",
                 columns=("join_log_channel_id",),
                 also_same=("join_exit_log_channel_id",),
                 channel_types=[discord.ChannelType.text],
-                row=1,
+                row=2,
                 require_text=True,
             )
         )
@@ -1912,16 +1987,6 @@ class LogsStatusPickerView(SetupNavView):
                 placeholder="Where bot status messages go",
                 columns=("status_channel_id",),
                 also_same=("bot_status_channel_id", "health_channel_id"),
-                channel_types=[discord.ChannelType.text],
-                row=2,
-                require_text=True,
-            )
-        )
-        self.add_item(
-            SaveChannelSelect(
-                placeholder="Bans / blacklist channel, if used",
-                columns=("bans_channel_id",),
-                also_same=("blacklist_channel_id",),
                 channel_types=[discord.ChannelType.text],
                 row=3,
                 require_text=True,
