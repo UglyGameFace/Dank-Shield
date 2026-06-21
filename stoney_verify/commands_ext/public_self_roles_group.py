@@ -17,6 +17,7 @@ PROFILE_PREFIX = "dank:profile:v1:"
 _ATTACHED = False
 _LISTENER_ATTACHED = False
 _CONTEXT_MENU_ATTACHED = False
+_PROFILE_PANEL_VIEW_REGISTERED = False
 
 _PROFILE_PANEL_HARD_LOCKS: dict[tuple[int, int], asyncio.Lock] = {}
 _PROFILE_PANEL_BLOCK_UNTIL: dict[tuple[int, int], float] = {}
@@ -765,6 +766,29 @@ class ProfilePanelView(discord.ui.View):
         self.add_item(discord.ui.Button(label="Missing Identity?", emoji="✍️", style=discord.ButtonStyle.secondary, custom_id=f"{PROFILE_PREFIX}missing", row=3))
 
 
+def register_profile_panel_runtime(bot: Any) -> bool:
+    """Register the public Profile Panel as persistent across bot restarts."""
+
+    global _PROFILE_PANEL_VIEW_REGISTERED
+    if _PROFILE_PANEL_VIEW_REGISTERED:
+        return True
+
+    try:
+        add_view = getattr(bot, "add_view", None)
+        if callable(add_view):
+            add_view(ProfilePanelView())
+            _PROFILE_PANEL_VIEW_REGISTERED = True
+            print("✅ profile_panel: persistent ProfilePanelView registered")
+            return True
+    except Exception as exc:
+        try:
+            print(f"⚠️ profile_panel: persistent view registration failed: {type(exc).__name__}: {exc}")
+        except Exception:
+            pass
+
+    return False
+
+
 class ProfileCategorySelectView(discord.ui.View):
     def __init__(self, guild: discord.Guild, member: discord.Member, category_key: str) -> None:
         super().__init__(timeout=300)
@@ -1444,6 +1468,18 @@ async def _interaction_listener(interaction: discord.Interaction) -> None:
     gate_key: Optional[tuple[int, int]] = None
 
     if _panel_guard_is_profile_action(custom_id):
+        try:
+            print(
+                "🌿 profile_interaction "
+                f"guild={getattr(getattr(interaction, 'guild', None), 'id', 0)} "
+                f"channel={getattr(getattr(interaction, 'channel', None), 'id', 0)} "
+                f"user={getattr(getattr(interaction, 'user', None), 'id', 0)} "
+                f"custom_id={custom_id} "
+                f"response_done={getattr(interaction.response, 'is_done', lambda: False)()}"
+            )
+        except Exception:
+            pass
+
         if not await _profile_session_gate(interaction, custom_id):
             return
         gate_key = await _panel_guard_acquire(interaction, custom_id)
@@ -1454,6 +1490,26 @@ async def _interaction_listener(interaction: discord.Interaction) -> None:
         if await _handle_profile_interaction(interaction):
             return
         await _handle_self_role(interaction)
+    except Exception as exc:
+        try:
+            print(
+                "⚠️ profile_interaction failed "
+                f"guild={getattr(getattr(interaction, 'guild', None), 'id', 0)} "
+                f"user={getattr(getattr(interaction, 'user', None), 'id', 0)} "
+                f"custom_id={custom_id} "
+                f"error={type(exc).__name__}: {exc}"
+            )
+        except Exception:
+            pass
+
+        try:
+            await _reply(
+                interaction,
+                "That profile panel action failed safely. If this is an old panel, ask staff to repost the Profile Panel.",
+                ok=False,
+            )
+        except Exception:
+            pass
     finally:
         _panel_guard_release(gate_key)
 
@@ -1644,6 +1700,9 @@ def _attach_groups() -> bool:
 def register_public_self_roles_group_commands(bot: Any, tree: Any) -> None:
     global _LISTENER_ATTACHED, _CONTEXT_MENU_ATTACHED
 
+    if bot is not None:
+        register_profile_panel_runtime(bot)
+
     if tree is not None and not _CONTEXT_MENU_ATTACHED:
         try:
             existing = None
@@ -1680,4 +1739,4 @@ def register_public_self_roles_group_commands(bot: Any, tree: Any) -> None:
 
 _attach_groups()
 
-__all__ = ["register_public_self_roles_group_commands", "profile_group", "roles_group", "view_dank_profile_context_menu"]
+__all__ = ["register_public_self_roles_group_commands", "register_profile_panel_runtime", "profile_group", "roles_group", "view_dank_profile_context_menu"]

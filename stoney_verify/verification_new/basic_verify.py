@@ -250,6 +250,16 @@ class BasicVerifyButton(discord.ui.Button):
         super().__init__(label="Verify", emoji="✅", style=discord.ButtonStyle.success, custom_id=BASIC_VERIFY_CUSTOM_ID)
 
     async def callback(self, interaction: discord.Interaction) -> None:  # type: ignore[override]
+        try:
+            print(
+                "✅ basic_verify click "
+                f"guild={getattr(getattr(interaction, 'guild', None), 'id', 0)} "
+                f"channel={getattr(getattr(interaction, 'channel', None), 'id', 0)} "
+                f"user={getattr(getattr(interaction, 'user', None), 'id', 0)}"
+            )
+        except Exception:
+            pass
+
         if not interaction.guild or not isinstance(interaction.user, discord.Member):
             await _reply(interaction, "This only works inside the server.", ok=False)
             return
