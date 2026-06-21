@@ -349,19 +349,80 @@ async def _delete_category_safely(guild: discord.Guild, slug: str) -> tuple[bool
 
 
 class BackToSetupView(discord.ui.View):
+    """Legacy setup-start navigation wrapper.
+
+    This file is still used by Name Items Before Build. Navigation from here
+    must return users to the new dashboard-first /dank setup, not the older
+    quick setup flow.
+    """
+
     def __init__(self) -> None:
         super().__init__(timeout=900)
 
-    @discord.ui.button(label="Back to Setup", emoji="⬅️", style=discord.ButtonStyle.secondary, custom_id="stoney_setup:back", row=4)
-    async def back(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+    async def _solid_home(self, interaction: discord.Interaction) -> None:
+        guild = interaction.guild
+        if guild is None:
+            return await interaction.response.send_message("❌ This must be used inside a server.", ephemeral=True)
+
+        await _safe_defer_update(interaction)
+        from . import public_setup_solid
+
+        embed, view = await public_setup_solid._build_main_setup_payload(guild)
+        await public_setup_solid._edit_or_followup(interaction, embed=embed, view=view)
+
+    @discord.ui.button(label="Setup Home", emoji="🏠", style=discord.ButtonStyle.secondary, custom_id="stoney_setup:solid_home", row=4)
+    async def setup_home(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        if not await _require_setup_permission(interaction):
+            return
+        await self._solid_home(interaction)
+
+    @discord.ui.button(label="Current Setup", emoji="📋", style=discord.ButtonStyle.secondary, custom_id="stoney_setup:solid_current", row=4)
+    async def current_setup(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         if not await _require_setup_permission(interaction):
             return
         guild = interaction.guild
         if guild is None:
             return await interaction.response.send_message("❌ This must be used inside a server.", ephemeral=True)
+
         await _safe_defer_update(interaction)
-        embed, view = await _build_main_setup_payload(guild)
-        await _edit_setup_message(interaction, embed=embed, view=view)
+        from . import public_setup_solid
+
+        embed = await public_setup_solid._build_current_setup_embed(guild)
+        await public_setup_solid._edit_or_followup(interaction, embed=embed, view=public_setup_solid.SetupNavView())
+
+    @discord.ui.button(label="Setup Check", emoji="🩺", style=discord.ButtonStyle.primary, custom_id="stoney_setup:solid_health", row=4)
+    async def setup_check(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        if not await _require_setup_permission(interaction):
+            return
+        guild = interaction.guild
+        if guild is None:
+            return await interaction.response.send_message("❌ This must be used inside a server.", ephemeral=True)
+
+        await _safe_defer_update(interaction)
+        from . import public_setup_solid
+
+        embed = await public_setup_solid._build_health_embed(guild)
+        await public_setup_solid._edit_or_followup(interaction, embed=embed, view=public_setup_solid.SetupNavView())
+
+    @discord.ui.button(label="Close", emoji="✖️", style=discord.ButtonStyle.danger, custom_id="stoney_setup:solid_close", row=4)
+    async def close(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        if not await _require_setup_permission(interaction):
+            return
+        embed = discord.Embed(
+            title="Setup Closed",
+            description="Nothing else was changed. Run `/dank setup` whenever you want to continue.",
+            color=discord.Color.dark_grey(),
+        )
+        try:
+            if interaction.response.is_done():
+                await interaction.edit_original_response(embed=embed, view=None)
+            else:
+                await interaction.response.edit_message(embed=embed, view=None)
+        except Exception:
+            try:
+                await interaction.followup.send(embed=embed, ephemeral=True)
+            except Exception:
+                pass
 
 
 class DankSetupView(discord.ui.View):
@@ -395,20 +456,25 @@ class DankSetupView(discord.ui.View):
         if not await _require_setup_permission(interaction):
             return
         embed = discord.Embed(
-            title="✏️ Customize Setup Names",
+            title="✏️ Name Items Before Build",
             description=(
-                "Discord modals can only show 5 text fields at a time, so setup names are split into simple pages.\n\n"
-                "Use this when you want Dank Shield to create channels/roles, but **not** with the default names."
+                "Use this only if Dank Shield will create missing roles/channels and you want custom names first.\n\n"
+                "**This does not create anything by itself.** It only opens naming forms."
             ),
             color=discord.Color.blurple(),
         )
         embed.add_field(
-            name="Pages",
+            name="Naming Pages",
             value=(
-                "**Core Roles + Ticket Category** — staff/member roles and active ticket category\n"
-                "**Tickets + Verification Rooms** — archive/support/verify/VC items\n"
-                "**Logs + Status Channels** — transcripts, modlog, join log, bot status"
+                "1️⃣ **Core Roles + Ticket Category** — staff/member roles and active ticket category\n"
+                "2️⃣ **Tickets + Verification Rooms** — archive/support/verify/VC items\n"
+                "3️⃣ **Logs + Status Channels** — transcripts, modlog, join log, bot status"
             ),
+            inline=False,
+        )
+        embed.add_field(
+            name="Best Workflow",
+            value="Name items here → go back to Setup Home → Review / Create Missing Items.",
             inline=False,
         )
         await interaction.response.edit_message(embed=embed, view=CustomizeSetupMenuView())
@@ -473,15 +539,15 @@ class DankSetupView(discord.ui.View):
 
 
 class CustomizeSetupMenuView(BackToSetupView):
-    @discord.ui.button(label="Core Roles + Ticket Category", emoji="1️⃣", style=discord.ButtonStyle.primary, custom_id="stoney_setup:custom_core", row=0)
+    @discord.ui.button(label="Name Core Roles + Ticket Category", emoji="1️⃣", style=discord.ButtonStyle.primary, custom_id="stoney_setup:custom_core", row=0)
     async def core(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         await self._open_modal(interaction, "core")
 
-    @discord.ui.button(label="Tickets + Verification Rooms", emoji="2️⃣", style=discord.ButtonStyle.primary, custom_id="stoney_setup:custom_ticket_verify", row=1)
+    @discord.ui.button(label="Name Tickets + Verification Rooms", emoji="2️⃣", style=discord.ButtonStyle.primary, custom_id="stoney_setup:custom_ticket_verify", row=1)
     async def ticket_verify(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         await self._open_modal(interaction, "ticket_verify")
 
-    @discord.ui.button(label="Logs + Status Channels", emoji="3️⃣", style=discord.ButtonStyle.primary, custom_id="stoney_setup:custom_logs", row=2)
+    @discord.ui.button(label="Name Logs + Status Channels", emoji="3️⃣", style=discord.ButtonStyle.primary, custom_id="stoney_setup:custom_logs", row=2)
     async def logs(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         await self._open_modal(interaction, "logs_status")
 
@@ -500,7 +566,24 @@ class CustomizeSetupMenuView(BackToSetupView):
             return await interaction.response.send_message("❌ No customizable fields were found for this page.", ephemeral=True)
         modal = public_setup_assistant.CustomMissingNamesModal(specs)
         modal.title = label[:45]
-        await interaction.response.send_modal(modal)
+        try:
+            await interaction.response.send_modal(modal)
+        except Exception as e:
+            embed = discord.Embed(
+                title="🚫 Naming Form Did Not Open",
+                description=(
+                    f"`{type(e).__name__}: {str(e)[:250]}`\n\n"
+                    "Nothing was changed. Press **Setup Home**, then try **Name Items Before Build** again."
+                ),
+                color=discord.Color.red(),
+            )
+            try:
+                if interaction.response.is_done():
+                    await interaction.followup.send(embed=embed, ephemeral=True)
+                else:
+                    await interaction.response.send_message(embed=embed, ephemeral=True)
+            except Exception:
+                pass
 
 
 class ChooseExistingMenuView(BackToSetupView):
