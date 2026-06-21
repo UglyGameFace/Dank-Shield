@@ -30,6 +30,7 @@ _STARTUP_GUARDS: Tuple[str, ...] = (
     "stoney_verify.startup_guards.spam_guard_invite_hard_block",
     "stoney_verify.startup_guards.spam_guard_invite_override_options",
     "stoney_verify.startup_guards.discord_invite_blocker_runtime_guard",
+    "stoney_verify.startup_guards.invite_live_enforcer_guard",
     "stoney_verify.startup_guards.protection_invite_target_precedence_guard",
     "stoney_verify.startup_guards.setup_ticket_tool_style_setup_guard",
     "stoney_verify.startup_guards.welcome_message_command_guard",
