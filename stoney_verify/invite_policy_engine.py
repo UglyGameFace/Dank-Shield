@@ -22,10 +22,10 @@ from typing import Any, Iterable, Mapping
 import discord
 
 INVITE_RE = re.compile(
-    r"(?<![A-Za-z0-9])(?:https?://)?(?:www\\.)?"
-    r"(?:discord(?:app)?\\.com\\s*/\\s*invite|discord\\.gg)\\s*/\\s*"
+    r"(?<![A-Za-z0-9])(?:https?://)?(?:www\.)?"
+    r"(?:discord(?:app)?\.com\s*/\s*invite|discord\.gg)\s*/\s*"
     r"([A-Za-z0-9-]{2,32})"
-    r"(?=$|[\\s<>\\]\\[(){}\\\"'`.,!?;]|[/?#&])",
+    r"(?=$|[\s<>\]\[(){}\"'`.,!?;]|[/?#&])",
     re.IGNORECASE,
 )
 
