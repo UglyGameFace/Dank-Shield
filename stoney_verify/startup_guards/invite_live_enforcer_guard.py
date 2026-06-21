@@ -121,3 +121,6 @@ def apply() -> None:
 
     setattr(builtins, _INSTALLED_FLAG, True)
     _log("active; live messages now call central invite policy engine")
+
+
+apply()
