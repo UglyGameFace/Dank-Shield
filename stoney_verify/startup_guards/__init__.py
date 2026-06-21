@@ -227,7 +227,12 @@ def load_startup_guards(modules: Iterable[str] = _STARTUP_GUARDS) -> Dict[str, M
             continue
         try:
             with _maybe_suppress_import_chatter(module_name):
-                _LOADED[module_name] = importlib.import_module(module_name)
+                module = importlib.import_module(module_name)
+                _LOADED[module_name] = module
+                if module_name == "stoney_verify.startup_guards.invite_live_enforcer_guard":
+                    apply_func = getattr(module, "apply", None)
+                    if callable(apply_func):
+                        apply_func()
         except Exception as exc:
             _ERRORS[module_name] = exc
             print(f"⚠️ startup_guard loader failed module={module_name}: {exc!r}")
