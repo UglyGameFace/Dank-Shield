@@ -455,6 +455,13 @@ def _category_governance_text(rows: list[dict[str, Any]]) -> str:
 
 
 async def _build_health_embed(guild: discord.Guild) -> discord.Embed:
+    """Dashboard-style health check.
+
+    This reuses the existing _build_setup_health() checks. It does not create a
+    second health system; it only groups the same evidence into customer-readable
+    service cards.
+    """
+
     blockers: list[str] = []
     warnings: list[str] = []
     ok: list[str] = []
@@ -472,34 +479,182 @@ async def _build_health_embed(guild: discord.Guild) -> discord.Embed:
     if category_load.error:
         blockers.append(category_load.error)
     elif not category_load.rows:
-        warnings.append("No ticket menu options exist yet. Press Ticket Menu Options → Create Recommended.")
+        warnings.append("Ticket menu options are missing. Press Tickets → Ticket Menu Options → Create Recommended.")
     else:
         ok.append(f"Ticket menu options loaded: `{len(category_load.rows)}`.")
         governance = _category_governance_text(category_load.rows)
         if governance.startswith("•") or governance.startswith("⚠️"):
             warnings.append(governance)
+        else:
+            ok.append(governance)
+
+    def _matches(line: str, words: tuple[str, ...]) -> bool:
+        low = str(line or "").lower()
+        return any(word in low for word in words)
+
+    buckets: dict[str, tuple[str, tuple[str, ...]]] = {
+        "🎫 Tickets": (
+            "ticket",
+            (
+                "ticket",
+                "tickets",
+                "archive",
+                "archived",
+                "closed",
+                "open ticket",
+                "panel",
+                "transcript",
+                "category",
+                "staff role",
+                "menu option",
+                "routing",
+            ),
+        ),
+        "✅ Verify": (
+            "verify",
+            (
+                "verify",
+                "verification",
+                "verified",
+                "unverified",
+                "resident",
+                "waiting role",
+                "approved role",
+                "access role",
+                "voice",
+                "vc",
+                "kick timer",
+            ),
+        ),
+        "🛡️ Protection": (
+            "protection",
+            (
+                "spam",
+                "spamguard",
+                "spam guard",
+                "automod",
+                "invite",
+                "link",
+                "protection",
+                "shield",
+                "filter",
+            ),
+        ),
+        "🧾 Logs + Status": (
+            "logs",
+            (
+                "log",
+                "logs",
+                "modlog",
+                "mod/security",
+                "status",
+                "join",
+                "leave",
+                "raid",
+                "transcript",
+            ),
+        ),
+        "🔐 Permissions": (
+            "permissions",
+            (
+                "permission",
+                "permissions",
+                "manage",
+                "read",
+                "send",
+                "view",
+                "role hierarchy",
+                "hierarchy",
+                "missing access",
+            ),
+        ),
+    }
+
+    all_evidence: list[tuple[str, str]] = (
+        [("blocker", item) for item in blockers]
+        + [("warning", item) for item in warnings]
+        + [("ok", item) for item in ok]
+    )
+
+    used: set[int] = set()
+
+    def _bucket_lines(words: tuple[str, ...], *, limit: int = 5) -> str:
+        selected: list[str] = []
+
+        for severity in ("blocker", "warning", "ok"):
+            for idx, (sev, line) in enumerate(all_evidence):
+                if idx in used or sev != severity:
+                    continue
+                if not _matches(line, words):
+                    continue
+
+                used.add(idx)
+                icon = "🚫" if sev == "blocker" else "⚠️" if sev == "warning" else "✅"
+                selected.append(f"{icon} {_short(line, 155)}")
+                if len(selected) >= limit:
+                    return "\n".join(selected)[:1024]
+
+        if not selected:
+            return "✅ No obvious issue found for this section."
+        return "\n".join(selected)[:1024]
 
     ready = not blockers
     embed = discord.Embed(
-        title="🩺 Setup Health Check",
+        title="🩺 Dank Shield Setup Check",
         description=(
-            "✅ **Ready enough to test.**" if ready else "🚫 **Fix the blockers first.**"
+            "🚫 **Fix blockers first.**" if blockers else
+            "⚠️ **Usable, but review warnings before public launch.**" if warnings else
+            "✅ **Looks ready to test.**"
         ),
-        color=discord.Color.green() if ready else discord.Color.red(),
+        color=discord.Color.red() if blockers else discord.Color.orange() if warnings else discord.Color.green(),
         timestamp=now_utc(),
     )
-    embed.add_field(name="Blockers", value=_field_text(blockers, empty="✅ None"), inline=False)
-    embed.add_field(name="Warnings", value=_field_text(warnings, empty="✅ None"), inline=False)
-    embed.add_field(name="Passing Checks", value=_field_text(ok, empty="No passing checks reported."), inline=False)
+
+    embed.add_field(
+        name="Summary",
+        value=(
+            f"Blockers: `{len(blockers)}`\n"
+            f"Warnings: `{len(warnings)}`\n"
+            f"Passing checks: `{len(ok)}`"
+        ),
+        inline=True,
+    )
+
+    if blockers:
+        next_action = f"Fix this first: {_short(blockers[0], 220)}"
+    elif warnings:
+        next_action = f"Review this next: {_short(warnings[0], 220)}"
+    else:
+        next_action = "Create a test ticket, close it, test verify, then test invite/protection."
+
+    embed.add_field(name="Next Best Action", value=next_action[:1024], inline=False)
+
+    for label, (_slug, words) in buckets.items():
+        embed.add_field(name=label, value=_bucket_lines(words), inline=False)
+
+    leftovers: list[str] = []
+    for idx, (sev, line) in enumerate(all_evidence):
+        if idx in used:
+            continue
+        icon = "🚫" if sev == "blocker" else "⚠️" if sev == "warning" else "✅"
+        leftovers.append(f"{icon} {_short(line, 150)}")
+        if len(leftovers) >= 5:
+            break
+
+    if leftovers:
+        embed.add_field(name="Other Checks", value="\n".join(leftovers)[:1024], inline=False)
+
     embed.add_field(
         name="What To Press Next",
         value=(
-            "If there are blockers, press **Back to Setup** and use **Use My Existing Server** to pick the exact missing item.\n"
-            "If there are no blockers, test creating a ticket and test your verification flow."
+            "• Use **View Current Setup** to see saved IDs.\n"
+            "• Use **Use My Existing Server** to map existing channels/roles.\n"
+            "• Use **Review / Create Missing Items** only when something is missing."
         ),
         inline=False,
     )
-    embed.set_footer(text=f"Guild {guild.id} • /dank setup")
+
+    embed.set_footer(text=f"Guild {guild.id} • setup check groups existing health evidence")
     return embed
 
 
