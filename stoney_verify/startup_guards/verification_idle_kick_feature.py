@@ -319,6 +319,64 @@ async def cancel_timer(guild_id: int, user_id: int, *, delete: bool = True) -> b
     return cancelled
 
 
+
+async def timer_summary(guild_id: int) -> dict[str, int]:
+    gid = int(guild_id)
+    active = sum(1 for key, task in list(_TASKS.items()) if int(key[0]) == gid and task and not task.done())
+    persisted = 0
+    try:
+        from stoney_verify.commands_ext import kick_timers
+
+        res = await kick_timers._member_wait_timer_persist_select_all_async()  # type: ignore[attr-defined]
+        rows = getattr(res, "data", None) or []
+        for row in rows:
+            if int(str(row.get("guild_id") or "0") or 0) == gid and str(row.get("timer_type") or "") == _TIMER_TYPE:
+                persisted += 1
+    except Exception:
+        pass
+    return {"active": int(active), "persisted": int(persisted)}
+
+
+async def clear_guild_timers(guild_id: int) -> dict[str, int]:
+    gid = int(guild_id)
+    cleared_active = 0
+    cleared_persisted = 0
+
+    for key, task in list(_TASKS.items()):
+        if int(key[0]) != gid:
+            continue
+        if task and not task.done():
+            task.cancel()
+            cleared_active += 1
+        _TASKS.pop(key, None)
+        _STARTS.pop(key, None)
+        _CHANNELS.pop(key, None)
+        try:
+            await _delete_timer(gid, int(key[1]))
+            cleared_persisted += 1
+        except Exception:
+            pass
+
+    try:
+        from stoney_verify.commands_ext import kick_timers
+
+        res = await kick_timers._member_wait_timer_persist_select_all_async()  # type: ignore[attr-defined]
+        rows = getattr(res, "data", None) or []
+        for row in rows:
+            if int(str(row.get("guild_id") or "0") or 0) != gid:
+                continue
+            if str(row.get("timer_type") or "") != _TIMER_TYPE:
+                continue
+            user_id = _safe_int(row.get("user_id"), 0)
+            if user_id:
+                await _delete_timer(gid, user_id)
+                cleared_persisted += 1
+    except Exception:
+        pass
+
+    return {"active": int(cleared_active), "persisted": int(cleared_persisted)}
+
+
 async def _on_member_join(member: discord.Member) -> None:
     try:
         await start_timer(member)
@@ -402,4 +460,4 @@ def apply() -> bool:
 
 apply()
 
-__all__ = ["apply", "start_timer", "cancel_timer"]
+__all__ = ["apply", "start_timer", "cancel_timer", "timer_summary", "clear_guild_timers"]

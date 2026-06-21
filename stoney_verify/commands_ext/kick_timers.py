@@ -303,6 +303,53 @@ def _default_no_ticket_hours() -> int:
     return 24
 
 
+
+def _cfg_value_for_timer(cfg: Any, key: str, default: Any = None) -> Any:
+    try:
+        if hasattr(cfg, "get"):
+            value = cfg.get(key)
+            if value is not None:
+                return value
+    except Exception:
+        pass
+    try:
+        value = getattr(cfg, key, None)
+        if value is not None:
+            return value
+    except Exception:
+        pass
+    return default
+
+
+async def _guild_verify_wait_hours(guild_id: int) -> int:
+    """Per-guild verification wait timer hours.
+
+    Falls back to legacy env/global defaults only when no saved guild value
+    exists. This keeps multi-server setup scoped by guild_id.
+    """
+
+    try:
+        from stoney_verify.guild_config import get_guild_config
+
+        try:
+            cfg = await get_guild_config(int(guild_id), refresh=True)
+        except TypeError:
+            cfg = await get_guild_config(int(guild_id))
+
+        for key in ("verify_kick_hours", "verification_wait_timer_hours", "verification_no_progress_hours"):
+            raw = _cfg_value_for_timer(cfg, key)
+            try:
+                value = int(str(raw or "").strip() or 0)
+                if value > 0:
+                    return max(1, min(720, value))
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+    return max(1, min(720, int(_default_no_ticket_hours() or 24)))
+
+
 def _member_has_role_id(member: discord.Member, role_id: int) -> bool:
     try:
         return bool(role_id) and any(int(r.id) == int(role_id) for r in (member.roles or []))
@@ -826,7 +873,7 @@ async def _start_member_no_ticket_timer(
 
     _cancel_member_no_ticket_timer(member.guild.id, member.id)
 
-    timer_hours = int(hours or _default_no_ticket_hours())
+    timer_hours = int(hours) if hours is not None else await _guild_verify_wait_hours(member.guild.id)
     if timer_hours <= 0:
         timer_hours = 24
 
@@ -912,7 +959,7 @@ async def _join_grace_then_start_member_timer_task(
         await _start_member_no_ticket_timer(
             member=member,
             source_channel=notice_channel,
-            hours=_default_no_ticket_hours(),
+            hours=await _guild_verify_wait_hours(guild_id),
             announce=True,
             cancel_join_grace=False,
             started_at=end_at,
@@ -1055,7 +1102,7 @@ async def _resume_member_wait_timers_from_live_state(
                         ok = await _start_member_no_ticket_timer(
                             member=member,
                             source_channel=fallback_channel,
-                            hours=no_ticket_hours,
+                            hours=await _guild_verify_wait_hours(guild.id),
                             announce=False,
                             cancel_join_grace=True,
                             started_at=no_ticket_start,
@@ -1148,7 +1195,7 @@ async def member_wait_timer_resume_all() -> None:
                         persist=False,
                     )
                 else:
-                    hours = int(row.get("hours") or _default_no_ticket_hours() or 24)
+                    hours = int(row.get("hours") or await _guild_verify_wait_hours(guild_id) or 24)
                     started_by = None
                     try:
                         raw_started_by = row.get("started_by")
@@ -1264,6 +1311,126 @@ async def cancel_verification_wait_timers_for_member(guild_id: int, owner_id: in
     return cancelled_any
 
 
+async def verification_wait_timer_summary(guild_id: int) -> dict[str, int]:
+    gid = int(guild_id)
+    active_join = sum(1 for key, task in list(_JOIN_GRACE_TASKS.items()) if int(key[0]) == gid and task and not task.done())
+    active_member = sum(1 for key, task in list(_MEMBER_NO_TICKET_TASKS.items()) if int(key[0]) == gid and task and not task.done())
+
+    active_ticket = 0
+    try:
+        guild = bot.get_guild(gid)
+        if guild is not None:
+            for channel_id, task in list(_common.KICK_TIMER_TASKS.items()):
+                if not task or task.done():
+                    continue
+                ch = guild.get_channel(int(channel_id))
+                if isinstance(ch, discord.TextChannel) and is_verification_ticket_channel(ch):
+                    active_ticket += 1
+    except Exception:
+        pass
+
+    persisted = 0
+    try:
+        res = await _member_wait_timer_persist_select_all_async()
+        rows = getattr(res, "data", None) or []
+        for row in rows:
+            if int(str(row.get("guild_id") or "0") or 0) != gid:
+                continue
+            if str(row.get("timer_type") or "").strip().lower() in {"join_grace", "member_no_ticket"}:
+                persisted += 1
+    except Exception:
+        pass
+
+    return {
+        "active_join_grace": int(active_join),
+        "active_member_no_ticket": int(active_member),
+        "active_ticket_no_response": int(active_ticket),
+        "persisted_wait_rows": int(persisted),
+    }
+
+
+async def clear_verification_wait_timers_for_guild(guild_id: int) -> dict[str, int]:
+    gid = int(guild_id)
+    cleared_join = 0
+    cleared_member = 0
+    cleared_ticket = 0
+    cleared_persisted = 0
+
+    for key, task in list(_JOIN_GRACE_TASKS.items()):
+        if int(key[0]) != gid:
+            continue
+        if task and not task.done():
+            task.cancel()
+            cleared_join += 1
+        _JOIN_GRACE_TASKS.pop(key, None)
+        _JOIN_GRACE_STARTS.pop(key, None)
+        _JOIN_GRACE_SOURCE_CHANNELS.pop(key, None)
+        try:
+            await member_wait_timer_persist_delete(gid, int(key[1]), timer_type="join_grace")
+            cleared_persisted += 1
+        except Exception:
+            pass
+
+    for key, task in list(_MEMBER_NO_TICKET_TASKS.items()):
+        if int(key[0]) != gid:
+            continue
+        if task and not task.done():
+            task.cancel()
+            cleared_member += 1
+        _MEMBER_NO_TICKET_TASKS.pop(key, None)
+        _MEMBER_NO_TICKET_STARTS.pop(key, None)
+        _MEMBER_NO_TICKET_SOURCE_CHANNELS.pop(key, None)
+        _MEMBER_NO_TICKET_STARTED_BY.pop(key, None)
+        try:
+            await member_wait_timer_persist_delete(gid, int(key[1]), timer_type="member_no_ticket")
+            cleared_persisted += 1
+        except Exception:
+            pass
+
+    try:
+        guild = bot.get_guild(gid)
+        if guild is not None:
+            for channel_id, task in list(_common.KICK_TIMER_TASKS.items()):
+                ch = guild.get_channel(int(channel_id))
+                if not isinstance(ch, discord.TextChannel) or not is_verification_ticket_channel(ch):
+                    continue
+                if task and not task.done():
+                    task.cancel()
+                    cleared_ticket += 1
+                _common.KICK_TIMER_TASKS.pop(int(channel_id), None)
+                _common.KICK_TIMER_STARTS.pop(int(channel_id), None)
+                _common.KICK_TIMER_STARTED_BY.pop(int(channel_id), None)
+                try:
+                    await kick_timer_persist_delete(int(channel_id))
+                except Exception:
+                    pass
+    except Exception:
+        pass
+
+    try:
+        res = await _member_wait_timer_persist_select_all_async()
+        rows = getattr(res, "data", None) or []
+        for row in rows:
+            if int(str(row.get("guild_id") or "0") or 0) != gid:
+                continue
+            timer_type = str(row.get("timer_type") or "").strip().lower()
+            if timer_type not in {"join_grace", "member_no_ticket"}:
+                continue
+            user_id = int(str(row.get("user_id") or "0") or 0)
+            if user_id:
+                await member_wait_timer_persist_delete(gid, user_id, timer_type=timer_type)
+                cleared_persisted += 1
+    except Exception:
+        pass
+
+    return {
+        "join_grace": int(cleared_join),
+        "member_no_ticket": int(cleared_member),
+        "ticket_no_response": int(cleared_ticket),
+        "persisted_rows": int(cleared_persisted),
+    }
+
+
 # ============================================================
 # Staff command helpers
 # ============================================================
@@ -1294,7 +1461,7 @@ async def _start_ticket_no_response_timer(
 
     _cancel_kick_timer(ch.id)
 
-    timer_hours = int(hours or VERIFY_KICK_HOURS)
+    timer_hours = int(hours) if hours is not None else await _guild_verify_wait_hours(interaction.guild.id)
     if timer_hours <= 0:
         timer_hours = 24
 
@@ -1377,7 +1544,7 @@ async def _start_member_no_ticket_timer_slash(
             ephemeral=True,
         )
 
-    timer_hours = int(hours or _default_no_ticket_hours())
+    timer_hours = int(hours) if hours is not None else await _guild_verify_wait_hours(member.guild.id)
     if timer_hours <= 0:
         timer_hours = 24
 
@@ -1572,6 +1739,8 @@ __all__ = [
     "member_wait_timer_resume_all",
     "start_join_grace_then_kick_timer_for_member",
     "cancel_verification_wait_timers_for_member",
+    "verification_wait_timer_summary",
+    "clear_verification_wait_timers_for_guild",
     "_start_no_response_timer",
     "_cancel_no_response_timer",
     "_start_ticket_no_response_timer",

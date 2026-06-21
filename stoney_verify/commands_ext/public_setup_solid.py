@@ -180,6 +180,22 @@ def _safe_int(value: Any, default: int = 0) -> int:
         return int(default)
 
 
+def _setup_bool(value: Any, default: bool = False) -> bool:
+    try:
+        if isinstance(value, bool):
+            return value
+        if value is None:
+            return bool(default)
+        text = str(value).strip().lower()
+        if text in {"1", "true", "yes", "y", "on", "enabled"}:
+            return True
+        if text in {"0", "false", "no", "n", "off", "disabled"}:
+            return False
+    except Exception:
+        pass
+    return bool(default)
+
+
 def _none_if_blank(value: Any) -> Optional[str]:
     text = str(value or "").strip()
     return text or None
@@ -781,11 +797,15 @@ async def _add_saved_setup_section(embed: discord.Embed, guild: discord.Guild, s
             f"Bot status: {_channel_or_not_set(guild, _cfg_value(cfg, 'status_channel_id') or _cfg_value(cfg, 'bot_status_channel_id') or _cfg_value(cfg, 'health_channel_id'))}"
         )
     elif section == "behavior":
+        wait_enabled = _setup_bool(_cfg_value(cfg, "verification_wait_timer_enabled"), False)
+        idle_enabled = _setup_bool(_cfg_value(cfg, "verification_idle_kick_enabled"), False)
         value = (
             f"Verification mode: `{_safe_str(_cfg_value(cfg, 'verification_mode'), 'not chosen')}`\n"
             f"Ticket prefix: `{_safe_str(_cfg_value(cfg, 'ticket_prefix'), 'ticket')}`\n"
-            f"Verify kick hours: `{_safe_str(_cfg_value(cfg, 'verify_kick_hours'), '24')}`\n"
-            f"Basic Verify: `{'on' if bool(_cfg_value(cfg, 'basic_verify_enabled') or _cfg_value(cfg, 'basic_button_verify_enabled')) else 'off'}`"
+            f"Verification wait timer: `{'ON' if wait_enabled else 'OFF'}`\n"
+            f"Wait timer hours: `{_safe_str(_cfg_value(cfg, 'verify_kick_hours'), '24')}`\n"
+            f"No-start auto-remove: `{'ON' if idle_enabled else 'OFF'}`\n"
+            f"No-start minutes: `{_safe_str(_cfg_value(cfg, 'verification_idle_kick_minutes'), '60')}`"
         )
     else:
         value = "No section snapshot available."
@@ -2014,6 +2034,232 @@ class LogsStatusPickerView(SetupNavView):
 # ---------------------------------------------------------------------------
 
 
+
+async def _verification_timer_payload(guild: discord.Guild) -> tuple[discord.Embed, discord.ui.View]:
+    cfg = None
+    try:
+        cfg = await get_guild_config(guild.id, refresh=True)
+    except Exception:
+        cfg = None
+
+    wait_enabled = _setup_bool(_cfg_value(cfg, "verification_wait_timer_enabled"), False)
+    wait_hours = max(1, min(720, _safe_int(_cfg_value(cfg, "verify_kick_hours"), 24)))
+    idle_enabled = _setup_bool(_cfg_value(cfg, "verification_idle_kick_enabled"), False)
+    idle_minutes = max(5, min(10080, _safe_int(_cfg_value(cfg, "verification_idle_kick_minutes"), 60)))
+
+    wait_summary = {"active_join_grace": 0, "active_member_no_ticket": 0, "active_ticket_no_response": 0, "persisted_wait_rows": 0}
+    try:
+        from stoney_verify.commands_ext import kick_timers
+        wait_summary = await kick_timers.verification_wait_timer_summary(guild.id)  # type: ignore[attr-defined]
+    except Exception:
+        pass
+
+    idle_summary = {"active": 0, "persisted": 0}
+    try:
+        from stoney_verify.startup_guards import verification_idle_kick_feature as idle
+        idle_summary = await idle.timer_summary(guild.id)  # type: ignore[attr-defined]
+    except Exception:
+        pass
+
+    embed = discord.Embed(
+        title="⏱️ Verification Timers",
+        description=(
+            "Control timers that can remove pending/unverified members. "
+            "Nothing here changes roles/channels. Disable + Clear stops future starts and removes active timers."
+        ),
+        color=discord.Color.green() if wait_enabled else discord.Color.blurple(),
+        timestamp=now_utc(),
+    )
+    embed.add_field(
+        name="Main Wait Timer",
+        value=(
+            f"Status: `{'ON' if wait_enabled else 'OFF'}`\\n"
+            f"Delay: `{wait_hours}` hour(s)\\n"
+            "Applies to: pending/unverified members who make no verification progress.\\n"
+            "Stops automatically when they gain a safe role or open a verification ticket.\\n"
+            f"Active now: join grace `{wait_summary.get('active_join_grace', 0)}`, no-ticket `{wait_summary.get('active_member_no_ticket', 0)}`, ticket `{wait_summary.get('active_ticket_no_response', 0)}`, saved rows `{wait_summary.get('persisted_wait_rows', 0)}`"
+        )[:1024],
+        inline=False,
+    )
+    embed.add_field(
+        name="Advanced No-Start Auto-Remove",
+        value=(
+            f"Status: `{'ON' if idle_enabled else 'OFF'}`\\n"
+            f"Delay: `{idle_minutes}` minute(s)\\n"
+            "Applies to: pending/unverified members who never start verification.\\n"
+            f"Active now: `{idle_summary.get('active', 0)}` active, `{idle_summary.get('persisted', 0)}` saved rows"
+        )[:1024],
+        inline=False,
+    )
+    embed.add_field(
+        name="Safe Removal",
+        value="Use **Disable + Clear** to turn a timer off and remove active saved timers for this server.",
+        inline=False,
+    )
+    return embed, VerificationTimerSettingsView()
+
+
+async def _open_verification_timer_settings(interaction: discord.Interaction) -> None:
+    if not await _require_setup_permission(interaction):
+        return
+    guild = interaction.guild
+    if guild is None:
+        return await interaction.response.send_message("❌ This must be used inside a server.", ephemeral=True)
+    await _safe_defer_update(interaction)
+    embed, view = await _verification_timer_payload(guild)
+    await _edit_or_followup(interaction, embed=embed, view=view)
+
+
+class VerificationTimerSettingsView(SetupNavView):
+    @discord.ui.button(label="Enable Wait Timer", emoji="✅", style=discord.ButtonStyle.success, custom_id="stoney_solid:verify_timer_enable", row=0)
+    async def enable_wait(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        if not await _require_setup_permission(interaction):
+            return
+        await _save_config(interaction, {"verification_wait_timer_enabled": True, "verify_kick_hours": str(24)})
+        await _open_verification_timer_settings(interaction)
+
+    @discord.ui.button(label="Disable + Clear Wait Timer", emoji="🛑", style=discord.ButtonStyle.danger, custom_id="stoney_solid:verify_timer_disable_clear", row=0)
+    async def disable_wait(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        if not await _require_setup_permission(interaction):
+            return
+        guild = interaction.guild
+        if guild is None:
+            return await interaction.response.send_message("❌ This must be used inside a server.", ephemeral=True)
+        await _save_config(interaction, {"verification_wait_timer_enabled": False})
+        try:
+            from stoney_verify.commands_ext import kick_timers
+            await kick_timers.clear_verification_wait_timers_for_guild(guild.id)  # type: ignore[attr-defined]
+        except Exception:
+            pass
+        await _open_verification_timer_settings(interaction)
+
+    @discord.ui.button(label="Change Wait Hours", emoji="⏱️", style=discord.ButtonStyle.primary, custom_id="stoney_solid:verify_timer_hours", row=1)
+    async def change_wait_hours(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        if not await _require_setup_permission(interaction):
+            return
+        await interaction.response.send_modal(VerificationWaitTimerModal())
+
+    @discord.ui.button(label="Clear Active Wait Timers", emoji="🧹", style=discord.ButtonStyle.secondary, custom_id="stoney_solid:verify_timer_clear_active", row=1)
+    async def clear_wait(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        if not await _require_setup_permission(interaction):
+            return
+        guild = interaction.guild
+        if guild is None:
+            return await interaction.response.send_message("❌ This must be used inside a server.", ephemeral=True)
+        try:
+            from stoney_verify.commands_ext import kick_timers
+            await kick_timers.clear_verification_wait_timers_for_guild(guild.id)  # type: ignore[attr-defined]
+        except Exception:
+            pass
+        await _open_verification_timer_settings(interaction)
+
+    @discord.ui.button(label="Advanced No-Start Timer", emoji="⚠️", style=discord.ButtonStyle.secondary, custom_id="stoney_solid:verify_idle_timer", row=2)
+    async def idle_timer(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        if not await _require_setup_permission(interaction):
+            return
+        guild = interaction.guild
+        if guild is None:
+            return await interaction.response.send_message("❌ This must be used inside a server.", ephemeral=True)
+        await _safe_defer_update(interaction)
+        embed, _ = await _verification_timer_payload(guild)
+        embed.title = "⚠️ Advanced No-Start Auto-Remove"
+        embed.description = (
+            "This optional timer removes pending/unverified members who never start verification at all. "
+            "Most public servers should leave this OFF unless they really want automatic cleanup."
+        )
+        await _edit_or_followup(interaction, embed=embed, view=VerificationIdleTimerSettingsView())
+
+
+class VerificationIdleTimerSettingsView(SetupNavView):
+    @discord.ui.button(label="Enable No-Start Timer", emoji="✅", style=discord.ButtonStyle.success, custom_id="stoney_solid:idle_timer_enable", row=0)
+    async def enable_idle(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        if not await _require_setup_permission(interaction):
+            return
+        await _save_config(interaction, {"verification_idle_kick_enabled": True, "verification_idle_kick_minutes": 60})
+        await _open_verification_timer_settings(interaction)
+
+    @discord.ui.button(label="Disable + Clear No-Start", emoji="🛑", style=discord.ButtonStyle.danger, custom_id="stoney_solid:idle_timer_disable_clear", row=0)
+    async def disable_idle(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        if not await _require_setup_permission(interaction):
+            return
+        guild = interaction.guild
+        if guild is None:
+            return await interaction.response.send_message("❌ This must be used inside a server.", ephemeral=True)
+        await _save_config(interaction, {"verification_idle_kick_enabled": False})
+        try:
+            from stoney_verify.startup_guards import verification_idle_kick_feature as idle
+            await idle.clear_guild_timers(guild.id)  # type: ignore[attr-defined]
+        except Exception:
+            pass
+        await _open_verification_timer_settings(interaction)
+
+    @discord.ui.button(label="Change No-Start Minutes", emoji="⏱️", style=discord.ButtonStyle.primary, custom_id="stoney_solid:idle_timer_minutes", row=1)
+    async def change_idle_minutes(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        if not await _require_setup_permission(interaction):
+            return
+        await interaction.response.send_modal(VerificationIdleTimerModal())
+
+
+class VerificationWaitTimerModal(discord.ui.Modal, title="Verification Wait Timer"):
+    hours = discord.ui.TextInput(
+        label="Hours before removing if no progress",
+        placeholder="24",
+        required=True,
+        max_length=4,
+    )
+    enable_now = discord.ui.TextInput(
+        label="Enable now? yes/no",
+        placeholder="yes",
+        required=False,
+        max_length=5,
+    )
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        if not await _require_setup_permission(interaction):
+            return
+        raw = _none_if_blank(self.hours.value)
+        hours = _safe_int(raw, 24)
+        if hours < 1 or hours > 720:
+            embed = discord.Embed(title="🚫 Timer Not Saved", description="Use 1 to 720 hours. Example: `24`.", color=discord.Color.red())
+            return await interaction.response.send_message(embed=embed, ephemeral=True)
+
+        enable_text = str(self.enable_now.value or "yes").strip().lower()
+        enable = enable_text not in {"no", "n", "false", "off", "0"}
+        await _save_config(interaction, {"verification_wait_timer_enabled": bool(enable), "verify_kick_hours": str(hours)})
+        embed, view = await _verification_timer_payload(interaction.guild)  # type: ignore[arg-type]
+        await _send_ephemeral(interaction, embed=embed, view=view)
+
+
+class VerificationIdleTimerModal(discord.ui.Modal, title="No-Start Auto-Remove"):
+    minutes = discord.ui.TextInput(
+        label="Minutes before removing if no start",
+        placeholder="60",
+        required=True,
+        max_length=5,
+    )
+    enable_now = discord.ui.TextInput(
+        label="Enable now? yes/no",
+        placeholder="yes",
+        required=False,
+        max_length=5,
+    )
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        if not await _require_setup_permission(interaction):
+            return
+        raw = _none_if_blank(self.minutes.value)
+        minutes = _safe_int(raw, 60)
+        if minutes < 5 or minutes > 10080:
+            embed = discord.Embed(title="🚫 Timer Not Saved", description="Use 5 to 10080 minutes. Example: `60`.", color=discord.Color.red())
+            return await interaction.response.send_message(embed=embed, ephemeral=True)
+
+        enable_text = str(self.enable_now.value or "yes").strip().lower()
+        enable = enable_text not in {"no", "n", "false", "off", "0"}
+        await _save_config(interaction, {"verification_idle_kick_enabled": bool(enable), "verification_idle_kick_minutes": int(minutes)})
+        embed, view = await _verification_timer_payload(interaction.guild)  # type: ignore[arg-type]
+        await _send_ephemeral(interaction, embed=embed, view=view)
+
+
 class VerificationModeSelect(discord.ui.Select):
     def __init__(self) -> None:
         options = [
@@ -2068,13 +2314,17 @@ class BehaviorSettingsView(SetupNavView):
         super().__init__()
         self.add_item(VerificationModeSelect())
 
-    @discord.ui.button(label="Set Prefix / Timer", emoji="⏱️", style=discord.ButtonStyle.primary, custom_id="stoney_solid:behavior_modal", row=1)
+    @discord.ui.button(label="Verification Timers", emoji="⏱️", style=discord.ButtonStyle.primary, custom_id="stoney_solid:behavior_verify_timers", row=1)
+    async def verify_timers(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        await _open_verification_timer_settings(interaction)
+
+    @discord.ui.button(label="Set Prefix / Ticket Timer Hours", emoji="✏️", style=discord.ButtonStyle.secondary, custom_id="stoney_solid:behavior_modal", row=1)
     async def modal(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         if not await _require_setup_permission(interaction):
             return
         await interaction.response.send_modal(BehaviorSettingsModal())
 
-    @discord.ui.button(label="Clear Optional Access Roles", emoji="🧽", style=discord.ButtonStyle.secondary, custom_id="stoney_solid:clear_access_roles", row=1)
+    @discord.ui.button(label="Clear Optional Access Roles", emoji="🧽", style=discord.ButtonStyle.secondary, custom_id="stoney_solid:clear_access_roles", row=2)
     async def clear_access_roles(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         if not await _require_setup_permission(interaction):
             return

@@ -773,6 +773,56 @@ async def _refetch_live_member(guild: discord.Guild, member_id: int) -> Optional
     return None
 
 
+def _timer_cfg_value(cfg: Any, key: str, default: Any = None) -> Any:
+    try:
+        if hasattr(cfg, "get"):
+            value = cfg.get(key)
+            if value is not None:
+                return value
+    except Exception:
+        pass
+    try:
+        value = getattr(cfg, key, None)
+        if value is not None:
+            return value
+    except Exception:
+        pass
+    return default
+
+
+def _timer_cfg_bool(value: Any, default: bool = False) -> bool:
+    try:
+        if isinstance(value, bool):
+            return value
+        if value is None:
+            return bool(default)
+        text = str(value).strip().lower()
+        if text in {"1", "true", "yes", "y", "on", "enabled"}:
+            return True
+        if text in {"0", "false", "no", "n", "off", "disabled"}:
+            return False
+    except Exception:
+        pass
+    return bool(default)
+
+
+async def _verification_wait_timer_enabled_for_guild(guild_id: int) -> bool:
+    if get_guild_config is None:
+        return False
+    try:
+        try:
+            cfg = await get_guild_config(int(guild_id), refresh=True)
+        except TypeError:
+            cfg = await get_guild_config(int(guild_id))
+        return _timer_cfg_bool(_timer_cfg_value(cfg, "verification_wait_timer_enabled", False), False)
+    except Exception:
+        return False
+
+
+def _timer_cancel_result(cancelled: bool) -> str:
+    return "cancelled" if cancelled else "no_active_timer"
+
+
 async def _sync_verification_wait_timer_for_member(
     member: discord.Member,
     *,
@@ -784,18 +834,36 @@ async def _sync_verification_wait_timer_for_member(
 
         gid = int(member.guild.id)
         uid = int(member.id)
+        enabled = await _verification_wait_timer_enabled_for_guild(gid)
+
+        if not enabled:
+            try:
+                cancelled = await cancel_verification_wait_timers_for_member(gid, uid)
+                if cancelled:
+                    print(
+                        f"🛑 [VERIFY-TIMER] disabled_cleanup "
+                        f"guild={gid} member={uid} result={_timer_cancel_result(cancelled)} "
+                        f"reason=timer_disabled source={source}"
+                    )
+            except Exception as e:
+                print(
+                    f"⚠️ [VERIFY-TIMER] disabled cleanup failed "
+                    f"guild={gid} member={uid} source={source} error={repr(e)}"
+                )
+            return
 
         if _member_has_any_safe_access_role(member, include_unverified=False):
             try:
                 cancelled = await cancel_verification_wait_timers_for_member(gid, uid)
                 print(
                     f"🛑 [VERIFY-TIMER] cancel "
-                    f"guild={gid} member={uid} cancelled={cancelled} source={source}"
+                    f"guild={gid} member={uid} result={_timer_cancel_result(cancelled)} "
+                    f"reason=safe_access_role source={source}"
                 )
             except Exception as e:
                 print(
                     f"⚠️ [VERIFY-TIMER] cancel failed "
-                    f"guild={gid} member={uid} source={source} error={repr(e)}"
+                    f"guild={gid} member={uid} reason=safe_access_role source={source} error={repr(e)}"
                 )
             return
 
@@ -808,13 +876,13 @@ async def _sync_verification_wait_timer_for_member(
                 )
                 print(
                     f"⏳ [VERIFY-TIMER] start "
-                    f"guild={gid} member={uid} started={started} "
-                    f"channel={getattr(fallback_channel, 'id', None)} source={source}"
+                    f"guild={gid} member={uid} result={'started' if started else 'not_started'} "
+                    f"reason=pending_verification channel={getattr(fallback_channel, 'id', None)} source={source}"
                 )
             except Exception as e:
                 print(
                     f"⚠️ [VERIFY-TIMER] start failed "
-                    f"guild={gid} member={uid} source={source} error={repr(e)}"
+                    f"guild={gid} member={uid} reason=pending_verification source={source} error={repr(e)}"
                 )
             return
 
@@ -822,12 +890,13 @@ async def _sync_verification_wait_timer_for_member(
             cancelled = await cancel_verification_wait_timers_for_member(gid, uid)
             print(
                 f"🛑 [VERIFY-TIMER] cleanup "
-                f"guild={gid} member={uid} cancelled={cancelled} source={source}"
+                f"guild={gid} member={uid} result={_timer_cancel_result(cancelled)} "
+                f"reason=no_longer_pending source={source}"
             )
         except Exception as e:
             print(
                 f"⚠️ [VERIFY-TIMER] cleanup failed "
-                f"guild={gid} member={uid} source={source} error={repr(e)}"
+                f"guild={gid} member={uid} reason=no_longer_pending source={source} error={repr(e)}"
             )
     except Exception as e:
         print(
