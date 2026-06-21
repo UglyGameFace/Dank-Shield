@@ -212,6 +212,78 @@ async def safe_followup(
             pass
 
 
+
+def _short_error(value: Any, limit: int = 220) -> str:
+    try:
+        text = str(value or "").strip()
+    except Exception:
+        text = ""
+    if not text:
+        return "Unknown error"
+    return text[: max(0, limit - 1)] + ("…" if len(text) > limit else "")
+
+
+async def safe_interaction_error(
+    interaction: discord.Interaction,
+    *,
+    title: str = "Action Failed",
+    error: Any = None,
+    hint: str = "Nothing was changed. Try again, or reopen the setup screen.",
+    view: Optional[discord.ui.View] = None,
+) -> None:
+    """Always give the user a clean ephemeral error instead of Discord's generic failure."""
+
+    err_type = type(error).__name__ if error is not None else "UnknownError"
+    err_text = _short_error(error)
+
+    try:
+        print(
+            "⚠️ interaction_error "
+            f"guild={getattr(getattr(interaction, 'guild', None), 'id', None)} "
+            f"channel={getattr(getattr(interaction, 'channel', None), 'id', None)} "
+            f"user={getattr(getattr(interaction, 'user', None), 'id', None)} "
+            f"custom_id={getattr(getattr(interaction, 'data', {}) or {}, 'get', lambda *_: None)('custom_id')} "
+            f"type={err_type} error={err_text}"
+        )
+    except Exception:
+        pass
+
+    embed = discord.Embed(
+        title=f"🚫 {title}",
+        description=(
+            f"`{err_type}: {err_text}`\n\n"
+            f"**What To Do**\n{hint}"
+        )[:3900],
+        color=discord.Color.red(),
+    )
+
+    payload = {
+        "embed": embed,
+        "ephemeral": True,
+        "allowed_mentions": discord.AllowedMentions.none(),
+    }
+    if view is not None:
+        payload["view"] = view
+
+    try:
+        if interaction.response.is_done():
+            await interaction.followup.send(**payload)
+        else:
+            await interaction.response.send_message(**payload)
+        return
+    except Exception:
+        pass
+
+    try:
+        await interaction.followup.send(
+            content=f"🚫 {title}: `{err_type}`. {hint}",
+            ephemeral=True,
+            allowed_mentions=discord.AllowedMentions.none(),
+        )
+    except Exception:
+        pass
+
+
 async def reply_once(interaction: discord.Interaction, payload: Dict[str, Any]) -> None:
     """
     Safe reply helper: replies if possible, else followUps.

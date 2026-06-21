@@ -21,7 +21,7 @@ from typing import Any, Iterable, Mapping, Optional
 
 import discord
 
-from .common import safe_defer
+from .common import safe_defer, safe_followup, safe_interaction_error
 from .public_setup_group import (
     _build_setup_health,
     _can_manage_role,
@@ -607,6 +607,20 @@ async def _build_main_setup_payload(guild: discord.Guild) -> tuple[discord.Embed
 class SetupNavView(discord.ui.View):
     def __init__(self) -> None:
         super().__init__(timeout=900)
+
+    async def on_error(self, interaction: discord.Interaction, error: Exception, item: discord.ui.Item[Any]) -> None:
+        try:
+            item_label = getattr(item, "label", None) or getattr(item, "placeholder", None) or getattr(item, "custom_id", None) or "setup item"
+        except Exception:
+            item_label = "setup item"
+
+        await safe_interaction_error(
+            interaction,
+            title="Setup Action Failed",
+            error=error,
+            hint=f"The **{item_label}** action failed safely. Nothing was changed. Press **Refresh** or reopen `/dank setup`.",
+            view=self,
+        )
 
     @discord.ui.button(label="Back to Setup", emoji="⬅️", style=discord.ButtonStyle.secondary, custom_id="stoney_solid:back", row=4)
     async def back(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
@@ -1566,7 +1580,15 @@ class CategoryManagerView(SetupNavView):
     async def add(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         if not await _require_setup_permission(interaction):
             return
-        await interaction.response.send_modal(CategoryModal(existing=None))
+        try:
+            await interaction.response.send_modal(CategoryModal(existing=None))
+        except Exception as e:
+            await safe_interaction_error(
+                interaction,
+                title="Ticket Menu Editor Did Not Open",
+                error=e,
+                hint="Nothing was changed. Press **Refresh**, then try **Add Custom Option** again.",
+            )
 
     @discord.ui.button(label="Refresh", emoji="🔄", style=discord.ButtonStyle.secondary, custom_id="stoney_solid:cat_refresh", row=3)
     async def refresh(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
@@ -1628,12 +1650,22 @@ class CategoryModal(discord.ui.Modal, title="Ticket Menu Option"):
         self.add_item(self.keywords_input)
         self.add_item(self.type_input)
 
+    async def on_error(self, interaction: discord.Interaction, error: Exception) -> None:
+        await safe_interaction_error(
+            interaction,
+            title="Ticket Menu Editor Failed",
+            error=error,
+            hint="Nothing was changed. Press **Refresh**, then try the edit again.",
+        )
+
     async def on_submit(self, interaction: discord.Interaction) -> None:
         if not await _require_setup_permission(interaction):
             return
         guild = interaction.guild
         if guild is None:
             return await interaction.response.send_message("❌ This must be used inside a server.", ephemeral=True)
+
+        await safe_defer(interaction, ephemeral=True)
 
         name = str(self.name_input.value or "").strip()
         slug = _slugify(self.slug_input.value or name)
@@ -1660,9 +1692,9 @@ class CategoryModal(discord.ui.Modal, title="Ticket Menu Option"):
                 description=f"{msg}\n\nWhat to do next: check the values and try again.",
                 color=discord.Color.red(),
             )
-            return await interaction.response.send_message(embed=embed, ephemeral=True)
+            return await safe_followup(interaction, embed=embed, ephemeral=True, allowed_mentions=discord.AllowedMentions.none())
         embed, view = await _build_category_manager_payload(guild, title="✅ Ticket Menu Option Saved")
-        await interaction.response.edit_message(embed=embed, view=view)
+        await _edit_or_followup(interaction, embed=embed, view=view)
 
 
 # ---------------------------------------------------------------------------
