@@ -1400,6 +1400,133 @@ class ChooseExistingView(SetupNavView):
         await interaction.response.edit_message(embed=embed, view=BehaviorSettingsView())
 
 
+
+class PostSaveSetupView(SetupNavView):
+    def __init__(self, section: str) -> None:
+        super().__init__()
+        self.section = str(section or "current")
+
+    @discord.ui.button(label="Continue This Section", emoji="➡️", style=discord.ButtonStyle.primary, custom_id="stoney_solid:postsave_continue", row=0)
+    async def continue_section(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        if not await _require_setup_permission(interaction):
+            return
+
+        section = self.section
+        embed = discord.Embed(
+            title="Continue Setup",
+            description="Continue editing this same section.",
+            color=discord.Color.blurple(),
+        )
+
+        if section == "ticket_basics":
+            embed.title = "🎫 Ticket Basics"
+            embed.description = "Pick where tickets go. Use your exact server items. Names do not matter."
+            if interaction.guild is not None:
+                await _add_saved_setup_section(embed, interaction.guild, "ticket_basics")
+            return await interaction.response.edit_message(embed=embed, view=TicketBasicsPickerView())
+
+        if section == "access_roles":
+            embed.title = "🎭 Access Roles"
+            embed.description = "Pick the exact roles your server uses. Leave optional roles blank if unused."
+            if interaction.guild is not None:
+                await _add_saved_setup_section(embed, interaction.guild, "access_roles")
+            return await interaction.response.edit_message(embed=embed, view=AccessRolesPickerView())
+
+        if section == "verification_channels":
+            embed.title = "🎙️ Verification Channels"
+            embed.description = "Pick the channels your verification flow uses. Leave anything unused blank."
+            if interaction.guild is not None:
+                await _add_saved_setup_section(embed, interaction.guild, "verification_channels")
+            return await interaction.response.edit_message(embed=embed, view=VerificationChannelsPickerView())
+
+        if section == "logs_status":
+            embed.title = "🧾 Logs + Status"
+            embed.description = "Pick where logs and status messages go. Names do not matter."
+            if interaction.guild is not None:
+                await _add_saved_setup_section(embed, interaction.guild, "logs_status")
+            return await interaction.response.edit_message(embed=embed, view=LogsStatusPickerView())
+
+        if section == "behavior":
+            embed.title = "⚙️ Behavior Settings"
+            embed.description = "Pick verification style, ticket prefix, kick timer, and other behavior settings."
+            if interaction.guild is not None:
+                await _add_saved_setup_section(embed, interaction.guild, "behavior")
+            return await interaction.response.edit_message(embed=embed, view=BehaviorSettingsView())
+
+        guild = interaction.guild
+        if guild is None:
+            return await interaction.response.send_message("❌ This must be used inside a server.", ephemeral=True)
+        await _safe_defer_update(interaction)
+        embed, view = await _build_main_setup_payload(guild)
+        await _edit_or_followup(interaction, embed=embed, view=view)
+
+    @discord.ui.button(label="Run Setup Check", emoji="🩺", style=discord.ButtonStyle.secondary, custom_id="stoney_solid:postsave_health", row=0)
+    async def health(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        if not await _require_setup_permission(interaction):
+            return
+        guild = interaction.guild
+        if guild is None:
+            return await interaction.response.send_message("❌ This must be used inside a server.", ephemeral=True)
+        await _safe_defer_update(interaction)
+        embed = await _build_health_embed(guild)
+        await _edit_or_followup(interaction, embed=embed, view=SetupNavView())
+
+
+def _section_from_columns(columns: tuple[str, ...]) -> str:
+    joined = " ".join(str(x) for x in columns).lower()
+
+    if any(key in joined for key in ("ticket_category", "ticket_archive", "ticket_panel", "support_channel", "staff_role", "transcript")):
+        return "ticket_basics"
+
+    if any(key in joined for key in ("unverified_role", "verified_role", "resident_role", "server_control_role", "control_role", "perm_role")):
+        return "access_roles"
+
+    if any(key in joined for key in ("verify_channel", "verification_channel", "vc_verify", "voice_verify", "welcome_channel")):
+        return "verification_channels"
+
+    if any(key in joined for key in ("modlog", "raidlog", "join_log", "status_channel", "bot_status", "bans_channel", "blacklist")):
+        return "logs_status"
+
+    if any(key in joined for key in ("verification_mode", "ticket_prefix", "verify_kick_hours")):
+        return "behavior"
+
+    return "current"
+
+
+async def _show_saved_section_screen(
+    interaction: discord.Interaction,
+    *,
+    title: str,
+    saved_line: str,
+    section: str,
+    warnings: list[str] | None = None,
+) -> None:
+    guild = interaction.guild
+    embed = discord.Embed(
+        title=title,
+        description=(
+            f"{saved_line}\n\n"
+            "Dank Shield saved the Discord ID. Names can change later without breaking the saved setup."
+        ),
+        color=discord.Color.green(),
+        timestamp=now_utc(),
+    )
+
+    if guild is not None:
+        await _add_saved_setup_section(embed, guild, section)
+
+    if warnings:
+        embed.add_field(name="Warnings", value="\n".join(f"• {x}" for x in warnings)[:1024], inline=False)
+
+    embed.add_field(
+        name="Next",
+        value="Continue this section, run Setup Check, or go back to Setup Home.",
+        inline=False,
+    )
+
+    await _send_ephemeral(interaction, embed=embed, view=PostSaveSetupView(section))
+
+
 class SaveRoleSelect(discord.ui.RoleSelect):
     def __init__(
         self,
@@ -1447,18 +1574,13 @@ class SaveRoleSelect(discord.ui.RoleSelect):
 
         payload = {column: _snowflake(role) for column in self.columns + self.also_same}
         await _save_config(interaction, payload)
-        embed = discord.Embed(
+        await _show_saved_section_screen(
+            interaction,
             title="✅ Saved Setup Role",
-            description=(
-                f"Saved {_mention(role)}.\n\n"
-                "Names do not matter. Dank Shield saved the role ID.\n\n"
-                "Next: pick another item, press Back to Setup, or Run Health Check."
-            ),
-            color=discord.Color.green(),
+            saved_line=f"Saved {_mention(role)}.",
+            section=_section_from_columns(self.columns + self.also_same),
+            warnings=warnings,
         )
-        if warnings:
-            embed.add_field(name="Warnings", value="\n".join(f"• {x}" for x in warnings), inline=False)
-        await interaction.response.send_message(embed=embed, ephemeral=True, allowed_mentions=discord.AllowedMentions.none())
 
 
 class SaveChannelSelect(discord.ui.ChannelSelect):
@@ -1524,16 +1646,12 @@ class SaveChannelSelect(discord.ui.ChannelSelect):
 
         payload = {column: _snowflake(channel) for column in self.columns + self.also_same}
         await _save_config(interaction, payload)
-        embed = discord.Embed(
+        await _show_saved_section_screen(
+            interaction,
             title="✅ Saved Setup Channel",
-            description=(
-                f"Saved {_mention(channel)}.\n\n"
-                "Names do not matter. Dank Shield saved the channel ID.\n\n"
-                "Next: pick another item, press Back to Setup, or Run Health Check."
-            ),
-            color=discord.Color.green(),
+            saved_line=f"Saved {_mention(channel)}.",
+            section=_section_from_columns(self.columns + self.also_same),
         )
-        await interaction.response.send_message(embed=embed, ephemeral=True, allowed_mentions=discord.AllowedMentions.none())
 
 
 class TicketBasicsPickerView(SetupNavView):
