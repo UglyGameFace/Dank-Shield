@@ -452,12 +452,12 @@ def _category_member_preview_text(rows: list[dict[str, Any]]) -> str:
         name = _short(row.get("name") or row.get("slug") or "Ticket choice", 42)
         desc = _short(row.get("description") or "No description set.", 72)
         default = " ⭐ default fallback" if bool(row.get("is_default")) else ""
-        lines.append(f"{idx}. **{name}**{default}\\n   ↳ {desc}")
+        lines.append(f"{idx}. **{name}**{default}\n   ↳ {desc}")
 
     if len(rows) > 10:
         lines.append(f"…and {len(rows) - 10} more choices")
 
-    return "\\n".join(lines)[:1024] or "No choices yet."
+    return "\n".join(lines)[:1024] or "No choices yet."
 
 
 def _category_governance_text(rows: list[dict[str, Any]]) -> str:

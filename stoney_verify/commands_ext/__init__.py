@@ -100,7 +100,6 @@ _PUBLIC_CORE_MODULES: Tuple[str, ...] = (
     "public_setup_recommend",
     "public_setup_recovery",
     "public_setup_cleanup",
-    "public_setup_fresh_choice",
     "public_setup_full_customization",
     "public_status_reporter",
     "public_modlog_coverage",
@@ -125,6 +124,7 @@ _PUBLIC_CORE_MODULES: Tuple[str, ...] = (
 
 _PUBLIC_ADMIN_EXTRA_MODULES: Tuple[str, ...] = (
     "public_spam_group",
+    "public_setup_fresh_choice",
     "public_setup_start",
     "public_setup_review",
     "public_setup_logs",
