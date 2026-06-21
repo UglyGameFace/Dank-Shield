@@ -446,7 +446,15 @@ def _custom_services_embed(guild: discord.Guild, state: Any, *, saved_message: s
     embed.add_field(name="Selected Services", value=_service_summary_text(state), inline=False)
     embed.add_field(name="Health Check Focus", value=_service_hint_text(state), inline=False)
     embed.add_field(name="Presets", value="\n".join(f"{emoji} **{label}** — {desc}" for label, _flags, desc, emoji in CUSTOM_PRESETS.values())[:1024], inline=False)
-    embed.add_field(name="Next", value="After picking services, press **Use My Existing Server** to map roles/channels or **Create Missing Items** to create safe defaults.", inline=False)
+    embed.add_field(
+        name="Next",
+        value=(
+            "Press **View Current Setup** to see the saved channels/roles/categories.\n"
+            "Press **Use My Existing Server** to map existing roles/channels.\n"
+            "Press **Review / Create Missing Items** only when something is missing."
+        ),
+        inline=False,
+    )
     embed.set_footer(text=f"Guild {guild.id} • custom setup services")
     return embed
 
@@ -519,6 +527,17 @@ class CustomServiceModeView(discord.ui.View):
     @discord.ui.button(label="Review / Create Missing Items", emoji="✨", style=discord.ButtonStyle.success, custom_id="dank_setup_custom_create", row=3)
     async def create_missing(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         await _open_create_missing_items(interaction)
+
+    @discord.ui.button(label="View Current Setup", emoji="📋", style=discord.ButtonStyle.secondary, custom_id="dank_setup_custom_current", row=4)
+    async def current_setup(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        if not await solid._require_setup_permission(interaction):
+            return
+        guild = interaction.guild
+        if guild is None:
+            return await interaction.response.send_message("❌ This must be used inside a server.", ephemeral=True)
+        await solid._safe_defer_update(interaction)
+        embed = await solid._build_current_setup_embed(guild)
+        await solid._edit_or_followup(interaction, embed=embed, view=self)
 
     @discord.ui.button(label="Setup Check", emoji="🩺", style=discord.ButtonStyle.secondary, custom_id="dank_setup_custom_health", row=4)
     async def health(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
