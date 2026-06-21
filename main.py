@@ -83,7 +83,31 @@ from stoney_verify.startup_guards import (
 # stoney_verify.app where bot.run(DISCORD_TOKEN) lives.
 # =====================================================
 
+
+def _sleep_before_import_if_discord_login_backoff_active() -> None:
+    """Sleep before importing the bot app if Discord login is cooling down.
+
+    This prevents restart loops from repeatedly loading all command modules
+    before the bot is even allowed to try Discord login again.
+    """
+    import os
+    import time
+
+    path = os.getenv("DANK_LOGIN_BACKOFF_STATE_FILE", ".dank_login_backoff_until")
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            until = float((fh.read() or "0").strip())
+    except Exception:
+        return
+
+    remaining = int(until - time.time())
+    if remaining > 0:
+        print(f"🧯 Dank Shield early login backoff active; sleeping {remaining}s before bot import")
+        time.sleep(remaining)
+
+
 def main() -> None:
+    _sleep_before_import_if_discord_login_backoff_active()
     from stoney_verify.app import run as _run_dank_shield
     _run_dank_shield()
 
