@@ -22,7 +22,10 @@ from typing import Any, Iterable, Mapping
 import discord
 
 INVITE_RE = re.compile(
-    r"(?:https?://)?(?:www\.)?(?:discord(?:app)?\.com\s*/\s*invite|discord\.gg)\s*/\s*([A-Za-z0-9-]+)",
+    r"(?<![A-Za-z0-9])(?:https?://)?(?:www\\.)?"
+    r"(?:discord(?:app)?\\.com\\s*/\\s*invite|discord\\.gg)\\s*/\\s*"
+    r"([A-Za-z0-9-]{2,32})"
+    r"(?=$|[\\s<>\\]\\[(){}\\\"'`.,!?;]|[/?#&])",
     re.IGNORECASE,
 )
 
@@ -184,7 +187,7 @@ def normalize_invite_code(value: Any) -> str:
     text = text.replace("https://discord.com/invite/", "").replace("http://discord.com/invite/", "")
     text = text.replace("https://discordapp.com/invite/", "").replace("http://discordapp.com/invite/", "")
     text = re.sub(r"[^a-z0-9-]+", "", text, flags=re.IGNORECASE)
-    return text[:80]
+    return text[:32]
 
 
 def clean_invite_text(value: Any) -> str:
@@ -199,10 +202,11 @@ def clean_invite_text(value: Any) -> str:
 def _component_text(component: Any) -> list[str]:
     parts: list[str] = []
     try:
-        for attr in ("url", "label", "custom_id"):
-            value = getattr(component, attr, None)
-            if value:
-                parts.append(str(value))
+        # Only scan actual component URLs. Labels/custom_ids are UI text and
+        # can accidentally glue words to invite codes when messages are compacted.
+        value = getattr(component, "url", None)
+        if value:
+            parts.append(str(value))
     except Exception:
         pass
     try:
@@ -252,16 +256,14 @@ def message_text(message: discord.Message) -> str:
 
 def extract_invite_codes_from_text(value: Any) -> list[str]:
     text = clean_invite_text(value)
-    compact = re.sub(r"\s+", "", text)
     found: list[str] = []
-    for source in (text, compact):
-        try:
-            for raw in INVITE_RE.findall(source or ""):
-                code = normalize_invite_code(raw)
-                if code and code not in found:
-                    found.append(code)
-        except Exception:
-            continue
+    try:
+        for raw in INVITE_RE.findall(text or ""):
+            code = normalize_invite_code(raw)
+            if code and code not in found:
+                found.append(code)
+    except Exception:
+        pass
     return found
 
 
