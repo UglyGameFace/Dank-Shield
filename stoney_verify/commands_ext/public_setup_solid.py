@@ -2040,15 +2040,12 @@ class VerificationModeSelect(discord.ui.Select):
             return
         mode = str(self.values[0])
         await _save_config(interaction, {"verification_mode": mode})
-        embed = discord.Embed(
+        await _show_saved_section_screen(
+            interaction,
             title="✅ Saved Access Role Style",
-            description=(
-                f"Saved mode: `{mode}`\n\n"
-                "Next: pick custom roles if needed, then Run Health Check."
-            ),
-            color=discord.Color.green(),
+            saved_line=f"Saved verification mode: `{mode}`.",
+            section="behavior",
         )
-        await interaction.response.send_message(embed=embed, ephemeral=True, allowed_mentions=discord.AllowedMentions.none())
 
 
 class BehaviorSettingsView(SetupNavView):
@@ -2067,15 +2064,12 @@ class BehaviorSettingsView(SetupNavView):
         if not await _require_setup_permission(interaction):
             return
         await _clear_config_keys(interaction, ("unverified_role_id", "verified_role_id", "resident_role_id"))
-        embed = discord.Embed(
+        await _show_saved_section_screen(
+            interaction,
             title="✅ Optional Access Roles Cleared",
-            description=(
-                "Cleared the saved new/waiting, approved, and full-access role slots.\n\n"
-                "This did not delete any Discord roles. It only removed Dank Shield's saved choices."
-            ),
-            color=discord.Color.green(),
+            saved_line="Cleared saved new/waiting, approved, and full-access role slots. No Discord roles were deleted.",
+            section="access_roles",
         )
-        await interaction.response.send_message(embed=embed, ephemeral=True, allowed_mentions=discord.AllowedMentions.none())
 
 
 class BehaviorSettingsModal(discord.ui.Modal, title="Behavior Settings"):
@@ -2117,18 +2111,27 @@ class BehaviorSettingsModal(discord.ui.Modal, title="Behavior Settings"):
         if not payload:
             embed = discord.Embed(
                 title="Nothing Changed",
-                description="No values were entered. Press Back to Setup to continue.",
+                description="No values were entered. Use **Continue This Section** to return to Behavior Settings.",
                 color=discord.Color.dark_grey(),
             )
-            return await interaction.response.send_message(embed=embed, ephemeral=True)
+            if interaction.guild is not None:
+                await _add_saved_setup_section(embed, interaction.guild, "behavior")
+            return await _send_ephemeral(interaction, embed=embed, view=PostSaveSetupView("behavior"))
 
         await _save_config(interaction, payload)
-        embed = discord.Embed(
+        saved_parts = []
+        if "ticket_prefix" in payload:
+            saved_parts.append(f"ticket prefix `{payload['ticket_prefix']}`")
+        if "verify_kick_hours" in payload:
+            saved_parts.append(f"verify kick timer `{payload['verify_kick_hours']}h`")
+        saved_line = "Saved " + " and ".join(saved_parts) + "." if saved_parts else "Saved behavior settings."
+
+        await _show_saved_section_screen(
+            interaction,
             title="✅ Behavior Settings Saved",
-            description="Saved your settings. Next: Run Health Check.",
-            color=discord.Color.green(),
+            saved_line=saved_line,
+            section="behavior",
         )
-        await interaction.response.send_message(embed=embed, ephemeral=True)
 
 
 # ---------------------------------------------------------------------------
