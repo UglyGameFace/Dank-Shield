@@ -1899,7 +1899,7 @@ class LogsSetupHubView(SetupNavView):
         )
         if interaction.guild is not None:
             await _add_saved_setup_section(embed, interaction.guild, "logs_status")
-        await interaction.response.edit_message(embed=embed, view=LogsSetupHubView())
+        await interaction.response.edit_message(embed=embed, view=LogsStatusPickerView())
 
     @discord.ui.button(label="Advanced Logs", emoji="📚", style=discord.ButtonStyle.secondary, custom_id="stoney_solid:logs_advanced", row=0)
     async def advanced(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
