@@ -193,6 +193,31 @@ def _cfg_int(cfg: Any, *names: str) -> int:
     return _safe_int(_cfg_value(cfg, *names), 0)
 
 
+def _cfg_bool(cfg: Any, *names: str, default: bool = False) -> bool:
+    raw = _cfg_value(cfg, *names)
+    try:
+        if isinstance(raw, bool):
+            return raw
+        if raw is None:
+            return bool(default)
+        value = str(raw).strip().lower()
+        if value in {"1", "true", "yes", "y", "on", "enabled"}:
+            return True
+        if value in {"0", "false", "no", "n", "off", "disabled"}:
+            return False
+    except Exception:
+        pass
+    return bool(default)
+
+
+def _vc_verify_enabled_by_config(cfg: Any) -> bool:
+    return (
+        _cfg_bool(cfg, "vc_verify_enabled", "voice_verify_enabled", "enable_vc_verify", default=False)
+        or _cfg_int(cfg, *VOICE_KEYS["VC verification channel"]) > 0
+        or _cfg_int(cfg, *TEXT_KEYS["VC queue/status channel"]) > 0
+    )
+
+
 def _channel(guild: discord.Guild, channel_id: int) -> Optional[discord.abc.GuildChannel]:
     try:
         if channel_id <= 0:
@@ -410,7 +435,10 @@ def _audit_roles(guild: discord.Guild, cfg: Any, result: AuditResult) -> dict[st
 
         if role_id <= 0:
             if label == "Server-control role":
-                result.add_warning(f"{label} is not saved. Setup control will rely on administrators/manage-guild users.", manual=True)
+                result.add_warning(
+                    f"{label} is optional and not saved. Setup control will rely on Administrator/Manage Server users.",
+                    manual=True,
+                )
             else:
                 result.add_blocker(f"{label} is not saved in setup.", manual=True)
             continue
@@ -493,13 +521,15 @@ def _audit_text_channels(guild: discord.Guild, cfg: Any, result: AuditResult, ro
         channel = raw if isinstance(raw, discord.TextChannel) else None
         channels[label] = channel
 
+        vc_enabled = _vc_verify_enabled_by_config(cfg)
         required = label in {
             "Ticket panel/support channel",
             "Verify channel",
             "Transcript channel",
             "Mod/security log channel",
-            "VC queue/status channel",
         }
+        if label == "VC queue/status channel":
+            required = vc_enabled
 
         if cid <= 0:
             if required:
@@ -562,7 +592,13 @@ def _audit_voice_channels(guild: discord.Guild, cfg: Any, result: AuditResult, r
         channels[label] = vc
 
         if cid <= 0:
-            result.add_blocker(f"{label} is not saved in setup. VC Verify must stay disabled until this is set.", manual=True)
+            if _vc_verify_enabled_by_config(cfg):
+                result.add_blocker(
+                    f"{label} is not saved, but VC Verify appears partially enabled. Either set the VC verification channel or disable VC Verify.",
+                    manual=True,
+                )
+            else:
+                result.ok.append("VC Verify is not configured, so voice verification is disabled. This is not a blocker for Basic Verify.")
             continue
         if vc is None:
             result.add_blocker(f"{label} is saved as `{cid}`, but it is {_kind_name(raw)} instead of a voice/stage channel.", manual=True)
@@ -1126,6 +1162,15 @@ async def build_full_health_embed(guild: discord.Guild) -> discord.Embed:
         description=description,
         color=discord.Color.green() if result.ready else discord.Color.red(),
         timestamp=_utc_now(),
+    )
+    embed.add_field(
+        name="Truth Rules",
+        value=(
+            "❌ Blocker = missing/deleted/wrong-type saved item, required permission failure, or enabled feature cannot run.\n"
+            "⚠️ Warning = cleanup/style/privacy recommendation, optional feature missing, or non-critical layout issue.\n"
+            "✅ Passing = the saved item exists and can be used."
+        )[:1024],
+        inline=False,
     )
     embed.add_field(name="Blockers", value=_field(result.blockers, empty="✅ None"), inline=False)
     embed.add_field(name="Warnings", value=_field(result.warnings, empty="✅ None"), inline=False)

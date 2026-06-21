@@ -1319,7 +1319,7 @@ def _check_layout_health(
             label="Verify",
             expected_parent=public_parent,
             expected_parent_label="public/start",
-            required=True,
+            required=False,
             blockers=blockers,
             warnings=warnings,
             ok=ok,
@@ -1331,7 +1331,7 @@ def _check_layout_health(
             label="Public ticket panel",
             expected_parent=public_parent,
             expected_parent_label="public/start",
-            required=True,
+            required=False,
             blockers=blockers,
             warnings=warnings,
             ok=ok,
@@ -1357,9 +1357,9 @@ def _check_layout_health(
         warnings.append("Could not resolve a clean staff/tools category. Put vc queue, transcripts, modlog, join-leave-log, and bot-status together under STAFF TOOLS.")
     else:
         for label, channel_id, critical in (
-            ("VC verify requests / queue", vc_verify_requests_channel_id, True),
-            ("Transcript", transcripts_channel_id, True),
-            ("Modlog", modlog_channel_id, True),
+            ("VC verify requests / queue", vc_verify_requests_channel_id, False),
+            ("Transcript", transcripts_channel_id, False),
+            ("Modlog", modlog_channel_id, False),
             ("Raid/security log", raidlog_channel_id, False),
             ("Join/exit log", join_log_channel_id, False),
             ("Forced verification log", force_verify_log_channel_id, False),
@@ -1385,9 +1385,10 @@ def _check_layout_health(
         if _same_category(panel_channel, verify_channel):
             ok.append("Public ticket panel and verify channel are grouped together.")
         else:
-            blockers.append(
-                f"Public ticket panel and verify channel are split across categories: "
-                f"{_placement_line(panel_channel)}; {_placement_line(verify_channel)}."
+            warnings.append(
+                f"Public ticket panel and verify channel are in different categories: "
+                f"{_placement_line(panel_channel)}; {_placement_line(verify_channel)}. "
+                "This is allowed if both channels are usable; grouping them is only a cleanup suggestion."
             )
 
     if vc_voice_channel is not None and verify_channel is not None:
