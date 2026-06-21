@@ -921,6 +921,17 @@ async def _build_main_setup_payload(guild: discord.Guild) -> tuple[discord.Embed
 
 
 class SetupNavView(discord.ui.View):
+    """Shared navigation for every setup sub-screen.
+
+    This is the universal safety row:
+    - Setup Home: reset back to dashboard-first /dank setup
+    - Current Setup: inspect saved Discord IDs
+    - Setup Check: diagnose blockers/warnings
+    - Close: stop cleanly
+
+    Do not add feature-specific config logic here.
+    """
+
     def __init__(self) -> None:
         super().__init__(timeout=900)
 
@@ -934,33 +945,47 @@ class SetupNavView(discord.ui.View):
             interaction,
             title="Setup Action Failed",
             error=error,
-            hint=f"The **{item_label}** action failed safely. Nothing was changed. Press **Refresh** or reopen `/dank setup`.",
+            hint=f"The **{item_label}** action failed safely. Nothing was changed. Press **Setup Home** or reopen `/dank setup`.",
             view=self,
         )
 
-    @discord.ui.button(label="Back to Setup", emoji="⬅️", style=discord.ButtonStyle.secondary, custom_id="stoney_solid:back", row=4)
-    async def back(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+    @discord.ui.button(label="Setup Home", emoji="🏠", style=discord.ButtonStyle.secondary, custom_id="stoney_solid:nav_home", row=4)
+    async def setup_home(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         if not await _require_setup_permission(interaction):
             return
         guild = interaction.guild
         if guild is None:
             return await interaction.response.send_message("❌ This must be used inside a server.", ephemeral=True)
+
         await _safe_defer_update(interaction)
         embed, view = await _build_main_setup_payload(guild)
         await _edit_or_followup(interaction, embed=embed, view=view)
 
-    @discord.ui.button(label="View Current Setup", emoji="📋", style=discord.ButtonStyle.secondary, custom_id="stoney_solid:summary", row=4)
-    async def summary(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+    @discord.ui.button(label="Current Setup", emoji="📋", style=discord.ButtonStyle.secondary, custom_id="stoney_solid:nav_current", row=4)
+    async def current_setup(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         if not await _require_setup_permission(interaction):
             return
         guild = interaction.guild
         if guild is None:
             return await interaction.response.send_message("❌ This must be used inside a server.", ephemeral=True)
+
         await _safe_defer_update(interaction)
         embed = await _build_current_setup_embed(guild)
         await _edit_or_followup(interaction, embed=embed, view=SetupNavView())
 
-    @discord.ui.button(label="Close", emoji="✖️", style=discord.ButtonStyle.danger, custom_id="stoney_solid:close", row=4)
+    @discord.ui.button(label="Setup Check", emoji="🩺", style=discord.ButtonStyle.primary, custom_id="stoney_solid:nav_health", row=4)
+    async def setup_check(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        if not await _require_setup_permission(interaction):
+            return
+        guild = interaction.guild
+        if guild is None:
+            return await interaction.response.send_message("❌ This must be used inside a server.", ephemeral=True)
+
+        await _safe_defer_update(interaction)
+        embed = await _build_health_embed(guild)
+        await _edit_or_followup(interaction, embed=embed, view=SetupNavView())
+
+    @discord.ui.button(label="Close", emoji="✖️", style=discord.ButtonStyle.danger, custom_id="stoney_solid:nav_close", row=4)
     async def close(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         if not await _require_setup_permission(interaction):
             return
