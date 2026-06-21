@@ -108,6 +108,29 @@ apply()
 __all__ = ["apply"]
 
 
+_LEGACY_PUBLIC_TOP_LEVEL_COMMANDS = {
+    "spam_guard",
+    "spam_guard_status",
+    "repair_verify_ui",
+    "recompute_member_risk",
+    "recompute_all_member_risk",
+}
+
+
+def _dank_public_command_surface_locked() -> bool:
+    allow = str(os.getenv("DANK_ALLOW_LEGACY_TOP_LEVEL_COMMANDS", "false")).strip().lower()
+    if allow in {"1", "true", "yes", "on"}:
+        return False
+
+    profile = str(os.getenv("DANK_COMMAND_PROFILE", "public")).strip().lower()
+    deployment = str(
+        os.getenv("DANK_DEPLOYMENT_MODE")
+        or os.getenv("DEPLOYMENT_ENV")
+        or "production"
+    ).strip().lower()
+
+    return profile == "public" or deployment in {"prod", "production", "public"}
+
 def _dank_legacy_add_command_blocker() -> None:
     """Block legacy top-level slash commands from being added in public mode."""
     if not _dank_public_command_surface_locked():
