@@ -563,15 +563,78 @@ def _ticket_active_category_id() -> int:
         return 0
 
 
+
+async def _guild_config_category_id(guild_id: int, *keys: str) -> int:
+    """Read per-guild category IDs saved by /dank setup."""
+    try:
+        from ..guild_config import get_guild_config
+
+        cfg = await get_guild_config(int(guild_id), refresh=True)
+        for key in keys:
+            try:
+                value = cfg.get(key) if hasattr(cfg, "get") else getattr(cfg, key, None)
+                cid = _safe_int(value, 0)
+                if cid > 0:
+                    return cid
+            except Exception:
+                continue
+    except Exception as e:
+        try:
+            print(f"⚠️ ticket_service per-guild category config lookup failed guild={guild_id}: {repr(e)}")
+        except Exception:
+            pass
+    return 0
+
+
+async def _resolve_archive_category_async(guild: discord.Guild) -> Optional[discord.CategoryChannel]:
+    cid = await _guild_config_category_id(
+        guild.id,
+        "ticket_archive_category_id",
+        "archive_ticket_category_id",
+        "ticket_archived_category_id",
+        "ticket_closed_category_id",
+        "closed_ticket_category_id",
+    )
+    if cid > 0:
+        cat = _resolve_category_by_id(guild, cid)
+        if cat is not None:
+            return cat
+
+    return _resolve_archive_category(guild)
+
+
+async def _resolve_active_ticket_category_async(guild: discord.Guild) -> Optional[discord.CategoryChannel]:
+    cid = await _guild_config_category_id(
+        guild.id,
+        "ticket_category_id",
+        "active_ticket_category_id",
+        "ticket_active_category_id",
+        "open_ticket_category_id",
+    )
+    if cid > 0:
+        cat = _resolve_category_by_id(guild, cid)
+        if cat is not None:
+            return cat
+
+    return _resolve_active_ticket_category(guild)
+
+
 def _looks_like_archive_category_name(name: str) -> bool:
     text = _safe_str(name).strip().lower()
     if not text:
         return False
 
+    try:
+        import unicodedata
+        text = unicodedata.normalize("NFKC", text).lower()
+    except Exception:
+        pass
+
     markers = (
         "archive",
         "archived",
         "ticket archive",
+        "ticket-archive",
         "tickets archive",
         "archived tickets",
         "closed tickets",
@@ -633,7 +696,7 @@ def _channel_is_in_category(
 
 
 async def _move_ticket_to_archive_if_configured(channel: discord.TextChannel) -> bool:
-    archive_category = _resolve_archive_category(channel.guild)
+    archive_category = await _resolve_archive_category_async(channel.guild)
     if archive_category is None:
         return False
 
@@ -653,7 +716,7 @@ async def _move_ticket_to_archive_if_configured(channel: discord.TextChannel) ->
 
 
 async def _move_ticket_to_active_if_configured(channel: discord.TextChannel) -> bool:
-    active_category = _resolve_active_ticket_category(channel.guild)
+    active_category = await _resolve_active_ticket_category_async(channel.guild)
     if active_category is None:
         return False
 

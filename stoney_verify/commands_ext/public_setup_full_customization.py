@@ -154,6 +154,27 @@ def _bot_member(guild: discord.Guild) -> Optional[discord.Member]:
         return None
 
 
+
+async def _resolve_selected_channel(guild: discord.Guild, value: Any) -> Any:
+    """ChannelSelect can hand us a partial/resolved object. Convert it to the real guild channel."""
+    try:
+        cid = _safe_int(getattr(value, "id", value), 0)
+        if cid <= 0:
+            return value
+
+        cached = guild.get_channel(cid)
+        if cached is not None:
+            return cached
+
+        try:
+            fetched = await guild.fetch_channel(cid)
+            return fetched
+        except Exception:
+            return value
+    except Exception:
+        return value
+
+
 def _role_manage_warning(guild: discord.Guild, role: discord.Role, *, require_manage: bool) -> tuple[bool, list[str]]:
     blockers: list[str] = []
     warnings: list[str] = []
@@ -185,6 +206,10 @@ def _channel_warnings(guild: discord.Guild, channel: Any, *, need_files: bool = 
     me = _bot_member(guild)
     if me is None:
         blockers.append("Bot member could not be resolved for channel permission checks.")
+        return False, blockers
+
+    if not hasattr(channel, "permissions_for"):
+        blockers.append("Selected item could not be resolved to a real Discord channel/category. Try again, or re-open setup and pick it once more.")
         return False, blockers
 
     try:
@@ -313,10 +338,11 @@ class SaveChannelSelect(discord.ui.ChannelSelect):
         if not await _require_setup_permission(interaction):
             return
         guild = interaction.guild
-        channel = self.values[0]
+        raw_channel = self.values[0]
         if guild is None:
             return await interaction.response.send_message("❌ This must be used inside a server.", ephemeral=True)
 
+        channel = await _resolve_selected_channel(guild, raw_channel)
         ok, messages = _channel_warnings(guild, channel, need_files=self.need_files)
         if not ok:
             embed = discord.Embed(title="🚫 Channel Not Saved", description="\n".join(f"• {x}" for x in messages), color=discord.Color.red())
