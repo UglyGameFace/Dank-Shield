@@ -2237,6 +2237,25 @@ async def mark_ticket_closed(
                 print(f"⚠️ repo_mark_ticket_closed exception for {channel.id}: {repr(e)}")
                 repo_close_ok = False
 
+        # Rename after archive move so the closed ticket uses the archive
+        # category's saved Dank Design separator/style, not the active category.
+        # See the post-archive rename block below.
+        try:
+            await _apply_closed_permissions(
+                channel,
+                owner_member,
+                staff_role_ids=_default_staff_role_ids(guild_id=channel.guild.id),
+            )
+        except Exception as e:
+            print(f"⚠️ Failed applying closed permissions for {channel.id}: {repr(e)}")
+
+        moved_to_archive = False
+        try:
+            moved_to_archive = await _move_ticket_to_archive_if_configured(channel)
+        except Exception as e:
+            moved_to_archive = False
+            print(f"⚠️ Ticket archive move failed before closed rename channel={channel.id}: {repr(e)}")
+
         if ticket_number is not None:
             new_name = await _format_ticket_channel_name_for_guild(
                 channel.guild,
@@ -2251,24 +2270,12 @@ async def mark_ticket_closed(
                     parent=channel.category,
                     exclude_channel_id=channel.id,
                 ):
-                    await channel.edit(name=new_name, reason="Ticket closed")
+                    await channel.edit(
+                        name=new_name,
+                        reason="Ticket closed -> archive style rename",
+                    )
             except Exception as e:
-                print(f"⚠️ Failed renaming channel to {new_name}: {repr(e)}")
-
-        try:
-            await _apply_closed_permissions(
-                channel,
-                owner_member,
-                staff_role_ids=_default_staff_role_ids(guild_id=channel.guild.id),
-            )
-        except Exception as e:
-            print(f"⚠️ Failed applying closed permissions for {channel.id}: {repr(e)}")
-
-        moved_to_archive = False
-        try:
-            moved_to_archive = await _move_ticket_to_archive_if_configured(channel)
-        except Exception:
-            moved_to_archive = False
+                print(f"⚠️ Failed renaming closed ticket to archive-styled name {new_name}: {repr(e)}")
 
         await _sync_channel_name_in_db(channel, ticket_number=ticket_number)
 
@@ -2286,7 +2293,7 @@ async def mark_ticket_closed(
 
         channel_looks_closed = False
         try:
-            channel_looks_closed = str(channel.name or "").lower().startswith("closed-")
+            channel_looks_closed = bool(re.search(r"(?:^|[^a-z0-9])closed[-_\s]*0*\d+", str(channel.name or "").lower()))
         except Exception:
             channel_looks_closed = False
 
