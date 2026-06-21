@@ -1028,14 +1028,8 @@ BackToSetupView = SetupNavView
 class SolidSetupView(discord.ui.View):
     """Dashboard-first /dank setup home.
 
-    This view intentionally reuses existing setup systems:
-    - Current Setup: _build_current_setup_embed()
-    - Health Check: _build_health_embed()
-    - Existing server mapping: ChooseExistingView and picker views
-    - Ticket menu options: _build_category_manager_payload()
-    - Protection: public_protection_center._refresh_panel()
-
-    Do not duplicate setup summary/config logic here.
+    Home should only show the big decisions. Feature-specific tools live behind
+    Configure Features so the first screen does not overwhelm new owners.
     """
 
     def __init__(self) -> None:
@@ -1055,7 +1049,7 @@ class SolidSetupView(discord.ui.View):
             view=self,
         )
 
-    # Row 0 — Start here
+    # Row 0 — inspect first
     @discord.ui.button(label="View Current Setup", emoji="📋", style=discord.ButtonStyle.primary, custom_id="stoney_solid:dashboard_current", row=0)
     async def current_setup(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         if not await _require_setup_permission(interaction):
@@ -1078,7 +1072,8 @@ class SolidSetupView(discord.ui.View):
         embed = await _build_health_embed(guild)
         await _edit_or_followup(interaction, embed=embed, view=SetupNavView())
 
-    @discord.ui.button(label="Use My Existing Server", emoji="🧩", style=discord.ButtonStyle.primary, custom_id="stoney_solid:dashboard_existing", row=0)
+    # Row 1 — choose setup path
+    @discord.ui.button(label="Use My Existing Server", emoji="🧩", style=discord.ButtonStyle.primary, custom_id="stoney_solid:dashboard_existing", row=1)
     async def choose_existing(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         if not await _require_setup_permission(interaction):
             return
@@ -1093,17 +1088,16 @@ class SolidSetupView(discord.ui.View):
         embed.add_field(
             name="Sections",
             value=(
-                "🎫 **Ticket Basics** — where tickets open/close, staff role, transcripts\n"
-                "🎭 **Access Roles** — optional roles for waiting, approved, full access\n"
-                "🎙️ **Verification Channels** — optional text/voice verification channels\n"
-                "🧾 **Logs + Status** — modlog, join/leave log, bot status\n"
-                "⚙️ **Behavior Settings** — verification style, ticket prefix, kick timer"
+                "🎫 **Ticket Basics** — open/archive ticket folders, staff role, ticket panel\n"
+                "🎭 **Access Roles** — waiting, approved, full access, setup admin\n"
+                "🎙️ **Verification Channels** — text verify, voice verify, staff queue\n"
+                "🧾 **Logs + Status** — logs, transcripts, status\n"
+                "⚙️ **Behavior Settings** — mode, ticket prefix, kick timer"
             ),
             inline=False,
         )
         await interaction.response.edit_message(embed=embed, view=ChooseExistingView())
 
-    # Row 1 — Build / repair
     @discord.ui.button(label="Review / Create Missing Items", emoji="✨", style=discord.ButtonStyle.success, custom_id="stoney_solid:dashboard_review_create", row=1)
     async def review_create(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         if not await _require_setup_permission(interaction):
@@ -1116,16 +1110,12 @@ class SolidSetupView(discord.ui.View):
 
         embed = discord.Embed(
             title="✨ Review / Create Missing Items",
-            description=(
-                "Review this before building. This page is read-only until you press **Build Missing Items**."
-            ),
+            description="Review this before building. This page is read-only until you press **Build Missing Items**.",
             color=discord.Color.green(),
             timestamp=now_utc(),
         )
-
         embed.add_field(name="Already Saved / Found", value=saved_text, inline=False)
         embed.add_field(name="Missing / Needs Review", value=missing_text, inline=False)
-
         embed.add_field(
             name="What Build Missing Items Does",
             value=(
@@ -1138,7 +1128,26 @@ class SolidSetupView(discord.ui.View):
         )
         await interaction.response.edit_message(embed=embed, view=BuildMissingItemsReviewView())
 
-    @discord.ui.button(label="Name Items Before Build", emoji="✏️", style=discord.ButtonStyle.secondary, custom_id="stoney_solid:dashboard_customize", row=1)
+    # Row 2 — extra setup work
+    @discord.ui.button(label="Configure Features", emoji="🧭", style=discord.ButtonStyle.secondary, custom_id="stoney_solid:dashboard_features", row=2)
+    async def features(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        if not await _require_setup_permission(interaction):
+            return
+        embed = discord.Embed(
+            title="🧭 Configure Features",
+            description=(
+                "Pick the feature you want to adjust. These screens save IDs/settings only; they do not delete server items."
+            ),
+            color=discord.Color.blurple(),
+        )
+        embed.add_field(
+            name="Best Order",
+            value="Tickets → Verify → Protection → Logs + Status → Behavior Settings",
+            inline=False,
+        )
+        await interaction.response.edit_message(embed=embed, view=ConfigureFeaturesHubView())
+
+    @discord.ui.button(label="Name Items Before Build", emoji="✏️", style=discord.ButtonStyle.secondary, custom_id="stoney_solid:dashboard_customize", row=2)
     async def customize(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         if not await _require_setup_permission(interaction):
             return
@@ -1149,9 +1158,14 @@ class SolidSetupView(discord.ui.View):
                 title="✏️ Name Items Before Build",
                 description=(
                     "Use this before building if you want Dank Shield-created missing items to use your names.\n\n"
-                    "Nothing is created until you submit a naming page."
+                    "**This does not create anything by itself.** It only opens naming forms."
                 ),
                 color=discord.Color.blurple(),
+            )
+            embed.add_field(
+                name="Best Workflow",
+                value="Name items here → Setup Home → Review / Create Missing Items.",
+                inline=False,
             )
             await interaction.response.edit_message(embed=embed, view=CustomizeSetupMenuView())
         except Exception as e:
@@ -1163,7 +1177,8 @@ class SolidSetupView(discord.ui.View):
                 view=SetupNavView(),
             )
 
-    @discord.ui.button(label="Cleanup / Repair", emoji="🧹", style=discord.ButtonStyle.secondary, custom_id="stoney_solid:dashboard_cleanup", row=1)
+    # Row 3 — repair
+    @discord.ui.button(label="Cleanup / Repair", emoji="🧹", style=discord.ButtonStyle.secondary, custom_id="stoney_solid:dashboard_cleanup", row=3)
     async def cleanup(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         if not await _require_setup_permission(interaction):
             return
@@ -1189,93 +1204,7 @@ class SolidSetupView(discord.ui.View):
         )
         await interaction.response.edit_message(embed=embed, view=SetupNavView())
 
-    # Row 2 — Configure features
-    @discord.ui.button(label="Tickets", emoji="🎫", style=discord.ButtonStyle.secondary, custom_id="stoney_solid:dashboard_tickets", row=2)
-    async def tickets(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        if not await _require_setup_permission(interaction):
-            return
-        embed = discord.Embed(
-            title="🎫 Tickets",
-            description="Ticket setup is split into routing and menu options so owners know exactly what they are changing.",
-            color=discord.Color.blurple(),
-        )
-        embed.add_field(
-            name="Recommended",
-            value="Start with **Ticket Basics**. Then use **Ticket Menu Options** for the choices members see.",
-            inline=False,
-        )
-        await interaction.response.edit_message(embed=embed, view=TicketSetupHubView())
-
-    @discord.ui.button(label="Verify", emoji="✅", style=discord.ButtonStyle.secondary, custom_id="stoney_solid:dashboard_verify", row=2)
-    async def verify(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        if not await _require_setup_permission(interaction):
-            return
-        embed = discord.Embed(
-            title="✅ Verify",
-            description=(
-                "Configure the roles and channels used for verification. "
-                "Basic Verify is separate from Voice Verify and ID/web verification."
-            ),
-            color=discord.Color.blurple(),
-        )
-        await interaction.response.edit_message(embed=embed, view=VerifySetupHubView())
-
-    @discord.ui.button(label="Protection", emoji="🛡️", style=discord.ButtonStyle.secondary, custom_id="stoney_solid:dashboard_protection", row=2)
-    async def protection(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        if not await _require_setup_permission(interaction):
-            return
-        try:
-            from . import public_protection_center
-
-            await public_protection_center._refresh_panel(interaction, content="🛡️ Protection Center opened from setup.")
-        except Exception as e:
-            await safe_interaction_error(
-                interaction,
-                title="Protection Center Did Not Open",
-                error=e,
-                hint="Nothing was changed. Run `/dank protection` directly.",
-                view=self,
-            )
-
-    # Row 3 — Feature details
-    @discord.ui.button(label="Logs + Status", emoji="🧾", style=discord.ButtonStyle.secondary, custom_id="stoney_solid:dashboard_logs", row=3)
-    async def logs(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        if not await _require_setup_permission(interaction):
-            return
-        embed = discord.Embed(
-            title="🧾 Logs + Status",
-            description="Pick where logs and status messages go. Names do not matter.",
-            color=discord.Color.blurple(),
-        )
-        if interaction.guild is not None:
-            await _add_saved_setup_section(embed, interaction.guild, "logs_status")
-        await interaction.response.edit_message(embed=embed, view=LogsSetupHubView())
-
-    @discord.ui.button(label="Ticket Menu Options", emoji="🗂️", style=discord.ButtonStyle.secondary, custom_id="stoney_solid:dashboard_categories", row=3)
-    async def categories(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        if not await _require_setup_permission(interaction):
-            return
-        guild = interaction.guild
-        if guild is None:
-            return await interaction.response.send_message("❌ This must be used inside a server.", ephemeral=True)
-        await _safe_defer_update(interaction)
-        embed, view = await _build_category_manager_payload(guild)
-        await _edit_or_followup(interaction, embed=embed, view=view)
-
-    @discord.ui.button(label="Behavior Settings", emoji="⚙️", style=discord.ButtonStyle.secondary, custom_id="stoney_solid:dashboard_behavior", row=3)
-    async def behavior(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        if not await _require_setup_permission(interaction):
-            return
-        embed = discord.Embed(
-            title="⚙️ Behavior Settings",
-            description="Pick verification style, ticket prefix, kick timer, and other behavior settings.",
-            color=discord.Color.blurple(),
-        )
-        if interaction.guild is not None:
-            await _add_saved_setup_section(embed, interaction.guild, "behavior")
-        await interaction.response.edit_message(embed=embed, view=BehaviorSettingsView())
-
-    # Row 4 — Navigation
+    # Row 4 — navigation
     @discord.ui.button(label="Refresh Setup Home", emoji="🔄", style=discord.ButtonStyle.secondary, custom_id="stoney_solid:dashboard_refresh", row=4)
     async def refresh(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         if not await _require_setup_permission(interaction):
@@ -1297,6 +1226,88 @@ class SolidSetupView(discord.ui.View):
             color=discord.Color.dark_grey(),
         )
         await _edit_or_followup(interaction, embed=embed, view=None)
+
+
+class ConfigureFeaturesHubView(SetupNavView):
+    @discord.ui.button(label="Tickets", emoji="🎫", style=discord.ButtonStyle.primary, custom_id="stoney_solid:features_tickets", row=0)
+    async def tickets(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        if not await _require_setup_permission(interaction):
+            return
+        embed = discord.Embed(
+            title="🎫 Tickets",
+            description="Ticket setup is split into routing and menu options so owners know exactly what they are changing.",
+            color=discord.Color.blurple(),
+        )
+        embed.add_field(name="Recommended", value="Start with **Ticket Basics**. Then use **Ticket Menu Options** for the choices members see.", inline=False)
+        if interaction.guild is not None:
+            await _add_saved_setup_section(embed, interaction.guild, "ticket_basics")
+        await interaction.response.edit_message(embed=embed, view=TicketSetupHubView())
+
+    @discord.ui.button(label="Verify", emoji="✅", style=discord.ButtonStyle.primary, custom_id="stoney_solid:features_verify", row=0)
+    async def verify(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        if not await _require_setup_permission(interaction):
+            return
+        embed = discord.Embed(
+            title="✅ Verify",
+            description="Configure roles/channels used for verification. Basic Verify is separate from Voice Verify and ID/web verification.",
+            color=discord.Color.blurple(),
+        )
+        if interaction.guild is not None:
+            await _add_saved_setup_section(embed, interaction.guild, "access_roles")
+        await interaction.response.edit_message(embed=embed, view=VerifySetupHubView())
+
+    @discord.ui.button(label="Protection", emoji="🛡️", style=discord.ButtonStyle.primary, custom_id="stoney_solid:features_protection", row=0)
+    async def protection(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        if not await _require_setup_permission(interaction):
+            return
+        try:
+            from . import public_protection_center
+            await public_protection_center._refresh_panel(interaction, content="🛡️ Protection Center opened from setup.")
+        except Exception as e:
+            await safe_interaction_error(
+                interaction,
+                title="Protection Center Did Not Open",
+                error=e,
+                hint="Nothing was changed. Run `/dank protection` directly.",
+                view=self,
+            )
+
+    @discord.ui.button(label="Logs + Status", emoji="🧾", style=discord.ButtonStyle.secondary, custom_id="stoney_solid:features_logs", row=1)
+    async def logs(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        if not await _require_setup_permission(interaction):
+            return
+        embed = discord.Embed(
+            title="🧾 Logs + Status",
+            description="Pick where logs, transcripts, and status messages go. Names do not matter.",
+            color=discord.Color.blurple(),
+        )
+        if interaction.guild is not None:
+            await _add_saved_setup_section(embed, interaction.guild, "logs_status")
+        await interaction.response.edit_message(embed=embed, view=LogsSetupHubView())
+
+    @discord.ui.button(label="Ticket Menu Options", emoji="🗂️", style=discord.ButtonStyle.secondary, custom_id="stoney_solid:features_categories", row=1)
+    async def categories(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        if not await _require_setup_permission(interaction):
+            return
+        guild = interaction.guild
+        if guild is None:
+            return await interaction.response.send_message("❌ This must be used inside a server.", ephemeral=True)
+        await _safe_defer_update(interaction)
+        embed, view = await _build_category_manager_payload(guild)
+        await _edit_or_followup(interaction, embed=embed, view=view)
+
+    @discord.ui.button(label="Behavior Settings", emoji="⚙️", style=discord.ButtonStyle.secondary, custom_id="stoney_solid:features_behavior", row=1)
+    async def behavior(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        if not await _require_setup_permission(interaction):
+            return
+        embed = discord.Embed(
+            title="⚙️ Behavior Settings",
+            description="Pick verification style, ticket prefix, kick timer, and other behavior settings.",
+            color=discord.Color.blurple(),
+        )
+        if interaction.guild is not None:
+            await _add_saved_setup_section(embed, interaction.guild, "behavior")
+        await interaction.response.edit_message(embed=embed, view=BehaviorSettingsView())
 
 
 class BuildMissingItemsReviewView(SetupNavView):
