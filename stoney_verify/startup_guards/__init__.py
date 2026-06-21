@@ -69,6 +69,7 @@ _STARTUP_GUARDS: Tuple[str, ...] = (
     "stoney_verify.startup_guards.setup_smart_home_menu_guard",
     "stoney_verify.startup_guards.setup_safety_repair_service_guard",
     "stoney_verify.startup_guards.setup_guided_flow_self_check",
+    "stoney_verify.startup_guards.setup_home_authority_guard",
     "stoney_verify.startup_guards.dank_shield_branding_guard",
     "stoney_verify.startup_guards.runtime_safety",
     "stoney_verify.startup_guards.invite_intent_safety",

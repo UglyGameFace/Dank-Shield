@@ -935,6 +935,10 @@ async def _build_main_setup_payload(guild: discord.Guild) -> tuple[discord.Embed
     return embed, SolidSetupView()
 
 
+# Official /dank setup home owner. Startup guards must not replace this.
+_DANK_SOLID_HOME_OWNER = _build_main_setup_payload
+
+
 # ---------------------------------------------------------------------------
 # reusable navigation
 # ---------------------------------------------------------------------------

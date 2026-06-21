@@ -572,29 +572,31 @@ async def _smart_plain_choice_main_payload(guild: discord.Guild) -> tuple[discor
 
 
 def apply() -> bool:
-    global _PATCHED, _ORIGINAL_MAIN
+    """Disabled legacy /dank setup home override.
+
+    This guard used to replace public_setup_solid._build_main_setup_payload at
+    startup. That made /dank setup keep showing the old home after the real
+    setup file was fixed.
+    """
+
+    global _PATCHED
     if _PATCHED:
         return True
-    try:
-        from stoney_verify.commands_ext import public_setup_fresh_choice as fresh
-        from stoney_verify.commands_ext import public_setup_recovery as recovery
-        from stoney_verify.commands_ext import public_setup_solid as solid
 
-        _ORIGINAL_MAIN = getattr(fresh, "_plain_choice_main_payload", None)
-        fresh._plain_choice_main_payload = _smart_plain_choice_main_payload
-        fresh.FreshChoiceHomeView = SmartSetupHomeView
-        fresh.FreshServerChoiceView = SmartSetupHomeView
-        try:
-            recovery._ORIGINAL_BUILD_MAIN = _smart_plain_choice_main_payload
-            solid._build_main_setup_payload = recovery._build_main_with_recovery
-        except Exception:
-            solid._build_main_setup_payload = _smart_plain_choice_main_payload
+    try:
+        import os
+        enabled = str(os.getenv("DANK_ENABLE_SMART_SETUP_HOME_GUARD", "") or "").strip().lower() in {"1", "true", "yes", "on"}
+    except Exception:
+        enabled = False
+
+    if not enabled:
         _PATCHED = True
-        _log("active; /dank setup home centralizes core setup, tickets, safety, and ProBot-style feature centers")
+        _log("skipped; public_setup_solid owns /dank setup home")
         return True
-    except Exception as exc:
-        _warn(f"failed: {exc!r}")
-        return False
+
+    _PATCHED = True
+    _log("legacy opt-in active")
+    return True
 
 
 apply()

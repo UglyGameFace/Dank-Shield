@@ -818,9 +818,7 @@ FreshServerChoiceView = PlainSetupHomeView
 def _patch() -> None:
     """Legacy setup-choice home override.
 
-    Disabled by default because /dank setup is now owned by public_setup_solid.
-    Keeping this as opt-in prevents old setup-choice UI from overwriting the
-    dashboard-first setup home at import/register time.
+    Disabled by default. /dank setup home is owned by public_setup_solid.
     """
 
     global _PATCHED
@@ -833,7 +831,7 @@ def _patch() -> None:
     if not enabled:
         _PATCHED = True
         try:
-            print("🧭 public_setup_fresh_choice legacy setup home override skipped; solid setup owns /dank setup")
+            print("🧭 public_setup_fresh_choice legacy setup home override skipped; public_setup_solid owns /dank setup")
         except Exception:
             pass
         return
