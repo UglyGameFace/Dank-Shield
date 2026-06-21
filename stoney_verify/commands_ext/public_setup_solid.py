@@ -778,6 +778,81 @@ async def _add_saved_setup_section(embed: discord.Embed, guild: discord.Guild, s
     )
 
 
+
+def _saved_or_missing_channel(guild: discord.Guild, cfg: Any, label: str, *keys: str, required: bool = True) -> str:
+    value = None
+    for key in keys:
+        value = _cfg_value(cfg, key)
+        if _safe_int(value, 0) > 0:
+            break
+
+    cid = _safe_int(value, 0)
+    if cid <= 0:
+        icon = "⚠️" if required else "—"
+        return f"{icon} **{label}:** not saved"
+
+    channel = guild.get_channel(cid)
+    if channel is None:
+        return f"⚠️ **{label}:** saved ID `{cid}` but not found in this server"
+
+    return f"✅ **{label}:** {_mention(channel)}"
+
+
+def _saved_or_missing_role(guild: discord.Guild, cfg: Any, label: str, *keys: str, required: bool = True) -> str:
+    value = None
+    for key in keys:
+        value = _cfg_value(cfg, key)
+        if _safe_int(value, 0) > 0:
+            break
+
+    rid = _safe_int(value, 0)
+    if rid <= 0:
+        icon = "⚠️" if required else "—"
+        return f"{icon} **{label}:** not saved"
+
+    role = guild.get_role(rid)
+    if role is None:
+        return f"⚠️ **{label}:** saved ID `{rid}` but not found in this server"
+
+    return f"✅ **{label}:** {_mention(role)}"
+
+
+async def _missing_items_preview_text(guild: discord.Guild) -> tuple[str, str]:
+    """Return already-saved/missing checklist for the create-missing review page.
+
+    Read-only. No config writes, no role/channel creation, no deletes.
+    """
+
+    try:
+        cfg = await get_guild_config(guild.id, refresh=True)
+    except Exception as e:
+        return (
+            "",
+            f"⚠️ Could not load saved setup: `{type(e).__name__}: {str(e)[:220]}`",
+        )
+
+    lines = [
+        _saved_or_missing_channel(guild, cfg, "Open ticket category", "ticket_category_id", "active_ticket_category_id", "open_ticket_category_id"),
+        _saved_or_missing_channel(guild, cfg, "Archive ticket category", "ticket_archive_category_id", "ticket_closed_category_id", "archive_ticket_category_id", "closed_ticket_category_id"),
+        _saved_or_missing_channel(guild, cfg, "Ticket panel channel", "ticket_panel_channel_id", "support_channel_id"),
+        _saved_or_missing_role(guild, cfg, "Ticket staff role", "staff_role_id", "ticket_staff_role_id"),
+        _saved_or_missing_channel(guild, cfg, "Transcript channel", "transcripts_channel_id", "transcript_channel_id", required=False),
+        _saved_or_missing_channel(guild, cfg, "Verify channel", "verify_channel_id", "verification_channel_id", required=False),
+        _saved_or_missing_role(guild, cfg, "Waiting/unverified role", "unverified_role_id", "waiting_role_id", required=False),
+        _saved_or_missing_role(guild, cfg, "Approved/verified role", "verified_role_id", "approved_role_id", required=False),
+        _saved_or_missing_channel(guild, cfg, "Mod/security log", "modlog_channel_id", "raidlog_channel_id", "raid_log_channel_id", required=False),
+        _saved_or_missing_channel(guild, cfg, "Bot status channel", "status_channel_id", "bot_status_channel_id", "health_channel_id", required=False),
+    ]
+
+    saved = [line for line in lines if line.startswith("✅")]
+    missing = [line for line in lines if not line.startswith("✅")]
+
+    saved_text = "\n".join(saved[:8]) if saved else "Nothing obvious is saved yet."
+    missing_text = "\n".join(missing[:8]) if missing else "✅ Core setup items are already saved. Build should not need to create core defaults."
+
+    return saved_text[:1024], missing_text[:1024]
+
+
 async def _build_main_setup_payload(guild: discord.Guild) -> tuple[discord.Embed, "SolidSetupView"]:
     cfg = None
     try:
@@ -992,41 +1067,27 @@ class SolidSetupView(discord.ui.View):
         if guild is None:
             return await interaction.response.send_message("❌ This must be used inside a server.", ephemeral=True)
 
-        cfg = None
-        try:
-            cfg = await get_guild_config(guild.id, refresh=True)
-        except Exception:
-            cfg = None
+        saved_text, missing_text = await _missing_items_preview_text(guild)
 
         embed = discord.Embed(
             title="✨ Review / Create Missing Items",
             description=(
-                "This is the safe creation path. Review what is saved first. "
-                "Only press **Build Missing Items** if the setup check says something is missing."
+                "Review this before building. This page is read-only until you press **Build Missing Items**."
             ),
             color=discord.Color.green(),
             timestamp=now_utc(),
         )
 
-        if cfg is not None:
-            embed.add_field(
-                name="Saved Now",
-                value=(
-                    f"Open tickets: {_channel_or_not_set(guild, _cfg_value(cfg, 'ticket_category_id'))}\n"
-                    f"Closed tickets: {_channel_or_not_set(guild, _cfg_value(cfg, 'ticket_archive_category_id'))}\n"
-                    f"Ticket panel: {_channel_or_not_set(guild, _cfg_value(cfg, 'ticket_panel_channel_id') or _cfg_value(cfg, 'support_channel_id'))}\n"
-                    f"Staff role: {_role_or_not_set(guild, _cfg_value(cfg, 'staff_role_id'))}\n"
-                    f"Mod/security log: {_channel_or_not_set(guild, _cfg_value(cfg, 'modlog_channel_id') or _cfg_value(cfg, 'raidlog_channel_id'))}"
-                )[:1024],
-                inline=False,
-            )
+        embed.add_field(name="Already Saved / Found", value=saved_text, inline=False)
+        embed.add_field(name="Missing / Needs Review", value=missing_text, inline=False)
 
         embed.add_field(
             name="What Build Missing Items Does",
             value=(
                 "Creates safe default roles/channels/categories only when missing.\n"
                 "Does not delete existing server items.\n"
-                "Does not replace saved choices."
+                "Does not replace saved choices.\n"
+                "If this page says everything important is saved, run **Setup Check** instead of building."
             ),
             inline=False,
         )
