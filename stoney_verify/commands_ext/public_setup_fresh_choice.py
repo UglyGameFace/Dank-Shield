@@ -511,48 +511,66 @@ class CustomServiceToggleButton(discord.ui.Button):
 
 
 class CustomServiceModeView(discord.ui.View):
+    """Custom Setup menu layout.
+
+    This view intentionally reuses existing setup systems:
+    - Current Setup uses public_setup_solid._build_current_setup_embed()
+    - Setup Check uses the existing plain health path
+    - Existing server mapping uses the existing mapper
+    - Missing-item creation uses the existing creation review flow
+
+    Do not duplicate role/channel/category summary logic here.
+    """
+
     def __init__(self, state: Any) -> None:
         super().__init__(timeout=900)
+
+        # Row 0: presets first, because this is a mode picker.
         self.add_item(CustomServicePresetSelect(state))
-        self.add_item(CustomServiceToggleButton("tickets_enabled", "Tickets", state.tickets, "🎫", 1))
-        self.add_item(CustomServiceToggleButton("verification_enabled", "Basic Verify", state.verification, "✅", 1))
-        self.add_item(CustomServiceToggleButton("voice_verification_enabled", "Voice Verify", state.voice, "🎙️", 1))
-        self.add_item(CustomServiceToggleButton("spam_guard_enabled", "SpamGuard service", state.spamguard, "🛡️", 2))
-        self.add_item(CustomServiceToggleButton("moderation_enabled", "Logs/Moderation", state.moderation, "🧾", 2))
 
-    @discord.ui.button(label="Use My Existing Server", emoji="🧩", style=discord.ButtonStyle.primary, custom_id="dank_setup_custom_existing", row=3)
-    async def existing(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        await _open_existing_server_setup(interaction)
+        # Row 3/4: service toggles lower down so owners do not mistake them
+        # for the actual installed-role/channel list.
+        self.add_item(CustomServiceToggleButton("tickets_enabled", "Tickets", state.tickets, "🎫", 3))
+        self.add_item(CustomServiceToggleButton("verification_enabled", "Basic Verify", state.verification, "✅", 3))
+        self.add_item(CustomServiceToggleButton("voice_verification_enabled", "Voice Verify", state.voice, "🎙️", 3))
+        self.add_item(CustomServiceToggleButton("spam_guard_enabled", "SpamGuard service", state.spamguard, "🛡️", 4))
+        self.add_item(CustomServiceToggleButton("moderation_enabled", "Logs/Moderation", state.moderation, "🧾", 4))
 
-    @discord.ui.button(label="Review / Create Missing Items", emoji="✨", style=discord.ButtonStyle.success, custom_id="dank_setup_custom_create", row=3)
-    async def create_missing(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        await _open_create_missing_items(interaction)
-
-    @discord.ui.button(label="View Current Setup", emoji="📋", style=discord.ButtonStyle.secondary, custom_id="dank_setup_custom_current", row=4)
+    @discord.ui.button(label="View Current Setup", emoji="📋", style=discord.ButtonStyle.primary, custom_id="dank_setup_custom_current", row=1)
     async def current_setup(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         if not await solid._require_setup_permission(interaction):
             return
         guild = interaction.guild
         if guild is None:
             return await interaction.response.send_message("❌ This must be used inside a server.", ephemeral=True)
+
         await solid._safe_defer_update(interaction)
         embed = await solid._build_current_setup_embed(guild)
         await solid._edit_or_followup(interaction, embed=embed, view=self)
 
-    @discord.ui.button(label="Setup Check", emoji="🩺", style=discord.ButtonStyle.secondary, custom_id="dank_setup_custom_health", row=4)
+    @discord.ui.button(label="Setup Check", emoji="🩺", style=discord.ButtonStyle.secondary, custom_id="dank_setup_custom_health", row=1)
     async def health(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         await _open_plain_health(interaction)
 
-    @discord.ui.button(label="Setup Home", emoji="🏠", style=discord.ButtonStyle.secondary, custom_id="dank_setup_custom_home", row=4)
+    @discord.ui.button(label="Setup Home", emoji="🏠", style=discord.ButtonStyle.secondary, custom_id="dank_setup_custom_home", row=1)
     async def home(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         if not await solid._require_setup_permission(interaction):
             return
         guild = interaction.guild
         if guild is None:
             return await interaction.response.send_message("❌ This must be used inside a server.", ephemeral=True)
+
         await solid._safe_defer_update(interaction)
         embed, view = await _plain_choice_main_payload(guild)
         await solid._edit_or_followup(interaction, embed=embed, view=view)
+
+    @discord.ui.button(label="Use My Existing Server", emoji="🧩", style=discord.ButtonStyle.primary, custom_id="dank_setup_custom_existing", row=2)
+    async def existing(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        await _open_existing_server_setup(interaction)
+
+    @discord.ui.button(label="Review / Create Missing Items", emoji="✨", style=discord.ButtonStyle.success, custom_id="dank_setup_custom_create", row=2)
+    async def create_missing(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        await _open_create_missing_items(interaction)
 
 
 async def _open_custom_service_picker(interaction: discord.Interaction, *, saved_message: str = "") -> None:
