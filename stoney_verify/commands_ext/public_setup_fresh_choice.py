@@ -197,6 +197,243 @@ async def _load_custom_state(guild_id: int) -> Any:
     return await modes.load_service_state(guild_id)
 
 
+
+_CUSTOM_SERVICE_FLAG_KEYS = (
+    "tickets_enabled",
+    "verification_enabled",
+    "voice_verification_enabled",
+    "spam_guard_enabled",
+    "moderation_enabled",
+)
+
+
+def _auto_cfg_value(cfg: Any, key: str, default: Any = None) -> Any:
+    try:
+        if hasattr(cfg, "get"):
+            value = cfg.get(key)
+            if value is not None:
+                return value
+    except Exception:
+        pass
+
+    try:
+        value = getattr(cfg, key, None)
+        if value is not None:
+            return value
+    except Exception:
+        pass
+
+    try:
+        for bucket in ("settings", "config", "metadata", "meta"):
+            nested = cfg.get(bucket) if hasattr(cfg, "get") else getattr(cfg, bucket, None)
+            if isinstance(nested, dict) and nested.get(key) is not None:
+                return nested.get(key)
+    except Exception:
+        pass
+
+    return default
+
+
+def _auto_truthy(value: Any, default: bool = False) -> bool:
+    try:
+        if isinstance(value, bool):
+            return value
+        if value is None:
+            return bool(default)
+        text = str(value).strip().lower()
+        if text in {"1", "true", "yes", "y", "on", "enabled"}:
+            return True
+        if text in {"0", "false", "no", "n", "off", "disabled"}:
+            return False
+    except Exception:
+        pass
+    return bool(default)
+
+
+def _auto_int(value: Any) -> int:
+    try:
+        return int(str(value or "0").strip() or 0)
+    except Exception:
+        return 0
+
+
+def _cfg_has_any_id(cfg: Any, *keys: str) -> bool:
+    for key in keys:
+        if _auto_int(_auto_cfg_value(cfg, key, 0)) > 0:
+            return True
+    return False
+
+
+def _name_has_any(value: Any, markers: tuple[str, ...]) -> bool:
+    try:
+        text = str(getattr(value, "name", value) or "").lower()
+        return any(marker in text for marker in markers)
+    except Exception:
+        return False
+
+
+def _guild_has_category(guild: discord.Guild, markers: tuple[str, ...]) -> bool:
+    try:
+        return any(_name_has_any(category, markers) for category in getattr(guild, "categories", []) or [])
+    except Exception:
+        return False
+
+
+def _guild_has_text_channel(guild: discord.Guild, markers: tuple[str, ...]) -> bool:
+    try:
+        return any(_name_has_any(channel, markers) for channel in getattr(guild, "text_channels", []) or [])
+    except Exception:
+        return False
+
+
+def _guild_has_voice_channel(guild: discord.Guild, markers: tuple[str, ...]) -> bool:
+    try:
+        return any(_name_has_any(channel, markers) for channel in getattr(guild, "voice_channels", []) or [])
+    except Exception:
+        return False
+
+
+def _guild_has_role(guild: discord.Guild, markers: tuple[str, ...]) -> bool:
+    try:
+        return any(_name_has_any(role, markers) for role in getattr(guild, "roles", []) or [])
+    except Exception:
+        return False
+
+
+async def _detect_existing_service_payload(guild: discord.Guild) -> tuple[dict[str, bool], list[str]]:
+    """Detect already-installed server pieces. This never creates anything."""
+
+    cfg = None
+    try:
+        cfg = await solid.get_guild_config(guild.id, refresh=True)  # type: ignore[attr-defined]
+    except Exception:
+        cfg = None
+
+    tickets = bool(
+        _cfg_has_any_id(
+            cfg,
+            "ticket_category_id",
+            "ticket_archive_category_id",
+            "ticket_closed_category_id",
+            "ticket_panel_channel_id",
+            "support_channel_id",
+            "staff_role_id",
+            "transcripts_channel_id",
+        )
+        or _guild_has_category(guild, ("ticket", "archive", "support"))
+        or _guild_has_text_channel(guild, ("ticket", "support", "transcript"))
+    )
+
+    basic_verify = bool(
+        _auto_truthy(_auto_cfg_value(cfg, "basic_verify_enabled", False), False)
+        or _auto_truthy(_auto_cfg_value(cfg, "basic_button_verify_enabled", False), False)
+        or _cfg_has_any_id(
+            cfg,
+            "verify_channel_id",
+            "verification_channel_id",
+            "unverified_role_id",
+            "verified_role_id",
+            "resident_role_id",
+        )
+        or _guild_has_text_channel(guild, ("verify", "verification"))
+        or _guild_has_role(guild, ("unverified", "verified", "resident", "member"))
+    )
+
+    voice = bool(
+        _auto_truthy(_auto_cfg_value(cfg, "voice_verification_enabled", False), False)
+        or _auto_truthy(_auto_cfg_value(cfg, "verification_allows_voice", False), False)
+        or _cfg_has_any_id(
+            cfg,
+            "vc_verify_channel_id",
+            "vc_verify_queue_channel_id",
+            "voice_verify_channel_id",
+            "voice_verification_channel_id",
+        )
+        or _guild_has_text_channel(guild, ("vc-verify", "voice-verify", "verify-queue"))
+        or _guild_has_voice_channel(guild, ("verify", "verification", "waiting"))
+    )
+
+    spamguard = bool(
+        _auto_truthy(_auto_cfg_value(cfg, "spam_guard_enabled", False), False)
+        or _auto_truthy(_auto_cfg_value(cfg, "automod_enabled", False), False)
+        or _auto_truthy(_auto_cfg_value(cfg, "automod_block_invites", False), False)
+        or _auto_truthy(_auto_cfg_value(cfg, "invite_shield_enabled", False), False)
+    )
+
+    moderation = bool(
+        _auto_truthy(_auto_cfg_value(cfg, "moderation_enabled", False), False)
+        or spamguard
+        or _cfg_has_any_id(
+            cfg,
+            "modlog_channel_id",
+            "raidlog_channel_id",
+            "raid_log_channel_id",
+            "join_log_channel_id",
+            "join_exit_log_channel_id",
+            "status_channel_id",
+            "bot_status_channel_id",
+            "health_channel_id",
+        )
+        or _guild_has_text_channel(guild, ("modlog", "mod-log", "logs", "join-leave", "bot-status", "status"))
+    )
+
+    if voice:
+        tickets = True
+        basic_verify = True
+        moderation = True
+
+    detected = {
+        "tickets_enabled": tickets,
+        "verification_enabled": basic_verify,
+        "voice_verification_enabled": voice,
+        "spam_guard_enabled": spamguard,
+        "moderation_enabled": moderation,
+    }
+
+    labels = []
+    if tickets:
+        labels.append("Tickets")
+    if basic_verify:
+        labels.append("Basic Verify")
+    if voice:
+        labels.append("Voice Verify")
+    if spamguard:
+        labels.append("SpamGuard")
+    if moderation:
+        labels.append("Logs/Moderation")
+
+    return detected, labels
+
+
+async def _autofill_custom_state_from_existing(guild: discord.Guild, state: Any) -> tuple[Any, str]:
+    """If Custom Setup is blank, pre-check services that already exist.
+
+    This only saves setup-focus flags. It does not create/delete channels, roles,
+    tickets, panels, or permissions.
+    """
+
+    try:
+        current = state.as_payload()
+    except Exception:
+        current = {}
+
+    if any(bool(current.get(key, False)) for key in _CUSTOM_SERVICE_FLAG_KEYS):
+        return state, ""
+
+    detected, labels = await _detect_existing_service_payload(guild)
+    if not any(detected.values()):
+        return state, ""
+
+    await _save_custom_services(guild.id, detected, guild.me or guild.owner)
+    next_state = await _load_custom_state(guild.id)
+
+    label_text = ", ".join(labels) if labels else "existing setup"
+    return (
+        next_state,
+        f"Detected existing server setup and pre-selected: **{label_text}**. Nothing was created.",
+    )
+
+
 def _custom_services_embed(guild: discord.Guild, state: Any, *, saved_message: str = "") -> discord.Embed:
     embed = discord.Embed(
         title="🧭 Choose Dank Shield Services",
@@ -239,7 +476,8 @@ class CustomServicePresetSelect(discord.ui.Select):
 
 class CustomServiceToggleButton(discord.ui.Button):
     def __init__(self, key: str, label: str, selected: bool, emoji: str, row: int) -> None:
-        super().__init__(label=f"{'Use' if selected else 'Skip'}: {label}", emoji=emoji, style=discord.ButtonStyle.success if selected else discord.ButtonStyle.secondary, row=row)
+        action = "Turn OFF" if selected else "Turn ON"
+        super().__init__(label=f"{action}: {label}", emoji=emoji, style=discord.ButtonStyle.success if selected else discord.ButtonStyle.secondary, row=row)
         self.key = key
         self.short_label = label
 
@@ -278,7 +516,7 @@ class CustomServiceModeView(discord.ui.View):
     async def existing(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         await _open_existing_server_setup(interaction)
 
-    @discord.ui.button(label="Create Missing Items", emoji="✨", style=discord.ButtonStyle.success, custom_id="dank_setup_custom_create", row=3)
+    @discord.ui.button(label="Review / Create Missing Items", emoji="✨", style=discord.ButtonStyle.success, custom_id="dank_setup_custom_create", row=3)
     async def create_missing(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         await _open_create_missing_items(interaction)
 
@@ -303,7 +541,9 @@ async def _open_custom_service_picker(interaction: discord.Interaction, *, saved
     if guild is None:
         return await interaction.response.send_message("❌ This must be used inside a server.", ephemeral=True)
     state = await _load_custom_state(guild.id)
-    await solid._edit_or_followup(interaction, embed=_custom_services_embed(guild, state, saved_message=saved_message or "Saved **Custom setup**. Now turn on only the services this server will actually use."), view=CustomServiceModeView(state))
+    state, detected_message = await _autofill_custom_state_from_existing(guild, state)
+    message = saved_message or detected_message or "Saved **Custom setup**. Existing server items are detected automatically. Turn on/off only what this server should actually use."
+    await solid._edit_or_followup(interaction, embed=_custom_services_embed(guild, state, saved_message=message), view=CustomServiceModeView(state))
 
 
 def _choice_preview_embed(guild: discord.Guild, choice: PlainSetupChoice) -> discord.Embed:
