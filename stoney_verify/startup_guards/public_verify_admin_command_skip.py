@@ -106,3 +106,33 @@ def apply() -> bool:
 apply()
 
 __all__ = ["apply"]
+
+
+def _dank_legacy_add_command_blocker() -> None:
+    """Block legacy top-level slash commands from being added in public mode."""
+    if not _dank_public_command_surface_locked():
+        return
+
+    try:
+        from discord import app_commands
+    except Exception:
+        return
+
+    original = getattr(app_commands.CommandTree, "add_command", None)
+    if not callable(original) or getattr(original, "_dank_legacy_top_level_blocker", False):
+        return
+
+    def patched_add_command(self, command, *args, **kwargs):
+        guild = kwargs.get("guild")
+        name = getattr(command, "name", None)
+        if guild is None and name in _LEGACY_PUBLIC_TOP_LEVEL_COMMANDS:
+            print(f"🧭 Dank Shield blocked legacy top-level command in public mode: /{name}")
+            return None
+        return original(self, command, *args, **kwargs)
+
+    setattr(patched_add_command, "_dank_legacy_top_level_blocker", True)
+    app_commands.CommandTree.add_command = patched_add_command
+    print("✅ Dank Shield legacy top-level command blocker active")
+
+
+_dank_legacy_add_command_blocker()

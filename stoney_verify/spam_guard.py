@@ -3422,7 +3422,36 @@ class SpamGuardPanelView(discord.ui.View):
         return view
 
 
+
+def _dank_register_legacy_top_level_spam_commands() -> bool:
+    """Return True only when legacy /spam_guard commands should be exposed.
+
+    Public production uses /dank protection instead.
+    """
+    import os as _os
+
+    allow = str(_os.getenv("DANK_ALLOW_LEGACY_TOP_LEVEL_COMMANDS", "false")).strip().lower()
+    if allow in {"1", "true", "yes", "on"}:
+        return True
+
+    profile = str(_os.getenv("DANK_COMMAND_PROFILE", "public")).strip().lower()
+    deployment = str(
+        _os.getenv("DANK_DEPLOYMENT_MODE")
+        or _os.getenv("DEPLOYMENT_ENV")
+        or "production"
+    ).strip().lower()
+
+    if profile == "public" or deployment in {"prod", "production", "public"}:
+        return False
+
+    return True
+
+
 def _register_spam_guard_commands() -> None:
+    if not _dank_register_legacy_top_level_spam_commands():
+        print("🧭 Spam Guard legacy top-level commands skipped; use /dank protection")
+        return
+
     global _SPAM_GUARD_COMMANDS_REGISTERED
 
     if _SPAM_GUARD_COMMANDS_REGISTERED:
