@@ -710,6 +710,74 @@ async def _build_current_setup_embed(guild: discord.Guild) -> discord.Embed:
     return embed
 
 
+
+async def _add_saved_setup_section(embed: discord.Embed, guild: discord.Guild, section: str) -> None:
+    """Add a small current-saved snapshot to the exact setup section being edited.
+
+    This intentionally reuses existing config helpers in this file. It is not a
+    second setup summary system and does not write config or create anything.
+    """
+
+    try:
+        cfg = await get_guild_config(guild.id, refresh=True)
+    except Exception as e:
+        embed.add_field(
+            name="Currently Saved",
+            value=f"Could not load saved setup: `{type(e).__name__}: {str(e)[:220]}`",
+            inline=False,
+        )
+        return
+
+    section = str(section or "").strip().lower()
+
+    if section == "ticket_basics":
+        value = (
+            f"Open tickets: {_channel_or_not_set(guild, _cfg_value(cfg, 'ticket_category_id'))}\n"
+            f"Closed/archive: {_channel_or_not_set(guild, _cfg_value(cfg, 'ticket_archive_category_id') or _cfg_value(cfg, 'ticket_closed_category_id'))}\n"
+            f"Ticket panel: {_channel_or_not_set(guild, _cfg_value(cfg, 'ticket_panel_channel_id') or _cfg_value(cfg, 'support_channel_id'))}\n"
+            f"Staff role: {_role_or_not_set(guild, _cfg_value(cfg, 'staff_role_id') or _cfg_value(cfg, 'ticket_staff_role_id'))}\n"
+            f"Transcripts: {_channel_or_not_set(guild, _cfg_value(cfg, 'transcripts_channel_id') or _cfg_value(cfg, 'transcript_channel_id'))}"
+        )
+    elif section == "access_roles":
+        value = (
+            f"Mode: `{_safe_str(_cfg_value(cfg, 'verification_mode'), 'not chosen')}`\n"
+            f"New/waiting role: {_role_or_not_set(guild, _cfg_value(cfg, 'unverified_role_id') or _cfg_value(cfg, 'waiting_role_id'))}\n"
+            f"Approved role: {_role_or_not_set(guild, _cfg_value(cfg, 'verified_role_id') or _cfg_value(cfg, 'approved_role_id'))}\n"
+            f"Full access role: {_role_or_not_set(guild, _cfg_value(cfg, 'resident_role_id') or _cfg_value(cfg, 'member_role_id'))}\n"
+            f"Server-control role: {_role_or_not_set(guild, _cfg_value(cfg, 'server_control_role_id') or _cfg_value(cfg, 'control_role_id') or _cfg_value(cfg, 'perm_role_id'))}"
+        )
+    elif section == "verification_channels":
+        value = (
+            f"Verify text channel: {_channel_or_not_set(guild, _cfg_value(cfg, 'verify_channel_id') or _cfg_value(cfg, 'verification_channel_id'))}\n"
+            f"Voice verify channel: {_channel_or_not_set(guild, _cfg_value(cfg, 'vc_verify_channel_id') or _cfg_value(cfg, 'voice_verify_channel_id'))}\n"
+            f"Staff VC queue: {_channel_or_not_set(guild, _cfg_value(cfg, 'vc_verify_queue_channel_id') or _cfg_value(cfg, 'vc_verify_requests_channel_id'))}\n"
+            f"Welcome/start channel: {_channel_or_not_set(guild, _cfg_value(cfg, 'welcome_channel_id'))}"
+        )
+    elif section == "logs_status":
+        value = (
+            f"Mod/security log: {_channel_or_not_set(guild, _cfg_value(cfg, 'modlog_channel_id') or _cfg_value(cfg, 'raidlog_channel_id') or _cfg_value(cfg, 'raid_log_channel_id'))}\n"
+            f"Join/leave log: {_channel_or_not_set(guild, _cfg_value(cfg, 'join_log_channel_id') or _cfg_value(cfg, 'join_exit_log_channel_id'))}\n"
+            f"Bot status: {_channel_or_not_set(guild, _cfg_value(cfg, 'status_channel_id') or _cfg_value(cfg, 'bot_status_channel_id') or _cfg_value(cfg, 'health_channel_id'))}\n"
+            f"Bans/blacklist: {_channel_or_not_set(guild, _cfg_value(cfg, 'bans_channel_id') or _cfg_value(cfg, 'blacklist_channel_id'))}"
+        )
+    elif section == "behavior":
+        value = (
+            f"Verification mode: `{_safe_str(_cfg_value(cfg, 'verification_mode'), 'not chosen')}`\n"
+            f"Ticket prefix: `{_safe_str(_cfg_value(cfg, 'ticket_prefix'), 'ticket')}`\n"
+            f"Verify kick hours: `{_safe_str(_cfg_value(cfg, 'verify_kick_hours'), '24')}`\n"
+            f"Basic Verify: `{'on' if bool(_cfg_value(cfg, 'basic_verify_enabled') or _cfg_value(cfg, 'basic_button_verify_enabled')) else 'off'}`"
+        )
+    else:
+        value = "No section snapshot available."
+
+    embed.add_field(name="Currently Saved", value=value[:1024], inline=False)
+    embed.add_field(
+        name="Safe Rule",
+        value="Changing this section only saves the selected Discord IDs/settings. It does not delete existing channels, roles, tickets, or messages.",
+        inline=False,
+    )
+
+
 async def _build_main_setup_payload(guild: discord.Guild) -> tuple[discord.Embed, "SolidSetupView"]:
     cfg = None
     try:
@@ -1073,6 +1141,8 @@ class SolidSetupView(discord.ui.View):
             description="Pick where logs and status messages go. Names do not matter.",
             color=discord.Color.blurple(),
         )
+        if interaction.guild is not None:
+            await _add_saved_setup_section(embed, interaction.guild, "logs_status")
         await interaction.response.edit_message(embed=embed, view=LogsStatusPickerView())
 
     @discord.ui.button(label="Ticket Menu Options", emoji="🗂️", style=discord.ButtonStyle.secondary, custom_id="stoney_solid:dashboard_categories", row=3)
@@ -1095,6 +1165,8 @@ class SolidSetupView(discord.ui.View):
             description="Pick verification style, ticket prefix, kick timer, and other behavior settings.",
             color=discord.Color.blurple(),
         )
+        if interaction.guild is not None:
+            await _add_saved_setup_section(embed, interaction.guild, "behavior")
         await interaction.response.edit_message(embed=embed, view=BehaviorSettingsView())
 
     # Row 4 — Navigation
@@ -1171,6 +1243,8 @@ class TicketSetupHubView(SetupNavView):
             description="Pick where tickets go. Use your exact server items. Names do not matter. Each save is checked first.",
             color=discord.Color.blurple(),
         )
+        if interaction.guild is not None:
+            await _add_saved_setup_section(embed, interaction.guild, "ticket_basics")
         await interaction.response.edit_message(embed=embed, view=TicketBasicsPickerView())
 
     @discord.ui.button(label="Ticket Menu Options", emoji="🗂️", style=discord.ButtonStyle.primary, custom_id="stoney_solid:ticket_hub_menu", row=0)
@@ -1208,6 +1282,8 @@ class VerifySetupHubView(SetupNavView):
             ),
             inline=False,
         )
+        if interaction.guild is not None:
+            await _add_saved_setup_section(embed, interaction.guild, "access_roles")
         await interaction.response.edit_message(embed=embed, view=AccessRolesPickerView())
 
     @discord.ui.button(label="Verification Channels", emoji="🎙️", style=discord.ButtonStyle.primary, custom_id="stoney_solid:verify_hub_channels", row=0)
@@ -1219,6 +1295,8 @@ class VerifySetupHubView(SetupNavView):
             description="Pick the channels your verification flow uses. Leave anything unused blank.",
             color=discord.Color.blurple(),
         )
+        if interaction.guild is not None:
+            await _add_saved_setup_section(embed, interaction.guild, "verification_channels")
         await interaction.response.edit_message(embed=embed, view=VerificationChannelsPickerView())
 
     @discord.ui.button(label="Behavior Settings", emoji="⚙️", style=discord.ButtonStyle.secondary, custom_id="stoney_solid:verify_hub_behavior", row=1)
@@ -1230,6 +1308,8 @@ class VerifySetupHubView(SetupNavView):
             description="Pick verification style, ticket prefix, kick timer, and other behavior settings.",
             color=discord.Color.blurple(),
         )
+        if interaction.guild is not None:
+            await _add_saved_setup_section(embed, interaction.guild, "behavior")
         await interaction.response.edit_message(embed=embed, view=BehaviorSettingsView())
 
 
@@ -1248,6 +1328,8 @@ class ChooseExistingView(SetupNavView):
             description="Pick where tickets go. Use your exact server items. Names do not matter. Each save is checked first.",
             color=discord.Color.blurple(),
         )
+        if interaction.guild is not None:
+            await _add_saved_setup_section(embed, interaction.guild, "ticket_basics")
         await interaction.response.edit_message(embed=embed, view=TicketBasicsPickerView())
 
     @discord.ui.button(label="Access Roles", emoji="🎭", style=discord.ButtonStyle.primary, custom_id="stoney_solid:existing_roles", row=1)
@@ -1272,6 +1354,8 @@ class ChooseExistingView(SetupNavView):
             ),
             inline=False,
         )
+        if interaction.guild is not None:
+            await _add_saved_setup_section(embed, interaction.guild, "access_roles")
         await interaction.response.edit_message(embed=embed, view=AccessRolesPickerView())
 
     @discord.ui.button(label="Verification Channels", emoji="🎙️", style=discord.ButtonStyle.primary, custom_id="stoney_solid:existing_channels", row=2)
@@ -1283,6 +1367,8 @@ class ChooseExistingView(SetupNavView):
             description="Optional. Pick the channels your verification flow uses. If your server does not use one, leave it blank.",
             color=discord.Color.blurple(),
         )
+        if interaction.guild is not None:
+            await _add_saved_setup_section(embed, interaction.guild, "verification_channels")
         await interaction.response.edit_message(embed=embed, view=VerificationChannelsPickerView())
 
     @discord.ui.button(label="Logs + Status", emoji="🧾", style=discord.ButtonStyle.primary, custom_id="stoney_solid:existing_logs", row=3)
@@ -1294,6 +1380,8 @@ class ChooseExistingView(SetupNavView):
             description="Pick where logs and status messages go. Names do not matter.",
             color=discord.Color.blurple(),
         )
+        if interaction.guild is not None:
+            await _add_saved_setup_section(embed, interaction.guild, "logs_status")
         await interaction.response.edit_message(embed=embed, view=LogsStatusPickerView())
 
     @discord.ui.button(label="Behavior Settings", emoji="⚙️", style=discord.ButtonStyle.secondary, custom_id="stoney_solid:existing_behavior", row=3)
@@ -1307,6 +1395,8 @@ class ChooseExistingView(SetupNavView):
             ),
             color=discord.Color.blurple(),
         )
+        if interaction.guild is not None:
+            await _add_saved_setup_section(embed, interaction.guild, "behavior")
         await interaction.response.edit_message(embed=embed, view=BehaviorSettingsView())
 
 
