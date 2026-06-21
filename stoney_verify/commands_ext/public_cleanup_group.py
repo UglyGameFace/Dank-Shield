@@ -313,6 +313,167 @@ async def cleanup_purge(
         await interaction.followup.send(f"❌ Purge failed: `{_truncate(e, 300)}`", ephemeral=True)
 
 
+
+@cleanup_group.command(name="invites", description="Scan old messages and remove blocked Discord invites only.")
+@app_commands.describe(
+    channel="Channel to scan. Defaults to the current channel.",
+    amount="Recent messages to check per channel",
+    all_text_channels="Scan every text channel the bot can read",
+    dry_run="Preview only without deleting",
+)
+async def cleanup_invites(
+    interaction: discord.Interaction,
+    channel: Optional[discord.TextChannel] = None,
+    amount: Optional[app_commands.Range[int, 1, 1000]] = 500,
+    all_text_channels: Optional[bool] = False,
+    dry_run: Optional[bool] = True,
+) -> None:
+    if not await _staff_only(interaction):
+        return
+
+    guild = await _guild_or_reply(interaction)
+    if guild is None:
+        return
+
+    await safe_defer(interaction, ephemeral=True)
+
+    bot_member = guild.me
+    if bot_member is None:
+        return await interaction.followup.send("❌ Bot member could not be resolved in this server.", ephemeral=True)
+
+    from stoney_verify.invite_policy_engine import (
+        decide_invite_message,
+        delete_message_if_allowed,
+        extract_invite_codes_from_message,
+    )
+
+    use_amount = int(amount or 500)
+    targets: list[discord.TextChannel] = []
+
+    if all_text_channels:
+        targets = list(getattr(guild, "text_channels", []) or [])
+    else:
+        target = channel or interaction.channel
+        if not isinstance(target, discord.TextChannel):
+            return await interaction.followup.send("❌ Pick a text channel or run this inside a text channel.", ephemeral=True)
+        targets = [target]
+
+    checked_channels = 0
+    checked_messages = 0
+    invite_messages = 0
+    would_delete = 0
+    deleted = 0
+    failed = 0
+    allowed = 0
+    skipped_perm = 0
+    sample_lines: list[str] = []
+
+    for ch in targets:
+        if not isinstance(ch, discord.TextChannel):
+            continue
+
+        perms = ch.permissions_for(bot_member)
+        if not perms.view_channel or not perms.read_message_history:
+            skipped_perm += 1
+            sample_lines.append(f"⚠️ #{ch.name}: missing View Channel or Read Message History")
+            continue
+        if not dry_run and not perms.manage_messages:
+            skipped_perm += 1
+            sample_lines.append(f"⚠️ #{ch.name}: missing Manage Messages")
+            continue
+
+        checked_channels += 1
+
+        try:
+            async for msg in ch.history(limit=use_amount):
+                checked_messages += 1
+
+                try:
+                    if getattr(msg, "author", None) and getattr(interaction.client, "user", None):
+                        if int(getattr(msg.author, "id", 0) or 0) == int(getattr(interaction.client.user, "id", 0) or 0):
+                            continue
+                except Exception:
+                    pass
+
+                codes = extract_invite_codes_from_message(msg)
+                if not codes:
+                    continue
+
+                invite_messages += 1
+                decision = await decide_invite_message(
+                    msg,
+                    source="history_invite_cleanup",
+                    refresh_policy=True,
+                )
+
+                if decision.should_delete:
+                    would_delete += 1
+                    if dry_run:
+                        if len(sample_lines) < 12:
+                            sample_lines.append(
+                                f"🧪 #{ch.name}: would delete `{','.join(decision.codes[:3])}` "
+                                f"rule={decision.rule_id}"
+                            )
+                        continue
+
+                    ok = await delete_message_if_allowed(msg, decision)
+                    if ok:
+                        deleted += 1
+                        if len(sample_lines) < 12:
+                            sample_lines.append(
+                                f"🗑️ #{ch.name}: deleted `{','.join(decision.codes[:3])}` "
+                                f"rule={decision.rule_id}"
+                            )
+                    else:
+                        failed += 1
+                        if len(sample_lines) < 12:
+                            sample_lines.append(
+                                f"❌ #{ch.name}: failed `{','.join(decision.codes[:3])}` "
+                                f"error={decision.delete_error or 'unknown'}"
+                            )
+                else:
+                    allowed += 1
+                    if len(sample_lines) < 12:
+                        sample_lines.append(
+                            f"✅ #{ch.name}: allowed `{','.join(decision.codes[:3])}` "
+                            f"rule={decision.rule_id}"
+                        )
+
+        except Exception as e:
+            failed += 1
+            if len(sample_lines) < 12:
+                sample_lines.append(f"❌ #{ch.name}: scan failed {type(e).__name__}: {_truncate(e, 180)}")
+
+    mode = "DRY RUN" if dry_run else "DELETED"
+    summary = (
+        f"🧹 Invite history cleanup — {mode}\n"
+        f"Channels checked: `{checked_channels}`\n"
+        f"Messages checked: `{checked_messages}`\n"
+        f"Messages with Discord invites: `{invite_messages}`\n"
+        f"Would delete: `{would_delete}`\n"
+        f"Deleted: `{deleted}`\n"
+        f"Allowed/internal/exempt: `{allowed}`\n"
+        f"Failed: `{failed}`\n"
+        f"Skipped permission: `{skipped_perm}`"
+    )
+
+    if sample_lines:
+        summary += "\n\n" + "\n".join(sample_lines[:12])
+
+    try:
+        print(
+            "🧹 invite_history_cleanup "
+            f"guild={guild.id} dry_run={dry_run} all_channels={all_text_channels} "
+            f"channels={checked_channels} messages={checked_messages} "
+            f"invite_messages={invite_messages} would_delete={would_delete} "
+            f"deleted={deleted} failed={failed} skipped_perm={skipped_perm}"
+        )
+    except Exception:
+        pass
+
+    await interaction.followup.send(_truncate(summary, 1900), ephemeral=True)
+
+
 # ============================================================
 # Registration
 # ============================================================
