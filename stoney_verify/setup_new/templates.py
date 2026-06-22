@@ -171,35 +171,90 @@ def build_setup_template_select_options() -> list[discord.SelectOption]:
     ]
 
 
+def _compact_choice_line(choice: SetupTemplateChoice) -> str:
+    return f"{choice.emoji} **{choice.label}** — {choice.short_description}"
+
+
 def build_setup_template_embed(*, selected_key: Optional[str] = None, guild_name: str = "this server") -> discord.Embed:
     selected = get_setup_template(selected_key or "")
 
+    if selected:
+        embed = discord.Embed(
+            title=f"{selected.emoji} {selected.label}",
+            description=(
+                "✅ **Selected for preview.**\n\n"
+                "Press **Use This Setup** to save this choice.\n"
+                "Press **Preview Only** if you only wanted to look.\n\n"
+                "**Nothing is published until you confirm.**"
+            ),
+            color=discord.Color.green(),
+        )
+        embed.add_field(
+            name="What this setup does",
+            value=selected.short_description[:1024],
+            inline=False,
+        )
+        embed.add_field(
+            name="What members see",
+            value=selected.member_preview[:1024],
+            inline=False,
+        )
+        embed.add_field(
+            name="Best for",
+            value=selected.staff_preview[:1024],
+            inline=False,
+        )
+
+        if selected.key == "custom_setup":
+            embed.add_field(
+                name="Next screen",
+                value=(
+                    "After you press **Use This Setup**, Dank Shield opens the manual service picker. "
+                    "There you can turn Tickets, Basic Verify, Voice Verify, SpamGuard, and Logs on/off."
+                ),
+                inline=False,
+            )
+        else:
+            embed.add_field(
+                name="Next step",
+                value=(
+                    "After saving, use **Use My Existing Server** to map existing channels/roles, "
+                    "or **Create Missing Items** only when something is actually missing."
+                ),
+                inline=False,
+            )
+
+        embed.set_footer(text=f"Previewing {selected.label} for {guild_name}. Nothing is published until you confirm.")
+        return embed
+
     embed = discord.Embed(
-        title="Choose what this server needs",
+        title="Choose setup type",
         description=(
-            "Pick the closest option. You can preview it first and change it later.\n\n"
-            "No option forces long forms on members by default."
+            "Pick one option from the menu below.\n\n"
+            "**You do not need to read a wall of text.** "
+            "Select one, preview it, then confirm or go back."
         ),
         color=discord.Color.blurple(),
     )
 
-    for choice in SETUP_TEMPLATE_CHOICES:
-        marker = "✅ Selected" if selected and selected.key == choice.key else ""
-        value = (
-            f"{choice.short_description}\n"
-            f"**Members see:** {choice.member_preview}\n"
-            f"**Good for:** {choice.staff_preview}"
-        )
-        if marker:
-            value = f"{marker}\n{value}"
-        embed.add_field(name=f"{choice.emoji} {choice.label}", value=value[:1024], inline=False)
-
-    if selected:
-        embed.set_footer(text=f"Previewing {selected.label} for {guild_name}. Nothing is published until you confirm.")
-    else:
-        embed.set_footer(text="Use the menu below to choose. Nothing is changed until you confirm.")
-
+    embed.add_field(
+        name="Choices",
+        value="\n".join(_compact_choice_line(choice) for choice in SETUP_TEMPLATE_CHOICES)[:1024],
+        inline=False,
+    )
+    embed.add_field(
+        name="Simple pick",
+        value=(
+            "Most normal servers: **Basic server**.\n"
+            "Support/tickets only: **Help desk**.\n"
+            "One-button verification only: use **Basic verify** from the main setup choices when available.\n"
+            "Manual control: **Custom setup**."
+        ),
+        inline=False,
+    )
+    embed.set_footer(text="Use the menu below. Nothing is changed until you confirm.")
     return embed
+
 
 
 def plain_setup_choice_summary(key: str) -> str:
