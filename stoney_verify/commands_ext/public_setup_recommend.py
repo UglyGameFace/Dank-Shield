@@ -449,6 +449,29 @@ class SetupChoiceView(solid.BackToSetupView):
         )
         await solid._save_config(interaction, payload)
 
+        if selected == "custom_setup":
+            try:
+                from . import public_setup_fresh_choice
+                return await public_setup_fresh_choice._open_custom_service_picker(
+                    interaction,
+                    saved_message=(
+                        "Saved **Custom setup**. Now turn each service on/off below. "
+                        "This is the actual manual editor."
+                    ),
+                )
+            except Exception as e:
+                embed = discord.Embed(
+                    title="✅ Custom Setup Saved",
+                    description=(
+                        "Saved **Custom setup**, but the manual service editor did not open.\n\n"
+                        f"Error: `{type(e).__name__}: {str(e)[:220]}`\n\n"
+                        "Nothing else was changed. Use **Use My Existing Server** while this is repaired."
+                    ),
+                    color=discord.Color.orange(),
+                    timestamp=now_utc(),
+                )
+                return await solid._edit_or_followup(interaction, embed=embed, view=ProductSetupHomeView())
+
         embed = build_setup_template_embed(selected_key=selected, guild_name=str(guild.name))
         embed.title = "✅ Setup Choice Saved"
         embed.description = (
@@ -574,6 +597,44 @@ class ProductSetupHomeView(discord.ui.View):
         await solid._safe_defer_update(interaction)
         embed, view = await solid._build_category_manager_payload(guild)
         await solid._edit_or_followup(interaction, embed=embed, view=view)
+
+    @discord.ui.button(label="Custom Setup", emoji="🧩", style=discord.ButtonStyle.success, custom_id="dank_setup:custom_editor", row=3)
+    async def custom_editor(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        if not await solid._require_setup_permission(interaction):
+            return
+        guild = interaction.guild
+        if guild is None:
+            return await interaction.response.send_message("❌ This must be used inside a server.", ephemeral=True)
+
+        await solid._safe_defer_update(interaction)
+
+        payload = setup_template_payload("custom_setup")
+        payload.update(
+            {
+                "setup_choice_selected_at": solid._utc_iso(),
+                "setup_choice_selected_by_id": str(interaction.user.id),
+                "setup_choice_selected_by_name": str(interaction.user),
+            }
+        )
+        await solid._save_config(interaction, payload)
+
+        try:
+            from . import public_setup_fresh_choice
+            return await public_setup_fresh_choice._open_custom_service_picker(
+                interaction,
+                saved_message=(
+                    "Opened **Custom setup**. Turn each service on/off below. "
+                    "This is the actual manual editor."
+                ),
+            )
+        except Exception as e:
+            embed = discord.Embed(
+                title="Custom Setup Did Not Open",
+                description=f"Saved Custom setup, but the editor failed: `{type(e).__name__}: {str(e)[:220]}`",
+                color=discord.Color.orange(),
+                timestamp=now_utc(),
+            )
+            await solid._edit_or_followup(interaction, embed=embed, view=self)
 
     @discord.ui.button(label="Health Check", emoji="🩺", style=discord.ButtonStyle.secondary, custom_id="dank_setup:health", row=2)
     async def health(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
