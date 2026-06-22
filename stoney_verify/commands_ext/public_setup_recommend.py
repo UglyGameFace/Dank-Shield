@@ -686,6 +686,7 @@ async def _open_manage_setup(interaction: discord.Interaction) -> None:
         value=(
             "🧩 **Service Switches** — turn features ON/OFF.\n"
             "🧭 **Saved Roles/Channels** — change mapped roles/channels.\n"
+            "🎨 **Server Design** — fonts, separators, category frames, emojis, preview/apply, rollback.\n"
             "🧾 **Ticket Menu Options** — edit ticket choices.\n"
             "🧯 **Recovery / Start Over** — reset/undo setup safely.\n"
             "❓ **Help / FAQ** — plain-language help."
@@ -866,6 +867,13 @@ class ManageSetupView(discord.ui.View):
     @discord.ui.button(label="Ticket Menu Options", emoji="🧾", style=discord.ButtonStyle.secondary, custom_id="dank_setup_manage:ticket_menu", row=1)
     async def ticket_menu(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         await _open_ticket_menu(interaction)
+
+    @discord.ui.button(label="Server Design", emoji="🎨", style=discord.ButtonStyle.primary, custom_id="dank_setup_manage:design", row=2)
+    async def server_design(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        if not await solid._require_setup_permission(interaction):
+            return
+        from . import public_design_bridge
+        await public_design_bridge.open_design_studio_from_setup(interaction)
 
     @discord.ui.button(label="Recovery / Start Over", emoji="🧯", style=discord.ButtonStyle.danger, custom_id="dank_setup_manage:recovery", row=1)
     async def recovery(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:

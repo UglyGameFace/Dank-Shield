@@ -898,7 +898,17 @@ class PlainSetupHomeView(discord.ui.View):
             color=discord.Color.blurple(),
             timestamp=now_utc(),
         )
-        embed.add_field(name="Tools", value="🧩 Services\n🧭 Saved roles/channels\n🧾 Ticket menu\n❓ Help", inline=False)
+        embed.add_field(
+            name="Tools",
+            value=(
+                "🧩 Services\n"
+                "🧭 Saved roles/channels\n"
+                "🎨 Server Design — fonts, separators, category frames, emojis\n"
+                "🧾 Ticket menu\n"
+                "❓ Help"
+            ),
+            inline=False,
+        )
         await interaction.response.edit_message(embed=embed, view=PlainManageSetupView())
 
 
@@ -947,6 +957,13 @@ class PlainManageSetupView(solid.BackToSetupView):
     @discord.ui.button(label="Ticket Menu Options", emoji="🧾", style=discord.ButtonStyle.secondary, custom_id="dank_setup_plain_manage:ticket_menu", row=1)
     async def ticket_menu(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         await _open_ticket_menu_options(interaction)
+
+    @discord.ui.button(label="Server Design", emoji="🎨", style=discord.ButtonStyle.primary, custom_id="dank_setup_plain_manage:design", row=2)
+    async def server_design(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        if not await solid._require_setup_permission(interaction):
+            return
+        from . import public_design_bridge
+        await public_design_bridge.open_design_studio_from_setup(interaction)
 
     @discord.ui.button(label="Help / FAQ", emoji="❓", style=discord.ButtonStyle.secondary, custom_id="dank_setup_plain_manage:help", row=1)
     async def help_faq(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
