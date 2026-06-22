@@ -533,15 +533,20 @@ def _add_recovery_button(view: discord.ui.View) -> discord.ui.View:
     return view
 
 
+async def open_recovery_center(interaction: discord.Interaction) -> None:
+    if not await solid._require_setup_permission(interaction):
+        return
+    guild = interaction.guild
+    if guild is None:
+        return await interaction.response.send_message("❌ This must be used inside a server.", ephemeral=True)
+    await solid._safe_defer_update(interaction)
+    embed = await _build_recovery_embed(guild)
+    await solid._edit_or_followup(interaction, embed=embed, view=RecoveryCenterView())
+
+
 async def _build_main_with_recovery(guild: discord.Guild):
     builder = _ORIGINAL_BUILD_MAIN or recommend._product_main_setup_payload
-    embed, view = await builder(guild)
-    embed.add_field(
-        name="Need to undo setup?",
-        value="Use **Recovery / Start Over** if the wrong roles/channels/menu options were saved. It saves a restore snapshot first.",
-        inline=False,
-    )
-    return embed, _add_recovery_button(view)
+    return await builder(guild)
 
 
 def _patch() -> None:
@@ -561,4 +566,4 @@ def register_public_setup_recovery_commands(bot: Any, tree: Any) -> None:
     print("✅ public_setup_recovery: setup recovery/start-over center active")
 
 
-__all__ = ["register_public_setup_recovery_commands"]
+__all__ = ["register_public_setup_recovery_commands", "open_recovery_center"]

@@ -1,0 +1,40 @@
+from __future__ import annotations
+
+from pathlib import Path
+
+recommend = Path("stoney_verify/commands_ext/public_setup_recommend.py").read_text()
+fresh = Path("stoney_verify/commands_ext/public_setup_fresh_choice.py").read_text()
+recovery = Path("stoney_verify/commands_ext/public_setup_recovery.py").read_text()
+
+failures: list[str] = []
+
+for src_name, src in {"recommend": recommend, "fresh": fresh}.items():
+    for marker in ("Start / Continue Setup", "Setup Check", "Test / Launch", "Manage Setup"):
+        if marker not in src:
+            failures.append(f"{src_name} home missing {marker}")
+
+if 'custom_id="dank_setup:custom_editor"' in recommend:
+    failures.append("duplicate Custom Setup shortcut still exists on product home")
+
+if "Need to undo setup?" in recommend or "Need to undo setup?" in fresh:
+    failures.append("Recovery warning still appears on the setup home")
+
+if "_add_recovery_button(view)" in recovery or 'name="Need to undo setup?"' in recovery:
+    failures.append("Recovery still injects top-level home button/field")
+
+if "open_recovery_center" not in recovery:
+    failures.append("Recovery center helper is missing for Manage Setup")
+
+if "custom_id=\"dank_setup_choice:custom\"" not in fresh:
+    failures.append("Custom setup choice is missing from Choose Setup Type")
+
+if "_open_custom_service_picker(interaction)" not in fresh:
+    failures.append("Custom setup choice does not open service switches")
+
+if failures:
+    print("FAIL setup home final architecture")
+    for item in failures:
+        print(" -", item)
+    raise SystemExit(1)
+
+print("PASS setup home final architecture")
