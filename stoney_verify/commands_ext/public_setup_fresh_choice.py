@@ -689,16 +689,77 @@ def _build_setup_help_embed() -> discord.Embed:
 async def _plain_choice_main_payload(guild: discord.Guild) -> tuple[discord.Embed, discord.ui.View]:
     progress_text, done, total, next_step = await _setup_progress_for_home(guild)
     service_summary, service_hint = await _service_summary_for_home(guild)
-    embed = discord.Embed(title="🚀 Dank Shield Setup", description="Pick what this server actually needs. Start with **Choose Setup Type**. Then map roles/channels or create missing basics.", color=discord.Color.blurple(), timestamp=now_utc())
-    embed.add_field(name="Setup Choices", value=_choice_lines(guild)[:1024], inline=False)
-    embed.add_field(name="Current Choice", value=service_summary[:1024], inline=False)
-    embed.add_field(name="Health Check Focus", value=service_hint[:1024], inline=False)
-    embed.add_field(name=f"Setup Progress: {done}/{total} complete", value=progress_text or "No setup checks ran.", inline=False)
-    embed.add_field(name="Recommended Next Step", value=str(next_step or "Choose Setup Type")[:1024], inline=False)
-    embed.add_field(name="Product Rule", value="Basic verify is public-safe. Tickets open fast. Forms are optional only. Setup stays per-server.", inline=False)
-    embed.set_footer(text=f"Guild {guild.id} • /dank setup")
-    return embed, PlainSetupHomeView()
 
+    issues = [
+        line.strip()
+        for line in str(progress_text or "").splitlines()
+        if line.strip().startswith(("⚠️", "🚫", "❌"))
+    ][:4]
+
+    ready = bool(total and done >= total)
+    status = (
+        "✅ **Ready to test.** Post/update the needed panels, then test with an alt."
+        if ready
+        else f"⚠️ **Setup in progress:** `{done}/{total}` complete."
+    )
+
+    current = str(service_summary or "No setup type chosen yet.").strip()
+    current_lines = [line.strip() for line in current.splitlines() if line.strip()]
+    current_text = "\n".join(current_lines[:4])[:900] or "No setup type chosen yet."
+
+    embed = discord.Embed(
+        title="🚀 Dank Shield Setup Hub",
+        description=(
+            "Use this like a wizard from top to bottom. "
+            "Each action lives in one place so users are not guessing."
+        ),
+        color=discord.Color.green() if ready else discord.Color.blurple(),
+        timestamp=now_utc(),
+    )
+
+    embed.add_field(
+        name="1️⃣ Start / Change Setup Type",
+        value=(
+            "Press **Choose Setup Type** first.\n"
+            "Pick Basic server, Basic verify, Help desk, Voice check, ID check, ID + voice, or Custom.\n"
+            "**Custom setup opens the service switches after you choose it.**"
+        ),
+        inline=False,
+    )
+
+    embed.add_field(
+        name="2️⃣ Map or Create Items",
+        value=(
+            "Press **Use My Existing Server** if roles/channels already exist.\n"
+            "Press **Create Missing Items** only when something is actually missing.\n"
+            "Press **Ticket Menu Options** only to edit ticket choices."
+        ),
+        inline=False,
+    )
+
+    embed.add_field(
+        name="3️⃣ Check + Launch",
+        value=(
+            f"{status}\n"
+            f"Next: **{str(next_step or 'Run Setup Check.')[:300]}**"
+        ),
+        inline=False,
+    )
+
+    embed.add_field(
+        name="Current Selection",
+        value=current_text,
+        inline=False,
+    )
+
+    embed.add_field(
+        name="Needs Attention",
+        value="\n".join(issues)[:900] if issues else "✅ No required setup problems shown here. Run **Setup Check** for the full truth check.",
+        inline=False,
+    )
+
+    embed.set_footer(text=f"Guild {guild.id} • /dank setup • clean wizard flow")
+    return embed, PlainSetupHomeView()
 
 class PlainSetupHomeView(discord.ui.View):
     def __init__(self) -> None:
