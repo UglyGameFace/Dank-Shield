@@ -98,7 +98,7 @@ def _cfg_value(cfg: Any, key: str, default: Any = None) -> Any:
 async def _load_config(guild_id: int) -> Any:
     try:
         from stoney_verify.guild_config import get_guild_config
-        return await get_guild_config(int(guild_id), refresh=False)
+        return await get_guild_config(int(guild_id), refresh=True)
     except Exception:
         return None
 
@@ -122,8 +122,22 @@ def _bot_can_send(channel: Optional[discord.TextChannel]) -> bool:
         if not isinstance(me, discord.Member):
             return False
         perms = channel.permissions_for(me)
-        return bool(perms.view_channel and perms.send_messages)
-    except Exception:
+        ok = bool(
+            perms.view_channel
+            and perms.send_messages
+            and perms.embed_links
+            and perms.read_message_history
+        )
+        if not ok:
+            _log(
+                "channel not writable "
+                f"guild={channel.guild.id} channel={channel.id} "
+                f"view={bool(perms.view_channel)} send={bool(perms.send_messages)} "
+                f"embed={bool(perms.embed_links)} history={bool(perms.read_message_history)}"
+            )
+        return ok
+    except Exception as exc:
+        _log(f"channel permission check failed: {type(exc).__name__}: {exc}")
         return False
 
 
@@ -305,6 +319,8 @@ async def _send_public_join(member: discord.Member, channel: Optional[discord.Te
         embed.set_thumbnail(url=avatar)
     embed.set_footer(text="dank_shield:welcome_event:v2")
     await channel.send(embed=embed, allowed_mentions=discord.AllowedMentions.none())
+    _log(f"public leave sent guild={member.guild.id} member={member.id} channel={channel.id}")
+    _log(f"public join sent guild={member.guild.id} member={member.id} channel={channel.id}")
 
 
 async def _send_public_leave(member: discord.Member, channel: Optional[discord.TextChannel]) -> None:
@@ -398,7 +414,10 @@ JOIN_LEAVE_KEYS = (
 
     # Legacy/setup aliases used by older setup flows and setup health.
     "join_log_channel_id",
+    "join_exit_log_channel_id",
     "joinlog_channel_id",
+    "leave_log_channel_id",
+    "welcome_leave_channel_id",
 
     # Friendly names used by some setup templates.
     "welcome_exit_channel_id",

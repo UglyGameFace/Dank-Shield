@@ -307,7 +307,18 @@ async def _resolve_configured_channel(guild: discord.Guild, *field_names: str) -
 
 
 async def _resolve_join_log_channel(guild: discord.Guild) -> Optional[discord.TextChannel]:
-    return await _resolve_configured_channel(guild, "join_log_channel_id")
+    return await _resolve_configured_channel(
+        guild,
+        "join_leave_log_channel_id",
+        "member_join_leave_log_channel_id",
+        "member_lifecycle_log_channel_id",
+        "join_log_channel_id",
+        "join_exit_log_channel_id",
+        "joinlog_channel_id",
+        "leave_log_channel_id",
+        "welcome_exit_channel_id",
+        "welcome_leave_channel_id",
+    )
 
 
 async def _resolve_staff_modlog_channel(guild: discord.Guild) -> Optional[discord.TextChannel]:

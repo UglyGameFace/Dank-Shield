@@ -1365,18 +1365,9 @@ async def on_member_join(member: discord.Member):
                 if strip_msg:
                     await _post_raidlog(guild, strip_msg)
 
-            target_ch: Optional[discord.TextChannel] = None
-            try:
-                if JOIN_LOG_CHANNEL_ID and int(JOIN_LOG_CHANNEL_ID) != 0:
-                    ch = guild.get_channel(int(JOIN_LOG_CHANNEL_ID))
-                    if isinstance(ch, discord.TextChannel):
-                        target_ch = ch
-            except Exception:
-                target_ch = None
-
-            if not target_ch:
-                target_ch = _get_modlog_channel(guild)
-
+            # Public join/leave routing is owned by member_lifecycle_router_guard.
+            # This legacy event keeps only the detailed staff audit fallback.
+            target_ch: Optional[discord.TextChannel] = _get_modlog_channel(guild)
             if target_ch:
                 await target_ch.send(embed=embed, view=build_quick_mod_view(member.id))
 
@@ -1528,6 +1519,8 @@ async def on_member_remove(member: discord.Member):
         except Exception:
             pass
 
+        # Public leave routing is owned by member_lifecycle_router_guard.
+        # Keep this legacy path staff-only through modlog for compatibility.
         embed = discord.Embed(title="📤 Member Left", color=discord.Color.blurple())
         embed.add_field(name="User", value=f"`{member}` (`{member.id}`)", inline=False)
         await _post_modlog(guild, embed, view=None)
