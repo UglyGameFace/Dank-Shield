@@ -1379,6 +1379,23 @@ class SolidSetupView(discord.ui.View):
         )
         await interaction.response.edit_message(embed=embed, view=BuildMissingItemsReviewView())
 
+    @discord.ui.button(label="Custom Setup", emoji="🧩", style=discord.ButtonStyle.success, custom_id="stoney_solid:dashboard_custom_setup", row=2)
+    async def custom_setup(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        if not await _require_setup_permission(interaction):
+            return
+        await _safe_defer_update(interaction)
+        try:
+            from . import public_setup_fresh_choice
+            await public_setup_fresh_choice._open_custom_service_picker(interaction)  # type: ignore[attr-defined]
+        except Exception as e:
+            await safe_interaction_error(
+                interaction,
+                title="Custom Setup Did Not Open",
+                error=e,
+                hint="Nothing was changed. Use Configure Features or Use My Existing Server while this is repaired.",
+                view=self,
+            )
+
     # Row 2 — extra setup work
     @discord.ui.button(label="Configure Features", emoji="🧭", style=discord.ButtonStyle.secondary, custom_id="stoney_solid:dashboard_features", row=2)
     async def features(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:

@@ -106,6 +106,95 @@ async def _get_guild_config_safe(guild_id: int) -> Any:
         return None
 
 
+
+def _cfg_any(cfg: Any, *names: str, default: Any = None) -> Any:
+    sources: list[Any] = []
+    if cfg is not None:
+        sources.append(cfg)
+
+    for bucket in ("settings", "config", "metadata", "meta"):
+        try:
+            value = cfg.get(bucket) if hasattr(cfg, "get") else getattr(cfg, bucket, None)
+            if isinstance(value, dict):
+                sources.append(value)
+        except Exception:
+            pass
+
+    for source in sources:
+        for name in names:
+            try:
+                if hasattr(source, "get"):
+                    value = source.get(name)
+                    if value not in (None, "", 0, "0"):
+                        return value
+            except Exception:
+                pass
+            try:
+                value = getattr(source, name, None)
+                if value not in (None, "", 0, "0"):
+                    return value
+            except Exception:
+                pass
+
+    return default
+
+
+def _cfg_bool_any(cfg: Any, *names: str, default: bool = False) -> bool:
+    value = _cfg_any(cfg, *names, default=None)
+    try:
+        if isinstance(value, bool):
+            return value
+        if value is None:
+            return bool(default)
+        text = str(value).strip().lower()
+        if text in {"1", "true", "yes", "y", "on", "enabled"}:
+            return True
+        if text in {"0", "false", "no", "n", "off", "disabled"}:
+            return False
+    except Exception:
+        pass
+    return bool(default)
+
+
+def _cfg_mode(cfg: Any) -> str:
+    return str(_cfg_any(cfg, "verification_mode", "verify_mode", "setup_choice", "setup_type", "setup_mode", default="") or "").strip().lower()
+
+
+def _should_auto_route_unverified_ticket(cfg: Any) -> bool:
+    """Only advanced verification should hijack public support ticket clicks.
+
+    Basic Verify is a simple button flow. In Basic Verify-only mode, unverified
+    members must still be allowed to open normal support tickets, and the ID/web
+    verification panel must not appear in support tickets.
+    """
+
+    mode = _cfg_mode(cfg)
+
+    id_enabled = (
+        _cfg_bool_any(cfg, "id_verify_enabled", "web_verify_enabled", "id_web_verify_enabled", "verification_requires_id", default=False)
+        or mode in {"id_check", "id", "id_verify", "id verification", "web", "web_verify", "id_web", "id+web", "id/web", "id_voice_check"}
+    )
+
+    voice_enabled = (
+        _cfg_bool_any(cfg, "vc_verify_enabled", "voice_verify_enabled", "voice_verification_enabled", "verification_allows_voice", default=False)
+        or mode in {"voice_check", "voice", "vc", "vc_verify", "voice_verify", "id_voice_check"}
+    )
+
+    basic_enabled = (
+        _cfg_bool_any(cfg, "basic_verify_enabled", "basic_button_verify_enabled", "verification_enabled", default=False)
+        or mode in {"basic_verify", "basic", "basic_button", "simple_verify", "public_basic"}
+    )
+
+    if id_enabled or voice_enabled:
+        return True
+
+    if basic_enabled:
+        return False
+
+    # No advanced verify feature is enabled, so do not intercept support tickets.
+    return False
+
+
 def _is_staff(member: discord.Member, cfg: Any) -> bool:
     try:
         if member.guild_permissions.administrator or member.guild_permissions.manage_guild or member.guild_permissions.manage_channels:
@@ -605,6 +694,14 @@ async def _ensure_ticket_channel_access(channel: discord.TextChannel, member: di
 
 async def _post_verify_ui(channel: discord.TextChannel, member: discord.Member) -> bool:
     try:
+        cfg = await _get_guild_config_safe(channel.guild.id)
+        if not _should_auto_route_unverified_ticket(cfg):
+            _log(
+                "skipped verification UI post in ticket "
+                f"guild={channel.guild.id} channel={channel.id} user={member.id} reason=basic_verify_or_no_advanced_verify"
+            )
+            return False
+
         if not await _ensure_ticket_channel_access(channel, member):
             return False
         from stoney_verify.verify_ui import post_or_replace_verify_ui
@@ -820,9 +917,16 @@ async def _handle_unverified_panel_click(interaction: discord.Interaction) -> bo
         return False
     if not await _is_unverified_only_member(member):
         return False
-    await _defer(interaction)
 
     cfg = await _get_guild_config_safe(guild.id)
+    if not _should_auto_route_unverified_ticket(cfg):
+        _log(
+            "public ticket click allowed through normal support path "
+            f"guild={guild.id} user={member.id} reason=basic_verify_or_no_advanced_verify"
+        )
+        return False
+
+    await _defer(interaction)
     vc_locked, vc_message = await _ensure_configured_vc_verify_locked(guild, cfg)
     if not vc_locked:
         await _reply(
