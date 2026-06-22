@@ -18,16 +18,13 @@ def register_public_design_group_commands(bot: Any = None, tree: Any = None) -> 
     if _REGISTERED:
         return
 
-    # Dank Design command registration is now native.
-    # Strict/majority helpers are still temporary until their behavior is moved
-    # into the design service module in the next cleanup pass.
-    from stoney_verify.startup_guards import server_design_strict_layout_guard as strict_layout
-    from stoney_verify.startup_guards import server_design_majority_layout_guard as majority_layout
+    # Dank Design command registration is native. Layout enhancements are now
+    # activated from commands_ext, not from startup boot.
     from stoney_verify.commands_ext import public_design_studio as design
+    from stoney_verify.commands_ext import public_design_enhancements as enhancements
 
-    strict_layout.apply()
     design.register_public_design_studio_command(bot, tree)
-    majority_layout.apply()
+    enhancements.activate_public_design_enhancements()
     _REGISTERED = True
     print("✅ public_design_group registered native /dank design")
 

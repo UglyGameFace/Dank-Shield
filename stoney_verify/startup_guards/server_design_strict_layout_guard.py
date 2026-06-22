@@ -184,24 +184,28 @@ def _patch_command_guard_options() -> None:
     try:
         import sys
 
-        command_guard = sys.modules.get("stoney_verify.startup_guards.server_design_studio_command_guard")
-        if command_guard is None or getattr(command_guard, "_DANK_GOTHIC_LOCK_NORMALIZER_ACTIVE", False):
-            return
+        for module_name in (
+            "stoney_verify.commands_ext.public_design_studio",
+            "stoney_verify.startup_guards.server_design_studio_command_guard",
+        ):
+            command_guard = sys.modules.get(module_name)
+            if command_guard is None or getattr(command_guard, "_DANK_GOTHIC_LOCK_NORMALIZER_ACTIVE", False):
+                continue
 
-        original_load = getattr(command_guard, "_load_design_options", None)
-        original_save = getattr(command_guard, "_save_design_options", None)
-        if not callable(original_load) or not callable(original_save):
-            return
+            original_load = getattr(command_guard, "_load_design_options", None)
+            original_save = getattr(command_guard, "_save_design_options", None)
+            if not callable(original_load) or not callable(original_save):
+                continue
 
-        async def _load_design_options_normalized(guild_id: int) -> dict[str, Any]:
-            return _normalize_gothic_design_options(await original_load(guild_id))
+            async def _load_design_options_normalized(guild_id: int, _original_load=original_load) -> dict[str, Any]:
+                return _normalize_gothic_design_options(await _original_load(guild_id))
 
-        async def _save_design_options_normalized(guild_id: int, options: Mapping[str, Any]) -> None:
-            await original_save(guild_id, _normalize_gothic_design_options(options))
+            async def _save_design_options_normalized(guild_id: int, options: Mapping[str, Any], _original_save=original_save) -> None:
+                await _original_save(guild_id, _normalize_gothic_design_options(options))
 
-        command_guard._load_design_options = _load_design_options_normalized
-        command_guard._save_design_options = _save_design_options_normalized
-        command_guard._DANK_GOTHIC_LOCK_NORMALIZER_ACTIVE = True
+            command_guard._load_design_options = _load_design_options_normalized
+            command_guard._save_design_options = _save_design_options_normalized
+            command_guard._DANK_GOTHIC_LOCK_NORMALIZER_ACTIVE = True
     except Exception:
         pass
 
@@ -271,7 +275,5 @@ def apply() -> bool:
             pass
         return False
 
-
-apply()
 
 __all__ = ["apply"]

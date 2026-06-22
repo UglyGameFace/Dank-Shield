@@ -27,7 +27,10 @@ def _is_consistency_repair(options: Mapping[str, Any]) -> bool:
         return True
     try:
         for frame in inspect.stack(context=0)[1:10]:
-            if frame.function == "consistency" and "server_design_studio_command_guard" in frame.filename:
+            if frame.function == "consistency" and (
+                "server_design_studio_command_guard" in frame.filename
+                or "public_design_studio" in frame.filename
+            ):
                 return True
     except Exception:
         pass
@@ -495,7 +498,10 @@ def apply() -> bool:
         from stoney_verify.services import server_design_majority_layout as majority
         from stoney_verify.services import server_design_studio as studio
 
-        command_guard = sys.modules.get("stoney_verify.startup_guards.server_design_studio_command_guard")
+        command_guard = (
+            sys.modules.get("stoney_verify.commands_ext.public_design_studio")
+            or sys.modules.get("stoney_verify.startup_guards.server_design_studio_command_guard")
+        )
         if command_guard is None:
             return False
         if getattr(command_guard, "_DANK_MAJORITY_LAYOUT_PLAN_ACTIVE", False):
@@ -532,7 +538,5 @@ def apply() -> bool:
             pass
         return False
 
-
-apply()
 
 __all__ = ["apply"]
