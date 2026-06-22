@@ -2,9 +2,10 @@ from __future__ import annotations
 
 """Simplify Protection Center invite setup into a guided flow.
 
-This version is compatible with the newer ProtectionCenterView(author_id, cfg,
-spam) signature and then loads the final invite policy compatibility guard so
-/dank protection works from both the slash command and /dank setup.
+This guard only reshapes the older Protection Center invite setup surface. The
+central invite policy engine and /dank protection refresh/view behavior now live
+in their native modules, so this file must not load the retired invite policy
+runtime compatibility guard.
 """
 
 from typing import Any
@@ -298,7 +299,6 @@ def _chain_extra_guards() -> None:
         "modlog_center_tracking_guard",
         "live_guild_name_footer_guard",
         "protection_invite_toggle_cleanup_guard",
-        "invite_policy_runtime_compat_guard",
     ):
         try:
             module = __import__(f"stoney_verify.startup_guards.{name}", fromlist=["apply"])
