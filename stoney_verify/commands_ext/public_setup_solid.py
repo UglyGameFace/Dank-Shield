@@ -736,6 +736,11 @@ async def _build_health_embed(guild: discord.Guild) -> discord.Embed:
 
     blockers, warnings, ok = _setup_doctor_truth_filter(cfg, blockers, warnings, ok)
 
+    from stoney_verify.setup_doctor_canonical import normalize_setup_health, truth_rules_text
+
+    doctor = normalize_setup_health(cfg=cfg, blockers=blockers, warnings=warnings, ok=ok)
+    blockers, warnings, ok = doctor.blockers, doctor.warnings, doctor.ok
+
     def _matches(line: str, words: tuple[str, ...]) -> bool:
         low = str(line or "").lower()
         return any(word in low for word in words)
