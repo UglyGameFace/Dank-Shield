@@ -400,7 +400,7 @@ async def _detect_existing_service_payload(guild: discord.Guild) -> tuple[dict[s
     if spamguard:
         labels.append("SpamGuard")
     if moderation:
-        labels.append("Logs/Moderation")
+        labels.append("Logs")
 
     return detected, labels
 
@@ -436,15 +436,18 @@ async def _autofill_custom_state_from_existing(guild: discord.Guild, state: Any)
 
 def _custom_services_embed(guild: discord.Guild, state: Any, *, saved_message: str = "") -> discord.Embed:
     embed = discord.Embed(
-        title="🧭 Choose Dank Shield Services",
-        description="Pick exactly what this server uses. **Basic Verify** is the simple one-button verify gate. Voice Verify is separate. SpamGuard still has its own actual guard switch.",
+        title="🧩 Custom Setup — Service Switches",
+        description=(
+            "Turn each service **ON or OFF** for this server.\n\n"
+            "The buttons below show the current state. Tap a service button to switch it."
+        ),
         color=discord.Color.blurple(),
         timestamp=now_utc(),
     )
     if saved_message:
         embed.add_field(name="Saved", value=saved_message[:1024], inline=False)
-    embed.add_field(name="Selected Services", value=_service_summary_text(state), inline=False)
-    embed.add_field(name="Health Check Focus", value=_service_hint_text(state), inline=False)
+    embed.add_field(name="Current ON/OFF State", value=_service_summary_text(state), inline=False)
+    embed.add_field(name="What Setup Check Will Look At", value=_service_hint_text(state), inline=False)
     embed.add_field(name="Presets", value="\n".join(f"{emoji} **{label}** — {desc}" for label, _flags, desc, emoji in CUSTOM_PRESETS.values())[:1024], inline=False)
     embed.add_field(
         name="Next",
@@ -484,8 +487,14 @@ class CustomServicePresetSelect(discord.ui.Select):
 
 class CustomServiceToggleButton(discord.ui.Button):
     def __init__(self, key: str, label: str, selected: bool, emoji: str, row: int) -> None:
-        action = "Turn OFF" if selected else "Turn ON"
-        super().__init__(label=f"{action}: {label}", emoji=emoji, style=discord.ButtonStyle.success if selected else discord.ButtonStyle.secondary, row=row)
+        state_text = "ON ✅" if selected else "OFF ⬜"
+        super().__init__(
+            label=f"{label}: {state_text}",
+            emoji=emoji,
+            style=discord.ButtonStyle.success if selected else discord.ButtonStyle.secondary,
+            custom_id=f"dank_setup_custom_toggle:{key}",
+            row=row,
+        )
         self.key = key
         self.short_label = label
 
@@ -493,21 +502,36 @@ class CustomServiceToggleButton(discord.ui.Button):
         guild = interaction.guild
         if guild is None:
             return await interaction.response.send_message("❌ This must be used inside a server.", ephemeral=True)
+
         state = await _load_custom_state(guild.id)
         payload = state.as_payload()
-        payload[self.key] = not bool(payload.get(self.key, False))
+        next_value = not bool(payload.get(self.key, False))
+        payload[self.key] = next_value
+
         if self.key == "voice_verification_enabled" and payload[self.key]:
             payload["verification_enabled"] = True
             payload["tickets_enabled"] = True
             payload["moderation_enabled"] = True
+
         if self.key == "verification_enabled" and not payload[self.key]:
             payload["voice_verification_enabled"] = False
+
         if self.key == "spam_guard_enabled" and payload[self.key]:
             payload["moderation_enabled"] = True
+
         await interaction.response.defer(ephemeral=True)
         await _save_custom_services(guild.id, payload, interaction.user)
         next_state = await _load_custom_state(guild.id)
-        await interaction.edit_original_response(embed=_custom_services_embed(guild, next_state, saved_message=f"Updated **{self.short_label}**."), view=CustomServiceModeView(next_state))
+
+        await interaction.edit_original_response(
+            embed=_custom_services_embed(
+                guild,
+                next_state,
+                saved_message=f"Set **{self.short_label}** to **{'ON' if next_value else 'OFF'}**.",
+            ),
+            view=CustomServiceModeView(next_state),
+        )
+
 
 
 class CustomServiceModeView(discord.ui.View):
@@ -533,8 +557,8 @@ class CustomServiceModeView(discord.ui.View):
         self.add_item(CustomServiceToggleButton("tickets_enabled", "Tickets", state.tickets, "🎫", 3))
         self.add_item(CustomServiceToggleButton("verification_enabled", "Basic Verify", state.verification, "✅", 3))
         self.add_item(CustomServiceToggleButton("voice_verification_enabled", "Voice Verify", state.voice, "🎙️", 3))
-        self.add_item(CustomServiceToggleButton("spam_guard_enabled", "SpamGuard service", state.spamguard, "🛡️", 4))
-        self.add_item(CustomServiceToggleButton("moderation_enabled", "Logs/Moderation", state.moderation, "🧾", 4))
+        self.add_item(CustomServiceToggleButton("spam_guard_enabled", "SpamGuard", state.spamguard, "🛡️", 4))
+        self.add_item(CustomServiceToggleButton("moderation_enabled", "Logs", state.moderation, "🧾", 4))
 
     @discord.ui.button(label="View Current Setup", emoji="📋", style=discord.ButtonStyle.primary, custom_id="dank_setup_custom_current", row=1)
     async def current_setup(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
