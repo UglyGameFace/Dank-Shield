@@ -16,7 +16,7 @@ async def open_design_studio_from_setup(interaction: discord.Interaction) -> Non
     """Open Dank Design from a setup/manage button."""
 
     try:
-        from stoney_verify.startup_guards import server_design_studio_command_guard as design
+        from stoney_verify.commands_ext import public_design_studio as design
 
         if not await design._require_design_permission(interaction):  # type: ignore[attr-defined]
             return

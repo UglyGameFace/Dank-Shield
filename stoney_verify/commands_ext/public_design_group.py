@@ -18,19 +18,18 @@ def register_public_design_group_commands(bot: Any = None, tree: Any = None) -> 
     if _REGISTERED:
         return
 
-    # TEMPORARY BRIDGE:
-    # Dank Design is still being migrated out of startup guards. Keep one clean
-    # registration point here until server_design_studio_command_guard is split
-    # into a native command module.
+    # Dank Design command registration is now native.
+    # Strict/majority helpers are still temporary until their behavior is moved
+    # into the design service module in the next cleanup pass.
     from stoney_verify.startup_guards import server_design_strict_layout_guard as strict_layout
-    from stoney_verify.startup_guards import server_design_studio_command_guard as design
     from stoney_verify.startup_guards import server_design_majority_layout_guard as majority_layout
+    from stoney_verify.commands_ext import public_design_studio as design
 
     strict_layout.apply()
-    design.apply()
+    design.register_public_design_studio_command(bot, tree)
     majority_layout.apply()
     _REGISTERED = True
-    print("✅ public_design_group registered /dank design via temporary design bridge")
+    print("✅ public_design_group registered native /dank design")
 
 
 __all__ = ["register_public_design_group_commands"]
