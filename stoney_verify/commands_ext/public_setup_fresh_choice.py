@@ -114,7 +114,22 @@ async def _service_summary_for_home(guild: discord.Guild) -> tuple[str, str]:
         cfg = await solid.get_guild_config(guild.id, refresh=True)  # type: ignore[attr-defined]
     except Exception:
         cfg = None
-    return (f"**Chosen:** {_plain_saved_choice_from_cfg(cfg)}\nTickets: fast when enabled\nBasic verify: available for every server\nForms: off unless you turn them on", "Pick **Choose Setup Type** first if this is a new server.")
+
+    choice = _plain_saved_choice_from_cfg(cfg)
+    try:
+        state = await _load_custom_state(guild.id)
+        if str(_auto_cfg_value(cfg, "setup_choice", "") or "").strip() == "custom_setup":
+            return (
+                f"**Chosen:** {choice}\n{_service_summary_text(state)}",
+                _service_hint_text(state),
+            )
+    except Exception:
+        pass
+
+    return (
+        f"**Chosen:** {choice}\nTickets: fast when enabled\nBasic verify: available for every server\nForms: off unless you turn them on",
+        "Pick **Choose Setup Type** first if this is a new server.",
+    )
 
 
 def _service_flags_for_choice(choice: PlainSetupChoice) -> dict[str, bool]:
@@ -164,14 +179,93 @@ async def _save_choice(interaction: discord.Interaction, choice: PlainSetupChoic
     await solid._save_config(interaction, _choice_payload(choice))  # type: ignore[attr-defined]
 
 
+def _state_word(value: bool) -> str:
+    return "ON ✅" if value else "OFF ⬜"
+
+
 def _service_summary_text(state: Any) -> str:
     return (
-        f"{'✅' if state.tickets else '⬜'} Tickets\n"
-        f"{'✅' if state.verification else '⬜'} Basic Verify\n"
-        f"{'✅' if state.voice else '⬜'} Voice verification\n"
-        f"{'✅' if state.spamguard else '⬜'} SpamGuard service\n"
-        f"{'✅' if state.moderation else '⬜'} Logs/Moderation"
+        f"Tickets: **{_state_word(bool(state.tickets))}**\n"
+        f"Basic Verify: **{_state_word(bool(state.verification))}**\n"
+        f"Voice Verify: **{_state_word(bool(state.voice))}**\n"
+        f"SpamGuard: **{_state_word(bool(state.spamguard))}**\n"
+        f"Logs: **{_state_word(bool(state.moderation))}**"
     )
+
+
+def _custom_enabled_labels_from_payload(payload: dict[str, Any]) -> list[str]:
+    labels: list[str] = []
+    if bool(payload.get("tickets_enabled")):
+        labels.append("Tickets")
+    if bool(payload.get("verification_enabled")):
+        labels.append("Basic Verify")
+    if bool(payload.get("voice_verification_enabled")):
+        labels.append("Voice Verify")
+    if bool(payload.get("spam_guard_enabled")):
+        labels.append("SpamGuard")
+    if bool(payload.get("moderation_enabled")):
+        labels.append("Logs")
+    return labels
+
+
+def _custom_mix_label(payload: dict[str, Any]) -> str:
+    labels = _custom_enabled_labels_from_payload(payload)
+    return "Custom mix: " + (", ".join(labels) if labels else "No services selected")
+
+
+def _custom_preset_key_for_payload(payload: dict[str, Any]) -> str:
+    clean = {key: bool(payload.get(key, False)) for key in _CUSTOM_SERVICE_FLAG_KEYS}
+    for preset_key, (_label, flags, _desc, _emoji) in CUSTOM_PRESETS.items():
+        preset_clean = {key: bool(flags.get(key, False)) for key in _CUSTOM_SERVICE_FLAG_KEYS}
+        if preset_clean == clean:
+            return preset_key
+    return ""
+
+
+def _custom_service_config_patch(payload: dict[str, Any]) -> dict[str, Any]:
+    """Save service switches plus the derived setup flags other modules read."""
+
+    clean = {key: bool(payload.get(key, False)) for key in _CUSTOM_SERVICE_FLAG_KEYS}
+    voice_on = bool(clean.get("voice_verification_enabled", False))
+    basic_on = bool(clean.get("verification_enabled", False))
+    tickets_on = bool(clean.get("tickets_enabled", False))
+    spam_on = bool(clean.get("spam_guard_enabled", False))
+    logs_on = bool(clean.get("moderation_enabled", False))
+
+    if voice_on:
+        basic_on = True
+        tickets_on = True
+        logs_on = True
+
+    clean.update(
+        {
+            "tickets_enabled": tickets_on,
+            "ticket_service_enabled": tickets_on,
+            "verification_enabled": basic_on,
+            "basic_verify_enabled": basic_on,
+            "basic_button_verify_enabled": basic_on,
+            "voice_verification_enabled": voice_on,
+            "vc_verify_enabled": voice_on,
+            "voice_verify_enabled": voice_on,
+            "verification_allows_voice": voice_on,
+            "spam_guard_enabled": spam_on,
+            "moderation_enabled": logs_on,
+            "logs_enabled": logs_on,
+            # Custom setup is public-safe by default. ID/web is never implied.
+            "id_verify_enabled": False,
+            "web_verify_enabled": False,
+            "id_web_verify_enabled": False,
+            "verification_requires_id": False,
+            "verification_panel_style": "voice_check" if voice_on else "basic_verify" if basic_on else "none",
+            "verification_mode": "voice_check" if voice_on else "basic_button" if basic_on else "none",
+            "verify_mode": "voice_check" if voice_on else "basic_button" if basic_on else "none",
+            "setup_choice": "custom_setup",
+            "setup_choice_label": _custom_mix_label(clean),
+            "setup_choice_description": "Custom setup service switches.",
+            "setup_choice_member_sees": _custom_mix_label(clean),
+        }
+    )
+    return clean
 
 
 def _service_hint_text(state: Any) -> str:
@@ -189,7 +283,7 @@ def _service_hint_text(state: Any) -> str:
 
 async def _save_custom_services(guild_id: int, payload: dict[str, bool], actor: Any) -> None:
     from stoney_verify.startup_guards import setup_service_modes as modes
-    await modes._save_service_state(guild_id, payload, actor)
+    await modes._save_service_state(guild_id, _custom_service_config_patch(dict(payload)), actor)
 
 
 async def _load_custom_state(guild_id: int) -> Any:
@@ -435,26 +529,32 @@ async def _autofill_custom_state_from_existing(guild: discord.Guild, state: Any)
 
 
 def _custom_services_embed(guild: discord.Guild, state: Any, *, saved_message: str = "") -> discord.Embed:
+    payload = {key: bool(state.as_payload().get(key, False)) for key in _CUSTOM_SERVICE_FLAG_KEYS}
+    preset_key = _custom_preset_key_for_payload(payload)
+    preset_label = CUSTOM_PRESETS.get(preset_key, ("Custom mix", {}, "", "🧩"))[0] if preset_key else "Custom mix"
+
     embed = discord.Embed(
         title="🧩 Custom Setup — Service Switches",
         description=(
-            "Turn each service **ON or OFF** for this server.\n\n"
-            "The buttons below show the current state. Tap a service button to switch it."
+            "This is the real Custom Setup editor.\\n"
+            "The buttons show each service as **ON** or **OFF**. Tap one to switch it."
         ),
         color=discord.Color.blurple(),
         timestamp=now_utc(),
     )
     if saved_message:
         embed.add_field(name="Saved", value=saved_message[:1024], inline=False)
-    embed.add_field(name="Current ON/OFF State", value=_service_summary_text(state), inline=False)
-    embed.add_field(name="What Setup Check Will Look At", value=_service_hint_text(state), inline=False)
-    embed.add_field(name="Presets", value="\n".join(f"{emoji} **{label}** — {desc}" for label, _flags, desc, emoji in CUSTOM_PRESETS.values())[:1024], inline=False)
+
+    embed.add_field(name="Current Mode", value=f"**{preset_label}**\\n{_custom_mix_label(payload)}", inline=False)
+    embed.add_field(name="Service Switches", value=_service_summary_text(state), inline=False)
+    embed.add_field(name="Setup Check Will Require", value=_service_hint_text(state), inline=False)
     embed.add_field(
         name="Next",
         value=(
-            "Press **View Current Setup** to see the saved channels/roles/categories.\n"
-            "Press **Use My Existing Server** to map existing roles/channels.\n"
-            "Press **Review / Create Missing Items** only when something is missing."
+            "1. Use the buttons below to get the services right.\\n"
+            "2. Press **Use My Existing Server** to map channels/roles.\\n"
+            "3. Press **Setup Check**.\\n"
+            "4. Press **Test / Launch** from setup home when check passes."
         ),
         inline=False,
     )
@@ -462,19 +562,58 @@ def _custom_services_embed(guild: discord.Guild, state: Any, *, saved_message: s
     return embed
 
 
+
 class CustomServicePresetSelect(discord.ui.Select):
     def __init__(self, current: Any) -> None:
         options = []
-        current_payload = current.as_payload()
+        current_payload = {key: bool(current.as_payload().get(key, False)) for key in _CUSTOM_SERVICE_FLAG_KEYS}
+        preset_key = _custom_preset_key_for_payload(current_payload)
+
+        if not preset_key:
+            options.append(
+                discord.SelectOption(
+                    label=_custom_mix_label(current_payload)[:100],
+                    value="__custom_current__",
+                    description="Current manual ON/OFF switches.",
+                    emoji="🧩",
+                    default=True,
+                )
+            )
+
         for key, (label, flags, desc, emoji) in CUSTOM_PRESETS.items():
-            options.append(discord.SelectOption(label=label, value=key, description=desc[:100], emoji=emoji, default=flags == current_payload))
-        super().__init__(placeholder="Choose a preset or use the toggles below", min_values=1, max_values=1, options=options, row=0)
+            preset_clean = {flag_key: bool(flags.get(flag_key, False)) for flag_key in _CUSTOM_SERVICE_FLAG_KEYS}
+            options.append(
+                discord.SelectOption(
+                    label=label,
+                    value=key,
+                    description=desc[:100],
+                    emoji=emoji,
+                    default=(key == preset_key),
+                )
+            )
+
+        super().__init__(
+            placeholder=_custom_mix_label(current_payload)[:150],
+            min_values=1,
+            max_values=1,
+            options=options[:25],
+            row=0,
+        )
 
     async def callback(self, interaction: discord.Interaction) -> None:
         guild = interaction.guild
         if guild is None:
             return await interaction.response.send_message("❌ This must be used inside a server.", ephemeral=True)
+
         key = str(self.values[0])
+        if key == "__custom_current__":
+            await interaction.response.defer(ephemeral=True)
+            state = await _load_custom_state(guild.id)
+            return await interaction.edit_original_response(
+                embed=_custom_services_embed(guild, state, saved_message="Still using your current **Custom mix**."),
+                view=CustomServiceModeView(state),
+            )
+
         preset = CUSTOM_PRESETS.get(key)
         if preset is None:
             return await interaction.response.send_message("❌ Unknown preset.", ephemeral=True)
@@ -482,7 +621,11 @@ class CustomServicePresetSelect(discord.ui.Select):
         await interaction.response.defer(ephemeral=True)
         await _save_custom_services(guild.id, dict(flags), interaction.user)
         state = await _load_custom_state(guild.id)
-        await interaction.edit_original_response(embed=_custom_services_embed(guild, state, saved_message=f"Saved **{label}**. {desc}"), view=CustomServiceModeView(state))
+        await interaction.edit_original_response(
+            embed=_custom_services_embed(guild, state, saved_message=f"Saved **{label}**. {desc}"),
+            view=CustomServiceModeView(state),
+        )
+
 
 
 class CustomServiceToggleButton(discord.ui.Button):
