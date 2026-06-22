@@ -490,6 +490,215 @@ def _category_governance_text(rows: list[dict[str, Any]]) -> str:
     return "\n".join(f"• {item}" for item in warnings)[:1024]
 
 
+def _setup_doc_bool(value: Any, default: bool = False) -> bool:
+    try:
+        if isinstance(value, bool):
+            return value
+        if value is None:
+            return bool(default)
+        text = str(value).strip().lower()
+        if text in {"1", "true", "yes", "y", "on", "enabled"}:
+            return True
+        if text in {"0", "false", "no", "n", "off", "disabled"}:
+            return False
+    except Exception:
+        pass
+    return bool(default)
+
+
+def _setup_doc_cfg_bool(cfg: Any, *keys: str, default: bool = False) -> bool:
+    for key in keys:
+        value = _cfg_value(cfg, key)
+        if value is not None:
+            return _setup_doc_bool(value, default)
+    return bool(default)
+
+
+def _setup_doc_has_id(cfg: Any, *keys: str) -> bool:
+    for key in keys:
+        if _safe_int(_cfg_value(cfg, key), 0) > 0:
+            return True
+    return False
+
+
+def _setup_doc_features(cfg: Any) -> dict[str, bool]:
+    mode = _safe_str(_cfg_value(cfg, "verification_mode") or _cfg_value(cfg, "setup_type") or _cfg_value(cfg, "setup_mode"), "").lower()
+
+    tickets = (
+        _setup_doc_cfg_bool(cfg, "tickets_enabled", "ticketing_enabled", default=False)
+        or "ticket" in mode
+        or "help desk" in mode
+        or "helpdesk" in mode
+        or _setup_doc_has_id(cfg, "ticket_category_id", "open_ticket_category_id")
+        or _setup_doc_has_id(cfg, "ticket_archive_category_id", "archive_category_id", "closed_ticket_category_id")
+        or _setup_doc_has_id(cfg, "ticket_panel_channel_id", "support_channel_id", "panel_channel_id")
+        or _setup_doc_has_id(cfg, "staff_role_id", "ticket_staff_role_id", "support_role_id")
+    )
+
+    basic_verify = (
+        _setup_doc_cfg_bool(cfg, "basic_verify_enabled", "basic_button_verify_enabled", "verify_enabled", "verification_enabled", default=False)
+        or "verify" in mode
+        or _setup_doc_has_id(cfg, "verify_channel_id", "verification_channel_id")
+        or _setup_doc_has_id(cfg, "unverified_role_id", "waiting_role_id")
+        or _setup_doc_has_id(cfg, "verified_role_id", "approved_role_id")
+    )
+
+    vc_verify = (
+        _setup_doc_cfg_bool(cfg, "vc_verify_enabled", "voice_verify_enabled", "enable_vc_verify", default=False)
+        or "voice" in mode
+        or "vc" in mode
+        or _setup_doc_has_id(cfg, "vc_verify_channel_id", "voice_verify_channel_id")
+        or _setup_doc_has_id(cfg, "vc_verify_queue_channel_id", "vc_queue_channel_id", "vc_verify_requests_channel_id")
+    )
+
+    logs = (
+        _setup_doc_cfg_bool(cfg, "logs_enabled", "modlog_enabled", default=False)
+        or _setup_doc_has_id(cfg, "modlog_channel_id", "raidlog_channel_id", "security_log_channel_id")
+        or _setup_doc_has_id(cfg, "transcripts_channel_id", "transcript_channel_id")
+        or _setup_doc_has_id(cfg, "join_log_channel_id", "join_leave_log_channel_id")
+        or _setup_doc_has_id(cfg, "status_channel_id", "bot_status_channel_id")
+    )
+
+    return {
+        "tickets": bool(tickets),
+        "basic_verify": bool(basic_verify),
+        "vc_verify": bool(vc_verify),
+        "logs": bool(logs),
+    }
+
+
+_LAYOUT_ONLY_PHRASES = (
+    "wrong category",
+    "expected it under",
+    "expected under",
+    "not grouped with",
+    "split across categories",
+    "in different categories",
+    "category name looks unusual",
+    "name looks unusual",
+    "separate channels are cleaner",
+    "same category",
+    "category order",
+    "cleaner layout",
+    "between active tickets and archive",
+    "public/start",
+    "staff/tools",
+)
+
+
+_OPTIONAL_PERMISSION_PHRASES = (
+    "view audit log",
+    "manage messages",
+    "kick members",
+    "moderate members",
+    "ban members",
+)
+
+
+_REQUIRED_PERMISSION_PHRASES = (
+    "manage channels",
+    "manage roles",
+    "view channel",
+    "send messages",
+    "read message history",
+    "embed links",
+)
+
+
+def _setup_doc_is_layout_only(line: str) -> bool:
+    low = str(line or "").lower()
+    return any(phrase in low for phrase in _LAYOUT_ONLY_PHRASES)
+
+
+def _setup_doc_is_optional_control(line: str) -> bool:
+    low = str(line or "").lower()
+    return "server-control role" in low or "server control role" in low
+
+
+def _setup_doc_is_optional_permission_only(line: str) -> bool:
+    low = str(line or "").lower()
+    if "permission" not in low:
+        return False
+    has_optional = any(phrase in low for phrase in _OPTIONAL_PERMISSION_PHRASES)
+    has_required = any(phrase in low for phrase in _REQUIRED_PERMISSION_PHRASES)
+    return bool(has_optional and not has_required)
+
+
+def _setup_doc_is_vc_only(line: str) -> bool:
+    low = str(line or "").lower()
+    return "vc verify" in low or "vc verification" in low or "voice verification" in low or "vc queue" in low
+
+
+def _setup_doc_dedupe(items: list[str]) -> list[str]:
+    out: list[str] = []
+    seen: set[str] = set()
+    for item in items:
+        value = str(item or "").strip()
+        if not value or value in seen:
+            continue
+        seen.add(value)
+        out.append(value)
+    return out
+
+
+def _setup_doctor_truth_filter(
+    cfg: Any,
+    blockers: list[str],
+    warnings: list[str],
+    ok: list[str],
+) -> tuple[list[str], list[str], list[str]]:
+    """Final severity sanitizer for the live /dank setup check embed.
+
+    Blockers must be runtime-breaking. Layout, optional control, disabled VC,
+    and useful-but-not-required permission notes become warnings/ok.
+    """
+
+    features = _setup_doc_features(cfg)
+
+    new_blockers: list[str] = []
+    new_warnings: list[str] = list(warnings)
+    new_ok: list[str] = list(ok)
+
+    for line in blockers:
+        value = str(line or "").strip()
+        if not value:
+            continue
+
+        if _setup_doc_is_optional_control(value):
+            new_warnings.append(
+                "Optional setup control role is not saved. Admin/Manage Server users can still configure setup."
+            )
+            continue
+
+        if _setup_doc_is_layout_only(value):
+            new_warnings.append("Layout/style cleanup: " + value)
+            continue
+
+        if _setup_doc_is_optional_permission_only(value):
+            new_warnings.append("Useful optional permission: " + value)
+            continue
+
+        if _setup_doc_is_vc_only(value) and not features.get("vc_verify", False):
+            new_ok.append("VC Verify is disabled/not configured, so VC-only missing items are not blockers.")
+            continue
+
+        new_blockers.append(value)
+
+    new_ok.append(
+        "Detected feature scope: "
+        f"tickets={'on' if features.get('tickets') else 'off'}, "
+        f"basic verify={'on' if features.get('basic_verify') else 'off'}, "
+        f"vc verify={'on' if features.get('vc_verify') else 'off'}, "
+        f"logs={'on' if features.get('logs') else 'off'}."
+    )
+
+    return (
+        _setup_doc_dedupe(new_blockers),
+        _setup_doc_dedupe(new_warnings),
+        _setup_doc_dedupe(new_ok),
+    )
+
+
 async def _build_health_embed(guild: discord.Guild) -> discord.Embed:
     """Dashboard-style health check.
 
@@ -502,6 +711,7 @@ async def _build_health_embed(guild: discord.Guild) -> discord.Embed:
     warnings: list[str] = []
     ok: list[str] = []
 
+    cfg: Any = None
     try:
         cfg = await get_guild_config(guild.id, refresh=True)
         b, w, p = _build_setup_health(guild, cfg)
@@ -523,6 +733,8 @@ async def _build_health_embed(guild: discord.Guild) -> discord.Embed:
             warnings.append(governance)
         else:
             ok.append(governance)
+
+    blockers, warnings, ok = _setup_doctor_truth_filter(cfg, blockers, warnings, ok)
 
     def _matches(line: str, words: tuple[str, ...]) -> bool:
         low = str(line or "").lower()
@@ -644,6 +856,16 @@ async def _build_health_embed(guild: discord.Guild) -> discord.Embed:
         ),
         color=discord.Color.red() if blockers else discord.Color.orange() if warnings else discord.Color.green(),
         timestamp=now_utc(),
+    )
+
+    embed.add_field(
+        name="Truth Rules",
+        value=(
+            "❌ **Blocker** = enabled feature cannot run, saved ID is missing/deleted/wrong type, or required permission is missing.\n"
+            "⚠️ **Warning** = optional feature incomplete, useful permission missing, or layout/privacy/style cleanup.\n"
+            "✅ **Passing** = saved item exists and is usable for the detected feature scope."
+        )[:1024],
+        inline=False,
     )
 
     embed.add_field(
