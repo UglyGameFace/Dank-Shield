@@ -14,6 +14,7 @@ _ERRORS: Dict[str, BaseException] = {}
 _SEEN_IMPORT_MESSAGES: set[str] = set()
 
 _STARTUP_GUARDS: Tuple[str, ...] = (
+    "stoney_verify.startup_guards.embed_literal_newline_guard",
     "stoney_verify.startup_guards.process_health",
     "stoney_verify.startup_guards.command_safety",
     "stoney_verify.startup_guards.global_interaction_trace_guard",

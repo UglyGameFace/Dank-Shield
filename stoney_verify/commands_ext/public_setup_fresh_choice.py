@@ -536,7 +536,7 @@ def _custom_services_embed(guild: discord.Guild, state: Any, *, saved_message: s
     embed = discord.Embed(
         title="🧩 Custom Setup — Service Switches",
         description=(
-            "This is the real Custom Setup editor.\\n"
+            "This is the real Custom Setup editor.\n"
             "The buttons show each service as **ON** or **OFF**. Tap one to switch it."
         ),
         color=discord.Color.blurple(),
@@ -545,15 +545,15 @@ def _custom_services_embed(guild: discord.Guild, state: Any, *, saved_message: s
     if saved_message:
         embed.add_field(name="Saved", value=saved_message[:1024], inline=False)
 
-    embed.add_field(name="Current Mode", value=f"**{preset_label}**\\n{_custom_mix_label(payload)}", inline=False)
+    embed.add_field(name="Current Mode", value=f"**{preset_label}**\n{_custom_mix_label(payload)}", inline=False)
     embed.add_field(name="Service Switches", value=_service_summary_text(state), inline=False)
     embed.add_field(name="Setup Check Will Require", value=_service_hint_text(state), inline=False)
     embed.add_field(
         name="Next",
         value=(
-            "1. Use the buttons below to get the services right.\\n"
-            "2. Press **Use My Existing Server** to map channels/roles.\\n"
-            "3. Press **Setup Check**.\\n"
+            "1. Use the buttons below to get the services right.\n"
+            "2. Press **Use My Existing Server** to map channels/roles.\n"
+            "3. Press **Setup Check**.\n"
             "4. Press **Test / Launch** from setup home when check passes."
         ),
         inline=False,

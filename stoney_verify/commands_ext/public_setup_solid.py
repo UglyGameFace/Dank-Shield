@@ -2317,10 +2317,10 @@ async def _verification_timer_payload(guild: discord.Guild) -> tuple[discord.Emb
     embed.add_field(
         name="Main Wait Timer",
         value=(
-            f"Status: `{'ON' if wait_enabled else 'OFF'}`\\n"
-            f"Delay: `{wait_hours}` hour(s)\\n"
-            "Applies to: pending/unverified members who make no verification progress.\\n"
-            "Stops automatically when they gain a safe role or open a verification ticket.\\n"
+            f"Status: `{'ON' if wait_enabled else 'OFF'}`\n"
+            f"Delay: `{wait_hours}` hour(s)\n"
+            "Applies to: pending/unverified members who make no verification progress.\n"
+            "Stops automatically when they gain a safe role or open a verification ticket.\n"
             f"Active now: join grace `{wait_summary.get('active_join_grace', 0)}`, no-ticket `{wait_summary.get('active_member_no_ticket', 0)}`, ticket `{wait_summary.get('active_ticket_no_response', 0)}`, saved rows `{wait_summary.get('persisted_wait_rows', 0)}`"
         )[:1024],
         inline=False,
@@ -2328,9 +2328,9 @@ async def _verification_timer_payload(guild: discord.Guild) -> tuple[discord.Emb
     embed.add_field(
         name="Advanced No-Start Auto-Remove",
         value=(
-            f"Status: `{'ON' if idle_enabled else 'OFF'}`\\n"
-            f"Delay: `{idle_minutes}` minute(s)\\n"
-            "Applies to: pending/unverified members who never start verification.\\n"
+            f"Status: `{'ON' if idle_enabled else 'OFF'}`\n"
+            f"Delay: `{idle_minutes}` minute(s)\n"
+            "Applies to: pending/unverified members who never start verification.\n"
             f"Active now: `{idle_summary.get('active', 0)}` active, `{idle_summary.get('persisted', 0)}` saved rows"
         )[:1024],
         inline=False,

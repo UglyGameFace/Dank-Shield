@@ -737,10 +737,10 @@ async def _launch_state(guild: discord.Guild) -> dict[str, bool]:
 
 def _launch_state_text(state: dict[str, bool]) -> str:
     return (
-        f"🎫 Tickets: **{'ON ✅' if state.get('tickets') else 'OFF ⬜'}**\\n"
-        f"✅ Basic Verify: **{'ON ✅' if state.get('basic_verify') else 'OFF ⬜'}**\\n"
-        f"🎙️ Voice Verify: **{'ON ✅' if state.get('voice_verify') else 'OFF ⬜'}**\\n"
-        f"🪪 ID/Web Verify: **{'ON ✅' if state.get('id_verify') else 'OFF ⬜'}**\\n"
+        f"🎫 Tickets: **{'ON ✅' if state.get('tickets') else 'OFF ⬜'}**\n"
+        f"✅ Basic Verify: **{'ON ✅' if state.get('basic_verify') else 'OFF ⬜'}**\n"
+        f"🎙️ Voice Verify: **{'ON ✅' if state.get('voice_verify') else 'OFF ⬜'}**\n"
+        f"🪪 ID/Web Verify: **{'ON ✅' if state.get('id_verify') else 'OFF ⬜'}**\n"
         f"🧾 Logs: **{'ON ✅' if state.get('logs') else 'OFF ⬜'}**"
     )
 
@@ -776,7 +776,7 @@ async def _open_test_launch(interaction: discord.Interaction) -> None:
         actions.append("4. ID/Web verify is ON. Only use this for allowlisted/private servers.")
     actions.append("5. Join with an alt, click the public panel(s), and confirm roles/logs.")
 
-    embed.add_field(name="Launch Actions", value="\\n".join(actions)[:1024], inline=False)
+    embed.add_field(name="Launch Actions", value="\n".join(actions)[:1024], inline=False)
     embed.add_field(
         name="Expected Result",
         value="Ticket panel opens a ticket. Basic Verify grants the approved role. No ID/Voice flow appears unless those switches are ON.",
