@@ -3,7 +3,14 @@
 Dank Shield now has one reusable picker contract:
 
 ```py
-from stoney_verify.ui import DankPickerView, make_choice
+from stoney_verify.ui import (
+    DankPickerView,
+    DankRoleSelect,
+    DankChannelSelect,
+    DankUserSelect,
+    DankMentionableSelect,
+    make_choice,
+)
 ```
 
 ## Why this exists
@@ -12,7 +19,15 @@ The bot had dropdowns and picker-like flows scattered across setup, protection, 
 
 ## Rule going forward
 
-New picker/dropdown surfaces must use `DankPickerView` unless Discord requires a native entity selector such as `RoleSelect`, `ChannelSelect`, `UserSelect`, or `MentionableSelect`.
+New picker/dropdown surfaces must use the shared picker kit:
+
+- Use `DankPickerView` for normal option menus.
+- Use `DankRoleSelect` when Discord must pick a role.
+- Use `DankChannelSelect` when Discord must pick a channel/category.
+- Use `DankUserSelect` when Discord must pick a user/member.
+- Use `DankMentionableSelect` when Discord may pick either a role or a user.
+
+Do not create raw `discord.ui.Select`, `RoleSelect`, `ChannelSelect`, `UserSelect`, or `MentionableSelect` classes in feature modules unless there is a documented Discord limitation that the shared kit cannot support yet.
 
 When native Discord entity selectors are required, wrap them in the same UX rules:
 
@@ -28,13 +43,14 @@ When native Discord entity selectors are required, wrap them in the same UX rule
 Move one feature surface at a time. Do not rewrite the whole bot in one PR.
 
 1. `/dank setup` choice screens
-2. `/dank protection` invite/link/spam pickers
-3. `/dank design` style/layout/font/separator pickers
-4. ticket panel/category pickers
-5. members cleanup/review pickers
-6. self-role/profile pickers
-7. welcome/modlog setup pickers
-8. remaining startup guard pickers must be deleted or moved native
+2. `/dank setup` role/channel mapping pickers
+3. `/dank protection` invite/link/spam pickers
+4. `/dank design` style/layout/font/separator pickers
+5. ticket panel/category pickers
+6. members cleanup/review pickers
+7. self-role/profile pickers
+8. welcome/modlog setup pickers
+9. remaining startup guard pickers must be deleted or moved native
 
 ## Required behavior for every picker
 
@@ -46,7 +62,7 @@ Move one feature surface at a time. Do not rewrite the whole bot in one PR.
 - It must give the user an answer instead of letting Discord show `Interaction failed`.
 - It must stay usable on mobile.
 
-## Example
+## Normal option menu example
 
 ```py
 async def on_pick(interaction, value):
@@ -65,9 +81,37 @@ view = DankPickerView(
 )
 ```
 
+## Discord role/channel picker examples
+
+```py
+async def on_role(interaction, role):
+    await save_role(interaction.guild.id, role.id)
+    await interaction.response.edit_message(content=f"Saved {role.mention}.", view=None)
+
+view.add_item(DankRoleSelect(
+    author_id=interaction.user.id,
+    placeholder="Pick the staff role",
+    on_pick=on_role,
+))
+```
+
+```py
+async def on_channel(interaction, channel):
+    await save_channel(interaction.guild.id, channel.id)
+    await interaction.response.edit_message(content=f"Saved {channel.mention}.", view=None)
+
+view.add_item(DankChannelSelect(
+    author_id=interaction.user.id,
+    placeholder="Pick the ticket panel channel",
+    channel_types=[discord.ChannelType.text],
+    on_pick=on_channel,
+))
+```
+
 ## Anti-patterns to remove
 
 - `discord.ui.Select` classes copied per feature with different owner checks.
+- Raw `RoleSelect` / `ChannelSelect` wrappers duplicated in setup, protection, design, and cleanup.
 - Startup guards that monkey-patch select callbacks.
 - Long option labels that truncate important details.
 - Pickers with no Close button.

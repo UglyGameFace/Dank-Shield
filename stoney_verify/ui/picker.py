@@ -5,14 +5,16 @@ from __future__ import annotations
 Goal
 ----
 Every setup/protection/design/ticket/member flow should feel like the same bot.
-This module provides one small, reusable picker contract instead of each feature
+This module provides one reusable picker contract instead of each feature
 inventing its own dropdown wording, back button, cancel behavior, owner checks,
 empty-state handling, and value parsing.
 
 Adoption rule
 -------------
-New picker/dropdown surfaces should use :class:`DankPickerView`. Existing flows
-can migrate one screen at a time without changing their business logic.
+New picker/dropdown surfaces should use :class:`DankPickerView`. Flows that need
+Discord-native entity selectors should use the Dank Shield wrappers in this file:
+:class:`DankRoleSelect`, :class:`DankChannelSelect`, :class:`DankUserSelect`, or
+:class:`DankMentionableSelect`.
 """
 
 from dataclasses import dataclass
@@ -21,6 +23,10 @@ from typing import Any, Awaitable, Callable, Iterable, Optional, Sequence
 import discord
 
 PickerAction = Callable[[discord.Interaction, str], Awaitable[None]]
+RolePickAction = Callable[[discord.Interaction, discord.Role], Awaitable[None]]
+ChannelPickAction = Callable[[discord.Interaction, discord.abc.GuildChannel], Awaitable[None]]
+UserPickAction = Callable[[discord.Interaction, discord.abc.User], Awaitable[None]]
+MentionablePickAction = Callable[[discord.Interaction, Any], Awaitable[None]]
 
 _MAX_SELECT_OPTIONS = 25
 _DEFAULT_TIMEOUT_SECONDS = 900
@@ -86,6 +92,22 @@ async def _safe_ephemeral(interaction: discord.Interaction, message: str) -> Non
             await interaction.followup.send(message, ephemeral=True, allowed_mentions=discord.AllowedMentions.none())
     except Exception:
         pass
+
+
+def _interaction_user_id(interaction: discord.Interaction) -> int:
+    try:
+        return int(getattr(getattr(interaction, "user", None), "id", 0) or 0)
+    except Exception:
+        return 0
+
+
+async def _owner_check(interaction: discord.Interaction, *, author_id: int, allow_anyone: bool) -> bool:
+    if allow_anyone or int(author_id or 0) <= 0:
+        return True
+    if _interaction_user_id(interaction) == int(author_id or 0):
+        return True
+    await _safe_ephemeral(interaction, "Only the person who opened this picker can use it.")
+    return False
 
 
 class _DankPickerSelect(discord.ui.Select):
@@ -159,12 +181,7 @@ class DankPickerView(discord.ui.View):
             self.add_item(_PickerCancelButton(label=cancel_label))
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
-        if self.allow_anyone or self.author_id <= 0:
-            return True
-        if int(getattr(getattr(interaction, "user", None), "id", 0) or 0) == self.author_id:
-            return True
-        await _safe_ephemeral(interaction, "Only the person who opened this picker can use it.")
-        return False
+        return await _owner_check(interaction, author_id=self.author_id, allow_anyone=self.allow_anyone)
 
     async def handle_pick(self, interaction: discord.Interaction, value: str) -> None:
         if value in {"", "__dank_empty__"}:
@@ -211,10 +228,137 @@ class _PickerCancelButton(discord.ui.Button):
             await owner.close(interaction)
 
 
+class DankRoleSelect(discord.ui.RoleSelect):
+    """Dank Shield wrapper for Discord role picking."""
+
+    def __init__(
+        self,
+        *,
+        author_id: int,
+        on_pick: RolePickAction,
+        placeholder: str,
+        row: int = 0,
+        allow_anyone: bool = False,
+        min_values: int = 1,
+        max_values: int = 1,
+    ) -> None:
+        super().__init__(placeholder=_clip(placeholder, 150), min_values=min_values, max_values=max_values, row=row)
+        self.author_id = int(author_id or 0)
+        self.allow_anyone = bool(allow_anyone)
+        self.on_pick = on_pick
+
+    async def callback(self, interaction: discord.Interaction) -> None:  # type: ignore[override]
+        if not await _owner_check(interaction, author_id=self.author_id, allow_anyone=self.allow_anyone):
+            return
+        role = self.values[0] if self.values else None
+        if not isinstance(role, discord.Role):
+            return await _safe_ephemeral(interaction, "Pick a role first.")
+        await self.on_pick(interaction, role)
+
+
+class DankChannelSelect(discord.ui.ChannelSelect):
+    """Dank Shield wrapper for Discord channel/category picking."""
+
+    def __init__(
+        self,
+        *,
+        author_id: int,
+        on_pick: ChannelPickAction,
+        placeholder: str,
+        channel_types: Optional[list[discord.ChannelType]] = None,
+        row: int = 0,
+        allow_anyone: bool = False,
+        min_values: int = 1,
+        max_values: int = 1,
+    ) -> None:
+        super().__init__(
+            placeholder=_clip(placeholder, 150),
+            min_values=min_values,
+            max_values=max_values,
+            channel_types=channel_types,
+            row=row,
+        )
+        self.author_id = int(author_id or 0)
+        self.allow_anyone = bool(allow_anyone)
+        self.on_pick = on_pick
+
+    async def callback(self, interaction: discord.Interaction) -> None:  # type: ignore[override]
+        if not await _owner_check(interaction, author_id=self.author_id, allow_anyone=self.allow_anyone):
+            return
+        channel = self.values[0] if self.values else None
+        if not isinstance(channel, discord.abc.GuildChannel):
+            return await _safe_ephemeral(interaction, "Pick a server channel first.")
+        await self.on_pick(interaction, channel)
+
+
+class DankUserSelect(discord.ui.UserSelect):
+    """Dank Shield wrapper for Discord user/member picking."""
+
+    def __init__(
+        self,
+        *,
+        author_id: int,
+        on_pick: UserPickAction,
+        placeholder: str,
+        row: int = 0,
+        allow_anyone: bool = False,
+        min_values: int = 1,
+        max_values: int = 1,
+    ) -> None:
+        super().__init__(placeholder=_clip(placeholder, 150), min_values=min_values, max_values=max_values, row=row)
+        self.author_id = int(author_id or 0)
+        self.allow_anyone = bool(allow_anyone)
+        self.on_pick = on_pick
+
+    async def callback(self, interaction: discord.Interaction) -> None:  # type: ignore[override]
+        if not await _owner_check(interaction, author_id=self.author_id, allow_anyone=self.allow_anyone):
+            return
+        user = self.values[0] if self.values else None
+        if user is None:
+            return await _safe_ephemeral(interaction, "Pick a user first.")
+        await self.on_pick(interaction, user)
+
+
+class DankMentionableSelect(discord.ui.MentionableSelect):
+    """Dank Shield wrapper for role/user mentionable picking."""
+
+    def __init__(
+        self,
+        *,
+        author_id: int,
+        on_pick: MentionablePickAction,
+        placeholder: str,
+        row: int = 0,
+        allow_anyone: bool = False,
+        min_values: int = 1,
+        max_values: int = 1,
+    ) -> None:
+        super().__init__(placeholder=_clip(placeholder, 150), min_values=min_values, max_values=max_values, row=row)
+        self.author_id = int(author_id or 0)
+        self.allow_anyone = bool(allow_anyone)
+        self.on_pick = on_pick
+
+    async def callback(self, interaction: discord.Interaction) -> None:  # type: ignore[override]
+        if not await _owner_check(interaction, author_id=self.author_id, allow_anyone=self.allow_anyone):
+            return
+        value = self.values[0] if self.values else None
+        if value is None:
+            return await _safe_ephemeral(interaction, "Pick a user or role first.")
+        await self.on_pick(interaction, value)
+
+
 __all__ = [
+    "ChannelPickAction",
+    "DankChannelSelect",
     "DankChoice",
+    "DankMentionableSelect",
     "DankPickerView",
+    "DankRoleSelect",
+    "DankUserSelect",
+    "MentionablePickAction",
     "PickerAction",
+    "RolePickAction",
+    "UserPickAction",
     "chunk_choices",
     "make_choice",
     "make_home_choice",
