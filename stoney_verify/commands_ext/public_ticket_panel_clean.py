@@ -17,6 +17,7 @@ import discord
 from discord import app_commands
 
 from .common import _staff_check, reply_once
+from stoney_verify.panel_lifecycle import public_panel_lifecycle_text
 
 _PANEL_VIEW_REGISTERED = False
 _PANEL_GROUP_REGISTERED = False
@@ -731,6 +732,7 @@ async def _component_fallback_listener(i: discord.Interaction) -> None:
 def _panel_embed(guild: discord.Guild) -> discord.Embed:
     e = discord.Embed(title="🎫 Need help? Open a ticket", description="Press **Create Ticket** below, then pick the ticket type.\n\nNo form first. No guessing. You can confirm the category before anything is created.", color=discord.Color.blurple(), timestamp=discord.utils.utcnow())
     e.add_field(name="How it works", value="1. Press **Create Ticket**\n2. Pick a ticket type\n3. Confirm or go back\n4. A private ticket channel opens", inline=False)
+    e.add_field(name="Panel lifetime", value=public_panel_lifecycle_text("Create Ticket panel", "Private ticket type menus/confirm screens"), inline=False)
     e.set_footer(text=f"{guild.name} • Dank Shield ticket panel • category-menu")
     return e
 
@@ -848,6 +850,7 @@ async def _send_health(i: discord.Interaction) -> None:
     embed.add_field(name="Blockers", value=_field(blockers, "✅ None"), inline=False)
     embed.add_field(name="Warnings", value=_field(warnings, "✅ None"), inline=False)
     embed.add_field(name="Passing", value=_field(ok[:10], "No passing checks."), inline=False)
+    embed.add_field(name="Panel lifetime", value=public_panel_lifecycle_text("Create Ticket panel", "Private ticket type menus/confirm screens"), inline=False)
     await _ephemeral(i, "Ticket panel health check complete.", embed=embed)
 
 

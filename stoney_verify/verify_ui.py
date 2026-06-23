@@ -8,6 +8,8 @@ from typing import Optional, Tuple, Dict, Any
 
 import discord
 
+from .panel_lifecycle import public_panel_lifecycle_text
+
 from .globals import *  # noqa
 
 from .store import gen_token, sb_insert_token
@@ -330,6 +332,7 @@ def build_verify_embed(
 
     e.add_field(name="👤 User", value=user_value, inline=False)
     e.add_field(name="⏳ Upload Link Expiration", value=f"Generated links expire in **{int(ttl_minutes)} minutes**. This panel stays active.", inline=True)
+    e.add_field(name="Panel lifetime", value=public_panel_lifecycle_text("Verify panel", "Private upload links"), inline=False)
     e.add_field(name="🔒 Privacy", value="Link is sent **ephemeral** (owner only).", inline=True)
     e.add_field(name="🧾 Review", value="Staff approves / denies inside this ticket.", inline=False)
 

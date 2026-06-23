@@ -9,6 +9,7 @@ import discord
 from discord import app_commands
 
 from .public_setup_group import _require_setup_permission, dank_group
+from stoney_verify.panel_lifecycle import public_panel_lifecycle_text
 
 
 SELF_ROLE_PREFIX = "dank:selfrole:v1:"
@@ -484,6 +485,7 @@ def _profile_panel_embed(guild: discord.Guild, *, title: str = "Profile Panel") 
         ),
         inline=False,
     )
+    embed.add_field(name="Panel lifetime", value=public_panel_lifecycle_text("Profile Panel", "Private profile menus/dropdowns"), inline=False)
     embed.set_footer(text="Dank Shield profile panel")
     return embed
 
@@ -1036,6 +1038,7 @@ async def _post_profile_builder(interaction: discord.Interaction, *, title: str 
     embed.add_field(name="Panel target", value=channel.mention, inline=False)
     embed.add_field(name="Default profile sections", value="🪪 Pronouns\n🌈 Identity\n🎮 Interests\n✍️ Missing Identity request\n➕ Missing Interest request", inline=False)
     embed.add_field(name="Status", value="✅ Ready" if ready else "⚠️ Not ready", inline=False)
+    embed.add_field(name="Panel lifetime", value=public_panel_lifecycle_text("Profile Builder result panel", "Private builder actions"), inline=False)
 
     if fixable:
         embed.add_field(name="Bot can fix now", value="\n".join(f"• {x}" for x in fixable), inline=False)
@@ -1073,6 +1076,7 @@ async def _handle_builder_action(interaction: discord.Interaction, action: str) 
             lines.append("Fixable: " + ", ".join(fixable))
         if manual:
             lines.append("Manual: " + " | ".join(manual))
+        lines.append(public_panel_lifecycle_text("Profile Panel", "Private profile menus/dropdowns/builders"))
         await _reply(interaction, "\n".join(lines) if lines else "No status found.", ok=ready)
         return True
 
@@ -1538,6 +1542,7 @@ async def _post_advanced_panel(interaction: discord.Interaction, channel: discor
         value="Use this only for cosmetic roles. Do not use these buttons for verification, staff access, tickets, moderation, or permissions.",
         inline=False,
     )
+    embed.add_field(name="Panel lifetime", value=public_panel_lifecycle_text("Advanced role panel", "Private role confirmation/status messages"), inline=False)
     embed.set_footer(text="Dank Shield advanced role panel")
     try:
         await channel.send(embed=embed, view=AdvancedSelfRolePanelView(roles), allowed_mentions=discord.AllowedMentions.none())
