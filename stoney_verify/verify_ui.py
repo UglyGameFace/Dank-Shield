@@ -203,14 +203,9 @@ async def _resolve_ticket_owner_id(
     channel: Optional[discord.abc.GuildChannel],
     interaction: discord.Interaction,
 ) -> int:
-    if isinstance(channel, discord.TextChannel):
-        try:
-            owner = await find_ticket_owner_retry(channel, tries=6, delay=1.0)
-            if owner:
-                return int(getattr(owner, "id", 0) or 0)
-        except Exception:
-            pass
-
+    # Fast path: the clicked Verify panel already contains the ticket owner in
+    # its embed. Use this before any slow history scan so Discord does not show
+    # "interaction failed" while we are still searching.
     try:
         msg = getattr(interaction, "message", None)
         if msg and getattr(msg, "embeds", None):
@@ -219,6 +214,14 @@ async def _resolve_ticket_owner_id(
                 return owner_id
     except Exception:
         pass
+
+    if isinstance(channel, discord.TextChannel):
+        try:
+            owner = await find_ticket_owner_retry(channel, tries=2, delay=0.25)
+            if owner:
+                return int(getattr(owner, "id", 0) or 0)
+        except Exception:
+            pass
 
     return 0
 
@@ -231,28 +234,28 @@ async def _resolve_ticket_owner_member(
     if not isinstance(channel, discord.TextChannel):
         return None
 
+    owner_id = await _resolve_ticket_owner_id(channel=channel, interaction=interaction)
+    if owner_id > 0 and channel.guild:
+        try:
+            member = channel.guild.get_member(owner_id)
+            if member is not None:
+                return member
+        except Exception:
+            pass
+
+        try:
+            return await channel.guild.fetch_member(owner_id)
+        except Exception:
+            pass
+
     try:
-        owner = await find_ticket_owner_retry(channel, tries=6, delay=1.0)
+        owner = await find_ticket_owner_retry(channel, tries=2, delay=0.25)
         if isinstance(owner, discord.Member):
             return owner
     except Exception:
         pass
 
-    owner_id = await _resolve_ticket_owner_id(channel=channel, interaction=interaction)
-    if owner_id <= 0 or not channel.guild:
-        return None
-
-    try:
-        member = channel.guild.get_member(owner_id)
-        if member is not None:
-            return member
-    except Exception:
-        pass
-
-    try:
-        return await channel.guild.fetch_member(owner_id)
-    except Exception:
-        return None
+    return None
 
 
 # ============================================================
@@ -326,7 +329,7 @@ def build_verify_embed(
         user_value = "Unknown"
 
     e.add_field(name="👤 User", value=user_value, inline=False)
-    e.add_field(name="⏳ Expiration", value=f"**{int(ttl_minutes)} minutes**", inline=True)
+    e.add_field(name="⏳ Upload Link Expiration", value=f"Generated links expire in **{int(ttl_minutes)} minutes**. This panel stays active.", inline=True)
     e.add_field(name="🔒 Privacy", value="Link is sent **ephemeral** (owner only).", inline=True)
     e.add_field(name="🧾 Review", value="Staff approves / denies inside this ticket.", inline=False)
 
@@ -665,6 +668,33 @@ async def _post_vc_request_to_staff_only(
 
 
 # ============================================================
+# Interaction response helpers
+# ============================================================
+
+async def _ack_verify_ui_interaction(interaction: discord.Interaction) -> None:
+    """Acknowledge Verify panel clicks immediately.
+
+    Discord requires component interactions to be acknowledged within a few
+    seconds. Owner lookup, DB token creation, webhook checks, or member fetches
+    can take longer, so the Verify panel must defer first and do the real work
+    after. This keeps the panel effectively non-expiring for users.
+    """
+    try:
+        if not interaction.response.is_done():
+            await interaction.response.defer(ephemeral=True, thinking=True)
+    except Exception:
+        pass
+
+
+async def _reply_verify_ui(interaction: discord.Interaction, *args, **kwargs) -> None:
+    kwargs.setdefault("ephemeral", True)
+    if not interaction.response.is_done():
+        await interaction.response.send_message(*args, **kwargs)
+        return
+    await interaction.followup.send(*args, **kwargs)
+
+
+# ============================================================
 # Interaction handler
 # ============================================================
 
@@ -683,6 +713,8 @@ async def maybe_handle_verify_ui_interaction(interaction: discord.Interaction, *
             return False
         action = (parts[2] or "").strip().lower()
 
+        await _ack_verify_ui_interaction(interaction)
+
         user = interaction.user
         guild = interaction.guild
         channel = interaction.channel
@@ -690,7 +722,7 @@ async def maybe_handle_verify_ui_interaction(interaction: discord.Interaction, *
         if not isinstance(channel, discord.TextChannel):
             try:
                 if not interaction.response.is_done():
-                    await interaction.response.send_message(
+                    await _reply_verify_ui(interaction, 
                         "❌ This action only works inside a verification ticket.",
                         ephemeral=True,
                     )
@@ -718,7 +750,7 @@ async def maybe_handle_verify_ui_interaction(interaction: discord.Interaction, *
             if owner_id <= 0:
                 try:
                     if not interaction.response.is_done():
-                        await interaction.response.send_message(
+                        await _reply_verify_ui(interaction, 
                             "❌ I couldn't verify the ticket owner for this action. Ask staff to repost or repair the verify UI.",
                             ephemeral=True,
                         )
@@ -734,7 +766,7 @@ async def maybe_handle_verify_ui_interaction(interaction: discord.Interaction, *
             if int(user.id) != int(owner_id):
                 try:
                     if not interaction.response.is_done():
-                        await interaction.response.send_message(
+                        await _reply_verify_ui(interaction, 
                             "❌ Only the **ticket owner** can use that button.",
                             ephemeral=True,
                         )
@@ -751,7 +783,7 @@ async def maybe_handle_verify_ui_interaction(interaction: discord.Interaction, *
             if not bool(ALLOW_USER_VERIFYLINK):
                 try:
                     if not interaction.response.is_done():
-                        await interaction.response.send_message(
+                        await _reply_verify_ui(interaction, 
                             "❌ Generating a new link is currently **disabled**.",
                             ephemeral=True,
                         )
@@ -770,7 +802,7 @@ async def maybe_handle_verify_ui_interaction(interaction: discord.Interaction, *
         if action in ("get", "raw", "regen"):
             requester_id = int(owner_id or 0)
             if requester_id <= 0:
-                await interaction.response.send_message(
+                await _reply_verify_ui(interaction, 
                     "❌ I couldn't resolve the ticket owner, so I won't issue a verification token.",
                     ephemeral=True,
                 )
@@ -791,7 +823,7 @@ async def maybe_handle_verify_ui_interaction(interaction: discord.Interaction, *
                 except Exception:
                     pass
 
-                await interaction.response.send_message(
+                await _reply_verify_ui(interaction, 
                     "🔗 **Raw link (tap to reveal):**\n"
                     f"||<{url}>||",
                     ephemeral=True,
@@ -819,7 +851,7 @@ async def maybe_handle_verify_ui_interaction(interaction: discord.Interaction, *
                 f"||<{url}>||\n\n"
                 f"⏳ Expires in **{ttl} minutes**."
             )
-            await interaction.response.send_message(msg, view=view, ephemeral=True)
+            await _reply_verify_ui(interaction, msg, view=view, ephemeral=True)
             return True
 
         # --------------------------------------------------------
@@ -827,14 +859,14 @@ async def maybe_handle_verify_ui_interaction(interaction: discord.Interaction, *
         # --------------------------------------------------------
         if action == "vc":
             if not guild:
-                await interaction.response.send_message(
+                await _reply_verify_ui(interaction, 
                     "🎙️ VC verification is currently unavailable here. Please use secure upload in this ticket.",
                     ephemeral=True,
                 )
                 return True
 
             if owner_id <= 0:
-                await interaction.response.send_message(
+                await _reply_verify_ui(interaction, 
                     "❌ I couldn't resolve the ticket owner, so I won't create a VC verification request.",
                     ephemeral=True,
                 )
@@ -842,7 +874,7 @@ async def maybe_handle_verify_ui_interaction(interaction: discord.Interaction, *
 
             vc_id = _vc_channel_id()
             if vc_id <= 0:
-                await interaction.response.send_message(
+                await _reply_verify_ui(interaction, 
                     "🎙️ VC verification is currently unavailable. Please use secure upload in this ticket.",
                     ephemeral=True,
                 )
@@ -852,7 +884,7 @@ async def maybe_handle_verify_ui_interaction(interaction: discord.Interaction, *
                 last = VC_REQUEST_COOLDOWNS.get(int(user.id))
                 if last and (_now_utc() - last).total_seconds() < int(VC_REQUEST_COOLDOWN_SECONDS):
                     left = int(int(VC_REQUEST_COOLDOWN_SECONDS) - (_now_utc() - last).total_seconds())
-                    await interaction.response.send_message(
+                    await _reply_verify_ui(interaction, 
                         f"⏳ Please wait **{left}s** before requesting VC verify again.",
                         ephemeral=True,
                     )
@@ -875,7 +907,7 @@ async def maybe_handle_verify_ui_interaction(interaction: discord.Interaction, *
             try:
                 from .commands_ext.vc_flow import create_vc_request_for_ticket
             except Exception as e:
-                await interaction.response.send_message(
+                await _reply_verify_ui(interaction, 
                     f"❌ VC verify request service is unavailable: {e}",
                     ephemeral=True,
                 )
@@ -891,14 +923,14 @@ async def maybe_handle_verify_ui_interaction(interaction: discord.Interaction, *
             )
 
             if not result.get("ok"):
-                await interaction.response.send_message(
+                await _reply_verify_ui(interaction, 
                     f"❌ {result.get('message') or 'Failed to create VC request.'}",
                     ephemeral=True,
                 )
                 return True
 
             if result.get("duplicate"):
-                await interaction.response.send_message(
+                await _reply_verify_ui(interaction, 
                     "✅ VC request is already queued for this ticket. Staff will respond soon.",
                     ephemeral=True,
                 )
@@ -913,12 +945,12 @@ async def maybe_handle_verify_ui_interaction(interaction: discord.Interaction, *
             )
 
             if result.get("staff_posted"):
-                await interaction.response.send_message(
+                await _reply_verify_ui(interaction, 
                     "✅ VC request sent.\nStay in this ticket — staff will message you when ready.",
                     ephemeral=True,
                 )
             else:
-                await interaction.response.send_message(
+                await _reply_verify_ui(interaction, 
                     "⚠️ VC request was created, but staff routing failed.\nA staff member can recover it with `/vc_status` or `/vc_reissue`.",
                     ephemeral=True,
                 )
@@ -929,7 +961,7 @@ async def maybe_handle_verify_ui_interaction(interaction: discord.Interaction, *
     except Exception as e:
         try:
             if not interaction.response.is_done():
-                await interaction.response.send_message(f"❌ Verify UI error: {e}", ephemeral=True)
+                await _reply_verify_ui(interaction, f"❌ Verify UI error: {e}", ephemeral=True)
             else:
                 await interaction.followup.send(f"❌ Verify UI error: {e}", ephemeral=True)
         except Exception:
