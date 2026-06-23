@@ -144,6 +144,20 @@ async def _ensure_role(guild: discord.Guild, name: str, *, reason: str) -> disco
     return await guild.create_role(name=name[:100], mentionable=False, reason=reason)
 
 
+async def _ack_profile_action(interaction: discord.Interaction) -> None:
+    """Acknowledge slow profile/self-role actions before Discord times them out.
+
+    Public panels stay permanent, but role edits/channel fixes can take longer
+    than Discord's component response window. Defer before slow work so users do
+    not see "interaction failed".
+    """
+    try:
+        if not interaction.response.is_done():
+            await interaction.response.defer(ephemeral=True, thinking=True)
+    except Exception:
+        pass
+
+
 async def _reply(interaction: discord.Interaction, content: str, *, ok: bool = True) -> None:
     prefix = "✅ " if ok else "❌ "
     try:
@@ -1063,6 +1077,7 @@ async def _handle_builder_action(interaction: discord.Interaction, action: str) 
         return True
 
     if action == "fix":
+        await _ack_profile_action(interaction)
         if not fixable:
             await _reply(interaction, "No fixable channel permissions are missing right now.", ok=True)
             return True
@@ -1242,6 +1257,7 @@ async def _handle_profile_interaction(interaction: discord.Interaction) -> bool:
         return True
 
     if suffix.startswith("select:"):
+        await _ack_profile_action(interaction)
         category = suffix.split(":", 1)[1]
         raw_values = data.get("values") if isinstance(data.get("values"), list) else []
         selected = {int(value) for value in raw_values if str(value).isdigit() and int(value) > 0}
@@ -1269,6 +1285,7 @@ async def _handle_profile_interaction(interaction: discord.Interaction) -> bool:
         return True
 
     if suffix == "clear":
+        await _ack_profile_action(interaction)
         roles: list[discord.Role] = []
         for category in PROFILE_CATEGORIES:
             roles.extend(
@@ -1319,6 +1336,8 @@ async def _handle_self_role(interaction: discord.Interaction) -> bool:
         if not ok:
             await _reply(interaction, why, ok=False)
             return True
+
+        await _ack_profile_action(interaction)
 
         if role in interaction.user.roles:
             await interaction.user.remove_roles(role, reason="Dank Shield advanced self-role toggle")
