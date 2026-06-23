@@ -6,10 +6,15 @@ import discord
 from discord import app_commands
 
 from ..guild_config import get_guild_config
-from ..verification_new.basic_verify import post_basic_verify_panel, register_basic_verify_runtime
+from ..verification_new.basic_verify import (
+    maybe_handle_basic_verify_interaction,
+    post_basic_verify_panel,
+    register_basic_verify_runtime,
+)
 from .public_verify_group import _cfg_value, _safe_int, _send, _staff_only, verify_group
 
 _ATTACHED = False
+_LISTENER_ATTACHED = False
 
 
 def _cfg_int(cfg: Any, *keys: str) -> int:
@@ -35,6 +40,32 @@ async def _pick_channel(interaction: discord.Interaction) -> Optional[discord.Te
     return current if isinstance(current, discord.TextChannel) else None
 
 
+def _install_basic_verify_runtime(bot: Any) -> bool:
+    global _LISTENER_ATTACHED
+    registered = register_basic_verify_runtime(bot)
+
+    if _LISTENER_ATTACHED:
+        return bool(registered)
+
+    listen = getattr(bot, "listen", None)
+    if not callable(listen):
+        return bool(registered)
+
+    @bot.listen("on_interaction")
+    async def _basic_verify_panel_runtime(interaction: discord.Interaction) -> None:
+        try:
+            await maybe_handle_basic_verify_interaction(interaction)
+        except Exception:
+            pass
+
+    _LISTENER_ATTACHED = True
+    try:
+        print("public_verify_basic_panel runtime installed")
+    except Exception:
+        pass
+    return True
+
+
 async def verify_panel(interaction: discord.Interaction) -> None:
     try:
         if not interaction.response.is_done():
@@ -47,8 +78,10 @@ async def verify_panel(interaction: discord.Interaction) -> None:
     if target is None:
         return await _send(interaction, "Pick a text channel or save one in /dank setup.")
     try:
+        runtime_ready = _install_basic_verify_runtime(getattr(interaction, "client", None))
         result = await post_basic_verify_panel(target, actor_id=int(getattr(interaction.user, "id", 0) or 0))
-        await _send(interaction, f"Panel {result} in {target.mention}.")
+        suffix = " Runtime handler ready." if runtime_ready else " Runtime handler was not confirmed; restart the bot if the button still fails."
+        await _send(interaction, f"Panel {result} in {target.mention}.{suffix}")
     except Exception as exc:
         await _send(interaction, f"Could not post panel: {type(exc).__name__}")
 
@@ -83,7 +116,7 @@ def _attach() -> bool:
 
 def register_public_verify_basic_panel_commands(bot: Any, tree: Any) -> None:
     _ = tree
-    register_basic_verify_runtime(bot)
+    _install_basic_verify_runtime(bot)
     _attach()
 
 
