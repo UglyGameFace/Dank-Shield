@@ -43,13 +43,15 @@ async def _pick_channel(interaction: discord.Interaction) -> Optional[discord.Te
 def _install_basic_verify_runtime(bot: Any) -> bool:
     global _LISTENER_ATTACHED
     registered = register_basic_verify_runtime(bot)
+    if registered:
+        return True
 
     if _LISTENER_ATTACHED:
-        return bool(registered)
+        return True
 
     listen = getattr(bot, "listen", None)
     if not callable(listen):
-        return bool(registered)
+        return False
 
     @bot.listen("on_interaction")
     async def _basic_verify_panel_runtime(interaction: discord.Interaction) -> None:
@@ -60,7 +62,7 @@ def _install_basic_verify_runtime(bot: Any) -> bool:
 
     _LISTENER_ATTACHED = True
     try:
-        print("public_verify_basic_panel runtime installed")
+        print("public_verify_basic_panel fallback runtime installed")
     except Exception:
         pass
     return True
