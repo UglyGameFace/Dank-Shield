@@ -23,6 +23,7 @@ from typing import Any, Awaitable, Callable, Iterable, Optional, Sequence
 import discord
 
 PickerAction = Callable[[discord.Interaction, str], Awaitable[None]]
+MultiPickerAction = Callable[[discord.Interaction, list[str]], Awaitable[None]]
 RolePickAction = Callable[[discord.Interaction, discord.Role], Awaitable[None]]
 ChannelPickAction = Callable[[discord.Interaction, discord.abc.GuildChannel], Awaitable[None]]
 UserPickAction = Callable[[discord.Interaction, discord.abc.User], Awaitable[None]]
@@ -224,8 +225,105 @@ class _PickerCancelButton(discord.ui.Button):
 
     async def callback(self, interaction: discord.Interaction) -> None:  # type: ignore[override]
         owner = self.view
-        if isinstance(owner, DankPickerView):
+        if isinstance(owner, (DankPickerView, DankMultiPickerView)):
             await owner.close(interaction)
+
+
+class _DankMultiPickerSelect(discord.ui.Select):
+    def __init__(self, owner: "DankMultiPickerView") -> None:
+        self._owner = owner
+        options = [choice.to_option() for choice in owner.choices[:_MAX_SELECT_OPTIONS]]
+        if not options:
+            options = [
+                DankChoice(
+                    label="Nothing to choose yet",
+                    value="__dank_empty__",
+                    description="This section has no available options.",
+                    emoji="ℹ️",
+                ).to_option()
+            ]
+
+        max_values = max(1, min(int(owner.max_values or len(options)), len(options), _MAX_SELECT_OPTIONS))
+        min_values = max(0, min(int(owner.min_values or 0), max_values))
+
+        super().__init__(
+            placeholder=_clip(owner.placeholder, 150),
+            custom_id=owner.custom_id,
+            min_values=min_values,
+            max_values=max_values,
+            options=options,
+            row=0,
+            disabled=options[0].value == "__dank_empty__",
+        )
+
+    async def callback(self, interaction: discord.Interaction) -> None:  # type: ignore[override]
+        await self._owner.handle_pick(interaction, [str(value) for value in (self.values or [])])
+
+
+class DankMultiPickerView(discord.ui.View):
+    """Standard Dank Shield multi-select dropdown surface.
+
+    Use this for official multi-choice surfaces instead of creating raw
+    discord.ui.Select views in individual feature modules.
+    """
+
+    def __init__(
+        self,
+        *,
+        author_id: int,
+        choices: Sequence[DankChoice],
+        on_pick: MultiPickerAction,
+        custom_id: str,
+        placeholder: str = "Choose one or more options…",
+        timeout: Optional[float] = _DEFAULT_TIMEOUT_SECONDS,
+        title: str = "Dank Shield Multi Picker",
+        home_label: str = "Back",
+        cancel_label: str = "Close",
+        allow_anyone: bool = False,
+        include_cancel: bool = True,
+        on_home: Optional[Callable[[discord.Interaction], Awaitable[None]]] = None,
+        on_cancel: Optional[Callable[[discord.Interaction], Awaitable[None]]] = None,
+        min_values: int = 0,
+        max_values: Optional[int] = None,
+    ) -> None:
+        super().__init__(timeout=timeout)
+        self.author_id = int(author_id or 0)
+        self.choices = list(choices or [])[:_MAX_SELECT_OPTIONS]
+        self.on_pick = on_pick
+        self.custom_id = _clip(custom_id, 100) or "dank:multi_picker"
+        self.placeholder = placeholder
+        self.title = title
+        self.allow_anyone = bool(allow_anyone)
+        self.on_home = on_home
+        self.on_cancel = on_cancel
+        self.min_values = max(0, int(min_values or 0))
+        self.max_values = max_values if max_values is not None else len(self.choices)
+
+        self.add_item(_DankMultiPickerSelect(self))
+
+        if on_home is not None:
+            self.add_item(_PickerHomeButton(label=home_label))
+        if include_cancel:
+            self.add_item(_PickerCancelButton(label=cancel_label))
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        return await _owner_check(interaction, author_id=self.author_id, allow_anyone=self.allow_anyone)
+
+    async def handle_pick(self, interaction: discord.Interaction, values: list[str]) -> None:
+        clean = [str(value) for value in values if str(value or "") not in {"", "__dank_empty__"}]
+        await self.on_pick(interaction, clean)
+
+    async def close(self, interaction: discord.Interaction) -> None:
+        if self.on_cancel is not None:
+            await self.on_cancel(interaction)
+            return
+        try:
+            if not interaction.response.is_done():
+                await interaction.response.edit_message(content="Picker closed.", embed=None, view=None)
+            else:
+                await interaction.edit_original_response(content="Picker closed.", embed=None, view=None)
+        except Exception:
+            await _safe_ephemeral(interaction, "Picker closed.")
 
 
 class DankRoleSelect(discord.ui.RoleSelect):
@@ -352,10 +450,12 @@ __all__ = [
     "DankChannelSelect",
     "DankChoice",
     "DankMentionableSelect",
+    "DankMultiPickerView",
     "DankPickerView",
     "DankRoleSelect",
     "DankUserSelect",
     "MentionablePickAction",
+    "MultiPickerAction",
     "PickerAction",
     "RolePickAction",
     "UserPickAction",
