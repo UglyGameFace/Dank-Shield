@@ -61,6 +61,51 @@ create table if not exists public.ticket_counters (
     updated_at timestamptz not null default now()
 );
 
+create or replace function public.reserve_ticket_number(p_guild_id text)
+returns integer
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+    v_next integer;
+begin
+    if p_guild_id is null or btrim(p_guild_id) = '' then
+        raise exception 'guild_id is required';
+    end if;
+
+    insert into public.ticket_counters (guild_id, last_ticket_number, updated_at)
+    values (
+        p_guild_id,
+        coalesce((
+            select max(ticket_number)
+            from public.tickets
+            where guild_id = p_guild_id
+              and ticket_number is not null
+        ), 0),
+        now()
+    )
+    on conflict (guild_id) do update
+        set last_ticket_number = greatest(
+                public.ticket_counters.last_ticket_number,
+                excluded.last_ticket_number
+            ),
+            updated_at = now();
+
+    update public.ticket_counters
+       set last_ticket_number = last_ticket_number + 1,
+           updated_at = now()
+     where guild_id = p_guild_id
+     returning last_ticket_number into v_next;
+
+    return v_next;
+end;
+$$;
+
+create index if not exists idx_tickets_guild_ticket_number_desc
+    on public.tickets (guild_id, ticket_number desc)
+    where ticket_number is not null;
+
 create table if not exists public.ticket_categories (
     id uuid primary key default gen_random_uuid(),
     guild_id text not null,

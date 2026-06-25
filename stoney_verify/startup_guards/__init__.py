@@ -108,7 +108,6 @@ _STARTUP_GUARDS: Tuple[str, ...] = (
     "stoney_verify.startup_guards.public_ticket_confirm_hardening_guard",
     "stoney_verify.startup_guards.ticket_category_cod_services_guard",
     "stoney_verify.startup_guards.ticket_category_game_services_guard",
-    "stoney_verify.startup_guards.external_ticket_history_sequence_guard",
     "stoney_verify.startup_guards.vc_accept_claim_guard",
     "stoney_verify.startup_guards.ticket_action_lock_guard",
     "stoney_verify.startup_guards.production_command_surface_guard",

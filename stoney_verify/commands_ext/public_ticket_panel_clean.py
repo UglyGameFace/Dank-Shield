@@ -18,6 +18,7 @@ from discord import app_commands
 
 from .common import _staff_check, reply_once
 from stoney_verify.panel_lifecycle import public_panel_lifecycle_text
+from stoney_verify.tickets_new.counter_allocator import reserve_next_ticket_number as reserve_persistent_ticket_number
 
 _PANEL_VIEW_REGISTERED = False
 _PANEL_GROUP_REGISTERED = False
@@ -373,20 +374,11 @@ async def _db_max_ticket_number(guild: discord.Guild) -> int:
 
 
 async def _next_number(guild: discord.Guild, parent: Optional[discord.CategoryChannel]) -> int:
-    lock = _NUMBER_LOCKS.get(int(guild.id))
-    if lock is None:
-        lock = asyncio.Lock()
-        _NUMBER_LOCKS[int(guild.id)] = lock
-    async with lock:
-        max_num = await _db_max_ticket_number(guild)
-        candidates: List[discord.TextChannel] = []
-        if parent is not None:
-            candidates.extend(list(parent.text_channels))
-        candidates.extend(list(guild.text_channels))
-        for ch in candidates:
-            if isinstance(ch, discord.TextChannel):
-                max_num = max(max_num, _ticket_number_from_channel(ch))
-        return max_num + 1
+    return await reserve_persistent_ticket_number(
+        guild,
+        parent=parent,
+        source="public_ticket_panel_clean",
+    )
 
 
 def _channel_is_closed_like(ch: discord.TextChannel) -> bool:

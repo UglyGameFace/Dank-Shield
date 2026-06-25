@@ -32,6 +32,7 @@ from .repository import (
 )
 from .orphan_safety import cleanup_unpersisted_ticket_channel
 from ..services.server_design_ticket_naming import build_ticket_channel_name
+from .counter_allocator import reserve_next_ticket_number as reserve_persistent_ticket_number
 
 try:
     from .event_service import (
@@ -1165,79 +1166,12 @@ async def _reserve_next_ticket_number(
     *,
     max_retries: int = 20,
 ) -> int:
-    guild_id = int(guild.id)
-    lock = _ticket_number_lock(guild_id)
-
-    async with lock:
-        sb = _sb()
-        if sb is None:
-            return max(
-                _db_max_ticket_number(guild_id),
-                _channel_scan_max_ticket_number(guild, parent=parent),
-            ) + 1
-
-        await _run_db_op(
-            "seed ticket counter",
-            lambda: _ensure_counter_seed(guild, parent=parent),
-        )
-
-        for attempt in range(1, max_retries + 1):
-            row = await _run_db_op(
-                "read ticket counter row",
-                lambda: _get_counter_row(guild_id),
-            )
-
-            if not row:
-                await _run_db_op(
-                    "re-seed ticket counter",
-                    lambda: _ensure_counter_seed(guild, parent=parent),
-                )
-                await asyncio.sleep(min(0.05 * attempt, 0.5))
-                continue
-
-            current = _safe_int(row.get("last_ticket_number"), 0)
-            new_value = current + 1
-
-            try:
-                await _run_db_op(
-                    "advance ticket counter",
-                    lambda: (
-                        sb.table(_counter_table_name())
-                        .update(
-                            {
-                                "last_ticket_number": int(new_value),
-                                "updated_at": _utc_iso(now_utc()),
-                            }
-                        )
-                        .eq("guild_id", str(guild_id))
-                        .eq("last_ticket_number", int(current))
-                        .execute()
-                    ),
-                )
-
-                verify = await _run_db_op(
-                    "verify ticket counter",
-                    lambda: _get_counter_row(guild_id),
-                )
-                if verify and _safe_int(verify.get("last_ticket_number"), 0) == new_value:
-                    return new_value
-            except Exception:
-                pass
-
-            await asyncio.sleep(min(0.05 * attempt, 0.5))
-
-        row = await _run_db_op(
-            "final read ticket counter row",
-            lambda: _get_counter_row(guild_id),
-        )
-        if row:
-            current = _safe_int(row.get("last_ticket_number"), 0)
-            return current + 1
-
-        return max(
-            _db_max_ticket_number(guild_id),
-            _channel_scan_max_ticket_number(guild, parent=parent),
-        ) + 1
+    return await reserve_persistent_ticket_number(
+        guild,
+        parent=parent,
+        source="tickets_new.service",
+        max_retries=max_retries,
+    )
 
 
 async def _next_ticket_number(
