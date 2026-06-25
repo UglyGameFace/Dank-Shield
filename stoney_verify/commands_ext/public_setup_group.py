@@ -661,7 +661,7 @@ def _config_embed(guild: discord.Guild, cfg: Any, *, title: str = "🧭 Dank Shi
         value=(
             f"Modlog: {_channel_line(guild, _cfg_snowflake(cfg, 'modlog_channel_id'))}\n"
             f"Raid/security log: {_channel_line(guild, _cfg_snowflake(cfg, 'raidlog_channel_id'))}\n"
-            f"Join/exit log: {_channel_line(guild, _cfg_snowflake(cfg, 'join_log_channel_id'))}"
+            f"Join/exit log: {_channel_line(guild, _cfg_snowflake(cfg, 'join_leave_log_channel_id', 'join_leave_channel_id', 'member_join_leave_log_channel_id', 'member_lifecycle_log_channel_id', 'member_log_channel_id', 'member_logs_channel_id', 'join_log_channel_id', 'join_exit_log_channel_id', 'joinlog_channel_id', 'joinleave_channel_id', 'leave_log_channel_id', 'welcome_leave_channel_id', 'welcome_exit_channel_id', 'welcome_exit_log_channel_id', 'leave_channel_id'))}"
         ),
         inline=False,
     )

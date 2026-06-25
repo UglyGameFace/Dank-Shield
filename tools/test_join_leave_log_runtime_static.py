@@ -1,0 +1,62 @@
+from __future__ import annotations
+
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+
+INIT = (ROOT / "stoney_verify/commands_ext/__init__.py").read_text(encoding="utf-8")
+RUNTIME = (ROOT / "stoney_verify/commands_ext/public_member_lifecycle_runtime.py").read_text(encoding="utf-8")
+ROUTER = (ROOT / "stoney_verify/startup_guards/member_lifecycle_router_guard.py").read_text(encoding="utf-8")
+SETUP = (ROOT / "stoney_verify/commands_ext/public_setup_group.py").read_text(encoding="utf-8")
+SETUP_LOGS = (ROOT / "stoney_verify/commands_ext/public_setup_logs.py").read_text(encoding="utf-8")
+
+
+def test_member_lifecycle_runtime_is_public_core() -> None:
+    assert '"public_member_lifecycle_runtime"' in INIT
+    assert "register_public_member_lifecycle_runtime" in INIT
+
+
+def test_runtime_bootstrap_calls_authoritative_router_install() -> None:
+    assert "member_lifecycle_router_guard" in RUNTIME
+    assert "router.install()" in RUNTIME
+
+
+def test_join_leave_aliases_are_broad_and_consistent() -> None:
+    for key in (
+        "join_leave_log_channel_id",
+        "join_leave_channel_id",
+        "member_join_leave_log_channel_id",
+        "member_lifecycle_log_channel_id",
+        "join_log_channel_id",
+        "join_exit_log_channel_id",
+        "joinlog_channel_id",
+        "joinleave_channel_id",
+        "welcome_exit_channel_id",
+        "welcome_exit_log_channel_id",
+        "leave_log_channel_id",
+        "leave_channel_id",
+    ):
+        assert key in ROUTER, f"router missing alias {key}"
+        assert key in SETUP, f"setup display missing alias {key}"
+        assert key in SETUP_LOGS, f"setup-logs write missing alias {key}"
+
+
+def test_ready_logs_resolved_member_lifecycle_routes() -> None:
+    assert "member lifecycle routes ready" in ROUTER
+    assert "members intent is disabled in code" in ROUTER
+
+
+def test_member_logs_command_is_allowed_child() -> None:
+    assert '"member-logs"' in INIT
+
+
+if __name__ == "__main__":
+    for test in (
+        test_member_lifecycle_runtime_is_public_core,
+        test_runtime_bootstrap_calls_authoritative_router_install,
+        test_join_leave_aliases_are_broad_and_consistent,
+        test_ready_logs_resolved_member_lifecycle_routes,
+        test_member_logs_command_is_allowed_child,
+    ):
+        test()
+        print(f"PASS {test.__name__}")

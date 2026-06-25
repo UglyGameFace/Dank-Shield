@@ -409,18 +409,23 @@ PUBLIC_WELCOME_KEYS = (
 JOIN_LEAVE_KEYS = (
     # New explicit names.
     "join_leave_log_channel_id",
+    "join_leave_channel_id",
     "member_join_leave_log_channel_id",
     "member_lifecycle_log_channel_id",
+    "member_log_channel_id",
+    "member_logs_channel_id",
 
     # Legacy/setup aliases used by older setup flows and setup health.
     "join_log_channel_id",
     "join_exit_log_channel_id",
     "joinlog_channel_id",
+    "joinleave_channel_id",
     "leave_log_channel_id",
     "welcome_leave_channel_id",
 
-    # Friendly names used by some setup templates.
+    # Friendly names used by setup templates.
     "welcome_exit_channel_id",
+    "welcome_exit_log_channel_id",
     "leave_channel_id",
 )
 
@@ -488,8 +493,22 @@ async def _ready_listener() -> None:
     try:
         if bot is None:
             return
+        intents = getattr(bot, "intents", None)
+        if not bool(getattr(intents, "members", False)):
+            _log("members intent is disabled in code; join/leave events will not fire")
         for guild in list(getattr(bot, "guilds", []) or []):
             try:
+                cfg = await _load_config(int(guild.id))
+                join_leave_channel = _resolve_channel(guild, cfg, JOIN_LEAVE_KEYS)
+                public_channel = _resolve_channel(guild, cfg, PUBLIC_WELCOME_KEYS)
+                staff_channel = _resolve_channel(guild, cfg, STAFF_AUDIT_KEYS)
+                _log(
+                    "member lifecycle routes ready "
+                    f"guild={guild.id} "
+                    f"public={getattr(public_channel, 'id', None) or '-'} "
+                    f"join_leave={getattr(join_leave_channel, 'id', None) or '-'} "
+                    f"staff={getattr(staff_channel, 'id', None) or '-'}"
+                )
                 await _warm_invite_cache(guild, reason="ready")
             except Exception:
                 pass
