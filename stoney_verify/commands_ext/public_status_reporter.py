@@ -795,6 +795,39 @@ async def _save_status_channel(guild_id: int, status_channel_id: int, interactio
         pass
 
 
+async def _status_callback(interaction: discord.Interaction) -> None:
+    if not await _require_status_setup_permission(interaction):
+        return
+
+    await safe_defer(interaction, ephemeral=True)
+
+    guild = interaction.guild
+    if guild is None:
+        return await interaction.followup.send("❌ This command must be used inside a server.", ephemeral=True)
+
+    channel = await _resolve_status_channel(guild)
+    if channel is None:
+        return await interaction.followup.send(
+            "🚫 No writable status channel is configured. Run `/dank setup-status` and choose a channel, or set a status channel in setup.",
+            ephemeral=True,
+            allowed_mentions=discord.AllowedMentions.none(),
+        )
+
+    ok = await _send_status_report(interaction.client, guild, event="startup", force=True)
+    if ok:
+        await interaction.followup.send(
+            f"✅ Sent a fresh Dank Shield status report to {channel.mention}.",
+            ephemeral=True,
+            allowed_mentions=discord.AllowedMentions.none(),
+        )
+    else:
+        await interaction.followup.send(
+            "⚠️ I found the status channel, but the status report did not send. Check bot permissions for View Channel, Send Messages, Embed Links, and Read Message History.",
+            ephemeral=True,
+            allowed_mentions=discord.AllowedMentions.none(),
+        )
+
+
 async def _setup_status_callback(interaction: discord.Interaction, status_channel: discord.TextChannel) -> None:
     if not await _require_status_setup_permission(interaction):
         return
@@ -861,32 +894,45 @@ def _attach_setup_status_command() -> None:
     except Exception:
         return
 
-    try:
-        existing = dank_group.get_command("setup-status")
-    except Exception:
-        existing = None
-
-    if existing is not None:
-        return
-
-    command = discord.app_commands.Command(
-        name="setup-status",
-        description="Choose where Dank Shield posts online/restored status reports.",
-        callback=_setup_status_callback,
-    )
-
-    try:
-        command._params["status_channel"].description = "Text channel for online/restored status notices."
-    except Exception:
-        pass
-
-    try:
-        dank_group.add_command(command)
-    except Exception as e:
+    def has_child(name: str) -> bool:
         try:
-            print(f"⚠️ status_reporter failed adding /dank setup-status: {repr(e)}")
+            return dank_group.get_command(name) is not None
+        except Exception:
+            return False
+
+    if not has_child("status"):
+        status_command = discord.app_commands.Command(
+            name="status",
+            description="Send a fresh Dank Shield status report now.",
+            callback=_status_callback,
+        )
+        try:
+            dank_group.add_command(status_command)
+        except Exception as e:
+            try:
+                print(f"⚠️ status_reporter failed adding /dank status: {repr(e)}")
+            except Exception:
+                pass
+
+    if not has_child("setup-status"):
+        setup_command = discord.app_commands.Command(
+            name="setup-status",
+            description="Choose where Dank Shield posts online/restored status reports.",
+            callback=_setup_status_callback,
+        )
+
+        try:
+            setup_command._params["status_channel"].description = "Text channel for online/restored status notices."
         except Exception:
             pass
+
+        try:
+            dank_group.add_command(setup_command)
+        except Exception as e:
+            try:
+                print(f"⚠️ status_reporter failed adding /dank setup-status: {repr(e)}")
+            except Exception:
+                pass
 
 
 # ============================================================
@@ -930,6 +976,10 @@ def register_public_status_reporter(bot, tree) -> None:
         if not _enabled():
             return
         _ensure_tasks(bot)
+        try:
+            print("📡 status_reporter tasks ensured on_ready")
+        except Exception:
+            pass
 
     @bot.listen("on_resumed")
     async def _stoney_status_on_resumed() -> None:

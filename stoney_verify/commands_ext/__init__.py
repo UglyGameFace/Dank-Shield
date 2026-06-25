@@ -214,7 +214,6 @@ _CONFUSING_DANK_CHILDREN: Tuple[str, ...] = (
     "setup-logs",
     "setup-picker",
     "setup-review",
-    "setup-status",
     "setup-tickets",
     "setup-verify",
     "setup-verify-ids",
@@ -224,6 +223,7 @@ _CONFUSING_DANK_CHILDREN: Tuple[str, ...] = (
 _ALLOWED_DANK_CHILDREN = {
     "setup",
     "overview",
+    "status",
     "diagnostics",
     "protection",
     "help",
