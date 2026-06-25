@@ -459,11 +459,49 @@ def _profile_card_view(member: discord.Member, *, page: int = 0) -> Optional[dis
     return view
 
 
+def _profile_card_view_with_actions(member: discord.Member, *, page: int = 0) -> discord.ui.View:
+    """Profile view for the requesting user with obvious next actions."""
+
+    view = _profile_card_view(member, page=page)
+    if view is None:
+        view = discord.ui.View(timeout=300)
+
+    existing_ids = {
+        str(getattr(child, "custom_id", "") or "")
+        for child in list(getattr(view, "children", []) or [])
+    }
+
+    if f"{PROFILE_PREFIX}edit" not in existing_ids:
+        view.add_item(
+            discord.ui.Button(
+                label="Edit My Profile",
+                emoji="✏️",
+                style=discord.ButtonStyle.primary,
+                custom_id=f"{PROFILE_PREFIX}edit",
+                row=1,
+            )
+        )
+
+    if f"{PROFILE_PREFIX}full_roles_self" not in existing_ids:
+        view.add_item(
+            discord.ui.Button(
+                label="View Full Profile Roles",
+                emoji="📋",
+                style=discord.ButtonStyle.secondary,
+                custom_id=f"{PROFILE_PREFIX}full_roles_self",
+                row=1,
+            )
+        )
+
+    return view
+
+
 def _profile_panel_embed(guild: discord.Guild, *, title: str = "Profile Panel") -> discord.Embed:
     embed = discord.Embed(
         title=title[:256],
         description=(
             "Customize your server profile with optional pronoun, identity, and interest roles.\n\n"
+            "Press **Edit My Profile** to update your labels, or **View My Profile** to check what is currently shown. "
             "These roles are cosmetic only. They never control verification, tickets, moderation, staff access, or server permissions."
         ),
         color=discord.Color.blurple(),
@@ -704,7 +742,7 @@ class ProfileMemberListSelect(discord.ui.Select):
 
         await interaction.response.send_message(
             embed=_profile_card(member),
-            view=_profile_card_view(member),
+            view=_profile_card_view_with_actions(member),
             ephemeral=True,
             allowed_mentions=discord.AllowedMentions.none(),
         )
@@ -771,15 +809,68 @@ class ProfileMemberPickView(discord.ui.View):
 class ProfilePanelView(discord.ui.View):
     def __init__(self) -> None:
         super().__init__(timeout=None)
-        self.add_item(discord.ui.Button(label="View My Profile", emoji="👤", style=discord.ButtonStyle.primary, custom_id=f"{PROFILE_PREFIX}view", row=0))
+
+        # Row 0 is the main workflow. Do not hide editing behind individual
+        # category buttons; users expect a direct Edit Profile entrypoint.
+        self.add_item(discord.ui.Button(label="Edit My Profile", emoji="✏️", style=discord.ButtonStyle.primary, custom_id=f"{PROFILE_PREFIX}edit", row=0))
+        self.add_item(discord.ui.Button(label="View My Profile", emoji="👤", style=discord.ButtonStyle.secondary, custom_id=f"{PROFILE_PREFIX}view", row=0))
         self.add_item(discord.ui.Button(label="View Member Profile", emoji="👥", style=discord.ButtonStyle.secondary, custom_id=f"{PROFILE_PREFIX}pick_member", row=0))
         self.add_item(discord.ui.Button(label="Learn Terms", emoji="📘", style=discord.ButtonStyle.secondary, custom_id=f"{PROFILE_PREFIX}learn", row=0))
-        self.add_item(discord.ui.Button(label="Pronouns", emoji="🪪", style=discord.ButtonStyle.secondary, custom_id=f"{PROFILE_PREFIX}open:pronouns", row=1))
-        self.add_item(discord.ui.Button(label="Identity", emoji="🌈", style=discord.ButtonStyle.secondary, custom_id=f"{PROFILE_PREFIX}open:identity", row=1))
-        self.add_item(discord.ui.Button(label="Interests", emoji="🎮", style=discord.ButtonStyle.secondary, custom_id=f"{PROFILE_PREFIX}open:interests", row=2))
+
+        # Direct section shortcuts stay available for fast users.
+        self.add_item(discord.ui.Button(label="Edit Pronouns", emoji="🪪", style=discord.ButtonStyle.secondary, custom_id=f"{PROFILE_PREFIX}open:pronouns", row=1))
+        self.add_item(discord.ui.Button(label="Edit Identity", emoji="🌈", style=discord.ButtonStyle.secondary, custom_id=f"{PROFILE_PREFIX}open:identity", row=1))
+        self.add_item(discord.ui.Button(label="Edit Interests", emoji="🎮", style=discord.ButtonStyle.secondary, custom_id=f"{PROFILE_PREFIX}open:interests", row=1))
+
         self.add_item(discord.ui.Button(label="Suggest Missing Interest", emoji="➕", style=discord.ButtonStyle.secondary, custom_id=f"{PROFILE_PREFIX}missing_interest", row=2))
+        self.add_item(discord.ui.Button(label="Missing Identity?", emoji="✍️", style=discord.ButtonStyle.secondary, custom_id=f"{PROFILE_PREFIX}missing", row=2))
         self.add_item(discord.ui.Button(label="Clear Profile Roles", emoji="🧹", style=discord.ButtonStyle.danger, custom_id=f"{PROFILE_PREFIX}clear", row=3))
-        self.add_item(discord.ui.Button(label="Missing Identity?", emoji="✍️", style=discord.ButtonStyle.secondary, custom_id=f"{PROFILE_PREFIX}missing", row=3))
+
+
+def _profile_edit_embed(member: discord.Member) -> discord.Embed:
+    embed = discord.Embed(
+        title="✏️ Edit Your Profile",
+        description=(
+            "Choose what you want to update. Changes apply immediately, and every section is optional. "
+            "These roles are cosmetic only; they never control access, verification, tickets, moderation, or staff permissions."
+        ),
+        color=discord.Color.blurple(),
+        timestamp=discord.utils.utcnow(),
+    )
+    embed.add_field(name="Current pronouns", value=_profile_role_lines(member, DEFAULT_PRONOUN_ROLE_NAMES), inline=False)
+    embed.add_field(name="Current identity", value=_profile_role_lines(member, DEFAULT_IDENTITY_ROLE_NAMES), inline=False)
+
+    try:
+        interest_names = DEFAULT_INTEREST_ROLE_NAMES
+    except NameError:
+        interest_names = tuple()
+
+    if interest_names:
+        embed.add_field(name="Current interests", value=_profile_role_lines(member, interest_names), inline=False)
+
+    embed.add_field(
+        name="How editing works",
+        value=(
+            "Use **Edit Pronouns**, **Edit Identity**, or **Edit Interests** to pick from the available choices. "
+            "Use **Clear Profile Roles** to remove all optional profile labels."
+        ),
+        inline=False,
+    )
+    embed.set_footer(text="Dank Shield profile editor")
+    return embed
+
+
+class ProfileEditView(discord.ui.View):
+    def __init__(self) -> None:
+        super().__init__(timeout=300)
+        self.add_item(discord.ui.Button(label="Edit Pronouns", emoji="🪪", style=discord.ButtonStyle.primary, custom_id=f"{PROFILE_PREFIX}open:pronouns", row=0))
+        self.add_item(discord.ui.Button(label="Edit Identity", emoji="🌈", style=discord.ButtonStyle.primary, custom_id=f"{PROFILE_PREFIX}open:identity", row=0))
+        self.add_item(discord.ui.Button(label="Edit Interests", emoji="🎮", style=discord.ButtonStyle.primary, custom_id=f"{PROFILE_PREFIX}open:interests", row=0))
+        self.add_item(discord.ui.Button(label="View My Profile", emoji="👤", style=discord.ButtonStyle.secondary, custom_id=f"{PROFILE_PREFIX}view", row=1))
+        self.add_item(discord.ui.Button(label="Learn Terms", emoji="📘", style=discord.ButtonStyle.secondary, custom_id=f"{PROFILE_PREFIX}learn", row=1))
+        self.add_item(discord.ui.Button(label="Clear Profile Roles", emoji="🧹", style=discord.ButtonStyle.danger, custom_id=f"{PROFILE_PREFIX}clear", row=1))
+        self.add_item(discord.ui.Button(label="Missing Identity?", emoji="✍️", style=discord.ButtonStyle.secondary, custom_id=f"{PROFILE_PREFIX}missing", row=2))
+        self.add_item(discord.ui.Button(label="Suggest Missing Interest", emoji="➕", style=discord.ButtonStyle.secondary, custom_id=f"{PROFILE_PREFIX}missing_interest", row=2))
 
 
 def register_profile_panel_runtime(bot: Any) -> bool:
@@ -1219,6 +1310,23 @@ async def _handle_profile_interaction(interaction: discord.Interaction) -> bool:
         await _reply(interaction, "This only works inside the server.", ok=False)
         return True
 
+    if suffix == "edit":
+        await interaction.response.send_message(
+            embed=_profile_edit_embed(member),
+            view=ProfileEditView(),
+            ephemeral=True,
+            allowed_mentions=discord.AllowedMentions.none(),
+        )
+        return True
+
+    if suffix == "full_roles_self":
+        await interaction.response.send_message(
+            embed=_profile_full_roles_embed(member),
+            ephemeral=True,
+            allowed_mentions=discord.AllowedMentions.none(),
+        )
+        return True
+
     if suffix == "pick_member":
         await interaction.response.send_message(
             embed=_profile_member_page_embed(guild, page=0),
@@ -1395,7 +1503,7 @@ def _profile_action_key_from_custom_id(custom_id: str) -> str:
         suffix = text[len("dank:profile:v1:"):]
         if suffix.startswith("open:"):
             return suffix
-        if suffix in {"view", "clear", "missing", "missing_interest"}:
+        if suffix in {"view", "edit", "full_roles_self", "clear", "missing", "missing_interest"}:
             return suffix
     if text.startswith("dank:rolepicker:v2:"):
         suffix = text[len("dank:rolepicker:v2:"):]
