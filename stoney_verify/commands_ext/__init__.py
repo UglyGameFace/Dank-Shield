@@ -39,6 +39,7 @@ COMMAND_MODULES: List[CommandModuleSpec] = [
     ("public_members_group", "register_public_members_group_commands", "core: /dank members activity review commands"),
     ("public_members_cleanup_group", "register_public_members_cleanup_group_commands", "core: confirmed /dank members cleanup command"),
     ("public_self_roles_group", "register_public_self_roles_group_commands", "core: public profile panel and cosmetic self-role profile builder"),
+    ("public_design_group", "register_public_design_group_commands", "core: /dank design studio for safe channel/category name styling"),
     ("public_mod_group", "register_public_mod_group_commands", "core: grouped /mod moderation commands"),
     ("public_ticket_group_clean", "register_public_ticket_group_clean_commands", "core: grouped /ticket commands"),
     ("public_ticket_delete", "register_public_ticket_delete_commands", "core: /ticket delete command"),
@@ -114,6 +115,7 @@ _PUBLIC_CORE_MODULES: Tuple[str, ...] = (
     "public_members_group",
     "public_members_cleanup_group",
     "public_self_roles_group",
+    "public_design_group",
     "public_mod_group",
     "public_ticket_group_clean",
     "public_ticket_delete",
@@ -235,6 +237,7 @@ _ALLOWED_DANK_CHILDREN = {
     "roles",
     "modlog",
     "embed",
+    "design",
 }
 
 _COMPACT_SUPPRESS_PREFIXES: Tuple[str, ...] = (
