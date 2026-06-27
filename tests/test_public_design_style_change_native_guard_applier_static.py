@@ -56,7 +56,7 @@ def test_style_change_runtime_is_either_debt_or_applied() -> None:
         assert region.count("        async def action() -> None:") >= 3
         assert "\n            key = _key" in region
         assert "\n                await interaction.response.edit_message" in region
-        assert "\n            await interaction.response.edit_message" not in region
+        assert "\n            await _guard_design_action" in region
     else:
         assert "This preview expired. Run Style Change again." in region
         assert "return await interaction.response.send_message" in region
