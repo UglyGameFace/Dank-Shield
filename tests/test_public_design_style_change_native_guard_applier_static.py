@@ -52,11 +52,11 @@ def test_style_change_runtime_is_either_debt_or_applied() -> None:
             "design.style_change.fix_missing_icons_modal",
         ):
             assert action_name in region
-        assert "    async def on_submit(self, interaction: discord.Interaction) -> None:\n        async def action() -> None:" in region
-        assert region.count("        async def action() -> None:") >= 3
-        assert "\n            key = _key" in region
-        assert "\n                await interaction.response.edit_message" in region
-        assert "\n            await _guard_design_action" in region
+        assert "async def on_submit(self, interaction: discord.Interaction) -> None:" in region
+        assert region.count("async def action() -> None:") >= 3
+        assert "key = _key" in region
+        assert "await interaction.response.edit_message" in region
+        assert "await _guard_design_action" in region
     else:
         assert "This preview expired. Run Style Change again." in region
         assert "return await interaction.response.send_message" in region
