@@ -21,9 +21,29 @@ def replace_section(text: str, start_marker: str, end_marker: str, replacement: 
     return text[:start] + replacement + text[end:]
 
 
+def repair_split_newline_literals(text: str) -> tuple[str, bool]:
+    """Repair already-applied rollback slices where '\\n'.join became a literal newline."""
+    repaired = False
+    repairs = {
+        'value="' + "\n" + '".join(preview)[:1024] or "No items."': 'value="\\n".join(preview)[:1024] or "No items."',
+        'value="' + "\n" + '".join(failed[:10])[:1024]': 'value="\\n".join(failed[:10])[:1024]',
+    }
+    for bad, good in repairs.items():
+        if bad in text:
+            text = text.replace(bad, good)
+            repaired = True
+    return text, repaired
+
+
 def main() -> None:
     path = TARGET
     text = path.read_text(encoding="utf-8")
+
+    text, repaired_literals = repair_split_newline_literals(text)
+    if repaired_literals and "design.rollback.confirm" in text and "design.rollback.open" in text:
+        path.write_text(text, encoding="utf-8")
+        print("Repaired: Dank Design rollback newline join literals.")
+        return
 
     if "design.rollback.confirm" in text and "design.rollback.open" in text:
         print("Already applied: Dank Design rollback native guard slice is present.")
@@ -44,7 +64,7 @@ def main() -> None:
         if marker not in text:
             raise SystemExit(f"Refusing to patch rollback flow: marker not found: {marker!r}.")
 
-    new_rollback_region = '''class DesignDoneView(discord.ui.View):
+    new_rollback_region = r'''class DesignDoneView(discord.ui.View):
     def __init__(self, *, can_rollback: bool) -> None:
         super().__init__(timeout=900)
         self.rollback.disabled = not can_rollback
