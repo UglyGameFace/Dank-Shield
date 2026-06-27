@@ -12,15 +12,7 @@ If a future assistant, agent, or developer loses context, this file is the reset
 
 Make Dank Shield public-production-ready for real server owners, staff teams, and future premium customers.
 
-The bot must be:
-
-- safe for many unrelated Discord servers
-- simple enough for non-technical owners
-- clear enough for staff and visually impaired users
-- reliable under Discord, API, database, restart, and permission failures
-- resistant to duplicate commands, stale UI, silent errors, stale panels, and hidden boot mutations
-- structured around native services, not startup patch piles
-- ready for premium gating before premium features are sold
+The bot must be safe for many unrelated Discord servers, simple enough for non-technical owners, clear enough for staff and visually impaired users, reliable under Discord/API/database/restart/permission failures, resistant to duplicate commands/stale UI/silent errors/hidden boot mutations, structured around native services instead of startup patch piles, and ready for premium gating before premium features are sold.
 
 ---
 
@@ -43,8 +35,6 @@ The bot must be:
 
 ## Required work loop
 
-Every serious change must follow this loop:
-
 ```text
 1. Read this command center.
 2. State the active task ID.
@@ -64,7 +54,7 @@ No wandering. No drive-by feature work. No vague “fixed” claims.
 
 ## Interruption rule
 
-If a higher-risk issue is discovered while fixing another issue, stop and record it like this:
+If a higher-risk issue is discovered while fixing another issue, record:
 
 ```text
 INTERRUPTION DETECTED
@@ -78,7 +68,7 @@ Verification:
 Return path:
 ```
 
-The interruption becomes the active task only if it could cause generic interaction failure, data loss, cross-guild config bleed, unsafe moderation/deletion, command registration breakage, ticket numbering/channel orphaning, silent boot/runtime failure, or removal of an active feature.
+The interruption becomes active only if it could cause generic interaction failure, data loss, cross-guild config bleed, unsafe moderation/deletion, command registration breakage, ticket numbering/channel orphaning, silent boot/runtime failure, or removal of an active feature.
 
 ---
 
@@ -149,13 +139,13 @@ Current working score: **49 / 100**
 
 Meaning: internal/testing only. Not ready for wide public release, not ready for paid premium membership, and not ready to promise seamless UX.
 
-Score moved from 48 to 49 because the native interaction foundation now exists and Protection Center callbacks have started migrating to it. It cannot rise further until real test/compile commands are run and the old framework monkey patch is removed safely.
+Score moved from 48 to 49 because the native interaction foundation exists, Protection Center callbacks started migrating to it, and `/dank design` command-open now uses a guarded native wrapper. It cannot rise further until real test/compile commands are run, raw setup/design/ticket/verify callbacks are migrated, and the old framework monkey patch is removed safely.
 
 Remaining score blockers:
 
-- a large startup guard chain still controls too much behavior
+- large startup guard chain still controls too much behavior
 - `global_interaction_trace_guard` still patches Discord.py framework internals
-- not all setup/design/ticket/verify callbacks use the native interaction guard yet
+- many setup/design/ticket/verify callbacks still do raw `interaction.response.*` work
 - command registry still contains runtime pruning/mutation logic
 - settings are not yet defined through one central registry
 - Dank Design still contains too much state/UI/service logic in one command module
@@ -188,20 +178,25 @@ Progress completed:
 - It keeps a bounded recent-failure ring for diagnostics/tests.
 - It has native duplicate-action lock support.
 - `tests/test_interaction_guard.py` covers response/followup behavior, send failure logging, defer failure logging, safe callback errors, and duplicate locked actions.
-- `stoney_verify/commands_ext/public_protection_center.py` now routes `/dank protection`, Protection Center buttons, spam editor select/actions, filter modals, refresh, and close through native guarded actions.
+- `stoney_verify/commands_ext/public_protection_center.py` routes `/dank protection`, Protection Center buttons, spam editor select/actions, filter modals, refresh, and close through native guarded actions.
 - Legacy local `try/print` handling was removed from the Protection Center open path.
-- `tests/test_public_protection_center_native_interaction_static.py` now prevents Protection Center from regressing back to unguarded command-open handling and verifies required guarded action names exist.
+- `tests/test_public_protection_center_native_interaction_static.py` prevents Protection Center from regressing back to unguarded command-open handling and verifies required guarded action names exist.
+- `stoney_verify/commands_ext/public_design_group.py` now registers `/dank design` through a native `run_guarded_interaction()` wrapper instead of delegating the slash command callback to the raw studio opener.
+- `tests/test_public_design_group_native_interaction_static.py` verifies guarded `/dank design` registration and records the remaining raw callback debt in the large studio module.
 
-Important behavior note:
+Important behavior notes:
 
 - Slow Protection Center config writes now prefer deferred private followups over risky unacknowledged edit-in-place behavior. This is intentional for reliability. A later UX pass can improve in-place refresh once every path is safely acknowledged.
+- `/dank design` command-open is guarded now, but most internal Dank Design buttons/selects/modals still live in `public_design_studio.py` and still need careful small-slice migration.
+- Attempting the Dank Design slice revealed that `public_design_enhancements.py` still activates enhancement code from `startup_guards`; this is recorded under `P0-GUARD-001` and should be removed during guard migration, not buried as a new interaction patch.
 
 Remaining before this task can be marked done:
 
 - migrate the highest-risk setup/design/ticket/verify callbacks to `run_guarded_interaction()` or native helpers
+- migrate Dank Design internal buttons/selects/modals in smaller slices, starting with exact format editor and apply/rollback flows
 - ensure diagnostics can expose recent native interaction failures safely
 - remove or disable `global_interaction_trace_guard` framework patching only after native coverage exists
-- run the interaction/protection tests and compile checks in a real checkout
+- run interaction/protection/design static tests and compile checks in a real checkout
 
 Exit criteria:
 
@@ -226,6 +221,7 @@ Confirmed risk areas:
 - invite enforcement guards overlapping the central invite engine
 - protection center guards mutating command/UI behavior
 - setup UX guards patching flows at boot
+- design enhancements still activated through startup guard modules from the native design registration path
 - design guards patching Dank Design behavior instead of native design modules
 - ticket/VC guards patching product behavior instead of native services
 - `builtins.print` suppression during startup guard loading
@@ -250,11 +246,7 @@ Verification:
 
 Status: `PARTIAL / BLOCKER`
 
-The central `guild_config.py` is moving in the right direction. It has guild-scoped cache keys and public config isolation. That is good but not complete.
-
-Remaining concern:
-
-Old compatibility globals, startup guards, and split modules may still use fallback env IDs, module globals, or stale cache state outside the central resolver.
+The central `guild_config.py` is moving in the right direction. It has guild-scoped cache keys and public config isolation. Remaining concern: old compatibility globals, startup guards, and split modules may still use fallback env IDs, module globals, or stale cache state outside the central resolver.
 
 Safe strategy:
 
@@ -263,30 +255,13 @@ Safe strategy:
 - migrate runtime reads to resolver one subsystem at a time
 - keep env IDs only as controlled legacy/private fallback when explicitly allowed
 
-Verification:
-
-- two test guilds can use different roles/channels/categories
-- missing setup locks unsafe actions instead of guessing
-- diagnostics show exactly what is missing for each guild
-- cache keys include guild ID for all guild behavior
-
 ---
 
 ### `P0-INVITE-001` — Invite/link deletion must be exclusively centralized
 
 Status: `PARTIAL / BLOCKER`
 
-Good news:
-
-`stoney_verify/invite_policy_engine.py` already has a strong central decision object and correct policy posture:
-
-- same-server invites allowed by default
-- Spam Guard alone does not delete a single invite
-- decisions include feature owner, rule ID, reason, fix hint, guild ID, channel ID, author ID, classification, and delete result
-
-Remaining risk:
-
-Startup guards and legacy listeners may still contain invite/link delete behavior or overlapping enforcement.
+Good news: `stoney_verify/invite_policy_engine.py` already has a strong central decision object and correct policy posture. Remaining risk: startup guards and legacy listeners may still contain invite/link delete behavior or overlapping enforcement.
 
 Safe strategy:
 
@@ -294,14 +269,6 @@ Safe strategy:
 - identify every invite/link scanner/listener/runtime cleanup path
 - require all invite deletes to call `decide_invite_message()` and `delete_message_if_allowed()`
 - remove duplicate invite enforcement guards after coverage exists
-
-Verification:
-
-- Invite Shield can enable independently from Link Shield
-- internal invites are allowed when configured
-- external invites are blocked/deleted predictably
-- manual scan reports checked, matched, allowed, skipped, deleted, and failed counts
-- no invite/link message is deleted without a stored `InviteDecision`
 
 ---
 
@@ -318,13 +285,6 @@ Safe strategy:
 - remove public-runtime command pruning from normal startup
 - add tests for public command children and top-level commands
 
-Verification:
-
-- `/dank` public children are deterministic
-- no hidden legacy command appears in public profile
-- no normal startup path removes commands after registration
-- tests cover public, public-admin, dev, and minimal command profiles
-
 ---
 
 ### `P0-SETTINGS-001` — Central settings registry is missing
@@ -333,16 +293,7 @@ Status: `BLOCKER`
 
 Settings are currently spread across guild config, spam settings, automod presets, invite policy keys, setup helpers, and feature-specific UI code.
 
-Safe strategy:
-
-Create a central settings registry with key, display name, plain-English description, owning feature, default, valid values, storage location, conflict rules, migration aliases, visibility rules, audit log behavior, and premium gating metadata when needed.
-
-Verification:
-
-- Protection Center reads setting definitions from registry
-- Setup screens can show current/recommended/missing values from registry
-- Invite Shield conflict warnings use registry conflict rules
-- tests catch duplicate keys, unknown aliases, invalid defaults, and missing descriptions
+Safe strategy: create a central settings registry with key, display name, plain-English description, owning feature, default, valid values, storage location, conflict rules, migration aliases, visibility rules, audit log behavior, and premium gating metadata when needed.
 
 ---
 
@@ -350,17 +301,11 @@ Verification:
 
 Status: `BLOCKER / UX`
 
-Good news:
+Good news: Dank Design has native registration and visible cleanup for newline artifacts like `\\n`, `\n`, `/n`, and `/N`.
 
-Dank Design now has native registration and visible cleanup for newline artifacts like `\\n`, `\n`, `/n`, and `/N`.
+Remaining concern: `public_design_studio.py` still owns pending state, snapshots, locks, rollback persistence, format editor drafts, UI views, permission checks, and save/load behavior.
 
-Remaining concern:
-
-`public_design_studio.py` still owns pending state, snapshots, locks, rollback persistence, format editor drafts, UI views, permission checks, and save/load behavior.
-
-Safe strategy:
-
-Split into design service, state store, rollback service, UI views, logger/audit service, and permission helper.
+Safe strategy: split into design service, state store, rollback service, UI views, logger/audit service, and permission helper.
 
 Verification:
 
@@ -385,13 +330,6 @@ Safe strategy:
 - record operation state before creating Discord channels
 - repair or clearly report any partial failures
 
-Verification:
-
-- concurrent ticket creation does not duplicate ticket numbers
-- failed DB insert does not leave untracked channels silently
-- retries reuse or safely repair the same operation
-- imported/highest previous ticket numbers do not reset unexpectedly
-
 ---
 
 ## High-priority work
@@ -401,8 +339,6 @@ Verification:
 Status: `HIGH PRIORITY`
 
 Owners should see the exact missing permission and where it is missing.
-
-Required output format:
 
 ```text
 Missing: Manage Messages
@@ -433,16 +369,7 @@ No duplicate commands, stale commands, hidden legacy setup paths, or expired pub
 
 Status: `HIGH PRIORITY / PREMIUM`
 
-Premium features must not ship until this exists:
-
-- plan definitions
-- entitlement lookup
-- feature gates
-- locked-feature messages
-- downgrade-safe behavior
-- data retention rules after downgrade
-- staff/admin override rules
-- tests for free, premium, expired, and downgraded states
+Premium features must not ship until plan definitions, entitlement lookup, feature gates, locked-feature messages, downgrade-safe behavior, data retention rules after downgrade, staff/admin override rules, and tests for free/premium/expired/downgraded states exist.
 
 Free tier must keep basic safety usable. Premium should enhance scale, analytics, automation, branding, forms, transcripts, and advanced protection — not lock essential server safety behind a confusing paywall.
 
@@ -464,6 +391,7 @@ Every startup guard must be classified before removal.
 | `discord_invite_blocker_runtime_guard` | overlap risk with invite policy engine | inspect for direct deletes |
 | `invite_live_enforcer_guard` | loader explicitly calls `apply()` | high-risk inspection required |
 | `server_design_*_guard` | design behavior should be native | migrate into design service/UI |
+| `public_design_enhancements` startup-guard imports | native design path still activates startup guard modules | migrate strict/majority layout into native design services |
 | `setup_*_guard` | too many setup UX fixes at startup | classify and migrate valid UX into setup modules |
 | `ticket_*_guard` | ticket behavior should be native | migrate into ticket services |
 | `vc_*_guard` | VC verify should be native | migrate into verification service |
@@ -483,6 +411,7 @@ pytest tests/test_guild_context.py
 pytest tests/test_multi_guild_isolation.py
 pytest tests/test_interaction_guard.py
 pytest tests/test_public_protection_center_native_interaction_static.py
+pytest tests/test_public_design_group_native_interaction_static.py
 pytest tests/test_ticket_counter_concurrency.py
 pytest tests/test_ticket_creation_idempotency.py
 pytest tests/test_invite_policy_engine.py
@@ -529,19 +458,9 @@ Existing server:
 
 Status: `DONE`
 
-Scope:
+Scope: update this command center, lower readiness score from 62 to 48, define active task IDs, add interruption rule, add strict definition of done, and update startup guard migration ledger.
 
-- update this command center to reflect current audit findings
-- lower readiness score from 62 to 48
-- define active task IDs
-- add interruption rule
-- add strict definition of done
-- update startup guard migration ledger
-
-Verification:
-
-- docs render in GitHub
-- no runtime behavior changed
+Verification: docs render in GitHub and no runtime behavior changed.
 
 ---
 
@@ -566,14 +485,17 @@ Progress:
 - tests expanded for response, followup, send failure, defer failure, callback exception, and duplicate action paths
 - Protection Center command/button/modal/select paths now use native guarded interaction wrappers
 - Protection Center static regression test added
+- `/dank design` command-open now uses a native guarded wrapper from the public design registrar
+- public design group static regression test added
 
 Verification:
 
 - `tests/test_interaction_guard.py` updated
 - `tests/test_public_protection_center_native_interaction_static.py` added
+- `tests/test_public_design_group_native_interaction_static.py` added
 - static GitHub inspection completed
 - compile/pytest still need to be run from a real checkout
-- setup/design/ticket/verify callbacks are not fully migrated yet
+- setup/design internal/ticket/verify callbacks are not fully migrated yet
 
 ---
 
@@ -583,12 +505,7 @@ Status: `NOT STARTED`
 
 Task ID: `P0-GUARD-001`
 
-Scope:
-
-- inventory every startup guard
-- classify each guard
-- identify native owner module
-- migrate/delete safely in batches
+Scope: inventory every startup guard, classify each guard, identify native owner module, migrate/delete safely in batches.
 
 ---
 
@@ -598,11 +515,7 @@ Status: `NOT STARTED`
 
 Task ID: `P0-INVITE-001`
 
-Scope:
-
-- verify every invite/link delete calls central invite policy engine
-- remove duplicate invite hard-block paths
-- add scan/deletion accounting tests
+Scope: verify every invite/link delete calls central invite policy engine, remove duplicate invite hard-block paths, add scan/deletion accounting tests.
 
 ---
 
@@ -612,11 +525,7 @@ Status: `NOT STARTED`
 
 Task ID: `P0-CMD-001`
 
-Scope:
-
-- remove normal public runtime command pruning/mutation
-- keep cleanup as explicit migration/admin tooling only
-- add command surface tests
+Scope: remove normal public runtime command pruning/mutation, keep cleanup as explicit migration/admin tooling only, add command surface tests.
 
 ---
 
@@ -626,11 +535,7 @@ Status: `NOT STARTED`
 
 Task ID: `P0-SETTINGS-001`
 
-Scope:
-
-- define setting registry model
-- migrate Protection Center first
-- add conflict and alias validation tests
+Scope: define setting registry model, migrate Protection Center first, add conflict and alias validation tests.
 
 ---
 
@@ -640,11 +545,7 @@ Status: `NOT STARTED`
 
 Task ID: `P0-DESIGN-001`
 
-Scope:
-
-- split design command module into service/state/UI/logging
-- preserve previews, rollback, examples, and format locks
-- remove design startup patch dependencies
+Scope: split design command module into service/state/UI/logging, preserve previews/rollback/examples/format locks, remove design startup patch dependencies.
 
 ---
 
@@ -654,11 +555,7 @@ Status: `NOT STARTED`
 
 Task ID: `P0-TICKET-001`
 
-Scope:
-
-- database atomic ticket number reservation
-- idempotent ticket creation operation records
-- repair/report partial channel creation failures
+Scope: database atomic ticket number reservation, idempotent ticket creation operation records, repair/report partial channel creation failures.
 
 ---
 
@@ -668,11 +565,7 @@ Status: `NOT STARTED`
 
 Task ID: `P1-PERMS-001`
 
-Scope:
-
-- central permission requirements map
-- exact owner-facing missing permission messages
-- no Administrator requirement for normal operation
+Scope: central permission requirements map, exact owner-facing missing permission messages, no Administrator requirement for normal operation.
 
 ---
 
@@ -682,13 +575,7 @@ Status: `NOT STARTED`
 
 Task ID: `P1-PREMIUM-001`
 
-Scope:
-
-- plan definitions
-- feature gates
-- entitlement provider abstraction
-- locked-feature messaging
-- downgrade tests
+Scope: plan definitions, feature gates, entitlement provider abstraction, locked-feature messaging, downgrade tests.
 
 ---
 
@@ -698,11 +585,7 @@ Status: `NOT STARTED`
 
 Task ID: `P1-QA-001`
 
-Scope:
-
-- automated regression tests
-- manual QA checklist
-- release gate script/documentation
+Scope: automated regression tests, manual QA checklist, release gate script/documentation.
 
 ---
 
