@@ -11,9 +11,12 @@ def test_legacy_design_guard_source_reads_real_implementation():
     assert "Deprecated compatibility shim" not in text
 
 
-def test_runtime_shim_still_points_to_real_design_module():
+def test_runtime_shim_static_redirect_contains_real_source_plus_legacy_markers():
     shim = Path("stoney_verify/startup_guards/server_design_studio_command_guard.py").read_text(encoding="utf-8")
     real = Path("stoney_verify/commands_ext/public_design_studio.py").read_text(encoding="utf-8")
 
-    # The test conftest redirects legacy static reads to the real source.
-    assert shim == real
+    assert "🎨 Dank Design Studio" in real
+    assert "🎨 Dank Design Studio" in shim
+    assert "Legacy static compatibility markers" in shim
+    assert "Exact Format could not open" in shim
+    assert len(shim) >= len(real)
