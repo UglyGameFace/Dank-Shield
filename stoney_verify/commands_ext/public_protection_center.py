@@ -10,14 +10,13 @@ owners.
 
 import re
 import unicodedata
-from typing import Any, Mapping
+from typing import Any, Awaitable, Callable, Mapping
 
 import discord
-from discord import app_commands
 
 from ..guild_config import get_guild_config, invalidate_guild_config, upsert_guild_config
+from ..interaction_guard import log_interaction_failure, run_guarded_interaction, safe_send_interaction
 from .public_setup_group import _require_setup_permission, dank_group
-from ..interaction_guard import safe_defer_interaction, safe_send_interaction
 
 _ATTACHED = False
 
@@ -121,6 +120,20 @@ SPAM_PRESETS: dict[str, dict[str, Any]] = {
     },
 }
 
+SPAM_MODE_LABELS = {
+    "log_only": "Alert Only",
+    "delete_only": "Delete Messages",
+    "timeout": "Timeout User",
+    "quarantine": "Quarantine + Restore",
+    "kick": "Kick User",
+    "ban": "Ban User",
+}
+
+PROTECTION_ERROR_GUIDANCE = (
+    "Nothing was changed unless the success message says it was. Reopen `/dank protection`, "
+    "press Refresh, and check `/dank diagnostics` with the Error ID if it repeats."
+)
+
 
 def _clean_filter_item(value: Any) -> str:
     text = unicodedata.normalize("NFKC", str(value or ""))
@@ -137,6 +150,18 @@ def _csv_items(value: Any) -> list[str]:
         item = _clean_filter_item(chunk)
         if item and item not in out:
             out.append(item)
+    return out
+
+
+def _parse_csvish_codes(value: Any) -> list[str]:
+    out: list[str] = []
+    for chunk in re.split(r"[\s,;]+", str(value or "")):
+        code = chunk.strip().strip("/")
+        code = code.replace("https://discord.gg/", "").replace("http://discord.gg/", "")
+        code = code.replace("https://discord.com/invite/", "").replace("http://discord.com/invite/", "")
+        code = re.sub(r"[^A-Za-z0-9-]+", "", code)[:32]
+        if code and code not in out:
+            out.append(code)
     return out
 
 
@@ -262,7 +287,6 @@ async def _save_spam_settings(guild_id: int, patch: dict[str, Any], member: disc
         return dict(patch), False
 
 
-
 def _invalidate_invite_policy_cache(guild_id: int) -> None:
     """Make invite blocker changes live immediately."""
     try:
@@ -297,13 +321,25 @@ async def _save_automod(guild_id: int, updates: dict[str, Any]) -> Any:
 
 
 async def _send_ephemeral(interaction: discord.Interaction, content: str = "", **kwargs: Any) -> None:
-    try:
-        if not interaction.response.is_done():
-            await interaction.response.send_message(content, ephemeral=True, **kwargs)
-        else:
-            await interaction.followup.send(content, ephemeral=True, **kwargs)
-    except Exception:
-        pass
+    await safe_send_interaction(interaction, content=content, ephemeral=True, action_name="protection.ephemeral", **kwargs)
+
+
+async def _guard_protection_action(
+    interaction: discord.Interaction,
+    action_name: str,
+    action: Callable[[], Awaitable[None]],
+    *,
+    defer: bool = True,
+) -> None:
+    await run_guarded_interaction(
+        interaction,
+        action,
+        defer=defer,
+        ephemeral=True,
+        action_name=action_name,
+        error_title="❌ Protection action failed safely",
+        error_guidance=PROTECTION_ERROR_GUIDANCE,
+    )
 
 
 def _link_policy_label(cfg: Any) -> str:
@@ -385,28 +421,45 @@ def _protection_embed(guild: discord.Guild, cfg: Any, spam: dict[str, Any], spam
 async def _refresh_panel(interaction: discord.Interaction, *, content: str | None = None) -> None:
     guild = interaction.guild
     if guild is None:
-        return await _send_ephemeral(interaction, "❌ This must be used inside a server.")
+        await _send_ephemeral(interaction, "❌ This must be used inside a server.")
+        return
+
     cfg = await get_guild_config(int(guild.id), refresh=True)
     spam, spam_source = await _load_spam_settings(int(guild.id))
     embed = _protection_embed(guild, cfg, spam, spam_source)
     view = ProtectionCenterView(author_id=int(interaction.user.id), cfg=cfg, spam=spam)
+
+    if interaction.response.is_done():
+        await safe_send_interaction(
+            interaction,
+            content=content or "Protection Center refreshed.",
+            embed=embed,
+            view=view,
+            ephemeral=True,
+            allowed_mentions=discord.AllowedMentions.none(),
+            action_name="protection.refresh.followup",
+        )
+        return
+
     try:
-        if interaction.response.is_done():
-            await interaction.followup.send(content or "Updated Protection Center.", embed=embed, view=view, ephemeral=True, allowed_mentions=discord.AllowedMentions.none())
-        else:
-            await interaction.response.edit_message(content=content or "Protection Center refreshed.", embed=embed, view=view)
-    except Exception:
-        await _send_ephemeral(interaction, content or "Protection Center refreshed.", embed=embed, view=view, allowed_mentions=discord.AllowedMentions.none())
-
-
-SPAM_MODE_LABELS = {
-    "log_only": "Alert Only",
-    "delete_only": "Delete Messages",
-    "timeout": "Timeout User",
-    "quarantine": "Quarantine + Restore",
-    "kick": "Kick User",
-    "ban": "Ban User",
-}
+        await interaction.response.edit_message(content=content or "Protection Center refreshed.", embed=embed, view=view)
+    except Exception as exc:
+        log_interaction_failure(
+            interaction,
+            exc,
+            stage="protection_refresh_edit_failed",
+            action_name="protection.refresh",
+            fix_hint="Dank Shield could not edit the existing Protection Center panel, so it will try to send a fresh private panel.",
+        )
+        await safe_send_interaction(
+            interaction,
+            content=content or "Protection Center refreshed.",
+            embed=embed,
+            view=view,
+            ephemeral=True,
+            allowed_mentions=discord.AllowedMentions.none(),
+            action_name="protection.refresh.fallback_send",
+        )
 
 
 def _normalize_spam_mode_for_ui(value: Any) -> str:
@@ -416,34 +469,26 @@ def _normalize_spam_mode_for_ui(value: Any) -> str:
 
 def _protection_state(cfg: Any, spam: dict[str, Any]) -> str:
     """Return off/safe/strict/custom for live button labels."""
-
     try:
         automod_on = _cfg_bool(cfg, "automod_enabled", False)
         invites_on = _cfg_bool(cfg, "automod_block_invites", False)
         links_on = _cfg_bool(cfg, "automod_block_links", False)
         spam_on = bool((spam or {}).get("enabled"))
         preset = str(_cfg_value(cfg, "automod_preset", "custom") or "custom").strip().lower()
-
         if not automod_on and not invites_on and not links_on and not spam_on:
             return "off"
-
         if spam_on and invites_on and links_on and preset == "strict":
             return "strict"
-
         if spam_on and invites_on and not links_on and preset == "safe":
             return "safe"
-
-        # Backward-compatible detection if the saved preset label is stale.
         if spam_on and invites_on and links_on:
             try:
                 if int((spam or {}).get("message_threshold", 99) or 99) <= int(SPAM_PRESETS["strict"]["message_threshold"]):
                     return "strict"
             except Exception:
                 return "strict"
-
         if spam_on and invites_on and not links_on:
             return "safe"
-
         return "custom"
     except Exception:
         return "custom"
@@ -455,37 +500,29 @@ def _decorate_quick_mode_buttons(view: discord.ui.View, cfg: Any, spam: dict[str
     links_on = _link_shield_enabled_for_ui(cfg, spam or {})
     for child in list(getattr(view, "children", []) or []):
         custom_id = str(getattr(child, "custom_id", "") or "")
-
         if custom_id == "dank_protection:safe":
             child.label = f"Safe Defaults: {'ON' if state == 'safe' else 'OFF'}"
             child.style = discord.ButtonStyle.success if state == "safe" else discord.ButtonStyle.secondary
             child.emoji = "🟢"
-
         elif custom_id == "dank_protection:strict":
             child.label = f"Strict Mode: {'ON' if state == 'strict' else 'OFF'}"
             child.style = discord.ButtonStyle.success if state == "strict" else discord.ButtonStyle.secondary
             child.emoji = "🔒"
-
         elif custom_id == "dank_protection:off":
             child.label = "Protection: OFF" if state == "off" else "Turn Off"
             child.style = discord.ButtonStyle.success if state == "off" else discord.ButtonStyle.danger
             child.emoji = "⏸️"
-
         elif custom_id == "dank_protection:block_invites":
             child.label = f"Invite Blocker: {'ON' if invite_on else 'OFF'}"
             child.style = discord.ButtonStyle.success if invite_on else discord.ButtonStyle.secondary
             child.emoji = "🛡️" if invite_on else "⚪"
-
         elif custom_id == "dank_protection:block_links":
             child.label = f"All Links: {'ON' if links_on else 'OFF'}"
             child.style = discord.ButtonStyle.success if links_on else discord.ButtonStyle.secondary
             child.emoji = "🔗" if links_on else "⚪"
-
         elif custom_id == "dank_protection:edit_spamguard":
             child.label = "Spam Guard Actions"
             child.emoji = "🛡️"
-
-
 
 
 async def _apply_protection_preset(interaction: discord.Interaction, preset: str) -> None:
@@ -493,25 +530,22 @@ async def _apply_protection_preset(interaction: discord.Interaction, preset: str
         return
     guild = interaction.guild
     if guild is None:
-        return await _send_ephemeral(interaction, "❌ This must be used inside a server.")
+        await _send_ephemeral(interaction, "❌ This must be used inside a server.")
+        return
 
     preset = str(preset or "safe").strip().lower()
     if preset not in AUTOMOD_PRESETS or preset not in SPAM_PRESETS:
         preset = "safe"
 
     member = interaction.user if isinstance(interaction.user, discord.Member) else None
-
     current_cfg = await get_guild_config(int(guild.id), refresh=True)
     current_spam, _ = await _load_spam_settings(int(guild.id))
     current_state = _protection_state(current_cfg, current_spam)
-
-    # Make Safe / Strict behave like real live toggles.
     target = "off" if preset in {"safe", "strict"} and current_state == preset else preset
 
     automod_updates = dict(AUTOMOD_PRESETS[target])
     automod_updates["automod_updated_by_id"] = str(int(interaction.user.id))
     await _save_automod(int(guild.id), automod_updates)
-
     spam_settings, persisted = await _save_spam_settings(int(guild.id), dict(SPAM_PRESETS[target]), member)
 
     if target == "off":
@@ -520,7 +554,6 @@ async def _apply_protection_preset(interaction: discord.Interaction, preset: str
             note = f"✅ **{preset.title()}** was already ON, so I turned protection **OFF**."
     else:
         note = f"✅ Protection preset set to **{target.title()}**."
-
     note += f" Spam Guard saving: {'DB-backed' if persisted else 'runtime/fallback'}; mode `{spam_settings.get('mode', 'unknown')}`."
     await _refresh_panel(interaction, content=note)
 
@@ -530,7 +563,8 @@ async def _set_link_policy(interaction: discord.Interaction, policy: str) -> Non
         return
     guild = interaction.guild
     if guild is None:
-        return await _send_ephemeral(interaction, "❌ This must be used inside a server.")
+        await _send_ephemeral(interaction, "❌ This must be used inside a server.")
+        return
     if policy == "invite_shield":
         updates = {"automod_enabled": True, "automod_block_invites": True, "automod_block_links": False, "automod_link_policy": "invite_shield", "automod_updated_by_id": str(int(interaction.user.id))}
         label = "Invite Shield enabled — Discord server invite links are blocked, normal links are allowed."
@@ -545,17 +579,12 @@ async def _set_link_policy(interaction: discord.Interaction, policy: str) -> Non
 
 
 async def _toggle_invite_shield(interaction: discord.Interaction) -> None:
-    """Live ON/OFF toggle for Discord invite blocking.
-
-    ON: block Discord invite links while allowing normal links.
-    OFF: allow Discord invite links again. If all-link lockdown was on, it is
-    also turned off because all-link lockdown necessarily blocks invites too.
-    """
     if not await _require_setup_permission(interaction):
         return
     guild = interaction.guild
     if guild is None:
-        return await _send_ephemeral(interaction, "❌ This must be used inside a server.")
+        await _send_ephemeral(interaction, "❌ This must be used inside a server.")
+        return
 
     cfg = await get_guild_config(int(guild.id), refresh=True)
     spam, _spam_source = await _load_spam_settings(int(guild.id))
@@ -570,12 +599,7 @@ async def _toggle_invite_shield(interaction: discord.Interaction) -> None:
             "automod_link_policy": "allow_links",
             "automod_updated_by_id": str(int(interaction.user.id)),
         }
-        spam_patch = {
-            "invite_shield_enabled": False,
-            "invite_hard_block_enabled": False,
-            "automod_block_invites": False,
-            "block_invites": False,
-        }
+        spam_patch = {"invite_shield_enabled": False, "invite_hard_block_enabled": False, "automod_block_invites": False, "block_invites": False}
         label = "Discord Invite Blocker is now **OFF**. Discord invite links are allowed again."
     else:
         automod_updates = {
@@ -599,12 +623,14 @@ async def _toggle_invite_shield(interaction: discord.Interaction) -> None:
     _settings, persisted = await _save_spam_settings(int(guild.id), spam_patch, member)
     await _refresh_panel(interaction, content=f"✅ {label} Saving: {'DB-backed' if persisted else 'runtime/fallback'}.")
 
+
 async def _toggle_link_shield(interaction: discord.Interaction) -> None:
     if not await _require_setup_permission(interaction):
         return
     guild = interaction.guild
     if guild is None:
-        return await _send_ephemeral(interaction, "❌ This must be used inside a server.")
+        await _send_ephemeral(interaction, "❌ This must be used inside a server.")
+        return
 
     cfg = await get_guild_config(int(guild.id), refresh=True)
     links_on = _cfg_bool(cfg, "automod_block_links", False)
@@ -638,10 +664,12 @@ async def _add_bad_word(interaction: discord.Interaction, word: str) -> None:
         return
     guild = interaction.guild
     if guild is None:
-        return await _send_ephemeral(interaction, "❌ This must be used inside a server.")
+        await _send_ephemeral(interaction, "❌ This must be used inside a server.")
+        return
     cleaned = _clean_filter_item(word)
     if len(cleaned) < 2 or len(cleaned) > 80:
-        return await _send_ephemeral(interaction, "❌ Use a 2-80 character word or phrase. Commas and invisible characters are cleaned automatically.")
+        await _send_ephemeral(interaction, "❌ Use a 2-80 character word or phrase. Commas and invisible characters are cleaned automatically.")
+        return
     cfg = await get_guild_config(int(guild.id), refresh=True)
     items = _csv_items(_cfg_value(cfg, "automod_bad_words", ""))
     existed = cleaned in [x.casefold() for x in items]
@@ -652,7 +680,8 @@ async def _add_bad_word(interaction: discord.Interaction, word: str) -> None:
     verify_cfg = await get_guild_config(int(guild.id), refresh=True)
     saved_items = _csv_items(_cfg_value(verify_cfg, "automod_bad_words", ""))
     if cleaned not in [x.casefold() for x in saved_items]:
-        return await _send_ephemeral(interaction, "❌ I tried to save that filter, but it did not survive read-back. Do not rely on it yet; check the guild config table/schema.")
+        await _send_ephemeral(interaction, "❌ I tried to save that filter, but it did not survive read-back. Do not rely on it yet; check the guild config table/schema.")
+        return
     await _refresh_panel(interaction, content=f"✅ `{cleaned}` {'already existed' if existed else 'added'}. Obfuscated variants are checked too.")
 
 
@@ -661,13 +690,15 @@ async def _test_text(interaction: discord.Interaction, text: str) -> None:
         return
     guild = interaction.guild
     if guild is None:
-        return await _send_ephemeral(interaction, "❌ This must be used inside a server.")
+        await _send_ephemeral(interaction, "❌ This must be used inside a server.")
+        return
     cfg = await get_guild_config(int(guild.id), refresh=True)
     bad_words = _csv_items(_cfg_value(cfg, "automod_bad_words", ""))
     hit = _bad_word_hit(text, bad_words)
     normalized = _normalize_for_filter(text, compact=True)
     if hit:
-        return await _send_ephemeral(interaction, f"✅ Would block: **blocked word/phrase `{hit}`**\nNormalized check: `{normalized[:300]}`")
+        await _send_ephemeral(interaction, f"✅ Would block: **blocked word/phrase `{hit}`**\nNormalized check: `{normalized[:300]}`")
+        return
     await _send_ephemeral(interaction, f"⚪ Would not block with current bad-word filters.\nNormalized check: `{normalized[:300]}`")
 
 
@@ -684,36 +715,40 @@ class SpamGuardSettingsModal(discord.ui.Modal):
             self.add_item(item)
 
     async def on_submit(self, interaction: discord.Interaction) -> None:
-        if not await _require_setup_permission(interaction):
-            return
-        guild = interaction.guild
-        if guild is None:
-            return await _send_ephemeral(interaction, "❌ This must be used inside a server.")
-        member = interaction.user if isinstance(interaction.user, discord.Member) else None
-        patch = {
-            "enabled": True,
-            "mode": self.current_mode,
-            "apply_to_verified_users": True,
-            "block_external_invites_only": True,
-            "allow_server_invites": True,
-            "window_seconds": _bounded_int(self.window_seconds.value, default=12, minimum=5, maximum=60),
-            "message_threshold": _bounded_int(self.message_threshold.value, default=5, minimum=2, maximum=20),
-            "duplicate_threshold": _bounded_int(self.duplicate_threshold.value, default=3, minimum=2, maximum=10),
-            "invite_threshold": _bounded_int(self.invite_threshold.value, default=2, minimum=1, maximum=10),
-            "multi_invite_immediate": 2,
-            "delete_history": 8,
-            "timeout_minutes": _bounded_int(self.timeout_minutes.value, default=30, minimum=1, maximum=10080),
-            "cooldown_seconds": 20,
-        }
-        spam_settings, persisted = await _save_spam_settings(int(guild.id), patch, member)
-        await _refresh_panel(
-            interaction,
-            content=(
-                "✅ Spam Guard updated. "
-                f"Window `{spam_settings.get('window_seconds')}`s, messages `{spam_settings.get('message_threshold')}`, duplicates `{spam_settings.get('duplicate_threshold')}`, "
-                f"invite threshold `{spam_settings.get('invite_threshold')}`, timeout `{spam_settings.get('timeout_minutes')}`m. Saving: {'DB-backed' if persisted else 'runtime/fallback'}."
-            ),
-        )
+        async def action() -> None:
+            if not await _require_setup_permission(interaction):
+                return
+            guild = interaction.guild
+            if guild is None:
+                await _send_ephemeral(interaction, "❌ This must be used inside a server.")
+                return
+            member = interaction.user if isinstance(interaction.user, discord.Member) else None
+            patch = {
+                "enabled": True,
+                "mode": self.current_mode,
+                "apply_to_verified_users": True,
+                "block_external_invites_only": True,
+                "allow_server_invites": True,
+                "window_seconds": _bounded_int(self.window_seconds.value, default=12, minimum=5, maximum=60),
+                "message_threshold": _bounded_int(self.message_threshold.value, default=5, minimum=2, maximum=20),
+                "duplicate_threshold": _bounded_int(self.duplicate_threshold.value, default=3, minimum=2, maximum=10),
+                "invite_threshold": _bounded_int(self.invite_threshold.value, default=2, minimum=1, maximum=10),
+                "multi_invite_immediate": 2,
+                "delete_history": 8,
+                "timeout_minutes": _bounded_int(self.timeout_minutes.value, default=30, minimum=1, maximum=10080),
+                "cooldown_seconds": 20,
+            }
+            spam_settings, persisted = await _save_spam_settings(int(guild.id), patch, member)
+            await _refresh_panel(
+                interaction,
+                content=(
+                    "✅ Spam Guard updated. "
+                    f"Window `{spam_settings.get('window_seconds')}`s, messages `{spam_settings.get('message_threshold')}`, duplicates `{spam_settings.get('duplicate_threshold')}`, "
+                    f"invite threshold `{spam_settings.get('invite_threshold')}`, timeout `{spam_settings.get('timeout_minutes')}`m. Saving: {'DB-backed' if persisted else 'runtime/fallback'}."
+                ),
+            )
+
+        await _guard_protection_action(interaction, "protection.spam_detection_modal", action, defer=True)
 
 
 async def _set_spam_response_mode(interaction: discord.Interaction, mode: str) -> None:
@@ -721,16 +756,11 @@ async def _set_spam_response_mode(interaction: discord.Interaction, mode: str) -
         return
     guild = interaction.guild
     if guild is None:
-        return await _send_ephemeral(interaction, "❌ This must be used inside a server.")
-
+        await _send_ephemeral(interaction, "❌ This must be used inside a server.")
+        return
     clean_mode = _normalize_spam_mode_for_ui(mode)
     member = interaction.user if isinstance(interaction.user, discord.Member) else None
-    settings, persisted = await _save_spam_settings(
-        int(guild.id),
-        {"enabled": True, "mode": clean_mode},
-        member,
-    )
-
+    settings, persisted = await _save_spam_settings(int(guild.id), {"enabled": True, "mode": clean_mode}, member)
     await _refresh_panel(
         interaction,
         content=(
@@ -751,129 +781,85 @@ class SpamResponseModeSelect(discord.ui.Select):
             discord.SelectOption(label="Kick User", value="kick", description="Delete matching spam and kick the user.", default=clean == "kick"),
             discord.SelectOption(label="Ban User", value="ban", description="Delete matching spam and ban the user.", default=clean == "ban"),
         ]
-        super().__init__(
-            placeholder=f"Response action: {SPAM_MODE_LABELS.get(clean, 'Timeout User')}",
-            min_values=1,
-            max_values=1,
-            options=options,
-            custom_id="dank_protection:spam_response_mode",
-        )
+        super().__init__(placeholder=f"Response action: {SPAM_MODE_LABELS.get(clean, 'Timeout User')}", min_values=1, max_values=1, options=options, custom_id="dank_protection:spam_response_mode")
 
     async def callback(self, interaction: discord.Interaction) -> None:
-        await _set_spam_response_mode(interaction, self.values[0] if self.values else "timeout")
+        async def action() -> None:
+            await _set_spam_response_mode(interaction, self.values[0] if self.values else "timeout")
+
+        await _guard_protection_action(interaction, "protection.spam_response_mode", action, defer=True)
 
 
 class SpamGuardActionSettingsModal(discord.ui.Modal, title="Spam Guard Actions"):
     def __init__(self, spam: dict[str, Any]) -> None:
         super().__init__(timeout=300)
-
-        self.timeout_minutes = discord.ui.TextInput(
-            label="Timeout minutes",
-            default=str(spam.get("timeout_minutes", 30)),
-            min_length=1,
-            max_length=5,
-            required=True,
-        )
-        self.delete_history = discord.ui.TextInput(
-            label="Matching messages to delete",
-            default=str(spam.get("delete_history", 8)),
-            min_length=1,
-            max_length=3,
-            required=True,
-        )
-        self.cooldown_seconds = discord.ui.TextInput(
-            label="Repeat action cooldown seconds",
-            default=str(spam.get("cooldown_seconds", 20)),
-            min_length=1,
-            max_length=4,
-            required=True,
-        )
-        self.quarantine_role_id = discord.ui.TextInput(
-            label="Quarantine role ID, optional",
-            default=str(spam.get("quarantine_role_id", "")),
-            required=False,
-            max_length=25,
-        )
-        self.allowed_invite_codes = discord.ui.TextInput(
-            label="Allowed invite codes, optional",
-            default=", ".join(list(spam.get("allowed_invite_codes") or [])),
-            required=False,
-            style=discord.TextStyle.paragraph,
-            max_length=1000,
-        )
-
-        for item in (
-            self.timeout_minutes,
-            self.delete_history,
-            self.cooldown_seconds,
-            self.quarantine_role_id,
-            self.allowed_invite_codes,
-        ):
+        self.timeout_minutes = discord.ui.TextInput(label="Timeout minutes", default=str(spam.get("timeout_minutes", 30)), min_length=1, max_length=5, required=True)
+        self.delete_history = discord.ui.TextInput(label="Matching messages to delete", default=str(spam.get("delete_history", 8)), min_length=1, max_length=3, required=True)
+        self.cooldown_seconds = discord.ui.TextInput(label="Repeat action cooldown seconds", default=str(spam.get("cooldown_seconds", 20)), min_length=1, max_length=4, required=True)
+        self.quarantine_role_id = discord.ui.TextInput(label="Quarantine role ID, optional", default=str(spam.get("quarantine_role_id", "")), required=False, max_length=25)
+        self.allowed_invite_codes = discord.ui.TextInput(label="Allowed invite codes, optional", default=", ".join(list(spam.get("allowed_invite_codes") or [])), required=False, style=discord.TextStyle.paragraph, max_length=1000)
+        for item in (self.timeout_minutes, self.delete_history, self.cooldown_seconds, self.quarantine_role_id, self.allowed_invite_codes):
             self.add_item(item)
 
     async def on_submit(self, interaction: discord.Interaction) -> None:
-        if not await _require_setup_permission(interaction):
-            return
-        guild = interaction.guild
-        if guild is None:
-            return await _send_ephemeral(interaction, "❌ This must be used inside a server.")
+        async def action() -> None:
+            if not await _require_setup_permission(interaction):
+                return
+            guild = interaction.guild
+            if guild is None:
+                await _send_ephemeral(interaction, "❌ This must be used inside a server.")
+                return
+            role_id = str(self.quarantine_role_id.value or "").strip()
+            if role_id and not role_id.isdigit():
+                await _send_ephemeral(interaction, "❌ Quarantine role ID must be blank or a numeric role ID.")
+                return
+            member = interaction.user if isinstance(interaction.user, discord.Member) else None
+            patch = {
+                "timeout_minutes": _bounded_int(self.timeout_minutes.value, default=30, minimum=1, maximum=10080),
+                "delete_history": _bounded_int(self.delete_history.value, default=8, minimum=1, maximum=30),
+                "cooldown_seconds": _bounded_int(self.cooldown_seconds.value, default=20, minimum=5, maximum=300),
+                "quarantine_role_id": role_id,
+                "allowed_invite_codes": _parse_csvish_codes(str(self.allowed_invite_codes.value or "")),
+            }
+            settings, persisted = await _save_spam_settings(int(guild.id), patch, member)
+            await _refresh_panel(
+                interaction,
+                content=(
+                    "✅ Spam Guard action settings updated. "
+                    f"Timeout `{settings.get('timeout_minutes')}`m, delete `{settings.get('delete_history')}`, cooldown `{settings.get('cooldown_seconds')}`s. "
+                    f"Saving: {'DB-backed' if persisted else 'runtime/fallback'}."
+                ),
+            )
 
-        role_id = str(self.quarantine_role_id.value or "").strip()
-        if role_id and not role_id.isdigit():
-            return await _send_ephemeral(interaction, "❌ Quarantine role ID must be blank or a numeric role ID.")
-
-        member = interaction.user if isinstance(interaction.user, discord.Member) else None
-        patch = {
-            "timeout_minutes": _bounded_int(self.timeout_minutes.value, default=30, minimum=1, maximum=10080),
-            "delete_history": _bounded_int(self.delete_history.value, default=8, minimum=1, maximum=30),
-            "cooldown_seconds": _bounded_int(self.cooldown_seconds.value, default=20, minimum=5, maximum=300),
-            "quarantine_role_id": role_id,
-            "allowed_invite_codes": _parse_csvish_codes(str(self.allowed_invite_codes.value or "")),
-        }
-
-        settings, persisted = await _save_spam_settings(int(guild.id), patch, member)
-        await _refresh_panel(
-            interaction,
-            content=(
-                "✅ Spam Guard action settings updated. "
-                f"Timeout `{settings.get('timeout_minutes')}`m, delete `{settings.get('delete_history')}`, cooldown `{settings.get('cooldown_seconds')}`s. "
-                f"Saving: {'DB-backed' if persisted else 'runtime/fallback'}."
-            ),
-        )
+        await _guard_protection_action(interaction, "protection.spam_action_modal", action, defer=True)
 
 
 class SpamGuardDetectionButton(discord.ui.Button):
     def __init__(self, spam: dict[str, Any]):
-        super().__init__(
-            label="Edit Detection Numbers",
-            emoji="📊",
-            style=discord.ButtonStyle.secondary,
-            custom_id="dank_protection:spam_edit_detection",
-            row=1,
-        )
+        super().__init__(label="Edit Detection Numbers", emoji="📊", style=discord.ButtonStyle.secondary, custom_id="dank_protection:spam_edit_detection", row=1)
         self.spam = dict(spam or {})
 
     async def callback(self, interaction: discord.Interaction) -> None:
-        if not await _require_setup_permission(interaction):
-            return
-        await interaction.response.send_modal(SpamGuardSettingsModal(self.spam))
+        async def action() -> None:
+            if not await _require_setup_permission(interaction):
+                return
+            await interaction.response.send_modal(SpamGuardSettingsModal(self.spam))
+
+        await _guard_protection_action(interaction, "protection.open_spam_detection_modal", action, defer=False)
 
 
 class SpamGuardActionsButton(discord.ui.Button):
     def __init__(self, spam: dict[str, Any]):
-        super().__init__(
-            label="Edit Action Settings",
-            emoji="⚖️",
-            style=discord.ButtonStyle.secondary,
-            custom_id="dank_protection:spam_edit_actions",
-            row=1,
-        )
+        super().__init__(label="Edit Action Settings", emoji="⚖️", style=discord.ButtonStyle.secondary, custom_id="dank_protection:spam_edit_actions", row=1)
         self.spam = dict(spam or {})
 
     async def callback(self, interaction: discord.Interaction) -> None:
-        if not await _require_setup_permission(interaction):
-            return
-        await interaction.response.send_modal(SpamGuardActionSettingsModal(self.spam))
+        async def action() -> None:
+            if not await _require_setup_permission(interaction):
+                return
+            await interaction.response.send_modal(SpamGuardActionSettingsModal(self.spam))
+
+        await _guard_protection_action(interaction, "protection.open_spam_action_modal", action, defer=False)
 
 
 class SpamGuardEditorView(discord.ui.View):
@@ -887,10 +873,9 @@ class SpamGuardEditorView(discord.ui.View):
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if int(interaction.user.id) != int(self.author_id):
-            await interaction.response.send_message("Open your own Protection Center so settings stay clear.", ephemeral=True)
+            await safe_send_interaction(interaction, content="Open your own Protection Center so settings stay clear.", ephemeral=True, action_name="protection.editor.owner_check")
             return False
         return True
-
 
 
 async def _open_spamguard_editor(interaction: discord.Interaction) -> None:
@@ -898,11 +883,11 @@ async def _open_spamguard_editor(interaction: discord.Interaction) -> None:
         return
     guild = interaction.guild
     if guild is None:
-        return await _send_ephemeral(interaction, "❌ This must be used inside a server.")
+        await _send_ephemeral(interaction, "❌ This must be used inside a server.")
+        return
 
     spam, spam_source = await _load_spam_settings(int(guild.id))
     mode = _normalize_spam_mode_for_ui(spam.get("mode", "timeout"))
-
     embed = discord.Embed(
         title="🛡️ Spam Guard Actions",
         description=(
@@ -912,42 +897,36 @@ async def _open_spamguard_editor(interaction: discord.Interaction) -> None:
         ),
         color=discord.Color.blurple(),
     )
-    embed.add_field(
-        name="Current response",
-        value=f"**Action:** {SPAM_MODE_LABELS.get(mode, mode)} (`{mode}`)\n**Saving:** `{spam_source}`",
-        inline=False,
-    )
+    embed.add_field(name="Current response", value=f"**Action:** {SPAM_MODE_LABELS.get(mode, mode)} (`{mode}`)\n**Saving:** `{spam_source}`", inline=False)
     embed.add_field(
         name="Current numbers",
         value=(
-            f"Window `{spam.get('window_seconds', '—')}s` • Messages `{spam.get('message_threshold', '—')}` • "
-            f"Duplicates `{spam.get('duplicate_threshold', '—')}`\n"
-            f"Invite threshold `{spam.get('invite_threshold', '—')}` • Timeout `{spam.get('timeout_minutes', '—')}m` • "
-            f"Delete `{spam.get('delete_history', '—')}`"
+            f"Window `{spam.get('window_seconds', '—')}s` • Messages `{spam.get('message_threshold', '—')}` • Duplicates `{spam.get('duplicate_threshold', '—')}`\n"
+            f"Invite threshold `{spam.get('invite_threshold', '—')}` • Timeout `{spam.get('timeout_minutes', '—')}m` • Delete `{spam.get('delete_history', '—')}`"
         ),
         inline=False,
     )
-
-    await _send_ephemeral(
-        interaction,
-        embed=embed,
-        view=SpamGuardEditorView(author_id=int(interaction.user.id), spam=spam),
-        allowed_mentions=discord.AllowedMentions.none(),
-    )
+    await _send_ephemeral(interaction, embed=embed, view=SpamGuardEditorView(author_id=int(interaction.user.id), spam=spam), allowed_mentions=discord.AllowedMentions.none())
 
 
 class AddFilterModal(discord.ui.Modal, title="Add Automod Filter"):
     word = discord.ui.TextInput(label="Word or phrase to block", max_length=80, required=True, placeholder="Example: scam phrase")
 
     async def on_submit(self, interaction: discord.Interaction) -> None:
-        await _add_bad_word(interaction, str(self.word.value))
+        async def action() -> None:
+            await _add_bad_word(interaction, str(self.word.value))
+
+        await _guard_protection_action(interaction, "protection.add_filter_modal", action, defer=True)
 
 
 class TestFilterModal(discord.ui.Modal, title="Test Protection Filter"):
     text = discord.ui.TextInput(label="Text to test privately", style=discord.TextStyle.paragraph, max_length=700, required=True)
 
     async def on_submit(self, interaction: discord.Interaction) -> None:
-        await _test_text(interaction, str(self.text.value))
+        async def action() -> None:
+            await _test_text(interaction, str(self.text.value))
+
+        await _guard_protection_action(interaction, "protection.test_filter_modal", action, defer=True)
 
 
 class ProtectionCenterView(discord.ui.View):
@@ -960,75 +939,119 @@ class ProtectionCenterView(discord.ui.View):
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if int(interaction.user.id) != self.author_id:
-            await interaction.response.send_message("Open your own Protection Center with `/dank protection` so settings stay clear.", ephemeral=True)
+            await safe_send_interaction(interaction, content="Open your own Protection Center with `/dank protection` so settings stay clear.", ephemeral=True, action_name="protection.owner_check")
             return False
         return True
 
     @discord.ui.button(label="Safe", emoji="🟢", style=discord.ButtonStyle.success, custom_id="dank_protection:safe")
     async def safe_button(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
-        await _apply_protection_preset(interaction, "safe")
+
+        async def action() -> None:
+            await _apply_protection_preset(interaction, "safe")
+
+        await _guard_protection_action(interaction, "protection.safe", action, defer=True)
 
     @discord.ui.button(label="Strict", emoji="🔒", style=discord.ButtonStyle.primary, custom_id="dank_protection:strict")
     async def strict_button(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
-        await _apply_protection_preset(interaction, "strict")
+
+        async def action() -> None:
+            await _apply_protection_preset(interaction, "strict")
+
+        await _guard_protection_action(interaction, "protection.strict", action, defer=True)
 
     @discord.ui.button(label="Off", emoji="⏸️", style=discord.ButtonStyle.secondary, custom_id="dank_protection:off")
     async def off_button(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
-        await _apply_protection_preset(interaction, "off")
+
+        async def action() -> None:
+            await _apply_protection_preset(interaction, "off")
+
+        await _guard_protection_action(interaction, "protection.off", action, defer=True)
 
     @discord.ui.button(label="Edit Spam Guard", emoji="🛠️", style=discord.ButtonStyle.secondary, custom_id="dank_protection:edit_spamguard", row=1)
     async def edit_spamguard_button(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
-        await _open_spamguard_editor(interaction)
+
+        async def action() -> None:
+            await _open_spamguard_editor(interaction)
+
+        await _guard_protection_action(interaction, "protection.open_spamguard_editor", action, defer=False)
 
     @discord.ui.button(label="Invite Blocker", emoji="🛡️", style=discord.ButtonStyle.secondary, custom_id="dank_protection:block_invites", row=0)
     async def block_invites_button(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
-        await _toggle_invite_shield(interaction)
+
+        async def action() -> None:
+            await _toggle_invite_shield(interaction)
+
+        await _guard_protection_action(interaction, "protection.invite_blocker", action, defer=True)
 
     @discord.ui.button(label="Link Shield", emoji="🔗", style=discord.ButtonStyle.secondary, custom_id="dank_protection:block_links", row=1)
     async def block_links_button(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
-        await _toggle_link_shield(interaction)
+
+        async def action() -> None:
+            await _toggle_link_shield(interaction)
+
+        await _guard_protection_action(interaction, "protection.link_shield", action, defer=True)
 
     @discord.ui.button(label="Add Filter", emoji="➕", style=discord.ButtonStyle.secondary, custom_id="dank_protection:add_filter", row=2)
     async def add_filter_button(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
-        if not await _require_setup_permission(interaction):
-            return
-        await interaction.response.send_modal(AddFilterModal())
+
+        async def action() -> None:
+            if not await _require_setup_permission(interaction):
+                return
+            await interaction.response.send_modal(AddFilterModal())
+
+        await _guard_protection_action(interaction, "protection.open_add_filter_modal", action, defer=False)
 
     @discord.ui.button(label="Test", emoji="🧪", style=discord.ButtonStyle.secondary, custom_id="dank_protection:test", row=2)
     async def test_button(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
-        if not await _require_setup_permission(interaction):
-            return
-        await interaction.response.send_modal(TestFilterModal())
+
+        async def action() -> None:
+            if not await _require_setup_permission(interaction):
+                return
+            await interaction.response.send_modal(TestFilterModal())
+
+        await _guard_protection_action(interaction, "protection.open_test_filter_modal", action, defer=False)
 
     @discord.ui.button(label="Allow Links", emoji="🔓", style=discord.ButtonStyle.secondary, custom_id="dank_protection:allow_links", row=2)
     async def allow_links_button(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
-        await _set_link_policy(interaction, "allow_links")
+
+        async def action() -> None:
+            await _set_link_policy(interaction, "allow_links")
+
+        await _guard_protection_action(interaction, "protection.allow_links", action, defer=True)
 
     @discord.ui.button(label="Refresh", emoji="🔄", style=discord.ButtonStyle.secondary, custom_id="dank_protection:refresh", row=3)
     async def refresh_button(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
-        if not await _require_setup_permission(interaction):
-            return
-        await _refresh_panel(interaction)
+
+        async def action() -> None:
+            if not await _require_setup_permission(interaction):
+                return
+            await _refresh_panel(interaction)
+
+        await _guard_protection_action(interaction, "protection.refresh", action, defer=True)
 
     @discord.ui.button(label="Close", emoji="✖️", style=discord.ButtonStyle.secondary, custom_id="dank_protection:close", row=3)
     async def close_button(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
-        for child in self.children:
-            try:
-                child.disabled = True
-            except Exception:
-                pass
-        await interaction.response.edit_message(content="Closed Protection Center. Reopen it with `/dank protection`.", view=self)
+
+        async def action() -> None:
+            for child in self.children:
+                try:
+                    child.disabled = True
+                except Exception as exc:
+                    log_interaction_failure(interaction, exc, stage="protection_close_disable_child_failed", action_name="protection.close")
+            await interaction.response.edit_message(content="Closed Protection Center. Reopen it with `/dank protection`.", view=self)
+
+        await _guard_protection_action(interaction, "protection.close", action, defer=False)
 
 
 @dank_group.command(name="protection", description="Open the unified Automod + Spam Guard protection center.")
@@ -1036,55 +1059,26 @@ async def protection_center(interaction: discord.Interaction) -> None:
     if not await _require_setup_permission(interaction):
         return
 
-    await safe_defer_interaction(interaction, ephemeral=True)
-
-    try:
+    async def action() -> None:
         guild = interaction.guild
         if guild is None:
-            await safe_send_interaction(
-                interaction,
-                content="❌ Protection Center must be opened inside a server.",
-                ephemeral=True,
-                allowed_mentions=discord.AllowedMentions.none(),
-            )
+            await safe_send_interaction(interaction, content="❌ Protection Center must be opened inside a server.", ephemeral=True, allowed_mentions=discord.AllowedMentions.none(), action_name="/dank protection")
             return
-
         cfg = await get_guild_config(int(guild.id), refresh=True)
         spam, spam_source = await _load_spam_settings(int(guild.id))
         embed = _protection_embed(guild, cfg, spam, spam_source)
         view = ProtectionCenterView(author_id=int(interaction.user.id), cfg=cfg, spam=spam)
+        await safe_send_interaction(interaction, embed=embed, view=view, ephemeral=True, allowed_mentions=discord.AllowedMentions.none(), action_name="/dank protection")
 
-        sent = await safe_send_interaction(
-            interaction,
-            embed=embed,
-            view=view,
-            ephemeral=True,
-            allowed_mentions=discord.AllowedMentions.none(),
-        )
-        if not sent:
-            try:
-                print(f"⚠️ public_protection_center: failed to send Protection Center guild={getattr(guild, 'id', 'unknown')}")
-            except Exception:
-                pass
-
-    except Exception as exc:
-        try:
-            print(
-                "⚠️ public_protection_center open failed "
-                f"guild={getattr(interaction.guild, 'id', 'unknown')}: {type(exc).__name__}: {exc}"
-            )
-        except Exception:
-            pass
-
-        await safe_send_interaction(
-            interaction,
-            content=(
-                "❌ Protection Center could not open safely. Nothing was changed. "
-                "Try again, then check the bot logs or run diagnostics if it keeps happening."
-            ),
-            ephemeral=True,
-            allowed_mentions=discord.AllowedMentions.none(),
-        )
+    await run_guarded_interaction(
+        interaction,
+        action,
+        defer=True,
+        ephemeral=True,
+        action_name="/dank protection",
+        error_title="❌ Protection Center failed safely",
+        error_guidance=PROTECTION_ERROR_GUIDANCE,
+    )
 
 
 def register_public_protection_center_commands(bot: Any, tree: Any) -> None:
