@@ -5146,11 +5146,12 @@ class StyleChangeFixMissingEmojiModal(discord.ui.Modal):
             self.add_item(field)
 
     async def on_submit(self, interaction: discord.Interaction) -> None:
-        if not await _require_design_permission(interaction):
-            return
+        async def action() -> None:
+            if not await _require_design_permission(interaction):
+                return
 
-        guild = interaction.guild
-        assert guild is not None
+            guild = interaction.guild
+            assert guild is not None
 
             key = _key(int(guild.id), int(interaction.user.id))
             pending = _PENDING.get(key)
@@ -5163,35 +5164,35 @@ class StyleChangeFixMissingEmojiModal(discord.ui.Modal):
                 )
                 return
 
-        items = list(pending.get("items") or [])
-        separator_id = _safe_str(pending.get("separator_id"), self.separator_id)
+            items = list(pending.get("items") or [])
+            separator_id = _safe_str(pending.get("separator_id"), self.separator_id)
 
-        values_by_channel: dict[str, str] = {}
-        for channel_id, child in zip(self.item_keys, self.children):
-            values_by_channel[channel_id] = _safe_str(getattr(child, "value", ""), "")
+            values_by_channel: dict[str, str] = {}
+            for channel_id, child in zip(self.item_keys, self.children):
+                values_by_channel[channel_id] = _safe_str(getattr(child, "value", ""), "")
 
-        for item in items:
-            channel_id = _safe_str(item.get("channel_id"), "")
-            if channel_id not in values_by_channel:
-                continue
+            for item in items:
+                channel_id = _safe_str(item.get("channel_id"), "")
+                if channel_id not in values_by_channel:
+                    continue
 
-            manual_emoji = values_by_channel[channel_id]
-            after, warnings, blockers = _style_change_after_with_manual_emoji(
-                _safe_str(item.get("before"), ""),
-                separator_id,
-                manual_emoji,
-            )
+                manual_emoji = values_by_channel[channel_id]
+                after, warnings, blockers = _style_change_after_with_manual_emoji(
+                    _safe_str(item.get("before"), ""),
+                    separator_id,
+                    manual_emoji,
+                )
 
-            item["after"] = after
-            item["warnings"] = warnings
-            item["blockers"] = blockers
-            item["status"] = "failed" if blockers else ("changed" if after != item.get("before") else "unchanged")
-            item["style_change_manual_emoji"] = manual_emoji
+                item["after"] = after
+                item["warnings"] = warnings
+                item["blockers"] = blockers
+                item["status"] = "failed" if blockers else ("changed" if after != item.get("before") else "unchanged")
+                item["style_change_manual_emoji"] = manual_emoji
 
-        pending["items"] = items
-        _PENDING[key] = pending
+            pending["items"] = items
+            _PENDING[key] = pending
 
-        embed, view = _style_change_rebuild_preview_response(guild, pending)
+            embed, view = _style_change_rebuild_preview_response(guild, pending)
             await interaction.response.edit_message(embed=embed, view=view)
 
         await _guard_design_action(interaction, "design.style_change.missing_icons_submit", action, defer=False)
@@ -5208,11 +5209,12 @@ class StyleChangeApplySafeOnlyButton(discord.ui.Button):
         )
 
     async def callback(self, interaction: discord.Interaction) -> None:  # type: ignore[override]
-        if not await _require_design_permission(interaction):
-            return
+        async def action() -> None:
+            if not await _require_design_permission(interaction):
+                return
 
-        guild = interaction.guild
-        assert guild is not None
+            guild = interaction.guild
+            assert guild is not None
 
             key = _key(int(guild.id), int(interaction.user.id))
             pending = _PENDING.get(key)
@@ -5225,33 +5227,33 @@ class StyleChangeApplySafeOnlyButton(discord.ui.Button):
                 )
                 return
 
-        items = list(pending.get("items") or [])
-        safe_items: list[dict[str, Any]] = []
+            items = list(pending.get("items") or [])
+            safe_items: list[dict[str, Any]] = []
 
-        for item in items:
-            if item.get("status") == "failed":
-                skipped = dict(item)
-                skipped["after"] = skipped.get("before")
-                skipped["status"] = "protected"
-                skipped["protected"] = True
-                skipped["warnings"] = ["Skipped by user from Style Change issues review."]
-                skipped["blockers"] = []
-                safe_items.append(skipped)
-            else:
-                safe_items.append(item)
+            for item in items:
+                if item.get("status") == "failed":
+                    skipped = dict(item)
+                    skipped["after"] = skipped.get("before")
+                    skipped["status"] = "protected"
+                    skipped["protected"] = True
+                    skipped["warnings"] = ["Skipped by user from Style Change issues review."]
+                    skipped["blockers"] = []
+                    safe_items.append(skipped)
+                else:
+                    safe_items.append(item)
 
-        pending["items"] = safe_items
-        pending["style_change_skipped_issues"] = True
-        _PENDING[key] = pending
+            pending["items"] = safe_items
+            pending["style_change_skipped_issues"] = True
+            _PENDING[key] = pending
 
-        separator_id = _safe_str(pending.get("separator_id"), "none")
-        embed = _style_change_preview_embed(guild, safe_items, separator_id=separator_id)
-        embed.title = "👁️ Style Change Preview · Safe Changes Only"
-        embed.add_field(
-            name="Skipped issues",
-            value="Needs-review rows were left untouched. Apply will only rename safe rows.",
-            inline=False,
-        )
+            separator_id = _safe_str(pending.get("separator_id"), "none")
+            embed = _style_change_preview_embed(guild, safe_items, separator_id=separator_id)
+            embed.title = "👁️ Style Change Preview · Safe Changes Only"
+            embed.add_field(
+                name="Skipped issues",
+                value="Needs-review rows were left untouched. Apply will only rename safe rows.",
+                inline=False,
+            )
 
             await interaction.response.edit_message(
                 embed=embed,
@@ -5272,11 +5274,12 @@ class StyleChangeFixMissingEmojiButton(discord.ui.Button):
         )
 
     async def callback(self, interaction: discord.Interaction) -> None:  # type: ignore[override]
-        if not await _require_design_permission(interaction):
-            return
+        async def action() -> None:
+            if not await _require_design_permission(interaction):
+                return
 
-        guild = interaction.guild
-        assert guild is not None
+            guild = interaction.guild
+            assert guild is not None
 
             key = _key(int(guild.id), int(interaction.user.id))
             pending = _PENDING.get(key)
@@ -5289,8 +5292,8 @@ class StyleChangeFixMissingEmojiButton(discord.ui.Button):
                 )
                 return
 
-        items = list(pending.get("items") or [])
-        missing = _style_change_missing_emoji_items(items)
+            items = list(pending.get("items") or [])
+            missing = _style_change_missing_emoji_items(items)
 
             if not missing:
                 await safe_send_interaction(
