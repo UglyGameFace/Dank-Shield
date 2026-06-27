@@ -767,12 +767,16 @@ def register_ticket_panel_admin_commands(bot, tree) -> None:
         slugs = _comma_list(categories)
         rows = await replace_ticket_panel_categories(guild.id, key, slugs)
 
+        bound_slugs = ", ".join(f"`{r.get('category_slug')}`" for r in rows[:20])
+        if not bound_slugs:
+            bound_slugs = "No categories; panel allows all categories."
+        plural = "y" if len(rows) == 1 else "ies"
         await reply_once(
             interaction,
             {
                 "content": (
-                    f"✅ Bound `{len(rows)}` categor{'y' if len(rows) == 1 else 'ies'} to panel `{key}`.\n"
-                    f"{', '.join(f'`{r.get('category_slug')}`' for r in rows[:20]) or 'No categories; panel allows all categories.'}"
+                    f"✅ Bound `{len(rows)}` categor{plural} to panel `{key}`.\n"
+                    f"{bound_slugs}"
                 ),
                 "ephemeral": True,
             },
