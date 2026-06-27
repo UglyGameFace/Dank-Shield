@@ -2,9 +2,7 @@
 
 Last updated: **2026-06-27**
 
-This file is the source of truth for turning Dank Shield into a public, multi-server, premium-ready Discord bot without losing direction.
-
-Every bug report, screenshot, PR, feature idea, audit finding, and code change must map back to this command center before runtime behavior is changed.
+This file is the source of truth for turning Dank Shield into a public, multi-server, premium-ready Discord bot without losing direction. Every bug report, screenshot, PR, feature idea, audit finding, and code change must map back to this command center before runtime behavior is changed.
 
 If a future assistant, agent, or developer loses context, this file is the reset point.
 
@@ -80,16 +78,7 @@ Verification:
 Return path:
 ```
 
-The interruption becomes the active task only if it could cause:
-
-- generic interaction failure
-- data loss or corrupt state
-- cross-guild config bleed
-- unsafe moderation/deletion
-- command registration breakage
-- ticket numbering/channel orphaning
-- silent boot/runtime failure
-- removal of an active feature
+The interruption becomes the active task only if it could cause generic interaction failure, data loss, cross-guild config bleed, unsafe moderation/deletion, command registration breakage, ticket numbering/channel orphaning, silent boot/runtime failure, or removal of an active feature.
 
 ---
 
@@ -116,8 +105,6 @@ If any item is missing, the task is partial, not done.
 ---
 
 ## Status labels
-
-Use exactly these labels when tracking work:
 
 | Label | Meaning |
 | --- | --- |
@@ -158,20 +145,20 @@ Current priority order:
 
 ## Production readiness score
 
-Current working score: **48 / 100**
+Current working score: **49 / 100**
 
 Meaning: internal/testing only. Not ready for wide public release, not ready for paid premium membership, and not ready to promise seamless UX.
 
-Reason for score reduction from the previous 62/100:
+Score moved from 48 to 49 because the native interaction foundation now exists and Protection Center callbacks have started migrating to it. It cannot rise further until real test/compile commands are run and the old framework monkey patch is removed safely.
+
+Remaining score blockers:
 
 - a large startup guard chain still controls too much behavior
-- framework monkey-patching exists for interaction tracing/error handling
-- exception swallowing still exists in shared interaction helpers
+- `global_interaction_trace_guard` still patches Discord.py framework internals
+- not all setup/design/ticket/verify callbacks use the native interaction guard yet
 - command registry still contains runtime pruning/mutation logic
 - settings are not yet defined through one central registry
 - Dank Design still contains too much state/UI/service logic in one command module
-
-Score can move up only when blockers are fixed and verified.
 
 ---
 
@@ -192,7 +179,7 @@ Current evidence:
 - It also patches `discord.ui.View._scheduled_task`.
 - The logger captures useful fields, but the implementation is still a monkey patch.
 
-Progress this pass:
+Progress completed:
 
 - `stoney_verify/interaction_guard.py` now has native structured context capture.
 - It creates `DANK-xxxxxxxx` error IDs without Discord.py private method replacement.
@@ -200,27 +187,21 @@ Progress this pass:
 - It logs defer failures, send failures, callback exceptions, and duplicate action clicks.
 - It keeps a bounded recent-failure ring for diagnostics/tests.
 - It has native duplicate-action lock support.
-- `tests/test_interaction_guard.py` now covers response/followup behavior, send failure logging, defer failure logging, safe callback errors, and duplicate locked actions.
+- `tests/test_interaction_guard.py` covers response/followup behavior, send failure logging, defer failure logging, safe callback errors, and duplicate locked actions.
+- `stoney_verify/commands_ext/public_protection_center.py` now routes `/dank protection`, Protection Center buttons, spam editor select/actions, filter modals, refresh, and close through native guarded actions.
+- Legacy local `try/print` handling was removed from the Protection Center open path.
+- `tests/test_public_protection_center_native_interaction_static.py` now prevents Protection Center from regressing back to unguarded command-open handling and verifies required guarded action names exist.
 
-Required native replacement:
+Important behavior note:
 
-- central `InteractionService` or equivalent native helper
-- safe defer/followup/send helpers
-- structured error object with error ID
-- component/action lock support
-- stale interaction handling
-- duplicate click handling
-- permission/API/database error translation
-- user-facing fix hints
-- guild/channel/user/custom_id/command path logging
-- no Discord.py private method replacement
+- Slow Protection Center config writes now prefer deferred private followups over risky unacknowledged edit-in-place behavior. This is intentional for reliability. A later UX pass can improve in-place refresh once every path is safely acknowledged.
 
 Remaining before this task can be marked done:
 
-- migrate the highest-risk setup/protection/design/ticket/verify callbacks to `run_guarded_interaction()` or native helpers
+- migrate the highest-risk setup/design/ticket/verify callbacks to `run_guarded_interaction()` or native helpers
 - ensure diagnostics can expose recent native interaction failures safely
 - remove or disable `global_interaction_trace_guard` framework patching only after native coverage exists
-- run the interaction test suite and compile checks in a real checkout
+- run the interaction/protection tests and compile checks in a real checkout
 
 Exit criteria:
 
@@ -330,10 +311,6 @@ Status: `BLOCKER`
 
 The command registry is partially centralized, but it still includes runtime pruning/removal logic for stale top-level commands and confusing `/dank` children.
 
-Problem:
-
-Runtime command mutation can contribute to outdated command behavior, hidden aliases, inconsistent slash syncs, and user-facing confusion.
-
 Safe strategy:
 
 - make public command surface deterministic from the command registry
@@ -358,20 +335,7 @@ Settings are currently spread across guild config, spam settings, automod preset
 
 Safe strategy:
 
-Create a central settings registry with:
-
-- key
-- display name
-- plain-English description
-- owning feature
-- default
-- valid values
-- storage location
-- conflict rules
-- migration aliases
-- visibility rules
-- audit log behavior
-- premium gating metadata when needed
+Create a central settings registry with key, display name, plain-English description, owning feature, default, valid values, storage location, conflict rules, migration aliases, visibility rules, audit log behavior, and premium gating metadata when needed.
 
 Verification:
 
@@ -392,37 +356,11 @@ Dank Design now has native registration and visible cleanup for newline artifact
 
 Remaining concern:
 
-`public_design_studio.py` still owns too much:
-
-- pending state
-- snapshots
-- locks
-- rollback persistence
-- format editor drafts
-- UI views
-- permission checks
-- save/load behavior
+`public_design_studio.py` still owns pending state, snapshots, locks, rollback persistence, format editor drafts, UI views, permission checks, and save/load behavior.
 
 Safe strategy:
 
-Split into:
-
-- design service
-- design state store
-- rollback service
-- design UI views
-- design logger/audit service
-- design permission helper
-
-UX requirements:
-
-- clear examples for separator/layout/font choices
-- preview before apply
-- rollback after apply
-- category grouping for channel editor
-- current in-use status
-- plain-English fix hints
-- no server-specific assumptions
+Split into design service, state store, rollback service, UI views, logger/audit service, and permission helper.
 
 Verification:
 
@@ -479,15 +417,7 @@ Fix: give the Dank Shield role Manage Messages in this channel or category
 
 Status: `HIGH PRIORITY / UX`
 
-Every setup screen should explain:
-
-- what this does
-- current saved value
-- recommended value
-- risk if wrong
-- what button to press next
-- what conflicts with this setting
-- how to undo or repair it
+Every setup screen should explain what this does, current saved value, recommended value, risk if wrong, what button to press next, what conflicts with this setting, and how to undo or repair it.
 
 ---
 
@@ -552,6 +482,7 @@ pytest tests/test_startup_health.py
 pytest tests/test_guild_context.py
 pytest tests/test_multi_guild_isolation.py
 pytest tests/test_interaction_guard.py
+pytest tests/test_public_protection_center_native_interaction_static.py
 pytest tests/test_ticket_counter_concurrency.py
 pytest tests/test_ticket_creation_idempotency.py
 pytest tests/test_invite_policy_engine.py
@@ -633,13 +564,16 @@ Progress:
 - native duplicate-action lock support exists
 - native recent-failure ring exists for diagnostics/tests
 - tests expanded for response, followup, send failure, defer failure, callback exception, and duplicate action paths
+- Protection Center command/button/modal/select paths now use native guarded interaction wrappers
+- Protection Center static regression test added
 
 Verification:
 
 - `tests/test_interaction_guard.py` updated
+- `tests/test_public_protection_center_native_interaction_static.py` added
 - static GitHub inspection completed
 - compile/pytest still need to be run from a real checkout
-- common setup/protection/design callbacks are not fully migrated yet
+- setup/design/ticket/verify callbacks are not fully migrated yet
 
 ---
 
