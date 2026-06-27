@@ -1928,11 +1928,12 @@ class SeparatorExamplesPageButton(discord.ui.Button):
         self.page = int(page)
 
     async def callback(self, interaction: discord.Interaction) -> None:  # type: ignore[override]
-        if not await _require_design_permission(interaction):
-            return
+        async def action() -> None:
+            if not await _require_design_permission(interaction):
+                return
 
-        guild = interaction.guild
-        assert guild is not None
+            guild = interaction.guild
+            assert guild is not None
 
         view = getattr(self, "view", None)
         scope = getattr(view, "scope", "channel")
@@ -1956,11 +1957,12 @@ class SeparatorExamplesBackButton(discord.ui.Button):
         )
 
     async def callback(self, interaction: discord.Interaction) -> None:  # type: ignore[override]
-        if not await _require_design_permission(interaction):
-            return
+        async def action() -> None:
+            if not await _require_design_permission(interaction):
+                return
 
-        guild = interaction.guild
-        assert guild is not None
+            guild = interaction.guild
+            assert guild is not None
 
         view = getattr(self, "view", None)
         scope = getattr(view, "scope", "channel")
@@ -2708,11 +2710,12 @@ class DirectRenameModal(discord.ui.Modal):
         self.add_item(self.new_name)
 
     async def on_submit(self, interaction: discord.Interaction) -> None:
-        if not await _require_design_permission(interaction):
-            return
+        async def action() -> None:
+            if not await _require_design_permission(interaction):
+                return
 
-        guild = interaction.guild
-        assert guild is not None
+            guild = interaction.guild
+            assert guild is not None
 
         channel = guild.get_channel(self.target_id)
         if channel is None:
@@ -5149,10 +5152,16 @@ class StyleChangeFixMissingEmojiModal(discord.ui.Modal):
         guild = interaction.guild
         assert guild is not None
 
-        key = _key(int(guild.id), int(interaction.user.id))
-        pending = _PENDING.get(key)
-        if not pending:
-            return await interaction.response.send_message("This preview expired. Run Style Change again.", ephemeral=True)
+            key = _key(int(guild.id), int(interaction.user.id))
+            pending = _PENDING.get(key)
+            if not pending:
+                await safe_send_interaction(
+                    interaction,
+                    content="This preview expired. Run Style Change again.",
+                    ephemeral=True,
+                    action_name="design.style_change.missing_icons.expired",
+                )
+                return
 
         items = list(pending.get("items") or [])
         separator_id = _safe_str(pending.get("separator_id"), self.separator_id)
@@ -5183,7 +5192,9 @@ class StyleChangeFixMissingEmojiModal(discord.ui.Modal):
         _PENDING[key] = pending
 
         embed, view = _style_change_rebuild_preview_response(guild, pending)
-        await interaction.response.edit_message(embed=embed, view=view)
+            await interaction.response.edit_message(embed=embed, view=view)
+
+        await _guard_design_action(interaction, "design.style_change.missing_icons_submit", action, defer=False)
 
 
 class StyleChangeApplySafeOnlyButton(discord.ui.Button):
@@ -5203,10 +5214,16 @@ class StyleChangeApplySafeOnlyButton(discord.ui.Button):
         guild = interaction.guild
         assert guild is not None
 
-        key = _key(int(guild.id), int(interaction.user.id))
-        pending = _PENDING.get(key)
-        if not pending:
-            return await interaction.response.send_message("This preview expired. Run Style Change again.", ephemeral=True)
+            key = _key(int(guild.id), int(interaction.user.id))
+            pending = _PENDING.get(key)
+            if not pending:
+                await safe_send_interaction(
+                    interaction,
+                    content="This preview expired. Run Style Change again.",
+                    ephemeral=True,
+                    action_name="design.style_change.apply_safe.expired",
+                )
+                return
 
         items = list(pending.get("items") or [])
         safe_items: list[dict[str, Any]] = []
@@ -5236,10 +5253,12 @@ class StyleChangeApplySafeOnlyButton(discord.ui.Button):
             inline=False,
         )
 
-        await interaction.response.edit_message(
-            embed=embed,
-            view=StyleChangePreviewView(can_apply=True, has_blockers=False),
-        )
+            await interaction.response.edit_message(
+                embed=embed,
+                view=StyleChangePreviewView(can_apply=True, has_blockers=False),
+            )
+
+        await _guard_design_action(interaction, "design.style_change.apply_safe_only", action, defer=False)
 
 
 class StyleChangeFixMissingEmojiButton(discord.ui.Button):
@@ -5259,27 +5278,44 @@ class StyleChangeFixMissingEmojiButton(discord.ui.Button):
         guild = interaction.guild
         assert guild is not None
 
-        key = _key(int(guild.id), int(interaction.user.id))
-        pending = _PENDING.get(key)
-        if not pending:
-            return await interaction.response.send_message("This preview expired. Run Style Change again.", ephemeral=True)
+            key = _key(int(guild.id), int(interaction.user.id))
+            pending = _PENDING.get(key)
+            if not pending:
+                await safe_send_interaction(
+                    interaction,
+                    content="This preview expired. Run Style Change again.",
+                    ephemeral=True,
+                    action_name="design.style_change.fix_missing.expired",
+                )
+                return
 
         items = list(pending.get("items") or [])
         missing = _style_change_missing_emoji_items(items)
 
-        if not missing:
-            return await interaction.response.send_message("No missing-emoji rows found in this preview.", ephemeral=True)
+            if not missing:
+                await safe_send_interaction(
+                    interaction,
+                    content="No missing-emoji rows found in this preview.",
+                    ephemeral=True,
+                    action_name="design.style_change.fix_missing.none",
+                )
+                return
 
-        if len(missing) > 5:
-            return await interaction.response.send_message(
-                "Too many missing-emoji rows for one modal. Use **Apply Safe Ones Only** to apply safe rows first, then fix the rest from Channel Editor.",
-                ephemeral=True,
+            if len(missing) > 5:
+                await safe_send_interaction(
+                    interaction,
+                    content="Too many missing-emoji rows for one modal. Use **Apply Safe Ones Only** to apply safe rows first, then fix the rest from Channel Editor.",
+                    ephemeral=True,
+                    action_name="design.style_change.fix_missing.too_many",
+                )
+                return
+
+            separator_id = _safe_str(pending.get("separator_id"), "none")
+            await interaction.response.send_modal(
+                StyleChangeFixMissingEmojiModal(items=missing, separator_id=separator_id)
             )
 
-        separator_id = _safe_str(pending.get("separator_id"), "none")
-        await interaction.response.send_modal(
-            StyleChangeFixMissingEmojiModal(items=missing, separator_id=separator_id)
-        )
+        await _guard_design_action(interaction, "design.style_change.fix_missing_icons_modal", action, defer=False)
 
 
 class StyleChangePreviewView(DesignPreviewView):
