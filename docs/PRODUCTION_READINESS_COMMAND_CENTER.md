@@ -179,7 +179,7 @@ Score can move up only when blockers are fixed and verified.
 
 ### `P0-INT-001` — Replace monkey-patched interaction logger with native interaction service
 
-Status: `BLOCKER`
+Status: `PARTIAL / BLOCKER`
 
 Goal:
 
@@ -191,6 +191,16 @@ Current evidence:
 - It also patches app command invocation methods.
 - It also patches `discord.ui.View._scheduled_task`.
 - The logger captures useful fields, but the implementation is still a monkey patch.
+
+Progress this pass:
+
+- `stoney_verify/interaction_guard.py` now has native structured context capture.
+- It creates `DANK-xxxxxxxx` error IDs without Discord.py private method replacement.
+- It records guild/channel/user/message/custom_id/component/command context.
+- It logs defer failures, send failures, callback exceptions, and duplicate action clicks.
+- It keeps a bounded recent-failure ring for diagnostics/tests.
+- It has native duplicate-action lock support.
+- `tests/test_interaction_guard.py` now covers response/followup behavior, send failure logging, defer failure logging, safe callback errors, and duplicate locked actions.
 
 Required native replacement:
 
@@ -204,6 +214,13 @@ Required native replacement:
 - user-facing fix hints
 - guild/channel/user/custom_id/command path logging
 - no Discord.py private method replacement
+
+Remaining before this task can be marked done:
+
+- migrate the highest-risk setup/protection/design/ticket/verify callbacks to `run_guarded_interaction()` or native helpers
+- ensure diagnostics can expose recent native interaction failures safely
+- remove or disable `global_interaction_trace_guard` framework patching only after native coverage exists
+- run the interaction test suite and compile checks in a real checkout
 
 Exit criteria:
 
@@ -599,7 +616,7 @@ Verification:
 
 ### Commit 2 — Native interaction service
 
-Status: `ACTIVE NEXT`
+Status: `IN PROGRESS / PARTIAL`
 
 Task ID: `P0-INT-001`
 
@@ -610,11 +627,19 @@ Scope:
 - migrate highest-risk setup/protection/design buttons first
 - remove Discord.py private method patching only after native coverage exists
 
+Progress:
+
+- native `interaction_guard.py` now captures structured context and error IDs
+- native duplicate-action lock support exists
+- native recent-failure ring exists for diagnostics/tests
+- tests expanded for response, followup, send failure, defer failure, callback exception, and duplicate action paths
+
 Verification:
 
-- interaction tests pass
-- no common setup/protection/design button shows generic `interaction failed`
-- errors include guild/channel/user/action/fix hint
+- `tests/test_interaction_guard.py` updated
+- static GitHub inspection completed
+- compile/pytest still need to be run from a real checkout
+- common setup/protection/design callbacks are not fully migrated yet
 
 ---
 
