@@ -16,9 +16,10 @@ def apply() -> bool:
             commands_ext._ALLOWED_DANK_CHILDREN = allowed
 
         from stoney_verify.commands_ext import public_self_roles_group
-        from stoney_verify.startup_guards import profile_terms_newline_guard
+        from stoney_verify.startup_guards import profile_request_center_guard, profile_terms_newline_guard
 
         profile_terms_newline_guard.apply()
+        profile_request_center_guard.apply()
 
         bot = None
         try:
@@ -31,7 +32,7 @@ def apply() -> bool:
         if callable(register):
             register(bot, getattr(bot, "tree", None) if bot is not None else None)
         _PATCHED = True
-        print("✅ self_roles_command_guard active; /dank roles and self-role buttons are allowed in public setup surface")
+        print("✅ self_roles_command_guard active; /dank roles, profile panels, and centralized profile requests are allowed in public setup surface")
         return True
     except Exception as exc:
         try:
