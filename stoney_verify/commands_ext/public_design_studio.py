@@ -5336,8 +5336,7 @@ async def _open_rollback(interaction: discord.Interaction) -> None:
             preview.append(f"↩️ `{item.get('new_name')}` → `{item.get('old_name')}`")
         embed = discord.Embed(title="↩️ Rollback Preview", description="Rollback uses the same safe 2-second rename queue.", color=discord.Color.orange())
         embed.add_field(name="Items", value=str(len(items)), inline=True)
-        embed.add_field(name="Preview", value="
-".join(preview)[:1024] or "No items.", inline=False)
+        embed.add_field(name="Preview", value="\n".join(preview)[:1024] or "No items.", inline=False)
         await safe_send_interaction(
             interaction,
             embed=embed,
@@ -5403,8 +5402,7 @@ class RollbackConfirmView(discord.ui.View):
             await _pop_latest_rollback_snapshot(int(guild.id))
             embed = discord.Embed(title="↩️ Rollback Complete", description=f"Restored **{reverted}** item(s). Failed **{len(failed)}**.", color=discord.Color.green() if not failed else discord.Color.orange())
             if failed:
-                embed.add_field(name="Skipped / Failed", value="
-".join(failed[:10])[:1024], inline=False)
+                embed.add_field(name="Skipped / Failed", value="\n".join(failed[:10])[:1024], inline=False)
             await interaction.edit_original_response(embed=embed, view=None)
 
         await _guard_design_action(interaction, "design.rollback.confirm", action, defer=False)
