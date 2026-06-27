@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-"""Compact native-guard migration for Dank Design Style Change issue-review flows.
+"""Boundary-based native-guard migration for Dank Design Style Change issue-review flows.
 
 Run from repo root:
     python tools/apply_p0_int_design_style_change_native_guard.py
@@ -10,6 +10,9 @@ from pathlib import Path
 
 TARGET = Path("stoney_verify/commands_ext/public_design_studio.py")
 
+START_MARKER = "class StyleChangeFixMissingEmojiModal(discord.ui.Modal):"
+END_MARKER = "class StyleChangePreviewView(DesignPreviewView):"
+
 ACTION_NAMES = (
     "design.style_change.missing_icons_submit",
     "design.style_change.apply_safe_only",
@@ -17,56 +20,57 @@ ACTION_NAMES = (
 )
 
 
-def replace_once(text: str, old: str, new: str, label: str) -> str:
-    count = text.count(old)
-    if count < 1:
-        raise SystemExit(f"Refusing to patch {label}: expected at least 1 match, found 0.")
-    return text.replace(old, new, 1)
+def replace_section(text: str, replacement: str) -> str:
+    start = text.find(START_MARKER)
+    if start < 0:
+        raise SystemExit(f"Refusing to patch style-change flow: start marker not found: {START_MARKER!r}.")
+    end = text.find(END_MARKER, start)
+    if end < 0:
+        raise SystemExit(f"Refusing to patch style-change flow: end marker not found: {END_MARKER!r}.")
+    return text[:start] + replacement + text[end:]
 
 
 def main() -> None:
     path = TARGET
     text = path.read_text(encoding="utf-8")
 
-    if all(name in text for name in ACTION_NAMES):
-        print("Already applied: Dank Design style-change native guard slice is present.")
-        return
-
     if "async def _guard_design_action(" not in text or "safe_send_interaction" not in text:
         raise SystemExit("Missing native design interaction helpers. Apply exact-format guard migration first.")
 
-    # Keep this slice intentionally narrow: wrap the three issue-review entrypoints
-    # and route their short error replies through safe_send_interaction. Several
-    # snippets repeat in this region, so replacements intentionally consume the
-    # next matching occurrence in order: modal -> apply-safe -> fix-missing.
-    text = replace_once(
-        text,
-        '''    async def on_submit(self, interaction: discord.Interaction) -> None:
-        if not await _require_design_permission(interaction):
-            return
+    current_region = text[text.find(START_MARKER): text.find(END_MARKER, text.find(START_MARKER))]
+    if all(name in current_region for name in ACTION_NAMES) and "        async def action() -> None:" in current_region:
+        print("Already applied: Dank Design style-change native guard slice is present.")
+        return
 
-        guild = interaction.guild
-        assert guild is not None
-''',
-        '''    async def on_submit(self, interaction: discord.Interaction) -> None:
+    new_style_change_region = r'''class StyleChangeFixMissingEmojiModal(discord.ui.Modal):
+    def __init__(self, *, items: list[dict[str, Any]], separator_id: str) -> None:
+        super().__init__(title="Choose Missing Icons")
+        self.separator_id = _safe_str(separator_id, "none")
+        self.item_keys: list[str] = []
+
+        for index, item in enumerate(items[:5], start=1):
+            channel_id = _safe_str(item.get("channel_id"), "")
+            self.item_keys.append(channel_id)
+            before = _safe_str(item.get("before"), "channel")
+            base = _safe_str(item.get("base_name"), before)
+            field = discord.ui.TextInput(
+                label=f"{index}. Emoji for {base}"[:45],
+                placeholder=f"Example: 🎮 for {before}"[:100],
+                min_length=1,
+                max_length=12,
+                required=True,
+            )
+            self.add_item(field)
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
         async def action() -> None:
             if not await _require_design_permission(interaction):
                 return
 
             guild = interaction.guild
             assert guild is not None
-''',
-        "style-change missing emoji modal start",
-    )
 
-    text = replace_once(
-        text,
-        '''        key = _key(int(guild.id), int(interaction.user.id))
-        pending = _PENDING.get(key)
-        if not pending:
-            return await interaction.response.send_message("This preview expired. Run Style Change again.", ephemeral=True)
-''',
-        '''            key = _key(int(guild.id), int(interaction.user.id))
+            key = _key(int(guild.id), int(interaction.user.id))
             pending = _PENDING.get(key)
             if not pending:
                 await safe_send_interaction(
@@ -76,55 +80,60 @@ def main() -> None:
                     action_name="design.style_change.missing_icons.expired",
                 )
                 return
-''',
-        "style-change modal expired send",
-    )
 
-    text = replace_once(
-        text,
-        '''        await interaction.response.edit_message(embed=embed, view=view)
+            items = list(pending.get("items") or [])
+            separator_id = _safe_str(pending.get("separator_id"), self.separator_id)
 
+            values_by_channel: dict[str, str] = {}
+            for channel_id, child in zip(self.item_keys, self.children):
+                values_by_channel[channel_id] = _safe_str(getattr(child, "value", ""), "")
 
-class StyleChangeApplySafeOnlyButton(discord.ui.Button):
-''',
-        '''            await interaction.response.edit_message(embed=embed, view=view)
+            for item in items:
+                channel_id = _safe_str(item.get("channel_id"), "")
+                if channel_id not in values_by_channel:
+                    continue
+
+                manual_emoji = values_by_channel[channel_id]
+                after, warnings, blockers = _style_change_after_with_manual_emoji(
+                    _safe_str(item.get("before"), ""),
+                    separator_id,
+                    manual_emoji,
+                )
+
+                item["after"] = after
+                item["warnings"] = warnings
+                item["blockers"] = blockers
+                item["status"] = "failed" if blockers else ("changed" if after != item.get("before") else "unchanged")
+                item["style_change_manual_emoji"] = manual_emoji
+
+            pending["items"] = items
+            _PENDING[key] = pending
+
+            embed, view = _style_change_rebuild_preview_response(guild, pending)
+            await interaction.response.edit_message(embed=embed, view=view)
 
         await _guard_design_action(interaction, "design.style_change.missing_icons_submit", action, defer=False)
 
 
 class StyleChangeApplySafeOnlyButton(discord.ui.Button):
-''',
-        "style-change modal guard footer",
-    )
+    def __init__(self, *, row: int = 2) -> None:
+        super().__init__(
+            label="Apply Safe Ones Only",
+            emoji="✅",
+            style=discord.ButtonStyle.secondary,
+            custom_id="dank_design:style_change_skip_issues",
+            row=row,
+        )
 
-    text = replace_once(
-        text,
-        '''    async def callback(self, interaction: discord.Interaction) -> None:  # type: ignore[override]
-        if not await _require_design_permission(interaction):
-            return
-
-        guild = interaction.guild
-        assert guild is not None
-''',
-        '''    async def callback(self, interaction: discord.Interaction) -> None:  # type: ignore[override]
+    async def callback(self, interaction: discord.Interaction) -> None:  # type: ignore[override]
         async def action() -> None:
             if not await _require_design_permission(interaction):
                 return
 
             guild = interaction.guild
             assert guild is not None
-''',
-        "style-change apply-safe callback start",
-    )
 
-    text = replace_once(
-        text,
-        '''        key = _key(int(guild.id), int(interaction.user.id))
-        pending = _PENDING.get(key)
-        if not pending:
-            return await interaction.response.send_message("This preview expired. Run Style Change again.", ephemeral=True)
-''',
-        '''            key = _key(int(guild.id), int(interaction.user.id))
+            key = _key(int(guild.id), int(interaction.user.id))
             pending = _PENDING.get(key)
             if not pending:
                 await safe_send_interaction(
@@ -134,21 +143,36 @@ class StyleChangeApplySafeOnlyButton(discord.ui.Button):
                     action_name="design.style_change.apply_safe.expired",
                 )
                 return
-''',
-        "style-change apply-safe expired send",
-    )
 
-    text = replace_once(
-        text,
-        '''        await interaction.response.edit_message(
-            embed=embed,
-            view=StyleChangePreviewView(can_apply=True, has_blockers=False),
-        )
+            items = list(pending.get("items") or [])
+            safe_items: list[dict[str, Any]] = []
 
+            for item in items:
+                if item.get("status") == "failed":
+                    skipped = dict(item)
+                    skipped["after"] = skipped.get("before")
+                    skipped["status"] = "protected"
+                    skipped["protected"] = True
+                    skipped["warnings"] = ["Skipped by user from Style Change issues review."]
+                    skipped["blockers"] = []
+                    safe_items.append(skipped)
+                else:
+                    safe_items.append(item)
 
-class StyleChangeFixMissingEmojiButton(discord.ui.Button):
-''',
-        '''            await interaction.response.edit_message(
+            pending["items"] = safe_items
+            pending["style_change_skipped_issues"] = True
+            _PENDING[key] = pending
+
+            separator_id = _safe_str(pending.get("separator_id"), "none")
+            embed = _style_change_preview_embed(guild, safe_items, separator_id=separator_id)
+            embed.title = "👁️ Style Change Preview · Safe Changes Only"
+            embed.add_field(
+                name="Skipped issues",
+                value="Needs-review rows were left untouched. Apply will only rename safe rows.",
+                inline=False,
+            )
+
+            await interaction.response.edit_message(
                 embed=embed,
                 view=StyleChangePreviewView(can_apply=True, has_blockers=False),
             )
@@ -157,38 +181,24 @@ class StyleChangeFixMissingEmojiButton(discord.ui.Button):
 
 
 class StyleChangeFixMissingEmojiButton(discord.ui.Button):
-''',
-        "style-change apply-safe guard footer",
-    )
+    def __init__(self, *, row: int = 2) -> None:
+        super().__init__(
+            label="Choose Missing Icons",
+            emoji="😀",
+            style=discord.ButtonStyle.primary,
+            custom_id="dank_design:style_change_fix_missing_emojis",
+            row=row,
+        )
 
-    text = replace_once(
-        text,
-        '''    async def callback(self, interaction: discord.Interaction) -> None:  # type: ignore[override]
-        if not await _require_design_permission(interaction):
-            return
-
-        guild = interaction.guild
-        assert guild is not None
-''',
-        '''    async def callback(self, interaction: discord.Interaction) -> None:  # type: ignore[override]
+    async def callback(self, interaction: discord.Interaction) -> None:  # type: ignore[override]
         async def action() -> None:
             if not await _require_design_permission(interaction):
                 return
 
             guild = interaction.guild
             assert guild is not None
-''',
-        "style-change fix-missing callback start",
-    )
 
-    text = replace_once(
-        text,
-        '''        key = _key(int(guild.id), int(interaction.user.id))
-        pending = _PENDING.get(key)
-        if not pending:
-            return await interaction.response.send_message("This preview expired. Run Style Change again.", ephemeral=True)
-''',
-        '''            key = _key(int(guild.id), int(interaction.user.id))
+            key = _key(int(guild.id), int(interaction.user.id))
             pending = _PENDING.get(key)
             if not pending:
                 await safe_send_interaction(
@@ -198,22 +208,11 @@ class StyleChangeFixMissingEmojiButton(discord.ui.Button):
                     action_name="design.style_change.fix_missing.expired",
                 )
                 return
-''',
-        "style-change fix-missing expired send",
-    )
 
-    text = replace_once(
-        text,
-        '''        if not missing:
-            return await interaction.response.send_message("No missing-emoji rows found in this preview.", ephemeral=True)
+            items = list(pending.get("items") or [])
+            missing = _style_change_missing_emoji_items(items)
 
-        if len(missing) > 5:
-            return await interaction.response.send_message(
-                "Too many missing-emoji rows for one modal. Use **Apply Safe Ones Only** to apply safe rows first, then fix the rest from Channel Editor.",
-                ephemeral=True,
-            )
-''',
-        '''            if not missing:
+            if not missing:
                 await safe_send_interaction(
                     interaction,
                     content="No missing-emoji rows found in this preview.",
@@ -230,21 +229,8 @@ class StyleChangeFixMissingEmojiButton(discord.ui.Button):
                     action_name="design.style_change.fix_missing.too_many",
                 )
                 return
-''',
-        "style-change fix-missing validation sends",
-    )
 
-    text = replace_once(
-        text,
-        '''        separator_id = _safe_str(pending.get("separator_id"), "none")
-        await interaction.response.send_modal(
-            StyleChangeFixMissingEmojiModal(items=missing, separator_id=separator_id)
-        )
-
-
-class StyleChangePreviewView(DesignPreviewView):
-''',
-        '''            separator_id = _safe_str(pending.get("separator_id"), "none")
+            separator_id = _safe_str(pending.get("separator_id"), "none")
             await interaction.response.send_modal(
                 StyleChangeFixMissingEmojiModal(items=missing, separator_id=separator_id)
             )
@@ -252,11 +238,8 @@ class StyleChangePreviewView(DesignPreviewView):
         await _guard_design_action(interaction, "design.style_change.fix_missing_icons_modal", action, defer=False)
 
 
-class StyleChangePreviewView(DesignPreviewView):
-''',
-        "style-change fix-missing guard footer",
-    )
-
+'''
+    text = replace_section(text, new_style_change_region)
     path.write_text(text, encoding="utf-8")
     print("Applied: Dank Design style-change native guard slice.")
 
