@@ -19,8 +19,8 @@ ACTION_NAMES = (
 
 def replace_once(text: str, old: str, new: str, label: str) -> str:
     count = text.count(old)
-    if count != 1:
-        raise SystemExit(f"Refusing to patch {label}: expected 1 match, found {count}.")
+    if count < 1:
+        raise SystemExit(f"Refusing to patch {label}: expected at least 1 match, found 0.")
     return text.replace(old, new, 1)
 
 
@@ -36,7 +36,9 @@ def main() -> None:
         raise SystemExit("Missing native design interaction helpers. Apply exact-format guard migration first.")
 
     # Keep this slice intentionally narrow: wrap the three issue-review entrypoints
-    # and route their short error replies through safe_send_interaction.
+    # and route their short error replies through safe_send_interaction. Several
+    # snippets repeat in this region, so replacements intentionally consume the
+    # next matching occurrence in order: modal -> apply-safe -> fix-missing.
     text = replace_once(
         text,
         '''    async def on_submit(self, interaction: discord.Interaction) -> None:
