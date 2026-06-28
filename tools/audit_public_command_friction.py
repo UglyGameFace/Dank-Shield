@@ -58,31 +58,29 @@ REQUIRED_PRUNED_DANK_CHILDREN = {
 }
 
 REQUIRED_ENV_MARKERS = {
-    "STONEY_DEPLOYMENT_MODE=production",
-    "STONEY_PUBLIC_MODE=true",
-    "STONEY_PRODUCTION_MODE=true",
-    "STONEY_COMMAND_PROFILE=public",
-    "STONEY_SYNC_BETA_GUILD_COMMANDS=false",
+    "DANK_DEPLOYMENT_MODE=production",
+    "DANK_PUBLIC_MODE=true",
+    "DANK_PRODUCTION_MODE=true",
+    "DANK_COMMAND_PROFILE=public",
+    "DANK_SYNC_BETA_GUILD_COMMANDS=false",
     "CLEAR_GLOBAL_COMMANDS_ON_BOOT=false",
     "DANK_SKIP_UNCHANGED_GLOBAL_SYNC=true",
     "DANK_FORCE_COMMAND_SYNC_ON_BOOT=false",
-    "STONEY_PUBLIC_CONFIG_ISOLATION=true",
-    "STONEY_ALLOW_SERVER_ENV_IDS=false",
-    "STONEY_SERVER_ENV_IDS_ENABLED=false",
+    "DANK_PUBLIC_CONFIG_ISOLATION=true",
+    "DANK_ALLOW_SERVER_ENV_IDS=false",
+    "DANK_SERVER_ENV_IDS_ENABLED=false",
     "BOT_DISPLAY_NAME=Dank Shield",
 }
 
 FORBIDDEN_ENV_MARKERS = {
     "GUILD_ID=1098088221457514609",
-    "STONEY_SYNC_BETA_GUILD_COMMANDS=true",
+    "DANK_SYNC_BETA_GUILD_COMMANDS=true",
     "CLEAR_GLOBAL_COMMANDS_ON_BOOT=true",
     "DANK_CLEAR_ANY_GUILD_COMMAND_COPY_ON_BOOT=true",
 }
 
 REQUIRED_BRANDING_MARKERS = {
-    "Stoney Verify",
     "Dank Shield",
-    "/stoney",
     "/dank",
     "discord.InteractionResponse",
     "discord.Interaction",
@@ -159,7 +157,7 @@ def main() -> int:
         "DANK_SKIP_UNCHANGED_GLOBAL_SYNC",
         "DANK_FORCE_COMMAND_SYNC_ON_BOOT",
         "DANK_GUILD_COMMAND_CLEANUP_IDS",
-        "STONEY_SYNC_BETA_GUILD_COMMANDS",
+        "DANK_SYNC_BETA_GUILD_COMMANDS",
     ]
     cleanup_required_text.extend(sorted(REQUIRED_COMMAND_CLEANUP_EPOCH_MARKERS))
     for marker in cleanup_required_text:

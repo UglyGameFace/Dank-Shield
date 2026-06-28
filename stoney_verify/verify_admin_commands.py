@@ -485,4 +485,36 @@ def _register_verify_admin_commands() -> None:
             return await _safe_ephemeral(interaction, message)
 
 
-_register_verify_admin_commands()
+def _verify_admin_commands_enabled() -> bool:
+    """Legacy top-level verify admin commands are dev/admin-only.
+
+    ``repair_verify_ui``, ``recompute_member_risk`` and
+    ``recompute_all_member_risk`` are internal maintenance commands. They stay
+    out of the public command surface (which is near Discord's 100 global-command
+    cap and should not confuse normal server owners) unless explicitly opted in.
+
+    Semantics mirror ``startup_guards.public_verify_admin_command_skip`` so the
+    two stay consistent: enabled only for dev/full/public-admin profiles or when
+    ``DANK_EXPOSE_VERIFY_ADMIN_COMMANDS`` is set.
+    """
+    import os
+
+    raw_expose = os.getenv("DANK_EXPOSE_VERIFY_ADMIN_COMMANDS", "")
+    if str(raw_expose or "").strip().lower() in {"1", "true", "yes", "y", "on"}:
+        return True
+
+    profile = str(os.getenv("DANK_COMMAND_PROFILE", "public")).strip().lower()
+    return profile in {"public-admin", "dev", "full"}
+
+
+if _verify_admin_commands_enabled():
+    _register_verify_admin_commands()
+else:
+    try:
+        print(
+            "🧭 verify_admin_commands: legacy top-level commands hidden in public "
+            "profile (set DANK_COMMAND_PROFILE=dev or "
+            "DANK_EXPOSE_VERIFY_ADMIN_COMMANDS=true to enable)"
+        )
+    except Exception:
+        pass
