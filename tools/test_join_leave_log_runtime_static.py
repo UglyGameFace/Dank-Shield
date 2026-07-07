@@ -7,6 +7,7 @@ ROOT = Path(__file__).resolve().parents[1]
 INIT = (ROOT / "stoney_verify/commands_ext/__init__.py").read_text(encoding="utf-8")
 RUNTIME = (ROOT / "stoney_verify/commands_ext/public_member_lifecycle_runtime.py").read_text(encoding="utf-8")
 ROUTER = (ROOT / "stoney_verify/startup_guards/member_lifecycle_router_guard.py").read_text(encoding="utf-8")
+STARTUP_GUARDS = (ROOT / "stoney_verify/startup_guards/__init__.py").read_text(encoding="utf-8")
 SETUP = (ROOT / "stoney_verify/commands_ext/public_setup_group.py").read_text(encoding="utf-8")
 SETUP_LOGS = (ROOT / "stoney_verify/commands_ext/public_setup_logs.py").read_text(encoding="utf-8")
 
@@ -27,6 +28,8 @@ def test_join_leave_aliases_are_broad_and_consistent() -> None:
         "join_leave_channel_id",
         "member_join_leave_log_channel_id",
         "member_lifecycle_log_channel_id",
+        "member_log_channel_id",
+        "member_logs_channel_id",
         "join_log_channel_id",
         "join_exit_log_channel_id",
         "joinlog_channel_id",
@@ -34,6 +37,7 @@ def test_join_leave_aliases_are_broad_and_consistent() -> None:
         "welcome_exit_channel_id",
         "welcome_exit_log_channel_id",
         "leave_log_channel_id",
+        "welcome_leave_channel_id",
         "leave_channel_id",
     ):
         assert key in ROUTER, f"router missing alias {key}"
@@ -50,6 +54,16 @@ def test_member_logs_command_is_allowed_child() -> None:
     assert '"member-logs"' in INIT
 
 
+def test_old_welcome_member_events_route_is_not_loaded_by_startup() -> None:
+    assert "stoney_verify.startup_guards.welcome_member_events_guard" not in STARTUP_GUARDS
+
+
+def test_setup_logs_uses_explicit_join_leave_route() -> None:
+    assert "join_leave_log_channel" in SETUP_LOGS
+    assert "welcome_exit_channel" not in SETUP_LOGS
+    assert "join_leave_log_channel) or _channel_value(modlog_channel)" not in SETUP_LOGS
+
+
 if __name__ == "__main__":
     for test in (
         test_member_lifecycle_runtime_is_public_core,
@@ -57,6 +71,8 @@ if __name__ == "__main__":
         test_join_leave_aliases_are_broad_and_consistent,
         test_ready_logs_resolved_member_lifecycle_routes,
         test_member_logs_command_is_allowed_child,
+        test_old_welcome_member_events_route_is_not_loaded_by_startup,
+        test_setup_logs_uses_explicit_join_leave_route,
     ):
         test()
         print(f"PASS {test.__name__}")
