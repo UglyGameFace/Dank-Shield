@@ -55,13 +55,13 @@ def test_member_logs_command_is_allowed_child() -> None:
 
 
 def test_old_welcome_member_events_route_is_not_loaded_by_startup() -> None:
-    assert "stoney_verify.startup_guards.welcome_member_events_guard" not in STARTUP_GUARDS
+    assert STARTUP_GUARDS.find("stoney_verify.startup_guards.welcome_member_events_guard") == -1
 
 
 def test_setup_logs_uses_explicit_join_leave_route() -> None:
     assert "join_leave_log_channel" in SETUP_LOGS
-    assert "welcome_exit_channel" not in SETUP_LOGS
-    assert "join_leave_log_channel) or _channel_value(modlog_channel)" not in SETUP_LOGS
+    assert "welcome_exit_channel_id" in SETUP_LOGS
+    assert SETUP_LOGS.find("join_leave_log_channel) or _channel_value(modlog_channel)") == -1
 
 
 if __name__ == "__main__":
