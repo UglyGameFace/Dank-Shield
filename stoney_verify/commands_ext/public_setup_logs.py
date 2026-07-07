@@ -29,7 +29,7 @@ from ..guild_config import get_guild_config, invalidate_guild_config
 # - raid/security and force-verify logs may reuse modlog when omitted
 # - join/leave/member lifecycle logs are explicit: no welcome-channel fallback
 # - every chosen channel is permission-validated before saving
-# - registering this module also enables per-guild join/leave log listeners
+# - listener registration stays in public_member_lifecycle_runtime only
 # ============================================================
 
 
@@ -191,15 +191,10 @@ _attach_setup_logs_command()
 
 
 def _register_member_lifecycle_listeners(bot, tree) -> None:
-    try:
-        from .public_member_lifecycle_logs import register_public_member_lifecycle_log_listeners
-
-        register_public_member_lifecycle_log_listeners(bot, tree)
-    except Exception as e:
-        try:
-            print(f"⚠️ public_setup_logs: failed registering join/exit log listeners: {repr(e)}")
-        except Exception:
-            pass
+    _ = bot, tree
+    # The authoritative router is installed by public_member_lifecycle_runtime.
+    # Registering legacy listeners here would duplicate join/leave posts.
+    return None
 
 
 def register_public_setup_logs_commands(bot, tree) -> None:
