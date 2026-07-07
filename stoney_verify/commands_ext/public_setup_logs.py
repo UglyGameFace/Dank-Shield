@@ -26,11 +26,10 @@ from ..guild_config import get_guild_config, invalidate_guild_config
 # Production goals:
 # - log-channel config is saved per guild_id, not env
 # - modlog is required because moderation/audit visibility depends on it
-# - raid/security, join/exit, and force-verify logs are optional and may reuse
-#   modlog, but every chosen channel is permission-validated before saving
-# - join/exit intentionally maps to join_log_channel_id so existing runtime code
-#   and the newer welcome-exit use case share one durable setting
-# - registering this module also enables per-guild join/exit log listeners
+# - raid/security and force-verify logs may reuse modlog when omitted
+# - join/leave/member lifecycle logs are explicit: no welcome-channel fallback
+# - every chosen channel is permission-validated before saving
+# - registering this module also enables per-guild join/leave log listeners
 # ============================================================
 
 
@@ -41,19 +40,47 @@ def _safe_channel_id(channel: Optional[discord.TextChannel]) -> Optional[str]:
     return _channel_value(channel) if channel is not None else None
 
 
-def _display_channel(channel: Optional[discord.TextChannel], *, fallback: discord.TextChannel) -> str:
+def _display_channel(channel: Optional[discord.TextChannel], *, fallback: Optional[discord.TextChannel] = None) -> str:
     chosen = channel or fallback
+    if chosen is None:
+        return "Not set"
     try:
         return f"{chosen.mention} (`{chosen.id}`)"
     except Exception:
         return "Not set"
 
 
+def _join_leave_alias_payload(channel_id: str) -> Dict[str, Any]:
+    return {
+        "join_leave_log_channel_id": channel_id,
+        "join_leave_channel_id": channel_id,
+        "member_join_leave_log_channel_id": channel_id,
+        "member_lifecycle_log_channel_id": channel_id,
+        "member_log_channel_id": channel_id,
+        "member_logs_channel_id": channel_id,
+        "join_log_channel_id": channel_id,
+        "join_exit_log_channel_id": channel_id,
+        "joinlog_channel_id": channel_id,
+        "joinleave_channel_id": channel_id,
+        "welcome_exit_channel_id": channel_id,
+        "welcome_exit_log_channel_id": channel_id,
+        "leave_log_channel_id": channel_id,
+        "leave_channel_id": channel_id,
+        "welcome_leave_channel_id": channel_id,
+    }
+
+
+def _normalize_join_leave_warning(text: str) -> str:
+    if "Join/exit log channel was not set" in str(text):
+        return "Join/leave log channel was not set. Join/leave event posting will stay off until a real join/leave log channel is configured."
+    return str(text)
+
+
 async def _setup_logs_callback(
     interaction: discord.Interaction,
     modlog_channel: discord.TextChannel,
     raidlog_channel: Optional[discord.TextChannel] = None,
-    welcome_exit_channel: Optional[discord.TextChannel] = None,
+    join_leave_log_channel: Optional[discord.TextChannel] = None,
     force_verify_log_channel: Optional[discord.TextChannel] = None,
 ) -> None:
     if not await _require_setup_permission(interaction):
@@ -69,9 +96,10 @@ async def _setup_logs_callback(
         guild,
         modlog_channel,
         raidlog_channel,
-        welcome_exit_channel,
+        join_leave_log_channel,
         force_verify_log_channel,
     )
+    warnings = [_normalize_join_leave_warning(w) for w in warnings]
 
     if blockers:
         embed = discord.Embed(
@@ -89,23 +117,14 @@ async def _setup_logs_callback(
     updates: Dict[str, Any] = {
         "modlog_channel_id": _channel_value(modlog_channel),
         "raidlog_channel_id": _safe_channel_id(raidlog_channel) or _channel_value(modlog_channel),
-        "join_leave_log_channel_id": _safe_channel_id(welcome_exit_channel) or _channel_value(modlog_channel),
-        "join_leave_channel_id": _safe_channel_id(welcome_exit_channel) or _channel_value(modlog_channel),
-        "member_join_leave_log_channel_id": _safe_channel_id(welcome_exit_channel) or _channel_value(modlog_channel),
-        "member_lifecycle_log_channel_id": _safe_channel_id(welcome_exit_channel) or _channel_value(modlog_channel),
-        "join_log_channel_id": _safe_channel_id(welcome_exit_channel) or _channel_value(modlog_channel),
-        "join_exit_log_channel_id": _safe_channel_id(welcome_exit_channel) or _channel_value(modlog_channel),
-        "joinlog_channel_id": _safe_channel_id(welcome_exit_channel) or _channel_value(modlog_channel),
-        "joinleave_channel_id": _safe_channel_id(welcome_exit_channel) or _channel_value(modlog_channel),
-        "welcome_exit_channel_id": _safe_channel_id(welcome_exit_channel) or _channel_value(modlog_channel),
-        "welcome_exit_log_channel_id": _safe_channel_id(welcome_exit_channel) or _channel_value(modlog_channel),
-        "leave_log_channel_id": _safe_channel_id(welcome_exit_channel) or _channel_value(modlog_channel),
-        "leave_channel_id": _safe_channel_id(welcome_exit_channel) or _channel_value(modlog_channel),
         "force_verify_log_channel_id": _safe_channel_id(force_verify_log_channel) or _channel_value(modlog_channel),
         "configured_by_id": str(interaction.user.id),
         "configured_by_name": str(interaction.user),
         "configured_at": _utc_iso(),
     }
+
+    if join_leave_log_channel is not None:
+        updates.update(_join_leave_alias_payload(_channel_value(join_leave_log_channel) or "0"))
 
     try:
         await _upsert_config(guild.id, updates)
@@ -114,15 +133,22 @@ async def _setup_logs_callback(
     except Exception as e:
         return await interaction.followup.send(f"❌ Failed saving log setup: `{e}`", ephemeral=True)
 
+    join_leave_display = _display_channel(join_leave_log_channel) if join_leave_log_channel is not None else "Unchanged / not set"
+
     embed = _config_embed(guild, cfg, title="✅ Log Setup Saved")
     embed.add_field(
         name="Saved Log Routing",
         value=(
-            f"Modlog: {_display_channel(modlog_channel, fallback=modlog_channel)}\n"
+            f"Modlog: {_display_channel(modlog_channel)}\n"
             f"Raid/security log: {_display_channel(raidlog_channel, fallback=modlog_channel)}\n"
-            f"Join/exit / welcome-exit log: {_display_channel(welcome_exit_channel, fallback=modlog_channel)}\n"
+            f"Join/leave log: {join_leave_display}\n"
             f"Force-verify log: {_display_channel(force_verify_log_channel, fallback=modlog_channel)}"
         ),
+        inline=False,
+    )
+    embed.add_field(
+        name="Welcome Channel Safety",
+        value="Join/leave event logs never fall back to the public welcome channel. Set `join_leave_log_channel` when you want join/leave cards posted.",
         inline=False,
     )
     _add_validation_summary(embed, warnings, ok)
@@ -145,14 +171,14 @@ def _attach_setup_logs_command() -> None:
 
     command = discord.app_commands.Command(
         name="setup-logs",
-        description="Configure modlog, raid/security, join/exit, and force-verify log channels.",
+        description="Configure modlog, raid/security, join/leave, and force-verify log channels.",
         callback=_setup_logs_callback,
     )
 
     try:
         command._params["modlog_channel"].description = "Main moderation log channel. Required."
         command._params["raidlog_channel"].description = "Optional raid/security log channel. Defaults to modlog."
-        command._params["welcome_exit_channel"].description = "Optional join/exit channel, such as #welcome-exit. Defaults to modlog."
+        command._params["join_leave_log_channel"].description = "Optional explicit join/leave member log channel. Never falls back to welcome."
         command._params["force_verify_log_channel"].description = "Optional forced-verification log channel. Defaults to modlog."
     except Exception:
         pass
