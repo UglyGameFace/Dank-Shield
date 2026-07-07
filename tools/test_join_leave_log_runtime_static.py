@@ -10,6 +10,7 @@ ROUTER = (ROOT / "stoney_verify/startup_guards/member_lifecycle_router_guard.py"
 STARTUP_GUARDS = (ROOT / "stoney_verify/startup_guards/__init__.py").read_text(encoding="utf-8")
 SETUP = (ROOT / "stoney_verify/commands_ext/public_setup_group.py").read_text(encoding="utf-8")
 SETUP_LOGS = (ROOT / "stoney_verify/commands_ext/public_setup_logs.py").read_text(encoding="utf-8")
+HARDENING = (ROOT / "stoney_verify/startup_guards/member_lifecycle_verify_runtime_hardening.py").read_text(encoding="utf-8")
 
 
 def test_member_lifecycle_runtime_is_public_core() -> None:
@@ -43,6 +44,7 @@ def test_join_leave_aliases_are_broad_and_consistent() -> None:
         assert key in ROUTER, f"router missing alias {key}"
         assert key in SETUP, f"setup display missing alias {key}"
         assert key in SETUP_LOGS, f"setup-logs write missing alias {key}"
+        assert key in HARDENING, f"hardening picker missing alias {key}"
 
 
 def test_ready_logs_resolved_member_lifecycle_routes() -> None:
@@ -64,6 +66,21 @@ def test_setup_logs_uses_explicit_join_leave_route() -> None:
     assert SETUP_LOGS.find("join_leave_log_channel) or _channel_value(modlog_channel)") == -1
 
 
+def test_runtime_hardening_is_loaded() -> None:
+    assert "member_lifecycle_verify_runtime_hardening" in STARTUP_GUARDS
+    assert "_install_basic_verify_fallback" in HARDENING
+    assert "maybe_handle_basic_verify_interaction" in HARDENING
+    assert "_patch_setup_join_leave_alias_picker" in HARDENING
+    assert "_patch_join_context_schema_fallback" in HARDENING
+    assert "_patch_modlog_alias_resolution" in HARDENING
+
+
+def test_welcome_channel_not_join_leave_default() -> None:
+    assert "join/leave channel equals welcome" in HARDENING
+    assert "welcome_enabled" in HARDENING
+    assert "welcome_join_enabled" in HARDENING
+
+
 if __name__ == "__main__":
     for test in (
         test_member_lifecycle_runtime_is_public_core,
@@ -73,6 +90,8 @@ if __name__ == "__main__":
         test_member_logs_command_is_allowed_child,
         test_old_welcome_member_events_route_is_not_loaded_by_startup,
         test_setup_logs_uses_explicit_join_leave_route,
+        test_runtime_hardening_is_loaded,
+        test_welcome_channel_not_join_leave_default,
     ):
         test()
         print(f"PASS {test.__name__}")
