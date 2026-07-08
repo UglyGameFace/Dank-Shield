@@ -20,6 +20,34 @@ import discord
 _REGISTERED = False
 _PATCHED = False
 
+JOIN_LEAVE_LOG_ALIASES: tuple[str, ...] = (
+    "join_leave_channel_id",
+    "member_join_leave_log_channel_id",
+    "member_lifecycle_log_channel_id",
+    "member_log_channel_id",
+    "member_logs_channel_id",
+    "join_log_channel_id",
+    "join_exit_log_channel_id",
+    "joinlog_channel_id",
+    "joinleave_channel_id",
+    "welcome_exit_channel_id",
+    "welcome_exit_log_channel_id",
+    "leave_log_channel_id",
+    "welcome_leave_channel_id",
+    "leave_channel_id",
+)
+
+STAFF_LOG_ALIASES: tuple[str, ...] = (
+    "raidlog_channel_id",
+    "raid_log_channel_id",
+    "force_verify_log_channel_id",
+    "staff_join_audit_channel_id",
+    "member_audit_log_channel_id",
+    "staff_log_channel_id",
+    "staff_logs_channel_id",
+    "audit_log_channel_id",
+)
+
 
 def _log(message: str) -> None:
     try:
@@ -154,7 +182,6 @@ def _bot_member(guild: discord.Guild) -> Optional[discord.Member]:
         return None
 
 
-
 async def _resolve_selected_channel(guild: discord.Guild, value: Any) -> Any:
     """ChannelSelect can hand us a partial/resolved object. Convert it to the real guild channel."""
     try:
@@ -194,7 +221,7 @@ def _role_manage_warning(guild: discord.Guild, role: discord.Role, *, require_ma
             if not me.guild_permissions.manage_roles:
                 (blockers if require_manage else warnings).append("Bot is missing Manage Roles.")
             elif me.top_role <= role and not me.guild_permissions.administrator:
-                (blockers if require_manage else warnings).append(f"Bot role is not above {role.mention}. Move Dank Shield higher in Server Settings → Roles.")
+                (blockers if require_manage else warnings).append(f"Bot role is not above {role.mention}. Move Dank Shield's bot role above this role in Server Settings → Roles.")
         except Exception:
             pass
 
@@ -278,7 +305,7 @@ class FullChooseExistingView(SetupBackView):
             return
         embed = discord.Embed(
             title="💬 Customize Public + Verification Channels",
-            description="Pick the text/voice channels users and staff interact with.",
+            description="Pick the text/voice channels users and staff interact with. Join/leave logs are also in **More Channels** so they are easy to find.",
             color=discord.Color.blurple(),
         )
         await interaction.response.edit_message(embed=embed, view=ChannelCustomizationPageOne())
@@ -399,7 +426,11 @@ class ChannelCustomizationPageOne(SetupBackView):
     async def more_channels(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         if not await _require_setup_permission(interaction):
             return
-        embed = discord.Embed(title="💬 More Channel Settings", description="Pick queue/status/helper channels.", color=discord.Color.blurple())
+        embed = discord.Embed(
+            title="💬 More Channel Settings",
+            description="Pick queue/status/helper channels, including the join/leave log channel.",
+            color=discord.Color.blurple(),
+        )
         await interaction.response.edit_message(embed=embed, view=ChannelCustomizationPageTwo())
 
 
@@ -407,16 +438,17 @@ class ChannelCustomizationPageTwo(SetupBackView):
     def __init__(self) -> None:
         super().__init__()
         self.add_item(SaveChannelSelect(placeholder="VC verification queue/status text channel", columns=("vc_verify_queue_channel_id",), channel_types=[discord.ChannelType.text], row=0))
-        self.add_item(SaveChannelSelect(placeholder="General support text channel fallback", columns=("support_channel_id",), also_same=("ticket_panel_channel_id",), channel_types=[discord.ChannelType.text], row=1))
-        self.add_item(SaveChannelSelect(placeholder="Bot health/status text channel", columns=("health_channel_id",), also_same=("status_channel_id", "bot_status_channel_id"), channel_types=[discord.ChannelType.text], row=2))
+        self.add_item(SaveChannelSelect(placeholder="Join / leave log channel — not welcome", columns=("join_leave_log_channel_id",), also_same=JOIN_LEAVE_LOG_ALIASES, channel_types=[discord.ChannelType.text], row=1))
+        self.add_item(SaveChannelSelect(placeholder="General support text channel fallback", columns=("support_channel_id",), also_same=("ticket_panel_channel_id",), channel_types=[discord.ChannelType.text], row=2))
+        self.add_item(SaveChannelSelect(placeholder="Bot health/status text channel", columns=("health_channel_id",), also_same=("status_channel_id", "bot_status_channel_id"), channel_types=[discord.ChannelType.text], row=3))
 
 
 class LogStatusCustomizationView(SetupBackView):
     def __init__(self) -> None:
         super().__init__()
         self.add_item(SaveChannelSelect(placeholder="Ticket transcripts channel", columns=("transcripts_channel_id",), channel_types=[discord.ChannelType.text], row=0, need_files=True))
-        self.add_item(SaveChannelSelect(placeholder="Moderation log channel", columns=("modlog_channel_id",), also_same=("raidlog_channel_id", "raid_log_channel_id", "force_verify_log_channel_id"), channel_types=[discord.ChannelType.text], row=1))
-        self.add_item(SaveChannelSelect(placeholder="Join / leave log channel", columns=("join_log_channel_id",), also_same=("join_exit_log_channel_id",), channel_types=[discord.ChannelType.text], row=2))
+        self.add_item(SaveChannelSelect(placeholder="Moderation / staff audit log channel", columns=("modlog_channel_id",), also_same=STAFF_LOG_ALIASES, channel_types=[discord.ChannelType.text], row=1))
+        self.add_item(SaveChannelSelect(placeholder="Join / leave log channel — not welcome", columns=("join_leave_log_channel_id",), also_same=JOIN_LEAVE_LOG_ALIASES, channel_types=[discord.ChannelType.text], row=2))
         self.add_item(SaveChannelSelect(placeholder="Bot status / uptime channel", columns=("status_channel_id",), also_same=("bot_status_channel_id", "uptime_channel_id"), channel_types=[discord.ChannelType.text], row=3))
 
 
