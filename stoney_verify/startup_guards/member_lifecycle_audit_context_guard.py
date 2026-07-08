@@ -19,6 +19,7 @@ except Exception:  # pragma: no cover
 
 _PATCHED = False
 _ORIGINAL_DETECT = None
+_SETUP_MENU_PATCHED = False
 
 
 def _safe_str(value: Any, default: str = "") -> str:
@@ -276,12 +277,91 @@ async def _send_staff_join_audit_full(
     await channel.send(embed=embed, allowed_mentions=discord.AllowedMentions.none())
 
 
+def _patch_setup_existing_menu() -> bool:
+    global _SETUP_MENU_PATCHED
+    if _SETUP_MENU_PATCHED:
+        return True
+    try:
+        from stoney_verify.commands_ext import public_setup_recommend as rec
+        from stoney_verify.commands_ext import public_setup_full_customization as full
+
+        aliases = (
+            "join_leave_channel_id",
+            "member_join_leave_log_channel_id",
+            "member_lifecycle_log_channel_id",
+            "member_log_channel_id",
+            "member_logs_channel_id",
+            "join_log_channel_id",
+            "join_exit_log_channel_id",
+            "joinlog_channel_id",
+            "joinleave_channel_id",
+            "welcome_exit_channel_id",
+            "welcome_exit_log_channel_id",
+            "leave_log_channel_id",
+            "welcome_leave_channel_id",
+            "leave_channel_id",
+        )
+
+        class VisibleChannelCustomizationPageTwo(full.SetupBackView):
+            def __init__(self) -> None:
+                super().__init__()
+                self.add_item(full.SaveChannelSelect(placeholder="VC verification queue/status text channel", columns=("vc_verify_queue_channel_id",), channel_types=[discord.ChannelType.text], row=0))
+                self.add_item(full.SaveChannelSelect(placeholder="Join / leave log channel — not welcome", columns=("join_leave_log_channel_id",), also_same=aliases, channel_types=[discord.ChannelType.text], row=1))
+                self.add_item(full.SaveChannelSelect(placeholder="General support text channel fallback", columns=("support_channel_id",), also_same=("ticket_panel_channel_id",), channel_types=[discord.ChannelType.text], row=2))
+                self.add_item(full.SaveChannelSelect(placeholder="Bot health/status text channel", columns=("health_channel_id",), also_same=("status_channel_id", "bot_status_channel_id"), channel_types=[discord.ChannelType.text], row=3))
+
+        class VisibleLogStatusCustomizationView(full.SetupBackView):
+            def __init__(self) -> None:
+                super().__init__()
+                self.add_item(full.SaveChannelSelect(placeholder="Ticket transcripts channel", columns=("transcripts_channel_id",), channel_types=[discord.ChannelType.text], row=0, need_files=True))
+                self.add_item(full.SaveChannelSelect(placeholder="Moderation / staff audit log channel", columns=("modlog_channel_id",), also_same=("raidlog_channel_id", "raid_log_channel_id", "force_verify_log_channel_id", "staff_join_audit_channel_id", "member_audit_log_channel_id", "staff_log_channel_id", "staff_logs_channel_id", "audit_log_channel_id"), channel_types=[discord.ChannelType.text], row=1))
+                self.add_item(full.SaveChannelSelect(placeholder="Join / leave log channel — not welcome", columns=("join_leave_log_channel_id",), also_same=aliases, channel_types=[discord.ChannelType.text], row=2))
+                self.add_item(full.SaveChannelSelect(placeholder="Bot status / uptime channel", columns=("status_channel_id",), also_same=("bot_status_channel_id", "uptime_channel_id"), channel_types=[discord.ChannelType.text], row=3))
+
+        full.ChannelCustomizationPageTwo = VisibleChannelCustomizationPageTwo
+        full.LogStatusCustomizationView = VisibleLogStatusCustomizationView
+        full.install_full_customization()
+
+        async def _open_existing_server_visible(interaction: discord.Interaction) -> None:
+            if not await rec.solid._require_setup_permission(interaction):
+                return
+            embed = discord.Embed(
+                title="🧭 Use Existing Roles / Channels",
+                description="Map the roles, channels, folders, logs, and status channels your server already has. Names do not matter; Dank Shield saves Discord IDs.",
+                color=discord.Color.blurple(),
+                timestamp=rec.now_utc(),
+            )
+            embed.add_field(
+                name="Recommended order",
+                value="1. Ticket Basics\n2. Access Roles\n3. Verification Channels\n4. Logs + Status\n5. Behavior Settings",
+                inline=False,
+            )
+            embed.add_field(
+                name="Join / Leave Log",
+                value="Open **Logs + Status** or **Channels → More Channels**, then pick **Join / leave log channel — not welcome**.",
+                inline=False,
+            )
+            await interaction.response.edit_message(embed=embed, view=full.FullChooseExistingView())
+
+        rec._open_existing_server = _open_existing_server_visible
+        _SETUP_MENU_PATCHED = True
+        print("✅ member_lifecycle_audit_context_guard active; recommended setup menu exposes join/leave log picker")
+        return True
+    except Exception as exc:
+        try:
+            print(f"⚠️ member_lifecycle_audit_context_guard setup menu patch failed: {type(exc).__name__}: {exc}")
+        except Exception:
+            pass
+        return False
+
+
 def install() -> bool:
     global _PATCHED, _ORIGINAL_DETECT
+    menu_ok = _patch_setup_existing_menu()
     if _PATCHED:
         return True
     if router is None:
-        return False
+        return bool(menu_ok)
     try:
         _ORIGINAL_DETECT = getattr(router, "_detect_invite", None)
         router._detect_invite = _detect_invite_full  # type: ignore[attr-defined]
@@ -294,7 +374,7 @@ def install() -> bool:
             print(f"⚠️ member_lifecycle_audit_context_guard failed: {type(exc).__name__}: {exc}")
         except Exception:
             pass
-        return False
+        return bool(menu_ok)
 
 
 install()
