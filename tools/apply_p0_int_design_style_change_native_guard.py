@@ -221,18 +221,13 @@ class StyleChangeFixMissingEmojiButton(discord.ui.Button):
                 )
                 return
 
-            if len(missing) > 5:
-                await safe_send_interaction(
-                    interaction,
-                    content="Too many missing-emoji rows for one modal. Use **Apply Safe Ones Only** to apply safe rows first, then fix the rest from Channel Editor.",
-                    ephemeral=True,
-                    action_name="design.style_change.fix_missing.too_many",
-                )
-                return
-
+            # Discord modals support at most 5 text inputs. Open the first batch,
+            # then rebuild the preview after submit so this button can handle
+            # the next unresolved batch instead of dead-ending the flow.
+            batch = missing[:5]
             separator_id = _safe_str(pending.get("separator_id"), "none")
             await interaction.response.send_modal(
-                StyleChangeFixMissingEmojiModal(items=missing, separator_id=separator_id)
+                StyleChangeFixMissingEmojiModal(items=batch, separator_id=separator_id)
             )
 
         await _guard_design_action(interaction, "design.style_change.fix_missing_icons_modal", action, defer=False)
