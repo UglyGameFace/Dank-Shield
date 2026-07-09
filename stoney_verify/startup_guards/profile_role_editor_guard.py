@@ -18,6 +18,7 @@ _ORIGINAL_HANDLE_PROFILE = None
 _ORIGINAL_HANDLE_BUILDER = None
 _ORIGINAL_MANAGER_EMBED = None
 
+_RESERVERED_ROLE_WORDS_TYPING_HELPER = ""
 _RESERVED_ROLE_WORDS = {
     "admin",
     "administrator",
@@ -36,6 +37,9 @@ _RESERVED_ROLE_WORDS = {
     "everyone",
     "here",
 }
+
+PROFILE_ROLES_COSMETICS_LABEL = "Server Roles / Cosmetics"
+PROFILE_ROLE_EDITOR_LABEL = "Profile Roles / Cosmetics"
 
 
 def _log(message: str) -> None:
@@ -92,6 +96,22 @@ def _button(*, label: str, emoji: str, custom_id: str, row: int, style: discord.
     return discord.ui.Button(label=label, emoji=emoji, style=style, custom_id=custom_id, row=row)
 
 
+def _retitle_profile_roles_button(view: discord.ui.View, prefix: str) -> None:
+    """Make the old Server Cosmetics button obvious to normal users."""
+
+    for child in list(getattr(view, "children", []) or []):
+        try:
+            custom_id = str(getattr(child, "custom_id", "") or "")
+            if custom_id == f"{prefix}cosmetics":
+                child.label = PROFILE_ROLES_COSMETICS_LABEL
+                child.emoji = "🧩"
+            elif custom_id == f"{prefix}builder:cosmetics":
+                child.label = PROFILE_ROLE_EDITOR_LABEL
+                child.emoji = "🧩"
+        except Exception:
+            continue
+
+
 def _safe_reason(value: Any) -> str:
     text = str(value or "").strip()
     text = text.replace("@everyone", "everyone").replace("@here", "here")
@@ -115,10 +135,10 @@ def _role_suggestion_embed(profile: Any, guild: discord.Guild, member: discord.M
     embed.add_field(name="Member", value=f"{member.mention}\n`{member}` (`{member.id}`)", inline=False)
     if isinstance(existing, discord.Role):
         embed.add_field(name="Existing role found", value=f"{existing.mention}\n`{existing.name}` (`{existing.id}`)", inline=False)
-        action = "Open `/dank profile builder` → **Profile Role Editor**, then add this existing role if it is safe/cosmetic."
+        action = f"Open `/dank profile builder` → **{PROFILE_ROLE_EDITOR_LABEL}**, then add this existing role if it is safe/cosmetic."
     else:
         embed.add_field(name="Requested role", value=f"`{role_name}`", inline=False)
-        action = "Create the role manually only if appropriate, then open `/dank profile builder` → **Profile Role Editor** and add it as an existing role."
+        action = f"Create the role manually only if appropriate, then open `/dank profile builder` → **{PROFILE_ROLE_EDITOR_LABEL}** and add it as an existing role."
     embed.add_field(name="Reason", value=reason or "No reason provided.", inline=False)
     embed.add_field(
         name="Safety",
@@ -141,6 +161,7 @@ def _patch_panel_views(profile: Any) -> None:
     class ProfilePanelViewWithRoleSuggestions(original_panel):
         def __init__(self) -> None:
             super().__init__()
+            _retitle_profile_roles_button(self, prefix)
             cid = f"{prefix}suggest_role"
             if not _has_child(self, cid):
                 self.add_item(_button(label="Suggest Role", emoji="💡", custom_id=cid, row=2))
@@ -148,6 +169,10 @@ def _patch_panel_views(profile: Any) -> None:
     class ProfileEditViewWithRoleSuggestions(original_edit):
         def __init__(self) -> None:
             super().__init__()
+            _retitle_profile_roles_button(self, prefix)
+            cosmetics_cid = f"{prefix}cosmetics"
+            if not _has_child(self, cosmetics_cid):
+                self.add_item(_button(label=PROFILE_ROLES_COSMETICS_LABEL, emoji="🧩", custom_id=cosmetics_cid, row=2))
             cid = f"{prefix}suggest_role"
             if not _has_child(self, cid):
                 self.add_item(_button(label="Suggest Role", emoji="💡", custom_id=cid, row=2))
@@ -163,16 +188,10 @@ def _patch_builder_view(profile: Any) -> None:
     class ProfileBuilderViewWithRoleEditor(original_builder):
         def __init__(self, *, author_id: int, ready: bool, fixable: bool, title: str) -> None:
             super().__init__(author_id=author_id, ready=ready, fixable=fixable, title=title)
-            for child in list(getattr(self, "children", []) or []):
-                try:
-                    if str(getattr(child, "custom_id", "") or "") == f"{prefix}builder:cosmetics":
-                        child.label = "Profile Role Editor"
-                        child.emoji = "🧩"
-                except Exception:
-                    continue
+            _retitle_profile_roles_button(self, prefix)
             cid = f"{prefix}builder:role_editor"
             if not _has_child(self, cid):
-                self.add_item(_button(label="Profile Role Editor", emoji="🧩", custom_id=cid, row=1, style=discord.ButtonStyle.primary))
+                self.add_item(_button(label=PROFILE_ROLE_EDITOR_LABEL, emoji="🧩", custom_id=cid, row=1, style=discord.ButtonStyle.primary))
 
     profile.ProfileBuilderView = ProfileBuilderViewWithRoleEditor
 
@@ -190,10 +209,15 @@ def _patch_embeds(profile: Any) -> None:
             embed = await _ORIGINAL_MANAGER_EMBED(guild)
         else:
             embed = discord.Embed(color=discord.Color.blurple(), timestamp=discord.utils.utcnow())
-        embed.title = "🧩 Profile Role Editor"
+        embed.title = f"🧩 {PROFILE_ROLE_EDITOR_LABEL}"
         embed.description = (
             "Add existing safe server roles that members may self-select from the Profile Panel. "
             "Members can also suggest roles, but staff/owner must review and add them here."
+        )
+        embed.add_field(
+            name="What this controls",
+            value="These are profile/server cosmetic roles members can choose for themselves. They are still real Discord roles, just safety-checked before being offered.",
+            inline=False,
         )
         embed.add_field(
             name="Member suggestions",
@@ -206,6 +230,11 @@ def _patch_embeds(profile: Any) -> None:
     def _panel_embed_with_role_suggestions(guild: discord.Guild, *args: Any, **kwargs: Any) -> discord.Embed:
         embed = original_panel_embed(guild, *args, **kwargs) if callable(original_panel_embed) else discord.Embed()
         embed.add_field(
+            name=PROFILE_ROLES_COSMETICS_LABEL,
+            value="Use **Server Roles / Cosmetics** to pick optional server roles offered through the Profile Builder.",
+            inline=False,
+        )
+        embed.add_field(
             name="Suggest a role",
             value="Use **Suggest Role** if a safe community/profile role is missing. Staff/owner reviews it first.",
             inline=False,
@@ -214,6 +243,11 @@ def _patch_embeds(profile: Any) -> None:
 
     def _edit_embed_with_role_suggestions(member: discord.Member, *args: Any, **kwargs: Any) -> discord.Embed:
         embed = original_edit_embed(member, *args, **kwargs) if callable(original_edit_embed) else discord.Embed()
+        embed.add_field(
+            name=PROFILE_ROLES_COSMETICS_LABEL,
+            value="Pick optional server roles/cosmetics, or suggest one the owner should add.",
+            inline=False,
+        )
         embed.add_field(
             name="Missing role?",
             value="Use **Suggest Role** for profile roles you think the server owner should add.",
@@ -319,7 +353,7 @@ def apply() -> bool:
         _patch_embeds(profile)
         _patch_handlers(profile)
         _PATCHED = True
-        _log("active; Profile Builder has existing-role editor and member role suggestions")
+        _log("active; Profile Builder has server roles/cosmetics editor and member role suggestions")
         return True
     except Exception as exc:
         _warn(f"failed: {type(exc).__name__}: {exc}")
