@@ -874,11 +874,30 @@ class QuickModView(discord.ui.View):
                     target = None
 
             if target is None:
-                return None, "Target member is no longer in this server."
+                return None, "Target member is no longer in this server. Use Ban to ban by user ID."
 
             return target, None
         except Exception:
             return None, "Failed to resolve target member."
+
+    def _ban_object(self) -> discord.Object:
+        return discord.Object(id=int(self.target_user_id))
+
+    def _target_mention(self) -> str:
+        return f"<@{int(self.target_user_id)}>"
+
+    def _bot_can_ban_by_id(self, guild: discord.Guild) -> Tuple[bool, str]:
+        try:
+            me = _bot_member_for_guild(guild)
+            if not isinstance(me, discord.Member):
+                return (False, "Bot member could not be resolved.")
+            if not _moderator_has_permission(me, "ban_members") and not _moderator_has_permission(me, "administrator"):
+                return (False, "Bot needs **Ban Members** to ban a user who already left.")
+            if int(self.target_user_id) == int(guild.owner_id or 0):
+                return (False, "Bot cannot ban the server owner.")
+            return (True, "")
+        except Exception:
+            return (False, "Failed to verify bot ban permission.")
 
     async def _ensure_mod(
         self,
@@ -922,27 +941,46 @@ class QuickModView(discord.ui.View):
         if error or moderator is None:
             await self._deny(interaction, error or "Permission denied.")
             return
-
-        target, error = await self._resolve_target(interaction)
-        if error or target is None:
-            await self._deny(interaction, error or "Target not found.")
+        if interaction.guild is None:
+            await self._deny(interaction, "Guild context missing.")
+            return
+        if int(self.target_user_id) == int(getattr(moderator, "id", 0) or 0):
+            await self._deny(interaction, "You cannot ban yourself.")
             return
 
-        ok, reason_text = _can_act_on_member(moderator, target)
-        if not ok:
-            await self._deny(interaction, reason_text)
-            return
-
-        ok, reason_text = _bot_can_act_on_member(interaction.guild, target)  # type: ignore[arg-type]
-        if not ok:
-            await self._deny(interaction, reason_text)
-            return
-
+        target, _resolve_error = await self._resolve_target(interaction)
         reason = _quick_mod_default_reason("ban", moderator)
 
+        if isinstance(target, discord.Member):
+            ok, reason_text = _can_act_on_member(moderator, target)
+            if not ok:
+                await self._deny(interaction, reason_text)
+                return
+
+            ok, reason_text = _bot_can_act_on_member(interaction.guild, target)  # type: ignore[arg-type]
+            if not ok:
+                await self._deny(interaction, reason_text)
+                return
+
+            try:
+                await target.ban(reason=reason, delete_message_days=0)
+                await self._ok(interaction, f"🔨 Banned {target.mention}")
+            except Exception as e:
+                await self._deny(interaction, f"Ban failed: {e}")
+            return
+
+        ok, reason_text = self._bot_can_ban_by_id(interaction.guild)
+        if not ok:
+            await self._deny(interaction, reason_text)
+            return
+
         try:
-            await target.ban(reason=reason, delete_message_days=0)
-            await self._ok(interaction, f"🔨 Banned {target.mention}")
+            await interaction.guild.ban(self._ban_object(), reason=reason, delete_message_days=0)
+            await self._ok(interaction, f"🔨 Banned {self._target_mention()} by user ID. They had already left or been kicked.")
+        except discord.NotFound:
+            await self._deny(interaction, "Ban failed: Discord could not find that user ID.")
+        except discord.Forbidden:
+            await self._deny(interaction, "Ban failed: I need **Ban Members**, and my role/permissions must allow this action.")
         except Exception as e:
             await self._deny(interaction, f"Ban failed: {e}")
 
