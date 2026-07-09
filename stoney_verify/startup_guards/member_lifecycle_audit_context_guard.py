@@ -273,8 +273,22 @@ async def _send_staff_join_audit_full(
     )
 
     embed.add_field(name="Dank Shield context", value=_hidden_dank_context(member)[:1024], inline=False)
+    embed.add_field(
+        name="DM spam limitation",
+        value=(
+            "Discord does not expose member-to-member DMs to bots. If this member is reported for NSFW/spam DMs, "
+            "use the quick moderation buttons immediately. Detection must happen from join/risk signals or user reports."
+        ),
+        inline=False,
+    )
     embed.set_footer(text="dank_shield:staff_join_audit:v3")
-    await channel.send(embed=embed, allowed_mentions=discord.AllowedMentions.none())
+    view = None
+    try:
+        from stoney_verify.modlog import build_quick_mod_view
+        view = build_quick_mod_view(int(member.id))
+    except Exception:
+        view = None
+    await channel.send(embed=embed, view=view, allowed_mentions=discord.AllowedMentions.none())
 
 
 def _patch_setup_existing_menu() -> bool:

@@ -26,7 +26,8 @@ _PROOF_CACHE_TTL_SECONDS = 60
 _USERNAME_TOKEN_RE = re.compile(r"[a-z0-9]+")
 _REPEAT_CHAR_RE = re.compile(r"(.)\1{3,}")
 _SUSPICIOUS_NAME_RE = re.compile(
-    r"(free|nitro|gift|airdrop|support|mod|staff|admin|real|backup|alt|test|temp|burner)",
+    r"(free[\W_]*nitro|nitro[\W_]*gift|discord[\W_]*gift|steam[\W_]*gift|airdrop)"
+    r"|(^|[^a-z0-9])(support|staff|admin|mod|backup|alt|test|temp|burner|real[\W_]*(support|staff|admin|mod|discord))($|[^a-z0-9])",
     re.IGNORECASE,
 )
 
@@ -1095,6 +1096,10 @@ def build_alt_detection_summary(member: discord.Member) -> str:
     score = int(profile.get("score") or 0)
     level = str(profile.get("level") or "low").upper()
     tier = str(profile.get("evidence_tier") or "clear").replace("_", " ").upper()
+    # Do not tell staff an account is CLEAR while also showing heuristic flags.
+    # Low-confidence flags are not proof, but they are not "clear" either.
+    if tier == "CLEAR" and list(profile.get("suspicion_flags") or []):
+        tier = "WATCHLIST"
     age_human = _humanize_age_days(int(profile.get("account_age_days") or 0))
     burst = int(profile.get("burst_count") or 0)
     fp_matches = int(profile.get("same_fingerprint_count") or 0)
