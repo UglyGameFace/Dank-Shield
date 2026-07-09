@@ -16,9 +16,15 @@ def apply() -> bool:
             commands_ext._ALLOWED_DANK_CHILDREN = allowed
 
         from stoney_verify.commands_ext import public_self_roles_group
+        from stoney_verify.startup_guards import profile_role_editor_guard
         from stoney_verify.startup_guards import profile_terms_newline_guard
 
         profile_terms_newline_guard.apply()
+        # Must run before register_public_self_roles_group_commands(), because that
+        # function registers the persistent ProfilePanelView with Discord. If this
+        # patch runs after registration, old buttons like "Server Cosmetics" remain
+        # attached to the runtime view until the next full restart/redeploy.
+        profile_role_editor_guard.apply()
 
         bot = None
         try:
@@ -31,7 +37,7 @@ def apply() -> bool:
         if callable(register):
             register(bot, getattr(bot, "tree", None) if bot is not None else None)
         _PATCHED = True
-        print("✅ self_roles_command_guard active; /dank roles and self-role buttons are allowed in public setup surface")
+        print("✅ self_roles_command_guard active; /dank roles and profile role/cosmetic buttons are allowed in public setup surface")
         return True
     except Exception as exc:
         try:
