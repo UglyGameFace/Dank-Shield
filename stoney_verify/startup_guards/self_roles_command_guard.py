@@ -22,7 +22,7 @@ def apply() -> bool:
         profile_terms_newline_guard.apply()
         # Must run before register_public_self_roles_group_commands(), because that
         # function registers the persistent ProfilePanelView with Discord. If this
-        # patch runs after registration, old buttons like "Server Cosmetics" remain
+        # patch runs after registration, legacy profile role/cosmetic buttons remain
         # attached to the runtime view until the next full restart/redeploy.
         profile_role_editor_guard.apply()
 

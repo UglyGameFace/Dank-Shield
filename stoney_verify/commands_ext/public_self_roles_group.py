@@ -450,9 +450,9 @@ def _profile_cosmetic_choices(member: discord.Member, roles: list[discord.Role])
         selected = role in member.roles
         choices.append(
             DankChoice(
-                label=str(role.name or "Cosmetic Role")[:100],
+                label=str(role.name or "Role / Cosmetic")[:100],
                 value=str(int(role.id)),
-                description="Currently selected" if selected else "Optional cosmetic role",
+                description="Currently selected" if selected else "Optional role / cosmetic",
                 emoji="🎭",
                 default=selected,
             )
@@ -467,7 +467,7 @@ def _profile_cosmetics_embed(
 ) -> discord.Embed:
     selected = [role for role in roles if role in member.roles]
     embed = discord.Embed(
-        title="🎭 Server Cosmetic Roles",
+        title="🎭 Profile Roles / Cosmetics",
         description=(
             "Pick the optional cosmetic roles you want shown on your server profile. "
             "These never grant access, staff tools, verification, moderation, or ticket permissions."
@@ -597,7 +597,7 @@ async def _open_profile_cosmetics(
 
     if not roles:
         await interaction.response.send_message(
-            "🎭 No server cosmetic roles are available yet. Staff can add them in `/dank profile builder` → **Server Cosmetic Roles**.",
+            "🎭 No server role/cosmetics are available yet. Staff can add them in `/dank profile builder` → **Profile Roles / Cosmetics**.",
             ephemeral=True,
             allowed_mentions=discord.AllowedMentions.none(),
         )
@@ -610,7 +610,7 @@ async def _open_profile_cosmetics(
             choices=_profile_cosmetic_choices(member, roles),
             on_pick=_handle_profile_cosmetics_pick,
             custom_id=f"{PROFILE_PREFIX}cosmetics_select",
-            placeholder="Choose your server cosmetic roles…",
+            placeholder="Choose your server role/cosmetics…",
             min_values=0,
             max_values=len(roles),
             allow_anyone=False,
@@ -1164,7 +1164,7 @@ class ProfilePanelView(discord.ui.View):
         self.add_item(discord.ui.Button(label="Edit Pronouns", emoji="🪪", style=discord.ButtonStyle.secondary, custom_id=f"{PROFILE_PREFIX}open:pronouns", row=1))
         self.add_item(discord.ui.Button(label="Edit Identity", emoji="🌈", style=discord.ButtonStyle.secondary, custom_id=f"{PROFILE_PREFIX}open:identity", row=1))
         self.add_item(discord.ui.Button(label="Edit Interests", emoji="🎮", style=discord.ButtonStyle.secondary, custom_id=f"{PROFILE_PREFIX}open:interests", row=1))
-        self.add_item(discord.ui.Button(label="Server Cosmetics", emoji="🎭", style=discord.ButtonStyle.secondary, custom_id=f"{PROFILE_PREFIX}cosmetics", row=2))
+        self.add_item(discord.ui.Button(label="Server Roles / Cosmetics", emoji="🎭", style=discord.ButtonStyle.secondary, custom_id=f"{PROFILE_PREFIX}cosmetics", row=2))
 
         self.add_item(discord.ui.Button(label="Suggest Missing Interest", emoji="➕", style=discord.ButtonStyle.secondary, custom_id=f"{PROFILE_PREFIX}missing_interest", row=2))
         self.add_item(discord.ui.Button(label="Missing Identity?", emoji="✍️", style=discord.ButtonStyle.secondary, custom_id=f"{PROFILE_PREFIX}missing", row=2))
@@ -1417,7 +1417,7 @@ class ProfileCosmeticRoleManagerView(discord.ui.View):
             DankRoleSelect(
                 author_id=self.author_id,
                 on_pick=self._add_role,
-                placeholder="Add an existing cosmetic role…",
+                placeholder="Add an existing server role / cosmetic…",
                 row=0,
                 allow_anyone=False,
             )
@@ -1440,16 +1440,16 @@ class ProfileCosmeticRoleManagerView(discord.ui.View):
             return await _reply(interaction, blocker, ok=False)
 
         if int(role.id) in role_ids:
-            return await _reply(interaction, f"{role.mention} is already a server cosmetic role.", ok=True)
+            return await _reply(interaction, f"{role.mention} is already a server role/cosmetic.", ok=True)
 
         if len(role_ids) >= PROFILE_COSMETIC_MAX_ROLES:
-            return await _reply(interaction, f"Cosmetic role limit reached ({PROFILE_COSMETIC_MAX_ROLES}). Remove one first.", ok=False)
+            return await _reply(interaction, f"Role/cosmetic limit reached ({PROFILE_COSMETIC_MAX_ROLES}). Remove one first.", ok=False)
 
         role_ids.append(int(role.id))
         await _save_profile_cosmetic_role_ids(guild, role_ids)
-        await _reply(interaction, f"Added {role.mention} as a server cosmetic role.", ok=True)
+        await _reply(interaction, f"Added {role.mention} as a server role/cosmetic.", ok=True)
 
-    @discord.ui.button(label="Remove Cosmetic Role", emoji="➖", style=discord.ButtonStyle.danger, custom_id="dank:profile:v1:builder:cosmetics_remove", row=1)
+    @discord.ui.button(label="Remove Role / Cosmetic", emoji="➖", style=discord.ButtonStyle.danger, custom_id="dank:profile:v1:builder:cosmetics_remove", row=1)
     async def remove_role(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
         guild = interaction.guild
@@ -1458,13 +1458,13 @@ class ProfileCosmeticRoleManagerView(discord.ui.View):
 
         roles = await _profile_configured_cosmetic_roles(guild, validate=False)
         if not roles:
-            return await _reply(interaction, "No cosmetic roles are configured yet.", ok=True)
+            return await _reply(interaction, "No profile roles/cosmetics are configured yet.", ok=True)
 
         choices = [
             DankChoice(
-                label=str(role.name or "Cosmetic Role")[:100],
+                label=str(role.name or "Role / Cosmetic")[:100],
                 value=str(int(role.id)),
-                description="Remove from Profile Builder cosmetics",
+                description="Remove from Profile Builder roles/cosmetics",
                 emoji="➖",
             )
             for role in roles[:PROFILE_COSMETIC_MAX_ROLES]
@@ -1472,8 +1472,8 @@ class ProfileCosmeticRoleManagerView(discord.ui.View):
 
         await interaction.response.send_message(
             embed=discord.Embed(
-                title="➖ Remove Cosmetic Roles",
-                description="Choose one or more roles to remove from the Profile Builder cosmetic allowlist.",
+                title="➖ Remove Roles / Cosmetics",
+                description="Choose one or more roles to remove from the Profile Builder roles/cosmetics allowlist.",
                 color=discord.Color.red(),
                 timestamp=discord.utils.utcnow(),
             ),
@@ -1482,7 +1482,7 @@ class ProfileCosmeticRoleManagerView(discord.ui.View):
                 choices=choices,
                 on_pick=_handle_profile_cosmetics_remove_pick,
                 custom_id=f"{PROFILE_PREFIX}cosmetics_remove_select",
-                placeholder="Choose cosmetic roles to remove…",
+                placeholder="Choose roles / cosmetics to remove…",
                 min_values=1,
                 max_values=len(choices),
                 allow_anyone=False,
@@ -1516,7 +1516,7 @@ class ProfileBuilderView(discord.ui.View):
         elif fixable:
             self.add_item(discord.ui.Button(label="Fix Channel Permissions", emoji="🛠️", style=discord.ButtonStyle.primary, custom_id=f"{PROFILE_PREFIX}builder:fix", row=0))
 
-        self.add_item(discord.ui.Button(label="Server Cosmetic Roles", emoji="🎭", style=discord.ButtonStyle.primary, custom_id=f"{PROFILE_PREFIX}builder:cosmetics", row=1))
+        self.add_item(discord.ui.Button(label="Profile Roles / Cosmetics", emoji="🎭", style=discord.ButtonStyle.primary, custom_id=f"{PROFILE_PREFIX}builder:cosmetics", row=1))
         self.add_item(discord.ui.Button(label="Health", emoji="🩺", style=discord.ButtonStyle.secondary, custom_id=f"{PROFILE_PREFIX}builder:health", row=1))
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:

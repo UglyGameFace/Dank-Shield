@@ -54,7 +54,7 @@ def test_server_roles_cosmetics_button_is_relabelled_with_roles() -> None:
     assert "Server Roles / Cosmetics" in GUARD
     assert "PROFILE_ROLES_COSMETICS_LABEL" in GUARD
     assert "_retitle_profile_roles_button" in GUARD
-    assert "These are profile/server cosmetic roles" in GUARD
+    assert "These are profile/server roles/cosmetics" in GUARD
 
 
 def test_builder_gets_profile_roles_cosmetics_editor_button() -> None:

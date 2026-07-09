@@ -97,7 +97,7 @@ def _button(*, label: str, emoji: str, custom_id: str, row: int, style: discord.
 
 
 def _retitle_profile_roles_button(view: discord.ui.View, prefix: str) -> None:
-    """Make the old Server Cosmetics button obvious to normal users."""
+    """Make the profile role/cosmetic button obvious to normal users."""
 
     for child in list(getattr(view, "children", []) or []):
         try:
@@ -216,7 +216,7 @@ def _patch_embeds(profile: Any) -> None:
         )
         embed.add_field(
             name="What this controls",
-            value="These are profile/server cosmetic roles members can choose for themselves. They are still real Discord roles, just safety-checked before being offered.",
+            value="These are profile/server roles/cosmetics members can choose for themselves. They are still real Discord roles, just safety-checked before being offered.",
             inline=False,
         )
         embed.add_field(
