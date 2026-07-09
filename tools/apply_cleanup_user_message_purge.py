@@ -1,18 +1,10 @@
 from __future__ import annotations
 
-"""Add /dank cleanup user-messages.
+"""Add user-targeted purge to the existing /dank cleanup purge flow.
 
-Adds a safe, guild-scoped command for purging messages by a specific user either
-in one channel or across all readable text channels in the server.
-
-Safety model:
-- Staff surface plus native Manage Messages requirement for the actor.
-- Bot permission checks per channel.
-- Dry-run defaults on.
-- Destructive runs require a confirmation phrase based on the target user ID.
-- Works for users who left/kicked by accepting a raw user_id.
-- Deletes individually so old user messages are not silently skipped by bulk
-  delete behavior.
+This intentionally does NOT add a separate /dank cleanup user-messages command.
+The regular purge command gains optional user/user_id + scope fields, then shows
+a preview with a button confirmation. No typed confirmation phrase.
 
 Run from repo root:
     python tools/apply_cleanup_user_message_purge.py
@@ -23,12 +15,13 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 TARGET = ROOT / "stoney_verify/commands_ext/public_cleanup_group.py"
 
-HELPER_MARKER = "# ============================================================\n# /dank cleanup commands\n# ============================================================\n"
-COMMAND_MARKER = "\n\n@cleanup_group.command(name=\"invites\", description=\"Scan old messages and remove blocked Discord invites only.\")"
+COMMANDS_MARKER = "# ============================================================\n# /dank cleanup commands\n# ============================================================\n"
+PURGE_START = '@cleanup_group.command(name="purge"'
+INVITES_START = '@cleanup_group.command(name="invites"'
 
 HELPERS = r'''
 # ============================================================
-# User message purge helpers
+# User-targeted purge helpers
 # ============================================================
 
 async def _require_manage_messages_native(interaction: discord.Interaction) -> bool:
@@ -41,10 +34,7 @@ async def _require_manage_messages_native(interaction: discord.Interaction) -> b
     perms = getattr(member, "guild_permissions", None)
     if bool(getattr(perms, "administrator", False)) or bool(getattr(perms, "manage_messages", False)):
         return True
-    await reply_once(
-        interaction,
-        {"content": "❌ You need Discord **Manage Messages** to purge user messages.", "ephemeral": True},
-    )
+    await reply_once(interaction, {"content": "❌ You need Discord **Manage Messages** to purge user messages.", "ephemeral": True})
     return False
 
 
@@ -59,13 +49,6 @@ def _cleanup_parse_user_id(user: Optional[discord.User], user_id: Optional[str])
     if target_id <= 0:
         return 0, "Pick a user or provide a numeric user_id."
     return int(target_id), None
-
-
-def _cleanup_user_purge_confirm_phrase(*, target_user_id: int, scope: str) -> str:
-    clean_scope = str(scope or "channel").strip().lower()
-    if clean_scope == "server":
-        return f"PURGE SERVER {int(target_user_id)}"
-    return f"PURGE {int(target_user_id)}"
 
 
 def _cleanup_user_purge_can_read(perms: discord.Permissions) -> bool:
@@ -97,14 +80,19 @@ def _cleanup_user_purge_channels(
     *,
     scope: str,
     channel: Optional[discord.TextChannel],
-    current_channel: Any,
+    channel_id: Optional[int] = None,
+    current_channel: Any = None,
 ) -> tuple[list[discord.TextChannel], Optional[str]]:
     clean_scope = str(scope or "channel").strip().lower()
     if clean_scope not in {"channel", "server"}:
         return [], "Scope must be `channel` or `server`."
     if clean_scope == "server":
         return list(getattr(guild, "text_channels", []) or []), None
-    target = channel or current_channel
+    target: Any = channel
+    if target is None and channel_id:
+        target = guild.get_channel(int(channel_id))
+    if target is None:
+        target = current_channel
     if not isinstance(target, discord.TextChannel):
         return [], "Pick a text channel or run this inside a text channel."
     return [target], None
@@ -170,132 +158,31 @@ async def _cleanup_scan_user_messages_in_channel(
     return result
 
 
-def _cleanup_user_purge_summary(
-    results: List[Dict[str, Any]],
+async def _cleanup_execute_user_purge(
+    interaction: discord.Interaction,
     *,
-    dry_run: bool,
     target_user_id: int,
     scope: str,
-    confirm_phrase: str,
-) -> str:
-    checked = len(results)
-    matched = sum(int(r.get("matched", 0) or 0) for r in results)
-    would_delete = sum(int(r.get("would_delete", 0) or 0) for r in results)
-    deleted = sum(int(r.get("deleted", 0) or 0) for r in results)
-    failed = sum(int(r.get("failed", 0) or 0) for r in results)
-    pinned = sum(int(r.get("skipped_pinned", 0) or 0) for r in results)
-    skipped = sum(1 for r in results if r.get("skipped"))
+    channel_id: Optional[int],
+    limit_per_channel: int,
+    include_pinned: bool,
+    dry_run: bool,
+) -> tuple[str, int]:
+    guild = interaction.guild
+    if guild is None or not isinstance(interaction.user, discord.Member) or not isinstance(guild.me, discord.Member):
+        return "❌ Guild/member context is missing.", 0
 
-    mode = "DRY RUN" if dry_run else "DELETED"
-    lines = [
-        f"🧹 User message purge — **{mode}**",
-        f"Target: `<@{int(target_user_id)}>` (`{int(target_user_id)}`)",
-        f"Scope: `{scope}`",
-        f"Channels checked: `{checked}` • skipped: `{skipped}`",
-        f"Matched user messages: `{matched}`",
-        f"Would delete: `{would_delete}` • deleted: `{deleted}` • failed: `{failed}` • pinned skipped: `{pinned}`",
-    ]
-
-    if dry_run:
-        lines.append(f"\nTo actually delete, rerun with `dry_run:false` and `confirm:{confirm_phrase}`")
-
-    samples: List[str] = []
-    for result in results:
-        if result.get("skipped") and len(samples) < 8:
-            samples.append(f"⚠️ #{result.get('channel_name', 'unknown')}: {result.get('skipped')}")
-            continue
-        for sample in list(result.get("sample") or []):
-            if len(samples) >= 8:
-                break
-            samples.append(f"🧪 {sample}" if dry_run else f"🗑️ {sample}")
-        if result.get("error") and len(samples) < 8:
-            samples.append(f"❌ #{result.get('channel_name', 'unknown')}: {result.get('error')}")
-
-    if samples:
-        lines.append("\nSamples / notes:")
-        lines.extend(samples[:8])
-
-    return _truncate("\n".join(lines), 1900)
-
-'''
-
-COMMAND = r'''
-
-@cleanup_group.command(name="user-messages", description="Preview or purge messages from one user in one channel or the whole server.")
-@app_commands.describe(
-    user="User to purge. Use user_id instead if they already left.",
-    user_id="Raw Discord user ID, useful after the user left/kicked",
-    scope="Purge one channel or every accessible text channel in this server",
-    channel="Channel to purge when scope is channel. Defaults to current channel.",
-    limit_per_channel="How many recent messages to scan per channel",
-    include_pinned="Also delete pinned messages from this user",
-    dry_run="Preview only. Defaults true for safety.",
-    confirm="Required for deleting. Use the exact phrase shown by dry run.",
-)
-@app_commands.choices(
-    scope=[
-        app_commands.Choice(name="One channel", value="channel"),
-        app_commands.Choice(name="Whole server", value="server"),
-    ]
-)
-async def cleanup_user_messages(
-    interaction: discord.Interaction,
-    user: Optional[discord.User] = None,
-    user_id: Optional[str] = None,
-    scope: Optional[str] = "channel",
-    channel: Optional[discord.TextChannel] = None,
-    limit_per_channel: Optional[app_commands.Range[int, 1, 100000]] = 5000,
-    include_pinned: Optional[bool] = False,
-    dry_run: Optional[bool] = True,
-    confirm: Optional[str] = None,
-) -> None:
-    if not await _staff_only(interaction):
-        return
-    if not await _require_manage_messages_native(interaction):
-        return
-    guild = await _guild_or_reply(interaction)
-    if guild is None:
-        return
-    if not isinstance(interaction.user, discord.Member):
-        return await reply_once(interaction, {"content": "❌ This command must be used by a server member.", "ephemeral": True})
-    bot_member = guild.me
-    if not isinstance(bot_member, discord.Member):
-        return await reply_once(interaction, {"content": "❌ Bot member could not be resolved in this server.", "ephemeral": True})
-
-    target_user_id, parse_error = _cleanup_parse_user_id(user, user_id)
-    if parse_error:
-        return await reply_once(interaction, {"content": f"❌ {parse_error}", "ephemeral": True})
-    if target_user_id == int(getattr(interaction.client.user, "id", 0) or 0):
-        return await reply_once(interaction, {"content": "❌ I will not purge my own messages with this tool.", "ephemeral": True})
-
-    clean_scope = str(scope or "channel").strip().lower()
     targets, scope_error = _cleanup_user_purge_channels(
         guild,
-        scope=clean_scope,
-        channel=channel,
+        scope=scope,
+        channel=None,
+        channel_id=channel_id,
         current_channel=interaction.channel,
     )
     if scope_error:
-        return await reply_once(interaction, {"content": f"❌ {scope_error}", "ephemeral": True})
+        return f"❌ {scope_error}", 0
 
-    scan_limit = int(limit_per_channel or 5000)
-    actual_dry_run = bool(dry_run if dry_run is not None else True)
-    confirm_phrase = _cleanup_user_purge_confirm_phrase(target_user_id=target_user_id, scope=clean_scope)
-    if not actual_dry_run and str(confirm or "").strip() != confirm_phrase:
-        return await reply_once(
-            interaction,
-            {
-                "content": (
-                    "❌ Confirmation required before deleting user messages.\n"
-                    f"Run a dry run first, then rerun with `confirm:{confirm_phrase}`."
-                ),
-                "ephemeral": True,
-            },
-        )
-
-    await safe_defer(interaction, ephemeral=True)
-
-    reason = f"Dank Shield user-message purge by {interaction.user} ({interaction.user.id}) target={target_user_id} scope={clean_scope}"
+    reason = f"Dank Shield user purge by {interaction.user} ({interaction.user.id}) target={target_user_id} scope={scope}"
     results: List[Dict[str, Any]] = []
     for ch in targets:
         if not isinstance(ch, discord.TextChannel):
@@ -303,8 +190,8 @@ async def cleanup_user_messages(
         skip = _cleanup_user_purge_channel_skip(
             ch,
             actor=interaction.user,
-            bot_member=bot_member,
-            dry_run=actual_dry_run,
+            bot_member=guild.me,
+            dry_run=dry_run,
         )
         if skip:
             results.append({
@@ -319,55 +206,284 @@ async def cleanup_user_messages(
                 "sample": [],
             })
             continue
-
-        result = await _cleanup_scan_user_messages_in_channel(
+        results.append(await _cleanup_scan_user_messages_in_channel(
             ch,
             target_user_id=target_user_id,
-            limit=scan_limit,
-            include_pinned=bool(include_pinned),
-            dry_run=actual_dry_run,
+            limit=limit_per_channel,
+            include_pinned=include_pinned,
+            dry_run=dry_run,
             reason=reason,
-        )
-        results.append(result)
+        ))
 
-    summary = _cleanup_user_purge_summary(
-        results,
-        dry_run=actual_dry_run,
-        target_user_id=target_user_id,
-        scope=clean_scope,
-        confirm_phrase=confirm_phrase,
-    )
-    await interaction.followup.send(summary, ephemeral=True)
+    summary = _cleanup_user_purge_summary(results, dry_run=dry_run, target_user_id=target_user_id, scope=scope)
+    would_delete = sum(int(r.get("would_delete", 0) or 0) for r in results)
+    return summary, would_delete
+
+
+def _cleanup_user_purge_summary(
+    results: List[Dict[str, Any]],
+    *,
+    dry_run: bool,
+    target_user_id: int,
+    scope: str,
+) -> str:
+    checked = len(results)
+    matched = sum(int(r.get("matched", 0) or 0) for r in results)
+    would_delete = sum(int(r.get("would_delete", 0) or 0) for r in results)
+    deleted = sum(int(r.get("deleted", 0) or 0) for r in results)
+    failed = sum(int(r.get("failed", 0) or 0) for r in results)
+    pinned = sum(int(r.get("skipped_pinned", 0) or 0) for r in results)
+    skipped = sum(1 for r in results if r.get("skipped"))
+    mode = "PREVIEW" if dry_run else "DELETED"
+    lines = [
+        f"🧹 User purge — **{mode}**",
+        f"Target: `<@{int(target_user_id)}>` (`{int(target_user_id)}`)",
+        f"Scope: `{scope}`",
+        f"Channels checked: `{checked}` • skipped: `{skipped}`",
+        f"Matched user messages: `{matched}`",
+        f"Would delete: `{would_delete}` • deleted: `{deleted}` • failed: `{failed}` • pinned skipped: `{pinned}`",
+    ]
+    if dry_run:
+        lines.append("\nReview this preview, then use the button below. No typed confirmation needed.")
+
+    samples: List[str] = []
+    for result in results:
+        if result.get("skipped") and len(samples) < 8:
+            samples.append(f"⚠️ #{result.get('channel_name', 'unknown')}: {result.get('skipped')}")
+            continue
+        for sample in list(result.get("sample") or []):
+            if len(samples) >= 8:
+                break
+            samples.append(f"🧪 {sample}" if dry_run else f"🗑️ {sample}")
+        if result.get("error") and len(samples) < 8:
+            samples.append(f"❌ #{result.get('channel_name', 'unknown')}: {result.get('error')}")
+    if samples:
+        lines.append("\nSamples / notes:")
+        lines.extend(samples[:8])
+    return _truncate("\n".join(lines), 1900)
+
+
+class CleanupUserPurgeConfirmView(discord.ui.View):
+    def __init__(
+        self,
+        *,
+        target_user_id: int,
+        scope: str,
+        channel_id: Optional[int],
+        limit_per_channel: int,
+        include_pinned: bool,
+        can_delete: bool,
+    ) -> None:
+        super().__init__(timeout=300)
+        self.target_user_id = int(target_user_id)
+        self.scope = str(scope or "channel").strip().lower()
+        self.channel_id = int(channel_id or 0) or None
+        self.limit_per_channel = int(limit_per_channel or 5000)
+        self.include_pinned = bool(include_pinned)
+        self.delete_matched.disabled = not bool(can_delete)
+        self.delete_matched.label = "Delete Across Server" if self.scope == "server" else "Delete From Channel"
+
+    @discord.ui.button(label="Delete Matched Messages", emoji="🧹", style=discord.ButtonStyle.danger, custom_id="dank_cleanup:user_purge:delete", row=0)
+    async def delete_matched(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        if not await _staff_only(interaction):
+            return
+        if not await _require_manage_messages_native(interaction):
+            return
+        await safe_defer(interaction, ephemeral=True)
+        summary, _count = await _cleanup_execute_user_purge(
+            interaction,
+            target_user_id=self.target_user_id,
+            scope=self.scope,
+            channel_id=self.channel_id,
+            limit_per_channel=self.limit_per_channel,
+            include_pinned=self.include_pinned,
+            dry_run=False,
+        )
+        await interaction.followup.send(summary, ephemeral=True)
+
+    @discord.ui.button(label="Cancel", emoji="✖️", style=discord.ButtonStyle.secondary, custom_id="dank_cleanup:user_purge:cancel", row=0)
+    async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        try:
+            for child in self.children:
+                child.disabled = True  # type: ignore[attr-defined]
+            await interaction.response.edit_message(content="Cancelled user purge preview.", view=self)
+        except Exception:
+            await reply_once(interaction, {"content": "Cancelled user purge preview.", "ephemeral": True})
+
+'''
+
+NEW_PURGE = r'''
+@cleanup_group.command(name="purge", description="Purge messages from a channel, or preview/delete one user's messages.")
+@app_commands.describe(
+    channel="Channel to purge. Defaults to the current channel.",
+    amount="Max number of matching messages to delete or scan per channel",
+    older_than_hours="Only delete messages older than this many hours. Ignored for user-target purge.",
+    include_pinned="Also delete pinned messages",
+    dry_run="For normal purge: preview only. User-target purge always previews first.",
+    user="Optional user whose messages should be targeted",
+    user_id="Raw Discord user ID, useful after the user left/kicked",
+    scope="For user-target purge: this channel or the whole server",
+)
+@app_commands.choices(
+    scope=[
+        app_commands.Choice(name="This channel", value="channel"),
+        app_commands.Choice(name="Whole server", value="server"),
+    ]
+)
+async def cleanup_purge(
+    interaction: discord.Interaction,
+    channel: Optional[discord.TextChannel] = None,
+    amount: Optional[app_commands.Range[int, 1, 100000]] = None,
+    older_than_hours: Optional[app_commands.Range[int, 1, 8760]] = None,
+    include_pinned: Optional[bool] = False,
+    dry_run: Optional[bool] = False,
+    user: Optional[discord.User] = None,
+    user_id: Optional[str] = None,
+    scope: Optional[str] = "channel",
+) -> None:
+    if not await _staff_only(interaction):
+        return
+    guild = await _guild_or_reply(interaction)
+    if guild is None:
+        return
+
+    target_user_id, parse_error = _cleanup_parse_user_id(user, user_id) if (user is not None or str(user_id or "").strip()) else (0, None)
+    if parse_error:
+        return await reply_once(interaction, {"content": f"❌ {parse_error}", "ephemeral": True})
+
+    if target_user_id:
+        if not await _require_manage_messages_native(interaction):
+            return
+        if not isinstance(guild.me, discord.Member):
+            return await reply_once(interaction, {"content": "❌ Bot member could not be resolved in this server.", "ephemeral": True})
+        clean_scope = str(scope or "channel").strip().lower()
+        targets, scope_error = _cleanup_user_purge_channels(
+            guild,
+            scope=clean_scope,
+            channel=channel,
+            current_channel=interaction.channel,
+        )
+        if scope_error:
+            return await reply_once(interaction, {"content": f"❌ {scope_error}", "ephemeral": True})
+        preview_channel_id = int(getattr(targets[0], "id", 0) or 0) if clean_scope == "channel" and targets else None
+        await safe_defer(interaction, ephemeral=True)
+        summary, count = await _cleanup_execute_user_purge(
+            interaction,
+            target_user_id=target_user_id,
+            scope=clean_scope,
+            channel_id=preview_channel_id,
+            limit_per_channel=int(amount or 5000),
+            include_pinned=bool(include_pinned),
+            dry_run=True,
+        )
+        await interaction.followup.send(
+            summary,
+            ephemeral=True,
+            view=CleanupUserPurgeConfirmView(
+                target_user_id=target_user_id,
+                scope=clean_scope,
+                channel_id=preview_channel_id,
+                limit_per_channel=int(amount or 5000),
+                include_pinned=bool(include_pinned),
+                can_delete=count > 0,
+            ),
+        )
+        return
+
+    if not _helpers_ready():
+        return await reply_once(interaction, {"content": "❌ Cleanup helpers are unavailable.", "ephemeral": True})
+
+    target = channel or interaction.channel
+    if not isinstance(target, discord.TextChannel):
+        return await reply_once(interaction, {"content": "❌ You must run this in a text channel or provide one.", "ephemeral": True})
+
+    await safe_defer(interaction, ephemeral=True)
+
+    use_amount = int(amount or _default_cleanup_limit())  # type: ignore[misc]
+    use_hours = int(older_than_hours) if older_than_hours else None
+
+    try:
+        result = await _purge_channel_messages(  # type: ignore[misc]
+            target,
+            amount=use_amount,
+            older_than_hours=use_hours,
+            include_pinned=bool(include_pinned),
+            dry_run=bool(dry_run),
+            bot_member=guild.me,
+        )
+        await interaction.followup.send(_truncate(_format_cleanup_summary([result], dry_run=bool(dry_run)), 1900), ephemeral=True)  # type: ignore[misc]
+    except Exception as e:
+        await interaction.followup.send(f"❌ Purge failed: `{_truncate(e, 300)}`", ephemeral=True)
 '''
 
 
-def insert_once(text: str, marker: str, addition: str, token: str) -> str:
-    if token in text:
+def remove_old_user_messages_command(text: str) -> str:
+    start = text.find('@cleanup_group.command(name="user-messages"')
+    if start < 0:
         return text
-    if marker not in text:
-        raise SystemExit(f"Marker not found for insertion: {marker[:60]!r}")
-    return text.replace(marker, addition + marker, 1)
+    end = text.find('\n\n@cleanup_group.command(name="invites"', start)
+    if end < 0:
+        raise SystemExit("Found user-messages command but could not locate following invites command")
+    return text[:start] + text[end + 2:]
+
+
+def remove_old_user_helpers(text: str) -> str:
+    start = text.find("# User message purge helpers")
+    if start < 0:
+        return text
+    section_start = text.rfind("# ============================================================", 0, start)
+    section_end = text.find(COMMANDS_MARKER, start)
+    if section_start < 0 or section_end < 0:
+        raise SystemExit("Found old user-message helpers but could not remove section safely")
+    return text[:section_start] + text[section_end:]
+
+
+def replace_purge_command(text: str) -> str:
+    start = text.find(PURGE_START)
+    end = text.find(INVITES_START, start)
+    if start < 0 or end < 0:
+        raise SystemExit("Could not locate cleanup purge command block")
+    return text[:start] + NEW_PURGE + "\n\n" + text[end:]
 
 
 def main() -> None:
     text = TARGET.read_text(encoding="utf-8")
-    text = insert_once(text, HELPER_MARKER, HELPERS, "_cleanup_scan_user_messages_in_channel")
-    text = insert_once(text, COMMAND_MARKER, COMMAND, "async def cleanup_user_messages")
+    text = remove_old_user_messages_command(text)
+    text = remove_old_user_helpers(text)
+    if "_cleanup_scan_user_messages_in_channel" not in text:
+        if COMMANDS_MARKER not in text:
+            raise SystemExit("Could not find /dank cleanup commands marker")
+        text = text.replace(COMMANDS_MARKER, HELPERS + COMMANDS_MARKER, 1)
+    text = replace_purge_command(text)
+
+    forbidden = (
+        '@cleanup_group.command(name="user-messages"',
+        "confirm_phrase",
+        "PURGE SERVER",
+        "Confirmation required before deleting user messages",
+    )
+    remaining = [token for token in forbidden if token in text]
+    if remaining:
+        raise SystemExit("Old clunky user purge flow remains: " + ", ".join(remaining))
 
     required = (
-        '@cleanup_group.command(name="user-messages"',
-        "_require_manage_messages_native",
-        "_cleanup_user_purge_confirm_phrase",
-        "PURGE SERVER",
+        '@cleanup_group.command(name="purge"',
+        "user=\"Optional user whose messages should be targeted\"",
         "user_id=\"Raw Discord user ID",
+        "CleanupUserPurgeConfirmView",
+        "No typed confirmation needed",
+        "Delete Across Server",
+        "Delete From Channel",
         "await msg.delete(reason=reason)",
     )
     missing = [token for token in required if token not in text]
     if missing:
-        raise SystemExit("User-message purge insertion missing tokens: " + ", ".join(missing))
+        raise SystemExit("Button-confirm user purge missing tokens: " + ", ".join(missing))
 
     TARGET.write_text(text, encoding="utf-8")
-    print("✅ Added /dank cleanup user-messages")
+    print("✅ /dank cleanup purge now supports user-targeted preview + button delete")
 
 
 if __name__ == "__main__":
