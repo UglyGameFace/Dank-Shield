@@ -649,8 +649,7 @@ def _profile_role_picker_embed(guild: discord.Guild, *, page: int = 0) -> discor
     if choices:
         embed.add_field(
             name=f"Roles page {page + 1}/{pages}",
-            value="
-".join(f"• `{choice.label}`" for choice in choices)[:1024],
+            value="\n".join(f"• `{choice.label}`" for choice in choices)[:1024],
             inline=False,
         )
     else:
@@ -702,11 +701,8 @@ async def _handle_profile_role_add_picker(interaction: discord.Interaction, valu
     if added:
         lines.append("Added: " + ", ".join(added))
     if skipped:
-        lines.append("Skipped:
-" + "
-".join(f"• {item}" for item in skipped[:8]))
-    await _reply(interaction, "
-".join(lines) if lines else "No role/cosmetic changes needed.", ok=bool(added))
+        lines.append("Skipped:\n" + "\n".join(f"• {item}" for item in skipped[:8]))
+    await _reply(interaction, "\n".join(lines) if lines else "No role/cosmetic changes needed.", ok=bool(added))
 
 
 class ProfileRoleAddPickerView(DankMultiPickerView):
