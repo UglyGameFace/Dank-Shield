@@ -30,7 +30,27 @@ def test_profile_panel_and_editor_get_suggest_role_buttons() -> None:
     assert "suggest_role" in GUARD
 
 
-def test_server_cosmetics_button_is_relabelled_with_roles() -> None:
+def test_native_profile_source_has_new_role_cosmetics_labels() -> None:
+    assert "Server Roles / Cosmetics" in PROFILE
+    assert "Profile Roles / Cosmetics" in PROFILE
+    assert "Add an existing server role / cosmetic" in PROFILE
+    assert "Remove Role / Cosmetic" in PROFILE
+
+
+def test_old_profile_cosmetics_user_facing_copy_is_gone() -> None:
+    for forbidden in (
+        "Server Cosmetics",
+        "Server Cosmetic Roles",
+        "Add an existing cosmetic role",
+        "Remove Cosmetic Role",
+        "Remove Cosmetic Roles",
+    ):
+        assert forbidden not in PROFILE, f"old native profile wording still present: {forbidden}"
+        assert forbidden not in GUARD, f"old guard profile wording still present: {forbidden}"
+        assert forbidden not in SELF_GUARD, f"old self-role guard wording still present: {forbidden}"
+
+
+def test_server_roles_cosmetics_button_is_relabelled_with_roles() -> None:
     assert "Server Roles / Cosmetics" in GUARD
     assert "PROFILE_ROLES_COSMETICS_LABEL" in GUARD
     assert "_retitle_profile_roles_button" in GUARD
@@ -52,9 +72,8 @@ def test_role_suggestions_are_review_only() -> None:
     assert "member.add_roles" not in GUARD
 
 
-def test_existing_profile_cosmetic_manager_still_exists() -> None:
+def test_existing_profile_role_manager_still_exists() -> None:
     assert "class ProfileCosmeticRoleManagerView" in PROFILE
-    assert "Add an existing cosmetic role" in PROFILE
     assert "PROFILE_COSMETIC_ROLE_IDS_KEY" in PROFILE
 
 
@@ -63,10 +82,12 @@ if __name__ == "__main__":
         test_profile_role_editor_guard_loads_before_self_roles_registration,
         test_self_roles_applies_role_editor_before_registering_panel,
         test_profile_panel_and_editor_get_suggest_role_buttons,
-        test_server_cosmetics_button_is_relabelled_with_roles,
+        test_native_profile_source_has_new_role_cosmetics_labels,
+        test_old_profile_cosmetics_user_facing_copy_is_gone,
+        test_server_roles_cosmetics_button_is_relabelled_with_roles,
         test_builder_gets_profile_roles_cosmetics_editor_button,
         test_role_suggestions_are_review_only,
-        test_existing_profile_cosmetic_manager_still_exists,
+        test_existing_profile_role_manager_still_exists,
     ):
         test()
         print(f"PASS {test.__name__}")
