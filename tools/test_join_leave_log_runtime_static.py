@@ -66,19 +66,24 @@ def test_setup_logs_uses_explicit_join_leave_route() -> None:
     assert SETUP_LOGS.find("join_leave_log_channel) or _channel_value(modlog_channel)") == -1
 
 
-def test_runtime_hardening_is_loaded() -> None:
+def test_runtime_hardening_is_loaded_but_does_not_override_router() -> None:
     assert "member_lifecycle_verify_runtime_hardening" in STARTUP_GUARDS
     assert "_install_basic_verify_fallback" in HARDENING
     assert "maybe_handle_basic_verify_interaction" in HARDENING
     assert "_patch_setup_join_leave_alias_picker" in HARDENING
     assert "_patch_join_context_schema_fallback" in HARDENING
     assert "_patch_modlog_alias_resolution" in HARDENING
+    assert "native router owns no-welcome-leak routing" in HARDENING
+    assert "welcome_enabled" not in HARDENING
+    assert "dank_shield:welcome_event:v2" not in HARDENING
 
 
-def test_welcome_channel_not_join_leave_default() -> None:
-    assert "join/leave channel equals welcome" in HARDENING
-    assert "welcome_enabled" in HARDENING
-    assert "welcome_join_enabled" in HARDENING
+def test_join_leave_never_posts_to_welcome_channel() -> None:
+    assert "dank_shield:welcome_event:v2" not in ROUTER
+    assert "public_targets.append(public_channel)" not in ROUTER
+    assert "Automatic join/leave cards are **never** posted to the welcome channel" in ROUTER
+    assert "join/leave route equals welcome" in ROUTER
+    assert "await _send_join_leave_join(member, join_leave_channel)" in ROUTER
 
 
 if __name__ == "__main__":
@@ -90,8 +95,8 @@ if __name__ == "__main__":
         test_member_logs_command_is_allowed_child,
         test_old_welcome_member_events_route_is_not_loaded_by_startup,
         test_setup_logs_uses_explicit_join_leave_route,
-        test_runtime_hardening_is_loaded,
-        test_welcome_channel_not_join_leave_default,
+        test_runtime_hardening_is_loaded_but_does_not_override_router,
+        test_join_leave_never_posts_to_welcome_channel,
     ):
         test()
         print(f"PASS {test.__name__}")
