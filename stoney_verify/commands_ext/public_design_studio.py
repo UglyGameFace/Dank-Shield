@@ -581,7 +581,7 @@ def _infer_live_majority_context(
 
         records = _live_majority_records_for_design(guild)
         analysis = majority.infer_live_majority_layout(studio, records)
-        repair_options = majority.apply_majority_to_options(studio, options, analysis, respect_locks=False)
+        repair_options = majority.apply_majority_to_options(studio, options, analysis, respect_locks=True)
         summary = dict(repair_options.get("__majority_layout_summary") or {})
         if not summary:
             summary = {
@@ -639,7 +639,7 @@ def _home_embed(guild: discord.Guild, options: Mapping[str, Any] | None = None) 
     embed.add_field(
         name="Recommended",
         value="\n".join((
-            "🧭 **Fix Mismatched Names** — copies the live server style and fixes only names that do not match.",
+            "🧭 **Fix Mismatched Names** — reviews saved rules first; Live Majority is preview-only when saved rules exist.",
             "⚡ **Change One Style** — add/change one thing, like a separator, while keeping everything else.",
             "👁️ **Preview Saved Design** — shows what saved rules would rename before anything changes.",
         )),
@@ -684,12 +684,12 @@ def _home_embed(guild: discord.Guild, options: Mapping[str, Any] | None = None) 
             f"Global: **{'On' if counts['global'] else 'Off'}**",
             f"Categories: **{counts['categories']}**",
             f"Channels: **{counts['channels']}**",
-            "Fix Mismatched Names ignores saved rules unless you choose saved layout.",
+            "Fix Mismatched Names protects saved rules; use Live Majority only as a manual preview.",
         )),
         inline=True,
     )
 
-    embed.set_footer(text="Names only • Fix Mismatched Names follows live style • Preview Saved Design follows saved rules")
+    embed.set_footer(text="Names only • Saved rules win • Live Majority is preview-only when locks exist")
     return _clean_design_embed(embed)
 
 

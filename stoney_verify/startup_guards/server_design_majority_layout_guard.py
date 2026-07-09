@@ -263,7 +263,7 @@ def _patch_consistency_embed(command_guard: Any, majority: Any, discord: Any) ->
             embed.add_field(name="Skipped on purpose", value="\n".join(skipped)[:1024], inline=False)
         found, active = majority.lock_notice_from_items(items)
         if found:
-            embed.add_field(name="Saved rules found", value=f"{found} saved rule(s) exist. This preview uses **Live Majority** because you chose it.", inline=False)
+            embed.add_field(name="Saved rules found", value=f"{found} saved rule(s) exist. **Apply is disabled for Live Majority** so saved rules cannot be bypassed here. Use **Saved Layout** or Manual Editor.", inline=False)
         elif active:
             embed.add_field(name="Saved rules active", value=f"{active} saved rule(s) are active for this preview.", inline=False)
         embed.set_footer(text="Names only • Preview first • Apply disabled when confidence is low")
@@ -319,14 +319,14 @@ def _patch_guided_flow(command_guard: Any, majority: Any, studio: Any, discord: 
         )
         embed.add_field(
             name="Saved rules",
-            value=f"Saved rules found: **{_saved_rule_count(options)}**\nUse saved rules only when those are intentionally correct.",
+            value=f"Saved rules found: **{_saved_rule_count(options)}**\nSaved rules/locks are owner-approved. Use them unless you are only previewing Live Majority.",
             inline=True,
         )
         embed.add_field(
             name="Recommended",
             value=(
-                "Use **Live Majority** only when the preview keeps the server's look. "
-                "If it would flatten styled names, choose **Manual Editor** or **Saved Layout**."
+                "Use **Saved Layout** when saved rules exist. "
+                "Live Majority is only a preview unless there are no saved locks and confidence is high."
             ),
             inline=False,
         )
@@ -359,7 +359,7 @@ def _patch_guided_flow(command_guard: Any, majority: Any, studio: Any, discord: 
         def __init__(self) -> None:
             super().__init__(timeout=900)
 
-        @discord.ui.button(label="Use Live Majority", emoji="✅", style=discord.ButtonStyle.success, custom_id="dank_design:majority_use_live", row=0)
+        @discord.ui.button(label="Preview Live Majority", emoji="👁️", style=discord.ButtonStyle.secondary, custom_id="dank_design:majority_use_live", row=0)
         async def use_live_majority(self, interaction: Any, button: Any) -> None:
             if not await command_guard._require_design_permission(interaction):
                 return
@@ -377,21 +377,25 @@ def _patch_guided_flow(command_guard: Any, majority: Any, studio: Any, discord: 
                         _item['status'] = 'failed'
                         _item['repair_confidence_blocked'] = True
             counts = _counts(command_guard, items)
+            saved_rules = _saved_rule_count(options)
+            live_apply_allowed = (
+                bool(confidence.get("apply_allowed"))
+                and not counts.get("failed")
+                and bool(counts.get("needs_fix"))
+                and not _majority_apply_blocked(items)
+                and saved_rules == 0
+            )
+            if saved_rules:
+                requested["__live_majority_apply_disabled_by_saved_rules"] = saved_rules
             command_guard._PENDING[command_guard._key(int(guild.id), int(interaction.user.id))] = {
                 "created_at": command_guard.time.time(),
                 "items": items,
                 "options": dict(requested),
-                "mode": "consistency_live_majority",
+                "mode": "consistency_live_majority_preview_only" if saved_rules else "consistency_live_majority",
             }
             await interaction.edit_original_response(
                 embed=command_guard._consistency_embed(guild, items, requested),
-                view=command_guard.DesignPreviewView(
-                    can_apply=(
-                        not counts.get("failed")
-                        and bool(counts.get("needs_fix"))
-                        and not _majority_apply_blocked(items)
-                    )
-                ),
+                view=command_guard.DesignPreviewView(can_apply=live_apply_allowed),
             )
 
         @discord.ui.button(label="Use Saved Layout", emoji="🔒", style=discord.ButtonStyle.secondary, custom_id="dank_design:majority_use_saved", row=0)
@@ -520,7 +524,10 @@ def apply() -> bool:
 
             records = _records_for_guild(command_guard, guild)
             analysis = majority.infer_live_majority_layout(studio, records)
-            inferred = majority.apply_majority_to_options(studio, options, analysis, respect_locks=False)
+            respect_saved_locks = bool(_saved_rule_count(options))
+            inferred = majority.apply_majority_to_options(studio, options, analysis, respect_locks=respect_saved_locks)
+            if respect_saved_locks:
+                inferred["__live_majority_apply_disabled_by_saved_rules"] = _saved_rule_count(options)
             items = await original(guild, inferred)
             return majority.annotate_plan_items(items, analysis, inferred, studio=studio)
 

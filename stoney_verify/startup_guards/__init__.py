@@ -163,8 +163,6 @@ _ALWAYS_SHOW_PREFIXES: Tuple[str, ...] = (
     "✅ ticket_forms_foundation_guard active",
     "✅ public_ticket_confirm_hardening_guard",
     "✅ server_design_command_module_guard active",
-    "✅ server_design_strict_layout_guard active",
-    "✅ server_design_majority_layout_guard active",
     "✅ production_command_surface_guard active",
 )
 _ONCE_ONLY_PREFIXES: Tuple[str, ...] = (
