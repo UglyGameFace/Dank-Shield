@@ -33,7 +33,9 @@ def test_profile_panel_and_editor_get_suggest_role_buttons() -> None:
 def test_native_profile_source_has_new_role_cosmetics_labels() -> None:
     assert "Server Roles / Cosmetics" in PROFILE
     assert "Profile Roles / Cosmetics" in PROFILE
-    assert "Add an existing server role / cosmetic" in PROFILE
+    assert "Browse / Add Server Roles" in PROFILE
+    assert "Add Server Roles / Cosmetics" in PROFILE
+    assert "ProfileRoleAddPickerView(DankMultiPickerView)" in PROFILE
     assert "Remove Role / Cosmetic" in PROFILE
 
 
@@ -42,8 +44,10 @@ def test_old_profile_cosmetics_user_facing_copy_is_gone() -> None:
         "Server Cosmetics",
         "Server Cosmetic Roles",
         "Add an existing cosmetic role",
+        "Add an existing server role / cosmetic",
         "Remove Cosmetic Role",
         "Remove Cosmetic Roles",
+        "DankRoleSelect(",
     ):
         assert forbidden not in PROFILE, f"old native profile wording still present: {forbidden}"
         assert forbidden not in GUARD, f"old guard profile wording still present: {forbidden}"
