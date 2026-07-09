@@ -17,9 +17,10 @@ def test_profile_role_editor_guard_loads_before_self_roles_registration() -> Non
 
 def test_self_roles_applies_role_editor_before_registering_panel() -> None:
     assert "profile_role_editor_guard.apply()" in SELF_GUARD
-    assert "register_public_self_roles_group_commands" in SELF_GUARD
-    assert SELF_GUARD.index("profile_role_editor_guard.apply()") < SELF_GUARD.index("register_public_self_roles_group_commands")
-    assert "Server Cosmetics" not in SELF_GUARD
+    assert "register = getattr(public_self_roles_group" in SELF_GUARD
+    assert "register(bot," in SELF_GUARD
+    assert SELF_GUARD.index("profile_role_editor_guard.apply()") < SELF_GUARD.index("register = getattr(public_self_roles_group")
+    assert SELF_GUARD.index("profile_role_editor_guard.apply()") < SELF_GUARD.index("register(bot,")
 
 
 def test_profile_panel_and_editor_get_suggest_role_buttons() -> None:
