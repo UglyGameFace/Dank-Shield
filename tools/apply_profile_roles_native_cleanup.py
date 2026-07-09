@@ -34,6 +34,11 @@ PROFILE_REPLACEMENTS: tuple[tuple[str, str], ...] = (
     ('"No cosmetic roles are configured yet."', '"No profile roles/cosmetics are configured yet."'),
     ('label=str(role.name or "Cosmetic Role")[:100]', 'label=str(role.name or "Role / Cosmetic")[:100]'),
     ('"Choose one or more roles to remove from the Profile Builder cosmetic allowlist."', '"Choose one or more roles to remove from the Profile Builder roles/cosmetics allowlist."'),
+    # Catch old prose that is not always inside the exact button/placeholder forms.
+    ('"Server Cosmetics"', '"Server Roles / Cosmetics"'),
+    ('"Server Cosmetic Roles"', '"Profile Roles / Cosmetics"'),
+    ('server cosmetic role', 'server role/cosmetic'),
+    ('server cosmetic roles', 'server roles/cosmetics'),
 )
 
 # Only patch helper guard comments/copy. Do not rewrite tests: the tests must keep
@@ -57,6 +62,7 @@ FORBIDDEN_PROFILE_COPY: tuple[str, ...] = (
     '"Cosmetic role limit reached',
     '"Choose one or more roles to remove from the Profile Builder cosmetic allowlist."',
     'server cosmetic role',
+    'server cosmetic roles',
 )
 
 REQUIRED_PROFILE_COPY: tuple[str, ...] = (
