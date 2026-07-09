@@ -2,13 +2,12 @@ from __future__ import annotations
 
 """Authoritative member join/leave router.
 
-Fixes:
-- public welcome messages only go to the configured public welcome channel
-- public leave messages only go to the configured join/leave channel
-- detailed staff join audit only goes to staff/modlog/audit channel
-- invite/source is resolved through warmed invite cache when permissions allow
-- no staff audit fallback into public channels
-- old welcome_member_events_guard listeners are removed when possible
+Rules:
+- The public welcome channel is for static welcome/rules content only.
+- Join/leave event cards are posted only to the explicit join/leave log route.
+- Staff join/leave audit goes only to staff/modlog/audit routes.
+- Staff audit never falls back into public channels.
+- Legacy welcome_member_events_guard listeners are removed when possible.
 """
 
 import asyncio
@@ -28,12 +27,46 @@ try:
 except Exception:  # pragma: no cover
     dank_group = None  # type: ignore
 
-
 _INSTALLED = False
 _INVITE_CACHE: dict[int, dict[str, int]] = {}
 _INVITE_META: dict[int, dict[str, dict[str, Any]]] = {}
 _INVITE_CACHE_AT: dict[int, float] = {}
 _CACHE_LOCKS: dict[int, asyncio.Lock] = {}
+
+PUBLIC_WELCOME_KEYS = (
+    "public_welcome_channel_id",
+    "welcome_channel_id",
+    "welcome_public_channel_id",
+    "member_welcome_channel_id",
+)
+
+JOIN_LEAVE_KEYS = (
+    "join_leave_log_channel_id",
+    "join_leave_channel_id",
+    "member_join_leave_log_channel_id",
+    "member_lifecycle_log_channel_id",
+    "member_log_channel_id",
+    "member_logs_channel_id",
+    "join_log_channel_id",
+    "join_exit_log_channel_id",
+    "joinlog_channel_id",
+    "joinleave_channel_id",
+    "leave_log_channel_id",
+    "welcome_leave_channel_id",
+    "welcome_exit_channel_id",
+    "welcome_exit_log_channel_id",
+    "leave_channel_id",
+)
+
+STAFF_AUDIT_KEYS = (
+    "staff_join_audit_channel_id",
+    "member_audit_log_channel_id",
+    "staff_log_channel_id",
+    "staff_logs_channel_id",
+    "modlog_channel_id",
+    "mod_log_channel_id",
+    "audit_log_channel_id",
+)
 
 
 def _log(message: str) -> None:
@@ -68,7 +101,6 @@ def _cfg_value(cfg: Any, key: str, default: Any = None) -> Any:
             return value
     except Exception:
         pass
-
     try:
         if hasattr(cfg, "get"):
             value = cfg.get(key)
@@ -76,7 +108,6 @@ def _cfg_value(cfg: Any, key: str, default: Any = None) -> Any:
                 return value
     except Exception:
         pass
-
     for bucket in ("settings", "config", "metadata", "meta"):
         try:
             nested = getattr(cfg, bucket, None)
@@ -91,7 +122,6 @@ def _cfg_value(cfg: Any, key: str, default: Any = None) -> Any:
                     return nested.get(key)
         except Exception:
             pass
-
     return default
 
 
@@ -114,6 +144,13 @@ def _resolve_channel(guild: discord.Guild, cfg: Any, keys: tuple[str, ...]) -> O
     return None
 
 
+def _same_channel(a: Any, b: Any) -> bool:
+    try:
+        return isinstance(a, discord.TextChannel) and isinstance(b, discord.TextChannel) and int(a.id) == int(b.id)
+    except Exception:
+        return False
+
+
 def _bot_can_send(channel: Optional[discord.TextChannel]) -> bool:
     try:
         if channel is None:
@@ -122,12 +159,7 @@ def _bot_can_send(channel: Optional[discord.TextChannel]) -> bool:
         if not isinstance(me, discord.Member):
             return False
         perms = channel.permissions_for(me)
-        ok = bool(
-            perms.view_channel
-            and perms.send_messages
-            and perms.embed_links
-            and perms.read_message_history
-        )
+        ok = bool(perms.view_channel and perms.send_messages and perms.embed_links and perms.read_message_history)
         if not ok:
             _log(
                 "channel not writable "
@@ -163,7 +195,6 @@ def _cache_lock(guild_id: int) -> asyncio.Lock:
 async def _fetch_invite_snapshot(guild: discord.Guild) -> tuple[dict[str, int], dict[str, dict[str, Any]], str]:
     if not _bot_can_read_invites(guild):
         return {}, {}, "missing Manage Server permission"
-
     try:
         invites = await guild.invites()
     except discord.Forbidden:
@@ -191,7 +222,6 @@ async def _fetch_invite_snapshot(guild: discord.Guild) -> tuple[dict[str, int], 
             "target_id": str(getattr(target_user, "id", "") or ""),
             "target_name": str(target_user) if target_user else "",
         }
-
     return uses, meta, "ok"
 
 
@@ -208,35 +238,18 @@ async def _warm_invite_cache(guild: discord.Guild, *, reason: str = "warm") -> N
 async def _detect_invite(member: discord.Member) -> dict[str, Any]:
     guild = member.guild
     gid = int(guild.id)
-
     async with _cache_lock(gid):
         old = dict(_INVITE_CACHE.get(gid) or {})
         old_meta = dict(_INVITE_META.get(gid) or {})
         had_cache = bool(old)
-
         current, meta, status = await _fetch_invite_snapshot(guild)
         if status != "ok":
-            return {
-                "source": "unknown",
-                "invite": "unknown",
-                "creator": "unknown",
-                "target": "unknown",
-                "confidence": status,
-            }
-
-        # Always update cache before returning.
+            return {"source": "unknown", "invite": "unknown", "creator": "unknown", "target": "unknown", "confidence": status}
         _INVITE_CACHE[gid] = dict(current)
         _INVITE_META[gid] = dict(meta)
         _INVITE_CACHE_AT[gid] = time.monotonic()
-
         if not had_cache:
-            return {
-                "source": "unknown",
-                "invite": "unknown",
-                "creator": "unknown",
-                "target": "unknown",
-                "confidence": "invite cache was cold; warmed now",
-            }
+            return {"source": "unknown", "invite": "unknown", "creator": "unknown", "target": "unknown", "confidence": "invite cache was cold; warmed now"}
 
         candidates: list[tuple[int, str]] = []
         for code, uses in current.items():
@@ -244,33 +257,23 @@ async def _detect_invite(member: discord.Member) -> dict[str, Any]:
             delta = int(uses or 0) - before
             if delta > 0:
                 candidates.append((delta, code))
-
         if not candidates:
-            return {
-                "source": "unknown",
-                "invite": "unknown",
-                "creator": "unknown",
-                "target": "unknown",
-                "confidence": "no invite use delta detected",
-            }
+            return {"source": "unknown", "invite": "unknown", "creator": "unknown", "target": "unknown", "confidence": "no invite use delta detected"}
 
         candidates.sort(reverse=True)
         _, code = candidates[0]
         item = meta.get(code) or old_meta.get(code) or {}
         channel_id = _safe_int(item.get("channel_id"), 0)
         channel = guild.get_channel(channel_id) if channel_id > 0 else None
-
         inviter_id = _safe_str(item.get("inviter_id"))
         inviter_text = "unknown"
         if inviter_id:
             user = guild.get_member(_safe_int(inviter_id, 0))
             inviter_text = f"{user.mention} (`{inviter_id}`)" if user else f"{_safe_str(item.get('inviter_name'), 'unknown')} (`{inviter_id}`)"
-
         target_text = "unknown"
         target_id = _safe_str(item.get("target_id"))
         if target_id:
             target_text = f"{_safe_str(item.get('target_name'), 'unknown')} (`{target_id}`)"
-
         return {
             "source": channel.mention if isinstance(channel, discord.TextChannel) else _safe_str(item.get("channel_name"), "unknown"),
             "invite": code,
@@ -282,8 +285,7 @@ async def _detect_invite(member: discord.Member) -> dict[str, Any]:
 
 def _member_age_text(member: discord.Member) -> str:
     try:
-        created = member.created_at
-        delta = discord.utils.utcnow() - created
+        delta = discord.utils.utcnow() - member.created_at
         days = max(0, int(delta.total_seconds() // 86400))
         years = days // 365
         months = (days % 365) // 30
@@ -303,33 +305,36 @@ def _avatar_url(member: discord.Member) -> str:
         return ""
 
 
-async def _send_public_join(member: discord.Member, channel: Optional[discord.TextChannel]) -> None:
+async def _send_join_leave_join(member: discord.Member, channel: Optional[discord.TextChannel]) -> None:
     if not _bot_can_send(channel):
-        _log(f"public join skipped guild={member.guild.id} member={member.id}: target missing or not writable")
+        _log(f"join log skipped guild={member.guild.id} member={member.id}: join/leave target missing or not writable")
         return
-
     embed = discord.Embed(
         title=f"👋 {member.display_name} joined",
-        description=f"Welcome to **{member.guild.name}**, {member.mention}!",
+        description=f"Member: {member.mention}\nMembers now: **{member.guild.member_count or 'unknown'}**.",
         color=discord.Color.green(),
         timestamp=discord.utils.utcnow(),
     )
     avatar = _avatar_url(member)
     if avatar:
         embed.set_thumbnail(url=avatar)
-    embed.set_footer(text="dank_shield:welcome_event:v2")
+    embed.set_footer(text="dank_shield:join_leave_event:v3")
     await channel.send(embed=embed, allowed_mentions=discord.AllowedMentions.none())
-    _log(f"public leave sent guild={member.guild.id} member={member.id} channel={channel.id}")
-    _log(f"public join sent guild={member.guild.id} member={member.id} channel={channel.id}")
+    _log(f"join log sent guild={member.guild.id} member={member.id} channel={channel.id}")
+
+
+async def _send_public_join(member: discord.Member, channel: Optional[discord.TextChannel]) -> None:
+    # Backward-compatible symbol for older imports. It now intentionally routes
+    # only as a join/leave log card and must never be used for welcome_channel_id.
+    await _send_join_leave_join(member, channel)
 
 
 async def _send_public_leave(member: discord.Member, channel: Optional[discord.TextChannel]) -> None:
     if not _bot_can_send(channel):
-        _log(f"public leave skipped guild={member.guild.id} member={member.id}: join/leave target missing or not writable")
+        _log(f"leave log skipped guild={member.guild.id} member={member.id}: join/leave target missing or not writable")
         return
-
     embed = discord.Embed(
-        title=f"{member.display_name} left",
+        title=f"👋 {member.display_name} left",
         description=f"Members now: **{member.guild.member_count or 'unknown'}**.",
         color=discord.Color.dark_gray(),
         timestamp=discord.utils.utcnow(),
@@ -337,39 +342,22 @@ async def _send_public_leave(member: discord.Member, channel: Optional[discord.T
     avatar = _avatar_url(member)
     if avatar:
         embed.set_thumbnail(url=avatar)
-    embed.set_footer(text="dank_shield:leave_event:v2")
+    embed.set_footer(text="dank_shield:join_leave_event:v3")
     await channel.send(embed=embed, allowed_mentions=discord.AllowedMentions.none())
+    _log(f"leave log sent guild={member.guild.id} member={member.id} channel={channel.id}")
 
 
 async def _send_staff_join_audit(member: discord.Member, channel: Optional[discord.TextChannel], public_channel: Optional[discord.TextChannel], invite: dict[str, Any]) -> None:
-    # Important: never fall back to a public channel for staff audit.
     if not _bot_can_send(channel):
         _log(f"staff audit skipped guild={member.guild.id} member={member.id}: no staff audit channel")
         return
-
-    embed = discord.Embed(
-        title=f"👋 {member.display_name} joined",
-        color=discord.Color.green(),
-        timestamp=discord.utils.utcnow(),
-    )
+    embed = discord.Embed(title=f"👋 {member.display_name} joined", color=discord.Color.green(), timestamp=discord.utils.utcnow())
     avatar = _avatar_url(member)
     if avatar:
         embed.set_thumbnail(url=avatar)
-
     embed.add_field(name="Member", value=f"{member.mention}\n`{member.id}`", inline=False)
-    embed.add_field(
-        name="Public welcome",
-        value=public_channel.mention if isinstance(public_channel, discord.TextChannel) else "`Not configured`",
-        inline=False,
-    )
-    embed.add_field(
-        name="Account",
-        value=(
-            f"Age: **{_member_age_text(member)}**\n"
-            f"Joined: {discord.utils.format_dt(discord.utils.utcnow(), style='F')}"
-        ),
-        inline=False,
-    )
+    embed.add_field(name="Public welcome", value=public_channel.mention if isinstance(public_channel, discord.TextChannel) else "`Not configured`", inline=False)
+    embed.add_field(name="Account", value=f"Age: **{_member_age_text(member)}**\nJoined: {discord.utils.format_dt(discord.utils.utcnow(), style='F')}", inline=False)
     embed.add_field(
         name="Invite/source",
         value=(
@@ -381,94 +369,36 @@ async def _send_staff_join_audit(member: discord.Member, channel: Optional[disco
         )[:1024],
         inline=False,
     )
-    embed.set_footer(text="dank_shield:staff_join_audit:v2")
+    embed.set_footer(text="dank_shield:staff_join_audit:v3")
     await channel.send(embed=embed, allowed_mentions=discord.AllowedMentions.none())
 
 
 async def _send_staff_leave_audit(member: discord.Member, channel: Optional[discord.TextChannel]) -> None:
     if not _bot_can_send(channel):
         return
-    embed = discord.Embed(
-        title=f"👋 {member.display_name} left",
-        color=discord.Color.orange(),
-        timestamp=discord.utils.utcnow(),
-    )
+    embed = discord.Embed(title=f"👋 {member.display_name} left", color=discord.Color.orange(), timestamp=discord.utils.utcnow())
     embed.add_field(name="Member", value=f"{member.mention}\n`{member.id}`", inline=False)
     embed.add_field(name="Members now", value=str(member.guild.member_count or "unknown"), inline=False)
-    embed.set_footer(text="dank_shield:staff_leave_audit:v2")
+    embed.set_footer(text="dank_shield:staff_leave_audit:v3")
     await channel.send(embed=embed, allowed_mentions=discord.AllowedMentions.none())
-
-
-PUBLIC_WELCOME_KEYS = (
-    "public_welcome_channel_id",
-    "welcome_channel_id",
-    "welcome_public_channel_id",
-    "member_welcome_channel_id",
-)
-
-JOIN_LEAVE_KEYS = (
-    # New explicit names.
-    "join_leave_log_channel_id",
-    "join_leave_channel_id",
-    "member_join_leave_log_channel_id",
-    "member_lifecycle_log_channel_id",
-    "member_log_channel_id",
-    "member_logs_channel_id",
-
-    # Legacy/setup aliases used by older setup flows and setup health.
-    "join_log_channel_id",
-    "join_exit_log_channel_id",
-    "joinlog_channel_id",
-    "joinleave_channel_id",
-    "leave_log_channel_id",
-    "welcome_leave_channel_id",
-
-    # Friendly names used by setup templates.
-    "welcome_exit_channel_id",
-    "welcome_exit_log_channel_id",
-    "leave_channel_id",
-)
-
-STAFF_AUDIT_KEYS = (
-    "staff_join_audit_channel_id",
-    "member_audit_log_channel_id",
-    "staff_log_channel_id",
-    "staff_logs_channel_id",
-    "modlog_channel_id",
-    "mod_log_channel_id",
-    "audit_log_channel_id",
-)
 
 
 async def _join_listener(member: discord.Member) -> None:
     try:
         guild = member.guild
         cfg = await _load_config(int(guild.id))
-
         public_channel = _resolve_channel(guild, cfg, PUBLIC_WELCOME_KEYS)
         join_leave_channel = _resolve_channel(guild, cfg, JOIN_LEAVE_KEYS)
         staff_channel = _resolve_channel(guild, cfg, STAFF_AUDIT_KEYS)
-
-        # Public welcome and join/leave logs are separate products.
-        # If both are configured, send the friendly welcome to public welcome
-        # and a public-safe join card to join/leave-log too. If only join/leave
-        # is configured, it still receives the join.
         invite = await _detect_invite(member)
 
-        public_targets: list[discord.TextChannel] = []
-        if isinstance(public_channel, discord.TextChannel):
-            public_targets.append(public_channel)
-        if isinstance(join_leave_channel, discord.TextChannel) and all(int(join_leave_channel.id) != int(ch.id) for ch in public_targets):
-            public_targets.append(join_leave_channel)
+        if _same_channel(public_channel, join_leave_channel):
+            _log(f"join log suppressed because join/leave route equals welcome guild={guild.id} channel={getattr(public_channel, 'id', None)}")
+            join_leave_channel = None
 
-        if not public_targets and isinstance(join_leave_channel, discord.TextChannel):
-            public_targets.append(join_leave_channel)
-
-        for target in public_targets:
-            await _send_public_join(member, target)
-
-        audit_public_channel = public_channel or join_leave_channel
-        await _send_staff_join_audit(member, staff_channel, audit_public_channel, invite)
+        # Critical: never post automatic join cards to the public welcome channel.
+        await _send_join_leave_join(member, join_leave_channel)
+        await _send_staff_join_audit(member, staff_channel, public_channel, invite)
     except Exception as exc:
         _log(f"join failed guild={getattr(member.guild, 'id', 'unknown')} member={getattr(member, 'id', 'unknown')}: {type(exc).__name__}: {exc}")
 
@@ -477,13 +407,14 @@ async def _leave_listener(member: discord.Member) -> None:
     try:
         guild = member.guild
         cfg = await _load_config(int(guild.id))
+        public_channel = _resolve_channel(guild, cfg, PUBLIC_WELCOME_KEYS)
         join_leave_channel = _resolve_channel(guild, cfg, JOIN_LEAVE_KEYS)
         staff_channel = _resolve_channel(guild, cfg, STAFF_AUDIT_KEYS)
-
+        if _same_channel(public_channel, join_leave_channel):
+            _log(f"leave log suppressed because join/leave route equals welcome guild={guild.id} channel={getattr(public_channel, 'id', None)}")
+            join_leave_channel = None
         await _send_public_leave(member, join_leave_channel)
         await _send_staff_leave_audit(member, staff_channel)
-
-        # Refresh invite cache after leaves in case invite state changed.
         await _warm_invite_cache(guild, reason="member_remove")
     except Exception as exc:
         _log(f"leave failed guild={getattr(member.guild, 'id', 'unknown')} member={getattr(member, 'id', 'unknown')}: {type(exc).__name__}: {exc}")
@@ -502,12 +433,12 @@ async def _ready_listener() -> None:
                 join_leave_channel = _resolve_channel(guild, cfg, JOIN_LEAVE_KEYS)
                 public_channel = _resolve_channel(guild, cfg, PUBLIC_WELCOME_KEYS)
                 staff_channel = _resolve_channel(guild, cfg, STAFF_AUDIT_KEYS)
+                route_note = "join/leave disabled because it equals welcome" if _same_channel(public_channel, join_leave_channel) else "ok"
                 _log(
                     "member lifecycle routes ready "
-                    f"guild={guild.id} "
-                    f"public={getattr(public_channel, 'id', None) or '-'} "
+                    f"guild={guild.id} public={getattr(public_channel, 'id', None) or '-'} "
                     f"join_leave={getattr(join_leave_channel, 'id', None) or '-'} "
-                    f"staff={getattr(staff_channel, 'id', None) or '-'}"
+                    f"staff={getattr(staff_channel, 'id', None) or '-'} route={route_note}"
                 )
                 await _warm_invite_cache(guild, reason="ready")
             except Exception:
@@ -543,13 +474,17 @@ def _remove_old_welcome_listeners() -> None:
             removed = 0
             for fn in listeners:
                 module = _safe_str(getattr(fn, "__module__", ""))
+                name = _safe_str(getattr(fn, "__name__", ""))
                 if "welcome_member_events_guard" in module:
+                    removed += 1
+                    continue
+                if "member_lifecycle_verify_runtime_hardening" in module and name in {"_patched_join_listener", "_patched_leave_listener"}:
                     removed += 1
                     continue
                 kept.append(fn)
             extra[event_name] = kept
             if removed:
-                _log(f"removed old welcome_member_events_guard listeners event={event_name} count={removed}")
+                _log(f"removed old/conflicting member lifecycle listeners event={event_name} count={removed}")
     except Exception as exc:
         _log(f"old listener removal failed: {type(exc).__name__}: {exc}")
 
@@ -572,50 +507,26 @@ async def _member_logs_command(
     try:
         if interaction.guild is None:
             return await interaction.response.send_message("❌ This must be used inside a server.", ephemeral=True)
-
         perms = getattr(interaction.user, "guild_permissions", None)
         if not (getattr(perms, "administrator", False) or getattr(perms, "manage_guild", False) or getattr(perms, "manage_channels", False)):
-            return await interaction.response.send_message(
-                "❌ You need **Manage Server** or **Manage Channels** to configure member logs.",
-                ephemeral=True,
-                allowed_mentions=discord.AllowedMentions.none(),
-            )
+            return await interaction.response.send_message("❌ You need **Manage Server** or **Manage Channels** to configure member logs.", ephemeral=True, allowed_mentions=discord.AllowedMentions.none())
 
         guild = interaction.guild
         payload: dict[str, Any] = {}
-
         if public_welcome is not None:
             payload["public_welcome_channel_id"] = str(public_welcome.id)
             payload["welcome_channel_id"] = str(public_welcome.id)
-
         if join_leave_log is not None:
-            # Write all aliases so every setup/read path agrees.
-            payload["join_leave_log_channel_id"] = str(join_leave_log.id)
-            payload["member_join_leave_log_channel_id"] = str(join_leave_log.id)
-            payload["member_lifecycle_log_channel_id"] = str(join_leave_log.id)
-            payload["join_log_channel_id"] = str(join_leave_log.id)
-            payload["joinlog_channel_id"] = str(join_leave_log.id)
-            payload["welcome_exit_channel_id"] = str(join_leave_log.id)
-            payload["leave_channel_id"] = str(join_leave_log.id)
-
+            for key in JOIN_LEAVE_KEYS:
+                payload[key] = str(join_leave_log.id)
         if staff_audit_log is not None:
             payload["staff_join_audit_channel_id"] = str(staff_audit_log.id)
             payload["member_audit_log_channel_id"] = str(staff_audit_log.id)
             payload["modlog_channel_id"] = str(staff_audit_log.id)
-
         if payload:
             from stoney_verify.commands_ext.public_setup_config_writer import upsert_guild_config
             from stoney_verify.guild_config import invalidate_guild_config
-
-            payload.update(
-                {
-                    "__config_write_mode": "setup_builder",
-                    "__config_write_source": "/dank member-logs",
-                    "configured_by_id": str(interaction.user.id),
-                    "configured_by_name": str(interaction.user),
-                    "configured_at": discord.utils.utcnow().isoformat(),
-                }
-            )
+            payload.update({"__config_write_mode": "setup_builder", "__config_write_source": "/dank member-logs", "configured_by_id": str(interaction.user.id), "configured_by_name": str(interaction.user), "configured_at": discord.utils.utcnow().isoformat()})
             await upsert_guild_config(int(guild.id), payload)
             invalidate_guild_config(int(guild.id))
 
@@ -623,33 +534,28 @@ async def _member_logs_command(
         public_channel = _resolve_channel(guild, cfg, PUBLIC_WELCOME_KEYS)
         join_leave_channel = _resolve_channel(guild, cfg, JOIN_LEAVE_KEYS)
         staff_channel = _resolve_channel(guild, cfg, STAFF_AUDIT_KEYS)
+        same_route = _same_channel(public_channel, join_leave_channel)
 
         embed = discord.Embed(
             title="👋 Member Lifecycle Routing",
             description=(
-                "Public messages and staff audits are separated so private details do not leak.\n\n"
-                "Use the command options to set or update channels."
+                "Welcome content and join/leave event logs are separated.\n\n"
+                "Automatic join/leave cards are **never** posted to the welcome channel."
             ),
             color=discord.Color.blurple(),
         )
         embed.add_field(name="Public welcome", value=public_channel.mention if public_channel else "`Not set`", inline=False)
-        embed.add_field(name="Join / leave log", value=join_leave_channel.mention if join_leave_channel else "`Not set`", inline=False)
+        embed.add_field(name="Join / leave log", value=(join_leave_channel.mention if join_leave_channel and not same_route else "`Not set or same as welcome — event cards disabled`"), inline=False)
         embed.add_field(name="Staff audit / invite source", value=staff_channel.mention if staff_channel else "`Not set — detailed audit will not be posted publicly`", inline=False)
-
+        embed.add_field(name="Leak guard", value="Join/leave cards skip the welcome channel even if an old alias points there.", inline=False)
         invite_status = "Can read invites ✅" if _bot_can_read_invites(guild) else "Missing Manage Server permission ⚠️ invite source may stay unknown"
         embed.add_field(name="Invite tracking", value=invite_status, inline=False)
-
         if payload:
             embed.add_field(name="Saved", value="Updated member lifecycle routes.", inline=False)
-
         await interaction.response.send_message(embed=embed, ephemeral=True, allowed_mentions=discord.AllowedMentions.none())
     except Exception as exc:
         try:
-            await interaction.response.send_message(
-                f"❌ Could not update member logs: `{type(exc).__name__}: {exc}`",
-                ephemeral=True,
-                allowed_mentions=discord.AllowedMentions.none(),
-            )
+            await interaction.response.send_message(f"❌ Could not update member logs: `{type(exc).__name__}: {exc}`", ephemeral=True, allowed_mentions=discord.AllowedMentions.none())
         except Exception:
             pass
 
@@ -662,22 +568,16 @@ def _install_command() -> bool:
         existing = {getattr(command, "name", "") for command in getattr(dank_group, "commands", []) or []}
         if "member-logs" in existing:
             return True
-
         decorated = app_commands.describe(
-            public_welcome="Public channel for friendly welcome messages.",
-            join_leave_log="Public or staff-safe channel for simple join/leave messages.",
+            public_welcome="Static welcome/rules channel. Join cards are never posted here.",
+            join_leave_log="Channel for simple join/leave event cards.",
             staff_audit_log="Staff-only channel for detailed join audit and invite source.",
         )(_member_logs_command)
-
         try:
             decorated = app_commands.default_permissions(manage_guild=True)(decorated)
         except Exception:
             pass
-
-        dank_group.command(
-            name="member-logs",
-            description="Configure where joins, leaves, and invite-source audits are sent.",
-        )(decorated)
+        dank_group.command(name="member-logs", description="Configure member lifecycle routes without leaking joins into welcome.")(decorated)
         return True
     except Exception as exc:
         _log(f"command install failed: {type(exc).__name__}: {exc}")
@@ -686,27 +586,22 @@ def _install_command() -> bool:
 
 def install() -> bool:
     global _INSTALLED
-
     _install_command()
-
     if _INSTALLED:
         return True
     if bot is None:
         _log("bot unavailable; listeners not installed")
         return False
-
     try:
         _remove_old_welcome_listeners()
-
         _install_listener(_join_listener, "on_member_join")
         _install_listener(_leave_listener, "on_member_remove")
         _install_listener(_ready_listener, "on_ready")
         _install_listener(_guild_join_listener, "on_guild_join")
         _install_listener(_invite_create_listener, "on_invite_create")
         _install_listener(_invite_delete_listener, "on_invite_delete")
-
         _INSTALLED = True
-        _log("active; public welcome/leave and staff invite audit are routed separately")
+        _log("active; join/leave logs never post to welcome channel")
         return True
     except Exception as exc:
         _log(f"install failed: {type(exc).__name__}: {exc}")
