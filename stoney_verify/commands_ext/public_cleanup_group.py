@@ -241,7 +241,7 @@ async def _cleanup_scan_user_messages_in_channel(
                 continue
 
             try:
-                await msg.delete(reason=reason)
+                await msg.delete()
                 result["deleted"] = int(result.get("deleted", 0) or 0) + 1
                 if int(result["deleted"]) % 10 == 0:
                     import asyncio
@@ -390,7 +390,17 @@ class CleanupUserPurgeConfirmView(discord.ui.View):
             return
         if not await _require_manage_messages_native(interaction):
             return
-        await safe_defer(interaction, ephemeral=True)
+        try:
+            for child in self.children:
+                child.disabled = True  # type: ignore[attr-defined]
+            if not interaction.response.is_done():
+                await interaction.response.edit_message(view=self)
+        except Exception:
+            if not interaction.response.is_done():
+                await safe_defer(interaction, ephemeral=True)
+        if not interaction.response.is_done():
+            await safe_defer(interaction, ephemeral=True)
+
         summary, _count = await _cleanup_execute_user_purge(
             interaction,
             target_user_id=self.target_user_id,

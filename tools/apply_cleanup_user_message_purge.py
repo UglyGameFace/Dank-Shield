@@ -141,7 +141,7 @@ async def _cleanup_scan_user_messages_in_channel(
                 continue
 
             try:
-                await msg.delete(reason=reason)
+                await msg.delete()
                 result["deleted"] = int(result.get("deleted", 0) or 0) + 1
                 if int(result["deleted"]) % 10 == 0:
                     import asyncio
@@ -476,7 +476,7 @@ def main() -> None:
         "No typed confirmation needed",
         "Delete Across Server",
         "Delete From Channel",
-        "await msg.delete(reason=reason)",
+        "await msg.delete()",
     )
     missing = [token for token in required if token not in text]
     if missing:
