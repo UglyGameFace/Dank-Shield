@@ -2810,7 +2810,7 @@ def _category_action_embed(category: discord.CategoryChannel) -> discord.Embed:
         value=(
             "**Custom Format** = choose font/separator/frame manually.\n"
             "**Save Category Layout** = remember a special rule for this category.\n"
-            "**Rename Protection** = control whether this category is skipped."
+            "**Protected Names / Unlock** = control whether this category is styled, partially styled, or skipped."
         ),
         inline=False,
     )
@@ -2848,7 +2848,7 @@ def _channel_action_embed(channel: discord.abc.GuildChannel) -> discord.Embed:
         value=(
             "**Custom Format** = choose this item's exact look.\n"
             "**Save Channel Layout** = remember a special rule for this item.\n"
-            "**Rename Protection** = control whether this item is skipped."
+            "**Protected Names / Unlock** = control whether this item is styled, partially styled, or skipped."
         ),
         inline=False,
     )
@@ -2927,7 +2927,7 @@ class CategoryEditorActionView(discord.ui.View):
             else:
                 await interaction.response.send_message(f"❌ Could not save category rule: `{type(exc).__name__}: {_safe_str(exc)[:120]}`", ephemeral=True)
 
-    @discord.ui.button(label="Rename Protection", emoji="🛡️", style=discord.ButtonStyle.secondary, custom_id="dank_design:category_protection_mode", row=3)
+    @discord.ui.button(label="Protected Names / Unlock", emoji="🛡️", style=discord.ButtonStyle.secondary, custom_id="dank_design:category_protection_mode", row=3)
     async def protection_mode(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         await _open_protection_mode_editor(interaction, channel_id=self.category_id)
 
@@ -3017,7 +3017,7 @@ class ChannelEditorActionView(discord.ui.View):
             else:
                 await interaction.response.send_message(f"❌ Could not save channel rule: `{type(exc).__name__}: {_safe_str(exc)[:120]}`", ephemeral=True)
 
-    @discord.ui.button(label="Rename Protection", emoji="🛡️", style=discord.ButtonStyle.secondary, custom_id="dank_design:channel_protection_mode", row=2)
+    @discord.ui.button(label="Protected Names / Unlock", emoji="🛡️", style=discord.ButtonStyle.secondary, custom_id="dank_design:channel_protection_mode", row=2)
     async def protection_mode(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         await _open_protection_mode_editor(interaction, channel_id=self.channel_id)
 
@@ -3696,6 +3696,35 @@ async def _save_protection_rule(interaction: discord.Interaction, *, base_name: 
     return options
 
 
+async def _set_default_protection_rules(interaction: discord.Interaction, *, mode: str | None) -> tuple[dict[str, Any], int]:
+    guild = interaction.guild
+    assert guild is not None
+
+    options = await _load_design_options(int(guild.id))
+    rules = _protection_rules(options)
+    changed = 0
+    clean_mode = _safe_str(mode or "").lower().replace("-", "_")
+
+    for name in sorted(studio.DEFAULT_PROTECTED_NAMES):
+        base = studio.normalize_base_name(name)
+        if not base:
+            continue
+        if mode is None:
+            if base in rules:
+                rules.pop(base, None)
+                changed += 1
+            continue
+        if clean_mode not in PROTECTION_LABELS:
+            clean_mode = "font_only"
+        if rules.get(base) != clean_mode:
+            rules[base] = clean_mode
+            changed += 1
+
+    options["protection_rules"] = rules
+    await _save_options(interaction, options) if "_save_options" in globals() else await _save_design_options(int(guild.id), options)
+    return options, changed
+
+
 def _protection_manager_embed(guild: discord.Guild, options: Mapping[str, Any]) -> discord.Embed:
     rules = _protection_rules(options)
 
@@ -3734,14 +3763,14 @@ def _protection_manager_embed(guild: discord.Guild, options: Mapping[str, Any]) 
         ),
         inline=False,
     )
-    embed.set_footer(text="Protected items do not block Apply. They are safe skips unless overridden.")
+    embed.set_footer(text="Unsupported font glyphs fall back per character; protection is a rename policy, not a font failure.")
     return _clean_design_embed(embed)
 
 
 class ProtectionManagerButton(discord.ui.Button):
     def __init__(self, *, row: int = 4) -> None:
         super().__init__(
-            label="Rename Protection",
+            label="Protected Names / Unlock",
             emoji="🛡️",
             style=discord.ButtonStyle.secondary,
             custom_id="dank_design:protection_manager",
@@ -3764,7 +3793,35 @@ class ProtectionManagerView(discord.ui.View):
     def __init__(self) -> None:
         super().__init__(timeout=900)
 
-    @discord.ui.button(label="Pick Item with Editor", emoji="#️⃣", style=discord.ButtonStyle.primary, custom_id="dank_design:protection_pick_item", row=0)
+    @discord.ui.button(label="Allow Font on Defaults", emoji="🔤", style=discord.ButtonStyle.primary, custom_id="dank_design:protection_allow_font_defaults", row=0)
+    async def allow_font_defaults(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        if not await _require_design_permission(interaction):
+            return
+        guild = interaction.guild
+        assert guild is not None
+        options, changed = await _set_default_protection_rules(interaction, mode="font_only")
+        embed = _protection_manager_embed(guild, options)
+        embed.title = "🔤 Default Protected Names Allow Font"
+        embed.add_field(
+            name="Updated",
+            value=f"**{changed}** default protected name rule(s) now allow font styling while still blocking full layout/frame changes.",
+            inline=False,
+        )
+        await interaction.response.edit_message(embed=embed, view=ProtectionManagerView())
+
+    @discord.ui.button(label="Restore Default Protection", emoji="↩️", style=discord.ButtonStyle.secondary, custom_id="dank_design:protection_restore_defaults", row=0)
+    async def restore_defaults(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        if not await _require_design_permission(interaction):
+            return
+        guild = interaction.guild
+        assert guild is not None
+        options, changed = await _set_default_protection_rules(interaction, mode=None)
+        embed = _protection_manager_embed(guild, options)
+        embed.title = "↩️ Default Protection Restored"
+        embed.add_field(name="Updated", value=f"Removed **{changed}** default protected-name override(s).", inline=False)
+        await interaction.response.edit_message(embed=embed, view=ProtectionManagerView())
+
+    @discord.ui.button(label="Pick Exact Item", emoji="#️⃣", style=discord.ButtonStyle.primary, custom_id="dank_design:protection_pick_item", row=1)
     async def pick_item(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         if not await _require_design_permission(interaction):
             return
@@ -3955,7 +4012,7 @@ def _editors_locks_embed(guild: discord.Guild, options: Mapping[str, Any]) -> di
             "**Category Editor** = design a whole category.\n"
             "**Channel Editor** = override one channel.\n"
             "**Format Locks** = save reusable layouts.\n"
-            "**Rename Protection** = decide what the bot may rename.\n"
+            "**Protected Names / Unlock** = decide what the bot may style, partially style, or skip.\n"
             "**Check Design Problems** = audit before applying."
         ),
         color=discord.Color.blurple(),
@@ -4055,7 +4112,7 @@ class EditorsLocksView(discord.ui.View):
             view=LockManagerView(guild, options, page=0),
         )
 
-    @discord.ui.button(label="Rename Protection", emoji="🛡️", style=discord.ButtonStyle.secondary, custom_id="dank_design:submenu_protection", row=2)
+    @discord.ui.button(label="Protected Names / Unlock", emoji="🛡️", style=discord.ButtonStyle.secondary, custom_id="dank_design:submenu_protection", row=2)
     async def protection(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         if not await _require_design_permission(interaction):
             return
@@ -4146,7 +4203,7 @@ def _advanced_tools_embed() -> discord.Embed:
             "🩺 **Check Design Problems** — audit saved rules, drift, duplicates, blockers.\n"
             "🔒 **Saved Layout Rules** — save reusable layouts.\n"
             "🔐 **Manage Saved Rules** — remove old overrides or stale locks.\n"
-            "🛡 **Rename Protection** — choose what should never be renamed.\n"
+            "🛡 **Protected Names / Unlock** — choose what should never be renamed.\n"
             "↩️ **Rollback** — undo the last applied rename batch.\n"
             "❓ **Help** — explain the workflow."
         ),
@@ -4188,7 +4245,7 @@ class AdvancedToolsView(discord.ui.View):
         options = await _load_design_options(int(guild.id))
         await interaction.response.edit_message(embed=_format_lock_manager_embed(guild, options, page=0), view=LockManagerView(guild, options, page=0))
 
-    @discord.ui.button(label="Rename Protection", emoji="🛡️", style=discord.ButtonStyle.secondary, custom_id="dank_design:advanced_protection", row=1)
+    @discord.ui.button(label="Protected Names / Unlock", emoji="🛡️", style=discord.ButtonStyle.secondary, custom_id="dank_design:advanced_protection", row=1)
     async def protection(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         if not await _require_design_permission(interaction):
             return
