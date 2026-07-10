@@ -456,47 +456,62 @@ async def _clear_all_locks(interaction: discord.Interaction) -> dict[str, Any]:
     return options
 
 
+
+
 def _format_locks_embed(guild: discord.Guild, options: Mapping[str, Any]) -> discord.Embed:
     counts = _lock_count(options)
     theme = _theme_from_options(options)
     current_lock = _current_format_lock(options)
 
+    font = _safe_str(current_lock.get("font"), "normal").replace("_", " ").title()
+    sep = _safe_str(current_lock.get("separator_id"), "bar_full").replace("_", " ").title()
+    frame = _safe_str(current_lock.get("category_frame_id"), "line").replace("_", " ").title()
+    strength = _safe_int(current_lock.get("strength"), 4)
+
     embed = discord.Embed(
-        title="🔒 Server Design Format Locks",
+        title="🔐 Lock / Unlock Saved Rules",
         description=(
-            "Lock a selected layout once, then reuse it for categories or channels.\n\n"
-            "Future previews and consistency checks will compare names against these saved locks instead of guessing from one global auto design."
+            "Review exactly which preset is locked for global, categories, and channels. "
+            "Unlock individual rules or clean stale/deleted targets. Nothing is permanent."
         ),
         color=discord.Color.blurple(),
     )
+
     embed.add_field(
-        name="Saved design rule",
-        value=(
-            f"Theme: **{getattr(theme, 'label', 'Gothic Clean')}**\n"
-            f"Font: **{_safe_str(current_lock.get('font'), 'normal').replace('_', ' ').title()}**\n"
-            f"Separator: **{_safe_str(current_lock.get('separator_id'), 'bar_full').replace('_', ' ').title()}**\n"
-            f"Category frame: **{_safe_str(current_lock.get('category_frame_id'), 'line').replace('_', ' ').title()}**\n"
-            f"Strength: **{_safe_int(current_lock.get('strength'), 4)}/5**"
-        ),
+        name="Current global preset",
+        value="\n".join((
+            f"Theme: **{getattr(theme, 'label', 'Gothic Clean')}**",
+            f"Font: **{font}**",
+            f"Separator: **{sep}**",
+            f"Category frame: **{frame}**",
+            f"Strength: **{strength}/5**",
+        )),
         inline=False,
     )
+
     embed.add_field(
-        name="Saved locks",
-        value=(
-            f"Global: **{'On' if counts['global'] else 'Off'}**\n"
-            f"Categories: **{counts['categories']}**\n"
-            f"Channels: **{counts['channels']}**"
-        ),
+        name="Saved rules / locks",
+        value="\n".join((
+            f"Global preset: **{'On' if counts['global'] else 'Off'}**",
+            f"Locked category rules: **{counts['categories']}**",
+            f"Locked channel overrides: **{counts['channels']}**",
+        )),
         inline=True,
     )
+
     embed.add_field(
-        name="Priority",
-        value="Protected item → Channel lock → Category lock → Global lock → Auto theme",
+        name="What each rule means",
+        value="\n".join((
+            "Category rule preset shows: Font `{font}` • Separator `{sep}` • Frame `{frame}` • Strength `{strength}/5`.",
+            "Channel override preset shows: Font `{font}` • Separator `{sep}` • Strength `{strength}/5`.",
+            "Priority: Protection policy → Channel override → Category rule → Global preset → Detected live style preview.",
+            "Protected Names / Unlock controls protected ticket/log/system names separately.",
+        )),
         inline=False,
     )
-    embed.set_footer(text="Use Find & Fix Inconsistencies after saving locks.")
-    return _clean_design_embed(embed)
 
+    embed.set_footer(text="Use numbered buttons to unlock one saved rule. Nothing is permanent.")
+    return _clean_design_embed(embed)
 
 
 async def build_design_plan(guild: discord.Guild, options: Mapping[str, Any]) -> list[dict[str, Any]]:
@@ -621,6 +636,8 @@ def _majority_confidence_line(summary: Mapping[str, str]) -> str:
     return "Clear majority detected."
 
 
+
+
 def _home_embed(guild: discord.Guild, options: Mapping[str, Any] | None = None) -> discord.Embed:
     options = options or {}
     counts = _lock_count(options)
@@ -637,11 +654,11 @@ def _home_embed(guild: discord.Guild, options: Mapping[str, Any] | None = None) 
     )
 
     embed.add_field(
-        name="Recommended",
+        name="Recommended workflow",
         value="\n".join((
-            "🧭 **Fix Mismatched Names** — reviews saved rules first; Live Majority is preview-only when saved rules exist.",
-            "⚡ **Change One Style** — add/change one thing, like a separator, while keeping everything else.",
-            "👁️ **Preview Saved Design** — shows what saved rules would rename before anything changes.",
+            "👁️ **Preview Saved Design** — follows your saved global/category/channel rules and shows exact names before anything changes.",
+            "🧭 **Review Name Drift** — compares names against saved category/channel rules; live detection is preview-only when saved rules exist.",
+            "⚡ **Change Channel Separator Only** — changes channel separators only. It does not change icons, font, category frames, permissions, or order.",
         )),
         inline=False,
     )
@@ -649,8 +666,8 @@ def _home_embed(guild: discord.Guild, options: Mapping[str, Any] | None = None) 
     embed.add_field(
         name="Edit one thing",
         value="\n".join((
-            "🗂️ **Category Editor** — preview, rename, or style one category.",
-            "#️⃣ **Channel Editor** — preview, rename, or style one channel.",
+            "🗂️ **Category Editor** — preview, rename, style, lock, or unlock one category.",
+            "#️⃣ **Channel Editor** — preview, rename, style, lock, or unlock one channel.",
         )),
         inline=False,
     )
@@ -673,25 +690,24 @@ def _home_embed(guild: discord.Guild, options: Mapping[str, Any] | None = None) 
             f"Theme: **{saved['theme']}**",
             f"Font: **{saved['font']}**",
             f"Strength: **{saved['strength']}**",
-            "Used by Preview Server and manual saved rules.",
+            "Used by Preview Saved Design and manual saved rules.",
         )),
         inline=True,
     )
 
     embed.add_field(
-        name="Saved rules",
+        name="Saved rules / locks",
         value="\n".join((
-            f"Global: **{'On' if counts['global'] else 'Off'}**",
-            f"Categories: **{counts['categories']}**",
-            f"Channels: **{counts['channels']}**",
-            "Fix Mismatched Names protects saved rules; use Live Majority only as a manual preview.",
+            f"Global preset: **{'On' if counts['global'] else 'Off'}**",
+            f"Locked category rules: **{counts['categories']}**",
+            f"Locked channel overrides: **{counts['channels']}**",
+            "Open **Rules & Unlocks** to see the exact preset each category/channel follows or unlock it.",
         )),
         inline=True,
     )
 
-    embed.set_footer(text="Names only • Saved rules win • Live Majority is preview-only when locks exist")
+    embed.set_footer(text="Names only • Saved rules win • Live detection is preview-only when saved rules exist")
     return _clean_design_embed(embed)
-
 
 
 def _preview_embed(guild: discord.Guild, items: list[dict[str, Any]], *, title: str = "👁 Server Design Preview") -> discord.Embed:
@@ -928,7 +944,7 @@ def _consistency_embed(guild: discord.Guild, items: list[dict[str, Any]], option
     if options.get("__majority_layout_overrode_locks"):
         embed.add_field(
             name="Saved rules ignored for this repair",
-            value=f"Review Repairs ignored **{_safe_int(options.get('__majority_layout_overrode_locks'), 0)}** saved rule(s) so it could copy the live majority.",
+            value=f"Review Name Drift ignored **{_safe_int(options.get('__majority_layout_overrode_locks'), 0)}** saved rule(s) so it could copy the live majority.",
             inline=False,
         )
     elif options.get("__majority_layout_lock_override_active"):
@@ -2809,12 +2825,12 @@ def _category_action_embed(category: discord.CategoryChannel) -> discord.Embed:
         name="Advanced options",
         value=(
             "**Custom Format** = choose font/separator/frame manually.\n"
-            "**Save Category Layout** = remember a special rule for this category.\n"
+            "**Lock Category Rule** = remember a special rule for this category.\n"
             "**Protected Names / Unlock** = control whether this category is styled, partially styled, or skipped."
         ),
         inline=False,
     )
-    embed.set_footer(text="Rename is instant • Preview/Change One Style/Custom Format use Apply later")
+    embed.set_footer(text="Rename is instant • Preview/Change Channel Separator Only/Custom Format use Apply later")
     return _clean_design_embed(embed)
 
 def _channel_action_embed(channel: discord.abc.GuildChannel) -> discord.Embed:
@@ -2847,12 +2863,12 @@ def _channel_action_embed(channel: discord.abc.GuildChannel) -> discord.Embed:
         name="Advanced options",
         value=(
             "**Custom Format** = choose this item's exact look.\n"
-            "**Save Channel Layout** = remember a special rule for this item.\n"
+            "**Lock Channel Rule** = remember a special rule for this item.\n"
             "**Protected Names / Unlock** = control whether this item is styled, partially styled, or skipped."
         ),
         inline=False,
     )
-    embed.set_footer(text="Rename is instant • Preview/Change One Style/Custom Format use Apply later")
+    embed.set_footer(text="Rename is instant • Preview/Change Channel Separator Only/Custom Format use Apply later")
     return _clean_design_embed(embed)
 
 class CategoryEditorActionView(discord.ui.View):
@@ -2901,7 +2917,7 @@ class CategoryEditorActionView(discord.ui.View):
     async def edit_exact_format(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         await _open_exact_format_editor(interaction, scope="category", target_id=self.category_id)
 
-    @discord.ui.button(label="Save Category Layout", emoji="🔒", style=discord.ButtonStyle.secondary, custom_id="dank_design:category_lock_here", row=2)
+    @discord.ui.button(label="Lock Category Rule", emoji="🔒", style=discord.ButtonStyle.secondary, custom_id="dank_design:category_lock_here", row=2)
     async def lock_here(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         if not await _require_design_permission(interaction):
             return
@@ -2914,7 +2930,7 @@ class CategoryEditorActionView(discord.ui.View):
             options = await _save_category_lock(interaction, self.category_id)
             counts = _lock_count(options)
             embed = _category_action_embed(category)
-            embed.title = "✅ Category Rule Saved"
+            embed.title = "✅ Category Rule Locked"
             embed.add_field(
                 name="Saved rules",
                 value=f"Global: {counts['global']} • Categories: {counts['categories']} • Channels: {counts['channels']}",
@@ -2991,7 +3007,7 @@ class ChannelEditorActionView(discord.ui.View):
     async def edit_exact_format(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         await _open_exact_format_editor(interaction, scope="channel", target_id=self.channel_id)
 
-    @discord.ui.button(label="Save Channel Layout", emoji="🔒", style=discord.ButtonStyle.secondary, custom_id="dank_design:channel_lock_here", row=1)
+    @discord.ui.button(label="Lock Channel Rule", emoji="🔒", style=discord.ButtonStyle.secondary, custom_id="dank_design:channel_lock_here", row=1)
     async def lock_here(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         if not await _require_design_permission(interaction):
             return
@@ -3004,7 +3020,7 @@ class ChannelEditorActionView(discord.ui.View):
             options = await _save_channel_lock(interaction, self.channel_id)
             counts = _lock_count(options)
             embed = _channel_action_embed(channel)
-            embed.title = "✅ Channel Rule Saved"
+            embed.title = "✅ Channel Rule Locked"
             embed.add_field(
                 name="Saved rules",
                 value=f"Global: {counts['global']} • Categories: {counts['categories']} • Channels: {counts['channels']}",
@@ -3253,7 +3269,7 @@ def _doctor_embed(guild: discord.Guild, options: Mapping[str, Any], items: list[
     else:
         embed.add_field(
             name="Recommended next step",
-            value="Use **Find & Fix Inconsistencies** for drift, or **Category/Channel Editor** to lock missing categories.",
+            value="Use **Find & Review Name Drift** for drift, or **Category/Channel Editor** to lock missing categories.",
             inline=False,
         )
 
@@ -3287,7 +3303,7 @@ class DesignDoctorView(discord.ui.View):
     def __init__(self) -> None:
         super().__init__(timeout=900)
 
-    @discord.ui.button(label="Find & Fix Inconsistencies", emoji="🧭", style=discord.ButtonStyle.success, custom_id="dank_design:doctor_consistency", row=0)
+    @discord.ui.button(label="Find & Review Name Drift", emoji="🧭", style=discord.ButtonStyle.success, custom_id="dank_design:doctor_consistency", row=0)
     async def consistency(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         if not await _require_design_permission(interaction):
             return
@@ -3345,7 +3361,7 @@ class DesignDoctorView(discord.ui.View):
 
 
 # ---------------------------------------------------------------------------
-# Format Lock Manager
+# Lock / Unlock Saved Rules
 # ---------------------------------------------------------------------------
 
 LOCK_MANAGER_PAGE_SIZE = 8
@@ -3410,7 +3426,7 @@ def _format_lock_manager_embed(guild: discord.Guild, options: Mapping[str, Any],
 
     stale_count = sum(1 for row in rows if not row.get("exists"))
     embed = discord.Embed(
-        title="🔐 Format Lock Manager",
+        title="🔐 Lock / Unlock Saved Rules",
         description=(
             "Review saved global/category/channel locks, remove individual overrides, or clean stale locks."
         ),
@@ -3437,7 +3453,7 @@ def _format_lock_manager_embed(guild: discord.Guild, options: Mapping[str, Any],
 
     embed.add_field(
         name="Priority order",
-        value="Protected item → Channel override → Category lock → Global lock → Auto theme",
+        value="Protection policy → Channel override → Category rule → Global preset → Detected live style preview",
         inline=False,
     )
 
@@ -3504,7 +3520,7 @@ async def _clean_stale_format_locks(interaction: discord.Interaction) -> tuple[d
 class LockManagerButton(discord.ui.Button):
     def __init__(self, *, row: int = 4) -> None:
         super().__init__(
-            label="Manage Locks",
+            label="Unlock Saved Rules",
             emoji="🔐",
             style=discord.ButtonStyle.secondary,
             custom_id="dank_design:manage_locks",
@@ -3529,7 +3545,7 @@ class LockRemoveButton(discord.ui.Button):
         label = _safe_str(row_data.get("label"), "Unknown")
         emoji = {"global": "🌐", "category": "🗂️", "channel": "#️⃣"}.get(scope, "🔒")
         super().__init__(
-            label=f"Remove {display_index}. {_short_label(label, 46) if '_short_label' in globals() else label[:46]}",
+            label=f"Unlock {display_index}. {_short_label(label, 46) if '_short_label' in globals() else label[:46]}",
             emoji=emoji,
             style=discord.ButtonStyle.danger if not row_data.get("exists") else discord.ButtonStyle.secondary,
             custom_id=f"dank_design:remove_lock:{scope}:{row_data.get('target_id')}",
@@ -3880,7 +3896,7 @@ class ProtectionModeSelect(discord.ui.Select):
         )
         embed.add_field(
             name="Next step",
-            value="Run **Fix Mismatched Names** or **Preview Saved Design** to see the result.",
+            value="Run **Review Name Drift** or **Preview Saved Design** to see the result.",
             inline=False,
         )
         await interaction.response.edit_message(embed=embed, view=ChannelEditorActionView(self.channel_id) if "ChannelEditorActionView" in globals() else None)
@@ -3951,7 +3967,7 @@ def _start_here_embed() -> discord.Embed:
     embed.add_field(
         name="Fix only messy/inconsistent names",
         value=(
-            "**1.** Press **Fix Inconsistencies**.\n"
+            "**1.** Press **Review Name Drift**.\n"
             "**2.** Review what drifted.\n"
             "**3.** Press **Apply Reviewed Changes**."
         ),
@@ -4006,7 +4022,7 @@ class StartHereView(discord.ui.View):
 def _editors_locks_embed(guild: discord.Guild, options: Mapping[str, Any]) -> discord.Embed:
     counts = _lock_count(options) if "_lock_count" in globals() else {"global": 0, "categories": 0, "channels": 0}
     embed = discord.Embed(
-        title="🧰 Editors & Locks",
+        title="🧰 Rules & Unlocks",
         description=(
             "Use this section only when you want exact control.\n\n"
             "**Category Editor** = design a whole category.\n"
@@ -4043,7 +4059,7 @@ def _editors_locks_embed(guild: discord.Guild, options: Mapping[str, Any]) -> di
 class EditorsLocksButton(discord.ui.Button):
     def __init__(self, *, row: int = 3) -> None:
         super().__init__(
-            label="Editors & Locks",
+            label="Rules & Unlocks",
             emoji="🧰",
             style=discord.ButtonStyle.primary,
             custom_id="dank_design:editors_locks",
@@ -4100,7 +4116,7 @@ class EditorsLocksView(discord.ui.View):
             view=FormatLocksView(),
         )
 
-    @discord.ui.button(label="Manage Saved Rules", emoji="🔐", style=discord.ButtonStyle.secondary, custom_id="dank_design:submenu_manage_locks", row=1)
+    @discord.ui.button(label="Unlock Saved Rules", emoji="🔐", style=discord.ButtonStyle.secondary, custom_id="dank_design:submenu_manage_locks", row=1)
     async def manage_locks(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         if not await _require_design_permission(interaction):
             return
@@ -4172,7 +4188,7 @@ def _design_help_embed() -> discord.Embed:
         name="Best workflow",
         value=(
             "**Quick server style:** Preview Server\n"
-            "**Fix drift:** Review Repairs\n"
+            "**Fix drift:** Review Name Drift\n"
             "**Exact control:** Category Editor or Channel Editor → Edit Custom Format → Save Rule & Preview"
         ),
         inline=False,
@@ -4184,7 +4200,7 @@ def _design_help_embed() -> discord.Embed:
         ),
         inline=False,
     )
-    embed.set_footer(text="Use More Tools for problem checks, saved rules, rename protection, rollback, and help.")
+    embed.set_footer(text="Use Rules & Unlocks for problem checks, saved rules, rename protection, rollback, and help.")
     return _clean_design_embed(embed)
 
 
@@ -4193,7 +4209,7 @@ def _advanced_tools_embed() -> discord.Embed:
         title="⚙️ Dank Design Advanced Tools",
         description=(
             "These tools are useful after the basic workflow. "
-            "Most users only need Preview Saved Design, Fix Mismatched Names, Category Editor, or Channel Editor."
+            "Most users only need Preview Saved Design, Review Name Drift, Category Editor, or Channel Editor."
         ),
         color=discord.Color.blurple(),
     )
@@ -4202,7 +4218,7 @@ def _advanced_tools_embed() -> discord.Embed:
         value=(
             "🩺 **Check Design Problems** — audit saved rules, drift, duplicates, blockers.\n"
             "🔒 **Saved Layout Rules** — save reusable layouts.\n"
-            "🔐 **Manage Saved Rules** — remove old overrides or stale locks.\n"
+            "🔐 **Unlock Saved Rules** — remove old overrides or stale locks.\n"
             "🛡 **Protected Names / Unlock** — choose what should never be renamed.\n"
             "↩️ **Rollback** — undo the last applied rename batch.\n"
             "❓ **Help** — explain the workflow."
@@ -4236,7 +4252,7 @@ class AdvancedToolsView(discord.ui.View):
         options = await _load_design_options(int(guild.id))
         await interaction.response.edit_message(embed=_format_locks_embed(guild, options), view=FormatLocksView())
 
-    @discord.ui.button(label="Manage Saved Rules", emoji="🔐", style=discord.ButtonStyle.secondary, custom_id="dank_design:advanced_manage_locks", row=1)
+    @discord.ui.button(label="Unlock Saved Rules", emoji="🔐", style=discord.ButtonStyle.secondary, custom_id="dank_design:advanced_manage_locks", row=1)
     async def manage_locks(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         if not await _require_design_permission(interaction):
             return
@@ -4699,11 +4715,11 @@ def _style_change_embed(guild: discord.Guild, options: Mapping[str, Any], *, sep
     _analysis, _repair_options, live_summary = _infer_live_majority_context(guild, options)
 
     embed = discord.Embed(
-        title="⚡ Change One Style",
+        title="⚡ Change Channel Separator Only",
         description=(
-            "Change **one visual rule** while keeping the rest of the server style the same.\n\n"
-            "**Current tool:** Channel Separator\n"
-            "Choosing a separator only updates this draft. Use **Preview This Change** next, then **Apply Reviewed Changes**."
+            "This tool changes only the **separator between an existing icon and channel name**.\n\n"
+            "It keeps current emoji/icons, font, category frames, permissions, tickets, verification, and channel order unchanged.\n"
+            "Use **Preview This Change** next, then **Apply Reviewed Changes**."
         ),
         color=discord.Color.blurple(),
     )
@@ -4780,7 +4796,7 @@ def _style_change_preview_embed(guild: discord.Guild, items: list[dict[str, Any]
     if failed_lines and failed_lines != ["No matching preview rows."]:
         embed.add_field(name="Needs review", value="\n".join(failed_lines)[:1024], inline=False)
         embed.add_field(
-            name="How to fix",
+            name="How to fix next",
             value="\n".join(_style_change_issue_lines(items))[:1024],
             inline=False,
         )
@@ -4871,7 +4887,7 @@ class DesignHomeView(discord.ui.View):
         self.add_item(ThemeSelect(_safe_str(options.get("theme_id"), "gothic_clean")))
         self.add_item(StrengthSelect(_safe_int(options.get("strength"), 2)))
 
-    @discord.ui.button(label="Fix Mismatched Names", emoji="🧭", style=discord.ButtonStyle.success, custom_id="dank_design:consistency_check", row=2)
+    @discord.ui.button(label="Review Name Drift", emoji="🧭", style=discord.ButtonStyle.success, custom_id="dank_design:consistency_check", row=2)
     async def consistency_check(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         if not await _require_design_permission(interaction):
             return
@@ -4907,7 +4923,7 @@ class DesignHomeView(discord.ui.View):
             view=DesignPreviewView(can_apply=not has_blockers and has_changes),
         )
 
-    @discord.ui.button(label="Change One Style", emoji="⚡", style=discord.ButtonStyle.secondary, custom_id="dank_design:style_change", row=2)
+    @discord.ui.button(label="Change Channel Separator Only", emoji="⚡", style=discord.ButtonStyle.secondary, custom_id="dank_design:style_change", row=2)
     async def style_change(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         if not await _require_design_permission(interaction):
             return
@@ -4971,7 +4987,7 @@ class DesignHomeView(discord.ui.View):
             return
         await interaction.response.edit_message(embed=_start_here_embed(), view=StartHereView())
 
-    @discord.ui.button(label="More Tools", emoji="⚙️", style=discord.ButtonStyle.secondary, custom_id="dank_design:advanced_tools", row=4)
+    @discord.ui.button(label="Rules & Unlocks", emoji="⚙️", style=discord.ButtonStyle.secondary, custom_id="dank_design:advanced_tools", row=4)
     async def advanced_tools(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         if not await _require_design_permission(interaction):
             return
@@ -5039,7 +5055,7 @@ class DesignPreviewView(discord.ui.View):
             await _persist_rollback_snapshot(int(guild.id), snapshot_payload)
         _PENDING.pop(key, None)
         mode = _safe_str(payload.get("mode"), "preview")
-        complete_title = "✅ Design Inconsistencies Fixed" if mode == "consistency_check" else ("✅ Change One Style Applied" if mode.startswith("style_change") else "✅ Server Design Apply Complete")
+        complete_title = "✅ Design Inconsistencies Fixed" if mode == "consistency_check" else ("✅ Change Channel Separator Only Applied" if mode.startswith("style_change") else "✅ Server Design Apply Complete")
         complete_description = (
             f"Changed **{changed}** item(s). Skipped **{skipped}**. Failed **{len(failed)}**."
             if mode not in {"consistency_check", "style_change_separator"}

@@ -12,8 +12,8 @@ def test_home_uses_clear_workflows_not_old_vague_labels() -> None:
     assert "Preview Saved Design" in PUBLIC
     assert "Review Name Drift" in PUBLIC
     assert "Change Channel Separator Only" in PUBLIC
-    assert "Change One Style" not in PUBLIC
-    assert "Fix Mismatched Names" not in PUBLIC
+    assert "Change Channel Separator Only" not in PUBLIC
+    assert "Review Name Drift" not in PUBLIC
 
 
 def test_rules_unlocks_surface_is_obvious() -> None:
@@ -23,7 +23,7 @@ def test_rules_unlocks_surface_is_obvious() -> None:
     assert "Nothing is permanent" in PUBLIC
     assert "Locked category rules" in PUBLIC
     assert "Locked channel overrides" in PUBLIC
-    assert "Editors & Locks" not in PUBLIC
+    assert "Rules & Unlocks" not in PUBLIC
 
 
 def test_lock_manager_shows_exact_presets() -> None:
@@ -37,13 +37,13 @@ def test_lock_manager_shows_exact_presets() -> None:
 def test_separator_only_tool_explains_scope() -> None:
     assert "This tool changes only the **separator between an existing icon and channel name**" in PUBLIC
     assert "It keeps current emoji/icons, font, category frames, permissions, tickets, verification, and channel order unchanged." in PUBLIC
-    assert "How to fix next" in PUBLIC
+    assert "How to fix next next next next" in PUBLIC
 
 
 def test_old_safe_repair_test_expectations_updated() -> None:
     assert "Saved rules / locks" in SAFE_TEST
     assert "compares names against saved category/channel rules" in SAFE_TEST
-    assert "reviews saved rules first" not in SAFE_TEST
+    assert "compares names against saved category/channel rules" not in SAFE_TEST
 
 
 if __name__ == "__main__":

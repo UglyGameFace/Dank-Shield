@@ -18,9 +18,9 @@ def test_native_design_owns_enhancements_not_startup_loading() -> None:
 
 
 def test_fix_mismatched_names_copy_mentions_saved_rules_win() -> None:
-    assert "Saved rules win" in PUBLIC
-    assert "Live Majority is preview-only when locks exist" in PUBLIC
-    assert "reviews saved rules first" in PUBLIC
+    assert "Saved rules / locks" in PUBLIC
+    assert "live detection is preview-only when saved rules exist" in PUBLIC
+    assert "compares names against saved category/channel rules" in PUBLIC
     assert "copies the live server style" not in PUBLIC
     assert "ignores saved rules" not in PUBLIC
 
