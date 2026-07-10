@@ -1091,7 +1091,7 @@ def build_alt_detection_summary(member: discord.Member) -> str:
     profile = build_member_risk_profile(member)
 
     if bool(profile.get("is_bot_account")):
-        return "BOT ACCOUNT • excluded from raid/alt scoring"
+        return "Official Bot: Yes\nAlt/Raid Risk: excluded from human raid/alt scoring\nDM Raider Report Risk: separate report flow"
 
     score = int(profile.get("score") or 0)
     level = str(profile.get("level") or "low").upper()
@@ -1110,8 +1110,10 @@ def build_alt_detection_summary(member: discord.Member) -> str:
     manual_likely = int(profile.get("manual_likely_match_count") or 0)
 
     parts: List[str] = [
-        f"{tier} ({level} / {score}/100)",
+        "Official Bot: No",
+        f"Alt/Raid Risk: {tier} ({level} / {score}/100)",
         f"Account age: {age_human}",
+        "DM Raider Report Risk: separate user-report evidence required",
     ]
 
     signal_parts: List[str] = []
