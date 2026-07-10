@@ -256,37 +256,18 @@ def patch_public() -> None:
 
 
 def patch_tests() -> None:
-    for path in (SAFE_TEST, UX_TEST):
-        if not path.exists():
-            continue
-        text = path.read_text(encoding="utf-8")
+    # Keep tests explicit. Do not globally replace forbidden strings inside tests,
+    # because tests are allowed to mention old labels as negative assertions.
+    if SAFE_TEST.exists():
+        text = SAFE_TEST.read_text(encoding="utf-8")
+        text = text.replace('assert "Saved rules win" in PUBLIC', 'assert "Saved rules / locks" in PUBLIC')
+        text = text.replace('assert "Live Majority is preview-only when locks exist" in PUBLIC', 'assert "live detection is preview-only when saved rules exist" in PUBLIC')
+        text = text.replace('assert "reviews saved rules first" in PUBLIC', 'assert "compares names against saved category/channel rules" in PUBLIC')
+        SAFE_TEST.write_text(text, encoding="utf-8")
+        print(f"✅ updated {SAFE_TEST.relative_to(ROOT)}")
 
-        for old, new in REPLACEMENTS.items():
-            text = text.replace(old, new)
-
-        for _ in range(4):
-            text = text.replace("Change Channel Separator Only Only", "Change Channel Separator Only")
-
-        text = text.replace("Saved rules win", "Saved rules / locks")
-        text = text.replace("Live Majority is preview-only when locks exist", "live detection is preview-only when saved rules exist")
-        text = text.replace("reviews saved rules first", "compares names against saved category/channel rules")
-        text = text.replace("How to fix", "How to fix next")
-
-        forbidden = (
-            "Fix Mismatched Names",
-            "Change One Style",
-            "Editors & Locks",
-            "Format Lock Manager",
-            "Review Repairs",
-            "Rename Protection",
-        )
-        remaining = [token for token in forbidden if token in text]
-        if remaining:
-            raise SystemExit(f"Old wording remains in {path}: " + ", ".join(remaining))
-
-        path.write_text(text, encoding="utf-8")
-        print(f"✅ updated {path.relative_to(ROOT)}")
-
+    UX_TEST.write_text('from __future__ import annotations\n\nfrom pathlib import Path\n\nROOT = Path(__file__).resolve().parents[1]\nPUBLIC = (ROOT / "stoney_verify/commands_ext/public_design_studio.py").read_text(encoding="utf-8")\nSAFE_TEST = (ROOT / "tools/test_dank_design_safe_repair_cleanup_static.py").read_text(encoding="utf-8")\n\n\ndef test_home_uses_clear_workflows_not_old_vague_labels() -> None:\n    assert "Recommended workflow" in PUBLIC\n    assert "Preview Saved Design" in PUBLIC\n    assert "Review Name Drift" in PUBLIC\n    assert "Change Channel Separator Only" in PUBLIC\n    assert "Change One Style" not in PUBLIC\n    assert "Fix Mismatched Names" not in PUBLIC\n\n\ndef test_rules_unlocks_surface_is_obvious() -> None:\n    assert "Rules & Unlocks" in PUBLIC\n    assert "Lock / Unlock Saved Rules" in PUBLIC\n    assert "Unlock Saved Rules" in PUBLIC\n    assert "Nothing is permanent" in PUBLIC\n    assert "Locked category rules" in PUBLIC\n    assert "Locked channel overrides" in PUBLIC\n    assert "Editors & Locks" not in PUBLIC\n    assert "Format Lock Manager" not in PUBLIC\n\n\ndef test_lock_manager_shows_exact_presets() -> None:\n    assert "Frame `{frame}`" in PUBLIC\n    assert "Separator `{sep}`" in PUBLIC\n    assert "Strength `{strength}/5`" in PUBLIC\n    assert "Protection policy → Channel override → Category rule → Global preset" in PUBLIC\n\n\ndef test_separator_only_tool_explains_scope() -> None:\n    assert "Change Channel Separator Only" in PUBLIC\n    assert (\n        "permissions, tickets, verification, and channel order" in PUBLIC\n        or "does not change icons, font, category frames, permissions, or order" in PUBLIC\n    )\n\n\ndef test_old_safe_repair_test_expectations_updated() -> None:\n    assert "Saved rules / locks" in SAFE_TEST\n    assert "compares names against saved category/channel rules" in SAFE_TEST\n    assert "reviews saved rules first" not in SAFE_TEST\n\n\nif __name__ == "__main__":\n    for test in (\n        test_home_uses_clear_workflows_not_old_vague_labels,\n        test_rules_unlocks_surface_is_obvious,\n        test_lock_manager_shows_exact_presets,\n        test_separator_only_tool_explains_scope,\n        test_old_safe_repair_test_expectations_updated,\n    ):\n        test()\n        print(f"PASS {test.__name__}")\n', encoding="utf-8")
+    print(f"✅ rewrote {UX_TEST.relative_to(ROOT)}")
 
 def main() -> None:
     patch_public()
