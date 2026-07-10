@@ -7,6 +7,7 @@ Goals:
 - Rename vague buttons like "Change One Style" to the actual action: separator-only.
 - Make saved category/channel rules visibly lockable/unlockable.
 - Show per-rule presets in the lock manager, including separator, font, frame, and strength.
+- Keep "Protected Names / Unlock" wording intact because separate tests and UX already use it.
 - Update old static test copy so older expectations do not pull the confusing wording back.
 
 Run from repo root:
@@ -96,7 +97,6 @@ def patch_public() -> None:
         "Save Channel Layout": "Lock Channel Rule",
         "Category Rule Saved": "Category Rule Locked",
         "Channel Rule Saved": "Channel Rule Locked",
-        "Protected Names / Unlock": "Protection: Lock / Unlock",
         "Use More Tools for problem checks, saved rules, rename protection, rollback, and help.": "Use Rules & Unlocks to see exact presets, unlock category/channel rules, manage protection, rollback, and help.",
         "Preview/Change One Style/Custom Format": "Preview/Change Separator/Custom Format",
         "✅ Change One Style Applied": "✅ Separator Change Applied",
@@ -176,6 +176,7 @@ def patch_public() -> None:
         "Locked channel overrides",
         "Nothing is permanent",
         "Frame `{frame}`",
+        "Protected Names / Unlock",
         "Protection policy → Channel override → Category rule → Global preset",
     )
     missing = [token for token in required if token not in text]
