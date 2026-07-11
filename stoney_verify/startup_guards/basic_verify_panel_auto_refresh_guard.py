@@ -12,6 +12,10 @@ from typing import Any, Optional
 
 import discord
 
+from stoney_verify.setup_engine.verification_modes import (
+    effective_verification_mode,
+)
+
 _PATCHED = False
 _READY_RAN = False
 
@@ -85,13 +89,29 @@ def _channel_by_name(guild: discord.Guild, *tokens: str) -> Optional[discord.Tex
     return None
 
 
-def _verify_channel(guild: discord.Guild, cfg: Any) -> Optional[discord.TextChannel]:
-    cid = _safe_int(_cfg_value(cfg, "verify_channel_id", "verification_channel_id"), 0)
-    if cid > 0:
-        channel = guild.get_channel(cid)
-        if isinstance(channel, discord.TextChannel):
-            return channel
-    return _channel_by_name(guild, "verification", "verify")
+def _verify_channel(
+    guild: discord.Guild,
+    cfg: Any,
+) -> Optional[discord.TextChannel]:
+    """Return only the explicitly configured verification channel.
+
+    Startup repair must never guess by channel name. A guild owner or staff
+    member must explicitly configure the verification channel before Dank
+    Shield is allowed to edit an existing panel during boot.
+    """
+    cid = _safe_int(
+        _cfg_value(
+            cfg,
+            "verify_channel_id",
+            "verification_channel_id",
+        ),
+        0,
+    )
+    if cid <= 0:
+        return None
+
+    channel = guild.get_channel(cid)
+    return channel if isinstance(channel, discord.TextChannel) else None
 
 
 def _can_scan(channel: discord.TextChannel) -> bool:
@@ -121,8 +141,21 @@ async def refresh_basic_verify_panel(guild: discord.Guild, *, reason: str = "sta
             pass
 
         cfg = await _load_cfg(guild)
+
+        mode = effective_verification_mode(guild, cfg)
+        if mode != "basic_button":
+            _log(
+                "skipped disabled Basic Verify refresh "
+                f"guild={guild.id} mode={mode}"
+            )
+            return False
+
         channel = _verify_channel(guild, cfg)
         if not isinstance(channel, discord.TextChannel):
+            _log(
+                "skipped Basic Verify refresh; no explicitly configured "
+                f"verification channel guild={guild.id}"
+            )
             return False
         if not _can_scan(channel):
             _warn(f"cannot scan verify channel guild={guild.id} channel={getattr(channel, 'id', 0)}")

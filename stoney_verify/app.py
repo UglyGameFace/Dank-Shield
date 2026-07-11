@@ -72,6 +72,22 @@ from .tickets_new import panel as _tickets_panel  # noqa: F401
 from .tickets_new import sync_service as _tickets_sync_service  # noqa: F401
 from .verification_new import service as _verification_service  # noqa: F401
 from .verification_new import voice_verify as _voice_verify_service  # noqa: F401
+from .verification_new.basic_verify import (
+    install_basic_verify_runtime as _install_basic_verify_runtime,
+)
+
+# Native Basic Verify persistence. This installs both the fixed persistent
+# view and a delayed interaction fallback before Discord login. Startup only
+# fails when neither handler path can be registered.
+try:
+    _install_basic_verify_runtime(bot, strict=True)
+except Exception as e:
+    print(
+        "❌ critical Basic Verify runtime install failed:",
+        repr(e),
+    )
+    raise
+
 
 # Native authoritative member activity tracking. This is an explicit runtime
 # service, not a startup monkey patch.

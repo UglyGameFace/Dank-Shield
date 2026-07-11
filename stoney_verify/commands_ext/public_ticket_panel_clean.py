@@ -694,6 +694,18 @@ async def _handle_panel_button(i: discord.Interaction) -> None:
     await _ephemeral(i, "Choose a ticket type.", embed=embed, view=TicketSelectView(rows))
 
 
+
+async def handle_public_ticket_panel_click(
+    interaction: discord.Interaction,
+) -> None:
+    """Canonical public Create Ticket interaction entry point.
+
+    Current clean panels and old compatibility panels both delegate here so a
+    restart cannot revive a second ticket-creation workflow.
+    """
+    await _handle_panel_button(interaction)
+
+
 class PublicCreateTicketPanelView(discord.ui.View):
     def __init__(self) -> None:
         super().__init__(timeout=None)
@@ -891,4 +903,7 @@ def register_public_ticket_panel_clean(bot: Any, tree: Any) -> None:
             _warn(f"could not register /ticket-panel commands: {e!r}")
 
 
-__all__ = ["register_public_ticket_panel_clean"]
+__all__ = [
+    "handle_public_ticket_panel_click",
+    "register_public_ticket_panel_clean",
+]

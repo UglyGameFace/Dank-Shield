@@ -101,7 +101,6 @@ _STARTUP_GUARDS: Tuple[str, ...] = (
     "stoney_verify.startup_guards.vc_setup_one_press_fix",
     "stoney_verify.startup_guards.vc_per_guild_access_fix",
     "stoney_verify.startup_guards.public_no_env_runtime_config",
-    "stoney_verify.startup_guards.legacy_public_ticket_panel_disable",
     "stoney_verify.startup_guards.ticket_panel_doctor_command",
     "stoney_verify.startup_guards.ticket_panel_doctor_production_wording",
     "stoney_verify.startup_guards.public_ticket_panel_clean_hardening",

@@ -7,14 +7,12 @@ from discord import app_commands
 
 from ..guild_config import get_guild_config
 from ..verification_new.basic_verify import (
-    maybe_handle_basic_verify_interaction,
+    install_basic_verify_runtime,
     post_basic_verify_panel,
-    register_basic_verify_runtime,
 )
 from .public_verify_group import _cfg_value, _safe_int, _send, _staff_only, verify_group
 
 _ATTACHED = False
-_LISTENER_ATTACHED = False
 
 
 def _cfg_int(cfg: Any, *keys: str) -> int:
@@ -41,31 +39,11 @@ async def _pick_channel(interaction: discord.Interaction) -> Optional[discord.Te
 
 
 def _install_basic_verify_runtime(bot: Any) -> bool:
-    global _LISTENER_ATTACHED
-    registered = register_basic_verify_runtime(bot)
-    if registered:
-        return True
-
-    if _LISTENER_ATTACHED:
-        return True
-
-    listen = getattr(bot, "listen", None)
-    if not callable(listen):
-        return False
-
-    @bot.listen("on_interaction")
-    async def _basic_verify_panel_runtime(interaction: discord.Interaction) -> None:
-        try:
-            await maybe_handle_basic_verify_interaction(interaction)
-        except Exception:
-            pass
-
-    _LISTENER_ATTACHED = True
-    try:
-        print("public_verify_basic_panel fallback runtime installed")
-    except Exception:
-        pass
-    return True
+    """Delegate to the native restart-safe Basic Verify runtime."""
+    return install_basic_verify_runtime(
+        bot,
+        strict=False,
+    )
 
 
 async def verify_panel(interaction: discord.Interaction) -> None:

@@ -20,6 +20,8 @@ from stoney_verify.setup_engine.verification_modes import BASIC_VERIFY_CUSTOM_ID
 
 _BASIC_VERIFY_LOCKS: dict[str, asyncio.Lock] = {}
 _RUNTIME_VIEW_REGISTERED = False
+_RUNTIME_FALLBACK_LISTENER_REGISTERED = False
+_RUNTIME_REGISTRATION_ERROR: str = ""
 
 
 def _safe_int(value: Any, default: int = 0) -> int:
@@ -282,23 +284,148 @@ class BasicVerifyView(discord.ui.View):
         self.add_item(BasicVerifyButton())
 
 
-def register_basic_verify_runtime(bot: Any) -> bool:
-    global _RUNTIME_VIEW_REGISTERED
-    if _RUNTIME_VIEW_REGISTERED:
-        return True
+async def _basic_verify_fallback_listener(
+    interaction: discord.Interaction,
+) -> None:
+    """Handle an old Basic Verify button if view dispatch ever misses it."""
     try:
-        add_view = getattr(bot, "add_view", None)
-        if callable(add_view):
-            add_view(BasicVerifyView())
-            _RUNTIME_VIEW_REGISTERED = True
-            print("✅ basic_verify: persistent Basic Verify button view registered")
-            return True
+        if interaction.type is not discord.InteractionType.component:
+            return
+
+        data = (
+            interaction.data
+            if isinstance(interaction.data, dict)
+            else {}
+        )
+        custom_id = str(data.get("custom_id") or "")
+        if custom_id != BASIC_VERIFY_CUSTOM_ID:
+            return
+
+        # Give discord.py's persistent view the first chance to handle it.
+        await asyncio.sleep(0.15)
+
+        if interaction.response.is_done():
+            return
+
+        await maybe_handle_basic_verify_interaction(interaction)
     except Exception as exc:
         try:
-            print(f"⚠️ basic_verify: persistent view registration failed: {type(exc).__name__}: {exc}")
+            print(
+                "❌ basic_verify: fallback interaction handler failed "
+                f"guild={getattr(getattr(interaction, 'guild', None), 'id', 0)} "
+                f"user={getattr(getattr(interaction, 'user', None), 'id', 0)} "
+                f"error={type(exc).__name__}: {exc}"
+            )
         except Exception:
             pass
-    return False
+
+
+def basic_verify_runtime_status() -> dict[str, Any]:
+    return {
+        "persistent_view_registered": bool(
+            _RUNTIME_VIEW_REGISTERED
+        ),
+        "fallback_listener_registered": bool(
+            _RUNTIME_FALLBACK_LISTENER_REGISTERED
+        ),
+        "ready": bool(
+            _RUNTIME_VIEW_REGISTERED
+            or _RUNTIME_FALLBACK_LISTENER_REGISTERED
+        ),
+        "error": str(_RUNTIME_REGISTRATION_ERROR or ""),
+    }
+
+
+def install_basic_verify_runtime(
+    bot: Any,
+    *,
+    strict: bool = False,
+) -> bool:
+    """Install both restart-safe Basic Verify interaction paths.
+
+    The fixed persistent view is the primary route. The global listener is a
+    delayed fallback for already-posted messages if discord.py view dispatch
+    ever misses an interaction after restart.
+    """
+    global _RUNTIME_VIEW_REGISTERED
+    global _RUNTIME_FALLBACK_LISTENER_REGISTERED
+    global _RUNTIME_REGISTRATION_ERROR
+
+    errors: list[str] = []
+
+    if not _RUNTIME_VIEW_REGISTERED:
+        try:
+            add_view = getattr(bot, "add_view", None)
+            if not callable(add_view):
+                raise RuntimeError(
+                    "Discord client has no callable add_view"
+                )
+
+            add_view(BasicVerifyView())
+            _RUNTIME_VIEW_REGISTERED = True
+        except Exception as exc:
+            errors.append(
+                "persistent view: "
+                f"{type(exc).__name__}: {exc}"
+            )
+
+    if not _RUNTIME_FALLBACK_LISTENER_REGISTERED:
+        try:
+            add_listener = getattr(bot, "add_listener", None)
+            if not callable(add_listener):
+                raise RuntimeError(
+                    "Discord client has no callable add_listener"
+                )
+
+            add_listener(
+                _basic_verify_fallback_listener,
+                "on_interaction",
+            )
+            _RUNTIME_FALLBACK_LISTENER_REGISTERED = True
+        except Exception as exc:
+            errors.append(
+                "fallback listener: "
+                f"{type(exc).__name__}: {exc}"
+            )
+
+    ready = bool(
+        _RUNTIME_VIEW_REGISTERED
+        or _RUNTIME_FALLBACK_LISTENER_REGISTERED
+    )
+
+    _RUNTIME_REGISTRATION_ERROR = " | ".join(errors)
+
+    if ready and not errors:
+        print(
+            "✅ basic_verify runtime ready "
+            "persistent_view=True fallback_listener=True"
+        )
+    elif ready:
+        print(
+            "⚠️ basic_verify runtime degraded but operational "
+            f"persistent_view={_RUNTIME_VIEW_REGISTERED} "
+            "fallback_listener="
+            f"{_RUNTIME_FALLBACK_LISTENER_REGISTERED} "
+            f"error={_RUNTIME_REGISTRATION_ERROR}"
+        )
+    else:
+        message = (
+            "Basic Verify has no registered interaction handler"
+        )
+        if _RUNTIME_REGISTRATION_ERROR:
+            message += f": {_RUNTIME_REGISTRATION_ERROR}"
+
+        print(f"❌ basic_verify runtime unavailable: {message}")
+
+        if strict:
+            raise RuntimeError(message)
+
+    return ready
+
+
+def register_basic_verify_runtime(bot: Any) -> bool:
+    """Backward-compatible alias for older callers."""
+    return install_basic_verify_runtime(bot, strict=False)
 
 
 async def post_basic_verify_panel(channel: discord.TextChannel, *, actor_id: int = 0) -> str:
@@ -413,8 +540,10 @@ async def maybe_handle_basic_verify_interaction(interaction: discord.Interaction
 
 __all__ = [
     "BasicVerifyView",
-    "register_basic_verify_runtime",
     "apply_basic_verification",
-    "post_basic_verify_panel",
+    "basic_verify_runtime_status",
+    "install_basic_verify_runtime",
     "maybe_handle_basic_verify_interaction",
+    "post_basic_verify_panel",
+    "register_basic_verify_runtime",
 ]

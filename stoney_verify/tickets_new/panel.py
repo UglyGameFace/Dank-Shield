@@ -2815,7 +2815,15 @@ class LegacyTicketChannelCompatibilityView(discord.ui.View):
 
 
 class TicketPanelView(discord.ui.View):
-    def __init__(self):
+    """Compatibility handler for already-posted legacy ticket panels.
+
+    Old Discord messages keep their original ``ticket_create`` custom ID, but
+    all clicks now enter the clean public category-menu workflow. This keeps
+    existing messages usable after restart without reviving a second ticket
+    creation implementation.
+    """
+
+    def __init__(self) -> None:
         super().__init__(timeout=None)
 
     @discord.ui.button(
@@ -2828,80 +2836,26 @@ class TicketPanelView(discord.ui.View):
         self,
         interaction: discord.Interaction,
         button: discord.ui.Button,
-    ):
-        if id(interaction) not in _TICKET_ENTRY_GUARD_ACTIVE:
-            return await _run_ticket_entry_callback(
-                interaction,
-                lambda: self.create_ticket(interaction, button),
-                "create ticket",
-            )
+    ) -> None:
+        _ = button
+
         try:
-            guild = interaction.guild
-            user = _resolve_member(interaction)
-
-            if guild is None or user is None:
-                await _safe_followup(interaction, "This can only be used inside the server.")
-                return
-
-            if getattr(user, "bot", False):
-                await _safe_followup(interaction, "Bots cannot create tickets.")
-                return
-
-            guild_context = await _ticket_panel_guild_context(guild)
-            unverified_only = _is_unverified_only_user(user, guild_context)
-            _debug(
-                f"public-create click guild={guild.id} user={user.id} "
-                f"unverified_only={unverified_only} "
-                f"roles={[int(r.id) for r in (user.roles or []) if not r.is_default()]}"
+            from stoney_verify.commands_ext.public_ticket_panel_clean import (
+                handle_public_ticket_panel_click,
             )
+        except Exception as exc:
+            print(
+                "❌ Legacy ticket compatibility handler import failed:",
+                repr(exc),
+            )
+            await _safe_followup(
+                interaction,
+                "The ticket panel could not load safely. "
+                "Please ask staff to run `/ticket-panel post`.",
+            )
+            return
 
-            if unverified_only:
-                await _safe_defer(interaction)
-
-                categories = await _fetch_dashboard_ticket_categories(int(guild.id))
-                verification_slug = _find_verification_category_slug(categories)
-                verification_label = _find_category_label_by_slug(
-                    categories,
-                    verification_slug,
-                    "Verification",
-                )
-                verification_row = _find_category_row_by_slug(categories, verification_slug)
-                verification_match_payload = _build_match_payload(
-                    matched_row=verification_row,
-                    matched_score=999,
-                    matched_reason="User routed directly to verification because they only have the Unverified role.",
-                    category_slug=verification_slug,
-                )
-
-                _debug(
-                    f"public-create unverified-route guild={guild.id} user={user.id} "
-                    f"verification_slug={verification_slug} match={verification_match_payload!r}"
-                )
-
-                await _create_ticket_for_member(
-                    interaction=interaction,
-                    guild=guild,
-                    user=user,
-                    category=verification_slug,
-                    category_label=verification_label,
-                    reason="",
-                    source="discord_button_unverified",
-                    is_ghost=False,
-                    match_payload=verification_match_payload,
-                )
-                return
-
-            _debug(f"public-create modal-route guild={guild.id} user={user.id}")
-
-            if not interaction.response.is_done():
-                await interaction.response.send_modal(TicketReasonModal())
-                return
-
-            await _safe_followup(interaction, "Please try again to open the ticket form.")
-
-        except Exception as e:
-            print("❌ Public ticket create failed:", repr(e))
-            raise
+        await handle_public_ticket_panel_click(interaction)
 
 
 class StaffGhostTicketView(discord.ui.View):
