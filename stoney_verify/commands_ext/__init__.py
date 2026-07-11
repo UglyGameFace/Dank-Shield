@@ -37,6 +37,7 @@ COMMAND_MODULES: List[CommandModuleSpec] = [
     ("public_cleanup_group", "register_public_cleanup_group_commands", "core: /dank cleanup commands"),
     ("public_spam_group", "register_public_spam_group_commands", "admin: legacy /dank spam commands hidden behind /dank protection"),
     ("public_members_group", "register_public_members_group_commands", "core: /dank members activity review commands"),
+    ("public_member_review_feedback", "register_public_member_review_feedback_commands", "core: reversible staff verdict feedback for member intelligence"),
     ("public_members_cleanup_group", "register_public_members_cleanup_group_commands", "core: confirmed /dank members cleanup command"),
     ("public_self_roles_group", "register_public_self_roles_group_commands", "core: public profile panel and cosmetic self-role profile builder"),
     ("public_design_group", "register_public_design_group_commands", "core: /dank design studio for safe channel/category name styling"),

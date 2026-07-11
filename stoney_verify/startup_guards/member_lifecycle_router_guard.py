@@ -369,8 +369,105 @@ async def _send_staff_join_audit(member: discord.Member, channel: Optional[disco
         )[:1024],
         inline=False,
     )
-    embed.set_footer(text="dank_shield:staff_join_audit:v3")
-    await channel.send(embed=embed, allowed_mentions=discord.AllowedMentions.none())
+    # Add only the most useful intelligence fields so the mobile card stays readable.
+    try:
+        from stoney_verify.modlog import _build_member_context_fields
+
+        context_fields = await _build_member_context_fields(member.guild, member)
+        preferred_names = (
+            "Join Intelligence",
+            "Evidence & Source",
+            "Identity Links",
+            "Smart Join Intelligence",
+            "Evidence Health",
+            "Containment Posture",
+        )
+        selected = []
+        for wanted in preferred_names:
+            for item in context_fields:
+                if item[0] == wanted and wanted not in {row[0] for row in selected}:
+                    selected.append(item)
+                    break
+            if len(selected) >= 3:
+                break
+
+        for name, value, inline in selected:
+            if len(embed.fields) >= 24:
+                break
+            embed.add_field(name=name, value=str(value)[:1024], inline=bool(inline))
+    except Exception as exc:
+        _log(
+            "staff join intelligence unavailable "
+            f"guild={member.guild.id} member={member.id}: "
+            f"{type(exc).__name__}: {exc}"
+        )
+
+    review_view = None
+    try:
+        from stoney_verify.member_review_feedback import (
+            feedback_display_value,
+            get_latest_member_review_feedback,
+            get_latest_source_review_feedback,
+            source_key_from_join_context,
+        )
+        from stoney_verify.member_review_ui import build_member_review_view
+
+        source_key = source_key_from_join_context(invite)
+
+        latest_feedback = await asyncio.to_thread(
+            get_latest_member_review_feedback,
+            guild_id=str(member.guild.id),
+            user_id=str(member.id),
+        )
+        previous_value = feedback_display_value(latest_feedback)
+        if previous_value and len(embed.fields) < 24:
+            embed.add_field(
+                name="Previous Staff Verdict",
+                value=previous_value[:1024],
+                inline=False,
+            )
+
+        if source_key:
+            latest_source = await asyncio.to_thread(
+                get_latest_source_review_feedback,
+                guild_id=str(member.guild.id),
+                source_key=source_key,
+            )
+            source_value = feedback_display_value(latest_source)
+            if source_value and len(embed.fields) < 24:
+                embed.add_field(
+                    name="Previous Source Verdict",
+                    value=(
+                        f"Source: `{source_key}`\n{source_value}"
+                    )[:1024],
+                    inline=False,
+                )
+
+        review_view = build_member_review_view(
+            guild_id=int(member.guild.id),
+            target_user_id=int(member.id),
+            target_is_bot=bool(member.bot),
+            source_key=source_key,
+            evidence_snapshot={
+                "invite_context": dict(invite or {}),
+                "account_age": _member_age_text(member),
+                "member_is_bot": bool(member.bot),
+                "member_name": str(member),
+            },
+        )
+    except Exception as exc:
+        _log(
+            "staff verdict controls unavailable "
+            f"guild={member.guild.id} member={member.id}: "
+            f"{type(exc).__name__}: {exc}"
+        )
+
+    embed.set_footer(text="dank_shield:staff_join_audit:v4")
+    await channel.send(
+        embed=embed,
+        view=review_view,
+        allowed_mentions=discord.AllowedMentions.none(),
+    )
 
 
 async def _send_staff_leave_audit(member: discord.Member, channel: Optional[discord.TextChannel]) -> None:
