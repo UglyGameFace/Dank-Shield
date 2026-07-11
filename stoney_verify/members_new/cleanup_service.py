@@ -36,9 +36,15 @@ except Exception:
         return datetime.now(timezone.utc)
 
 try:
-    from stoney_verify.members_new.activity_service import is_scan_user_locked
+    from stoney_verify.members_new.activity_service import (
+        InactiveScanOptions,
+        is_scan_user_locked,
+        scan_inactive_members,
+    )
 except Exception:
+    InactiveScanOptions = None  # type: ignore
     is_scan_user_locked = None  # type: ignore
+    scan_inactive_members = None  # type: ignore
 
 
 @dataclass(frozen=True)
@@ -50,6 +56,8 @@ class MemberCleanupRequest:
     require_scan_unlocked: bool = True
     protect_bots: bool = True
     protect_staff: bool = True
+    inactive_days: int = 90
+    require_authoritative_inactivity: bool = True
 
 
 @dataclass
@@ -261,6 +269,66 @@ async def validate_member_cleanup(guild: discord.Guild, request: MemberCleanupRe
                 reasons.append("Target is locked/skipped from cleanup scans. Unlock them first if this is intentional.")
         except Exception:
             warnings.append("Could not verify scan-lock status; continuing with other safety checks.")
+
+    if request.require_authoritative_inactivity:
+        if scan_inactive_members is None or InactiveScanOptions is None:
+            reasons.append(
+                "Authoritative inactivity validation is unavailable. "
+                "Cleanup stopped instead of guessing."
+            )
+        else:
+            try:
+                fresh_report = await scan_inactive_members(
+                    guild,
+                    InactiveScanOptions(
+                        inactive_days=max(7, min(int(request.inactive_days), 730)),
+                        grace_days=1,
+                        include_low_confidence=False,
+                        include_medium_confidence=True,
+                        include_high_confidence=True,
+                        max_candidates=10000,
+                        verified_resident_focus=True,
+                        use_audit_log_fallback=True,
+                        skip_locked_users=True,
+                    ),
+                )
+
+                if not bool(getattr(fresh_report, "actionable", False)):
+                    reasons.append(
+                        "Fresh inactivity proof is not actionable: "
+                        + str(
+                            getattr(
+                                fresh_report,
+                                "actionability_reason",
+                                "continuous activity coverage is incomplete",
+                            )
+                        )
+                    )
+                else:
+                    fresh_candidate = next(
+                        (
+                            candidate
+                            for candidate in fresh_report.candidates
+                            if int(candidate.user_id) == target_id
+                        ),
+                        None,
+                    )
+
+                    if fresh_candidate is None:
+                        reasons.append(
+                            "The member is not present in the fresh inactivity "
+                            "candidate set."
+                        )
+                    elif not bool(getattr(fresh_candidate, "removable", False)):
+                        reasons.append(
+                            "The fresh scan did not mark this member purge-safe."
+                        )
+            except Exception as exc:
+                reasons.append(
+                    "Fresh inactivity validation failed: "
+                    f"{type(exc).__name__}: {str(exc)[:180]}. "
+                    "Cleanup stopped instead of guessing."
+                )
 
     if reasons:
         return MemberCleanupValidation(False, "Blocked by safety checks", target_id, display_name, reasons, warnings, target)

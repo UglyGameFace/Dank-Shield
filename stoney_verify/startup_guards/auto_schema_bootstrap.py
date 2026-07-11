@@ -17,6 +17,7 @@ never drops user data.
 
 import asyncio
 import os
+from pathlib import Path
 from typing import Optional
 
 import discord
@@ -386,6 +387,14 @@ def _execute_schema_sql_sync(url: str) -> None:
     with psycopg.connect(url, autocommit=True) as conn:
         with conn.cursor() as cur:
             cur.execute(SCHEMA_SQL)
+
+            migration = (
+                Path(__file__).resolve().parents[2]
+                / "supabase/migrations/20260711_member_activity_truth_ledger.sql"
+            )
+
+            if migration.exists():
+                cur.execute(migration.read_text(encoding="utf-8"))
 
 
 async def ensure_schema_once() -> bool:

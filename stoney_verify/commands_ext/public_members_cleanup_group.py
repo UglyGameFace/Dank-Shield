@@ -46,6 +46,7 @@ _PURGE_ALL_PREVIEW_LIMIT = 20
 class QueuePreviewItem:
     candidate: InactiveMemberCandidate
     validation: MemberCleanupValidation
+    inactive_days: int = 90
 
 
 def _trim(text: str, limit: int = 3900) -> str:
@@ -255,10 +256,17 @@ def _queue_context_line(settings: MemberCleanupSettings, *, include_low_confiden
 
 
 async def _load_report_for_queue(guild: discord.Guild) -> tuple[InactiveScanReport, bool]:
-    report = get_last_scan(int(guild.id))
-    if report is not None:
-        return report, False
-    report = await scan_inactive_members(guild, InactiveScanOptions())
+    # Cleanup previews always run a fresh scan. Cached in-memory scans are for
+    # display only and can never authorize member removal.
+    report = await scan_inactive_members(
+        guild,
+        InactiveScanOptions(
+            include_low_confidence=False,
+            verified_resident_focus=True,
+            use_audit_log_fallback=True,
+            skip_locked_users=True,
+        ),
+    )
     return report, True
 
 
@@ -274,6 +282,17 @@ async def _build_queue_preview(
     skipped: list[tuple[InactiveMemberCandidate, str]] = []
     validation_blocked: list[tuple[InactiveMemberCandidate, MemberCleanupValidation]] = []
 
+    if not bool(getattr(report, "actionable", False)):
+        reason = str(
+            getattr(
+                report,
+                "actionability_reason",
+                "continuous activity coverage is incomplete",
+            )
+        )
+        skipped.extend((candidate, reason) for candidate in report.candidates)
+        return report, fresh_scan, queued, skipped, validation_blocked
+
     for candidate in report.candidates:
         if len(queued) >= limit:
             break
@@ -286,10 +305,17 @@ async def _build_queue_preview(
             target_user_id=int(candidate.user_id),
             actor_user_id=int(actor_user_id),
             reason="Confirmed inactive verified/resident cleanup queue",
+            inactive_days=int(report.options.inactive_days),
         )
         validation = await validate_member_cleanup(guild, request)
         if validation.ok:
-            queued.append(QueuePreviewItem(candidate=candidate, validation=validation))
+            queued.append(
+                QueuePreviewItem(
+                    candidate=candidate,
+                    validation=validation,
+                    inactive_days=int(report.options.inactive_days),
+                )
+            )
         else:
             validation_blocked.append((candidate, validation))
 
@@ -322,6 +348,17 @@ async def _build_purge_all_preview(
     skipped: list[tuple[InactiveMemberCandidate, str]] = []
     validation_blocked: list[tuple[InactiveMemberCandidate, MemberCleanupValidation]] = []
 
+    if not bool(getattr(report, "actionable", False)):
+        reason = str(
+            getattr(
+                report,
+                "actionability_reason",
+                "continuous activity coverage is incomplete",
+            )
+        )
+        skipped.extend((candidate, reason) for candidate in report.candidates)
+        return report, queued, skipped, validation_blocked
+
     for candidate in report.candidates:
         ok, reason = _candidate_is_purge_all_eligible(
             candidate,
@@ -336,10 +373,17 @@ async def _build_purge_all_preview(
             target_user_id=int(candidate.user_id),
             actor_user_id=int(actor_user_id),
             reason="Purge-all inactive verified/resident cleanup",
+            inactive_days=int(report.options.inactive_days),
         )
         validation = await validate_member_cleanup(guild, request)
         if validation.ok:
-            queued.append(QueuePreviewItem(candidate=candidate, validation=validation))
+            queued.append(
+                QueuePreviewItem(
+                    candidate=candidate,
+                    validation=validation,
+                    inactive_days=int(report.options.inactive_days),
+                )
+            )
         else:
             validation_blocked.append((candidate, validation))
     return report, queued, skipped, validation_blocked
@@ -363,6 +407,7 @@ async def _process_queue_items(
             target_user_id=int(item.candidate.user_id),
             actor_user_id=int(interaction.user.id),
             reason=reason,
+            inactive_days=int(item.inactive_days),
         )
         result: MemberCleanupResult = await execute_member_cleanup(interaction.guild, request)
         line = f"**{_safe_name(result.target_display_name)}** (`{result.target_user_id}`) — {result.status}"
@@ -596,7 +641,7 @@ async def members_cleanup_queue(
     if validation_blocked:
         body += "\n\n**Blocked by final validation**\n" + _trim("\n".join(f"• {_safe_name(c.display_name)} — {v.status}" for c, v in validation_blocked[:6]), 800)
 
-    if settings.require_queue_confirmation:
+    if True:  # Safety invariant: mass cleanup always requires confirmation.
         body += "\n\nPress **Confirm Queue** to process these members one by one with final safety checks. Press **Cancel** to do nothing."
         return await interaction.edit_original_response(
             embed=_result_embed("⚠️ Confirm Cleanup Queue", body, ok=False),
@@ -662,7 +707,7 @@ async def members_purge_all(
     if not queued:
         return await interaction.edit_original_response(embed=_result_embed("🧹 Purge-All Found Nothing Eligible", body, ok=False))
 
-    if settings.require_queue_confirmation:
+    if True:  # Safety invariant: mass cleanup always requires confirmation.
         body += "\n\nPress **Confirm Queue** to purge exactly these eligible members. Press **Cancel** to do nothing."
         return await interaction.edit_original_response(
             embed=_result_embed("⚠️ Confirm Purge-All", body, ok=False),

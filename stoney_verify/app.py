@@ -63,12 +63,25 @@ except Exception as e:
 # SUPPORTING SERVICES
 # ============================================================
 from .members_new import service as _members_service  # noqa: F401
+from .members_new.activity_tracker import (
+    install_activity_tracker as _install_activity_tracker,
+)
 from .tickets_new import service as _tickets_service  # noqa: F401
 from .tickets_new import transcript_service as _transcript_service  # noqa: F401
 from .tickets_new import panel as _tickets_panel  # noqa: F401
 from .tickets_new import sync_service as _tickets_sync_service  # noqa: F401
 from .verification_new import service as _verification_service  # noqa: F401
 from .verification_new import voice_verify as _voice_verify_service  # noqa: F401
+
+# Native authoritative member activity tracking. This is an explicit runtime
+# service, not a startup monkey patch.
+try:
+    _install_activity_tracker(bot)
+except Exception as e:
+    print(
+        "❌ authoritative activity tracker install failed:",
+        repr(e),
+    )
 
 try:
     from .members_new.sync_service import (

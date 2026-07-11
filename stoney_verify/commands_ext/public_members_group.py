@@ -36,6 +36,9 @@ from stoney_verify.members_new.activity_service import (
 )
 
 from stoney_verify.globals import get_supabase
+from stoney_verify.members_new.activity_tracker import (
+    get_activity_coverage_status,
+)
 
 
 members_group = app_commands.Group(
@@ -227,11 +230,16 @@ def _short_locked_line(guild: Optional[discord.Guild], record: ScanLockRecord, i
 
 
 def _build_status_snapshot(report: InactiveScanReport) -> str:
+    actionable = bool(getattr(report, "actionable", False))
+    action_label = "✅ Actionable" if actionable else "🟡 Review-only"
+
     return _safe_field(
+        f"**Mode:** {action_label}\n"
         f"**Review:** {len(report.candidates)} • **Purge-safe:** {len(getattr(report, 'removable', []) or [])} • **Manual-only:** {len([c for c in report.candidates if not getattr(c, 'removable', False)])} • **Pages:** {_page_count(report)}\n"
         f"**Verified quiet:** {_safe_int_attr(report, 'verified_resident_without_post_activity')}/{_safe_int_attr(report, 'verified_resident_seen')} ({_safe_int_attr(report, 'verified_vanished_percent')}%)\n"
         f"**Server activity:** {_safe_int_attr(report, 'active_activity_percent')}% active/recent • **Locked skipped:** {_safe_int_attr(report, 'locked_users_skipped')}\n"
-        f"**Data:** {getattr(report, 'data_confidence_label', 'Unknown')} ({_safe_int_attr(report, 'data_coverage_percent')}%) • **Audit hits:** {_safe_int_attr(report, 'audit_log_times_found')}",
+        f"**Data:** {getattr(report, 'data_confidence_label', 'Unknown')} ({_safe_int_attr(report, 'data_coverage_percent')}%) • **Audit hits:** {_safe_int_attr(report, 'audit_log_times_found')}\n"
+        f"**Tracker coverage:** {_safe_int_attr(report, 'coverage_observed_days')}/{_safe_int_attr(report, 'coverage_required_days')} day(s)",
         _SAFE_FIELD_LIMIT,
     )
 
@@ -291,7 +299,10 @@ def _build_data_notes_embed(report: InactiveScanReport) -> discord.Embed:
     embed.add_field(
         name="What This Means",
         value=_safe_field(
-            "Confidence now uses calibrated rules: High requires direct member activity evidence; Medium requires reliable DB/audit/mod-log verification timing plus readable activity coverage; Low means weak proof and is shown as manual-only, not purge-safe. Mod-log embeds are scanned with faster matching. Low-confidence users are shown for manual review but are not purge-safe."
+            "Only activity directly performed by the member can reset inactivity. "
+            "Staff actions, role changes, generic row updates, and log mentions are context only. "
+            "If continuous authoritative coverage is incomplete, the entire scan is review-only "
+            "and nobody can be removed."
         ),
         inline=False,
     )
@@ -1750,6 +1761,109 @@ async def _run_activity_scan(
         ephemeral=True,
         allowed_mentions=discord.AllowedMentions.none(),
     )
+
+@members_group.command(
+    name="coverage",
+    description="Check whether inactive-member evidence is safe for cleanup.",
+)
+@app_commands.describe(
+    required_days="Coverage window to verify. Default 90 days.",
+)
+async def members_coverage(
+    interaction: discord.Interaction,
+    required_days: int = 90,
+) -> None:
+    if not await _require_review_permission(interaction):
+        return
+    if interaction.guild is None:
+        return
+
+    await interaction.response.defer(
+        ephemeral=True,
+        thinking=True,
+    )
+
+    safe_days = max(7, min(int(required_days or 90), 730))
+
+    status = await get_activity_coverage_status(
+        int(interaction.guild.id),
+        required_days=safe_days,
+    )
+
+    embed = discord.Embed(
+        title="📡 Inactive-Member Evidence Coverage",
+        description=(
+            "This reports whether Dank Shield has enough continuous, "
+            "directly observed activity data to authorize cleanup."
+        ),
+        color=(
+            discord.Color.green()
+            if status.actionable
+            else discord.Color.orange()
+        ),
+        timestamp=discord.utils.utcnow(),
+    )
+
+    embed.add_field(
+        name="Mode",
+        value=(
+            "✅ **Actionable**"
+            if status.actionable
+            else "🟡 **Review-only**"
+        ),
+        inline=False,
+    )
+
+    embed.add_field(
+        name="Coverage",
+        value=(
+            f"Observed: **{status.observed_days} day(s)**\n"
+            f"Required: **{status.required_days} day(s)**\n"
+            f"Storage ready: **{'Yes' if status.storage_ready else 'No'}**"
+        ),
+        inline=False,
+    )
+
+    embed.add_field(
+        name="Why",
+        value=str(status.reason)[:1024],
+        inline=False,
+    )
+
+    if status.continuous_since is not None:
+        embed.add_field(
+            name="Continuous Since",
+            value=f"<t:{int(status.continuous_since.timestamp())}:F>",
+            inline=False,
+        )
+
+    if status.last_heartbeat_at is not None:
+        embed.add_field(
+            name="Last Heartbeat",
+            value=f"<t:{int(status.last_heartbeat_at.timestamp())}:R>",
+            inline=False,
+        )
+
+    if status.last_error:
+        embed.add_field(
+            name="Last Tracker Error",
+            value=str(status.last_error)[:1024],
+            inline=False,
+        )
+
+    embed.set_footer(
+        text=(
+            "Restarts, stale heartbeats, or failed writes reset the "
+            "continuous proof window."
+        )
+    )
+
+    await interaction.followup.send(
+        embed=embed,
+        ephemeral=True,
+        allowed_mentions=discord.AllowedMentions.none(),
+    )
+
 
 @members_group.command(name="scan", description="Review verified/resident activity using safe default thresholds.")
 async def members_scan(interaction: discord.Interaction) -> None:

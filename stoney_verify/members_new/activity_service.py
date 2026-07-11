@@ -34,6 +34,10 @@ from typing import Any, Iterable, Mapping, Optional
 
 import discord
 
+from stoney_verify.members_new.activity_tracker import (
+    get_activity_coverage_status,
+)
+
 try:
     from stoney_verify.guild_config import get_guild_config
 except Exception:
@@ -141,6 +145,15 @@ class InactiveScanReport:
     audit_log_times_found: int = 0
     locked_users_skipped: int = 0
     scan_lock_persistence: str = "unknown"
+    actionable: bool = False
+    actionability_reason: str = ""
+    member_errors: int = 0
+    configuration_errors: list[str] = field(default_factory=list)
+    coverage_continuous_since: Optional[datetime] = None
+    coverage_last_heartbeat_at: Optional[datetime] = None
+    coverage_observed_days: int = 0
+    coverage_required_days: int = 0
+    coverage_storage_ready: bool = False
 
     @property
     def removable(self) -> list[InactiveMemberCandidate]:
@@ -534,6 +547,7 @@ def _signal_is_direct_activity(signal: MemberActivitySignal) -> bool:
     return any(
         key in source
         for key in (
+            "authoritative activity ledger",
             "recent discord message history",
             "ticket message",
             "message history",
@@ -690,7 +704,14 @@ def _confidence_from_signals(signals: list[MemberActivitySignal], *, db_availabl
 
 
 def _best_last_seen(signals: list[MemberActivitySignal], fallback: Optional[datetime]) -> Optional[datetime]:
-    timestamps = [s.timestamp for s in signals if s.timestamp is not None]
+    # Only something directly performed by the member can establish
+    # their last activity. Staff actions, role changes, log mentions, and
+    # generic DB updates are context only.
+    timestamps = [
+        s.timestamp
+        for s in signals
+        if s.timestamp is not None and _signal_is_direct_activity(s)
+    ]
     if fallback is not None:
         timestamps.append(fallback)
     if not timestamps:
@@ -706,6 +727,7 @@ def _best_post_verification_activity(signals: list[MemberActivitySignal], verifi
         for s in signals
         if s.timestamp is not None
         and s.timestamp > verified_at
+        and _signal_is_direct_activity(s)
         and not _signal_is_verification_timestamp(s)
     ]
     return max(after) if after else None
@@ -792,6 +814,7 @@ def _verification_times_from_rows(rows: Iterable[Mapping[str, Any]], *, user_key
 
 def _table_display_name(table: str) -> str:
     return {
+        "member_activity_ledger": "authoritative activity ledger",
         "ticket_messages": "ticket message history",
         "tickets": "ticket history",
         "member_joins": "member tracking history",
@@ -829,6 +852,14 @@ async def _load_known_activity_signals(guild_id: int) -> tuple[dict[int, list[Me
     verification_times: dict[int, tuple[datetime, str]] = {}
 
     table_specs = (
+        (
+            "member_activity_ledger",
+            ("user_id",),
+            ("last_activity_at",),
+            "authoritative activity ledger",
+            "High",
+            "Direct member-authored activity recorded by Dank Shield.",
+        ),
         ("ticket_messages", ("user_id", "author_id", "member_id", "discord_user_id"), ("created_at", "timestamp", "sent_at", "updated_at"), "ticket message", "High", "Had ticket-message activity recorded by Dank Shield."),
         ("tickets", ("user_id", "creator_id", "member_id", "opened_by_id"), ("last_activity_at", "updated_at", "created_at", "closed_at"), "ticket", "Medium", "Had ticket lifecycle activity recorded by Dank Shield."),
         ("member_joins", ("user_id", "member_id", "discord_user_id"), ("last_seen_at", "last_activity_at", "updated_at", "joined_at", "created_at"), "member record", "Medium", "Had member tracking data recorded by Dank Shield."),
@@ -856,9 +887,26 @@ async def _load_known_activity_signals(guild_id: int) -> tuple[dict[int, list[Me
             continue
 
         sources_read += 1
-        for uid, signal in _rows_by_user(rows, user_keys=user_keys, time_keys=time_keys, source=source, confidence=confidence, note=note).items():
-            merged.setdefault(uid, []).append(signal)
 
+        # Only ticket_messages proves direct member authorship. Ticket lifecycle
+        # updates, member row updates, and activity-feed target events can be
+        # caused by staff or the bot and must not reset member inactivity.
+        if table in {
+            "member_activity_ledger",
+            "ticket_messages",
+        }:
+            for uid, signal in _rows_by_user(
+                rows,
+                user_keys=user_keys,
+                time_keys=time_keys,
+                source=source,
+                confidence=confidence,
+                note=note,
+            ).items():
+                merged.setdefault(uid, []).append(signal)
+
+        # These tables may still provide an exact verification timestamp, but
+        # they are not treated as direct activity.
         if table in {"member_joins", "activity_feed_events", "tickets"}:
             for uid, pair in _verification_times_from_rows(rows, user_keys=user_keys).items():
                 old = verification_times.get(uid)
@@ -1279,6 +1327,33 @@ async def scan_inactive_members(guild: discord.Guild, options: Optional[Inactive
     protected_role_ids, verified_resident_role_ids = await _load_role_sets(guild)
     members = list(getattr(guild, "members", []) or [])
 
+    # Missing verified/resident configuration is not permission to scan every
+    # member. Stop with an explicit configuration error instead.
+    if options.verified_resident_focus and not verified_resident_role_ids:
+        report = InactiveScanReport(
+            guild_id=int(guild.id),
+            scanned_at=now,
+            options=options,
+            total_members_seen=len(members),
+            candidates=[],
+            protected=[],
+            cannot_remove=[],
+            data_warnings=[
+                "No valid verified/resident role IDs are configured. "
+                "The scan stopped instead of guessing which members belong "
+                "to the cleanup population."
+            ],
+            actionable=False,
+            actionability_reason=(
+                "Configure valid verified/resident role IDs before scanning."
+            ),
+            configuration_errors=[
+                "verified_role_id/resident_role_id missing or invalid"
+            ],
+        )
+        remember_scan(report)
+        return report
+
     locked_user_ids: set[int] = set()
     lock_persistence = "disabled"
     data_warnings: list[str] = []
@@ -1316,6 +1391,12 @@ async def scan_inactive_members(guild: discord.Guild, options: Optional[Inactive
 
     db_available = bool(activity_signals)
 
+    coverage = await get_activity_coverage_status(
+        int(guild.id),
+        required_days=int(options.inactive_days),
+    )
+    data_warnings.append(coverage.reason)
+
     candidates: list[InactiveMemberCandidate] = []
     protected: list[InactiveMemberCandidate] = []
     cannot_remove: list[InactiveMemberCandidate] = []
@@ -1325,6 +1406,7 @@ async def scan_inactive_members(guild: discord.Guild, options: Optional[Inactive
     verified_resident_without_post_activity = 0
     locked_users_skipped = 0
     inactive_hidden_by_filter_count = 0
+    member_scan_errors = 0
 
     for member in members:
         try:
@@ -1388,15 +1470,33 @@ async def scan_inactive_members(guild: discord.Guild, options: Optional[Inactive
                     verified_at = joined_at
                     verification_source = "join-date fallback; exact verification date unknown"
 
-            post_verify_activity = _best_post_verification_activity(signals, verified_at)
+            proof_start = verified_at
+
+            if (
+                coverage.continuous_since is not None
+                and (
+                    proof_start is None
+                    or coverage.continuous_since > proof_start
+                )
+            ):
+                proof_start = coverage.continuous_since
+                reasons.append(
+                    "Inactivity proof begins at the authoritative tracker "
+                    "coverage start, not before it."
+                )
+
+            post_verify_activity = _best_post_verification_activity(
+                signals,
+                proof_start,
+            )
             last_seen = _best_last_seen(signals, joined_at)
             days_since_verification: Optional[int] = None
 
-            if is_verified_resident and verified_at is not None:
+            if is_verified_resident and proof_start is not None:
                 days_since_verification = _days_since(verified_at, now)
                 if post_verify_activity is None:
                     verified_resident_without_post_activity += 1
-                    last_seen_for_threshold = verified_at
+                    last_seen_for_threshold = proof_start
                     if str(verification_source).startswith("join-date fallback"):
                         reasons.append(
                             "Exact verification date is unknown, so Dank Shield is using join-date fallback plus the recent evidence sweep. This user is reviewable/manual-only unless confidence becomes Medium/High from stronger evidence."
@@ -1480,7 +1580,14 @@ async def scan_inactive_members(guild: discord.Guild, options: Optional[Inactive
                 inactive_hidden_by_filter_count += 1
             else:
                 candidates.append(candidate)
-        except Exception:
+        except Exception as exc:
+            member_scan_errors += 1
+            if member_scan_errors <= 10:
+                data_warnings.append(
+                    "Member scan error for "
+                    f"{getattr(member, 'id', 'unknown')}: "
+                    f"{type(exc).__name__}: {str(exc)[:160]}"
+                )
             continue
 
     candidates.sort(
@@ -1491,6 +1598,56 @@ async def scan_inactive_members(guild: discord.Guild, options: Optional[Inactive
         reverse=True,
     )
     candidates = candidates[: max(1, int(options.max_candidates))]
+
+    report_actionable = bool(coverage.actionable)
+    actionability_reason = str(coverage.reason)
+
+    if report_actionable:
+        for candidate in candidates:
+            exact_verification = (
+                _verification_source_strength(
+                    candidate.verification_source
+                )
+                >= 2
+            )
+
+            if not exact_verification:
+                candidate.removable = False
+                candidate.status = "Needs review"
+                candidate.reasons.append(
+                    "Exact verification timing is required before cleanup. "
+                    "Join-date fallback cannot authorize removal."
+                )
+                continue
+
+            if candidate.inactivity_days is None:
+                candidate.removable = False
+                candidate.status = "Needs review"
+                continue
+
+            if candidate.inactivity_days < int(options.inactive_days):
+                candidate.removable = False
+                candidate.status = "Active/recent evidence"
+                continue
+
+            candidate.removable = bool(
+                not candidate.protected
+                and not candidate.cannot_remove
+                and candidate.status == "Review candidate"
+                and candidate.confidence.lower() in {
+                    "medium",
+                    "high",
+                }
+            )
+    else:
+        for candidate in candidates:
+            candidate.removable = False
+
+            if candidate.status == "Review candidate":
+                candidate.status = "Needs review"
+
+            if actionability_reason not in candidate.reasons:
+                candidate.reasons.append(actionability_reason)
 
     report = InactiveScanReport(
         guild_id=int(guild.id),
@@ -1511,6 +1668,15 @@ async def scan_inactive_members(guild: discord.Guild, options: Optional[Inactive
         audit_log_times_found=len(audit_times),
         locked_users_skipped=locked_users_skipped,
         scan_lock_persistence=lock_persistence,
+        actionable=report_actionable,
+        actionability_reason=actionability_reason,
+        member_errors=member_scan_errors,
+        configuration_errors=[],
+        coverage_continuous_since=coverage.continuous_since,
+        coverage_last_heartbeat_at=coverage.last_heartbeat_at,
+        coverage_observed_days=coverage.observed_days,
+        coverage_required_days=coverage.required_days,
+        coverage_storage_ready=coverage.storage_ready,
     )
     remember_scan(report)
     return report

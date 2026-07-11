@@ -14,6 +14,14 @@ _TASK: asyncio.Task | None = None
 _HAS_RUN = False
 
 _OPTIONAL_TABLES: tuple[tuple[str, str], ...] = (
+    (
+        "member_activity_ledger",
+        "supabase/migrations/20260711_member_activity_truth_ledger.sql",
+    ),
+    (
+        "member_activity_tracker_state",
+        "supabase/migrations/20260711_member_activity_truth_ledger.sql",
+    ),
     ("member_activity_notices", "supabase/migrations/20260611_member_activity_notices.sql"),
     ("ticket_automation_settings", "supabase/migrations/20260611_ticket_automation_tables.sql"),
     ("ticket_automation_state", "supabase/migrations/20260611_ticket_automation_tables.sql"),
