@@ -1307,6 +1307,133 @@ def _sb_get_identity_truth_context_sync(guild_id: int, user_id: int) -> Dict[str
         return {}
 
 
+def _source_key_from_join_rows(latest_join: Dict[str, Any], guild_member: Dict[str, Any]) -> Tuple[str, str]:
+    latest = dict(latest_join or {})
+    member_row = dict(guild_member or {})
+
+    invite_code = _safe_str(latest.get("invite_code") or member_row.get("invite_code"))
+    if invite_code and invite_code.lower() not in {"unknown", "none", "null"}:
+        return ("invite_code", invite_code)
+
+    join_source = _safe_str(latest.get("join_source") or member_row.get("join_source"))
+    if join_source and join_source.lower() not in {"unknown", "unknown_join", "none", "null"}:
+        return ("join_source", join_source)
+
+    entry_method = _safe_str(latest.get("entry_method") or member_row.get("entry_method"))
+    if entry_method and entry_method.lower() not in {"unknown", "unknown_join", "none", "null"}:
+        return ("entry_method", entry_method)
+
+    return ("", "")
+
+
+def _sb_select_source_reputation_sync(
+    guild_id: int,
+    user_id: int,
+    latest_join: Dict[str, Any],
+    guild_member: Dict[str, Any],
+) -> Dict[str, Any]:
+    try:
+        field, value = _source_key_from_join_rows(latest_join, guild_member)
+        if not field or not value:
+            return {}
+
+        sb = get_supabase()
+        if not sb:
+            return {}
+
+        res = (
+            sb.table("member_joins")
+            .select(
+                "user_id,username,joined_at,invite_code,join_source,entry_method,entry_truth_quality,entry_confidence,risk_score,risk_level,evidence_tier",
+                count="exact",
+            )
+            .eq("guild_id", str(int(guild_id)))
+            .eq(field, value)
+            .order("joined_at", desc=True)
+            .limit(50)
+            .execute()
+        )
+
+        rows = [dict(r) for r in (getattr(res, "data", None) or []) if isinstance(r, dict)]
+        total = int(getattr(res, "count", 0) or len(rows) or 0)
+
+        risky = 0
+        strong_or_confirmed = 0
+        low_confidence = 0
+        unique_users: Set[str] = set()
+
+        for row in rows:
+            uid = _safe_str(row.get("user_id"))
+            if uid:
+                unique_users.add(uid)
+
+            score = _safe_int(row.get("risk_score"), 0)
+            level = _safe_str(row.get("risk_level")).lower()
+            tier = _safe_str(row.get("evidence_tier")).lower()
+            confidence = _safe_int(row.get("entry_confidence"), 0)
+
+            if score >= 45 or level in {"medium", "high", "critical"}:
+                risky += 1
+            if tier in {"strongly_linked", "confirmed_duplicate"}:
+                strong_or_confirmed += 1
+            if confidence and confidence < 50:
+                low_confidence += 1
+
+        return {
+            "source_field": field,
+            "source_value": value,
+            "sample_size": len(rows),
+            "total_count": total,
+            "unique_users": len(unique_users),
+            "risky_count": risky,
+            "strong_or_confirmed_count": strong_or_confirmed,
+            "low_confidence_count": low_confidence,
+        }
+    except Exception as e:
+        print("⚠️ _sb_select_source_reputation_sync failed:", repr(e))
+        return {}
+
+
+def _source_reputation_value(reputation: Dict[str, Any]) -> str:
+    rep = dict(reputation or {})
+    source_field = _safe_str(rep.get("source_field"))
+    source_value = _safe_str(rep.get("source_value"))
+
+    if not source_field or not source_value:
+        return ""
+
+    sample_size = _safe_int(rep.get("sample_size"), 0)
+    total_count = _safe_int(rep.get("total_count"), sample_size)
+    unique_users = _safe_int(rep.get("unique_users"), 0)
+    risky_count = _safe_int(rep.get("risky_count"), 0)
+    strong_or_confirmed = _safe_int(rep.get("strong_or_confirmed_count"), 0)
+    low_confidence = _safe_int(rep.get("low_confidence_count"), 0)
+
+    if strong_or_confirmed > 0 or risky_count >= 3:
+        verdict = "⚠️ Source needs staff review."
+    elif low_confidence >= max(3, sample_size // 2):
+        verdict = "🟡 Source attribution is weak; watch new joins from this source."
+    elif sample_size >= 5 and risky_count == 0 and strong_or_confirmed == 0:
+        verdict = "✅ No recent risk pattern from this source."
+    else:
+        verdict = "ℹ️ Not enough history for a strong source verdict yet."
+
+    lines = [
+        f"Source key: `{source_field}` = `{source_value}`",
+        f"Recent sample: **{sample_size}** join row(s) / **{unique_users}** user(s)",
+        f"Risky from same source: **{risky_count}**",
+        f"Strong/confirmed alt evidence: **{strong_or_confirmed}**",
+        f"Low-confidence attribution rows: **{low_confidence}**",
+        verdict,
+    ]
+
+    if total_count > sample_size:
+        lines.append(f"More history exists: **{total_count}** total matching row(s).")
+
+    return _chunk_lines(lines, 1000)
+
+
+
 def _extract_flags_from_profile_like(data: Dict[str, Any]) -> List[str]:
     flags: List[str] = []
 
@@ -1475,10 +1602,12 @@ def _smart_join_intelligence_value(
     guild_member: Dict[str, Any],
     *,
     warn_count: int = 0,
+    source_reputation: Dict[str, Any] | None = None,
 ) -> str:
     merged = dict(merged_risk or {})
     latest = dict(latest_join or {})
     member_row = dict(guild_member or {})
+    source_rep = dict(source_reputation or {})
 
     is_bot = _safe_bool(merged.get("is_bot_account"), False)
     tier = _safe_str(merged.get("evidence_tier"), "clear").replace("_", " ").upper()
@@ -1524,12 +1653,20 @@ def _smart_join_intelligence_value(
     else:
         lines.append("Signals: no strong recent link evidence yet")
 
+    source_risky = _safe_int(source_rep.get("risky_count"), 0)
+    source_strong = _safe_int(source_rep.get("strong_or_confirmed_count"), 0)
+    source_low_conf = _safe_int(source_rep.get("low_confidence_count"), 0)
+    if source_rep:
+        lines.append(f"Source pattern: risky={source_risky}, strong/confirmed={source_strong}, low-confidence={source_low_conf}")
+
     if warn_count > 0:
         lines.append(f"History: {warn_count} warning(s) on record")
 
     if tier in {"CONFIRMED DUPLICATE", "STRONGLY LINKED"} or score >= 65:
         action = "Restrict and review immediately."
-    elif score >= 20 or source_unknown or warn_count > 0:
+    elif source_strong > 0 or source_risky >= 3:
+        action = "Watch this source closely; same source has risky join history."
+    elif score >= 20 or source_unknown or source_low_conf >= 3 or warn_count > 0:
         action = "Watch verification; keep unverified containment until source/behavior looks clean."
     else:
         action = "Normal verification; keep logging for new behavior, reports, or source changes."
@@ -1546,11 +1683,19 @@ async def _build_member_context_fields(
         latest_join = await _run_blocking_db(_sb_select_latest_join_sync, guild.id, member_or_user.id) or {}
         warn_count = await _run_blocking_db(_sb_select_warn_count_sync, guild.id, member_or_user.id)
         truth_context = await _run_blocking_db(_sb_get_identity_truth_context_sync, guild.id, member_or_user.id) or {}
+        source_reputation = await _run_blocking_db(
+            _sb_select_source_reputation_sync,
+            guild.id,
+            member_or_user.id,
+            latest_join if isinstance(latest_join, dict) else {},
+            guild_member if isinstance(guild_member, dict) else {},
+        ) or {}
     except Exception:
         guild_member = {}
         latest_join = {}
         warn_count = 0
         truth_context = {}
+        source_reputation = {}
 
     risk_profile = {}
     try:
@@ -1609,7 +1754,13 @@ async def _build_member_context_fields(
 
     fields.append(("Risk Context", _chunk_lines(base_lines, 1000), False))
 
-    smart_value = _smart_join_intelligence_value(merged_risk, latest_join, guild_member, warn_count=warn_count)
+    smart_value = _smart_join_intelligence_value(
+        merged_risk,
+        latest_join,
+        guild_member,
+        warn_count=warn_count,
+        source_reputation=source_reputation,
+    )
     if smart_value:
         fields.append(("Smart Join Intelligence", smart_value, False))
 
@@ -1630,6 +1781,10 @@ async def _build_member_context_fields(
         join_source_lines.append(f"Why: {_truncate(entry_reason, 180)}")
 
     fields.append(("Join Source", _chunk_lines(join_source_lines, 1000), False))
+
+    source_reputation_value = _source_reputation_value(source_reputation)
+    if source_reputation_value:
+        fields.append(("Source Reputation", source_reputation_value, False))
 
     truth_value = _context_truth_value(guild, truth_context, merged_risk)
     if truth_value:
