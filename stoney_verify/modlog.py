@@ -1468,6 +1468,75 @@ def _risk_summary_header(source: Dict[str, Any], warn_count: int = 0) -> str:
     return " • ".join(parts)
 
 
+
+def _smart_join_intelligence_value(
+    merged_risk: Dict[str, Any],
+    latest_join: Dict[str, Any],
+    guild_member: Dict[str, Any],
+    *,
+    warn_count: int = 0,
+) -> str:
+    merged = dict(merged_risk or {})
+    latest = dict(latest_join or {})
+    member_row = dict(guild_member or {})
+
+    is_bot = _safe_bool(merged.get("is_bot_account"), False)
+    tier = _safe_str(merged.get("evidence_tier"), "clear").replace("_", " ").upper()
+    score = _safe_int(merged.get("risk_score"), _safe_int(merged.get("score"), 0))
+    level = _safe_str(merged.get("risk_level") or merged.get("level"), "low").upper()
+
+    entry_method = _safe_str(merged.get("entry_method") or latest.get("entry_method") or member_row.get("entry_method"), "unknown")
+    join_source = _safe_str(merged.get("join_source") or latest.get("join_source") or member_row.get("join_source"), "unknown")
+    entry_quality = _safe_str(merged.get("entry_truth_quality") or latest.get("entry_truth_quality") or member_row.get("entry_truth_quality"), "unknown")
+    entry_confidence = _safe_int(merged.get("entry_confidence") or latest.get("entry_confidence") or member_row.get("entry_confidence"), 0)
+    entry_reason = _safe_str(merged.get("entry_quality_reason") or latest.get("entry_quality_reason") or member_row.get("entry_quality_reason"))
+
+    flags = _extract_flags_from_profile_like(merged)
+    pretty_flags = [_pretty_flag_label(flag) for flag in flags if _pretty_flag_label(flag)]
+
+    source_unknown = (
+        entry_method in {"", "unknown", "unknown_join", "invite_unresolved", "invite_cache_warming", "invite_tracking_unavailable"}
+        or join_source in {"", "unknown", "unknown_join", "invite_unresolved", "invite_cache_warming", "invite_tracking_unavailable"}
+        or entry_confidence < 50
+    )
+
+    lines: List[str] = []
+
+    if is_bot:
+        lines.append("Official bot: **Yes**")
+        lines.append("Alt/raid evidence: excluded from human alt/raid scoring")
+        lines.append("Human automation/userbot risk: not applicable; this is a Discord bot account")
+        lines.append("Recommended action: review who added it and whether its permissions are safe.")
+        return _chunk_lines(lines, 1000)
+
+    lines.append("Official bot: **No**")
+    lines.append(f"Alt/raid evidence: **{tier}** • **{level} / {score}/100**")
+    lines.append("Human automation/userbot risk: not proven from join alone; needs message behavior, staff reports, or DM reports.")
+    lines.append(f"Invite/source confidence: **{entry_quality or 'unknown'}** / **{entry_confidence}/100**")
+
+    if source_unknown:
+        lines.append("Context gap: invite/source is unresolved or low-confidence; treat as watchlist context, not proof.")
+    elif entry_reason:
+        lines.append(f"Source reason: {_truncate(entry_reason, 180)}")
+
+    if pretty_flags:
+        lines.append("Signals: " + ", ".join(pretty_flags[:8]))
+    else:
+        lines.append("Signals: no strong recent link evidence yet")
+
+    if warn_count > 0:
+        lines.append(f"History: {warn_count} warning(s) on record")
+
+    if tier in {"CONFIRMED DUPLICATE", "STRONGLY LINKED"} or score >= 65:
+        action = "Restrict and review immediately."
+    elif score >= 20 or source_unknown or warn_count > 0:
+        action = "Watch verification; keep unverified containment until source/behavior looks clean."
+    else:
+        action = "Normal verification; keep logging for new behavior, reports, or source changes."
+
+    lines.append(f"Recommended action: {action}")
+    return _chunk_lines(lines, 1000)
+
 async def _build_member_context_fields(
     guild: discord.Guild,
     member_or_user: discord.abc.User,
@@ -1539,6 +1608,10 @@ async def _build_member_context_fields(
         base_lines.append("DM Raider Risk: no DM report evidence attached to this join")
 
     fields.append(("Risk Context", _chunk_lines(base_lines, 1000), False))
+
+    smart_value = _smart_join_intelligence_value(merged_risk, latest_join, guild_member, warn_count=warn_count)
+    if smart_value:
+        fields.append(("Smart Join Intelligence", smart_value, False))
 
     entry_method = _safe_str(merged_risk.get("entry_method") or latest_join.get("entry_method") or guild_member.get("entry_method"), "unknown")
     join_source = _safe_str(merged_risk.get("join_source") or latest_join.get("join_source") or guild_member.get("join_source"), "unknown")
