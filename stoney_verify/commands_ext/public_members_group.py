@@ -1751,18 +1751,12 @@ async def _run_activity_scan(
         allowed_mentions=discord.AllowedMentions.none(),
     )
 
-
-@members_group.command(name="inactive", description="Open the verified member activity review console.")
-async def members_inactive(interaction: discord.Interaction) -> None:
-    await _run_activity_scan(interaction)
-
-
-@members_group.command(name="scan", description="Run the default verified member activity review.")
+@members_group.command(name="scan", description="Review verified/resident activity using safe default thresholds.")
 async def members_scan(interaction: discord.Interaction) -> None:
     await _run_activity_scan(interaction)
 
 
-@members_group.command(name="advanced-scan", description="Run member review with custom thresholds.")
+@members_group.command(name="scan-custom", description="Review member activity with custom thresholds.")
 @app_commands.describe(
     inactive_days="Verified/resident members quiet this many days after verification are shown.",
     grace_days="Protect members newer than this many days.",
@@ -1819,7 +1813,7 @@ async def members_notices(interaction: discord.Interaction) -> None:
     )
 
 
-@members_group.command(name="last-scan", description="Show the latest member server-activity review since the bot started.")
+@members_group.command(name="scan-last", description="Reopen the latest member activity scan since this restart.")
 async def members_last_scan(interaction: discord.Interaction) -> None:
     if not await _require_review_permission(interaction):
         return

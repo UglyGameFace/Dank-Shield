@@ -143,6 +143,106 @@ class AltReviewModal(discord.ui.Modal):
         )
 
 
+class MoreReviewActionsSelect(discord.ui.Select):
+    def __init__(self, parent_view: "MemberReviewView") -> None:
+        self.parent_view = parent_view
+
+        options: list[discord.SelectOption] = []
+
+        if parent_view.target_is_bot:
+            options.extend(
+                [
+                    discord.SelectOption(
+                        label="Approved Bot",
+                        value="approved_bot",
+                        emoji="🤖",
+                        description="Official bot is expected and approved.",
+                    ),
+                    discord.SelectOption(
+                        label="Suspicious Bot",
+                        value="suspicious_bot",
+                        emoji="⚠️",
+                        description="Official bot needs staff investigation.",
+                    ),
+                ]
+            )
+
+        if parent_view.source_key:
+            options.extend(
+                [
+                    discord.SelectOption(
+                        label="Bad Invite Source",
+                        value="bad_invite_source",
+                        emoji="🚫",
+                        description="This invite/source has concerning activity.",
+                    ),
+                    discord.SelectOption(
+                        label="Clear Invite Source",
+                        value="clear_invite_source",
+                        emoji="🧼",
+                        description="Clear the current source concern.",
+                    ),
+                ]
+            )
+
+        options.extend(
+            [
+                discord.SelectOption(
+                    label="Likely Alt",
+                    value="likely_alt",
+                    emoji="🟠",
+                    description="Link another account as likely the same person.",
+                ),
+                discord.SelectOption(
+                    label="Confirmed Alt",
+                    value="confirmed_alt",
+                    emoji="🔴",
+                    description="Create a confirmed duplicate identity link.",
+                ),
+                discord.SelectOption(
+                    label="Reset Review Verdict",
+                    value="reset",
+                    emoji="↩️",
+                    description="Resets verdict only; identity links stay active.",
+                ),
+            ]
+        )
+
+        super().__init__(
+            placeholder="More staff verdicts…",
+            min_values=1,
+            max_values=1,
+            options=options,
+            row=1,
+        )
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        value = self.values[0]
+
+        titles = {
+            "approved_bot": "Approve Official Bot",
+            "suspicious_bot": "Flag Suspicious Bot",
+            "bad_invite_source": "Flag Bad Invite Source",
+            "clear_invite_source": "Clear Invite Source",
+            "likely_alt": "Likely Alt Link",
+            "confirmed_alt": "Confirmed Alt Link",
+            "reset": "Reset Review Verdict",
+        }
+
+        if value in {"likely_alt", "confirmed_alt"}:
+            await self.parent_view._open_alt(
+                interaction,
+                verdict=value,
+                title=titles[value],
+            )
+            return
+
+        await self.parent_view._open_reason(
+            interaction,
+            verdict=value,
+            title=titles[value],
+        )
+
 class MemberReviewView(discord.ui.View):
     def __init__(
         self,
@@ -159,6 +259,27 @@ class MemberReviewView(discord.ui.View):
         self.target_is_bot = bool(target_is_bot)
         self.source_key = str(source_key or "").strip()
         self.evidence_snapshot = dict(evidence_snapshot or {})
+
+        # Keep the common actions obvious and move specialist actions into
+        # one compact mobile-friendly select menu.
+        specialist_labels = {
+            "Approved Bot",
+            "Suspicious Bot",
+            "Bad Source",
+            "Clear Source",
+            "Likely Alt",
+            "Confirm Alt",
+            "Reset",
+        }
+
+        for item in list(self.children):
+            if (
+                isinstance(item, discord.ui.Button)
+                and str(getattr(item, "label", "")) in specialist_labels
+            ):
+                self.remove_item(item)
+
+        self.add_item(MoreReviewActionsSelect(self))
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if not await _staff_allowed(interaction):

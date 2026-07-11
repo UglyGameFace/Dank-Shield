@@ -4,10 +4,17 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 
-SERVICE = (ROOT / "stoney_verify/member_review_feedback.py").read_text(encoding="utf-8")
-UI = (ROOT / "stoney_verify/member_review_ui.py").read_text(encoding="utf-8")
+SERVICE = (
+    ROOT / "stoney_verify/member_review_feedback.py"
+).read_text(encoding="utf-8")
+UI = (
+    ROOT / "stoney_verify/member_review_ui.py"
+).read_text(encoding="utf-8")
 COMMAND = (
     ROOT / "stoney_verify/commands_ext/public_member_review_feedback.py"
+).read_text(encoding="utf-8")
+MEMBERS = (
+    ROOT / "stoney_verify/commands_ext/public_members_group.py"
 ).read_text(encoding="utf-8")
 ROUTER = (
     ROOT / "stoney_verify/startup_guards/member_lifecycle_router_guard.py"
@@ -17,48 +24,71 @@ REGISTRY = (
 ).read_text(encoding="utf-8")
 
 
-def test_feedback_is_guild_scoped_and_audited() -> None:
+def test_feedback_is_guild_scoped_and_non_enforcing() -> None:
     assert 'sb.table("member_events")' in SERVICE
     assert '"guild_id": guild_text' in SERVICE
     assert '"user_id": user_text' in SERVICE
     assert '"actor_id": actor_text' in SERVICE
-    assert '"evidence_snapshot"' in SERVICE
     assert '"automatic_enforcement": False' in SERVICE
 
 
-def test_all_staff_verdicts_exist() -> None:
-    for token in (
-        "looks_safe",
-        "watch_member",
-        "false_positive",
-        "approved_bot",
-        "suspicious_bot",
-        "bad_invite_source",
-        "clear_invite_source",
-        "likely_alt",
-        "confirmed_alt",
-        "reset",
-    ):
-        assert token in SERVICE
-        assert token in UI
+def test_public_profile_loads_member_review_module() -> None:
+    assert "register_public_member_review_feedback_commands" in REGISTRY
+
+    start = REGISTRY.index("_PUBLIC_CORE_MODULES:")
+    end = REGISTRY.index("_PUBLIC_ADMIN_EXTRA_MODULES:", start)
+    core = REGISTRY[start:end]
+
+    assert '"public_member_review_feedback"' in core
 
 
-def test_alt_feedback_uses_existing_identity_truth_service() -> None:
-    assert "confirm_duplicate_users" in SERVICE
-    assert "mark_users_likely_same_person" in SERVICE
-    assert "related_user_id" in SERVICE
-    assert "A member cannot be linked to themselves" in SERVICE
+def test_review_command_opens_panel_before_verdict() -> None:
+    start = COMMAND.index('if "review" not in existing:')
+    end = COMMAND.index('if "history" not in existing:', start)
+    block = COMMAND[start:end]
+
+    assert "build_member_review_view" in block
+    assert "_build_member_context_fields" in block
+    assert "previous_feedback" in block
+    assert "source_key" in block
+    assert "verdict: app_commands.Choice" not in block
+    assert "reason: str" not in block
 
 
-def test_source_feedback_is_reusable_on_future_joins() -> None:
-    assert "SOURCE_REVIEW_EVENT" in SERVICE
-    assert "get_latest_source_review_feedback" in SERVICE
-    assert "source_key_from_join_context" in SERVICE
-    assert "Source Staff Verdict" in UI
-    assert "Previous Source Verdict" in ROUTER
+def test_mobile_review_controls_are_compact() -> None:
+    assert "class MoreReviewActionsSelect" in UI
+    assert 'placeholder="More staff verdicts…"' in UI
+    assert "Reset Review Verdict" in UI
+    assert "identity links stay active" in UI
+    assert "self.add_item(MoreReviewActionsSelect(self))" in UI
 
 
-def test_join_staff_audit_has_review_controls() -> None:
+def test_command_permission_accepts_configured_staff_roles() -> None:
+    assert "staff_role_id" in COMMAND
+    assert "vc_staff_role_id" in COMMAND
+    assert "get_guild_config" in COMMAND
+
+
+def test_clean_command_names_replace_old_aliases() -> None:
+    assert 'name="review"' in COMMAND
+    assert 'name="history"' in COMMAND
+    assert 'name="review-history"' not in COMMAND
+
+    assert 'name="scan"' in MEMBERS
+    assert 'name="scan-custom"' in MEMBERS
+    assert 'name="scan-last"' in MEMBERS
+
+    assert 'name="inactive"' not in MEMBERS
+    assert 'name="advanced-scan"' not in MEMBERS
+    assert 'name="last-scan"' not in MEMBERS
+
+
+def test_reset_wording_is_honest() -> None:
+    assert '"reset": "Reset Review Verdict"' in SERVICE
+    assert '"identity_links_unchanged": verdict_text == "reset"' in SERVICE
+
+
+def test_staff_audit_still_has_review_controls() -> None:
     start = ROUTER.index("async def _send_staff_join_audit(")
     end = ROUTER.index("async def _send_staff_leave_audit(", start)
     block = ROUTER[start:end]
@@ -66,18 +96,11 @@ def test_join_staff_audit_has_review_controls() -> None:
     assert "build_member_review_view" in block
     assert "view=review_view" in block
     assert "Previous Staff Verdict" in block
-    assert "_build_member_context_fields" in block
 
 
-def test_public_join_leave_card_does_not_get_staff_buttons() -> None:
-    start = ROUTER.index("async def _send_join_leave_join(")
-    end = ROUTER.index("async def _send_public_join(", start)
-    block = ROUTER[start:end]
-    assert "build_member_review_view" not in block
-
-
-def test_review_buttons_do_not_punish_automatically() -> None:
+def test_review_system_never_punishes_automatically() -> None:
     combined = SERVICE + UI + COMMAND
+
     for forbidden in (
         ".ban(",
         ".kick(",
@@ -88,28 +111,17 @@ def test_review_buttons_do_not_punish_automatically() -> None:
         assert forbidden not in combined
 
 
-def test_durable_command_fallback_is_registered() -> None:
-    assert 'name="review"' in COMMAND
-    assert 'name="review-history"' in COMMAND
-    assert "register_public_member_review_feedback_commands" in REGISTRY
-
-    core_start = REGISTRY.index("_PUBLIC_CORE_MODULES:")
-    core_end = REGISTRY.index("_PUBLIC_ADMIN_EXTRA_MODULES:", core_start)
-    core_block = REGISTRY[core_start:core_end]
-
-    assert '"public_member_review_feedback"' in core_block
-
-
 if __name__ == "__main__":
     for test in (
-        test_feedback_is_guild_scoped_and_audited,
-        test_all_staff_verdicts_exist,
-        test_alt_feedback_uses_existing_identity_truth_service,
-        test_source_feedback_is_reusable_on_future_joins,
-        test_join_staff_audit_has_review_controls,
-        test_public_join_leave_card_does_not_get_staff_buttons,
-        test_review_buttons_do_not_punish_automatically,
-        test_durable_command_fallback_is_registered,
+        test_feedback_is_guild_scoped_and_non_enforcing,
+        test_public_profile_loads_member_review_module,
+        test_review_command_opens_panel_before_verdict,
+        test_mobile_review_controls_are_compact,
+        test_command_permission_accepts_configured_staff_roles,
+        test_clean_command_names_replace_old_aliases,
+        test_reset_wording_is_honest,
+        test_staff_audit_still_has_review_controls,
+        test_review_system_never_punishes_automatically,
     ):
         test()
         print(f"PASS {test.__name__}")

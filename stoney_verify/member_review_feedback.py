@@ -21,7 +21,7 @@ VERDICT_LABELS: Dict[str, str] = {
     "clear_invite_source": "Invite Source Cleared",
     "likely_alt": "Likely Alt",
     "confirmed_alt": "Confirmed Alt",
-    "reset": "Verdict Reset",
+    "reset": "Reset Review Verdict",
 }
 
 ALT_VERDICTS = {"likely_alt", "confirmed_alt"}
@@ -274,6 +274,7 @@ def record_member_review_feedback(
         ),
         "supersedes_previous": True,
         "automatic_enforcement": False,
+        "identity_links_unchanged": verdict_text == "reset",
     }
 
     created_at = _now_iso()

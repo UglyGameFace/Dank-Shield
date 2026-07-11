@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime
 from typing import Any, Optional
 
 import discord
@@ -8,42 +9,100 @@ from discord import app_commands
 
 from .public_members_group import members_group
 from stoney_verify.member_review_feedback import (
-    ALT_VERDICTS,
-    BOT_VERDICTS,
-    SOURCE_VERDICTS,
-    VERDICT_LABELS,
     feedback_display_value,
+    get_latest_member_review_feedback,
+    get_latest_source_review_feedback,
     get_member_review_history,
     infer_latest_source_key,
-    record_member_review_feedback,
 )
+from stoney_verify.member_review_ui import build_member_review_view
 
 
 _REGISTERED = False
 
 
-def _can_review(interaction: discord.Interaction) -> bool:
+def _cfg_role_id(cfg: Any, key: str) -> int:
     try:
-        if interaction.guild is None or not isinstance(interaction.user, discord.Member):
+        value = getattr(cfg, key, None)
+        if value is not None:
+            return int(str(value))
+    except Exception:
+        pass
+
+    try:
+        if hasattr(cfg, "get"):
+            value = cfg.get(key)
+            if value is not None:
+                return int(str(value))
+    except Exception:
+        pass
+
+    return 0
+
+
+async def _can_review(interaction: discord.Interaction) -> bool:
+    try:
+        if interaction.guild is None or not isinstance(
+            interaction.user,
+            discord.Member,
+        ):
             return False
+
         perms = interaction.user.guild_permissions
-        return bool(
+        if (
             perms.administrator
             or perms.manage_guild
             or perms.moderate_members
             or perms.kick_members
-        )
+        ):
+            return True
+
+        try:
+            from stoney_verify.guild_config import get_guild_config
+
+            cfg = await get_guild_config(interaction.guild.id)
+
+            staff_ids = {
+                role_id
+                for role_id in (
+                    _cfg_role_id(cfg, "staff_role_id"),
+                    _cfg_role_id(cfg, "vc_staff_role_id"),
+                )
+                if role_id > 0
+            }
+
+            return any(
+                int(role.id) in staff_ids
+                for role in interaction.user.roles
+            )
+        except Exception:
+            return False
     except Exception:
         return False
 
 
+def _relative_timestamp(value: Any) -> str:
+    try:
+        raw = str(value or "").strip()
+        if not raw:
+            return "unknown time"
+
+        parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+        return f"<t:{int(parsed.timestamp())}:R>"
+    except Exception:
+        return "unknown time"
+
+
 def _history_embed(
-    member: discord.Member,
+    user: discord.User | discord.Member,
     rows: list[dict[str, Any]],
 ) -> discord.Embed:
     embed = discord.Embed(
-        title="🧠 Staff Verdict History",
-        description=f"Review history for {member.mention} (`{member.id}`).",
+        title="🧠 Member Verdict History",
+        description=(
+            f"Staff decisions recorded for {user.mention} (`{user.id}`).\n"
+            "Newest decision first. Reset entries preserve the audit trail."
+        ),
         color=discord.Color.blurple(),
         timestamp=discord.utils.utcnow(),
     )
@@ -51,10 +110,12 @@ def _history_embed(
     if not rows:
         embed.add_field(
             name="History",
-            value="No staff verdicts have been recorded for this member.",
+            value="No staff verdicts have been recorded for this user.",
             inline=False,
         )
         return embed
+
+    lines: list[str] = []
 
     for index, row in enumerate(rows[:10], start=1):
         metadata = dict(row.get("metadata") or {})
@@ -63,13 +124,118 @@ def _history_embed(
             or metadata.get("verdict")
             or "Unknown"
         )
-        value = feedback_display_value(row) or "No details."
+        actor = str(
+            row.get("actor_name")
+            or row.get("actor_id")
+            or "Unknown staff"
+        )
+        reason = str(row.get("reason") or "No reason supplied.").strip()
+        reason = reason if len(reason) <= 120 else reason[:119] + "…"
+
+        lines.append(
+            f"`{index}.` **{label}** • {_relative_timestamp(row.get('created_at'))}\n"
+            f"By **{discord.utils.escape_markdown(actor, as_needed=True)}** • {reason}"
+        )
+
+    text = "\n\n".join(lines)
+    embed.add_field(
+        name="Recent Decisions",
+        value=text[:1024],
+        inline=False,
+    )
+    embed.set_footer(
+        text="Review verdicts are evidence context, not automatic punishment."
+    )
+    return embed
+
+
+def _add_context_fields(
+    embed: discord.Embed,
+    context_fields: list[tuple[str, str, bool]],
+) -> None:
+    preferred = (
+        "Join Intelligence",
+        "Evidence & Source",
+        "Identity Links",
+        "Smart Join Intelligence",
+        "Evidence Health",
+        "Containment Posture",
+    )
+
+    added: set[str] = set()
+
+    for wanted in preferred:
+        for name, value, inline in context_fields:
+            if name != wanted or name in added:
+                continue
+
+            embed.add_field(
+                name=name,
+                value=str(value)[:1024],
+                inline=bool(inline),
+            )
+            added.add(name)
+            break
+
+        if len(added) >= 3:
+            break
+
+
+def _review_embed(
+    user: discord.User | discord.Member,
+    *,
+    context_fields: list[tuple[str, str, bool]],
+    previous_feedback: Optional[dict[str, Any]],
+    previous_source_feedback: Optional[dict[str, Any]],
+    source_key: str,
+) -> discord.Embed:
+    embed = discord.Embed(
+        title="🛡️ Member Intelligence Review",
+        description=(
+            f"Review {user.mention} (`{user.id}`) before recording a staff verdict.\n\n"
+            "**No button on this panel automatically bans, kicks, times out, "
+            "or changes roles.**"
+        ),
+        color=discord.Color.blurple(),
+        timestamp=discord.utils.utcnow(),
+    )
+
+    try:
+        embed.set_thumbnail(url=user.display_avatar.url)
+    except Exception:
+        pass
+
+    _add_context_fields(embed, context_fields)
+
+    previous_value = feedback_display_value(previous_feedback)
+    if previous_value:
         embed.add_field(
-            name=f"{index}. {label}",
-            value=value[:1024],
+            name="Current Staff Verdict",
+            value=previous_value[:1024],
             inline=False,
         )
 
+    source_value = feedback_display_value(previous_source_feedback)
+    if source_key and source_value:
+        embed.add_field(
+            name="Current Source Verdict",
+            value=f"Source: `{source_key}`\n{source_value}"[:1024],
+            inline=False,
+        )
+
+    embed.add_field(
+        name="How to Review",
+        value=(
+            "Use **Looks Safe**, **Watch**, or **False Positive** for common decisions.\n"
+            "Use **More Staff Verdicts** for bots, invite sources, alt links, "
+            "or resetting only the review verdict."
+        ),
+        inline=False,
+    )
+
+    embed.set_footer(
+        text="Reset Review Verdict does not revoke an existing identity/alt link."
+    )
     return embed
 
 
@@ -83,6 +249,12 @@ def register_public_member_review_feedback_commands(
     if _REGISTERED:
         return
 
+    # Remove the old long command name if an earlier module version added it.
+    try:
+        members_group.remove_command("review-history")
+    except Exception:
+        pass
+
     existing = {
         getattr(command, "name", "")
         for command in getattr(members_group, "commands", []) or []
@@ -92,138 +264,98 @@ def register_public_member_review_feedback_commands(
 
         @members_group.command(
             name="review",
-            description="Record a reversible staff verdict for a member.",
+            description="Open a member intelligence panel and record a staff verdict.",
         )
         @app_commands.describe(
-            member="Member being reviewed",
-            verdict="Staff verdict",
-            reason="Why staff chose this verdict",
-            related_member="Required for Likely Alt or Confirmed Alt",
-        )
-        @app_commands.choices(
-            verdict=[
-                app_commands.Choice(name=label, value=value)
-                for value, label in VERDICT_LABELS.items()
-            ]
+            member="Member or user to review",
         )
         async def review_member(
             interaction: discord.Interaction,
-            member: discord.Member,
-            verdict: app_commands.Choice[str],
-            reason: str,
-            related_member: Optional[discord.Member] = None,
+            member: discord.User,
         ) -> None:
-            if not _can_review(interaction):
+            if not await _can_review(interaction):
                 await interaction.response.send_message(
-                    "❌ Member review requires Administrator, Manage Server, "
-                    "Moderate Members, or Kick Members.",
+                    "❌ Member review requires a configured staff role or "
+                    "Administrator, Manage Server, Moderate Members, or Kick Members.",
                     ephemeral=True,
                 )
                 return
 
-            verdict_value = str(verdict.value)
-
-            if verdict_value in ALT_VERDICTS and related_member is None:
+            if interaction.guild is None:
                 await interaction.response.send_message(
-                    "❌ Choose a related member for an alt verdict.",
+                    "❌ This command must be used inside a server.",
                     ephemeral=True,
                 )
                 return
 
-            if related_member is not None and related_member.id == member.id:
-                await interaction.response.send_message(
-                    "❌ A member cannot be linked to themselves.",
-                    ephemeral=True,
-                )
-                return
-
-            if verdict_value in BOT_VERDICTS and not member.bot:
-                await interaction.response.send_message(
-                    "❌ Discord does not mark this member as an official bot.",
-                    ephemeral=True,
-                )
-                return
+            await interaction.response.defer(
+                ephemeral=True,
+                thinking=True,
+            )
 
             source_key = await asyncio.to_thread(
                 infer_latest_source_key,
-                guild_id=str(interaction.guild_id or 0),
+                guild_id=str(interaction.guild.id),
                 user_id=str(member.id),
             )
 
-            if verdict_value in SOURCE_VERDICTS and not source_key:
-                await interaction.response.send_message(
-                    "❌ No known invite/source key exists for this member.",
-                    ephemeral=True,
-                )
-                return
-
-            try:
-                result = await asyncio.to_thread(
-                    record_member_review_feedback,
-                    guild_id=str(interaction.guild_id or 0),
-                    user_id=str(member.id),
-                    verdict=verdict_value,
-                    created_by=str(interaction.user.id),
-                    created_by_name=(
-                        getattr(interaction.user, "display_name", None)
-                        or str(interaction.user)
-                    ),
-                    reason=reason,
-                    evidence={
-                        "source": "dank_members_review_command",
-                        "member_is_bot": bool(member.bot),
-                    },
-                    related_user_id=(
-                        str(related_member.id)
-                        if related_member is not None
-                        else None
-                    ),
-                    source_key=source_key,
-                )
-            except Exception as exc:
-                await interaction.response.send_message(
-                    f"❌ Could not save verdict: `{type(exc).__name__}: {exc}`",
-                    ephemeral=True,
-                )
-                return
-
-            embed = discord.Embed(
-                title="✅ Staff Verdict Saved",
-                description=(
-                    "This records staff context and evidence. "
-                    "It does not automatically punish the member."
-                ),
-                color=discord.Color.green(),
-                timestamp=discord.utils.utcnow(),
+            previous_feedback_task = asyncio.to_thread(
+                get_latest_member_review_feedback,
+                guild_id=str(interaction.guild.id),
+                user_id=str(member.id),
             )
-            embed.add_field(
-                name="Member",
-                value=f"{member.mention} (`{member.id}`)",
-                inline=False,
-            )
-            embed.add_field(
-                name="Verdict",
-                value=f"**{result.get('verdict_label', verdict.name)}**",
-                inline=False,
-            )
-            embed.add_field(name="Reason", value=reason[:1024], inline=False)
-
-            if related_member is not None:
-                embed.add_field(
-                    name="Related Member",
-                    value=f"{related_member.mention} (`{related_member.id}`)",
-                    inline=False,
-                )
 
             if source_key:
-                embed.add_field(
-                    name="Source Key",
-                    value=f"`{source_key}`",
-                    inline=False,
+                previous_source_task = asyncio.to_thread(
+                    get_latest_source_review_feedback,
+                    guild_id=str(interaction.guild.id),
+                    source_key=source_key,
+                )
+            else:
+                previous_source_task = asyncio.sleep(
+                    0,
+                    result=None,
                 )
 
-            await interaction.response.send_message(
-                embed=embed,
+            previous_feedback, previous_source_feedback = await asyncio.gather(
+                previous_feedback_task,
+                previous_source_task,
+            )
+
+            context_fields: list[tuple[str, str, bool]] = []
+
+            try:
+                from stoney_verify.modlog import _build_member_context_fields
+
+                context_fields = await _build_member_context_fields(
+                    interaction.guild,
+                    member,
+                )
+            except Exception:
+                context_fields = []
+
+            view = build_member_review_view(
+                guild_id=int(interaction.guild.id),
+                target_user_id=int(member.id),
+                target_is_bot=bool(member.bot),
+                source_key=source_key,
+                evidence_snapshot={
+                    "source": "dank_members_review_panel",
+                    "target_user_id": str(member.id),
+                    "target_is_bot": bool(member.bot),
+                    "source_key": source_key,
+                },
+            )
+
+            await interaction.followup.send(
+                embed=_review_embed(
+                    member,
+                    context_fields=context_fields,
+                    previous_feedback=previous_feedback,
+                    previous_source_feedback=previous_source_feedback,
+                    source_key=source_key,
+                ),
+                view=view,
                 ephemeral=True,
                 allowed_mentions=discord.AllowedMentions.none(),
             )
@@ -233,23 +365,30 @@ def register_public_member_review_feedback_commands(
         for command in getattr(members_group, "commands", []) or []
     }
 
-    if "review-history" not in existing:
+    if "history" not in existing:
 
         @members_group.command(
-            name="review-history",
-            description="View recorded staff verdict history for a member.",
+            name="history",
+            description="View staff verdict history for a member or departed user.",
         )
-        @app_commands.describe(member="Member whose review history to inspect")
+        @app_commands.describe(
+            member="Member or user whose verdict history to inspect",
+        )
         async def review_history(
             interaction: discord.Interaction,
-            member: discord.Member,
+            member: discord.User,
         ) -> None:
-            if not _can_review(interaction):
+            if not await _can_review(interaction):
                 await interaction.response.send_message(
                     "❌ Staff only.",
                     ephemeral=True,
                 )
                 return
+
+            await interaction.response.defer(
+                ephemeral=True,
+                thinking=True,
+            )
 
             rows = await asyncio.to_thread(
                 get_member_review_history,
@@ -258,14 +397,16 @@ def register_public_member_review_feedback_commands(
                 limit=10,
             )
 
-            await interaction.response.send_message(
+            await interaction.followup.send(
                 embed=_history_embed(member, rows),
                 ephemeral=True,
                 allowed_mentions=discord.AllowedMentions.none(),
             )
 
     _REGISTERED = True
-    print("✅ public_member_review_feedback: staff verdict loop registered")
+    print(
+        "✅ public_member_review_feedback: mobile member review panel registered"
+    )
 
 
 __all__ = ["register_public_member_review_feedback_commands"]
