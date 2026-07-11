@@ -114,6 +114,7 @@ _PUBLIC_CORE_MODULES: Tuple[str, ...] = (
     "public_protection_center",
     "public_cleanup_group",
     "public_members_group",
+    "public_member_review_feedback",
     "public_members_cleanup_group",
     "public_self_roles_group",
     "public_design_group",

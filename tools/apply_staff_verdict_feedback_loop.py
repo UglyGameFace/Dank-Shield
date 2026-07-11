@@ -1539,10 +1539,20 @@ def patch_registry() -> None:
     "public_members_cleanup_group",
 '''
 
-    if '"public_member_review_feedback"' not in text:
-        if core_marker not in text:
+    core_start = text.index("_PUBLIC_CORE_MODULES:")
+    core_end = text.index("_PUBLIC_ADMIN_EXTRA_MODULES:", core_start)
+    core_block = text[core_start:core_end]
+
+    if '"public_member_review_feedback"' not in core_block:
+        if core_marker not in core_block:
             raise SystemExit("Could not find public core members module marker")
-        text = text.replace(core_marker, core_replacement, 1)
+
+        core_block = core_block.replace(
+            core_marker,
+            core_replacement,
+            1,
+        )
+        text = text[:core_start] + core_block + text[core_end:]
 
     REGISTRY.write_text(text, encoding="utf-8")
     print("✅ registered public member review feedback commands")

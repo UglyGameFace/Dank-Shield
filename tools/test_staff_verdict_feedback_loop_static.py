@@ -91,8 +91,13 @@ def test_review_buttons_do_not_punish_automatically() -> None:
 def test_durable_command_fallback_is_registered() -> None:
     assert 'name="review"' in COMMAND
     assert 'name="review-history"' in COMMAND
-    assert "public_member_review_feedback" in REGISTRY
-    assert '"public_member_review_feedback"' in REGISTRY
+    assert "register_public_member_review_feedback_commands" in REGISTRY
+
+    core_start = REGISTRY.index("_PUBLIC_CORE_MODULES:")
+    core_end = REGISTRY.index("_PUBLIC_ADMIN_EXTRA_MODULES:", core_start)
+    core_block = REGISTRY[core_start:core_end]
+
+    assert '"public_member_review_feedback"' in core_block
 
 
 if __name__ == "__main__":
