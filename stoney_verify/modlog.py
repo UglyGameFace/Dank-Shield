@@ -1452,7 +1452,7 @@ def _context_truth_value(
 
 def _risk_summary_header(source: Dict[str, Any], warn_count: int = 0) -> str:
     if _safe_bool(source.get("is_bot_account"), False):
-        return "BOT ACCOUNT • Excluded from alt-risk scoring"
+        return "Official Bot: Yes • Alt/Raid Risk: excluded from human scoring • Review bot permissions separately"
 
     tier = _safe_str(source.get("evidence_tier"), "clear").replace("_", " ").upper()
     score = _safe_int(source.get("risk_score"), _safe_int(source.get("score"), 0))
@@ -1462,7 +1462,7 @@ def _risk_summary_header(source: Dict[str, Any], warn_count: int = 0) -> str:
     if not age_human:
         age_human = f"{age_days} day(s)"
 
-    parts = [f"{tier}", f"{level} / {score}/100", f"Account age: {age_human}"]
+    parts = ["Official Bot: No", f"Alt/Raid Risk: {tier}", f"{level} / {score}/100", f"Account age: {age_human}"]
     if warn_count > 0:
         parts.append(f"Warns: {warn_count}")
     return " • ".join(parts)
@@ -1535,7 +1535,28 @@ async def _build_member_context_fields(
     if _safe_int(merged_risk.get("burst_join_count"), 0) > 0:
         base_lines.append(f"Burst join count: {_safe_int(merged_risk.get('burst_join_count'), 0)}")
 
+    if not _safe_bool(merged_risk.get("is_bot_account"), False):
+        base_lines.append("DM Raider Risk: no DM report evidence attached to this join")
+
     fields.append(("Risk Context", _chunk_lines(base_lines, 1000), False))
+
+    entry_method = _safe_str(merged_risk.get("entry_method") or latest_join.get("entry_method") or guild_member.get("entry_method"), "unknown")
+    join_source = _safe_str(merged_risk.get("join_source") or latest_join.get("join_source") or guild_member.get("join_source"), "unknown")
+    invite_code = _safe_str(merged_risk.get("invite_code") or latest_join.get("invite_code") or guild_member.get("invite_code"), "unknown")
+    entry_quality = _safe_str(merged_risk.get("entry_truth_quality") or latest_join.get("entry_truth_quality") or guild_member.get("entry_truth_quality"), "unknown")
+    entry_confidence = _safe_int(merged_risk.get("entry_confidence") or latest_join.get("entry_confidence") or guild_member.get("entry_confidence"), 0)
+    entry_reason = _safe_str(merged_risk.get("entry_quality_reason") or latest_join.get("entry_quality_reason") or guild_member.get("entry_quality_reason"))
+
+    join_source_lines = [
+        f"Entry method: `{entry_method or 'unknown'}`",
+        f"Source: `{join_source or 'unknown'}`",
+        f"Invite: `{invite_code or 'unknown'}`",
+        f"Confidence: `{entry_quality or 'unknown'}` / `{entry_confidence}/100`",
+    ]
+    if entry_reason:
+        join_source_lines.append(f"Why: {_truncate(entry_reason, 180)}")
+
+    fields.append(("Join Source", _chunk_lines(join_source_lines, 1000), False))
 
     truth_value = _context_truth_value(guild, truth_context, merged_risk)
     if truth_value:

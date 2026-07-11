@@ -743,8 +743,8 @@ def build_member_risk_profile(member: discord.Member) -> Dict[str, Any]:
             "risk_level": "low",
             "evidence_tier": "clear",
             "evidence_confidence": "excluded",
-            "reasons": ["Discord marks this account as a bot; excluded from raid/alt scoring."],
-            "risk_reasons": ["Discord marks this account as a bot; excluded from raid/alt scoring."],
+            "reasons": ["Official Discord bot account: excluded from human alt/raid scoring. Review bot permissions separately."],
+            "risk_reasons": ["Official Discord bot account: excluded from human alt/raid scoring. Review bot permissions separately."],
             "account_age_human": _humanize_age_days(age_days),
             "same_fingerprint_count": 0,
             "similar_name_count": 0,
@@ -1091,7 +1091,7 @@ def build_alt_detection_summary(member: discord.Member) -> str:
     profile = build_member_risk_profile(member)
 
     if bool(profile.get("is_bot_account")):
-        return "Official Bot: Yes\nAlt/Raid Risk: excluded from human raid/alt scoring\nDM Raider Report Risk: separate report flow"
+        return "Official Bot: Yes\nAlt/Raid Risk: excluded from human raid/alt scoring\nDM Raider Risk: separate report flow"
 
     score = int(profile.get("score") or 0)
     level = str(profile.get("level") or "low").upper()
@@ -1113,7 +1113,7 @@ def build_alt_detection_summary(member: discord.Member) -> str:
         "Official Bot: No",
         f"Alt/Raid Risk: {tier} ({level} / {score}/100)",
         f"Account age: {age_human}",
-        "DM Raider Report Risk: separate user-report evidence required",
+        "DM Raider Risk: separate user-report evidence required",
     ]
 
     signal_parts: List[str] = []
