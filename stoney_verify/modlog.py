@@ -15,13 +15,10 @@ import discord
 from .globals import *
 
 try:
-    from .raidguard import build_member_risk_profile, build_alt_detection_summary
+    from .raidguard import build_member_risk_profile
 except Exception:
     def build_member_risk_profile(member: discord.Member) -> Dict[str, Any]:
         return {}
-
-    def build_alt_detection_summary(member: discord.Member) -> str:
-        return ""
 
 
 try:
@@ -1394,46 +1391,6 @@ def _sb_select_source_reputation_sync(
         return {}
 
 
-def _source_reputation_value(reputation: Dict[str, Any]) -> str:
-    rep = dict(reputation or {})
-    source_field = _safe_str(rep.get("source_field"))
-    source_value = _safe_str(rep.get("source_value"))
-
-    if not source_field or not source_value:
-        return ""
-
-    sample_size = _safe_int(rep.get("sample_size"), 0)
-    total_count = _safe_int(rep.get("total_count"), sample_size)
-    unique_users = _safe_int(rep.get("unique_users"), 0)
-    risky_count = _safe_int(rep.get("risky_count"), 0)
-    strong_or_confirmed = _safe_int(rep.get("strong_or_confirmed_count"), 0)
-    low_confidence = _safe_int(rep.get("low_confidence_count"), 0)
-
-    if strong_or_confirmed > 0 or risky_count >= 3:
-        verdict = "⚠️ Source needs staff review."
-    elif low_confidence >= max(3, sample_size // 2):
-        verdict = "🟡 Source attribution is weak; watch new joins from this source."
-    elif sample_size >= 5 and risky_count == 0 and strong_or_confirmed == 0:
-        verdict = "✅ No recent risk pattern from this source."
-    else:
-        verdict = "ℹ️ Not enough history for a strong source verdict yet."
-
-    lines = [
-        f"Source key: `{source_field}` = `{source_value}`",
-        f"Recent sample: **{sample_size}** join row(s) / **{unique_users}** user(s)",
-        f"Risky from same source: **{risky_count}**",
-        f"Strong/confirmed alt evidence: **{strong_or_confirmed}**",
-        f"Low-confidence attribution rows: **{low_confidence}**",
-        verdict,
-    ]
-
-    if total_count > sample_size:
-        lines.append(f"More history exists: **{total_count}** total matching row(s).")
-
-    return _chunk_lines(lines, 1000)
-
-
-
 def _extract_flags_from_profile_like(data: Dict[str, Any]) -> List[str]:
     flags: List[str] = []
 
@@ -1577,350 +1534,128 @@ def _context_truth_value(
     return _chunk_lines(lines, 1000)
 
 
-def _member_role_name_set(member: discord.abc.User) -> Set[str]:
-    names: Set[str] = set()
+def _member_role_ids(member_or_user: discord.abc.User) -> Set[int]:
+    out: Set[int] = set()
     try:
-        for role in getattr(member, "roles", []) or []:
-            name = _safe_str(getattr(role, "name", "")).lower()
-            if name:
-                names.add(name)
+        for role in getattr(member_or_user, "roles", []) or []:
+            role_id = _safe_int(getattr(role, "id", 0), 0)
+            if role_id > 0:
+                out.add(role_id)
     except Exception:
         pass
-    return names
+    return out
 
 
-def _member_has_named_role(member: discord.abc.User, *needles: str) -> bool:
-    names = _member_role_name_set(member)
-    clean_needles = [str(n or "").strip().lower() for n in needles if str(n or "").strip()]
-    for name in names:
-        for needle in clean_needles:
-            if name == needle or needle in name:
-                return True
-    return False
-
-
-def _containment_posture_value(
+def _configured_access_state(
     member_or_user: discord.abc.User,
-    merged_risk: Dict[str, Any],
-    latest_join: Dict[str, Any],
-    guild_member: Dict[str, Any],
-    source_reputation: Dict[str, Any] | None = None,
+    runtime_config: Dict[str, Any],
     *,
-    warn_count: int = 0,
-) -> str:
-    merged = dict(merged_risk or {})
-    latest = dict(latest_join or {})
-    member_row = dict(guild_member or {})
-    source_rep = dict(source_reputation or {})
-
-    is_bot = _safe_bool(merged.get("is_bot_account"), False) or bool(getattr(member_or_user, "bot", False))
-    score = _safe_int(merged.get("risk_score"), _safe_int(merged.get("score"), 0))
-    tier = _safe_str(merged.get("evidence_tier"), "clear").replace("_", " ").upper()
-
-    entry_method = _safe_str(merged.get("entry_method") or latest.get("entry_method") or member_row.get("entry_method"), "unknown")
-    join_source = _safe_str(merged.get("join_source") or latest.get("join_source") or member_row.get("join_source"), "unknown")
-    entry_confidence = _safe_int(merged.get("entry_confidence") or latest.get("entry_confidence") or member_row.get("entry_confidence"), 0)
-
-    source_risky = _safe_int(source_rep.get("risky_count"), 0)
-    source_strong = _safe_int(source_rep.get("strong_or_confirmed_count"), 0)
-    source_low_conf = _safe_int(source_rep.get("low_confidence_count"), 0)
-
-    has_unverified = _member_has_named_role(member_or_user, "unverified")
-    has_verified = _member_has_named_role(member_or_user, "verified") and not has_unverified
-    has_resident = _member_has_named_role(member_or_user, "resident")
-    has_staffish = _member_has_named_role(member_or_user, "staff", "mod", "admin", "owner")
-
-    source_unknown = (
-        entry_method in {"", "unknown", "unknown_join", "invite_unresolved", "invite_cache_warming", "invite_tracking_unavailable"}
-        or join_source in {"", "unknown", "unknown_join", "invite_unresolved", "invite_cache_warming", "invite_tracking_unavailable"}
-        or entry_confidence < 50
-    )
-
-    hold_reasons: List[str] = []
-    if source_unknown:
-        hold_reasons.append("invite/source unresolved or low-confidence")
-    if score >= 20 or tier in {"SUSPICIOUS", "STRONGLY LINKED", "CONFIRMED DUPLICATE"}:
-        hold_reasons.append(f"alt/raid risk {tier} {score}/100")
-    if source_strong > 0 or source_risky >= 3:
-        hold_reasons.append("same source has risky join history")
-    if source_low_conf >= 3:
-        hold_reasons.append("same source repeatedly has weak attribution")
-    if warn_count > 0:
-        hold_reasons.append(f"{warn_count} prior warning(s)")
-
+    is_bot: bool,
+) -> Tuple[str, str]:
     if is_bot:
-        containment = "BOT ACCOUNT"
-        access = "Bot permissions must be reviewed separately."
-        action = "Review who added this bot and whether its permissions are safe."
-    elif has_staffish:
-        containment = "STAFF / PRIVILEGED"
-        access = "Privileged role detected."
-        action = "Staff/privileged accounts should bypass normal auto-risk only if intentionally trusted."
-    elif has_verified or has_resident:
-        containment = "VERIFIED ACCESS"
-        access = "Verified/resident access detected."
-        if hold_reasons:
-            action = "Review immediately; this user already has access while watchlist reasons exist."
-        else:
-            action = "Normal access state; keep logging behavior."
-    elif has_unverified:
-        containment = "UNVERIFIED / CONTAINED"
-        access = "No verified/resident access detected."
-        if hold_reasons:
-            action = "Keep contained until verification, source clarity, or staff review."
-        else:
-            action = "Normal verification path; containment is active."
-    else:
-        containment = "UNKNOWN ROLE STATE"
-        access = "No clear unverified/verified/resident role detected."
-        action = "Check setup roles; containment may not be applied correctly."
+        return (
+            "BOT ACCOUNT",
+            "Review who added the bot and whether its permissions are appropriate.",
+        )
 
-    lines = [
-        f"Containment: **{containment}**",
-        f"Access state: {access}",
-    ]
+    role_ids = _member_role_ids(member_or_user)
 
-    if hold_reasons:
-        lines.append("Hold reasons: " + " • ".join(hold_reasons[:5]))
-    else:
-        lines.append("Hold reasons: none from current join evidence")
+    unverified_id = _safe_int(runtime_config.get("unverified_role_id"), 0)
+    verified_id = _safe_int(runtime_config.get("verified_role_id"), 0)
+    resident_id = _safe_int(runtime_config.get("resident_role_id"), 0)
+    staff_id = _safe_int(runtime_config.get("staff_role_id"), 0)
+    vc_staff_id = _safe_int(runtime_config.get("vc_staff_role_id"), 0)
 
-    lines.append(f"Recommended action: {action}")
-    return _chunk_lines(lines, 1000)
+    configured_ids = {
+        role_id
+        for role_id in (
+            unverified_id,
+            verified_id,
+            resident_id,
+            staff_id,
+            vc_staff_id,
+        )
+        if role_id > 0
+    }
 
+    if staff_id > 0 and staff_id in role_ids:
+        return ("STAFF / PRIVILEGED", "Configured staff role is present.")
+    if vc_staff_id > 0 and vc_staff_id in role_ids:
+        return ("STAFF / PRIVILEGED", "Configured VC staff role is present.")
 
+    has_unverified = unverified_id > 0 and unverified_id in role_ids
+    has_verified = verified_id > 0 and verified_id in role_ids
+    has_resident = resident_id > 0 and resident_id in role_ids
 
-def _evidence_health_value(
-    merged_risk: Dict[str, Any],
-    latest_join: Dict[str, Any],
-    guild_member: Dict[str, Any],
-    truth_context: Dict[str, Any],
-    source_reputation: Dict[str, Any] | None = None,
-    *,
-    warn_count: int = 0,
-) -> str:
-    merged = dict(merged_risk or {})
-    latest = dict(latest_join or {})
-    member_row = dict(guild_member or {})
-    truth = dict(truth_context or {})
-    source_rep = dict(source_reputation or {})
+    if has_unverified:
+        return (
+            "UNVERIFIED / CONTAINED",
+            "Configured unverified role is present.",
+        )
 
-    is_bot = _safe_bool(merged.get("is_bot_account"), False)
-    score = _safe_int(merged.get("risk_score"), _safe_int(merged.get("score"), 0))
-    tier = _safe_str(merged.get("evidence_tier"), "clear").replace("_", " ").upper()
-    level = _safe_str(merged.get("risk_level") or merged.get("level"), "low").upper()
+    if has_verified or has_resident:
+        return (
+            "VERIFIED ACCESS",
+            "Configured verified/resident access role is present.",
+        )
 
-    entry_method = _safe_str(merged.get("entry_method") or latest.get("entry_method") or member_row.get("entry_method"), "unknown")
-    join_source = _safe_str(merged.get("join_source") or latest.get("join_source") or member_row.get("join_source"), "unknown")
-    entry_quality = _safe_str(merged.get("entry_truth_quality") or latest.get("entry_truth_quality") or member_row.get("entry_truth_quality"), "unknown")
-    entry_confidence = _safe_int(merged.get("entry_confidence") or latest.get("entry_confidence") or member_row.get("entry_confidence"), 0)
+    if not configured_ids:
+        return (
+            "ROLE CONFIG MISSING",
+            "No authoritative access-role IDs are configured for this server.",
+        )
 
-    identity_matches = max(
-        _safe_int(merged.get("identity_proof_match_count"), 0),
-        len(list(truth.get("proof_matches") or [])),
-    )
-    manual_confirmed = max(
-        _safe_int(merged.get("manual_confirmed_match_count"), 0),
-        len(list(truth.get("manual_confirmed") or [])),
-    )
-    manual_likely = max(
-        _safe_int(merged.get("manual_likely_match_count"), 0),
-        len(list(truth.get("manual_likely") or [])),
+    return (
+        "NO ACCESS ROLE DETECTED",
+        "Member has none of the configured unverified, verified, resident, or staff roles.",
     )
 
-    fp_count = _safe_int(merged.get("same_fingerprint_count"), 0)
-    name_count = _safe_int(merged.get("similar_name_count"), 0)
-    burst_count = _safe_int(merged.get("burst_join_count") or merged.get("burst_count"), 0)
-    flags = _extract_flags_from_profile_like(merged)
 
-    source_sample = _safe_int(source_rep.get("sample_size"), 0)
-    source_risky = _safe_int(source_rep.get("risky_count"), 0)
-    source_strong = _safe_int(source_rep.get("strong_or_confirmed_count"), 0)
-    source_low_conf = _safe_int(source_rep.get("low_confidence_count"), 0)
-
-    source_unknown = (
-        entry_method in {"", "unknown", "unknown_join", "invite_unresolved", "invite_cache_warming", "invite_tracking_unavailable"}
-        or join_source in {"", "unknown", "unknown_join", "invite_unresolved", "invite_cache_warming", "invite_tracking_unavailable"}
-        or entry_confidence < 50
+def _join_source_is_uncertain(
+    entry_method: str,
+    join_source: str,
+    entry_confidence: int,
+) -> bool:
+    uncertain_values = {
+        "",
+        "unknown",
+        "unknown_join",
+        "invite_unresolved",
+        "invite_cache_warming",
+        "invite_tracking_unavailable",
+    }
+    return (
+        str(entry_method or "").strip().lower() in uncertain_values
+        or str(join_source or "").strip().lower() in uncertain_values
+        or int(entry_confidence or 0) < 50
     )
 
-    strengths: List[str] = []
-    gaps: List[str] = []
-
-    if is_bot:
-        strengths.append("Discord marks this as an official bot account.")
-        gaps.append("Bot permission review is separate from human alt/raid scoring.")
-        verdict = "BOT REVIEW"
-    else:
-        if entry_confidence >= 85:
-            strengths.append("Join source confidence is high.")
-        elif source_unknown:
-            gaps.append("Invite/source is unresolved or low-confidence.")
-
-        if identity_matches > 0 or manual_confirmed > 0:
-            strengths.append("Hard identity/alt evidence exists.")
-        else:
-            gaps.append("No verified identity-proof or manually confirmed alt link.")
-
-        if manual_likely > 0:
-            strengths.append("Staff marked likely identity linkage.")
-
-        if fp_count > 0 or name_count > 0 or burst_count > 1:
-            strengths.append("Recent cluster/burst evidence exists.")
-        else:
-            gaps.append("No meaningful recent cluster evidence yet.")
-
-        if flags:
-            strengths.append("Join-time warning flags exist.")
-        else:
-            gaps.append("No join-time warning flags yet.")
-
-        if warn_count > 0:
-            strengths.append(f"User has {warn_count} prior warning(s).")
-        else:
-            gaps.append("No prior warns on record.")
-
-        if source_sample >= 5 and source_risky == 0 and source_strong == 0:
-            strengths.append("Same-source history has no recent risk pattern.")
-        elif source_strong > 0 or source_risky >= 3:
-            gaps.append("Same source has risky or confirmed-linked join history.")
-        elif source_sample > 0 and source_low_conf >= max(3, source_sample // 2):
-            gaps.append("Same-source history has repeated low-confidence attribution.")
-
-        gaps.append("DM/userbot behavior cannot be proven from join alone; it needs message behavior, staff reports, or DM reports.")
-
-        if identity_matches > 0 or manual_confirmed > 0 or score >= 65 or source_strong > 0:
-            verdict = "HIGH EVIDENCE"
-        elif source_unknown or score >= 20 or source_risky > 0 or source_low_conf >= 3 or flags:
-            verdict = "WATCHLIST"
-        else:
-            verdict = "LOW EVIDENCE"
-
-    lines = [
-        f"Verdict: **{verdict}**",
-        f"Alt/Raid: **{tier}** • **{level} / {score}/100**",
-        f"Join source: **{entry_quality or 'unknown'}** / **{entry_confidence}/100**",
-    ]
-
-    if source_sample > 0:
-        lines.append(f"Source history: sample={source_sample}, risky={source_risky}, strong={source_strong}, low-confidence={source_low_conf}")
-
-    if strengths:
-        lines.append("Evidence strength: " + " • ".join(strengths[:4]))
-
-    if gaps:
-        lines.append("Evidence gaps: " + " • ".join(gaps[:5]))
-
-    return _chunk_lines(lines, 1000)
-
-
-
-def _risk_summary_header(source: Dict[str, Any], warn_count: int = 0) -> str:
-    if _safe_bool(source.get("is_bot_account"), False):
-        return "Official Bot: Yes • Alt/Raid Risk: excluded from human scoring • Review bot permissions separately"
-
-    tier = _safe_str(source.get("evidence_tier"), "clear").replace("_", " ").upper()
-    score = _safe_int(source.get("risk_score"), _safe_int(source.get("score"), 0))
-    level = _safe_str(source.get("risk_level") or source.get("level"), "low").upper()
-    age_human = _safe_str(source.get("account_age_human"))
-    age_days = _safe_int(source.get("account_age_days"), 0)
-    if not age_human:
-        age_human = f"{age_days} day(s)"
-
-    parts = ["Official Bot: No", f"Alt/Raid Risk: {tier}", f"{level} / {score}/100", f"Account age: {age_human}"]
-    if warn_count > 0:
-        parts.append(f"Warns: {warn_count}")
-    return " • ".join(parts)
-
-
-
-def _smart_join_intelligence_value(
-    merged_risk: Dict[str, Any],
-    latest_join: Dict[str, Any],
-    guild_member: Dict[str, Any],
-    *,
-    warn_count: int = 0,
-    source_reputation: Dict[str, Any] | None = None,
-) -> str:
-    merged = dict(merged_risk or {})
-    latest = dict(latest_join or {})
-    member_row = dict(guild_member or {})
-    source_rep = dict(source_reputation or {})
-
-    is_bot = _safe_bool(merged.get("is_bot_account"), False)
-    tier = _safe_str(merged.get("evidence_tier"), "clear").replace("_", " ").upper()
-    score = _safe_int(merged.get("risk_score"), _safe_int(merged.get("score"), 0))
-    level = _safe_str(merged.get("risk_level") or merged.get("level"), "low").upper()
-
-    entry_method = _safe_str(merged.get("entry_method") or latest.get("entry_method") or member_row.get("entry_method"), "unknown")
-    join_source = _safe_str(merged.get("join_source") or latest.get("join_source") or member_row.get("join_source"), "unknown")
-    entry_quality = _safe_str(merged.get("entry_truth_quality") or latest.get("entry_truth_quality") or member_row.get("entry_truth_quality"), "unknown")
-    entry_confidence = _safe_int(merged.get("entry_confidence") or latest.get("entry_confidence") or member_row.get("entry_confidence"), 0)
-    entry_reason = _safe_str(merged.get("entry_quality_reason") or latest.get("entry_quality_reason") or member_row.get("entry_quality_reason"))
-
-    flags = _extract_flags_from_profile_like(merged)
-    pretty_flags = [_pretty_flag_label(flag) for flag in flags if _pretty_flag_label(flag)]
-
-    source_unknown = (
-        entry_method in {"", "unknown", "unknown_join", "invite_unresolved", "invite_cache_warming", "invite_tracking_unavailable"}
-        or join_source in {"", "unknown", "unknown_join", "invite_unresolved", "invite_cache_warming", "invite_tracking_unavailable"}
-        or entry_confidence < 50
-    )
-
-    lines: List[str] = []
-
-    if is_bot:
-        lines.append("Official bot: **Yes**")
-        lines.append("Alt/raid evidence: excluded from human alt/raid scoring")
-        lines.append("Human automation/userbot risk: not applicable; this is a Discord bot account")
-        lines.append("Recommended action: review who added it and whether its permissions are safe.")
-        return _chunk_lines(lines, 1000)
-
-    lines.append("Official bot: **No**")
-    lines.append(f"Alt/raid evidence: **{tier}** • **{level} / {score}/100**")
-    lines.append("Human automation/userbot risk: not proven from join alone; needs message behavior, staff reports, or DM reports.")
-    lines.append(f"Invite/source confidence: **{entry_quality or 'unknown'}** / **{entry_confidence}/100**")
-
-    if source_unknown:
-        lines.append("Context gap: invite/source is unresolved or low-confidence; treat as watchlist context, not proof.")
-    elif entry_reason:
-        lines.append(f"Source reason: {_truncate(entry_reason, 180)}")
-
-    if pretty_flags:
-        lines.append("Signals: " + ", ".join(pretty_flags[:8]))
-    else:
-        lines.append("Signals: no strong recent link evidence yet")
-
-    source_risky = _safe_int(source_rep.get("risky_count"), 0)
-    source_strong = _safe_int(source_rep.get("strong_or_confirmed_count"), 0)
-    source_low_conf = _safe_int(source_rep.get("low_confidence_count"), 0)
-    if source_rep:
-        lines.append(f"Source pattern: risky={source_risky}, strong/confirmed={source_strong}, low-confidence={source_low_conf}")
-
-    if warn_count > 0:
-        lines.append(f"History: {warn_count} warning(s) on record")
-
-    if tier in {"CONFIRMED DUPLICATE", "STRONGLY LINKED"} or score >= 65:
-        action = "Restrict and review immediately."
-    elif source_strong > 0 or source_risky >= 3:
-        action = "Watch this source closely; same source has risky join history."
-    elif score >= 20 or source_unknown or source_low_conf >= 3 or warn_count > 0:
-        action = "Watch verification; keep unverified containment until source/behavior looks clean."
-    else:
-        action = "Normal verification; keep logging for new behavior, reports, or source changes."
-
-    lines.append(f"Recommended action: {action}")
-    return _chunk_lines(lines, 1000)
 
 async def _build_member_context_fields(
     guild: discord.Guild,
     member_or_user: discord.abc.User,
 ) -> List[Tuple[str, str, bool]]:
     try:
-        guild_member = await _run_blocking_db(_sb_select_guild_member_sync, guild.id, member_or_user.id) or {}
-        latest_join = await _run_blocking_db(_sb_select_latest_join_sync, guild.id, member_or_user.id) or {}
-        warn_count = await _run_blocking_db(_sb_select_warn_count_sync, guild.id, member_or_user.id)
-        truth_context = await _run_blocking_db(_sb_get_identity_truth_context_sync, guild.id, member_or_user.id) or {}
+        guild_member = await _run_blocking_db(
+            _sb_select_guild_member_sync,
+            guild.id,
+            member_or_user.id,
+        ) or {}
+        latest_join = await _run_blocking_db(
+            _sb_select_latest_join_sync,
+            guild.id,
+            member_or_user.id,
+        ) or {}
+        warn_count = await _run_blocking_db(
+            _sb_select_warn_count_sync,
+            guild.id,
+            member_or_user.id,
+        )
+        truth_context = await _run_blocking_db(
+            _sb_get_identity_truth_context_sync,
+            guild.id,
+            member_or_user.id,
+        ) or {}
         source_reputation = await _run_blocking_db(
             _sb_select_source_reputation_sync,
             guild.id,
@@ -1935,7 +1670,12 @@ async def _build_member_context_fields(
         truth_context = {}
         source_reputation = {}
 
-    risk_profile = {}
+    try:
+        runtime_config = dict(await get_guild_config(guild.id) or {})
+    except Exception:
+        runtime_config = {}
+
+    risk_profile: Dict[str, Any] = {}
     try:
         if isinstance(member_or_user, discord.Member):
             risk_profile = build_member_risk_profile(member_or_user) or {}
@@ -1947,114 +1687,246 @@ async def _build_member_context_fields(
     merged_risk.update(latest_join if isinstance(latest_join, dict) else {})
     merged_risk.update(risk_profile if isinstance(risk_profile, dict) else {})
 
-    flags = _extract_flags_from_profile_like(merged_risk)
-    pretty_flags = [_pretty_flag_label(flag) for flag in flags if _pretty_flag_label(flag)]
+    is_bot = (
+        _safe_bool(merged_risk.get("is_bot_account"), False)
+        or bool(getattr(member_or_user, "bot", False))
+    )
+
+    score = _safe_int(
+        merged_risk.get("risk_score"),
+        _safe_int(merged_risk.get("score"), 0),
+    )
+    level = _safe_str(
+        merged_risk.get("risk_level") or merged_risk.get("level"),
+        "low",
+    ).upper()
+    tier = _safe_str(
+        merged_risk.get("evidence_tier"),
+        "clear",
+    ).replace("_", " ").upper()
 
     account_age = _account_age_human(member_or_user)
-    joined_gap_seconds, joined_gap_human = _join_after_creation_delta(
+    _joined_gap_seconds, joined_gap_human = _join_after_creation_delta(
         member_or_user if isinstance(member_or_user, discord.Member) else None
     )
 
-    evidence_header = _risk_summary_header(
-        {
-            **merged_risk,
-            "account_age_human": account_age,
-            "risk_score": _safe_int(merged_risk.get("risk_score"), _safe_int(merged_risk.get("score"), 0)),
-            "risk_level": _safe_str(merged_risk.get("risk_level") or merged_risk.get("level"), "low"),
-            "evidence_tier": _safe_str(merged_risk.get("evidence_tier"), "clear"),
-        },
-        warn_count=warn_count,
+    entry_method = _safe_str(
+        merged_risk.get("entry_method")
+        or latest_join.get("entry_method")
+        or guild_member.get("entry_method"),
+        "unknown",
+    )
+    join_source = _safe_str(
+        merged_risk.get("join_source")
+        or latest_join.get("join_source")
+        or guild_member.get("join_source"),
+        "unknown",
+    )
+    invite_code = _safe_str(
+        merged_risk.get("invite_code")
+        or latest_join.get("invite_code")
+        or guild_member.get("invite_code"),
+        "unknown",
+    )
+    entry_quality = _safe_str(
+        merged_risk.get("entry_truth_quality")
+        or latest_join.get("entry_truth_quality")
+        or guild_member.get("entry_truth_quality"),
+        "unknown",
+    )
+    entry_confidence = _safe_int(
+        merged_risk.get("entry_confidence")
+        or latest_join.get("entry_confidence")
+        or guild_member.get("entry_confidence"),
+        0,
+    )
+    entry_reason = _safe_str(
+        merged_risk.get("entry_quality_reason")
+        or latest_join.get("entry_quality_reason")
+        or guild_member.get("entry_quality_reason")
     )
 
-    alt_summary = ""
-    try:
-        if isinstance(member_or_user, discord.Member):
-            alt_summary = build_alt_detection_summary(member_or_user) or ""
-    except Exception:
-        alt_summary = ""
-
-    fields: List[Tuple[str, str, bool]] = []
-
-    base_lines = [evidence_header]
-    if pretty_flags:
-        base_lines.append("Flags: " + ", ".join(pretty_flags[:8]))
-    if joined_gap_human:
-        base_lines.append(f"Joined after creation: {joined_gap_human}")
-    if _safe_int(merged_risk.get("same_fingerprint_count"), 0) > 0:
-        base_lines.append(f"Shared fingerprint count: {_safe_int(merged_risk.get('same_fingerprint_count'), 0)}")
-    if _safe_int(merged_risk.get("similar_name_count"), 0) > 0:
-        base_lines.append(f"Similar name count: {_safe_int(merged_risk.get('similar_name_count'), 0)}")
-    if _safe_int(merged_risk.get("burst_join_count"), 0) > 0:
-        base_lines.append(f"Burst join count: {_safe_int(merged_risk.get('burst_join_count'), 0)}")
-
-    if not _safe_bool(merged_risk.get("is_bot_account"), False):
-        base_lines.append("DM Raider Risk: no DM report evidence attached to this join")
-
-    fields.append(("Risk Context", _chunk_lines(base_lines, 1000), False))
-
-    evidence_health = _evidence_health_value(
-        merged_risk,
-        latest_join,
-        guild_member,
-        truth_context,
-        locals().get("source_reputation", {}),
-        warn_count=warn_count,
+    source_uncertain = _join_source_is_uncertain(
+        entry_method,
+        join_source,
+        entry_confidence,
     )
-    if evidence_health:
-        fields.append(("Evidence Health", evidence_health, False))
 
-    containment_posture = _containment_posture_value(
-        member_or_user,
-        merged_risk,
-        latest_join,
-        guild_member,
-        locals().get("source_reputation", {}),
-        warn_count=warn_count,
+    source_sample = _safe_int(source_reputation.get("sample_size"), 0)
+    source_risky = _safe_int(source_reputation.get("risky_count"), 0)
+    source_strong = _safe_int(
+        source_reputation.get("strong_or_confirmed_count"),
+        0,
     )
-    if containment_posture:
-        fields.append(("Containment Posture", containment_posture, False))
-
-
-    smart_value = _smart_join_intelligence_value(
-        merged_risk,
-        latest_join,
-        guild_member,
-        warn_count=warn_count,
-        source_reputation=source_reputation,
+    source_low_conf = _safe_int(
+        source_reputation.get("low_confidence_count"),
+        0,
     )
-    if smart_value:
-        fields.append(("Smart Join Intelligence", smart_value, False))
 
-    entry_method = _safe_str(merged_risk.get("entry_method") or latest_join.get("entry_method") or guild_member.get("entry_method"), "unknown")
-    join_source = _safe_str(merged_risk.get("join_source") or latest_join.get("join_source") or guild_member.get("join_source"), "unknown")
-    invite_code = _safe_str(merged_risk.get("invite_code") or latest_join.get("invite_code") or guild_member.get("invite_code"), "unknown")
-    entry_quality = _safe_str(merged_risk.get("entry_truth_quality") or latest_join.get("entry_truth_quality") or guild_member.get("entry_truth_quality"), "unknown")
-    entry_confidence = _safe_int(merged_risk.get("entry_confidence") or latest_join.get("entry_confidence") or guild_member.get("entry_confidence"), 0)
-    entry_reason = _safe_str(merged_risk.get("entry_quality_reason") or latest_join.get("entry_quality_reason") or guild_member.get("entry_quality_reason"))
+    identity_matches = max(
+        _safe_int(merged_risk.get("identity_proof_match_count"), 0),
+        len(list(truth_context.get("proof_matches") or [])),
+    )
+    manual_confirmed = max(
+        _safe_int(merged_risk.get("manual_confirmed_match_count"), 0),
+        len(list(truth_context.get("manual_confirmed") or [])),
+    )
+    manual_likely = max(
+        _safe_int(merged_risk.get("manual_likely_match_count"), 0),
+        len(list(truth_context.get("manual_likely") or [])),
+    )
 
-    join_source_lines = [
-        f"Entry method: `{entry_method or 'unknown'}`",
-        f"Source: `{join_source or 'unknown'}`",
-        f"Invite: `{invite_code or 'unknown'}`",
-        f"Confidence: `{entry_quality or 'unknown'}` / `{entry_confidence}/100`",
+    flags = _extract_flags_from_profile_like(merged_risk)
+    pretty_flags = [
+        _pretty_flag_label(flag)
+        for flag in flags
+        if _pretty_flag_label(flag)
     ]
+
+    fingerprint_count = _safe_int(
+        merged_risk.get("same_fingerprint_count"),
+        0,
+    )
+    similar_name_count = _safe_int(
+        merged_risk.get("similar_name_count"),
+        0,
+    )
+    burst_count = _safe_int(
+        merged_risk.get("burst_join_count")
+        or merged_risk.get("burst_count"),
+        0,
+    )
+
+    access_state, access_reason = _configured_access_state(
+        member_or_user,
+        runtime_config,
+        is_bot=is_bot,
+    )
+
+    hard_evidence = (
+        identity_matches > 0
+        or manual_confirmed > 0
+        or tier in {"CONFIRMED DUPLICATE", "STRONGLY LINKED"}
+        or score >= 65
+        or source_strong > 0
+    )
+
+    watchlist_evidence = (
+        score >= 20
+        or bool(pretty_flags)
+        or source_uncertain
+        or source_risky > 0
+        or source_low_conf >= 3
+        or warn_count > 0
+        or fingerprint_count > 0
+        or similar_name_count > 0
+        or burst_count > 1
+        or manual_likely > 0
+    )
+
+    if is_bot:
+        verdict = "BOT REVIEW"
+        action = "Review who added it and audit its permissions before trusting it."
+    elif hard_evidence:
+        verdict = "REVIEW NOW"
+        action = "Keep contained and review the evidence immediately."
+    elif watchlist_evidence:
+        verdict = "WATCHLIST"
+        action = "Keep on the normal verification path; do not treat CLEAR as proof of safety."
+    else:
+        verdict = "NO CURRENT RISK SIGNALS"
+        action = "Continue normal verification and behavior logging."
+
+    if access_state == "VERIFIED ACCESS" and verdict in {"REVIEW NOW", "WATCHLIST"}:
+        action = "Review immediately because this member already has verified/resident access."
+    elif access_state == "ROLE CONFIG MISSING":
+        action = "Fix the server access-role configuration before relying on containment status."
+    elif access_state == "NO ACCESS ROLE DETECTED":
+        action = "Check setup and access routing; no configured containment/access role was found."
+
+    intelligence_lines = [
+        f"Verdict: **{verdict}**",
+        f"Official bot: **{'Yes' if is_bot else 'No'}**",
+        f"Alt/raid evidence: **{tier}** • **{level} / {score}/100**",
+        f"Access state: **{access_state}** — {access_reason}",
+        f"Recommended action: {action}",
+    ]
+
+    evidence_lines = [
+        f"Account age: **{account_age}**",
+        f"Entry: `{entry_method}` • Source: `{join_source}`",
+        f"Invite: `{invite_code}`",
+        f"Source confidence: **{entry_quality} / {entry_confidence}/100**",
+    ]
+
+    if joined_gap_human:
+        evidence_lines.append(f"Created-to-join timing: **{joined_gap_human}**")
+
     if entry_reason:
-        join_source_lines.append(f"Why: {_truncate(entry_reason, 180)}")
+        evidence_lines.append(f"Source explanation: {_truncate(entry_reason, 180)}")
 
-    fields.append(("Join Source", _chunk_lines(join_source_lines, 1000), False))
+    if pretty_flags:
+        evidence_lines.append("Signals: " + " • ".join(pretty_flags[:7]))
+    else:
+        evidence_lines.append("Signals: no current join-time warning flags")
 
-    source_reputation_value = _source_reputation_value(source_reputation)
-    if source_reputation_value:
-        fields.append(("Source Reputation", source_reputation_value, False))
+    cluster_bits: List[str] = []
+    if fingerprint_count > 0:
+        cluster_bits.append(f"shared fingerprints={fingerprint_count}")
+    if similar_name_count > 0:
+        cluster_bits.append(f"similar names={similar_name_count}")
+    if burst_count > 0:
+        cluster_bits.append(f"burst joins={burst_count}")
+    if cluster_bits:
+        evidence_lines.append("Recent cluster: " + " • ".join(cluster_bits))
 
-    truth_value = _context_truth_value(guild, truth_context, merged_risk)
+    if source_sample > 0:
+        evidence_lines.append(
+            "Same-source history: "
+            f"sample={source_sample} • risky={source_risky} • "
+            f"strong/confirmed={source_strong} • "
+            f"low-confidence={source_low_conf}"
+        )
+    else:
+        evidence_lines.append("Same-source history: not enough matching history yet")
+
+    if warn_count > 0:
+        evidence_lines.append(f"Prior warnings: **{warn_count}**")
+
+    evidence_lines.append(
+        "DM/userbot scope: private member DMs are not visible to the bot; "
+        "DM-spam findings require member/staff reports."
+    )
+
+    fields: List[Tuple[str, str, bool]] = [
+        (
+            "Join Intelligence",
+            _chunk_lines(intelligence_lines, 1000),
+            False,
+        ),
+        (
+            "Evidence & Source",
+            _chunk_lines(evidence_lines, 1000),
+            False,
+        ),
+    ]
+
+    truth_value = _context_truth_value(
+        guild,
+        truth_context,
+        merged_risk,
+    )
     if truth_value:
-        fields.append(("Identity Context", truth_value, False))
-
-    if alt_summary:
-        fields.append(("Alt Summary", _truncate(alt_summary, 1000), False))
+        fields.append(
+            (
+                "Identity Links",
+                _truncate(truth_value, 1000),
+                False,
+            )
+        )
 
     return fields
+
 
 
 # ==========================================================
