@@ -37,6 +37,7 @@ from stoney_verify.members_new.activity_service import (
 
 from stoney_verify.globals import get_supabase
 from stoney_verify.members_new.activity_tracker import (
+    ActivityCoverageStatus,
     get_activity_coverage_status,
 )
 
@@ -1785,10 +1786,50 @@ async def members_coverage(
 
     safe_days = max(7, min(int(required_days or 90), 730))
 
-    status = await get_activity_coverage_status(
-        int(interaction.guild.id),
-        required_days=safe_days,
-    )
+    guild_id = int(interaction.guild.id)
+
+    try:
+        print(
+            "📡 members coverage deferred "
+            f"guild={guild_id} user={int(interaction.user.id)}"
+        )
+    except Exception:
+        pass
+
+    try:
+        status = await asyncio.wait_for(
+            get_activity_coverage_status(
+                guild_id,
+                required_days=safe_days,
+            ),
+            timeout=8.0,
+        )
+    except asyncio.TimeoutError:
+        status = ActivityCoverageStatus(
+            guild_id=guild_id,
+            actionable=False,
+            reason=(
+                "Coverage storage did not answer within 8 seconds. "
+                "Cleanup remains review-only."
+            ),
+            required_days=safe_days,
+            storage_ready=False,
+            last_error="Coverage lookup timed out.",
+        )
+    except Exception as exc:
+        status = ActivityCoverageStatus(
+            guild_id=guild_id,
+            actionable=False,
+            reason=(
+                "Coverage lookup failed unexpectedly. "
+                "Cleanup remains review-only."
+            ),
+            required_days=safe_days,
+            storage_ready=False,
+            last_error=(
+                f"{type(exc).__name__}: {str(exc)[:400]}"
+            ),
+        )
 
     embed = discord.Embed(
         title="📡 Inactive-Member Evidence Coverage",
@@ -1853,8 +1894,9 @@ async def members_coverage(
 
     embed.set_footer(
         text=(
-            "Restarts, stale heartbeats, or failed writes reset the "
-            "continuous proof window."
+            "Safe restarts preserve coverage after bounded reconciliation. "
+            "Unverified gaps, stale heartbeats, missing permissions, "
+            "overflow, or failed writes reset the proof window."
         )
     )
 
