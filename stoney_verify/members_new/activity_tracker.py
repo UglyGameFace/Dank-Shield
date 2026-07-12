@@ -2,11 +2,14 @@ from __future__ import annotations
 
 """Authoritative, fail-closed member activity tracking.
 
-Only actions directly attributable to the Discord member are recorded:
-- authored guild messages
-- reactions added by the member
-- Discord interactions submitted by the member
+Cleanup-authorizing activity is limited to durable direct evidence:
+- retained guild messages authored by the member
+- Discord interactions submitted while Dank Shield is online
 - ticket messages explicitly authored by the member
+
+Reactions are stored only as supplemental context. They never authorize
+cleanup because their complete history cannot be reconstructed during bot
+downtime.
 
 Presence and voice-state changes are intentionally excluded from authoritative
 inactivity proof because they can be inaccurate or caused by staff actions.
@@ -22,6 +25,11 @@ import uuid
 import discord
 
 from stoney_verify.globals import get_supabase
+from stoney_verify.members_new.activity_reconciliation import (
+    audit_guild_activity_scope,
+    max_reconcile_gap_seconds,
+    reconcile_restart_gap,
+)
 
 
 LEDGER_TABLE = "member_activity_ledger"
@@ -35,6 +43,7 @@ _INSTALLED = False
 _HEARTBEAT_TASK: Optional[asyncio.Task] = None
 _STARTED_GUILDS: set[int] = set()
 _LOCAL_ERRORS: dict[int, str] = {}
+_LOCAL_SCOPE_ERRORS: dict[int, str] = {}
 
 
 @dataclass(frozen=True)
@@ -83,6 +92,15 @@ def _safe_int(value: Any, default: int = 0) -> int:
         return int(str(value).strip())
     except Exception:
         return int(default)
+
+
+def _combined_local_error(guild_id: int) -> str:
+    gid = int(guild_id)
+    parts = [
+        str(_LOCAL_ERRORS.get(gid, "") or "").strip(),
+        str(_LOCAL_SCOPE_ERRORS.get(gid, "") or "").strip(),
+    ]
+    return " | ".join(part for part in parts if part)
 
 
 def _rpc_sync(name: str, params: Mapping[str, Any]) -> None:
@@ -314,7 +332,7 @@ async def get_activity_coverage_status(
         now=_utcnow(),
         required_days=required_days,
         expected_process_id=_PROCESS_ID,
-        local_error=_LOCAL_ERRORS.get(gid, ""),
+        local_error=_combined_local_error(gid),
     )
 
 
@@ -329,6 +347,48 @@ def _start_tracker_sync(guild_id: int) -> None:
             "p_started_at": now,
         },
     )
+
+
+def _resume_tracker_sync(
+    *,
+    guild_id: int,
+    previous_process_id: str,
+    previous_heartbeat_at: datetime,
+    resumed_at: datetime,
+) -> bool:
+    sb = get_supabase()
+    if sb is None:
+        raise RuntimeError("Supabase client is unavailable.")
+
+    response = sb.rpc(
+        "resume_member_activity_tracker",
+        {
+            "p_guild_id": str(int(guild_id)),
+            "p_previous_process_id": str(
+                previous_process_id
+            ),
+            "p_new_process_id": _PROCESS_ID,
+            "p_previous_heartbeat_at": (
+                previous_heartbeat_at.isoformat()
+            ),
+            "p_resumed_at": resumed_at.isoformat(),
+        },
+    ).execute()
+
+    data = getattr(response, "data", None)
+
+    if isinstance(data, bool):
+        return data
+
+    if isinstance(data, list) and data:
+        return bool(data[0])
+
+    if isinstance(data, Mapping):
+        for value in data.values():
+            if isinstance(value, bool):
+                return value
+
+    return bool(data)
 
 
 def _heartbeat_sync(guild_id: int) -> None:
@@ -440,66 +500,285 @@ async def record_direct_member_activity(
         return False
 
 
-async def _start_guild_tracking(guild_id: int) -> bool:
-    gid = int(guild_id)
+async def _refresh_scope_status(
+    guild: discord.Guild,
+) -> str:
+    gid = int(guild.id)
+    previous = str(
+        _LOCAL_SCOPE_ERRORS.get(gid, "") or ""
+    ).strip()
+    current = str(
+        audit_guild_activity_scope(guild) or ""
+    ).strip()
+
+    if current:
+        _LOCAL_SCOPE_ERRORS[gid] = current
+
+        if gid in _STARTED_GUILDS and not previous:
+            try:
+                await asyncio.to_thread(
+                    _start_tracker_sync,
+                    gid,
+                )
+                print(
+                    "⚠️ authoritative activity coverage reset "
+                    f"guild={gid} reason=scope_became_incomplete"
+                )
+            except Exception as exc:
+                await _mark_failure(
+                    gid,
+                    "scope reset failed: "
+                    f"{type(exc).__name__}: {str(exc)[:300]}",
+                )
+
+        return current
+
+    if previous:
+        _LOCAL_SCOPE_ERRORS.pop(gid, None)
+
+        if gid in _STARTED_GUILDS:
+            try:
+                await asyncio.to_thread(
+                    _start_tracker_sync,
+                    gid,
+                )
+                _LOCAL_ERRORS.pop(gid, None)
+                print(
+                    "📡 authoritative activity coverage restarted "
+                    f"guild={gid} reason=scope_permissions_restored"
+                )
+            except Exception as exc:
+                await _mark_failure(
+                    gid,
+                    "scope recovery failed: "
+                    f"{type(exc).__name__}: {str(exc)[:300]}",
+                )
+
+    return ""
+
+
+async def _start_guild_tracking(
+    guild: discord.Guild,
+) -> bool:
+    gid = int(guild.id)
 
     if gid in _STARTED_GUILDS:
         return True
 
     try:
-        await asyncio.to_thread(_start_tracker_sync, gid)
+        scope_error = await _refresh_scope_status(guild)
+        row = await asyncio.to_thread(
+            _select_tracker_state_sync,
+            gid,
+        )
+        now = _utcnow()
+
+        previous_process = str(
+            (row or {}).get("process_id") or ""
+        ).strip()
+        previous_heartbeat = _safe_dt(
+            (row or {}).get("last_heartbeat_at")
+        )
+        previous_continuous = _safe_dt(
+            (row or {}).get("continuous_since")
+        )
+        previous_failures = _safe_int(
+            (row or {}).get("event_writes_failed"),
+            0,
+        )
+        previous_error = str(
+            (row or {}).get("last_error") or ""
+        ).strip()
+
+        if (
+            row
+            and previous_process == _PROCESS_ID
+            and previous_heartbeat is not None
+        ):
+            await asyncio.to_thread(
+                _heartbeat_sync,
+                gid,
+            )
+            _STARTED_GUILDS.add(gid)
+            _LOCAL_ERRORS.pop(gid, None)
+            return True
+
+        reset_reason = "no_previous_tracker_state"
+
+        if row:
+            reset_reason = "restart_gap_not_reconciled"
+
+        can_reconcile = bool(
+            row
+            and not scope_error
+            and previous_process
+            and previous_heartbeat is not None
+            and previous_continuous is not None
+            and previous_failures <= 0
+            and not previous_error
+        )
+
+        if can_reconcile:
+            gap_seconds = (
+                now - previous_heartbeat
+            ).total_seconds()
+
+            if gap_seconds < 0:
+                can_reconcile = False
+                reset_reason = "previous_heartbeat_in_future"
+            elif gap_seconds > max_reconcile_gap_seconds():
+                can_reconcile = False
+                reset_reason = (
+                    "restart_gap_exceeded_safe_limit"
+                )
+
+        if can_reconcile:
+            try:
+                result = await reconcile_restart_gap(
+                    guild,
+                    after=previous_heartbeat,
+                    before=now,
+                )
+
+                for user_id, (
+                    occurred_at,
+                    channel_id,
+                ) in sorted(
+                    result.latest_by_user.items()
+                ):
+                    await asyncio.to_thread(
+                        _record_activity_sync,
+                        guild_id=gid,
+                        user_id=int(user_id),
+                        activity_type="message",
+                        occurred_at=occurred_at,
+                        channel_id=channel_id or None,
+                    )
+
+                resumed = await asyncio.to_thread(
+                    _resume_tracker_sync,
+                    guild_id=gid,
+                    previous_process_id=previous_process,
+                    previous_heartbeat_at=previous_heartbeat,
+                    resumed_at=now,
+                )
+
+                if not resumed:
+                    raise RuntimeError(
+                        "Tracker state changed while restart "
+                        "reconciliation was running."
+                    )
+
+                _STARTED_GUILDS.add(gid)
+                _LOCAL_ERRORS.pop(gid, None)
+
+                print(
+                    "📡 authoritative activity continuity resumed "
+                    f"guild={gid} "
+                    f"channels={result.scanned_channels} "
+                    f"messages={result.scanned_messages} "
+                    f"members={result.replayed_members} "
+                    f"gap_seconds={int(gap_seconds)}"
+                )
+                return True
+
+            except Exception as exc:
+                reset_reason = (
+                    "restart_reconciliation_failed: "
+                    f"{type(exc).__name__}: {str(exc)[:250]}"
+                )
+
+        elif scope_error:
+            reset_reason = (
+                "activity_scope_incomplete: "
+                + scope_error[:250]
+            )
+        elif previous_failures > 0 or previous_error:
+            reset_reason = "previous_tracker_failure"
+
+        await asyncio.to_thread(
+            _start_tracker_sync,
+            gid,
+        )
+
         _STARTED_GUILDS.add(gid)
         _LOCAL_ERRORS.pop(gid, None)
+
         print(
             "📡 authoritative activity tracking started "
-            f"guild={gid} process={_PROCESS_ID[:8]}"
+            f"guild={gid} process={_PROCESS_ID[:8]} "
+            f"new_proof_window=True reason={reset_reason}"
         )
         return True
+
     except Exception as exc:
         await _mark_failure(
             gid,
-            f"tracker start failed: {type(exc).__name__}: {str(exc)[:350]}",
+            "tracker start failed: "
+            f"{type(exc).__name__}: {str(exc)[:350]}",
         )
         return False
 
 
-async def _heartbeat_loop(bot: discord.Client) -> None:
+async def _heartbeat_loop(
+    bot: discord.Client,
+) -> None:
     while not bot.is_closed():
-        await asyncio.sleep(_HEARTBEAT_INTERVAL_SECONDS)
+        await asyncio.sleep(
+            _HEARTBEAT_INTERVAL_SECONDS
+        )
 
-        for guild in list(getattr(bot, "guilds", []) or []):
+        for guild in list(
+            getattr(bot, "guilds", []) or []
+        ):
             gid = int(guild.id)
 
             if gid not in _STARTED_GUILDS:
-                await _start_guild_tracking(gid)
+                await _start_guild_tracking(guild)
                 continue
 
+            await _refresh_scope_status(guild)
+
             try:
-                await asyncio.to_thread(_heartbeat_sync, gid)
+                await asyncio.to_thread(
+                    _heartbeat_sync,
+                    gid,
+                )
                 _LOCAL_ERRORS.pop(gid, None)
             except Exception as exc:
                 await _mark_failure(
                     gid,
-                    f"heartbeat failed: "
+                    "heartbeat failed: "
                     f"{type(exc).__name__}: {str(exc)[:350]}",
                 )
 
 
-async def _on_ready(bot: discord.Client) -> None:
+async def _on_ready(
+    bot: discord.Client,
+) -> None:
     global _HEARTBEAT_TASK
 
-    for guild in list(getattr(bot, "guilds", []) or []):
-        await _start_guild_tracking(int(guild.id))
+    for guild in list(
+        getattr(bot, "guilds", []) or []
+    ):
+        await _start_guild_tracking(guild)
 
-    if _HEARTBEAT_TASK is None or _HEARTBEAT_TASK.done():
+    if (
+        _HEARTBEAT_TASK is None
+        or _HEARTBEAT_TASK.done()
+    ):
         _HEARTBEAT_TASK = asyncio.create_task(
             _heartbeat_loop(bot),
-            name="authoritative_member_activity_heartbeat",
+            name=(
+                "authoritative_member_activity_heartbeat"
+            ),
         )
 
 
-async def _on_guild_join(guild: discord.Guild) -> None:
-    await _start_guild_tracking(int(guild.id))
+async def _on_guild_join(
+    guild: discord.Guild,
+) -> None:
+    await _start_guild_tracking(guild)
 
 
 async def _on_message(message: discord.Message) -> None:
@@ -610,7 +889,8 @@ def install_activity_tracker(bot: discord.Client) -> bool:
 
     print(
         "📡 authoritative member activity tracker installed; "
-        "direct messages, reactions, and interactions are recorded"
+        "messages/interactions are cleanup evidence; "
+        "reactions are supplemental only"
     )
 
     return True
