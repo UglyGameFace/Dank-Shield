@@ -855,18 +855,10 @@ async def _load_known_activity_signals(guild_id: int) -> tuple[dict[int, list[Me
         (
             "member_activity_ledger",
             ("user_id",),
-            (
-                "last_message_at",
-                "last_interaction_at",
-                "last_ticket_message_at",
-            ),
+            ("last_activity_at",),
             "authoritative activity ledger",
             "High",
-            (
-                "Durable direct member-authored activity recorded by "
-                "Dank Shield. Reactions are supplemental and do not "
-                "authorize cleanup."
-            ),
+            "Direct member-authored activity recorded by Dank Shield.",
         ),
         ("ticket_messages", ("user_id", "author_id", "member_id", "discord_user_id"), ("created_at", "timestamp", "sent_at", "updated_at"), "ticket message", "High", "Had ticket-message activity recorded by Dank Shield."),
         ("tickets", ("user_id", "creator_id", "member_id", "opened_by_id"), ("last_activity_at", "updated_at", "created_at", "closed_at"), "ticket", "Medium", "Had ticket lifecycle activity recorded by Dank Shield."),
