@@ -28,8 +28,21 @@ if "open_recovery_center" not in recovery:
 if "custom_id=\"dank_setup_choice:custom\"" not in fresh:
     failures.append("Custom setup choice is missing from Choose Setup Type")
 
-if "_open_custom_service_picker(interaction)" not in fresh:
-    failures.append("Custom setup choice does not open service switches")
+choice_start = fresh.find("class SetupTypeChoiceView(")
+choice_end = fresh.find("class AfterChoiceView(", choice_start)
+choice_block = (
+    fresh[choice_start:choice_end]
+    if choice_start >= 0 and choice_end > choice_start
+    else ""
+)
+
+if (
+    'choice.key == "custom_setup"' not in choice_block
+    or "_open_custom_service_picker(" not in choice_block
+):
+    failures.append(
+        "Custom setup choice does not open service switches"
+    )
 
 if failures:
     print("FAIL setup home final architecture")

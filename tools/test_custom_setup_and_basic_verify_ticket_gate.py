@@ -2,6 +2,74 @@ from __future__ import annotations
 
 from pathlib import Path
 
+def _custom_setup_opens_service_picker(source: str) -> bool:
+    """Verify the owned Custom Setup runtime route."""
+    import ast
+
+    tree = ast.parse(source)
+
+    choice_view = next(
+        (
+            node
+            for node in tree.body
+            if isinstance(node, ast.ClassDef)
+            and node.name == "SetupTypeChoiceView"
+        ),
+        None,
+    )
+
+    if choice_view is None:
+        return False
+
+    save_method = next(
+        (
+            node
+            for node in choice_view.body
+            if isinstance(
+                node,
+                (ast.FunctionDef, ast.AsyncFunctionDef),
+            )
+            and node.name == "_save_and_show"
+        ),
+        None,
+    )
+
+    if save_method is None:
+        return False
+
+    def called_name(call: ast.Call) -> str | None:
+        if isinstance(call.func, ast.Name):
+            return call.func.id
+        if isinstance(call.func, ast.Attribute):
+            return call.func.attr
+        return None
+
+    for branch in ast.walk(save_method):
+        if not isinstance(branch, ast.If):
+            continue
+
+        values = {
+            node.value
+            for node in ast.walk(branch.test)
+            if isinstance(node, ast.Constant)
+            and isinstance(node.value, str)
+        }
+
+        if "custom_setup" not in values:
+            continue
+
+        for statement in branch.body:
+            for child in ast.walk(statement):
+                if (
+                    isinstance(child, ast.Call)
+                    and called_name(child)
+                    == "_open_custom_service_picker"
+                ):
+                    return True
+
+    return False
+
+
 ROOT = Path(__file__).resolve().parents[1]
 
 solid = (ROOT / "stoney_verify/commands_ext/public_setup_solid.py").read_text(errors="ignore")
@@ -17,7 +85,7 @@ for marker in (
     if marker not in solid:
         failures.append(f"setup home missing custom setup marker: {marker}")
 
-if "if choice.key == \"custom_setup\":" not in fresh or "_open_custom_service_picker(interaction)" not in fresh:
+if not _custom_setup_opens_service_picker(fresh):
     failures.append("fresh choice custom setup does not open the custom service picker")
 
 for marker in (

@@ -14,7 +14,6 @@ from typing import Any, Mapping
 
 import discord
 
-_PATCHED = False
 _DB_CACHE_TTL_SECONDS = 45.0
 _DB_TABLE_CACHE: dict[str, tuple[float, bool]] = {}
 _TICKET_MENU_CACHE: dict[int, tuple[float, list[dict[str, Any]], str]] = {}
@@ -202,6 +201,81 @@ def _can_use_channel(
         return base
     except Exception:
         return False
+
+def _verified_role_voice_access(
+    guild: discord.Guild,
+    cfg: Any,
+    voice: Any | None,
+) -> tuple[bool, str]:
+    """Check approved-member access to Voice Verify."""
+
+    verified = _role(
+        guild,
+        _cfg_first(
+            cfg,
+            "verified_role_id",
+            "member_role_id",
+            "approved_role_id",
+        ),
+    )
+
+    if verified is None:
+        return (
+            False,
+            "Select or create the approved-member role.",
+        )
+
+    if voice is None:
+        return (
+            False,
+            "Select or create the Voice Verify channel.",
+        )
+
+    try:
+        permissions = voice.permissions_for(verified)
+    except Exception as exc:
+        return (
+            False,
+            (
+                "Could not inspect approved-member Voice "
+                "Verify access: "
+                f"{type(exc).__name__}."
+            ),
+        )
+
+    missing = [
+        label
+        for attribute, label in (
+            ("view_channel", "View Channel"),
+            ("connect", "Connect"),
+            ("speak", "Speak"),
+        )
+        if not bool(
+            getattr(
+                permissions,
+                attribute,
+                False,
+            )
+        )
+    ]
+
+    if missing:
+        return (
+            False,
+            (
+                f"Approved role {verified.mention} needs "
+                + ", ".join(missing)
+                + f" in {voice.mention}."
+            ),
+        )
+
+    return (
+        True,
+        (
+            f"Approved role {verified.mention} can View, "
+            f"Connect, and Speak in {voice.mention}."
+        ),
+    )
 
 
 def _db_table_readable_sync(table: str) -> bool:
@@ -474,6 +548,18 @@ def _voice_score(guild: discord.Guild, cfg: Any, enabled: bool) -> FeatureHealth
         blockers.append("Select or create the voice verification channel.")
     elif not _can_use_channel(guild, voice, manage=True):
         blockers.append("Bot needs View Channel + Manage Channels on the voice verify channel.")
+
+    if voice is not None:
+        member_access_ok, member_access_text = (
+            _verified_role_voice_access(
+                guild,
+                cfg,
+                voice,
+            )
+        )
+
+        if not member_access_ok:
+            blockers.append(member_access_text)
     if queue is None:
         blockers.append("Select a VC queue/staff request channel.")
     elif not _can_use_channel(guild, queue, need_files=True):
@@ -626,70 +712,4 @@ def _next_step(scores: list[FeatureHealth]) -> str:
     return "All selected services look ready. Test ticket open/close, verification, logs, and SpamGuard in a staff-only channel."
 
 
-def _wrap_setup_health() -> bool:
-    try:
-        from stoney_verify.commands_ext import public_setup_solid as solid
-    except Exception as e:
-        _warn(f"public_setup_solid unavailable: {e!r}")
-        return False
-
-    original = getattr(solid, "_build_health_embed", None)
-    if not callable(original):
-        _warn("public_setup_solid._build_health_embed missing")
-        return False
-    if getattr(original, "_feature_scoreboard_wrapped", False):
-        return True
-
-    async def wrapped_build_health_embed(guild: discord.Guild):
-        embed = await original(guild)
-        try:
-            scores = await build_feature_scoreboard(guild)
-            blockers = [s for s in scores if s.status == "blocker"]
-            warnings = [s for s in scores if s.status == "warning"]
-            ready = [s for s in scores if s.status == "ready"]
-            skipped = [s for s in scores if s.status == "skipped"]
-            embed.add_field(name="Feature Health Scoreboard", value=_scoreboard_value(scores), inline=False)
-            embed.add_field(name="Feature Fixes", value=_fixes_value(scores), inline=False)
-            embed.add_field(name="Suggested Actions", value=_actions_value(scores), inline=False)
-            embed.add_field(
-                name="Product Readiness",
-                value=(
-                    f"Ready: **{len(ready)}** • Warnings: **{len(warnings)}** • Blockers: **{len(blockers)}** • Skipped: **{len(skipped)}**\n"
-                    + _next_step(scores)
-                )[:1024],
-                inline=False,
-            )
-            if blockers:
-                embed.color = discord.Color.red()
-                embed.description = "🚫 **Fix the blockers first.** Feature scoreboard below shows exactly what is blocking setup."
-            elif warnings:
-                embed.color = discord.Color.orange()
-                embed.description = "⚠️ **Usable, but not fully clean.** Feature scoreboard below shows remaining cleanup."
-            else:
-                embed.color = discord.Color.green()
-                embed.description = "✅ **Selected services look ready to test.**"
-        except Exception as e:
-            try:
-                embed.add_field(name="Feature Health Scoreboard", value=f"⚠️ Scoreboard check failed: `{type(e).__name__}`", inline=False)
-            except Exception:
-                pass
-        return embed
-
-    setattr(wrapped_build_health_embed, "_feature_scoreboard_wrapped", True)
-    setattr(solid, "_build_health_embed", wrapped_build_health_embed)
-    return True
-
-
-def apply() -> bool:
-    global _PATCHED
-    if _PATCHED:
-        return True
-    ok = _wrap_setup_health()
-    _PATCHED = True
-    _log(f"active wrapped={ok}")
-    return ok
-
-
-apply()
-
-__all__ = ["apply", "build_feature_scoreboard"]
+__all__ = ["FeatureHealth", "build_feature_scoreboard"]

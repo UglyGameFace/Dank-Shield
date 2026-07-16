@@ -32,7 +32,8 @@ SETUP_FILES = [
     ROOT / "stoney_verify" / "startup_guards" / "setup_feature_health_scoreboard.py",
     ROOT / "stoney_verify" / "startup_guards" / "setup_scoreboard_command.py",
     ROOT / "stoney_verify" / "startup_guards" / "setup_verification_idle_kick_controls.py",
-    ROOT / "stoney_verify" / "startup_guards" / "setup_ux_clarity_guard.py",
+    ROOT / "stoney_verify" / "commands_ext" / "public_setup_recommend.py",
+    ROOT / "stoney_verify" / "commands_ext" / "public_setup_fresh_choice.py",
     ROOT / "stoney_verify" / "startup_guards" / "verification_idle_kick_feature.py",
 ]
 
@@ -41,18 +42,313 @@ def _read(path: Path) -> str:
     return path.read_text(encoding="utf-8", errors="replace") if path.exists() else ""
 
 
-def _assert_setup_ux_guard_is_scoped(failures: list[str]) -> None:
-    path = ROOT / "stoney_verify" / "startup_guards" / "setup_ux_clarity_guard.py"
+def _button_inventory(
+    path: Path,
+    class_name: str,
+) -> dict[str, tuple[str, str, str]]:
     text = _read(path)
-    required = (
-        "_is_setup_embed",
-        "_view_has_setup_controls",
-        "should_polish",
-        "_SETUP_CUSTOM_ID_PREFIXES",
+
+    try:
+        tree = ast.parse(text, filename=str(path))
+    except SyntaxError:
+        return {}
+
+    classes = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.ClassDef)
+        and node.name == class_name
+    ]
+
+    if len(classes) != 1:
+        return {}
+
+    result: dict[str, tuple[str, str, str]] = {}
+
+    for method in classes[0].body:
+        if not isinstance(
+            method,
+            (
+                ast.FunctionDef,
+                ast.AsyncFunctionDef,
+            ),
+        ):
+            continue
+
+        for decorator in method.decorator_list:
+            if not isinstance(decorator, ast.Call):
+                continue
+
+            func = decorator.func
+
+            if not (
+                isinstance(func, ast.Attribute)
+                and func.attr == "button"
+            ):
+                continue
+
+            label = ""
+            custom_id = ""
+
+            for keyword in decorator.keywords:
+                if keyword.arg not in {
+                    "label",
+                    "custom_id",
+                }:
+                    continue
+
+                if not isinstance(
+                    keyword.value,
+                    ast.Constant,
+                ):
+                    continue
+
+                if not isinstance(
+                    keyword.value.value,
+                    str,
+                ):
+                    continue
+
+                if keyword.arg == "label":
+                    label = keyword.value.value
+                elif keyword.arg == "custom_id":
+                    custom_id = keyword.value.value
+
+            result[method.name] = (
+                label,
+                custom_id,
+                ast.get_source_segment(text, method) or "",
+            )
+
+    return result
+
+
+def _assert_native_setup_ux_owners(
+    failures: list[str],
+) -> None:
+    recommend = (
+        ROOT
+        / "stoney_verify"
+        / "commands_ext"
+        / "public_setup_recommend.py"
     )
-    for needle in required:
-        if needle not in text:
-            failures.append(f"{path.relative_to(ROOT)}: setup UX guard is missing scoped gate `{needle}`")
+    fresh = (
+        ROOT
+        / "stoney_verify"
+        / "commands_ext"
+        / "public_setup_fresh_choice.py"
+    )
+    retired_guard = (
+        ROOT
+        / "stoney_verify"
+        / "startup_guards"
+        / ("setup_" + "ux_clarity_guard.py")
+    )
+
+    if retired_guard.exists():
+        failures.append(
+            f"{retired_guard.relative_to(ROOT)}: "
+            "obsolete global setup UX wrapper still exists"
+        )
+
+    home = _button_inventory(
+        recommend,
+        "ProductSetupHomeView",
+    )
+    guided = _button_inventory(
+        recommend,
+        "ContinueSetupView",
+    )
+    advanced = _button_inventory(
+        recommend,
+        "ManageSetupView",
+    )
+    choices = _button_inventory(
+        fresh,
+        "SetupTypeChoiceView",
+    )
+
+    expected_home = {
+        "continue_setup": (
+            "Start / Continue Setup",
+            "dank_setup_home:continue",
+        ),
+        "health": (
+            "Setup Check",
+            "dank_setup_home:health",
+        ),
+        "launch": (
+            "Test / Launch",
+            "dank_setup_home:launch",
+        ),
+    }
+
+    expected_guided = {
+        "fix_next": (
+            "Fix Next Item",
+            "dank_setup_guided:fix_next",
+        ),
+        "review": (
+            "Setup Check",
+            "dank_setup_guided:review",
+        ),
+        "change_type": (
+            "Change Setup Type",
+            "dank_setup_guided:change_type",
+        ),
+        "advanced": (
+            "Advanced Options",
+            "dank_setup_guided:advanced",
+        ),
+        "home": (
+            "Back Home",
+            "dank_setup_guided:home",
+        ),
+    }
+
+    expected_advanced = {
+        "services": "Features On / Off",
+        "ticket_choices": "Ticket Choices",
+        "protection": "Protection",
+        "timers_behavior": "Timers & Behavior",
+        "server_design": "Server Design",
+        "detailed_mapping": (
+            "Detailed Role / Channel Mapping"
+        ),
+        "recovery": "Recovery / Start Over",
+        "home": "Back Home",
+    }
+
+    expected_choices = {
+        "basic": (
+            "Basic Server",
+            "dank_setup_choice:basic",
+        ),
+        "basic_verify": (
+            "Basic Verify",
+            "dank_setup_choice:basic_verify",
+        ),
+        "helpdesk": (
+            "Help Desk",
+            "dank_setup_choice:helpdesk",
+        ),
+        "voice_check": (
+            "Voice Verify",
+            "dank_setup_choice:voice",
+        ),
+        "custom": (
+            "Custom",
+            "dank_setup_choice:custom",
+        ),
+    }
+
+    for method, expected in expected_home.items():
+        actual = home.get(method)
+
+        if actual is None:
+            failures.append(
+                f"{recommend.relative_to(ROOT)}: "
+                f"ProductSetupHomeView missing `{method}`"
+            )
+            continue
+
+        if actual[:2] != expected:
+            failures.append(
+                f"{recommend.relative_to(ROOT)}: "
+                f"ProductSetupHomeView.{method} is "
+                f"{actual[:2]!r}, expected {expected!r}"
+            )
+
+    for method, expected in expected_guided.items():
+        actual = guided.get(method)
+
+        if actual is None:
+            failures.append(
+                f"{recommend.relative_to(ROOT)}: "
+                f"ContinueSetupView missing `{method}`"
+            )
+            continue
+
+        if actual[:2] != expected:
+            failures.append(
+                f"{recommend.relative_to(ROOT)}: "
+                f"ContinueSetupView.{method} is "
+                f"{actual[:2]!r}, expected {expected!r}"
+            )
+
+    change_type = guided.get("change_type")
+
+    if (
+        change_type is not None
+        and "await _open_choose_setup_type(interaction)"
+        not in change_type[2]
+    ):
+        failures.append(
+            f"{recommend.relative_to(ROOT)}: "
+            "Change Setup Type does not open the existing "
+            "setup-type picker"
+        )
+
+    for method, expected_label in (
+        expected_advanced.items()
+    ):
+        actual = advanced.get(method)
+
+        if actual is None:
+            failures.append(
+                f"{recommend.relative_to(ROOT)}: "
+                f"ManageSetupView missing `{method}`"
+            )
+            continue
+
+        if actual[0] != expected_label:
+            failures.append(
+                f"{recommend.relative_to(ROOT)}: "
+                f"ManageSetupView.{method} label is "
+                f"{actual[0]!r}, expected "
+                f"{expected_label!r}"
+            )
+
+    for method, expected in expected_choices.items():
+        actual = choices.get(method)
+
+        if actual is None:
+            failures.append(
+                f"{fresh.relative_to(ROOT)}: "
+                f"SetupTypeChoiceView missing `{method}`"
+            )
+            continue
+
+        if actual[:2] != expected:
+            failures.append(
+                f"{fresh.relative_to(ROOT)}: "
+                f"SetupTypeChoiceView.{method} is "
+                f"{actual[:2]!r}, expected {expected!r}"
+            )
+
+    guard_dir = (
+        ROOT
+        / "stoney_verify"
+        / "startup_guards"
+    )
+
+    forbidden = (
+        "_setup_ux_clarity_wrapped",
+        'setattr(discord.InteractionResponse, '
+        '"edit_message", wrapped_edit_message)',
+    )
+
+    for path in guard_dir.glob("*.py"):
+        text = _read(path)
+
+        for marker in forbidden:
+            if marker in text:
+                failures.append(
+                    f"{path.relative_to(ROOT)}: "
+                    f"obsolete global setup UX wrapper "
+                    f"marker remains: `{marker}`"
+                )
+
 
 
 def _assert_idle_kick_is_per_guild_and_off_by_default(failures: list[str]) -> None:
@@ -110,7 +406,7 @@ def main() -> int:
     failures: list[str] = []
     _assert_python_parseable(failures)
     _assert_no_private_markers(failures)
-    _assert_setup_ux_guard_is_scoped(failures)
+    _assert_native_setup_ux_owners(failures)
     _assert_idle_kick_is_per_guild_and_off_by_default(failures)
 
     if failures:

@@ -295,8 +295,6 @@ def _chain_extra_guards() -> None:
     for name in (
         "protection_center_embed_refresh_guard",
         "protection_center_filter_list_guard",
-        "vc_verified_health_check_guard",
-        "modlog_center_tracking_guard",
         "live_guild_name_footer_guard",
         "protection_invite_toggle_cleanup_guard",
     ):

@@ -95,7 +95,7 @@ CHECKS = {
         "COMMAND_CLEANUP_EPOCH",
         "command outdated",
     ],
-    "stoney_verify/startup_guards/setup_feature_health_scoreboard.py": ["_ticket_score", "Feature Health Scoreboard"],
+    "stoney_verify/startup_guards/setup_feature_health_scoreboard.py": ["_ticket_score", "build_feature_scoreboard"],
     "stoney_verify/commands_ext/public_ticket_panel_clean.py": ["_health_lines", "_ticket_panel_group", "ticket_panel_message_id"],
 }
 
