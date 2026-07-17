@@ -73,11 +73,12 @@ def test_guided_target_is_structured():
         assert key in target
 
 
+
 def test_saved_preset_enters_guided_setup():
     choice = block(
         FRESH,
         "class SetupTypeChoiceView(",
-        "class AfterChoiceView(",
+        "def register_public_setup_fresh_choice_commands(",
     )
 
     assert "recommend._open_guided_setup(" in choice
@@ -100,55 +101,50 @@ def test_custom_setup_has_switches_then_one_continue_button():
     assert "Review / Create Missing Items" not in custom
 
 
-def test_legacy_continue_surface_is_also_unified():
-    """The compatibility screen must enter canonical routes."""
 
-    import ast
-
-    tree = ast.parse(FRESH)
-
-    matches = [
-        node
-        for node in tree.body
-        if isinstance(node, ast.ClassDef)
-        and node.name == "PlainContinueSetupView"
-    ]
-
-    assert len(matches) == 1
-
-    legacy = (
-        ast.get_source_segment(
-            FRESH,
-            matches[0],
-        )
-        or ""
+def test_duplicate_setup_home_family_is_retired():
+    retired_classes = (
+        "PlainSetupHomeView",
+        "PlainContinueSetupView",
+        "PlainLaunchView",
+        "AfterChoiceView",
+        "CreateMissingItemsView",
     )
 
-    assert "Continue Guided Setup" in legacy
-    assert "Change Setup Type" in legacy
-    assert "Advanced Options" in legacy
+    retired_functions = (
+        "_choice_lines",
+        "_bool_icon",
+        "_setup_progress_for_home",
+        "_service_summary_for_home",
+        "_choice_preview_embed",
+        "_edit_setup_message",
+        "_open_existing_server_setup",
+        "_open_create_missing_items",
+        "_open_ticket_menu_options",
+        "_build_setup_help_embed",
+        "_plain_choice_main_payload",
+    )
 
-    assert "recommend._open_guided_setup(interaction)" in legacy
-    assert "recommend._open_manage_setup(interaction)" in legacy
+    for class_name in retired_classes:
+        assert f"class {class_name}(" not in FRESH
 
-    assert "Service Switches" not in legacy
-    assert "Use Existing Server" not in legacy
-    assert "Create Missing Items" not in legacy
-
-    # Advanced Options now has one canonical owner.
-    assert "class PlainManageSetupView" not in FRESH
+    for function_name in retired_functions:
+        assert f"def {function_name}(" not in FRESH
 
 
 
 
-def test_after_choice_no_longer_branches_setup():
-    after = block(
+
+def test_setup_type_choice_has_one_guided_exit():
+    choice = block(
         FRESH,
-        "class AfterChoiceView(",
-        "class CreateMissingItemsView(",
+        "class SetupTypeChoiceView(",
+        "def register_public_setup_fresh_choice_commands(",
     )
 
-    assert "Continue Guided Setup" in after
-    assert "Setup Check" in after
-    assert "Use My Existing Server" not in after
-    assert "Create Missing Items" not in after
+    assert "recommend._open_guided_setup(" in choice
+    assert "_open_custom_service_picker(" in choice
+
+    assert "Use My Existing Server" not in choice
+    assert "Create Missing Items" not in choice
+    assert "Service Switches" not in choice

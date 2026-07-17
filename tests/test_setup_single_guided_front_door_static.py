@@ -20,8 +20,9 @@ def section(
     return source[left:right]
 
 
+
 def test_normal_front_door_has_no_competing_setup_methods():
-    """Normal setup screens must not expose competing systems."""
+    """Canonical setup screens must not expose competing systems."""
 
     import ast
 
@@ -55,11 +56,7 @@ def test_normal_front_door_has_no_competing_setup_methods():
         ),
         class_source(
             FRESH,
-            "PlainSetupHomeView",
-        ),
-        class_source(
-            FRESH,
-            "AfterChoiceView",
+            "SetupTypeChoiceView",
         ),
     )
 

@@ -8,10 +8,30 @@ recovery = Path("stoney_verify/commands_ext/public_setup_recovery.py").read_text
 
 failures: list[str] = []
 
-for src_name, src in {"recommend": recommend, "fresh": fresh}.items():
-    for marker in ("Start / Continue Setup", "Setup Check", "Test / Launch", "Manage Setup"):
-        if marker not in src:
-            failures.append(f"{src_name} home missing {marker}")
+for marker in (
+    "Start / Continue Setup",
+    "Setup Check",
+    "Test / Launch",
+    "Manage Setup",
+):
+    if marker not in recommend:
+        failures.append(
+            f"canonical product home missing {marker}"
+        )
+
+for retired_owner in (
+    "_plain_choice_main_payload",
+    "PlainSetupHomeView",
+    "PlainContinueSetupView",
+    "PlainLaunchView",
+    "AfterChoiceView",
+    "CreateMissingItemsView",
+):
+    if retired_owner in fresh:
+        failures.append(
+            f"retired fresh-choice owner remains: "
+            f"{retired_owner}"
+        )
 
 if 'custom_id="dank_setup:custom_editor"' in recommend:
     failures.append("duplicate Custom Setup shortcut still exists on product home")
@@ -29,7 +49,7 @@ if "custom_id=\"dank_setup_choice:custom\"" not in fresh:
     failures.append("Custom setup choice is missing from Choose Setup Type")
 
 choice_start = fresh.find("class SetupTypeChoiceView(")
-choice_end = fresh.find("class AfterChoiceView(", choice_start)
+choice_end = fresh.find("def register_public_setup_fresh_choice_commands(", choice_start)
 choice_block = (
     fresh[choice_start:choice_end]
     if choice_start >= 0 and choice_end > choice_start

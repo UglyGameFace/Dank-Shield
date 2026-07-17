@@ -105,6 +105,7 @@ def test_fresh_module_cannot_replace_setup_home() -> None:
         assert marker not in source
 
 
+
 def test_custom_home_returns_to_canonical_home() -> None:
     body = _owner_source(
         FRESH,
@@ -114,7 +115,6 @@ def test_custom_home_returns_to_canonical_home() -> None:
     home = body[home_index:]
 
     assert "await recommend._home_edit(interaction)" in home
-    assert "_plain_choice_main_payload" not in home
 
 
 def test_setup_choices_and_guided_routes_remain() -> None:
@@ -140,6 +140,7 @@ def test_ticket_style_payload_guard_is_retired() -> None:
     assert needle not in _source(MAIN)
 
 
+
 def test_no_startup_guard_mutates_setup_home_payloads() -> None:
     guard_dir = (
         ROOT
@@ -147,11 +148,9 @@ def test_no_startup_guard_mutates_setup_home_payloads() -> None:
         / "startup_guards"
     )
     forbidden_attributes = {
-        "_plain_choice_main_payload",
         "_build_main_setup_payload",
         "FreshChoiceHomeView",
         "FreshServerChoiceView",
-        "PlainSetupHomeView",
     }
 
     found: list[str] = []
