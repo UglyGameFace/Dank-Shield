@@ -1,0 +1,21 @@
+........................................................................ [ 17%]
+........................................................................ [ 35%]
+........................................................................ [ 53%]
+........................................................................ [ 71%]
+........................................................................ [ 89%]
+..............................F...........                               [100%]
+=================================== FAILURES ===================================
+_________________ test_fix_next_opens_permission_instructions __________________
+tests/test_vc_verified_health_guard_retired.py:152: in test_fix_next_opens_permission_instructions
+    assert "Fix Next Item" in body
+E   assert 'Fix Next Item' in 'async def _open_guided_target(\n    interaction: discord.Interaction,\n    target: str,\n    requirement_key: str = "...eraction)\n\n    await solid._edit_or_followup(\n        interaction,\n        embed=embed,\n        view=view,\n    )'
+=============================== warnings summary ===============================
+../../../../../opt/hostedtoolcache/Python/3.11.15/x64/lib/python3.11/site-packages/discord/player.py:30
+  /opt/hostedtoolcache/Python/3.11.15/x64/lib/python3.11/site-packages/discord/player.py:30: DeprecationWarning: 'audioop' is deprecated and slated for removal in Python 3.13
+    import audioop
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+=========================== short test summary info ============================
+FAILED tests/test_vc_verified_health_guard_retired.py::test_fix_next_opens_permission_instructions - assert 'Fix Next Item' in 'async def _open_guided_target(\n    interaction: discord.Interaction,\n    target: str,\n    requirement_key: str = "...eraction)\n\n    await solid._edit_or_followup(\n        interaction,\n        embed=embed,\n        view=view,\n    )'
+1 failed, 401 passed, 1 warning in 8.27s
+🫀 process_health PROCESS_EXIT uptime=7.3s rss≈129.4MB
