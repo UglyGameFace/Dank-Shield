@@ -7,7 +7,7 @@ on:
       - main
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   python-compile:
@@ -70,34 +70,3 @@ jobs:
 
       - name: Audit event boundary ownership
         run: python tools/audit_event_boundary.py
-
-  cleanup-smart-auto-detect-scaffolding:
-    name: Clean Smart Auto-Detect scaffolding
-    if: github.event_name == 'pull_request' && github.head_ref == 'fix/dank-design-category-aware-auto-detect' && github.actor != 'github-actions[bot]'
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-
-    steps:
-      - name: Check out latest feature branch
-        uses: actions/checkout@v4
-        with:
-          ref: fix/dank-design-category-aware-auto-detect
-          fetch-depth: 0
-
-      - name: Restore normal CI and remove only remaining temporary backups
-        run: |
-          git show origin/main:.github/workflows/ci.yml > .github/workflows/ci.yml
-          rm -f tools/sitecustomize_smart_auto_detect_original.txt
-          rm -f tools/usercustomize_smart_auto_detect_original.txt
-
-      - name: Commit cleanup only
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add -A -- \
-            .github/workflows/ci.yml \
-            tools/sitecustomize_smart_auto_detect_original.txt \
-            tools/usercustomize_smart_auto_detect_original.txt
-          git diff --cached --check
-          git commit -m "chore: remove Smart Auto-Detect validation scaffolding"
-          git push origin HEAD:fix/dank-design-category-aware-auto-detect
