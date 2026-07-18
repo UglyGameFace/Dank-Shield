@@ -106,23 +106,45 @@ jobs:
           python tools/apply_dank_design_category_aware_followup.py
 
       - name: Validate focused behavior
+        id: focused
+        continue-on-error: true
         env:
           DANK_STARTUP_LOG_STYLE: quiet
           DANK_COMMAND_LOG_STYLE: quiet
+        shell: bash
         run: |
-          python -m py_compile \
-            stoney_verify/services/server_design_studio.py \
-            stoney_verify/services/server_design_majority_layout.py \
-            stoney_verify/commands_ext/public_design_studio.py \
-            stoney_verify/startup_guards/server_design_majority_layout_guard.py
-          python -m pytest \
-            tests/test_server_design_majority_layout.py \
-            tests/test_server_design_majority_confidence_static.py \
-            tests/test_server_design_category_aware_auto_detect.py -q
-          python tools/test_dank_design_safe_repair_cleanup_static.py
-          python tools/test_dank_design_ux_lock_cleanup_static.py
-          python tools/test_dank_design_clean_simple_unlock_ui_static.py
-          git diff --check
+          status=0
+          {
+            python -m py_compile \
+              stoney_verify/services/server_design_studio.py \
+              stoney_verify/services/server_design_majority_layout.py \
+              stoney_verify/commands_ext/public_design_studio.py \
+              stoney_verify/startup_guards/server_design_majority_layout_guard.py || status=1
+            python -m pytest \
+              tests/test_server_design_majority_layout.py \
+              tests/test_server_design_majority_confidence_static.py \
+              tests/test_server_design_category_aware_auto_detect.py -q || status=1
+            python tools/test_dank_design_safe_repair_cleanup_static.py || status=1
+            python tools/test_dank_design_ux_lock_cleanup_static.py || status=1
+            python tools/test_dank_design_clean_simple_unlock_ui_static.py || status=1
+            git diff --check || status=1
+          } > smart-auto-detect-focused-output.txt 2>&1
+          exit "$status"
+
+      - name: Upload focused validation output
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: smart-auto-detect-focused-output
+          path: smart-auto-detect-focused-output.txt
+          if-no-files-found: error
+          retention-days: 1
+
+      - name: Stop on focused validation failure
+        if: steps.focused.outcome == 'failure'
+        run: |
+          cat smart-auto-detect-focused-output.txt
+          exit 1
 
       - name: Validate full repository
         env:
