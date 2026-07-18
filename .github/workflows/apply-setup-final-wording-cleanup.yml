@@ -29,16 +29,34 @@ jobs:
         run: python tools/apply_setup_final_wording_cleanup.py
 
       - name: Validate final wording cleanup
+        id: validate
+        continue-on-error: true
+        shell: bash
         run: |
-          python -m py_compile \
-            stoney_verify/commands_ext/public_setup_recommend.py \
-            stoney_verify/commands_ext/public_setup_fresh_choice.py \
-            tests/test_setup_single_path_front_door_v2_static.py
-          python -m pytest tests/test_setup_single_path_front_door_v2_static.py -q
-          git diff --check
+          {
+            python -m py_compile \
+              stoney_verify/commands_ext/public_setup_recommend.py \
+              stoney_verify/commands_ext/public_setup_fresh_choice.py \
+              tests/test_setup_single_path_front_door_v2_static.py &&
+            python -m pytest tests/test_setup_single_path_front_door_v2_static.py -q &&
+            git diff --check
+          } > setup-final-wording-validation.txt 2>&1
+
+      - name: Capture final wording validation failure
+        if: steps.validate.outcome == 'failure'
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add setup-final-wording-validation.txt
+          git commit -m "chore: capture final setup wording validation failure" || true
+          git push origin HEAD:fix/setup-single-path-front-door-v2
+          exit 1
 
       - name: Commit final wording cleanup
+        if: steps.validate.outcome == 'success'
         run: |
+          rm -f setup-final-wording-validation.txt
           rm -f tools/apply_setup_final_wording_cleanup.py
           rm -f .github/workflows/apply-setup-final-wording-cleanup.yml
           git config user.name "github-actions[bot]"
