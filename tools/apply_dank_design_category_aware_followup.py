@@ -6,8 +6,10 @@ ROOT = Path(__file__).resolve().parents[1]
 MAJORITY = ROOT / "stoney_verify/services/server_design_majority_layout.py"
 CONFIDENCE_TEST = ROOT / "tests/test_server_design_majority_confidence_static.py"
 LEGACY_THIRD_APPLIER = ROOT / "tools/apply_dank_design_category_aware_separator_identity.py"
-BOOTSTRAP = ROOT / "usercustomize.py"
-BOOTSTRAP_BACKUP = ROOT / "tools/usercustomize_smart_auto_detect_original.txt"
+USER_BOOTSTRAP = ROOT / "usercustomize.py"
+USER_BACKUP = ROOT / "tools/usercustomize_smart_auto_detect_original.txt"
+SITE_BOOTSTRAP = ROOT / "sitecustomize.py"
+SITE_BACKUP = ROOT / "tools/sitecustomize_smart_auto_detect_original.txt"
 SELF = Path(__file__)
 
 text = MAJORITY.read_text(encoding="utf-8")
@@ -89,15 +91,16 @@ CONFIDENCE_TEST.write_text(contract, encoding="utf-8")
 for path in (MAJORITY, CONFIDENCE_TEST):
     compile(path.read_text(encoding="utf-8"), str(path), "exec")
 
-# Restore the repository's real usercustomize.py byte-for-byte before the
-# permanent commit, then remove only temporary CI bridge files.
-try:
-    if BOOTSTRAP_BACKUP.exists():
-        BOOTSTRAP.write_text(BOOTSTRAP_BACKUP.read_text(encoding="utf-8"), encoding="utf-8")
-except Exception:
-    pass
+# Restore the repository's real startup customization files byte-for-byte before
+# the permanent commit. These files are unrelated to Dank Design.
+for target, backup in ((USER_BOOTSTRAP, USER_BACKUP), (SITE_BOOTSTRAP, SITE_BACKUP)):
+    try:
+        if backup.exists():
+            target.write_text(backup.read_text(encoding="utf-8"), encoding="utf-8")
+    except Exception:
+        pass
 
-for path in (LEGACY_THIRD_APPLIER, BOOTSTRAP_BACKUP, SELF):
+for path in (LEGACY_THIRD_APPLIER, USER_BACKUP, SITE_BACKUP, SELF):
     try:
         if path.exists():
             path.unlink()
