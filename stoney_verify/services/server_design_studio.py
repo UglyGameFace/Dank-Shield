@@ -476,7 +476,7 @@ def _theme(theme_id: str | None) -> ThemePreset:
 
 
 def suggested_icon(base_name: str, *, icon_pack: str = "420_lounge", existing: str = "", mode: str = "replace_missing") -> str:
-    if mode == "keep_existing" and existing:
+    if mode == "keep_existing":
         return existing
     if mode == "clear":
         return ""
