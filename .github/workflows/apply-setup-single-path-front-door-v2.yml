@@ -37,8 +37,15 @@ jobs:
         run: |
           python tools/finalize_setup_single_path_front_door_v2.py >> setup-ux-applier-output.txt 2>&1
 
+      - name: Repair generated code
+        id: repair
+        continue-on-error: true
+        shell: bash
+        run: |
+          python tools/repair_setup_single_path_generated_code.py >> setup-ux-applier-output.txt 2>&1
+
       - name: Capture rewrite failure
-        if: steps.finalize.outcome == 'failure'
+        if: steps.repair.outcome == 'failure'
         shell: bash
         run: |
           cp setup-ux-applier-output.txt setup-ux-applier-error.txt
@@ -50,7 +57,7 @@ jobs:
           exit 1
 
       - name: Validate rewritten files
-        if: steps.finalize.outcome == 'success'
+        if: steps.repair.outcome == 'success'
         run: |
           python -m py_compile \
             stoney_verify/commands_ext/public_setup_recommend.py \
@@ -60,12 +67,13 @@ jobs:
           git diff --check
 
       - name: Commit rewritten setup flow
-        if: steps.finalize.outcome == 'success'
+        if: steps.repair.outcome == 'success'
         run: |
           rm -f setup-ux-applier-output.txt
           rm -f setup-ux-applier-error.txt
           rm -f tools/apply_setup_single_path_front_door_v2.py
           rm -f tools/finalize_setup_single_path_front_door_v2.py
+          rm -f tools/repair_setup_single_path_generated_code.py
           rm -f .github/workflows/apply-setup-single-path-front-door-v2.yml
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
