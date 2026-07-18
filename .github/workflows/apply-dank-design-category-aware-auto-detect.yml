@@ -37,25 +37,43 @@ jobs:
         run: python tools/apply_dank_design_category_aware_auto_detect.py
 
       - name: Validate focused design behavior
+        id: focused
+        continue-on-error: true
         env:
           DANK_STARTUP_LOG_STYLE: quiet
           DANK_COMMAND_LOG_STYLE: quiet
+        shell: bash
         run: |
-          python -m py_compile \
-            stoney_verify/services/server_design_studio.py \
-            stoney_verify/services/server_design_majority_layout.py \
-            stoney_verify/commands_ext/public_design_studio.py \
-            stoney_verify/startup_guards/server_design_majority_layout_guard.py
-          python -m pytest \
-            tests/test_server_design_majority_layout.py \
-            tests/test_server_design_majority_confidence_static.py \
-            tests/test_server_design_category_aware_auto_detect.py -q
-          python tools/test_dank_design_safe_repair_cleanup_static.py
-          python tools/test_dank_design_ux_lock_cleanup_static.py
-          python tools/test_dank_design_clean_simple_unlock_ui_static.py
-          git diff --check
+          {
+            python -m py_compile \
+              stoney_verify/services/server_design_studio.py \
+              stoney_verify/services/server_design_majority_layout.py \
+              stoney_verify/commands_ext/public_design_studio.py \
+              stoney_verify/startup_guards/server_design_majority_layout_guard.py &&
+            python -m pytest \
+              tests/test_server_design_majority_layout.py \
+              tests/test_server_design_majority_confidence_static.py \
+              tests/test_server_design_category_aware_auto_detect.py -q &&
+            python tools/test_dank_design_safe_repair_cleanup_static.py &&
+            python tools/test_dank_design_ux_lock_cleanup_static.py &&
+            python tools/test_dank_design_clean_simple_unlock_ui_static.py &&
+            git diff --check
+          } > dank-design-category-aware-focused.txt 2>&1
+
+      - name: Save focused failure
+        if: steps.focused.outcome == 'failure'
+        shell: bash
+        run: |
+          tail -260 dank-design-category-aware-focused.txt > dank-design-category-aware-failure.txt
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add dank-design-category-aware-failure.txt
+          git commit -m "chore: capture Smart Auto-Detect focused failure" || true
+          git push origin HEAD:fix/dank-design-category-aware-auto-detect
+          exit 1
 
       - name: Validate full suite
+        if: steps.focused.outcome == 'success'
         env:
           DANK_STARTUP_LOG_STYLE: quiet
           DANK_COMMAND_LOG_STYLE: quiet
@@ -68,7 +86,10 @@ jobs:
           test "$status" -eq 0
 
       - name: Commit permanent fix
+        if: steps.focused.outcome == 'success'
         run: |
+          rm -f dank-design-category-aware-focused.txt
+          rm -f dank-design-category-aware-failure.txt
           rm -f tools/apply_dank_design_category_aware_auto_detect.py
           rm -f .github/workflows/apply-dank-design-category-aware-auto-detect.yml
           git config user.name "github-actions[bot]"
