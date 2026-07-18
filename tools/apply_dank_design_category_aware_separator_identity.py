@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+# This applier runs after the main Smart Auto-Detect rewrite so runtime-added
+# spaced separator specs can never be mistaken for compact separator specs.
 ROOT = Path(__file__).resolve().parents[1]
 MAJORITY = ROOT / "stoney_verify/services/server_design_majority_layout.py"
 
