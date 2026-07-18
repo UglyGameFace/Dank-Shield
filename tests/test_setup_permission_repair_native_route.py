@@ -88,11 +88,11 @@ def test_native_permission_repair_route_exists() -> None:
 
 
 def test_advanced_options_button_uses_native_route() -> None:
-    manage = _class("ManageSetupView")
+    monitoring = _class("AdvancedMonitoringRepairView")
 
     methods = [
         node
-        for node in manage.body
+        for node in monitoring.body
         if isinstance(node, ast.AsyncFunctionDef)
         and node.name == "permission_repair"
     ]
@@ -139,9 +139,9 @@ def test_advanced_options_button_uses_native_route() -> None:
     assert values == {
         "label": "Permission Repair",
         "custom_id": (
-            "dank_setup_manage:permission_repair"
+            "dank_setup_advanced_monitoring:permission_repair"
         ),
-        "row": 3,
+        "row": 0,
     }
 
 
