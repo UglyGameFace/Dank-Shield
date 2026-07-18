@@ -114,8 +114,7 @@ def test_advanced_tools_still_exist():
 
     assert "Recovery / Start Over" not in hub
 
-    advanced = "
-".join(
+    advanced = "\n".join(
         classes[name]
         for name in (
             "AdvancedCoreSetupView",

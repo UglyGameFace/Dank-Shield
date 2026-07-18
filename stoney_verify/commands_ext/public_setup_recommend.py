@@ -1878,8 +1878,7 @@ def _advanced_section_embed(
     )
     embed.add_field(
         name="In This Section",
-        value="
-".join(items)[:1024],
+        value="\n".join(items)[:1024],
         inline=False,
     )
     embed.set_footer(

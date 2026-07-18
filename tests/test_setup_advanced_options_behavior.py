@@ -177,7 +177,7 @@ def test_group_buttons_open_focused_submenus(monkeypatch: pytest.MonkeyPatch) ->
         events: list[str] = []
 
         async def route(*args: Any, _route_name: str = route_name, **kwargs: Any) -> None:
-  events.append(_route_name)
+            events.append(_route_name)
 
         monkeypatch.setattr(recommend, route_name, route)
         run(find_button(recommend.ManageSetupView(), label).callback(FakeInteraction()))
@@ -203,7 +203,7 @@ def test_advanced_options_screen_uses_canonical_grouped_view(monkeypatch: pytest
     assert captured["interaction"] is interaction
     assert captured["embed"].title == "⚙️ Advanced Options"
     assert isinstance(captured["view"], recommend.ManageSetupView)
-    assert "Danger Zone" in {field.name for field in captured["embed"].fields}
+    assert any("Danger Zone" in field.name for field in captured["embed"].fields)
 
 
 def test_protection_reuses_protection_center(monkeypatch: pytest.MonkeyPatch) -> None:

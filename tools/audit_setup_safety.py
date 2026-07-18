@@ -163,6 +163,10 @@ def _assert_native_setup_ux_owners(
         recommend,
         "ManageSetupView",
     )
+    danger_advanced = _button_inventory(
+        recommend,
+        "AdvancedDangerZoneView",
+    )
     choices = _button_inventory(
         fresh,
         "SetupTypeChoiceView",
@@ -207,17 +211,14 @@ def _assert_native_setup_ux_owners(
     }
 
     expected_advanced = {
-        "services": "Features On / Off",
-        "ticket_choices": "Ticket Choices",
-        "protection": "Protection",
-        "timers_behavior": "Timers & Behavior",
-        "server_design": "Server Design",
-        "detailed_mapping": (
-            "Detailed Role / Channel Mapping"
-        ),
-        "recovery": "Recovery / Start Over",
-        "home": "Back Home",
-    }
+    "core_setup": "Core Setup",
+    "member_experience": "Member Experience",
+    "monitoring_repair": "Monitoring & Repair",
+    "appearance": "Appearance",
+    "danger_zone": "Danger Zone",
+    "help_faq": "Help / FAQ",
+    "home": "Back Home",
+}
 
     expected_choices = {
         "basic": (
@@ -308,6 +309,35 @@ def _assert_native_setup_ux_owners(
                 f"{actual[0]!r}, expected "
                 f"{expected_label!r}"
             )
+
+    flat_forbidden = {
+    "Features On / Off",
+    "Ticket Choices",
+    "Protection",
+    "Modlog Tracking",
+    "Timers & Behavior",
+    "Server Design",
+    "Detailed Role / Channel Mapping",
+    "Permission Repair",
+    "Recovery / Start Over",
+}
+    exposed_flat = {
+        button[0]
+        for button in advanced.values()
+        if button[0] in flat_forbidden
+    }
+    if exposed_flat:
+        failures.append(
+            f"{recommend.relative_to(ROOT)}: ManageSetupView still exposes "
+            f"flat advanced actions: {sorted(exposed_flat)!r}"
+        )
+
+    recovery = danger_advanced.get("recovery")
+    if recovery is None or recovery[0] != "Recovery / Start Over":
+        failures.append(
+            f"{recommend.relative_to(ROOT)}: AdvancedDangerZoneView must own "
+            "Recovery / Start Over"
+        )
 
     for method, expected in expected_choices.items():
         actual = choices.get(method)
