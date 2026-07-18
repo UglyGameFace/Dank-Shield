@@ -34,7 +34,9 @@ jobs:
           pip install pytest
 
       - name: Apply Smart Auto-Detect rewrite
-        run: python tools/apply_dank_design_category_aware_auto_detect.py
+        run: |
+          python tools/apply_dank_design_category_aware_auto_detect.py
+          python tools/apply_dank_design_category_aware_followup.py
 
       - name: Validate focused design behavior
         id: focused
@@ -91,6 +93,7 @@ jobs:
           rm -f dank-design-category-aware-focused.txt
           rm -f dank-design-category-aware-failure.txt
           rm -f tools/apply_dank_design_category_aware_auto_detect.py
+          rm -f tools/apply_dank_design_category_aware_followup.py
           rm -f .github/workflows/apply-dank-design-category-aware-auto-detect.yml
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
