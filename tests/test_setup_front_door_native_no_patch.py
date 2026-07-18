@@ -106,30 +106,26 @@ def test_fresh_module_cannot_replace_setup_home() -> None:
 
 
 
-def test_custom_home_returns_to_canonical_home() -> None:
-    body = _owner_source(
-        FRESH,
-        "CustomServiceModeView",
-    )
-    home_index = body.index("async def home(")
-    home = body[home_index:]
-
-    assert "await recommend._home_edit(interaction)" in home
-
+def test_custom_back_returns_to_setup_type_choice() -> None:
+    body = _owner_source(FRESH, "CustomServiceModeView")
+    assert "async def back(" in body
+    assert "await recommend._open_choose_setup_type(interaction)" in body
+    assert "await recommend._home_edit(interaction)" not in body
 
 def test_setup_choices_and_guided_routes_remain() -> None:
     source = _source(FRESH)
-
     for marker in (
+        "class SetupTypeChoiceSelect(",
         "class SetupTypeChoiceView(",
         "class CustomServiceModeView(",
-        "Continue Guided Setup",
+        "Continue Setup",
         "recommend._open_guided_setup(",
-        "recommend._open_manage_setup(",
+        "recommend._open_choose_setup_type(",
         "id_verify_allowed_for_guild",
     ):
         assert marker in source
-
+    assert "Continue Guided Setup" not in source
+    assert "recommend._open_manage_setup(" not in source
 
 def test_ticket_style_payload_guard_is_retired() -> None:
     assert not TICKET_STYLE.exists()

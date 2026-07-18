@@ -137,18 +137,18 @@ def test_advanced_options_button_uses_native_route() -> None:
                 )
 
     assert values == {
-        "label": "Permission Repair",
+        "label": "Fix Channel Permissions",
         "custom_id": (
             "dank_setup_advanced_monitoring:permission_repair"
         ),
-        "row": 0,
+        "row": 1,
     }
 
 
 def test_advanced_options_describes_repair() -> None:
     assert (
-        "🛠️ **Permission Repair** — preview and repair "
-        "saved setup channel permissions."
+        "🛠️ **Fix Channel Permissions** — check and fix "
+        "access to Dank Shield channels."
         in RECOMMEND
     )
 

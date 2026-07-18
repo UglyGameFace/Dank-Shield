@@ -88,7 +88,7 @@ def test_id_web_verify_remains_guild_gated():
 
     assert 'services["id"]' in health
     assert "id_verify_allowed_for_guild(guild)" in health
-    assert "Choose Basic Verify or Voice Verify" in health
+    assert "Choose Simple Verify or Voice Verify" in health
 
 
 def test_progress_matches_health_service_gates():

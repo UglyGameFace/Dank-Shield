@@ -528,7 +528,7 @@ async def _build_plain_setup_health_embed(
     if setup_choice and not any_service:
         blockers.append(
             "Turn on at least one feature under "
-            "**Advanced Options → Features On / Off**."
+            "**Other Settings → Features On / Off**."
         )
 
     bot_member = getattr(guild, "me", None)
@@ -634,7 +634,7 @@ async def _build_plain_setup_health_embed(
             if category_load.error:
                 blockers.append(
                     "Ticket choices could not be checked. "
-                    "Open **Advanced Options → Ticket Choices**."
+                    "Open **Other Settings → Ticket Choices**."
                 )
             elif category_load.rows:
                 passing.append(
@@ -843,7 +843,7 @@ async def _build_plain_setup_health_embed(
         value=(
             f"**{choice_label}**\n"
             f"Tickets: `{'ON' if services['tickets'] else 'OFF'}` • "
-            f"Basic Verify: `{'ON' if services['basic_verify'] else 'OFF'}`\n"
+            f"Simple Verify: `{'ON' if services['basic_verify'] else 'OFF'}`\n"
             f"Voice Verify: `{'ON' if services['voice'] else 'OFF'}` • "
             f"SpamGuard: `{'ON' if services['spam_guard'] else 'OFF'}` • "
             f"Logs: `{'ON' if services['logs'] else 'OFF'}`"
@@ -881,9 +881,9 @@ async def _build_plain_setup_health_embed(
     embed.add_field(
         name="What to press",
         value=(
-            "Press **Start / Continue Setup** to finish "
+            "Press **Continue Setup** to finish "
             "anything required.\n"
-            "Press **Test / Launch** after this page says ready."
+            "Press **Test & Launch** after this page says ready."
         ),
         inline=False,
     )
@@ -1992,7 +1992,7 @@ async def _open_manage_setup(
     embed = discord.Embed(
         title="••• More Options",
         description=(
-            "Normal setup is done from **Back Home → Start / Continue Setup**. "
+            "Normal setup is done from **Back Home → Continue Setup**. "
             "Use this screen only when you intentionally need one of these extra tools."
         ),
         color=discord.Color.blurple(),
@@ -3113,7 +3113,7 @@ async def _open_guided_target(
                     "2. Choose **Edit Channel → Permissions**.\n"
                     "3. Select the approved-member role.\n"
                     f"4. Allow: **{required_text}**.\n"
-                    "5. Return and press **Fix Next Item**."
+                    "5. Return and press **Fix Next Problem**."
                 )[:1024],
                 inline=False,
             )
@@ -3166,7 +3166,7 @@ async def _open_guided_target(
         embed.add_field(
             name="After fixing it",
             value=(
-                "Return here and press **Fix Next Item** again."
+                "Return here and press **Fix Next Problem** again."
             ),
             inline=False,
         )
@@ -3926,7 +3926,7 @@ async def _create_setup_test_ticket(
                 matched_intake_type="test",
                 matched_category_reason=(
                     "Created from the canonical /dank setup "
-                    "Test / Launch screen"
+                    "Test & Launch screen"
                 ),
                 matched_category_score=100,
                 category_override=True,

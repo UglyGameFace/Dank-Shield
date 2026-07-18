@@ -27,7 +27,8 @@ def test_home_has_one_setup_entry():
         "class ContinueSetupView(",
     )
 
-    assert "Start / Continue Setup" in home
+    assert "Start Setup" in home
+    assert "More Options" in home
     assert "_open_guided_setup(interaction)" in home
     assert "Use Things I Already Made" not in home
     assert "Make Missing Things For Me" not in home
@@ -41,10 +42,10 @@ def test_guided_screen_has_one_fix_action():
         "class ManageSetupView(",
     )
 
-    assert "Fix Next Item" in guided
-    assert "Setup Check" in guided
-    assert "Change Setup Type" in guided
-    assert "Advanced Options" in guided
+    assert "Set Up This Step" in guided
+    assert "Setup Check" not in guided
+    assert "Change Setup Type" not in guided
+    assert "Advanced Options" not in guided
     assert "Back Home" in guided
 
     assert "Use Things I Already Made" not in guided
@@ -93,9 +94,10 @@ def test_custom_setup_has_switches_then_one_continue_button():
         "async def _open_custom_service_picker(",
     )
 
-    assert "Continue Guided Setup" in custom
+    assert "Continue Setup" in custom
     assert "CustomServiceToggleButton" in custom
-    assert "Advanced Options" in custom
+    assert "Advanced Options" not in custom
+    assert 'label="Back"' in custom
 
     assert "Use My Existing Server" not in custom
     assert "Review / Create Missing Items" not in custom
