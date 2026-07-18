@@ -569,7 +569,7 @@ class CustomServicePresetSelect(discord.ui.Select):
 
         preset = CUSTOM_PRESETS.get(key)
         if preset is None:
-            return await interaction.response.send_message("❌ Unknown preset.", ephemeral=True)
+            return await interaction.response.send_message("❌ That feature choice is no longer available. Choose another option.", ephemeral=True)
         label, flags, desc, _emoji = preset
         await interaction.response.defer(ephemeral=True)
         await _save_custom_services(guild.id, dict(flags), interaction.user)
@@ -728,7 +728,7 @@ class SetupTypeChoiceView(solid.BackToSetupView):
             return await interaction.response.send_message("❌ This must be used inside a server.", ephemeral=True)
         if choice.needs_id and not id_verify_allowed_for_guild(guild):
             return await interaction.response.send_message(
-                "🔒 ID/Web verification is not available for this server. Use **Basic Verify** instead.",
+                "🔒 ID/Web Verify is not available for this server. Use **Simple Verify** instead.",
                 ephemeral=True,
                 allowed_mentions=discord.AllowedMentions.none(),
             )
@@ -738,7 +738,7 @@ class SetupTypeChoiceView(solid.BackToSetupView):
             return await _open_custom_service_picker(
                 interaction,
                 saved_message=(
-                    "Saved **Custom setup**. Choose which features this server should use, "
+                    "Saved **Choose My Own Features**. Choose which features this server should use, "
                     "then press **Continue Setup**."
                 ),
             )

@@ -527,8 +527,7 @@ async def _build_plain_setup_health_embed(
 
     if setup_choice and not any_service:
         blockers.append(
-            "Turn on at least one feature under "
-            "**Other Settings → Features On / Off**."
+            "Press **Continue Setup** and turn on at least one feature."
         )
 
     bot_member = getattr(guild, "me", None)
@@ -633,8 +632,7 @@ async def _build_plain_setup_health_embed(
 
             if category_load.error:
                 blockers.append(
-                    "Ticket choices could not be checked. "
-                    "Open **Other Settings → Ticket Choices**."
+                    "Ticket choices could not be checked. Press **Continue Setup** to fix them."
                 )
             elif category_load.rows:
                 passing.append(
@@ -3308,7 +3306,7 @@ async def _open_guided_setup(
     embed.add_field(
         name="Progress",
         value=(
-            f"**{done}/{total} required checks complete**"
+            f"**{done}/{total} required steps complete**"
             if total
             else "Setup has not started yet."
         ),
@@ -3317,7 +3315,7 @@ async def _open_guided_setup(
 
     embed.set_footer(
         text=(
-            f"Guild {guild.id} • one guided setup route"
+            f"Guild {guild.id} • guided setup"
         )
     )
 

@@ -134,3 +134,24 @@ def test_help_and_progress_only_teach_current_setup_path():
         assert stale not in progress
     assert "Continue Setup" in progress
     assert "second Discord account" in progress
+
+
+def test_final_setup_copy_never_sends_users_out_of_the_guided_path():
+    for stale in (
+        "Other Settings → Features On / Off",
+        "Other Settings → Ticket Choices",
+        "required checks complete",
+        "one guided setup route",
+    ):
+        assert stale not in RECOMMEND
+    assert "Press **Continue Setup** and turn on at least one feature." in RECOMMEND
+    assert "Ticket choices could not be checked. Press **Continue Setup** to fix them." in RECOMMEND
+    assert "required steps complete" in RECOMMEND
+
+
+def test_final_setup_type_copy_uses_the_same_names_everywhere():
+    assert "Use **Basic Verify** instead." not in FRESH
+    assert "Saved **Custom setup**" not in FRESH
+    assert "Unknown preset" not in FRESH
+    assert "Use **Simple Verify** instead." in FRESH
+    assert "Saved **Choose My Own Features**" in FRESH
