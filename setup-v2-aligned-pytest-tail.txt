@@ -1,0 +1,21 @@
+........................................................................ [ 17%]
+........................................................................ [ 35%]
+........................................................................ [ 53%]
+.........F.............................................................. [ 71%]
+........................................................................ [ 89%]
+..........................................                               [100%]
+=================================== FAILURES ===================================
+_________________ test_native_setup_owns_first_run_experience __________________
+tests/test_setup_first_run_guard_retired.py:61: in test_native_setup_owns_first_run_experience
+    assert marker in RECOMMEND
+E   assert 'Advanced Options' in 'from __future__ import annotations\n\nimport asyncio\n\n"""Plain-language public /dank setup home.\n\nThis module pat...p_recommend: plain-language /dank setup choices active")\n\n\n__all__ = ["register_public_setup_recommend_commands"]\n'
+=============================== warnings summary ===============================
+../../../../../opt/hostedtoolcache/Python/3.11.15/x64/lib/python3.11/site-packages/discord/player.py:30
+  /opt/hostedtoolcache/Python/3.11.15/x64/lib/python3.11/site-packages/discord/player.py:30: DeprecationWarning: 'audioop' is deprecated and slated for removal in Python 3.13
+    import audioop
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+=========================== short test summary info ============================
+FAILED tests/test_setup_first_run_guard_retired.py::test_native_setup_owns_first_run_experience - assert 'Advanced Options' in 'from __future__ import annotations\n\nimport asyncio\n\n"""Plain-language public /dank setup home.\n\nThis module pat...p_recommend: plain-language /dank setup choices active")\n\n\n__all__ = ["register_public_setup_recommend_commands"]\n'
+1 failed, 401 passed, 1 warning in 7.74s
+🫀 process_health PROCESS_EXIT uptime=6.9s rss≈129.6MB
