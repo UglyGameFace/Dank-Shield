@@ -42,7 +42,7 @@ E                       status = "Not started"
 E                       recommended = "Press **Start Setup** and choose what this server needs."
 E                   elif ready:
 E                       status = "Ready to test"
-E                       recommended = "Press **Test & Launch** and test with an alt account."
+E                       recommended = "Press **Test & Launch** and test with a second Discord account."
 E                   else:
 E                       status = "Needs setup work"
 E                       recommended = str(next_step or "Press Continue Setup.")[:350]
@@ -2916,7 +2916,7 @@ FAILED tests/test_setup_single_path_front_door_v2_static.py::test_launch_and_fal
             recommended = "Press **Start Setup** and choose what this server needs."
         elif ready:
             status = "Ready to test"
-            recommended = "Press **Test & Launch** and test with an alt account."
+            recommended = "Press **Test & Launch** and test with a second Discord account."
         else:
             status = "Needs setup work"
             recommended = str(next_step or "Press Continue Setup.")[:350]
@@ -5750,4 +5750,4 @@ FAILED tests/test_setup_single_path_front_door_v2_static.py::test_launch_and_fal
     
     
     __all__ = ["register_public_setup_recommend_commands"]
-1 failed, 14 passed in 0.06s
+1 failed, 14 passed in 0.08s
