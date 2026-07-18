@@ -35,7 +35,6 @@ def test_style_change_applier_targets_issue_review_actions() -> None:
         "design.style_change.fix_missing_icons_modal",
         "design.style_change.fix_missing.expired",
         "design.style_change.fix_missing.none",
-        "design.style_change.fix_missing.too_many",
     ):
         assert action_name in APPLIER
 

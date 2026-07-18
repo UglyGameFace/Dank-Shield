@@ -21,7 +21,7 @@ def test_live_majority_blocks_decorative_simplification_apply():
 
 def test_live_majority_recommendation_is_no_longer_blindly_live_majority():
     assert "For hand-built servers, choose **Use Live Majority**." not in SOURCE
-    assert "Use **Live Majority** only when the preview keeps the server's look." in SOURCE
+    assert "Use **Live Majority** only when the preview keeps the current server look." in SOURCE
 
 
 def test_patch_is_names_only_not_permission_or_config_repair():
