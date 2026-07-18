@@ -4,7 +4,7 @@ from pathlib import Path
 SOURCE = Path("stoney_verify/startup_guards/server_design_majority_layout_guard.py").read_text()
 
 
-def test_live_majority_blocks_decorative_simplification_apply():
+def test_smart_auto_detect_blocks_decorative_simplification_apply():
     required = [
         "_looks_display_heading",
         "_looks_plain_slug",
@@ -19,9 +19,12 @@ def test_live_majority_blocks_decorative_simplification_apply():
         assert phrase in SOURCE
 
 
-def test_live_majority_recommendation_is_no_longer_blindly_live_majority():
+def test_smart_auto_detect_recommendation_is_category_aware():
     assert "For hand-built servers, choose **Use Live Majority**." not in SOURCE
-    assert "Use **Live Majority** only when the preview keeps the current server look." in SOURCE
+    assert "Smart Auto-Detect" in SOURCE
+    assert "learn each category separately" in SOURCE
+    assert "Saved channel/category/global rules always win" in SOURCE
+    assert "mixed categories are left alone instead of being flattened" in SOURCE
 
 
 def test_patch_is_names_only_not_permission_or_config_repair():
