@@ -1,0 +1,40 @@
+....F.....F......                                                        [100%]
+=================================== FAILURES ===================================
+_______ test_correct_separator_wrong_spacing_repairs_to_majority_spacing _______
+
+    def test_correct_separator_wrong_spacing_repairs_to_majority_spacing():
+        names = [
+            f"💬 │ {_styled('general')}",
+            f"📢 │ {_styled('announcements')}",
+            f"🎮 │ {_styled('gaming')}",
+            f"🎭│{_styled('profile')}",
+        ]
+        options = majority.apply_majority_to_options(studio, {"theme_id": "gothic_clean"}, majority.infer_live_majority_layout(studio, _records(names)))
+>       assert options["separator_id"] == "bar_thin_spaced"
+E       AssertionError: assert 'bar_thin' == 'bar_thin_spaced'
+E         
+E         - bar_thin_spaced
+E         + bar_thin
+
+tests/test_server_design_majority_layout.py:104: AssertionError
+_______ test_majority_repair_no_longer_recommends_live_majority_blindly ________
+
+    def test_majority_repair_no_longer_recommends_live_majority_blindly():
+        assert "For hand-built servers, choose **Use Live Majority**." not in SOURCE
+>       assert "Fix Only Obvious Mistakes" in SOURCE
+E       assert 'Fix Only Obvious Mistakes' in 'from __future__ import annotations\n\n"""Guided live-majority repair bridge for Dank Design."""\n\nfrom collections.a...(exc).__name__}: {exc}")\n        except Exception:\n            pass\n        return False\n\n\n__all__ = ["apply"]\n'
+
+tests/test_server_design_majority_confidence_static.py:24: AssertionError
+=============================== warnings summary ===============================
+tests/test_server_design_majority_layout.py::test_hand_built_majority_pipe_fraktur_layout_repairs_outlier
+  /opt/hostedtoolcache/Python/3.11.15/x64/lib/python3.11/site-packages/discord/player.py:30: DeprecationWarning: 'audioop' is deprecated and slated for removal in Python 3.13
+    import audioop
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+=========================== short test summary info ============================
+FAILED tests/test_server_design_majority_layout.py::test_correct_separator_wrong_spacing_repairs_to_majority_spacing - AssertionError: assert 'bar_thin' == 'bar_thin_spaced'
+  
+  - bar_thin_spaced
+  + bar_thin
+FAILED tests/test_server_design_majority_confidence_static.py::test_majority_repair_no_longer_recommends_live_majority_blindly - assert 'Fix Only Obvious Mistakes' in 'from __future__ import annotations\n\n"""Guided live-majority repair bridge for Dank Design."""\n\nfrom collections.a...(exc).__name__}: {exc}")\n        except Exception:\n            pass\n        return False\n\n\n__all__ = ["apply"]\n'
+2 failed, 15 passed, 1 warning in 0.47s
