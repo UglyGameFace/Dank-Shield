@@ -21,22 +21,38 @@ jobs:
       - name: Apply patch or capture traceback
         shell: bash
         run: |
+          rm -f patch-error.txt
           python - <<'PY'
           from pathlib import Path
-          import textwrap
           import traceback
 
           workflow = Path('.github/workflows/apply-grouped-setup-advanced-ui.yml')
-          text = workflow.read_text(encoding='utf-8')
-          start_marker = "          python - <<'PY'\n"
-          end_marker = "\n          PY\n"
+          lines = workflow.read_text(encoding='utf-8').splitlines()
           try:
-              start = text.index(start_marker) + len(start_marker)
-              end = text.index(end_marker, start)
-              script = textwrap.dedent(text[start:end])
-              exec(compile(script, str(workflow), 'exec'), {'__name__': '__main__'})
+              start = next(
+                  index
+                  for index, line in enumerate(lines)
+                  if line.strip() == "python - <<'PY'"
+              ) + 1
+              end = next(
+                  index
+                  for index in range(start, len(lines))
+                  if lines[index].strip() == 'PY'
+              )
+              block = lines[start:end]
+              script = '\n'.join(
+                  line[10:] if line.startswith('          ') else line
+                  for line in block
+              ) + '\n'
+              exec(
+                  compile(script, str(workflow), 'exec'),
+                  {'__name__': '__main__'},
+              )
           except BaseException:
-              Path('patch-error.txt').write_text(traceback.format_exc(), encoding='utf-8')
+              Path('patch-error.txt').write_text(
+                  traceback.format_exc(),
+                  encoding='utf-8',
+              )
           PY
 
       - name: Commit result
