@@ -71,7 +71,6 @@ text = text.replace(old_identity, new_identity, 1)
 # prepended to the library by an earlier category/test.
 old_majority = '''    if sep_mixed:
         separator = {**separator, "spacing": "mixed/unknown", "label": "mixed/unknown"}
-
     frame = frame_examples.get(frame_id, {"id": "", "kind": "unknown", "label": "mixed/unknown"}) if frame_id else {"id": "", "kind": "unknown", "label": "mixed/unknown"}'''
 new_majority = '''    if sep_mixed:
         separator = {**separator, "spacing": "mixed/unknown", "label": "mixed/unknown"}
@@ -87,7 +86,6 @@ new_majority = '''    if sep_mixed:
             resolved_separator_id = ensure_separator_spec(studio, majority_token, majority_spacing)
         if resolved_separator_id:
             separator = {**separator, "separator_id": resolved_separator_id}
-
     frame = frame_examples.get(frame_id, {"id": "", "kind": "unknown", "label": "mixed/unknown"}) if frame_id else {"id": "", "kind": "unknown", "label": "mixed/unknown"}'''
 if text.count(old_majority) != 1:
     raise SystemExit(f"majority separator normalization block count={text.count(old_majority)}")
