@@ -149,7 +149,8 @@ def test_fix_next_opens_permission_instructions() -> None:
     )
     assert "Edit Channel → Permissions" in body
     assert "View Channel, Connect, Speak" in body
-    assert "Fix Next Item" in body
+    assert "Fix Next Problem" in body
+    assert "Fix Next Item" not in body
 
 
 def test_scoreboard_mirrors_member_access_truth() -> None:

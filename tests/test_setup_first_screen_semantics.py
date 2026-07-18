@@ -34,16 +34,12 @@ def button_by_id(
     return matches[0]
 
 
-def setup_choice_labels(
-    view: discord.ui.View,
-) -> set[str]:
-    return {
-        str(getattr(child, "label", "") or "")
-        for child in view.children
-        if str(getattr(child, "custom_id", "") or "").startswith(
-            "dank_setup_choice:"
-        )
-    }
+def setup_choice_labels(view: discord.ui.View) -> set[str]:
+    result: set[str] = set()
+    for child in view.children:
+        if isinstance(child, discord.ui.Select):
+            result.update(str(option.label) for option in child.options)
+    return result
 
 
 def test_new_server_opens_setup_type_before_guided_setup(
@@ -140,11 +136,11 @@ def test_public_setup_type_screen_has_exact_five_choices(
     )
 
     assert setup_choice_labels(view) == {
-        "Basic Server",
-        "Basic Verify",
-        "Help Desk",
+        "Tickets + Server Basics",
+        "Simple Verify",
+        "Help Desk / Tickets",
         "Voice Verify",
-        "Custom",
+        "Choose My Own Features",
     }
 
 
@@ -164,11 +160,11 @@ def test_id_web_choices_exist_only_for_allowed_guilds(
     labels = setup_choice_labels(view)
 
     assert {
-        "Basic Server",
-        "Basic Verify",
-        "Help Desk",
+        "Tickets + Server Basics",
+        "Simple Verify",
+        "Help Desk / Tickets",
         "Voice Verify",
-        "Custom",
+        "Choose My Own Features",
     } <= labels
 
     assert "ID / Web Verify" in labels

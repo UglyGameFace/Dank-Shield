@@ -145,6 +145,9 @@ def _assert_native_setup_ux_owners(
         / ("setup_" + "ux_clarity_guard.py")
     )
 
+    recommend_text = _read(recommend)
+    fresh_text = _read(fresh)
+
     if retired_guard.exists():
         failures.append(
             f"{retired_guard.relative_to(ROOT)}: "
@@ -159,201 +162,260 @@ def _assert_native_setup_ux_owners(
         recommend,
         "ContinueSetupView",
     )
-    advanced = _button_inventory(
+    more = _button_inventory(
         recommend,
         "ManageSetupView",
     )
-    danger_advanced = _button_inventory(
+    settings = _button_inventory(
+        recommend,
+        "AdvancedSettingsHubView",
+    )
+    danger = _button_inventory(
         recommend,
         "AdvancedDangerZoneView",
     )
-    choices = _button_inventory(
+    custom = _button_inventory(
         fresh,
-        "SetupTypeChoiceView",
+        "CustomServiceModeView",
     )
 
     expected_home = {
         "continue_setup": (
-            "Start / Continue Setup",
+            "Start Setup",
             "dank_setup_home:continue",
         ),
-        "health": (
-            "Setup Check",
-            "dank_setup_home:health",
-        ),
-        "launch": (
-            "Test / Launch",
-            "dank_setup_home:launch",
+        "more_options": (
+            "More Options",
+            "dank_setup_home:more_options",
         ),
     }
-
     expected_guided = {
         "fix_next": (
-            "Fix Next Item",
+            "Set Up This Step",
             "dank_setup_guided:fix_next",
-        ),
-        "review": (
-            "Setup Check",
-            "dank_setup_guided:review",
-        ),
-        "change_type": (
-            "Change Setup Type",
-            "dank_setup_guided:change_type",
-        ),
-        "advanced": (
-            "Advanced Options",
-            "dank_setup_guided:advanced",
         ),
         "home": (
             "Back Home",
             "dank_setup_guided:home",
         ),
     }
-
-    expected_advanced = {
-    "core_setup": "Core Setup",
-    "member_experience": "Member Experience",
-    "monitoring_repair": "Monitoring & Repair",
-    "appearance": "Appearance",
-    "danger_zone": "Danger Zone",
-    "help_faq": "Help / FAQ",
-    "home": "Back Home",
-}
-
-    expected_choices = {
-        "basic": (
-            "Basic Server",
-            "dank_setup_choice:basic",
+    expected_more = {
+        "change_type": "Change Setup Type",
+        "advanced_settings": "Other Settings",
+        "health": "Check Setup for Problems",
+        "recovery": "Fix Setup or Start Over",
+        "help_faq": "Help",
+        "home": "Back Home",
+    }
+    expected_settings = {
+        "core": "Features, Roles & Channels",
+        "tickets": "Tickets",
+        "safety": "Logs & Safety",
+        "design": "Server Design",
+        "back": "Back to More Options",
+        "home": "Back Home",
+    }
+    expected_danger = {
+        "recovery": "Fix or Start Over",
+        "back": "Back to More Options",
+        "home": "Back Home",
+    }
+    expected_custom = {
+        "continue_guided": (
+            "Continue Setup",
+            "dank_setup_custom:continue_guided",
         ),
-        "basic_verify": (
-            "Basic Verify",
-            "dank_setup_choice:basic_verify",
-        ),
-        "helpdesk": (
-            "Help Desk",
-            "dank_setup_choice:helpdesk",
-        ),
-        "voice_check": (
-            "Voice Verify",
-            "dank_setup_choice:voice",
-        ),
-        "custom": (
-            "Custom",
-            "dank_setup_choice:custom",
+        "back": (
+            "Back",
+            "dank_setup_custom:back",
         ),
     }
 
+    if set(home) != set(expected_home):
+        failures.append(
+            f"{recommend.relative_to(ROOT)}: ProductSetupHomeView "
+            f"must expose only {sorted(expected_home)!r}; "
+            f"found {sorted(home)!r}"
+        )
     for method, expected in expected_home.items():
         actual = home.get(method)
-
-        if actual is None:
-            failures.append(
-                f"{recommend.relative_to(ROOT)}: "
-                f"ProductSetupHomeView missing `{method}`"
-            )
-            continue
-
-        if actual[:2] != expected:
+        if actual is None or actual[:2] != expected:
             failures.append(
                 f"{recommend.relative_to(ROOT)}: "
                 f"ProductSetupHomeView.{method} is "
-                f"{actual[:2]!r}, expected {expected!r}"
+                f"{actual[:2] if actual else None!r}, "
+                f"expected {expected!r}"
             )
 
+    primary = home.get("continue_setup")
+    if primary is not None:
+        for route in (
+            "_open_test_launch(interaction)",
+            "_open_guided_setup(interaction)",
+            "_open_choose_setup_type(interaction)",
+        ):
+            if route not in primary[2]:
+                failures.append(
+                    f"{recommend.relative_to(ROOT)}: setup-home primary "
+                    f"action is missing route `{route}`"
+                )
+
+    if set(guided) != set(expected_guided):
+        failures.append(
+            f"{recommend.relative_to(ROOT)}: ContinueSetupView must "
+            f"expose only {sorted(expected_guided)!r}; "
+            f"found {sorted(guided)!r}"
+        )
     for method, expected in expected_guided.items():
         actual = guided.get(method)
-
-        if actual is None:
-            failures.append(
-                f"{recommend.relative_to(ROOT)}: "
-                f"ContinueSetupView missing `{method}`"
-            )
-            continue
-
-        if actual[:2] != expected:
+        if actual is None or actual[:2] != expected:
             failures.append(
                 f"{recommend.relative_to(ROOT)}: "
                 f"ContinueSetupView.{method} is "
-                f"{actual[:2]!r}, expected {expected!r}"
+                f"{actual[:2] if actual else None!r}, "
+                f"expected {expected!r}"
             )
 
-    change_type = guided.get("change_type")
+    for method, expected_label in expected_more.items():
+        actual = more.get(method)
+        if actual is None or actual[0] != expected_label:
+            failures.append(
+                f"{recommend.relative_to(ROOT)}: ManageSetupView.{method} "
+                f"label is {actual[0] if actual else None!r}, "
+                f"expected {expected_label!r}"
+            )
 
+    more_recovery = more.get("recovery")
     if (
-        change_type is not None
-        and "await _open_choose_setup_type(interaction)"
-        not in change_type[2]
+        more_recovery is None
+        or "await _open_advanced_danger_zone(interaction)"
+        not in more_recovery[2]
+        or "_open_recovery_center(interaction)"
+        in more_recovery[2]
     ):
         failures.append(
-            f"{recommend.relative_to(ROOT)}: "
-            "Change Setup Type does not open the existing "
-            "setup-type picker"
+            f"{recommend.relative_to(ROOT)}: More Options must route "
+            "Fix Setup or Start Over through the separate recovery screen"
         )
 
-    for method, expected_label in (
-        expected_advanced.items()
+    for method, expected_label in expected_settings.items():
+        actual = settings.get(method)
+        if actual is None or actual[0] != expected_label:
+            failures.append(
+                f"{recommend.relative_to(ROOT)}: "
+                f"AdvancedSettingsHubView.{method} label is "
+                f"{actual[0] if actual else None!r}, "
+                f"expected {expected_label!r}"
+            )
+
+    for method, expected_label in expected_danger.items():
+        actual = danger.get(method)
+        if actual is None or actual[0] != expected_label:
+            failures.append(
+                f"{recommend.relative_to(ROOT)}: "
+                f"AdvancedDangerZoneView.{method} label is "
+                f"{actual[0] if actual else None!r}, "
+                f"expected {expected_label!r}"
+            )
+
+    danger_recovery = danger.get("recovery")
+    if (
+        danger_recovery is None
+        or "await _open_recovery_center(interaction)"
+        not in danger_recovery[2]
     ):
-        actual = advanced.get(method)
+        failures.append(
+            f"{recommend.relative_to(ROOT)}: separate recovery screen "
+            "must own the real recovery-center route"
+        )
 
-        if actual is None:
+    if set(custom) != set(expected_custom):
+        failures.append(
+            f"{fresh.relative_to(ROOT)}: CustomServiceModeView must "
+            f"expose only {sorted(expected_custom)!r}; "
+            f"found {sorted(custom)!r}"
+        )
+    for method, expected in expected_custom.items():
+        actual = custom.get(method)
+        if actual is None or actual[:2] != expected:
             failures.append(
-                f"{recommend.relative_to(ROOT)}: "
-                f"ManageSetupView missing `{method}`"
-            )
-            continue
-
-        if actual[0] != expected_label:
-            failures.append(
-                f"{recommend.relative_to(ROOT)}: "
-                f"ManageSetupView.{method} label is "
-                f"{actual[0]!r}, expected "
-                f"{expected_label!r}"
+                f"{fresh.relative_to(ROOT)}: "
+                f"CustomServiceModeView.{method} is "
+                f"{actual[:2] if actual else None!r}, "
+                f"expected {expected!r}"
             )
 
-    flat_forbidden = {
-    "Features On / Off",
-    "Ticket Choices",
-    "Protection",
-    "Modlog Tracking",
-    "Timers & Behavior",
-    "Server Design",
-    "Detailed Role / Channel Mapping",
-    "Permission Repair",
-    "Recovery / Start Over",
-}
-    exposed_flat = {
-        button[0]
-        for button in advanced.values()
-        if button[0] in flat_forbidden
+    # Normal setup screens must never expose repair/reset/destructive actions.
+    destructive_labels = {
+        "Fix Setup or Start Over",
+        "Fix or Start Over",
+        "Recovery / Start Over",
+        "Danger Zone",
     }
-    if exposed_flat:
-        failures.append(
-            f"{recommend.relative_to(ROOT)}: ManageSetupView still exposes "
-            f"flat advanced actions: {sorted(exposed_flat)!r}"
-        )
-
-    recovery = danger_advanced.get("recovery")
-    if recovery is None or recovery[0] != "Recovery / Start Over":
-        failures.append(
-            f"{recommend.relative_to(ROOT)}: AdvancedDangerZoneView must own "
-            "Recovery / Start Over"
-        )
-
-    for method, expected in expected_choices.items():
-        actual = choices.get(method)
-
-        if actual is None:
+    for owner_name, inventory in (
+        ("ProductSetupHomeView", home),
+        ("ContinueSetupView", guided),
+        ("AdvancedSettingsHubView", settings),
+        ("CustomServiceModeView", custom),
+    ):
+        exposed = {
+            item[0]
+            for item in inventory.values()
+            if item[0] in destructive_labels
+        }
+        if exposed:
             failures.append(
-                f"{fresh.relative_to(ROOT)}: "
-                f"SetupTypeChoiceView missing `{method}`"
+                f"{recommend.relative_to(ROOT)}: {owner_name} exposes "
+                f"destructive setup actions: {sorted(exposed)!r}"
             )
-            continue
 
-        if actual[:2] != expected:
+    # Setup type selection must stay a single compact select, not a button wall.
+    if "class SetupTypeChoiceSelect(discord.ui.Select)" not in fresh_text:
+        failures.append(
+            f"{fresh.relative_to(ROOT)}: setup type chooser must use "
+            "SetupTypeChoiceSelect"
+        )
+    for marker in (
+        'custom_id="dank_setup_choice:basic"',
+        'custom_id="dank_setup_choice:basic_verify"',
+        'custom_id="dank_setup_choice:helpdesk"',
+        'custom_id="dank_setup_choice:voice"',
+        'custom_id="dank_setup_choice:custom"',
+    ):
+        if marker in fresh_text:
             failures.append(
-                f"{fresh.relative_to(ROOT)}: "
-                f"SetupTypeChoiceView.{method} is "
-                f"{actual[:2]!r}, expected {expected!r}"
+                f"{fresh.relative_to(ROOT)}: old setup-type button "
+                f"wall marker remains: `{marker}`"
+            )
+
+    for label in (
+        "Tickets + Server Basics",
+        "Simple Verify",
+        "Help Desk / Tickets",
+        "Voice Verify",
+        "Choose My Own Features",
+    ):
+        if f'"{label}"' not in fresh_text:
+            failures.append(
+                f"{fresh.relative_to(ROOT)}: setup type `{label}` is missing"
+            )
+
+    # Retired/vague public setup terms must not return.
+    for stale in (
+        "Member Experience",
+        "Core Setup",
+        "Monitoring & Repair",
+        "Setup Check / Diagnostics",
+        "Start / Continue Setup",
+        "Test / Launch",
+        "Fix Next Item",
+        "Advanced Options",
+        "Detailed Role / Channel Mapping",
+    ):
+        if stale in recommend_text:
+            failures.append(
+                f"{recommend.relative_to(ROOT)}: stale public setup "
+                f"wording remains: `{stale}`"
             )
 
     guard_dir = (
@@ -369,16 +431,15 @@ def _assert_native_setup_ux_owners(
     )
 
     for path in guard_dir.glob("*.py"):
-        text = _read(path)
+        guard_text = _read(path)
 
         for marker in forbidden:
-            if marker in text:
+            if marker in guard_text:
                 failures.append(
                     f"{path.relative_to(ROOT)}: "
                     f"obsolete global setup UX wrapper "
                     f"marker remains: `{marker}`"
                 )
-
 
 
 def _assert_idle_kick_is_per_guild_and_off_by_default(failures: list[str]) -> None:

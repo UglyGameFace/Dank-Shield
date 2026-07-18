@@ -101,7 +101,7 @@ def test_native_feature_aware_health_owner_exists() -> None:
         "SetupReviewView",
         "SetupReviewFixNextButton",
         "SetupReviewLaunchButton",
-        "SetupReviewAdvancedButton",
+        "SetupReviewHomeButton",
     }
 
     assert required.issubset(owners)
@@ -118,8 +118,10 @@ def test_native_setup_check_owns_plain_next_step() -> None:
     ) or ""
 
     assert 'name="What to press"' in body
-    assert "Start / Continue Setup" in body
-    assert "Test / Launch" in body
+    assert "Continue Setup" in body
+    assert "Test & Launch" in body
+    assert "Start / Continue Setup" not in body
+    assert "Test / Launch" not in body
     assert "Use Existing Roles/Channels" not in body
     assert "Start Setup / Fix Missing" not in body
 
@@ -135,9 +137,9 @@ def test_native_review_owns_one_correct_main_action() -> None:
     assert "if ready:" in body
     assert "SetupReviewLaunchButton()" in body
     assert "SetupReviewFixNextButton()" in body
-    assert "SetupReviewAdvancedButton()" in body
-    assert "SetupReviewChangeTypeButton()" in body
     assert "SetupReviewHomeButton()" in body
+    assert "SetupReviewAdvancedButton()" not in body
+    assert "SetupReviewChangeTypeButton()" not in body
 
 
 def test_no_startup_guard_recreates_next_action_wrapper() -> None:

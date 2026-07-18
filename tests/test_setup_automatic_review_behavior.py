@@ -42,10 +42,10 @@ def test_review_shows_fix_only_when_work_remains():
     view = recommend.SetupReviewView(ready=False)
     labels = button_labels(view)
 
-    assert "Fix Next Item" in labels
-    assert "Test / Launch" not in labels
-    assert "Advanced Options" in labels
-    assert "Change Setup Type" in labels
+    assert "Fix Next Problem" in labels
+    assert "Test & Launch" not in labels
+    assert "Other Settings" not in labels
+    assert "Change Setup Type" not in labels
     assert "Back Home" in labels
 
 
@@ -53,10 +53,10 @@ def test_review_shows_launch_only_when_ready():
     view = recommend.SetupReviewView(ready=True)
     labels = button_labels(view)
 
-    assert "Test / Launch" in labels
-    assert "Fix Next Item" not in labels
-    assert "Advanced Options" in labels
-    assert "Change Setup Type" in labels
+    assert "Test & Launch" in labels
+    assert "Fix Next Problem" not in labels
+    assert "Other Settings" not in labels
+    assert "Change Setup Type" not in labels
     assert "Back Home" in labels
 
 
@@ -234,8 +234,8 @@ def test_launch_is_blocked_until_ready(
 @pytest.mark.parametrize(
     ("target_name", "main_label", "hidden_label"),
     (
-        ("ready", "Test / Launch", "Fix Next Item"),
-        ("roles", "Fix Next Item", "Test / Launch"),
+        ("ready", "Test & Launch", "Fix Next Problem"),
+        ("roles", "Fix Next Problem", "Test & Launch"),
     ),
 )
 def test_health_check_builds_correct_review_view(

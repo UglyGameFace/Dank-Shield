@@ -118,10 +118,16 @@ def test_native_completion_and_review_remain() -> None:
         "def _open_guided_setup",
         "def _open_health_check",
         "class SetupReviewView",
+        "Fix Next Problem",
+        "Test & Launch",
+    ):
+        assert marker in RECOMMEND
+
+    for stale in (
         "Fix Next Item",
         "Test / Launch",
     ):
-        assert marker in RECOMMEND
+        assert stale not in RECOMMEND
 
     assert (
         "def _setup_defaults_callback" in DEFAULTS

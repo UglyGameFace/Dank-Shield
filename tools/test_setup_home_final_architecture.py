@@ -8,15 +8,30 @@ recovery = Path("stoney_verify/commands_ext/public_setup_recovery.py").read_text
 
 failures: list[str] = []
 
+home_start = recommend.find("class ProductSetupHomeView(")
+home_end = recommend.find("class ContinueSetupView(", home_start)
+home = recommend[home_start:home_end] if home_start >= 0 and home_end > home_start else ""
+
 for marker in (
-    "Start / Continue Setup",
-    "Setup Check",
-    "Test / Launch",
-    "Manage Setup",
+    "Start Setup",
+    "Continue Setup",
+    "Test & Launch",
+    "More Options",
 ):
-    if marker not in recommend:
+    if marker not in home:
         failures.append(
             f"canonical product home missing {marker}"
+        )
+
+for stale in (
+    'label="Setup Check"',
+    'label="Manage Setup"',
+    "Start / Continue Setup",
+    "Test / Launch",
+):
+    if stale in home:
+        failures.append(
+            f"canonical product home still exposes stale action: {stale}"
         )
 
 for retired_owner in (
@@ -43,10 +58,13 @@ if "_add_recovery_button(view)" in recovery or 'name="Need to undo setup?"' in r
     failures.append("Recovery still injects top-level home button/field")
 
 if "open_recovery_center" not in recovery:
-    failures.append("Recovery center helper is missing for Manage Setup")
+    failures.append("Recovery center helper is missing for More Options")
 
-if "custom_id=\"dank_setup_choice:custom\"" not in fresh:
-    failures.append("Custom setup choice is missing from Choose Setup Type")
+if 'PlainSetupChoice("custom_setup", "Choose My Own Features"' not in fresh:
+    failures.append("Choose My Own Features setup choice is missing")
+
+if "class SetupTypeChoiceSelect(discord.ui.Select)" not in fresh:
+    failures.append("Choose Setup Type is not using the compact select")
 
 choice_start = fresh.find("class SetupTypeChoiceView(")
 choice_end = fresh.find("def register_public_setup_fresh_choice_commands(", choice_start)
@@ -61,7 +79,7 @@ if (
     or "_open_custom_service_picker(" not in choice_block
 ):
     failures.append(
-        "Custom setup choice does not open service switches"
+        "Choose My Own Features does not open the feature chooser"
     )
 
 if failures:

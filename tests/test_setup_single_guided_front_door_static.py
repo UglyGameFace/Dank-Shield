@@ -85,34 +85,39 @@ def test_custom_switches_are_explicitly_custom_only():
 
     assert "Custom Setup only" in custom
     assert "CustomServiceToggleButton" in custom
-    assert "Continue Guided Setup" in custom
+    assert "Continue Setup" in custom
 
 
 def test_advanced_tools_still_exist():
-    """Every advanced tool must live under the grouped canonical owner."""
-
+    """Every optional tool remains reachable under literal secondary labels."""
     import ast
 
-    recommend_tree = ast.parse(RECOMMEND)
+    tree = ast.parse(RECOMMEND)
     classes = {
         node.name: ast.get_source_segment(RECOMMEND, node) or ""
-        for node in recommend_tree.body
+        for node in tree.body
         if isinstance(node, ast.ClassDef)
     }
 
-    hub = classes["ManageSetupView"]
+    more = classes["ManageSetupView"]
     for label in (
-        "Core Setup",
-        "Member Experience",
-        "Monitoring & Repair",
-        "Appearance",
-        "Danger Zone",
-        "Help / FAQ",
+        "Change Setup Type",
+        "Other Settings",
+        "Check Setup for Problems",
+        "Fix Setup or Start Over",
+        "Help",
         "Back Home",
     ):
-        assert label in hub
+        assert label in more
 
-    assert "Recovery / Start Over" not in hub
+    hub = classes["AdvancedSettingsHubView"]
+    for label in (
+        "Features, Roles & Channels",
+        "Tickets",
+        "Logs & Safety",
+        "Server Design",
+    ):
+        assert label in hub
 
     advanced = "\n".join(
         classes[name]
@@ -124,24 +129,21 @@ def test_advanced_tools_still_exist():
             "AdvancedDangerZoneView",
         )
     )
-
-    required_labels = (
-        "Features On / Off",
+    for label in (
+        "Turn Features On / Off",
         "Ticket Choices",
-        "Protection",
-        "Modlog Tracking",
-        "Timers & Behavior",
+        "Spam & Raid Protection",
+        "Choose What Gets Logged",
+        "Timers & Rules",
         "Server Design",
-        "Detailed Role / Channel Mapping",
-        "Permission Repair",
-        "Recovery / Start Over",
-        "Back to Advanced",
+        "Choose Roles & Channels",
+        "Fix Channel Permissions",
+        "Fix or Start Over",
         "Back Home",
-    )
-    for label in required_labels:
+    ):
         assert label in advanced
 
-    required_routes = (
+    for route in (
         "_open_services",
         "_open_ticket_menu",
         "_open_protection_options",
@@ -150,14 +152,9 @@ def test_advanced_tools_still_exist():
         "_open_existing_server",
         "_open_permission_repair",
         "_open_recovery_center",
-        "_open_manage_setup",
         "_home_edit",
-    )
-    for route in required_routes:
+    ):
         assert route in advanced
 
-    danger = classes["AdvancedDangerZoneView"]
-    assert "Recovery / Start Over" in danger
-
     assert "class PlainManageSetupView" not in FRESH
-    assert "recommend._open_manage_setup" in FRESH
+    assert "Member Experience" not in RECOMMEND

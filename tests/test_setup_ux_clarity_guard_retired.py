@@ -191,53 +191,51 @@ def test_no_global_setup_edit_wrapper_remains() -> None:
 def test_native_guided_labels_and_routes_remain() -> None:
     home = _buttons(_class("ProductSetupHomeView"))
     guided = _buttons(_class("ContinueSetupView"))
-    advanced = _buttons(_class("ManageSetupView"))
+    more = _buttons(_class("ManageSetupView"))
+    settings = _buttons(_class("AdvancedSettingsHubView"))
     core = _buttons(_class("AdvancedCoreSetupView"))
-    members = _buttons(_class("AdvancedMemberExperienceView"))
-    monitoring = _buttons(_class("AdvancedMonitoringRepairView"))
+    tickets = _buttons(_class("AdvancedMemberExperienceView"))
+    safety = _buttons(_class("AdvancedMonitoringRepairView"))
     appearance = _buttons(_class("AdvancedAppearanceView"))
-    danger = _buttons(_class("AdvancedDangerZoneView"))
+    recovery = _buttons(_class("AdvancedDangerZoneView"))
 
-    assert home["continue_setup"][:2] == (
-        "Start / Continue Setup",
-        "dank_setup_home:continue",
-    )
-    assert home["health"][0] == "Setup Check"
-    assert home["launch"][0] == "Test / Launch"
+    assert home["continue_setup"][:2] == ("Start Setup", "dank_setup_home:continue")
+    assert home["more_options"][0] == "More Options"
+    assert set(home) == {"continue_setup", "more_options"}
 
-    assert guided["fix_next"][0] == "Fix Next Item"
-    assert guided["review"][0] == "Setup Check"
-    assert guided["change_type"][:2] == (
-        "Change Setup Type",
-        "dank_setup_guided:change_type",
-    )
-    assert "await _open_choose_setup_type(interaction)" in guided["change_type"][2]
-    assert guided["advanced"][0] == "Advanced Options"
+    assert guided["fix_next"][0] == "Set Up This Step"
     assert guided["home"][0] == "Back Home"
+    assert set(guided) == {"fix_next", "home"}
 
-    assert advanced["core_setup"][0] == "Core Setup"
-    assert advanced["member_experience"][0] == "Member Experience"
-    assert advanced["monitoring_repair"][0] == "Monitoring & Repair"
-    assert advanced["appearance"][0] == "Appearance"
-    assert advanced["danger_zone"][0] == "Danger Zone"
+    assert more["change_type"][0] == "Change Setup Type"
+    assert more["advanced_settings"][0] == "Other Settings"
+    assert more["health"][0] == "Check Setup for Problems"
+    assert more["recovery"][0] == "Fix Setup or Start Over"
+    assert more["help_faq"][0] == "Help"
+    assert more["home"][0] == "Back Home"
 
-    assert core["services"][0] == "Features On / Off"
-    assert core["timers_behavior"][0] == "Timers & Behavior"
-    assert core["detailed_mapping"][0] == "Detailed Role / Channel Mapping"
-    assert members["ticket_choices"][0] == "Ticket Choices"
-    assert members["protection"][0] == "Protection"
-    assert monitoring["modlog_tracking"][0] == "Modlog Tracking"
-    assert monitoring["permission_repair"][0] == "Permission Repair"
+    assert settings["core"][0] == "Features, Roles & Channels"
+    assert settings["tickets"][0] == "Tickets"
+    assert settings["safety"][0] == "Logs & Safety"
+    assert settings["design"][0] == "Server Design"
+
+    assert core["services"][0] == "Turn Features On / Off"
+    assert core["timers_behavior"][0] == "Timers & Rules"
+    assert core["detailed_mapping"][0] == "Choose Roles & Channels"
+    assert tickets["ticket_choices"][0] == "Ticket Choices"
+    assert safety["modlog_tracking"][0] == "Choose What Gets Logged"
+    assert safety["protection"][0] == "Spam & Raid Protection"
+    assert safety["permission_repair"][0] == "Fix Channel Permissions"
     assert appearance["server_design"][0] == "Server Design"
-    assert danger["recovery"][0] == "Recovery / Start Over"
-
+    assert recovery["recovery"][0] == "Fix or Start Over"
 
 def test_public_setup_type_picker_remains() -> None:
+    assert "class SetupTypeChoiceSelect(discord.ui.Select)" in FRESH
     for label in (
-        "Basic Server",
-        "Basic Verify",
-        "Help Desk",
+        "Tickets + Server Basics",
+        "Simple Verify",
+        "Help Desk / Tickets",
         "Voice Verify",
-        "Custom",
+        "Choose My Own Features",
     ):
-        assert f'label="{label}"' in FRESH
+        assert f'"{label}"' in FRESH
