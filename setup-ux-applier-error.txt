@@ -4,3 +4,10 @@ Traceback (most recent call last):
   File "/home/runner/work/Dank-Shield/Dank-Shield/stoney_verify/commands_ext/public_setup_fresh_choice.py", line 508
     embed.add_field(
 IndentationError: unexpected indent
+Traceback (most recent call last):
+  File "/home/runner/work/Dank-Shield/Dank-Shield/tools/finalize_setup_single_path_front_door_v2.py", line 153, in <module>
+    compile(path.read_text(encoding="utf-8"), str(path), "exec")
+  File "/home/runner/work/Dank-Shield/Dank-Shield/stoney_verify/commands_ext/public_setup_fresh_choice.py", line 506
+    embed.add_field(name="Your Setup", value=f"**{preset_label}**
+                                             ^
+SyntaxError: unterminated string literal (detected at line 506)
