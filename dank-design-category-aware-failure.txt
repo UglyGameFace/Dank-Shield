@@ -83,4 +83,4 @@ FAILED tests/test_server_design_category_aware_auto_detect.py::test_smart_option
   
   - bar_thin
   + bar_thin_spaced
-2 failed, 15 passed, 1 warning in 0.47s
+2 failed, 15 passed, 1 warning in 0.45s
