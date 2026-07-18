@@ -1,0 +1,177 @@
+===== tools/test_authoritative_activity_tracker_static.py =====
+PASS test_tracker_records_only_direct_member_actions
+PASS test_native_app_installs_tracker
+PASS test_schema_has_atomic_activity_and_continuity_functions
+PASS test_scan_uses_authoritative_coverage
+PASS test_cleanup_preserves_scan_threshold
+PASS test_coverage_never_activates_early
+PASS test_coverage_activates_after_full_threshold
+PASS test_restart_or_stale_heartbeat_fails_closed
+===== tools/test_bot_account_detection_cleanup_static.py =====
+PASS test_risk_wording_separates_bot_alt_and_dm_report
+PASS test_dm_report_command_exists_under_cleanup
+PASS test_dm_report_has_staff_actions_without_auto_purge
+PASS test_dm_report_is_not_private_dm_surveillance
+===== tools/test_cleanup_user_message_purge_static.py =====
+PASS test_existing_purge_command_owns_user_target_flow
+PASS test_user_purge_has_channel_and_server_scope
+PASS test_user_purge_uses_preview_buttons_not_typed_confirm
+PASS test_user_purge_still_requires_native_manage_messages
+PASS test_user_purge_scans_channels_and_deletes_individually
+===== tools/test_custom_setup_and_basic_verify_ticket_gate.py =====
+PASS custom setup/basic verify ticket gate
+===== tools/test_custom_state_and_launch_actions.py =====
+PASS custom state and launch actions
+===== tools/test_dank_design_clean_simple_unlock_ui_static.py =====
+PASS test_home_has_clear_current_workflow
+PASS test_rules_and_unlocks_is_reachable
+PASS test_lock_manager_covers_saved_rule_scopes
+PASS test_style_change_missing_icons_batches_without_dead_end
+PASS test_current_design_contract_keeps_preview_first_safety
+===== tools/test_dank_design_missing_icons_batch_static.py =====
+PASS test_missing_icons_no_longer_dead_ends_when_more_than_five
+PASS test_missing_icons_modal_uses_first_batch_of_five
+PASS test_missing_icons_help_explains_batching
+PASS test_old_style_change_applier_will_not_reintroduce_dead_end
+===== tools/test_dank_design_protection_unlock_static.py =====
+PASS test_protection_manager_has_obvious_unlock_controls
+PASS test_default_protected_names_can_allow_font_without_full_layout
+PASS test_protection_manager_explains_font_fallback_is_not_a_blocker
+PASS test_font_engine_falls_back_per_character
+===== tools/test_dank_design_safe_repair_cleanup_static.py =====
+PASS test_native_design_owns_enhancements_not_startup_loading
+PASS test_fix_mismatched_names_copy_mentions_saved_rules_win
+PASS test_native_majority_context_respects_locks
+PASS test_live_majority_apply_requires_high_confidence_and_no_saved_rules
+PASS test_majority_plan_respects_saved_locks_when_present
+===== tools/test_dank_design_ux_lock_cleanup_static.py =====
+PASS test_home_uses_clear_workflows_not_old_vague_labels
+PASS test_rules_unlocks_surface_is_obvious
+PASS test_lock_manager_shows_exact_presets
+PASS test_separator_only_tool_explains_scope
+PASS test_old_safe_repair_test_expectations_updated
+===== tools/test_design_layout_helpers_not_startup.py =====
+PASS design layout helpers not startup
+===== tools/test_design_native_registration.py =====
+PASS design native registration
+===== tools/test_designated_multi_picker_static.py =====
+PASS test_multi_picker_action_contract_exists
+PASS test_dank_multi_picker_view_exists
+PASS test_multi_picker_uses_shared_choice_contract
+PASS test_cancel_supports_single_and_multi_picker
+PASS test_multi_picker_is_exported
+===== tools/test_embed_literal_newline_guard.py =====
+🫀 process_health BOOT count=1 first_recorded_boot pid=2190 rss≈43.7MB
+🫀 process_health loaded; crash/restart visibility active
+🧼 embed_literal_newline_guard active; literal newline markers are sanitized before embeds render
+PASS embed literal newline guard
+🫀 process_health PROCESS_EXIT uptime=0.0s rss≈43.7MB
+===== tools/test_inactive_members_truth_gate_static.py =====
+PASS test_only_direct_member_activity_resets_inactivity
+PASS test_missing_role_configuration_fails_closed
+PASS test_member_errors_are_not_silently_hidden
+PASS test_historical_scan_is_review_only_until_tracker_exists
+PASS test_cleanup_always_rechecks_fresh_inactivity
+PASS test_cleanup_queue_never_uses_cached_scan
+PASS test_mass_cleanup_always_requires_confirmation
+PASS test_ui_shows_actionability
+===== tools/test_invite_extraction_safety.py =====
+PASS invite extraction safety
+===== tools/test_join_intelligence_consolidation_static.py =====
+PASS test_only_canonical_join_fields_are_emitted
+PASS test_role_state_uses_per_guild_ids_not_name_guessing
+PASS test_old_display_helpers_are_removed
+PASS test_canonical_summary_is_honest_and_actionable
+===== tools/test_join_leave_log_centralized.py =====
+PASS join/leave log centralization
+===== tools/test_join_leave_log_runtime_static.py =====
+PASS test_member_lifecycle_runtime_is_public_core
+PASS test_runtime_bootstrap_calls_authoritative_router_install
+PASS test_join_leave_aliases_are_broad_and_consistent
+PASS test_ready_logs_resolved_member_lifecycle_routes
+PASS test_member_logs_command_is_allowed_child
+PASS test_old_welcome_member_events_route_is_not_loaded_by_startup
+PASS test_setup_logs_uses_explicit_join_leave_route
+PASS test_runtime_hardening_is_loaded_but_does_not_override_router
+PASS test_join_leave_never_posts_to_welcome_channel
+===== tools/test_live_setup_check_uses_canonical.py =====
+PASS live setup check canonical wiring
+===== tools/test_persistent_ticket_counter_static.py =====
+PASS test_public_panel_uses_persistent_allocator
+PASS test_ticket_service_uses_persistent_allocator
+PASS test_legacy_sequence_guard_no_longer_overrides_native_numbering
+PASS test_schema_bootstrap_exposes_atomic_rpc
+PASS test_counter_allocator_is_db_authoritative
+===== tools/test_profile_builder_edit_static.py =====
+PASS test_profile_panel_has_clear_edit_entrypoint
+PASS test_profile_edit_hub_exists
+PASS test_view_profile_is_not_dead_end
+PASS test_profile_handler_routes_edit_and_full_roles
+===== tools/test_profile_cosmetic_roles_static.py =====
+PASS test_cosmetics_use_designated_pickers
+PASS test_cosmetic_allowlist_is_per_guild_config
+PASS test_staff_builder_has_cosmetic_manager_entry
+PASS test_user_panel_has_cosmetic_picker_entry
+PASS test_cosmetics_block_sensitive_roles
+===== tools/test_profile_role_centralized_picker_static.py =====
+PASS test_profile_role_builder_does_not_use_native_role_select
+PASS test_profile_role_builder_uses_centralized_multi_picker
+PASS test_profile_role_picker_has_pagination_controls
+PASS test_centralized_picker_contract_exists
+PASS test_native_role_select_import_removed_from_profile_builder
+===== tools/test_profile_role_editor_guard_static.py =====
+PASS test_profile_role_editor_guard_loads_before_self_roles_registration
+PASS test_self_roles_applies_role_editor_before_registering_panel
+PASS test_profile_panel_and_editor_get_suggest_role_buttons
+PASS test_native_profile_source_has_new_role_cosmetics_labels
+PASS test_old_profile_cosmetics_user_facing_copy_is_gone
+PASS test_server_roles_cosmetics_button_is_relabelled_with_roles
+PASS test_builder_gets_profile_roles_cosmetics_editor_button
+PASS test_role_suggestions_are_review_only
+PASS test_existing_profile_role_manager_still_exists
+===== tools/test_public_status_command_surface_static.py =====
+PASS test_status_reporter_is_public_core
+PASS test_setup_status_is_not_pruned_as_confusing
+PASS test_public_status_command_exists
+PASS test_setup_status_alias_still_exists
+PASS test_status_on_ready_logs_task_start
+===== tools/test_quick_mod_ban_left_user_static.py =====
+PASS test_quick_mod_ban_has_left_user_fallback
+PASS test_quick_mod_member_only_actions_still_require_current_member
+PASS test_quick_mod_ban_by_id_checks_permissions
+===== tools/test_raidguard_dm_safety_static.py =====
+PASS test_suspicious_name_regex_is_not_substring_real_trap
+PASS test_low_flagged_accounts_do_not_render_as_clear
+PASS test_staff_join_audit_has_dm_safety_context_and_quick_mod
+===== tools/test_setup_choice_preview_compact.py =====
+PASS setup choice preview compact test
+===== tools/test_setup_doctor_canonical.py =====
+PASS canonical setup doctor
+===== tools/test_setup_doctor_live_embed_truth.py =====
+PASS live setup doctor truth embed test
+===== tools/test_setup_existing_join_leave_menu_static.py =====
+Traceback (most recent call last):
+  File "/home/runner/work/Dank-Shield/Dank-Shield/tools/test_setup_existing_join_leave_menu_static.py", line 105, in <module>
+    test()
+  File "/home/runner/work/Dank-Shield/Dank-Shield/tools/test_setup_existing_join_leave_menu_static.py", line 37, in test_recommended_setup_path_is_the_real_existing_server_menu
+    assert 'label="Detailed Role / Channel Mapping"' in manage_source
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError
+===== tools/test_setup_full_customization_join_leave_native_static.py =====
+PASS test_more_channels_natively_shows_join_leave_picker
+PASS test_more_channels_still_has_all_four_selects
+PASS test_logs_status_writes_join_leave_aliases
+===== tools/test_setup_home_final_architecture.py =====
+PASS setup home final architecture
+===== tools/test_staff_verdict_feedback_loop_static.py =====
+PASS test_feedback_is_guild_scoped_and_non_enforcing
+PASS test_public_profile_loads_member_review_module
+PASS test_review_command_opens_panel_before_verdict
+PASS test_mobile_review_controls_are_compact
+PASS test_command_permission_accepts_configured_staff_roles
+PASS test_clean_command_names_replace_old_aliases
+PASS test_reset_wording_is_honest
+PASS test_staff_audit_still_has_review_controls
+PASS test_review_system_never_punishes_automatically
+===== tools/test_startup_guard_literal_newline_registered.py =====
+PASS literal newline startup registration
