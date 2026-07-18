@@ -10,6 +10,8 @@ TEST = ROOT / "tests/test_setup_single_path_front_door_v2_static.py"
 recommend = RECOMMEND.read_text(encoding="utf-8")
 
 replacements = {
+    'recommended = "Press **Test & Launch** and test with an alt account."':
+        'recommended = "Press **Test & Launch** and test with a second Discord account."',
     '"Saved **Custom setup**. Now turn each service on/off below. "\n                        "This is the actual manual editor."':
         '"Saved **Choose My Own Features**. Choose which features are ON or OFF below."',
     'title="✅ Custom Setup Saved"': 'title="✅ Feature Choices Saved"',
