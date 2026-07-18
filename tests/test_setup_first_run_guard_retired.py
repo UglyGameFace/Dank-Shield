@@ -51,14 +51,23 @@ def test_native_setup_owns_first_run_experience() -> None:
     for marker in (
         "class ProductSetupHomeView",
         "class ContinueSetupView",
-        "Start / Continue Setup",
-        "Setup Check",
-        "Test / Launch",
-        "Advanced Options",
+        "Start Setup",
+        "More Options",
+        "Set Up This Step",
+        "Test & Launch",
+        "Other Settings",
         "_open_guided_setup",
         "_open_manage_setup",
     ):
         assert marker in RECOMMEND
+
+    for stale in (
+        "Start / Continue Setup",
+        "Advanced Options",
+        "Fix Next Item",
+        "Test / Launch",
+    ):
+        assert stale not in RECOMMEND
 
 
 def test_retired_wrapper_assignment_is_gone() -> None:
