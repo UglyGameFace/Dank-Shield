@@ -1,22 +1,3 @@
-            )
-    
-        target, _title, _explanation, _requirement_key = (
-            await _guided_setup_target(guild)
-        )
-    
-        if target != "ready":
-            return await _open_health_check(interaction)
-    
-        lock_key = (
-            int(guild.id),
-            int(member.id),
-        )
-        lock = _SETUP_TEST_TICKET_LOCKS.get(lock_key)
-    
-        if lock is None:
-            lock = asyncio.Lock()
-            _SETUP_TEST_TICKET_LOCKS[lock_key] = lock
-    
         if lock.locked():
             return await interaction.response.send_message(
                 (
@@ -118,7 +99,7 @@
                     matched_intake_type="test",
                     matched_category_reason=(
                         "Created from the canonical /dank setup "
-                        "Test / Launch screen"
+                        "Test & Launch screen"
                     ),
                     matched_category_score=100,
                     category_override=True,
@@ -256,5 +237,24 @@
     
     
     __all__ = ["register_public_setup_recommend_commands"]
-1 failed, 401 passed, 1 warning in 6.28s
-🫀 process_health PROCESS_EXIT uptime=5.5s rss≈129.9MB
+FAILED tests/test_setup_health_next_action_guard_retired.py::test_native_setup_check_owns_plain_next_step - assert 'Start / Continue Setup' not in 'async def _...return embed'
+  
+  'Start / Continue Setup' is contained here:
+     "Press **Start / Continue Setup** to finish "
+                "anything required.\n"
+                "Press **Test & Launch** after this page says ready."
+            ),
+            inline=False,
+        )
+    
+        embed.set_footer(
+            text=(
+                f"Guild {guild.id} • only enabled features "
+                "are checked"
+            )
+        )
+    
+        return embed
+FAILED tests/test_setup_success_next_step_guard_retired.py::test_native_completion_and_review_remain - assert 'Test / Launch' in 'from __future__ import annotations\n\nimport asyncio\n\n"""Plain-language public /dank setup home.\n\nThis module pat...p_recommend: plain-language /dank setup choices active")\n\n\n__all__ = ["register_public_setup_recommend_commands"]\n'
+3 failed, 399 passed, 1 warning in 6.71s
+🫀 process_health PROCESS_EXIT uptime=5.7s rss≈130.5MB
