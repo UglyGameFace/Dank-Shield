@@ -33,15 +33,36 @@ jobs:
         run: python tools/apply_setup_v2_contract_alignment.py
 
       - name: Run full unit suite
+        id: pytest
+        continue-on-error: true
         env:
           DANK_STARTUP_LOG_STYLE: quiet
           DANK_COMMAND_LOG_STYLE: quiet
+        shell: bash
         run: |
-          python -m pytest tests/ -q
-          git diff --check
+          python -m pytest tests/ -q --tb=short > setup-v2-aligned-pytest-output.txt 2>&1
+
+      - name: Capture remaining failures
+        if: steps.pytest.outcome == 'failure'
+        shell: bash
+        run: |
+          tail -260 setup-v2-aligned-pytest-output.txt > setup-v2-aligned-pytest-tail.txt
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add setup-v2-aligned-pytest-tail.txt
+          git commit -m "chore: capture remaining aligned setup test failures" || true
+          git push origin HEAD:fix/setup-single-path-front-door-v2
+          exit 1
+
+      - name: Check diff
+        if: steps.pytest.outcome == 'success'
+        run: git diff --check
 
       - name: Commit aligned contracts
+        if: steps.pytest.outcome == 'success'
         run: |
+          rm -f setup-v2-aligned-pytest-output.txt
+          rm -f setup-v2-aligned-pytest-tail.txt
           rm -f tools/apply_setup_v2_contract_alignment.py
           rm -f .github/workflows/apply-setup-v2-contract-alignment.yml
           rm -f .github/workflows/diagnose-setup-v2-full-tests.yml
