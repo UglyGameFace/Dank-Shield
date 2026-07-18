@@ -1,0 +1,166 @@
+name: Finalize grouped setup UI
+
+on:
+  pull_request:
+    types: [synchronize]
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  finalize:
+    if: github.head_ref == 'fix/setup-advanced-options-grouped-mobile' && github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.head_ref }}
+
+      - name: Repair and validate grouped setup UX
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import re
+
+          source_path = Path('stoney_verify/commands_ext/public_setup_recommend.py')
+          source = source_path.read_text(encoding='utf-8')
+          bad_source = '        value="\n".join(items)[:1024],'
+          good_source = '        value="\\n".join(items)[:1024],'
+          if source.count(bad_source) != 1:
+              raise SystemExit(f'expected one broken advanced-section newline, found {source.count(bad_source)}')
+          source = source.replace(bad_source, good_source, 1)
+          source_path.write_text(source, encoding='utf-8')
+
+          advanced_path = Path('tests/test_setup_advanced_options_behavior.py')
+          advanced = advanced_path.read_text(encoding='utf-8')
+          bad_route = (
+              '        async def route(*args: Any, _route_name: str = route_name, **kwargs: Any) -> None:\n'
+              '  events.append(_route_name)'
+          )
+          good_route = (
+              '        async def route(*args: Any, _route_name: str = route_name, **kwargs: Any) -> None:\n'
+              '            events.append(_route_name)'
+          )
+          if advanced.count(bad_route) != 1:
+              raise SystemExit(f'expected one broken route indentation, found {advanced.count(bad_route)}')
+          advanced = advanced.replace(bad_route, good_route, 1)
+          advanced = advanced.replace(
+              '    assert "Danger Zone" in {field.name for field in captured["embed"].fields}',
+              '    assert any("Danger Zone" in field.name for field in captured["embed"].fields)',
+              1,
+          )
+          advanced_path.write_text(advanced, encoding='utf-8')
+
+          single_path = Path('tests/test_setup_single_guided_front_door_static.py')
+          single = single_path.read_text(encoding='utf-8')
+          bad_single = '    advanced = "\n".join('
+          good_single = '    advanced = "\\n".join('
+          if single.count(bad_single) != 1:
+              raise SystemExit(f'expected one broken front-door newline, found {single.count(bad_single)}')
+          single = single.replace(bad_single, good_single, 1)
+          single_path.write_text(single, encoding='utf-8')
+
+          audit_path = Path('tools/audit_setup_safety.py')
+          audit = audit_path.read_text(encoding='utf-8')
+
+          if 'danger_advanced = _button_inventory(' not in audit:
+              inventory_marker = '''    advanced = _button_inventory(
+                  recommend,
+                  "ManageSetupView",
+              )
+          '''
+              inventory_replacement = inventory_marker + '''    danger_advanced = _button_inventory(
+                  recommend,
+                  "AdvancedDangerZoneView",
+              )
+          '''
+              if audit.count(inventory_marker) != 1:
+                  raise SystemExit('ManageSetupView inventory marker changed')
+              audit = audit.replace(inventory_marker, inventory_replacement, 1)
+
+          expected_replacement = '''    expected_advanced = {
+              "core_setup": "Core Setup",
+              "member_experience": "Member Experience",
+              "monitoring_repair": "Monitoring & Repair",
+              "appearance": "Appearance",
+              "danger_zone": "Danger Zone",
+              "help_faq": "Help / FAQ",
+              "home": "Back Home",
+          }
+
+              expected_choices = {'''
+          audit, count = re.subn(
+              r'    expected_advanced = \{.*?\n    \}\n\n    expected_choices = \{',
+              expected_replacement,
+              audit,
+              count=1,
+              flags=re.S,
+          )
+          if count != 1:
+              raise SystemExit(f'expected one expected_advanced block, replaced {count}')
+
+          choices_marker = '    for method, expected in expected_choices.items():\n'
+          isolation_check = '''    flat_forbidden = {
+              "Features On / Off",
+              "Ticket Choices",
+              "Protection",
+              "Modlog Tracking",
+              "Timers & Behavior",
+              "Server Design",
+              "Detailed Role / Channel Mapping",
+              "Permission Repair",
+              "Recovery / Start Over",
+          }
+              exposed_flat = {
+                  button[0]
+                  for button in advanced.values()
+                  if button[0] in flat_forbidden
+              }
+              if exposed_flat:
+                  failures.append(
+                      f"{recommend.relative_to(ROOT)}: ManageSetupView still exposes "
+                      f"flat advanced actions: {sorted(exposed_flat)!r}"
+                  )
+
+              recovery = danger_advanced.get("recovery")
+              if recovery is None or recovery[0] != "Recovery / Start Over":
+                  failures.append(
+                      f"{recommend.relative_to(ROOT)}: AdvancedDangerZoneView must own "
+                      "Recovery / Start Over"
+                  )
+
+              for method, expected in expected_choices.items():
+          '''
+          if 'flat_forbidden = {' not in audit:
+              if audit.count(choices_marker) != 1:
+                  raise SystemExit('expected choices loop marker changed')
+              audit = audit.replace(choices_marker, isolation_check, 1)
+
+          audit_path.write_text(audit, encoding='utf-8')
+
+          for path in (
+              source_path,
+              advanced_path,
+              single_path,
+              Path('tests/test_setup_ux_clarity_guard_retired.py'),
+              audit_path,
+          ):
+              compile(path.read_text(encoding='utf-8'), str(path), 'exec')
+          PY
+
+          python tools/audit_setup_safety.py
+          git diff --check
+
+      - name: Commit finalized grouped setup UX
+        shell: bash
+        run: |
+          rm -f .github/workflows/finalize-grouped-setup-ui.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git diff --cached --check
+          git commit -m "ux: group advanced setup options for mobile"
+          git push origin HEAD:fix/setup-advanced-options-grouped-mobile
