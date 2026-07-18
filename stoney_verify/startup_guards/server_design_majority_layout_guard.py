@@ -187,15 +187,37 @@ def _saved_rule_count(options: Mapping[str, Any]) -> int:
 
 def _repair_mode_recommendation_text() -> str:
     return (
-        "Start with **Fix Only Obvious Mistakes** for styled servers. "
-        "Use **Live Majority** only when the preview keeps the current server look. "
-        "Use **Saved Layout** when this server already has approved Dank Design rules."
+        "Use **Smart Auto-Detect** to learn each category separately. "
+        "Saved channel/category/global rules always win, and mixed categories are left alone instead of being flattened. "
+        "Use **Saved Layout** when you want to enforce your saved design everywhere."
     )
+
+
+def _category_profile_lines(guild: Any, options: Mapping[str, Any], *, limit: int = 8) -> list[str]:
+    profiles = options.get("__auto_detect_category_profiles") if isinstance(options.get("__auto_detect_category_profiles"), Mapping) else {}
+    lines: list[str] = []
+    for category_id, summary in profiles.items():
+        if not isinstance(summary, Mapping):
+            continue
+        if category_id == "__uncategorized__":
+            label = "No Category"
+        else:
+            category = guild.get_channel(int(category_id)) if str(category_id).isdigit() else None
+            label = _text(getattr(category, "name", ""), f"Category {category_id}")
+        lines.append(
+            f"• **{label}** — font: {_text(summary.get('font'), 'mixed/unknown')} • "
+            f"separator: {_text(summary.get('separator'), 'mixed/unknown')} • "
+            f"emoji: {_text(summary.get('leading_emoji'), 'mixed/unknown')}"
+        )
+        if len(lines) >= limit:
+            break
+    return lines or ["No category-local channel groups were available to detect."]
+
 
 def _patch_consistency_embed(command_guard: Any, majority: Any, discord: Any) -> None:
     def _majority_consistency_embed(guild: Any, items: list[dict[str, Any]], options: Mapping[str, Any]) -> Any:
         counts = _counts(command_guard, items)
-        confidence = options.get('__repair_confidence_result') if isinstance(options.get('__repair_confidence_result'), dict) else repair_confidence.evaluate_repair_plan(items, context='live_majority')
+        confidence = options.get('__repair_confidence_result') if isinstance(options.get('__repair_confidence_result'), dict) else repair_confidence.evaluate_repair_plan(items, context='smart_category_auto_detect')
         confidence_apply_allowed = bool(confidence.get('apply_allowed'))
         detected = majority.majority_summary_from_items(items) or {
             "separator": "mixed/unknown",
@@ -207,10 +229,10 @@ def _patch_consistency_embed(command_guard: Any, majority: Any, discord: Any) ->
         apply_blocked = _majority_apply_blocked(items)
 
         embed = discord.Embed(
-            title="✅ Live Majority Repair Preview" if confidence_apply_allowed else "⚠️ Live Majority Needs Review",
+            title="✅ Smart Auto-Detect Preview" if confidence_apply_allowed else "⚠️ Live Majority Needs Review",
             description=(
                 "**Step 2 of 2 — review before apply.**\n"
-                "Target: the layout most channels/categories already use here.\n\n"
+                "Target: each category follows its own local channel majority.\n\n"
                 + (
                     "Apply is blocked because this preview would simplify styled section names. "
                     "Use **Manual Editor** or **Saved Layout** instead."
@@ -293,22 +315,17 @@ def _patch_guided_flow(command_guard: Any, majority: Any, studio: Any, discord: 
             analysis = majority.infer_live_majority_layout(studio, _records_for_guild(command_guard, guild))
             detected = _analysis_summary(analysis)
         embed = discord.Embed(
-            title="🧭 Choose Repair Target",
+            title="🧭 Choose Smart Repair Target",
             description="**Step 1 of 2.** Pick what Dank Design should copy before any apply button appears.",
             color=discord.Color.blurple(),
         )
         embed.add_field(
-            name="Live majority detected",
-            value=(
-                f"Separator: **{detected.get('separator', 'mixed/unknown')}**\n"
-                f"Category frame: **{detected.get('category_frame', 'mixed/unknown')}**\n"
-                f"Font/style: **{detected.get('font', 'mixed/unknown')}**\n"
-                f"Leading emoji: **{detected.get('leading_emoji', 'mixed/unknown')}**"
-            )[:1024],
+            name="Smart detection by category",
+            value="\n".join(_category_profile_lines(guild, options, limit=8))[:1024],
             inline=False,
         )
         embed.add_field(
-            name="Using live majority would",
+            name="Smart Auto-Detect would",
             value=(
                 f"Keep matching: **{counts.get('matches', 0)}**\n"
                 f"Repair: **{counts.get('needs_fix', 0)}**\n"
@@ -319,14 +336,14 @@ def _patch_guided_flow(command_guard: Any, majority: Any, studio: Any, discord: 
         )
         embed.add_field(
             name="Saved rules",
-            value=f"Saved rules found: **{_saved_rule_count(options)}**\nSaved rules/locks are owner-approved. Use them unless you are only previewing Live Majority.",
+            value=f"Saved rules found: **{_saved_rule_count(options)}**\nChannel rules beat category rules, category rules beat global rules, and Smart Auto-Detect only fills unlocked areas.",
             inline=True,
         )
         embed.add_field(
             name="Recommended",
             value=(
-                "Use **Saved Layout** when saved rules exist. "
-                "Live Majority is only a preview unless there are no saved locks and confidence is high."
+                "Use **Smart Auto-Detect** to repair unlocked outliers using each category's own channel style. "
+                "Use **Saved Layout** to enforce saved design rules instead."
             ),
             inline=False,
         )
@@ -359,7 +376,7 @@ def _patch_guided_flow(command_guard: Any, majority: Any, studio: Any, discord: 
         def __init__(self) -> None:
             super().__init__(timeout=900)
 
-        @discord.ui.button(label="Preview Live Majority", emoji="👁️", style=discord.ButtonStyle.secondary, custom_id="dank_design:majority_use_live", row=0)
+        @discord.ui.button(label="Preview Smart Auto-Detect", emoji="👁️", style=discord.ButtonStyle.secondary, custom_id="dank_design:majority_use_live", row=0)
         async def use_live_majority(self, interaction: Any, button: Any) -> None:
             if not await command_guard._require_design_permission(interaction):
                 return
@@ -368,7 +385,7 @@ def _patch_guided_flow(command_guard: Any, majority: Any, studio: Any, discord: 
             await interaction.response.defer(ephemeral=True, thinking=True)
             options = await _load_options(int(guild.id))
             items, requested = await _majority_items(guild, options)
-            confidence = repair_confidence.evaluate_repair_plan(items, context='live_majority')
+            confidence = repair_confidence.evaluate_repair_plan(items, context='smart_category_auto_detect')
             requested['__repair_confidence_result'] = dict(confidence)
             if not bool(confidence.get('apply_allowed')):
                 for _item in items:
@@ -383,15 +400,14 @@ def _patch_guided_flow(command_guard: Any, majority: Any, studio: Any, discord: 
                 and not counts.get("failed")
                 and bool(counts.get("needs_fix"))
                 and not _majority_apply_blocked(items)
-                and saved_rules == 0
             )
             if saved_rules:
-                requested["__live_majority_apply_disabled_by_saved_rules"] = saved_rules
+                requested["__auto_detect_saved_rules_respected_count"] = saved_rules
             command_guard._PENDING[command_guard._key(int(guild.id), int(interaction.user.id))] = {
                 "created_at": command_guard.time.time(),
                 "items": items,
                 "options": dict(requested),
-                "mode": "consistency_live_majority_preview_only" if saved_rules else "consistency_live_majority",
+                "mode": "consistency_smart_auto_detect",
             }
             await interaction.edit_original_response(
                 embed=command_guard._consistency_embed(guild, items, requested),
@@ -460,8 +476,8 @@ def _patch_guided_flow(command_guard: Any, majority: Any, studio: Any, discord: 
             assert guild is not None
             await interaction.response.defer(ephemeral=True, thinking=True)
             options = await _load_options(int(guild.id))
-            items, _requested = await _majority_items(guild, options)
-            await interaction.edit_original_response(embed=_target_embed(guild, options, items), view=RepairTargetView())
+            items, requested = await _majority_items(guild, options)
+            await interaction.edit_original_response(embed=_target_embed(guild, requested, items), view=RepairTargetView())
 
         @discord.ui.button(label="Category Editor", emoji="🗂️", style=discord.ButtonStyle.primary, custom_id="dank_design:doctor_category", row=1)
         async def category_editor(self, interaction: Any, button: Any) -> None:
@@ -523,13 +539,9 @@ def apply() -> bool:
                 return await original(guild, options)
 
             records = _records_for_guild(command_guard, guild)
-            analysis = majority.infer_live_majority_layout(studio, records)
-            respect_saved_locks = bool(_saved_rule_count(options))
-            inferred = majority.apply_majority_to_options(studio, options, analysis, respect_locks=respect_saved_locks)
-            if respect_saved_locks:
-                inferred["__live_majority_apply_disabled_by_saved_rules"] = _saved_rule_count(options)
+            inferred, _profiles = majority.build_category_aware_options(studio, options, records)
             items = await original(guild, inferred)
-            return majority.annotate_plan_items(items, analysis, inferred, studio=studio)
+            return majority.annotate_category_aware_plan_items(studio, items, inferred)
 
         command_guard.build_design_plan = _build_design_plan_with_majority
         command_guard._DANK_MAJORITY_LAYOUT_PLAN_ACTIVE = True

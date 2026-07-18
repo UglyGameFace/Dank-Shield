@@ -1195,14 +1195,20 @@ def _live_design_records_for_exact_format(guild: discord.Guild) -> list[dict[str
     for category in list(getattr(guild, "categories", []) or []):
         name = _safe_str(getattr(category, "name", ""))
         if name:
-            records.append({"name": name, "kind": "category"})
+            records.append({"id": str(getattr(category, "id", "")), "category_id": str(getattr(category, "id", "")), "name": name, "kind": "category"})
 
     for channel in list(getattr(guild, "channels", []) or []):
         kind = _kind(channel)
         if kind in {"text", "voice", "stage"}:
             name = _safe_str(getattr(channel, "name", ""))
             if name:
-                records.append({"name": name, "kind": "text"})
+                parent = getattr(channel, "category", None)
+                records.append({
+                    "id": str(getattr(channel, "id", "")),
+                    "category_id": str(getattr(parent, "id", "")),
+                    "name": name,
+                    "kind": "text",
+                })
 
     return records
 
@@ -1224,8 +1230,13 @@ def _live_majority_exact_lock(
         if not records:
             return {}
 
-        analysis = majority.infer_live_majority_layout(studio, records)
-        inferred = majority.apply_majority_to_options(studio, options, analysis, respect_locks=False)
+        analysis = majority.infer_target_layout(
+            studio,
+            records,
+            scope=scope,
+            target_id=int(target_id),
+        )
+        inferred = majority.apply_majority_to_options(studio, options, analysis, respect_locks=True)
         summary = dict(inferred.get("__majority_layout_summary") or {})
 
         return {

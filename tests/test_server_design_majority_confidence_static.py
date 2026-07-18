@@ -19,10 +19,11 @@ def test_majority_repair_uses_confidence_engine():
         assert phrase in SOURCE
 
 
-def test_majority_repair_no_longer_recommends_live_majority_blindly():
+def test_majority_repair_recommends_category_aware_auto_detect():
     assert "For hand-built servers, choose **Use Live Majority**." not in SOURCE
-    assert "Fix Only Obvious Mistakes" in SOURCE
-    assert "Use **Live Majority** only when the preview keeps the current server look." in SOURCE
+    assert "Smart Auto-Detect" in SOURCE
+    assert "learn each category separately" in SOURCE
+    assert "Saved channel/category/global rules always win" in SOURCE
 
 
 def test_majority_apply_is_blocked_by_confidence_without_rewriting_internal_ids():

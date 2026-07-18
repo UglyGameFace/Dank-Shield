@@ -178,11 +178,39 @@ def detect_channel_separator(studio: Any, name: Any) -> dict[str, Any]:
     """Detect the exact visible separator token and spacing in a channel name."""
 
     raw = _strip_invisible_with(studio, name)
+
+    wrapper_specs = (
+        ("「", "」", "bracket_corner"),
+        ("『", "』", "bracket_white_corner"),
+        ("〔", "〕", "bracket_tortoise"),
+        ("【", "】", "bracket_lenticular"),
+        ("〖", "〗", "bracket_white_lenticular"),
+        ("꒰", "꒱", "bracket_soft"),
+    )
+    for opener, closer, separator_id in wrapper_specs:
+        if raw.startswith(opener) and closer in raw:
+            close_at = raw.find(closer)
+            inside = raw[len(opener):close_at].strip()
+            remainder_after = raw[close_at + len(closer):].strip()
+            if inside and remainder_after:
+                return {
+                    "emoji": inside,
+                    "has_leading_emoji": True,
+                    "token": f"{opener}{closer}",
+                    "spacing": "wrapped",
+                    "label": separator_id.replace("_", " "),
+                    "separator_id": separator_id,
+                    "missing": False,
+                    "doubled": False,
+                    "separator_in_name_text": False,
+                }
+
     emoji, remainder = _remove_leading_emoji(studio, raw, kind="text")
     left_spaces = len(remainder) - len(remainder.lstrip(" "))
     scan = remainder.lstrip(" ")
 
-    for token in VERTICAL_SEPARATOR_TOKENS:
+    tokens = tuple(sorted({value.strip() for value in _separator_values_for(studio) if value and value.strip()}, key=len, reverse=True))
+    for token in tokens:
         if not scan.startswith(token):
             continue
         after_token = scan[len(token) :]
@@ -197,12 +225,20 @@ def detect_channel_separator(studio: Any, name: Any) -> dict[str, Any]:
             spacing = "compact"
         else:
             spacing = "partial"
+        separator_id = ""
+        expected_value = f" {token} " if spacing == "spaced" else token
+        for spec in tuple(getattr(studio, "SEPARATOR_LIBRARY", tuple()) or tuple()):
+            raw_value = str(getattr(spec, "value", "") or "")
+            if raw_value == expected_value:
+                separator_id = _text(getattr(spec, "id", ""))
+                break
         return {
             "emoji": emoji,
             "has_leading_emoji": bool(emoji),
             "token": token,
             "spacing": spacing,
             "label": _separator_label(token, spacing),
+            "separator_id": separator_id,
             "missing": False,
             "doubled": doubled,
             "separator_in_name_text": bool(any(mark in after_visible for mark in VERTICAL_SEPARATOR_TOKENS)),
@@ -214,6 +250,7 @@ def detect_channel_separator(studio: Any, name: Any) -> dict[str, Any]:
         "token": "",
         "spacing": "none",
         "label": "no separator",
+        "separator_id": "none",
         "missing": True,
         "doubled": False,
         "separator_in_name_text": bool(any(mark in scan for mark in VERTICAL_SEPARATOR_TOKENS)),
@@ -227,10 +264,62 @@ def _font_compare_text(value: str) -> str:
     return value
 
 
-def detect_font_style(studio: Any, name: Any) -> str:
+def detect_font_id(studio: Any, name: Any) -> str:
+    """Detect the actual supported Unicode font family used by a visible name.
+
+    Older auto-detection collapsed every decorated alphabet into ``fraktur``.
+    That made Bold Sans, Monospace, Serif, Small Caps, Fullwidth, Script, and
+    other intentional category styles look like mistakes.  Score the real
+    runtime glyph maps instead and return the strongest exact family match.
+    """
+
     raw = _strip_invisible_with(studio, name)
+    if not raw:
+        return "normal"
+
+    styles = tuple(getattr(studio, "FONT_STYLES", ("normal", "fraktur")) or ("normal", "fraktur"))
+    runtime_map = getattr(studio, "_runtime_unicode_map", None)
+    if not callable(runtime_map):
+        plain = _strip_fonts_with(studio, raw)
+        return "fraktur" if _font_compare_text(raw) != _font_compare_text(plain) else "normal"
+
     plain = _strip_fonts_with(studio, raw)
-    return "styled" if _font_compare_text(raw) != _font_compare_text(plain) else "normal"
+    plain_count = max(1, sum(1 for ch in plain if ch.isalnum()))
+    best_font = "normal"
+    best_hits = 0
+
+    for font_id in styles:
+        font_id = _text(font_id, "normal").lower().replace("-", "_")
+        if font_id in {"", "normal", "upside_down"}:
+            continue
+        try:
+            mapping = runtime_map(font_id)
+        except Exception:
+            continue
+        if not isinstance(mapping, Mapping):
+            continue
+        glyphs = {
+            str(glyph)
+            for plain_char, glyph in mapping.items()
+            if glyph and str(glyph) != str(plain_char) and not str(glyph).isascii()
+        }
+        if not glyphs:
+            continue
+        hits = sum(1 for ch in raw if ch in glyphs)
+        if hits > best_hits:
+            best_font = font_id
+            best_hits = hits
+
+    minimum_hits = 1 if plain_count <= 2 else 2
+    if best_hits >= minimum_hits and (best_hits / plain_count) >= 0.40:
+        return best_font
+    return "normal"
+
+
+def detect_font_style(studio: Any, name: Any) -> str:
+    """Backward-compatible coarse label used by older callers."""
+
+    return "normal" if detect_font_id(studio, name) == "normal" else "styled"
 
 
 def _frame_label(frame: Mapping[str, Any]) -> str:
@@ -308,6 +397,9 @@ def _record_kind(record: Any) -> str:
 
 def _separator_key(parts: Mapping[str, Any]) -> tuple[str, str]:
     spacing = _text(parts.get("spacing"), "none")
+    separator_id = _text(parts.get("separator_id"))
+    if separator_id and separator_id != "none":
+        return (f"id:{separator_id}", spacing)
     token = _text(parts.get("token"))
     if spacing in {"partial", "doubled"}:
         return ("", "mixed")
@@ -335,7 +427,7 @@ def infer_live_majority_layout(studio: Any, records: Iterable[Any]) -> dict[str,
         kind = _record_kind(record)
         if not name:
             continue
-        font_counts[detect_font_style(studio, name)] += 1
+        font_counts[detect_font_id(studio, name)] += 1
         if kind == "category":
             category_total += 1
             frame = detect_category_frame(studio, name)
@@ -368,6 +460,18 @@ def infer_live_majority_layout(studio: Any, records: Iterable[Any]) -> dict[str,
     separator = separator_examples.get(sep_key, {"token": "", "spacing": "unknown", "label": "mixed/unknown"}) if sep_key else {"token": "", "spacing": "unknown", "label": "mixed/unknown"}
     if sep_mixed:
         separator = {**separator, "spacing": "mixed/unknown", "label": "mixed/unknown"}
+    else:
+        majority_spacing = _text(separator.get("spacing"), "unknown")
+        majority_token = _text(separator.get("token"))
+        resolved_separator_id = ""
+        if majority_spacing == "wrapped":
+            candidate = _text(separator.get("separator_id"))
+            if candidate in getattr(studio, "SEPARATORS_BY_ID", {}):
+                resolved_separator_id = candidate
+        elif majority_spacing in {"compact", "spaced", "none"}:
+            resolved_separator_id = ensure_separator_spec(studio, majority_token, majority_spacing)
+        if resolved_separator_id:
+            separator = {**separator, "separator_id": resolved_separator_id}
     frame = frame_examples.get(frame_id, {"id": "", "kind": "unknown", "label": "mixed/unknown"}) if frame_id else {"id": "", "kind": "unknown", "label": "mixed/unknown"}
     if frame_mixed:
         frame = {**frame, "id": "", "kind": "unknown", "label": "mixed/unknown"}
@@ -381,8 +485,8 @@ def infer_live_majority_layout(studio: Any, records: Iterable[Any]) -> dict[str,
         # Store how many categories used it separately.
         "category_frame": {**frame, "occurrence_count": frame_count, "mixed": frame_mixed},
         "font": {
-            "id": "fraktur" if font_id == "styled" and not font_mixed else ("normal" if font_id == "normal" and not font_mixed else ""),
-            "label": "styled/fraktur" if font_id == "styled" and not font_mixed else ("normal text" if font_id == "normal" and not font_mixed else "mixed/unknown"),
+            "id": _text(font_id) if font_id and not font_mixed else "",
+            "label": (_text(font_id).replace("_", " ") if font_id and not font_mixed else "mixed/unknown"),
             "count": font_count,
             "mixed": font_mixed,
         },
@@ -398,7 +502,8 @@ def infer_live_majority_layout(studio: Any, records: Iterable[Any]) -> dict[str,
 
 def _separator_spec_exists(studio: Any, sep_id: str, value: str) -> bool:
     spec = getattr(studio, "SEPARATORS_BY_ID", {}).get(sep_id)
-    return bool(spec and _text(getattr(spec, "value", "")) == value)
+    raw_value = str(getattr(spec, "value", "") or "") if spec is not None else ""
+    return bool(spec and raw_value == value)
 
 
 def ensure_separator_spec(studio: Any, token: str, spacing: str) -> str:
@@ -409,7 +514,8 @@ def ensure_separator_spec(studio: Any, token: str, spacing: str) -> str:
 
     value = f" {token} " if spacing == "spaced" else token
     for spec in tuple(getattr(studio, "SEPARATOR_LIBRARY", tuple()) or tuple()):
-        if _text(getattr(spec, "value", "")) == value:
+        raw_value = str(getattr(spec, "value", "") or "")
+        if raw_value == value:
             return _text(getattr(spec, "id", ""))
 
     base_id = _TOKEN_BASE_IDS.get(token, "vertical")
@@ -496,7 +602,10 @@ def apply_majority_to_options(
     separator = analysis.get("separator") if isinstance(analysis.get("separator"), Mapping) else {}
     token = _text(separator.get("token"))
     spacing = _text(separator.get("spacing"), "unknown")
-    if spacing in {"compact", "spaced", "none"}:
+    separator_id = _text(separator.get("separator_id"))
+    if separator_id and spacing == "wrapped" and separator_id in getattr(studio, "SEPARATORS_BY_ID", {}):
+        out["separator_id"] = separator_id
+    elif spacing in {"compact", "spaced", "none"}:
         out["separator_id"] = ensure_separator_spec(studio, token, spacing)
 
     frame = analysis.get("category_frame") if isinstance(analysis.get("category_frame"), Mapping) else {}
@@ -505,7 +614,7 @@ def apply_majority_to_options(
 
     font = analysis.get("font") if isinstance(analysis.get("font"), Mapping) else {}
     font_id = _text(font.get("id"))
-    if font_id in {"normal", "fraktur"}:
+    if font_id in set(getattr(studio, "FONT_STYLES", ("normal", "fraktur"))):
         out["font"] = font_id
 
     emoji = analysis.get("leading_emoji") if isinstance(analysis.get("leading_emoji"), Mapping) else {}
@@ -593,8 +702,8 @@ def classify_repair_item(studio: Any, item: Mapping[str, Any], analysis: Mapping
         else:
             details.append(f"Separator repaired to majority: {target}.")
 
-    before_font = detect_font_style(studio, before)
-    after_font = detect_font_style(studio, after)
+    before_font = detect_font_id(studio, before)
+    after_font = detect_font_id(studio, after)
     if before_font != after_font:
         target = _majority_value(summary, "font")
         if _is_unknown_majority(target):
@@ -701,15 +810,11 @@ def _font_matches_expected(studio: Any, after: str, analysis: Mapping[str, Any])
     font = analysis.get("font") if isinstance(analysis.get("font"), Mapping) else {}
     expected = _text(font.get("id"))
 
-    if expected not in {"normal", "fraktur"}:
+    if expected not in set(getattr(studio, "FONT_STYLES", ("normal", "fraktur"))):
         return True
 
-    detected = detect_font_style(studio, after)
-
-    if expected == "normal":
-        return detected == "normal"
-
-    return detected == "styled"
+    detected = detect_font_id(studio, after)
+    return detected == expected
 
 
 def validate_majority_repair_items(
@@ -829,15 +934,11 @@ def _font_matches_expected(studio: Any, after: str, analysis: Mapping[str, Any])
     font = analysis.get("font") if isinstance(analysis.get("font"), Mapping) else {}
     expected = _text(font.get("id"))
 
-    if expected not in {"normal", "fraktur"}:
+    if expected not in set(getattr(studio, "FONT_STYLES", ("normal", "fraktur"))):
         return True
 
-    detected = detect_font_style(studio, after)
-
-    if expected == "normal":
-        return detected == "normal"
-
-    return detected == "styled"
+    detected = detect_font_id(studio, after)
+    return detected == expected
 
 
 def validate_majority_repair_items(
@@ -914,6 +1015,250 @@ def annotate_plan_items(
 
 
 
+
+def _record_id(record: Any) -> str:
+    if isinstance(record, Mapping):
+        return _text(record.get("id"))
+    return _text(getattr(record, "id", ""))
+
+
+def _record_category_id(record: Any) -> str:
+    if isinstance(record, Mapping):
+        return _text(record.get("category_id"))
+    return _text(getattr(record, "category_id", ""))
+
+
+def infer_category_local_layouts(studio: Any, records: Iterable[Any]) -> dict[str, Any]:
+    """Infer independent channel styles for each category.
+
+    Category A is never allowed to become the template for Category B.  The
+    uncategorized channel bucket is treated as its own group.  Category headers
+    are intentionally not used as channel-majority votes because a category
+    title often uses a different font/frame from the channels beneath it.
+    """
+
+    groups: dict[str, list[Any]] = {}
+    category_names: dict[str, str] = {}
+    for record in records:
+        kind = _record_kind(record)
+        rid = _record_id(record)
+        if kind == "category":
+            if rid:
+                category_names[rid] = _record_name(record)
+            continue
+        category_id = _record_category_id(record) or "__uncategorized__"
+        groups.setdefault(category_id, []).append(record)
+
+    analyses = {
+        category_id: infer_live_majority_layout(studio, rows)
+        for category_id, rows in groups.items()
+        if rows
+    }
+    return {
+        "channel_groups": analyses,
+        "category_names": category_names,
+        "summaries": {category_id: _summary_text(analysis) for category_id, analysis in analyses.items()},
+    }
+
+
+def infer_target_layout(
+    studio: Any,
+    records: Iterable[Any],
+    *,
+    scope: str,
+    target_id: int,
+) -> dict[str, Any]:
+    """Return the local live layout relevant to one category/channel editor."""
+
+    rows = list(records)
+    target_key = str(int(target_id))
+    target = next((row for row in rows if _record_id(row) == target_key), None)
+    profiles = infer_category_local_layouts(studio, rows)
+    groups = profiles.get("channel_groups") if isinstance(profiles.get("channel_groups"), Mapping) else {}
+
+    if scope == "channel" and target is not None:
+        category_id = _record_category_id(target) or "__uncategorized__"
+        analysis = groups.get(category_id)
+        if isinstance(analysis, Mapping):
+            return dict(analysis)
+
+    if scope == "category":
+        analysis = groups.get(target_key)
+        if isinstance(analysis, Mapping):
+            return dict(analysis)
+
+    return infer_live_majority_layout(studio, rows)
+
+
+def _saved_lock_scope(options: Mapping[str, Any], *, channel_id: str, category_id: str) -> str:
+    channel_locks = options.get("channel_format_locks") if isinstance(options.get("channel_format_locks"), Mapping) else {}
+    category_locks = options.get("category_format_locks") if isinstance(options.get("category_format_locks"), Mapping) else {}
+    global_lock = options.get("format_lock_global") if isinstance(options.get("format_lock_global"), Mapping) else {}
+    if channel_id and isinstance(channel_locks.get(channel_id), Mapping):
+        return "channel"
+    if category_id and isinstance(category_locks.get(category_id), Mapping):
+        return "category"
+    if global_lock.get("enabled"):
+        return "global"
+    return ""
+
+
+def _separator_id_from_parts(studio: Any, parts: Mapping[str, Any]) -> str:
+    separator_id = _text(parts.get("separator_id"))
+    spacing = _text(parts.get("spacing"), "unknown")
+    token = _text(parts.get("token"))
+    if separator_id and spacing == "wrapped" and separator_id in getattr(studio, "SEPARATORS_BY_ID", {}):
+        return separator_id
+    if spacing in {"compact", "spaced", "none"}:
+        return ensure_separator_spec(studio, token, spacing)
+    return ""
+
+
+def _auto_channel_lock(
+    studio: Any,
+    record: Mapping[str, Any],
+    analysis: Mapping[str, Any],
+    options: Mapping[str, Any],
+) -> dict[str, Any] | None:
+    current_name = _record_name(record)
+    current_separator = detect_channel_separator(studio, current_name)
+    majority_separator = analysis.get("separator") if isinstance(analysis.get("separator"), Mapping) else {}
+    majority_spacing = _text(majority_separator.get("spacing"), "unknown")
+    separator_id = ""
+    if majority_spacing not in {"mixed/unknown", "unknown", "partial", "doubled"}:
+        separator_id = _separator_id_from_parts(studio, majority_separator)
+    if not separator_id:
+        separator_id = _separator_id_from_parts(studio, current_separator)
+    if not separator_id:
+        return None
+
+    majority_font = analysis.get("font") if isinstance(analysis.get("font"), Mapping) else {}
+    font_id = _text(majority_font.get("id"))
+    if font_id not in set(getattr(studio, "FONT_STYLES", ("normal", "fraktur"))):
+        font_id = detect_font_id(studio, current_name)
+
+    majority_emoji = analysis.get("leading_emoji") if isinstance(analysis.get("leading_emoji"), Mapping) else {}
+    enabled = majority_emoji.get("enabled")
+    current_has_emoji = bool(current_separator.get("has_leading_emoji"))
+    if enabled is True:
+        icon_mode = "replace_missing"
+    elif enabled is False:
+        icon_mode = "clear"
+    else:
+        icon_mode = "keep_existing" if current_has_emoji else "clear"
+
+    strength = 4 if font_id != "normal" else 2
+    return {
+        "scope": "auto_category",
+        "theme_id": _text(options.get("theme_id"), "gothic_clean"),
+        "strength": strength,
+        "font": font_id,
+        "separator_id": separator_id,
+        "category_frame_id": _text(options.get("category_frame_id"), "plain"),
+        "icon_mode": icon_mode,
+        "emoji_override": "",
+        "exact_match": True,
+        "__auto_detect": True,
+    }
+
+
+def build_category_aware_options(
+    studio: Any,
+    options: Mapping[str, Any],
+    records: Iterable[Mapping[str, Any]],
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Create ephemeral per-channel rules from each category's own majority.
+
+    Saved channel/category/global locks always win and are never overwritten.
+    Category headers without an explicit saved rule are preserved as-is.  When a
+    category is too mixed to infer safely, only dimensions with a clear majority
+    are changed and uncertain dimensions keep each channel's current style.
+    """
+
+    rows = [dict(row) for row in records]
+    profiles = infer_category_local_layouts(studio, rows)
+    analyses = profiles.get("channel_groups") if isinstance(profiles.get("channel_groups"), Mapping) else {}
+
+    out = dict(options)
+    saved_channel_locks = dict(options.get("channel_format_locks")) if isinstance(options.get("channel_format_locks"), Mapping) else {}
+    merged_channel_locks = dict(saved_channel_locks)
+    ephemeral_ids: list[str] = []
+    preserve_ids: list[str] = []
+
+    for record in rows:
+        channel_id = _record_id(record)
+        kind = _record_kind(record)
+        category_id = channel_id if kind == "category" else (_record_category_id(record) or "__uncategorized__")
+        saved_scope = _saved_lock_scope(options, channel_id=channel_id, category_id=(channel_id if kind == "category" else _record_category_id(record)))
+        if saved_scope:
+            continue
+        if kind == "category":
+            if channel_id:
+                preserve_ids.append(channel_id)
+            continue
+        analysis = analyses.get(category_id)
+        if not isinstance(analysis, Mapping):
+            if channel_id:
+                preserve_ids.append(channel_id)
+            continue
+        lock = _auto_channel_lock(studio, record, analysis, options)
+        if lock is None:
+            if channel_id:
+                preserve_ids.append(channel_id)
+            continue
+        merged_channel_locks[channel_id] = lock
+        ephemeral_ids.append(channel_id)
+
+    out["channel_format_locks"] = merged_channel_locks
+    out["__category_aware_auto_detect"] = True
+    out["__auto_detect_ephemeral_channel_ids"] = ephemeral_ids
+    out["__auto_detect_preserve_ids"] = preserve_ids
+    out["__auto_detect_category_analyses"] = dict(analyses)
+    out["__auto_detect_category_profiles"] = dict(profiles.get("summaries") or {})
+    out["__auto_detect_saved_rules_respected"] = _lock_counts(options)
+    return out, profiles
+
+
+def annotate_category_aware_plan_items(
+    studio: Any,
+    items: list[dict[str, Any]],
+    options: Mapping[str, Any],
+) -> list[dict[str, Any]]:
+    analyses = options.get("__auto_detect_category_analyses") if isinstance(options.get("__auto_detect_category_analyses"), Mapping) else {}
+    ephemeral = {str(value) for value in list(options.get("__auto_detect_ephemeral_channel_ids") or [])}
+    preserve = {str(value) for value in list(options.get("__auto_detect_preserve_ids") or [])}
+    saved_counts = options.get("__auto_detect_saved_rules_respected") if isinstance(options.get("__auto_detect_saved_rules_respected"), Mapping) else {}
+    saved_total = sum(_safe_int(saved_counts.get(key), 0) for key in ("global", "categories", "channels"))
+
+    for item in items:
+        channel_id = _text(item.get("channel_id"))
+        category_id = _text(item.get("category_id")) or "__uncategorized__"
+        kind = _text(item.get("kind"), "text")
+
+        if channel_id in preserve:
+            item["after"] = item.get("before")
+            item["status"] = "unchanged"
+            item["blockers"] = []
+            item["warnings"] = list(item.get("warnings") or []) + [
+                "Smart Auto-Detect left this item unchanged because it has no safe local majority target."
+            ]
+            item["auto_detect_preserved"] = True
+            continue
+
+        if channel_id in ephemeral:
+            analysis = analyses.get(category_id)
+            if isinstance(analysis, Mapping):
+                validate_majority_repair_items(studio, [item], analysis)
+                item["majority_layout"] = _summary_text(analysis)
+            item["format_lock_scope"] = "auto_category"
+            item["auto_detect_category_id"] = category_id
+
+        if saved_total:
+            item["auto_detect_saved_rules_respected"] = saved_total
+
+    return items
+
+
 def majority_summary_from_items(items: Iterable[Mapping[str, Any]]) -> dict[str, str]:
     for item in items:
         summary = item.get("majority_layout")
@@ -954,10 +1299,15 @@ __all__ = [
     "classify_repair_item",
     "detect_category_frame",
     "detect_channel_separator",
+    "detect_font_id",
     "detect_font_style",
     "ensure_category_frame_spec",
     "ensure_separator_spec",
     "infer_live_majority_layout",
+    "infer_category_local_layouts",
+    "infer_target_layout",
+    "build_category_aware_options",
+    "annotate_category_aware_plan_items",
     "install_separator_safe_parser",
     "validate_majority_repair_items",
     "lock_notice_from_items",
