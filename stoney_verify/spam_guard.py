@@ -473,7 +473,7 @@ def _settings_row_exists(row: Optional[Dict[str, Any]]) -> bool:
 def _settings_row_enabled_value(row: Optional[Dict[str, Any]]) -> Optional[bool]:
     if not _settings_row_exists(row):
         return None
-    return _safe_bool((row or {}).get("spam_blocker_enabled", (row or {}).get("enabled")), False)
+    return _safe_bool((row or {}).get("spam_blocker_enabled", (row or {}).get("enabled")), True)
 
 
 def _settings_row_mode_value(row: Optional[Dict[str, Any]]) -> Optional[str]:
@@ -887,7 +887,7 @@ async def save_quarantine_case(case: Dict[str, Any]) -> Tuple[Optional[Dict[str,
 def _default_settings(guild_id: int) -> Dict[str, Any]:
     return {
         "guild_id": str(guild_id),
-        "enabled": False,
+        "enabled": True,
         "mode": "timeout",
         "apply_to_verified_users": True,
         "block_external_invites_only": True,
@@ -1114,30 +1114,56 @@ async def get_spam_settings(guild_id: int) -> Dict[str, Any]:
         if status == "ok":
             row_found = _settings_row_exists(row)
             normalized = _normalize_settings(gid, row or {})
-            source = "db" if row_found else "db-empty"
+            persisted = bool(row_found)
+            effective_reason = reason
+
+            # A readable table with no row is a normal first-run state, not a
+            # reason to leave protection runtime-only. Create the canonical
+            # default row immediately. New defaults are ON; explicit saved Off
+            # rows still normalize to Off and are never overwritten here.
+            if not row_found:
+                try:
+                    persisted, create_reason = await asyncio.to_thread(
+                        _upsert_settings_sync,
+                        _settings_payload_for_db(normalized),
+                    )
+                    effective_reason = "row_created_default_on" if persisted else f"{reason};{create_reason}"
+                except Exception as e:
+                    persisted = False
+                    effective_reason = f"{reason};auto_create_exception:{type(e).__name__}"
+
+            effective_row_found = bool(row_found or persisted)
+            source = "db" if row_found else ("db-created" if persisted else "db-empty")
             _cache_runtime_settings(
                 gid,
                 normalized,
                 source=source,
-                persisted=row_found,
+                persisted=persisted,
             )
             _record_settings_diag(
                 gid,
                 action="load",
-                status="ok",
-                reason=reason,
-                row_found=row_found,
+                status="ok" if persisted or row_found else "not_persisted",
+                reason=effective_reason,
+                row_found=effective_row_found,
+                persisted=persisted,
                 source=source,
-                row_enabled=_settings_row_enabled_value(row),
-                row_mode=_settings_row_mode_value(row),
+                row_enabled=(bool(normalized.get("enabled")) if effective_row_found else _settings_row_enabled_value(row)),
+                row_mode=(str(normalized.get("mode")) if effective_row_found else _settings_row_mode_value(row)),
                 effective_enabled=bool(normalized.get("enabled")),
                 effective_mode=str(normalized.get("mode")),
             )
             if not row_found:
-                _settings_debug_throttled(
-                    f"settings-load-row-missing:{gid}",
-                    f"settings load guild={gid} status=ok row_found=False fallback=defaults enabled={bool(normalized.get('enabled'))} mode={normalized.get('mode')} reason={reason}",
-                )
+                if persisted:
+                    _settings_debug_throttled(
+                        f"settings-load-row-created:{gid}",
+                        f"settings load guild={gid} row_missing=True auto_created=True enabled={bool(normalized.get('enabled'))} mode={normalized.get('mode')}",
+                    )
+                else:
+                    _settings_debug_throttled(
+                        f"settings-load-row-missing:{gid}",
+                        f"settings load guild={gid} row_missing=True auto_created=False runtime_default_enabled={bool(normalized.get('enabled'))} mode={normalized.get('mode')} reason={effective_reason}",
+                    )
             return normalized
 
         if status == "missing_table":
@@ -3534,6 +3560,21 @@ def _register_spam_guard_commands() -> None:
 @bot.listen("on_message")
 async def _spam_guard_on_message(message: discord.Message):
     await handle_incoming_spam_message(message)
+
+
+@bot.listen("on_guild_join")
+async def _spam_guard_initialize_new_guild(guild: discord.Guild):
+    """Persist the safe default immediately when Dank Shield joins a server."""
+    try:
+        settings = await get_spam_settings(int(guild.id))
+        cached = _cached_runtime_settings(int(guild.id)) or {}
+        _debug(
+            "new guild settings initialized "
+            f"guild={guild.id} enabled={bool(settings.get('enabled'))} "
+            f"persisted={bool(cached.get('__meta_persisted'))}"
+        )
+    except Exception as e:
+        _debug(f"new guild settings initialization failed guild={getattr(guild, 'id', 0)} error={repr(e)}")
 
 
 @bot.listen("on_ready")

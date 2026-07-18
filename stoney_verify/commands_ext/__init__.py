@@ -6,6 +6,7 @@ from contextlib import contextmanager
 from typing import Any, Callable, Dict, Iterator, List, Sequence, Tuple
 
 _COMMANDS_EXT_REGISTERED = False
+_RUNTIME_SKIP_LOGGED: set[str] = set()
 DEFAULT_COMMAND_PROFILE = "public"
 CommandRegistrar = Callable[[Any, Any], None]
 CommandModuleSpec = Tuple[str, str, str]
@@ -226,7 +227,6 @@ _CONFUSING_DANK_CHILDREN: Tuple[str, ...] = (
 
 _ALLOWED_DANK_CHILDREN = {
     "setup",
-    "overview",
     "status",
     "diagnostics",
     "protection",
@@ -235,11 +235,21 @@ _ALLOWED_DANK_CHILDREN = {
     "cleanup",
     "members",
     "member-logs",
-    "welcome",
+    "profile",
     "roles",
-    "modlog",
-    "embed",
     "design",
+}
+
+_EXPECTED_PUBLIC_TOP_LEVEL_COMMANDS = {
+    "dank",
+    "mod",
+    "ticket",
+    "tickets",
+    "ticket-intake",
+    "ticket-category",
+    "ticket-panel",
+    "verify",
+    "View Dank Profile",
 }
 
 _COMPACT_SUPPRESS_PREFIXES: Tuple[str, ...] = (
@@ -414,9 +424,47 @@ def _runtime_command_prune_disabled() -> bool:
         return True
     return False
 
+def _log_runtime_skip_once(key: str, message: str) -> None:
+    clean = str(key or "default")
+    if clean in _RUNTIME_SKIP_LOGGED:
+        return
+    _RUNTIME_SKIP_LOGGED.add(clean)
+    print(message)
+
+
+def _public_top_level_names(tree: Any) -> set[str]:
+    try:
+        return {
+            str(getattr(command, "name", "")).strip()
+            for command in list(tree.get_commands(guild=None) or [])
+            if str(getattr(command, "name", "")).strip()
+        }
+    except Exception:
+        return set()
+
+
+def _validate_public_top_level_surface(tree: Any, profile: str) -> None:
+    if not _public_profile_like(profile):
+        return
+    actual = _public_top_level_names(tree)
+    missing = sorted(_EXPECTED_PUBLIC_TOP_LEVEL_COMMANDS - actual)
+    unexpected = sorted(actual - _EXPECTED_PUBLIC_TOP_LEVEL_COMMANDS)
+    if missing or unexpected:
+        print(
+            "⚠️ commands_ext public command surface mismatch "
+            f"expected={len(_EXPECTED_PUBLIC_TOP_LEVEL_COMMANDS)} actual={len(actual)} "
+            f"missing={missing} unexpected={unexpected}"
+        )
+        return
+    print(
+        "✅ commands_ext public command surface verified "
+        f"global={len(actual)} names={sorted(actual)}"
+    )
+
+
 def _remove_stale_top_level_commands(tree: Any, *, reason: str) -> list[str]:
     if _runtime_command_prune_disabled():
-        print("🧭 Dank Shield stale top-level command removal skipped; stable command surface active")
+        _log_runtime_skip_once("stale_top_level", "🧭 Dank Shield stale top-level command removal skipped; stable command surface active")
         return []
 
     removed: list[str] = []
@@ -434,7 +482,7 @@ def _remove_stale_top_level_commands(tree: Any, *, reason: str) -> list[str]:
 
 def _prune_public_dank_children(*, profile: str, reason: str) -> list[str]:
     if _runtime_command_prune_disabled():
-        print("🧭 Dank Shield /dank child prune skipped; stable command surface active")
+        _log_runtime_skip_once("dank_children", "🧭 Dank Shield /dank child prune skipped; stable command surface active")
         return []
 
     if not _public_profile_like(profile):
@@ -578,6 +626,7 @@ def register_all_commands(bot: Any, tree: Any) -> None:
     prune_removed += len(removed)
     _COMMANDS_EXT_REGISTERED = True
     final_global, final_guild = _tree_command_counts(tree)
+    _validate_public_top_level_surface(tree, profile)
 
     if final_global >= 95:
         print(f"⚠️ commands_ext command budget high: global={final_global}/100.")

@@ -316,7 +316,7 @@ def _spam_guard_module() -> Any | None:
 def _default_spam_settings(guild_id: int) -> dict[str, Any]:
     return {
         "guild_id": str(int(guild_id)),
-        "enabled": False,
+        "enabled": True,
         "mode": "timeout",
         "apply_to_verified_users": True,
         "block_external_invites_only": True,
@@ -346,7 +346,7 @@ def _normalize_spam_settings(guild_id: int, raw: Mapping[str, Any] | None) -> di
             pass
 
     data["guild_id"] = str(int(guild_id))
-    data["enabled"] = _safe_bool(data.get("enabled", data.get("spam_blocker_enabled")), False)
+    data["enabled"] = _safe_bool(data.get("enabled", data.get("spam_blocker_enabled")), True)
     data["mode"] = _safe_str(data.get("mode", data.get("spam_mode", "timeout")), "timeout")
     data["apply_to_verified_users"] = _safe_bool(data.get("apply_to_verified_users"), True)
     data["block_external_invites_only"] = _safe_bool(data.get("block_external_invites_only"), True)
@@ -390,7 +390,7 @@ async def _load_spam_actual_state(guild_id: int, service_state: Optional[Service
     return SpamGuardActualState(
         service_selected=bool(service_state.spamguard),
         moderation_selected=bool(service_state.moderation),
-        guard_active=_safe_bool(settings.get("enabled", settings.get("spam_blocker_enabled")), False),
+        guard_active=_safe_bool(settings.get("enabled", settings.get("spam_blocker_enabled")), True),
         mode=_safe_str(settings.get("mode", settings.get("spam_mode", "timeout")), "timeout"),
         persisted=bool(persisted),
         persistence_label=label,
@@ -410,7 +410,7 @@ async def _load_spam_actual_state(guild_id: int, service_state: Optional[Service
 def _spam_settings_payload(settings: Mapping[str, Any]) -> dict[str, Any]:
     return {
         "guild_id": str(settings.get("guild_id")),
-        "spam_blocker_enabled": _safe_bool(settings.get("enabled", settings.get("spam_blocker_enabled")), False),
+        "spam_blocker_enabled": _safe_bool(settings.get("enabled", settings.get("spam_blocker_enabled")), True),
         "spam_mode": _safe_str(settings.get("mode", settings.get("spam_mode", "timeout")), "timeout"),
         "apply_to_verified_users": _safe_bool(settings.get("apply_to_verified_users"), True),
         "block_external_invites_only": _safe_bool(settings.get("block_external_invites_only"), True),

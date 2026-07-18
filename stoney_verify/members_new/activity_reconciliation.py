@@ -188,80 +188,59 @@ def _private_threads_may_exist(
 def audit_guild_activity_scope(
     guild: discord.Guild,
 ) -> str:
-    """Return an explanation when full durable coverage is impossible."""
+    """Return a bounded, actionable explanation when durable coverage is incomplete."""
     member = getattr(guild, "me", None)
 
     if not isinstance(member, discord.Member):
         return (
-            "Could not resolve Dank Shield's guild member "
-            "permissions."
+            "Could not resolve Dank Shield's guild member permissions. "
+            "Inactivity cleanup stays review-only until permissions can be verified."
         )
 
-    for channel in list(
-        getattr(guild, "channels", []) or []
-    ):
-        has_history = callable(
-            getattr(channel, "history", None)
-        )
-        is_thread_parent = isinstance(
-            channel,
-            (
-                discord.TextChannel,
-                discord.ForumChannel,
-            ),
-        )
+    issues: list[str] = []
 
-        if (
-            (has_history or is_thread_parent)
-            and not _can_read_history(channel, member)
-        ):
-            return (
-                "Activity coverage is incomplete because Dank "
-                "Shield cannot view/read history in "
-                f"#{getattr(channel, 'name', channel.id)} "
-                f"({int(channel.id)})."
+    for channel in list(getattr(guild, "channels", []) or []):
+        has_history = callable(getattr(channel, "history", None))
+        is_thread_parent = isinstance(channel, (discord.TextChannel, discord.ForumChannel))
+
+        if (has_history or is_thread_parent) and not _can_read_history(channel, member):
+            issues.append(
+                f"#{getattr(channel, 'name', channel.id)} ({int(channel.id)}): "
+                "grant View Channel + Read Message History"
             )
 
         if isinstance(channel, discord.TextChannel):
-            permissions = _permissions_for(
-                channel,
-                member,
-            )
-            manage_threads = bool(
-                getattr(
-                    permissions,
-                    "manage_threads",
-                    False,
-                )
-            )
-
-            if (
-                not manage_threads
-                and _private_threads_may_exist(
-                    channel,
-                    guild,
-                )
-            ):
-                return (
-                    "Activity coverage is incomplete because "
-                    "members can use private threads in "
-                    f"#{channel.name}, but Dank Shield cannot "
-                    "enumerate all private threads. Grant Manage "
-                    "Threads or disable private-thread creation."
+            permissions = _permissions_for(channel, member)
+            manage_threads = bool(getattr(permissions, "manage_threads", False))
+            if not manage_threads and _private_threads_may_exist(channel, guild):
+                issues.append(
+                    f"#{channel.name} ({int(channel.id)}): grant Manage Threads "
+                    "or disable private-thread creation"
                 )
 
-    for thread in list(
-        getattr(guild, "threads", []) or []
-    ):
+    for thread in list(getattr(guild, "threads", []) or []):
         if not _can_read_history(thread, member):
-            return (
-                "Activity coverage is incomplete because Dank "
-                "Shield cannot read active thread "
-                f"{getattr(thread, 'name', thread.id)} "
-                f"({int(thread.id)})."
+            issues.append(
+                f"thread {getattr(thread, 'name', thread.id)} ({int(thread.id)}): "
+                "grant View Channel + Read Message History"
             )
 
-    return ""
+    if not issues:
+        return ""
+
+    # Deduplicate while preserving Discord's visible order, then bound startup
+    # and report text so one large server cannot flood logs/interactions.
+    unique = list(dict.fromkeys(issues))
+    shown = unique[:5]
+    extra = len(unique) - len(shown)
+    detail = "; ".join(shown)
+    if extra > 0:
+        detail += f"; +{extra} more channel/thread permission issue(s)"
+
+    return (
+        "Activity coverage is incomplete, so inactivity cleanup stays review-only. "
+        "Fix Dank Shield's channel permissions: " + detail + "."
+    )
 
 
 def _thread_is_relevant(

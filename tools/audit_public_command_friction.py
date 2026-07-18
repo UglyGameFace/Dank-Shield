@@ -36,11 +36,17 @@ REQUIRED_STALE_TOP_LEVEL = {
 
 EXPECTED_ALLOWED_DANK_CHILDREN = {
     "setup",
+    "status",
+    "diagnostics",
+    "protection",
     "help",
     "commands",
-    "spam",
     "cleanup",
     "members",
+    "member-logs",
+    "profile",
+    "roles",
+    "design",
 }
 
 REQUIRED_PRUNED_DANK_CHILDREN = {

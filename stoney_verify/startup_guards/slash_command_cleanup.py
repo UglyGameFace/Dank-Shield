@@ -44,7 +44,7 @@ _ORIGINAL_CLEAR_COMMANDS = None
 # Bump this value when public command cleanup rules change and Discord needs one
 # guaranteed global sync after deployment. This avoids stale global /dank or
 # old dev command cache while still allowing future unchanged syncs to be skipped.
-COMMAND_CLEANUP_EPOCH = "2026-06-14-verify-panel-command-v2"
+COMMAND_CLEANUP_EPOCH = "2026-07-18-public-surface-v3"
 
 STALE_TOP_LEVEL_COMMANDS = {
     "stoney",
@@ -110,11 +110,17 @@ CONFUSING_DANK_CHILDREN = {
 
 ALLOWED_DANK_CHILDREN = {
     "setup",
+    "status",
+    "diagnostics",
+    "protection",
     "help",
     "commands",
-    "spam",
     "cleanup",
     "members",
+    "member-logs",
+    "profile",
+    "roles",
+    "design",
 }
 
 CONFUSING_DANK_CHILDREN = CONFUSING_DANK_CHILDREN
