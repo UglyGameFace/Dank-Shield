@@ -29,13 +29,13 @@ class PlainSetupChoice:
 
 
 SETUP_CHOICES: tuple[PlainSetupChoice, ...] = (
-    PlainSetupChoice("basic_server", "Basic Server", "🏠", "Simple server setup with support tickets, starter logs, and normal public-server defaults.", "A clean support button when they need staff help.", True, False, False, "basic"),
-    PlainSetupChoice("basic_verify", "Basic Verify", "✅", "Simple Verify button flow: no ID upload, no website token, no voice check, no forced ticket.", "A Verify button that grants the configured access role and removes the waiting role.", False, False, False, "basic_verify"),
-    PlainSetupChoice("help_desk", "Help Desk", "🎫", "Support-ticket focused setup for help requests, reports, appeals, and staff triage.", "A clean ticket panel with fast support choices.", True, False, False, "help_desk"),
+    PlainSetupChoice("basic_server", "Tickets + Server Basics", "🏠", "Sets up support tickets and basic logs. A good choice for most servers that do not need member verification.", "A support button when they need help from staff.", True, False, False, "basic"),
+    PlainSetupChoice("basic_verify", "Simple Verify", "✅", "Members press one Verify button to get the member role. No ID upload or voice check.", "One Verify button that gives them server access.", False, False, False, "basic_verify"),
+    PlainSetupChoice("help_desk", "Help Desk / Tickets", "🎫", "Sets up support tickets for help requests, reports, appeals, and staff support.", "A ticket panel where they choose what they need help with.", True, False, False, "help_desk"),
     PlainSetupChoice("voice_check", "Voice Verify", "🎙️", "Members request staff voice verification without ID upload or website upload flow.", "A verification ticket with a Verify in VC option.", True, False, True, "voice_check"),
     PlainSetupChoice("id_check", "ID / Web Verify", "🪪", "Private ID upload verification for allowlisted servers only.", "A verification ticket with an Upload ID button.", True, True, False, "id_check"),
     PlainSetupChoice("id_voice_check", "ID / Web + Voice", "🔐", "Private ID upload plus voice-check workflow for allowlisted servers only.", "Upload ID, Verify in VC, reveal link, regenerate link if enabled, and website button if configured.", True, True, True, "id_voice_check"),
-    PlainSetupChoice("custom_setup", "Custom", "⚙️", "Choose every service yourself: tickets, Basic Verify, voice verify, SpamGuard, and logs.", "Whatever services you turn on in the next screen.", False, False, False, "custom"),
+    PlainSetupChoice("custom_setup", "Choose My Own Features", "⚙️", "Choose exactly which features you want: tickets, Simple Verify, Voice Verify, SpamGuard, and logs.", "Only the features you choose on the next screen.", False, False, False, "custom"),
 )
 
 CHOICES_BY_KEY: dict[str, PlainSetupChoice] = {choice.key: choice for choice in SETUP_CHOICES}
@@ -489,13 +489,13 @@ async def _autofill_custom_state_from_existing(guild: discord.Guild, state: Any)
 def _custom_services_embed(guild: discord.Guild, state: Any, *, saved_message: str = "") -> discord.Embed:
     payload = {key: bool(state.as_payload().get(key, False)) for key in _CUSTOM_SERVICE_FLAG_KEYS}
     preset_key = _custom_preset_key_for_payload(payload)
-    preset_label = CUSTOM_PRESETS.get(preset_key, ("Custom mix", {}, "", "🧩"))[0] if preset_key else "Custom mix"
+    preset_label = CUSTOM_PRESETS.get(preset_key, ("Your choices", {}, "", "🧩"))[0] if preset_key else "Your choices"
 
     embed = discord.Embed(
-        title="🧩 Custom Setup — Service Switches",
+        title="🧩 Choose Your Features",
         description=(
-            "This is the real Custom Setup editor.\n"
-            "The buttons show each service as **ON** or **OFF**. Tap one to switch it."
+            "Choose what you want Dank Shield to do in this server. "
+            "A green button means the feature is ON. A gray button means it is OFF."
         ),
         color=discord.Color.blurple(),
         timestamp=now_utc(),
@@ -503,23 +503,18 @@ def _custom_services_embed(guild: discord.Guild, state: Any, *, saved_message: s
     if saved_message:
         embed.add_field(name="Saved", value=saved_message[:1024], inline=False)
 
-    embed.add_field(name="Current Mode", value=f"**{preset_label}**\n{_custom_mix_label(payload)}", inline=False)
-    embed.add_field(name="Service Switches", value=_service_summary_text(state), inline=False)
-    embed.add_field(name="Setup Check Will Require", value=_service_hint_text(state), inline=False)
+    embed.add_field(name="Your Setup", value=f"**{preset_label}**\n{_custom_mix_label(payload)}", inline=False)
+    embed.add_field(name="Features", value=_service_summary_text(state), inline=False)
     embed.add_field(
         name="Next",
         value=(
-            "1. Use the buttons below to get the services right.\n"
-            "2. Press **Use My Existing Server** to map channels/roles.\n"
-            "3. Press **Setup Check**.\n"
-            "4. Press **Test / Launch** from setup home when check passes."
+            "Turn the features on or off, then press **Continue Setup**. "
+            "Dank Shield will walk you through the rest one step at a time."
         ),
         inline=False,
     )
-    embed.set_footer(text=f"Guild {guild.id} • custom setup services")
+    embed.set_footer(text=f"Guild {guild.id} • choose your features")
     return embed
-
-
 
 class CustomServicePresetSelect(discord.ui.Select):
     def __init__(self, current: Any) -> None:
@@ -532,7 +527,7 @@ class CustomServicePresetSelect(discord.ui.Select):
                 discord.SelectOption(
                     label=_custom_mix_label(current_payload)[:100],
                     value="__custom_current__",
-                    description="Current manual ON/OFF switches.",
+                    description="Your current feature choices.",
                     emoji="🧩",
                     default=True,
                 )
@@ -636,117 +631,36 @@ class CustomServiceToggleButton(discord.ui.Button):
 
 
 class CustomServiceModeView(discord.ui.View):
-    """Custom Setup only: choose features, then continue guided setup."""
+    """Custom Setup only: choose services here, then return to one guided path."""
 
     def __init__(self, state: Any) -> None:
         super().__init__(timeout=900)
-
-        self.add_item(
-            CustomServicePresetSelect(state)
-        )
-
-        self.add_item(
-            CustomServiceToggleButton(
-                "tickets_enabled",
-                "Tickets",
-                state.tickets,
-                "🎫",
-                2,
-            )
-        )
-        self.add_item(
-            CustomServiceToggleButton(
-                "verification_enabled",
-                "Basic Verify",
-                state.verification,
-                "✅",
-                2,
-            )
-        )
-        self.add_item(
-            CustomServiceToggleButton(
-                "voice_verification_enabled",
-                "Voice Verify",
-                state.voice,
-                "🎙️",
-                2,
-            )
-        )
-        self.add_item(
-            CustomServiceToggleButton(
-                "spam_guard_enabled",
-                "SpamGuard",
-                state.spamguard,
-                "🛡️",
-                3,
-            )
-        )
-        self.add_item(
-            CustomServiceToggleButton(
-                "moderation_enabled",
-                "Logs",
-                state.moderation,
-                "🧾",
-                3,
-            )
-        )
+        self.add_item(CustomServicePresetSelect(state))
+        self.add_item(CustomServiceToggleButton("tickets_enabled", "Tickets", state.tickets, "🎫", 2))
+        self.add_item(CustomServiceToggleButton("verification_enabled", "Basic Verify", state.verification, "✅", 2))
+        self.add_item(CustomServiceToggleButton("voice_verification_enabled", "Voice Verify", state.voice, "🎙️", 2))
+        self.add_item(CustomServiceToggleButton("spam_guard_enabled", "SpamGuard", state.spamguard, "🛡️", 3))
+        self.add_item(CustomServiceToggleButton("moderation_enabled", "Logs", state.moderation, "🧾", 3))
 
     @discord.ui.button(
-        label="Continue Guided Setup",
+        label="Continue Setup",
         emoji="➡️",
         style=discord.ButtonStyle.success,
         custom_id="dank_setup_custom:continue_guided",
         row=1,
     )
-    async def continue_guided(
-        self,
-        interaction: discord.Interaction,
-        button: discord.ui.Button,
-    ) -> None:
+    async def continue_guided(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         await recommend._open_guided_setup(interaction)
 
     @discord.ui.button(
-        label="Setup Check",
-        emoji="🩺",
-        style=discord.ButtonStyle.primary,
-        custom_id="dank_setup_custom:health",
-        row=1,
-    )
-    async def health(
-        self,
-        interaction: discord.Interaction,
-        button: discord.ui.Button,
-    ) -> None:
-        await _open_plain_health(interaction)
-
-    @discord.ui.button(
-        label="Advanced Options",
-        emoji="⚙️",
+        label="Back",
+        emoji="↩️",
         style=discord.ButtonStyle.secondary,
-        custom_id="dank_setup_custom:advanced",
-        row=1,
-    )
-    async def advanced(
-        self,
-        interaction: discord.Interaction,
-        button: discord.ui.Button,
-    ) -> None:
-        await recommend._open_manage_setup(interaction)
-
-    @discord.ui.button(
-        label="Setup Home",
-        emoji="🏠",
-        style=discord.ButtonStyle.secondary,
-        custom_id="dank_setup_custom:home",
+        custom_id="dank_setup_custom:back",
         row=4,
     )
-    async def home(
-        self,
-        interaction: discord.Interaction,
-        button: discord.ui.Button,
-    ) -> None:
-        await recommend._home_edit(interaction)
-
+    async def back(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        await recommend._open_choose_setup_type(interaction)
 
 async def _open_custom_service_picker(interaction: discord.Interaction, *, saved_message: str = "") -> None:
     guild = interaction.guild
@@ -768,17 +682,39 @@ async def _open_plain_health(
 
 
 
+class SetupTypeChoiceSelect(discord.ui.Select):
+    def __init__(self, *, guild: Optional[discord.Guild] = None) -> None:
+        choices = _choices_for_guild(guild)
+        super().__init__(
+            placeholder="What do you want Dank Shield to do?",
+            min_values=1,
+            max_values=1,
+            options=[
+                discord.SelectOption(
+                    label=choice.label,
+                    value=choice.key,
+                    description=choice.short[:100],
+                    emoji=choice.emoji,
+                )
+                for choice in choices
+            ][:25],
+            row=0,
+        )
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        view = self.view
+        if not isinstance(view, SetupTypeChoiceView):
+            return
+        choice = CHOICES_BY_KEY.get(str(self.values[0]))
+        if choice is None:
+            return await interaction.response.send_message("❌ Unknown setup type.", ephemeral=True)
+        await view._save_and_show(interaction, choice)
+
+
 class SetupTypeChoiceView(solid.BackToSetupView):
     def __init__(self, *, guild: Optional[discord.Guild] = None) -> None:
         super().__init__()
-        if not id_verify_allowed_for_guild(guild):
-            for child in list(getattr(self, "children", []) or []):
-                if str(getattr(child, "custom_id", "") or "") in {"dank_setup_choice:id", "dank_setup_choice:id_voice"}:
-                    try:
-                        self.remove_item(child)
-                    except Exception:
-                        pass
-
+        self.add_item(SetupTypeChoiceSelect(guild=guild))
 
     async def _save_and_show(
         self,
@@ -787,76 +723,29 @@ class SetupTypeChoiceView(solid.BackToSetupView):
     ) -> None:
         if not await solid._require_setup_permission(interaction):
             return
-
         guild = interaction.guild
-
         if guild is None:
+            return await interaction.response.send_message("❌ This must be used inside a server.", ephemeral=True)
+        if choice.needs_id and not id_verify_allowed_for_guild(guild):
             return await interaction.response.send_message(
-                "❌ This must be used inside a server.",
-                ephemeral=True,
-            )
-
-        if (
-            choice.needs_id
-            and not id_verify_allowed_for_guild(guild)
-        ):
-            return await interaction.response.send_message(
-                (
-                    "🔒 ID/Web verification is not available "
-                    "for this server. Use **Basic verify** instead."
-                ),
+                "🔒 ID/Web verification is not available for this server. Use **Basic Verify** instead.",
                 ephemeral=True,
                 allowed_mentions=discord.AllowedMentions.none(),
             )
-
         await solid._safe_defer_update(interaction)
         await _save_choice(interaction, choice)
-
         if choice.key == "custom_setup":
             return await _open_custom_service_picker(
                 interaction,
                 saved_message=(
-                    "Saved **Custom setup**. Choose which "
-                    "features this server should use, then press "
-                    "**Continue Guided Setup**."
+                    "Saved **Custom setup**. Choose which features this server should use, "
+                    "then press **Continue Setup**."
                 ),
             )
-
         await recommend._open_guided_setup(
             interaction,
-            saved_message=(
-                f"Saved **{choice.label}**."
-            ),
+            saved_message=f"Saved **{choice.label}**.",
         )
-
-    @discord.ui.button(label="Basic Server", emoji="🏠", style=discord.ButtonStyle.primary, custom_id="dank_setup_choice:basic", row=0)
-    async def basic(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        await self._save_and_show(interaction, CHOICES_BY_KEY["basic_server"])
-
-    @discord.ui.button(label="Basic Verify", emoji="✅", style=discord.ButtonStyle.success, custom_id="dank_setup_choice:basic_verify", row=0)
-    async def basic_verify(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        await self._save_and_show(interaction, CHOICES_BY_KEY["basic_verify"])
-
-    @discord.ui.button(label="Help Desk", emoji="🎫", style=discord.ButtonStyle.primary, custom_id="dank_setup_choice:helpdesk", row=1)
-    async def helpdesk(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        await self._save_and_show(interaction, CHOICES_BY_KEY["help_desk"])
-
-    @discord.ui.button(label="Voice Verify", emoji="🎙️", style=discord.ButtonStyle.primary, custom_id="dank_setup_choice:voice", row=1)
-    async def voice_check(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        await self._save_and_show(interaction, CHOICES_BY_KEY["voice_check"])
-
-    @discord.ui.button(label="ID / Web Verify", emoji="🪪", style=discord.ButtonStyle.primary, custom_id="dank_setup_choice:id", row=2)
-    async def id_check(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        await self._save_and_show(interaction, CHOICES_BY_KEY["id_check"])
-
-    @discord.ui.button(label="ID / Web + Voice", emoji="🔐", style=discord.ButtonStyle.success, custom_id="dank_setup_choice:id_voice", row=2)
-    async def id_voice_check(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        await self._save_and_show(interaction, CHOICES_BY_KEY["id_voice_check"])
-
-    @discord.ui.button(label="Custom", emoji="⚙️", style=discord.ButtonStyle.secondary, custom_id="dank_setup_choice:custom", row=3)
-    async def custom(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        await self._save_and_show(interaction, CHOICES_BY_KEY["custom_setup"])
-
 
 def register_public_setup_fresh_choice_commands(
     bot: Any,
