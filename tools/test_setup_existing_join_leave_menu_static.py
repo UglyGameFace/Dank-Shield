@@ -10,7 +10,7 @@ GUARD = (ROOT / "stoney_verify/startup_guards/member_lifecycle_audit_context_gua
 
 
 def test_recommended_setup_path_is_the_real_existing_server_menu() -> None:
-    """Core Setup owns the deliberate existing-item mapper."""
+    """Other Settings keeps the deliberate existing-item chooser."""
 
     import ast
 
@@ -34,8 +34,9 @@ def test_recommended_setup_path_is_the_real_existing_server_menu() -> None:
         or ""
     )
 
-    assert 'label="Detailed Role / Channel Mapping"' in core_source
+    assert 'label="Choose Roles & Channels"' in core_source
     assert 'custom_id="dank_setup_advanced_core:existing"' in core_source
+    assert 'label="Detailed Role / Channel Mapping"' not in core_source
 
     method_matches = [
         current
@@ -59,7 +60,7 @@ def test_recommended_setup_path_is_the_real_existing_server_menu() -> None:
 
     assert "await _open_existing_server(interaction)" in method_source
 
-    # The old competing Continue Setup mapping button was removed.
+    # The old competing Continue Setup mapping button remains retired.
     assert "dank_setup_continue:existing" not in RECOMMEND
 
 
