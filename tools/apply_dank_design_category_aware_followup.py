@@ -8,6 +8,30 @@ CONFIDENCE_TEST = ROOT / "tests/test_server_design_majority_confidence_static.py
 
 text = MAJORITY.read_text(encoding="utf-8")
 
+# Separator registry identity must preserve whitespace. `_text()` strips leading
+# and trailing spaces, which made compact `│` and spaced ` │ ` look identical.
+old_spec_exists = '''def _separator_spec_exists(studio: Any, sep_id: str, value: str) -> bool:
+    spec = getattr(studio, "SEPARATORS_BY_ID", {}).get(sep_id)
+    return bool(spec and _text(getattr(spec, "value", "")) == value)'''
+new_spec_exists = '''def _separator_spec_exists(studio: Any, sep_id: str, value: str) -> bool:
+    spec = getattr(studio, "SEPARATORS_BY_ID", {}).get(sep_id)
+    raw_value = str(getattr(spec, "value", "") or "") if spec is not None else ""
+    return bool(spec and raw_value == value)'''
+if text.count(old_spec_exists) != 1:
+    raise SystemExit(f"separator spec identity block count={text.count(old_spec_exists)}")
+text = text.replace(old_spec_exists, new_spec_exists, 1)
+
+old_ensure_loop = '''    for spec in tuple(getattr(studio, "SEPARATOR_LIBRARY", tuple()) or tuple()):
+        if _text(getattr(spec, "value", "")) == value:
+            return _text(getattr(spec, "id", ""))'''
+new_ensure_loop = '''    for spec in tuple(getattr(studio, "SEPARATOR_LIBRARY", tuple()) or tuple()):
+        raw_value = str(getattr(spec, "value", "") or "")
+        if raw_value == value:
+            return _text(getattr(spec, "id", ""))'''
+if text.count(old_ensure_loop) != 1:
+    raise SystemExit(f"ensure separator raw-value block count={text.count(old_ensure_loop)}")
+text = text.replace(old_ensure_loop, new_ensure_loop, 1)
+
 # A known separator ID must not erase its spacing. A compact `│` and a spaced
 # ` │ ` are different visible layouts even though they share the same symbol.
 old_apply = '''    separator_id = _text(separator.get("separator_id"))
@@ -46,9 +70,7 @@ if text.count(old_helper) != 1:
     raise SystemExit(f"separator helper spacing block count={text.count(old_helper)}")
 text = text.replace(old_helper, new_helper, 1)
 
-# Runtime-added spaced separator specs are prepended to the separator library.
-# Match the full visible value, not `.strip()`, so a previous spaced detection
-# can never make a later compact channel inherit the wrong separator ID.
+# The detector must also compare raw separator values, not stripped values.
 old_identity = '''        separator_id = ""
         for spec in tuple(getattr(studio, "SEPARATOR_LIBRARY", tuple()) or tuple()):
             value = _text(getattr(spec, "value", "")).strip()
@@ -58,8 +80,8 @@ old_identity = '''        separator_id = ""
 new_identity = '''        separator_id = ""
         expected_value = f" {token} " if spacing == "spaced" else token
         for spec in tuple(getattr(studio, "SEPARATOR_LIBRARY", tuple()) or tuple()):
-            value = _text(getattr(spec, "value", ""))
-            if value == expected_value:
+            raw_value = str(getattr(spec, "value", "") or "")
+            if raw_value == expected_value:
                 separator_id = _text(getattr(spec, "id", ""))
                 break'''
 if text.count(old_identity) != 1:
@@ -110,4 +132,4 @@ CONFIDENCE_TEST.write_text(contract, encoding="utf-8")
 for path in (MAJORITY, CONFIDENCE_TEST):
     compile(path.read_text(encoding="utf-8"), str(path), "exec")
 
-print("PASS: normalized category-majority separators and aligned Smart Auto-Detect contract")
+print("PASS: preserved raw separator whitespace identity and aligned Smart Auto-Detect contract")
