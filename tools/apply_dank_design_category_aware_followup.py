@@ -5,12 +5,6 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 MAJORITY = ROOT / "stoney_verify/services/server_design_majority_layout.py"
 CONFIDENCE_TEST = ROOT / "tests/test_server_design_majority_confidence_static.py"
-LEGACY_THIRD_APPLIER = ROOT / "tools/apply_dank_design_category_aware_separator_identity.py"
-USER_BOOTSTRAP = ROOT / "usercustomize.py"
-USER_BACKUP = ROOT / "tools/usercustomize_smart_auto_detect_original.txt"
-SITE_BOOTSTRAP = ROOT / "sitecustomize.py"
-SITE_BACKUP = ROOT / "tools/sitecustomize_smart_auto_detect_original.txt"
-SELF = Path(__file__)
 
 text = MAJORITY.read_text(encoding="utf-8")
 
@@ -72,6 +66,33 @@ if text.count(old_identity) != 1:
     raise SystemExit(f"separator identity block count={text.count(old_identity)}")
 text = text.replace(old_identity, new_identity, 1)
 
+# Normalize the winning majority from its visible token + spacing. This makes
+# the result deterministic even after runtime-generated separator specs are
+# prepended to the library by an earlier category/test.
+old_majority = '''    if sep_mixed:
+        separator = {**separator, "spacing": "mixed/unknown", "label": "mixed/unknown"}
+
+    frame = frame_examples.get(frame_id, {"id": "", "kind": "unknown", "label": "mixed/unknown"}) if frame_id else {"id": "", "kind": "unknown", "label": "mixed/unknown"}'''
+new_majority = '''    if sep_mixed:
+        separator = {**separator, "spacing": "mixed/unknown", "label": "mixed/unknown"}
+    else:
+        majority_spacing = _text(separator.get("spacing"), "unknown")
+        majority_token = _text(separator.get("token"))
+        resolved_separator_id = ""
+        if majority_spacing == "wrapped":
+            candidate = _text(separator.get("separator_id"))
+            if candidate in getattr(studio, "SEPARATORS_BY_ID", {}):
+                resolved_separator_id = candidate
+        elif majority_spacing in {"compact", "spaced", "none"}:
+            resolved_separator_id = ensure_separator_spec(studio, majority_token, majority_spacing)
+        if resolved_separator_id:
+            separator = {**separator, "separator_id": resolved_separator_id}
+
+    frame = frame_examples.get(frame_id, {"id": "", "kind": "unknown", "label": "mixed/unknown"}) if frame_id else {"id": "", "kind": "unknown", "label": "mixed/unknown"}'''
+if text.count(old_majority) != 1:
+    raise SystemExit(f"majority separator normalization block count={text.count(old_majority)}")
+text = text.replace(old_majority, new_majority, 1)
+
 MAJORITY.write_text(text, encoding="utf-8")
 
 contract = CONFIDENCE_TEST.read_text(encoding="utf-8")
@@ -91,20 +112,4 @@ CONFIDENCE_TEST.write_text(contract, encoding="utf-8")
 for path in (MAJORITY, CONFIDENCE_TEST):
     compile(path.read_text(encoding="utf-8"), str(path), "exec")
 
-# Restore the repository's real startup customization files byte-for-byte before
-# the permanent commit. These files are unrelated to Dank Design.
-for target, backup in ((USER_BOOTSTRAP, USER_BACKUP), (SITE_BOOTSTRAP, SITE_BACKUP)):
-    try:
-        if backup.exists():
-            target.write_text(backup.read_text(encoding="utf-8"), encoding="utf-8")
-    except Exception:
-        pass
-
-for path in (LEGACY_THIRD_APPLIER, USER_BACKUP, SITE_BACKUP, SELF):
-    try:
-        if path.exists():
-            path.unlink()
-    except Exception:
-        pass
-
-print("PASS: preserved separator spacing/identity and aligned Smart Auto-Detect contract")
+print("PASS: normalized category-majority separators and aligned Smart Auto-Detect contract")
