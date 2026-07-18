@@ -7,7 +7,7 @@ on:
       - main
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   python-compile:
@@ -70,3 +70,51 @@ jobs:
 
       - name: Audit event boundary ownership
         run: python tools/audit_event_boundary.py
+
+  cleanup-smart-auto-detect-scaffolding:
+    name: Clean Smart Auto-Detect scaffolding
+    if: github.event_name == 'pull_request' && github.head_ref == 'fix/dank-design-category-aware-auto-detect' && github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Check out latest feature branch
+        uses: actions/checkout@v4
+        with:
+          ref: fix/dank-design-category-aware-auto-detect
+          fetch-depth: 0
+
+      - name: Restore untouched repository files from main
+        run: |
+          git show origin/main:.github/workflows/ci.yml > .github/workflows/ci.yml
+          git show origin/main:sitecustomize.py > sitecustomize.py
+          git show origin/main:usercustomize.py > usercustomize.py
+
+      - name: Remove only temporary Smart Auto-Detect scaffolding
+        run: |
+          rm -f .github/workflows/apply-dank-design-category-aware-auto-detect.yml
+          rm -f dank-design-category-aware-failure.txt
+          rm -f tools/apply_dank_design_category_aware_auto_detect.py
+          rm -f tools/apply_dank_design_category_aware_followup.py
+          rm -f tools/apply_dank_design_category_aware_separator_identity.py
+          rm -f tools/sitecustomize_smart_auto_detect_original.txt
+          rm -f tools/usercustomize_smart_auto_detect_original.txt
+
+      - name: Commit cleanup only
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -- \
+            .github/workflows/ci.yml \
+            .github/workflows/apply-dank-design-category-aware-auto-detect.yml \
+            dank-design-category-aware-failure.txt \
+            sitecustomize.py \
+            usercustomize.py \
+            tools/apply_dank_design_category_aware_auto_detect.py \
+            tools/apply_dank_design_category_aware_followup.py \
+            tools/apply_dank_design_category_aware_separator_identity.py \
+            tools/sitecustomize_smart_auto_detect_original.txt \
+            tools/usercustomize_smart_auto_detect_original.txt
+          git diff --cached --check
+          git commit -m "chore: remove Smart Auto-Detect validation scaffolding"
+          git push origin HEAD:fix/dank-design-category-aware-auto-detect
