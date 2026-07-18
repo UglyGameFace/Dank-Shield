@@ -1,0 +1,63 @@
+name: Align setup v2 safety audit
+
+on:
+  pull_request:
+    types: [synchronize]
+    branches: [main]
+
+concurrency:
+  group: setup-v2-safety-audit-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+
+jobs:
+  align:
+    if: github.head_ref == 'fix/setup-single-path-front-door-v2' && github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.head_ref }}
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pytest
+
+      - name: Align setup safety audit
+        run: python tools/apply_setup_v2_safety_audit_alignment.py
+
+      - name: Validate safety and setup contracts
+        env:
+          DANK_STARTUP_LOG_STYLE: quiet
+          DANK_COMMAND_LOG_STYLE: quiet
+        shell: bash
+        run: |
+          python tools/audit_setup_safety.py
+          python -m pytest tests/ -q
+          status=0
+          for f in tools/test_*.py; do
+            python "$f" || status=1
+          done
+          test "$status" -eq 0
+          git diff --check
+
+      - name: Commit aligned safety audit
+        run: |
+          rm -f tools/apply_setup_v2_safety_audit_alignment.py
+          rm -f .github/workflows/apply-setup-v2-safety-audit-alignment.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git diff --cached --check
+          git commit -m "test: align setup safety audit with one-path UX"
+          git push origin HEAD:fix/setup-single-path-front-door-v2
