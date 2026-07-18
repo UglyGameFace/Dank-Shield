@@ -24,25 +24,31 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
           pip install pytest
-      - name: Run full pytest
-        id: pytest
+      - name: Run standalone tools
+        id: standalone
         continue-on-error: true
         env:
           DANK_STARTUP_LOG_STYLE: quiet
           DANK_COMMAND_LOG_STYLE: quiet
         shell: bash
         run: |
-          python -m pytest tests/ -q --tb=short > pytest-output.txt 2>&1
-      - name: Save pytest tail to branch
+          status=0
+          : > standalone-output.txt
+          for f in tools/test_*.py; do
+            echo "===== $f =====" >> standalone-output.txt
+            python "$f" >> standalone-output.txt 2>&1 || status=1
+          done
+          exit $status
+      - name: Save standalone tail to branch
         if: always()
         shell: bash
         run: |
-          tail -200 pytest-output.txt > pytest-failure-tail.txt
+          tail -240 standalone-output.txt > standalone-failure-tail.txt
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add pytest-failure-tail.txt
-          git commit -m "chore: capture grouped setup pytest tail" || true
+          git add standalone-failure-tail.txt
+          git commit -m "chore: capture grouped setup standalone tail" || true
           git push origin HEAD:fix/setup-advanced-options-grouped-mobile
-      - name: Fail when pytest failed
-        if: steps.pytest.outcome == 'failure'
+      - name: Fail when standalone checks failed
+        if: steps.standalone.outcome == 'failure'
         run: exit 1
