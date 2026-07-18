@@ -1,2 +1,0 @@
-Smart Auto-Detect final validation retrigger.
-This temporary file is removed automatically after successful validation.
