@@ -6,7 +6,7 @@ ROOT = Path(__file__).resolve().parents[1]
 MAJORITY = ROOT / "stoney_verify/services/server_design_majority_layout.py"
 CONFIDENCE_TEST = ROOT / "tests/test_server_design_majority_confidence_static.py"
 LEGACY_THIRD_APPLIER = ROOT / "tools/apply_dank_design_category_aware_separator_identity.py"
-BOOTSTRAP = ROOT / "sitecustomize.py"
+BOOTSTRAP = ROOT / "usercustomize.py"
 SELF = Path(__file__)
 
 text = MAJORITY.read_text(encoding="utf-8")
@@ -89,6 +89,7 @@ for path in (MAJORITY, CONFIDENCE_TEST):
     compile(path.read_text(encoding="utf-8"), str(path), "exec")
 
 # Temporary compatibility machinery must not survive the permanent commit.
+# Never touch the repository's real sitecustomize.py runtime-safety file.
 for path in (LEGACY_THIRD_APPLIER, BOOTSTRAP, SELF):
     try:
         if path.exists():
