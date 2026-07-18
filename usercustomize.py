@@ -52,3 +52,24 @@ try:
         a()
 except Exception:
     pass
+
+
+# TEMPORARY CI BRIDGE — removed and restored byte-for-byte before the permanent
+# Smart Auto-Detect commit. It activates only for the dedicated patch applier.
+try:
+    import atexit
+    import runpy
+    import sys
+    from pathlib import Path
+
+    if str(sys.argv[0]).endswith("tools/apply_dank_design_category_aware_auto_detect.py"):
+        _smart_root = Path(__file__).resolve().parent
+        _smart_followup = _smart_root / "tools/apply_dank_design_category_aware_followup.py"
+
+        def _run_smart_auto_detect_followup() -> None:
+            if _smart_followup.exists():
+                runpy.run_path(str(_smart_followup), run_name="__main__")
+
+        atexit.register(_run_smart_auto_detect_followup)
+except Exception:
+    pass
