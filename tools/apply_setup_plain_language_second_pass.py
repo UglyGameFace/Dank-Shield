@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from pathlib import Path
-import re
 
 ROOT = Path(__file__).resolve().parents[1]
 RECOMMEND = ROOT / "stoney_verify/commands_ext/public_setup_recommend.py"
@@ -26,21 +25,26 @@ if "class SetupReviewAdvancedButton" in recommend:
     )
 
 # Replace the stale legacy setup-choice instructions with the same one-path message.
-recommend, count = re.subn(
-    r'''        embed\.add_field\(\n            name="Next step",\n            value=\(\n                "• Press \*\*Use My Existing Server\*\* if your roles/channels already exist\\n"\n                "• Press \*\*Create Missing Items\*\* if you want Dank Shield to create missing basics\\n"\n                "• Press \*\*Health Check\*\* when you think setup is ready\."\n            \),\n            inline=False,\n        \)''',
-    '''        embed.add_field(
+old_next = '''        embed.add_field(
+            name="Next step",
+            value=(
+                "• Press **Use My Existing Server** if your roles/channels already exist.\\n"
+                "• Press **Create Missing Items** if you want Dank Shield to create missing basics.\\n"
+                "• Press **Health Check** when you think setup is ready."
+            ),
+            inline=False,
+        )'''
+new_next = '''        embed.add_field(
             name="Next",
             value=(
                 "Press **Continue Setup** on Setup Home. "
                 "Dank Shield will show only the next thing you need to set up."
             ),
             inline=False,
-        )''',
-    recommend,
-    count=1,
-)
-if count != 1:
-    raise SystemExit(f"stale legacy next-step replacement count={count}")
+        )'''
+if recommend.count(old_next) != 1:
+    raise SystemExit(f"stale legacy next-step replacement count={recommend.count(old_next)}")
+recommend = recommend.replace(old_next, new_next, 1)
 
 replacements = {
     'embed.set_footer(text=f"Guild {guild.id} • /dank setup • simple home")':
