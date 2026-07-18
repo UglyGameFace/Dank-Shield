@@ -22,14 +22,14 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
           pip install pytest
-      - name: Run grouped setup tests
+      - name: Run full pytest and show failure tail
         env:
           DANK_STARTUP_LOG_STYLE: quiet
           DANK_COMMAND_LOG_STYLE: quiet
+        shell: bash
         run: |
-          python -m pytest \
-            tests/test_setup_advanced_options_behavior.py \
-            tests/test_setup_single_guided_front_door_static.py \
-            tests/test_setup_ux_clarity_guard_retired.py \
-            -q
-          python tools/audit_setup_safety.py
+          set +e
+          python -m pytest tests/ -q --tb=short > pytest-output.txt 2>&1
+          rc=$?
+          tail -160 pytest-output.txt
+          exit $rc
