@@ -86,3 +86,23 @@ def test_plain_language_action_labels_exist():
 def test_setup_type_names_are_plain_language():
     for text in ("Tickets + Server Basics", "Simple Verify", "Help Desk / Tickets", "Choose My Own Features"):
         assert text in FRESH
+
+
+def test_secondary_setup_screens_use_the_same_plain_language():
+    legacy_choice = block(RECOMMEND, "class SetupChoiceView(", "class SetupReviewFixNextButton(")
+    for stale in ("Use My Existing Server", "Create Missing Items", "Health Check"):
+        assert stale not in legacy_choice
+    for stale in ("Service switches opened", "Service Switches Did Not Open", "Advanced Options •", "Timers & Behavior", "Use Existing Roles / Channels"):
+        assert stale not in RECOMMEND
+
+
+def test_custom_feature_picker_avoids_setup_jargon():
+    for stale in ("Ticket panel and ticket lifecycle only.", "No ID, no VC", "verify blockers", "Custom mix:", "Basic Verify only", "Basic + Voice Verify"):
+        assert stale not in FRESH
+    for expected in ("Support ticket panel and ticket tools.", "Simple Verify only", "Simple + Voice Verify", "Your features:", "Simple Verify"):
+        assert expected in FRESH
+
+
+def test_plain_language_fallback_actions_are_consistent():
+    for expected in ("Choose Existing Roles & Channels", "Choose which features are ON or OFF", "Feature Settings Did Not Open", "Check Setup Again", "Fix Setup or Start Over"):
+        assert expected in RECOMMEND

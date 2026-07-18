@@ -32,20 +32,20 @@ SETUP_CHOICES: tuple[PlainSetupChoice, ...] = (
     PlainSetupChoice("basic_server", "Tickets + Server Basics", "🏠", "Sets up support tickets and basic logs. A good choice for most servers that do not need member verification.", "A support button when they need help from staff.", True, False, False, "basic"),
     PlainSetupChoice("basic_verify", "Simple Verify", "✅", "Members press one Verify button to get the member role. No ID upload or voice check.", "One Verify button that gives them server access.", False, False, False, "basic_verify"),
     PlainSetupChoice("help_desk", "Help Desk / Tickets", "🎫", "Sets up support tickets for help requests, reports, appeals, and staff support.", "A ticket panel where they choose what they need help with.", True, False, False, "help_desk"),
-    PlainSetupChoice("voice_check", "Voice Verify", "🎙️", "Members request staff voice verification without ID upload or website upload flow.", "A verification ticket with a Verify in VC option.", True, False, True, "voice_check"),
-    PlainSetupChoice("id_check", "ID / Web Verify", "🪪", "Private ID upload verification for allowlisted servers only.", "A verification ticket with an Upload ID button.", True, True, False, "id_check"),
-    PlainSetupChoice("id_voice_check", "ID / Web + Voice", "🔐", "Private ID upload plus voice-check workflow for allowlisted servers only.", "Upload ID, Verify in VC, reveal link, regenerate link if enabled, and website button if configured.", True, True, True, "id_voice_check"),
+    PlainSetupChoice("voice_check", "Voice Verify", "🎙️", "Members request staff voice verification without ID upload or website upload flow.", "A verification ticket with a button to request a staff voice check.", True, False, True, "voice_check"),
+    PlainSetupChoice("id_check", "ID / Web Verify", "🪪", "Private ID upload verification for allowlisted servers only.", "A private button to upload an ID for staff review.", True, True, False, "id_check"),
+    PlainSetupChoice("id_voice_check", "ID / Web + Voice", "🔐", "Private ID upload plus voice-check workflow for allowlisted servers only.", "Private ID upload and a button to request a staff voice check.", True, True, True, "id_voice_check"),
     PlainSetupChoice("custom_setup", "Choose My Own Features", "⚙️", "Choose exactly which features you want: tickets, Simple Verify, Voice Verify, SpamGuard, and logs.", "Only the features you choose on the next screen.", False, False, False, "custom"),
 )
 
 CHOICES_BY_KEY: dict[str, PlainSetupChoice] = {choice.key: choice for choice in SETUP_CHOICES}
 
 CUSTOM_PRESETS: dict[str, tuple[str, dict[str, bool], str, str]] = {
-    "tickets": ("Tickets only", {"tickets_enabled": True, "verification_enabled": False, "voice_verification_enabled": False, "spam_guard_enabled": False, "moderation_enabled": False}, "Ticket panel and ticket lifecycle only.", "🎫"),
-    "basic_verify": ("Basic Verify only", {"tickets_enabled": False, "verification_enabled": True, "voice_verification_enabled": False, "spam_guard_enabled": False, "moderation_enabled": False}, "One-button verify gate. No ID, no VC, no ticket required.", "✅"),
-    "voice_verify": ("Basic + Voice Verify", {"tickets_enabled": True, "verification_enabled": True, "voice_verification_enabled": True, "spam_guard_enabled": False, "moderation_enabled": True}, "Basic Verify plus staff voice-check support.", "🎙️"),
-    "spamguard": ("SpamGuard only", {"tickets_enabled": False, "verification_enabled": False, "voice_verification_enabled": False, "spam_guard_enabled": True, "moderation_enabled": True}, "Spam protection and logs without ticket or verify blockers.", "🛡️"),
-    "all": ("Everything", {"tickets_enabled": True, "verification_enabled": True, "voice_verification_enabled": True, "spam_guard_enabled": True, "moderation_enabled": True}, "Tickets, Basic Verify, Voice Verify, SpamGuard, and logs.", "🚀"),
+    "tickets": ("Tickets only", {"tickets_enabled": True, "verification_enabled": False, "voice_verification_enabled": False, "spam_guard_enabled": False, "moderation_enabled": False}, "Support ticket panel and ticket tools.", "🎫"),
+    "basic_verify": ("Simple Verify only", {"tickets_enabled": False, "verification_enabled": True, "voice_verification_enabled": False, "spam_guard_enabled": False, "moderation_enabled": False}, "One Verify button. No tickets, ID upload, or voice check.", "✅"),
+    "voice_verify": ("Simple + Voice Verify", {"tickets_enabled": True, "verification_enabled": True, "voice_verification_enabled": True, "spam_guard_enabled": False, "moderation_enabled": True}, "Simple Verify plus a staff voice check.", "🎙️"),
+    "spamguard": ("SpamGuard only", {"tickets_enabled": False, "verification_enabled": False, "voice_verification_enabled": False, "spam_guard_enabled": True, "moderation_enabled": True}, "Spam and raid protection with logs.", "🛡️"),
+    "all": ("Everything", {"tickets_enabled": True, "verification_enabled": True, "voice_verification_enabled": True, "spam_guard_enabled": True, "moderation_enabled": True}, "Tickets, Simple Verify, Voice Verify, SpamGuard, and logs.", "🚀"),
 }
 
 
@@ -144,7 +144,7 @@ def _state_word(value: bool) -> str:
 def _service_summary_text(state: Any) -> str:
     return (
         f"Tickets: **{_state_word(bool(state.tickets))}**\n"
-        f"Basic Verify: **{_state_word(bool(state.verification))}**\n"
+        f"Simple Verify: **{_state_word(bool(state.verification))}**\n"
         f"Voice Verify: **{_state_word(bool(state.voice))}**\n"
         f"SpamGuard: **{_state_word(bool(state.spamguard))}**\n"
         f"Logs: **{_state_word(bool(state.moderation))}**"
@@ -156,7 +156,7 @@ def _custom_enabled_labels_from_payload(payload: dict[str, Any]) -> list[str]:
     if bool(payload.get("tickets_enabled")):
         labels.append("Tickets")
     if bool(payload.get("verification_enabled")):
-        labels.append("Basic Verify")
+        labels.append("Simple Verify")
     if bool(payload.get("voice_verification_enabled")):
         labels.append("Voice Verify")
     if bool(payload.get("spam_guard_enabled")):
@@ -168,7 +168,7 @@ def _custom_enabled_labels_from_payload(payload: dict[str, Any]) -> list[str]:
 
 def _custom_mix_label(payload: dict[str, Any]) -> str:
     labels = _custom_enabled_labels_from_payload(payload)
-    return "Custom mix: " + (", ".join(labels) if labels else "No services selected")
+    return "Your features: " + (", ".join(labels) if labels else "No features selected")
 
 
 def _custom_preset_key_for_payload(payload: dict[str, Any]) -> str:
@@ -231,12 +231,12 @@ def _service_hint_text(state: Any) -> str:
     if state.tickets:
         enabled.append("Ticket Basics")
     if state.verification:
-        enabled.append("Basic Verify")
+        enabled.append("Simple Verify")
     if state.voice:
-        enabled.append("Voice Verification")
+        enabled.append("Voice Verify")
     if state.spamguard or state.moderation:
-        enabled.append("SpamGuard setup / Logs")
-    return "Choose at least one service first." if not enabled else "Health Check will focus on: " + ", ".join(enabled) + "."
+        enabled.append("SpamGuard / Logs")
+    return "Choose at least one feature first." if not enabled else "Setup will check: " + ", ".join(enabled) + "."
 
 
 async def _save_custom_services(guild_id: int, payload: dict[str, bool], actor: Any) -> None:
@@ -446,7 +446,7 @@ async def _detect_existing_service_payload(guild: discord.Guild) -> tuple[dict[s
     if tickets:
         labels.append("Tickets")
     if basic_verify:
-        labels.append("Basic Verify")
+        labels.append("Simple Verify")
     if voice:
         labels.append("Voice Verify")
     if spamguard:
@@ -563,7 +563,7 @@ class CustomServicePresetSelect(discord.ui.Select):
             await interaction.response.defer(ephemeral=True)
             state = await _load_custom_state(guild.id)
             return await interaction.edit_original_response(
-                embed=_custom_services_embed(guild, state, saved_message="Still using your current **Custom mix**."),
+                embed=_custom_services_embed(guild, state, saved_message="Still using your current feature choices."),
                 view=CustomServiceModeView(state),
             )
 
@@ -637,7 +637,7 @@ class CustomServiceModeView(discord.ui.View):
         super().__init__(timeout=900)
         self.add_item(CustomServicePresetSelect(state))
         self.add_item(CustomServiceToggleButton("tickets_enabled", "Tickets", state.tickets, "🎫", 2))
-        self.add_item(CustomServiceToggleButton("verification_enabled", "Basic Verify", state.verification, "✅", 2))
+        self.add_item(CustomServiceToggleButton("verification_enabled", "Simple Verify", state.verification, "✅", 2))
         self.add_item(CustomServiceToggleButton("voice_verification_enabled", "Voice Verify", state.voice, "🎙️", 2))
         self.add_item(CustomServiceToggleButton("spam_guard_enabled", "SpamGuard", state.spamguard, "🛡️", 3))
         self.add_item(CustomServiceToggleButton("moderation_enabled", "Logs", state.moderation, "🧾", 3))
@@ -668,7 +668,7 @@ async def _open_custom_service_picker(interaction: discord.Interaction, *, saved
         return await interaction.response.send_message("❌ This must be used inside a server.", ephemeral=True)
     state = await _load_custom_state(guild.id)
     state, detected_message = await _autofill_custom_state_from_existing(guild, state)
-    message = saved_message or detected_message or "Saved **Custom setup**. Existing server items are detected automatically. Turn on/off only what this server should actually use."
+    message = saved_message or detected_message or "Saved **Choose My Own Features**. Dank Shield checks what is already set up and pre-selects matching features. Turn off anything you do not want."
     await solid._edit_or_followup(interaction, embed=_custom_services_embed(guild, state, saved_message=message), view=CustomServiceModeView(state))
 
 
