@@ -8,7 +8,8 @@ TEXT = (ROOT / "stoney_verify/commands_ext/public_self_roles_group.py").read_tex
 
 def test_cosmetics_use_designated_pickers() -> None:
     assert "DankMultiPickerView" in TEXT
-    assert "DankRoleSelect" in TEXT
+    assert "ProfileRoleAddPickerView(DankMultiPickerView)" in TEXT
+    assert "DankRoleSelect" not in TEXT
     assert "ProfileCosmeticRoleManagerView" in TEXT
 
 
@@ -19,13 +20,13 @@ def test_cosmetic_allowlist_is_per_guild_config() -> None:
 
 
 def test_staff_builder_has_cosmetic_manager_entry() -> None:
-    assert 'label="Server Cosmetic Roles"' in TEXT
+    assert 'label="Profile Roles / Cosmetics"' in TEXT
     assert 'custom_id=f"{PROFILE_PREFIX}builder:cosmetics"' in TEXT
     assert 'if action == "cosmetics":' in TEXT
 
 
 def test_user_panel_has_cosmetic_picker_entry() -> None:
-    assert 'label="Server Cosmetics"' in TEXT
+    assert 'label="Server Roles / Cosmetics"' in TEXT
     assert 'custom_id=f"{PROFILE_PREFIX}cosmetics"' in TEXT
     assert 'if suffix == "cosmetics":' in TEXT
 

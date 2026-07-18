@@ -26,9 +26,9 @@ CHECKS = {
         "setup-check inference guard",
     ],
     "stoney_verify/commands_ext/public_setup_recommend.py": [
-        "Choose a setup type first. Press **Choose Setup Type**.",
+        "Choose what this server should use.",
         "Setup Check",
-        "Ticket menu has",
+        "The ticket menu has",
     ],
 }
 
