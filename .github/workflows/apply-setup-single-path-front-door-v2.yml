@@ -27,7 +27,7 @@ jobs:
         continue-on-error: true
         shell: bash
         run: |
-          rm -f setup-ux-applier-error.txt
+          rm -f setup-ux-applier-error.txt setup-ux-validation-error.txt
           python tools/apply_setup_single_path_front_door_v2.py > setup-ux-applier-output.txt 2>&1
 
       - name: Finalize plain-language setup UX
@@ -57,20 +57,39 @@ jobs:
           exit 1
 
       - name: Validate rewritten files
+        id: validate
         if: steps.repair.outcome == 'success'
+        continue-on-error: true
+        shell: bash
         run: |
-          python -m py_compile \
-            stoney_verify/commands_ext/public_setup_recommend.py \
-            stoney_verify/commands_ext/public_setup_fresh_choice.py \
-            tests/test_setup_single_path_front_door_v2_static.py
-          python -m pytest tests/test_setup_single_path_front_door_v2_static.py -q
-          git diff --check
+          {
+            python -m py_compile \
+              stoney_verify/commands_ext/public_setup_recommend.py \
+              stoney_verify/commands_ext/public_setup_fresh_choice.py \
+              tests/test_setup_single_path_front_door_v2_static.py &&
+            python -m pytest tests/test_setup_single_path_front_door_v2_static.py -q &&
+            git diff --check
+          } > setup-ux-validation-output.txt 2>&1
+
+      - name: Capture validation failure
+        if: steps.validate.outcome == 'failure'
+        shell: bash
+        run: |
+          cp setup-ux-validation-output.txt setup-ux-validation-error.txt
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add setup-ux-validation-error.txt
+          git commit -m "chore: capture one-path setup validation failure" || true
+          git push origin HEAD:fix/setup-single-path-front-door-v2
+          exit 1
 
       - name: Commit rewritten setup flow
-        if: steps.repair.outcome == 'success'
+        if: steps.validate.outcome == 'success'
         run: |
           rm -f setup-ux-applier-output.txt
           rm -f setup-ux-applier-error.txt
+          rm -f setup-ux-validation-output.txt
+          rm -f setup-ux-validation-error.txt
           rm -f tools/apply_setup_single_path_front_door_v2.py
           rm -f tools/finalize_setup_single_path_front_door_v2.py
           rm -f tools/repair_setup_single_path_generated_code.py
