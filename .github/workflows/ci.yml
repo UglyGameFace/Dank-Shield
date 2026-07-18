@@ -7,7 +7,7 @@ on:
       - main
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   python-compile:
@@ -106,103 +106,94 @@ jobs:
           python tools/apply_dank_design_category_aware_followup.py
 
       - name: Validate focused behavior
-        id: focused
-        continue-on-error: true
         env:
           DANK_STARTUP_LOG_STYLE: quiet
           DANK_COMMAND_LOG_STYLE: quiet
-        shell: bash
         run: |
-          status=0
-          {
-            python -m py_compile \
-              stoney_verify/services/server_design_studio.py \
-              stoney_verify/services/server_design_majority_layout.py \
-              stoney_verify/commands_ext/public_design_studio.py \
-              stoney_verify/startup_guards/server_design_majority_layout_guard.py || status=1
-            python -m pytest \
-              tests/test_server_design_majority_layout.py \
-              tests/test_server_design_majority_confidence_static.py \
-              tests/test_server_design_category_aware_auto_detect.py -q || status=1
-            python tools/test_dank_design_safe_repair_cleanup_static.py || status=1
-            python tools/test_dank_design_ux_lock_cleanup_static.py || status=1
-            python tools/test_dank_design_clean_simple_unlock_ui_static.py || status=1
-            git diff --check || status=1
-          } > smart-auto-detect-focused-output.txt 2>&1
-          exit "$status"
-
-      - name: Upload focused validation output
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: smart-auto-detect-focused-output
-          path: smart-auto-detect-focused-output.txt
-          if-no-files-found: error
-          retention-days: 1
-
-      - name: Stop on focused validation failure
-        if: steps.focused.outcome == 'failure'
-        run: |
-          cat smart-auto-detect-focused-output.txt
-          exit 1
+          python -m py_compile \
+            stoney_verify/services/server_design_studio.py \
+            stoney_verify/services/server_design_majority_layout.py \
+            stoney_verify/commands_ext/public_design_studio.py \
+            stoney_verify/startup_guards/server_design_majority_layout_guard.py
+          python -m pytest \
+            tests/test_server_design_majority_layout.py \
+            tests/test_server_design_majority_confidence_static.py \
+            tests/test_server_design_category_aware_auto_detect.py -q
+          python tools/test_dank_design_safe_repair_cleanup_static.py
+          python tools/test_dank_design_ux_lock_cleanup_static.py
+          python tools/test_dank_design_clean_simple_unlock_ui_static.py
+          git diff --check
 
       - name: Validate full repository
-        id: full
-        continue-on-error: true
         env:
           DANK_STARTUP_LOG_STYLE: quiet
           DANK_COMMAND_LOG_STYLE: quiet
-        shell: bash
         run: |
+          python -m pytest tests/ -q
           status=0
-          {
-            python -m pytest tests/ -q || status=1
-            for f in tools/test_*.py; do
-              python "$f" || status=1
-            done
-          } > smart-auto-detect-full-output.txt 2>&1
-          exit "$status"
+          for f in tools/test_*.py; do
+            python "$f" || status=1
+          done
+          test "$status" -eq 0
 
-      - name: Upload full validation output
-        if: always()
-        uses: actions/upload-artifact@v4
+  finalize-smart-auto-detect:
+    name: Persist validated Smart Auto-Detect
+    if: github.event_name == 'pull_request' && github.head_ref == 'fix/dank-design-category-aware-auto-detect' && github.actor != 'github-actions[bot]'
+    needs: smart-auto-detect-export
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Check out latest feature branch
+        uses: actions/checkout@v4
         with:
-          name: smart-auto-detect-full-output
-          path: smart-auto-detect-full-output.txt
-          if-no-files-found: error
-          retention-days: 1
+          ref: fix/dank-design-category-aware-auto-detect
+          fetch-depth: 0
 
-      - name: Stop on full validation failure
-        if: steps.full.outcome == 'failure'
-        run: |
-          cat smart-auto-detect-full-output.txt
-          exit 1
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
 
-      - name: Package validated permanent files
+      - name: Install dependencies
         run: |
-          mkdir -p validated-smart-auto-detect/stoney_verify/services
-          mkdir -p validated-smart-auto-detect/stoney_verify/commands_ext
-          mkdir -p validated-smart-auto-detect/stoney_verify/startup_guards
-          mkdir -p validated-smart-auto-detect/tests
-          cp stoney_verify/services/server_design_studio.py validated-smart-auto-detect/stoney_verify/services/
-          cp stoney_verify/services/server_design_majority_layout.py validated-smart-auto-detect/stoney_verify/services/
-          cp stoney_verify/commands_ext/public_design_studio.py validated-smart-auto-detect/stoney_verify/commands_ext/
-          cp stoney_verify/startup_guards/server_design_majority_layout_guard.py validated-smart-auto-detect/stoney_verify/startup_guards/
-          cp tests/test_server_design_category_aware_auto_detect.py validated-smart-auto-detect/tests/
-          cp tests/test_server_design_majority_confidence_static.py validated-smart-auto-detect/tests/
-          git diff -- \
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pytest
+
+      - name: Restore unrelated startup files
+        run: |
+          cp tools/sitecustomize_smart_auto_detect_original.txt sitecustomize.py
+          cp tools/usercustomize_smart_auto_detect_original.txt usercustomize.py
+
+      - name: Generate validated permanent files
+        run: |
+          python tools/apply_dank_design_category_aware_auto_detect.py
+          python tools/apply_dank_design_category_aware_followup.py
+          python -m pytest \
+            tests/test_server_design_majority_layout.py \
+            tests/test_server_design_majority_confidence_static.py \
+            tests/test_server_design_category_aware_auto_detect.py -q
+          python -m pytest tests/ -q
+          status=0
+          for f in tools/test_*.py; do
+            python "$f" || status=1
+          done
+          test "$status" -eq 0
+          git diff --check
+
+      - name: Commit only permanent Dank Design files
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add \
             stoney_verify/services/server_design_studio.py \
             stoney_verify/services/server_design_majority_layout.py \
             stoney_verify/commands_ext/public_design_studio.py \
             stoney_verify/startup_guards/server_design_majority_layout_guard.py \
             tests/test_server_design_category_aware_auto_detect.py \
-            tests/test_server_design_majority_confidence_static.py \
-            > validated-smart-auto-detect/final.patch
-
-      - name: Upload validated files
-        uses: actions/upload-artifact@v4
-        with:
-          name: validated-smart-auto-detect
-          path: validated-smart-auto-detect
-          if-no-files-found: error
-          retention-days: 1
+            tests/test_server_design_majority_confidence_static.py
+          git diff --cached --check
+          git commit -m "fix: make Dank Design auto-detect category aware"
+          git push origin HEAD:fix/dank-design-category-aware-auto-detect
