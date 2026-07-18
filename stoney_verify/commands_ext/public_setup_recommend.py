@@ -1859,10 +1859,157 @@ async def _open_modlog_tracking(
     )
 
 
+def _advanced_section_embed(
+    *,
+    title: str,
+    description: str,
+    items: tuple[str, ...],
+    danger: bool = False,
+) -> discord.Embed:
+    embed = discord.Embed(
+        title=title,
+        description=description,
+        color=(
+            discord.Color.red()
+            if danger
+            else discord.Color.blurple()
+        ),
+        timestamp=now_utc(),
+    )
+    embed.add_field(
+        name="In This Section",
+        value="
+".join(items)[:1024],
+        inline=False,
+    )
+    embed.set_footer(
+        text=(
+            "Advanced Options • Back to Advanced returns to the "
+            "grouped menu"
+        )
+    )
+    return embed
+
+
+async def _open_advanced_section(
+    interaction: discord.Interaction,
+    *,
+    title: str,
+    description: str,
+    items: tuple[str, ...],
+    view: discord.ui.View,
+    danger: bool = False,
+) -> None:
+    if not await solid._require_setup_permission(interaction):
+        return
+
+    await solid._edit_or_followup(
+        interaction,
+        embed=_advanced_section_embed(
+            title=title,
+            description=description,
+            items=items,
+            danger=danger,
+        ),
+        view=view,
+    )
+
+
+async def _open_advanced_core_setup(
+    interaction: discord.Interaction,
+) -> None:
+    await _open_advanced_section(
+        interaction,
+        title="🧰 Core Setup",
+        description=(
+            "Change the main setup behavior without digging through "
+            "unrelated tools."
+        ),
+        items=(
+            "🧩 **Features On / Off** — choose which services run.",
+            "⏱️ **Timers & Behavior** — timers, naming, and flow settings.",
+            "🧭 **Detailed Role / Channel Mapping** — deliberately remap saved items.",
+        ),
+        view=AdvancedCoreSetupView(),
+    )
+
+
+async def _open_advanced_member_experience(
+    interaction: discord.Interaction,
+) -> None:
+    await _open_advanced_section(
+        interaction,
+        title="👥 Member Experience",
+        description=(
+            "Adjust what members interact with during tickets and "
+            "server protection flows."
+        ),
+        items=(
+            "🧾 **Ticket Choices** — edit what members can request.",
+            "🛡️ **Protection** — open the Protection Center.",
+        ),
+        view=AdvancedMemberExperienceView(),
+    )
+
+
+async def _open_advanced_monitoring_repair(
+    interaction: discord.Interaction,
+) -> None:
+    await _open_advanced_section(
+        interaction,
+        title="🧰 Monitoring & Repair",
+        description=(
+            "Manage server event tracking and repair saved setup "
+            "permissions."
+        ),
+        items=(
+            "🧾 **Modlog Tracking** — choose which server events are recorded.",
+            "🛠️ **Permission Repair** — preview and repair saved setup channel permissions.",
+        ),
+        view=AdvancedMonitoringRepairView(),
+    )
+
+
+async def _open_advanced_appearance(
+    interaction: discord.Interaction,
+) -> None:
+    await _open_advanced_section(
+        interaction,
+        title="🎨 Appearance",
+        description=(
+            "Open the visual design tools without mixing them into "
+            "normal server setup."
+        ),
+        items=(
+            "🎨 **Server Design** — fonts, frames, emojis, preview, and rollback.",
+        ),
+        view=AdvancedAppearanceView(),
+    )
+
+
+async def _open_advanced_danger_zone(
+    interaction: discord.Interaction,
+) -> None:
+    await _open_advanced_section(
+        interaction,
+        title="🚨 Danger Zone",
+        description=(
+            "Use this only when you deliberately want to recover or "
+            "start setup over. Normal setup tools are kept out of "
+            "this section."
+        ),
+        items=(
+            "🧯 **Recovery / Start Over** — safely reset or recover setup.",
+        ),
+        view=AdvancedDangerZoneView(),
+        danger=True,
+    )
+
+
 async def _open_manage_setup(
     interaction: discord.Interaction,
 ) -> None:
-    """Open the single deliberate Advanced Options screen."""
+    """Open the grouped Advanced Options hub."""
 
     if not await solid._require_setup_permission(interaction):
         return
@@ -1870,30 +2017,43 @@ async def _open_manage_setup(
     embed = discord.Embed(
         title="⚙️ Advanced Options",
         description=(
-            "Most servers will not need this page during normal "
-            "setup. Open a section only when you deliberately "
-            "want to change extra details."
+            "Choose one group. Regular setup should usually be done "
+            "from **Start / Continue Setup**."
         ),
         color=discord.Color.blurple(),
         timestamp=now_utc(),
     )
-
     embed.add_field(
-        name="Choose One Section",
+        name="🧰 Core Setup",
         value=(
-            "🧩 **Features On / Off** — choose which services run.\n"
-            "🧾 **Ticket Choices** — edit what members can request.\n"
-            "🛡️ **Protection** — open the Protection Center.\n"
-            "🧾 **Modlog Tracking** — choose which server events are recorded.\n"
-            "⏱️ **Timers & Behavior** — timers, naming, and flow settings.\n"
-            "🎨 **Server Design** — fonts, frames, emojis, preview, and rollback.\n"
-            "🧭 **Detailed Role / Channel Mapping** — deliberately remap saved items.\n"
-            "🛠️ **Permission Repair** — preview and repair saved setup channel permissions.\n"
-            "🧯 **Recovery / Start Over** — safely reset or recover setup."
+            "Features, timers, behavior, and detailed role/channel "
+            "mapping."
         ),
         inline=False,
     )
-
+    embed.add_field(
+        name="👥 Member Experience",
+        value="Ticket choices and Protection Center settings.",
+        inline=False,
+    )
+    embed.add_field(
+        name="🧰 Monitoring & Repair",
+        value="Modlog tracking and permission repair.",
+        inline=False,
+    )
+    embed.add_field(
+        name="🎨 Appearance",
+        value="Server Design, preview, and rollback tools.",
+        inline=False,
+    )
+    embed.add_field(
+        name="🚨 Danger Zone",
+        value=(
+            "Recovery / Start Over is isolated here so it is never "
+            "mixed with normal setup actions."
+        ),
+        inline=False,
+    )
     embed.add_field(
         name="Simple Setup",
         value=(
@@ -1908,7 +2068,6 @@ async def _open_manage_setup(
         embed=embed,
         view=ManageSetupView(),
     )
-
 
 
 
@@ -3432,161 +3591,94 @@ class ContinueSetupView(discord.ui.View):
 
 
 class ManageSetupView(discord.ui.View):
-    """The one canonical Advanced Options menu."""
+    """The canonical grouped Advanced Options hub."""
 
     def __init__(self) -> None:
         super().__init__(timeout=900)
 
     @discord.ui.button(
-        label="Features On / Off",
-        emoji="🧩",
+        label="Core Setup",
+        emoji="🧰",
         style=discord.ButtonStyle.primary,
-        custom_id="dank_setup_manage:services",
+        custom_id="dank_setup_manage:core",
         row=0,
     )
-    async def services(
+    async def core_setup(
         self,
         interaction: discord.Interaction,
         button: discord.ui.Button,
     ) -> None:
-        await _open_services(interaction)
+        await _open_advanced_core_setup(interaction)
 
     @discord.ui.button(
-        label="Ticket Choices",
-        emoji="🧾",
-        style=discord.ButtonStyle.secondary,
-        custom_id="dank_setup_manage:ticket_menu",
+        label="Member Experience",
+        emoji="👥",
+        style=discord.ButtonStyle.primary,
+        custom_id="dank_setup_manage:members",
         row=0,
     )
-    async def ticket_choices(
+    async def member_experience(
         self,
         interaction: discord.Interaction,
         button: discord.ui.Button,
     ) -> None:
-        await _open_ticket_menu(interaction)
+        await _open_advanced_member_experience(interaction)
 
     @discord.ui.button(
-        label="Protection",
-        emoji="🛡️",
+        label="Monitoring & Repair",
+        emoji="🧰",
         style=discord.ButtonStyle.primary,
-        custom_id="dank_setup_manage:protection",
-        row=0,
-    )
-    async def protection(
-        self,
-        interaction: discord.Interaction,
-        button: discord.ui.Button,
-    ) -> None:
-        await _open_protection_options(interaction)
-
-    @discord.ui.button(
-        label="Modlog Tracking",
-        emoji="🧾",
-        style=discord.ButtonStyle.primary,
-        custom_id="dank_setup_manage:modlog_tracking",
+        custom_id="dank_setup_manage:monitoring_repair",
         row=1,
     )
-    async def modlog_tracking(
+    async def monitoring_repair(
         self,
         interaction: discord.Interaction,
         button: discord.ui.Button,
     ) -> None:
-        await _open_modlog_tracking(interaction)
+        await _open_advanced_monitoring_repair(interaction)
 
     @discord.ui.button(
-        label="Timers & Behavior",
-        emoji="⏱️",
-        style=discord.ButtonStyle.secondary,
-        custom_id="dank_setup_manage:timers_behavior",
-        row=1,
-    )
-    async def timers_behavior(
-        self,
-        interaction: discord.Interaction,
-        button: discord.ui.Button,
-    ) -> None:
-        await _open_timers_behavior(interaction)
-
-    @discord.ui.button(
-        label="Server Design",
+        label="Appearance",
         emoji="🎨",
-        style=discord.ButtonStyle.primary,
-        custom_id="dank_setup_manage:design",
+        style=discord.ButtonStyle.secondary,
+        custom_id="dank_setup_manage:appearance",
         row=1,
     )
-    async def server_design(
+    async def appearance(
         self,
         interaction: discord.Interaction,
         button: discord.ui.Button,
     ) -> None:
-        if not await solid._require_setup_permission(
-            interaction
-        ):
-            return
-
-        from . import public_design_bridge
-
-        await public_design_bridge.open_design_studio_from_setup(
-            interaction
-        )
+        await _open_advanced_appearance(interaction)
 
     @discord.ui.button(
-        label="Detailed Role / Channel Mapping",
-        emoji="🧭",
-        style=discord.ButtonStyle.secondary,
-        custom_id="dank_setup_manage:existing",
-        row=2,
-    )
-    async def detailed_mapping(
-        self,
-        interaction: discord.Interaction,
-        button: discord.ui.Button,
-    ) -> None:
-        await _open_existing_server(interaction)
-
-    @discord.ui.button(
-        label="Recovery / Start Over",
-        emoji="🧯",
+        label="Danger Zone",
+        emoji="🚨",
         style=discord.ButtonStyle.danger,
-        custom_id="dank_setup_manage:recovery",
+        custom_id="dank_setup_manage:danger",
         row=2,
     )
-    async def recovery(
+    async def danger_zone(
         self,
         interaction: discord.Interaction,
         button: discord.ui.Button,
     ) -> None:
-        await _open_recovery_center(interaction)
-
-    @discord.ui.button(
-        label="Permission Repair",
-        emoji="🛠️",
-        style=discord.ButtonStyle.primary,
-        custom_id="dank_setup_manage:permission_repair",
-        row=3,
-    )
-    async def permission_repair(
-        self,
-        interaction: discord.Interaction,
-        button: discord.ui.Button,
-    ) -> None:
-        await _open_permission_repair(interaction)
+        await _open_advanced_danger_zone(interaction)
 
     @discord.ui.button(
         label="Help / FAQ",
         emoji="❓",
         style=discord.ButtonStyle.secondary,
         custom_id="dank_setup_manage:help",
-        row=3,
+        row=2,
     )
     async def help_faq(
         self,
         interaction: discord.Interaction,
         button: discord.ui.Button,
     ) -> None:
-        if not await solid._require_setup_permission(
-            interaction
-        ):
+        if not await solid._require_setup_permission(interaction):
             return
 
         await interaction.response.edit_message(
@@ -3608,6 +3700,223 @@ class ManageSetupView(discord.ui.View):
     ) -> None:
         await _home_edit(interaction)
 
+
+class AdvancedCoreSetupView(discord.ui.View):
+    def __init__(self) -> None:
+        super().__init__(timeout=900)
+
+    @discord.ui.button(
+        label="Features On / Off",
+        emoji="🧩",
+        style=discord.ButtonStyle.primary,
+        custom_id="dank_setup_advanced_core:services",
+        row=0,
+    )
+    async def services(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        await _open_services(interaction)
+
+    @discord.ui.button(
+        label="Timers & Behavior",
+        emoji="⏱️",
+        style=discord.ButtonStyle.secondary,
+        custom_id="dank_setup_advanced_core:timers_behavior",
+        row=0,
+    )
+    async def timers_behavior(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        await _open_timers_behavior(interaction)
+
+    @discord.ui.button(
+        label="Detailed Role / Channel Mapping",
+        emoji="🧭",
+        style=discord.ButtonStyle.secondary,
+        custom_id="dank_setup_advanced_core:existing",
+        row=1,
+    )
+    async def detailed_mapping(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        await _open_existing_server(interaction)
+
+    @discord.ui.button(
+        label="Back to Advanced",
+        emoji="↩️",
+        style=discord.ButtonStyle.secondary,
+        custom_id="dank_setup_advanced_core:back",
+        row=2,
+    )
+    async def back(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        await _open_manage_setup(interaction)
+
+    @discord.ui.button(
+        label="Back Home",
+        emoji="🏠",
+        style=discord.ButtonStyle.secondary,
+        custom_id="dank_setup_advanced_core:home",
+        row=2,
+    )
+    async def home(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        await _home_edit(interaction)
+
+
+class AdvancedMemberExperienceView(discord.ui.View):
+    def __init__(self) -> None:
+        super().__init__(timeout=900)
+
+    @discord.ui.button(
+        label="Ticket Choices",
+        emoji="🧾",
+        style=discord.ButtonStyle.primary,
+        custom_id="dank_setup_advanced_members:ticket_menu",
+        row=0,
+    )
+    async def ticket_choices(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        await _open_ticket_menu(interaction)
+
+    @discord.ui.button(
+        label="Protection",
+        emoji="🛡️",
+        style=discord.ButtonStyle.primary,
+        custom_id="dank_setup_advanced_members:protection",
+        row=0,
+    )
+    async def protection(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        await _open_protection_options(interaction)
+
+    @discord.ui.button(
+        label="Back to Advanced",
+        emoji="↩️",
+        style=discord.ButtonStyle.secondary,
+        custom_id="dank_setup_advanced_members:back",
+        row=1,
+    )
+    async def back(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        await _open_manage_setup(interaction)
+
+    @discord.ui.button(
+        label="Back Home",
+        emoji="🏠",
+        style=discord.ButtonStyle.secondary,
+        custom_id="dank_setup_advanced_members:home",
+        row=1,
+    )
+    async def home(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        await _home_edit(interaction)
+
+
+class AdvancedMonitoringRepairView(discord.ui.View):
+    def __init__(self) -> None:
+        super().__init__(timeout=900)
+
+    @discord.ui.button(
+        label="Modlog Tracking",
+        emoji="🧾",
+        style=discord.ButtonStyle.primary,
+        custom_id="dank_setup_advanced_monitoring:modlog_tracking",
+        row=0,
+    )
+    async def modlog_tracking(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        await _open_modlog_tracking(interaction)
+
+    @discord.ui.button(
+        label="Permission Repair",
+        emoji="🛠️",
+        style=discord.ButtonStyle.primary,
+        custom_id="dank_setup_advanced_monitoring:permission_repair",
+        row=0,
+    )
+    async def permission_repair(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        await _open_permission_repair(interaction)
+
+    @discord.ui.button(
+        label="Back to Advanced",
+        emoji="↩️",
+        style=discord.ButtonStyle.secondary,
+        custom_id="dank_setup_advanced_monitoring:back",
+        row=1,
+    )
+    async def back(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        await _open_manage_setup(interaction)
+
+    @discord.ui.button(
+        label="Back Home",
+        emoji="🏠",
+        style=discord.ButtonStyle.secondary,
+        custom_id="dank_setup_advanced_monitoring:home",
+        row=1,
+    )
+    async def home(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        await _home_edit(interaction)
+
+
+class AdvancedAppearanceView(discord.ui.View):
+    def __init__(self) -> None:
+        super().__init__(timeout=900)
+
+    @discord.ui.button(
+        label="Server Design",
+        emoji="🎨",
+        style=discord.ButtonStyle.primary,
+        custom_id="dank_setup_advanced_appearance:design",
+        row=0,
+    )
+    async def server_design(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        if not await solid._require_setup_permission(interaction):
+            return
+        from . import public_design_bridge
+        await public_design_bridge.open_design_studio_from_setup(interaction)
+
+    @discord.ui.button(
+        label="Back to Advanced",
+        emoji="↩️",
+        style=discord.ButtonStyle.secondary,
+        custom_id="dank_setup_advanced_appearance:back",
+        row=1,
+    )
+    async def back(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        await _open_manage_setup(interaction)
+
+    @discord.ui.button(
+        label="Back Home",
+        emoji="🏠",
+        style=discord.ButtonStyle.secondary,
+        custom_id="dank_setup_advanced_appearance:home",
+        row=1,
+    )
+    async def home(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        await _home_edit(interaction)
+
+
+class AdvancedDangerZoneView(discord.ui.View):
+    def __init__(self) -> None:
+        super().__init__(timeout=900)
+
+    @discord.ui.button(
+        label="Recovery / Start Over",
+        emoji="🧯",
+        style=discord.ButtonStyle.danger,
+        custom_id="dank_setup_advanced_danger:recovery",
+        row=0,
+    )
+    async def recovery(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        await _open_recovery_center(interaction)
+
+    @discord.ui.button(
+        label="Back to Advanced",
+        emoji="↩️",
+        style=discord.ButtonStyle.secondary,
+        custom_id="dank_setup_advanced_danger:back",
+        row=1,
+    )
+    async def back(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        await _open_manage_setup(interaction)
+
+    @discord.ui.button(
+        label="Back Home",
+        emoji="🏠",
+        style=discord.ButtonStyle.secondary,
+        custom_id="dank_setup_advanced_danger:home",
+        row=1,
+    )
+    async def home(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        await _home_edit(interaction)
 
 
 
