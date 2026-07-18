@@ -3376,7 +3376,7 @@ class ProductSetupHomeView(discord.ui.View):
 
     @discord.ui.button(
         label="More Options",
-        emoji="•••",
+        emoji="⚙️",
         style=discord.ButtonStyle.secondary,
         custom_id="dank_setup_home:more_options",
         row=1,
