@@ -1,0 +1,1202 @@
+name: Apply grouped setup advanced UI
+
+on:
+  push:
+    branches:
+      - fix/setup-advanced-options-grouped-mobile
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: fix/setup-advanced-options-grouped-mobile
+
+      - name: Reorganize advanced setup UI
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import re
+
+          source_path = Path('stoney_verify/commands_ext/public_setup_recommend.py')
+          source = source_path.read_text(encoding='utf-8')
+
+          open_block = '''def _advanced_section_embed(
+              *,
+              title: str,
+              description: str,
+              items: tuple[str, ...],
+              danger: bool = False,
+          ) -> discord.Embed:
+              embed = discord.Embed(
+                  title=title,
+                  description=description,
+                  color=(
+                      discord.Color.red()
+                      if danger
+                      else discord.Color.blurple()
+                  ),
+                  timestamp=now_utc(),
+              )
+              embed.add_field(
+                  name="In This Section",
+                  value="\\n".join(items)[:1024],
+                  inline=False,
+              )
+              embed.set_footer(
+                  text=(
+                      "Advanced Options • Back to Advanced returns to the "
+                      "grouped menu"
+                  )
+              )
+              return embed
+
+
+          async def _open_advanced_section(
+              interaction: discord.Interaction,
+              *,
+              title: str,
+              description: str,
+              items: tuple[str, ...],
+              view: discord.ui.View,
+              danger: bool = False,
+          ) -> None:
+              if not await solid._require_setup_permission(interaction):
+                  return
+
+              await solid._edit_or_followup(
+                  interaction,
+                  embed=_advanced_section_embed(
+                      title=title,
+                      description=description,
+                      items=items,
+                      danger=danger,
+                  ),
+                  view=view,
+              )
+
+
+          async def _open_advanced_core_setup(
+              interaction: discord.Interaction,
+          ) -> None:
+              await _open_advanced_section(
+                  interaction,
+                  title="🧰 Core Setup",
+                  description=(
+                      "Change the main setup behavior without digging through "
+                      "unrelated tools."
+                  ),
+                  items=(
+                      "🧩 **Features On / Off** — choose which services run.",
+                      "⏱️ **Timers & Behavior** — timers, naming, and flow settings.",
+                      "🧭 **Detailed Role / Channel Mapping** — deliberately remap saved items.",
+                  ),
+                  view=AdvancedCoreSetupView(),
+              )
+
+
+          async def _open_advanced_member_experience(
+              interaction: discord.Interaction,
+          ) -> None:
+              await _open_advanced_section(
+                  interaction,
+                  title="👥 Member Experience",
+                  description=(
+                      "Adjust what members interact with during tickets and "
+                      "server protection flows."
+                  ),
+                  items=(
+                      "🧾 **Ticket Choices** — edit what members can request.",
+                      "🛡️ **Protection** — open the Protection Center.",
+                  ),
+                  view=AdvancedMemberExperienceView(),
+              )
+
+
+          async def _open_advanced_monitoring_repair(
+              interaction: discord.Interaction,
+          ) -> None:
+              await _open_advanced_section(
+                  interaction,
+                  title="🧰 Monitoring & Repair",
+                  description=(
+                      "Manage server event tracking and repair saved setup "
+                      "permissions."
+                  ),
+                  items=(
+                      "🧾 **Modlog Tracking** — choose which server events are recorded.",
+                      "🛠️ **Permission Repair** — preview and repair saved setup channel permissions.",
+                  ),
+                  view=AdvancedMonitoringRepairView(),
+              )
+
+
+          async def _open_advanced_appearance(
+              interaction: discord.Interaction,
+          ) -> None:
+              await _open_advanced_section(
+                  interaction,
+                  title="🎨 Appearance",
+                  description=(
+                      "Open the visual design tools without mixing them into "
+                      "normal server setup."
+                  ),
+                  items=(
+                      "🎨 **Server Design** — fonts, frames, emojis, preview, and rollback.",
+                  ),
+                  view=AdvancedAppearanceView(),
+              )
+
+
+          async def _open_advanced_danger_zone(
+              interaction: discord.Interaction,
+          ) -> None:
+              await _open_advanced_section(
+                  interaction,
+                  title="🚨 Danger Zone",
+                  description=(
+                      "Use this only when you deliberately want to recover or "
+                      "start setup over. Normal setup tools are kept out of "
+                      "this section."
+                  ),
+                  items=(
+                      "🧯 **Recovery / Start Over** — safely reset or recover setup.",
+                  ),
+                  view=AdvancedDangerZoneView(),
+                  danger=True,
+              )
+
+
+          async def _open_manage_setup(
+              interaction: discord.Interaction,
+          ) -> None:
+              """Open the grouped Advanced Options hub."""
+
+              if not await solid._require_setup_permission(interaction):
+                  return
+
+              embed = discord.Embed(
+                  title="⚙️ Advanced Options",
+                  description=(
+                      "Choose one group. Regular setup should usually be done "
+                      "from **Start / Continue Setup**."
+                  ),
+                  color=discord.Color.blurple(),
+                  timestamp=now_utc(),
+              )
+              embed.add_field(
+                  name="🧰 Core Setup",
+                  value=(
+                      "Features, timers, behavior, and detailed role/channel "
+                      "mapping."
+                  ),
+                  inline=False,
+              )
+              embed.add_field(
+                  name="👥 Member Experience",
+                  value="Ticket choices and Protection Center settings.",
+                  inline=False,
+              )
+              embed.add_field(
+                  name="🧰 Monitoring & Repair",
+                  value="Modlog tracking and permission repair.",
+                  inline=False,
+              )
+              embed.add_field(
+                  name="🎨 Appearance",
+                  value="Server Design, preview, and rollback tools.",
+                  inline=False,
+              )
+              embed.add_field(
+                  name="🚨 Danger Zone",
+                  value=(
+                      "Recovery / Start Over is isolated here so it is never "
+                      "mixed with normal setup actions."
+                  ),
+                  inline=False,
+              )
+              embed.add_field(
+                  name="Simple Setup",
+                  value=(
+                      "Use **Back Home → Start / Continue Setup** for the "
+                      "one-item-at-a-time guided route."
+                  ),
+                  inline=False,
+              )
+
+              await solid._edit_or_followup(
+                  interaction,
+                  embed=embed,
+                  view=ManageSetupView(),
+              )
+          '''
+
+          source, count = re.subn(
+              r'async def _open_manage_setup\(\n.*?\n\n\ndef _setup_bool',
+              open_block + '\n\n\ndef _setup_bool',
+              source,
+              count=1,
+              flags=re.S,
+          )
+          if count != 1:
+              raise SystemExit(f'expected one _open_manage_setup block, replaced {count}')
+
+          view_block = '''class ManageSetupView(discord.ui.View):
+              """The canonical grouped Advanced Options hub."""
+
+              def __init__(self) -> None:
+                  super().__init__(timeout=900)
+
+              @discord.ui.button(
+                  label="Core Setup",
+                  emoji="🧰",
+                  style=discord.ButtonStyle.primary,
+                  custom_id="dank_setup_manage:core",
+                  row=0,
+              )
+              async def core_setup(
+                  self,
+                  interaction: discord.Interaction,
+                  button: discord.ui.Button,
+              ) -> None:
+                  await _open_advanced_core_setup(interaction)
+
+              @discord.ui.button(
+                  label="Member Experience",
+                  emoji="👥",
+                  style=discord.ButtonStyle.primary,
+                  custom_id="dank_setup_manage:members",
+                  row=0,
+              )
+              async def member_experience(
+                  self,
+                  interaction: discord.Interaction,
+                  button: discord.ui.Button,
+              ) -> None:
+                  await _open_advanced_member_experience(interaction)
+
+              @discord.ui.button(
+                  label="Monitoring & Repair",
+                  emoji="🧰",
+                  style=discord.ButtonStyle.primary,
+                  custom_id="dank_setup_manage:monitoring_repair",
+                  row=1,
+              )
+              async def monitoring_repair(
+                  self,
+                  interaction: discord.Interaction,
+                  button: discord.ui.Button,
+              ) -> None:
+                  await _open_advanced_monitoring_repair(interaction)
+
+              @discord.ui.button(
+                  label="Appearance",
+                  emoji="🎨",
+                  style=discord.ButtonStyle.secondary,
+                  custom_id="dank_setup_manage:appearance",
+                  row=1,
+              )
+              async def appearance(
+                  self,
+                  interaction: discord.Interaction,
+                  button: discord.ui.Button,
+              ) -> None:
+                  await _open_advanced_appearance(interaction)
+
+              @discord.ui.button(
+                  label="Danger Zone",
+                  emoji="🚨",
+                  style=discord.ButtonStyle.danger,
+                  custom_id="dank_setup_manage:danger",
+                  row=2,
+              )
+              async def danger_zone(
+                  self,
+                  interaction: discord.Interaction,
+                  button: discord.ui.Button,
+              ) -> None:
+                  await _open_advanced_danger_zone(interaction)
+
+              @discord.ui.button(
+                  label="Help / FAQ",
+                  emoji="❓",
+                  style=discord.ButtonStyle.secondary,
+                  custom_id="dank_setup_manage:help",
+                  row=2,
+              )
+              async def help_faq(
+                  self,
+                  interaction: discord.Interaction,
+                  button: discord.ui.Button,
+              ) -> None:
+                  if not await solid._require_setup_permission(interaction):
+                      return
+
+                  await interaction.response.edit_message(
+                      embed=_build_setup_help_embed(),
+                      view=ManageSetupView(),
+                  )
+
+              @discord.ui.button(
+                  label="Back Home",
+                  emoji="🏠",
+                  style=discord.ButtonStyle.secondary,
+                  custom_id="dank_setup_manage:home",
+                  row=3,
+              )
+              async def home(
+                  self,
+                  interaction: discord.Interaction,
+                  button: discord.ui.Button,
+              ) -> None:
+                  await _home_edit(interaction)
+
+
+          class AdvancedCoreSetupView(discord.ui.View):
+              def __init__(self) -> None:
+                  super().__init__(timeout=900)
+
+              @discord.ui.button(
+                  label="Features On / Off",
+                  emoji="🧩",
+                  style=discord.ButtonStyle.primary,
+                  custom_id="dank_setup_advanced_core:services",
+                  row=0,
+              )
+              async def services(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+                  await _open_services(interaction)
+
+              @discord.ui.button(
+                  label="Timers & Behavior",
+                  emoji="⏱️",
+                  style=discord.ButtonStyle.secondary,
+                  custom_id="dank_setup_advanced_core:timers_behavior",
+                  row=0,
+              )
+              async def timers_behavior(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+                  await _open_timers_behavior(interaction)
+
+              @discord.ui.button(
+                  label="Detailed Role / Channel Mapping",
+                  emoji="🧭",
+                  style=discord.ButtonStyle.secondary,
+                  custom_id="dank_setup_advanced_core:existing",
+                  row=1,
+              )
+              async def detailed_mapping(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+                  await _open_existing_server(interaction)
+
+              @discord.ui.button(
+                  label="Back to Advanced",
+                  emoji="↩️",
+                  style=discord.ButtonStyle.secondary,
+                  custom_id="dank_setup_advanced_core:back",
+                  row=2,
+              )
+              async def back(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+                  await _open_manage_setup(interaction)
+
+              @discord.ui.button(
+                  label="Back Home",
+                  emoji="🏠",
+                  style=discord.ButtonStyle.secondary,
+                  custom_id="dank_setup_advanced_core:home",
+                  row=2,
+              )
+              async def home(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+                  await _home_edit(interaction)
+
+
+          class AdvancedMemberExperienceView(discord.ui.View):
+              def __init__(self) -> None:
+                  super().__init__(timeout=900)
+
+              @discord.ui.button(
+                  label="Ticket Choices",
+                  emoji="🧾",
+                  style=discord.ButtonStyle.primary,
+                  custom_id="dank_setup_advanced_members:ticket_menu",
+                  row=0,
+              )
+              async def ticket_choices(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+                  await _open_ticket_menu(interaction)
+
+              @discord.ui.button(
+                  label="Protection",
+                  emoji="🛡️",
+                  style=discord.ButtonStyle.primary,
+                  custom_id="dank_setup_advanced_members:protection",
+                  row=0,
+              )
+              async def protection(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+                  await _open_protection_options(interaction)
+
+              @discord.ui.button(
+                  label="Back to Advanced",
+                  emoji="↩️",
+                  style=discord.ButtonStyle.secondary,
+                  custom_id="dank_setup_advanced_members:back",
+                  row=1,
+              )
+              async def back(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+                  await _open_manage_setup(interaction)
+
+              @discord.ui.button(
+                  label="Back Home",
+                  emoji="🏠",
+                  style=discord.ButtonStyle.secondary,
+                  custom_id="dank_setup_advanced_members:home",
+                  row=1,
+              )
+              async def home(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+                  await _home_edit(interaction)
+
+
+          class AdvancedMonitoringRepairView(discord.ui.View):
+              def __init__(self) -> None:
+                  super().__init__(timeout=900)
+
+              @discord.ui.button(
+                  label="Modlog Tracking",
+                  emoji="🧾",
+                  style=discord.ButtonStyle.primary,
+                  custom_id="dank_setup_advanced_monitoring:modlog_tracking",
+                  row=0,
+              )
+              async def modlog_tracking(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+                  await _open_modlog_tracking(interaction)
+
+              @discord.ui.button(
+                  label="Permission Repair",
+                  emoji="🛠️",
+                  style=discord.ButtonStyle.primary,
+                  custom_id="dank_setup_advanced_monitoring:permission_repair",
+                  row=0,
+              )
+              async def permission_repair(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+                  await _open_permission_repair(interaction)
+
+              @discord.ui.button(
+                  label="Back to Advanced",
+                  emoji="↩️",
+                  style=discord.ButtonStyle.secondary,
+                  custom_id="dank_setup_advanced_monitoring:back",
+                  row=1,
+              )
+              async def back(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+                  await _open_manage_setup(interaction)
+
+              @discord.ui.button(
+                  label="Back Home",
+                  emoji="🏠",
+                  style=discord.ButtonStyle.secondary,
+                  custom_id="dank_setup_advanced_monitoring:home",
+                  row=1,
+              )
+              async def home(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+                  await _home_edit(interaction)
+
+
+          class AdvancedAppearanceView(discord.ui.View):
+              def __init__(self) -> None:
+                  super().__init__(timeout=900)
+
+              @discord.ui.button(
+                  label="Server Design",
+                  emoji="🎨",
+                  style=discord.ButtonStyle.primary,
+                  custom_id="dank_setup_advanced_appearance:design",
+                  row=0,
+              )
+              async def server_design(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+                  if not await solid._require_setup_permission(interaction):
+                      return
+                  from . import public_design_bridge
+                  await public_design_bridge.open_design_studio_from_setup(interaction)
+
+              @discord.ui.button(
+                  label="Back to Advanced",
+                  emoji="↩️",
+                  style=discord.ButtonStyle.secondary,
+                  custom_id="dank_setup_advanced_appearance:back",
+                  row=1,
+              )
+              async def back(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+                  await _open_manage_setup(interaction)
+
+              @discord.ui.button(
+                  label="Back Home",
+                  emoji="🏠",
+                  style=discord.ButtonStyle.secondary,
+                  custom_id="dank_setup_advanced_appearance:home",
+                  row=1,
+              )
+              async def home(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+                  await _home_edit(interaction)
+
+
+          class AdvancedDangerZoneView(discord.ui.View):
+              def __init__(self) -> None:
+                  super().__init__(timeout=900)
+
+              @discord.ui.button(
+                  label="Recovery / Start Over",
+                  emoji="🧯",
+                  style=discord.ButtonStyle.danger,
+                  custom_id="dank_setup_advanced_danger:recovery",
+                  row=0,
+              )
+              async def recovery(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+                  await _open_recovery_center(interaction)
+
+              @discord.ui.button(
+                  label="Back to Advanced",
+                  emoji="↩️",
+                  style=discord.ButtonStyle.secondary,
+                  custom_id="dank_setup_advanced_danger:back",
+                  row=1,
+              )
+              async def back(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+                  await _open_manage_setup(interaction)
+
+              @discord.ui.button(
+                  label="Back Home",
+                  emoji="🏠",
+                  style=discord.ButtonStyle.secondary,
+                  custom_id="dank_setup_advanced_danger:home",
+                  row=1,
+              )
+              async def home(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+                  await _home_edit(interaction)
+          '''
+
+          source, count = re.subn(
+              r'class ManageSetupView\(discord\.ui\.View\):\n.*?\n\n\n_SETUP_TEST_TICKET_LOCKS',
+              view_block + '\n\n\n_SETUP_TEST_TICKET_LOCKS',
+              source,
+              count=1,
+              flags=re.S,
+          )
+          if count != 1:
+              raise SystemExit(f'expected one ManageSetupView block, replaced {count}')
+
+          source_path.write_text(source, encoding='utf-8')
+
+          advanced_test = r'''from __future__ import annotations
+
+import asyncio
+import ast
+from collections import Counter
+from pathlib import Path
+from types import SimpleNamespace
+from typing import Any
+
+import discord
+import pytest
+
+from stoney_verify.commands_ext import (
+    public_protection_center,
+    public_setup_recommend as recommend,
+)
+
+
+def run(coroutine: Any) -> Any:
+    return asyncio.run(coroutine)
+
+
+def labels(view: discord.ui.View) -> set[str]:
+    return {
+        str(getattr(child, "label", "") or "")
+        for child in view.children
+    }
+
+
+def find_button(
+    view: discord.ui.View,
+    label: str,
+) -> discord.ui.Button:
+    matches = [
+        child
+        for child in view.children
+        if str(getattr(child, "label", "") or "") == label
+    ]
+    assert len(matches) == 1
+    assert isinstance(matches[0], discord.ui.Button)
+    return matches[0]
+
+
+def assert_mobile_rows(view: discord.ui.View) -> None:
+    counts = Counter(int(getattr(child, "row", 0) or 0) for child in view.children)
+    assert counts
+    assert max(counts.values()) <= 2
+
+
+class FakeResponse:
+    async def edit_message(self, **kwargs: Any) -> None:
+        return None
+
+    async def send_message(self, *args: Any, **kwargs: Any) -> None:
+        return None
+
+
+class FakeInteraction:
+    def __init__(self) -> None:
+        self.guild = SimpleNamespace(id=8080)
+        self.user = SimpleNamespace(id=77)
+        self.response = FakeResponse()
+
+
+def test_advanced_options_hub_is_grouped_not_flat():
+    view = recommend.ManageSetupView()
+    assert labels(view) == {
+        "Core Setup",
+        "Member Experience",
+        "Monitoring & Repair",
+        "Appearance",
+        "Danger Zone",
+        "Help / FAQ",
+        "Back Home",
+    }
+    assert "Recovery / Start Over" not in labels(view)
+    assert "Features On / Off" not in labels(view)
+
+
+def test_advanced_submenus_keep_every_existing_tool():
+    assert labels(recommend.AdvancedCoreSetupView()) == {
+        "Features On / Off",
+        "Timers & Behavior",
+        "Detailed Role / Channel Mapping",
+        "Back to Advanced",
+        "Back Home",
+    }
+    assert labels(recommend.AdvancedMemberExperienceView()) == {
+        "Ticket Choices",
+        "Protection",
+        "Back to Advanced",
+        "Back Home",
+    }
+    assert labels(recommend.AdvancedMonitoringRepairView()) == {
+        "Modlog Tracking",
+        "Permission Repair",
+        "Back to Advanced",
+        "Back Home",
+    }
+    assert labels(recommend.AdvancedAppearanceView()) == {
+        "Server Design",
+        "Back to Advanced",
+        "Back Home",
+    }
+    assert labels(recommend.AdvancedDangerZoneView()) == {
+        "Recovery / Start Over",
+        "Back to Advanced",
+        "Back Home",
+    }
+
+
+def test_recovery_is_isolated_to_danger_zone():
+    normal_views = (
+        recommend.ManageSetupView(),
+        recommend.AdvancedCoreSetupView(),
+        recommend.AdvancedMemberExperienceView(),
+        recommend.AdvancedMonitoringRepairView(),
+        recommend.AdvancedAppearanceView(),
+    )
+    for view in normal_views:
+        assert "Recovery / Start Over" not in labels(view)
+    assert "Recovery / Start Over" in labels(recommend.AdvancedDangerZoneView())
+
+
+def test_all_advanced_pages_are_mobile_compact():
+    for view in (
+        recommend.ManageSetupView(),
+        recommend.AdvancedCoreSetupView(),
+        recommend.AdvancedMemberExperienceView(),
+        recommend.AdvancedMonitoringRepairView(),
+        recommend.AdvancedAppearanceView(),
+        recommend.AdvancedDangerZoneView(),
+    ):
+        assert_mobile_rows(view)
+
+
+@pytest.mark.parametrize(
+    ("view_cls", "label", "route_name"),
+    (
+        (recommend.AdvancedCoreSetupView, "Features On / Off", "_open_services"),
+        (recommend.AdvancedCoreSetupView, "Timers & Behavior", "_open_timers_behavior"),
+        (recommend.AdvancedCoreSetupView, "Detailed Role / Channel Mapping", "_open_existing_server"),
+        (recommend.AdvancedMemberExperienceView, "Ticket Choices", "_open_ticket_menu"),
+        (recommend.AdvancedMemberExperienceView, "Protection", "_open_protection_options"),
+        (recommend.AdvancedMonitoringRepairView, "Modlog Tracking", "_open_modlog_tracking"),
+        (recommend.AdvancedMonitoringRepairView, "Permission Repair", "_open_permission_repair"),
+        (recommend.AdvancedDangerZoneView, "Recovery / Start Over", "_open_recovery_center"),
+        (recommend.ManageSetupView, "Back Home", "_home_edit"),
+    ),
+)
+def test_buttons_reuse_existing_runtime_routes(
+    monkeypatch: pytest.MonkeyPatch,
+    view_cls: type[discord.ui.View],
+    label: str,
+    route_name: str,
+) -> None:
+    events: list[str] = []
+
+    async def route(*args: Any, **kwargs: Any) -> None:
+        events.append(route_name)
+
+    monkeypatch.setattr(recommend, route_name, route)
+    view = view_cls()
+    run(find_button(view, label).callback(FakeInteraction()))
+    assert events == [route_name]
+
+
+def test_group_buttons_open_focused_submenus(monkeypatch: pytest.MonkeyPatch) -> None:
+    mapping = (
+        ("Core Setup", "_open_advanced_core_setup"),
+        ("Member Experience", "_open_advanced_member_experience"),
+        ("Monitoring & Repair", "_open_advanced_monitoring_repair"),
+        ("Appearance", "_open_advanced_appearance"),
+        ("Danger Zone", "_open_advanced_danger_zone"),
+    )
+    for label, route_name in mapping:
+        events: list[str] = []
+
+        async def route(*args: Any, _route_name: str = route_name, **kwargs: Any) -> None:
+            events.append(_route_name)
+
+        monkeypatch.setattr(recommend, route_name, route)
+        run(find_button(recommend.ManageSetupView(), label).callback(FakeInteraction()))
+        assert events == [route_name]
+
+
+def test_advanced_options_screen_uses_canonical_grouped_view(monkeypatch: pytest.MonkeyPatch) -> None:
+    interaction = FakeInteraction()
+    captured: dict[str, Any] = {}
+
+    async def allow(*args: Any, **kwargs: Any) -> bool:
+        return True
+
+    async def edit(interaction_arg: Any, *, embed: discord.Embed, view: discord.ui.View) -> None:
+        captured["interaction"] = interaction_arg
+        captured["embed"] = embed
+        captured["view"] = view
+
+    monkeypatch.setattr(recommend.solid, "_require_setup_permission", allow)
+    monkeypatch.setattr(recommend.solid, "_edit_or_followup", edit)
+
+    run(recommend._open_manage_setup(interaction))
+    assert captured["interaction"] is interaction
+    assert captured["embed"].title == "⚙️ Advanced Options"
+    assert isinstance(captured["view"], recommend.ManageSetupView)
+    assert "Danger Zone" in {field.name for field in captured["embed"].fields}
+
+
+def test_protection_reuses_protection_center(monkeypatch: pytest.MonkeyPatch) -> None:
+    interaction = FakeInteraction()
+    events: list[str] = []
+
+    async def allow(*args: Any, **kwargs: Any) -> bool:
+        return True
+
+    async def refresh(interaction_arg: Any, *, content: str) -> None:
+        assert interaction_arg is interaction
+        assert "Advanced Options" in content
+        events.append("protection")
+
+    monkeypatch.setattr(recommend.solid, "_require_setup_permission", allow)
+    monkeypatch.setattr(public_protection_center, "_refresh_panel", refresh)
+    run(recommend._open_protection_options(interaction))
+    assert events == ["protection"]
+
+
+def test_timers_behavior_reuses_existing_behavior_view(monkeypatch: pytest.MonkeyPatch) -> None:
+    interaction = FakeInteraction()
+    captured: dict[str, Any] = {}
+
+    async def allow(*args: Any, **kwargs: Any) -> bool:
+        return True
+
+    async def add_section(embed: discord.Embed, guild: Any, section: str) -> None:
+        captured["section"] = section
+        captured["guild"] = guild
+
+    async def edit(interaction_arg: Any, *, embed: discord.Embed, view: discord.ui.View) -> None:
+        captured["interaction"] = interaction_arg
+        captured["embed"] = embed
+        captured["view"] = view
+
+    monkeypatch.setattr(recommend.solid, "_require_setup_permission", allow)
+    monkeypatch.setattr(recommend.solid, "_add_saved_setup_section", add_section)
+    monkeypatch.setattr(recommend.solid, "_edit_or_followup", edit)
+
+    run(recommend._open_timers_behavior(interaction))
+    assert captured["section"] == "behavior"
+    assert captured["guild"] is interaction.guild
+    assert captured["interaction"] is interaction
+    assert captured["embed"].title == "⏱️ Timers & Behavior"
+    assert isinstance(captured["view"], recommend.solid.BehaviorSettingsView)
+
+
+def test_unused_plain_manage_duplicate_is_removed():
+    path = Path("stoney_verify/commands_ext/public_setup_fresh_choice.py")
+    text = path.read_text(encoding="utf-8")
+    tree = ast.parse(text, filename=str(path))
+    assert not any(
+        isinstance(node, ast.ClassDef) and node.name == "PlainManageSetupView"
+        for node in ast.walk(tree)
+    )
+    assert "recommend._open_manage_setup" in text
+
+
+def test_canonical_views_use_grouped_plain_labels():
+    path = Path("stoney_verify/commands_ext/public_setup_recommend.py")
+    text = path.read_text(encoding="utf-8")
+    tree = ast.parse(text, filename=str(path))
+
+    classes = {
+        node.name: ast.get_source_segment(text, node) or ""
+        for node in ast.walk(tree)
+        if isinstance(node, ast.ClassDef)
+    }
+
+    hub = classes["ManageSetupView"]
+    assert 'label="Core Setup"' in hub
+    assert 'label="Member Experience"' in hub
+    assert 'label="Monitoring & Repair"' in hub
+    assert 'label="Appearance"' in hub
+    assert 'label="Danger Zone"' in hub
+    assert 'label="Recovery / Start Over"' not in hub
+
+    combined = "\n".join(
+        classes[name]
+        for name in (
+            "AdvancedCoreSetupView",
+            "AdvancedMemberExperienceView",
+            "AdvancedMonitoringRepairView",
+            "AdvancedAppearanceView",
+            "AdvancedDangerZoneView",
+        )
+    )
+    for label in (
+        "Features On / Off",
+        "Ticket Choices",
+        "Protection",
+        "Modlog Tracking",
+        "Timers & Behavior",
+        "Server Design",
+        "Detailed Role / Channel Mapping",
+        "Permission Repair",
+        "Recovery / Start Over",
+    ):
+        assert f'label="{label}"' in combined
+'''
+          Path('tests/test_setup_advanced_options_behavior.py').write_text(advanced_test, encoding='utf-8')
+
+          single_path = Path('tests/test_setup_single_guided_front_door_static.py')
+          single = single_path.read_text(encoding='utf-8')
+          new_advanced_test = '''def test_advanced_tools_still_exist():
+              """Every advanced tool must live under the grouped canonical owner."""
+
+              import ast
+
+              recommend_tree = ast.parse(RECOMMEND)
+              classes = {
+                  node.name: ast.get_source_segment(RECOMMEND, node) or ""
+                  for node in recommend_tree.body
+                  if isinstance(node, ast.ClassDef)
+              }
+
+              hub = classes["ManageSetupView"]
+              for label in (
+                  "Core Setup",
+                  "Member Experience",
+                  "Monitoring & Repair",
+                  "Appearance",
+                  "Danger Zone",
+                  "Help / FAQ",
+                  "Back Home",
+              ):
+                  assert label in hub
+
+              assert "Recovery / Start Over" not in hub
+
+              advanced = "\\n".join(
+                  classes[name]
+                  for name in (
+                      "AdvancedCoreSetupView",
+                      "AdvancedMemberExperienceView",
+                      "AdvancedMonitoringRepairView",
+                      "AdvancedAppearanceView",
+                      "AdvancedDangerZoneView",
+                  )
+              )
+
+              required_labels = (
+                  "Features On / Off",
+                  "Ticket Choices",
+                  "Protection",
+                  "Modlog Tracking",
+                  "Timers & Behavior",
+                  "Server Design",
+                  "Detailed Role / Channel Mapping",
+                  "Permission Repair",
+                  "Recovery / Start Over",
+                  "Back to Advanced",
+                  "Back Home",
+              )
+              for label in required_labels:
+                  assert label in advanced
+
+              required_routes = (
+                  "_open_services",
+                  "_open_ticket_menu",
+                  "_open_protection_options",
+                  "_open_modlog_tracking",
+                  "_open_timers_behavior",
+                  "_open_existing_server",
+                  "_open_permission_repair",
+                  "_open_recovery_center",
+                  "_open_manage_setup",
+                  "_home_edit",
+              )
+              for route in required_routes:
+                  assert route in advanced
+
+              danger = classes["AdvancedDangerZoneView"]
+              assert "Recovery / Start Over" in danger
+
+              assert "class PlainManageSetupView" not in FRESH
+              assert "recommend._open_manage_setup" in FRESH
+          '''
+          single, count = re.subn(
+              r'def test_advanced_tools_still_exist\(\):.*\Z',
+              new_advanced_test,
+              single,
+              count=1,
+              flags=re.S,
+          )
+          if count != 1:
+              raise SystemExit(f'expected one advanced front-door test, replaced {count}')
+          single_path.write_text(single, encoding='utf-8')
+
+          clarity_path = Path('tests/test_setup_ux_clarity_guard_retired.py')
+          clarity = clarity_path.read_text(encoding='utf-8')
+          new_clarity = '''def test_native_guided_labels_and_routes_remain() -> None:
+              home = _buttons(_class("ProductSetupHomeView"))
+              guided = _buttons(_class("ContinueSetupView"))
+              advanced = _buttons(_class("ManageSetupView"))
+              core = _buttons(_class("AdvancedCoreSetupView"))
+              members = _buttons(_class("AdvancedMemberExperienceView"))
+              monitoring = _buttons(_class("AdvancedMonitoringRepairView"))
+              appearance = _buttons(_class("AdvancedAppearanceView"))
+              danger = _buttons(_class("AdvancedDangerZoneView"))
+
+              assert home["continue_setup"][:2] == (
+                  "Start / Continue Setup",
+                  "dank_setup_home:continue",
+              )
+              assert home["health"][0] == "Setup Check"
+              assert home["launch"][0] == "Test / Launch"
+
+              assert guided["fix_next"][0] == "Fix Next Item"
+              assert guided["review"][0] == "Setup Check"
+              assert guided["change_type"][:2] == (
+                  "Change Setup Type",
+                  "dank_setup_guided:change_type",
+              )
+              assert "await _open_choose_setup_type(interaction)" in guided["change_type"][2]
+              assert guided["advanced"][0] == "Advanced Options"
+              assert guided["home"][0] == "Back Home"
+
+              assert advanced["core_setup"][0] == "Core Setup"
+              assert advanced["member_experience"][0] == "Member Experience"
+              assert advanced["monitoring_repair"][0] == "Monitoring & Repair"
+              assert advanced["appearance"][0] == "Appearance"
+              assert advanced["danger_zone"][0] == "Danger Zone"
+
+              assert core["services"][0] == "Features On / Off"
+              assert core["timers_behavior"][0] == "Timers & Behavior"
+              assert core["detailed_mapping"][0] == "Detailed Role / Channel Mapping"
+              assert members["ticket_choices"][0] == "Ticket Choices"
+              assert members["protection"][0] == "Protection"
+              assert monitoring["modlog_tracking"][0] == "Modlog Tracking"
+              assert monitoring["permission_repair"][0] == "Permission Repair"
+              assert appearance["server_design"][0] == "Server Design"
+              assert danger["recovery"][0] == "Recovery / Start Over"
+          '''
+          clarity, count = re.subn(
+              r'def test_native_guided_labels_and_routes_remain\(\) -> None:.*?\n\ndef test_public_setup_type_picker_remains',
+              new_clarity + '\n\ndef test_public_setup_type_picker_remains',
+              clarity,
+              count=1,
+              flags=re.S,
+          )
+          if count != 1:
+              raise SystemExit(f'expected one clarity advanced block, replaced {count}')
+          clarity_path.write_text(clarity, encoding='utf-8')
+
+          audit_path = Path('tools/audit_setup_safety.py')
+          audit = audit_path.read_text(encoding='utf-8')
+          audit = audit.replace(
+              '''    advanced = _button_inventory(
+                  recommend,
+                  "ManageSetupView",
+              )
+          ''',
+              '''    advanced = _button_inventory(
+                  recommend,
+                  "ManageSetupView",
+              )
+              advanced_sections = {
+                  "AdvancedCoreSetupView": _button_inventory(
+                      recommend,
+                      "AdvancedCoreSetupView",
+                  ),
+                  "AdvancedMemberExperienceView": _button_inventory(
+                      recommend,
+                      "AdvancedMemberExperienceView",
+                  ),
+                  "AdvancedMonitoringRepairView": _button_inventory(
+                      recommend,
+                      "AdvancedMonitoringRepairView",
+                  ),
+                  "AdvancedAppearanceView": _button_inventory(
+                      recommend,
+                      "AdvancedAppearanceView",
+                  ),
+                  "AdvancedDangerZoneView": _button_inventory(
+                      recommend,
+                      "AdvancedDangerZoneView",
+                  ),
+              }
+          ''',
+              1,
+          )
+          old_expected = '''    expected_advanced = {
+              "services": "Features On / Off",
+              "ticket_choices": "Ticket Choices",
+              "protection": "Protection",
+              "timers_behavior": "Timers & Behavior",
+              "server_design": "Server Design",
+              "detailed_mapping": (
+                  "Detailed Role / Channel Mapping"
+              ),
+              "recovery": "Recovery / Start Over",
+              "home": "Back Home",
+          }
+          '''
+          new_expected = '''    expected_advanced = {
+              "core_setup": "Core Setup",
+              "member_experience": "Member Experience",
+              "monitoring_repair": "Monitoring & Repair",
+              "appearance": "Appearance",
+              "danger_zone": "Danger Zone",
+              "help_faq": "Help / FAQ",
+              "home": "Back Home",
+          }
+
+              expected_advanced_sections = {
+                  "AdvancedCoreSetupView": {
+                      "services": "Features On / Off",
+                      "timers_behavior": "Timers & Behavior",
+                      "detailed_mapping": "Detailed Role / Channel Mapping",
+                      "back": "Back to Advanced",
+                      "home": "Back Home",
+                  },
+                  "AdvancedMemberExperienceView": {
+                      "ticket_choices": "Ticket Choices",
+                      "protection": "Protection",
+                      "back": "Back to Advanced",
+                      "home": "Back Home",
+                  },
+                  "AdvancedMonitoringRepairView": {
+                      "modlog_tracking": "Modlog Tracking",
+                      "permission_repair": "Permission Repair",
+                      "back": "Back to Advanced",
+                      "home": "Back Home",
+                  },
+                  "AdvancedAppearanceView": {
+                      "server_design": "Server Design",
+                      "back": "Back to Advanced",
+                      "home": "Back Home",
+                  },
+                  "AdvancedDangerZoneView": {
+                      "recovery": "Recovery / Start Over",
+                      "back": "Back to Advanced",
+                      "home": "Back Home",
+                  },
+              }
+          '''
+          if old_expected not in audit:
+              raise SystemExit('expected_advanced block changed')
+          audit = audit.replace(old_expected, new_expected, 1)
+
+          marker = '''    for method, expected in expected_choices.items():
+          '''
+          grouped_check = '''    if any(
+                  item[0] == "Recovery / Start Over"
+                  for item in advanced.values()
+              ):
+                  failures.append(
+                      f"{recommend.relative_to(ROOT)}: Recovery / Start Over "
+                      "must be isolated inside AdvancedDangerZoneView"
+                  )
+
+              for class_name, expected_buttons in expected_advanced_sections.items():
+                  inventory = advanced_sections.get(class_name, {})
+                  for method, expected_label in expected_buttons.items():
+                      actual = inventory.get(method)
+                      if actual is None:
+                          failures.append(
+                              f"{recommend.relative_to(ROOT)}: "
+                              f"{class_name} missing `{method}`"
+                          )
+                          continue
+                      if actual[0] != expected_label:
+                          failures.append(
+                              f"{recommend.relative_to(ROOT)}: "
+                              f"{class_name}.{method} label is "
+                              f"{actual[0]!r}, expected {expected_label!r}"
+                          )
+
+              for method, expected in expected_choices.items():
+          '''
+          if marker not in audit:
+              raise SystemExit('expected choices loop marker missing')
+          audit = audit.replace(marker, grouped_check, 1)
+          audit_path.write_text(audit, encoding='utf-8')
+
+          # Fail fast on syntax before committing.
+          for path in (
+              source_path,
+              Path('tests/test_setup_advanced_options_behavior.py'),
+              single_path,
+              clarity_path,
+              audit_path,
+          ):
+              compile(path.read_text(encoding='utf-8'), str(path), 'exec')
+
+          workflow = Path('.github/workflows/apply-grouped-setup-advanced-ui.yml')
+          workflow.unlink()
+          PY
+
+      - name: Commit grouped setup UX
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add stoney_verify/commands_ext/public_setup_recommend.py \
+            tests/test_setup_advanced_options_behavior.py \
+            tests/test_setup_single_guided_front_door_static.py \
+            tests/test_setup_ux_clarity_guard_retired.py \
+            tools/audit_setup_safety.py \
+            .github/workflows/apply-grouped-setup-advanced-ui.yml
+          git diff --cached --check
+          git commit -m "ux: group advanced setup options for mobile"
+          git push origin HEAD:fix/setup-advanced-options-grouped-mobile
