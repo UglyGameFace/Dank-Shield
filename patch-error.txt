@@ -1,0 +1,6 @@
+Traceback (most recent call last):
+  File "<stdin>", line 13, in <module>
+  File ".github/workflows/apply-grouped-setup-advanced-ui.yml", line 1
+    name: Apply grouped setup advanced UI
+             ^
+IndentationError: unexpected indent
