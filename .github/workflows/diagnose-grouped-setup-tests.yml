@@ -6,14 +6,16 @@ on:
     branches: [main]
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   diagnose:
-    if: github.head_ref == 'fix/setup-advanced-options-grouped-mobile'
+    if: github.head_ref == 'fix/setup-advanced-options-grouped-mobile' && github.actor != 'github-actions[bot]'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.head_ref }}
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
@@ -22,14 +24,25 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
           pip install pytest
-      - name: Run full pytest and show failure tail
+      - name: Run full pytest
+        id: pytest
+        continue-on-error: true
         env:
           DANK_STARTUP_LOG_STYLE: quiet
           DANK_COMMAND_LOG_STYLE: quiet
         shell: bash
         run: |
-          set +e
           python -m pytest tests/ -q --tb=short > pytest-output.txt 2>&1
-          rc=$?
-          tail -160 pytest-output.txt
-          exit $rc
+      - name: Save pytest tail to branch
+        if: always()
+        shell: bash
+        run: |
+          tail -200 pytest-output.txt > pytest-failure-tail.txt
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add pytest-failure-tail.txt
+          git commit -m "chore: capture grouped setup pytest tail" || true
+          git push origin HEAD:fix/setup-advanced-options-grouped-mobile
+      - name: Fail when pytest failed
+        if: steps.pytest.outcome == 'failure'
+        run: exit 1
