@@ -61,11 +61,11 @@ PASS test_multi_picker_uses_shared_choice_contract
 PASS test_cancel_supports_single_and_multi_picker
 PASS test_multi_picker_is_exported
 ===== tools/test_embed_literal_newline_guard.py =====
-🫀 process_health BOOT count=1 first_recorded_boot pid=2190 rss≈43.7MB
+🫀 process_health BOOT count=1 first_recorded_boot pid=2385 rss≈43.6MB
 🫀 process_health loaded; crash/restart visibility active
 🧼 embed_literal_newline_guard active; literal newline markers are sanitized before embeds render
 PASS embed literal newline guard
-🫀 process_health PROCESS_EXIT uptime=0.0s rss≈43.7MB
+🫀 process_health PROCESS_EXIT uptime=0.0s rss≈43.6MB
 ===== tools/test_inactive_members_truth_gate_static.py =====
 PASS test_only_direct_member_activity_resets_inactivity
 PASS test_missing_role_configuration_fails_closed
@@ -150,13 +150,10 @@ PASS canonical setup doctor
 ===== tools/test_setup_doctor_live_embed_truth.py =====
 PASS live setup doctor truth embed test
 ===== tools/test_setup_existing_join_leave_menu_static.py =====
-Traceback (most recent call last):
-  File "/home/runner/work/Dank-Shield/Dank-Shield/tools/test_setup_existing_join_leave_menu_static.py", line 105, in <module>
-    test()
-  File "/home/runner/work/Dank-Shield/Dank-Shield/tools/test_setup_existing_join_leave_menu_static.py", line 37, in test_recommended_setup_path_is_the_real_existing_server_menu
-    assert 'label="Detailed Role / Channel Mapping"' in manage_source
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-AssertionError
+PASS test_recommended_setup_path_is_the_real_existing_server_menu
+PASS test_guard_patches_recommended_existing_server_menu
+PASS test_join_leave_picker_is_visible_in_logs_and_channels
+PASS test_join_leave_picker_writes_authoritative_aliases
 ===== tools/test_setup_full_customization_join_leave_native_static.py =====
 PASS test_more_channels_natively_shows_join_leave_picker
 PASS test_more_channels_still_has_all_four_selects
