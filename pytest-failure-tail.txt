@@ -2,27 +2,13 @@
 ........................................................................ [ 38%]
 ........................................................................ [ 57%]
 ........................................................................ [ 76%]
-..............F..F...................................................... [ 95%]
+........................................................................ [ 95%]
 .................                                                        [100%]
-=================================== FAILURES ===================================
-_________________ test_canonical_setup_route_still_owns_entry __________________
-tests/test_setup_permission_repair_guard_native_no_payload_patch.py:209: in test_canonical_setup_route_still_owns_entry
-    assert (
-E   assert 'custom_id="dank_setup_manage:permission_repair"' in 'from __future__ import annotations\n\nimport asyncio\n\n"""Plain-language public /dank setup home.\n\nThis module pat...p_recommend: plain-language /dank setup choices active")\n\n\n__all__ = ["register_public_setup_recommend_commands"]\n'
-________________ test_advanced_options_button_uses_native_route ________________
-tests/test_setup_permission_repair_native_route.py:100: in test_advanced_options_button_uses_native_route
-    assert len(methods) == 1
-E   assert 0 == 1
-E    +  where 0 = len([])
 =============================== warnings summary ===============================
 ../../../../../opt/hostedtoolcache/Python/3.11.15/x64/lib/python3.11/site-packages/discord/player.py:30
   /opt/hostedtoolcache/Python/3.11.15/x64/lib/python3.11/site-packages/discord/player.py:30: DeprecationWarning: 'audioop' is deprecated and slated for removal in Python 3.13
     import audioop
 
 -- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
-=========================== short test summary info ============================
-FAILED tests/test_setup_permission_repair_guard_native_no_payload_patch.py::test_canonical_setup_route_still_owns_entry - assert 'custom_id="dank_setup_manage:permission_repair"' in 'from __future__ import annotations\n\nimport asyncio\n\n"""Plain-language public /dank setup home.\n\nThis module pat...p_recommend: plain-language /dank setup choices active")\n\n\n__all__ = ["register_public_setup_recommend_commands"]\n'
-FAILED tests/test_setup_permission_repair_native_route.py::test_advanced_options_button_uses_native_route - assert 0 == 1
- +  where 0 = len([])
-2 failed, 375 passed, 1 warning in 9.02s
-🫀 process_health PROCESS_EXIT uptime=8.0s rss≈129.4MB
+377 passed, 1 warning in 8.18s
+🫀 process_health PROCESS_EXIT uptime=7.2s rss≈129.2MB
