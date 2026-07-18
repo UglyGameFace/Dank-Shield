@@ -1,12 +1,12 @@
 name: Apply category-aware Dank Design auto-detect
 
 on:
-  pull_request:
-    types: [opened, synchronize]
-    branches: [main]
+  push:
+    branches:
+      - fix/dank-design-category-aware-auto-detect
 
 concurrency:
-  group: dank-design-category-aware-${{ github.event.pull_request.number }}
+  group: dank-design-category-aware-branch
   cancel-in-progress: true
 
 permissions:
@@ -14,12 +14,12 @@ permissions:
 
 jobs:
   apply:
-    if: github.head_ref == 'fix/dank-design-category-aware-auto-detect' && github.actor != 'github-actions[bot]'
+    if: github.ref == 'refs/heads/fix/dank-design-category-aware-auto-detect' && github.actor != 'github-actions[bot]'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ github.head_ref }}
+          ref: fix/dank-design-category-aware-auto-detect
           fetch-depth: 0
 
       - uses: actions/setup-python@v5
