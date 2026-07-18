@@ -1,0 +1,46 @@
+name: Apply one-path setup front door v2
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    if: github.head_ref == 'fix/setup-single-path-front-door-v2' && github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.head_ref }}
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Apply setup UX rewrite
+        run: python tools/apply_setup_single_path_front_door_v2.py
+
+      - name: Validate rewritten files
+        run: |
+          python -m py_compile \
+            stoney_verify/commands_ext/public_setup_recommend.py \
+            stoney_verify/commands_ext/public_setup_fresh_choice.py \
+            tests/test_setup_single_path_front_door_v2_static.py
+          python -m pytest tests/test_setup_single_path_front_door_v2_static.py -q
+          git diff --check
+
+      - name: Commit rewritten setup flow
+        run: |
+          rm -f tools/apply_setup_single_path_front_door_v2.py
+          rm -f .github/workflows/apply-setup-single-path-front-door-v2.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git diff --cached --check
+          git commit -m "ux: enforce one-path Dank setup front door"
+          git push origin HEAD:fix/setup-single-path-front-door-v2
