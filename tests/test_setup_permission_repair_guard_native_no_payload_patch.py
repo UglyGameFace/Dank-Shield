@@ -207,7 +207,7 @@ def test_canonical_setup_route_still_owns_entry() -> None:
     )
 
     assert (
-        'custom_id="dank_setup_manage:permission_repair"'
+        'custom_id="dank_setup_advanced_monitoring:permission_repair"'
         in RECOMMEND
     )
 

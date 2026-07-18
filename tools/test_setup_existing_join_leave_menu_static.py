@@ -10,36 +10,36 @@ GUARD = (ROOT / "stoney_verify/startup_guards/member_lifecycle_audit_context_gua
 
 
 def test_recommended_setup_path_is_the_real_existing_server_menu() -> None:
-    """Advanced Options owns the deliberate existing-item mapper."""
+    """Core Setup owns the deliberate existing-item mapper."""
 
     import ast
 
     tree = ast.parse(RECOMMEND)
 
-    manage_matches = [
+    core_matches = [
         current
         for current in tree.body
         if isinstance(current, ast.ClassDef)
-        and current.name == "ManageSetupView"
+        and current.name == "AdvancedCoreSetupView"
     ]
 
-    assert len(manage_matches) == 1
+    assert len(core_matches) == 1
 
-    manage_view = manage_matches[0]
-    manage_source = (
+    core_view = core_matches[0]
+    core_source = (
         ast.get_source_segment(
             RECOMMEND,
-            manage_view,
+            core_view,
         )
         or ""
     )
 
-    assert 'label="Detailed Role / Channel Mapping"' in manage_source
-    assert 'custom_id="dank_setup_manage:existing"' in manage_source
+    assert 'label="Detailed Role / Channel Mapping"' in core_source
+    assert 'custom_id="dank_setup_advanced_core:existing"' in core_source
 
     method_matches = [
         current
-        for current in manage_view.body
+        for current in core_view.body
         if isinstance(
             current,
             (ast.FunctionDef, ast.AsyncFunctionDef),
@@ -61,8 +61,6 @@ def test_recommended_setup_path_is_the_real_existing_server_menu() -> None:
 
     # The old competing Continue Setup mapping button was removed.
     assert "dank_setup_continue:existing" not in RECOMMEND
-
-
 
 
 def test_guard_patches_recommended_existing_server_menu() -> None:

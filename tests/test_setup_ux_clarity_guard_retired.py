@@ -189,15 +189,14 @@ def test_no_global_setup_edit_wrapper_remains() -> None:
 
 
 def test_native_guided_labels_and_routes_remain() -> None:
-    home = _buttons(
-        _class("ProductSetupHomeView")
-    )
-    guided = _buttons(
-        _class("ContinueSetupView")
-    )
-    advanced = _buttons(
-        _class("ManageSetupView")
-    )
+    home = _buttons(_class("ProductSetupHomeView"))
+    guided = _buttons(_class("ContinueSetupView"))
+    advanced = _buttons(_class("ManageSetupView"))
+    core = _buttons(_class("AdvancedCoreSetupView"))
+    members = _buttons(_class("AdvancedMemberExperienceView"))
+    monitoring = _buttons(_class("AdvancedMonitoringRepairView"))
+    appearance = _buttons(_class("AdvancedAppearanceView"))
+    danger = _buttons(_class("AdvancedDangerZoneView"))
 
     assert home["continue_setup"][:2] == (
         "Start / Continue Setup",
@@ -212,30 +211,25 @@ def test_native_guided_labels_and_routes_remain() -> None:
         "Change Setup Type",
         "dank_setup_guided:change_type",
     )
-    assert (
-        "await _open_choose_setup_type(interaction)"
-        in guided["change_type"][2]
-    )
-    assert guided["advanced"][0] == (
-        "Advanced Options"
-    )
+    assert "await _open_choose_setup_type(interaction)" in guided["change_type"][2]
+    assert guided["advanced"][0] == "Advanced Options"
     assert guided["home"][0] == "Back Home"
 
-    assert advanced["services"][0] == (
-        "Features On / Off"
-    )
-    assert advanced["ticket_choices"][0] == (
-        "Ticket Choices"
-    )
-    assert advanced["timers_behavior"][0] == (
-        "Timers & Behavior"
-    )
-    assert advanced["detailed_mapping"][0] == (
-        "Detailed Role / Channel Mapping"
-    )
-    assert advanced["recovery"][0] == (
-        "Recovery / Start Over"
-    )
+    assert advanced["core_setup"][0] == "Core Setup"
+    assert advanced["member_experience"][0] == "Member Experience"
+    assert advanced["monitoring_repair"][0] == "Monitoring & Repair"
+    assert advanced["appearance"][0] == "Appearance"
+    assert advanced["danger_zone"][0] == "Danger Zone"
+
+    assert core["services"][0] == "Features On / Off"
+    assert core["timers_behavior"][0] == "Timers & Behavior"
+    assert core["detailed_mapping"][0] == "Detailed Role / Channel Mapping"
+    assert members["ticket_choices"][0] == "Ticket Choices"
+    assert members["protection"][0] == "Protection"
+    assert monitoring["modlog_tracking"][0] == "Modlog Tracking"
+    assert monitoring["permission_repair"][0] == "Permission Repair"
+    assert appearance["server_design"][0] == "Server Design"
+    assert danger["recovery"][0] == "Recovery / Start Over"
 
 
 def test_public_setup_type_picker_remains() -> None:

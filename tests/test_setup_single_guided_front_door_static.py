@@ -89,41 +89,55 @@ def test_custom_switches_are_explicitly_custom_only():
 
 
 def test_advanced_tools_still_exist():
-    """Every advanced tool must live under one canonical owner."""
+    """Every advanced tool must live under the grouped canonical owner."""
 
     import ast
 
     recommend_tree = ast.parse(RECOMMEND)
-
-    matches = [
-        node
+    classes = {
+        node.name: ast.get_source_segment(RECOMMEND, node) or ""
         for node in recommend_tree.body
         if isinstance(node, ast.ClassDef)
-        and node.name == "ManageSetupView"
-    ]
+    }
 
-    assert len(matches) == 1
+    hub = classes["ManageSetupView"]
+    for label in (
+        "Core Setup",
+        "Member Experience",
+        "Monitoring & Repair",
+        "Appearance",
+        "Danger Zone",
+        "Help / FAQ",
+        "Back Home",
+    ):
+        assert label in hub
 
-    advanced = (
-        ast.get_source_segment(
-            RECOMMEND,
-            matches[0],
+    assert "Recovery / Start Over" not in hub
+
+    advanced = "\n".join(
+        classes[name]
+        for name in (
+            "AdvancedCoreSetupView",
+            "AdvancedMemberExperienceView",
+            "AdvancedMonitoringRepairView",
+            "AdvancedAppearanceView",
+            "AdvancedDangerZoneView",
         )
-        or ""
     )
 
     required_labels = (
         "Features On / Off",
         "Ticket Choices",
         "Protection",
+        "Modlog Tracking",
         "Timers & Behavior",
         "Server Design",
         "Detailed Role / Channel Mapping",
+        "Permission Repair",
         "Recovery / Start Over",
-        "Help / FAQ",
+        "Back to Advanced",
         "Back Home",
     )
-
     for label in required_labels:
         assert label in advanced
 
@@ -131,14 +145,19 @@ def test_advanced_tools_still_exist():
         "_open_services",
         "_open_ticket_menu",
         "_open_protection_options",
+        "_open_modlog_tracking",
         "_open_timers_behavior",
         "_open_existing_server",
+        "_open_permission_repair",
         "_open_recovery_center",
+        "_open_manage_setup",
         "_home_edit",
     )
-
     for route in required_routes:
         assert route in advanced
+
+    danger = classes["AdvancedDangerZoneView"]
+    assert "Recovery / Start Over" in danger
 
     assert "class PlainManageSetupView" not in FRESH
     assert "recommend._open_manage_setup" in FRESH
