@@ -147,16 +147,36 @@ jobs:
           exit 1
 
       - name: Validate full repository
+        id: full
+        continue-on-error: true
         env:
           DANK_STARTUP_LOG_STYLE: quiet
           DANK_COMMAND_LOG_STYLE: quiet
+        shell: bash
         run: |
-          python -m pytest tests/ -q
           status=0
-          for f in tools/test_*.py; do
-            python "$f" || status=1
-          done
-          test "$status" -eq 0
+          {
+            python -m pytest tests/ -q || status=1
+            for f in tools/test_*.py; do
+              python "$f" || status=1
+            done
+          } > smart-auto-detect-full-output.txt 2>&1
+          exit "$status"
+
+      - name: Upload full validation output
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: smart-auto-detect-full-output
+          path: smart-auto-detect-full-output.txt
+          if-no-files-found: error
+          retention-days: 1
+
+      - name: Stop on full validation failure
+        if: steps.full.outcome == 'failure'
+        run: |
+          cat smart-auto-detect-full-output.txt
+          exit 1
 
       - name: Package validated permanent files
         run: |
