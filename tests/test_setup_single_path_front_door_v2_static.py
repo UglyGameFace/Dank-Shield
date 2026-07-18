@@ -106,3 +106,31 @@ def test_custom_feature_picker_avoids_setup_jargon():
 def test_plain_language_fallback_actions_are_consistent():
     for expected in ("Choose Existing Roles & Channels", "Choose which features are ON or OFF", "Feature Settings Did Not Open", "Check Setup Again", "Fix Setup or Start Over"):
         assert expected in RECOMMEND
+
+
+def test_launch_and_fallback_copy_use_plain_language():
+    for stale in ("manual service editor", "each service on/off", "Post Basic Verify Panel", "with an alt", "those switches are ON", "allowlisted/private servers"):
+        assert stale not in RECOMMEND
+    for expected in ("Post Simple Verify Panel", "second test account", "Simple Verify gives the member role", "servers approved to use it"):
+        assert expected in RECOMMEND
+
+
+def test_custom_saved_copy_uses_feature_language():
+    for stale in ("Custom setup service switches.", "allowlisted servers only", "pre-selected:"):
+        assert stale not in FRESH
+    for expected in ("Custom feature choices.", "servers approved to use this feature", "turned on matching features"):
+        assert expected in FRESH
+
+
+def test_help_and_progress_only_teach_current_setup_path():
+    help_block = block(RECOMMEND, "def _build_setup_help_embed()", "async def _setup_progress(")
+    for stale in ("Use My Existing Server", "Create Missing Items", "legacy single-server", "hardcoded", "Choose Setup Type"):
+        assert stale not in help_block
+    for expected in ("Start Setup", "Set Up This Step", "Test & Launch", "More Options"):
+        assert expected in help_block
+
+    progress = block(RECOMMEND, "async def _setup_progress(", "async def _product_main_setup_payload(")
+    for stale in ("Open Manage Setup", "Use Things I Already Made", "with an alt", "Basic Verify"):
+        assert stale not in progress
+    assert "Continue Setup" in progress
+    assert "second Discord account" in progress

@@ -773,7 +773,7 @@ async def _build_plain_setup_health_embed(
     ):
         blockers.append(
             "ID/Web Verify is not available for this server. "
-            "Choose Basic Verify or Voice Verify instead."
+            "Choose Simple Verify or Voice Verify instead."
         )
 
     if services["logs"]:
@@ -901,19 +901,67 @@ async def _build_plain_setup_health_embed(
 def _build_setup_help_embed() -> discord.Embed:
     embed = discord.Embed(
         title="❓ Dank Shield Setup Help",
-        description="Simple answers for the setup screen. No technical terms needed.",
+        description=(
+            "Setup is meant to be simple: start setup, choose what you want, "
+            "then follow one step at a time."
+        ),
         color=discord.Color.blurple(),
         timestamp=now_utc(),
     )
-    embed.add_field(name="What should I press first?", value="Press **Choose Setup Type**. Pick the option closest to your server. You can change it later.", inline=False)
-    embed.add_field(name="What if I already made my roles/channels?", value="Press **Use My Existing Server**. Then pick your existing roles and channels from Discord menus.", inline=False)
-    embed.add_field(name="What if I do not have roles/channels yet?", value="Press **Create Missing Items**. Dank Shield creates missing basics only. It does not delete your server setup.", inline=False)
-    embed.add_field(name="What is ID + voice check?", value="That is the upload-link plus voice-check style like your current legacy single-server setup, but without hardcoded server names, role IDs, or channel IDs.", inline=False)
-    embed.add_field(name="What if setup says owner/admin role is missing?", value="That is optional. It came from older server-specific setup. Pick a new owner/admin role only if you want that feature.", inline=False)
-    embed.add_field(name="Will this force forms on members?", value="No. Ticket flow stays fast by default. Forms are optional only.", inline=False)
-    embed.add_field(name="Will this copy legacy single-server settings to other servers?", value="No. Every server saves its own setup. No legacy single-server IDs or branding should be used for other guilds.", inline=False)
+    embed.add_field(
+        name="Where do I start?",
+        value="Press **Start Setup**. Choose what you want Dank Shield to do in this server.",
+        inline=False,
+    )
+    embed.add_field(
+        name="What do I do after that?",
+        value=(
+            "Press **Set Up This Step**. Dank Shield shows one thing at a time. "
+            "After you finish it, setup moves to the next thing you need."
+        ),
+        inline=False,
+    )
+    embed.add_field(
+        name="What if I already have roles or channels?",
+        value=(
+            "Choose the role or channel you already use when setup asks for it. "
+            "You can also let Dank Shield create the needed item for you."
+        ),
+        inline=False,
+    )
+    embed.add_field(
+        name="How do I know when setup is finished?",
+        value=(
+            "Dank Shield checks setup automatically after the last required step. "
+            "Fix any problem it shows, then press **Test & Launch**."
+        ),
+        inline=False,
+    )
+    embed.add_field(
+        name="Where are the extra settings?",
+        value=(
+            "Press **More Options** on Setup Home. Most servers do not need those "
+            "extra settings during normal setup."
+        ),
+        inline=False,
+    )
+    embed.add_field(
+        name="What is ID / Web + Voice?",
+        value=(
+            "It combines private ID review with a staff voice check. "
+            "Those options only appear for servers approved to use ID/Web Verify."
+        ),
+        inline=False,
+    )
+    embed.add_field(
+        name="Will setup delete my server?",
+        value=(
+            "No. The guided setup only connects or creates the item it is asking for. "
+            "Starting over is kept separately under **More Options**."
+        ),
+        inline=False,
+    )
     return embed
-
 
 async def _setup_progress(
     guild: discord.Guild,
@@ -968,7 +1016,7 @@ async def _setup_progress(
     check(
         "Setup type",
         bool(setup_choice),
-        "Press Start / Continue Setup and choose a type.",
+        "Press **Start Setup** and choose what you want Dank Shield to do.",
     )
 
     if not setup_choice:
@@ -993,7 +1041,7 @@ async def _setup_progress(
     check(
         "At least one feature",
         any_service,
-        "Open Manage Setup → Features On / Off.",
+        "Press **Continue Setup** and choose at least one feature.",
     )
 
     bot_member = getattr(guild, "me", None)
@@ -1027,7 +1075,7 @@ async def _setup_progress(
                 cfg,
                 "staff_role_id",
             ),
-            "Use Things I Already Made → ticket staff role.",
+            "Press **Continue Setup** to choose the role for people who answer tickets.",
         )
 
         check(
@@ -1037,7 +1085,7 @@ async def _setup_progress(
                 cfg,
                 "ticket_category_id",
             ),
-            "Use Things I Already Made → new-ticket folder.",
+            "Press **Continue Setup** to choose where new tickets should open.",
         )
 
         try:
@@ -1054,7 +1102,7 @@ async def _setup_progress(
 
                 if next_step == default_next:
                     next_step = (
-                        "Open Manage Setup → Ticket Choices."
+                        "Press **Continue Setup** to choose what members can request in a ticket."
                     )
             elif category_load.rows:
                 done += 1
@@ -1069,7 +1117,7 @@ async def _setup_progress(
 
                 if next_step == default_next:
                     next_step = (
-                        "Open Manage Setup → Ticket Choices."
+                        "Press **Continue Setup** to choose what members can request in a ticket."
                     )
         except Exception:
             total += 1
@@ -1079,7 +1127,7 @@ async def _setup_progress(
 
             if next_step == default_next:
                 next_step = (
-                    "Open Manage Setup → Ticket Choices."
+                    "Press **Continue Setup** to choose what members can request in a ticket."
                 )
 
     if services["verify"]:
@@ -1091,7 +1139,7 @@ async def _setup_progress(
                 "verify_channel_id",
                 "verification_channel_id",
             ),
-            "Use Things I Already Made → verification channel.",
+            "Press **Continue Setup** to choose where members press Verify.",
         )
 
         check(
@@ -1101,7 +1149,7 @@ async def _setup_progress(
                 cfg,
                 "verified_role_id",
             ),
-            "Use Things I Already Made → approved-member role.",
+            "Press **Continue Setup** to choose the role members get after verification.",
         )
 
     if services["voice"]:
@@ -1112,7 +1160,7 @@ async def _setup_progress(
                 cfg,
                 "vc_verify_channel_id",
             ),
-            "Choose the Voice Verify channel.",
+            "Press **Continue Setup** to choose the Voice Verify channel.",
         )
 
         check(
@@ -1125,14 +1173,14 @@ async def _setup_progress(
                 "vc_request_channel_id",
                 "vc_verify_requests_channel_id",
             ),
-            "Choose where staff receive Voice Verify requests.",
+            "Press **Continue Setup** to choose where staff receive Voice Verify requests.",
         )
 
     if services["id"]:
         check(
             "ID/Web Verify permission",
             id_verify_allowed_for_guild(guild),
-            "Choose Basic Verify or Voice Verify instead.",
+            "Choose Simple Verify or Voice Verify instead.",
         )
 
     if services["logs"]:
@@ -1144,12 +1192,12 @@ async def _setup_progress(
                 "modlog_channel_id",
                 "raidlog_channel_id",
             ),
-            "Use Things I Already Made → Logs + Status.",
+            "Press **Continue Setup** to choose where logs should be posted.",
         )
 
     if total and done == total:
         next_step = (
-            "Press Test / Launch and test with an alt account."
+            "Press **Test & Launch** and test with a second Discord account."
         )
 
     return (
@@ -1182,7 +1230,7 @@ async def _product_main_setup_payload(guild: discord.Guild) -> tuple[discord.Emb
         recommended = "Press **Start Setup** and choose what this server needs."
     elif ready:
         status = "Ready to test"
-        recommended = "Press **Test & Launch** and test with an alt account."
+        recommended = "Press **Test & Launch** and test with a second Discord account."
     else:
         status = "Needs setup work"
         recommended = str(next_step or "Press Continue Setup.")[:350]
@@ -1198,7 +1246,7 @@ async def _product_main_setup_payload(guild: discord.Guild) -> tuple[discord.Emb
         value=(
             f"**{status}**\n"
             f"{saved_choice}\n"
-            f"`{done}/{total}` setup checks complete"
+            f"`{done}/{total}` required steps complete"
         )[:1024],
         inline=False,
     )
@@ -1277,15 +1325,14 @@ class SetupChoiceView(solid.BackToSetupView):
                 return await public_setup_fresh_choice._open_custom_service_picker(
                     interaction,
                     saved_message=(
-                        "Saved **Custom setup**. Now turn each service on/off below. "
-                        "This is the actual manual editor."
+                        "Saved **Choose My Own Features**. Choose which features are ON or OFF below."
                     ),
                 )
             except Exception as e:
                 embed = discord.Embed(
-                    title="✅ Custom Setup Saved",
+                    title="✅ Feature Choices Saved",
                     description=(
-                        "Saved **Custom setup**, but the manual service editor did not open.\n\n"
+                        "Saved your feature choices, but the feature screen did not open.\n\n"
                         f"Error: `{type(e).__name__}: {str(e)[:220]}`\n\n"
                         "Nothing else was changed. Return to Setup Home and try again."
                     ),
@@ -1468,8 +1515,8 @@ async def _open_choose_setup_type(
         embed.add_field(
             name="🔒 ID Verification",
             value=(
-                "ID/Web choices are hidden because this server "
-                "has not been specifically allowed to use them."
+                "ID/Web Verify is only available for servers approved to use it, "
+                "so those options are hidden here."
             ),
             inline=False,
         )
@@ -2005,7 +2052,7 @@ async def _launch_state(guild: discord.Guild) -> dict[str, bool]:
 def _launch_state_text(state: dict[str, bool]) -> str:
     return (
         f"🎫 Tickets: **{'ON ✅' if state.get('tickets') else 'OFF ⬜'}**\n"
-        f"✅ Basic Verify: **{'ON ✅' if state.get('basic_verify') else 'OFF ⬜'}**\n"
+        f"✅ Simple Verify: **{'ON ✅' if state.get('basic_verify') else 'OFF ⬜'}**\n"
         f"🎙️ Voice Verify: **{'ON ✅' if state.get('voice_verify') else 'OFF ⬜'}**\n"
         f"🪪 ID/Web Verify: **{'ON ✅' if state.get('id_verify') else 'OFF ⬜'}**\n"
         f"🧾 Logs: **{'ON ✅' if state.get('logs') else 'OFF ⬜'}**"
@@ -2043,17 +2090,17 @@ async def _open_test_launch(interaction: discord.Interaction) -> None:
     if state.get("tickets"):
         actions.append("1. Press **Post Ticket Panel**, then **Create Test Ticket**.")
     if state.get("basic_verify"):
-        actions.append("2. Press **Post Basic Verify Panel**.")
+        actions.append("2. Press **Post Simple Verify Panel**.")
     if state.get("voice_verify"):
-        actions.append("3. Join the saved voice verify channel with an alt and request staff verification.")
+        actions.append("3. Join the saved Voice Verify channel with a second test account and request a staff voice check.")
     if state.get("id_verify"):
-        actions.append("4. ID/Web verify is ON. Only use this for allowlisted/private servers.")
+        actions.append("4. ID/Web Verify is ON. This option is only for servers approved to use it.")
     actions.append("5. Join with a second test account, use the public panels, and make sure roles and logs work.")
 
     embed.add_field(name="What To Test", value="\n".join(actions)[:1024], inline=False)
     embed.add_field(
         name="What Should Happen",
-        value="Ticket panel opens a ticket. Basic Verify grants the approved role. No ID/Voice flow appears unless those switches are ON.",
+        value="The ticket panel opens a ticket. Simple Verify gives the member role. ID or Voice Verify only appears when you turned it on.",
         inline=False,
     )
 
@@ -2104,8 +2151,7 @@ async def _guided_setup_target(
             "services",
             "Choose Which Features Are On",
             (
-                "This Custom Setup does not have any features "
-                "turned on yet."
+                "You have not turned on any features yet."
             ),
             "services",
         )
@@ -2275,7 +2321,7 @@ async def _guided_setup_target(
             "Choose a Different Verification Type",
             (
                 "ID/Web Verify is not available for this server. "
-                "Choose Basic Verify or Voice Verify."
+                "Choose Simple Verify or Voice Verify."
             ),
             "setup_type",
         )
@@ -3953,7 +3999,7 @@ class LaunchTestView(discord.ui.View):
         except Exception as e:
             return await interaction.response.send_message(f"❌ Could not post ticket panel: `{type(e).__name__}: {str(e)[:220]}`", ephemeral=True)
 
-    @discord.ui.button(label="Post Basic Verify Panel", emoji="✅", style=discord.ButtonStyle.success, custom_id="dank_setup_launch:post_basic_verify", row=0)
+    @discord.ui.button(label="Post Simple Verify Panel", emoji="✅", style=discord.ButtonStyle.success, custom_id="dank_setup_launch:post_basic_verify", row=0)
     async def post_basic_verify(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         if not await solid._require_setup_permission(interaction):
             return
@@ -3962,12 +4008,12 @@ class LaunchTestView(discord.ui.View):
             return await interaction.response.send_message("❌ This must be used inside a server.", ephemeral=True)
         state = await _launch_state(guild)
         if not state.get("basic_verify"):
-            return await interaction.response.send_message("✅ Basic Verify is OFF in Custom Setup. Turn Basic Verify ON first.", ephemeral=True)
+            return await interaction.response.send_message("✅ Simple Verify is OFF. Turn Simple Verify ON first.", ephemeral=True)
         try:
             from .public_verify_basic_panel import verify_panel
             return await verify_panel(interaction)
         except Exception as e:
-            return await interaction.response.send_message(f"❌ Could not post Basic Verify panel: `{type(e).__name__}: {str(e)[:220]}`", ephemeral=True)
+            return await interaction.response.send_message(f"❌ Could not post Simple Verify panel: `{type(e).__name__}: {str(e)[:220]}`", ephemeral=True)
 
     @discord.ui.button(
         label="Create Test Ticket",

@@ -33,8 +33,8 @@ SETUP_CHOICES: tuple[PlainSetupChoice, ...] = (
     PlainSetupChoice("basic_verify", "Simple Verify", "✅", "Members press one Verify button to get the member role. No ID upload or voice check.", "One Verify button that gives them server access.", False, False, False, "basic_verify"),
     PlainSetupChoice("help_desk", "Help Desk / Tickets", "🎫", "Sets up support tickets for help requests, reports, appeals, and staff support.", "A ticket panel where they choose what they need help with.", True, False, False, "help_desk"),
     PlainSetupChoice("voice_check", "Voice Verify", "🎙️", "Members request staff voice verification without ID upload or website upload flow.", "A verification ticket with a button to request a staff voice check.", True, False, True, "voice_check"),
-    PlainSetupChoice("id_check", "ID / Web Verify", "🪪", "Private ID upload verification for allowlisted servers only.", "A private button to upload an ID for staff review.", True, True, False, "id_check"),
-    PlainSetupChoice("id_voice_check", "ID / Web + Voice", "🔐", "Private ID upload plus voice-check workflow for allowlisted servers only.", "Private ID upload and a button to request a staff voice check.", True, True, True, "id_voice_check"),
+    PlainSetupChoice("id_check", "ID / Web Verify", "🪪", "Private ID upload verification for servers approved to use this feature.", "A private button to upload an ID for staff review.", True, True, False, "id_check"),
+    PlainSetupChoice("id_voice_check", "ID / Web + Voice", "🔐", "Private ID upload plus a staff voice check for servers approved to use this feature.", "Private ID upload and a button to request a staff voice check.", True, True, True, "id_voice_check"),
     PlainSetupChoice("custom_setup", "Choose My Own Features", "⚙️", "Choose exactly which features you want: tickets, Simple Verify, Voice Verify, SpamGuard, and logs.", "Only the features you choose on the next screen.", False, False, False, "custom"),
 )
 
@@ -219,7 +219,7 @@ def _custom_service_config_patch(payload: dict[str, Any]) -> dict[str, Any]:
             "verify_mode": "voice_check" if voice_on else "basic_button" if basic_on else "none",
             "setup_choice": "custom_setup",
             "setup_choice_label": _custom_mix_label(clean),
-            "setup_choice_description": "Custom setup service switches.",
+            "setup_choice_description": "Custom feature choices.",
             "setup_choice_member_sees": _custom_mix_label(clean),
         }
     )
@@ -229,7 +229,7 @@ def _custom_service_config_patch(payload: dict[str, Any]) -> dict[str, Any]:
 def _service_hint_text(state: Any) -> str:
     enabled: list[str] = []
     if state.tickets:
-        enabled.append("Ticket Basics")
+        enabled.append("Tickets")
     if state.verification:
         enabled.append("Simple Verify")
     if state.voice:
@@ -482,7 +482,7 @@ async def _autofill_custom_state_from_existing(guild: discord.Guild, state: Any)
     label_text = ", ".join(labels) if labels else "existing setup"
     return (
         next_state,
-        f"Detected existing server setup and pre-selected: **{label_text}**. Nothing was created.",
+        f"Found existing setup and turned on matching features: **{label_text}**. Nothing was created.",
     )
 
 
