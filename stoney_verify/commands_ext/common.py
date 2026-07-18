@@ -569,24 +569,48 @@ def _staff_ping_text() -> str:
 # Shared member target resolution helpers
 # ============================================================
 def parse_member_id_from_target(target: str) -> int:
+    """Extract a Discord user ID from typed or pasted text.
+
+    Supports raw IDs, Discord user mentions, autocomplete
+    labels, and copied moderation-log text containing a
+    Discord snowflake.
+    """
+
     text = str(target or "").strip()
+
     if not text:
         return 0
 
-    mention_match = re.search(r"<@!?(\d+)>", text)
+    mention_match = re.search(
+        r"<@!?(\d{15,22})>",
+        text,
+    )
+
     if mention_match:
         try:
             return int(mention_match.group(1))
-        except Exception:
+        except (TypeError, ValueError):
             return 0
 
     if text.isdigit():
         try:
             return int(text)
-        except Exception:
+        except (TypeError, ValueError):
+            return 0
+
+    embedded_id = re.search(
+        r"(?<!\d)(\d{15,22})(?!\d)",
+        text,
+    )
+
+    if embedded_id:
+        try:
+            return int(embedded_id.group(1))
+        except (TypeError, ValueError):
             return 0
 
     return 0
+
 
 
 async def resolve_member_any(guild: discord.Guild, user_id: int) -> Optional[discord.Member]:

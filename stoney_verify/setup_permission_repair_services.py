@@ -251,7 +251,11 @@ async def preview_or_apply(guild: discord.Guild, *, apply: bool) -> dict[str, An
     }
 
 
-def result_embed(result: dict[str, Any]) -> discord.Embed:
+def result_embed(
+    result: dict[str, Any],
+    *,
+    deep_audit: Any = None,
+) -> discord.Embed:
     from stoney_verify.startup_guards import setup_permission_repair_guard as legacy
 
     embed = legacy._result_embed(result)
@@ -271,12 +275,184 @@ def result_embed(result: dict[str, Any]) -> discord.Embed:
         )
     except Exception:
         pass
+    if deep_audit is not None:
+        deep_blockers = list(
+            getattr(
+                deep_audit,
+                "blockers",
+                [],
+            )
+            or []
+        )
+        deep_warnings = list(
+            getattr(
+                deep_audit,
+                "warnings",
+                [],
+            )
+            or []
+        )
+        deep_ok = list(
+            getattr(
+                deep_audit,
+                "ok",
+                [],
+            )
+            or []
+        )
+
+        embed.add_field(
+            name="Advanced Diagnostic Blockers",
+            value=legacy._line_list(
+                deep_blockers,
+                empty="✅ No advanced diagnostic blockers.",
+            ),
+            inline=False,
+        )
+
+        embed.add_field(
+            name="Advanced Diagnostic Warnings",
+            value=legacy._line_list(
+                deep_warnings,
+                empty="✅ No advanced diagnostic warnings.",
+            ),
+            inline=False,
+        )
+
+        embed.add_field(
+            name="Advanced Diagnostic Passing",
+            value=legacy._line_list(
+                deep_ok,
+                empty="No advanced passing checks reported.",
+            ),
+            inline=False,
+        )
+
+        embed.add_field(
+            name="Readiness Boundary",
+            value=(
+                "These deep diagnostics are for Advanced "
+                "Options only. They do **not** decide whether "
+                "**Test / Launch** is available. The "
+                "feature-aware **Setup Check** remains the "
+                "authoritative readiness gate."
+            ),
+            inline=False,
+        )
+
     return embed
+
+async def _load_deep_audit(
+    guild: discord.Guild,
+) -> Any:
+    """Load Advanced-only diagnostics without changing setup."""
+
+    try:
+        from stoney_verify.startup_guards import (
+            full_setup_health_autofix as deep_health,
+        )
+
+        return await deep_health.run_full_audit(guild)
+    except Exception:
+        return None
+
+
+async def _back_to_advanced_options(
+    interaction: discord.Interaction,
+) -> None:
+    from stoney_verify.commands_ext import (
+        public_setup_recommend as recommend,
+    )
+
+    await recommend._open_manage_setup(interaction)
+
+
+class PermissionRepairPreviewView(discord.ui.View):
+    """Canonical preview controls for Advanced Permission Repair."""
+
+    def __init__(self) -> None:
+        super().__init__(timeout=900)
+
+    @discord.ui.button(
+        label="Apply Safe Fixes",
+        emoji="🛠️",
+        style=discord.ButtonStyle.success,
+        custom_id="dank_setup_permission:apply",
+        row=0,
+    )
+    async def apply_fixes(
+        self,
+        interaction: discord.Interaction,
+        button: discord.ui.Button,
+    ) -> None:
+        await apply_permission_repair(interaction)
+
+    @discord.ui.button(
+        label="Preview Again",
+        emoji="🔍",
+        style=discord.ButtonStyle.secondary,
+        custom_id="dank_setup_permission:preview",
+        row=0,
+    )
+    async def preview_again(
+        self,
+        interaction: discord.Interaction,
+        button: discord.ui.Button,
+    ) -> None:
+        await open_permission_repair(interaction)
+
+    @discord.ui.button(
+        label="Back to Advanced",
+        emoji="⬅️",
+        style=discord.ButtonStyle.secondary,
+        custom_id="dank_setup_permission:advanced",
+        row=0,
+    )
+    async def back_to_advanced(
+        self,
+        interaction: discord.Interaction,
+        button: discord.ui.Button,
+    ) -> None:
+        await _back_to_advanced_options(interaction)
+
+
+class PermissionRepairResultView(discord.ui.View):
+    """Canonical post-repair controls."""
+
+    def __init__(self) -> None:
+        super().__init__(timeout=900)
+
+    @discord.ui.button(
+        label="Preview Again",
+        emoji="🔍",
+        style=discord.ButtonStyle.secondary,
+        custom_id="dank_setup_permission_done:preview",
+        row=0,
+    )
+    async def preview_again(
+        self,
+        interaction: discord.Interaction,
+        button: discord.ui.Button,
+    ) -> None:
+        await open_permission_repair(interaction)
+
+    @discord.ui.button(
+        label="Back to Advanced",
+        emoji="⬅️",
+        style=discord.ButtonStyle.secondary,
+        custom_id="dank_setup_permission_done:advanced",
+        row=0,
+    )
+    async def back_to_advanced(
+        self,
+        interaction: discord.Interaction,
+        button: discord.ui.Button,
+    ) -> None:
+        await _back_to_advanced_options(interaction)
 
 
 async def open_permission_repair(interaction: discord.Interaction) -> None:
     from stoney_verify.commands_ext import public_setup_solid as solid
-    from stoney_verify.startup_guards.setup_permission_repair_guard import PermissionRepairConfirmView
 
     if not await solid._require_setup_permission(interaction):
         return
@@ -284,14 +460,25 @@ async def open_permission_repair(interaction: discord.Interaction) -> None:
     if guild is None:
         return await interaction.response.send_message("❌ This must be used inside a server.", ephemeral=True)
     await solid._safe_defer_update(interaction)
-    result = await preview_or_apply(guild, apply=False)
-    await solid._edit_or_followup(interaction, embed=result_embed(result), view=PermissionRepairConfirmView())
+    result = await preview_or_apply(
+        guild,
+        apply=False,
+    )
+    deep_audit = await _load_deep_audit(guild)
+
+    await solid._edit_or_followup(
+        interaction,
+        embed=result_embed(
+            result,
+            deep_audit=deep_audit,
+        ),
+        view=PermissionRepairPreviewView(),
+    )
 
 
 async def apply_permission_repair(interaction: discord.Interaction) -> None:
     from stoney_verify.commands_ext import public_setup_solid as solid
     from stoney_verify.operation_queue import run_interaction_exclusive
-    from stoney_verify.startup_guards.setup_permission_repair_guard import PermissionRepairDoneView
 
     if not await solid._require_setup_permission(interaction):
         return
@@ -320,7 +507,25 @@ async def apply_permission_repair(interaction: discord.Interaction) -> None:
     )
     if result is None:
         return
-    await interaction.followup.send(embed=result_embed(result), view=PermissionRepairDoneView(), ephemeral=True, allowed_mentions=discord.AllowedMentions.none())
+
+    deep_audit = await _load_deep_audit(guild)
+
+    await interaction.followup.send(
+        embed=result_embed(
+            result,
+            deep_audit=deep_audit,
+        ),
+        view=PermissionRepairResultView(),
+        ephemeral=True,
+        allowed_mentions=discord.AllowedMentions.none(),
+    )
 
 
-__all__ = ["open_permission_repair", "apply_permission_repair", "preview_or_apply", "result_embed"]
+__all__ = [
+    "PermissionRepairPreviewView",
+    "PermissionRepairResultView",
+    "open_permission_repair",
+    "apply_permission_repair",
+    "preview_or_apply",
+    "result_embed",
+]

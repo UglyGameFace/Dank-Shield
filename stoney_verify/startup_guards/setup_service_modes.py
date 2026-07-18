@@ -742,6 +742,106 @@ class SpamGuardSetupButton(discord.ui.Button):
                 await interaction.response.send_message(msg, ephemeral=True, allowed_mentions=discord.AllowedMentions.none())
 
 
+class NativeSetupNavigationButton(discord.ui.Button):
+    """Navigate service pages through canonical setup owners."""
+
+    def __init__(
+        self,
+        *,
+        label: str,
+        emoji: str,
+        route_name: str,
+        style: discord.ButtonStyle,
+        custom_id: str,
+    ) -> None:
+        super().__init__(
+            label=label,
+            emoji=emoji,
+            style=style,
+            custom_id=custom_id,
+            row=4,
+        )
+        self.route_name = route_name
+
+    async def callback(
+        self,
+        interaction: discord.Interaction,
+    ) -> None:
+        from stoney_verify.commands_ext import (
+            public_setup_recommend as recommend,
+        )
+
+        route = getattr(
+            recommend,
+            self.route_name,
+            None,
+        )
+
+        if not callable(route):
+            message = (
+                "❌ That setup destination is unavailable. "
+                "Return to `/dank setup` and try again."
+            )
+
+            if interaction.response.is_done():
+                await interaction.followup.send(
+                    message,
+                    ephemeral=True,
+                )
+            else:
+                await interaction.response.send_message(
+                    message,
+                    ephemeral=True,
+                )
+
+            return
+
+        await route(interaction)
+
+
+def _append_native_setup_navigation(
+    view: discord.ui.View,
+) -> None:
+    """Add the same four canonical exits to every service page."""
+
+    view.add_item(
+        NativeSetupNavigationButton(
+            label="Continue Guided Setup",
+            emoji="➡️",
+            route_name="_open_guided_setup",
+            style=discord.ButtonStyle.success,
+            custom_id="dank_setup_service_nav:guided",
+        )
+    )
+    view.add_item(
+        NativeSetupNavigationButton(
+            label="Setup Check",
+            emoji="🩺",
+            route_name="_open_health_check",
+            style=discord.ButtonStyle.primary,
+            custom_id="dank_setup_service_nav:check",
+        )
+    )
+    view.add_item(
+        NativeSetupNavigationButton(
+            label="Advanced Options",
+            emoji="⚙️",
+            route_name="_open_manage_setup",
+            style=discord.ButtonStyle.secondary,
+            custom_id="dank_setup_service_nav:advanced",
+        )
+    )
+    view.add_item(
+        NativeSetupNavigationButton(
+            label="Setup Home",
+            emoji="🏠",
+            route_name="_home_edit",
+            style=discord.ButtonStyle.secondary,
+            custom_id="dank_setup_service_nav:home",
+        )
+    )
+
+
 class ServiceModeView(discord.ui.View):
     def __init__(self, state: ServiceState) -> None:
         super().__init__(timeout=900)
@@ -754,10 +854,13 @@ class ServiceModeView(discord.ui.View):
         if state.spamguard or state.moderation:
             self.add_item(SpamGuardSetupButton())
 
+        _append_native_setup_navigation(self)
+
 
 class SpamGuardSetupView(discord.ui.View):
     def __init__(self) -> None:
         super().__init__(timeout=900)
+        _append_native_setup_navigation(self)
 
     @discord.ui.button(label="Enable Actual Guard", emoji="✅", style=discord.ButtonStyle.success, row=0)
     async def enable_guard(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
@@ -881,85 +984,6 @@ def _extract_health_lines(value: str) -> list[str]:
     return out
 
 
-def _patch_setup_ui() -> None:
-    try:
-        from stoney_verify.commands_ext import public_setup_solid as solid
-    except Exception as e:
-        _warn(f"public_setup_solid unavailable: {e!r}")
-        return
-
-    try:
-        original_build_main = getattr(solid, "_build_main_setup_payload", None)
-        if callable(original_build_main) and not getattr(original_build_main, "_service_modes_wrapped", False):
-            async def wrapped_build_main(guild: discord.Guild):
-                embed, view = await original_build_main(guild)
-                state = await load_service_state(guild.id)
-                embed.add_field(name="Selected Services", value=_service_summary_text(state), inline=True)
-                embed.add_field(name="Health Check Focus", value=_service_mode_hint(state), inline=False)
-                if state.spamguard or state.moderation:
-                    embed.add_field(
-                        name="SpamGuard Setup",
-                        value="Press **Choose Services**, then **SpamGuard Setup**. It will show selected-service vs actual-active state.",
-                        inline=False,
-                    )
-                try:
-                    view.add_item(OpenServiceModeButton())
-                except Exception:
-                    pass
-                return embed, view
-
-            setattr(wrapped_build_main, "_service_modes_wrapped", True)
-            setattr(solid, "_build_main_setup_payload", wrapped_build_main)
-
-        original_health = getattr(solid, "_build_health_embed", None)
-        if callable(original_health) and not getattr(original_health, "_service_modes_wrapped", False):
-            async def wrapped_health(guild: discord.Guild):
-                embed = await original_health(guild)
-                state = await load_service_state(guild.id)
-                try:
-                    fields = list(getattr(embed, "fields", []) or [])
-                    raw: dict[str, list[str]] = {"blockers": [], "warnings": [], "ok": []}
-                    for field in fields:
-                        name = str(getattr(field, "name", "") or "").lower()
-                        value = str(getattr(field, "value", "") or "")
-                        lines = _extract_health_lines(value)
-                        if "blocker" in name:
-                            raw["blockers"].extend(lines)
-                        elif "warning" in name:
-                            raw["warnings"].extend(lines)
-                        elif "passing" in name:
-                            raw["ok"].extend(lines)
-                    blockers, warnings, ok, state = await _filter_health_for_services(guild.id, raw["blockers"], raw["warnings"], raw["ok"])
-                    filtered = discord.Embed(
-                        title="🩺 Setup Health Check",
-                        description="✅ **Ready enough to test.**" if not blockers else "🚫 **Fix the blockers first.**",
-                        color=discord.Color.green() if not blockers else discord.Color.red(),
-                        timestamp=now_utc(),
-                    )
-                    filtered.add_field(name="Selected Services", value=_service_summary_text(state), inline=False)
-                    filtered.add_field(name="Blockers", value=_format_health_value(blockers, empty="✅ None"), inline=False)
-                    filtered.add_field(name="Warnings", value=_format_health_value(warnings, empty="✅ None"), inline=False)
-                    fixes = _warning_fixes(warnings)
-                    if fixes:
-                        filtered.add_field(name="Warning Fixes", value="\n".join(fixes)[:1024], inline=False)
-                    filtered.add_field(name="Passing Checks", value=_format_health_value(ok, empty="No passing checks reported."), inline=False)
-                    next_text = "Use **Services** if this server is not using every Dank Shield feature. Then test only the selected services shown above."
-                    if state.spamguard or state.moderation:
-                        next_text += " For SpamGuard, open **Services → SpamGuard Setup** and confirm Actual guard active."
-                    filtered.add_field(name="What To Press Next", value=next_text[:1024], inline=False)
-                    filtered.set_footer(text=f"Guild {guild.id} • /dank setup")
-                    return filtered
-                except Exception:
-                    try:
-                        embed.add_field(name="Selected Services", value=_service_summary_text(state), inline=False)
-                    except Exception:
-                        pass
-                    return embed
-
-            setattr(wrapped_health, "_service_modes_wrapped", True)
-            setattr(solid, "_build_health_embed", wrapped_health)
-    except Exception as e:
-        _warn(f"setup UI patch failed: {e!r}")
 
 
 class OpenServiceModeButton(discord.ui.Button):
@@ -985,16 +1009,22 @@ class OpenServiceModeButton(discord.ui.Button):
 
 
 def install_setup_service_modes() -> bool:
+    """Compatibility installer for the native service helpers.
+
+    Service selection and SpamGuard setup are now opened by
+    their native command/view owners. Importing this module
+    must not replace setup-home or health builders.
+    """
     global _PATCHED
+
     if _PATCHED:
         return True
-    _patch_setup_ui()
+
     _PATCHED = True
-    _log("installed Phase 2 service-mode setup layer")
+    _log("native service-mode helpers available")
     return True
 
 
-install_setup_service_modes()
 
 
 __all__ = [

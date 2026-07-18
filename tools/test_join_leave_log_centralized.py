@@ -15,8 +15,8 @@ required_router = [
     "JOIN_LEAVE_KEYS",
     '"join_leave_log_channel_id"',
     '"join_exit_log_channel_id"',
-    "public join sent guild=",
-    "public leave sent guild=",
+    "join log sent guild=",
+    "leave log sent guild=",
     "embed_links",
     "read_message_history",
 ]

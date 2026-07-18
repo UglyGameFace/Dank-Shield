@@ -62,6 +62,211 @@ def _safe_int(value: Any, default: int = 0) -> int:
         return int(default)
 
 
+def _config_value(
+    cfg: Any,
+    key: str,
+    default: Any = None,
+) -> Any:
+    if cfg is None:
+        return default
+
+    try:
+        value = getattr(cfg, key)
+
+        if value is not None:
+            return value
+    except Exception:
+        pass
+
+    try:
+        if hasattr(cfg, "get"):
+            value = cfg.get(key)
+
+            if value is not None:
+                return value
+    except Exception:
+        pass
+
+    return default
+
+
+def _config_bool(
+    value: Any,
+    *,
+    default: bool = False,
+) -> bool:
+    if isinstance(value, bool):
+        return value
+
+    if value is None:
+        return bool(default)
+
+    clean = str(value).strip().lower()
+
+    if clean in {
+        "1",
+        "true",
+        "yes",
+        "on",
+        "enabled",
+    }:
+        return True
+
+    if clean in {
+        "0",
+        "false",
+        "no",
+        "off",
+        "disabled",
+        "",
+    }:
+        return False
+
+    return bool(default)
+
+
+def _first_config_bool(
+    cfg: Any,
+    keys: tuple[str, ...],
+    *,
+    default: bool,
+) -> bool:
+    for key in keys:
+        value = _config_value(cfg, key, None)
+
+        if value is not None:
+            return _config_bool(
+                value,
+                default=default,
+            )
+
+    return bool(default)
+
+
+def _service_scope_from_config(
+    cfg: Any,
+) -> dict[str, bool]:
+    """Return exactly what Make Missing Things may create."""
+
+    choice = str(
+        _config_value(cfg, "setup_choice", "") or ""
+    ).strip().lower()
+
+    tickets_default = choice in {
+        "basic_server",
+        "help_desk",
+        "voice_check",
+        "id_check",
+        "id_voice_check",
+    }
+
+    basic_verify_default = choice == "basic_verify"
+
+    voice_default = choice in {
+        "voice_check",
+        "id_voice_check",
+    }
+
+    id_default = choice in {
+        "id_check",
+        "id_voice_check",
+    }
+
+    logs_default = choice in {
+        "basic_server",
+        "help_desk",
+        "voice_check",
+        "id_check",
+        "id_voice_check",
+    }
+
+    tickets = _first_config_bool(
+        cfg,
+        (
+            "tickets_enabled",
+            "ticket_service_enabled",
+        ),
+        default=tickets_default,
+    )
+
+    basic_verify = _first_config_bool(
+        cfg,
+        (
+            "basic_verify_enabled",
+            "basic_button_verify_enabled",
+            "verification_enabled",
+        ),
+        default=basic_verify_default,
+    )
+
+    voice = _first_config_bool(
+        cfg,
+        (
+            "voice_verification_enabled",
+            "vc_verify_enabled",
+            "voice_verify_enabled",
+            "verification_allows_voice",
+        ),
+        default=voice_default,
+    )
+
+    id_verify = _first_config_bool(
+        cfg,
+        (
+            "id_verify_enabled",
+            "web_verify_enabled",
+            "id_web_verify_enabled",
+            "verification_requires_id",
+        ),
+        default=id_default,
+    )
+
+    spam_guard = _first_config_bool(
+        cfg,
+        ("spam_guard_enabled",),
+        default=False,
+    )
+
+    logs = _first_config_bool(
+        cfg,
+        (
+            "logs_enabled",
+            "moderation_enabled",
+        ),
+        default=logs_default,
+    )
+
+    if voice or id_verify:
+        tickets = True
+        basic_verify = True
+        logs = True
+
+    if spam_guard:
+        logs = True
+
+    resident_role = _first_config_bool(
+        cfg,
+        ("verification_resident_role_enabled",),
+        default=(choice == "id_voice_check"),
+    )
+
+    return {
+        "tickets": bool(tickets),
+        "verify": bool(
+            basic_verify
+            or voice
+            or id_verify
+        ),
+        "basic_verify": bool(basic_verify),
+        "voice": bool(voice),
+        "id": bool(id_verify),
+        "spam_guard": bool(spam_guard),
+        "logs": bool(logs),
+        "welcome": bool(choice == "basic_server"),
+        "resident_role": bool(resident_role),
+    }
+
+
 def _key(value: Any) -> str:
     try:
         text = unicodedata.normalize("NFKC", str(value or "")).casefold().replace("&", " and ")
@@ -445,150 +650,863 @@ async def _setup_defaults_callback(
     staff_role: Optional[discord.Role] = None,
     create_missing_roles: bool = True,
     apply_channel_permissions: bool = True,
-) -> None:
+) -> bool:
+    """Create only items required by this guild's enabled features."""
+
     if not await _require_setup_permission(interaction):
-        return
-    await safe_defer(interaction, ephemeral=True)
+        return False
+
+    await safe_defer(
+        interaction,
+        ephemeral=True,
+    )
 
     guild = interaction.guild
+
     if guild is None:
-        return await interaction.followup.send("❌ This command must be used inside a server.", ephemeral=True)
+        await interaction.followup.send(
+            "❌ This must be used inside a server.",
+            ephemeral=True,
+        )
+        return False
+
+    try:
+        cfg = await get_guild_config(
+            guild.id,
+            refresh=True,
+        )
+    except Exception as exc:
+        await interaction.followup.send(
+            (
+                "❌ I could not read this server's setup.\n"
+                f"`{type(exc).__name__}: {str(exc)[:180]}`"
+            ),
+            ephemeral=True,
+        )
+        return False
+
+    services = _service_scope_from_config(cfg)
+
+    enabled_labels: list[str] = []
+
+    if services["tickets"]:
+        enabled_labels.append("Tickets")
+
+    if services["basic_verify"]:
+        enabled_labels.append("Basic Verify")
+
+    if services["voice"]:
+        enabled_labels.append("Voice Verify")
+
+    if services["spam_guard"]:
+        enabled_labels.append("SpamGuard")
+
+    if services["logs"]:
+        enabled_labels.append("Logs")
+
+    if not enabled_labels:
+        embed = discord.Embed(
+            title="🧭 Choose Features First",
+            description=(
+                "Nothing was created because this server has "
+                "no enabled features yet."
+            ),
+            color=discord.Color.orange(),
+        )
+        embed.add_field(
+            name="What to do",
+            value=(
+                "Open `/dank setup`, press **Start / Continue Setup**, "
+                "and choose a setup type or turn features on."
+            ),
+            inline=False,
+        )
+
+        await interaction.followup.send(
+            embed=embed,
+            ephemeral=True,
+        )
+        return False
 
     created: list[str] = []
     reused: list[str] = []
     notes: list[str] = []
     ok: list[str] = []
 
-    try:
-        cfg = await get_guild_config(guild.id, refresh=True)
-    except Exception:
-        cfg = None
+    needs_staff = bool(
+        services["tickets"]
+        or services["voice"]
+        or services["logs"]
+    )
 
-    control_role = control_role or _role_from_config(guild, cfg, "server_control_role_id", "control_role_id", "perm_role_id") or await _resolve_existing_control_role(guild)
-    if control_role:
-        _unique(reused, f"Server-control role: {control_role.mention}")
+    needs_public_area = bool(
+        services["welcome"]
+        or services["tickets"]
+        or services["verify"]
+    )
+
+    needs_staff_area = bool(
+        services["tickets"]
+        or services["voice"]
+        or services["logs"]
+    )
+
+    control_role = (
+        control_role
+        or _role_from_config(
+            guild,
+            cfg,
+            "server_control_role_id",
+            "control_role_id",
+            "perm_role_id",
+        )
+        or await _resolve_existing_control_role(guild)
+    )
+
+    if control_role is not None:
+        _unique(
+            reused,
+            f"Setup manager role: {control_role.mention}",
+        )
+
+    if needs_staff:
+        staff_role = (
+            staff_role
+            or _role_from_config(
+                guild,
+                cfg,
+                "staff_role_id",
+                "vc_staff_role_id",
+            )
+        )
+
+        if staff_role is None:
+            staff_role = await _ensure_role(
+                guild,
+                DEFAULT_STAFF_ROLE_NAME,
+                create_missing_roles=create_missing_roles,
+                notes=notes,
+                created=created,
+                reused=reused,
+            )
+        else:
+            _unique(
+                reused,
+                f"Staff role: {staff_role.mention}",
+            )
     else:
-        control_role = await _ensure_role(guild, DEFAULT_CONTROL_ROLE_NAME, create_missing_roles=create_missing_roles, notes=notes, created=created, reused=reused)
+        staff_role = None
 
-    staff_role = staff_role or _role_from_config(guild, cfg, "staff_role_id", "vc_staff_role_id")
-    if staff_role:
-        _unique(reused, f"Ticket staff role: {staff_role.mention}")
-    else:
-        staff_role = await _ensure_role(guild, DEFAULT_STAFF_ROLE_NAME, create_missing_roles=create_missing_roles, notes=notes, created=created, reused=reused)
+    unverified_role: Optional[discord.Role] = None
+    verified_role: Optional[discord.Role] = None
+    member_role: Optional[discord.Role] = None
 
-    unverified_role = _role_from_config(guild, cfg, "unverified_role_id") or await _ensure_role(guild, DEFAULT_UNVERIFIED_ROLE_NAME, create_missing_roles=create_missing_roles, notes=notes, created=created, reused=reused)
-    verified_role = _role_from_config(guild, cfg, "verified_role_id") or await _ensure_role(guild, DEFAULT_VERIFIED_ROLE_NAME, create_missing_roles=create_missing_roles, notes=notes, created=created, reused=reused)
-    member_role = _role_from_config(guild, cfg, "resident_role_id", "member_role_id") or await _ensure_role(guild, DEFAULT_MEMBER_ROLE_NAME, create_missing_roles=create_missing_roles, notes=notes, created=created, reused=reused)
+    if services["verify"]:
+        unverified_role = (
+            _role_from_config(
+                guild,
+                cfg,
+                "unverified_role_id",
+            )
+            or await _ensure_role(
+                guild,
+                DEFAULT_UNVERIFIED_ROLE_NAME,
+                create_missing_roles=create_missing_roles,
+                notes=notes,
+                created=created,
+                reused=reused,
+            )
+        )
 
-    for label, role in (("Pending / Unverified role", unverified_role), ("Verified role", verified_role), ("Member / Resident role", member_role)):
-        if role:
-            _unique(reused, f"{label}: {role.mention}")
+        verified_role = (
+            _role_from_config(
+                guild,
+                cfg,
+                "verified_role_id",
+            )
+            or await _ensure_role(
+                guild,
+                DEFAULT_VERIFIED_ROLE_NAME,
+                create_missing_roles=create_missing_roles,
+                notes=notes,
+                created=created,
+                reused=reused,
+            )
+        )
 
-    await _assign_control_role_to_runner(interaction, control_role, notes, ok)
+    if services["resident_role"]:
+        member_role = (
+            _role_from_config(
+                guild,
+                cfg,
+                "resident_role_id",
+                "member_role_id",
+            )
+            or await _ensure_role(
+                guild,
+                DEFAULT_MEMBER_ROLE_NAME,
+                create_missing_roles=create_missing_roles,
+                notes=notes,
+                created=created,
+                reused=reused,
+            )
+        )
 
-    public_ow = _public_overwrites(guild, staff_role, control_role, unverified_role) if apply_channel_permissions else {}
-    staff_ow = _staff_overwrites(guild, staff_role, control_role) if apply_channel_permissions else {}
-    voice_ow = _voice_overwrites(guild, staff_role, control_role, unverified_role) if apply_channel_permissions else {}
+    await _assign_control_role_to_runner(
+        interaction,
+        control_role,
+        notes,
+        ok,
+    )
 
-    start_category = _channel_from_config(guild, cfg, discord.CategoryChannel, "start_category_id", "welcome_category_id") or await _ensure_category(guild, START_CATEGORY_NAME, overwrites=public_ow, notes=notes, created=created, reused=reused)
-    ticket_category = _channel_from_config(guild, cfg, discord.CategoryChannel, "ticket_category_id") or await _ensure_category(guild, TICKET_CATEGORY_NAME, overwrites=staff_ow, notes=notes, created=created, reused=reused)
-    archive_category = _channel_from_config(guild, cfg, discord.CategoryChannel, "ticket_archive_category_id") or await _ensure_category(guild, ARCHIVE_CATEGORY_NAME, overwrites=staff_ow, notes=notes, created=created, reused=reused)
-    management_category = _channel_from_config(guild, cfg, discord.CategoryChannel, "management_category_id", "staff_tools_category_id") or await _ensure_category(guild, MANAGEMENT_CATEGORY_NAME, overwrites=staff_ow, notes=notes, created=created, reused=reused)
+    public_ow = (
+        _public_overwrites(
+            guild,
+            staff_role,
+            control_role,
+            unverified_role,
+        )
+        if apply_channel_permissions
+        else {}
+    )
 
-    for label, channel in (("Start category", start_category), ("Ticket category", ticket_category), ("Archive category", archive_category), ("Staff tools category", management_category)):
-        if channel:
-            _unique(reused, f"{label}: `{channel.name}`")
+    staff_ow = (
+        _staff_overwrites(
+            guild,
+            staff_role,
+            control_role,
+        )
+        if apply_channel_permissions
+        else {}
+    )
 
-    welcome_channel = _channel_from_config(guild, cfg, discord.TextChannel, "welcome_channel_id") or await _ensure_text(guild, WELCOME_CHANNEL_NAME, category=start_category, overwrites=public_ow, topic="Welcome information for new members.", notes=notes, created=created, reused=reused)
-    verify_channel = _channel_from_config(guild, cfg, discord.TextChannel, "verify_channel_id") or await _ensure_text(guild, VERIFY_CHANNEL_NAME, category=start_category, overwrites=public_ow, topic="Start server verification here.", notes=notes, created=created, reused=reused)
-    ticket_panel_channel = _channel_from_config(guild, cfg, discord.TextChannel, "ticket_panel_channel_id", "support_channel_id") or await _ensure_text(guild, TICKET_PANEL_CHANNEL_NAME, category=start_category, overwrites=public_ow, topic="Open a private support ticket here.", notes=notes, created=created, reused=reused)
-    vc_verify_channel = _channel_from_config(guild, cfg, discord.VoiceChannel, "vc_verify_channel_id") or await _ensure_voice(guild, VC_VERIFY_CHANNEL_NAME, category=start_category, overwrites=voice_ow, notes=notes, created=created, reused=reused)
-    vc_queue_channel = _channel_from_config(guild, cfg, discord.TextChannel, "vc_verify_queue_channel_id") or await _ensure_text(guild, VC_QUEUE_CHANNEL_NAME, category=management_category, overwrites=staff_ow, topic="Staff queue and status channel for voice verification requests.", notes=notes, created=created, reused=reused)
-    transcripts_channel = _channel_from_config(guild, cfg, discord.TextChannel, "transcripts_channel_id") or await _ensure_text(guild, TRANSCRIPTS_CHANNEL_NAME, category=management_category, overwrites=staff_ow, topic="Ticket transcripts are posted here.", notes=notes, created=created, reused=reused)
-    modlog_channel = _channel_from_config(guild, cfg, discord.TextChannel, "modlog_channel_id", "raidlog_channel_id", "force_verify_log_channel_id") or await _ensure_text(guild, MODLOG_CHANNEL_NAME, category=management_category, overwrites=staff_ow, topic="Moderation, ticket, and security logs are posted here.", notes=notes, created=created, reused=reused)
-    join_leave_channel = _channel_from_config(guild, cfg, discord.TextChannel, "join_log_channel_id") or await _ensure_text(guild, JOIN_LEAVE_CHANNEL_NAME, category=management_category, overwrites=staff_ow, topic="Join and leave events are posted here.", notes=notes, created=created, reused=reused)
-    status_channel = _channel_from_config(guild, cfg, discord.TextChannel, "status_channel_id", "bot_status_channel_id") or await _ensure_text(guild, STATUS_CHANNEL_NAME, category=management_category, overwrites=staff_ow, topic="Bot status and restored-service notices are posted here.", notes=notes, created=created, reused=reused)
+    voice_ow = (
+        _voice_overwrites(
+            guild,
+            staff_role,
+            control_role,
+            unverified_role,
+        )
+        if apply_channel_permissions
+        else {}
+    )
+
+    start_category: Optional[discord.CategoryChannel] = None
+    ticket_category: Optional[discord.CategoryChannel] = None
+    archive_category: Optional[discord.CategoryChannel] = None
+    management_category: Optional[discord.CategoryChannel] = None
+
+    if needs_public_area:
+        start_category = (
+            _channel_from_config(
+                guild,
+                cfg,
+                discord.CategoryChannel,
+                "start_category_id",
+                "welcome_category_id",
+            )
+            or await _ensure_category(
+                guild,
+                START_CATEGORY_NAME,
+                overwrites=public_ow,
+                notes=notes,
+                created=created,
+                reused=reused,
+            )
+        )
+
+    if services["tickets"]:
+        ticket_category = (
+            _channel_from_config(
+                guild,
+                cfg,
+                discord.CategoryChannel,
+                "ticket_category_id",
+            )
+            or await _ensure_category(
+                guild,
+                TICKET_CATEGORY_NAME,
+                overwrites=staff_ow,
+                notes=notes,
+                created=created,
+                reused=reused,
+            )
+        )
+
+        archive_category = (
+            _channel_from_config(
+                guild,
+                cfg,
+                discord.CategoryChannel,
+                "ticket_archive_category_id",
+            )
+            or await _ensure_category(
+                guild,
+                ARCHIVE_CATEGORY_NAME,
+                overwrites=staff_ow,
+                notes=notes,
+                created=created,
+                reused=reused,
+            )
+        )
+
+    if needs_staff_area:
+        management_category = (
+            _channel_from_config(
+                guild,
+                cfg,
+                discord.CategoryChannel,
+                "management_category_id",
+                "staff_tools_category_id",
+            )
+            or await _ensure_category(
+                guild,
+                MANAGEMENT_CATEGORY_NAME,
+                overwrites=staff_ow,
+                notes=notes,
+                created=created,
+                reused=reused,
+            )
+        )
+
+    welcome_channel: Optional[discord.TextChannel] = None
+    verify_channel: Optional[discord.TextChannel] = None
+    ticket_panel_channel: Optional[discord.TextChannel] = None
+    vc_verify_channel: Optional[discord.VoiceChannel] = None
+    vc_queue_channel: Optional[discord.TextChannel] = None
+    transcripts_channel: Optional[discord.TextChannel] = None
+    modlog_channel: Optional[discord.TextChannel] = None
+    join_leave_channel: Optional[discord.TextChannel] = None
+    status_channel: Optional[discord.TextChannel] = None
+
+    if services["welcome"]:
+        welcome_channel = (
+            _channel_from_config(
+                guild,
+                cfg,
+                discord.TextChannel,
+                "welcome_channel_id",
+            )
+            or await _ensure_text(
+                guild,
+                WELCOME_CHANNEL_NAME,
+                category=start_category,
+                overwrites=public_ow,
+                topic="Welcome information for new members.",
+                notes=notes,
+                created=created,
+                reused=reused,
+            )
+        )
+
+    if services["verify"]:
+        verify_channel = (
+            _channel_from_config(
+                guild,
+                cfg,
+                discord.TextChannel,
+                "verify_channel_id",
+                "verification_channel_id",
+            )
+            or await _ensure_text(
+                guild,
+                VERIFY_CHANNEL_NAME,
+                category=start_category,
+                overwrites=public_ow,
+                topic="Press Verify here to receive server access.",
+                notes=notes,
+                created=created,
+                reused=reused,
+            )
+        )
+
+    if services["tickets"]:
+        ticket_panel_channel = (
+            _channel_from_config(
+                guild,
+                cfg,
+                discord.TextChannel,
+                "ticket_panel_channel_id",
+                "support_channel_id",
+            )
+            or await _ensure_text(
+                guild,
+                TICKET_PANEL_CHANNEL_NAME,
+                category=start_category,
+                overwrites=public_ow,
+                topic="Open a private support ticket here.",
+                notes=notes,
+                created=created,
+                reused=reused,
+            )
+        )
+
+        transcripts_channel = (
+            _channel_from_config(
+                guild,
+                cfg,
+                discord.TextChannel,
+                "transcripts_channel_id",
+            )
+            or await _ensure_text(
+                guild,
+                TRANSCRIPTS_CHANNEL_NAME,
+                category=management_category,
+                overwrites=staff_ow,
+                topic="Ticket transcripts are posted here.",
+                notes=notes,
+                created=created,
+                reused=reused,
+            )
+        )
+
+    if services["voice"]:
+        vc_verify_channel = (
+            _channel_from_config(
+                guild,
+                cfg,
+                discord.VoiceChannel,
+                "vc_verify_channel_id",
+            )
+            or await _ensure_voice(
+                guild,
+                VC_VERIFY_CHANNEL_NAME,
+                category=start_category,
+                overwrites=voice_ow,
+                notes=notes,
+                created=created,
+                reused=reused,
+            )
+        )
+
+        vc_queue_channel = (
+            _channel_from_config(
+                guild,
+                cfg,
+                discord.TextChannel,
+                "vc_verify_queue_channel_id",
+                "vc_queue_channel_id",
+                "vc_request_channel_id",
+            )
+            or await _ensure_text(
+                guild,
+                VC_QUEUE_CHANNEL_NAME,
+                category=management_category,
+                overwrites=staff_ow,
+                topic=(
+                    "Staff requests and updates for Voice Verify."
+                ),
+                notes=notes,
+                created=created,
+                reused=reused,
+            )
+        )
+
+    if services["logs"]:
+        modlog_channel = (
+            _channel_from_config(
+                guild,
+                cfg,
+                discord.TextChannel,
+                "modlog_channel_id",
+                "raidlog_channel_id",
+                "force_verify_log_channel_id",
+            )
+            or await _ensure_text(
+                guild,
+                MODLOG_CHANNEL_NAME,
+                category=management_category,
+                overwrites=staff_ow,
+                topic="Moderation and security logs are posted here.",
+                notes=notes,
+                created=created,
+                reused=reused,
+            )
+        )
+
+        join_leave_channel = (
+            _channel_from_config(
+                guild,
+                cfg,
+                discord.TextChannel,
+                "join_leave_log_channel_id",
+                "join_log_channel_id",
+                "leave_log_channel_id",
+            )
+            or await _ensure_text(
+                guild,
+                JOIN_LEAVE_CHANNEL_NAME,
+                category=management_category,
+                overwrites=staff_ow,
+                topic="Member joins and leaves are posted here.",
+                notes=notes,
+                created=created,
+                reused=reused,
+            )
+        )
+
+        status_channel = (
+            _channel_from_config(
+                guild,
+                cfg,
+                discord.TextChannel,
+                "status_channel_id",
+                "bot_status_channel_id",
+                "uptime_channel_id",
+            )
+            or await _ensure_text(
+                guild,
+                STATUS_CHANNEL_NAME,
+                category=management_category,
+                overwrites=staff_ow,
+                topic="Bot status and restored services are posted here.",
+                notes=notes,
+                created=created,
+                reused=reused,
+            )
+        )
 
     if apply_channel_permissions:
-        for label, channel, overwrites in (
-            ("start category", start_category, public_ow),
-            ("open ticket category", ticket_category, staff_ow),
-            ("archive category", archive_category, staff_ow),
-            ("staff tools category", management_category, staff_ow),
+        repair_targets = (
+            ("start folder", start_category, public_ow),
+            ("new-ticket folder", ticket_category, staff_ow),
+            ("closed-ticket folder", archive_category, staff_ow),
+            ("staff-tools folder", management_category, staff_ow),
             ("welcome channel", welcome_channel, public_ow),
-            ("verify channel", verify_channel, public_ow),
-            ("support/ticket panel channel", ticket_panel_channel, public_ow),
-            ("voice verification channel", vc_verify_channel, voice_ow),
-            ("VC queue channel", vc_queue_channel, staff_ow),
-            ("transcripts channel", transcripts_channel, staff_ow),
-            ("modlog channel", modlog_channel, staff_ow),
+            ("verification channel", verify_channel, public_ow),
+            ("ticket panel channel", ticket_panel_channel, public_ow),
+            ("Voice Verify channel", vc_verify_channel, voice_ow),
+            ("Voice Verify request channel", vc_queue_channel, staff_ow),
+            ("transcript channel", transcripts_channel, staff_ow),
+            ("moderation log channel", modlog_channel, staff_ow),
             ("join/leave log channel", join_leave_channel, staff_ow),
             ("bot status channel", status_channel, staff_ow),
-        ):
-            await _repair_existing_permissions(channel, overwrites, label=label, notes=notes, ok=ok)
+        )
 
-    required = [
-        ("server-control role", control_role), ("ticket staff role", staff_role), ("pending/unverified role", unverified_role), ("verified role", verified_role),
-        ("start category", start_category), ("ticket category", ticket_category), ("archive category", archive_category), ("management category", management_category),
-        ("welcome channel", welcome_channel), ("verify channel", verify_channel), ("support/ticket panel channel", ticket_panel_channel),
-        ("transcripts channel", transcripts_channel), ("modlog channel", modlog_channel),
+        for label, channel, overwrites in repair_targets:
+            if channel is None:
+                continue
+
+            await _repair_existing_permissions(
+                channel,
+                overwrites,
+                label=label,
+                notes=notes,
+                ok=ok,
+            )
+
+    required: list[tuple[str, Any]] = []
+
+    if needs_staff:
+        required.append(
+            ("staff role", staff_role)
+        )
+
+    if services["tickets"]:
+        required.extend(
+            [
+                ("new-ticket folder", ticket_category),
+                ("Create Ticket panel channel", ticket_panel_channel),
+            ]
+        )
+
+    if services["verify"]:
+        required.extend(
+            [
+                ("approved-member role", verified_role),
+                ("verification channel", verify_channel),
+            ]
+        )
+
+    if services["voice"]:
+        required.extend(
+            [
+                ("Voice Verify channel", vc_verify_channel),
+                (
+                    "Voice Verify staff request channel",
+                    vc_queue_channel,
+                ),
+            ]
+        )
+
+    if services["logs"]:
+        required.append(
+            ("moderation/security log channel", modlog_channel)
+        )
+
+    blockers = [
+        f"Missing {label}."
+        for label, value in required
+        if value is None
     ]
-    blockers = [f"Missing {label}." for label, value in required if value is None]
+
     if blockers:
-        embed = discord.Embed(title="🚫 Recommended Layout Incomplete", description="Fix the blockers below, then run `/dank setup` again.", color=discord.Color.red())
-        embed.add_field(name="Blockers", value=_line_list(blockers), inline=False)
+        embed = discord.Embed(
+            title="🚫 Some Required Items Could Not Be Made",
+            description=(
+                "Nothing unrelated was created. Fix the items below "
+                "and run this step again."
+            ),
+            color=discord.Color.red(),
+        )
+        embed.add_field(
+            name="Required fixes",
+            value=_line_list(blockers),
+            inline=False,
+        )
+
         if created:
-            embed.add_field(name="Created Before Stopping", value=_line_list(created), inline=False)
+            embed.add_field(
+                name="Created safely",
+                value=_line_list(created),
+                inline=False,
+            )
+
         if reused:
-            embed.add_field(name="Reused", value=_line_list(reused), inline=False)
+            embed.add_field(
+                name="Already existed",
+                value=_line_list(reused),
+                inline=False,
+            )
+
         if notes:
-            embed.add_field(name="Notes", value=_line_list(notes), inline=False)
-        embed.add_field(name="What To Press Next", value="Press `/dank setup` → **Use My Existing Server** if you already have custom roles/channels, or fix bot permissions and run Create Missing Items again.", inline=False)
-        return await interaction.followup.send(embed=embed, ephemeral=True)
+            embed.add_field(
+                name="Notes",
+                value=_line_list(notes),
+                inline=False,
+            )
+
+        await interaction.followup.send(
+            embed=embed,
+            ephemeral=True,
+        )
+        return False
+
+    def item_id(item: Any) -> Optional[str]:
+        if item is None:
+            return None
+
+        try:
+            return str(int(item.id))
+        except Exception:
+            return None
+
+    updates: dict[str, Any] = {
+        "__config_write_mode": "auto_create",
+        "__config_write_source": (
+            "/dank setup make missing things"
+        ),
+        "configured_by_id": str(interaction.user.id),
+        "configured_by_name": str(interaction.user),
+        "configured_at": _utc_iso(),
+        "default_setup_version": (
+            "7_enabled_features_only"
+        ),
+    }
+
+    if control_role is not None:
+        updates.update(
+            {
+                "server_control_role_id": _role_value(control_role),
+                "control_role_id": _role_value(control_role),
+                "perm_role_id": _role_value(control_role),
+            }
+        )
+
+    if staff_role is not None:
+        updates.update(
+            {
+                "staff_role_id": _role_value(staff_role),
+                "vc_staff_role_id": _role_value(staff_role),
+            }
+        )
+
+    if services["verify"]:
+        updates.update(
+            {
+                "unverified_role_id": _role_value(unverified_role),
+                "verified_role_id": _role_value(verified_role),
+                "verify_channel_id": item_id(verify_channel),
+                "verification_channel_id": item_id(verify_channel),
+            }
+        )
+
+    if member_role is not None:
+        updates["resident_role_id"] = _role_value(member_role)
+
+    if services["tickets"]:
+        updates.update(
+            {
+                "ticket_category_id": item_id(ticket_category),
+                "ticket_archive_category_id": item_id(
+                    archive_category
+                ),
+                "ticket_panel_channel_id": item_id(
+                    ticket_panel_channel
+                ),
+                "support_channel_id": item_id(
+                    ticket_panel_channel
+                ),
+                "transcripts_channel_id": item_id(
+                    transcripts_channel
+                ),
+                "ticket_prefix": "ticket",
+            }
+        )
+
+    if services["voice"]:
+        updates.update(
+            {
+                "vc_verify_channel_id": item_id(
+                    vc_verify_channel
+                ),
+                "vc_verify_queue_channel_id": item_id(
+                    vc_queue_channel
+                ),
+            }
+        )
+
+    if services["welcome"]:
+        updates["welcome_channel_id"] = item_id(
+            welcome_channel
+        )
+
+    if services["logs"]:
+        updates.update(
+            {
+                "modlog_channel_id": item_id(modlog_channel),
+                "raidlog_channel_id": item_id(modlog_channel),
+                "force_verify_log_channel_id": item_id(
+                    modlog_channel
+                ),
+                "join_leave_log_channel_id": item_id(
+                    join_leave_channel
+                ),
+                "join_log_channel_id": item_id(
+                    join_leave_channel
+                ),
+                "leave_log_channel_id": item_id(
+                    join_leave_channel
+                ),
+                "status_channel_id": item_id(status_channel),
+                "bot_status_channel_id": item_id(
+                    status_channel
+                ),
+                "uptime_channel_id": item_id(status_channel),
+            }
+        )
+
+    if start_category is not None:
+        updates["start_category_id"] = item_id(
+            start_category
+        )
+
+    if management_category is not None:
+        updates["management_category_id"] = item_id(
+            management_category
+        )
 
     updates = {
-        "__config_write_mode": "auto_create",
-        "__config_write_source": "/dank setup create missing items",
-        "server_control_role_id": _role_value(control_role), "control_role_id": _role_value(control_role), "perm_role_id": _role_value(control_role),
-        "staff_role_id": _role_value(staff_role), "vc_staff_role_id": _role_value(staff_role),
-        "unverified_role_id": _role_value(unverified_role), "verified_role_id": _role_value(verified_role), "resident_role_id": _role_value(member_role),
-        "ticket_category_id": str(int(ticket_category.id)) if ticket_category else None,
-        "ticket_archive_category_id": str(int(archive_category.id)) if archive_category else None,
-        "transcripts_channel_id": str(int(transcripts_channel.id)) if transcripts_channel else None,
-        "verify_channel_id": str(int(verify_channel.id)) if verify_channel else None,
-        "ticket_panel_channel_id": str(int(ticket_panel_channel.id)) if ticket_panel_channel else None,
-        "support_channel_id": str(int(ticket_panel_channel.id)) if ticket_panel_channel else None,
-        "welcome_channel_id": str(int(welcome_channel.id)) if welcome_channel else None,
-        "vc_verify_channel_id": str(int(vc_verify_channel.id)) if vc_verify_channel else None,
-        "vc_verify_queue_channel_id": str(int(vc_queue_channel.id)) if vc_queue_channel else None,
-        "modlog_channel_id": str(int(modlog_channel.id)) if modlog_channel else None,
-        "raidlog_channel_id": str(int(modlog_channel.id)) if modlog_channel else None,
-        "force_verify_log_channel_id": str(int(modlog_channel.id)) if modlog_channel else None,
-        "join_log_channel_id": str(int(join_leave_channel.id)) if join_leave_channel else None,
-        "status_channel_id": str(int(status_channel.id)) if status_channel else None,
-        "bot_status_channel_id": str(int(status_channel.id)) if status_channel else None,
-        "ticket_prefix": "ticket",
-        "configured_by_id": str(interaction.user.id), "configured_by_name": str(interaction.user), "configured_at": _utc_iso(),
-        "default_setup_version": "6_repair_safe_bot_staff_overwrites",
+        key: value
+        for key, value in updates.items()
+        if value is not None
     }
 
     try:
-        await _upsert_config(guild.id, updates)
+        await _upsert_config(
+            guild.id,
+            updates,
+        )
         invalidate_guild_config(guild.id)
-        cfg_after = await get_guild_config(guild.id, refresh=True)
-    except Exception as e:
-        return await interaction.followup.send(f"❌ Recommended layout handled Discord items but failed saving config: `{e}`\n\nPress `/dank setup` → **Use My Existing Server** to save your roles/channels manually.", ephemeral=True)
 
-    embed = _config_embed(guild, cfg_after, title="✅ Recommended Layout Handled")
-    embed.add_field(name="Created", value=_line_list(created, empty="Nothing new created."), inline=False)
-    embed.add_field(name="Reused", value=_line_list(reused, empty="Nothing reused."), inline=False)
+        cfg_after = await get_guild_config(
+            guild.id,
+            refresh=True,
+        )
+    except Exception as exc:
+        await interaction.followup.send(
+            (
+                "❌ The Discord items were handled, but saving "
+                "the setup failed.\n"
+                f"`{type(exc).__name__}: {str(exc)[:180]}`"
+            ),
+            ephemeral=True,
+        )
+        return False
+
+    embed = _config_embed(
+        guild,
+        cfg_after,
+        title="✅ Missing Items Handled",
+    )
+
+    embed.description = (
+        "Dank Shield created or reused only the items needed by "
+        "the features currently turned on."
+    )
+
+    embed.add_field(
+        name="Enabled Features",
+        value=", ".join(enabled_labels),
+        inline=False,
+    )
+
+    embed.add_field(
+        name="Created",
+        value=_line_list(
+            created,
+            empty="Nothing new was needed.",
+        ),
+        inline=False,
+    )
+
+    embed.add_field(
+        name="Already Existed",
+        value=_line_list(
+            reused,
+            empty="No existing items were reused.",
+        ),
+        inline=False,
+    )
+
     if ok:
-        embed.add_field(name="Passing Checks", value=_line_list(ok), inline=False)
+        embed.add_field(
+            name="Safe Repairs",
+            value=_line_list(ok),
+            inline=False,
+        )
+
     if notes:
-        embed.add_field(name="Notes", value=_line_list(notes), inline=False)
-    embed.add_field(name="Auto-Build Safety", value="Auto-Build fills missing setup only. For existing items, it repairs only Dank Shield bot/staff/control access. It does not move, rename, delete, or rewrite @everyone/member-facing permissions.", inline=False)
-    embed.add_field(name="Next Step", value="Press `/dank setup` → **Setup Check**. If anything is wrong, press **Use My Existing Server** and pick the exact role/channel/category you want.", inline=False)
-    await interaction.followup.send(embed=embed, ephemeral=True)
+        embed.add_field(
+            name="Notes",
+            value=_line_list(notes),
+            inline=False,
+        )
+
+    embed.add_field(
+        name="Nothing Else Was Touched",
+        value=(
+            "Disabled features created nothing. Existing items "
+            "were not renamed, moved, or deleted. Member-facing "
+            "permissions were not rewritten."
+        ),
+        inline=False,
+    )
+
+    embed.add_field(
+        name="Next Step",
+        value=(
+            "Return to `/dank setup` and press **Setup Check**."
+        ),
+        inline=False,
+    )
+
+    await interaction.followup.send(
+        embed=embed,
+        ephemeral=True,
+    )
+
+    return True
 
 
 def _attach() -> None:

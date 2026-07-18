@@ -122,39 +122,77 @@ async def _fetch_ban_entry_by_id(guild: discord.Guild, user_id: int) -> Optional
 async def _resolve_ban_toggle_target(
     guild: discord.Guild,
     raw_target: str,
-) -> tuple[int, Optional[discord.Member], Optional[Any]]:
-    """
-    Resolve a target for /ban_unban toggle mode.
+) -> tuple[
+    int,
+    Optional[discord.Member],
+    Optional[Any],
+]:
+    """Resolve a target for ban or unban.
 
-    Returns:
-        (user_id, current_member_if_present, ban_entry_if_currently_banned)
-
-    For unbanning, a raw ID or mention is the safest because banned users are no
-    longer guild members and cannot always be resolved by display name.
+    IDs and mentions check Discord's ban record first.
+    Banned users are absent from the guild member list,
+    so unban must never depend on member resolution.
     """
-    user_id = parse_member_id_from_target(raw_target)
+
+    user_id = parse_member_id_from_target(
+        raw_target
+    )
     target_member: Optional[discord.Member] = None
 
     if user_id > 0:
+        ban_entry = await _fetch_ban_entry_by_id(
+            guild,
+            int(user_id),
+        )
+
+        if ban_entry is not None:
+            return (
+                int(user_id),
+                None,
+                ban_entry,
+            )
+
         try:
-            target_member = guild.get_member(int(user_id))
+            target_member = guild.get_member(
+                int(user_id)
+            )
         except Exception:
             target_member = None
+
         if target_member is None:
             try:
-                target_member = await guild.fetch_member(int(user_id))
+                target_member = await guild.fetch_member(
+                    int(user_id)
+                )
             except Exception:
                 target_member = None
     else:
-        target_member = await resolve_member_from_target(guild, raw_target)
+        target_member = await resolve_member_from_target(
+            guild,
+            raw_target,
+        )
+
         if target_member is not None:
             try:
                 user_id = int(target_member.id)
             except Exception:
                 user_id = 0
 
-    ban_entry = await _fetch_ban_entry_by_id(guild, user_id) if user_id > 0 else None
-    return int(user_id or 0), target_member, ban_entry
+    ban_entry = (
+        await _fetch_ban_entry_by_id(
+            guild,
+            int(user_id),
+        )
+        if user_id > 0
+        else None
+    )
+
+    return (
+        int(user_id or 0),
+        target_member,
+        ban_entry,
+    )
+
 
 
 async def _configured_modlog_channel(guild: discord.Guild) -> Optional[discord.TextChannel]:

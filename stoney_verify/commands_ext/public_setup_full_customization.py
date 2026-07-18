@@ -138,7 +138,14 @@ async def _send_saved(interaction: discord.Interaction, *, title: str, descripti
     embed = discord.Embed(title=title, description=description[:4096], color=discord.Color.green())
     if warnings:
         embed.add_field(name="Warnings", value="\n".join(f"• {x}" for x in warnings)[:1024], inline=False)
-    embed.add_field(name="Next", value="Pick another item, press **Back to Setup**, or run **Run Health Check**.", inline=False)
+    embed.add_field(
+        name="Next",
+        value=(
+            "Choose another item, press **Back to Setup**, "
+            "or press **Setup Check**."
+        ),
+        inline=False,
+    )
     try:
         await interaction.response.send_message(embed=embed, ephemeral=True)
     except Exception:
@@ -276,56 +283,235 @@ class SetupBackView(discord.ui.View):
 
 
 class FullChooseExistingView(SetupBackView):
-    @discord.ui.button(label="Roles", emoji="👥", style=discord.ButtonStyle.primary, custom_id="stoney_full_custom:roles", row=0)
-    async def roles(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+    @discord.ui.button(
+        label="Access & Staff Roles",
+        emoji="👥",
+        style=discord.ButtonStyle.primary,
+        custom_id="stoney_full_custom:roles",
+        row=0,
+    )
+    async def roles(
+        self,
+        interaction: discord.Interaction,
+        button: discord.ui.Button,
+    ) -> None:
         if not await _require_setup_permission(interaction):
             return
+
         embed = discord.Embed(
-            title="👥 Customize Roles",
-            description="Pick the exact roles this server uses. Names do not matter; the saved role IDs are what Dank Shield uses.",
+            title="👥 Choose Your Server Roles",
+            description=(
+                "Pick only the roles used by features you turned on. "
+                "Role names can be anything."
+            ),
             color=discord.Color.blurple(),
         )
-        embed.add_field(name="Included", value="Server-control, ticket staff, Pending / Unverified, Verified, Member / Resident, and VC staff fallback.", inline=False)
-        await interaction.response.edit_message(embed=embed, view=RoleCustomizationPageOne())
 
-    @discord.ui.button(label="Discord Categories", emoji="📁", style=discord.ButtonStyle.primary, custom_id="stoney_full_custom:categories", row=0)
-    async def categories(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        embed.add_field(
+            name="Basic Verify",
+            value=(
+                "Choose the **Waiting** role and the "
+                "**Approved Member** role."
+            ),
+            inline=False,
+        )
+
+        embed.add_field(
+            name="Tickets",
+            value=(
+                "Choose the role for people who answer tickets."
+            ),
+            inline=False,
+        )
+
+        embed.add_field(
+            name="Optional",
+            value=(
+                "Setup managers, full members, and a separate "
+                "Voice Verify staff role can be chosen later."
+            ),
+            inline=False,
+        )
+
+        await interaction.response.edit_message(
+            embed=embed,
+            view=RoleCustomizationPageOne(),
+        )
+
+    @discord.ui.button(
+        label="Ticket Folders",
+        emoji="📁",
+        style=discord.ButtonStyle.primary,
+        custom_id="stoney_full_custom:categories",
+        row=0,
+    )
+    async def categories(
+        self,
+        interaction: discord.Interaction,
+        button: discord.ui.Button,
+    ) -> None:
         if not await _require_setup_permission(interaction):
             return
+
         embed = discord.Embed(
-            title="📁 Customize Discord Categories",
-            description="Pick the actual Discord channel categories Dank Shield should use. These are not the logical ticket routing categories.",
+            title="📁 Choose Ticket Folders",
+            description=(
+                "Discord calls these categories. Think of them as "
+                "folders that hold channels."
+            ),
             color=discord.Color.blurple(),
         )
-        await interaction.response.edit_message(embed=embed, view=DiscordCategoryCustomizationView())
 
-    @discord.ui.button(label="Channels", emoji="💬", style=discord.ButtonStyle.primary, custom_id="stoney_full_custom:channels", row=1)
-    async def channels(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        embed.add_field(
+            name="Needed when Tickets are ON",
+            value=(
+                "Choose the folder where new tickets open."
+            ),
+            inline=False,
+        )
+
+        embed.add_field(
+            name="Optional",
+            value=(
+                "You may also choose folders for closed tickets, "
+                "welcome channels, and staff tools."
+            ),
+            inline=False,
+        )
+
+        await interaction.response.edit_message(
+            embed=embed,
+            view=DiscordCategoryCustomizationView(),
+        )
+
+    @discord.ui.button(
+        label="Member Channels",
+        emoji="💬",
+        style=discord.ButtonStyle.primary,
+        custom_id="stoney_full_custom:channels",
+        row=1,
+    )
+    async def channels(
+        self,
+        interaction: discord.Interaction,
+        button: discord.ui.Button,
+    ) -> None:
         if not await _require_setup_permission(interaction):
             return
+
         embed = discord.Embed(
-            title="💬 Customize Public + Verification Channels",
-            description="Pick the text/voice channels users and staff interact with. Join/leave logs are also in **More Channels** so they are easy to find.",
+            title="💬 Choose Member Channels",
+            description=(
+                "Choose only the channels needed by the features "
+                "you turned on."
+            ),
             color=discord.Color.blurple(),
         )
-        await interaction.response.edit_message(embed=embed, view=ChannelCustomizationPageOne())
 
-    @discord.ui.button(label="Logs + Status", emoji="🧾", style=discord.ButtonStyle.primary, custom_id="stoney_full_custom:logs", row=1)
-    async def logs(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        embed.add_field(
+            name="Basic Verify",
+            value="Choose where members press **Verify**.",
+            inline=False,
+        )
+
+        embed.add_field(
+            name="Tickets",
+            value=(
+                "Choose where members see the "
+                "**Create Ticket** panel."
+            ),
+            inline=False,
+        )
+
+        embed.add_field(
+            name="Voice Verify",
+            value=(
+                "Choose the voice channel used for the staff check."
+            ),
+            inline=False,
+        )
+
+        embed.add_field(
+            name="Optional",
+            value=(
+                "Welcome, join/leave, backup support, and bot-status "
+                "channels remain available under the channel pages."
+            ),
+            inline=False,
+        )
+
+        await interaction.response.edit_message(
+            embed=embed,
+            view=ChannelCustomizationPageOne(),
+        )
+
+    @discord.ui.button(
+        label="Logs & Status",
+        emoji="🧾",
+        style=discord.ButtonStyle.primary,
+        custom_id="stoney_full_custom:logs",
+        row=1,
+    )
+    async def logs(
+        self,
+        interaction: discord.Interaction,
+        button: discord.ui.Button,
+    ) -> None:
         if not await _require_setup_permission(interaction):
             return
+
         embed = discord.Embed(
-            title="🧾 Customize Logs + Status",
-            description="Pick where Dank Shield sends moderation, security, join/leave, transcript, and health/status messages.",
+            title="🧾 Choose Logs & Status Channels",
+            description=(
+                "Choose where staff should receive records and "
+                "bot updates."
+            ),
             color=discord.Color.blurple(),
         )
-        await interaction.response.edit_message(embed=embed, view=LogStatusCustomizationView())
 
-    @discord.ui.button(label="Behavior Settings", emoji="⚙️", style=discord.ButtonStyle.secondary, custom_id="stoney_full_custom:behavior", row=2)
-    async def behavior(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        embed.add_field(
+            name="Available choices",
+            value=(
+                "• Ticket transcripts\n"
+                "• Moderation and security logs\n"
+                "• Join and leave logs\n"
+                "• Bot status and uptime"
+            ),
+            inline=False,
+        )
+
+        embed.add_field(
+            name="Simple rule",
+            value=(
+                "Skip a choice when your server does not use "
+                "that feature."
+            ),
+            inline=False,
+        )
+
+        await interaction.response.edit_message(
+            embed=embed,
+            view=LogStatusCustomizationView(),
+        )
+
+    @discord.ui.button(
+        label="Optional Settings",
+        emoji="⚙️",
+        style=discord.ButtonStyle.secondary,
+        custom_id="stoney_full_custom:behavior",
+        row=2,
+    )
+    async def behavior(
+        self,
+        interaction: discord.Interaction,
+        button: discord.ui.Button,
+    ) -> None:
         if not await _require_setup_permission(interaction):
             return
-        await interaction.response.send_modal(BehaviorSettingsModal())
+
+        await interaction.response.send_modal(
+            BehaviorSettingsModal()
+        )
 
 
 class SaveRoleSelect(discord.ui.RoleSelect):
@@ -351,7 +537,15 @@ class SaveRoleSelect(discord.ui.RoleSelect):
 
         payload = {column: _snowflake(role) for column in self.columns + self.also_same}
         await _save_config(interaction, payload, source=f"/dank setup full customization role picker: {self.placeholder}")
-        await _send_saved(interaction, title="✅ Saved Setup Role", description=f"Saved {_mention(role)} for `{', '.join(self.columns + self.also_same)}`.", warnings=messages if messages else None)
+        await _send_saved(
+            interaction,
+            title="✅ Role Saved",
+            description=(
+                f"Saved {_mention(role)} as "
+                f"**{str(self.placeholder or 'this role')}**."
+            ),
+            warnings=messages if messages else None,
+        )
 
 
 class SaveChannelSelect(discord.ui.ChannelSelect):
@@ -378,78 +572,425 @@ class SaveChannelSelect(discord.ui.ChannelSelect):
 
         payload = {column: _snowflake(channel) for column in self.columns + self.also_same}
         await _save_config(interaction, payload, source=f"/dank setup full customization channel picker: {self.placeholder}")
-        await _send_saved(interaction, title="✅ Saved Setup Channel", description=f"Saved {_mention(channel)} for `{', '.join(self.columns + self.also_same)}`.")
+        await _send_saved(
+            interaction,
+            title="✅ Channel Saved",
+            description=(
+                f"Saved {_mention(channel)} as "
+                f"**{str(self.placeholder or 'this channel')}**."
+            ),
+        )
 
 
 class RoleCustomizationPageOne(SetupBackView):
     def __init__(self) -> None:
         super().__init__()
-        self.add_item(SaveRoleSelect(placeholder="Server-control / bot manager role", columns=("server_control_role_id",), also_same=("control_role_id", "perm_role_id", "bot_manager_role_id"), require_manage=False, row=0))
-        self.add_item(SaveRoleSelect(placeholder="Ticket staff / support role", columns=("staff_role_id",), also_same=("vc_staff_role_id",), require_manage=False, row=1))
-        self.add_item(SaveRoleSelect(placeholder="Pending / Unverified role", columns=("unverified_role_id",), require_manage=True, row=2))
-        self.add_item(SaveRoleSelect(placeholder="Verified role", columns=("verified_role_id",), require_manage=True, row=3))
 
-    @discord.ui.button(label="More Roles", emoji="➡️", style=discord.ButtonStyle.secondary, custom_id="stoney_full_custom:roles_more", row=4)
-    async def more_roles(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        self.add_item(
+            SaveRoleSelect(
+                placeholder="Optional: role allowed to manage Dank Shield",
+                columns=("server_control_role_id",),
+                also_same=(
+                    "control_role_id",
+                    "perm_role_id",
+                    "bot_manager_role_id",
+                ),
+                require_manage=False,
+                row=0,
+            )
+        )
+
+        self.add_item(
+            SaveRoleSelect(
+                placeholder="Tickets: role that answers tickets",
+                columns=("staff_role_id",),
+                also_same=("vc_staff_role_id",),
+                require_manage=False,
+                row=1,
+            )
+        )
+
+        self.add_item(
+            SaveRoleSelect(
+                placeholder="Verify: waiting role for new members",
+                columns=("unverified_role_id",),
+                require_manage=True,
+                row=2,
+            )
+        )
+
+        self.add_item(
+            SaveRoleSelect(
+                placeholder="Verify: approved member role",
+                columns=("verified_role_id",),
+                require_manage=True,
+                row=3,
+            )
+        )
+
+    @discord.ui.button(
+        label="Optional Roles",
+        emoji="➡️",
+        style=discord.ButtonStyle.secondary,
+        custom_id="stoney_full_custom:roles_more",
+        row=4,
+    )
+    async def more_roles(
+        self,
+        interaction: discord.Interaction,
+        button: discord.ui.Button,
+    ) -> None:
         if not await _require_setup_permission(interaction):
             return
-        embed = discord.Embed(title="👥 More Role Settings", description="Pick optional/fallback roles.", color=discord.Color.blurple())
-        await interaction.response.edit_message(embed=embed, view=RoleCustomizationPageTwo())
+
+        embed = discord.Embed(
+            title="👥 Optional Roles",
+            description=(
+                "Most servers can skip this page.\n\n"
+                "Use these only when your server has a separate "
+                "full-member role, separate Voice Verify staff, "
+                "or another Dank Shield manager role."
+            ),
+            color=discord.Color.blurple(),
+        )
+
+        await interaction.response.edit_message(
+            embed=embed,
+            view=RoleCustomizationPageTwo(),
+        )
 
 
 class RoleCustomizationPageTwo(SetupBackView):
     def __init__(self) -> None:
         super().__init__()
-        self.add_item(SaveRoleSelect(placeholder="Member / Resident / full-access role", columns=("resident_role_id",), also_same=("member_role_id",), require_manage=True, row=0))
-        self.add_item(SaveRoleSelect(placeholder="Voice verification staff role override", columns=("vc_staff_role_id",), require_manage=False, row=1))
-        self.add_item(SaveRoleSelect(placeholder="Additional server-control role override", columns=("control_role_id",), also_same=("server_control_role_id",), require_manage=False, row=2))
+
+        self.add_item(
+            SaveRoleSelect(
+                placeholder="Optional: full member or resident role",
+                columns=("resident_role_id",),
+                also_same=("member_role_id",),
+                require_manage=True,
+                row=0,
+            )
+        )
+
+        self.add_item(
+            SaveRoleSelect(
+                placeholder="Optional: separate Voice Verify staff role",
+                columns=("vc_staff_role_id",),
+                require_manage=False,
+                row=1,
+            )
+        )
+
+        self.add_item(
+            SaveRoleSelect(
+                placeholder="Optional: another Dank Shield manager role",
+                columns=("control_role_id",),
+                also_same=("server_control_role_id",),
+                require_manage=False,
+                row=2,
+            )
+        )
+
+    @discord.ui.button(
+        label="Back to Main Roles",
+        emoji="⬅️",
+        style=discord.ButtonStyle.secondary,
+        custom_id="stoney_full_custom:roles_first",
+        row=4,
+    )
+    async def first_roles(
+        self,
+        interaction: discord.Interaction,
+        button: discord.ui.Button,
+    ) -> None:
+        if not await _require_setup_permission(interaction):
+            return
+
+        embed = discord.Embed(
+            title="👥 Choose Your Server Roles",
+            description=(
+                "Choose only the roles used by features "
+                "you turned on."
+            ),
+            color=discord.Color.blurple(),
+        )
+
+        embed.add_field(
+            name="Usually needed",
+            value=(
+                "• Tickets: staff role\n"
+                "• Basic Verify: waiting role and approved role"
+            ),
+            inline=False,
+        )
+
+        await interaction.response.edit_message(
+            embed=embed,
+            view=RoleCustomizationPageOne(),
+        )
 
 
 class DiscordCategoryCustomizationView(SetupBackView):
     def __init__(self) -> None:
         super().__init__()
-        self.add_item(SaveChannelSelect(placeholder="Start / welcome Discord category", columns=("start_category_id",), also_same=("welcome_category_id",), channel_types=[discord.ChannelType.category], row=0))
-        self.add_item(SaveChannelSelect(placeholder="Open tickets Discord category", columns=("ticket_category_id",), channel_types=[discord.ChannelType.category], row=1))
-        self.add_item(SaveChannelSelect(placeholder="Closed/archive tickets Discord category", columns=("ticket_archive_category_id",), also_same=("ticket_closed_category_id",), channel_types=[discord.ChannelType.category], row=2))
-        self.add_item(SaveChannelSelect(placeholder="Staff tools / management Discord category", columns=("management_category_id",), also_same=("staff_tools_category_id",), channel_types=[discord.ChannelType.category], row=3))
+
+        self.add_item(
+            SaveChannelSelect(
+                placeholder="Optional: welcome or start folder",
+                columns=("start_category_id",),
+                also_same=("welcome_category_id",),
+                channel_types=[discord.ChannelType.category],
+                row=0,
+            )
+        )
+
+        self.add_item(
+            SaveChannelSelect(
+                placeholder="Tickets: folder for new tickets",
+                columns=("ticket_category_id",),
+                channel_types=[discord.ChannelType.category],
+                row=1,
+            )
+        )
+
+        self.add_item(
+            SaveChannelSelect(
+                placeholder="Optional: folder for closed tickets",
+                columns=("ticket_archive_category_id",),
+                also_same=("ticket_closed_category_id",),
+                channel_types=[discord.ChannelType.category],
+                row=2,
+            )
+        )
+
+        self.add_item(
+            SaveChannelSelect(
+                placeholder="Optional: folder for staff tools",
+                columns=("management_category_id",),
+                also_same=("staff_tools_category_id",),
+                channel_types=[discord.ChannelType.category],
+                row=3,
+            )
+        )
 
 
 class ChannelCustomizationPageOne(SetupBackView):
     def __init__(self) -> None:
         super().__init__()
-        self.add_item(SaveChannelSelect(placeholder="Welcome text channel", columns=("welcome_channel_id",), channel_types=[discord.ChannelType.text], row=0))
-        self.add_item(SaveChannelSelect(placeholder="Verify text channel", columns=("verify_channel_id",), channel_types=[discord.ChannelType.text], row=1))
-        self.add_item(SaveChannelSelect(placeholder="Support / ticket panel text channel", columns=("ticket_panel_channel_id",), also_same=("support_channel_id",), channel_types=[discord.ChannelType.text], row=2))
-        self.add_item(SaveChannelSelect(placeholder="VC verification voice channel", columns=("vc_verify_channel_id",), channel_types=[discord.ChannelType.voice], row=3))
 
-    @discord.ui.button(label="More Channels", emoji="➡️", style=discord.ButtonStyle.secondary, custom_id="stoney_full_custom:channels_more", row=4)
-    async def more_channels(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        self.add_item(
+            SaveChannelSelect(
+                placeholder="Optional: welcome channel",
+                columns=("welcome_channel_id",),
+                channel_types=[discord.ChannelType.text],
+                row=0,
+            )
+        )
+
+        self.add_item(
+            SaveChannelSelect(
+                placeholder="Verify: channel with the Verify button",
+                columns=("verify_channel_id",),
+                channel_types=[discord.ChannelType.text],
+                row=1,
+            )
+        )
+
+        self.add_item(
+            SaveChannelSelect(
+                placeholder="Tickets: channel with Create Ticket panel",
+                columns=("ticket_panel_channel_id",),
+                also_same=("support_channel_id",),
+                channel_types=[discord.ChannelType.text],
+                row=2,
+            )
+        )
+
+        self.add_item(
+            SaveChannelSelect(
+                placeholder="Voice Verify: voice channel for the check",
+                columns=("vc_verify_channel_id",),
+                channel_types=[discord.ChannelType.voice],
+                row=3,
+            )
+        )
+
+    @discord.ui.button(
+        label="Optional Channels",
+        emoji="➡️",
+        style=discord.ButtonStyle.secondary,
+        custom_id="stoney_full_custom:channels_more",
+        row=4,
+    )
+    async def more_channels(
+        self,
+        interaction: discord.Interaction,
+        button: discord.ui.Button,
+    ) -> None:
         if not await _require_setup_permission(interaction):
             return
+
         embed = discord.Embed(
-            title="💬 More Channel Settings",
-            description="Pick queue/status/helper channels, including the join/leave log channel.",
+            title="💬 Optional Channels",
+            description=(
+                "Most servers do not need every item here.\n\n"
+                "Choose only channels used by features "
+                "you turned on."
+            ),
             color=discord.Color.blurple(),
         )
-        await interaction.response.edit_message(embed=embed, view=ChannelCustomizationPageTwo())
+
+        embed.add_field(
+            name="Available",
+            value=(
+                "• Voice Verify staff requests\n"
+                "• Join and leave logs\n"
+                "• Backup support channel\n"
+                "• Bot status and uptime"
+            ),
+            inline=False,
+        )
+
+        await interaction.response.edit_message(
+            embed=embed,
+            view=ChannelCustomizationPageTwo(),
+        )
 
 
 class ChannelCustomizationPageTwo(SetupBackView):
     def __init__(self) -> None:
         super().__init__()
-        self.add_item(SaveChannelSelect(placeholder="VC verification queue/status text channel", columns=("vc_verify_queue_channel_id",), channel_types=[discord.ChannelType.text], row=0))
-        self.add_item(SaveChannelSelect(placeholder="Join / leave log channel — not welcome", columns=("join_leave_log_channel_id",), also_same=JOIN_LEAVE_LOG_ALIASES, channel_types=[discord.ChannelType.text], row=1))
-        self.add_item(SaveChannelSelect(placeholder="General support text channel fallback", columns=("support_channel_id",), also_same=("ticket_panel_channel_id",), channel_types=[discord.ChannelType.text], row=2))
-        self.add_item(SaveChannelSelect(placeholder="Bot health/status text channel", columns=("health_channel_id",), also_same=("status_channel_id", "bot_status_channel_id"), channel_types=[discord.ChannelType.text], row=3))
+
+        self.add_item(
+            SaveChannelSelect(
+                placeholder="Voice Verify: staff request channel",
+                columns=("vc_verify_queue_channel_id",),
+                channel_types=[discord.ChannelType.text],
+                row=0,
+            )
+        )
+
+        self.add_item(
+            SaveChannelSelect(
+                placeholder="Join and leave: staff log channel",
+                columns=("join_leave_log_channel_id",),
+                also_same=JOIN_LEAVE_LOG_ALIASES,
+                channel_types=[discord.ChannelType.text],
+                row=1,
+            )
+        )
+
+        self.add_item(
+            SaveChannelSelect(
+                placeholder="Tickets: backup support channel",
+                columns=("support_channel_id",),
+                also_same=("ticket_panel_channel_id",),
+                channel_types=[discord.ChannelType.text],
+                row=2,
+            )
+        )
+
+        self.add_item(
+            SaveChannelSelect(
+                placeholder="Bot status: uptime and health channel",
+                columns=("health_channel_id",),
+                also_same=(
+                    "status_channel_id",
+                    "bot_status_channel_id",
+                ),
+                channel_types=[discord.ChannelType.text],
+                row=3,
+            )
+        )
+
+    @discord.ui.button(
+        label="Back to Main Channels",
+        emoji="⬅️",
+        style=discord.ButtonStyle.secondary,
+        custom_id="stoney_full_custom:channels_first",
+        row=4,
+    )
+    async def first_channels(
+        self,
+        interaction: discord.Interaction,
+        button: discord.ui.Button,
+    ) -> None:
+        if not await _require_setup_permission(interaction):
+            return
+
+        embed = discord.Embed(
+            title="💬 Choose Member Channels",
+            description=(
+                "Choose only the channels needed by the "
+                "features you turned on."
+            ),
+            color=discord.Color.blurple(),
+        )
+
+        embed.add_field(
+            name="Usually needed",
+            value=(
+                "• Basic Verify: Verify channel\n"
+                "• Tickets: Create Ticket panel channel\n"
+                "• Voice Verify: voice channel"
+            ),
+            inline=False,
+        )
+
+        await interaction.response.edit_message(
+            embed=embed,
+            view=ChannelCustomizationPageOne(),
+        )
 
 
 class LogStatusCustomizationView(SetupBackView):
     def __init__(self) -> None:
         super().__init__()
-        self.add_item(SaveChannelSelect(placeholder="Ticket transcripts channel", columns=("transcripts_channel_id",), channel_types=[discord.ChannelType.text], row=0, need_files=True))
-        self.add_item(SaveChannelSelect(placeholder="Moderation / staff audit log channel", columns=("modlog_channel_id",), also_same=STAFF_LOG_ALIASES, channel_types=[discord.ChannelType.text], row=1))
-        self.add_item(SaveChannelSelect(placeholder="Join / leave log channel — not welcome", columns=("join_leave_log_channel_id",), also_same=JOIN_LEAVE_LOG_ALIASES, channel_types=[discord.ChannelType.text], row=2))
-        self.add_item(SaveChannelSelect(placeholder="Bot status / uptime channel", columns=("status_channel_id",), also_same=("bot_status_channel_id", "uptime_channel_id"), channel_types=[discord.ChannelType.text], row=3))
+
+        self.add_item(
+            SaveChannelSelect(
+                placeholder="Tickets: saved transcript channel",
+                columns=("transcripts_channel_id",),
+                channel_types=[discord.ChannelType.text],
+                row=0,
+                need_files=True,
+            )
+        )
+
+        self.add_item(
+            SaveChannelSelect(
+                placeholder="Moderation and protection log channel",
+                columns=("modlog_channel_id",),
+                also_same=STAFF_LOG_ALIASES,
+                channel_types=[discord.ChannelType.text],
+                row=1,
+            )
+        )
+
+        self.add_item(
+            SaveChannelSelect(
+                placeholder="Join and leave log channel",
+                columns=("join_leave_log_channel_id",),
+                also_same=JOIN_LEAVE_LOG_ALIASES,
+                channel_types=[discord.ChannelType.text],
+                row=2,
+            )
+        )
+
+        self.add_item(
+            SaveChannelSelect(
+                placeholder="Bot status and uptime channel",
+                columns=("status_channel_id",),
+                also_same=(
+                    "bot_status_channel_id",
+                    "uptime_channel_id",
+                ),
+                channel_types=[discord.ChannelType.text],
+                row=3,
+            )
+        )
 
 
 class BehaviorSettingsModal(discord.ui.Modal, title="Setup Behavior Settings"):

@@ -172,30 +172,80 @@ async def _fetch_ban_entry_by_id(guild: discord.Guild, user_id: int) -> Optional
         return None
 
 
-async def _resolve_ban_target(guild: discord.Guild, raw_target: str) -> tuple[int, Optional[discord.Member], Optional[Any]]:
-    user_id = parse_member_id_from_target(raw_target)
+async def _resolve_ban_target(
+    guild: discord.Guild,
+    raw_target: str,
+) -> tuple[
+    int,
+    Optional[discord.Member],
+    Optional[Any],
+]:
+    """Resolve the public ban/unban target.
+
+    A pasted ID or mention checks guild.fetch_ban first.
+    Current-member lookup remains only as the fallback
+    for banning someone who is still in the server.
+    """
+
+    user_id = parse_member_id_from_target(
+        raw_target
+    )
     member: Optional[discord.Member] = None
 
     if user_id > 0:
+        ban_entry = await _fetch_ban_entry_by_id(
+            guild,
+            int(user_id),
+        )
+
+        if ban_entry is not None:
+            return (
+                int(user_id),
+                None,
+                ban_entry,
+            )
+
         try:
-            member = guild.get_member(int(user_id))
+            member = guild.get_member(
+                int(user_id)
+            )
         except Exception:
             member = None
+
         if member is None:
             try:
-                member = await guild.fetch_member(int(user_id))
+                member = await guild.fetch_member(
+                    int(user_id)
+                )
             except Exception:
                 member = None
     else:
-        member = await resolve_member_from_target(guild, raw_target)
+        member = await resolve_member_from_target(
+            guild,
+            raw_target,
+        )
+
         if member is not None:
             try:
                 user_id = int(member.id)
             except Exception:
                 user_id = 0
 
-    ban_entry = await _fetch_ban_entry_by_id(guild, int(user_id)) if user_id > 0 else None
-    return int(user_id or 0), member, ban_entry
+    ban_entry = (
+        await _fetch_ban_entry_by_id(
+            guild,
+            int(user_id),
+        )
+        if user_id > 0
+        else None
+    )
+
+    return (
+        int(user_id or 0),
+        member,
+        ban_entry,
+    )
+
 
 
 @app_commands.describe(

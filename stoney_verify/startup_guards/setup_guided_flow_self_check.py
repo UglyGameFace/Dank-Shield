@@ -11,10 +11,6 @@ import sys
 from typing import Any
 
 REQUIRED_GUARDS = (
-    "stoney_verify.startup_guards.setup_first_run_ux_guard",
-    "stoney_verify.startup_guards.setup_success_next_step_guard",
-    "stoney_verify.startup_guards.setup_health_next_action_guard",
-    "stoney_verify.startup_guards.setup_health_action_buttons_guard",
     "stoney_verify.startup_guards.setup_save_next_step_guard",
 )
 
@@ -53,8 +49,6 @@ def apply() -> bool:
             hook_warnings.append("health_builder_missing")
         if not callable(getattr(solid, "_edit_or_followup", None)):
             hook_warnings.append("edit_or_followup_missing")
-        elif not _has_wrapped_marker(getattr(solid, "_edit_or_followup"), "_health_action_buttons_wrapped"):
-            hook_warnings.append("health_action_buttons_not_wrapped")
     except Exception as exc:
         hook_warnings.append(f"public_setup_solid_error:{type(exc).__name__}")
 
@@ -81,7 +75,7 @@ def apply() -> bool:
 
     print(
         "🧭 guided_setup_self_check ready; "
-        "guided_setup_guards=5 health_actions=ok save_next_steps=ok visibility_health=ok"
+        "native_guided_review=ok save_next_steps=ok visibility_health=ok"
     )
     return True
 

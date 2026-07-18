@@ -1120,70 +1120,24 @@ async def _missing_items_preview_text(guild: discord.Guild) -> tuple[str, str]:
     return saved_text[:1024], missing_text[:1024]
 
 
-async def _build_main_setup_payload(guild: discord.Guild) -> tuple[discord.Embed, "SolidSetupView"]:
-    cfg = None
-    try:
-        cfg = await get_guild_config(guild.id, refresh=True)
-    except Exception:
-        cfg = None
+async def _build_main_setup_payload(
+    guild: discord.Guild,
+) -> tuple[discord.Embed, discord.ui.View]:
+    """Return the one canonical Dank Shield setup home.
 
-    embed = discord.Embed(
-        title="🚀 Dank Shield Setup",
-        description=(
-            "**Start here. Inspect first, then change things.**\n\n"
-            "Dank Shield saves Discord IDs, not names. Your channels and roles can be named anything.\n"
-            "This screen is organized so owners can see what already exists before creating anything."
-        ),
-        color=discord.Color.blurple(),
-        timestamp=now_utc(),
+    Older setup buttons still call this compatibility owner.
+    It deliberately delegates to the native guided product
+    home instead of rebuilding the retired Solid dashboard.
+    """
+
+    from . import public_setup_recommend as recommend
+
+    return await recommend._product_main_setup_payload(
+        guild
     )
-
-    if cfg is not None:
-        embed.add_field(
-            name="Current Setup Snapshot",
-            value=(
-                f"Open tickets: {_channel_or_not_set(guild, _cfg_value(cfg, 'ticket_category_id'))}\n"
-                f"Closed tickets: {_channel_or_not_set(guild, _cfg_value(cfg, 'ticket_archive_category_id'))}\n"
-                f"Ticket panel: {_channel_or_not_set(guild, _cfg_value(cfg, 'ticket_panel_channel_id') or _cfg_value(cfg, 'support_channel_id'))}\n"
-                f"Staff role: {_role_or_not_set(guild, _cfg_value(cfg, 'staff_role_id'))}\n"
-                f"Access mode: `{_safe_str(_cfg_value(cfg, 'verification_mode'), 'not chosen')}`"
-            )[:1024],
-            inline=False,
-        )
-    else:
-        embed.add_field(
-            name="Current Setup Snapshot",
-            value="Could not load saved setup yet. Press **Run Setup Check** for details.",
-            inline=False,
-        )
-
-    embed.add_field(
-        name="Recommended Workflow",
-        value=(
-            "**1. View Current Setup** — see what is already saved.\n"
-            "**2. Run Setup Check** — find blockers before testing.\n"
-            "**3. Use My Existing Server** — map existing channels/roles.\n"
-            "**4. Review / Create Missing Items** — only create what is missing.\n"
-            "**5. Configure Features** — tickets, verify, protection, logs."
-        ),
-        inline=False,
-    )
-
-    embed.add_field(
-        name="Safety Rule",
-        value=(
-            "Setup buttons save choices or open a review screen. "
-            "They should not delete your channels, roles, tickets, or messages."
-        ),
-        inline=False,
-    )
-
-    embed.set_footer(text=f"Guild {guild.id} • /dank setup dashboard")
-    return embed, SolidSetupView()
 
 
 # Official /dank setup home owner. Startup guards must not replace this.
-_DANK_SOLID_HOME_OWNER = _build_main_setup_payload
 
 
 # ---------------------------------------------------------------------------

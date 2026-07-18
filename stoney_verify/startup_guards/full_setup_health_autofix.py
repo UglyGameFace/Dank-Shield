@@ -29,25 +29,14 @@ from typing import Any, Iterable, Optional
 
 import discord
 
-_PATCHED = False
 
 
 # ---------------------------------------------------------------------------
 # simple helpers
 # ---------------------------------------------------------------------------
 
-def _log(message: str) -> None:
-    try:
-        print(f"✅ full_setup_health_autofix: {message}")
-    except Exception:
-        pass
 
 
-def _warn(message: str) -> None:
-    try:
-        print(f"⚠️ full_setup_health_autofix: {message}")
-    except Exception:
-        pass
 
 
 def _safe_int(value: Any, default: int = 0) -> int:
@@ -1207,130 +1196,14 @@ async def build_full_health_embed(guild: discord.Guild) -> discord.Embed:
     return embed
 
 
-def _make_health_view(public_setup_solid: Any) -> type:
-    original_view = getattr(public_setup_solid, "SetupNavView")
-
-    class FullHealthFixView(original_view):  # type: ignore[misc, valid-type]
-        def __init__(self) -> None:
-            super().__init__()
-
-            fix_button = discord.ui.Button(
-                label="Fix Detected Issues",
-                emoji="🛠️",
-                style=discord.ButtonStyle.success,
-                custom_id="stoney_full_health:fix",
-                row=3,
-            )
-            rerun_button = discord.ui.Button(
-                label="Re-run Health Check",
-                emoji="🔁",
-                style=discord.ButtonStyle.primary,
-                custom_id="stoney_full_health:rerun",
-                row=3,
-            )
-
-            async def fix_callback(interaction: discord.Interaction) -> None:
-                if not await public_setup_solid._require_setup_permission(interaction):
-                    return
-                guild = interaction.guild
-                if guild is None:
-                    return await interaction.response.send_message("❌ This must be used inside a server.", ephemeral=True)
-
-                try:
-                    if not interaction.response.is_done():
-                        await interaction.response.defer(ephemeral=True, thinking=True)
-                except Exception:
-                    pass
-
-                changed, failed = await run_one_press_repair(guild)
-                embed = await build_full_health_embed(guild)
-
-                summary = []
-                if changed:
-                    summary.append(f"✅ Repaired `{len(changed)}` permission/overwrite item(s).")
-                else:
-                    summary.append("ℹ️ No permission overwrites were changed.")
-                if failed:
-                    summary.append(f"⚠️ `{len(failed)}` item(s) still need manual attention.")
-                    embed.add_field(
-                        name="Repair Attempt Results",
-                        value=_field([f"• {x}" for x in failed], empty="No failures."),
-                        inline=False,
-                    )
-                else:
-                    summary.append("✅ No repair failures returned by Discord.")
-
-                embed.description = "\n".join(summary) + "\n\n" + (embed.description or "")
-
-                try:
-                    await interaction.edit_original_response(embed=embed, view=FullHealthFixView())
-                except Exception:
-                    try:
-                        await interaction.followup.send(embed=embed, view=FullHealthFixView(), ephemeral=True)
-                    except Exception:
-                        pass
-
-            async def rerun_callback(interaction: discord.Interaction) -> None:
-                if not await public_setup_solid._require_setup_permission(interaction):
-                    return
-                guild = interaction.guild
-                if guild is None:
-                    return await interaction.response.send_message("❌ This must be used inside a server.", ephemeral=True)
-
-                try:
-                    if not interaction.response.is_done():
-                        await interaction.response.defer(ephemeral=True, thinking=False)
-                except Exception:
-                    pass
-
-                embed = await build_full_health_embed(guild)
-                try:
-                    await interaction.edit_original_response(embed=embed, view=FullHealthFixView())
-                except Exception:
-                    try:
-                        await interaction.followup.send(embed=embed, view=FullHealthFixView(), ephemeral=True)
-                    except Exception:
-                        pass
-
-            fix_button.callback = fix_callback  # type: ignore[assignment]
-            rerun_button.callback = rerun_callback  # type: ignore[assignment]
-            self.add_item(fix_button)
-            self.add_item(rerun_button)
-
-    FullHealthFixView.__name__ = "FullHealthFixView"
-    return FullHealthFixView
 
 
-def patch_full_setup_health_autofix() -> bool:
-    global _PATCHED
-    if _PATCHED:
-        return True
-
-    try:
-        from stoney_verify.commands_ext import public_setup_solid
-    except Exception as e:
-        _warn(f"public_setup_solid import failed: {e!r}")
-        return False
-
-    try:
-        public_setup_solid._build_health_embed = build_full_health_embed  # type: ignore[attr-defined]
-        view_cls = _make_health_view(public_setup_solid)
-        public_setup_solid.SetupNavView = view_cls  # type: ignore[attr-defined]
-        public_setup_solid.BackToSetupView = view_cls  # type: ignore[attr-defined]
-    except Exception as e:
-        _warn(f"patch failed: {e!r}")
-        return False
-
-    _PATCHED = True
-    _log("full health audit + one-press repair active")
-    return True
 
 
-patch_full_setup_health_autofix()
 
 
 __all__ = [
-    "patch_full_setup_health_autofix",
+    "AuditResult",
     "run_full_audit",
     "run_one_press_repair",
     "build_full_health_embed",

@@ -14,7 +14,6 @@ from typing import Any, Mapping, Optional
 import discord
 
 _PATCHED = False
-_ORIGINAL_BUILD_MAIN: Any = None
 
 
 @dataclass(frozen=True)
@@ -614,49 +613,25 @@ class PermissionRepairDoneView(discord.ui.View):
         await solid._edit_or_followup(interaction, embed=embed, view=view)
 
 
-def _attach_button(view: Any) -> Any:
-    try:
-        children = list(getattr(view, "children", []) or [])
-        if any(str(getattr(child, "custom_id", "") or "") == "stoney_setup:permission_repair" for child in children):
-            return view
-        if len(children) >= 25:
-            return view
-        view.add_item(PermissionRepairButton(row=4))
-    except Exception:
-        pass
-    return view
 
 
-async def _wrapped_build_main_setup_payload(guild: discord.Guild):
-    embed, view = await _ORIGINAL_BUILD_MAIN(guild)
-    try:
-        embed.add_field(name="Permission Repair", value="Use **🛠️ Fix Permissions** if Setup Health flags channel/category drift or someone changed overwrites after setup.", inline=False)
-    except Exception:
-        pass
-    return embed, _attach_button(view)
 
 
 def apply() -> bool:
-    global _PATCHED, _ORIGINAL_BUILD_MAIN
+    """Compatibility installer for the owned repair engine.
+
+    Permission repair is opened by the canonical setup route.
+    Calling this compatibility function must not replace setup
+    home builders or inject controls into unrelated views.
+    """
+    global _PATCHED
+
     if _PATCHED:
         return True
-    try:
-        from stoney_verify.commands_ext import public_setup_solid as solid
 
-        original = getattr(solid, "_build_main_setup_payload", None)
-        if not callable(original) or getattr(original, "_setup_permission_repair_wrapped", False):
-            return False
-        _ORIGINAL_BUILD_MAIN = original
-        setattr(_wrapped_build_main_setup_payload, "_setup_permission_repair_wrapped", True)
-        solid._build_main_setup_payload = _wrapped_build_main_setup_payload
-        _PATCHED = True
-        print("🛠️ setup_permission_repair_guard active; /dank setup can preview/apply canonical permission repairs with prerequisite diagnostics")
-        return True
-    except Exception as exc:
-        print(f"⚠️ setup_permission_repair_guard failed: {exc!r}")
-        return False
+    _PATCHED = True
+    return True
 
 
-apply()
 
 __all__ = ["apply", "PermissionRepairButton", "PermissionRepairConfirmView"]

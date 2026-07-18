@@ -10,9 +10,59 @@ GUARD = (ROOT / "stoney_verify/startup_guards/member_lifecycle_audit_context_gua
 
 
 def test_recommended_setup_path_is_the_real_existing_server_menu() -> None:
-    assert "dank_setup_continue:existing" in RECOMMEND
-    assert "dank_setup_manage:existing" in RECOMMEND
-    assert "_open_existing_server" in RECOMMEND
+    """Advanced Options owns the deliberate existing-item mapper."""
+
+    import ast
+
+    tree = ast.parse(RECOMMEND)
+
+    manage_matches = [
+        current
+        for current in tree.body
+        if isinstance(current, ast.ClassDef)
+        and current.name == "ManageSetupView"
+    ]
+
+    assert len(manage_matches) == 1
+
+    manage_view = manage_matches[0]
+    manage_source = (
+        ast.get_source_segment(
+            RECOMMEND,
+            manage_view,
+        )
+        or ""
+    )
+
+    assert 'label="Detailed Role / Channel Mapping"' in manage_source
+    assert 'custom_id="dank_setup_manage:existing"' in manage_source
+
+    method_matches = [
+        current
+        for current in manage_view.body
+        if isinstance(
+            current,
+            (ast.FunctionDef, ast.AsyncFunctionDef),
+        )
+        and current.name == "detailed_mapping"
+    ]
+
+    assert len(method_matches) == 1
+
+    method_source = (
+        ast.get_source_segment(
+            RECOMMEND,
+            method_matches[0],
+        )
+        or ""
+    )
+
+    assert "await _open_existing_server(interaction)" in method_source
+
+    # The old competing Continue Setup mapping button was removed.
+    assert "dank_setup_continue:existing" not in RECOMMEND
+
+
 
 
 def test_guard_patches_recommended_existing_server_menu() -> None:
@@ -26,7 +76,7 @@ def test_join_leave_picker_is_visible_in_logs_and_channels() -> None:
     assert "VisibleLogStatusCustomizationView" in GUARD
     assert "VisibleChannelCustomizationPageTwo" in GUARD
     assert "Join / leave log channel — not welcome" in GUARD
-    assert "Logs + Status" in FULL
+    assert "Logs & Status" in FULL
 
 
 def test_join_leave_picker_writes_authoritative_aliases() -> None:

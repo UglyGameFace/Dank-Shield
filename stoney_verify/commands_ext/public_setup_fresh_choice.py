@@ -9,11 +9,10 @@ import discord
 
 from ..globals import now_utc
 from . import public_setup_recommend as recommend
-from . import public_setup_recovery as recovery
+
 from . import public_setup_solid as solid
 from ..setup_engine.verification_modes import id_verify_allowed_for_guild
 
-_PATCHED = False
 
 
 @dataclass(frozen=True)
@@ -30,13 +29,13 @@ class PlainSetupChoice:
 
 
 SETUP_CHOICES: tuple[PlainSetupChoice, ...] = (
-    PlainSetupChoice("basic_server", "Basic server", "🏠", "Simple server setup with support tickets, starter logs, and normal public-server defaults.", "A clean support button when they need staff help.", True, False, False, "basic"),
-    PlainSetupChoice("basic_verify", "Basic verify", "✅", "Simple Verify button flow: no ID upload, no website token, no voice check, no forced ticket.", "A Verify button that grants the configured access role and removes the waiting role.", False, False, False, "basic_verify"),
-    PlainSetupChoice("help_desk", "Help desk", "🎫", "Support-ticket focused setup for help requests, reports, appeals, and staff triage.", "A clean ticket panel with fast support choices.", True, False, False, "help_desk"),
-    PlainSetupChoice("voice_check", "Voice check", "🎙️", "Members request staff voice verification without ID upload or website upload flow.", "A verification ticket with a Verify in VC option.", True, False, True, "voice_check"),
-    PlainSetupChoice("id_check", "ID check", "🪪", "Private ID upload verification for allowlisted servers only.", "A verification ticket with an Upload ID button.", True, True, False, "id_check"),
-    PlainSetupChoice("id_voice_check", "ID + voice check", "🔐", "Private ID upload plus voice-check workflow for allowlisted servers only.", "Upload ID, Verify in VC, reveal link, regenerate link if enabled, and website button if configured.", True, True, True, "id_voice_check"),
-    PlainSetupChoice("custom_setup", "Custom setup", "⚙️", "Choose every service yourself: tickets, Basic Verify, voice verify, SpamGuard, and logs.", "Whatever services you turn on in the next screen.", False, False, False, "custom"),
+    PlainSetupChoice("basic_server", "Basic Server", "🏠", "Simple server setup with support tickets, starter logs, and normal public-server defaults.", "A clean support button when they need staff help.", True, False, False, "basic"),
+    PlainSetupChoice("basic_verify", "Basic Verify", "✅", "Simple Verify button flow: no ID upload, no website token, no voice check, no forced ticket.", "A Verify button that grants the configured access role and removes the waiting role.", False, False, False, "basic_verify"),
+    PlainSetupChoice("help_desk", "Help Desk", "🎫", "Support-ticket focused setup for help requests, reports, appeals, and staff triage.", "A clean ticket panel with fast support choices.", True, False, False, "help_desk"),
+    PlainSetupChoice("voice_check", "Voice Verify", "🎙️", "Members request staff voice verification without ID upload or website upload flow.", "A verification ticket with a Verify in VC option.", True, False, True, "voice_check"),
+    PlainSetupChoice("id_check", "ID / Web Verify", "🪪", "Private ID upload verification for allowlisted servers only.", "A verification ticket with an Upload ID button.", True, True, False, "id_check"),
+    PlainSetupChoice("id_voice_check", "ID / Web + Voice", "🔐", "Private ID upload plus voice-check workflow for allowlisted servers only.", "Upload ID, Verify in VC, reveal link, regenerate link if enabled, and website button if configured.", True, True, True, "id_voice_check"),
+    PlainSetupChoice("custom_setup", "Custom", "⚙️", "Choose every service yourself: tickets, Basic Verify, voice verify, SpamGuard, and logs.", "Whatever services you turn on in the next screen.", False, False, False, "custom"),
 )
 
 CHOICES_BY_KEY: dict[str, PlainSetupChoice] = {choice.key: choice for choice in SETUP_CHOICES}
@@ -56,13 +55,6 @@ def get_plain_setup_choice(key: Any) -> Optional[PlainSetupChoice]:
 
 def _choices_for_guild(guild: Optional[discord.Guild]) -> tuple[PlainSetupChoice, ...]:
     return SETUP_CHOICES if id_verify_allowed_for_guild(guild) else tuple(choice for choice in SETUP_CHOICES if not choice.needs_id)
-
-
-def _choice_lines(guild: Optional[discord.Guild] = None) -> str:
-    lines = "\n".join(f"{c.emoji} **{c.label}** — {c.short}" for c in _choices_for_guild(guild))
-    if not id_verify_allowed_for_guild(guild):
-        lines += "\n\n🔒 ID/web verification choices are hidden for this server. Use **Basic verify** for a simple one-button verification gate."
-    return lines
 
 
 def _plain_saved_choice_from_cfg(cfg: Any) -> str:
@@ -96,40 +88,6 @@ def _plain_saved_choice_from_cfg(cfg: Any) -> str:
     except Exception:
         pass
     return "Not chosen yet"
-
-
-def _bool_icon(value: bool) -> str:
-    return "✅" if value else "—"
-
-
-async def _setup_progress_for_home(guild: discord.Guild) -> tuple[str, int, int, str]:
-    try:
-        return await recommend._setup_progress(guild)  # type: ignore[attr-defined]
-    except Exception:
-        return "Run **Setup Check** to see what is ready.", 0, 1, "Choose Setup Type"
-
-
-async def _service_summary_for_home(guild: discord.Guild) -> tuple[str, str]:
-    try:
-        cfg = await solid.get_guild_config(guild.id, refresh=True)  # type: ignore[attr-defined]
-    except Exception:
-        cfg = None
-
-    choice = _plain_saved_choice_from_cfg(cfg)
-    try:
-        state = await _load_custom_state(guild.id)
-        if str(_auto_cfg_value(cfg, "setup_choice", "") or "").strip() == "custom_setup":
-            return (
-                f"**Chosen:** {choice}\n{_service_summary_text(state)}",
-                _service_hint_text(state),
-            )
-    except Exception:
-        pass
-
-    return (
-        f"**Chosen:** {choice}\nTickets: fast when enabled\nBasic verify: available for every server\nForms: off unless you turn them on",
-        "Pick **Choose Setup Type** first if this is a new server.",
-    )
 
 
 def _service_flags_for_choice(choice: PlainSetupChoice) -> dict[str, bool]:
@@ -678,66 +636,116 @@ class CustomServiceToggleButton(discord.ui.Button):
 
 
 class CustomServiceModeView(discord.ui.View):
-    """Custom Setup menu layout.
-
-    This view intentionally reuses existing setup systems:
-    - Current Setup uses public_setup_solid._build_current_setup_embed()
-    - Setup Check uses the existing plain health path
-    - Existing server mapping uses the existing mapper
-    - Missing-item creation uses the existing creation review flow
-
-    Do not duplicate role/channel/category summary logic here.
-    """
+    """Custom Setup only: choose features, then continue guided setup."""
 
     def __init__(self, state: Any) -> None:
         super().__init__(timeout=900)
 
-        # Row 0: presets first, because this is a mode picker.
-        self.add_item(CustomServicePresetSelect(state))
+        self.add_item(
+            CustomServicePresetSelect(state)
+        )
 
-        # Row 3/4: service toggles lower down so owners do not mistake them
-        # for the actual installed-role/channel list.
-        self.add_item(CustomServiceToggleButton("tickets_enabled", "Tickets", state.tickets, "🎫", 3))
-        self.add_item(CustomServiceToggleButton("verification_enabled", "Basic Verify", state.verification, "✅", 3))
-        self.add_item(CustomServiceToggleButton("voice_verification_enabled", "Voice Verify", state.voice, "🎙️", 3))
-        self.add_item(CustomServiceToggleButton("spam_guard_enabled", "SpamGuard", state.spamguard, "🛡️", 4))
-        self.add_item(CustomServiceToggleButton("moderation_enabled", "Logs", state.moderation, "🧾", 4))
+        self.add_item(
+            CustomServiceToggleButton(
+                "tickets_enabled",
+                "Tickets",
+                state.tickets,
+                "🎫",
+                2,
+            )
+        )
+        self.add_item(
+            CustomServiceToggleButton(
+                "verification_enabled",
+                "Basic Verify",
+                state.verification,
+                "✅",
+                2,
+            )
+        )
+        self.add_item(
+            CustomServiceToggleButton(
+                "voice_verification_enabled",
+                "Voice Verify",
+                state.voice,
+                "🎙️",
+                2,
+            )
+        )
+        self.add_item(
+            CustomServiceToggleButton(
+                "spam_guard_enabled",
+                "SpamGuard",
+                state.spamguard,
+                "🛡️",
+                3,
+            )
+        )
+        self.add_item(
+            CustomServiceToggleButton(
+                "moderation_enabled",
+                "Logs",
+                state.moderation,
+                "🧾",
+                3,
+            )
+        )
 
-    @discord.ui.button(label="View Current Setup", emoji="📋", style=discord.ButtonStyle.primary, custom_id="dank_setup_custom_current", row=1)
-    async def current_setup(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        if not await solid._require_setup_permission(interaction):
-            return
-        guild = interaction.guild
-        if guild is None:
-            return await interaction.response.send_message("❌ This must be used inside a server.", ephemeral=True)
+    @discord.ui.button(
+        label="Continue Guided Setup",
+        emoji="➡️",
+        style=discord.ButtonStyle.success,
+        custom_id="dank_setup_custom:continue_guided",
+        row=1,
+    )
+    async def continue_guided(
+        self,
+        interaction: discord.Interaction,
+        button: discord.ui.Button,
+    ) -> None:
+        await recommend._open_guided_setup(interaction)
 
-        await solid._safe_defer_update(interaction)
-        embed = await solid._build_current_setup_embed(guild)
-        await solid._edit_or_followup(interaction, embed=embed, view=self)
-
-    @discord.ui.button(label="Setup Check", emoji="🩺", style=discord.ButtonStyle.secondary, custom_id="dank_setup_custom_health", row=1)
-    async def health(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+    @discord.ui.button(
+        label="Setup Check",
+        emoji="🩺",
+        style=discord.ButtonStyle.primary,
+        custom_id="dank_setup_custom:health",
+        row=1,
+    )
+    async def health(
+        self,
+        interaction: discord.Interaction,
+        button: discord.ui.Button,
+    ) -> None:
         await _open_plain_health(interaction)
 
-    @discord.ui.button(label="Setup Home", emoji="🏠", style=discord.ButtonStyle.secondary, custom_id="dank_setup_custom_home", row=1)
-    async def home(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        if not await solid._require_setup_permission(interaction):
-            return
-        guild = interaction.guild
-        if guild is None:
-            return await interaction.response.send_message("❌ This must be used inside a server.", ephemeral=True)
+    @discord.ui.button(
+        label="Advanced Options",
+        emoji="⚙️",
+        style=discord.ButtonStyle.secondary,
+        custom_id="dank_setup_custom:advanced",
+        row=1,
+    )
+    async def advanced(
+        self,
+        interaction: discord.Interaction,
+        button: discord.ui.Button,
+    ) -> None:
+        await recommend._open_manage_setup(interaction)
 
-        await solid._safe_defer_update(interaction)
-        embed, view = await _plain_choice_main_payload(guild)
-        await solid._edit_or_followup(interaction, embed=embed, view=view)
-
-    @discord.ui.button(label="Use My Existing Server", emoji="🧩", style=discord.ButtonStyle.primary, custom_id="dank_setup_custom_existing", row=2)
-    async def existing(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        await _open_existing_server_setup(interaction)
-
-    @discord.ui.button(label="Review / Create Missing Items", emoji="✨", style=discord.ButtonStyle.success, custom_id="dank_setup_custom_create", row=2)
-    async def create_missing(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        await _open_create_missing_items(interaction)
+    @discord.ui.button(
+        label="Setup Home",
+        emoji="🏠",
+        style=discord.ButtonStyle.secondary,
+        custom_id="dank_setup_custom:home",
+        row=4,
+    )
+    async def home(
+        self,
+        interaction: discord.Interaction,
+        button: discord.ui.Button,
+    ) -> None:
+        await recommend._home_edit(interaction)
 
 
 async def _open_custom_service_picker(interaction: discord.Interaction, *, saved_message: str = "") -> None:
@@ -750,245 +758,17 @@ async def _open_custom_service_picker(interaction: discord.Interaction, *, saved
     await solid._edit_or_followup(interaction, embed=_custom_services_embed(guild, state, saved_message=message), view=CustomServiceModeView(state))
 
 
-def _choice_preview_embed(guild: discord.Guild, choice: PlainSetupChoice) -> discord.Embed:
-    basic_verify = choice.key == "basic_verify"
-    custom = choice.key == "custom_setup"
-    embed = discord.Embed(title=f"{choice.emoji} {choice.label}", description=choice.short, color=discord.Color.green() if basic_verify else discord.Color.blurple(), timestamp=now_utc())
-    embed.add_field(name="What members will see", value=choice.member_sees[:1024], inline=False)
-    embed.add_field(name="What this turns on", value=("⬜ Tickets\n⬜ Basic Verify button\n⬜ Voice check\n⬜ SpamGuard\n⬜ Logs/Moderation\nNext screen lets you turn each one on/off." if custom else f"{_bool_icon(choice.needs_tickets)} Tickets\n{_bool_icon(basic_verify)} Basic Verify button\n{_bool_icon(choice.needs_id)} ID upload link\n{_bool_icon(choice.needs_voice)} Voice check\n✅ Fast ticket opening when tickets are enabled\n✅ Forms off by default"), inline=False)
-    if basic_verify:
-        embed.add_field(name="Important", value="Users press **Verify**, Dank Shield grants the configured Verified/full-access role, and removes the waiting role. No ID upload, website token, VC check, or forced ticket.", inline=False)
-    elif custom:
-        embed.add_field(name="Important", value="Custom setup opens the service picker so you can turn on exactly what this server uses.", inline=False)
-    elif choice.needs_id:
-        embed.add_field(name="Allowlisted ID/Web Verification", value="This is restricted to allowlisted guild IDs so public servers do not accidentally inherit the old ID upload flow.", inline=False)
-    embed.add_field(name="Next", value=("Custom setup opens the service picker next. Turn on exactly what you want, then map roles/channels." if custom else "Press **Use My Existing Server** if your roles/channels already exist.\nPress **Create Missing Items** if you want Dank Shield to create missing basics.\nPress **Setup Check** when you are done."), inline=False)
-    embed.set_footer(text=f"Guild {guild.id} • choice saved per server")
-    return embed
+async def _open_plain_health(
+    interaction: discord.Interaction,
+) -> None:
+    """Use the one canonical feature-aware Setup Check."""
+
+    await recommend._open_health_check(interaction)
 
 
-async def _edit_setup_message(interaction: discord.Interaction, *, embed: discord.Embed, view: discord.ui.View) -> None:
-    if interaction.response.is_done():
-        await solid._edit_or_followup(interaction, embed=embed, view=view)
-    else:
-        await interaction.response.edit_message(embed=embed, view=view)
 
 
-async def _open_existing_server_setup(interaction: discord.Interaction) -> None:
-    if not await solid._require_setup_permission(interaction):
-        return
-    embed = discord.Embed(title="🧩 Use My Existing Server", description="Pick the roles/channels/folders your server already uses. Names do not matter. Dank Shield saves Discord IDs per server.", color=discord.Color.blurple(), timestamp=now_utc())
-    embed.add_field(name="Sections", value="🎫 **Ticket Basics** — ticket folders, staff role, transcripts\n🎭 **Access Roles** — waiting role, approved role, member role\n🎙️ **Verification Channels** — Basic Verify or voice check channels\n🧾 **Logs + Status** — modlog, join log, status channel\n⚙️ **Behavior Settings** — ticket prefix, kick timer, verification style", inline=False)
-    await _edit_setup_message(interaction, embed=embed, view=solid.ChooseExistingView())
-
-
-async def _open_create_missing_items(interaction: discord.Interaction) -> None:
-    if not await solid._require_setup_permission(interaction):
-        return
-    embed = discord.Embed(title="✨ Create Missing Items", description="Dank Shield can create missing starter roles/channels/folders. It does **not** delete your server setup.", color=discord.Color.green(), timestamp=now_utc())
-    embed.add_field(name="Before it creates anything", value="Review this screen. Press **Create Basic Missing Items** only if you want the starter layout.", inline=False)
-    await _edit_setup_message(interaction, embed=embed, view=CreateMissingItemsView())
-
-
-async def _open_ticket_menu_options(interaction: discord.Interaction) -> None:
-    if not await solid._require_setup_permission(interaction):
-        return
-    guild = interaction.guild
-    if guild is None:
-        return await interaction.response.send_message("❌ This must be used inside a server.", ephemeral=True)
-    await solid._safe_defer_update(interaction)
-    try:
-        embed, view = await recommend._better_category_manager_payload(guild, title="🧾 Ticket Menu Options")  # type: ignore[attr-defined]
-    except Exception:
-        embed, view = await solid._build_category_manager_payload(guild)  # type: ignore[attr-defined]
-    await solid._edit_or_followup(interaction, embed=embed, view=view)
-
-
-async def _open_plain_health(interaction: discord.Interaction) -> None:
-    if not await solid._require_setup_permission(interaction):
-        return
-    guild = interaction.guild
-    if guild is None:
-        return await interaction.response.send_message("❌ This must be used inside a server.", ephemeral=True)
-    await solid._safe_defer_update(interaction)
-    try:
-        embed = await recommend._build_plain_setup_health_embed(guild)  # type: ignore[attr-defined]
-        view: Optional[discord.ui.View] = getattr(recommend, "SetupHealthHelpView", solid.BackToSetupView)()
-    except Exception:
-        embed = await solid._build_health_embed(guild)
-        view = solid.BackToSetupView()
-    await solid._edit_or_followup(interaction, embed=embed, view=view)
-
-
-def _build_setup_help_embed() -> discord.Embed:
-    embed = discord.Embed(title="❓ Dank Shield Setup Help", description="Simple answers for the setup screen.", color=discord.Color.blurple(), timestamp=now_utc())
-    embed.add_field(name="What should I press first?", value="Press **Choose Setup Type**. Pick the closest match. You can change it later.", inline=False)
-    embed.add_field(name="What is Basic verify?", value="A public-safe Verify button. Members click it, get the configured Verified/full-access role, and lose the waiting role. No ID upload, website token, voice check, or forced ticket.", inline=False)
-    embed.add_field(name="What if I choose Custom setup?", value="Custom setup opens a service picker with **Basic Verify** as its own toggle. Turn on only what you want.", inline=False)
-    embed.add_field(name="What if my server already has roles/channels?", value="Press **Use My Existing Server** and pick what you already use from Discord menus.", inline=False)
-    return embed
-
-
-async def _plain_choice_main_payload(guild: discord.Guild) -> tuple[discord.Embed, discord.ui.View]:
-    progress_text, done, total, next_step = await _setup_progress_for_home(guild)
-    service_summary, service_hint = await _service_summary_for_home(guild)
-
-    issues = [
-        line.strip()
-        for line in str(progress_text or "").splitlines()
-        if line.strip().startswith(("⚠️", "🚫", "❌"))
-    ][:3]
-
-    ready = bool(total and done >= total)
-    status = "Ready to test" if ready else f"Setup in progress: {done}/{total} complete"
-
-    embed = discord.Embed(
-        title="🚀 Dank Shield Setup",
-        description="One screen. One next step. Open sections only when you need them.",
-        color=discord.Color.green() if ready else discord.Color.blurple(),
-        timestamp=now_utc(),
-    )
-    embed.add_field(name="Status", value=f"**{status}**\n{str(service_summary or 'No setup type chosen yet.')[:700]}", inline=False)
-    embed.add_field(name="Recommended Next Step", value=str(next_step or "Choose Setup Type.")[:500], inline=False)
-    embed.add_field(name="Needs Attention", value="\n".join(issues)[:900] if issues else "✅ No required setup problem shown here. Run **Setup Check** for the full truth check.", inline=False)
-    embed.set_footer(text=f"Guild {guild.id} • /dank setup • simple home")
-    return embed, PlainSetupHomeView()
-
-class PlainSetupHomeView(discord.ui.View):
-    def __init__(self) -> None:
-        super().__init__(timeout=900)
-
-    @discord.ui.button(label="Start / Continue Setup", emoji="▶️", style=discord.ButtonStyle.success, custom_id="dank_setup_plain:continue", row=0)
-    async def continue_setup(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        if not await solid._require_setup_permission(interaction):
-            return
-        embed = discord.Embed(
-            title="▶️ Continue Setup",
-            description="Work from top to bottom. Custom setup is inside **Choose Setup Type** and opens service switches there.",
-            color=discord.Color.blurple(),
-            timestamp=now_utc(),
-        )
-        embed.add_field(name="Setup path", value="1. Choose Setup Type\n2. Service Switches if using Custom\n3. Use Existing Server\n4. Create Missing Items only if needed\n5. Setup Check", inline=False)
-        await interaction.response.edit_message(embed=embed, view=PlainContinueSetupView())
-
-    @discord.ui.button(label="Setup Check", emoji="🩺", style=discord.ButtonStyle.primary, custom_id="dank_setup_plain:health", row=0)
-    async def health(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        await _open_plain_health(interaction)
-
-    @discord.ui.button(label="Test / Launch", emoji="🧪", style=discord.ButtonStyle.secondary, custom_id="dank_setup_plain:launch", row=1)
-    async def launch(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        if not await solid._require_setup_permission(interaction):
-            return
-        embed = discord.Embed(
-            title="🧪 Test / Launch",
-            description="Use after Setup Check passes. Test with an alt before real members.",
-            color=discord.Color.green(),
-            timestamp=now_utc(),
-        )
-        embed.add_field(name="Checklist", value="1. Post the panels you use.\n2. Join with an alt.\n3. Test Verify / Ticket flow.\n4. Confirm logs and roles.", inline=False)
-        await interaction.response.edit_message(embed=embed, view=PlainLaunchView())
-
-    @discord.ui.button(label="Manage Setup", emoji="⚙️", style=discord.ButtonStyle.secondary, custom_id="dank_setup_plain:manage", row=1)
-    async def manage(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        if not await solid._require_setup_permission(interaction):
-            return
-        embed = discord.Embed(
-            title="⚙️ Manage Setup",
-            description="Edit details here after the main setup path.",
-            color=discord.Color.blurple(),
-            timestamp=now_utc(),
-        )
-        embed.add_field(
-            name="Tools",
-            value=(
-                "🧩 Services\n"
-                "🧭 Saved roles/channels\n"
-                "🎨 Server Design — fonts, separators, category frames, emojis\n"
-                "🧾 Ticket menu\n"
-                "❓ Help"
-            ),
-            inline=False,
-        )
-        await interaction.response.edit_message(embed=embed, view=PlainManageSetupView())
-
-
-class PlainContinueSetupView(solid.BackToSetupView):
-    @discord.ui.button(label="Choose Setup Type", emoji="🧭", style=discord.ButtonStyle.primary, custom_id="dank_setup_plain_continue:choose", row=0)
-    async def choose(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        if not await solid._require_setup_permission(interaction):
-            return
-        embed = discord.Embed(title="🧭 Choose Setup Type", description="Pick the closest match. Custom setup opens service switches.", color=discord.Color.blurple(), timestamp=now_utc())
-        for choice in _choices_for_guild(interaction.guild):
-            embed.add_field(name=f"{choice.emoji} {choice.label}", value=f"{choice.short}\nMembers see: {choice.member_sees}", inline=False)
-        await interaction.response.edit_message(embed=embed, view=PlainSetupChoiceView(guild=interaction.guild))
-
-    @discord.ui.button(label="Service Switches", emoji="🧩", style=discord.ButtonStyle.secondary, custom_id="dank_setup_plain_continue:services", row=0)
-    async def services(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        if not await solid._require_setup_permission(interaction):
-            return
-        await solid._safe_defer_update(interaction)
-        await _open_custom_service_picker(interaction, saved_message="Service switches opened. Turn each feature ON/OFF here.")
-
-    @discord.ui.button(label="Use Existing Server", emoji="🧭", style=discord.ButtonStyle.secondary, custom_id="dank_setup_plain_continue:existing", row=1)
-    async def existing(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        await _open_existing_server_setup(interaction)
-
-    @discord.ui.button(label="Create Missing Items", emoji="✨", style=discord.ButtonStyle.success, custom_id="dank_setup_plain_continue:create", row=1)
-    async def create_missing(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        await _open_create_missing_items(interaction)
-
-    @discord.ui.button(label="Setup Check", emoji="🩺", style=discord.ButtonStyle.primary, custom_id="dank_setup_plain_continue:health", row=2)
-    async def health(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        await _open_plain_health(interaction)
-
-
-class PlainManageSetupView(solid.BackToSetupView):
-    @discord.ui.button(label="Service Switches", emoji="🧩", style=discord.ButtonStyle.primary, custom_id="dank_setup_plain_manage:services", row=0)
-    async def services(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        if not await solid._require_setup_permission(interaction):
-            return
-        await solid._safe_defer_update(interaction)
-        await _open_custom_service_picker(interaction, saved_message="Service switches opened. Turn each feature ON/OFF here.")
-
-    @discord.ui.button(label="Saved Roles/Channels", emoji="🧭", style=discord.ButtonStyle.secondary, custom_id="dank_setup_plain_manage:existing", row=0)
-    async def existing(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        await _open_existing_server_setup(interaction)
-
-    @discord.ui.button(label="Ticket Menu Options", emoji="🧾", style=discord.ButtonStyle.secondary, custom_id="dank_setup_plain_manage:ticket_menu", row=1)
-    async def ticket_menu(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        await _open_ticket_menu_options(interaction)
-
-    @discord.ui.button(label="Server Design", emoji="🎨", style=discord.ButtonStyle.primary, custom_id="dank_setup_plain_manage:design", row=2)
-    async def server_design(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        if not await solid._require_setup_permission(interaction):
-            return
-        from . import public_design_bridge
-        await public_design_bridge.open_design_studio_from_setup(interaction)
-
-    @discord.ui.button(label="Help / FAQ", emoji="❓", style=discord.ButtonStyle.secondary, custom_id="dank_setup_plain_manage:help", row=1)
-    async def help_faq(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        if not await solid._require_setup_permission(interaction):
-            return
-        await interaction.response.edit_message(embed=_build_setup_help_embed(), view=self)
-
-
-class PlainLaunchView(solid.BackToSetupView):
-    @discord.ui.button(label="Setup Check", emoji="🩺", style=discord.ButtonStyle.primary, custom_id="dank_setup_plain_launch:health", row=0)
-    async def health(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        await _open_plain_health(interaction)
-
-    @discord.ui.button(label="View Current Setup", emoji="📋", style=discord.ButtonStyle.secondary, custom_id="dank_setup_plain_launch:current", row=0)
-    async def current(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        if not await solid._require_setup_permission(interaction):
-            return
-        guild = interaction.guild
-        if guild is None:
-            return await interaction.response.send_message("❌ This must be used inside a server.", ephemeral=True)
-        await solid._safe_defer_update(interaction)
-        embed = await solid._build_current_setup_embed(guild)
-        await solid._edit_or_followup(interaction, embed=embed, view=self)
-
-class PlainSetupChoiceView(solid.BackToSetupView):
+class SetupTypeChoiceView(solid.BackToSetupView):
     def __init__(self, *, guild: Optional[discord.Guild] = None) -> None:
         super().__init__()
         if not id_verify_allowed_for_guild(guild):
@@ -999,132 +779,96 @@ class PlainSetupChoiceView(solid.BackToSetupView):
                     except Exception:
                         pass
 
-    async def _save_and_show(self, interaction: discord.Interaction, choice: PlainSetupChoice) -> None:
+
+    async def _save_and_show(
+        self,
+        interaction: discord.Interaction,
+        choice: PlainSetupChoice,
+    ) -> None:
         if not await solid._require_setup_permission(interaction):
             return
+
         guild = interaction.guild
+
         if guild is None:
-            return await interaction.response.send_message("❌ This must be used inside a server.", ephemeral=True)
-        if choice.needs_id and not id_verify_allowed_for_guild(guild):
-            return await interaction.response.send_message("🔒 ID/web verification is only available for allowlisted guild IDs. Use **Basic verify** instead.", ephemeral=True, allowed_mentions=discord.AllowedMentions.none())
+            return await interaction.response.send_message(
+                "❌ This must be used inside a server.",
+                ephemeral=True,
+            )
+
+        if (
+            choice.needs_id
+            and not id_verify_allowed_for_guild(guild)
+        ):
+            return await interaction.response.send_message(
+                (
+                    "🔒 ID/Web verification is not available "
+                    "for this server. Use **Basic verify** instead."
+                ),
+                ephemeral=True,
+                allowed_mentions=discord.AllowedMentions.none(),
+            )
+
         await solid._safe_defer_update(interaction)
         await _save_choice(interaction, choice)
-        if choice.key == "custom_setup":
-            return await _open_custom_service_picker(interaction)
-        await solid._edit_or_followup(interaction, embed=_choice_preview_embed(guild, choice), view=AfterChoiceView())
 
-    @discord.ui.button(label="Basic server", emoji="🏠", style=discord.ButtonStyle.primary, custom_id="dank_setup_choice:basic", row=0)
+        if choice.key == "custom_setup":
+            return await _open_custom_service_picker(
+                interaction,
+                saved_message=(
+                    "Saved **Custom setup**. Choose which "
+                    "features this server should use, then press "
+                    "**Continue Guided Setup**."
+                ),
+            )
+
+        await recommend._open_guided_setup(
+            interaction,
+            saved_message=(
+                f"Saved **{choice.label}**."
+            ),
+        )
+
+    @discord.ui.button(label="Basic Server", emoji="🏠", style=discord.ButtonStyle.primary, custom_id="dank_setup_choice:basic", row=0)
     async def basic(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         await self._save_and_show(interaction, CHOICES_BY_KEY["basic_server"])
 
-    @discord.ui.button(label="Basic verify", emoji="✅", style=discord.ButtonStyle.success, custom_id="dank_setup_choice:basic_verify", row=0)
+    @discord.ui.button(label="Basic Verify", emoji="✅", style=discord.ButtonStyle.success, custom_id="dank_setup_choice:basic_verify", row=0)
     async def basic_verify(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         await self._save_and_show(interaction, CHOICES_BY_KEY["basic_verify"])
 
-    @discord.ui.button(label="Help desk", emoji="🎫", style=discord.ButtonStyle.primary, custom_id="dank_setup_choice:helpdesk", row=1)
+    @discord.ui.button(label="Help Desk", emoji="🎫", style=discord.ButtonStyle.primary, custom_id="dank_setup_choice:helpdesk", row=1)
     async def helpdesk(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         await self._save_and_show(interaction, CHOICES_BY_KEY["help_desk"])
 
-    @discord.ui.button(label="Voice check", emoji="🎙️", style=discord.ButtonStyle.primary, custom_id="dank_setup_choice:voice", row=1)
+    @discord.ui.button(label="Voice Verify", emoji="🎙️", style=discord.ButtonStyle.primary, custom_id="dank_setup_choice:voice", row=1)
     async def voice_check(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         await self._save_and_show(interaction, CHOICES_BY_KEY["voice_check"])
 
-    @discord.ui.button(label="ID check", emoji="🪪", style=discord.ButtonStyle.primary, custom_id="dank_setup_choice:id", row=2)
+    @discord.ui.button(label="ID / Web Verify", emoji="🪪", style=discord.ButtonStyle.primary, custom_id="dank_setup_choice:id", row=2)
     async def id_check(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         await self._save_and_show(interaction, CHOICES_BY_KEY["id_check"])
 
-    @discord.ui.button(label="ID + voice check", emoji="🔐", style=discord.ButtonStyle.success, custom_id="dank_setup_choice:id_voice", row=2)
+    @discord.ui.button(label="ID / Web + Voice", emoji="🔐", style=discord.ButtonStyle.success, custom_id="dank_setup_choice:id_voice", row=2)
     async def id_voice_check(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         await self._save_and_show(interaction, CHOICES_BY_KEY["id_voice_check"])
 
-    @discord.ui.button(label="Custom setup", emoji="⚙️", style=discord.ButtonStyle.secondary, custom_id="dank_setup_choice:custom", row=3)
+    @discord.ui.button(label="Custom", emoji="⚙️", style=discord.ButtonStyle.secondary, custom_id="dank_setup_choice:custom", row=3)
     async def custom(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         await self._save_and_show(interaction, CHOICES_BY_KEY["custom_setup"])
 
 
-class AfterChoiceView(solid.BackToSetupView):
-    @discord.ui.button(label="Use My Existing Server", emoji="🧩", style=discord.ButtonStyle.primary, custom_id="dank_setup_after_choice:existing", row=0)
-    async def existing(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        await _open_existing_server_setup(interaction)
+def register_public_setup_fresh_choice_commands(
+    bot: Any,
+    tree: Any,
+) -> None:
+    """Register choice helpers without replacing setup home."""
 
-    @discord.ui.button(label="Create Missing Items", emoji="✨", style=discord.ButtonStyle.success, custom_id="dank_setup_after_choice:create", row=0)
-    async def create_missing(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        await _open_create_missing_items(interaction)
-
-    @discord.ui.button(label="Setup Check", emoji="🩺", style=discord.ButtonStyle.secondary, custom_id="dank_setup_after_choice:health", row=1)
-    async def health(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        await _open_plain_health(interaction)
-
-
-class CreateMissingItemsView(solid.BackToSetupView):
-    @discord.ui.button(label="Create Basic Missing Items", emoji="✨", style=discord.ButtonStyle.success, custom_id="dank_setup_plain:confirm_create_missing", row=0)
-    async def confirm_create(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        if not await solid._require_setup_permission(interaction):
-            return
-        try:
-            from . import public_setup_defaults
-            await public_setup_defaults._setup_defaults_callback(interaction)
-            if interaction.guild is not None:
-                try:
-                    created, skipped, error = await solid._seed_recommended_categories(interaction.guild)
-                except Exception as e:
-                    created, skipped, error = [], [], f"{type(e).__name__}: {str(e)[:220]}"
-                msg = "✅ Missing starter items were handled.\n\n**Next:** run `/dank setup`, press **Setup Check**, then post the panel you need: `/verify panel` for Basic Verify or `/ticket-panel post` for tickets."
-                if error:
-                    msg += f"\n\n⚠️ Ticket menu options could not be checked: `{error}`"
-                elif created:
-                    msg += f"\n\nCreated ticket menu options: {', '.join(f'`{x}`' for x in created)}"
-                elif skipped:
-                    msg += "\n\nTicket menu options already existed."
-                await interaction.followup.send(msg, ephemeral=True, allowed_mentions=discord.AllowedMentions.none())
-        except Exception as e:
-            msg = f"❌ Create Missing Items failed: `{type(e).__name__}: {str(e)[:250]}`"
-            if interaction.response.is_done():
-                await interaction.followup.send(msg, ephemeral=True)
-            else:
-                await interaction.response.send_message(msg, ephemeral=True)
-
-
-FreshChoiceHomeView = PlainSetupHomeView
-FreshServerChoiceView = PlainSetupHomeView
-
-
-def _patch() -> None:
-    """Legacy setup-choice home override.
-
-    Disabled by default. /dank setup home is owned by public_setup_solid.
-    """
-
-    global _PATCHED
-    try:
-        import os
-        enabled = str(os.getenv("DANK_ENABLE_LEGACY_SETUP_CHOICE_HOME", "") or "").strip().lower() in {"1", "true", "yes", "on"}
-    except Exception:
-        enabled = False
-
-    if not enabled:
-        _PATCHED = True
-        try:
-            print("🧭 public_setup_fresh_choice legacy setup home override skipped; public_setup_solid owns /dank setup")
-        except Exception:
-            pass
-        return
-
-    try:
-        recovery._ORIGINAL_BUILD_MAIN = _plain_choice_main_payload
-        solid._build_main_setup_payload = recovery._build_main_with_recovery
-    except Exception:
-        solid._build_main_setup_payload = _plain_choice_main_payload
-    _PATCHED = True
-
-
-_patch()
-
-
-def register_public_setup_fresh_choice_commands(bot: Any, tree: Any) -> None:
     _ = bot, tree
-    _patch()
-    print("✅ public_setup_fresh_choice: plain setup choices active")
+    print(
+        "✅ public_setup_fresh_choice: "
+        "guided setup choices ready"
+    )
 
 
 __all__ = ["register_public_setup_fresh_choice_commands", "get_plain_setup_choice", "PlainSetupChoice", "SETUP_CHOICES", "CHOICES_BY_KEY"]

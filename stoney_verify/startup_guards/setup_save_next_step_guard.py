@@ -40,7 +40,7 @@ async def _open_health(interaction: discord.Interaction) -> None:
             return await interaction.response.send_message("❌ This must be used inside a server.", ephemeral=True)
         await solid._safe_defer_update(interaction)
         embed = await solid._build_health_embed(guild)
-        # The health-action guard will attach the richer HealthActionView.
+        # The canonical guided Setup Review owns the next-action view.
         await solid._edit_or_followup(interaction, embed=embed, view=solid.SetupNavView())
     except Exception as exc:
         try:

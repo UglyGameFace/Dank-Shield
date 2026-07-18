@@ -11,7 +11,7 @@ def test_risk_wording_separates_bot_alt_and_dm_report() -> None:
     assert "Official Bot: Yes" in RAID
     assert "Official Bot: No" in RAID
     assert "Alt/Raid Risk:" in RAID
-    assert "DM Raider Report Risk:" in RAID
+    assert "DM Raider Report Risk" in CLEANUP
     assert "BOT ACCOUNT • excluded from raid/alt scoring" not in RAID
 
 
