@@ -29,6 +29,9 @@ jobs:
           pip install -r requirements.txt
           pip install pytest
 
+      - name: Remove final legacy setup wording
+        run: python tools/apply_setup_v2_last_cleanup.py
+
       - name: Align stale setup contracts
         run: python tools/apply_setup_v2_contract_alignment.py
 
@@ -64,8 +67,8 @@ jobs:
           rm -f setup-v2-aligned-pytest-output.txt
           rm -f setup-v2-aligned-pytest-tail.txt
           rm -f tools/apply_setup_v2_contract_alignment.py
+          rm -f tools/apply_setup_v2_last_cleanup.py
           rm -f .github/workflows/apply-setup-v2-contract-alignment.yml
-          rm -f .github/workflows/diagnose-setup-v2-full-tests.yml
           rm -f setup-v2-pytest-tail.txt
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
