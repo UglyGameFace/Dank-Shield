@@ -185,6 +185,11 @@ def attach_setup_review_commands() -> None:
             print("⚠️ setup db-check command attach failed:", repr(e))
 
 
-attach_setup_review_commands()
+def register_public_setup_review_commands(bot: Any, tree: Any) -> None:
+    """Attach direct review/DB aliases only when this advanced module is selected."""
 
-__all__ = ["attach_setup_review_commands"]
+    _ = bot, tree
+    attach_setup_review_commands()
+
+
+__all__ = ["attach_setup_review_commands", "register_public_setup_review_commands"]
