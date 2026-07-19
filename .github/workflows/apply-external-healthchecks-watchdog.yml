@@ -1,23 +1,23 @@
 name: Apply external Healthchecks watchdog
 
 on:
-  push:
-    branches:
-      - fix/external-healthchecks-watchdog
+  pull_request:
+    types: [opened, synchronize]
+    branches: [main]
 
 permissions:
   contents: write
 
 jobs:
   apply:
-    if: github.actor != 'github-actions[bot]'
+    if: github.head_ref == 'fix/external-healthchecks-watchdog' && github.actor != 'github-actions[bot]'
     runs-on: ubuntu-latest
     timeout-minutes: 20
 
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: fix/external-healthchecks-watchdog
+          ref: ${{ github.head_ref }}
           fetch-depth: 0
 
       - uses: actions/setup-python@v5
