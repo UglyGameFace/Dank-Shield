@@ -20,6 +20,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          show-progress: false
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -29,9 +30,9 @@ jobs:
 
       - name: Install dependencies
         run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt
-          pip install pytest
+          python -m pip install --upgrade pip -q
+          pip install -q -r requirements.txt
+          pip install -q pytest
 
       - name: Check committed diff whitespace
         run: git diff --check "$(git merge-base origin/main HEAD)"..HEAD
@@ -40,7 +41,7 @@ jobs:
         run: python -m compileall -q stoney_verify main.py tools
 
       - name: Run unit test suite
-        run: python -m pytest tests/ -q
+        run: python -m pytest tests/ -q --tb=short --disable-warnings
         env:
           DANK_STARTUP_LOG_STYLE: quiet
           DANK_COMMAND_LOG_STYLE: quiet
