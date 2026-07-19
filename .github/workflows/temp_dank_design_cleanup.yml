@@ -19,6 +19,8 @@ jobs:
           fetch-depth: 0
 
       - name: Apply exact Dank Design cleanup
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           python - <<'PY'
           from pathlib import Path
@@ -111,8 +113,29 @@ jobs:
             exit 0
           fi
 
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add stoney_verify/services/server_design_majority_layout.py
-          git commit -m "fix: make Dank Design auto-detect deterministic"
-          git push origin HEAD:fix/finish-dank-shield-stability-mission
+          python - <<'PY'
+          import base64
+          import json
+          from pathlib import Path
+
+          content = Path("stoney_verify/services/server_design_majority_layout.py").read_bytes()
+          payload = {
+              "message": "fix: make Dank Design auto-detect deterministic",
+              "content": base64.b64encode(content).decode("ascii"),
+              "branch": "fix/finish-dank-shield-stability-mission",
+          }
+          Path("/tmp/update-base.json").write_text(json.dumps(payload), encoding="utf-8")
+          PY
+
+          current_sha="$(gh api 'repos/UglyGameFace/Dank-Shield/contents/stoney_verify/services/server_design_majority_layout.py?ref=fix/finish-dank-shield-stability-mission' --jq .sha)"
+          python - "$current_sha" <<'PY'
+          import json
+          import sys
+          from pathlib import Path
+
+          path = Path("/tmp/update-base.json")
+          payload = json.loads(path.read_text(encoding="utf-8"))
+          payload["sha"] = sys.argv[1]
+          path.write_text(json.dumps(payload), encoding="utf-8")
+          PY
+          gh api --method PUT repos/UglyGameFace/Dank-Shield/contents/stoney_verify/services/server_design_majority_layout.py --input /tmp/update-base.json
