@@ -96,3 +96,15 @@ For each Discord server:
 5. SpamGuard defaults to ON for new/missing settings rows unless an owner explicitly turns it off.
 
 Never fix a public server by putting that server's IDs into Discloud env. That creates cross-server leakage risk.
+
+
+## External uptime watchdog
+
+For true bot-down alerts, configure a Healthchecks.io ping URL in the host environment:
+
+```bash
+DANK_HEALTHCHECKS_PING_URL=<your private Healthchecks.io ping URL>
+DANK_HEALTHCHECKS_TIMEOUT_SECONDS=5
+```
+
+Keep the ping URL private. Do not commit it to GitHub. Dank Shield sends an immediate success ping after Discord `on_ready`, then another ping from the process-health loop every `DANK_PROCESS_HEALTH_INTERVAL_SECONDS` (120 seconds by default). A 5-minute Healthchecks.io period with a 10-minute grace window is compatible with the default interval.

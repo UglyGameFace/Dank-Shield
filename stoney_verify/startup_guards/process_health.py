@@ -18,6 +18,7 @@ import signal
 import sys
 import time
 import traceback
+import urllib.request
 from pathlib import Path
 from typing import Any
 
@@ -29,6 +30,10 @@ _READY_LISTENER_ATTACHED = False
 _PREVIOUS_EXCEPTHOOK = sys.excepthook
 _ORIGINAL_IMPORT = builtins.__import__
 _INSTALLED = False
+_EXTERNAL_WATCHDOG_LAST_OK_AT = 0.0
+_EXTERNAL_WATCHDOG_LAST_ERROR = ""
+_EXTERNAL_WATCHDOG_LAST_FAILURE_LOG_AT = 0.0
+_EXTERNAL_WATCHDOG_WAS_OK = False
 
 
 def _log(message: str) -> None:
@@ -64,6 +69,107 @@ def _write_boot_state(count: int, ts: float) -> None:
         _BOOT_STATE_PATH.write_text(f"{int(count)},{float(ts)}", encoding="utf-8")
     except Exception:
         pass
+
+
+def _external_watchdog_url() -> str:
+    for name in (
+        "DANK_HEALTHCHECKS_PING_URL",
+        "HEALTHCHECKS_PING_URL",
+        "HEALTHCHECK_PING_URL",
+        "HC_PING_URL",
+    ):
+        try:
+            value = str(os.getenv(name, "") or "").strip()
+        except Exception:
+            value = ""
+        if value:
+            return value
+    return ""
+
+
+def _external_watchdog_timeout_seconds() -> float:
+    try:
+        raw = float(str(os.getenv("DANK_HEALTHCHECKS_TIMEOUT_SECONDS", "5") or "5").strip())
+        return max(1.0, min(raw, 15.0))
+    except Exception:
+        return 5.0
+
+
+def external_watchdog_configured() -> bool:
+    return bool(_external_watchdog_url())
+
+
+def external_watchdog_status() -> tuple[bool, bool, str]:
+    configured = external_watchdog_configured()
+    if not configured:
+        return False, False, "not configured — set `DANK_HEALTHCHECKS_PING_URL`"
+
+    if _EXTERNAL_WATCHDOG_LAST_OK_AT > 0:
+        age = max(0, int(time.time() - _EXTERNAL_WATCHDOG_LAST_OK_AT))
+        if _EXTERNAL_WATCHDOG_LAST_ERROR:
+            return True, False, f"last success {age}s ago; latest ping failed"
+        return True, True, f"pinging Healthchecks.io; last success {age}s ago"
+
+    if _EXTERNAL_WATCHDOG_LAST_ERROR:
+        return True, False, "configured; ping has not succeeded yet"
+    return True, False, "configured; waiting for first successful ping"
+
+
+def _ping_external_watchdog_sync() -> tuple[bool, str]:
+    url = _external_watchdog_url()
+    if not url:
+        return False, "not_configured"
+
+    request = urllib.request.Request(
+        url,
+        headers={"User-Agent": "Dank-Shield/healthcheck"},
+        method="GET",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=_external_watchdog_timeout_seconds()) as response:
+            status = int(getattr(response, "status", 200) or 200)
+            if 200 <= status < 300:
+                return True, f"http_{status}"
+            return False, f"http_{status}"
+    except Exception as exc:
+        return False, f"{type(exc).__name__}"
+
+
+async def _ping_external_watchdog() -> bool:
+    global _EXTERNAL_WATCHDOG_LAST_OK_AT
+    global _EXTERNAL_WATCHDOG_LAST_ERROR
+    global _EXTERNAL_WATCHDOG_LAST_FAILURE_LOG_AT
+    global _EXTERNAL_WATCHDOG_WAS_OK
+
+    if not external_watchdog_configured():
+        return False
+
+    try:
+        ok, detail = await asyncio.wait_for(
+            asyncio.to_thread(_ping_external_watchdog_sync),
+            timeout=_external_watchdog_timeout_seconds() + 2.0,
+        )
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:
+        ok, detail = False, type(exc).__name__
+
+    now = time.time()
+    if ok:
+        recovered = bool(_EXTERNAL_WATCHDOG_LAST_ERROR)
+        _EXTERNAL_WATCHDOG_LAST_OK_AT = now
+        _EXTERNAL_WATCHDOG_LAST_ERROR = ""
+        if recovered or not _EXTERNAL_WATCHDOG_WAS_OK:
+            _log("external watchdog ping healthy")
+        _EXTERNAL_WATCHDOG_WAS_OK = True
+        return True
+
+    _EXTERNAL_WATCHDOG_LAST_ERROR = str(detail or "ping_failed")
+    _EXTERNAL_WATCHDOG_WAS_OK = False
+    if now - _EXTERNAL_WATCHDOG_LAST_FAILURE_LOG_AT >= 300:
+        _EXTERNAL_WATCHDOG_LAST_FAILURE_LOG_AT = now
+        _log(f"external watchdog ping failed error={_EXTERNAL_WATCHDOG_LAST_ERROR}")
+    return False
 
 
 def _memory_snapshot() -> str:
@@ -168,6 +274,7 @@ async def _health_loop() -> None:
     while True:
         try:
             await asyncio.sleep(interval)
+            watchdog_ok = await _ping_external_watchdog() if external_watchdog_configured() else False
             uptime = time.time() - _BOOT_TS
             loop = asyncio.get_running_loop()
             task_count = 0
@@ -175,7 +282,8 @@ async def _health_loop() -> None:
                 task_count = len([t for t in asyncio.all_tasks(loop) if not t.done()])
             except Exception:
                 task_count = 0
-            _log(f"heartbeat uptime={uptime:.1f}s tasks={task_count} {_memory_snapshot()}{_operation_queue_snapshot()}")
+            watchdog_state = "ok" if watchdog_ok else ("off" if not external_watchdog_configured() else "failed")
+            _log(f"heartbeat uptime={uptime:.1f}s tasks={task_count} {_memory_snapshot()}{_operation_queue_snapshot()} external_watchdog={watchdog_state}")
         except asyncio.CancelledError:
             raise
         except Exception as e:
@@ -208,6 +316,8 @@ def _attach_ready_listener(bot: Any) -> None:
     async def _process_health_on_ready() -> None:
         try:
             start_health_loop()
+            if external_watchdog_configured():
+                await _ping_external_watchdog()
             user = getattr(bot, "user", None)
             guilds = len(getattr(bot, "guilds", []) or [])
             uptime = time.time() - _BOOT_TS
@@ -284,4 +394,10 @@ install()
 _log("loaded; crash/restart visibility active")
 
 
-__all__ = ["install", "install_loop_exception_handler", "start_health_loop"]
+__all__ = [
+    "install",
+    "install_loop_exception_handler",
+    "start_health_loop",
+    "external_watchdog_configured",
+    "external_watchdog_status",
+]
