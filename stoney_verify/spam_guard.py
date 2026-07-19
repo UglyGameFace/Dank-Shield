@@ -887,7 +887,7 @@ async def save_quarantine_case(case: Dict[str, Any]) -> Tuple[Optional[Dict[str,
 def _default_settings(guild_id: int) -> Dict[str, Any]:
     return {
         "guild_id": str(guild_id),
-        "enabled": False,
+        "enabled": True,
         "mode": "timeout",
         "apply_to_verified_users": True,
         "block_external_invites_only": True,
@@ -1114,30 +1114,56 @@ async def get_spam_settings(guild_id: int) -> Dict[str, Any]:
         if status == "ok":
             row_found = _settings_row_exists(row)
             normalized = _normalize_settings(gid, row or {})
-            source = "db" if row_found else "db-empty"
+            persisted = bool(row_found)
+            bootstrap_reason = "row_found" if row_found else "not_attempted"
+
+            # New guilds and legacy guilds with no security-settings row should
+            # immediately receive a durable default row. Existing saved rows are
+            # never changed here, so an owner who explicitly disabled SpamGuard
+            # stays disabled.
+            if not row_found:
+                try:
+                    persisted, bootstrap_reason = await asyncio.to_thread(
+                        _upsert_settings_sync,
+                        _settings_payload_for_db(normalized),
+                    )
+                except Exception as exc:
+                    persisted = False
+                    bootstrap_reason = f"bootstrap_exception:{type(exc).__name__}"
+
+            effective_row_found = bool(row_found or persisted)
+            source = "db" if row_found else ("db-bootstrap" if persisted else "defaults")
             _cache_runtime_settings(
                 gid,
                 normalized,
                 source=source,
-                persisted=row_found,
+                persisted=persisted,
             )
             _record_settings_diag(
                 gid,
                 action="load",
                 status="ok",
-                reason=reason,
-                row_found=row_found,
+                reason=(bootstrap_reason if not row_found else reason),
+                row_found=effective_row_found,
+                original_row_found=row_found,
+                persisted=persisted,
                 source=source,
-                row_enabled=_settings_row_enabled_value(row),
-                row_mode=_settings_row_mode_value(row),
+                row_enabled=(_settings_row_enabled_value(row) if row_found else bool(normalized.get("enabled"))),
+                row_mode=(_settings_row_mode_value(row) if row_found else str(normalized.get("mode"))),
                 effective_enabled=bool(normalized.get("enabled")),
                 effective_mode=str(normalized.get("mode")),
             )
             if not row_found:
-                _settings_debug_throttled(
-                    f"settings-load-row-missing:{gid}",
-                    f"settings load guild={gid} status=ok row_found=False fallback=defaults enabled={bool(normalized.get('enabled'))} mode={normalized.get('mode')} reason={reason}",
-                )
+                if persisted:
+                    _settings_debug_throttled(
+                        f"settings-bootstrap-row:{gid}",
+                        f"settings bootstrap guild={gid} created_default_row=True enabled={bool(normalized.get('enabled'))} mode={normalized.get('mode')} reason={bootstrap_reason}",
+                    )
+                else:
+                    _settings_debug_throttled(
+                        f"settings-load-row-missing:{gid}",
+                        f"settings load guild={gid} status=ok row_found=False fallback=defaults enabled={bool(normalized.get('enabled'))} mode={normalized.get('mode')} reason={bootstrap_reason}",
+                    )
             return normalized
 
         if status == "missing_table":

@@ -115,6 +115,93 @@ def _split_legacy_targets(raw: Any) -> tuple[list[Any], list[str], list[str], li
     return targets, notes, missing_mappings, manual_actions
 
 
+def _activity_coverage_channel(channel: Any) -> bool:
+    return isinstance(channel, (discord.TextChannel, discord.ForumChannel)) or callable(getattr(channel, "history", None))
+
+
+def _activity_coverage_expected(channel: Any) -> discord.PermissionOverwrite:
+    expected = discord.PermissionOverwrite(
+        view_channel=True,
+        read_message_history=True,
+    )
+    if isinstance(channel, (discord.TextChannel, discord.ForumChannel)):
+        expected.manage_threads = True
+    return expected
+
+
+def _activity_coverage_needs_repair(channel: Any, me: discord.Member) -> bool:
+    try:
+        permissions = channel.permissions_for(me)
+    except Exception:
+        return True
+    if not bool(getattr(permissions, "view_channel", False)):
+        return True
+    if not bool(getattr(permissions, "read_message_history", False)):
+        return True
+    if isinstance(channel, (discord.TextChannel, discord.ForumChannel)) and not bool(getattr(permissions, "manage_threads", False)):
+        return True
+    return False
+
+
+def _merge_activity_coverage_targets(
+    guild: discord.Guild,
+    targets: list[Any],
+    seen: set[int],
+    notes: list[str],
+) -> None:
+    """Add explicit bot-only repairs required by authoritative activity tracking.
+
+    This never changes member/staff visibility. It only gives Dank Shield itself
+    the durable history/thread access required for accurate inactivity proof.
+    """
+    from stoney_verify.startup_guards import setup_permission_repair_guard as legacy
+
+    me = legacy._bot_member(guild)
+    if not isinstance(me, discord.Member):
+        return
+
+    by_channel = {
+        int(getattr(item.channel, "id", 0) or 0): item
+        for item in targets
+        if int(getattr(item.channel, "id", 0) or 0) > 0
+    }
+    repair_count = 0
+
+    for channel in list(getattr(guild, "channels", []) or []):
+        if not _activity_coverage_channel(channel):
+            continue
+        if not _activity_coverage_needs_repair(channel, me):
+            continue
+
+        cid = int(getattr(channel, "id", 0) or 0)
+        if cid <= 0:
+            continue
+        expected = _activity_coverage_expected(channel)
+        existing = by_channel.get(cid)
+        if existing is not None:
+            current = existing.overwrites.get(me, discord.PermissionOverwrite())
+            current.view_channel = True
+            current.read_message_history = True
+            if isinstance(channel, (discord.TextChannel, discord.ForumChannel)):
+                current.manage_threads = True
+            existing.overwrites[me] = current
+        else:
+            legacy._add_target(
+                targets,
+                seen,
+                channel,
+                "Authoritative activity coverage",
+                {me: expected},
+            )
+            by_channel[cid] = targets[-1] if targets else None
+        repair_count += 1
+
+    if repair_count:
+        notes.append(
+            f"Activity coverage: {repair_count} channel(s) need Dank Shield bot-only View Channel / Read Message History / Manage Threads access. Member visibility is not changed."
+        )
+
+
 async def _build_expanded_targets(guild: discord.Guild) -> tuple[list[Any], list[str], list[str], list[str]]:
     from stoney_verify.guild_config import get_guild_config
     from stoney_verify.startup_guards import setup_permission_repair_guard as legacy
@@ -176,6 +263,8 @@ async def _build_expanded_targets(guild: discord.Guild) -> tuple[list[Any], list
         if item.label in {"Active tickets category", "Ticket archive category", "Staff tools category"}:
             for child in list(getattr(item.channel, "channels", []) or []):
                 legacy._add_target(targets, seen, child, f"{item.label} child channel", item.overwrites)
+
+    _merge_activity_coverage_targets(guild, targets, seen, notes)
 
     if not targets:
         notes.append("No saved or exact-name setup channels/categories were found. Run Core Setup first, or use existing-server mapping to save the intended roles/channels.")
@@ -261,14 +350,14 @@ def result_embed(
     embed = legacy._result_embed(result)
     try:
         embed.description = (
-            "Truth-engine repair for configured and exact-name Dank Shield setup targets. "
-            "It fixes channel/category overwrites, then tells you what still requires Discord-level action."
+            "Truth-engine repair for configured setup targets plus Dank Shield activity-coverage access. "
+            "It fixes safe channel/category overwrites, then tells you what still requires Discord-level action."
         )
         embed.add_field(
             name="Fix Boundary",
             value=(
-                "✅ Can fix saved/exact-name setup channel/category overwrites.\n"
-                "⚠️ Cannot move the bot role, grant missing bot permissions, or guess ambiguous duplicate channels.\n"
+                "✅ Can fix saved/exact-name setup overwrites and Dank Shield's own activity-history access.\n"
+                "⚠️ Cannot move the bot role, grant missing server-wide role permissions, or guess ambiguous duplicate channels.\n"
                 "🧭 If a target is not saved or exact-name matched, map it in Core Setup first."
             ),
             inline=False,

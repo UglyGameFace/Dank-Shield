@@ -6,6 +6,8 @@ from contextlib import contextmanager
 from typing import Any, Callable, Dict, Iterator, List, Sequence, Tuple
 
 _COMMANDS_EXT_REGISTERED = False
+_STALE_PRUNE_SKIP_LOGGED = False
+_CHILD_PRUNE_SKIP_LOGGED = False
 DEFAULT_COMMAND_PROFILE = "public"
 CommandRegistrar = Callable[[Any, Any], None]
 CommandModuleSpec = Tuple[str, str, str]
@@ -415,8 +417,11 @@ def _runtime_command_prune_disabled() -> bool:
     return False
 
 def _remove_stale_top_level_commands(tree: Any, *, reason: str) -> list[str]:
+    global _STALE_PRUNE_SKIP_LOGGED
     if _runtime_command_prune_disabled():
-        print("🧭 Dank Shield stale top-level command removal skipped; stable command surface active")
+        if not _STALE_PRUNE_SKIP_LOGGED:
+            print("🧭 Dank Shield stale top-level command removal skipped; stable command surface active")
+            _STALE_PRUNE_SKIP_LOGGED = True
         return []
 
     removed: list[str] = []
@@ -433,8 +438,11 @@ def _remove_stale_top_level_commands(tree: Any, *, reason: str) -> list[str]:
 
 
 def _prune_public_dank_children(*, profile: str, reason: str) -> list[str]:
+    global _CHILD_PRUNE_SKIP_LOGGED
     if _runtime_command_prune_disabled():
-        print("🧭 Dank Shield /dank child prune skipped; stable command surface active")
+        if not _CHILD_PRUNE_SKIP_LOGGED:
+            print("🧭 Dank Shield /dank child prune skipped; stable command surface active")
+            _CHILD_PRUNE_SKIP_LOGGED = True
         return []
 
     if not _public_profile_like(profile):
