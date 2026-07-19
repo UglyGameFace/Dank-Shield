@@ -8,7 +8,7 @@ permissions or mutates channel overwrites.
 """
 
 from dataclasses import dataclass
-from typing import Any, Iterable
+from typing import Any
 
 import discord
 
@@ -103,10 +103,16 @@ def _active_threads(guild: discord.Guild) -> list[discord.Thread]:
     return [thread for thread in list(getattr(guild, "threads", []) or []) if isinstance(thread, discord.Thread)]
 
 
-def _missing_for_channel(channel: Any, me: discord.Member) -> tuple[str, ...]:
+def _permissions_for(channel: Any, me: discord.Member) -> Any:
     try:
-        perms = channel.permissions_for(me)
+        return channel.permissions_for(me)
     except Exception:
+        return None
+
+
+def _missing_for_channel(channel: Any, me: discord.Member) -> tuple[str, ...]:
+    perms = _permissions_for(channel, me)
+    if perms is None:
         return ("View Channel", "Read Message History")
 
     missing: list[str] = []
@@ -115,6 +121,37 @@ def _missing_for_channel(channel: Any, me: discord.Member) -> tuple[str, ...]:
     if not bool(getattr(perms, "read_message_history", False)):
         missing.append("Read Message History")
     return tuple(missing)
+
+
+def _private_threads_may_exist(channel: discord.TextChannel, guild: discord.Guild) -> bool:
+    """Mirror the reconciliation safety rule for potentially hidden private threads."""
+
+    for role in list(getattr(guild, "roles", []) or []):
+        try:
+            if bool(getattr(role, "managed", False)):
+                continue
+            permissions = channel.permissions_for(role)
+            if (
+                bool(getattr(permissions, "view_channel", False))
+                and bool(getattr(permissions, "create_private_threads", False))
+                and bool(getattr(permissions, "send_messages_in_threads", False))
+            ):
+                return True
+        except Exception:
+            continue
+    return False
+
+
+def _manage_threads_problem(channel: Any, me: discord.Member) -> ActivityScopeProblem | None:
+    perms = _permissions_for(channel, me)
+    if perms is None or bool(getattr(perms, "manage_threads", False)):
+        return None
+    return ActivityScopeProblem(
+        channel_id=_safe_channel_id(channel),
+        channel_name=_safe_channel_name(channel),
+        channel_kind=_channel_kind(channel),
+        missing_permissions=("Manage Threads",),
+    )
 
 
 def _private_thread_parent_problem(thread: discord.Thread, me: discord.Member) -> ActivityScopeProblem | None:
@@ -127,18 +164,7 @@ def _private_thread_parent_problem(thread: discord.Thread, me: discord.Member) -
     parent = getattr(thread, "parent", None)
     if parent is None:
         return None
-    try:
-        perms = parent.permissions_for(me)
-    except Exception:
-        return None
-    if bool(getattr(perms, "manage_threads", False)):
-        return None
-    return ActivityScopeProblem(
-        channel_id=_safe_channel_id(parent),
-        channel_name=_safe_channel_name(parent),
-        channel_kind=_channel_kind(parent),
-        missing_permissions=("Manage Threads",),
-    )
+    return _manage_threads_problem(parent, me)
 
 
 def audit_activity_scope(guild: discord.Guild) -> ActivityScopeReport:
@@ -167,11 +193,19 @@ def audit_activity_scope(guild: discord.Guild) -> ActivityScopeReport:
             problems_by_key[(cid, missing)] = problem
             inaccessible_ids.add(cid)
 
+        if isinstance(channel, discord.TextChannel) and _private_threads_may_exist(channel, guild):
+            parent_problem = _manage_threads_problem(channel, me)
+            if parent_problem is not None:
+                key = (parent_problem.channel_id, parent_problem.missing_permissions)
+                problems_by_key[key] = parent_problem
+                inaccessible_ids.add(cid)
+
         if isinstance(channel, discord.Thread):
             parent_problem = _private_thread_parent_problem(channel, me)
             if parent_problem is not None:
                 key = (parent_problem.channel_id, parent_problem.missing_permissions)
                 problems_by_key[key] = parent_problem
+                inaccessible_ids.add(parent_problem.channel_id)
                 inaccessible_ids.add(cid)
 
     problems = tuple(
@@ -181,7 +215,9 @@ def audit_activity_scope(guild: discord.Guild) -> ActivityScopeReport:
         )
     )
     total = len(channels)
-    accessible = max(0, total - len({cid for cid in inaccessible_ids if cid > 0}))
+    channel_ids = {_safe_channel_id(channel) for channel in channels}
+    inaccessible_in_scope = {cid for cid in inaccessible_ids if cid > 0 and cid in channel_ids}
+    accessible = max(0, total - len(inaccessible_in_scope))
     return ActivityScopeReport(
         total_channels=total,
         accessible_channels=accessible,
