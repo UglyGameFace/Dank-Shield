@@ -3,6 +3,7 @@
 ## SG-STATS-001 — Live Discord SpamGuard stats channels
 
 **Status:** COMPLETE — awaiting merge/deploy approval
+**PR:** #96
 
 ### Scope
 Create a real Discord server-stats display for Dank Shield using locked voice channels, not an image or fake counters.
