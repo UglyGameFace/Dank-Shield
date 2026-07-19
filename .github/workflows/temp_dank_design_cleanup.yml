@@ -1,15 +1,16 @@
 name: Temporary Dank Design cleanup applier
 
 on:
-  push:
+  pull_request:
     branches:
-      - fix/finish-dank-shield-stability-mission
+      - main
 
 permissions:
   contents: write
 
 jobs:
   apply:
+    if: github.head_ref == 'fix/finish-dank-shield-stability-mission'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
