@@ -1,0 +1,117 @@
+name: Temporary Dank Design cleanup applier
+
+on:
+  push:
+    branches:
+      - fix/finish-dank-shield-stability-mission
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/finish-dank-shield-stability-mission
+          fetch-depth: 0
+
+      - name: Apply exact Dank Design cleanup
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path("stoney_verify/services/server_design_majority_layout.py")
+          text = path.read_text(encoding="utf-8")
+          original = text
+
+          old_top = '''def _top_majority(counter: Counter[Any], *, total: int) -> tuple[Any, int, bool]:
+              if not counter:
+                  return None, 0, False
+              winners = counter.most_common()
+              value, count = winners[0]
+              tied = len(winners) > 1 and winners[1][1] == count
+              return value, count, bool(tied or count <= max(1, total // 2))
+          '''.replace("          ", "")
+          new_top = '''def _top_majority(counter: Counter[Any], *, total: int) -> tuple[Any, int, bool]:
+              if not counter:
+                  return None, 0, False
+              count = max(counter.values())
+              top_values = [value for value, value_count in counter.items() if value_count == count]
+              value = sorted(top_values, key=repr)[0]
+              tied = len(top_values) > 1
+              return value, count, bool(tied or count <= max(1, total // 2))
+          '''.replace("          ", "")
+          if old_top in text:
+              text = text.replace(old_top, new_top, 1)
+
+          old_example = '''        separator_counts[key] += 1
+                  separator_examples.setdefault(key, dict(sep))
+                  if sep.get("separator_in_name_text"):
+          '''.replace("          ", "")
+          new_example = '''        separator_counts[key] += 1
+                  candidate = dict(sep)
+                  current_example = separator_examples.get(key)
+                  if current_example is None or repr(sorted(candidate.items())) < repr(sorted(current_example.items())):
+                      separator_examples[key] = candidate
+                  if sep.get("separator_in_name_text"):
+          '''.replace("          ", "")
+          if old_example in text:
+              text = text.replace(old_example, new_example, 1)
+
+          marker = "\ndef _fail_repair_item(item: dict[str, Any], reason: str) -> None:\n"
+          first = text.find(marker)
+          second = text.find(marker, first + len(marker)) if first >= 0 else -1
+          if second >= 0:
+              end = text.find("\ndef annotate_plan_items(\n", second)
+              if end < 0:
+                  raise SystemExit("duplicate helper cleanup end marker not found")
+              text = text[:second] + text[end:]
+
+          text = text.replace(
+              "for category_id, rows in groups.items()\n        if rows",
+              "for category_id, rows in sorted(groups.items(), key=lambda item: item[0])\n        if rows",
+              1,
+          )
+          text = text.replace(
+              '"category_names": category_names,',
+              '"category_names": dict(sorted(category_names.items(), key=lambda item: item[0])),',
+              1,
+          )
+          text = text.replace(
+              'out["__auto_detect_ephemeral_channel_ids"] = ephemeral_ids\n'
+              '    out["__auto_detect_preserve_ids"] = preserve_ids\n'
+              '    out["__auto_detect_category_analyses"] = dict(analyses)',
+              'out["__auto_detect_ephemeral_channel_ids"] = sorted(set(ephemeral_ids))\n'
+              '    out["__auto_detect_preserve_ids"] = sorted(set(preserve_ids))\n'
+              '    out["__auto_detect_category_analyses"] = dict(sorted(analyses.items(), key=lambda item: str(item[0])))',
+              1,
+          )
+
+          if text == original:
+              print("Dank Design cleanup already applied; no changes needed.")
+              raise SystemExit(0)
+
+          if text.count("def _fail_repair_item(") != 1:
+              raise SystemExit("expected exactly one _fail_repair_item after cleanup")
+          if text.count("def validate_majority_repair_items(") != 1:
+              raise SystemExit("expected exactly one validate_majority_repair_items after cleanup")
+          if 'out["__auto_detect_preserve_ids"] = sorted(set(preserve_ids))' not in text:
+              raise SystemExit("deterministic preserve-id ordering was not applied")
+
+          path.write_text(text, encoding="utf-8")
+          PY
+
+          python -m py_compile stoney_verify/services/server_design_majority_layout.py
+
+          if git diff --quiet -- stoney_verify/services/server_design_majority_layout.py; then
+            echo "No production diff to commit."
+            exit 0
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add stoney_verify/services/server_design_majority_layout.py
+          git commit -m "fix: make Dank Design auto-detect deterministic"
+          git push origin HEAD:fix/finish-dank-shield-stability-mission
