@@ -14,12 +14,6 @@ import stoney_verify.startup_guards.command_scope_dedupe  # noqa: F401
 # app.py imports globals consumers.
 import stoney_verify.startup_guards.public_server_env_id_guard  # noqa: F401
 
-# Departure reconciliation is allowed to infer "left the guild" only from a
-# completed Discord member enumeration. Load this before app.py/events.py capture
-# member-sync callables so a failed fetch can never fall back to partial cache
-# absence as negative membership evidence.
-import stoney_verify.startup_guards.member_reconciliation_authority_guard  # noqa: F401
-
 # =====================================================
 # SAFE MINIMAL STARTUP GUARDS (Production Audit Fix)
 # Only keeping essential safety guards. Everything else
