@@ -44,8 +44,8 @@ def main() -> int:
         if count != 1:
             failures.append(f"{function_name} definition count is {count}, expected 1")
 
-    if 'if icon_mode == "keep_existing":\n        return current' not in STUDIO:
-        failures.append("keep_existing icon mode does not return the exact current icon")
+    if 'if mode == "keep_existing":\n        return existing' not in STUDIO:
+        failures.append("keep_existing icon mode does not return the exact existing icon value")
 
     required_tests = (
         "test_exact_font_detection_distinguishes_supported_lettering_families",
