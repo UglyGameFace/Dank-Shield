@@ -236,12 +236,12 @@ async def load_service_state(guild_id: int) -> ServiceState:
             _warn(f"could not load guild config for services guild={guild_id}: {e!r}")
 
     if cfg is None:
-        return ServiceState(True, False, False, False, False, "defaults")
+        return ServiceState(True, False, False, True, True, "defaults")
 
     tickets = _safe_bool(_cfg_value(cfg, "tickets_enabled", True), True)
     verification = _safe_bool(_cfg_value(cfg, "verification_enabled", False), False)
     voice = _safe_bool(_cfg_value(cfg, "voice_verification_enabled", False), False)
-    spamguard = _safe_bool(_cfg_value(cfg, "spam_guard_enabled", False), False)
+    spamguard = _safe_bool(_cfg_value(cfg, "spam_guard_enabled", True), True)
     moderation = _safe_bool(_cfg_value(cfg, "moderation_enabled", spamguard), spamguard)
     return ServiceState(tickets, verification, voice, spamguard, moderation, str(_cfg_value(cfg, "source", "guild_configs")))
 
@@ -316,7 +316,7 @@ def _spam_guard_module() -> Any | None:
 def _default_spam_settings(guild_id: int) -> dict[str, Any]:
     return {
         "guild_id": str(int(guild_id)),
-        "enabled": False,
+        "enabled": True,
         "mode": "timeout",
         "apply_to_verified_users": True,
         "block_external_invites_only": True,

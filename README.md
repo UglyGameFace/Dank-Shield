@@ -36,6 +36,7 @@ Invite Dank Shield with permissions that allow it to manage the workflow:
 - Embed Links
 - Attach Files
 - Read Message History
+- Manage Threads
 - Manage Messages
 - Moderate Members
 
@@ -49,55 +50,23 @@ In Discord, run:
 /dank setup
 ```
 
-You will see three main paths:
+The normal setup flow is one guided path:
 
 ```text
-Fresh Server
-Existing Server
-Advanced Setup
+Start Setup
+Choose what Dank Shield should do
+Set Up This Step
+Automatic Setup Check
+Fix Next Problem or Test & Launch
 ```
 
-### 3. Pick the right path
+### 3. Follow the guided steps
 
-#### Fresh Server
+Dank Shield asks for one required item at a time. Choose an existing role/channel or let Dank Shield create the missing item when that step supports creation.
 
-Use this when the server does not already have a support/verification layout.
+Use **More Options** only for secondary tools such as changing setup type, optional settings, manual setup checks, permission repair, or starting over.
 
-Dank Shield will create missing recommended items only. It will not delete old channels, old tickets, or existing roles.
-
-Recommended flow:
-
-```text
-/dank setup
-Fresh Server
-Create Missing Defaults Now
-Health Check
-/ticket-panel post
-Open a test ticket
-```
-
-#### Existing Server
-
-Use this when the server already has roles/channels/categories.
-
-Recommended flow:
-
-```text
-/dank setup
-Existing Server
-Ticket Basics
-Verification Roles
-Verification Channels
-Logs + Status
-Back to Setup
-Health Check
-/ticket-panel post
-Open a test ticket
-```
-
-#### Advanced Setup
-
-Use this only when you want to fine-tune names, ticket menu options, logs, status, or category routing.
+SpamGuard is enabled by default for normal new-server setup. Owners can still turn it off explicitly from the protection/settings controls.
 
 ---
 

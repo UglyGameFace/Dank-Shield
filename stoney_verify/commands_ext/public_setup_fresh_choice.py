@@ -92,15 +92,15 @@ def _plain_saved_choice_from_cfg(cfg: Any) -> str:
 
 def _service_flags_for_choice(choice: PlainSetupChoice) -> dict[str, bool]:
     if choice.key == "basic_server":
-        return {"tickets_enabled": True, "verification_enabled": False, "voice_verification_enabled": False, "spam_guard_enabled": False, "moderation_enabled": True}
+        return {"tickets_enabled": True, "verification_enabled": False, "voice_verification_enabled": False, "spam_guard_enabled": True, "moderation_enabled": True}
     if choice.key == "basic_verify":
-        return {"tickets_enabled": False, "verification_enabled": True, "voice_verification_enabled": False, "spam_guard_enabled": False, "moderation_enabled": False}
+        return {"tickets_enabled": False, "verification_enabled": True, "voice_verification_enabled": False, "spam_guard_enabled": True, "moderation_enabled": True}
     if choice.key == "help_desk":
-        return {"tickets_enabled": True, "verification_enabled": False, "voice_verification_enabled": False, "spam_guard_enabled": False, "moderation_enabled": True}
+        return {"tickets_enabled": True, "verification_enabled": False, "voice_verification_enabled": False, "spam_guard_enabled": True, "moderation_enabled": True}
     if choice.key == "voice_check":
-        return {"tickets_enabled": True, "verification_enabled": True, "voice_verification_enabled": True, "spam_guard_enabled": False, "moderation_enabled": True}
+        return {"tickets_enabled": True, "verification_enabled": True, "voice_verification_enabled": True, "spam_guard_enabled": True, "moderation_enabled": True}
     if choice.key in {"id_check", "id_voice_check"}:
-        return {"tickets_enabled": True, "verification_enabled": True, "voice_verification_enabled": bool(choice.needs_voice), "spam_guard_enabled": False, "moderation_enabled": True}
+        return {"tickets_enabled": True, "verification_enabled": True, "voice_verification_enabled": bool(choice.needs_voice), "spam_guard_enabled": True, "moderation_enabled": True}
     return {"tickets_enabled": False, "verification_enabled": False, "voice_verification_enabled": False, "spam_guard_enabled": False, "moderation_enabled": False}
 
 

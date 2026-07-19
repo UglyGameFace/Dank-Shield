@@ -74,7 +74,7 @@ Healthy public startup should show:
 public_server_env_id_guard public mode active; deployment-level Discord IDs are disabled
 globals: startup summary: {'guild': 0, ...}
 globals: supabase status: state=ready ... service_role_present=True
-commands_ext registration complete. final_global=7 final_guild=0 profile=public
+commands_ext registration complete. final_global=9 final_guild=0 profile=public
 ```
 
 Optional schema health should show either:
@@ -89,9 +89,10 @@ or exact migration guidance for missing optional tables.
 
 For each Discord server:
 
-1. Invite the bot with the required permissions.
+1. Invite the bot with the required permissions, including Manage Threads for authoritative activity coverage.
 2. Run `/dank setup`.
-3. Choose create-missing-items or existing-server setup.
-4. Verify ticket panel, verification channel, modlog, roles, and spam guard from setup health.
+3. Choose what Dank Shield should do and follow **Set Up This Step** until Setup Check runs automatically.
+4. Fix any reported problem, then use **Test & Launch**.
+5. SpamGuard defaults to ON for new/missing settings rows unless an owner explicitly turns it off.
 
 Never fix a public server by putting that server's IDs into Discloud env. That creates cross-server leakage risk.

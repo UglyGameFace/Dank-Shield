@@ -17,6 +17,7 @@ REQUIRED_README_MARKERS = [
     "Embed Links",
     "Attach Files",
     "Read Message History",
+    "Manage Threads",
     "Manage Messages",
     "Moderate Members",
     "Keep the Dank Shield bot role above roles it needs to assign",
