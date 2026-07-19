@@ -70,3 +70,85 @@ jobs:
 
       - name: Audit event boundary ownership
         run: python tools/audit_event_boundary.py
+
+  apply-startup-operational-fixes:
+    name: Apply startup operational fixes
+    if: github.event_name == 'pull_request' && github.head_ref == 'fix/startup-spamguard-defaults-and-log-hygiene' && github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    permissions:
+      contents: write
+
+    steps:
+      - name: Check out feature branch
+        uses: actions/checkout@v4
+        with:
+          ref: fix/startup-spamguard-defaults-and-log-hygiene
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pytest
+
+      - name: Apply operational fixes
+        run: python tools/apply_startup_operational_fixes.py
+
+      - name: Validate focused operational contracts
+        env:
+          DANK_STARTUP_LOG_STYLE: quiet
+          DANK_COMMAND_LOG_STYLE: quiet
+        run: |
+          python -m py_compile \
+            stoney_verify/spam_guard.py \
+            stoney_verify/startup_guards/setup_service_modes.py \
+            stoney_verify/commands_ext/public_setup_fresh_choice.py \
+            stoney_verify/commands_ext/__init__.py \
+            stoney_verify/setup_permission_repair_services.py
+          python -m pytest \
+            tests/test_spam_guard_default_on_bootstrap_static.py \
+            tests/test_command_prune_log_hygiene_static.py \
+            tests/test_activity_coverage_permission_repair_static.py \
+            tests/test_public_command_count_docs_static.py \
+            tests/test_activity_reconciliation.py \
+            tests/test_activity_tracker_coverage.py \
+            tests/test_setup_permission_repair_native_route.py -q
+          python tools/audit_public_invite_permissions.py
+          git diff --check
+
+      - name: Validate full repository
+        env:
+          DANK_STARTUP_LOG_STYLE: quiet
+          DANK_COMMAND_LOG_STYLE: quiet
+        run: |
+          python -m pytest tests/ -q
+          status=0
+          for f in tools/test_*.py; do
+            python "$f" || status=1
+          done
+          test "$status" -eq 0
+          python tools/audit_public_setup.py
+          python tools/audit_public_command_friction.py
+          python tools/audit_public_invite_permissions.py
+          python tools/audit_setup_safety.py
+          python tools/audit_role_truth.py
+          python tools/audit_event_boundary.py
+          git diff --check
+
+      - name: Commit permanent fixes only
+        run: |
+          git show origin/main:.github/workflows/ci.yml > .github/workflows/ci.yml
+          rm -f tools/apply_startup_operational_fixes.py
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git diff --cached --check
+          git commit -m "fix: harden startup defaults and activity coverage"
+          git push origin HEAD:fix/startup-spamguard-defaults-and-log-hygiene
