@@ -2,8 +2,8 @@
 
 ## SG-STATS-001 — Live Discord SpamGuard stats channels
 
-**Status:** COMPLETE — awaiting merge/deploy approval
-**PR:** #96
+**Status:** IN PROGRESS — behavioral test cleanup
+**Merged feature PR:** #97
 
 ### Scope
 Create a real Discord server-stats display for Dank Shield using locked voice channels, not an image or fake counters.
@@ -24,26 +24,28 @@ Only actions Dank Shield can actually prove happened may increment a counter.
 - Per-guild `guild_config` storage can persist nested stats/display metadata without adding a new database table.
 - `/dank protection` is the correct existing owner-facing surface; no new top-level slash command is needed.
 - Channel-name refreshes must be throttled instead of renaming a channel for every moderation event.
+- Repository guardrails require behavioral tests rather than new source-shape assertions; the feature's two source-text checks are being replaced with executable behavior tests.
 
 ### Changes
 - Added native `stoney_verify/security_stats.py` service.
 - Added compact counter formatting and guild-scoped durable counters.
 - Added locked voice-channel display creation/repair and a 10-minute refresh loop.
-- Added focused unit/static coverage in `tests/test_security_stats_channels.py`.
 - Runtime hooks are applied to Spam Guard, the authoritative invite-delete path, and `/dank protection`.
+- Replaced feature-added source-shape assertions with behavioral persistence and locked-channel creation tests.
 
 ### Validation
-- Targeted tests: PASS
-- Full unit suite: PASS
-- Python compile check: PASS
-- Standalone `tools/test_*.py`: PASS
-- Public/setup/safety/role/event audits: PASS
-- Conflict inspection: PASS
+- Behavioral cleanup targeted tests: PENDING
+- Full unit suite rerun: PENDING
+- Python compile check rerun: PENDING
+- Standalone `tools/test_*.py` rerun: PENDING
+- Public/setup/safety/role/event audits rerun: PENDING
+- Conflict inspection rerun: PENDING
 
 ### Cleanup
-- Temporary patch/workflow files: removed before final commit
+- Temporary patch/workflow files: removed
 - Redundant implementations: none added
 - Startup-guard monkey patches: none added
+- Feature-added source-shape checks: removal implemented, validation pending
 
 ### Blockers
 None currently.
@@ -57,8 +59,8 @@ None currently.
 - [x] Guild-scoped persistence designed
 - [x] Runtime event hooks applied
 - [x] `/dank protection` activation UI applied
-- [x] Targeted tests pass
-- [x] Full regression suite passes
-- [x] Compile/static validation passes
-- [x] Cleanup complete
-- [x] Conflict inspection complete
+- [ ] Behavioral test cleanup passes
+- [ ] Full regression suite passes after cleanup
+- [ ] Compile/static validation passes after cleanup
+- [ ] Cleanup complete
+- [ ] Conflict inspection complete
