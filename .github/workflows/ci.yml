@@ -41,28 +41,10 @@ jobs:
         run: python -m compileall -q stoney_verify main.py tools
 
       - name: Run unit test suite
-        run: |
-          set -o pipefail
-          python -m pytest tests/ -q --tb=short --disable-warnings 2>&1 | tee /tmp/pytest-failure.log
+        run: python -m pytest tests/ -q --tb=short --disable-warnings
         env:
           DANK_STARTUP_LOG_STYLE: quiet
           DANK_COMMAND_LOG_STYLE: quiet
-
-      - name: Upload temporary pytest failure log
-        if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: pytest-failure-log
-          path: /tmp/pytest-failure.log
-          retention-days: 1
-
-      - name: Upload temporary Dank Design source snapshot
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: dank-design-source-snapshot
-          path: stoney_verify/services/server_design_majority_layout.py
-          retention-days: 1
 
       - name: Run standalone tool checks
         run: |
