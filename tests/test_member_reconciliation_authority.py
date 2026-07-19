@@ -1,10 +1,10 @@
 from __future__ import annotations
 
-from types import SimpleNamespace
+from pathlib import Path
 
 import pytest
 
-from stoney_verify.members_new import sync_service
+from stoney_verify.members_new import membership_authority, sync_service
 from stoney_verify.members_new.membership_authority import MembershipSnapshot
 
 
@@ -17,6 +17,7 @@ class FakeMember:
 class FakeGuild:
     def __init__(self, guild_id: int = 123) -> None:
         self.id = guild_id
+        self.members: list[FakeMember] = []
 
 
 @pytest.mark.asyncio
@@ -38,11 +39,11 @@ async def test_departed_reconciliation_skips_when_full_member_fetch_failed(monke
         bulk_calls.append(set(active_ids))
         return 99
 
-    monkeypatch.setattr(sync_service, "collect_membership_snapshot", fake_collect)
-    monkeypatch.setattr(sync_service._impl, "get_supabase", lambda: object())
-    monkeypatch.setattr(sync_service._impl, "_bulk_mark_departed_members_async", fake_bulk)
+    monkeypatch.setattr(membership_authority, "collect_membership_snapshot", fake_collect)
+    monkeypatch.setattr(sync_service, "get_supabase", lambda: object())
+    monkeypatch.setattr(sync_service, "_bulk_mark_departed_members_async", fake_bulk)
 
-    result = await sync_service.run_departed_reconciliation_for_guild(guild)
+    result = await membership_authority.run_safe_departed_reconciliation_for_guild(guild)
 
     assert result["marked_departed"] == 0
     assert result["departure_reconciliation_skipped"] is True
@@ -75,12 +76,12 @@ async def test_full_sync_uses_cache_only_as_positive_membership_evidence(monkeyp
     async def forbidden_bulk(*_args, **_kwargs):
         raise AssertionError("non-authoritative cache absence must never mark departures")
 
-    monkeypatch.setattr(sync_service, "collect_membership_snapshot", fake_collect)
-    monkeypatch.setattr(sync_service._impl, "get_supabase", lambda: object())
-    monkeypatch.setattr(sync_service._impl, "sync_member_to_supabase", fake_sync)
-    monkeypatch.setattr(sync_service._impl, "_bulk_mark_departed_members_async", forbidden_bulk)
+    monkeypatch.setattr(membership_authority, "collect_membership_snapshot", fake_collect)
+    monkeypatch.setattr(sync_service, "get_supabase", lambda: object())
+    monkeypatch.setattr(sync_service, "sync_member_to_supabase", fake_sync)
+    monkeypatch.setattr(sync_service, "_bulk_mark_departed_members_async", forbidden_bulk)
 
-    result = await sync_service.run_full_member_sync_for_guild(guild)
+    result = await membership_authority.run_safe_full_member_sync_for_guild(guild)
 
     assert synced == [7]
     assert result["active_members_synced"] == 1
@@ -108,11 +109,11 @@ async def test_authoritative_reconciliation_preserves_all_live_ids_including_bot
         captured["active_ids"] = set(active_ids)
         return 3
 
-    monkeypatch.setattr(sync_service, "collect_membership_snapshot", fake_collect)
-    monkeypatch.setattr(sync_service._impl, "get_supabase", lambda: object())
-    monkeypatch.setattr(sync_service._impl, "_bulk_mark_departed_members_async", fake_bulk)
+    monkeypatch.setattr(membership_authority, "collect_membership_snapshot", fake_collect)
+    monkeypatch.setattr(sync_service, "get_supabase", lambda: object())
+    monkeypatch.setattr(sync_service, "_bulk_mark_departed_members_async", fake_bulk)
 
-    result = await sync_service.run_departed_reconciliation_for_guild(guild)
+    result = await membership_authority.run_safe_departed_reconciliation_for_guild(guild)
 
     assert captured["guild_id"] == "123"
     assert captured["active_ids"] == {"10", "20"}
@@ -126,5 +127,17 @@ def test_membership_snapshot_authority_contract_is_explicit() -> None:
     authoritative = MembershipSnapshot(tuple(), True, "discord_fetch_members")
     cached = MembershipSnapshot(tuple(), False, "discord_member_cache", "temporary failure")
 
-    assert sync_service.departure_reconciliation_allowed(authoritative) is True
-    assert sync_service.departure_reconciliation_allowed(cached) is False
+    assert membership_authority.departure_reconciliation_allowed(authoritative) is True
+    assert membership_authority.departure_reconciliation_allowed(cached) is False
+
+
+def test_authority_guard_loads_before_app_import_and_replaces_both_runtime_entry_points() -> None:
+    main_source = Path("main.py").read_text(encoding="utf-8")
+    guard_source = Path("stoney_verify/startup_guards/member_reconciliation_authority_guard.py").read_text(encoding="utf-8")
+
+    guard_import = "import stoney_verify.startup_guards.member_reconciliation_authority_guard"
+    app_import = "from stoney_verify.app import run as _run_dank_shield"
+    assert guard_import in main_source
+    assert main_source.index(guard_import) < main_source.index(app_import)
+    assert "sync_service.run_full_member_sync_for_guild = membership_authority.run_safe_full_member_sync_for_guild" in guard_source
+    assert "sync_service.run_departed_reconciliation_for_guild = membership_authority.run_safe_departed_reconciliation_for_guild" in guard_source
