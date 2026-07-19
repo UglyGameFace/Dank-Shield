@@ -140,12 +140,20 @@ def test_complete_scope_reports_full_coverage(fake_discord_types) -> None:
     assert report.problems == ()
 
 
-def test_diagnostics_surfaces_scope_without_auto_granting_permissions() -> None:
-    source = Path("stoney_verify/commands_ext/public_diagnostics_group.py").read_text(encoding="utf-8")
+def test_diagnostics_and_setup_check_surface_scope_without_auto_granting_permissions() -> None:
+    diagnostics_source = Path("stoney_verify/commands_ext/public_diagnostics_group.py").read_text(encoding="utf-8")
+    setup_source = Path("stoney_verify/commands_ext/public_setup_group.py").read_text(encoding="utf-8")
     scope_source = Path("stoney_verify/members_new/activity_scope.py").read_text(encoding="utf-8")
 
-    assert "Activity Tracking Coverage" in source
-    assert "Inactive-member cleanup remains fail-closed" in source
+    assert "Activity Tracking Coverage" in diagnostics_source
+    assert "Inactive-member cleanup remains fail-closed" in diagnostics_source
+
+    assert "activity_scope = audit_activity_scope(guild)" in setup_source
+    assert "format_activity_scope_problems(activity_scope, limit=20)" in setup_source
+    assert "Activity tracking coverage is incomplete:" in setup_source
+    assert "Activity tracking access: {problem}" in setup_source
+    assert "Inactivity cleanup stays fail-closed until access is restored." in setup_source
+
     assert "View Channel" in scope_source
     assert "Read Message History" in scope_source
     assert "Manage Threads" in scope_source
