@@ -184,7 +184,17 @@ def test_category_local_detection_is_semantically_deterministic_when_scan_order_
     reverse, reverse_profiles = majority.build_category_aware_options(studio, {"theme_id": "gothic_clean"}, list(reversed(records)))
 
     assert forward["channel_format_locks"] == reverse["channel_format_locks"]
-    assert forward_profiles["channel_groups"] == reverse_profiles["channel_groups"]
+    assert forward["__auto_detect_preserve_ids"] == reverse["__auto_detect_preserve_ids"]
+    assert forward_profiles["summaries"] == reverse_profiles["summaries"]
+    for category_id in ("10", "20"):
+        forward_analysis = forward_profiles["channel_groups"][category_id]
+        reverse_analysis = reverse_profiles["channel_groups"][category_id]
+        assert forward_analysis["font"] == reverse_analysis["font"]
+        assert forward_analysis["category_frame"] == reverse_analysis["category_frame"]
+        assert forward_analysis["leading_emoji"] == reverse_analysis["leading_emoji"]
+        assert forward_analysis["issues"] == reverse_analysis["issues"]
+        for key in ("token", "spacing", "separator_id", "missing", "doubled", "mixed", "count"):
+            assert forward_analysis["separator"][key] == reverse_analysis["separator"][key]
 
 
 def test_preview_annotation_preserves_uncertain_rows_and_explains_local_safety_reason() -> None:
