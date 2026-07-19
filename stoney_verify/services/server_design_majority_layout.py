@@ -377,9 +377,10 @@ def detect_category_frame(studio: Any, name: Any) -> dict[str, Any]:
 def _top_majority(counter: Counter[Any], *, total: int) -> tuple[Any, int, bool]:
     if not counter:
         return None, 0, False
-    winners = counter.most_common()
-    value, count = winners[0]
-    tied = len(winners) > 1 and winners[1][1] == count
+    count = max(counter.values())
+    top_values = [value for value, value_count in counter.items() if value_count == count]
+    value = sorted(top_values, key=repr)[0]
+    tied = len(top_values) > 1
     return value, count, bool(tied or count <= max(1, total // 2))
 
 
@@ -448,7 +449,10 @@ def infer_live_majority_layout(studio: Any, records: Iterable[Any]) -> dict[str,
                 issue_counts["separator_in_name_text"] += 1
             continue
         separator_counts[key] += 1
-        separator_examples.setdefault(key, dict(sep))
+        candidate = dict(sep)
+        current_example = separator_examples.get(key)
+        if current_example is None or repr(sorted(candidate.items())) < repr(sorted(current_example.items())):
+            separator_examples[key] = candidate
         if sep.get("separator_in_name_text"):
             issue_counts["separator_in_name_text"] += 1
 
@@ -878,117 +882,6 @@ def validate_majority_repair_items(
     return items
 
 
-def _fail_repair_item(item: dict[str, Any], reason: str) -> None:
-    item.setdefault("blockers", []).append(clean_design_text(reason))
-    item["status"] = "failed"
-    item["majority_repair_safety_blocked"] = True
-
-
-def _expected_separator(analysis: Mapping[str, Any]) -> tuple[str, str]:
-    separator = analysis.get("separator") if isinstance(analysis.get("separator"), Mapping) else {}
-    token = _text(separator.get("token"))
-    spacing = _text(separator.get("spacing"), "unknown")
-    if spacing not in {"compact", "spaced", "none"}:
-        return "", "unknown"
-    return token, spacing
-
-
-def _separator_matches_expected(studio: Any, after: str, token: str, spacing: str) -> bool:
-    parts = detect_channel_separator(studio, after)
-
-    if parts.get("doubled"):
-        return False
-
-    if parts.get("separator_in_name_text") and spacing != "none":
-        return False
-
-    if spacing == "none":
-        return bool(parts.get("missing"))
-
-    return _text(parts.get("token")) == token and _text(parts.get("spacing")) == spacing
-
-
-def _expected_frame(analysis: Mapping[str, Any]) -> Mapping[str, Any]:
-    frame = analysis.get("category_frame") if isinstance(analysis.get("category_frame"), Mapping) else {}
-    if _text(frame.get("kind")) in {"", "unknown"}:
-        return {}
-    return frame
-
-
-def _frame_matches_expected(studio: Any, after: str, expected: Mapping[str, Any]) -> bool:
-    detected = detect_category_frame(studio, after)
-
-    expected_kind = _text(expected.get("kind"), "plain")
-    detected_kind = _text(detected.get("kind"), "plain")
-
-    if expected_kind != detected_kind:
-        return False
-
-    if expected_kind in {"line", "heavy_line", "dash_line"}:
-        return _safe_int(detected.get("count"), 0) == _safe_int(expected.get("count"), 0)
-
-    return True
-
-
-def _font_matches_expected(studio: Any, after: str, analysis: Mapping[str, Any]) -> bool:
-    font = analysis.get("font") if isinstance(analysis.get("font"), Mapping) else {}
-    expected = _text(font.get("id"))
-
-    if expected not in set(getattr(studio, "FONT_STYLES", ("normal", "fraktur"))):
-        return True
-
-    detected = detect_font_id(studio, after)
-    return detected == expected
-
-
-def validate_majority_repair_items(
-    studio: Any,
-    items: list[dict[str, Any]],
-    analysis: Mapping[str, Any],
-) -> list[dict[str, Any]]:
-    """Fail closed when a majority repair preview does not match the detected majority."""
-
-    token, spacing = _expected_separator(analysis)
-    frame = _expected_frame(analysis)
-
-    for item in items:
-        if item.get("status") != "changed":
-            continue
-
-        kind = _text(item.get("kind"), "text")
-        after = _text(item.get("after"))
-
-        if not after:
-            _fail_repair_item(item, "Repair safety stopped this row because the proposed name was blank.")
-            continue
-
-        if kind == "category":
-            if frame and not _frame_matches_expected(studio, after, frame):
-                _fail_repair_item(
-                    item,
-                    "Repair safety stopped this category because the preview did not match the detected majority category frame.",
-                )
-            continue
-
-        if spacing != "unknown" and not _separator_matches_expected(studio, after, token, spacing):
-            label = _separator_label(token, spacing)
-            _fail_repair_item(
-                item,
-                f"Repair safety stopped this channel because the preview did not keep the detected majority separator: {label}.",
-            )
-            continue
-
-        if not _font_matches_expected(studio, after, analysis):
-            font = analysis.get("font") if isinstance(analysis.get("font"), Mapping) else {}
-            label = _text(font.get("label"), "detected majority font/style")
-            _fail_repair_item(
-                item,
-                f"Repair safety stopped this channel because the preview did not match the detected majority font/style: {label}.",
-            )
-
-    return items
-
-
 def annotate_plan_items(
     items: list[dict[str, Any]],
     analysis: Mapping[str, Any],
@@ -1051,12 +944,12 @@ def infer_category_local_layouts(studio: Any, records: Iterable[Any]) -> dict[st
 
     analyses = {
         category_id: infer_live_majority_layout(studio, rows)
-        for category_id, rows in groups.items()
+        for category_id, rows in sorted(groups.items(), key=lambda item: item[0])
         if rows
     }
     return {
         "channel_groups": analyses,
-        "category_names": category_names,
+        "category_names": dict(sorted(category_names.items(), key=lambda item: item[0])),
         "summaries": {category_id: _summary_text(analysis) for category_id, analysis in analyses.items()},
     }
 
@@ -1211,9 +1104,9 @@ def build_category_aware_options(
 
     out["channel_format_locks"] = merged_channel_locks
     out["__category_aware_auto_detect"] = True
-    out["__auto_detect_ephemeral_channel_ids"] = ephemeral_ids
-    out["__auto_detect_preserve_ids"] = preserve_ids
-    out["__auto_detect_category_analyses"] = dict(analyses)
+    out["__auto_detect_ephemeral_channel_ids"] = sorted(set(ephemeral_ids))
+    out["__auto_detect_preserve_ids"] = sorted(set(preserve_ids))
+    out["__auto_detect_category_analyses"] = dict(sorted(analyses.items(), key=lambda item: str(item[0])))
     out["__auto_detect_category_profiles"] = dict(profiles.get("summaries") or {})
     out["__auto_detect_saved_rules_respected"] = _lock_counts(options)
     return out, profiles
