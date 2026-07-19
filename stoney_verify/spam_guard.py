@@ -2471,6 +2471,18 @@ async def record_invite_shield_block(
                     reason="Spam Guard: repeated external invite attempts blocked by Invite Shield",
                 )
 
+            try:
+                from .security_stats import record_spam_guard_action
+
+                await record_spam_guard_action(
+                    guild.id,
+                    deleted_messages=0,
+                    action_taken=action_taken,
+                    quarantine_case=quarantine_case,
+                )
+            except Exception as e:
+                _debug(f"security stats record failed guild={guild.id} source=invite-shield error={repr(e)}")
+
             await _log_trigger(
                 guild=guild,
                 member=member,
@@ -2785,6 +2797,18 @@ async def handle_incoming_spam_message(message: discord.Message) -> bool:
                 settings=settings,
                 reason="Spam guard: probable hacked-account spam burst",
             )
+
+            try:
+                from .security_stats import record_spam_guard_action
+
+                await record_spam_guard_action(
+                    guild.id,
+                    deleted_messages=delete_count,
+                    action_taken=action_taken,
+                    quarantine_case=quarantine_case,
+                )
+            except Exception as e:
+                _debug(f"security stats record failed guild={guild.id} source=spam-guard error={repr(e)}")
 
             await _log_trigger(
                 guild=guild,
