@@ -74,6 +74,9 @@ jobs:
       - name: Audit setup safety rules
         run: python tools/audit_setup_safety.py
 
+      - name: Audit Dank Design Smart Auto-Detect
+        run: python tools/audit_dank_design_smart_auto_detect.py
+
       - name: Audit role truth ownership
         run: python tools/audit_role_truth.py
 
