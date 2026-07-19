@@ -2,19 +2,21 @@ from __future__ import annotations
 
 """Audit public slash-command surface and default-opening friction.
 
-This is intentionally narrower than grep. Internal module/package names like
-``stoney_verify`` are allowed. The audit focuses on the public command cleanup
-contract needed for Dank Shield's multi-server release:
-- legacy /stoney and old top-level slash commands must be pruned before sync
-- public /dank must only expose the simple owner-facing children by default
-- branding cleanup must wrap public Discord message surfaces
-- public production env defaults must avoid home-guild IDs and duplicate sync
-- command cleanup epoch must force one cleaned global sync after rule changes
+The canonical product surface lives in ``stoney_verify.command_surface_contract``.
+This audit checks that stale Discord registrations are still pruned safely, that
+advanced/direct aliases remain classified as hidden cleanup targets, and that
+public production defaults avoid duplicate/guild-scoped command friction.
 """
 
 import ast
 from pathlib import Path
-from typing import Any
+
+from stoney_verify.command_surface_contract import (
+    PUBLIC_DANK_CHILDREN,
+    PUBLIC_GLOBAL_COMMAND_COUNT,
+    PUBLIC_GLOBAL_COMMAND_NAMES,
+    PUBLIC_HIDDEN_DANK_CHILDREN,
+)
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -23,6 +25,7 @@ BRANDING_GUARD = ROOT / "stoney_verify" / "startup_guards" / "dank_shield_brandi
 STARTUP_LOADER = ROOT / "stoney_verify" / "startup_guards" / "__init__.py"
 ENV_EXAMPLE = ROOT / ".env.example"
 PUBLIC_SETUP_AUDIT = ROOT / "tools" / "audit_public_setup.py"
+PUBLIC_SURFACE_AUDIT = ROOT / "tools" / "audit_public_command_surface.py"
 
 REQUIRED_STALE_TOP_LEVEL = {
     "stoney",
@@ -32,15 +35,6 @@ REQUIRED_STALE_TOP_LEVEL = {
     "ticket_panel_bootstrap_all",
     "verify_status",
     "repair_verify_ui",
-}
-
-EXPECTED_ALLOWED_DANK_CHILDREN = {
-    "setup",
-    "help",
-    "commands",
-    "spam",
-    "cleanup",
-    "members",
 }
 
 REQUIRED_PRUNED_DANK_CHILDREN = {
@@ -95,8 +89,8 @@ REQUIRED_LOADER_ORDER = [
 REQUIRED_COMMAND_CLEANUP_EPOCH_MARKERS = {
     "COMMAND_CLEANUP_EPOCH",
     "cleanup_epoch",
-    "state[\"cleanup_epoch\"] = COMMAND_CLEANUP_EPOCH",
-    "and str(state.get(\"cleanup_epoch\", \"\")) == COMMAND_CLEANUP_EPOCH",
+    'state["cleanup_epoch"] = COMMAND_CLEANUP_EPOCH',
+    'and str(state.get("cleanup_epoch", "")) == COMMAND_CLEANUP_EPOCH',
 }
 
 
@@ -132,28 +126,57 @@ def fail_missing(label: str, have: set[str], required: set[str], failures: list[
 def main() -> int:
     failures: list[str] = []
 
-    for path in (SLASH_CLEANUP, BRANDING_GUARD, STARTUP_LOADER, ENV_EXAMPLE, PUBLIC_SETUP_AUDIT):
+    if PUBLIC_GLOBAL_COMMAND_COUNT != 9 or len(PUBLIC_GLOBAL_COMMAND_NAMES) != 9:
+        failures.append("canonical public global command surface is not exactly 9 commands")
+    if not PUBLIC_DANK_CHILDREN:
+        failures.append("canonical public /dank child contract is empty")
+
+    for path in (
+        SLASH_CLEANUP,
+        BRANDING_GUARD,
+        STARTUP_LOADER,
+        ENV_EXAMPLE,
+        PUBLIC_SETUP_AUDIT,
+        PUBLIC_SURFACE_AUDIT,
+    ):
         if not path.exists():
             failures.append(f"missing required file: {path.relative_to(ROOT)}")
 
     stale_top = literal_set_from_file(SLASH_CLEANUP, "STALE_TOP_LEVEL_COMMANDS")
-    allowed_dank = literal_set_from_file(SLASH_CLEANUP, "ALLOWED_DANK_CHILDREN")
     pruned_dank = literal_set_from_file(SLASH_CLEANUP, "CONFUSING_DANK_CHILDREN")
 
     fail_missing("STALE_TOP_LEVEL_COMMANDS", stale_top, REQUIRED_STALE_TOP_LEVEL, failures)
-    fail_missing("ALLOWED_DANK_CHILDREN", allowed_dank, EXPECTED_ALLOWED_DANK_CHILDREN, failures)
     fail_missing("CONFUSING_DANK_CHILDREN", pruned_dank, REQUIRED_PRUNED_DANK_CHILDREN, failures)
 
-    extra_allowed = sorted(allowed_dank - EXPECTED_ALLOWED_DANK_CHILDREN)
-    if extra_allowed:
-        failures.append(f"ALLOWED_DANK_CHILDREN exposes non-public children: {', '.join(extra_allowed)}")
+    hidden_direct_aliases = {
+        name
+        for name in PUBLIC_HIDDEN_DANK_CHILDREN
+        if name in {
+            "setup-access",
+            "setup-assistant",
+            "setup-defaults",
+            "setup-find",
+            "setup-logs",
+            "setup-picker",
+            "setup-review",
+            "setup-status",
+            "setup-tickets",
+            "setup-verify",
+            "setup-verify-ids",
+            "db-check",
+            "permission-check",
+            "production-audit",
+            "tickettool-check",
+        }
+    }
+    fail_missing("CONFUSING_DANK_CHILDREN hidden aliases", pruned_dank, hidden_direct_aliases, failures)
 
     cleanup_text = read(SLASH_CLEANUP)
     cleanup_required_text = [
         "install_slash_command_cleanup_guard()",
         "app_commands.CommandTree.sync = _patched_sync",
-        "remove_stale_top_level_commands(self, reason=\"pre_sync\", guild=guild)",
-        "prune_public_stoney_children(self, reason=\"pre_sync\", guild=guild)",
+        'remove_stale_top_level_commands(self, reason="pre_sync", guild=guild)',
+        'prune_public_stoney_children(self, reason="pre_sync", guild=guild)',
         "DANK_SKIP_UNCHANGED_GLOBAL_SYNC",
         "DANK_FORCE_COMMAND_SYNC_ON_BOOT",
         "DANK_GUILD_COMMAND_CLEANUP_IDS",
@@ -196,6 +219,7 @@ def main() -> int:
         return 1
 
     print("Public command/friction audit passed.")
+    print(f"Canonical globals: {PUBLIC_GLOBAL_COMMAND_COUNT} -> {', '.join(PUBLIC_GLOBAL_COMMAND_NAMES)}")
     return 0
 
 
