@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - feature/spamguard-live-stats-channels
+  pull_request:
 
 permissions:
   contents: write
