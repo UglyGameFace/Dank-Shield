@@ -1,0 +1,24 @@
+name: Temporary native member reconciliation applier
+
+on:
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    if: github.head_ref == 'fix/finish-dank-shield-stability-mission'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/finish-dank-shield-stability-mission
+          fetch-depth: 1
+          show-progress: false
+      - name: Apply native authoritative member reconciliation
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python tools/_temp_apply_native_member_reconciliation.py
