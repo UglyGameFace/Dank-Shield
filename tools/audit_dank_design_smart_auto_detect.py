@@ -18,7 +18,9 @@ def main() -> int:
         "def infer_category_local_layouts(",
         "def build_category_aware_options(",
         "def annotate_category_aware_plan_items(",
-        "spec.value == value",
+        # Separator identity must compare the raw stored separator value. Do not
+        # normalize or strip whitespace here: "│" and " │ " are different styles.
+        "raw_value == expected_value",
         "sorted(set(ephemeral_ids))",
         "sorted(set(preserve_ids))",
         "sorted(groups.items(), key=lambda item: item[0])",
