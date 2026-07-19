@@ -577,16 +577,27 @@ async def _build_service_status_lines(bot: Any, guild: discord.Guild) -> tuple[l
     cfg_ok, cfg_detail = await _probe_guild_config(guild)
     perm_ok, perm_detail = _probe_permissions(guild)
 
+    watchdog_configured = False
+    watchdog_ok = False
+    watchdog_detail = "not configured — set `DANK_HEALTHCHECKS_PING_URL`"
+    try:
+        from ..startup_guards.process_health import external_watchdog_status
+
+        watchdog_configured, watchdog_ok, watchdog_detail = external_watchdog_status()
+    except Exception:
+        pass
+
     lines = [
         _service_line("Discord gateway", gateway_ok, gateway_detail),
         _service_line("Supabase", db_ok, db_detail),
         _service_line("Guild config", cfg_ok, cfg_detail),
         _service_line("Bot permissions", perm_ok, perm_detail),
         _service_line("Slash commands", True, "registered with Discord if this message posted"),
-        _service_line("Status heartbeat", _heartbeat_enabled(), "enabled" if _heartbeat_enabled() else "disabled by env"),
+        _service_line("Internal DB heartbeat", _heartbeat_enabled(), "enabled" if _heartbeat_enabled() else "disabled by env"),
+        _service_line("External uptime watchdog", watchdog_ok, watchdog_detail),
     ]
 
-    return lines, bool(gateway_ok and db_ok and cfg_ok and perm_ok)
+    return lines, bool(gateway_ok and db_ok and cfg_ok and perm_ok and watchdog_configured and watchdog_ok)
 
 
 # ============================================================
