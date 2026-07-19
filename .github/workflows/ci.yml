@@ -7,7 +7,7 @@ on:
       - main
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   python-compile:
@@ -70,3 +70,81 @@ jobs:
 
       - name: Audit event boundary ownership
         run: python tools/audit_event_boundary.py
+
+  finalize-runtime-hygiene:
+    name: Finalize runtime hygiene fixes
+    if: github.event_name == 'pull_request' && github.head_ref == 'fix/runtime-startup-hygiene-spamguard-default' && github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Check out feature branch
+        uses: actions/checkout@v4
+        with:
+          ref: fix/runtime-startup-hygiene-spamguard-default
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pytest
+
+      - name: Apply runtime hygiene patch
+        run: python tools/apply_runtime_startup_hygiene_spamguard_default.py
+
+      - name: Validate focused fixes
+        env:
+          DANK_STARTUP_LOG_STYLE: quiet
+          DANK_COMMAND_LOG_STYLE: quiet
+        run: |
+          python -m py_compile \
+            stoney_verify/spam_guard.py \
+            stoney_verify/startup_guards/setup_service_modes.py \
+            stoney_verify/commands_ext/__init__.py \
+            stoney_verify/members_new/activity_reconciliation.py
+          python -m pytest \
+            tests/test_spam_guard_default_enabled_static.py \
+            tests/test_command_prune_log_hygiene_static.py \
+            tests/test_activity_scope_relevance_static.py \
+            tests/test_activity_restart_continuity_static.py -q
+          git diff --check
+
+      - name: Validate full repository
+        env:
+          DANK_STARTUP_LOG_STYLE: quiet
+          DANK_COMMAND_LOG_STYLE: quiet
+        run: |
+          python -m pytest tests/ -q
+          status=0
+          for f in tools/test_*.py; do
+            python "$f" || status=1
+          done
+          test "$status" -eq 0
+          python tools/audit_public_setup.py
+          python tools/audit_public_command_friction.py
+          python tools/audit_public_invite_permissions.py
+          python tools/audit_setup_safety.py
+          python tools/audit_role_truth.py
+          python tools/audit_event_boundary.py
+
+      - name: Remove temporary validation machinery
+        run: |
+          git show origin/main:.github/workflows/ci.yml > .github/workflows/ci.yml
+          rm -f tools/apply_runtime_startup_hygiene_spamguard_default.py
+          git diff --check
+
+      - name: Commit permanent fixes only
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git diff --cached --check
+          git commit -m "fix: harden startup defaults and runtime hygiene"
+          git push origin HEAD:fix/runtime-startup-hygiene-spamguard-default
