@@ -29,6 +29,7 @@ def test_protection_center_buttons_use_guarded_actions() -> None:
         "protection.open_add_filter_modal",
         "protection.open_test_filter_modal",
         "protection.allow_links",
+        "protection.live_stats",
         "protection.refresh",
         "protection.close",
         "protection.spam_response_mode",
