@@ -11,11 +11,12 @@ def test_authoritative_spam_guard_enabled_policy_is_on():
     assert SPAM_GUARD_DEFAULT_ENABLED is True
 
 
-def test_spam_guard_runtime_defaults_match_authoritative_on_policy():
+def test_spam_guard_runtime_defaults_use_authoritative_on_policy():
+    assert "from .spam_guard_defaults import SPAM_GUARD_DEFAULT_ENABLED" in SOURCE
     block = SOURCE[SOURCE.index("def _default_settings("):SOURCE.index("def _normalize_settings(")]
-    assert '"enabled": True' in block
+    assert '"enabled": SPAM_GUARD_DEFAULT_ENABLED' in block
+    assert '"enabled": True' not in block
     assert '"enabled": False' not in block
-    assert SPAM_GUARD_DEFAULT_ENABLED is True
 
 
 def test_missing_settings_row_is_bootstrapped_to_database():
@@ -31,12 +32,13 @@ def test_existing_saved_off_state_is_not_forced_on():
     assert 'row.get("spam_blocker_enabled", row.get("enabled"))' in normalize
 
 
-def test_setup_defaults_match_authoritative_on_policy():
-    assert SPAM_GUARD_DEFAULT_ENABLED is True
-    assert 'ServiceState(True, False, False, True, True, "defaults")' in MODES
-    assert '_cfg_value(cfg, "spam_guard_enabled", True), True' in MODES
+def test_setup_defaults_use_authoritative_on_policy():
+    assert "from stoney_verify.spam_guard_defaults import SPAM_GUARD_DEFAULT_ENABLED" in MODES
+    assert 'ServiceState(True, False, False, SPAM_GUARD_DEFAULT_ENABLED, SPAM_GUARD_DEFAULT_ENABLED, "defaults")' in MODES
+    assert '_cfg_value(cfg, "spam_guard_enabled", SPAM_GUARD_DEFAULT_ENABLED), SPAM_GUARD_DEFAULT_ENABLED' in MODES
     default_block = MODES[MODES.index("def _default_spam_settings("):MODES.index("def _normalize_spam_settings(")]
-    assert '"enabled": True' in default_block
+    assert '"enabled": SPAM_GUARD_DEFAULT_ENABLED' in default_block
+    assert '"enabled": True' not in default_block
     assert '"enabled": False' not in default_block
 
 
