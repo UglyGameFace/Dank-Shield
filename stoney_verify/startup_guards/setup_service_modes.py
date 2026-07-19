@@ -19,6 +19,8 @@ from typing import Any, Mapping, Optional
 
 import discord
 
+from stoney_verify.spam_guard_defaults import SPAM_GUARD_DEFAULT_ENABLED
+
 try:
     from stoney_verify.commands_ext.public_setup_config_writer import upsert_guild_config
 except Exception:
@@ -236,12 +238,12 @@ async def load_service_state(guild_id: int) -> ServiceState:
             _warn(f"could not load guild config for services guild={guild_id}: {e!r}")
 
     if cfg is None:
-        return ServiceState(True, False, False, True, True, "defaults")
+        return ServiceState(True, False, False, SPAM_GUARD_DEFAULT_ENABLED, SPAM_GUARD_DEFAULT_ENABLED, "defaults")
 
     tickets = _safe_bool(_cfg_value(cfg, "tickets_enabled", True), True)
     verification = _safe_bool(_cfg_value(cfg, "verification_enabled", False), False)
     voice = _safe_bool(_cfg_value(cfg, "voice_verification_enabled", False), False)
-    spamguard = _safe_bool(_cfg_value(cfg, "spam_guard_enabled", True), True)
+    spamguard = _safe_bool(_cfg_value(cfg, "spam_guard_enabled", SPAM_GUARD_DEFAULT_ENABLED), SPAM_GUARD_DEFAULT_ENABLED)
     moderation = _safe_bool(_cfg_value(cfg, "moderation_enabled", spamguard), spamguard)
     return ServiceState(tickets, verification, voice, spamguard, moderation, str(_cfg_value(cfg, "source", "guild_configs")))
 
@@ -316,7 +318,7 @@ def _spam_guard_module() -> Any | None:
 def _default_spam_settings(guild_id: int) -> dict[str, Any]:
     return {
         "guild_id": str(int(guild_id)),
-        "enabled": True,
+        "enabled": SPAM_GUARD_DEFAULT_ENABLED,
         "mode": "timeout",
         "apply_to_verified_users": True,
         "block_external_invites_only": True,
@@ -346,7 +348,7 @@ def _normalize_spam_settings(guild_id: int, raw: Mapping[str, Any] | None) -> di
             pass
 
     data["guild_id"] = str(int(guild_id))
-    data["enabled"] = _safe_bool(data.get("enabled", data.get("spam_blocker_enabled")), False)
+    data["enabled"] = _safe_bool(data.get("enabled", data.get("spam_blocker_enabled")), SPAM_GUARD_DEFAULT_ENABLED)
     data["mode"] = _safe_str(data.get("mode", data.get("spam_mode", "timeout")), "timeout")
     data["apply_to_verified_users"] = _safe_bool(data.get("apply_to_verified_users"), True)
     data["block_external_invites_only"] = _safe_bool(data.get("block_external_invites_only"), True)
