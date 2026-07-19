@@ -10,15 +10,18 @@ public production defaults avoid duplicate/guild-scoped command friction.
 
 import ast
 from pathlib import Path
+import sys
 
-from stoney_verify.command_surface_contract import (
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from stoney_verify.command_surface_contract import (  # noqa: E402
     PUBLIC_DANK_CHILDREN,
     PUBLIC_GLOBAL_COMMAND_COUNT,
     PUBLIC_GLOBAL_COMMAND_NAMES,
     PUBLIC_HIDDEN_DANK_CHILDREN,
 )
-
-ROOT = Path(__file__).resolve().parents[1]
 
 SLASH_CLEANUP = ROOT / "stoney_verify" / "startup_guards" / "slash_command_cleanup.py"
 BRANDING_GUARD = ROOT / "stoney_verify" / "startup_guards" / "dank_shield_branding_guard.py"
