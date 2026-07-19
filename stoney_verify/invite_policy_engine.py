@@ -759,6 +759,14 @@ async def delete_message_if_allowed(message: discord.Message, decision: InviteDe
         await message.delete()
         decision.delete_succeeded = True
         decision.delete_error = ""
+        try:
+            from stoney_verify.security_stats import record_security_event
+
+            if message.guild is not None:
+                await record_security_event(int(message.guild.id), invites_blocked=1)
+        except Exception:
+            # Statistics must never turn a successful moderation delete into a failure.
+            pass
         record_invite_decision(message, decision)
         return True
     except discord.NotFound:

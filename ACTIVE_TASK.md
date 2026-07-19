@@ -2,7 +2,7 @@
 
 ## SG-STATS-001 — Live Discord SpamGuard stats channels
 
-**Status:** IN PROGRESS
+**Status:** COMPLETE — awaiting merge/deploy approval
 
 ### Scope
 Create a real Discord server-stats display for Dank Shield using locked voice channels, not an image or fake counters.
@@ -29,18 +29,18 @@ Only actions Dank Shield can actually prove happened may increment a counter.
 - Added compact counter formatting and guild-scoped durable counters.
 - Added locked voice-channel display creation/repair and a 10-minute refresh loop.
 - Added focused unit/static coverage in `tests/test_security_stats_channels.py`.
-- Runtime hooks into Spam Guard, invite policy, and `/dank protection` are pending application.
+- Runtime hooks are applied to Spam Guard, the authoritative invite-delete path, and `/dank protection`.
 
 ### Validation
-- Targeted tests: PENDING
-- Full unit suite: PENDING
-- Python compile check: PENDING
-- Standalone `tools/test_*.py`: PENDING
-- Public/setup/safety/role/event audits: PENDING
-- Conflict inspection: PENDING
+- Targeted tests: PASS
+- Full unit suite: PASS
+- Python compile check: PASS
+- Standalone `tools/test_*.py`: PASS
+- Public/setup/safety/role/event audits: PASS
+- Conflict inspection: PASS
 
 ### Cleanup
-- Temporary patch/workflow files: NOT YET CREATED
+- Temporary patch/workflow files: removed before final commit
 - Redundant implementations: none added
 - Startup-guard monkey patches: none added
 
@@ -54,10 +54,10 @@ None currently.
 - [x] Root cause/execution paths inspected
 - [x] Native central service selected
 - [x] Guild-scoped persistence designed
-- [ ] Runtime event hooks applied
-- [ ] `/dank protection` activation UI applied
-- [ ] Targeted tests pass
-- [ ] Full regression suite passes
-- [ ] Compile/static validation passes
-- [ ] Cleanup complete
-- [ ] Conflict inspection complete
+- [x] Runtime event hooks applied
+- [x] `/dank protection` activation UI applied
+- [x] Targeted tests pass
+- [x] Full regression suite passes
+- [x] Compile/static validation passes
+- [x] Cleanup complete
+- [x] Conflict inspection complete

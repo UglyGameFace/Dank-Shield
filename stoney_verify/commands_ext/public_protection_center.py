@@ -16,6 +16,11 @@ import discord
 
 from ..guild_config import get_guild_config, invalidate_guild_config, upsert_guild_config
 from ..interaction_guard import log_interaction_failure, run_guarded_interaction, safe_send_interaction
+from ..security_stats import (
+    SECURITY_STATS_ENABLED_KEY,
+    ensure_security_stats_display,
+    refresh_security_stats_display,
+)
 from .public_setup_group import _require_setup_permission, dank_group
 
 _ATTACHED = False
@@ -410,6 +415,7 @@ def _protection_embed(guild: discord.Guild, cfg: Any, spam: dict[str, Any], spam
             "**Edit Spam Guard** = message speed, duplicate messages, invite-flood threshold, timeout length.\n"
             "**Invite Blocker** = live ON/OFF for Discord invite links.\n"
             "**Block All Links** = stop every URL.\n"
+            "**Live Stats** = create locked voice-channel counters using real Spam Guard actions.\n"
             "**Add Filter/Test** = banned words and bypass tests."
         ),
         inline=False,
@@ -426,6 +432,16 @@ async def _refresh_panel(interaction: discord.Interaction, *, content: str | Non
 
     cfg = await get_guild_config(int(guild.id), refresh=True)
     spam, spam_source = await _load_spam_settings(int(guild.id))
+    try:
+        await refresh_security_stats_display(guild, force=True)
+    except Exception as exc:
+        log_interaction_failure(
+            interaction,
+            exc,
+            stage="security_stats_refresh_failed",
+            action_name="protection.live_stats.refresh",
+            fix_hint="The Protection Center still works; check Manage Channels/Manage Roles if the live stats display stops updating.",
+        )
     embed = _protection_embed(guild, cfg, spam, spam_source)
     view = ProtectionCenterView(author_id=int(interaction.user.id), cfg=cfg, spam=spam)
 
@@ -523,6 +539,10 @@ def _decorate_quick_mode_buttons(view: discord.ui.View, cfg: Any, spam: dict[str
         elif custom_id == "dank_protection:edit_spamguard":
             child.label = "Spam Guard Actions"
             child.emoji = "🛡️"
+        elif custom_id == "dank_protection:live_stats":
+            live_stats_on = _cfg_bool(cfg, SECURITY_STATS_ENABLED_KEY, False)
+            child.label = f"Live Stats: {'ON' if live_stats_on else 'SET UP'}"
+            child.style = discord.ButtonStyle.success if live_stats_on else discord.ButtonStyle.secondary
 
 
 async def _apply_protection_preset(interaction: discord.Interaction, preset: str) -> None:
@@ -1027,6 +1047,30 @@ class ProtectionCenterView(discord.ui.View):
             await _set_link_policy(interaction, "allow_links")
 
         await _guard_protection_action(interaction, "protection.allow_links", action, defer=True)
+
+    @discord.ui.button(label="Live Stats", emoji="📊", style=discord.ButtonStyle.secondary, custom_id="dank_protection:live_stats", row=3)
+    async def live_stats_button(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+
+        async def action() -> None:
+            if not await _require_setup_permission(interaction):
+                return
+            guild = interaction.guild
+            if guild is None:
+                await _send_ephemeral(interaction, "❌ This must be used inside a server.")
+                return
+            ok, note = await ensure_security_stats_display(guild)
+            if not ok:
+                await _send_ephemeral(interaction, note)
+                return
+            await _refresh_panel(interaction, content=note)
+
+        await _guard_protection_action(
+            interaction,
+            "protection.live_stats",
+            action,
+            defer=True,
+        )
 
     @discord.ui.button(label="Refresh", emoji="🔄", style=discord.ButtonStyle.secondary, custom_id="dank_protection:refresh", row=3)
     async def refresh_button(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
