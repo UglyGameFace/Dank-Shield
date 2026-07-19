@@ -117,8 +117,9 @@ jobs:
             tests/test_command_prune_log_hygiene_static.py \
             tests/test_activity_coverage_permission_repair_static.py \
             tests/test_public_command_count_docs_static.py \
-            tests/test_activity_reconciliation.py \
-            tests/test_activity_tracker_coverage.py \
+            tests/test_activity_restart_continuity_static.py \
+            tests/test_activity_restart_memory_bounds.py \
+            tests/test_activity_restart_responsiveness_static.py \
             tests/test_setup_permission_repair_native_route.py -q
           python tools/audit_public_invite_permissions.py
           git diff --check
