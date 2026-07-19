@@ -36,6 +36,8 @@ from typing import Any, Optional
 
 from discord import app_commands
 
+from stoney_verify.command_surface_contract import PUBLIC_DANK_CHILDREN
+
 
 _PATCHED = False
 _ORIGINAL_SYNC = None
@@ -44,7 +46,7 @@ _ORIGINAL_CLEAR_COMMANDS = None
 # Bump this value when public command cleanup rules change and Discord needs one
 # guaranteed global sync after deployment. This avoids stale global /dank or
 # old dev command cache while still allowing future unchanged syncs to be skipped.
-COMMAND_CLEANUP_EPOCH = "2026-06-14-verify-panel-command-v2"
+COMMAND_CLEANUP_EPOCH = "2026-07-19-public-command-contract-v1"
 
 STALE_TOP_LEVEL_COMMANDS = {
     "stoney",
@@ -108,17 +110,7 @@ CONFUSING_DANK_CHILDREN = {
     "tickettool-check",
 }
 
-ALLOWED_DANK_CHILDREN = {
-    "setup",
-    "help",
-    "commands",
-    "spam",
-    "cleanup",
-    "members",
-}
-
-CONFUSING_DANK_CHILDREN = CONFUSING_DANK_CHILDREN
-ALLOWED_DANK_CHILDREN = ALLOWED_DANK_CHILDREN
+ALLOWED_DANK_CHILDREN = set(PUBLIC_DANK_CHILDREN)
 
 
 def _env_true(name: str, default: bool = False) -> bool:
