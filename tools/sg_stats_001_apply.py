@@ -3,236 +3,110 @@ from __future__ import annotations
 from pathlib import Path
 
 
-def replace_once(path: str, old: str, new: str) -> None:
-    file_path = Path(path)
-    text = file_path.read_text(encoding="utf-8")
-    if new in text:
-        print(f"already applied: {path}")
+def read(path: str) -> str:
+    return Path(path).read_text(encoding="utf-8")
+
+
+def write(path: str, text: str) -> None:
+    Path(path).write_text(text, encoding="utf-8")
+
+
+def replace_once(path: str, old: str, new: str, *, marker: str) -> None:
+    text = read(path)
+    if marker in text:
+        print(f"already applied: {path} marker={marker}")
         return
-    count = text.count(old)
-    if count != 1:
-        raise RuntimeError(f"expected exactly one match in {path}, found {count}")
-    file_path.write_text(text.replace(old, new, 1), encoding="utf-8")
-    print(f"applied: {path}")
+    if old not in text:
+        raise RuntimeError(f"missing replacement anchor in {path}: {old[:100]!r}")
+    write(path, text.replace(old, new, 1))
+    print(f"applied: {path} marker={marker}")
 
 
-replace_once(
-    "stoney_verify/spam_guard.py",
-    '''            else:
-                action_taken, quarantine_case = await _apply_mode_action(
-                    guild=guild,
-                    member=member,
-                    settings=settings,
-                    reason="Spam Guard: repeated external invite attempts blocked by Invite Shield",
-                )
+def insert_before_after_anchor(path: str, *, anchor: str, before: str, block: str, marker: str) -> None:
+    text = read(path)
+    if marker in text:
+        print(f"already applied: {path} marker={marker}")
+        return
+    start = text.find(anchor)
+    if start < 0:
+        raise RuntimeError(f"missing primary anchor in {path}: {anchor!r}")
+    pos = text.find(before, start + len(anchor))
+    if pos < 0:
+        raise RuntimeError(f"missing insertion anchor in {path}: {before!r}")
+    write(path, text[:pos] + block + text[pos:])
+    print(f"applied: {path} marker={marker}")
 
-            await _log_trigger(
-''',
-    '''            else:
-                action_taken, quarantine_case = await _apply_mode_action(
-                    guild=guild,
-                    member=member,
-                    settings=settings,
-                    reason="Spam Guard: repeated external invite attempts blocked by Invite Shield",
-                )
 
-            try:
-                from .security_stats import record_spam_guard_action
+SPAM_PATH = "stoney_verify/spam_guard.py"
+INVITE_PATH = "stoney_verify/invite_policy_engine.py"
+CENTER_PATH = "stoney_verify/commands_ext/public_protection_center.py"
+TEST_PATH = "tests/test_public_protection_center_native_interaction_static.py"
 
-                await record_spam_guard_action(
-                    guild.id,
-                    deleted_messages=0,
-                    action_taken=action_taken,
-                    quarantine_case=quarantine_case,
-                )
-            except Exception as e:
-                _debug(f"security stats record failed guild={guild.id} source=invite-shield error={repr(e)}")
+insert_before_after_anchor(
+    SPAM_PATH,
+    anchor='reason="Spam Guard: repeated external invite attempts blocked by Invite Shield",',
+    before="            await _log_trigger(\n",
+    marker="source=invite-shield error=",
+    block='''            try:\n                from .security_stats import record_spam_guard_action\n\n                await record_spam_guard_action(\n                    guild.id,\n                    deleted_messages=0,\n                    action_taken=action_taken,\n                    quarantine_case=quarantine_case,\n                )\n            except Exception as e:\n                _debug(f"security stats record failed guild={guild.id} source=invite-shield error={repr(e)}")\n\n''',
+)
 
-            await _log_trigger(
-''',
+insert_before_after_anchor(
+    SPAM_PATH,
+    anchor='reason="Spam guard: probable hacked-account spam burst",',
+    before="            await _log_trigger(\n",
+    marker="source=spam-guard error=",
+    block='''            try:\n                from .security_stats import record_spam_guard_action\n\n                await record_spam_guard_action(\n                    guild.id,\n                    deleted_messages=delete_count,\n                    action_taken=action_taken,\n                    quarantine_case=quarantine_case,\n                )\n            except Exception as e:\n                _debug(f"security stats record failed guild={guild.id} source=spam-guard error={repr(e)}")\n\n''',
 )
 
 replace_once(
-    "stoney_verify/spam_guard.py",
-    '''            action_taken, quarantine_case = await _apply_mode_action(
-                guild=guild,
-                member=member,
-                settings=settings,
-                reason="Spam guard: probable hacked-account spam burst",
-            )
-
-            await _log_trigger(
-''',
-    '''            action_taken, quarantine_case = await _apply_mode_action(
-                guild=guild,
-                member=member,
-                settings=settings,
-                reason="Spam guard: probable hacked-account spam burst",
-            )
-
-            try:
-                from .security_stats import record_spam_guard_action
-
-                await record_spam_guard_action(
-                    guild.id,
-                    deleted_messages=delete_count,
-                    action_taken=action_taken,
-                    quarantine_case=quarantine_case,
-                )
-            except Exception as e:
-                _debug(f"security stats record failed guild={guild.id} source=spam-guard error={repr(e)}")
-
-            await _log_trigger(
-''',
+    INVITE_PATH,
+    '        decision.delete_error = ""\n        record_invite_decision(message, decision)\n        return True\n',
+    '''        decision.delete_error = ""\n        try:\n            from stoney_verify.security_stats import record_security_event\n\n            if message.guild is not None:\n                await record_security_event(int(message.guild.id), invites_blocked=1)\n        except Exception:\n            # Statistics must never turn a successful moderation delete into a failure.\n            pass\n        record_invite_decision(message, decision)\n        return True\n''',
+    marker="await record_security_event(int(message.guild.id), invites_blocked=1)",
 )
 
 replace_once(
-    "stoney_verify/invite_policy_engine.py",
-    '''    try:
-        await message.delete()
-        decision.delete_succeeded = True
-        decision.delete_error = ""
-        record_invite_decision(message, decision)
-        return True
-''',
-    '''    try:
-        await message.delete()
-        decision.delete_succeeded = True
-        decision.delete_error = ""
-        try:
-            from stoney_verify.security_stats import record_security_event
-
-            if message.guild is not None:
-                await record_security_event(int(message.guild.id), invites_blocked=1)
-        except Exception:
-            # Statistics must never turn a successful moderation delete into a failure.
-            pass
-        record_invite_decision(message, decision)
-        return True
-''',
+    CENTER_PATH,
+    'from ..interaction_guard import log_interaction_failure, run_guarded_interaction, safe_send_interaction\n',
+    '''from ..interaction_guard import log_interaction_failure, run_guarded_interaction, safe_send_interaction\nfrom ..security_stats import (\n    SECURITY_STATS_ENABLED_KEY,\n    ensure_security_stats_display,\n    refresh_security_stats_display,\n)\n''',
+    marker="from ..security_stats import (",
 )
 
 replace_once(
-    "stoney_verify/commands_ext/public_protection_center.py",
-    '''from ..guild_config import get_guild_config, invalidate_guild_config, upsert_guild_config
-from ..interaction_guard import log_interaction_failure, run_guarded_interaction, safe_send_interaction
-from .public_setup_group import _require_setup_permission, dank_group
-''',
-    '''from ..guild_config import get_guild_config, invalidate_guild_config, upsert_guild_config
-from ..interaction_guard import log_interaction_failure, run_guarded_interaction, safe_send_interaction
-from ..security_stats import (
-    SECURITY_STATS_ENABLED_KEY,
-    ensure_security_stats_display,
-    refresh_security_stats_display,
-)
-from .public_setup_group import _require_setup_permission, dank_group
-''',
+    CENTER_PATH,
+    '            "**Block All Links** = stop every URL.\\n"\n',
+    '            "**Block All Links** = stop every URL.\\n"\n            "**Live Stats** = create locked voice-channel counters using real Spam Guard actions.\\n"\n',
+    marker="**Live Stats** = create locked voice-channel counters",
 )
 
 replace_once(
-    "stoney_verify/commands_ext/public_protection_center.py",
-    '''            "**Invite Blocker** = live ON/OFF for Discord invite links.\n"
-            "**Block All Links** = stop every URL.\n"
-            "**Add Filter/Test** = banned words and bypass tests."
-''',
-    '''            "**Invite Blocker** = live ON/OFF for Discord invite links.\n"
-            "**Block All Links** = stop every URL.\n"
-            "**Live Stats** = create locked voice-channel counters using real Spam Guard actions.\n"
-            "**Add Filter/Test** = banned words and bypass tests."
-''',
+    CENTER_PATH,
+    '    spam, spam_source = await _load_spam_settings(int(guild.id))\n    embed = _protection_embed(guild, cfg, spam, spam_source)\n',
+    '''    spam, spam_source = await _load_spam_settings(int(guild.id))\n    try:\n        await refresh_security_stats_display(guild, force=True)\n    except Exception as exc:\n        log_interaction_failure(\n            interaction,\n            exc,\n            stage="security_stats_refresh_failed",\n            action_name="protection.live_stats.refresh",\n            fix_hint="The Protection Center still works; check Manage Channels/Manage Roles if the live stats display stops updating.",\n        )\n    embed = _protection_embed(guild, cfg, spam, spam_source)\n''',
+    marker='stage="security_stats_refresh_failed"',
+)
+
+insert_before_after_anchor(
+    CENTER_PATH,
+    anchor='        elif custom_id == "dank_protection:edit_spamguard":',
+    before="\n\nasync def _apply_protection_preset",
+    marker='custom_id == "dank_protection:live_stats"',
+    block='''        elif custom_id == "dank_protection:live_stats":\n            live_stats_on = _cfg_bool(cfg, SECURITY_STATS_ENABLED_KEY, False)\n            child.label = f"Live Stats: {'ON' if live_stats_on else 'SET UP'}"\n            child.style = discord.ButtonStyle.success if live_stats_on else discord.ButtonStyle.secondary\n''',
+)
+
+insert_before_after_anchor(
+    CENTER_PATH,
+    anchor='class ProtectionCenterView(discord.ui.View):',
+    before='    @discord.ui.button(label="Refresh", emoji="🔄", style=discord.ButtonStyle.secondary, custom_id="dank_protection:refresh", row=3)\n',
+    marker='async def live_stats_button(self, interaction: discord.Interaction',
+    block='''    @discord.ui.button(label="Live Stats", emoji="📊", style=discord.ButtonStyle.secondary, custom_id="dank_protection:live_stats", row=3)\n    async def live_stats_button(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:\n        _ = button\n\n        async def action() -> None:\n            if not await _require_setup_permission(interaction):\n                return\n            guild = interaction.guild\n            if guild is None:\n                await _send_ephemeral(interaction, "❌ This must be used inside a server.")\n                return\n            ok, note = await ensure_security_stats_display(guild)\n            if not ok:\n                await _send_ephemeral(interaction, note)\n                return\n            await _refresh_panel(interaction, content=note)\n\n        await _guard_protection_action(\n            interaction,\n            "protection.live_stats",\n            action,\n            defer=True,\n        )\n\n''',
 )
 
 replace_once(
-    "stoney_verify/commands_ext/public_protection_center.py",
-    '''    cfg = await get_guild_config(int(guild.id), refresh=True)
-    spam, spam_source = await _load_spam_settings(int(guild.id))
-    embed = _protection_embed(guild, cfg, spam, spam_source)
-''',
-    '''    cfg = await get_guild_config(int(guild.id), refresh=True)
-    spam, spam_source = await _load_spam_settings(int(guild.id))
-    try:
-        await refresh_security_stats_display(guild, force=True)
-    except Exception as exc:
-        log_interaction_failure(
-            interaction,
-            exc,
-            stage="security_stats_refresh_failed",
-            action_name="protection.live_stats.refresh",
-            fix_hint="The Protection Center still works; check Manage Channels/Manage Roles if the live stats display stops updating.",
-        )
-    embed = _protection_embed(guild, cfg, spam, spam_source)
-''',
-)
-
-replace_once(
-    "stoney_verify/commands_ext/public_protection_center.py",
-    '''        elif custom_id == "dank_protection:edit_spamguard":
-            child.label = "Spam Guard Actions"
-            child.emoji = "🛡️"
-
-
-async def _apply_protection_preset(interaction: discord.Interaction, preset: str) -> None:
-''',
-    '''        elif custom_id == "dank_protection:edit_spamguard":
-            child.label = "Spam Guard Actions"
-            child.emoji = "🛡️"
-        elif custom_id == "dank_protection:live_stats":
-            live_stats_on = _cfg_bool(cfg, SECURITY_STATS_ENABLED_KEY, False)
-            child.label = f"Live Stats: {'ON' if live_stats_on else 'SET UP'}"
-            child.style = discord.ButtonStyle.success if live_stats_on else discord.ButtonStyle.secondary
-
-
-async def _apply_protection_preset(interaction: discord.Interaction, preset: str) -> None:
-''',
-)
-
-replace_once(
-    "stoney_verify/commands_ext/public_protection_center.py",
-    '''        await _guard_protection_action(interaction, "protection.allow_links", action, defer=True)
-
-    @discord.ui.button(label="Refresh", emoji="🔄", style=discord.ButtonStyle.secondary, custom_id="dank_protection:refresh", row=3)
-''',
-    '''        await _guard_protection_action(interaction, "protection.allow_links", action, defer=True)
-
-    @discord.ui.button(label="Live Stats", emoji="📊", style=discord.ButtonStyle.secondary, custom_id="dank_protection:live_stats", row=3)
-    async def live_stats_button(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        _ = button
-
-        async def action() -> None:
-            if not await _require_setup_permission(interaction):
-                return
-            guild = interaction.guild
-            if guild is None:
-                await _send_ephemeral(interaction, "❌ This must be used inside a server.")
-                return
-            ok, note = await ensure_security_stats_display(guild)
-            if not ok:
-                await _send_ephemeral(interaction, note)
-                return
-            await _refresh_panel(interaction, content=note)
-
-        await _guard_protection_action(
-            interaction,
-            "protection.live_stats",
-            action,
-            defer=True,
-        )
-
-    @discord.ui.button(label="Refresh", emoji="🔄", style=discord.ButtonStyle.secondary, custom_id="dank_protection:refresh", row=3)
-''',
-)
-
-replace_once(
-    "tests/test_public_protection_center_native_interaction_static.py",
-    '''        "protection.open_test_filter_modal",
-        "protection.allow_links",
-        "protection.refresh",
-''',
-    '''        "protection.open_test_filter_modal",
-        "protection.allow_links",
-        "protection.live_stats",
-        "protection.refresh",
-''',
+    TEST_PATH,
+    '        "protection.allow_links",\n        "protection.refresh",\n',
+    '        "protection.allow_links",\n        "protection.live_stats",\n        "protection.refresh",\n',
+    marker='        "protection.live_stats",',
 )
 
 print("SG-STATS-001 runtime integration applied")
