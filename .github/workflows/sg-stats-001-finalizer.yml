@@ -36,8 +36,7 @@ jobs:
 
       - name: Apply native runtime integration
         run: |
-          git apply --check patches/sg-stats-001-live-discord-channels.patch
-          git apply patches/sg-stats-001-live-discord-channels.patch
+          python tools/sg_stats_001_apply.py
           git diff --check
 
       - name: Run focused live-stats tests
@@ -116,6 +115,7 @@ jobs:
       - name: Remove temporary patch machinery
         run: |
           rm -f patches/sg-stats-001-live-discord-channels.patch
+          rm -f tools/sg_stats_001_apply.py
           rm -f .github/workflows/sg-stats-001-finalizer.yml
           git diff --check
 
