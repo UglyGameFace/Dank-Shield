@@ -3,13 +3,16 @@ from __future__ import annotations
 """Permanent drift audit for Dank Shield's normal public command profile."""
 
 from pathlib import Path
+import sys
 
-from stoney_verify.command_surface_contract import (
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from stoney_verify.command_surface_contract import (  # noqa: E402
     PUBLIC_GLOBAL_COMMAND_COUNT,
     PUBLIC_GLOBAL_COMMAND_NAMES,
 )
-
-ROOT = Path(__file__).resolve().parents[1]
 
 
 def _read(path: str) -> str:
