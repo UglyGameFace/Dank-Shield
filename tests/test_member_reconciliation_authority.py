@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 
 import pytest
@@ -20,8 +21,7 @@ class FakeGuild:
         self.members: list[FakeMember] = []
 
 
-@pytest.mark.asyncio
-async def test_departed_reconciliation_skips_when_full_member_fetch_failed(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_departed_reconciliation_skips_when_full_member_fetch_failed(monkeypatch: pytest.MonkeyPatch) -> None:
     guild = FakeGuild()
     snapshot = MembershipSnapshot(
         members=(FakeMember(1),),
@@ -43,7 +43,7 @@ async def test_departed_reconciliation_skips_when_full_member_fetch_failed(monke
     monkeypatch.setattr(sync_service, "get_supabase", lambda: object())
     monkeypatch.setattr(sync_service, "_bulk_mark_departed_members_async", fake_bulk)
 
-    result = await membership_authority.run_safe_departed_reconciliation_for_guild(guild)
+    result = asyncio.run(membership_authority.run_safe_departed_reconciliation_for_guild(guild))
 
     assert result["marked_departed"] == 0
     assert result["departure_reconciliation_skipped"] is True
@@ -53,8 +53,7 @@ async def test_departed_reconciliation_skips_when_full_member_fetch_failed(monke
     assert bulk_calls == []
 
 
-@pytest.mark.asyncio
-async def test_full_sync_uses_cache_only_as_positive_membership_evidence(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_full_sync_uses_cache_only_as_positive_membership_evidence(monkeypatch: pytest.MonkeyPatch) -> None:
     guild = FakeGuild()
     cached_member = FakeMember(7)
     snapshot = MembershipSnapshot(
@@ -81,7 +80,7 @@ async def test_full_sync_uses_cache_only_as_positive_membership_evidence(monkeyp
     monkeypatch.setattr(sync_service, "sync_member_to_supabase", fake_sync)
     monkeypatch.setattr(sync_service, "_bulk_mark_departed_members_async", forbidden_bulk)
 
-    result = await membership_authority.run_safe_full_member_sync_for_guild(guild)
+    result = asyncio.run(membership_authority.run_safe_full_member_sync_for_guild(guild))
 
     assert synced == [7]
     assert result["active_members_synced"] == 1
@@ -90,8 +89,7 @@ async def test_full_sync_uses_cache_only_as_positive_membership_evidence(monkeyp
     assert result["membership_authoritative"] is False
 
 
-@pytest.mark.asyncio
-async def test_authoritative_reconciliation_preserves_all_live_ids_including_bots(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_authoritative_reconciliation_preserves_all_live_ids_including_bots(monkeypatch: pytest.MonkeyPatch) -> None:
     guild = FakeGuild()
     snapshot = MembershipSnapshot(
         members=(FakeMember(10), FakeMember(20, bot=True)),
@@ -113,7 +111,7 @@ async def test_authoritative_reconciliation_preserves_all_live_ids_including_bot
     monkeypatch.setattr(sync_service, "get_supabase", lambda: object())
     monkeypatch.setattr(sync_service, "_bulk_mark_departed_members_async", fake_bulk)
 
-    result = await membership_authority.run_safe_departed_reconciliation_for_guild(guild)
+    result = asyncio.run(membership_authority.run_safe_departed_reconciliation_for_guild(guild))
 
     assert captured["guild_id"] == "123"
     assert captured["active_ids"] == {"10", "20"}
