@@ -18,6 +18,8 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -30,6 +32,9 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
           pip install pytest
+
+      - name: Check committed diff whitespace
+        run: git diff --check "$(git merge-base origin/main HEAD)"..HEAD
 
       - name: Compile Python modules
         run: python -m compileall -q stoney_verify main.py tools
@@ -55,6 +60,9 @@ jobs:
 
       - name: Audit public setup text and isolation
         run: python tools/audit_public_setup.py
+
+      - name: Audit canonical public command surface
+        run: python tools/audit_public_command_surface.py
 
       - name: Audit public command surface and startup friction
         run: python tools/audit_public_command_friction.py
