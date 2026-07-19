@@ -1,12 +1,8 @@
 from __future__ import annotations
 
 import asyncio
-from pathlib import Path
 
 from stoney_verify import security_stats
-
-
-SOURCE = Path("stoney_verify/security_stats.py").read_text(encoding="utf-8")
 
 
 def test_compact_stat_formatting_keeps_channel_names_readable() -> None:
@@ -103,14 +99,178 @@ def test_completed_spamguard_actions_translate_to_real_counters(monkeypatch) -> 
     )
 
 
-def test_real_discord_display_is_locked_voice_channels_not_an_image() -> None:
-    assert "create_voice_channel" in SOURCE
-    assert "PermissionOverwrite(view_channel=True, connect=False)" in SOURCE
-    assert "SECURITY_STATS_CATEGORY_NAME" in SOURCE
-    assert "tasks.loop(minutes=10)" in SOURCE
+def test_event_writes_are_guild_scoped_and_persisted(monkeypatch) -> None:
+    security_stats._STATS_LOCKS.clear()
+    state = {
+        security_stats.SECURITY_STATS_COUNTS_KEY: {
+            "spam_blocked": 4,
+            "invites_blocked": 2,
+            "timeouts_issued": 1,
+            "quarantines": 0,
+        }
+    }
+    writes = []
+
+    async def fake_get_guild_config(guild_id: int, refresh: bool = False):
+        assert guild_id == 321
+        assert refresh is True
+        return dict(state)
+
+    async def fake_upsert_guild_config(guild_id: int, updates):
+        assert guild_id == 321
+        writes.append(dict(updates))
+        state.update(updates)
+        return state
+
+    monkeypatch.setattr(security_stats, "get_guild_config", fake_get_guild_config)
+    monkeypatch.setattr(security_stats, "upsert_guild_config", fake_upsert_guild_config)
+
+    result = asyncio.run(
+        security_stats.record_security_event(
+            321,
+            spam_blocked=3,
+            invites_blocked=1,
+            timeouts_issued=2,
+        )
+    )
+
+    assert result == {
+        "spam_blocked": 7,
+        "invites_blocked": 3,
+        "timeouts_issued": 3,
+        "quarantines": 0,
+    }
+    assert writes == [{security_stats.SECURITY_STATS_COUNTS_KEY: result}]
 
 
-def test_event_writes_are_guild_scoped_and_persisted() -> None:
-    assert "async with _lock_for(_STATS_LOCKS, gid)" in SOURCE
-    assert "get_guild_config(gid, refresh=True)" in SOURCE
-    assert "upsert_guild_config(gid, {SECURITY_STATS_COUNTS_KEY: counts})" in SOURCE
+def test_real_discord_display_creates_visible_locked_voice_channels(monkeypatch) -> None:
+    from stoney_verify import spam_guard
+
+    security_stats._DISPLAY_LOCKS.clear()
+    security_stats._LAST_REFRESH_AT.clear()
+
+    class FakePermissions:
+        manage_channels = True
+        manage_roles = True
+        administrator = False
+
+    class FakeMember:
+        guild_permissions = FakePermissions()
+
+    class FakeRole:
+        pass
+
+    class FakeCategoryChannel:
+        def __init__(self, channel_id: int, name: str):
+            self.id = channel_id
+            self.name = name
+            self.voice_channels = []
+            self.position = None
+            self.permission_updates = []
+
+        async def edit(self, *, position: int, reason: str):
+            self.position = position
+
+        async def set_permissions(self, role, **kwargs):
+            self.permission_updates.append((role, kwargs))
+
+    class FakeVoiceChannel:
+        def __init__(self, channel_id: int, name: str, category_id: int):
+            self.id = channel_id
+            self.name = name
+            self.category_id = category_id
+            self.edits = []
+
+        async def edit(self, *, name: str, reason: str):
+            self.name = name
+            self.edits.append((name, reason))
+
+    class FakeGuild:
+        def __init__(self):
+            self.id = 777
+            self.me = FakeMember()
+            self.default_role = FakeRole()
+            self.categories = []
+            self._channels = {}
+            self.created_category_overwrites = None
+            self._next_id = 1000
+
+        def get_channel(self, channel_id: int):
+            return self._channels.get(int(channel_id))
+
+        async def create_category(self, name: str, *, overwrites, reason: str):
+            self.created_category_overwrites = overwrites
+            category = FakeCategoryChannel(self._next_id, name)
+            self._next_id += 1
+            self.categories.append(category)
+            self._channels[category.id] = category
+            return category
+
+        async def create_voice_channel(self, name: str, *, category, reason: str):
+            channel = FakeVoiceChannel(self._next_id, name, category.id)
+            self._next_id += 1
+            category.voice_channels.append(channel)
+            self._channels[channel.id] = channel
+            return channel
+
+    state = {
+        security_stats.SECURITY_STATS_COUNTS_KEY: {
+            "spam_blocked": 1284,
+            "invites_blocked": 93,
+            "timeouts_issued": 38,
+            "quarantines": 4,
+        }
+    }
+    writes = []
+
+    async def fake_get_guild_config(guild_id: int, refresh: bool = False):
+        assert guild_id == 777
+        return dict(state)
+
+    async def fake_upsert_guild_config(guild_id: int, updates):
+        assert guild_id == 777
+        writes.append(dict(updates))
+        state.update(updates)
+        return state
+
+    async def fake_get_spam_settings(guild_id: int):
+        assert guild_id == 777
+        return {"enabled": True}
+
+    monkeypatch.setattr(security_stats.discord, "CategoryChannel", FakeCategoryChannel)
+    monkeypatch.setattr(security_stats.discord, "VoiceChannel", FakeVoiceChannel)
+    monkeypatch.setattr(security_stats, "get_guild_config", fake_get_guild_config)
+    monkeypatch.setattr(security_stats, "upsert_guild_config", fake_upsert_guild_config)
+    monkeypatch.setattr(spam_guard, "get_spam_settings", fake_get_spam_settings)
+
+    guild = FakeGuild()
+    ok, note = asyncio.run(security_stats.ensure_security_stats_display(guild))
+
+    assert ok is True
+    assert "visible but locked" in note
+    assert len(guild.categories) == 1
+    category = guild.categories[0]
+    assert category.name == security_stats.SECURITY_STATS_CATEGORY_NAME
+    assert category.position == 0
+    assert [channel.name for channel in category.voice_channels] == [
+        "🛡️ SpamGuard: ONLINE",
+        "🚫 Spam Blocked: 1.28K",
+        "🔗 Invites Blocked: 93",
+        "⏱️ Timeouts Issued: 38",
+        "🔒 Quarantined: 4",
+    ]
+
+    overwrite = guild.created_category_overwrites[guild.default_role]
+    assert overwrite.view_channel is True
+    assert overwrite.connect is False
+
+    saved = writes[-1]
+    assert saved[security_stats.SECURITY_STATS_ENABLED_KEY] is True
+    assert saved[security_stats.SECURITY_STATS_CATEGORY_ID_KEY] == str(category.id)
+    assert set(saved[security_stats.SECURITY_STATS_CHANNEL_IDS_KEY]) == {
+        "status",
+        "spam_blocked",
+        "invites_blocked",
+        "timeouts_issued",
+        "quarantines",
+    }
