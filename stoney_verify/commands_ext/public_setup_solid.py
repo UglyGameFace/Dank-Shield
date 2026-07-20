@@ -36,85 +36,20 @@ from .public_setup_group import (
 )
 from ..globals import get_supabase, now_utc
 from ..guild_config import get_guild_config, invalidate_guild_config
+from ..tickets_new.panel import _DEFAULT_BOOTSTRAP_CATEGORIES
+from .ticket_category_admin import _ALLOWED_INTAKE_TYPES
 
 
 _ATTACHED = False
 
-RECOMMENDED_CATEGORIES: tuple[dict[str, Any], ...] = (
-    {
-        "slug": "support",
-        "name": "Support",
-        "description": "General help and support tickets.",
-        "intake_type": "support",
-        "match_keywords": ["support", "help", "issue", "problem"],
-        "is_default": True,
-        "sort_order": 10,
-    },
-    {
-        "slug": "verification",
-        "name": "Verification Help",
-        "description": "Help for users stuck during verification.",
-        "intake_type": "verification",
-        "match_keywords": ["verify", "verification", "pending", "unverified", "vc verify"],
-        "is_default": False,
-        "sort_order": 20,
-    },
-    {
-        "slug": "appeal",
-        "name": "Appeal",
-        "description": "Appeals for moderation actions or access decisions.",
-        "intake_type": "appeal",
-        "match_keywords": ["appeal", "ban", "mute", "timeout", "blacklist"],
-        "is_default": False,
-        "sort_order": 30,
-    },
-    {
-        "slug": "report",
-        "name": "Report User",
-        "description": "Report a member, message, scam, or rule violation.",
-        "intake_type": "report",
-        "match_keywords": ["report", "scam", "harass", "spam", "abuse"],
-        "is_default": False,
-        "sort_order": 40,
-    },
-    {
-        "slug": "question",
-        "name": "Question",
-        "description": "General questions that do not need urgent staff escalation.",
-        "intake_type": "question",
-        "match_keywords": ["question", "ask", "how", "info"],
-        "is_default": False,
-        "sort_order": 50,
-    },
-    {
-        "slug": "bug",
-        "name": "Bug Report",
-        "description": "Report a bot/server workflow bug.",
-        "intake_type": "bug",
-        "match_keywords": ["bug", "broken", "error", "not working"],
-        "is_default": False,
-        "sort_order": 60,
-    },
-    {
-        "slug": "custom",
-        "name": "Other",
-        "description": "Anything that does not match another category.",
-        "intake_type": "custom",
-        "match_keywords": ["other", "custom", "misc"],
-        "is_default": False,
-        "sort_order": 70,
-    },
+RECOMMENDED_CATEGORIES: tuple[dict[str, Any], ...] = tuple(
+    dict(item) for item in _DEFAULT_BOOTSTRAP_CATEGORIES
 )
 
-INTAKE_TYPE_OPTIONS: tuple[str, ...] = (
-    "support",
-    "verification",
-    "appeal",
-    "report",
-    "question",
-    "bug",
-    "custom",
+INTAKE_TYPE_OPTIONS: tuple[str, ...] = tuple(
+    sorted(value for value in _ALLOWED_INTAKE_TYPES if value != "ghost")
 )
+
 
 CONTROL_KEYS = {
     "__config_write_mode",
@@ -1543,7 +1478,7 @@ class BuildMissingItemsReviewView(SetupNavView):
             await public_setup_defaults._setup_defaults_callback(interaction)
 
             if interaction.guild is not None:
-                created, skipped, error = await _seed_recommended_categories(interaction.guild)
+                created, skipped, error = await _seed_recommended_categories(interaction.guild, managed_only=True)
                 if error:
                     await interaction.followup.send(
                         f"⚠️ Auto-build ran, but ticket menu options could not be checked: `{error}`",
@@ -2722,28 +2657,56 @@ async def _write_category(guild: discord.Guild, row: dict[str, Any], *, set_defa
     return await asyncio.to_thread(_category_table_write_sync, int(guild.id), dict(row), set_default=set_default)
 
 
-async def _seed_recommended_categories(guild: discord.Guild) -> tuple[list[str], list[str], str]:
+async def _seed_recommended_categories(
+    guild: discord.Guild,
+    *,
+    managed_only: bool = False,
+) -> tuple[list[str], list[str], str]:
     load = await _category_load(guild)
     if load.error:
         return [], [], load.error
-    existing = {str(row.get("slug") or "").strip().lower() for row in load.rows}
+
+    from . import public_tickettool_parity_polish as ticket_menu
+
+    if managed_only and load.rows and not ticket_menu._looks_like_legacy_managed_default_rows(load.rows):
+        existing_slugs = [
+            str(row.get("slug") or row.get("name") or "custom").strip().lower()
+            for row in load.rows
+        ]
+        return [], existing_slugs, ""
+
+    existing = {
+        ticket_menu._canonical_category_key(row)
+        for row in load.rows
+    }
     created: list[str] = []
     skipped: list[str] = []
     has_default = any(bool(row.get("is_default")) for row in load.rows)
 
     for item in RECOMMENDED_CATEGORIES:
         slug = _slugify(item["slug"])
-        if slug in existing:
+        key = ticket_menu._canonical_category_key(item)
+
+        if key in existing:
             skipped.append(slug)
             continue
+
         payload = dict(item)
         payload["slug"] = slug
         payload["is_default"] = bool(item.get("is_default")) and not has_default
-        ok, msg = await _write_category(guild, payload, set_default=bool(payload["is_default"]))
+
+        ok, msg = await _write_category(
+            guild,
+            payload,
+            set_default=bool(payload["is_default"]),
+        )
+
         if not ok:
             return created, skipped, msg
+
         created.append(slug)
-        existing.add(slug)
+        existing.add(key)
+
         if payload["is_default"]:
             has_default = True
 
@@ -2812,8 +2775,16 @@ class CategoryManagerView(SetupNavView):
 
         # Make the create button truthful after recommended choices already exist.
         try:
-            existing = {str(row.get("slug") or "").strip().lower() for row in rows}
-            recommended = {_slugify(item.get("slug") or item.get("name")) for item in RECOMMENDED_CATEGORIES}
+            from . import public_tickettool_parity_polish as ticket_menu
+
+            existing = {
+                ticket_menu._canonical_category_key(row)
+                for row in rows
+            }
+            recommended = {
+                ticket_menu._canonical_category_key(item)
+                for item in RECOMMENDED_CATEGORIES
+            }
             all_recommended_exist = bool(recommended) and recommended.issubset(existing)
             for child in list(getattr(self, "children", []) or []):
                 custom_id = str(getattr(child, "custom_id", "") or "")
