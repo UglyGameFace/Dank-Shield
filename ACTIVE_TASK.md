@@ -1,11 +1,11 @@
 # ACTIVE TASK
 
-## DS-SPAMGUARD-STARTUP-001 — Make SpamGuard default/startup truth live in production
+## DS-LIVE-STATS-001 — Expand Discord-native Dank Shield live stats
 
 **Status:** READY FOR REVIEW — NOT MERGED — NOT DEPLOYED
-**Branch:** `fix/spamguard-live-startup-state-reporting`
-**PR:** #102
-**Base:** current `main` after merged PR #99 / PR #101
+**Branch:** `feature/dank-shield-live-stats-expansion`
+**PR:** #103
+**Base:** current `main` after merged PR #102
 
 ## Single Active Task Lock
 
@@ -13,55 +13,59 @@ Do not switch to unrelated implementation work until this task reaches Definitio
 
 ## Scope
 
-- Keep SpamGuard enabled by default for brand-new guilds and missing `guild_security_settings` rows.
-- Preserve explicit persisted enabled/disabled owner choices.
-- Keep database read failures distinct from a legitimate default-enabled state.
-- Ensure the four startup labels actually run on the real production boot path:
-  - `DEFAULT ENABLED`
-  - `PERSISTED ENABLED`
-  - `PERSISTED DISABLED`
-  - `DATABASE LOAD ERROR`
-- Replace SpamGuard source-shape regression checks with behavioral coverage.
-- Do not enable the dormant bulk startup-guard loader.
-- Do not touch `main.py`, `sitecustomize.py`, or `usercustomize.py`.
+Expand the existing opt-in locked Discord voice-channel stats category without creating a competing stats system.
 
-## Root Cause
+Add only real, auditable values:
 
-PR #101 correctly introduced the authoritative `SPAM_GUARD_DEFAULT_ENABLED = True` policy and correct persistence behavior, but its startup-state reporter lived only in `startup_guards/spam_guard_default_state_guard.py` and was listed in `_STARTUP_GUARDS`.
+- `👥 Members` — Discord guild member total.
+- `🎫 Open Tickets` — current authoritative open ticket state.
+- `🙋 Claimed Tickets` — current authoritative claimed state, including legacy/open rows that already carry an assignee.
+- `✅ Closed Tickets` — current authoritative closed ticket state.
 
-The repository boot contract explicitly states that the bulk startup-guard loader is dormant, and `main.py` does not call `load_all_startup_guards()`. Therefore the reporter's `on_ready` listener was not guaranteed to be registered in production even though its label-unit tests passed.
+Keep the existing protection statistics:
 
-The same PR also added `tests/test_spam_guard_default_on_bootstrap_static.py`, which reads source files and asserts code shape despite the repository rule requiring behavioral tests.
+- `🛡️ SpamGuard: ONLINE/OFFLINE`
+- `🚫 Spam Blocked`
+- `🔗 Invites Blocked`
+- `⏱️ Timeouts Issued`
+- `🔒 Quarantined`
 
-## Execution Path Confirmed
+Do not add invented estimates such as bots stopped, raids prevented, or users protected.
 
-`main.py` → `stoney_verify.app` → `stoney_verify.events` → `stoney_verify.spam_guard` → `stoney_verify.spam_guard_defaults`
+## Root Cause / Design Finding
 
-That makes the SpamGuard defaults import path a guaranteed live SpamGuard runtime path without enabling the dormant guard registry.
+The existing `stoney_verify/security_stats.py` system already owns the correct Discord-native display, guild-scoped durable protection counters, locked voice channels, saved channel IDs, and a rate-limited refresh worker. Building a second stats feature would duplicate ownership and create drift.
+
+Ticket/member values are different from cumulative protection counters and must not be persisted as duplicate totals:
+
+- member total is read from Discord's guild total, falling back to the local member cache only when Discord reports the guild is fully chunked;
+- ticket totals are recalculated from the canonical `tickets` table on refresh;
+- unavailable authoritative live-state reads render `N/A`, never a misleading zero.
+
+The existing ~10-minute channel rename cadence remains in place to avoid Discord channel-edit rate-limit churn.
 
 ## Changes
 
-- Added `stoney_verify/spam_guard_startup_state.py` as the native SpamGuard-owned startup-state reporter.
-- Wired reporter registration through the authoritative SpamGuard defaults import path used by the live runtime.
-- Converted `startup_guards/spam_guard_default_state_guard.py` into a compatibility shim so legacy imports keep working without registering a duplicate listener.
-- Added warm-cache provenance handling so an already-cached persisted OFF state is not mislabeled on startup.
-- Expanded behavioral tests for:
-  - all four startup labels;
-  - actual `bot` `on_ready` listener registration;
-  - once-per-guild/process reporting;
-  - warm persisted OFF cache classification;
-  - runtime/setup default-enabled behavior;
-  - explicit disabled behavior;
-  - normal plain setup choices selecting SpamGuard by default.
-- Removed `tests/test_spam_guard_default_on_bootstrap_static.py` and replaced it with behavioral coverage.
+- Expanded `STAT_CHANNEL_PREFIXES` with Members, Open Tickets, Claimed Tickets, and Closed Tickets.
+- Added safe Discord member-count resolution that does not trust a partial member cache.
+- Added read-only ticket lifecycle aggregation from the canonical `tickets` table.
+- Treats `active`/`reopened` legacy states as open.
+- Treats an `open` ticket carrying `claimed_by` or `assigned_to` as claimed, matching repository normalization behavior.
+- Keeps deleted tickets out of the public lifecycle counts.
+- Renders `N/A` on unavailable member/ticket truth instead of false zeroes.
+- Existing protection counters remain persisted exactly as before.
+- Existing opted-in stats categories self-repair missing newly introduced stat channels during the normal refresh cycle.
+- Failed individual channel repairs preserve previously saved channel IDs instead of erasing config references.
+- Updated the success copy from "Live SpamGuard stats" to "Live Dank Shield stats".
+- Expanded behavioral tests for authoritative member count, ticket lifecycle classification, `N/A` fail-safe rendering, nine-channel creation, and migration/repair of an existing five-channel display.
 
 ## Validation
 
-Code head `5f426eba9a8690d5064437081b1139b0bb51d4d6` passed GitHub Actions `Dank Shield CI` run 455:
+Implementation head `951792dac4aba1aaeebbf002b3babf828a854b34` passed GitHub Actions `Dank Shield CI` run 458:
 
 - Committed diff whitespace check: PASS.
 - Python compile check: PASS.
-- Full unit test suite (`pytest tests/`): PASS, including the new targeted SpamGuard behavior tests.
+- Full unit test suite (`pytest tests/`): PASS, including the expanded live-stats behavioral tests.
 - Every standalone tool check: PASS.
 - Public setup text/isolation audit: PASS.
 - Canonical public command surface audit: PASS.
@@ -76,16 +80,14 @@ The final task-record-only head created by this update must also remain green be
 
 ## Cleanup / Conflict Inspection
 
-- Final implementation diff is limited to seven task-related paths: SpamGuard defaults/startup reporting, its compatibility shim, behavioral tests, removal of the obsolete static test, and this task record.
-- No new startup guard was added.
-- Dormant `load_all_startup_guards()` remains dormant.
-- No monkey patch was added.
-- `main.py` unchanged.
-- `sitecustomize.py` unchanged.
-- `usercustomize.py` unchanged.
-- Old startup-guard module is retained only as a compatibility import shim.
-- Source-shape SpamGuard bootstrap test removed rather than duplicated.
-- PR review-thread inspection found no unresolved review threads before final-head validation.
+- Final implementation diff is limited to three task-related paths: the existing stats owner, its behavioral tests, and this task record.
+- Reuses the existing `security_stats.py` owner instead of adding a second stats module.
+- Does not persist duplicate member or ticket counters.
+- Does not add per-event forced channel renames.
+- Does not change the existing public `Live Stats` button/custom ID.
+- Does not alter ticket write paths or member synchronization behavior.
+- Existing opted-in categories are upgraded only inside the already-owned stats category.
+- `main.py`, `sitecustomize.py`, and `usercustomize.py` remain untouched.
 
 ## Blockers
 
@@ -95,19 +97,19 @@ The final task-record-only head created by this update must also remain green be
 
 ## Backlog
 
-Locked while this task is active. Healthchecks heartbeat timing was configured separately at 60 seconds and is not part of this code change.
+After this task is complete, separately audit authoritative verification/member-role data before considering stats such as Verified Members or Pending Verification.
 
 ## Definition of Done
 
-- [x] Authoritative SpamGuard product default remains ON.
-- [x] Missing/new settings rows retain default-enabled behavior.
-- [x] Explicit persisted OFF remains OFF.
-- [x] Startup reporter is attached through a real production import path.
-- [x] Four required startup-state labels remain behaviorally covered.
-- [x] Warm persisted cache cannot mislabel explicit OFF as a default/error state.
-- [x] No duplicate startup listener is introduced by the compatibility guard.
-- [x] Static SpamGuard bootstrap source-shape test removed/replaced behaviorally.
-- [x] Targeted SpamGuard behavior tests pass as part of the full suite.
+- [x] Existing SpamGuard/protection stats remain intact.
+- [x] Members uses Discord guild total or a proven-complete cache fallback.
+- [x] Open/Claimed/Closed ticket numbers derive from authoritative ticket lifecycle state.
+- [x] Legacy ticket states and assigned-open rows normalize consistently with ticket repository behavior.
+- [x] Unavailable live truth displays `N/A` instead of false zero.
+- [x] Existing opted-in displays can gain the new channels without manual deletion/recreation.
+- [x] Failed repairs do not wipe previously saved channel IDs.
+- [x] No fake or estimated public metrics are introduced.
+- [x] New behavior has targeted behavioral regression coverage.
 - [x] Full regression/compile/audits pass on the implementation head.
 - [x] Final diff contains only task-related permanent code/tests/task record.
 - [ ] Final task-record-only head GitHub Actions must pass.

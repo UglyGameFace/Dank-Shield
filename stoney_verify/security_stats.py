@@ -1,10 +1,10 @@
 from __future__ import annotations
 
-"""Live Discord channel counters for Dank Shield protection statistics.
+"""Live Discord channel counters for auditable Dank Shield server statistics.
 
-The display intentionally uses only durable, auditable actions that Dank Shield can
-prove happened. It does not invent estimates such as "users protected" or "raids
-prevented".
+The display intentionally uses only durable, auditable actions or authoritative
+current state that Dank Shield can prove. It does not invent estimates such as
+"users protected" or "raids prevented".
 
 The public display is opt-in per guild. When enabled, Dank Shield creates a visible
 category containing locked voice channels, matching the common Discord server-stats
@@ -18,7 +18,7 @@ from typing import Any, Dict, Mapping, Optional, Tuple
 import discord
 from discord.ext import tasks
 
-from .globals import bot
+from .globals import bot, get_supabase
 from .guild_config import get_guild_config, upsert_guild_config
 
 SECURITY_STATS_CATEGORY_NAME = "🛡️ DANK SHIELD STATS"
@@ -36,14 +36,24 @@ DEFAULT_SECURITY_STATS: Dict[str, int] = {
     "quarantines": 0,
 }
 
+DEFAULT_TICKET_STATUS_COUNTS: Dict[str, int] = {
+    "open_tickets": 0,
+    "claimed_tickets": 0,
+    "closed_tickets": 0,
+}
+
 # key -> static visible prefix. Prefixes are also used to recover channels if a
-# saved channel ID is stale but the category still exists.
+# saved channel ID is stale but the owned stats category still exists.
 STAT_CHANNEL_PREFIXES: Dict[str, str] = {
     "status": "🛡️ SpamGuard:",
+    "members": "👥 Members:",
     "spam_blocked": "🚫 Spam Blocked:",
     "invites_blocked": "🔗 Invites Blocked:",
     "timeouts_issued": "⏱️ Timeouts Issued:",
     "quarantines": "🔒 Quarantined:",
+    "open_tickets": "🎫 Open Tickets:",
+    "claimed_tickets": "🙋 Claimed Tickets:",
+    "closed_tickets": "✅ Closed Tickets:",
 }
 
 _STATS_LOCKS: Dict[int, asyncio.Lock] = {}
@@ -120,15 +130,141 @@ def format_security_stat_count(value: Any) -> str:
     return str(number)
 
 
-def _display_names(*, spam_guard_enabled: bool, counts: Mapping[str, int]) -> Dict[str, str]:
+def _format_live_count(value: Optional[int]) -> str:
+    if value is None:
+        return "N/A"
+    return format_security_stat_count(value)
+
+
+def _guild_member_count(guild: discord.Guild) -> Optional[int]:
+    """Return Discord's guild member total without trusting a partial member cache."""
+    try:
+        raw = getattr(guild, "member_count", None)
+        if raw is not None and not isinstance(raw, bool):
+            count = int(raw)
+            if count >= 0:
+                return count
+    except Exception:
+        pass
+
+    try:
+        if bool(getattr(guild, "chunked", False)):
+            return max(0, len(list(getattr(guild, "members", []) or [])))
+    except Exception:
+        pass
+    return None
+
+
+def _normalize_ticket_status_counts(value: Any) -> Optional[Dict[str, int]]:
+    if value is None:
+        return None
+    raw = _mapping(value)
+    return {
+        key: max(0, _safe_int(raw.get(key), 0))
+        for key in DEFAULT_TICKET_STATUS_COUNTS
+    }
+
+
+def _query_ticket_status_counts_sync(guild_id: int) -> Optional[Dict[str, int]]:
+    """Read current ticket lifecycle totals from the canonical tickets table."""
+    sb = get_supabase()
+    if sb is None:
+        return None
+
+    response = (
+        sb.table("tickets")
+        .select("status,claimed_by,assigned_to")
+        .eq("guild_id", str(int(guild_id)))
+        .execute()
+    )
+    rows = getattr(response, "data", None)
+    if rows is None:
+        return None
+
+    counts = dict(DEFAULT_TICKET_STATUS_COUNTS)
+    for row in rows:
+        if not isinstance(row, Mapping):
+            continue
+        status = str(row.get("status") or "").strip().lower()
+        if status in {"active", "reopened"}:
+            status = "open"
+        if status == "open":
+            claimed_by = str(row.get("claimed_by") or "").strip()
+            assigned_to = str(row.get("assigned_to") or "").strip()
+            if claimed_by or assigned_to:
+                status = "claimed"
+
+        if status == "open":
+            counts["open_tickets"] += 1
+        elif status == "claimed":
+            counts["claimed_tickets"] += 1
+        elif status == "closed":
+            counts["closed_tickets"] += 1
+    return counts
+
+
+async def _ticket_status_counts(guild_id: int) -> Optional[Dict[str, int]]:
+    try:
+        counts = await asyncio.to_thread(_query_ticket_status_counts_sync, int(guild_id))
+        return _normalize_ticket_status_counts(counts)
+    except Exception:
+        return None
+
+
+async def _spam_guard_enabled(guild_id: int) -> bool:
+    try:
+        from .spam_guard import get_spam_settings
+
+        spam_settings = await get_spam_settings(int(guild_id))
+        return bool(spam_settings.get("enabled"))
+    except Exception:
+        return False
+
+
+def _display_names(
+    *,
+    spam_guard_enabled: bool,
+    counts: Mapping[str, int],
+    member_count: Optional[int] = None,
+    ticket_counts: Optional[Mapping[str, int]] = None,
+) -> Dict[str, str]:
     normalized = normalize_security_stats(counts)
+    tickets = _normalize_ticket_status_counts(ticket_counts)
     return {
         "status": f"🛡️ SpamGuard: {'ONLINE' if spam_guard_enabled else 'OFFLINE'}",
+        "members": f"👥 Members: {_format_live_count(member_count)}",
         "spam_blocked": f"🚫 Spam Blocked: {format_security_stat_count(normalized['spam_blocked'])}",
         "invites_blocked": f"🔗 Invites Blocked: {format_security_stat_count(normalized['invites_blocked'])}",
         "timeouts_issued": f"⏱️ Timeouts Issued: {format_security_stat_count(normalized['timeouts_issued'])}",
         "quarantines": f"🔒 Quarantined: {format_security_stat_count(normalized['quarantines'])}",
+        "open_tickets": (
+            f"🎫 Open Tickets: {_format_live_count(None if tickets is None else tickets['open_tickets'])}"
+        ),
+        "claimed_tickets": (
+            f"🙋 Claimed Tickets: {_format_live_count(None if tickets is None else tickets['claimed_tickets'])}"
+        ),
+        "closed_tickets": (
+            f"✅ Closed Tickets: {_format_live_count(None if tickets is None else tickets['closed_tickets'])}"
+        ),
     }
+
+
+async def _display_names_for_guild(
+    guild: discord.Guild,
+    *,
+    counts: Mapping[str, int],
+) -> Dict[str, str]:
+    gid = int(guild.id)
+    spam_enabled, ticket_counts = await asyncio.gather(
+        _spam_guard_enabled(gid),
+        _ticket_status_counts(gid),
+    )
+    return _display_names(
+        spam_guard_enabled=bool(spam_enabled),
+        counts=counts,
+        member_count=_guild_member_count(guild),
+        ticket_counts=ticket_counts,
+    )
 
 
 def _saved_channel_ids(cfg: Any) -> Dict[str, int]:
@@ -264,16 +400,7 @@ async def ensure_security_stats_display(guild: discord.Guild) -> Tuple[bool, str
 
         cfg = await get_guild_config(gid, refresh=True)
         counts = _stats_counts(cfg)
-
-        try:
-            from .spam_guard import get_spam_settings
-
-            spam_settings = await get_spam_settings(gid)
-            spam_enabled = bool(spam_settings.get("enabled"))
-        except Exception:
-            spam_enabled = False
-
-        names = _display_names(spam_guard_enabled=spam_enabled, counts=counts)
+        names = await _display_names_for_guild(guild, counts=counts)
         category = _find_owned_category(guild, cfg)
 
         try:
@@ -284,7 +411,7 @@ async def ensure_security_stats_display(guild: discord.Guild) -> Tuple[bool, str
                 category = await guild.create_category(
                     SECURITY_STATS_CATEGORY_NAME,
                     overwrites=overwrites,
-                    reason="Dank Shield live security stats display",
+                    reason="Dank Shield live stats display",
                 )
                 try:
                     await category.edit(position=0, reason="Place Dank Shield live stats near the top")
@@ -317,10 +444,10 @@ async def ensure_security_stats_display(guild: discord.Guild) -> Tuple[bool, str
                     channel = await guild.create_voice_channel(
                         names[key],
                         category=category,
-                        reason="Dank Shield live security stats display",
+                        reason="Dank Shield live stats display",
                     )
                 elif channel.name != names[key]:
-                    await channel.edit(name=names[key], reason="Refresh Dank Shield live security stats")
+                    await channel.edit(name=names[key], reason="Refresh Dank Shield live stats")
                 resolved_ids[key] = str(int(channel.id))
             except discord.Forbidden:
                 return False, f"❌ Discord denied permission while creating **{names[key]}**. Check channel permission overrides."
@@ -340,7 +467,7 @@ async def ensure_security_stats_display(guild: discord.Guild) -> Tuple[bool, str
 
         return (
             True,
-            f"✅ Live SpamGuard stats are active in **{SECURITY_STATS_CATEGORY_NAME}**. The voice channels are visible but locked so nobody can join them.",
+            f"✅ Live Dank Shield stats are active in **{SECURITY_STATS_CATEGORY_NAME}**. The voice channels are visible but locked so nobody can join them.",
         )
 
 
@@ -349,7 +476,7 @@ async def refresh_security_stats_display(
     *,
     force: bool = False,
 ) -> bool:
-    """Refresh existing stat-channel names without creating surprise channels."""
+    """Refresh or repair channels inside an already-enabled owned stats category."""
 
     gid = int(guild.id)
     cfg = await get_guild_config(gid, refresh=True)
@@ -364,16 +491,14 @@ async def refresh_security_stats_display(
     if category is None:
         return False
 
-    try:
-        from .spam_guard import get_spam_settings
-
-        spam_settings = await get_spam_settings(gid)
-        spam_enabled = bool(spam_settings.get("enabled"))
-    except Exception:
-        spam_enabled = False
-
-    names = _display_names(spam_guard_enabled=spam_enabled, counts=_stats_counts(cfg))
+    names = await _display_names_for_guild(guild, counts=_stats_counts(cfg))
     saved_ids = _saved_channel_ids(cfg)
+    previous_ids = {
+        key: str(value)
+        for key, value in saved_ids.items()
+        if int(value) > 0
+    }
+    resolved_ids: Dict[str, str] = dict(previous_ids)
     changed = False
 
     async with _lock_for(_DISPLAY_LOCKS, gid):
@@ -384,13 +509,29 @@ async def refresh_security_stats_display(
                 key=key,
                 saved_id=saved_ids.get(key, 0),
             )
-            if channel is None or channel.name == names[key]:
-                continue
             try:
-                await channel.edit(name=names[key], reason="Refresh Dank Shield live security stats")
-                changed = True
+                if channel is None:
+                    channel = await guild.create_voice_channel(
+                        names[key],
+                        category=category,
+                        reason="Repair Dank Shield live stats display",
+                    )
+                    changed = True
+                elif channel.name != names[key]:
+                    await channel.edit(name=names[key], reason="Refresh Dank Shield live stats")
+                    changed = True
+                resolved_ids[key] = str(int(channel.id))
             except (discord.Forbidden, discord.HTTPException):
                 continue
+
+        if resolved_ids and resolved_ids != previous_ids:
+            try:
+                await upsert_guild_config(
+                    gid,
+                    {SECURITY_STATS_CHANNEL_IDS_KEY: resolved_ids},
+                )
+            except Exception:
+                pass
 
         _LAST_REFRESH_AT[gid] = time.monotonic()
     return changed
@@ -426,6 +567,7 @@ async def _start_security_stats_refresh_loop() -> None:
 
 __all__ = [
     "DEFAULT_SECURITY_STATS",
+    "DEFAULT_TICKET_STATUS_COUNTS",
     "SECURITY_STATS_CATEGORY_NAME",
     "SECURITY_STATS_COUNTS_KEY",
     "SECURITY_STATS_ENABLED_KEY",
