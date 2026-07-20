@@ -42,50 +42,33 @@ class FakeSupabase:
         return FakeUpdateQuery(table_name, self.recorder)
 
 
-class FakeCategoryQuery:
-    def __init__(self, table_name: str, events: list[dict[str, Any]]) -> None:
-        self.table_name = table_name
+class FakeRpcCall:
+    def __init__(
+        self,
+        events: list[dict[str, Any]],
+        name: str,
+        params: dict[str, Any],
+    ) -> None:
         self.events = events
-        self.action = ""
-        self.payload: Any = None
-        self.filters: list[tuple[str, Any]] = []
-
-    def delete(self) -> "FakeCategoryQuery":
-        self.action = "delete"
-        return self
-
-    def update(self, payload: dict[str, Any]) -> "FakeCategoryQuery":
-        self.action = "update"
-        self.payload = dict(payload)
-        return self
-
-    def insert(self, payload: dict[str, Any]) -> "FakeCategoryQuery":
-        self.action = "insert"
-        self.payload = dict(payload)
-        return self
-
-    def eq(self, key: str, value: Any) -> "FakeCategoryQuery":
-        self.filters.append((key, value))
-        return self
+        self.name = name
+        self.params = dict(params)
 
     def execute(self) -> FakeResponse:
         self.events.append(
             {
-                "table": self.table_name,
-                "action": self.action,
-                "payload": self.payload,
-                "filters": list(self.filters),
+                "rpc": self.name,
+                "params": dict(self.params),
             }
         )
         return FakeResponse([])
 
 
-class FakeCategorySupabase:
+class FakeRpcSupabase:
     def __init__(self, events: list[dict[str, Any]]) -> None:
         self.events = events
 
-    def table(self, table_name: str) -> FakeCategoryQuery:
-        return FakeCategoryQuery(table_name, self.events)
+    def rpc(self, name: str, params: dict[str, Any]) -> FakeRpcCall:
+        return FakeRpcCall(self.events, name, params)
 
 
 def test_changed_config_keys_ignores_write_audit_metadata() -> None:
@@ -343,7 +326,7 @@ def test_restore_creates_safety_backup_then_restores_selected_snapshot(
     assert result["restored_from_version_id"] == 8
 
 
-def test_ticket_choice_restore_updates_inserts_removes_and_saves_safety_backup(
+def test_ticket_choice_restore_uses_one_atomic_rpc_and_history_guards(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     current_categories = [
@@ -387,8 +370,8 @@ def test_ticket_choice_restore_updates_inserts_removes_and_saves_safety_backup(
             (True, [dict(row) for row in restored_categories]),
         ]
     )
-    events: list[dict[str, Any]] = []
-    backups: list[dict[str, Any]] = []
+    rpc_events: list[dict[str, Any]] = []
+    history_writes: list[dict[str, Any]] = []
 
     monkeypatch.setattr(
         config_history,
@@ -419,9 +402,15 @@ def test_ticket_choice_restore_updates_inserts_removes_and_saves_safety_backup(
         snapshot: dict[str, Any],
         **kwargs: Any,
     ) -> dict[str, Any]:
-        backups.append({"guild_id": guild_id, "snapshot": snapshot, **kwargs})
+        history_writes.append(
+            {
+                "guild_id": guild_id,
+                "snapshot": snapshot,
+                **kwargs,
+            }
+        )
         return {
-            "version_id": 90 + len(backups),
+            "version_id": 90 + len(history_writes),
             "config_table": kwargs["config_table"],
             "snapshot": snapshot,
         }
@@ -430,7 +419,7 @@ def test_ticket_choice_restore_updates_inserts_removes_and_saves_safety_backup(
     monkeypatch.setattr(
         config_history,
         "_require_supabase",
-        lambda: FakeCategorySupabase(events),
+        lambda: FakeRpcSupabase(rpc_events),
     )
 
     result = config_history.restore_config_version_sync(
@@ -440,26 +429,26 @@ def test_ticket_choice_restore_updates_inserts_removes_and_saves_safety_backup(
         reason="Restore ticket choices",
     )
 
-    assert events[0] == {
-        "table": "ticket_categories",
-        "action": "delete",
-        "payload": None,
-        "filters": [("guild_id", "123"), ("slug", "report")],
-    }
-    assert events[1]["action"] == "update"
-    assert events[1]["filters"] == [("guild_id", "123"), ("slug", "support")]
-    assert events[1]["payload"]["name"] == "Support"
-    assert "id" not in events[1]["payload"]
-    assert events[1]["payload"]["form_questions"] == [{"label": "What happened?"}]
-    assert events[2]["action"] == "insert"
-    assert events[2]["payload"]["slug"] == "partnership"
-    assert events[2]["payload"]["id"] == "partner-old-id"
+    assert rpc_events == [
+        {
+            "rpc": "restore_ticket_categories_snapshot",
+            "params": {
+                "p_guild_id": "123",
+                "p_rows": saved_categories,
+            },
+        }
+    ]
 
-    assert backups[0]["config_table"] == "ticket_categories"
-    assert backups[0]["source"] == "pre_restore_backup"
-    assert backups[0]["snapshot"]["rows"] == current_categories
-    assert backups[1]["source"] == "config_history_restore"
-    assert backups[1]["is_manual"] is False
+    assert len(history_writes) == 2
+    assert history_writes[0]["config_table"] == "ticket_categories"
+    assert history_writes[0]["source"] == "pre_restore_backup"
+    assert history_writes[0]["snapshot"]["rows"] == current_categories
+    assert history_writes[1]["config_table"] == "ticket_categories"
+    assert history_writes[1]["source"] == "config_history_restore"
+    assert history_writes[1]["mode"] == "restore"
+    assert history_writes[1]["actor_id"] == 77
+    assert history_writes[1]["reason"] == "Restore ticket choices"
+    assert history_writes[1]["snapshot"]["rows"] == restored_categories
     assert result["config_table"] == "ticket_categories"
     assert result["restored_from_version_id"] == 44
 
@@ -484,6 +473,43 @@ def test_restore_refuses_snapshot_from_different_guild(
             "config_table": "guild_configs",
             "snapshot": {"guild_id": "999", "settings": {}},
         },
+    )
+
+    with pytest.raises(RuntimeError, match="different guild"):
+        config_history.restore_config_version_sync(123, 8)
+
+
+def test_ticket_choice_restore_refuses_row_from_different_guild(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        config_history,
+        "_fetch_current_config_row_sync",
+        lambda guild_id: ("guild_configs", {"guild_id": str(guild_id)}),
+    )
+    monkeypatch.setattr(
+        config_history,
+        "_fetch_version_sync",
+        lambda guild_id, version_id, config_table=None: {
+            "version_id": version_id,
+            "guild_id": str(guild_id),
+            "config_table": "ticket_categories",
+            "snapshot": {
+                "guild_id": str(guild_id),
+                "rows": [
+                    {
+                        "guild_id": "999",
+                        "slug": "support",
+                        "name": "Support",
+                    }
+                ],
+            },
+        },
+    )
+    monkeypatch.setattr(
+        config_history,
+        "_fetch_ticket_categories_state_sync",
+        lambda guild_id: (True, []),
     )
 
     with pytest.raises(RuntimeError, match="different guild"):
