@@ -12,7 +12,6 @@ The public panel flow is intentionally boring and reliable:
 - selecting a category creates the ticket through tickets_new.service
 - the created channel is repaired into the configured Active Tickets category
 """
-
 import asyncio
 import inspect
 from typing import Any, Dict, List, Optional, Tuple
@@ -61,6 +60,32 @@ _CANONICAL_PRIORITY: Tuple[str, ...] = (
     "question",
     "bug",
     "support",
+)
+
+# Older /dank setup releases created exactly this managed starter set.  When a
+# guild still has only this known set, the live picker may safely layer in newer
+# built-in choices from tickets_new.panel.  Any unknown/custom slug means the
+# owner has a genuinely customized category set and must remain authoritative.
+_LEGACY_MANAGED_DEFAULT_SLUGS = frozenset(
+    {
+        "support",
+        "verification",
+        "appeal",
+        "report",
+        "question",
+        "bug",
+        "custom",
+    }
+)
+_LEGACY_MANAGED_REQUIRED_SLUGS = frozenset(
+    {
+        "support",
+        "verification",
+        "appeal",
+        "report",
+        "question",
+        "bug",
+    }
 )
 
 
@@ -189,7 +214,7 @@ async def _category_list_callback(interaction: discord.Interaction) -> None:
     if guild is None:
         return
 
-    rows = await legacy._fetch_categories(guild.id)
+    rows = await _load_ticket_rows(guild)
     if not rows:
         return await reply_once(
             interaction,
@@ -452,25 +477,49 @@ def _normalize_ticket_rows(raw_rows: Any) -> List[Dict[str, Any]]:
     return out[:25]
 
 
+def _looks_like_legacy_managed_default_rows(raw_rows: Any) -> bool:
+    rows = [dict(item) for item in (raw_rows or []) if isinstance(item, dict)]
+    if not rows:
+        return False
+
+    slugs = {_row_slug(row) for row in rows}
+    if not _LEGACY_MANAGED_REQUIRED_SLUGS.issubset(slugs):
+        return False
+    return slugs.issubset(_LEGACY_MANAGED_DEFAULT_SLUGS)
+
+
+def _effective_ticket_rows(raw_rows: Any, default_rows: Any) -> List[Dict[str, Any]]:
+    """Return the member-visible category set without overwriting owner config.
+
+    Only the exact legacy Dank Shield managed starter shape is upgraded in-memory.
+    Any unknown/custom slug means the guild's configured rows remain authoritative.
+    """
+
+    if _looks_like_legacy_managed_default_rows(raw_rows):
+        return _normalize_ticket_rows([*(raw_rows or []), *(default_rows or [])])
+    return _normalize_ticket_rows(raw_rows)
+
+
 async def _load_ticket_rows(guild: discord.Guild) -> List[Dict[str, Any]]:
     try:
         from ..tickets_new import panel
 
+        defaults_raw = getattr(panel, "_DEFAULT_BOOTSTRAP_CATEGORIES", None)
         fetcher = getattr(panel, "_fetch_dashboard_ticket_categories_sync", None)
         if callable(fetcher):
             rows = await asyncio.to_thread(fetcher, int(guild.id))
-            normalized = _normalize_ticket_rows(rows)
+            normalized = _effective_ticket_rows(rows, defaults_raw)
             if normalized:
                 return normalized
 
         seeder = getattr(panel, "_seed_dashboard_ticket_categories_sync", None)
         if callable(seeder):
             rows = await asyncio.to_thread(seeder, int(guild.id))
-            normalized = _normalize_ticket_rows(rows)
+            normalized = _effective_ticket_rows(rows, defaults_raw)
             if normalized:
                 return normalized
 
-        defaults = _normalize_ticket_rows(getattr(panel, "_DEFAULT_BOOTSTRAP_CATEGORIES", None))
+        defaults = _normalize_ticket_rows(defaults_raw)
         if defaults:
             return defaults
     except Exception as e:
