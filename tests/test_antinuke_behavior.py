@@ -129,7 +129,7 @@ def test_mass_delete_threshold_contains_once_and_logs(monkeypatch) -> None:
     incidents: list[dict] = []
 
     async def fake_settings(_guild_id: int):
-        return anti_nuke.normalize_antinuke_settings({})
+        return anti_nuke.normalize_antinuke_settings({"antinuke_enabled": True})
 
     async def fake_audit(_guild, _action_name, *, target_id=None, retries=3):
         _ = retries
@@ -179,7 +179,7 @@ def test_unattributed_destructive_event_never_contains(monkeypatch) -> None:
     contain_calls: list[int] = []
 
     async def fake_settings(_guild_id: int):
-        return anti_nuke.normalize_antinuke_settings({})
+        return anti_nuke.normalize_antinuke_settings({"antinuke_enabled": True})
 
     async def no_audit(*_args, **_kwargs):
         return None
