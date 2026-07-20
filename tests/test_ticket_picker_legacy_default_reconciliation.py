@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from stoney_verify.commands_ext import public_setup_solid as setup
 from stoney_verify.commands_ext import public_tickettool_parity_polish as ticket_menu
 from stoney_verify.tickets_new import panel
 
@@ -81,6 +82,19 @@ def test_legacy_managed_picker_regains_richer_builtin_categories() -> None:
     assert len(keys) == len(set(keys))
 
 
+def test_setup_recommended_categories_share_the_rich_ticket_catalog() -> None:
+    keys = [ticket_menu._canonical_category_key(row) for row in setup.RECOMMENDED_CATEGORIES]
+
+    assert "partnership" in keys
+    assert "cod-services" in keys
+    assert "account-access" in keys
+    assert "payments-refunds" in keys
+    assert "staff-complaint" in keys
+    assert "vouch-referral" in keys
+    assert "giveaway-reward" in keys
+    assert "content-media" in keys
+
+
 def test_custom_owner_category_set_remains_authoritative() -> None:
     custom_rows = [
         *_legacy_managed_rows(),
@@ -118,3 +132,27 @@ def test_ticket_select_exposes_partnership_for_legacy_managed_set() -> None:
     assert "COD Services" in labels
     assert "Account / Access" in labels
     assert "Payments / Refunds" in labels
+
+
+def test_category_manager_button_uses_canonical_completeness() -> None:
+    # Simulate the database after recommended seeding starts from the legacy
+    # managed set. Canonical duplicates such as verification/verification_issue
+    # and bug/technical_support are intentionally not inserted twice.
+    rows = [dict(row) for row in _legacy_managed_rows()]
+    existing_keys = {ticket_menu._canonical_category_key(row) for row in rows}
+
+    for item in setup.RECOMMENDED_CATEGORIES:
+        key = ticket_menu._canonical_category_key(item)
+        if key in existing_keys:
+            continue
+        rows.append(dict(item))
+        existing_keys.add(key)
+
+    view = setup.CategoryManagerView(rows=rows)
+    seed_button = next(
+        child
+        for child in view.children
+        if getattr(child, "custom_id", "") == "stoney_solid:cat_seed"
+    )
+
+    assert seed_button.label == "Check Recommended Options"
