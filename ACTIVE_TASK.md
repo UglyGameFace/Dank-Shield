@@ -2,8 +2,8 @@
 
 ## DS-SPAMGUARD-STARTUP-001 — Make SpamGuard default/startup truth live in production
 
-**Status:** IN PROGRESS — VALIDATION PENDING  
-**Branch:** `fix/spamguard-live-startup-state-reporting`  
+**Status:** IN PROGRESS — VALIDATION PENDING
+**Branch:** `fix/spamguard-live-startup-state-reporting`
 **Base:** current `main` after merged PR #99 / PR #101
 
 ## Single Active Task Lock
