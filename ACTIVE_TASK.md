@@ -2,8 +2,9 @@
 
 ## DS-SPAMGUARD-STARTUP-001 — Make SpamGuard default/startup truth live in production
 
-**Status:** IN PROGRESS — VALIDATION PENDING
+**Status:** READY FOR REVIEW — NOT MERGED — NOT DEPLOYED
 **Branch:** `fix/spamguard-live-startup-state-reporting`
+**PR:** #102
 **Base:** current `main` after merged PR #99 / PR #101
 
 ## Single Active Task Lock
@@ -56,17 +57,26 @@ That makes the SpamGuard defaults import path a guaranteed live SpamGuard runtim
 
 ## Validation
 
-Pending:
+Code head `5f426eba9a8690d5064437081b1139b0bb51d4d6` passed GitHub Actions `Dank Shield CI` run 455:
 
-- Python compile validation.
-- Targeted SpamGuard tests.
-- Full `pytest tests/` regression suite.
-- Standalone tools/audits required by CI.
-- `git diff --check` equivalent / final diff inspection.
-- GitHub Actions on the PR head.
+- Committed diff whitespace check: PASS.
+- Python compile check: PASS.
+- Full unit test suite (`pytest tests/`): PASS, including the new targeted SpamGuard behavior tests.
+- Every standalone tool check: PASS.
+- Public setup text/isolation audit: PASS.
+- Canonical public command surface audit: PASS.
+- Public command/startup friction audit: PASS.
+- Public invite permission audit: PASS.
+- Setup safety audit: PASS.
+- Dank Design Smart Auto-Detect audit: PASS.
+- Role truth ownership audit: PASS.
+- Event boundary ownership audit: PASS.
+
+The final task-record-only head created by this update must also remain green before merge approval.
 
 ## Cleanup / Conflict Inspection
 
+- Final implementation diff is limited to seven task-related paths: SpamGuard defaults/startup reporting, its compatibility shim, behavioral tests, removal of the obsolete static test, and this task record.
 - No new startup guard was added.
 - Dormant `load_all_startup_guards()` remains dormant.
 - No monkey patch was added.
@@ -75,10 +85,13 @@ Pending:
 - `usercustomize.py` unchanged.
 - Old startup-guard module is retained only as a compatibility import shim.
 - Source-shape SpamGuard bootstrap test removed rather than duplicated.
+- PR review-thread inspection found no unresolved review threads before final-head validation.
 
 ## Blockers
 
-None known yet. Validation is still required before this task can be called complete.
+- No known technical blocker remains.
+- Merge into `main` requires explicit user approval.
+- Manual deployment is not authorized and has not occurred.
 
 ## Backlog
 
@@ -94,7 +107,8 @@ Locked while this task is active. Healthchecks heartbeat timing was configured s
 - [x] Warm persisted cache cannot mislabel explicit OFF as a default/error state.
 - [x] No duplicate startup listener is introduced by the compatibility guard.
 - [x] Static SpamGuard bootstrap source-shape test removed/replaced behaviorally.
-- [ ] Targeted tests pass.
-- [ ] Full regression/compile/audits pass.
-- [ ] Final diff contains only task-related permanent code/tests/task record.
-- [ ] GitHub Actions pass on final PR head.
+- [x] Targeted SpamGuard behavior tests pass as part of the full suite.
+- [x] Full regression/compile/audits pass on the implementation head.
+- [x] Final diff contains only task-related permanent code/tests/task record.
+- [ ] Final task-record-only head GitHub Actions must pass.
+- [ ] Merge/deploy requires explicit user approval.
