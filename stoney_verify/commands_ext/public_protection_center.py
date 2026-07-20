@@ -21,6 +21,12 @@ from ..security_stats import (
     ensure_security_stats_display,
     refresh_security_stats_display,
 )
+from ..anti_nuke import (
+    antinuke_permission_health,
+    get_antinuke_settings,
+    normalize_antinuke_settings,
+    save_antinuke_settings,
+)
 from .public_setup_group import _require_setup_permission, dank_group
 
 _ATTACHED = False
@@ -167,6 +173,28 @@ def _parse_csvish_codes(value: Any) -> list[str]:
         code = re.sub(r"[^A-Za-z0-9-]+", "", code)[:32]
         if code and code not in out:
             out.append(code)
+    return out
+
+
+def _parse_antinuke_id_list(value: Any, *, limit: int = 100) -> list[int]:
+    out: list[int] = []
+    seen: set[int] = set()
+
+    for match in re.findall(r"\d{5,25}", str(value or "")):
+        try:
+            item = int(match)
+        except Exception:
+            continue
+
+        if item <= 0 or item in seen:
+            continue
+
+        seen.add(item)
+        out.append(item)
+
+        if len(out) >= limit:
+            break
+
     return out
 
 
@@ -361,12 +389,18 @@ def _protection_embed(guild: discord.Guild, cfg: Any, spam: dict[str, Any], spam
     bad_words = _csv_items(_cfg_value(cfg, "automod_bad_words", ""))
     automod_on = _cfg_bool(cfg, "automod_enabled", False)
     spam_on = bool(spam.get("enabled"))
+    antinuke = normalize_antinuke_settings(cfg)
+    antinuke_missing = antinuke_permission_health(
+        guild,
+        {**antinuke, "antinuke_enabled": True},
+    )
     both_on = automod_on and spam_on
     embed = discord.Embed(
         title="🛡️ Dank Shield Protection Center",
         description=(
-            "One product surface. Two engines underneath:\n"
-            "**Automod** filters message content and links. **Spam Guard** watches behavior, rate, duplicate messages, and invite floods."
+            "One product surface. Three protection engines underneath:\n"
+            "**Automod** filters content and links. **Spam Guard** watches message behavior and floods. "
+            "**AntiNuke** watches audit-log-attributed destructive admin actions."
         ),
         color=discord.Color.green() if both_on else discord.Color.gold() if (automod_on or spam_on) else discord.Color.dark_grey(),
         timestamp=discord.utils.utcnow(),
@@ -410,8 +444,26 @@ def _protection_embed(guild: discord.Guild, cfg: Any, spam: dict[str, Any], spam
         inline=False,
     )
     embed.add_field(
+        name="AntiNuke — destructive action protection",
+        value=(
+            f"**Enabled:** {'✅ Yes' if antinuke['antinuke_enabled'] else '⚪ No — opt in when ready'}\n"
+            f"**Mode:** `{antinuke['antinuke_mode']}`\n"
+            f"**Permission health:** {'✅ Ready' if not antinuke_missing else '❌ Missing: ' + ', '.join(antinuke_missing)}\n"
+            f"**Window:** `{antinuke['antinuke_window_seconds']}s` • "
+            f"**Channel deletes:** `{antinuke['antinuke_channel_delete_threshold']}` • "
+            f"**Role deletes:** `{antinuke['antinuke_role_delete_threshold']}`\n"
+            f"**Mass bans/kicks:** `{antinuke['antinuke_ban_threshold']}` / `{antinuke['antinuke_kick_threshold']}` • "
+            f"**Webhook creates:** `{antinuke['antinuke_webhook_create_threshold']}`\n"
+            f"**Trusted users:** `{len(antinuke['antinuke_trusted_user_ids'])}` • "
+            f"**Trusted roles:** `{len(antinuke['antinuke_trusted_role_ids'])}`"
+        ),
+        inline=False,
+    )
+
+    embed.add_field(
         name="What buttons do",
         value=(
+            "**AntiNuke** = destructive-action protection, containment mode, trusted exemptions, and thresholds.\n"
             "**Edit Spam Guard** = message speed, duplicate messages, invite-flood threshold, timeout length.\n"
             "**Invite Blocker** = live ON/OFF for Discord invite links.\n"
             "**Block All Links** = stop every URL.\n"
@@ -514,6 +566,7 @@ def _decorate_quick_mode_buttons(view: discord.ui.View, cfg: Any, spam: dict[str
     state = _protection_state(cfg, spam or {})
     invite_on = _invite_shield_enabled_for_ui(cfg, spam or {})
     links_on = _link_shield_enabled_for_ui(cfg, spam or {})
+    antinuke = normalize_antinuke_settings(cfg)
     for child in list(getattr(view, "children", []) or []):
         custom_id = str(getattr(child, "custom_id", "") or "")
         if custom_id == "dank_protection:safe":
@@ -539,6 +592,18 @@ def _decorate_quick_mode_buttons(view: discord.ui.View, cfg: Any, spam: dict[str
         elif custom_id == "dank_protection:edit_spamguard":
             child.label = "Spam Guard Actions"
             child.emoji = "🛡️"
+        elif custom_id == "dank_protection:antinuke_toggle":
+            antinuke_on = bool(antinuke["antinuke_enabled"])
+            child.label = f"AntiNuke: {'ON' if antinuke_on else 'OFF'}"
+            child.style = discord.ButtonStyle.success if antinuke_on else discord.ButtonStyle.secondary
+            child.emoji = "🚨" if antinuke_on else "⚪"
+        elif custom_id == "dank_protection:antinuke_mode":
+            child.label = f"Mode: {str(antinuke['antinuke_mode']).upper()}"
+            child.style = (
+                discord.ButtonStyle.danger
+                if antinuke["antinuke_mode"] == "contain"
+                else discord.ButtonStyle.secondary
+            )
         elif custom_id == "dank_protection:live_stats":
             live_stats_on = _cfg_bool(cfg, SECURITY_STATS_ENABLED_KEY, False)
             child.label = f"Live Stats: {'ON' if live_stats_on else 'SET UP'}"
@@ -720,6 +785,323 @@ async def _test_text(interaction: discord.Interaction, text: str) -> None:
         await _send_ephemeral(interaction, f"✅ Would block: **blocked word/phrase `{hit}`**\nNormalized check: `{normalized[:300]}`")
         return
     await _send_ephemeral(interaction, f"⚪ Would not block with current bad-word filters.\nNormalized check: `{normalized[:300]}`")
+
+
+async def _send_updated_protection_snapshot(
+    interaction: discord.Interaction,
+    content: str,
+) -> None:
+    guild = interaction.guild
+    if guild is None:
+        await _send_ephemeral(interaction, "❌ This must be used inside a server.")
+        return
+
+    cfg = await get_guild_config(int(guild.id), refresh=True)
+    spam, spam_source = await _load_spam_settings(int(guild.id))
+
+    await _send_ephemeral(
+        interaction,
+        content,
+        embed=_protection_embed(guild, cfg, spam, spam_source),
+        view=ProtectionCenterView(
+            author_id=int(interaction.user.id),
+            cfg=cfg,
+            spam=spam,
+        ),
+        allowed_mentions=discord.AllowedMentions.none(),
+    )
+
+
+async def _toggle_antinuke(interaction: discord.Interaction) -> None:
+    if not await _require_setup_permission(interaction):
+        return
+
+    guild = interaction.guild
+    if guild is None:
+        await _send_ephemeral(interaction, "❌ This must be used inside a server.")
+        return
+
+    current = await get_antinuke_settings(int(guild.id))
+    target_enabled = not bool(current["antinuke_enabled"])
+
+    candidate = {
+        **current,
+        "antinuke_enabled": target_enabled,
+    }
+
+    if target_enabled:
+        missing = antinuke_permission_health(guild, candidate)
+        if missing:
+            await _send_ephemeral(
+                interaction,
+                "❌ AntiNuke was **not enabled**. Missing: **"
+                + ", ".join(missing)
+                + "**.\n\n"
+                "AntiNuke needs **View Audit Log** to prove who performed destructive actions. "
+                "Contain mode also needs **Manage Roles** so Dank Shield can remove manageable dangerous roles. "
+                "Administrator is **not required**.",
+            )
+            return
+
+    saved = await save_antinuke_settings(
+        int(guild.id),
+        {"antinuke_enabled": target_enabled},
+    )
+
+    await _refresh_panel(
+        interaction,
+        content=(
+            "✅ AntiNuke is now **ON**."
+            if saved["antinuke_enabled"]
+            else "✅ AntiNuke is now **OFF**. Detection settings are saved for later."
+        ),
+    )
+
+
+async def _toggle_antinuke_mode(interaction: discord.Interaction) -> None:
+    if not await _require_setup_permission(interaction):
+        return
+
+    guild = interaction.guild
+    if guild is None:
+        await _send_ephemeral(interaction, "❌ This must be used inside a server.")
+        return
+
+    current = await get_antinuke_settings(int(guild.id))
+    target_mode = "alert" if current["antinuke_mode"] == "contain" else "contain"
+
+    candidate = {
+        **current,
+        "antinuke_mode": target_mode,
+    }
+
+    if current["antinuke_enabled"]:
+        missing = antinuke_permission_health(guild, candidate)
+        if missing:
+            await _send_ephemeral(
+                interaction,
+                "❌ AntiNuke mode was **not changed**. Missing: **"
+                + ", ".join(missing)
+                + "**.\n"
+                "Use **Alert** mode without Manage Roles, or grant only the missing permission. "
+                "Administrator is not required.",
+            )
+            return
+
+    saved = await save_antinuke_settings(
+        int(guild.id),
+        {"antinuke_mode": target_mode},
+    )
+
+    await _refresh_panel(
+        interaction,
+        content=f"✅ AntiNuke response mode set to **{saved['antinuke_mode'].upper()}**.",
+    )
+
+
+class AntiNukeTrustedIdsModal(discord.ui.Modal):
+    def __init__(self, settings: dict[str, Any]) -> None:
+        super().__init__(title="AntiNuke Trusted Exemptions", timeout=300)
+
+        self.trusted_users = discord.ui.TextInput(
+            label="Trusted user IDs",
+            placeholder="123456789012345678, 987654321098765432",
+            default=", ".join(str(x) for x in settings["antinuke_trusted_user_ids"]),
+            required=False,
+            style=discord.TextStyle.paragraph,
+            max_length=1500,
+        )
+
+        self.trusted_roles = discord.ui.TextInput(
+            label="Trusted role IDs",
+            placeholder="123456789012345678, 987654321098765432",
+            default=", ".join(str(x) for x in settings["antinuke_trusted_role_ids"]),
+            required=False,
+            style=discord.TextStyle.paragraph,
+            max_length=1500,
+        )
+
+        self.add_item(self.trusted_users)
+        self.add_item(self.trusted_roles)
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        async def action() -> None:
+            if not await _require_setup_permission(interaction):
+                return
+
+            guild = interaction.guild
+            if guild is None:
+                await _send_ephemeral(interaction, "❌ This must be used inside a server.")
+                return
+
+            users = _parse_antinuke_id_list(self.trusted_users.value)
+            roles = _parse_antinuke_id_list(self.trusted_roles.value)
+
+            await save_antinuke_settings(
+                int(guild.id),
+                {
+                    "antinuke_trusted_user_ids": users,
+                    "antinuke_trusted_role_ids": roles,
+                },
+            )
+
+            await _send_updated_protection_snapshot(
+                interaction,
+                f"✅ AntiNuke trusted exemptions saved: **{len(users)} users** and **{len(roles)} roles**.",
+            )
+
+        await _guard_protection_action(
+            interaction,
+            "protection.antinuke.trusted_ids",
+            action,
+            defer=True,
+        )
+
+
+class AntiNukeThresholdsModal(discord.ui.Modal):
+    def __init__(self, settings: dict[str, Any]) -> None:
+        super().__init__(title="AntiNuke Detection Thresholds", timeout=300)
+
+        self.window_seconds = discord.ui.TextInput(
+            label="Detection window seconds",
+            default=str(settings["antinuke_window_seconds"]),
+            min_length=1,
+            max_length=3,
+            required=True,
+        )
+
+        self.channel_deletes = discord.ui.TextInput(
+            label="Channel deletes before trigger",
+            default=str(settings["antinuke_channel_delete_threshold"]),
+            min_length=1,
+            max_length=2,
+            required=True,
+        )
+
+        self.role_deletes = discord.ui.TextInput(
+            label="Role deletes before trigger",
+            default=str(settings["antinuke_role_delete_threshold"]),
+            min_length=1,
+            max_length=2,
+            required=True,
+        )
+
+        self.member_removals = discord.ui.TextInput(
+            label="Mass bans/kicks before trigger",
+            default=str(settings["antinuke_ban_threshold"]),
+            min_length=1,
+            max_length=2,
+            required=True,
+        )
+
+        self.webhooks = discord.ui.TextInput(
+            label="Webhook creates before trigger",
+            default=str(settings["antinuke_webhook_create_threshold"]),
+            min_length=1,
+            max_length=2,
+            required=True,
+        )
+
+        for item in (
+            self.window_seconds,
+            self.channel_deletes,
+            self.role_deletes,
+            self.member_removals,
+            self.webhooks,
+        ):
+            self.add_item(item)
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        async def action() -> None:
+            if not await _require_setup_permission(interaction):
+                return
+
+            guild = interaction.guild
+            if guild is None:
+                await _send_ephemeral(interaction, "❌ This must be used inside a server.")
+                return
+
+            removal_threshold = _bounded_int(
+                self.member_removals.value,
+                default=5,
+                minimum=2,
+                maximum=50,
+            )
+
+            saved = await save_antinuke_settings(
+                int(guild.id),
+                {
+                    "antinuke_window_seconds": _bounded_int(
+                        self.window_seconds.value,
+                        default=15,
+                        minimum=5,
+                        maximum=120,
+                    ),
+                    "antinuke_channel_delete_threshold": _bounded_int(
+                        self.channel_deletes.value,
+                        default=3,
+                        minimum=2,
+                        maximum=25,
+                    ),
+                    "antinuke_role_delete_threshold": _bounded_int(
+                        self.role_deletes.value,
+                        default=3,
+                        minimum=2,
+                        maximum=25,
+                    ),
+                    "antinuke_ban_threshold": removal_threshold,
+                    "antinuke_kick_threshold": removal_threshold,
+                    "antinuke_webhook_create_threshold": _bounded_int(
+                        self.webhooks.value,
+                        default=3,
+                        minimum=2,
+                        maximum=25,
+                    ),
+                },
+            )
+
+            await _send_updated_protection_snapshot(
+                interaction,
+                "✅ AntiNuke thresholds saved. "
+                f"Window `{saved['antinuke_window_seconds']}s`, "
+                f"channels `{saved['antinuke_channel_delete_threshold']}`, "
+                f"roles `{saved['antinuke_role_delete_threshold']}`, "
+                f"bans/kicks `{saved['antinuke_ban_threshold']}`, "
+                f"webhooks `{saved['antinuke_webhook_create_threshold']}`.",
+            )
+
+        await _guard_protection_action(
+            interaction,
+            "protection.antinuke.thresholds",
+            action,
+            defer=True,
+        )
+
+
+async def _open_antinuke_trusted_modal(interaction: discord.Interaction) -> None:
+    if not await _require_setup_permission(interaction):
+        return
+
+    guild = interaction.guild
+    if guild is None:
+        await _send_ephemeral(interaction, "❌ This must be used inside a server.")
+        return
+
+    settings = await get_antinuke_settings(int(guild.id))
+    await interaction.response.send_modal(AntiNukeTrustedIdsModal(settings))
+
+
+async def _open_antinuke_thresholds_modal(interaction: discord.Interaction) -> None:
+    if not await _require_setup_permission(interaction):
+        return
+
+    guild = interaction.guild
+    if guild is None:
+        await _send_ephemeral(interaction, "❌ This must be used inside a server.")
+        return
+
+    settings = await get_antinuke_settings(int(guild.id))
+    await interaction.response.send_modal(AntiNukeThresholdsModal(settings))
 
 
 class SpamGuardSettingsModal(discord.ui.Modal):
@@ -1072,6 +1454,62 @@ class ProtectionCenterView(discord.ui.View):
             defer=True,
         )
 
+    @discord.ui.button(label="AntiNuke", emoji="⚪", style=discord.ButtonStyle.secondary, custom_id="dank_protection:antinuke_toggle", row=4)
+    async def antinuke_toggle_button(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+
+        async def action() -> None:
+            await _toggle_antinuke(interaction)
+
+        await _guard_protection_action(
+            interaction,
+            "protection.antinuke.toggle",
+            action,
+            defer=True,
+        )
+
+    @discord.ui.button(label="Mode", emoji="🛡️", style=discord.ButtonStyle.secondary, custom_id="dank_protection:antinuke_mode", row=4)
+    async def antinuke_mode_button(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+
+        async def action() -> None:
+            await _toggle_antinuke_mode(interaction)
+
+        await _guard_protection_action(
+            interaction,
+            "protection.antinuke.mode",
+            action,
+            defer=True,
+        )
+
+    @discord.ui.button(label="Trusted IDs", emoji="✅", style=discord.ButtonStyle.secondary, custom_id="dank_protection:antinuke_trusted", row=4)
+    async def antinuke_trusted_button(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+
+        async def action() -> None:
+            await _open_antinuke_trusted_modal(interaction)
+
+        await _guard_protection_action(
+            interaction,
+            "protection.antinuke.open_trusted",
+            action,
+            defer=False,
+        )
+
+    @discord.ui.button(label="Thresholds", emoji="📊", style=discord.ButtonStyle.secondary, custom_id="dank_protection:antinuke_thresholds", row=4)
+    async def antinuke_thresholds_button(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+
+        async def action() -> None:
+            await _open_antinuke_thresholds_modal(interaction)
+
+        await _guard_protection_action(
+            interaction,
+            "protection.antinuke.open_thresholds",
+            action,
+            defer=False,
+        )
+
     @discord.ui.button(label="Refresh", emoji="🔄", style=discord.ButtonStyle.secondary, custom_id="dank_protection:refresh", row=3)
     async def refresh_button(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
@@ -1098,7 +1536,7 @@ class ProtectionCenterView(discord.ui.View):
         await _guard_protection_action(interaction, "protection.close", action, defer=False)
 
 
-@dank_group.command(name="protection", description="Open the unified Automod + Spam Guard protection center.")
+@dank_group.command(name="protection", description="Open the unified Automod + Spam Guard + AntiNuke protection center.")
 async def protection_center(interaction: discord.Interaction) -> None:
     if not await _require_setup_permission(interaction):
         return
