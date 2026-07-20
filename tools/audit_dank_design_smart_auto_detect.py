@@ -7,7 +7,9 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 MAJORITY = (ROOT / "stoney_verify/services/server_design_majority_layout.py").read_text(encoding="utf-8")
 STUDIO = (ROOT / "stoney_verify/services/server_design_studio.py").read_text(encoding="utf-8")
-COMMANDS = (ROOT / "stoney_verify/commands_ext/public_design_commands.py").read_text(encoding="utf-8")
+DESIGN_REGISTRAR = (ROOT / "stoney_verify/commands_ext/public_design_group.py").read_text(encoding="utf-8")
+DESIGN_ENHANCEMENTS = (ROOT / "stoney_verify/commands_ext/public_design_enhancements.py").read_text(encoding="utf-8")
+DESIGN_BRIDGE = (ROOT / "stoney_verify/startup_guards/server_design_majority_layout_guard.py").read_text(encoding="utf-8")
 TESTS = (ROOT / "tests/test_server_design_category_aware_auto_detect.py").read_text(encoding="utf-8")
 
 
@@ -72,10 +74,19 @@ def main() -> int:
         if marker not in TESTS:
             failures.append(f"category-aware regression coverage missing: {marker}")
 
-    if "build_category_aware_options" not in COMMANDS:
-        failures.append("public design command flow does not use category-aware options")
-    if "annotate_category_aware_plan_items" not in COMMANDS:
-        failures.append("public design preview flow does not annotate category-aware decisions")
+    # Verify the actual native registration/execution path instead of a deleted
+    # legacy command file. /dank design registers normally, activates the design
+    # enhancement layer, and that layer installs the category-aware plan bridge.
+    if "activate_public_design_enhancements" not in DESIGN_REGISTRAR:
+        failures.append("public design registrar does not activate the design enhancement layer")
+    if "server_design_majority_layout_guard" not in DESIGN_ENHANCEMENTS:
+        failures.append("public design enhancement layer does not activate the majority-layout bridge")
+    if "majority.build_category_aware_options" not in DESIGN_BRIDGE:
+        failures.append("live Smart Auto-Detect flow does not build category-aware options")
+    if "majority.annotate_category_aware_plan_items" not in DESIGN_BRIDGE:
+        failures.append("live Smart Auto-Detect preview flow does not annotate category-aware decisions")
+    if "command_guard.build_design_plan = _build_design_plan_with_majority" not in DESIGN_BRIDGE:
+        failures.append("category-aware Smart Auto-Detect bridge is not installed on the active design plan path")
 
     if failures:
         print("DANK DESIGN SMART AUTO-DETECT AUDIT FAILED")
@@ -84,7 +95,7 @@ def main() -> int:
         return 1
 
     print("DANK DESIGN SMART AUTO-DETECT AUDIT OK")
-    print("category_local=yes raw_separator_identity=yes deterministic=yes keep_existing_exact=yes duplicate_helpers=no")
+    print("category_local=yes raw_separator_identity=yes deterministic=yes keep_existing_exact=yes duplicate_helpers=no native_flow=yes")
     return 0
 
 
