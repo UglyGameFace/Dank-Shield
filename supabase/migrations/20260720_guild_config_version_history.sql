@@ -3,12 +3,16 @@
 -- ------------------------------------------------------------
 -- Durable per-guild configuration version history.
 --
+-- Versioned live configuration domains:
+-- - guild_configs / guild_config: core Dank Shield settings and Discord IDs;
+-- - ticket_categories: active ticket choices plus category-stored form config.
+--
 -- Goals:
--- - automatically snapshot successful guild config writes;
--- - seed a baseline for already-configured guilds;
--- - keep canonical and legacy config-table histories isolated;
+-- - automatically snapshot successful configuration changes;
+-- - seed baselines for already-configured guilds;
+-- - isolate canonical/legacy config-table histories;
 -- - ignore lifecycle/write-audit-only noise;
--- - retain only the newest 50 versions per guild + config table;
+-- - retain newest 50 versions per guild + configuration domain;
 -- - keep RLS enabled with no public policies (service-role bot access only).
 --
 -- Safe to run more than once.
@@ -108,6 +112,37 @@ begin
 end;
 $$;
 
+create or replace function public.normalize_ticket_category_snapshot(payload jsonb)
+returns jsonb
+language sql
+immutable
+as $$
+    select jsonb_build_object(
+        'guild_id', coalesce(payload ->> 'guild_id', ''),
+        'rows', coalesce(
+            (
+                select jsonb_agg(
+                    cleaned
+                    order by sort_order, slug, cleaned::text
+                )
+                from (
+                    select
+                        item
+                            - 'id'
+                            - 'created_at'
+                            - 'updated_at' as cleaned,
+                        coalesce((item ->> 'sort_order')::integer, 999) as sort_order,
+                        coalesce(item ->> 'slug', '') as slug
+                    from jsonb_array_elements(
+                        coalesce(payload -> 'rows', '[]'::jsonb)
+                    ) as item
+                ) normalized_rows
+            ),
+            '[]'::jsonb
+        )
+    );
+$$;
+
 create or replace function public.capture_guild_config_version()
 returns trigger
 language plpgsql
@@ -136,15 +171,12 @@ begin
     if tg_op = 'UPDATE' then
         previous_payload := to_jsonb(old);
 
-        -- Ignore updates that do not change functional configuration.
         if public.normalize_guild_config_snapshot(payload)
            = public.normalize_guild_config_snapshot(previous_payload) then
             return new;
         end if;
     end if;
 
-    -- Avoid only a consecutive functional duplicate. Returning to an older
-    -- configuration after another change is still a real new version.
     select v.snapshot
       into latest_snapshot
       from public.guild_config_versions v
@@ -214,6 +246,100 @@ begin
 end;
 $$;
 
+create or replace function public.capture_ticket_category_version()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+    resolved_guild_id text;
+    payload jsonb;
+    category_rows jsonb;
+    latest_snapshot jsonb;
+begin
+    if tg_op = 'DELETE' then
+        resolved_guild_id := nullif(to_jsonb(old) ->> 'guild_id', '');
+    else
+        resolved_guild_id := nullif(to_jsonb(new) ->> 'guild_id', '');
+    end if;
+
+    if resolved_guild_id is null then
+        if tg_op = 'DELETE' then
+            return old;
+        end if;
+        return new;
+    end if;
+
+    select coalesce(
+        jsonb_agg(
+            to_jsonb(tc)
+            order by
+                coalesce((to_jsonb(tc) ->> 'sort_order')::integer, 999),
+                coalesce(to_jsonb(tc) ->> 'slug', ''),
+                coalesce(to_jsonb(tc) ->> 'id', '')
+        ),
+        '[]'::jsonb
+    )
+      into category_rows
+      from public.ticket_categories tc
+     where tc.guild_id = resolved_guild_id;
+
+    payload := jsonb_build_object(
+        'guild_id', resolved_guild_id,
+        'rows', category_rows
+    );
+
+    select v.snapshot
+      into latest_snapshot
+      from public.guild_config_versions v
+     where v.guild_id = resolved_guild_id
+       and v.config_table = 'ticket_categories'
+     order by v.created_at desc, v.version_id desc
+     limit 1;
+
+    if latest_snapshot is not null
+       and public.normalize_ticket_category_snapshot(latest_snapshot)
+           = public.normalize_ticket_category_snapshot(payload) then
+        if tg_op = 'DELETE' then
+            return old;
+        end if;
+        return new;
+    end if;
+
+    insert into public.guild_config_versions (
+        guild_id,
+        config_table,
+        snapshot,
+        source,
+        mode,
+        is_manual
+    ) values (
+        resolved_guild_id,
+        'ticket_categories',
+        payload,
+        'ticket_categories',
+        lower(tg_op),
+        false
+    );
+
+    delete from public.guild_config_versions
+    where version_id in (
+        select version_id
+        from public.guild_config_versions
+        where guild_id = resolved_guild_id
+          and config_table = 'ticket_categories'
+        order by created_at desc, version_id desc
+        offset 50
+    );
+
+    if tg_op = 'DELETE' then
+        return old;
+    end if;
+    return new;
+end;
+$$;
+
 -- Seed one baseline for already-configured canonical guild rows.
 do $$
 begin
@@ -278,6 +404,50 @@ begin
 end;
 $$;
 
+-- Seed one baseline for each existing active ticket-choice set.
+do $$
+begin
+    if to_regclass('public.ticket_categories') is not null then
+        execute $seed$
+            insert into public.guild_config_versions (
+                guild_id,
+                config_table,
+                snapshot,
+                source,
+                mode,
+                is_manual
+            )
+            select
+                tc.guild_id::text,
+                'ticket_categories',
+                jsonb_build_object(
+                    'guild_id',
+                    tc.guild_id::text,
+                    'rows',
+                    jsonb_agg(
+                        to_jsonb(tc)
+                        order by
+                            coalesce((to_jsonb(tc) ->> 'sort_order')::integer, 999),
+                            coalesce(to_jsonb(tc) ->> 'slug', ''),
+                            coalesce(to_jsonb(tc) ->> 'id', '')
+                    )
+                ),
+                'migration_baseline',
+                'baseline',
+                false
+            from public.ticket_categories tc
+            where not exists (
+                select 1
+                from public.guild_config_versions v
+                where v.guild_id = tc.guild_id::text
+                  and v.config_table = 'ticket_categories'
+            )
+            group by tc.guild_id
+        $seed$;
+    end if;
+end;
+$$;
+
 -- Attach to the canonical table when present.
 do $$
 begin
@@ -305,6 +475,21 @@ begin
             after insert or update on public.guild_config
             for each row
             execute function public.capture_guild_config_version()
+        ';
+    end if;
+end;
+$$;
+
+-- Version the active ticket choices and category-stored form configuration.
+do $$
+begin
+    if to_regclass('public.ticket_categories') is not null then
+        execute 'drop trigger if exists trg_capture_ticket_category_version on public.ticket_categories';
+        execute '
+            create trigger trg_capture_ticket_category_version
+            after insert or update or delete on public.ticket_categories
+            for each row
+            execute function public.capture_ticket_category_version()
         ';
     end if;
 end;
