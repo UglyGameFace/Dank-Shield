@@ -1706,6 +1706,19 @@ async def _open_health_check(
 
 
 
+async def _open_bot_access_check(
+    interaction: discord.Interaction,
+) -> None:
+    """Open the read-only activity coverage access check."""
+
+    if not await solid._require_setup_permission(interaction):
+        return
+
+    from stoney_verify import setup_activity_access
+
+    await setup_activity_access.open_activity_access_check(interaction)
+
+
 async def _open_permission_repair(
     interaction: discord.Interaction,
 ) -> None:
@@ -1917,11 +1930,12 @@ async def _open_advanced_monitoring_repair(
     await _open_advanced_section(
         interaction,
         title="🛡️ Logs & Safety",
-        description="Choose what gets logged, change spam and raid protection, or fix channel access.",
+        description="Choose what gets logged, change spam and raid protection, check bot activity access, or repair channel permissions.",
         items=(
             "🧾 **Choose What Gets Logged** — choose which server actions are saved in the log.",
             "🛡️ **Spam & Raid Protection** — change spam and raid safety settings.",
-            "🛠️ **Fix Channel Permissions** — check and fix access to Dank Shield channels.",
+            "🔐 **Check Bot Access** — see exactly which channels Dank Shield cannot inspect for accurate activity tracking.",
+            "🛠️ **Fix Channel Permissions** — preview broader channel permission repairs before applying anything.",
         ),
         view=AdvancedMonitoringRepairView(),
     )
@@ -3624,6 +3638,10 @@ class AdvancedMonitoringRepairView(discord.ui.View):
     @discord.ui.button(label="Spam & Raid Protection", emoji="🛡️", style=discord.ButtonStyle.primary, custom_id="dank_setup_advanced_monitoring:protection", row=0)
     async def protection(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         await _open_protection_options(interaction)
+
+    @discord.ui.button(label="Check Bot Access", emoji="🔐", style=discord.ButtonStyle.primary, custom_id="dank_setup_advanced_monitoring:bot_access", row=1)
+    async def bot_access(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        await _open_bot_access_check(interaction)
 
     @discord.ui.button(label="Fix Channel Permissions", emoji="🛠️", style=discord.ButtonStyle.primary, custom_id="dank_setup_advanced_monitoring:permission_repair", row=1)
     async def permission_repair(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
