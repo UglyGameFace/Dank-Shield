@@ -45,10 +45,10 @@ def _reset_runtime_state() -> None:
     anti_nuke._SEEN_AUDIT_ENTRY_IDS.clear()
 
 
-def test_default_antinuke_policy_is_enabled_and_containing() -> None:
+def test_default_antinuke_policy_is_opt_in_and_containing_when_enabled() -> None:
     settings = anti_nuke.normalize_antinuke_settings({})
 
-    assert settings["antinuke_enabled"] is True
+    assert settings["antinuke_enabled"] is False
     assert settings["antinuke_mode"] == "contain"
     assert settings["antinuke_channel_delete_threshold"] == 3
     assert settings["antinuke_role_delete_threshold"] == 3

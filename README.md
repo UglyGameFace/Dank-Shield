@@ -31,6 +31,7 @@ Invite Dank Shield with permissions that allow it to manage the workflow:
 
 - Manage Channels
 - Manage Roles
+- View Audit Log
 - View Channels
 - Send Messages
 - Embed Links

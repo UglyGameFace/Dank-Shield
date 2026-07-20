@@ -30,7 +30,7 @@ from .modlog import _post_modlog
 
 
 ANTINUKE_DEFAULTS: dict[str, Any] = {
-    "antinuke_enabled": True,
+    "antinuke_enabled": False,
     "antinuke_mode": "contain",
     "antinuke_window_seconds": 15,
     "antinuke_channel_delete_threshold": 3,

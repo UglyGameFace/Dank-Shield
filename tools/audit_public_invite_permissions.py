@@ -12,6 +12,7 @@ REQUIRED_README_MARKERS = [
     "Invite Dank Shield with permissions",
     "Manage Channels",
     "Manage Roles",
+    "View Audit Log",
     "View Channels",
     "Send Messages",
     "Embed Links",
