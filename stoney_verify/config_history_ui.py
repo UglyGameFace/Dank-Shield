@@ -8,9 +8,12 @@ from typing import Any, Mapping
 import discord
 
 from .config_history import (
+    TICKET_CATEGORIES_TABLE,
     changed_config_keys,
+    changed_ticket_category_slugs,
     create_manual_backup,
     get_config_version,
+    get_current_ticket_categories,
     list_config_versions,
     restore_config_version,
 )
@@ -50,23 +53,36 @@ def _format_timestamp(value: Any) -> str:
         return text[:40]
 
 
+def _version_domain(row: Mapping[str, Any]) -> str:
+    if _safe_str(row.get("config_table")) == TICKET_CATEGORIES_TABLE:
+        return "Ticket Choices"
+    return "Core Settings"
+
+
 def _version_source(row: Mapping[str, Any]) -> str:
-    if bool(row.get("is_manual")):
-        return "Manual backup"
-    source = _safe_str(row.get("source"), "Automatic change")
+    domain = _version_domain(row)
+    source = _safe_str(row.get("source"), "automatic_change")
+
     if source == "pre_restore_backup":
-        return "Pre-restore safety backup"
+        return f"Pre-restore safety backup • {domain}"
     if source == "config_history_restore":
-        return "Restore"
-    return source.replace("_", " ").strip().title()[:80]
+        return f"Restore • {domain}"
+    if bool(row.get("is_manual")):
+        return f"Manual backup • {domain}"
+    if source == "ticket_categories":
+        mode = _safe_str(row.get("mode"), "change").replace("_", " ").title()
+        return f"Ticket Choices • {mode}"
+    if source == "migration_baseline":
+        return f"Initial baseline • {domain}"
+    return f"{source.replace('_', ' ').strip().title()[:60]} • {domain}"
 
 
 def _version_option(row: Mapping[str, Any]) -> discord.SelectOption | None:
     version_id = _safe_int(row.get("version_id"), 0)
     if version_id <= 0:
         return None
-    label = f"Version #{version_id} • {_version_source(row)}"[:100]
-    description = _format_timestamp(row.get("created_at"))[:100]
+    label = f"#{version_id} • {_version_domain(row)}"[:100]
+    description = f"{_version_source(row)} • {_format_timestamp(row.get('created_at'))}"[:100]
     emoji = "💾" if bool(row.get("is_manual")) else "🕘"
     return discord.SelectOption(
         label=label,
@@ -121,8 +137,8 @@ def _history_embed(
     embed = discord.Embed(
         title="💾 Backups & Version History",
         description=(
-            "Dank Shield keeps saved configuration versions so you can recover from a bad settings change. "
-            "This history stores Dank Shield configuration only—it does not clone or recreate your Discord server."
+            "Dank Shield keeps versions of **Core Settings** and **Ticket Choices** so you can recover from a bad configuration change. "
+            "Ticket-choice backups include category-stored form questions. This does not clone or recreate your Discord server."
         ),
         color=discord.Color.red() if error else discord.Color.blurple(),
         timestamp=discord.utils.utcnow(),
@@ -138,7 +154,8 @@ def _history_embed(
             if version_id <= 0:
                 continue
             lines.append(
-                f"**#{version_id}** • {_version_source(row)}\n"
+                f"**#{version_id} • {_version_domain(row)}**\n"
+                f"{_version_source(row)}\n"
                 f"{_format_timestamp(row.get('created_at'))}"
             )
         embed.add_field(
@@ -149,8 +166,8 @@ def _history_embed(
         embed.add_field(
             name="How to Restore",
             value=(
-                "Choose a version from the menu. You will see its details first. "
-                "Restoring always requires a separate confirmation and creates a safety backup of the current config first."
+                "Choose a version from the menu. You will see exactly whether it is **Core Settings** or **Ticket Choices** before restoring. "
+                "Restore always requires a separate confirmation and creates a safety backup first."
             ),
             inline=False,
         )
@@ -158,18 +175,22 @@ def _history_embed(
         embed.add_field(
             name="No Versions Yet",
             value=(
-                "Press **Create Backup** to save the current configuration now. "
-                "Automatic versions will also appear after future saved configuration changes."
+                "Press **Create Backup** to save the current core settings and ticket choices now. "
+                "Automatic versions will also appear after future saved changes."
             ),
             inline=False,
         )
-    embed.set_footer(text=f"Guild {guild.id} • newest 50 versions retained")
+    embed.set_footer(text=f"Guild {guild.id} • newest 50 versions retained per configuration domain")
     return embed
 
 
 class ConfigHistorySelect(discord.ui.Select):
     def __init__(self, versions: list[dict[str, Any]]) -> None:
-        options = [option for row in versions[:25] if (option := _version_option(row)) is not None]
+        options = [
+            option
+            for row in versions[:25]
+            if (option := _version_option(row)) is not None
+        ]
         super().__init__(
             placeholder="Choose a saved version to inspect…",
             min_values=1,
@@ -206,7 +227,9 @@ class ConfigHistoryView(discord.ui.View):
             return
         guild = interaction.guild
         if guild is None:
-            return await interaction.response.send_message("❌ This must be used inside a server.", ephemeral=True)
+            return await interaction.response.send_message(
+                "❌ This must be used inside a server.", ephemeral=True
+            )
         await _safe_defer_update(interaction)
         try:
             backup = await create_manual_backup(
@@ -214,9 +237,26 @@ class ConfigHistoryView(discord.ui.View):
                 actor_id=int(interaction.user.id),
                 reason="Manual backup from /dank setup",
             )
-            version_id = _safe_int(backup.get("version_id"), 0)
-            message = f"Created configuration backup **#{version_id}**." if version_id > 0 else "Created a configuration backup."
-            await open_config_history(interaction, saved_message=message, already_deferred=True)
+            versions = [
+                row
+                for row in (backup.get("backup_versions") or [])
+                if isinstance(row, Mapping)
+            ]
+            parts: list[str] = []
+            for row in versions:
+                version_id = _safe_int(row.get("version_id"), 0)
+                if version_id > 0:
+                    parts.append(f"**{_version_domain(row)} #{version_id}**")
+            message = (
+                "Created backup set: " + " • ".join(parts) + "."
+                if parts
+                else "Created a configuration backup."
+            )
+            await open_config_history(
+                interaction,
+                saved_message=message,
+                already_deferred=True,
+            )
         except Exception as exc:
             await open_config_history(
                 interaction,
@@ -315,7 +355,9 @@ class RestoreConfigConfirmView(discord.ui.View):
             return
         guild = interaction.guild
         if guild is None:
-            return await interaction.response.send_message("❌ This must be used inside a server.", ephemeral=True)
+            return await interaction.response.send_message(
+                "❌ This must be used inside a server.", ephemeral=True
+            )
         await _safe_defer_update(interaction)
         try:
             result = await restore_config_version(
@@ -324,11 +366,18 @@ class RestoreConfigConfirmView(discord.ui.View):
                 actor_id=int(interaction.user.id),
                 reason=f"Owner confirmed restore of config version {self.version_id}",
             )
-            restored_id = _safe_int(result.get("restored_from_version_id"), self.version_id)
+            restored_id = _safe_int(
+                result.get("restored_from_version_id"), self.version_id
+            )
+            restored_domain = (
+                "Ticket Choices"
+                if _safe_str(result.get("config_table")) == TICKET_CATEGORIES_TABLE
+                else "Core Settings"
+            )
             await open_config_history(
                 interaction,
                 saved_message=(
-                    f"Restored configuration version **#{restored_id}**. "
+                    f"Restored **{restored_domain} version #{restored_id}**. "
                     "The configuration that was active immediately before restore was saved as a safety backup."
                 ),
                 already_deferred=True,
@@ -362,7 +411,9 @@ async def open_config_history(
         return
     guild = interaction.guild
     if guild is None:
-        return await interaction.response.send_message("❌ This must be used inside a server.", ephemeral=True)
+        return await interaction.response.send_message(
+            "❌ This must be used inside a server.", ephemeral=True
+        )
     if not already_deferred:
         await _safe_defer_update(interaction)
 
@@ -383,19 +434,31 @@ async def open_config_history(
     await _edit(interaction, embed=embed, view=view)
 
 
-async def open_config_version_detail(interaction: discord.Interaction, version_id: int) -> None:
+async def open_config_version_detail(
+    interaction: discord.Interaction,
+    version_id: int,
+) -> None:
     if not await _require_setup_permission(interaction):
         return
     guild = interaction.guild
     if guild is None:
-        return await interaction.response.send_message("❌ This must be used inside a server.", ephemeral=True)
+        return await interaction.response.send_message(
+            "❌ This must be used inside a server.", ephemeral=True
+        )
     await _safe_defer_update(interaction)
 
     try:
         version = await get_config_version(int(guild.id), int(version_id))
         snapshot = _snapshot(version)
-        current = await get_guild_config(int(guild.id), refresh=True)
-        changed = changed_config_keys(snapshot, current)
+        is_ticket_choices = (
+            _safe_str(version.get("config_table")) == TICKET_CATEGORIES_TABLE
+        )
+        if is_ticket_choices:
+            current_rows = await get_current_ticket_categories(int(guild.id))
+            changed = changed_ticket_category_slugs(snapshot, current_rows)
+        else:
+            current = await get_guild_config(int(guild.id), refresh=True)
+            changed = changed_config_keys(snapshot, current)
     except Exception as exc:
         return await open_config_history(
             interaction,
@@ -403,48 +466,111 @@ async def open_config_version_detail(interaction: discord.Interaction, version_i
             already_deferred=True,
         )
 
+    domain = _version_domain(version)
     embed = discord.Embed(
-        title=f"🕘 Configuration Version #{int(version_id)}",
+        title=f"🕘 {domain} Version #{int(version_id)}",
         description=(
             "Review this version before restoring it. Nothing changes until you press **Restore This Version** and then confirm again."
         ),
         color=discord.Color.blurple(),
         timestamp=discord.utils.utcnow(),
     )
-    embed.add_field(name="Saved", value=_format_timestamp(version.get("created_at")), inline=False)
+    embed.add_field(
+        name="Saved",
+        value=_format_timestamp(version.get("created_at")),
+        inline=False,
+    )
     embed.add_field(name="Source", value=_version_source(version), inline=False)
     reason = _safe_str(version.get("reason"))
     if reason:
         embed.add_field(name="Reason", value=reason[:1024], inline=False)
-    embed.add_field(
-        name="Different From Current Config",
-        value=(
-            f"**{len(changed)} setting(s)** differ.\n"
-            + (", ".join(f"`{key}`" for key in changed[:20]) if changed else "This version matches the current functional configuration.")
-        )[:1024],
-        inline=False,
+
+    if is_ticket_choices:
+        embed.add_field(
+            name="Different From Current Ticket Choices",
+            value=(
+                f"**{len(changed)} ticket choice(s)** differ.\n"
+                + (
+                    ", ".join(f"`{slug}`" for slug in changed[:20])
+                    if changed
+                    else "This version matches the current functional ticket choices."
+                )
+            )[:1024],
+            inline=False,
+        )
+        safety_text = (
+            "Restoring this version changes Dank Shield's saved **ticket choices and category-stored form configuration** only. "
+            "It does **not** delete or recreate Discord roles/channels. Current ticket choices are backed up first."
+        )
+    else:
+        embed.add_field(
+            name="Different From Current Core Settings",
+            value=(
+                f"**{len(changed)} setting(s)** differ.\n"
+                + (
+                    ", ".join(f"`{key}`" for key in changed[:20])
+                    if changed
+                    else "This version matches the current functional core configuration."
+                )
+            )[:1024],
+            inline=False,
+        )
+        safety_text = (
+            "Restoring this version changes Dank Shield's saved **core settings and Discord ID references** only. "
+            "It does **not** delete or recreate Discord roles/channels. Current core settings are backed up first."
+        )
+
+    embed.add_field(name="Restore Safety", value=safety_text, inline=False)
+    await _edit(
+        interaction,
+        embed=embed,
+        view=ConfigVersionDetailView(int(version_id)),
     )
-    embed.add_field(
-        name="Restore Safety",
-        value=(
-            "Restoring changes Dank Shield's saved configuration references and settings only. "
-            "It does **not** delete or recreate Discord roles/channels. The current configuration is backed up first."
-        ),
-        inline=False,
-    )
-    await _edit(interaction, embed=embed, view=ConfigVersionDetailView(int(version_id)))
 
 
-async def open_restore_confirmation(interaction: discord.Interaction, version_id: int) -> None:
+async def open_restore_confirmation(
+    interaction: discord.Interaction,
+    version_id: int,
+) -> None:
     if not await _require_setup_permission(interaction):
         return
+    guild = interaction.guild
+    if guild is None:
+        return await interaction.response.send_message(
+            "❌ This must be used inside a server.", ephemeral=True
+        )
     await _safe_defer_update(interaction)
+
+    try:
+        version = await get_config_version(int(guild.id), int(version_id))
+    except Exception as exc:
+        return await open_config_history(
+            interaction,
+            saved_message=f"Could not confirm that version: `{type(exc).__name__}: {str(exc)[:240]}`",
+            already_deferred=True,
+        )
+
+    domain = _version_domain(version)
+    is_ticket_choices = (
+        _safe_str(version.get("config_table")) == TICKET_CATEGORIES_TABLE
+    )
+    what_changes = (
+        "the selected saved ticket choices and category-stored form configuration"
+        if is_ticket_choices
+        else "the selected saved core settings and Discord ID references"
+    )
+    current_backup = (
+        "current ticket choices"
+        if is_ticket_choices
+        else "current core settings"
+    )
+
     embed = discord.Embed(
-        title="⚠️ Confirm Configuration Restore",
+        title=f"⚠️ Confirm {domain} Restore",
         description=(
-            f"Restore saved configuration **version #{int(version_id)}**?\n\n"
-            "Dank Shield will first save the configuration you have right now as a safety backup. "
-            "Then it will restore the selected saved settings and Discord ID references.\n\n"
+            f"Restore saved **{domain} version #{int(version_id)}**?\n\n"
+            f"Dank Shield will first save the {current_backup} as a safety backup. "
+            f"Then it will restore {what_changes}.\n\n"
             "**No Discord roles or channels are deleted, recreated, or renamed by this restore.**"
         ),
         color=discord.Color.orange(),
@@ -455,7 +581,11 @@ async def open_restore_confirmation(interaction: discord.Interaction, version_id
         value="Press **Confirm Restore** to continue, or **Cancel** to go back without changing anything.",
         inline=False,
     )
-    await _edit(interaction, embed=embed, view=RestoreConfigConfirmView(int(version_id)))
+    await _edit(
+        interaction,
+        embed=embed,
+        view=RestoreConfigConfirmView(int(version_id)),
+    )
 
 
 __all__ = [
