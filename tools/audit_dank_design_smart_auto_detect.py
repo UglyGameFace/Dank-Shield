@@ -18,9 +18,6 @@ def main() -> int:
         "def infer_category_local_layouts(",
         "def build_category_aware_options(",
         "def annotate_category_aware_plan_items(",
-        # Separator identity must compare the raw stored separator value. Do not
-        # normalize or strip whitespace here: "│" and " │ " are different styles.
-        "raw_value == expected_value",
         "sorted(set(ephemeral_ids))",
         "sorted(set(preserve_ids))",
         "sorted(groups.items(), key=lambda item: item[0])",
@@ -30,6 +27,21 @@ def main() -> int:
     for marker in required_majority:
         if marker not in MAJORITY:
             failures.append(f"majority layout missing contract marker: {marker}")
+
+    # Separator identity must compare the raw stored separator value. Do not
+    # normalize or strip whitespace here: "│" and " │ " are different styles.
+    separator_helper_start = MAJORITY.find("def _separator_spec_exists(")
+    separator_helper_end = MAJORITY.find("\ndef ensure_separator_spec(", separator_helper_start)
+    if separator_helper_start < 0 or separator_helper_end < 0:
+        failures.append("separator identity helper is missing")
+    else:
+        separator_helper = MAJORITY[separator_helper_start:separator_helper_end]
+        if 'raw_value = str(getattr(spec, "value", "") or "")' not in separator_helper:
+            failures.append("separator identity helper does not read the raw stored separator value")
+        if "raw_value == value" not in separator_helper:
+            failures.append("separator identity helper does not compare the raw stored separator value directly")
+        if ".strip(" in separator_helper:
+            failures.append("separator identity helper strips whitespace and would collapse compact/spaced separators")
 
     for function_name in (
         "_fail_repair_item",
