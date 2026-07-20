@@ -2,10 +2,10 @@ from __future__ import annotations
 
 """Durable guild configuration backup, history, and restore service.
 
-The automatic snapshot owner is the Supabase trigger installed by
+Automatic snapshots are owned by the Supabase trigger installed by
 ``20260720_guild_config_version_history.sql``. This module provides the bot-side
 read/manual-backup/restore API without patching config writers or introducing a
-parallel configuration source of truth.
+parallel live configuration source.
 """
 
 import asyncio
@@ -105,7 +105,7 @@ def _fetch_current_config_row_sync(guild_id: int) -> tuple[str, dict[str, Any]]:
             )
             rows = getattr(response, "data", None) or []
             if rows and isinstance(rows[0], Mapping):
-                return table_name, dict(rows[0])
+                return str(table_name), dict(rows[0])
         except Exception as exc:
             last_error = exc
             if _is_missing_table_error(exc):
@@ -117,17 +117,23 @@ def _fetch_current_config_row_sync(guild_id: int) -> tuple[str, dict[str, Any]]:
     raise LookupError(f"No saved guild configuration exists for guild {gid}.")
 
 
-def _fetch_version_sync(guild_id: int, version_id: int) -> dict[str, Any]:
+def _fetch_version_sync(
+    guild_id: int,
+    version_id: int,
+    *,
+    config_table: Optional[str] = None,
+) -> dict[str, Any]:
     sb = _require_supabase()
     try:
-        response = (
+        query = (
             sb.table(CONFIG_HISTORY_TABLE)
             .select("*")
             .eq("guild_id", str(int(guild_id)))
             .eq("version_id", int(version_id))
-            .limit(1)
-            .execute()
         )
+        if _safe_str(config_table):
+            query = query.eq("config_table", _safe_str(config_table))
+        response = query.limit(1).execute()
     except Exception as exc:
         if _is_missing_table_error(exc):
             raise RuntimeError(
@@ -143,14 +149,27 @@ def _fetch_version_sync(guild_id: int, version_id: int) -> dict[str, Any]:
     return dict(rows[0])
 
 
+def _get_config_version_for_current_table_sync(guild_id: int, version_id: int) -> dict[str, Any]:
+    table_name, _current = _fetch_current_config_row_sync(int(guild_id))
+    return _fetch_version_sync(
+        int(guild_id),
+        int(version_id),
+        config_table=table_name,
+    )
+
+
 def _list_config_versions_sync(guild_id: int, limit: int = 10) -> list[dict[str, Any]]:
     sb = _require_supabase()
+    table_name, _current = _fetch_current_config_row_sync(int(guild_id))
     bounded = max(1, min(int(limit), CONFIG_HISTORY_RETENTION))
     try:
         response = (
             sb.table(CONFIG_HISTORY_TABLE)
-            .select("version_id,guild_id,source,mode,actor_id,reason,is_manual,created_at,snapshot")
+            .select(
+                "version_id,guild_id,config_table,source,mode,actor_id,reason,is_manual,created_at,snapshot"
+            )
             .eq("guild_id", str(int(guild_id)))
+            .eq("config_table", table_name)
             .order("created_at", desc=True)
             .order("version_id", desc=True)
             .limit(bounded)
@@ -163,13 +182,18 @@ def _list_config_versions_sync(guild_id: int, limit: int = 10) -> list[dict[str,
             ) from exc
         raise
 
-    return [dict(row) for row in (getattr(response, "data", None) or []) if isinstance(row, Mapping)]
+    return [
+        dict(row)
+        for row in (getattr(response, "data", None) or [])
+        if isinstance(row, Mapping)
+    ]
 
 
 def _insert_snapshot_sync(
     guild_id: int,
     snapshot: Mapping[str, Any],
     *,
+    config_table: str,
     source: str,
     mode: str = "manual",
     actor_id: Optional[int] = None,
@@ -177,8 +201,13 @@ def _insert_snapshot_sync(
     is_manual: bool = True,
 ) -> dict[str, Any]:
     sb = _require_supabase()
+    table_name = _safe_str(config_table)
+    if not table_name:
+        raise ValueError("config_table is required for configuration history snapshots.")
+
     payload = {
         "guild_id": str(int(guild_id)),
+        "config_table": table_name,
         "snapshot": dict(snapshot),
         "source": _safe_str(source, "manual_backup")[:300],
         "mode": _safe_str(mode, "manual")[:100],
@@ -197,26 +226,33 @@ def _insert_snapshot_sync(
 
     rows = getattr(response, "data", None) or []
     inserted = dict(rows[0]) if rows and isinstance(rows[0], Mapping) else payload
-    _prune_versions_sync(guild_id)
+    _prune_versions_sync(guild_id, table_name)
     return inserted
 
 
-def _prune_versions_sync(guild_id: int) -> None:
+def _prune_versions_sync(guild_id: int, config_table: str) -> None:
     sb = _require_supabase()
     try:
         response = (
             sb.table(CONFIG_HISTORY_TABLE)
             .select("version_id")
             .eq("guild_id", str(int(guild_id)))
+            .eq("config_table", _safe_str(config_table))
             .order("created_at", desc=True)
             .order("version_id", desc=True)
             .execute()
         )
-        rows = [row for row in (getattr(response, "data", None) or []) if isinstance(row, Mapping)]
+        rows = [
+            row
+            for row in (getattr(response, "data", None) or [])
+            if isinstance(row, Mapping)
+        ]
         for row in rows[CONFIG_HISTORY_RETENTION:]:
             version_id = _safe_int(row.get("version_id"), 0)
             if version_id > 0:
-                sb.table(CONFIG_HISTORY_TABLE).delete().eq("version_id", version_id).execute()
+                sb.table(CONFIG_HISTORY_TABLE).delete().eq(
+                    "version_id", version_id
+                ).execute()
     except Exception:
         # Retention cleanup must never turn a successful backup into a failed write.
         return
@@ -228,10 +264,11 @@ def create_manual_backup_sync(
     actor_id: Optional[int] = None,
     reason: str = "Manual backup",
 ) -> dict[str, Any]:
-    _table_name, current = _fetch_current_config_row_sync(int(guild_id))
+    table_name, current = _fetch_current_config_row_sync(int(guild_id))
     return _insert_snapshot_sync(
         int(guild_id),
         current,
+        config_table=table_name,
         source="manual_backup",
         mode="manual",
         actor_id=actor_id,
@@ -268,20 +305,27 @@ def restore_config_version_sync(
 ) -> dict[str, Any]:
     gid = int(guild_id)
     vid = int(version_id)
-    version = _fetch_version_sync(gid, vid)
+
+    table_name, current = _fetch_current_config_row_sync(gid)
+    version = _fetch_version_sync(gid, vid, config_table=table_name)
+    version_table = _safe_str(version.get("config_table"), table_name)
+    if version_table != table_name:
+        raise RuntimeError(
+            "Configuration version belongs to a different configuration table."
+        )
+
     snapshot = _row_dict(version.get("snapshot"))
     if not snapshot:
         raise RuntimeError(f"Configuration version {vid} has no usable snapshot.")
     if _safe_int(snapshot.get("guild_id"), gid) != gid:
         raise RuntimeError("Configuration version belongs to a different guild.")
 
-    table_name, current = _fetch_current_config_row_sync(gid)
-
-    # Preserve the state immediately before restore even if the automatic
-    # trigger history is incomplete or the current row was written externally.
+    # Preserve the state immediately before restore even if trigger history is
+    # incomplete or the current row was written externally.
     pre_restore = _insert_snapshot_sync(
         gid,
         current,
+        config_table=table_name,
         source="pre_restore_backup",
         mode="restore_guard",
         actor_id=actor_id,
@@ -319,7 +363,9 @@ def restore_config_version_sync(
         )
 
     if not restore_payload:
-        raise RuntimeError("Configuration version contains no restorable fields for the current schema.")
+        raise RuntimeError(
+            "Configuration version contains no restorable fields for the current schema."
+        )
 
     sb = _require_supabase()
     response = (
@@ -329,11 +375,16 @@ def restore_config_version_sync(
         .execute()
     )
     rows = getattr(response, "data", None) or []
-    restored = dict(rows[0]) if rows and isinstance(rows[0], Mapping) else _fetch_current_config_row_sync(gid)[1]
+    restored = (
+        dict(rows[0])
+        if rows and isinstance(rows[0], Mapping)
+        else _fetch_current_config_row_sync(gid)[1]
+    )
     clear_guild_config_cache(gid)
 
     return {
         "guild_id": str(gid),
+        "config_table": table_name,
         "restored_from_version_id": vid,
         "restored": restored,
         "pre_restore_backup": pre_restore,
@@ -367,11 +418,19 @@ def changed_config_keys(left: Mapping[str, Any], right: Mapping[str, Any]) -> li
 
 
 async def list_config_versions(guild_id: int, limit: int = 10) -> list[dict[str, Any]]:
-    return await asyncio.to_thread(_list_config_versions_sync, int(guild_id), int(limit))
+    return await asyncio.to_thread(
+        _list_config_versions_sync,
+        int(guild_id),
+        int(limit),
+    )
 
 
 async def get_config_version(guild_id: int, version_id: int) -> dict[str, Any]:
-    return await asyncio.to_thread(_fetch_version_sync, int(guild_id), int(version_id))
+    return await asyncio.to_thread(
+        _get_config_version_for_current_table_sync,
+        int(guild_id),
+        int(version_id),
+    )
 
 
 async def create_manual_backup(
