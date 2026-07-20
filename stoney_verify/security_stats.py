@@ -50,7 +50,7 @@ STAT_CHANNEL_PREFIXES: Dict[str, str] = {
     "spam_blocked": "🚫 Spam Blocked:",
     "invites_blocked": "🔗 Invites Blocked:",
     "timeouts_issued": "⏱️ Timeouts Issued:",
-    "quarantines": "🔒 Quarantined:",
+    "quarantines": "☣️ Quarantined:",
     "open_tickets": "🎫 Open Tickets:",
     "claimed_tickets": "🙋 Claimed Tickets:",
     "closed_tickets": "✅ Closed Tickets:",
@@ -236,7 +236,7 @@ def _display_names(
         "spam_blocked": f"🚫 Spam Blocked: {format_security_stat_count(normalized['spam_blocked'])}",
         "invites_blocked": f"🔗 Invites Blocked: {format_security_stat_count(normalized['invites_blocked'])}",
         "timeouts_issued": f"⏱️ Timeouts Issued: {format_security_stat_count(normalized['timeouts_issued'])}",
-        "quarantines": f"🔒 Quarantined: {format_security_stat_count(normalized['quarantines'])}",
+        "quarantines": f"☣️ Quarantined: {format_security_stat_count(normalized['quarantines'])}",
         "open_tickets": (
             f"🎫 Open Tickets: {_format_live_count(None if tickets is None else tickets['open_tickets'])}"
         ),

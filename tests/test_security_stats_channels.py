@@ -55,7 +55,7 @@ def test_display_uses_only_auditable_protection_and_live_state_stats() -> None:
         "spam_blocked": "🚫 Spam Blocked: 1.28K",
         "invites_blocked": "🔗 Invites Blocked: 93",
         "timeouts_issued": "⏱️ Timeouts Issued: 38",
-        "quarantines": "🔒 Quarantined: 4",
+        "quarantines": "☣️ Quarantined: 4",
         "open_tickets": "🎫 Open Tickets: 3",
         "claimed_tickets": "🙋 Claimed Tickets: 2",
         "closed_tickets": "✅ Closed Tickets: 218",
@@ -351,7 +351,7 @@ def test_real_discord_display_creates_visible_locked_voice_channels(monkeypatch)
         "🚫 Spam Blocked: 1.28K",
         "🔗 Invites Blocked: 93",
         "⏱️ Timeouts Issued: 38",
-        "🔒 Quarantined: 4",
+        "☣️ Quarantined: 4",
         "🎫 Open Tickets: 3",
         "🙋 Claimed Tickets: 2",
         "✅ Closed Tickets: 218",
@@ -473,6 +473,8 @@ def test_refresh_repairs_new_stats_channels_for_existing_opted_in_display(monkey
     assert changed is True
     rendered = {channel.name for channel in guild.category.voice_channels}
     assert "👥 Members: 10" in rendered
+    assert "☣️ Quarantined: 4" in rendered
+    assert "🔒 Quarantined: 4" not in rendered
     assert "🎫 Open Tickets: 1" in rendered
     assert "🙋 Claimed Tickets: 1" in rendered
     assert "✅ Closed Tickets: 5" in rendered
