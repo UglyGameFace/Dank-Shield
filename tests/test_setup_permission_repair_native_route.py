@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import ast
+import asyncio
 from pathlib import Path
+
+from stoney_verify.commands_ext import public_setup_recommend as recommend
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -145,21 +148,48 @@ def test_advanced_options_button_uses_native_route() -> None:
     }
 
 
-def test_advanced_options_separates_access_check_from_repair() -> None:
-    assert (
-        "🔐 **Check Bot Access** — see exactly which channels "
-        "Dank Shield cannot inspect for accurate activity tracking."
-        in RECOMMEND
+def test_advanced_options_separates_access_check_from_repair(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    async def capture_section(
+        interaction,
+        *,
+        title,
+        description,
+        items,
+        view,
+    ) -> None:
+        captured["interaction"] = interaction
+        captured["title"] = title
+        captured["description"] = description
+        captured["items"] = tuple(items)
+        captured["view"] = view
+
+    monkeypatch.setattr(recommend, "_open_advanced_section", capture_section)
+
+    interaction = object()
+    asyncio.run(recommend._open_advanced_monitoring_repair(interaction))
+
+    assert captured["interaction"] is interaction
+    assert captured["title"] == "🛡️ Logs & Safety"
+    assert isinstance(captured["view"], recommend.AdvancedMonitoringRepairView)
+
+    items = captured["items"]
+    assert isinstance(items, tuple)
+    assert any(
+        "Check Bot Access" in item
+        and "accurate activity tracking" in item
+        for item in items
     )
-    assert (
-        "🛠️ **Fix Channel Permissions** — preview broader channel "
-        "permission repairs before applying anything."
-        in RECOMMEND
+    assert any(
+        "Fix Channel Permissions" in item
+        and "preview broader channel permission repairs" in item
+        for item in items
     )
-    assert (
-        "🛠️ **Fix Channel Permissions** — check and fix "
-        "access to Dank Shield channels."
-        not in RECOMMEND
+    assert not any(
+        "Fix Channel Permissions" in item
+        and "check and fix access to Dank Shield channels" in item
+        for item in items
     )
 
 
