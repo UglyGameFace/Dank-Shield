@@ -28,6 +28,7 @@ _RESTORE_EXCLUDED_KEYS = {
     "_source_table",
 }
 _COMPARISON_EXCLUDED_KEYS = {
+    "guild_id",
     "created_at",
     "updated_at",
     "config_last_write_at",
@@ -295,21 +296,21 @@ def restore_config_version_sync(
         if str(key) in allowed_columns and str(key) not in _RESTORE_EXCLUDED_KEYS
     }
 
-    if "settings" in allowed_columns:
+    if "settings" in allowed_columns and "settings" in snapshot:
         restore_payload["settings"] = _restore_audit_payload(
             snapshot.get("settings"),
             actor_id=actor_id,
             reason=reason,
             version_id=vid,
         )
-    if "config" in allowed_columns:
+    if "config" in allowed_columns and "config" in snapshot:
         restore_payload["config"] = _restore_audit_payload(
             snapshot.get("config"),
             actor_id=actor_id,
             reason=reason,
             version_id=vid,
         )
-    if "metadata" in allowed_columns:
+    if "metadata" in allowed_columns and "metadata" in snapshot:
         restore_payload["metadata"] = _restore_audit_payload(
             snapshot.get("metadata"),
             actor_id=actor_id,
