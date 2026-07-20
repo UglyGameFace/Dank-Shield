@@ -9,9 +9,10 @@
 --
 -- Goals:
 -- - automatically snapshot successful configuration changes;
--- - seed baselines for already-configured guilds;
+-- - seed baselines for already-configured guilds, including empty ticket choices;
 -- - isolate canonical/legacy config-table histories;
 -- - ignore lifecycle/write-audit-only noise;
+-- - restore ticket choices atomically in one database transaction;
 -- - retain newest 50 versions per guild + configuration domain;
 -- - keep RLS enabled with no public policies (service-role bot access only).
 --
@@ -258,6 +259,14 @@ declare
     category_rows jsonb;
     latest_snapshot jsonb;
 begin
+    -- Atomic restore RPC temporarily suppresses row-level intermediate versions.
+    if coalesce(current_setting('dank_shield.skip_config_history', true), '') = '1' then
+        if tg_op = 'DELETE' then
+            return old;
+        end if;
+        return new;
+    end if;
+
     if tg_op = 'DELETE' then
         resolved_guild_id := nullif(to_jsonb(old) ->> 'guild_id', '');
     else
@@ -340,6 +349,195 @@ begin
 end;
 $$;
 
+-- Restore a complete ticket-choice snapshot in one transaction. The dynamic
+-- column handling preserves any compatible category/form columns present in the
+-- deployment while leaving columns absent from an older snapshot unchanged on
+-- matching rows and allowing table defaults on newly inserted missing fields.
+create or replace function public.restore_ticket_categories_snapshot(
+    p_guild_id text,
+    p_rows jsonb
+)
+returns jsonb
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+    item jsonb;
+    normalized_item jsonb;
+    saved_slug text;
+    update_clause text;
+    insert_columns text;
+    insert_values text;
+    restored_rows jsonb;
+begin
+    if p_guild_id is null or btrim(p_guild_id) = '' then
+        raise exception 'guild_id is required';
+    end if;
+
+    p_rows := coalesce(p_rows, '[]'::jsonb);
+    if jsonb_typeof(p_rows) <> 'array' then
+        raise exception 'ticket category snapshot rows must be a JSON array';
+    end if;
+
+    if exists (
+        select 1
+        from jsonb_array_elements(p_rows) value
+        where nullif(btrim(value ->> 'slug'), '') is null
+    ) then
+        raise exception 'ticket category snapshot contains a blank slug';
+    end if;
+
+    if exists (
+        select 1
+        from (
+            select lower(btrim(value ->> 'slug')) as slug
+            from jsonb_array_elements(p_rows) value
+            group by lower(btrim(value ->> 'slug'))
+            having count(*) > 1
+        ) duplicate_slugs
+    ) then
+        raise exception 'ticket category snapshot contains duplicate slugs';
+    end if;
+
+    if exists (
+        select 1
+        from jsonb_array_elements(p_rows) value
+        where nullif(value ->> 'guild_id', '') is not null
+          and value ->> 'guild_id' <> p_guild_id
+    ) then
+        raise exception 'ticket category snapshot contains a different guild_id';
+    end if;
+
+    -- This setting is transaction-local. If anything below fails, PostgreSQL
+    -- rolls back every category mutation and the setting disappears with it.
+    perform set_config('dank_shield.skip_config_history', '1', true);
+
+    delete from public.ticket_categories tc
+     where tc.guild_id = p_guild_id
+       and not exists (
+            select 1
+            from jsonb_array_elements(p_rows) value
+            where lower(btrim(value ->> 'slug')) = lower(tc.slug)
+       );
+
+    for item in select value from jsonb_array_elements(p_rows)
+    loop
+        saved_slug := btrim(item ->> 'slug');
+        normalized_item := item || jsonb_build_object('guild_id', p_guild_id);
+
+        if exists (
+            select 1
+            from public.ticket_categories tc
+            where tc.guild_id = p_guild_id
+              and lower(tc.slug) = lower(saved_slug)
+        ) then
+            select string_agg(
+                format(
+                    '%1$I = case when $1 ? %2$L then src.%1$I else tc.%1$I end',
+                    c.column_name,
+                    c.column_name
+                ),
+                ', '
+                order by c.ordinal_position
+            )
+              into update_clause
+              from information_schema.columns c
+             where c.table_schema = 'public'
+               and c.table_name = 'ticket_categories'
+               and c.column_name not in (
+                    'id',
+                    'guild_id',
+                    'slug',
+                    'created_at',
+                    'updated_at'
+               );
+
+            if update_clause is not null and update_clause <> '' then
+                execute format(
+                    'update public.ticket_categories tc set %s '
+                    || 'from jsonb_populate_record(null::public.ticket_categories, $1) src '
+                    || 'where tc.guild_id = $2 and lower(tc.slug) = lower($3)',
+                    update_clause
+                )
+                using normalized_item, p_guild_id, saved_slug;
+            end if;
+        else
+            select
+                string_agg(format('%I', c.column_name), ', ' order by c.ordinal_position),
+                string_agg(format('src.%I', c.column_name), ', ' order by c.ordinal_position)
+              into insert_columns, insert_values
+              from information_schema.columns c
+             where c.table_schema = 'public'
+               and c.table_name = 'ticket_categories'
+               and c.column_name not in ('created_at', 'updated_at')
+               and normalized_item ? c.column_name;
+
+            if insert_columns is null or insert_columns = '' then
+                raise exception 'ticket category snapshot row has no insertable columns';
+            end if;
+
+            begin
+                execute format(
+                    'insert into public.ticket_categories (%s) '
+                    || 'select %s from jsonb_populate_record(null::public.ticket_categories, $1) src',
+                    insert_columns,
+                    insert_values
+                )
+                using normalized_item;
+            exception when unique_violation then
+                -- Historical UUID may collide only after external/manual data
+                -- movement. Retry without the historical id so PostgreSQL uses
+                -- the table default while preserving guild_id + slug identity.
+                normalized_item := normalized_item - 'id';
+
+                select
+                    string_agg(format('%I', c.column_name), ', ' order by c.ordinal_position),
+                    string_agg(format('src.%I', c.column_name), ', ' order by c.ordinal_position)
+                  into insert_columns, insert_values
+                  from information_schema.columns c
+                 where c.table_schema = 'public'
+                   and c.table_name = 'ticket_categories'
+                   and c.column_name not in ('created_at', 'updated_at')
+                   and normalized_item ? c.column_name;
+
+                execute format(
+                    'insert into public.ticket_categories (%s) '
+                    || 'select %s from jsonb_populate_record(null::public.ticket_categories, $1) src',
+                    insert_columns,
+                    insert_values
+                )
+                using normalized_item;
+            end;
+        end if;
+    end loop;
+
+    perform set_config('dank_shield.skip_config_history', '0', true);
+
+    select coalesce(
+        jsonb_agg(
+            to_jsonb(tc)
+            order by
+                coalesce((to_jsonb(tc) ->> 'sort_order')::integer, 999),
+                coalesce(to_jsonb(tc) ->> 'slug', ''),
+                coalesce(to_jsonb(tc) ->> 'id', '')
+        ),
+        '[]'::jsonb
+    )
+      into restored_rows
+      from public.ticket_categories tc
+     where tc.guild_id = p_guild_id;
+
+    return jsonb_build_object(
+        'guild_id', p_guild_id,
+        'rows', restored_rows
+    );
+end;
+$$;
+
+revoke all on function public.restore_ticket_categories_snapshot(text, jsonb) from public;
+grant execute on function public.restore_ticket_categories_snapshot(text, jsonb) to service_role;
+
 -- Seed one baseline for already-configured canonical guild rows.
 do $$
 begin
@@ -404,7 +602,7 @@ begin
 end;
 $$;
 
--- Seed one baseline for each existing active ticket-choice set.
+-- Seed ticket-choice baselines for guilds that already have category rows.
 do $$
 begin
     if to_regclass('public.ticket_categories') is not null then
@@ -443,6 +641,78 @@ begin
                   and v.config_table = 'ticket_categories'
             )
             group by tc.guild_id
+        $seed$;
+    end if;
+end;
+$$;
+
+-- Seed an empty ticket-choice baseline for configured guilds with no categories.
+do $$
+begin
+    if to_regclass('public.ticket_categories') is not null
+       and to_regclass('public.guild_configs') is not null then
+        execute $seed$
+            insert into public.guild_config_versions (
+                guild_id,
+                config_table,
+                snapshot,
+                source,
+                mode,
+                is_manual
+            )
+            select
+                gc.guild_id::text,
+                'ticket_categories',
+                jsonb_build_object(
+                    'guild_id', gc.guild_id::text,
+                    'rows', '[]'::jsonb
+                ),
+                'migration_baseline',
+                'baseline',
+                false
+            from public.guild_configs gc
+            where not exists (
+                select 1
+                from public.guild_config_versions v
+                where v.guild_id = gc.guild_id::text
+                  and v.config_table = 'ticket_categories'
+            )
+        $seed$;
+    end if;
+end;
+$$;
+
+-- Same empty-baseline protection for guilds living only in legacy guild_config.
+do $$
+begin
+    if to_regclass('public.ticket_categories') is not null
+       and to_regclass('public.guild_config') is not null then
+        execute $seed$
+            insert into public.guild_config_versions (
+                guild_id,
+                config_table,
+                snapshot,
+                source,
+                mode,
+                is_manual
+            )
+            select
+                gc.guild_id::text,
+                'ticket_categories',
+                jsonb_build_object(
+                    'guild_id', gc.guild_id::text,
+                    'rows', '[]'::jsonb
+                ),
+                'migration_baseline',
+                'baseline',
+                false
+            from public.guild_config gc
+            where not exists (
+                select 1
+                from public.guild_config_versions v
+                where v.guild_id = gc.guild_id::text
+                  and v.config_table = 'ticket_categories'
+            )
         $seed$;
     end if;
 end;
