@@ -10,17 +10,21 @@ PUBLIC_LAUNCH = ROOT / "docs" / "PUBLIC_LAUNCH_CHECKLIST.md"
 
 REQUIRED_README_MARKERS = [
     "Invite Dank Shield with permissions",
+    "Kick Members",
+    "Ban Members",
     "Manage Channels",
     "Manage Roles",
     "View Audit Log",
     "View Channels",
     "Send Messages",
+    "Send Messages in Threads",
     "Embed Links",
     "Attach Files",
     "Read Message History",
     "Manage Threads",
     "Manage Messages",
     "Moderate Members",
+    "Move Members",
     "Keep the Dank Shield bot role above roles it needs to assign",
 ]
 

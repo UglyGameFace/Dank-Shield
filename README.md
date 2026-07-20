@@ -29,17 +29,21 @@ You should not need to memorize setup helper commands.
 
 Invite Dank Shield with permissions that allow it to manage the workflow:
 
+- Kick Members
+- Ban Members
 - Manage Channels
 - Manage Roles
 - View Audit Log
 - View Channels
 - Send Messages
+- Send Messages in Threads
 - Embed Links
 - Attach Files
 - Read Message History
 - Manage Threads
 - Manage Messages
 - Moderate Members
+- Move Members
 
 Keep the Dank Shield bot role above roles it needs to assign, such as Unverified, Verified, Member/Resident, and ticket staff roles.
 
