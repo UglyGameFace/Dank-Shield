@@ -21,17 +21,13 @@ CONFIG_HISTORY_TABLE = (
 ).strip() or "guild_config_versions"
 CONFIG_HISTORY_RETENTION = 50
 TICKET_CATEGORIES_TABLE = "ticket_categories"
+TICKET_CATEGORY_RESTORE_RPC = "restore_ticket_categories_snapshot"
 
 _RESTORE_EXCLUDED_KEYS = {
     "guild_id",
     "created_at",
     "updated_at",
     "_source_table",
-}
-_CATEGORY_RESTORE_EXCLUDED_KEYS = {
-    "guild_id",
-    "created_at",
-    "updated_at",
 }
 _COMPARISON_EXCLUDED_KEYS = {
     "guild_id",
@@ -94,9 +90,17 @@ def _is_missing_table_error(error: Exception) -> bool:
     )
 
 
-def _is_unique_violation(error: Exception) -> bool:
+def _is_missing_rpc_error(error: Exception) -> bool:
     text = repr(error).lower()
-    return "23505" in text or "duplicate key" in text or "unique constraint" in text
+    return any(
+        marker in text
+        for marker in (
+            "pgrst202",
+            "could not find the function",
+            "function public.restore_ticket_categories_snapshot",
+            "restore_ticket_categories_snapshot(text, jsonb)",
+        )
+    )
 
 
 def _require_supabase() -> Any:
@@ -499,22 +503,25 @@ def _restore_ticket_categories_version_sync(
     snapshot_rows = _category_snapshot_rows(snapshot)
     categories_available, current_rows = _fetch_ticket_categories_state_sync(gid)
     if not categories_available:
-        raise RuntimeError("Ticket category configuration is not available in this deployment.")
+        raise RuntimeError(
+            "Ticket category configuration is not available in this deployment."
+        )
 
-    snapshot_by_slug: dict[str, dict[str, Any]] = {}
+    seen_slugs: set[str] = set()
     for row in snapshot_rows:
         slug = _safe_str(row.get("slug")).lower()
         if not slug:
             raise RuntimeError("Ticket category snapshot contains a row without a slug.")
-        if slug in snapshot_by_slug:
-            raise RuntimeError("Ticket category snapshot contains duplicate slugs and cannot be restored safely.")
-        snapshot_by_slug[slug] = row
-
-    current_by_slug: dict[str, dict[str, Any]] = {}
-    for row in current_rows:
-        slug = _safe_str(row.get("slug")).lower()
-        if slug and slug not in current_by_slug:
-            current_by_slug[slug] = row
+        if slug in seen_slugs:
+            raise RuntimeError(
+                "Ticket category snapshot contains duplicate slugs and cannot be restored safely."
+            )
+        row_guild_id = _safe_str(row.get("guild_id"), str(gid))
+        if row_guild_id != str(gid):
+            raise RuntimeError(
+                "Ticket category snapshot contains a row from a different guild."
+            )
+        seen_slugs.add(slug)
 
     pre_restore = _insert_snapshot_sync(
         gid,
@@ -528,51 +535,20 @@ def _restore_ticket_categories_version_sync(
     )
 
     sb = _require_supabase()
-
-    # Remove choices that did not exist in the selected snapshot.
-    for slug in sorted(set(current_by_slug) - set(snapshot_by_slug)):
-        (
-            sb.table(TICKET_CATEGORIES_TABLE)
-            .delete()
-            .eq("guild_id", str(gid))
-            .eq("slug", slug)
-            .execute()
-        )
-
-    # Update matching slugs in place so their current stable IDs remain intact.
-    # Missing choices are reinserted, preserving the historical ID when possible.
-    for slug, saved_row in snapshot_by_slug.items():
-        if slug in current_by_slug:
-            update_payload = {
-                str(key): value
-                for key, value in saved_row.items()
-                if str(key) not in _CATEGORY_RESTORE_EXCLUDED_KEYS
-                and str(key) != "id"
-            }
-            if update_payload:
-                (
-                    sb.table(TICKET_CATEGORIES_TABLE)
-                    .update(update_payload)
-                    .eq("guild_id", str(gid))
-                    .eq("slug", slug)
-                    .execute()
-                )
-            continue
-
-        insert_payload = {
-            str(key): value
-            for key, value in saved_row.items()
-            if str(key) not in {"created_at", "updated_at"}
-        }
-        insert_payload["guild_id"] = str(gid)
-        try:
-            sb.table(TICKET_CATEGORIES_TABLE).insert(insert_payload).execute()
-        except Exception as exc:
-            if "id" not in insert_payload or not _is_unique_violation(exc):
-                raise
-            fallback = dict(insert_payload)
-            fallback.pop("id", None)
-            sb.table(TICKET_CATEGORIES_TABLE).insert(fallback).execute()
+    try:
+        sb.rpc(
+            TICKET_CATEGORY_RESTORE_RPC,
+            {
+                "p_guild_id": str(gid),
+                "p_rows": snapshot_rows,
+            },
+        ).execute()
+    except Exception as exc:
+        if _is_missing_rpc_error(exc):
+            raise RuntimeError(
+                "Atomic ticket-choice restore is not installed yet. Apply the guild config version-history migration first."
+            ) from exc
+        raise
 
     _available_after, restored_rows = _fetch_ticket_categories_state_sync(gid)
     restored_snapshot = _ticket_category_snapshot(gid, restored_rows)
@@ -745,6 +721,7 @@ __all__ = [
     "CONFIG_HISTORY_RETENTION",
     "CONFIG_HISTORY_TABLE",
     "TICKET_CATEGORIES_TABLE",
+    "TICKET_CATEGORY_RESTORE_RPC",
     "changed_config_keys",
     "changed_ticket_category_slugs",
     "create_manual_backup",
