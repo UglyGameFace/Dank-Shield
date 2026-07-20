@@ -145,11 +145,21 @@ def test_advanced_options_button_uses_native_route() -> None:
     }
 
 
-def test_advanced_options_describes_repair() -> None:
+def test_advanced_options_separates_access_check_from_repair() -> None:
+    assert (
+        "🔐 **Check Bot Access** — see exactly which channels "
+        "Dank Shield cannot inspect for accurate activity tracking."
+        in RECOMMEND
+    )
+    assert (
+        "🛠️ **Fix Channel Permissions** — preview broader channel "
+        "permission repairs before applying anything."
+        in RECOMMEND
+    )
     assert (
         "🛠️ **Fix Channel Permissions** — check and fix "
         "access to Dank Shield channels."
-        in RECOMMEND
+        not in RECOMMEND
     )
 
 
