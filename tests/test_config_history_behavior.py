@@ -79,7 +79,9 @@ def test_changed_config_keys_reports_real_functional_change() -> None:
     assert config_history.changed_config_keys(before, after) == ["spam_guard_enabled"]
 
 
-def test_manual_backup_snapshots_current_config(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_manual_backup_snapshots_current_config_and_source_table(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     current = {
         "guild_id": "123",
         "ticket_prefix": "ticket",
@@ -93,11 +95,19 @@ def test_manual_backup_snapshots_current_config(monkeypatch: pytest.MonkeyPatch)
         lambda guild_id: ("guild_configs", dict(current)),
     )
 
-    def insert_snapshot(guild_id: int, snapshot: dict[str, Any], **kwargs: Any) -> dict[str, Any]:
+    def insert_snapshot(
+        guild_id: int,
+        snapshot: dict[str, Any],
+        **kwargs: Any,
+    ) -> dict[str, Any]:
         captured["guild_id"] = guild_id
         captured["snapshot"] = dict(snapshot)
         captured.update(kwargs)
-        return {"version_id": 55, "snapshot": dict(snapshot)}
+        return {
+            "version_id": 55,
+            "config_table": kwargs["config_table"],
+            "snapshot": dict(snapshot),
+        }
 
     monkeypatch.setattr(config_history, "_insert_snapshot_sync", insert_snapshot)
 
@@ -110,6 +120,7 @@ def test_manual_backup_snapshots_current_config(monkeypatch: pytest.MonkeyPatch)
     assert result["version_id"] == 55
     assert captured["guild_id"] == 123
     assert captured["snapshot"] == current
+    assert captured["config_table"] == "guild_configs"
     assert captured["source"] == "manual_backup"
     assert captured["mode"] == "manual"
     assert captured["actor_id"] == 77
@@ -117,7 +128,9 @@ def test_manual_backup_snapshots_current_config(monkeypatch: pytest.MonkeyPatch)
     assert captured["is_manual"] is True
 
 
-def test_restore_creates_safety_backup_then_restores_selected_snapshot(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_restore_creates_safety_backup_then_restores_selected_snapshot(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     current = {
         "guild_id": "123",
         "ticket_prefix": "current",
@@ -143,23 +156,35 @@ def test_restore_creates_safety_backup_then_restores_selected_snapshot(monkeypat
     recorder: dict[str, Any] = {}
     backups: list[dict[str, Any]] = []
     cache_clears: list[int] = []
+    version_scopes: list[str | None] = []
 
-    monkeypatch.setattr(
-        config_history,
-        "_fetch_version_sync",
-        lambda guild_id, version_id: {
-            "version_id": version_id,
-            "guild_id": str(guild_id),
-            "snapshot": dict(snapshot),
-        },
-    )
     monkeypatch.setattr(
         config_history,
         "_fetch_current_config_row_sync",
         lambda guild_id: ("guild_configs", dict(current)),
     )
 
-    def insert_snapshot(guild_id: int, saved_snapshot: dict[str, Any], **kwargs: Any) -> dict[str, Any]:
+    def fetch_version(
+        guild_id: int,
+        version_id: int,
+        *,
+        config_table: str | None = None,
+    ) -> dict[str, Any]:
+        version_scopes.append(config_table)
+        return {
+            "version_id": version_id,
+            "guild_id": str(guild_id),
+            "config_table": "guild_configs",
+            "snapshot": dict(snapshot),
+        }
+
+    monkeypatch.setattr(config_history, "_fetch_version_sync", fetch_version)
+
+    def insert_snapshot(
+        guild_id: int,
+        saved_snapshot: dict[str, Any],
+        **kwargs: Any,
+    ) -> dict[str, Any]:
         backups.append(
             {
                 "guild_id": guild_id,
@@ -167,11 +192,23 @@ def test_restore_creates_safety_backup_then_restores_selected_snapshot(monkeypat
                 **kwargs,
             }
         )
-        return {"version_id": 99, "snapshot": dict(saved_snapshot)}
+        return {
+            "version_id": 99,
+            "config_table": kwargs["config_table"],
+            "snapshot": dict(saved_snapshot),
+        }
 
     monkeypatch.setattr(config_history, "_insert_snapshot_sync", insert_snapshot)
-    monkeypatch.setattr(config_history, "_require_supabase", lambda: FakeSupabase(recorder))
-    monkeypatch.setattr(config_history, "clear_guild_config_cache", lambda guild_id: cache_clears.append(guild_id))
+    monkeypatch.setattr(
+        config_history,
+        "_require_supabase",
+        lambda: FakeSupabase(recorder),
+    )
+    monkeypatch.setattr(
+        config_history,
+        "clear_guild_config_cache",
+        lambda guild_id: cache_clears.append(guild_id),
+    )
 
     result = config_history.restore_config_version_sync(
         123,
@@ -180,8 +217,10 @@ def test_restore_creates_safety_backup_then_restores_selected_snapshot(monkeypat
         reason="Rollback bad setup change",
     )
 
+    assert version_scopes == ["guild_configs"]
     assert len(backups) == 1
     assert backups[0]["snapshot"] == current
+    assert backups[0]["config_table"] == "guild_configs"
     assert backups[0]["source"] == "pre_restore_backup"
     assert backups[0]["mode"] == "restore_guard"
     assert backups[0]["is_manual"] is True
@@ -204,20 +243,58 @@ def test_restore_creates_safety_backup_then_restores_selected_snapshot(monkeypat
     assert payload["metadata"]["config_last_write_source"] == "config_history_restore"
 
     assert cache_clears == [123]
+    assert result["config_table"] == "guild_configs"
     assert result["restored_from_version_id"] == 8
     assert result["pre_restore_backup"]["version_id"] == 99
 
 
-def test_restore_refuses_snapshot_from_different_guild(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_restore_refuses_snapshot_from_different_guild(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        config_history,
+        "_fetch_current_config_row_sync",
+        lambda guild_id: (
+            "guild_configs",
+            {"guild_id": str(guild_id), "settings": {}},
+        ),
+    )
     monkeypatch.setattr(
         config_history,
         "_fetch_version_sync",
-        lambda guild_id, version_id: {
+        lambda guild_id, version_id, config_table=None: {
             "version_id": version_id,
             "guild_id": str(guild_id),
+            "config_table": "guild_configs",
             "snapshot": {"guild_id": "999", "settings": {}},
         },
     )
 
     with pytest.raises(RuntimeError, match="different guild"):
+        config_history.restore_config_version_sync(123, 8)
+
+
+def test_restore_refuses_snapshot_from_different_config_table(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        config_history,
+        "_fetch_current_config_row_sync",
+        lambda guild_id: (
+            "guild_configs",
+            {"guild_id": str(guild_id), "settings": {}},
+        ),
+    )
+    monkeypatch.setattr(
+        config_history,
+        "_fetch_version_sync",
+        lambda guild_id, version_id, config_table=None: {
+            "version_id": version_id,
+            "guild_id": str(guild_id),
+            "config_table": "guild_config",
+            "snapshot": {"guild_id": str(guild_id), "settings": {}},
+        },
+    )
+
+    with pytest.raises(RuntimeError, match="different configuration table"):
         config_history.restore_config_version_sync(123, 8)
