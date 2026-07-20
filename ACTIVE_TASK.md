@@ -1,10 +1,10 @@
 # ACTIVE TASK
 
-## DS-TICKET-CATEGORIES-001 — Restore rich ticket picker categories without patch layers
+## DS-ANTINUKE-001 — Native AntiNuke destructive-action containment
 
-**Status:** IN PROGRESS — SETUP ALIGNMENT + VALIDATION PENDING
-**Branch:** `fix/reconcile-ticket-picker-default-categories`
-**Base:** current `main` after merged PR #104
+**Status:** IN PROGRESS — LIVE WIRING / UI / VALIDATION PENDING
+**Branch:** `feature/native-antinuke-core`
+**Base:** current `main` after merged PR #105
 
 ## Single Active Task Lock
 
@@ -14,47 +14,69 @@ Do not switch to unrelated implementation work until this task reaches Definitio
 
 - No monkey patches.
 - No startup guards as the implementation path.
-- No import-time mutation of another module's callbacks, views, commands, or constants.
-- No new bridge/tiny patch module.
-- Preserve multi-server isolation and owner-defined custom ticket categories.
-- Use native runtime owners and behavioral tests.
+- Do not reactivate the dormant startup-guard loader.
+- No new `*_new` parallel tree.
+- New AntiNuke behavior belongs in its native engine and existing Protection Center/event runtime.
+- Per-guild DB config is authoritative; no guild-specific `.env` IDs.
+- Never punish an unattributed actor. Audit-log attribution must succeed first.
+- Never contain the guild owner.
+- Behavioral tests only; no new source-shape/static tests.
 
 ## Scope
 
-- Restore the richer built-in ticket choices users were intended to see, including Partnerships and the other specialized ticket types already defined by the live ticket system.
-- Fix legacy guilds whose categories came from the older stripped-down `/dank setup` starter set.
-- Keep genuinely custom owner category sets authoritative.
-- Keep the actual Create Ticket picker and `/ticket-category list` consistent.
-- Align the native `/dank setup` recommended category source with the same rich built-ins before DoD.
+Build the first production AntiNuke layer for high-confidence destructive actions:
 
-## Root Cause
+- mass channel deletion;
+- mass role deletion;
+- mass bans;
+- mass kicks;
+- webhook creation floods;
+- dangerous role-permission escalation;
+- dangerous role grants to members;
+- trusted-user and trusted-role exemptions;
+- alert-only and contain modes;
+- containment by removing only manageable dangerous roles from the attributed actor;
+- rollback of manageable dangerous permission escalation/grants;
+- modlog incident reporting;
+- Protection Center status/config surface;
+- live runtime registration without guards or monkey patches.
 
-The repository currently has split category truth:
+## Root Cause / Gap
 
-- `stoney_verify/tickets_new/panel.py` owns a richer built-in set including Verification, Account / Access, Payments / Refunds, Appeals, Reports, Staff Complaint, COD Services, Service Requests, Vouch / Referral, Giveaway / Reward, Content / Media, Partnerships, Questions, and Support.
-- `stoney_verify/commands_ext/public_setup_solid.py` still seeds an older seven-option starter set: Support, Verification, Appeal, Report, Question, Bug, and Other.
-- `public_tickettool_parity_polish._load_ticket_rows()` returns configured rows as soon as any rows exist, so guilds created with the older starter set never reach the richer fallback definitions.
-- Historical category functionality also exists in startup-guard patch modules, but those are explicitly not an acceptable permanent implementation path and are not being used for this fix.
+Dank Shield has SpamGuard, RaidGuard, Automod, moderation logging, tickets, and verification, but no native unified AntiNuke engine. Existing modlog listeners observe channel/role/server changes but do not stop an attributed actor from continuing a destructive burst.
 
-## Changes So Far
+AntiNuke also requires reliable `View Audit Log` access for actor attribution. The engine must fail safe when attribution is unavailable instead of guessing.
 
-- Added native legacy-managed-set detection directly to `public_tickettool_parity_polish.py`.
-- The live picker now layers the rich `tickets_new.panel` built-ins over only the recognized legacy managed starter shape.
-- Any unknown/custom category slug makes the owner's configured category set authoritative, so custom guilds are not silently expanded or overwritten.
-- `/ticket-category list` now uses the same effective category loader as the member-facing picker.
-- Added behavioral tests proving:
-  - the legacy managed starter set is recognized;
-  - Partnerships and richer built-ins are restored for that set;
-  - no canonical duplicates are introduced;
-  - a custom `vip_concierge` category prevents automatic default merging;
-  - the actual Discord select exposes Partnership, COD Services, Account / Access, and Payments / Refunds.
+## Implementation So Far
+
+- Added `stoney_verify/anti_nuke.py` as the native AntiNuke owner.
+- Added per-guild settings using the existing flexible `guild_configs.settings` storage; no schema migration or duplicate table.
+- Product defaults currently use:
+  - enabled;
+  - `contain` mode;
+  - 15-second detection window;
+  - 3 channel deletes;
+  - 3 role deletes;
+  - 5 bans;
+  - 5 kicks;
+  - 3 webhook creates;
+  - immediate dangerous permission-escalation protection.
+- Added audit-log actor attribution with freshness checks, bounded retries, and audit-entry dedupe.
+- Added trusted actor rules for guild owner, Dank Shield itself, explicit trusted users, and explicit trusted roles.
+- Added per-actor/action sliding windows and trigger cooldowns.
+- Added containment that removes only dangerous roles Dank Shield can actually manage.
+- Added role-permission rollback and dangerous member-role-grant rollback when containment mode is active.
+- Added AntiNuke incidents to the existing per-guild modlog.
+- Added behavioral tests for defaults, bounds, trust policy, permission escalation, window thresholds, containment, unattributed fail-safe behavior, and listener registration.
 
 ## Validation
 
 Pending:
 
-- Native `/dank setup` recommended-category alignment.
-- Targeted ticket category tests.
+- Wire the native engine into a guaranteed live non-guard runtime path.
+- Add Protection Center AntiNuke status and controls.
+- Add/verify `View Audit Log` permission guidance without requiring Administrator.
+- Targeted AntiNuke tests.
 - Python compile validation.
 - Full `pytest tests/` regression suite.
 - Standalone tools/audits required by CI.
@@ -63,27 +85,39 @@ Pending:
 
 ## Cleanup / Conflict Inspection
 
-- No new startup guard was added.
-- No existing startup guard is used by the new reconciliation behavior.
-- No new monkey patch was added.
-- No new bridge module was added.
-- No database schema change or duplicate category table was added.
-- Custom owner categories remain authoritative.
-- Existing historical patch/guard debt is outside the implementation path and must not be expanded by this task.
+- No startup guard added.
+- No monkey patch added.
+- No new runtime patch file added.
+- No Supabase migration required; AntiNuke settings use existing JSON config storage.
+- Existing SpamGuard/RaidGuard engines are not modified or duplicated.
+- Existing modlog coverage remains observation/logging; AntiNuke owns containment decisions.
 
 ## Blockers
 
-None known yet. Setup alignment and validation remain.
+None known. Live wiring, UI, permission guidance, and validation remain.
+
+## Backlog After This Task
+
+1. Configuration backup + version history.
+2. Reusable configuration templates.
+3. Multi-server configuration sync.
+4. Cross-server analytics.
+5. Global moderation / shared security profiles.
 
 ## Definition of Done
 
-- [x] Legacy managed starter sets regain Partnerships and the richer live built-ins in the Create Ticket picker.
-- [x] Custom owner category sets are not force-expanded.
-- [x] Picker category dedupe remains canonical and capped by Discord's select limit.
-- [x] `/ticket-category list` reports the same effective category choices as the picker.
-- [x] Behavioral coverage exists for rich reconciliation and custom-owner preservation.
-- [ ] `/dank setup` recommended category source is aligned natively with the rich built-ins.
-- [ ] No monkey patch/startup-guard implementation dependency exists for the completed fix.
+- [x] Native AntiNuke owner exists outside startup guards.
+- [x] Per-guild settings and safe defaults exist without a schema migration.
+- [x] Unattributed actions never trigger containment.
+- [x] Guild owner and configured trusted actors are exempt.
+- [x] Mass channel/role deletes and mass ban/kick bursts are tracked per actor.
+- [x] Webhook creation floods are tracked per actor.
+- [x] Dangerous permission escalation/grants can be rolled back when manageable.
+- [x] Containment removes only manageable dangerous actor roles.
+- [x] Behavioral tests cover core policy and fail-safe behavior.
+- [ ] Engine is loaded by the guaranteed live runtime without a guard/patch.
+- [ ] Protection Center exposes clear AntiNuke status/configuration.
+- [ ] Missing View Audit Log is clearly reported as a feature blocker.
 - [ ] Targeted tests pass.
 - [ ] Full regression/compile/audits pass.
 - [ ] Final diff contains only task-related permanent code/tests/task record.
