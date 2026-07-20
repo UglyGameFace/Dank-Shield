@@ -2775,8 +2775,16 @@ class CategoryManagerView(SetupNavView):
 
         # Make the create button truthful after recommended choices already exist.
         try:
-            existing = {str(row.get("slug") or "").strip().lower() for row in rows}
-            recommended = {_slugify(item.get("slug") or item.get("name")) for item in RECOMMENDED_CATEGORIES}
+            from . import public_tickettool_parity_polish as ticket_menu
+
+            existing = {
+                ticket_menu._canonical_category_key(row)
+                for row in rows
+            }
+            recommended = {
+                ticket_menu._canonical_category_key(item)
+                for item in RECOMMENDED_CATEGORIES
+            }
             all_recommended_exist = bool(recommended) and recommended.issubset(existing)
             for child in list(getattr(self, "children", []) or []):
                 custom_id = str(getattr(child, "custom_id", "") or "")
