@@ -13,6 +13,7 @@ from discord import app_commands
 from discord.ext import tasks
 
 from .globals import *  # noqa: F401,F403
+from .spam_guard_defaults import SPAM_GUARD_DEFAULT_ENABLED
 
 # ============================================================
 # Spam / hacked-account guard with compact multi-page control UI
@@ -887,7 +888,7 @@ async def save_quarantine_case(case: Dict[str, Any]) -> Tuple[Optional[Dict[str,
 def _default_settings(guild_id: int) -> Dict[str, Any]:
     return {
         "guild_id": str(guild_id),
-        "enabled": True,
+        "enabled": SPAM_GUARD_DEFAULT_ENABLED,
         "mode": "timeout",
         "apply_to_verified_users": True,
         "block_external_invites_only": True,

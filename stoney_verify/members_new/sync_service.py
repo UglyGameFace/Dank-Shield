@@ -9,6 +9,7 @@ from typing import Any, Dict, List, Optional, Sequence
 import discord
 
 from ..globals import *  # noqa: F401,F403
+from .membership_authority import collect_membership_snapshot, departure_reconciliation_allowed
 
 
 # ============================================================
@@ -1662,18 +1663,22 @@ async def run_full_member_sync_for_guild(guild: discord.Guild) -> Dict[str, Any]
             summary["error"] = "supabase_unavailable"
             return summary
 
-        active_ids: set[str] = set()
-
-        try:
-            members = [m async for m in guild.fetch_members(limit=None)]
-        except Exception:
-            members = list(getattr(guild, "members", []) or [])
-
+        snapshot = await collect_membership_snapshot(guild)
+        members = list(snapshot.members)
+        summary["membership_source"] = snapshot.source
+        summary["membership_authoritative"] = bool(snapshot.authoritative)
+        if snapshot.error:
+            summary["member_fetch_error"] = snapshot.error
         summary["checked"] = len(members)
 
+        active_ids: set[str] = set()
         for idx, member in enumerate(members, start=1):
             try:
-                active_ids.add(str(member.id))
+                member_id = int(getattr(member, "id", 0) or 0)
+                if member_id <= 0:
+                    summary["errors"] += 1
+                    continue
+                active_ids.add(str(member_id))
                 await sync_member_to_supabase(member, in_guild=True)
                 summary["active_members_synced"] += 1
 
@@ -1683,19 +1688,32 @@ async def run_full_member_sync_for_guild(guild: discord.Guild) -> Dict[str, Any]
                 summary["errors"] += 1
                 continue
 
+        if not departure_reconciliation_allowed(snapshot):
+            summary["errors"] += 1
+            summary["departure_reconciliation_skipped"] = True
+            summary["departure_skip_reason"] = "authoritative_member_fetch_failed"
+            print(
+                "⚠️ Member departure reconciliation skipped during full sync: authoritative Discord member fetch failed; "
+                f"guild={getattr(guild, 'id', 'unknown')} cached_positive_members={len(active_ids)} "
+                f"error={snapshot.error or 'unknown'}"
+            )
+            return summary
+
         try:
             summary["marked_departed"] = await _bulk_mark_departed_members_async(
                 sb,
                 str(guild.id),
                 active_ids,
             )
-        except Exception:
+        except Exception as e:
             summary["errors"] += 1
+            summary["departure_reconciliation_error"] = f"{type(e).__name__}: {str(e)[:350]}"
 
         return summary
 
     except Exception as e:
         summary["error"] = repr(e)
+        summary["errors"] = max(1, int(summary.get("errors") or 0))
         print("⚠️ members_new.sync_service.run_full_member_sync_for_guild error:", repr(e))
         try:
             traceback.print_exc()
@@ -1718,20 +1736,25 @@ async def run_departed_reconciliation_for_guild(guild: discord.Guild) -> Dict[st
             summary["error"] = "supabase_unavailable"
             return summary
 
-        active_ids: set[str] = set()
-
-        try:
-            members = [m async for m in guild.fetch_members(limit=None)]
-        except Exception:
-            members = list(getattr(guild, "members", []) or [])
-
-        for member in members:
-            try:
-                active_ids.add(str(member.id))
-            except Exception:
-                continue
-
+        snapshot = await collect_membership_snapshot(guild)
+        active_ids = {str(user_id) for user_id in snapshot.active_user_ids}
+        summary["membership_source"] = snapshot.source
+        summary["membership_authoritative"] = bool(snapshot.authoritative)
+        if snapshot.error:
+            summary["member_fetch_error"] = snapshot.error
         summary["checked"] = len(active_ids)
+
+        if not departure_reconciliation_allowed(snapshot):
+            summary["errors"] = 1
+            summary["departure_reconciliation_skipped"] = True
+            summary["departure_skip_reason"] = "authoritative_member_fetch_failed"
+            print(
+                "⚠️ Departed-member reconciliation skipped: authoritative Discord member fetch failed; "
+                f"guild={getattr(guild, 'id', 'unknown')} cached_positive_members={len(active_ids)} "
+                f"error={snapshot.error or 'unknown'}"
+            )
+            return summary
+
         summary["marked_departed"] = await _bulk_mark_departed_members_async(
             sb,
             str(guild.id),

@@ -14,6 +14,7 @@ import discord
 from ..globals import now_utc
 from ..guild_context import GuildContext, get_guild_context
 from ..interaction_guard import run_guarded_interaction, safe_send_interaction
+from ..members_new.activity_scope import ActivityScopeReport, audit_activity_scope, format_activity_scope_problems
 from ..startup_diagnostics import build_startup_health_report
 from .public_setup_group import dank_group
 
@@ -80,10 +81,29 @@ def _guild_context_field(context: GuildContext) -> str:
     )
 
 
+def _activity_coverage_field(report: ActivityScopeReport) -> str:
+    if not report.bot_member_resolved:
+        return "🚫 Dank Shield could not resolve its bot member, so activity coverage cannot be verified."
+    if report.complete:
+        return (
+            f"✅ **100% channel scope** — {report.accessible_channels}/{report.total_channels} "
+            "message channels/active threads are inspectable for retained activity history."
+        )
+
+    details = format_activity_scope_problems(report, limit=8)
+    return (
+        f"⚠️ **{report.coverage_percent}% channel scope** — "
+        f"{report.accessible_channels}/{report.total_channels} inspectable.\n"
+        "Inactive-member cleanup remains fail-closed while authoritative activity coverage is incomplete.\n"
+        + _field_text(details, empty="Permission gap detected but details were unavailable.", limit=850)
+    )
+
+
 def _startup_diagnostics_embed(
     *,
     guild_context: Optional[GuildContext] = None,
     guild_context_error: Optional[BaseException] = None,
+    activity_scope: Optional[ActivityScopeReport] = None,
 ) -> discord.Embed:
     report = build_startup_health_report(load_missing=False)
 
@@ -99,16 +119,18 @@ def _startup_diagnostics_embed(
         if color == discord.Color.green():
             color = discord.Color.gold()
 
+    if activity_scope is not None and not activity_scope.complete and color == discord.Color.green():
+        color = discord.Color.gold()
+
     embed = discord.Embed(
         title="🩺 Dank Shield Diagnostics",
         description=(
-            "Read-only startup and guild-config health report. This does **not** reload guards, "
-            "change setup, touch tickets, or mutate server config."
+            "Read-only startup, guild-config, and activity-coverage health report. This does **not** reload guards, "
+            "change setup, grant permissions, touch tickets, or mutate server config."
         ),
         color=color,
         timestamp=now_utc(),
     )
-
     embed.add_field(
         name="Startup Status",
         value=(
@@ -136,6 +158,11 @@ def _startup_diagnostics_embed(
             inline=False,
         )
 
+    if activity_scope is not None:
+        embed.add_field(name="Activity Tracking Coverage", value=_activity_coverage_field(activity_scope), inline=False)
+    else:
+        embed.add_field(name="Activity Tracking Coverage", value="⚠️ Activity channel scope was not checked.", inline=False)
+
     embed.add_field(name="Startup Blockers", value=_field_text(report.blockers, empty="✅ None"), inline=False)
     embed.add_field(name="Startup Warnings", value=_field_text(report.warnings, empty="✅ None"), inline=False)
     embed.add_field(
@@ -143,11 +170,12 @@ def _startup_diagnostics_embed(
         value=(
             "**BLOCKER** means at least one startup guard failed and the bot may be unsafe to release.\n"
             "**Unsafe to run mutations** means this guild should refuse setup/ticket/protection actions instead of guessing config.\n"
+            "**Incomplete activity coverage** means Dank Shield will not treat inactivity evidence as purge-safe until channel access is restored.\n"
             "**Not ready** means setup is incomplete, but diagnostics stayed read-only and did not change anything."
         ),
         inline=False,
     )
-    embed.set_footer(text="Dank Shield • diagnostics are per-process and per-guild safe to run anytime")
+    embed.set_footer(text="Dank Shield • diagnostics are per-process, per-guild, and read-only")
     return embed
 
 
@@ -181,9 +209,11 @@ async def diagnostics(interaction: discord.Interaction) -> None:
         except Exception as e:
             guild_context_error = e
 
+        activity_scope = audit_activity_scope(interaction.guild)
         embed = _startup_diagnostics_embed(
             guild_context=guild_context,
             guild_context_error=guild_context_error,
+            activity_scope=activity_scope,
         )
         sent = await safe_send_interaction(
             interaction,

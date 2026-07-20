@@ -66,15 +66,6 @@ _ENV_CONTROL_ROLE_LIST_KEYS: tuple[str, ...] = (
     "PERM_ROLE_IDS",
 )
 
-_SETUP_PERMISSION_MODULES: tuple[str, ...] = (
-    "stoney_verify.commands_ext.public_setup_group",
-    "stoney_verify.commands_ext.public_setup_logs",
-    "stoney_verify.commands_ext.public_setup_by_id",
-    "stoney_verify.commands_ext.public_setup_picker",
-    "stoney_verify.commands_ext.public_setup_find",
-    "stoney_verify.commands_ext.public_setup_review",
-)
-
 
 def _safe_int(value: Any, default: int = 0) -> int:
     try:
@@ -446,24 +437,40 @@ def _attach_setup_access_command() -> None:
 
 
 def install_public_access_control() -> bool:
+    """Install the shared setup permission gate without importing command modules.
+
+    Importing advanced setup modules here used to execute their module-level
+    decorators and expose commands even when the public profile had skipped their
+    registrars. Patch only the canonical setup helper; later setup modules import
+    that already-patched helper without any registration side effects.
+    """
+
     global _PATCHED
     if _PATCHED:
         return True
 
-    for mod_name in _SETUP_PERMISSION_MODULES:
-        try:
-            module = __import__(mod_name, fromlist=["*"])
-            setattr(module, "_require_setup_permission", require_server_control)
-        except Exception:
-            continue
+    try:
+        from . import public_setup_group
 
-    _attach_setup_access_command()
+        setattr(public_setup_group, "_require_setup_permission", require_server_control)
+    except Exception as e:
+        try:
+            print(f"⚠️ public_access_control could not install setup permission gate: {type(e).__name__}: {e}")
+        except Exception:
+            pass
+        return False
+
     _PATCHED = True
     try:
         print("🛡️ public_access_control loaded; server-control role gate active")
     except Exception:
         pass
     return True
+
+
+def _direct_setup_access_enabled() -> bool:
+    profile = str(os.getenv("DANK_COMMAND_PROFILE", "public") or "public").strip().lower()
+    return profile in {"public-admin", "dev"}
 
 
 install_public_access_control()
@@ -477,9 +484,16 @@ __all__ = [
     "scoped_is_ticket_staff",
 ]
 
-# Compatibility entrypoint for the public commands_ext loader.
-# The setup-access command is already attached by this module during import,
-# so this function intentionally does not attach it again.
-def register_public_access_control(*args, **kwargs) -> None:
-    return None
 
+def register_public_access_control(*args, **kwargs) -> None:
+    """commands_ext registrar.
+
+    Normal public/minimal profiles install only the permission gate. The legacy
+    direct `/dank setup-access` alias is attached only in explicit admin/dev
+    command profiles; normal setup keeps access configuration inside `/dank setup`.
+    """
+
+    _ = args, kwargs
+    install_public_access_control()
+    if _direct_setup_access_enabled():
+        _attach_setup_access_command()

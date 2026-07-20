@@ -37,6 +37,10 @@ import discord
 from stoney_verify.members_new.activity_tracker import (
     get_activity_coverage_status,
 )
+from stoney_verify.members_new.activity_scope import (
+    audit_activity_scope,
+    format_activity_scope_problems,
+)
 
 try:
     from stoney_verify.guild_config import get_guild_config
@@ -154,6 +158,11 @@ class InactiveScanReport:
     coverage_observed_days: int = 0
     coverage_required_days: int = 0
     coverage_storage_ready: bool = False
+    activity_scope_total_channels: int = 0
+    activity_scope_accessible_channels: int = 0
+    activity_scope_coverage_percent: int = 0
+    activity_scope_complete: bool = False
+    activity_scope_problems: list[str] = field(default_factory=list)
 
     @property
     def removable(self) -> list[InactiveMemberCandidate]:
@@ -207,14 +216,20 @@ class InactiveScanReport:
     @property
     def data_coverage_percent(self) -> int:
         try:
-            if self.data_sources_attempted <= 0:
-                return 0
-            return max(0, min(100, round((self.data_sources_read / self.data_sources_attempted) * 100)))
+            source_percent = 0
+            if self.data_sources_attempted > 0:
+                source_percent = max(0, min(100, round((self.data_sources_read / self.data_sources_attempted) * 100)))
+            scope_percent = max(0, min(100, int(self.activity_scope_coverage_percent or 0)))
+            if self.activity_scope_total_channels > 0 or not self.activity_scope_complete:
+                return min(source_percent, scope_percent)
+            return source_percent
         except Exception:
             return 0
 
     @property
     def data_confidence_label(self) -> str:
+        if not self.activity_scope_complete:
+            return "Incomplete channel scope"
         if self.data_sources_attempted > 0 and self.data_sources_read >= self.data_sources_attempted:
             return "Good"
         if self.data_sources_read >= 1:
@@ -1334,6 +1349,8 @@ async def scan_inactive_members(guild: discord.Guild, options: Optional[Inactive
     now = now_utc()
     protected_role_ids, verified_resident_role_ids = await _load_role_sets(guild)
     members = list(getattr(guild, "members", []) or [])
+    scope_report = audit_activity_scope(guild)
+    scope_problem_lines = format_activity_scope_problems(scope_report, limit=20)
 
     # Missing verified/resident configuration is not permission to scan every
     # member. Stop with an explicit configuration error instead.
@@ -1358,6 +1375,11 @@ async def scan_inactive_members(guild: discord.Guild, options: Optional[Inactive
             configuration_errors=[
                 "verified_role_id/resident_role_id missing or invalid"
             ],
+            activity_scope_total_channels=scope_report.total_channels,
+            activity_scope_accessible_channels=scope_report.accessible_channels,
+            activity_scope_coverage_percent=scope_report.coverage_percent,
+            activity_scope_complete=scope_report.complete,
+            activity_scope_problems=scope_problem_lines,
         )
         remember_scan(report)
         return report
@@ -1404,6 +1426,8 @@ async def scan_inactive_members(guild: discord.Guild, options: Optional[Inactive
         required_days=int(options.inactive_days),
     )
     data_warnings.append(coverage.reason)
+    if not scope_report.complete:
+        data_warnings.append(scope_report.summary(limit=12))
 
     candidates: list[InactiveMemberCandidate] = []
     protected: list[InactiveMemberCandidate] = []
@@ -1607,8 +1631,15 @@ async def scan_inactive_members(guild: discord.Guild, options: Optional[Inactive
     )
     candidates = candidates[: max(1, int(options.max_candidates))]
 
-    report_actionable = bool(coverage.actionable)
+    report_actionable = bool(coverage.actionable and scope_report.complete)
     actionability_reason = str(coverage.reason)
+    if not scope_report.complete:
+        scope_reason = scope_report.summary(limit=8)
+        actionability_reason = (
+            f"{actionability_reason} {scope_reason}".strip()
+            if actionability_reason
+            else scope_reason
+        )
 
     if report_actionable:
         for candidate in candidates:
@@ -1685,6 +1716,11 @@ async def scan_inactive_members(guild: discord.Guild, options: Optional[Inactive
         coverage_observed_days=coverage.observed_days,
         coverage_required_days=coverage.required_days,
         coverage_storage_ready=coverage.storage_ready,
+        activity_scope_total_channels=scope_report.total_channels,
+        activity_scope_accessible_channels=scope_report.accessible_channels,
+        activity_scope_coverage_percent=scope_report.coverage_percent,
+        activity_scope_complete=scope_report.complete,
+        activity_scope_problems=scope_problem_lines,
     )
     remember_scan(report)
     return report

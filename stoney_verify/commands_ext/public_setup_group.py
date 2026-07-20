@@ -10,6 +10,7 @@ from discord import app_commands
 from .common import reply_once, safe_defer
 from ..guild_config import get_guild_config, invalidate_guild_config, guild_config_cache_snapshot
 from ..globals import get_supabase, now_utc
+from ..members_new.activity_scope import audit_activity_scope, format_activity_scope_problems
 
 
 # ============================================================
@@ -1540,6 +1541,28 @@ def _build_setup_health(guild: discord.Guild, cfg: Any) -> Tuple[List[str], List
                 + ", ".join(guild_warnings)
                 + "."
             )
+
+    # ------------------------------
+    # Activity-tracking channel scope
+    # ------------------------------
+    activity_scope = audit_activity_scope(guild)
+    if not activity_scope.bot_member_resolved:
+        blockers.append(
+            "Activity tracking coverage could not be verified because the bot member could not be resolved."
+        )
+    elif not activity_scope.complete:
+        warnings.append(
+            "Activity tracking coverage is incomplete: "
+            f"{activity_scope.accessible_channels}/{activity_scope.total_channels} inspectable channels "
+            f"({activity_scope.coverage_percent}%). Inactivity cleanup stays fail-closed until access is restored."
+        )
+        for problem in format_activity_scope_problems(activity_scope, limit=20):
+            warnings.append(f"Activity tracking access: {problem}")
+    else:
+        ok.append(
+            "Activity tracking has complete channel scope: "
+            f"{activity_scope.accessible_channels}/{activity_scope.total_channels} inspectable channels."
+        )
 
     # ------------------------------
     # Saved IDs / aliases

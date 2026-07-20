@@ -77,6 +77,20 @@ globals: supabase status: state=ready ... service_role_present=True
 commands_ext registration complete. final_global=9 final_guild=0 profile=public
 ```
 
+The intentional public global application-command surface is exactly **9** commands:
+
+1. `/dank`
+2. `/mod`
+3. `/ticket`
+4. `/tickets`
+5. `/ticket-intake`
+6. `/ticket-category`
+7. `/ticket-panel`
+8. `/verify`
+9. `View Dank Profile` user context menu
+
+Advanced setup aliases such as direct `/dank setup-review`, `/dank db-check`, and `/dank setup-access` are not part of the normal public profile. Their functionality belongs inside the guided `/dank setup` and diagnostics surfaces unless an explicit admin/development command profile selects the advanced registrar.
+
 Optional schema health should show either:
 
 ```text
@@ -96,7 +110,6 @@ For each Discord server:
 5. SpamGuard defaults to ON for new/missing settings rows unless an owner explicitly turns it off.
 
 Never fix a public server by putting that server's IDs into Discloud env. That creates cross-server leakage risk.
-
 
 ## External uptime watchdog
 

@@ -44,15 +44,19 @@ def test_member_errors_are_not_silently_hidden() -> None:
     assert "Member scan error for" in ACTIVITY
 
 
-def test_historical_scan_is_review_only_until_tracker_exists() -> None:
-    # Gate 2 replaced the temporary "tracker not installed" state.
-    # The permanent invariant is that authoritative coverage controls
-    # actionability and incomplete coverage forces every candidate review-only.
+def test_historical_scan_is_review_only_until_authoritative_scope_is_complete() -> None:
+    # Actionability requires both continuous authoritative tracker coverage and
+    # complete readable Discord channel/thread scope. Either gap forces every
+    # candidate review-only instead of guessing inactivity.
     assert "get_activity_coverage_status" in ACTIVITY
-    assert "report_actionable = bool(coverage.actionable)" in ACTIVITY
+    assert "scope_report = audit_activity_scope(guild)" in ACTIVITY
+    assert "report_actionable = bool(coverage.actionable and scope_report.complete)" in ACTIVITY
     assert "actionability_reason = str(coverage.reason)" in ACTIVITY
+    assert "if not scope_report.complete:" in ACTIVITY
     assert "if report_actionable:" in ACTIVITY
     assert "candidate.removable = False" in ACTIVITY
+
+
 def test_cleanup_always_rechecks_fresh_inactivity() -> None:
     assert "Fresh inactivity proof is not actionable" in CLEANUP
     assert "fresh_candidate" in CLEANUP
@@ -90,7 +94,7 @@ if __name__ == "__main__":
         test_only_direct_member_activity_resets_inactivity,
         test_missing_role_configuration_fails_closed,
         test_member_errors_are_not_silently_hidden,
-        test_historical_scan_is_review_only_until_tracker_exists,
+        test_historical_scan_is_review_only_until_authoritative_scope_is_complete,
         test_cleanup_always_rechecks_fresh_inactivity,
         test_cleanup_queue_never_uses_cached_scan,
         test_mass_cleanup_always_requires_confirmation,

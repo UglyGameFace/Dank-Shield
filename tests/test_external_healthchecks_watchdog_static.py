@@ -5,6 +5,7 @@ from pathlib import Path
 PROCESS = Path("stoney_verify/startup_guards/process_health.py").read_text(encoding="utf-8")
 STATUS = Path("stoney_verify/commands_ext/public_status_reporter.py").read_text(encoding="utf-8")
 SPAM = Path("stoney_verify/spam_guard.py").read_text(encoding="utf-8")
+SPAM_DEFAULTS = Path("stoney_verify/spam_guard_defaults.py").read_text(encoding="utf-8")
 COMMANDS = Path("stoney_verify/commands_ext/__init__.py").read_text(encoding="utf-8")
 
 
@@ -26,7 +27,9 @@ def test_status_report_distinguishes_internal_and_external_heartbeats():
 def test_spamguard_missing_rows_default_on_and_bootstrap():
     defaults = SPAM[SPAM.index("def _default_settings("):SPAM.index("def _normalize_settings(")]
     load = SPAM[SPAM.index("async def get_spam_settings("):SPAM.index("async def save_spam_settings(")]
-    assert '"enabled": True' in defaults
+    assert "SPAM_GUARD_DEFAULT_ENABLED = True" in SPAM_DEFAULTS
+    assert "from .spam_guard_defaults import SPAM_GUARD_DEFAULT_ENABLED" in SPAM
+    assert '"enabled": SPAM_GUARD_DEFAULT_ENABLED' in defaults
     assert "_upsert_settings_sync" in load
     assert 'source = "db" if row_found else ("db-bootstrap" if persisted else "defaults")' in load
 
