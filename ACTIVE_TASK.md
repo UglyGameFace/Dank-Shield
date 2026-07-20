@@ -2,8 +2,9 @@
 
 ## DS-LIVE-STATS-001 — Expand Discord-native Dank Shield live stats
 
-**Status:** IN PROGRESS — VALIDATION PENDING
+**Status:** READY FOR REVIEW — NOT MERGED — NOT DEPLOYED
 **Branch:** `feature/dank-shield-live-stats-expansion`
+**PR:** #103
 **Base:** current `main` after merged PR #102
 
 ## Single Active Task Lock
@@ -17,9 +18,9 @@ Expand the existing opt-in locked Discord voice-channel stats category without c
 Add only real, auditable values:
 
 - `👥 Members` — Discord guild member total.
-- `🎫 Open Tickets` — current authoritative `tickets.status = open` rows.
+- `🎫 Open Tickets` — current authoritative open ticket state.
 - `🙋 Claimed Tickets` — current authoritative claimed state, including legacy/open rows that already carry an assignee.
-- `✅ Closed Tickets` — current authoritative `tickets.status = closed` rows.
+- `✅ Closed Tickets` — current authoritative closed ticket state.
 
 Keep the existing protection statistics:
 
@@ -48,37 +49,51 @@ The existing ~10-minute channel rename cadence remains in place to avoid Discord
 - Expanded `STAT_CHANNEL_PREFIXES` with Members, Open Tickets, Claimed Tickets, and Closed Tickets.
 - Added safe Discord member-count resolution that does not trust a partial member cache.
 - Added read-only ticket lifecycle aggregation from the canonical `tickets` table.
+- Treats `active`/`reopened` legacy states as open.
 - Treats an `open` ticket carrying `claimed_by` or `assigned_to` as claimed, matching repository normalization behavior.
 - Keeps deleted tickets out of the public lifecycle counts.
 - Renders `N/A` on unavailable member/ticket truth instead of false zeroes.
 - Existing protection counters remain persisted exactly as before.
 - Existing opted-in stats categories self-repair missing newly introduced stat channels during the normal refresh cycle.
+- Failed individual channel repairs preserve previously saved channel IDs instead of erasing config references.
 - Updated the success copy from "Live SpamGuard stats" to "Live Dank Shield stats".
 - Expanded behavioral tests for authoritative member count, ticket lifecycle classification, `N/A` fail-safe rendering, nine-channel creation, and migration/repair of an existing five-channel display.
 
 ## Validation
 
-Pending:
+Implementation head `951792dac4aba1aaeebbf002b3babf828a854b34` passed GitHub Actions `Dank Shield CI` run 458:
 
-- Committed diff whitespace check.
-- Python compile validation.
-- Full `pytest tests/` regression suite, including targeted live-stats tests.
-- Standalone tools/audits required by CI.
-- Final diff inspection against current `main`.
-- GitHub Actions on final PR head.
+- Committed diff whitespace check: PASS.
+- Python compile check: PASS.
+- Full unit test suite (`pytest tests/`): PASS, including the expanded live-stats behavioral tests.
+- Every standalone tool check: PASS.
+- Public setup text/isolation audit: PASS.
+- Canonical public command surface audit: PASS.
+- Public command/startup friction audit: PASS.
+- Public invite permission audit: PASS.
+- Setup safety audit: PASS.
+- Dank Design Smart Auto-Detect audit: PASS.
+- Role truth ownership audit: PASS.
+- Event boundary ownership audit: PASS.
+
+The final task-record-only head created by this update must also remain green before merge approval.
 
 ## Cleanup / Conflict Inspection
 
+- Final implementation diff is limited to three task-related paths: the existing stats owner, its behavioral tests, and this task record.
 - Reuses the existing `security_stats.py` owner instead of adding a second stats module.
 - Does not persist duplicate member or ticket counters.
 - Does not add per-event forced channel renames.
 - Does not change the existing public `Live Stats` button/custom ID.
 - Does not alter ticket write paths or member synchronization behavior.
+- Existing opted-in categories are upgraded only inside the already-owned stats category.
 - `main.py`, `sitecustomize.py`, and `usercustomize.py` remain untouched.
 
 ## Blockers
 
-None known yet. Validation is required before this task can be called complete.
+- No known technical blocker remains.
+- Merge into `main` requires explicit user approval.
+- Manual deployment is not authorized and has not occurred.
 
 ## Backlog
 
@@ -89,11 +104,13 @@ After this task is complete, separately audit authoritative verification/member-
 - [x] Existing SpamGuard/protection stats remain intact.
 - [x] Members uses Discord guild total or a proven-complete cache fallback.
 - [x] Open/Claimed/Closed ticket numbers derive from authoritative ticket lifecycle state.
+- [x] Legacy ticket states and assigned-open rows normalize consistently with ticket repository behavior.
 - [x] Unavailable live truth displays `N/A` instead of false zero.
 - [x] Existing opted-in displays can gain the new channels without manual deletion/recreation.
+- [x] Failed repairs do not wipe previously saved channel IDs.
 - [x] No fake or estimated public metrics are introduced.
 - [x] New behavior has targeted behavioral regression coverage.
-- [ ] Full regression/compile/audits pass.
-- [ ] Final diff contains only task-related permanent code/tests/task record.
-- [ ] Final-head GitHub Actions pass.
+- [x] Full regression/compile/audits pass on the implementation head.
+- [x] Final diff contains only task-related permanent code/tests/task record.
+- [ ] Final task-record-only head GitHub Actions must pass.
 - [ ] Merge/deploy requires explicit user approval.
