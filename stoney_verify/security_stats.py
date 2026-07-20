@@ -175,7 +175,6 @@ def _query_ticket_status_counts_sync(guild_id: int) -> Optional[Dict[str, int]]:
         sb.table("tickets")
         .select("status,claimed_by,assigned_to")
         .eq("guild_id", str(int(guild_id)))
-        .in_("status", ["open", "claimed", "closed"])
         .execute()
     )
     rows = getattr(response, "data", None)
@@ -187,6 +186,8 @@ def _query_ticket_status_counts_sync(guild_id: int) -> Optional[Dict[str, int]]:
         if not isinstance(row, Mapping):
             continue
         status = str(row.get("status") or "").strip().lower()
+        if status in {"active", "reopened"}:
+            status = "open"
         if status == "open":
             claimed_by = str(row.get("claimed_by") or "").strip()
             assigned_to = str(row.get("assigned_to") or "").strip()
@@ -497,7 +498,7 @@ async def refresh_security_stats_display(
         for key, value in saved_ids.items()
         if int(value) > 0
     }
-    resolved_ids: Dict[str, str] = {}
+    resolved_ids: Dict[str, str] = dict(previous_ids)
     changed = False
 
     async with _lock_for(_DISPLAY_LOCKS, gid):
