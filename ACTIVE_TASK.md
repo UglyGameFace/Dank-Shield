@@ -1,12 +1,10 @@
 # ACTIVE TASK
 
-## DS-ANTINUKE-001 — Native AntiNuke destructive-action containment
+## DS-CONFIG-HISTORY-001 — Native configuration backup + version history
 
-**Status:** READY FOR REVIEW — NOT MERGED — NOT DEPLOYED
-**Branch:** `feature/native-antinuke-core`
-**PR:** #106
-**Dashboard companion PR:** `stoney-verify-dashboard` #11
-**Base:** current `main` after merged PR #105
+**Status:** IN PROGRESS — CORE VALIDATION + SETUP UI PENDING
+**Branch:** `feature/config-backup-version-history`
+**Base:** current `main` after merged PR #106
 
 ## Single Active Task Lock
 
@@ -17,135 +15,102 @@ Do not switch to unrelated implementation work until this task reaches Definitio
 - No monkey patches.
 - No startup guards as the implementation path.
 - Do not reactivate the dormant startup-guard loader.
-- No new `*_new` parallel tree.
-- New AntiNuke behavior belongs in its native engine and existing Protection Center/event runtime.
-- Per-guild DB config is authoritative; no guild-specific `.env` IDs.
-- Never punish an unattributed actor. Audit-log attribution must succeed first.
-- Never contain the guild owner.
+- No new parallel configuration source of truth.
+- `guild_configs` remains the live authoritative configuration.
+- Backups/history live in a separate durable history table.
+- Restore must never cross guild boundaries.
+- Restore must preserve the current state first so rollback is reversible.
 - Behavioral tests only; no new source-shape/static tests.
-- Public install must not require Discord Administrator permission.
+- Dashboard work is out of scope for this task.
 
 ## Scope
 
-Build the first production AntiNuke layer for high-confidence destructive actions:
+Build the first production configuration recovery layer:
 
-- mass channel deletion;
-- mass role deletion;
-- mass bans;
-- mass kicks;
-- webhook creation floods;
-- dangerous role-permission escalation;
-- dangerous role grants to members;
-- trusted-user and trusted-role exemptions;
-- alert-only and contain modes;
-- containment by removing only manageable dangerous roles from the attributed actor;
-- rollback of manageable dangerous permission escalation/grants;
-- modlog incident reporting;
-- Protection Center status/config surface;
-- live runtime registration without guards or monkey patches;
-- least-privilege public invite guidance including View Audit Log.
+- automatic configuration snapshots after successful guild config changes;
+- durable per-guild version history;
+- bounded retention so history cannot grow forever;
+- one-click/manual backup support;
+- safe restore of a selected historical version;
+- automatic pre-restore safety backup;
+- restore audit metadata and cache invalidation;
+- owner-facing history/restore UI inside the existing `/dank setup` flow;
+- no new top-level public command family.
 
 ## Root Cause / Gap
 
-Dank Shield had SpamGuard, RaidGuard, Automod, moderation logging, tickets, and verification, but no native unified AntiNuke engine. Existing modlog listeners observe channel/role/server changes but do not stop an attributed actor from continuing a destructive burst.
+Dank Shield stores live per-guild configuration in Supabase, but there is no durable revision history. A bad setup change, accidental overwrite, or destructive configuration edit currently has no native rollback path.
 
-AntiNuke requires reliable `View Audit Log` access for actor attribution. The engine fails safe when attribution is unavailable instead of guessing.
+The repository also has more than one legitimate native config writer. Instrumenting one Python writer would leave gaps. Automatic versioning therefore belongs at the database boundary, where every successful row change can be captured regardless of which native feature performed the write.
 
-A separate production-readiness issue was found during this task: the dashboard server-install route fell back to Discord permission integer `8` (Administrator). That conflicted with Dank Shield's public least-privilege policy and has now been removed in dashboard PR #11.
+## Implementation So Far
 
-## Implementation
-
-- Added `stoney_verify/anti_nuke.py` as the native AntiNuke owner.
-- Added per-guild settings using the existing flexible `guild_configs.settings` storage; no schema migration or duplicate table.
-- Product defaults are intentionally **opt-in**:
-  - disabled until the guild owner explicitly enables AntiNuke;
-  - `contain` is the selected response mode once enabled;
-  - 15-second detection window;
-  - 3 channel deletes;
-  - 3 role deletes;
-  - 5 bans;
-  - 5 kicks;
-  - 3 webhook creates;
-  - immediate dangerous permission-escalation protection.
-- Added audit-log actor attribution with freshness checks, bounded retries, and audit-entry dedupe.
-- Added trusted actor rules for guild owner, Dank Shield itself, explicit trusted users, and explicit trusted roles.
-- Added per-actor/action sliding windows and trigger cooldowns.
-- Added containment that removes only dangerous roles Dank Shield can actually manage.
-- Added role-permission rollback and dangerous member-role-grant rollback when containment mode is active.
-- Added AntiNuke incidents to the existing per-guild modlog.
-- Wired the native engine through `public_protection_center.py`, which is a guaranteed public-core command module; no `main.py`, `app.py`, startup guard, or monkey patch change was needed.
-- Added Protection Center AntiNuke status, permission health, ON/OFF toggle, Alert/Contain mode control, trusted user/role IDs, and threshold editor.
-- AntiNuke refuses to enable when required permissions are missing and clearly reports `View Audit Log`; Contain mode also requires `Manage Roles`.
-- Added `View Audit Log`, Kick Members, Ban Members, Send Messages in Threads, and Move Members to Dank Shield public permission guidance/audit so documented permissions match supported features.
-- Added behavioral tests for defaults, bounds, trust policy, permission escalation, window thresholds, containment, unattributed fail-safe behavior, and listener registration.
-- Fixed active-engine behavior tests after the opt-in default change so tests explicitly enable AntiNuke instead of depending on the product default.
-- Dashboard companion PR #11 replaces the old `permissions=8` Administrator fallback with least-privilege bitfield `1391854742678` and strips the Administrator bit from configured invite permissions before building an invite.
+- Added `supabase/migrations/20260720_guild_config_version_history.sql`.
+- Added `public.guild_config_versions` with RLS enabled and no public policies.
+- Added an automatic trigger for canonical `guild_configs` and legacy `guild_config` tables when present.
+- Trigger ignores timestamp-only changes.
+- Trigger dedupes only consecutive identical snapshots, so changing away from a state and later returning to it still creates a real history event.
+- Trigger retains the newest 50 versions per guild.
+- Added `stoney_verify/config_history.py` as the native bot-side history/restore owner.
+- Added manual backup support.
+- Added per-guild history list/get APIs.
+- Added restore with:
+  - guild ownership validation;
+  - pre-restore safety backup;
+  - schema-tolerant field restore;
+  - lifecycle/system field exclusion;
+  - write-audit metadata;
+  - guild config cache invalidation.
+- Added functional config diff helper that ignores write-audit metadata.
+- Added behavioral tests for manual backup, functional diffing, safe restore, pre-restore backup, and cross-guild refusal.
 
 ## Validation
 
-Completed:
+Pending:
 
-- Core AntiNuke branch passed Dank Shield CI run 469 before UI wiring.
-- Live-wiring/UI head initially failed CI run 470 because two behavioral tests still assumed the old enabled-by-default policy.
-- Tests were corrected while preserving the safer opt-in product default.
-- Corrected AntiNuke head passed Dank Shield CI runs 471 and 472.
-- Permission-guidance head `1ae85d6b0d7bc42e307362ffc4eabaf7559777d4` passed Dank Shield CI run 473.
-- Run 473 passed Python compile, full `pytest tests/`, standalone tools, public setup/isolation audit, canonical command-surface audit, startup-friction audit, public invite-permission audit, setup-safety audit, Dank Design audit, role-truth audit, and event-boundary audit.
-- Termux local targeted tests/import smoke could not run because that local Python environment imports a broken/incompatible `supabase` package (`cannot import name 'Client' from 'supabase'`). This is not reproduced in clean GitHub CI and production code was not changed to work around the local package issue.
-- Final implementation compare against `main`: ahead 7, behind 0, exactly six task-related Dank Shield paths.
-- PR #106 unresolved review-thread inspection: none.
-- Dashboard PR #11 compare against dashboard `main`: ahead 1, behind 0, exactly one changed file.
-- Dashboard PR #11 Vercel status check: SUCCESS.
-- Dashboard PR #11 unresolved review-thread inspection: none.
-- Dashboard PR #11 is mergeable and ready for review.
-
-The final task-record-only head created by this update must also pass Dank Shield CI before PR #106 is moved out of draft.
+- First GitHub Actions pass on the core implementation.
+- Migration review for SQL correctness/idempotency.
+- Owner-facing `/dank setup` Backups & History UI.
+- Explicit restore confirmation UX.
+- Full regression/compile/audits on final head.
+- Final diff/conflict inspection.
+- Final review-thread inspection.
 
 ## Cleanup / Conflict Inspection
 
 - No startup guard added.
 - No monkey patch added.
-- No new runtime patch file added.
-- No Supabase migration required; AntiNuke settings use existing JSON config storage.
-- Existing SpamGuard/RaidGuard engines are not modified or duplicated.
-- Existing modlog coverage remains observation/logging; AntiNuke owns containment decisions.
-- `main.py`, `app.py`, `globals.py`, `guild_config.py`, `sitecustomize.py`, and `usercustomize.py` were not changed.
-- Native runtime ownership is through the existing public Protection Center module listed in the public-core command registry.
-- Dashboard companion change is isolated to `app/api/servers/route.ts`.
+- No config-writer patch added.
+- Existing `guild_configs` remains authoritative.
+- New history table stores snapshots only; it does not become a runtime config source.
+- Dashboard repo is untouched.
 
 ## Blockers
 
-- No known technical blocker remains.
-- Final task-record-only Dank Shield CI must pass.
-- Merge into either repository requires explicit user approval.
-- Deployment is not authorized and has not occurred.
+None known yet. Core CI and setup UI remain.
 
 ## Backlog After This Task
 
-1. Configuration backup + version history.
-2. Reusable configuration templates.
-3. Multi-server configuration sync.
-4. Cross-server analytics.
-5. Global moderation / shared security profiles.
+1. Reusable configuration templates.
+2. Multi-server configuration sync.
+3. Cross-server analytics.
+4. Global moderation / shared security profiles.
 
 ## Definition of Done
 
-- [x] Native AntiNuke owner exists outside startup guards.
-- [x] Per-guild settings and safe opt-in defaults exist without a schema migration.
-- [x] Unattributed actions never trigger containment.
-- [x] Guild owner and configured trusted actors are exempt.
-- [x] Mass channel/role deletes and mass ban/kick bursts are tracked per actor.
-- [x] Webhook creation floods are tracked per actor.
-- [x] Dangerous permission escalation/grants can be rolled back when manageable.
-- [x] Containment removes only manageable dangerous actor roles.
-- [x] Behavioral tests cover core policy and fail-safe behavior.
-- [x] Engine is loaded by the guaranteed live runtime without a guard/patch.
-- [x] Protection Center exposes clear AntiNuke status/configuration.
-- [x] Missing View Audit Log is clearly reported as a feature blocker.
-- [x] Targeted/core behavior is green in clean CI.
-- [x] Full regression/compile/audits pass on the implementation head.
-- [x] Dashboard install flow no longer defaults to Administrator in companion PR #11.
-- [x] Final implementation diff contains only task-related permanent code/tests/task record.
-- [x] Final review-thread inspection is clean across both PRs.
-- [ ] Final task-record-only Dank Shield head GitHub Actions must pass.
+- [x] Separate durable config history table exists via migration.
+- [x] Successful config changes are automatically versioned at the DB boundary.
+- [x] Consecutive duplicate/timestamp-only noise is suppressed without hiding legitimate returns to an older state.
+- [x] History retention is bounded per guild.
+- [x] Manual backup API exists.
+- [x] Restore refuses cross-guild snapshots.
+- [x] Restore creates a pre-restore safety backup.
+- [x] Restore excludes lifecycle/system identity fields and invalidates runtime cache.
+- [x] Behavioral core tests exist.
+- [ ] Core compile/tests/audits pass.
+- [ ] Existing `/dank setup` exposes Backups & History without a new top-level command.
+- [ ] Restore requires explicit confirmation.
+- [ ] Final regression/compile/audits pass on final head.
+- [ ] Final diff contains only task-related permanent code/tests/task record.
+- [ ] Final review-thread inspection is clean.
 - [ ] Merge/deploy requires explicit user approval.
