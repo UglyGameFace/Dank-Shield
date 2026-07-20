@@ -1,75 +1,91 @@
 # ACTIVE TASK
 
-## DS-LIVE-STATS-002 — Make quarantine biohazard label permanent
+## DS-TICKET-CATEGORIES-001 — Restore rich ticket picker categories without patch layers
 
-**Status:** READY FOR REVIEW — NOT MERGED — NOT DEPLOYED
-**Branch:** `fix/quarantine-biohazard-stat-label`
-**PR:** #104
-**Base:** current `main` after merged PR #103
+**Status:** IN PROGRESS — SETUP ALIGNMENT + VALIDATION PENDING
+**Branch:** `fix/reconcile-ticket-picker-default-categories`
+**Base:** current `main` after merged PR #104
 
 ## Single Active Task Lock
 
 Do not switch to unrelated implementation work until this task reaches Definition of Done or the owner explicitly force-switches tasks.
 
+## Hard Architecture Rules
+
+- No monkey patches.
+- No startup guards as the implementation path.
+- No import-time mutation of another module's callbacks, views, commands, or constants.
+- No new bridge/tiny patch module.
+- Preserve multi-server isolation and owner-defined custom ticket categories.
+- Use native runtime owners and behavioral tests.
+
 ## Scope
 
-- Make the live quarantine stat use `☣️ Quarantined` permanently.
-- Preserve all other live stats behavior from merged PR #103.
-- Ensure an existing saved `🔒 Quarantined` channel is renamed to the new canonical biohazard label on refresh.
-- Do not create a duplicate quarantine stats channel.
+- Restore the richer built-in ticket choices users were intended to see, including Partnerships and the other specialized ticket types already defined by the live ticket system.
+- Fix legacy guilds whose categories came from the older stripped-down `/dank setup` starter set.
+- Keep genuinely custom owner category sets authoritative.
+- Keep the actual Create Ticket picker and `/ticket-category list` consistent.
+- Align the native `/dank setup` recommended category source with the same rich built-ins before DoD.
 
 ## Root Cause
 
-The quarantine channel name was still generated from the hardcoded canonical label `🔒 Quarantined`. A manual Discord rename to `☣️ Quarantined` would therefore be reverted by the next normal stats refresh.
+The repository currently has split category truth:
 
-## Changes
+- `stoney_verify/tickets_new/panel.py` owns a richer built-in set including Verification, Account / Access, Payments / Refunds, Appeals, Reports, Staff Complaint, COD Services, Service Requests, Vouch / Referral, Giveaway / Reward, Content / Media, Partnerships, Questions, and Support.
+- `stoney_verify/commands_ext/public_setup_solid.py` still seeds an older seven-option starter set: Support, Verification, Appeal, Report, Question, Bug, and Other.
+- `public_tickettool_parity_polish._load_ticket_rows()` returns configured rows as soon as any rows exist, so guilds created with the older starter set never reach the richer fallback definitions.
+- Historical category functionality also exists in startup-guard patch modules, but those are explicitly not an acceptable permanent implementation path and are not being used for this fix.
 
-- Changed the canonical quarantine stat prefix to `☣️ Quarantined:`.
-- Changed generated quarantine channel names to use the biohazard emoji.
-- Updated behavioral display expectations.
-- Kept an old `🔒 Quarantined` channel in the migration test and now verifies refresh converts it to `☣️ Quarantined` rather than leaving the old label.
+## Changes So Far
+
+- Added native legacy-managed-set detection directly to `public_tickettool_parity_polish.py`.
+- The live picker now layers the rich `tickets_new.panel` built-ins over only the recognized legacy managed starter shape.
+- Any unknown/custom category slug makes the owner's configured category set authoritative, so custom guilds are not silently expanded or overwritten.
+- `/ticket-category list` now uses the same effective category loader as the member-facing picker.
+- Added behavioral tests proving:
+  - the legacy managed starter set is recognized;
+  - Partnerships and richer built-ins are restored for that set;
+  - no canonical duplicates are introduced;
+  - a custom `vip_concierge` category prevents automatic default merging;
+  - the actual Discord select exposes Partnership, COD Services, Account / Access, and Payments / Refunds.
 
 ## Validation
 
-Implementation head `a0d47f11ffd5693860789af79316accf23aac353` passed GitHub Actions `Dank Shield CI` run 461:
+Pending:
 
-- Committed diff whitespace check: PASS.
-- Python compile: PASS.
-- Full `pytest tests/` suite: PASS, including the biohazard display and old-lock migration behavior.
-- Standalone tool checks: PASS.
-- Public setup/isolation audit: PASS.
-- Canonical command-surface audit: PASS.
-- Command/startup-friction audit: PASS.
-- Public invite-permission audit: PASS.
-- Setup-safety audit: PASS.
-- Dank Design Smart Auto-Detect audit: PASS.
-- Role-truth ownership audit: PASS.
-- Event-boundary ownership audit: PASS.
-
-The final task-record-only head created by this update must also remain green before merge approval.
+- Native `/dank setup` recommended-category alignment.
+- Targeted ticket category tests.
+- Python compile validation.
+- Full `pytest tests/` regression suite.
+- Standalone tools/audits required by CI.
+- Final diff/conflict inspection.
+- GitHub Actions on the final PR head.
 
 ## Cleanup / Conflict Inspection
 
-- Reuses the existing `security_stats.py` owner.
-- No new stats subsystem.
-- No new counters or database fields.
-- No changes to ticket/member logic.
-- `main.py`, `sitecustomize.py`, and `usercustomize.py` remain untouched.
-- Implementation diff is two changed lines in the stats owner plus focused behavioral test updates; task record is the only other changed file.
+- No new startup guard was added.
+- No existing startup guard is used by the new reconciliation behavior.
+- No new monkey patch was added.
+- No new bridge module was added.
+- No database schema change or duplicate category table was added.
+- Custom owner categories remain authoritative.
+- Existing historical patch/guard debt is outside the implementation path and must not be expanded by this task.
 
 ## Blockers
 
-- No known technical blocker remains.
-- Merge into `main` requires explicit user approval.
-- Manual deployment is not authorized and has not occurred.
+None known yet. Setup alignment and validation remain.
 
 ## Definition of Done
 
-- [x] Canonical quarantine label is `☣️ Quarantined`.
-- [x] New/fresh stats displays use the biohazard label.
-- [x] Existing saved old-lock quarantine channels migrate on refresh.
-- [x] No duplicate quarantine channel is created when the saved channel ID is valid.
-- [x] Full regression/compile/audits pass on the implementation head.
-- [x] Final diff contains only task-related files.
+- [x] Legacy managed starter sets regain Partnerships and the richer live built-ins in the Create Ticket picker.
+- [x] Custom owner category sets are not force-expanded.
+- [x] Picker category dedupe remains canonical and capped by Discord's select limit.
+- [x] `/ticket-category list` reports the same effective category choices as the picker.
+- [x] Behavioral coverage exists for rich reconciliation and custom-owner preservation.
+- [ ] `/dank setup` recommended category source is aligned natively with the rich built-ins.
+- [ ] No monkey patch/startup-guard implementation dependency exists for the completed fix.
+- [ ] Targeted tests pass.
+- [ ] Full regression/compile/audits pass.
+- [ ] Final diff contains only task-related permanent code/tests/task record.
 - [ ] Final-head GitHub Actions pass.
 - [ ] Merge/deploy requires explicit user approval.
