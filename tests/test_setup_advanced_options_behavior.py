@@ -87,6 +87,7 @@ def test_other_settings_submenus_keep_existing_tools():
     assert labels(recommend.AdvancedMonitoringRepairView()) == {
         "Choose What Gets Logged",
         "Spam & Raid Protection",
+        "Check Bot Access",
         "Fix Channel Permissions",
         "Back to Other Settings",
         "Back Home",
@@ -142,6 +143,7 @@ def test_all_secondary_pages_are_mobile_compact():
         (recommend.AdvancedMemberExperienceView, "Ticket Choices", "_open_ticket_menu"),
         (recommend.AdvancedMonitoringRepairView, "Choose What Gets Logged", "_open_modlog_tracking"),
         (recommend.AdvancedMonitoringRepairView, "Spam & Raid Protection", "_open_protection_options"),
+        (recommend.AdvancedMonitoringRepairView, "Check Bot Access", "_open_bot_access_check"),
         (recommend.AdvancedMonitoringRepairView, "Fix Channel Permissions", "_open_permission_repair"),
         (recommend.AdvancedDangerZoneView, "Fix or Start Over", "_open_recovery_center"),
     ),
