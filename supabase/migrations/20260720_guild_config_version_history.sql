@@ -41,6 +41,7 @@ as $$
 declare
     payload jsonb;
     previous_payload jsonb;
+    latest_snapshot jsonb;
     settings_payload jsonb;
     metadata_payload jsonb;
     resolved_guild_id text;
@@ -65,15 +66,17 @@ begin
         end if;
     end if;
 
-    -- Avoid consecutive duplicate snapshots while ignoring updated_at noise.
-    if exists (
-        select 1
-        from public.guild_config_versions v
-        where v.guild_id = resolved_guild_id
-          and (v.snapshot - 'updated_at') = (payload - 'updated_at')
-        order by v.created_at desc, v.version_id desc
-        limit 1
-    ) then
+    -- Avoid only a consecutive duplicate. If a guild changes away from a
+    -- previous state and later returns to it, that return is a real version.
+    select v.snapshot
+      into latest_snapshot
+      from public.guild_config_versions v
+     where v.guild_id = resolved_guild_id
+     order by v.created_at desc, v.version_id desc
+     limit 1;
+
+    if latest_snapshot is not null
+       and (latest_snapshot - 'updated_at') = (payload - 'updated_at') then
         return new;
     end if;
 
