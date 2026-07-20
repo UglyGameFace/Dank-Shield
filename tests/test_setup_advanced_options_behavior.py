@@ -9,6 +9,7 @@ from typing import Any
 import discord
 import pytest
 
+from stoney_verify import config_history_ui
 from stoney_verify.commands_ext import public_protection_center
 from stoney_verify.commands_ext import public_setup_recommend as recommend
 
@@ -66,6 +67,7 @@ def test_other_settings_hub_uses_literal_task_names():
         "Tickets",
         "Logs & Safety",
         "Server Design",
+        "Backups & History",
         "Back to More Options",
         "Back Home",
     }
@@ -166,6 +168,7 @@ def test_buttons_reuse_existing_runtime_routes(monkeypatch: pytest.MonkeyPatch, 
         ("Tickets", "_open_advanced_member_experience"),
         ("Logs & Safety", "_open_advanced_monitoring_repair"),
         ("Server Design", "_open_advanced_appearance"),
+        ("Backups & History", "_open_config_history"),
     ),
 )
 def test_other_settings_groups_open_focused_submenus(monkeypatch: pytest.MonkeyPatch, label: str, route_name: str) -> None:
@@ -234,6 +237,29 @@ def test_protection_reuses_protection_center(monkeypatch: pytest.MonkeyPatch) ->
     monkeypatch.setattr(public_protection_center, "_refresh_panel", refresh)
     run(recommend._open_protection_options(interaction))
     assert events == ["protection"]
+
+
+def test_backups_history_reuses_native_history_ui(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    interaction = FakeInteraction()
+    events: list[str] = []
+
+    async def open_history(
+        interaction_arg: Any,
+    ) -> None:
+        assert interaction_arg is interaction
+        events.append("history")
+
+    monkeypatch.setattr(
+        config_history_ui,
+        "open_config_history",
+        open_history,
+    )
+
+    run(recommend._open_config_history(interaction))
+
+    assert events == ["history"]
 
 
 def test_timers_rules_reuses_existing_behavior_view(monkeypatch: pytest.MonkeyPatch) -> None:
