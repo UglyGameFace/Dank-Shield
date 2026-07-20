@@ -103,13 +103,14 @@ def test_ticket_status_query_uses_authoritative_stored_lifecycle_state(monkeypat
         {"status": "claimed", "claimed_by": "66", "assigned_to": "66"},
         {"status": "closed", "claimed_by": None, "assigned_to": None},
         {"status": "closed", "claimed_by": "77", "assigned_to": "77"},
+        {"status": "active", "claimed_by": None, "assigned_to": None},
+        {"status": "reopened", "claimed_by": None, "assigned_to": "88"},
         {"status": "deleted", "claimed_by": None, "assigned_to": None},
     ]
 
     class FakeQuery:
         def __init__(self):
             self.guild_id = None
-            self.statuses = None
 
         def select(self, columns):
             assert columns == "status,claimed_by,assigned_to"
@@ -120,16 +121,9 @@ def test_ticket_status_query_uses_authoritative_stored_lifecycle_state(monkeypat
             self.guild_id = value
             return self
 
-        def in_(self, key, values):
-            assert key == "status"
-            self.statuses = list(values)
-            return self
-
         def execute(self):
             assert self.guild_id == "777"
-            assert self.statuses == ["open", "claimed", "closed"]
-            filtered = [row for row in rows if row["status"] in self.statuses]
-            return SimpleNamespace(data=filtered)
+            return SimpleNamespace(data=rows)
 
     class FakeSupabase:
         def table(self, name):
@@ -139,8 +133,8 @@ def test_ticket_status_query_uses_authoritative_stored_lifecycle_state(monkeypat
     monkeypatch.setattr(security_stats, "get_supabase", lambda: FakeSupabase())
 
     assert security_stats._query_ticket_status_counts_sync(777) == {
-        "open_tickets": 1,
-        "claimed_tickets": 2,
+        "open_tickets": 2,
+        "claimed_tickets": 3,
         "closed_tickets": 2,
     }
 
