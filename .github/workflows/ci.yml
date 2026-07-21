@@ -143,23 +143,34 @@ jobs:
           DANK_STARTUP_LOG_STYLE: quiet
           DANK_COMMAND_LOG_STYLE: quiet
         run: |
-          set -euo pipefail
-          git diff --check
-          python -m compileall -q stoney_verify main.py tools
-          python -m pytest tests/ -q --tb=short --disable-warnings
-          for f in tools/test_*.py; do
-            echo "::group::$f"
-            python "$f"
-            echo "::endgroup::"
-          done
-          python tools/audit_public_setup.py
-          python tools/audit_public_command_surface.py
-          python tools/audit_public_command_friction.py
-          python tools/audit_public_invite_permissions.py
-          python tools/audit_setup_safety.py
-          python tools/audit_dank_design_smart_auto_detect.py
-          python tools/audit_role_truth.py
-          python tools/audit_event_boundary.py
+          set -o pipefail
+          (
+            set -euo pipefail
+            git diff --check
+            python -m compileall -q stoney_verify main.py tools
+            python -m pytest tests/ -q --tb=short --disable-warnings
+            for f in tools/test_*.py; do
+              echo "::group::$f"
+              python "$f"
+              echo "::endgroup::"
+            done
+            python tools/audit_public_setup.py
+            python tools/audit_public_command_surface.py
+            python tools/audit_public_command_friction.py
+            python tools/audit_public_invite_permissions.py
+            python tools/audit_setup_safety.py
+            python tools/audit_dank_design_smart_auto_detect.py
+            python tools/audit_role_truth.py
+            python tools/audit_event_boundary.py
+          ) 2>&1 | tee /tmp/aio-test-migration-validation.log
+
+      - name: Upload failed migration validation
+        if: failure() && steps.gate.outputs.enabled == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: aio-test-migration-validation-failure
+          path: /tmp/aio-test-migration-validation.log
+          retention-days: 1
 
       - name: Commit only validated test migration
         if: steps.gate.outputs.enabled == 'true'
