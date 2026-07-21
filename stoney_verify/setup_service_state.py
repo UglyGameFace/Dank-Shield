@@ -42,6 +42,23 @@ class SetupServiceState:
         return bool(self.simple_verify or self.voice_verify or self.id_verify)
 
     @property
+    def verification(self) -> bool:
+        """Compatibility alias used by the existing custom feature picker."""
+        return bool(self.simple_verify)
+
+    @property
+    def voice(self) -> bool:
+        return bool(self.voice_verify)
+
+    @property
+    def spamguard(self) -> bool:
+        return bool(self.spam_guard)
+
+    @property
+    def moderation(self) -> bool:
+        return bool(self.logs)
+
+    @property
     def any_enabled(self) -> bool:
         return bool(
             self.tickets
@@ -58,6 +75,10 @@ class SetupServiceState:
             "spam_guard_enabled": bool(self.spam_guard),
             "moderation_enabled": bool(self.logs),
         }
+
+    def as_payload(self) -> dict[str, bool]:
+        """Compatibility alias for existing feature-picker views."""
+        return self.as_service_payload()
 
     def enabled_labels(self) -> list[str]:
         labels: list[str] = []
@@ -348,6 +369,27 @@ async def save_custom_service_state(
     return service_state_from_config(saved)
 
 
+async def invalidate_setup_completion(
+    guild_id: int,
+    *,
+    reason: str = "Setup configuration changed",
+) -> None:
+    """Mark a previously finished setup as needing review again."""
+    from .commands_ext.public_setup_config_writer import upsert_guild_config
+
+    await upsert_guild_config(
+        int(guild_id),
+        {
+            "setup_completed": False,
+            "setup_completion_invalidated_at": now_utc().isoformat(),
+            "setup_completion_invalidated_reason": str(reason or "")[:300],
+            "__config_write_mode": "explicit_override",
+            "__config_write_source": "/dank setup completion invalidation",
+        },
+    )
+    invalidate_guild_config(int(guild_id))
+
+
 async def mark_setup_completed(guild_id: int, *, actor: Any = None) -> SetupServiceState:
     from .commands_ext.public_setup_config_writer import upsert_guild_config
 
@@ -369,6 +411,7 @@ async def mark_setup_completed(guild_id: int, *, actor: Any = None) -> SetupServ
 
 __all__ = [
     "SetupServiceState",
+    "invalidate_setup_completion",
     "load_setup_service_state",
     "mark_setup_completed",
     "normalize_custom_service_patch",

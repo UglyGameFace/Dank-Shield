@@ -2,17 +2,11 @@ from __future__ import annotations
 
 import asyncio
 
-"""Plain-language public /dank setup home.
+"""Canonical plain-language product flow for public ``/dank setup``.
 
-This module patches the hardened setup flow from public_setup_solid.py into a
-simple first-run screen. It deliberately avoids developer/product terms.
-
-Public language rules:
-- Say Dank Shield, not Dank Shield.
-- Use plain labels: Basic server, Help desk, ID check, Voice check,
-  ID + voice check, Custom setup.
-- No forced forms by default.
-- Do not show raw role/channel IDs as public setup instructions.
+The low-level builders remain in ``public_setup_solid``. This module owns the
+customer-facing home, guided path, review, testing, completion, and navigation
+language.
 """
 
 from typing import Any, Optional
@@ -21,6 +15,12 @@ import discord
 
 from ..globals import now_utc
 from ..guild_config import get_guild_config
+from ..setup_service_state import (
+    SetupServiceState,
+    load_setup_service_state,
+    mark_setup_completed,
+    service_state_from_config,
+)
 from ..setup_engine.verification_modes import id_verify_allowed_for_guild
 from ..setup_new import (
     build_setup_template_embed,
@@ -280,133 +280,18 @@ def _first_config_bool(
     return bool(default)
 
 
-def _selected_setup_services(
-    cfg: Any,
-) -> dict[str, bool]:
-    """Return the services this guild actually selected."""
-
-    choice = str(
-        _cfg_value(cfg, "setup_choice", "") or ""
-    ).strip().lower()
-
-    tickets_default = choice in {
-        "basic_server",
-        "help_desk",
-        "voice_check",
-        "id_check",
-        "id_voice_check",
-    }
-
-    basic_default = choice == "basic_verify"
-
-    voice_default = choice in {
-        "voice_check",
-        "id_voice_check",
-    }
-
-    id_default = choice in {
-        "id_check",
-        "id_voice_check",
-    }
-
-    logs_default = choice in {
-        "basic_server",
-        "help_desk",
-        "voice_check",
-        "id_check",
-        "id_voice_check",
-    }
-
-    tickets = _first_config_bool(
-        cfg,
-        (
-            "tickets_enabled",
-            "ticket_service_enabled",
-        ),
-        default=tickets_default,
-    )
-
-    basic_verify = _first_config_bool(
-        cfg,
-        (
-            "basic_verify_enabled",
-            "basic_button_verify_enabled",
-        ),
-        default=basic_default,
-    )
-
-    verification_enabled = _first_config_bool(
-        cfg,
-        ("verification_enabled",),
-        default=(
-            basic_default
-            or voice_default
-            or id_default
-        ),
-    )
-
-    voice = _first_config_bool(
-        cfg,
-        (
-            "voice_verification_enabled",
-            "vc_verify_enabled",
-            "voice_verify_enabled",
-            "verification_allows_voice",
-        ),
-        default=voice_default,
-    )
-
-    id_verify = _first_config_bool(
-        cfg,
-        (
-            "id_verify_enabled",
-            "web_verify_enabled",
-            "id_web_verify_enabled",
-            "verification_requires_id",
-        ),
-        default=id_default,
-    )
-
-    spam_guard = _first_config_bool(
-        cfg,
-        ("spam_guard_enabled",),
-        default=False,
-    )
-
-    logs = _first_config_bool(
-        cfg,
-        (
-            "moderation_enabled",
-            "logs_enabled",
-        ),
-        default=logs_default,
-    )
-
-    verify = bool(
-        basic_verify
-        or verification_enabled
-        or voice
-        or id_verify
-    )
-
-    # These workflows depend on tickets and staff logs.
-    if voice or id_verify:
-        tickets = True
-        logs = True
-
-    if spam_guard:
-        logs = True
-
+def _selected_setup_services(cfg: Any) -> dict[str, bool]:
+    """Return the one canonical feature selection for every setup screen."""
+    state = service_state_from_config(cfg)
     return {
-        "tickets": bool(tickets),
-        "verify": bool(verify),
-        "basic_verify": bool(basic_verify),
-        "voice": bool(voice),
-        "id": bool(id_verify),
-        "spam_guard": bool(spam_guard),
-        "logs": bool(logs),
+        "tickets": bool(state.tickets),
+        "verify": bool(state.verification_enabled),
+        "basic_verify": bool(state.simple_verify),
+        "voice": bool(state.voice_verify),
+        "id": bool(state.id_verify),
+        "spam_guard": bool(state.spam_guard),
+        "logs": bool(state.logs),
     }
-
 
 def _missing_setup_permissions(
     bot_permissions: Any,
@@ -1206,17 +1091,26 @@ async def _setup_progress(
     )
 
 
-async def _product_main_setup_payload(guild: discord.Guild) -> tuple[discord.Embed, discord.ui.View]:
+def _enabled_feature_text(state: SetupServiceState) -> str:
+    labels = state.enabled_labels()
+    if not labels:
+        return "No features are selected yet."
+    return " • ".join(f"**{label}**" for label in labels)
+
+
+async def _product_main_setup_payload(
+    guild: discord.Guild,
+) -> tuple[discord.Embed, discord.ui.View]:
     progress_text, done, total, next_step = await _setup_progress(guild)
     try:
         cfg = await get_guild_config(guild.id, refresh=True)
     except Exception:
         cfg = None
 
-    saved_choice = _saved_choice_text(cfg) if cfg is not None else "⚠️ Saved setup could not be read."
+    state = service_state_from_config(cfg)
+    started = bool(state.setup_choice)
     ready = bool(total and done >= total)
-    started = bool(cfg is not None and str(_cfg_value(cfg, "setup_choice", "") or "").strip())
-
+    completed = bool(ready and state.completed)
     issues = [
         line.strip()
         for line in str(progress_text or "").splitlines()
@@ -1226,36 +1120,52 @@ async def _product_main_setup_payload(guild: discord.Guild) -> tuple[discord.Emb
     if not started:
         status = "Not started"
         recommended = "Press **Start Setup** and choose what this server needs."
+    elif completed:
+        status = "Setup finished"
+        recommended = (
+            "Your setup is saved and marked finished. Open **View Setup Summary** "
+            "to review it, or use **Edit / More Options** when you want to change something."
+        )
     elif ready:
-        status = "Ready to test"
-        recommended = "Press **Test & Launch** and test with a second Discord account."
+        status = "Ready for testing"
+        recommended = (
+            "Press **Test Your Setup**. When the enabled features work, press **Finish Setup**."
+        )
     else:
-        status = "Needs setup work"
+        status = "Needs attention"
         recommended = str(next_step or "Press Continue Setup.")[:350]
 
     embed = discord.Embed(
         title="🚀 Dank Shield Setup",
-        description="One clear next step. Extra tools stay out of the way under More Options.",
-        color=discord.Color.green() if ready else discord.Color.blurple(),
+        description=(
+            "Follow the recommended next step. Settings you do not need stay under "
+            "**Edit / More Options**."
+        ),
+        color=discord.Color.green() if completed or ready else discord.Color.blurple(),
         timestamp=now_utc(),
     )
     embed.add_field(
         name="Status",
         value=(
             f"**{status}**\n"
-            f"{saved_choice}\n"
+            f"Setup plan: **{state.setup_label}**\n"
             f"`{done}/{total}` required steps complete"
         )[:1024],
+        inline=False,
+    )
+    embed.add_field(
+        name="Enabled Features",
+        value=_enabled_feature_text(state)[:1024],
         inline=False,
     )
     embed.add_field(name="Recommended Next Step", value=recommended[:1024], inline=False)
     embed.add_field(
         name="Needs Attention",
-        value="\n".join(issues)[:900] if issues else "✅ No required setup problem is blocking the guided path.",
+        value="\n".join(issues)[:900] if issues else "✅ No required setup problem is blocking you.",
         inline=False,
     )
     embed.set_footer(text=f"Guild {guild.id} • /dank setup")
-    return embed, ProductSetupHomeView(ready=ready, started=started)
+    return embed, ProductSetupHomeView(ready=ready, started=started, completed=completed)
 
 class SetupChoiceSelect(discord.ui.Select):
     def __init__(self, selected_key: Optional[str] = None) -> None:
@@ -2046,39 +1956,35 @@ def _setup_bool(value: Any, default: bool = False) -> bool:
     return bool(default)
 
 
-async def _launch_state(guild: discord.Guild) -> dict[str, bool]:
-    try:
-        cfg = await get_guild_config(guild.id, refresh=True)
-    except Exception:
-        cfg = None
-
+async def _launch_state(guild: discord.Guild) -> dict[str, Any]:
+    state = await load_setup_service_state(guild.id)
     return {
-        "tickets": _setup_bool(_cfg_value(cfg, "tickets_enabled", True), True),
-        "basic_verify": _setup_bool(
-            _cfg_value(cfg, "basic_verify_enabled", _cfg_value(cfg, "basic_button_verify_enabled", _cfg_value(cfg, "verification_enabled", False))),
-            False,
-        ),
-        "voice_verify": _setup_bool(
-            _cfg_value(cfg, "voice_verification_enabled", _cfg_value(cfg, "vc_verify_enabled", _cfg_value(cfg, "verification_allows_voice", False))),
-            False,
-        ),
-        "id_verify": _setup_bool(
-            _cfg_value(cfg, "id_verify_enabled", _cfg_value(cfg, "web_verify_enabled", _cfg_value(cfg, "id_web_verify_enabled", _cfg_value(cfg, "verification_requires_id", False)))),
-            False,
-        ),
-        "logs": _setup_bool(_cfg_value(cfg, "logs_enabled", _cfg_value(cfg, "moderation_enabled", False)), False),
+        "tickets": bool(state.tickets),
+        "basic_verify": bool(state.simple_verify),
+        "voice_verify": bool(state.voice_verify),
+        "id_verify": bool(state.id_verify),
+        "spam_guard": bool(state.spam_guard),
+        "logs": bool(state.logs),
+        "completed": bool(state.completed),
+        "setup_choice": state.setup_choice,
+        "setup_label": state.setup_label,
     }
 
-
-def _launch_state_text(state: dict[str, bool]) -> str:
-    return (
-        f"🎫 Tickets: **{'ON ✅' if state.get('tickets') else 'OFF ⬜'}**\n"
-        f"✅ Simple Verify: **{'ON ✅' if state.get('basic_verify') else 'OFF ⬜'}**\n"
-        f"🎙️ Voice Verify: **{'ON ✅' if state.get('voice_verify') else 'OFF ⬜'}**\n"
-        f"🪪 ID/Web Verify: **{'ON ✅' if state.get('id_verify') else 'OFF ⬜'}**\n"
-        f"🧾 Logs: **{'ON ✅' if state.get('logs') else 'OFF ⬜'}**"
-    )
-
+def _launch_state_text(state: dict[str, Any]) -> str:
+    lines: list[str] = []
+    if state.get("tickets"):
+        lines.append("🎫 **Tickets**")
+    if state.get("basic_verify"):
+        lines.append("✅ **Simple Verify**")
+    if state.get("voice_verify"):
+        lines.append("🎙️ **Voice Verify**")
+    if state.get("id_verify"):
+        lines.append("🪪 **ID/Web Verify**")
+    if state.get("spam_guard"):
+        lines.append("🛡️ **SpamGuard**")
+    if state.get("logs"):
+        lines.append("🧾 **Logs**")
+    return "\n".join(lines) or "No features are enabled."
 
 async def _open_test_launch(interaction: discord.Interaction) -> None:
     if not await solid._require_setup_permission(interaction):
@@ -2087,46 +1993,96 @@ async def _open_test_launch(interaction: discord.Interaction) -> None:
     if guild is None:
         return await interaction.response.send_message("❌ This must be used inside a server.", ephemeral=True)
 
-    target, _title, _explanation, _requirement_key = (
-        await _guided_setup_target(guild)
-    )
-
+    await solid._safe_defer_update(interaction)
+    target, _title, _explanation, _key = await _guided_setup_target(guild)
     if target != "ready":
-        return await _open_health_check(interaction)
+        return await _open_health_check(interaction, already_deferred=True)
 
     state = await _launch_state(guild)
+    actions: list[str] = []
+    if state.get("tickets"):
+        actions.append("Post the ticket panel and create one test ticket. Try the staff controls, then delete the test ticket.")
+    if state.get("basic_verify"):
+        actions.append("Post the Simple Verify panel and test it with a second account.")
+    if state.get("voice_verify"):
+        actions.append("Use a second account to request Voice Verify and confirm staff receive the request.")
+    if state.get("id_verify"):
+        actions.append("Test the private ID/Web flow with an approved staff test account.")
+    if state.get("spam_guard"):
+        actions.append("Review SpamGuard in a private test channel and confirm its actions appear in the configured log.")
+    if state.get("logs"):
+        actions.append("Confirm the test actions appear in the correct log channels.")
 
+    numbered = "\n".join(f"{index}. {action}" for index, action in enumerate(actions, start=1))
     embed = discord.Embed(
-        title="🧪 Test & Launch",
+        title="🧪 Setup Test Tools" if state.get("completed") else "🧪 Test Your Setup",
         description=(
-            "Post the panels, then test them before real members use them. "
-            "Use a second Discord account for the test when possible."
+            "Only features enabled for this server are shown below. Nothing is posted until you press a matching button."
         ),
         color=discord.Color.green(),
         timestamp=now_utc(),
     )
-    embed.add_field(name="Features That Are On", value=_launch_state_text(state), inline=False)
-
-    actions: list[str] = []
-    if state.get("tickets"):
-        actions.append("1. Press **Post Ticket Panel**, then **Create Test Ticket**.")
-    if state.get("basic_verify"):
-        actions.append("2. Press **Post Simple Verify Panel**.")
-    if state.get("voice_verify"):
-        actions.append("3. Join the saved Voice Verify channel with a second test account and request a staff voice check.")
-    if state.get("id_verify"):
-        actions.append("4. ID/Web Verify is ON. This option is only for servers approved to use it.")
-    actions.append("5. Join with a second test account, use the public panels, and make sure roles and logs work.")
-
-    embed.add_field(name="What To Test", value="\n".join(actions)[:1024], inline=False)
-    embed.add_field(
-        name="What Should Happen",
-        value="The ticket panel opens a ticket. Simple Verify gives the member role. ID or Voice Verify only appears when you turned it on.",
-        inline=False,
-    )
-
+    embed.add_field(name="Setup Plan", value=f"**{state.get('setup_label') or 'Current setup'}**", inline=False)
+    embed.add_field(name="Enabled Features", value=_launch_state_text(state), inline=False)
+    embed.add_field(name="Test These", value=numbered[:1024] or "Run Setup Check before testing.", inline=False)
+    if not state.get("completed"):
+        embed.add_field(
+            name="When Everything Works",
+            value=(
+                "Press **Finish Setup**. Setup Home will then show **Setup finished** instead of sending you back here."
+            ),
+            inline=False,
+        )
+    embed.set_footer(text=f"Guild {guild.id} • enabled features only")
     await solid._edit_or_followup(interaction, embed=embed, view=LaunchTestView(state))
 
+
+async def _finish_setup(interaction: discord.Interaction) -> None:
+    if not await solid._require_setup_permission(interaction):
+        return
+    guild = interaction.guild
+    if guild is None:
+        return await interaction.response.send_message("❌ This must be used inside a server.", ephemeral=True)
+
+    await solid._safe_defer_update(interaction)
+    target, _title, _explanation, _key = await _guided_setup_target(guild)
+    if target != "ready":
+        return await _open_health_check(interaction, already_deferred=True)
+
+    state = await mark_setup_completed(guild.id, actor=interaction.user)
+    embed = discord.Embed(
+        title="✅ Setup Finished",
+        description=(
+            "Dank Shield saved this setup as finished. Setup Home will no longer send you into the testing screen."
+        ),
+        color=discord.Color.green(),
+        timestamp=now_utc(),
+    )
+    embed.add_field(name="Enabled Features", value=_enabled_feature_text(state), inline=False)
+    embed.add_field(
+        name="Changing Something Later",
+        value=(
+            "Any future setup edit automatically changes this server back to **Needs review** until you test and finish it again."
+        ),
+        inline=False,
+    )
+    await solid._edit_or_followup(interaction, embed=embed, view=FinishedSetupView())
+
+
+async def _open_completed_summary(interaction: discord.Interaction) -> None:
+    if not await solid._require_setup_permission(interaction):
+        return
+    guild = interaction.guild
+    if guild is None:
+        return await interaction.response.send_message("❌ This must be used inside a server.", ephemeral=True)
+
+    await solid._safe_defer_update(interaction)
+    embed = await solid._build_current_setup_embed(guild)
+    embed.title = "✅ Setup Summary"
+    embed.description = (
+        "This server is marked **Setup finished**. Use **Test Again** for the enabled test tools or **Edit Setup** to make changes."
+    )
+    await solid._edit_or_followup(interaction, embed=embed, view=FinishedSetupView())
 
 async def _guided_setup_target(
     guild: discord.Guild,
@@ -3354,28 +3310,27 @@ async def _open_guided_setup(
 
 
 class ProductSetupHomeView(discord.ui.View):
-    """Setup home with one primary action and one secondary escape hatch."""
+    """Setup Home with one clear primary action."""
 
-    def __init__(
-        self,
-        *,
-        ready: bool = False,
-        started: bool = False,
-    ) -> None:
+    def __init__(self, *, ready: bool = False, started: bool = False, completed: bool = False) -> None:
         super().__init__(timeout=900)
         self.ready = bool(ready)
         self.started = bool(started)
+        self.completed = bool(completed)
 
-        try:
-            self.continue_setup.label = (
-                "Test & Launch"
-                if self.ready
-                else "Continue Setup"
-                if self.started
-                else "Start Setup"
-            )
-        except Exception:
-            pass
+        if self.completed:
+            self.continue_setup.label = "View Setup Summary"
+            self.continue_setup.emoji = "✅"
+            self.more_options.label = "Edit / More Options"
+        elif self.ready:
+            self.continue_setup.label = "Test Your Setup"
+            self.continue_setup.emoji = "🧪"
+        elif self.started:
+            self.continue_setup.label = "Continue Setup"
+            self.continue_setup.emoji = "➡️"
+        else:
+            self.continue_setup.label = "Start Setup"
+            self.continue_setup.emoji = "▶️"
 
     @discord.ui.button(
         label="Start Setup",
@@ -3384,11 +3339,11 @@ class ProductSetupHomeView(discord.ui.View):
         custom_id="dank_setup_home:continue",
         row=0,
     )
-    async def continue_setup(
-        self,
-        interaction: discord.Interaction,
-        button: discord.ui.Button,
-    ) -> None:
+    async def continue_setup(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        if self.completed:
+            await _open_completed_summary(interaction)
+            return
         if self.ready:
             await _open_test_launch(interaction)
             return
@@ -3404,11 +3359,8 @@ class ProductSetupHomeView(discord.ui.View):
         custom_id="dank_setup_home:more_options",
         row=1,
     )
-    async def more_options(
-        self,
-        interaction: discord.Interaction,
-        button: discord.ui.Button,
-    ) -> None:
+    async def more_options(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
         await _open_manage_setup(interaction)
 
 class ContinueSetupView(discord.ui.View):
@@ -4011,19 +3963,33 @@ async def _create_setup_test_ticket(
 
 
 class LaunchTestView(discord.ui.View):
-    def __init__(self, state: Optional[dict[str, bool]] = None) -> None:
+    """Only render actions for features this guild actually enabled."""
+
+    def __init__(self, state: Optional[dict[str, Any]] = None) -> None:
         super().__init__(timeout=900)
         self.state = dict(state or {})
+        actions: list[tuple[str, str, discord.ButtonStyle, str, Any]] = []
 
-        try:
-            self.create_test_ticket.disabled = not bool(
-                self.state.get("tickets")
-            )
-        except Exception:
-            pass
+        if self.state.get("tickets"):
+            actions.extend([
+                ("Post Ticket Panel", "🎫", discord.ButtonStyle.success, "dank_setup_launch:post_ticket_panel", self._post_ticket_panel),
+                ("Create Test Ticket", "🧪", discord.ButtonStyle.success, "dank_setup_launch:create_test_ticket", self._create_test_ticket),
+            ])
+        if self.state.get("basic_verify"):
+            actions.append(("Post Simple Verify Panel", "✅", discord.ButtonStyle.success, "dank_setup_launch:post_basic_verify", self._post_basic_verify))
+        if not self.state.get("completed"):
+            actions.append(("Finish Setup", "🏁", discord.ButtonStyle.primary, "dank_setup_launch:finish", self._finish))
+        actions.extend([
+            ("Review Setup", "🩺", discord.ButtonStyle.secondary, "dank_setup_launch:health", self._review),
+            ("Setup Home", "🏠", discord.ButtonStyle.secondary, "dank_setup_launch:home", self._home),
+        ])
 
-    @discord.ui.button(label="Post Ticket Panel", emoji="🎫", style=discord.ButtonStyle.success, custom_id="dank_setup_launch:post_ticket_panel", row=0)
-    async def post_ticket_panel(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        for index, (label, emoji, style, custom_id, callback) in enumerate(actions):
+            button = discord.ui.Button(label=label, emoji=emoji, style=style, custom_id=custom_id, row=index // 2)
+            button.callback = callback
+            self.add_item(button)
+
+    async def _post_ticket_panel(self, interaction: discord.Interaction) -> None:
         if not await solid._require_setup_permission(interaction):
             return
         guild = interaction.guild
@@ -4031,15 +3997,17 @@ class LaunchTestView(discord.ui.View):
             return await interaction.response.send_message("❌ This must be used inside a server.", ephemeral=True)
         state = await _launch_state(guild)
         if not state.get("tickets"):
-            return await interaction.response.send_message("🎫 Tickets are OFF in Custom Setup. Turn Tickets ON first.", ephemeral=True)
+            return await interaction.response.send_message("🎫 Tickets are OFF. Open **Edit Setup** to turn them on.", ephemeral=True)
         try:
             from .public_ticket_panel_commands import post_ticket_panel_callback
-            return await post_ticket_panel_callback(interaction)
-        except Exception as e:
-            return await interaction.response.send_message(f"❌ Could not post ticket panel: `{type(e).__name__}: {str(e)[:220]}`", ephemeral=True)
+            await post_ticket_panel_callback(interaction)
+        except Exception as exc:
+            await interaction.response.send_message(
+                "❌ Could not post the ticket panel: " f"`{type(exc).__name__}: {str(exc)[:220]}`",
+                ephemeral=True,
+            )
 
-    @discord.ui.button(label="Post Simple Verify Panel", emoji="✅", style=discord.ButtonStyle.success, custom_id="dank_setup_launch:post_basic_verify", row=0)
-    async def post_basic_verify(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+    async def _post_basic_verify(self, interaction: discord.Interaction) -> None:
         if not await solid._require_setup_permission(interaction):
             return
         guild = interaction.guild
@@ -4047,44 +4015,46 @@ class LaunchTestView(discord.ui.View):
             return await interaction.response.send_message("❌ This must be used inside a server.", ephemeral=True)
         state = await _launch_state(guild)
         if not state.get("basic_verify"):
-            return await interaction.response.send_message("✅ Simple Verify is OFF. Turn Simple Verify ON first.", ephemeral=True)
+            return await interaction.response.send_message("✅ Simple Verify is OFF. Open **Edit Setup** to turn it on.", ephemeral=True)
         try:
             from .public_verify_basic_panel import verify_panel
-            return await verify_panel(interaction)
-        except Exception as e:
-            return await interaction.response.send_message(f"❌ Could not post Simple Verify panel: `{type(e).__name__}: {str(e)[:220]}`", ephemeral=True)
+            await verify_panel(interaction)
+        except Exception as exc:
+            await interaction.response.send_message(
+                "❌ Could not post the Simple Verify panel: " f"`{type(exc).__name__}: {str(exc)[:220]}`",
+                ephemeral=True,
+            )
 
-    @discord.ui.button(
-        label="Create Test Ticket",
-        emoji="🎫",
-        style=discord.ButtonStyle.success,
-        custom_id="dank_setup_launch:create_test_ticket",
-        row=0,
-    )
-    async def create_test_ticket(
-        self,
-        interaction: discord.Interaction,
-        button: discord.ui.Button,
-    ) -> None:
+    async def _create_test_ticket(self, interaction: discord.Interaction) -> None:
         await _create_setup_test_ticket(interaction)
 
-    @discord.ui.button(label="Check Setup Again", emoji="🩺", style=discord.ButtonStyle.primary, custom_id="dank_setup_launch:health", row=1)
-    async def health(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+    async def _finish(self, interaction: discord.Interaction) -> None:
+        await _finish_setup(interaction)
+
+    async def _review(self, interaction: discord.Interaction) -> None:
         await _open_health_check(interaction)
 
-    @discord.ui.button(label="View Current Setup", emoji="📋", style=discord.ButtonStyle.secondary, custom_id="dank_setup_launch:current", row=1)
-    async def current(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        if not await solid._require_setup_permission(interaction):
-            return
-        guild = interaction.guild
-        if guild is None:
-            return await interaction.response.send_message("❌ This must be used inside a server.", ephemeral=True)
-        await solid._safe_defer_update(interaction)
-        embed = await solid._build_current_setup_embed(guild)
-        await solid._edit_or_followup(interaction, embed=embed, view=LaunchTestView(await _launch_state(guild)))
+    async def _home(self, interaction: discord.Interaction) -> None:
+        await _home_edit(interaction)
 
-    @discord.ui.button(label="Back Home", emoji="🏠", style=discord.ButtonStyle.secondary, custom_id="dank_setup_launch:home", row=2)
+
+class FinishedSetupView(discord.ui.View):
+    def __init__(self) -> None:
+        super().__init__(timeout=900)
+
+    @discord.ui.button(label="Test Again", emoji="🧪", style=discord.ButtonStyle.secondary, custom_id="dank_setup_finished:test", row=0)
+    async def test_again(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        await _open_test_launch(interaction)
+
+    @discord.ui.button(label="Edit Setup", emoji="⚙️", style=discord.ButtonStyle.primary, custom_id="dank_setup_finished:edit", row=0)
+    async def edit_setup(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        await _open_manage_setup(interaction)
+
+    @discord.ui.button(label="Setup Home", emoji="🏠", style=discord.ButtonStyle.secondary, custom_id="dank_setup_finished:home", row=1)
     async def home(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
         await _home_edit(interaction)
 
 def _patch() -> None:

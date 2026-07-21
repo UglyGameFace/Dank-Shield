@@ -280,6 +280,36 @@ def _clean_payload(payload: Mapping[str, Any]) -> dict[str, Any]:
     return {str(k): v for k, v in dict(payload).items() if v is not None and str(k) not in _CONTROL_KEYS}
 
 
+_COMPLETION_METADATA_KEYS = {
+    "setup_completed",
+    "setup_completed_at",
+    "setup_completed_by_id",
+    "setup_completed_by_name",
+    "setup_completion_invalidated_at",
+    "setup_completion_invalidated_reason",
+}
+
+
+def _completion_aware_updates(updates: Mapping[str, Any]) -> dict[str, Any]:
+    """Invalidate Finished after a real setup edit."""
+    final = dict(updates)
+    if "setup_completed" in final:
+        return final
+
+    functional_keys = [
+        str(key)
+        for key in final
+        if str(key) not in _CONTROL_KEYS
+        and str(key) not in _BASE_WRITE_KEYS
+        and str(key) not in _COMPLETION_METADATA_KEYS
+        and not str(key).startswith("config_last_")
+    ]
+    if functional_keys:
+        final["setup_completed"] = False
+        final["setup_completion_invalidated_at"] = _utc_iso()
+    return final
+
+
 def upsert_guild_config_sync(guild_id: int, updates: Mapping[str, Any]) -> dict[str, Any]:
     sb = get_supabase()
     if sb is None:
@@ -288,9 +318,13 @@ def upsert_guild_config_sync(guild_id: int, updates: Mapping[str, Any]) -> dict[
     table = _config_table_name()
     gid = int(guild_id)
     existing = _fetch_existing_config_row_sync(gid)
-    safe_updates, blocked, changed, mode, source = _filter_safe_updates(existing, updates)
+    normalized_updates = _completion_aware_updates(updates)
+    safe_updates, blocked, changed, mode, source = _filter_safe_updates(
+        existing,
+        normalized_updates,
+    )
 
-    if _safe_bool(updates.get("__config_write_dry_run"), False):
+    if _safe_bool(normalized_updates.get("__config_write_dry_run"), False):
         preview = _settings_payload_update(existing, safe_updates)
         preview["_dry_run"] = True
         preview["_blocked_overwrites"] = blocked

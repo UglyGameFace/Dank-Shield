@@ -8,6 +8,11 @@ from typing import Any, Optional
 import discord
 
 from ..globals import now_utc
+from ..setup_service_state import (
+    load_setup_service_state,
+    normalize_custom_service_patch,
+    save_custom_service_state,
+)
 from . import public_setup_recommend as recommend
 
 from . import public_setup_solid as solid
@@ -181,50 +186,8 @@ def _custom_preset_key_for_payload(payload: dict[str, Any]) -> str:
 
 
 def _custom_service_config_patch(payload: dict[str, Any]) -> dict[str, Any]:
-    """Save service switches plus the derived setup flags other modules read."""
-
-    clean = {key: bool(payload.get(key, False)) for key in _CUSTOM_SERVICE_FLAG_KEYS}
-    voice_on = bool(clean.get("voice_verification_enabled", False))
-    basic_on = bool(clean.get("verification_enabled", False))
-    tickets_on = bool(clean.get("tickets_enabled", False))
-    spam_on = bool(clean.get("spam_guard_enabled", False))
-    logs_on = bool(clean.get("moderation_enabled", False))
-
-    if voice_on:
-        basic_on = True
-        tickets_on = True
-        logs_on = True
-
-    clean.update(
-        {
-            "tickets_enabled": tickets_on,
-            "ticket_service_enabled": tickets_on,
-            "verification_enabled": basic_on,
-            "basic_verify_enabled": basic_on,
-            "basic_button_verify_enabled": basic_on,
-            "voice_verification_enabled": voice_on,
-            "vc_verify_enabled": voice_on,
-            "voice_verify_enabled": voice_on,
-            "verification_allows_voice": voice_on,
-            "spam_guard_enabled": spam_on,
-            "moderation_enabled": logs_on,
-            "logs_enabled": logs_on,
-            # Custom setup is public-safe by default. ID/web is never implied.
-            "id_verify_enabled": False,
-            "web_verify_enabled": False,
-            "id_web_verify_enabled": False,
-            "verification_requires_id": False,
-            "verification_panel_style": "voice_check" if voice_on else "basic_verify" if basic_on else "none",
-            "verification_mode": "voice_check" if voice_on else "basic_button" if basic_on else "none",
-            "verify_mode": "voice_check" if voice_on else "basic_button" if basic_on else "none",
-            "setup_choice": "custom_setup",
-            "setup_choice_label": _custom_mix_label(clean),
-            "setup_choice_description": "Custom feature choices.",
-            "setup_choice_member_sees": _custom_mix_label(clean),
-        }
-    )
-    return clean
-
+    """Use the canonical native service-state normalizer."""
+    return normalize_custom_service_patch(payload)
 
 def _service_hint_text(state: Any) -> str:
     enabled: list[str] = []
@@ -239,16 +202,16 @@ def _service_hint_text(state: Any) -> str:
     return "Choose at least one feature first." if not enabled else "Setup will check: " + ", ".join(enabled) + "."
 
 
-async def _save_custom_services(guild_id: int, payload: dict[str, bool], actor: Any) -> None:
-    from stoney_verify.startup_guards import setup_service_modes as modes
-    await modes._save_service_state(guild_id, _custom_service_config_patch(dict(payload)), actor)
+async def _save_custom_services(
+    guild_id: int,
+    payload: dict[str, bool],
+    actor: Any,
+) -> None:
+    await save_custom_service_state(int(guild_id), dict(payload), actor=actor)
 
 
 async def _load_custom_state(guild_id: int) -> Any:
-    from stoney_verify.startup_guards import setup_service_modes as modes
-    return await modes.load_service_state(guild_id)
-
-
+    return await load_setup_service_state(int(guild_id))
 
 _CUSTOM_SERVICE_FLAG_KEYS = (
     "tickets_enabled",
