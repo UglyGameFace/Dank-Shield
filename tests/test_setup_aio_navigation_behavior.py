@@ -150,6 +150,67 @@ def test_custom_picker_explains_core_modules_and_aio_tools() -> None:
     assert "Core Modules" in field_names(embed)
 
 
+def test_custom_voice_toggle_applies_and_explains_dependencies() -> None:
+    payload, effective, changed, note = fresh._apply_custom_service_toggle(
+        {
+            "tickets_enabled": False,
+            "verification_enabled": False,
+            "voice_verification_enabled": False,
+            "spam_guard_enabled": False,
+            "moderation_enabled": False,
+        },
+        "voice_verification_enabled",
+    )
+
+    assert changed is True
+    assert effective is True
+    assert payload["voice_verification_enabled"] is True
+    assert payload["verification_enabled"] is True
+    assert payload["tickets_enabled"] is True
+    assert payload["moderation_enabled"] is True
+    assert "needs Simple Verify, Tickets, and Essential Logs" in note
+    assert "turned on" in note
+
+
+def test_custom_dependency_cannot_be_silently_disabled() -> None:
+    payload, effective, changed, note = fresh._apply_custom_service_toggle(
+        {
+            "tickets_enabled": True,
+            "verification_enabled": True,
+            "voice_verification_enabled": True,
+            "spam_guard_enabled": False,
+            "moderation_enabled": True,
+        },
+        "tickets_enabled",
+    )
+
+    assert changed is False
+    assert effective is True
+    assert payload["tickets_enabled"] is True
+    assert payload["voice_verification_enabled"] is True
+    assert "Voice Verify" in note
+    assert "needs" in note
+
+
+def test_custom_spamguard_toggle_explains_log_dependency() -> None:
+    payload, effective, changed, note = fresh._apply_custom_service_toggle(
+        {
+            "tickets_enabled": False,
+            "verification_enabled": False,
+            "voice_verification_enabled": False,
+            "spam_guard_enabled": False,
+            "moderation_enabled": False,
+        },
+        "spam_guard_enabled",
+    )
+
+    assert changed is True
+    assert effective is True
+    assert payload["spam_guard_enabled"] is True
+    assert payload["moderation_enabled"] is True
+    assert "SpamGuard needs Essential Logs" in note
+
+
 def test_template_preview_uses_current_quick_setup_language() -> None:
     embed = build_setup_template_embed(
         selected_key="custom_setup",
