@@ -194,24 +194,38 @@ jobs:
           DANK_STARTUP_LOG_STYLE: quiet
           DANK_COMMAND_LOG_STYLE: quiet
         run: |
-          git diff --check
-          python -m compileall -q stoney_verify main.py tools
-          python -m pytest tests/ -q --tb=short --disable-warnings
-          status=0
-          for f in tools/test_*.py; do
-            echo "::group::$f"
-            python "$f" || status=1
-            echo "::endgroup::"
-          done
-          test "$status" -eq 0
-          python tools/audit_public_setup.py
-          python tools/audit_public_command_surface.py
-          python tools/audit_public_command_friction.py
-          python tools/audit_public_invite_permissions.py
-          python tools/audit_setup_safety.py
-          python tools/audit_dank_design_smart_auto_detect.py
-          python tools/audit_role_truth.py
-          python tools/audit_event_boundary.py
+          if ! {
+            git diff --check
+            python -m compileall -q stoney_verify main.py tools
+            python -m pytest tests/ -q --tb=short --disable-warnings
+            status=0
+            for f in tools/test_*.py; do
+              echo "::group::$f"
+              python "$f" || status=1
+              echo "::endgroup::"
+            done
+            test "$status" -eq 0
+            python tools/audit_public_setup.py
+            python tools/audit_public_command_surface.py
+            python tools/audit_public_command_friction.py
+            python tools/audit_public_invite_permissions.py
+            python tools/audit_setup_safety.py
+            python tools/audit_dank_design_smart_auto_detect.py
+            python tools/audit_role_truth.py
+            python tools/audit_event_boundary.py
+          } > /tmp/setup-validation.log 2>&1; then
+            tail -n 200 /tmp/setup-validation.log
+            exit 1
+          fi
+          tail -n 100 /tmp/setup-validation.log
+
+      - name: Upload failed setup-validation log
+        if: failure() && steps.gate.outputs.enabled == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: setup-validation-failure-log
+          path: /tmp/setup-validation.log
+          retention-days: 1
 
       - name: Commit validated overhaul and remove scaffolding
         if: steps.gate.outputs.enabled == 'true'
