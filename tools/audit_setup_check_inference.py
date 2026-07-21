@@ -1,26 +1,21 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
-"""Sanity-check native setup-state inference.
+"""Sanity-check the canonical native setup-state normalizer.
 
-The public setup flow no longer uses the retired
-``setup_check_existing_server_inference_guard``. Setup Home, Review Setup, Quick
-Setup, and Test Your Setup all read the canonical native service state.
+The retired setup inference guards are gone. Setup Home, Review Setup, Quick
+Setup, and Test Your Setup all normalize saved guild configuration through
+``service_state_from_config``.
 
-This audit executes that behavior directly instead of inspecting source strings.
+This audit executes that owner directly. It deliberately avoids importing the
+public command package so command-registration/startup side effects cannot
+pollute a pure state check.
 """
 
-from stoney_verify.commands_ext import public_setup_recommend as recommend
+from stoney_verify.setup_service_state import service_state_from_config
 
 
-def _services(config: dict[str, object]) -> dict[str, bool]:
-    return recommend._selected_setup_services(config)
-
-
-def _assert(
-    condition: bool,
-    message: str,
-) -> None:
+def _assert(condition: bool, message: str) -> None:
     if not condition:
         raise AssertionError(message)
 
@@ -28,7 +23,7 @@ def _assert(
 def main() -> int:
     # Custom Setup must respect explicit choices instead of inventing template
     # defaults. This is the regression that originally broke Test Your Setup.
-    custom = _services(
+    custom = service_state_from_config(
         {
             "setup_choice": "custom_setup",
             "tickets_enabled": False,
@@ -38,12 +33,12 @@ def main() -> int:
             "moderation_enabled": False,
         }
     )
-    _assert(custom["tickets"] is False, "Custom Setup invented Tickets")
-    _assert(custom["basic_verify"] is True, "Custom Setup lost Simple Verify")
-    _assert(custom["voice"] is False, "Custom Setup invented Voice Verify")
+    _assert(custom.tickets is False, "Custom Setup invented Tickets")
+    _assert(custom.simple_verify is True, "Custom Setup lost Simple Verify")
+    _assert(custom.voice_verify is False, "Custom Setup invented Voice Verify")
 
     # Explicit saved switches must beat a template default.
-    explicit_off = _services(
+    explicit_off = service_state_from_config(
         {
             "setup_choice": "basic_server",
             "tickets_enabled": False,
@@ -52,15 +47,15 @@ def main() -> int:
         }
     )
     _assert(
-        explicit_off["tickets"] is False,
+        explicit_off.tickets is False,
         "Explicit Tickets OFF did not override the setup plan",
     )
-    _assert(explicit_off["spam_guard"] is True, "SpamGuard state was lost")
-    _assert(explicit_off["logs"] is True, "Essential Logs state was lost")
+    _assert(explicit_off.spam_guard is True, "SpamGuard state was lost")
+    _assert(explicit_off.logs is True, "Essential Logs state was lost")
 
     # Voice verification depends on ticket/staff workflow and logging. The
-    # canonical state normalizer must expose those dependencies everywhere.
-    voice = _services(
+    # canonical normalizer must expose those dependencies everywhere.
+    voice = service_state_from_config(
         {
             "setup_choice": "custom_setup",
             "tickets_enabled": False,
@@ -69,13 +64,20 @@ def main() -> int:
             "moderation_enabled": False,
         }
     )
-    _assert(voice["voice"] is True, "Voice Verify did not remain enabled")
-    _assert(voice["tickets"] is True, "Voice Verify dependency did not enable Tickets")
-    _assert(voice["logs"] is True, "Voice Verify dependency did not enable Logs")
+    _assert(voice.voice_verify is True, "Voice Verify did not remain enabled")
+    _assert(
+        voice.tickets is True,
+        "Voice Verify dependency did not enable Tickets",
+    )
+    _assert(
+        voice.logs is True,
+        "Voice Verify dependency did not enable Logs",
+    )
 
     # No saved plan and no explicit switches should remain genuinely unstarted.
-    blank = _services({})
-    _assert(not any(blank.values()), "Blank setup inferred enabled services")
+    blank = service_state_from_config({})
+    _assert(blank.any_enabled is False, "Blank setup inferred enabled services")
+    _assert(blank.setup_choice == "", "Blank setup inferred a setup plan")
 
     print("Native setup-state inference audit passed")
     return 0
