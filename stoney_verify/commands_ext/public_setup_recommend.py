@@ -1191,7 +1191,7 @@ class SetupChoiceSelect(discord.ui.Select):
         embed = build_setup_template_embed(selected_key=selected, guild_name=str(guild_name or "this server"))
         embed.add_field(
             name="Next",
-            value="Press **Use This Setup** to save this choice, or pick another option from the menu.",
+            value="Press **Use This Plan** to save this choice, or pick another option from the menu.",
             inline=False,
         )
         await interaction.response.edit_message(embed=embed, view=view)
@@ -1203,7 +1203,7 @@ class SetupChoiceView(solid.BackToSetupView):
         self.selected_key = selected_key
         self.add_item(SetupChoiceSelect(selected_key=selected_key))
 
-    @discord.ui.button(label="Use This Setup", emoji="✅", style=discord.ButtonStyle.success, custom_id="dank_setup_choice:publish", row=1)
+    @discord.ui.button(label="Use This Plan", emoji="✅", style=discord.ButtonStyle.success, custom_id="dank_setup_choice:publish", row=1)
     async def publish(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         if not await solid._require_setup_permission(interaction):
             return
@@ -1233,7 +1233,7 @@ class SetupChoiceView(solid.BackToSetupView):
                 return await public_setup_fresh_choice._open_custom_service_picker(
                     interaction,
                     saved_message=(
-                        "Saved **Choose My Own Features**. Choose which features are ON or OFF below."
+                        "Saved **Choose Core Features**. Choose the core modules this server should use, then press **Continue Quick Setup**."
                     ),
                 )
             except Exception as e:
@@ -1253,19 +1253,19 @@ class SetupChoiceView(solid.BackToSetupView):
         embed.title = "✅ Setup Choice Saved"
         embed.description = (
             f"Saved **{choice.label}** for this server.\n\n"
-            "Next, return to the guided setup and continue one required step at a time."
+            "Next, return to Quick Setup and continue one required step at a time."
         )
         embed.add_field(
             name="Next",
             value=(
-                "Press **Continue Setup** on Setup Home. "
+                "Press **Continue Quick Setup** on Setup Home. "
                 "Dank Shield will show only the next thing you need to set up."
             ),
             inline=False,
         )
         await solid._edit_or_followup(interaction, embed=embed, view=ProductSetupHomeView())
 
-    @discord.ui.button(label="Preview Only", emoji="👀", style=discord.ButtonStyle.secondary, custom_id="dank_setup_choice:preview", row=1)
+    @discord.ui.button(label="Preview", emoji="👀", style=discord.ButtonStyle.secondary, custom_id="dank_setup_choice:preview", row=1)
     async def preview(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         if not await solid._require_setup_permission(interaction):
             return

@@ -22,15 +22,15 @@ def _button(view: discord.ui.View, label: str) -> discord.ui.Button:
     return matches[0]
 
 
-def test_logs_and_safety_exposes_plain_check_bot_access_feature() -> None:
-    view = recommend.AdvancedMonitoringRepairView()
+def test_security_section_separates_access_check_from_permission_repair() -> None:
+    view = recommend.AdvancedSecurityView()
 
     access = _button(view, "Check Bot Access")
     repair = _button(view, "Fix Channel Permissions")
 
-    assert access.custom_id == "dank_setup_advanced_monitoring:bot_access"
-    assert access.row == 1
-    assert repair.custom_id == "dank_setup_advanced_monitoring:permission_repair"
+    assert access.custom_id == "dank_setup_security:access"
+    assert access.row == 0
+    assert repair.custom_id == "dank_setup_security:repair"
     assert repair.row == 1
 
 

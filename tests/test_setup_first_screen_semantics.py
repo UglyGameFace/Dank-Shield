@@ -136,11 +136,11 @@ def test_public_setup_type_screen_has_exact_five_choices(
     )
 
     assert setup_choice_labels(view) == {
-        "Tickets + Server Basics",
+        "Recommended Setup",
         "Simple Verify",
         "Help Desk / Tickets",
         "Voice Verify",
-        "Choose My Own Features",
+        "Choose Core Features",
     }
 
 
@@ -160,11 +160,11 @@ def test_id_web_choices_exist_only_for_allowed_guilds(
     labels = setup_choice_labels(view)
 
     assert {
-        "Tickets + Server Basics",
+        "Recommended Setup",
         "Simple Verify",
         "Help Desk / Tickets",
         "Voice Verify",
-        "Choose My Own Features",
+        "Choose Core Features",
     } <= labels
 
     assert "ID / Web Verify" in labels
