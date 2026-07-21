@@ -1,235 +1,178 @@
 # ACTIVE TASK
 
-## DS-CONFIG-HISTORY-001 — Native configuration backup + version history
+## DS-CONFIG-HISTORY-002 — Understandable selective backup and restore
 
-**Status:** FINAL HEAD VALIDATION PENDING — IMPLEMENTATION + DB EXERCISE COMPLETE
-**Branch:** `feature/config-backup-version-history`
-**PR:** #107 (draft until this exact head is green)
-**Base:** `main` after merged PR #106
+**Status:** FINAL HEAD VALIDATION PENDING
+**Branch:** `feature/selective-config-backup-restore`
+**PR:** #109, stacked on PR #108 until the localized-time fix merges
 
 ## Single Active Task Lock
 
 Do not switch to unrelated implementation work until this task reaches Definition of Done or the owner explicitly force-switches tasks.
 
-## Hard Architecture Rules
+## Owner Request
+
+Improve Backups & History so server owners can understand:
+
+- what a backup contains;
+- what a backup is useful for;
+- what is not backed up;
+- which configuration area they want to back up;
+- whether they want to restore only missing items, manually chosen items, or every difference;
+- exactly what will change before confirmation.
+
+The key recovery case is a server that already has newer working configuration and only needs missing settings or ticket choices from an older backup. Restore must not replace unrelated newer values.
+
+## Architecture Rules
 
 - No monkey patches.
-- No startup guards as the implementation path.
-- Do not reactivate the dormant startup-guard loader.
-- No parallel live configuration source of truth.
-- Existing live tables remain authoritative; history stores snapshots only.
-- Restore must never cross guild boundaries or canonical/legacy config-table boundaries.
-- Every restore must preserve the current state first so rollback remains reversible.
-- Ticket-choice restore must be atomic; a partial ticket-menu restore is unacceptable.
-- Behavioral tests only; no new source-shape/static tests.
-- Dashboard work is out of scope.
-- Merge and production migration/deployment require explicit owner approval.
+- No startup guards.
+- No dashboard work.
+- No new public command family.
+- Existing live configuration tables remain authoritative.
+- Existing `guild_config_versions` snapshots remain the only history source.
+- No new migration is required.
+- Every restore creates a full pre-restore safety backup.
+- Ticket-choice writes continue through the existing atomic PostgreSQL restore RPC.
+- Restore cannot cross guild or active config-table boundaries.
+- Merge requires explicit owner approval.
 
-## Scope
+## Delivered Behavior
 
-Build the first production configuration recovery layer for the active bot configuration domains:
+### Clear backup explanation
 
-1. **Core Settings**
-   - canonical `guild_configs` or the active legacy `guild_config` fallback;
-   - feature settings, timers, saved Discord role/channel/category IDs, protection settings, and other guild config stored there.
+The Backups & History screen now explains:
 
-2. **Ticket Choices**
-   - active `ticket_categories` rows;
-   - category-specific configuration stored on those rows, including compatible category-stored form configuration.
+- **Core Settings** save feature switches, timers/rules, protection configuration, setup choices, welcome/log settings, and saved Discord role/channel/category references.
+- **Ticket Choices** save the member-facing ticket menu plus compatible category-specific form configuration.
+- Backups do **not** save Discord messages, members, live ticket conversations, actual roles/channels/categories, files, or server ownership.
+- Restore changes Dank Shield's saved configuration only; it does not clone, delete, or rebuild the Discord server.
 
-Deliver:
+### Manual backup choice
 
-- automatic configuration snapshots after successful changes;
-- durable per-guild version history;
-- migration-time baselines for existing guilds;
-- empty Ticket Choices baselines for configured guilds with no categories;
-- bounded retention of newest 50 versions per guild and configuration domain;
-- manual backup sets covering Core Settings plus Ticket Choices when available;
-- safe restore of one selected historical version;
-- automatic pre-restore safety backup;
-- explicit two-step restore confirmation;
-- owner-facing Backups & History UI under `/dank setup` → More Options → Other Settings;
-- no new top-level public command family.
+Owners press **Choose Backup Contents** and select:
 
-This task does **not** claim to clone/recreate a Discord server or version every historical/dormant database table. Discord roles/channels are never deleted, recreated, or renamed by configuration restore.
+- Core Settings;
+- Ticket Choices;
+- or both.
 
-## Root Cause / Gap
+This selection is intentionally domain-level. A backup remains a coherent snapshot of the chosen active configuration area rather than an ambiguous partial row. Fine-grained control is provided during restore, where it prevents unwanted overwrites.
 
-Dank Shield had durable live per-guild configuration in Supabase but no revision history. A bad setup edit, accidental overwrite, or destructive ticket-choice change had no native rollback path.
+### Selective restore modes
 
-The repository has multiple legitimate native config write paths. Instrumenting only one Python writer would miss changes, so automatic history belongs at the database boundary.
+Each version explains what it contains, summarizes Core Settings sections or the Ticket Choices count, and compares the version with current configuration.
 
-A scope audit also confirmed that `guild_configs` is not the whole active configuration surface: ticket choices live in the separate guild-scoped `ticket_categories` table. The recovery feature therefore versions Core Settings and Ticket Choices as separate domains instead of falsely presenting a single-row backup as complete configuration recovery.
+Owners can choose:
 
-## Implementation
+1. **Restore Missing Only**
+   - restores saved items that are absent or blank now;
+   - does not overwrite an existing configured value.
+2. **Choose Exact Changes**
+   - manually selects individual Core setting keys or ticket-choice slugs;
+   - supports pagination beyond Discord's 25-option component limit;
+   - selections persist while moving between pages.
+3. **Restore All Differences**
+   - restores every currently different item in that saved version.
 
-### Durable history migration
+All three paths open a separate preview showing the exact selected items. Only **Confirm Restore** performs a write.
 
-- Added `supabase/migrations/20260720_guild_config_version_history.sql`.
-- Added `public.guild_config_versions` with RLS enabled and no public policies.
-- Added `config_table` domain/source isolation.
-- Added indexes for guild/domain/time history lookup.
-- Added migration baselines for:
-  - existing canonical `guild_configs` rows;
-  - existing legacy `guild_config` rows;
-  - existing `ticket_categories` sets;
-  - configured guilds whose Ticket Choices are currently empty.
-- Added functional snapshot normalization so timestamps and config-write audit metadata do not generate fake versions.
-- Consecutive functional duplicates are suppressed without hiding a legitimate later return to an older configuration.
-- Automatic history is retained to 50 versions per guild + configuration domain.
+### Native selective service
 
-### Core Settings history
+Added `stoney_verify/config_history_selective.py` as a substantive extension of the canonical history subsystem.
 
-- Automatic DB trigger captures successful canonical or legacy guild config changes.
-- Canonical and legacy histories cannot cross-restore.
-- Restore validates guild ownership.
-- Restore saves a pre-restore safety backup first.
-- Restore excludes lifecycle/system identity fields.
-- Restore adds write/restore audit metadata.
-- Guild config cache is invalidated after restore.
-
-### Ticket Choices history
-
-- Automatic DB trigger snapshots the complete current `ticket_categories` set after category insert/update/delete.
-- Functional dedupe ignores category row UUIDs and lifecycle timestamps.
-- Snapshot bundles preserve compatible category-stored configuration fields dynamically.
-- Added `restore_ticket_categories_snapshot(text, jsonb)` as a service-role-only database function.
-- Ticket-choice restore is one atomic DB transaction:
-  - validates guild IDs and slugs first;
-  - suppresses only intermediate row-trigger history inside the restore transaction;
-  - removes choices absent from the selected snapshot;
-  - updates matching slugs without replacing their current stable IDs;
-  - inserts missing historical choices using compatible table columns/defaults;
-  - rolls back the entire mutation if any operation fails.
-- Python writes one pre-restore safety snapshot and one clean restored-state history entry with actor/reason metadata.
-
-### Bot service and UI
-
-- Added `stoney_verify/config_history.py` as the native history/backup/restore owner.
-- Added `stoney_verify/config_history_ui.py` as the owner-facing setup UI.
-- Added **Backups & History** under the existing Other Settings hub while preserving the mobile two-components-per-row layout.
-- History clearly labels versions as **Core Settings** or **Ticket Choices**.
-- Manual **Create Backup** saves both available domains as one user action.
-- Version detail shows functional differences from current state.
-- **Restore This Version** is non-destructive and only opens confirmation.
-- Only **Confirm Restore** invokes restore.
-- UI explicitly states that restore does not delete/recreate/rename Discord roles or channels.
+- Domain-scoped manual backup creation.
+- Friendly Core setting labels and section grouping.
+- Current-vs-snapshot restore planning.
+- Missing-only item detection.
+- Selected Core Settings merge:
+  - applies only requested keys;
+  - preserves unselected top-level and nested values;
+  - adds restore audit metadata;
+  - invalidates guild-config cache.
+- Selected Ticket Choices reconciliation:
+  - starts from the current complete category set;
+  - replaces, adds, or removes only selected slugs according to the snapshot;
+  - preserves every unselected current choice;
+  - sends the resulting full target set through the existing atomic restore RPC;
+  - writes one clean restored-state history entry.
+- Every selective restore writes a complete pre-restore safety snapshot first.
 
 ## Behavioral Coverage
 
-- Core functional diff ignores write-audit metadata but detects real setting changes.
-- Ticket-choice diff ignores UUID/timestamp noise but detects real category changes.
-- Manual backup captures Core Settings and Ticket Choices.
-- Core restore creates a safety backup, excludes system/lifecycle identity fields, adds restore metadata, and clears cache.
-- Cross-guild core restore is refused.
-- Cross-table core restore is refused.
-- Ticket-choice snapshot rows from another guild are refused.
-- Ticket-choice restore uses one atomic RPC with the complete saved row set rather than individual REST mutations.
-- Ticket-choice restore writes pre-restore and final restored-state history records.
-- UI labels configuration domains correctly.
-- Restore detail → confirmation is required before the restore service runs.
-- Confirmation UX remains mobile-compact and offers only Confirm Restore / Cancel.
-- Setup Other Settings route behavior is covered.
+Service coverage proves:
 
-## GitHub Validation
+- Core-only manual backup does not read or write Ticket Choices.
+- Empty backup selection is refused.
+- Restore planning identifies real differences and missing settings.
+- Selected Core restore changes only the requested setting.
+- Missing-only Core restore does not overwrite an existing value.
+- Selected Ticket Choices restore preserves unselected current choices.
+- Ticket reconciliation still uses the atomic RPC.
+- Cross-guild snapshots are refused.
 
-Successful implementation-head runs:
+UI coverage proves:
 
-- Dank Shield CI 476: initial core service/migration-adjacent Python.
-- Dank Shield CI 478: native history UI.
-- Setup-wiring head `50966e2404902a52a200c44112300f9a1786533e`:
-  - Dank Shield CI 479: SUCCESS;
-  - Setup Check Inference 124: SUCCESS.
-- Hardened core/table-isolation head `9f6f8c91def74061d5f77238892bb1ea166b147c`:
-  - Dank Shield CI 482: SUCCESS;
-  - Setup Check Inference 127: SUCCESS.
-- Ticket-choice domain extension head `b111c6d79484c3081cead95fac67967711f8eeaf`:
-  - Dank Shield CI 487: SUCCESS;
-  - Setup Check Inference 132: SUCCESS.
-- Atomic ticket-choice restore head `050f81a95ada806688de2a0e785473b9bbaaeb0d`:
-  - Dank Shield CI 490: SUCCESS;
-  - Setup Check Inference 135: SUCCESS.
-- Task-record head `2549c8ae76f996c9d1af81898750994c52f612ba`:
-  - Dank Shield CI 492: SUCCESS;
-  - Setup Check Inference 137: SUCCESS.
-- PR #107 inline review threads before this final record update: none.
-- Compare against `main` before this final record update: ahead 20, behind 0; exactly eight task-related paths.
+- The screen explains what is and is not backed up.
+- Backup-domain selection defaults to both but allows one domain.
+- Only selected domains reach the backup service.
+- Version details explain contents and all three restore modes.
+- Missing-only and choose-exact buttons do not invoke restore directly.
+- Exact-change selection is individual and paginated.
+- Confirmation lists only items that will change.
+- Only Confirm Restore invokes the selective restore service.
+- Discord mobile rows remain compact.
 
-Local Termux targeted tests remain blocked by the local environment's incompatible/broken `supabase` import (`cannot import name 'Client' from 'supabase'`). Clean GitHub CI does not reproduce that environment issue; production code is not changed to work around it.
+## Validation
 
-## Database Migration Validation
-
-Supabase PR preview infrastructure failed **before running migrations** on both the original preview and a safely close/reopened fresh preview:
-
-`failed to clone repo: to: invalid path: "\\"`
-
-Because the failure occurs at repository clone, it is not evidence that the migration failed. PR #107 remains unmerged and no production Supabase migration was applied.
-
-An equivalent isolated database validation was completed against a disposable local **PostgreSQL 17** database using stub canonical `guild_configs`, legacy `guild_config`, and active `ticket_categories` tables plus a local `service_role` role. The current migration logic was applied and exercised without touching production data.
-
-Validated successfully:
-
-- migration SQL/function/trigger definitions loaded successfully;
-- canonical Core Settings baseline created;
-- legacy Core Settings baseline created;
-- populated Ticket Choices baseline created;
-- empty Ticket Choices baseline created for configured guilds with no categories;
-- audit-only core config metadata change did not create a fake version;
-- real core config change created a version;
-- real ticket-category change created a version;
-- atomic Ticket Choices restore replaced the saved category set correctly;
-- category-stored `form_questions` data was restored in the isolated schema exercise;
-- obsolete categories were removed and missing categories were inserted;
-- row-level automatic history remained suppressed during the atomic RPC, avoiding intermediate restore noise;
-- duplicate-slug invalid restore was rejected and live ticket-choice state remained unchanged;
-- rerunning the migration succeeded and did not duplicate migration baselines.
-
-The isolated PostgreSQL instance was stopped after validation.
+- Localization dependency PR #108 exact head `044b547b4c0ba1312ae01fabcaeae87d515f5fbc`:
+  - Dank Shield CI run 495: SUCCESS.
+- Initial selective backend/UI head:
+  - compile passed;
+  - CI run 498 exposed an underspecified fake ticket-state sequence in one behavioral fixture.
+- Corrected selective head `012f215cefa88d782bca28c3b5601862d8d4c34f`:
+  - Dank Shield CI run 499: SUCCESS;
+  - compile, full unit suite, standalone checks, and all production audits passed.
 
 ## Cleanup / Conflict Inspection
 
-- No startup guard added.
+- No migration added.
+- No startup guard added or reactivated.
 - No monkey patch added.
-- No config-writer patch added.
-- No dashboard changes.
-- No new public command family.
-- Existing live configuration tables remain authoritative.
-- History table is snapshot/recovery storage only.
-- Ticket-choice restore is atomic at the database mutation layer.
-- Dormant startup-guard ticket-form code is not used by this implementation.
+- No dashboard file changed.
+- No public command added.
+- Existing `config_history.py` remains the canonical full-history service.
+- New selective logic does not create a second live configuration source.
+- UI route remains `/dank setup` → More Options → Other Settings → Backups & History.
 
 ## Remaining Gate
 
-This task-record update is the final branch change. Its exact head must pass Dank Shield CI + Setup Check Inference. After that, repeat exact-head compare/review-thread inspection and mark PR #107 ready for review without changing the branch again.
+This task-record commit is the final planned branch change. Its exact head must pass CI. Then:
 
-Merge and production migration/deployment still require explicit owner approval.
+- compare PR #109 against its stacked base;
+- confirm it is not behind that base;
+- inspect unresolved review threads;
+- update the PR description with exact validation;
+- mark PR #109 ready for review without merging.
 
-## Backlog After This Task
-
-1. Reusable configuration templates.
-2. Multi-server configuration sync.
-3. Cross-server analytics.
-4. Global moderation / shared security profiles.
+PR #109 must remain stacked until PR #108 merges. After PR #108 merges, retarget PR #109 to `main` and run final exact-head validation against the new base before merge approval.
 
 ## Definition of Done
 
-- [x] Separate durable history table exists via migration.
-- [x] Core Settings changes are automatically versioned at the DB boundary.
-- [x] Active Ticket Choices changes are automatically versioned at the DB boundary.
-- [x] Existing guilds receive baseline history, including empty Ticket Choices where applicable.
-- [x] Functional duplicate/audit-only noise is suppressed without hiding real returns to older states.
-- [x] Retention is bounded per guild + domain.
-- [x] Manual backup covers both available active configuration domains.
-- [x] Core restore refuses cross-guild/cross-table snapshots.
-- [x] Ticket-choice restore refuses cross-guild rows.
-- [x] Every restore preserves current state first.
-- [x] Ticket-choice mutation restore is atomic.
-- [x] Restore confirmation is explicitly two-step.
-- [x] Existing `/dank setup` exposes Backups & History without a new top-level command.
-- [x] Behavioral coverage exists for service, restore safety, domain labeling, and setup routing.
-- [x] Full Python regression/compile/audits passed on the implementation head.
-- [x] Migration logic passed equivalent isolated PostgreSQL 17 schema/trigger/restore/idempotency exercise.
-- [ ] This exact final task-record head GitHub CI + Setup Check Inference pass.
-- [ ] Final exact-head diff contains only task-related permanent code/tests/task record.
-- [ ] Final exact-head review-thread inspection is clean.
-- [ ] Merge/deploy requires explicit owner approval.
+- [x] Backups screen explains Core Settings, Ticket Choices, intended use, and exclusions.
+- [x] Owner can choose Core Settings, Ticket Choices, or both for manual backup.
+- [x] Version detail explains exactly what the snapshot contains.
+- [x] Missing-only restore preserves existing configured values.
+- [x] Owner can manually choose individual settings or ticket choices to restore.
+- [x] Exact-change selection supports pagination.
+- [x] All-differences restore remains available.
+- [x] Every restore shows an exact preview and requires separate confirmation.
+- [x] Every restore creates a full safety backup first.
+- [x] Selective Core restore preserves unselected newer values.
+- [x] Selective Ticket restore preserves unselected current choices and remains atomic.
+- [x] Cross-guild safety remains enforced.
+- [x] Behavioral tests cover service and UI safety.
+- [x] Implementation head passed full CI and production audits.
+- [ ] This exact task-record head passes CI.
+- [ ] Final stacked-base compare is clean and review threads are resolved.
+- [ ] PR #109 retargets to `main` after PR #108 merges and passes the final merge-base gate.
+- [ ] Merge requires explicit owner approval.
