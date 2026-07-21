@@ -59,17 +59,18 @@ The normal setup flow is one guided path:
 
 ```text
 Start Setup
-Choose what Dank Shield should do
-Set Up This Step
+Choose a setup plan
+Set Up This Step (or Continue Setup for Choose Core Features)
 Automatic Setup Check
-Fix Next Problem or Test & Launch
+Test Your Setup
+Finish Setup
 ```
 
 ### 3. Follow the guided steps
 
 Dank Shield asks for one required item at a time. Choose an existing role/channel or let Dank Shield create the missing item when that step supports creation.
 
-Use **More Options** only for secondary tools such as changing setup type, optional settings, manual setup checks, permission repair, or starting over.
+Use **Manage Setup** for secondary tools such as changing the setup plan, optional settings, Review Setup, permission repair, backups, Server Design, or starting over.
 
 SpamGuard is enabled by default for normal new-server setup. Owners can still turn it off explicitly from the protection/settings controls.
 
@@ -91,7 +92,7 @@ TICKET ARCHIVE
 Configure these in:
 
 ```text
-/dank setup → Existing Server → Ticket Basics
+/dank setup → Manage Setup → All Features & Settings → Setup Plan & Server Items → Choose Roles & Channels
 ```
 
 ### Ticket menu options
@@ -111,7 +112,7 @@ Other
 Configure these in:
 
 ```text
-/dank setup → Advanced Setup → Ticket Menu Options
+/dank setup → Manage Setup → All Features & Settings → Tickets → Ticket Choices
 ```
 
 The recommended menu is:
@@ -211,12 +212,12 @@ Give Dank Shield permission to View Channel, Send Messages, Embed Links, Read Me
 Run:
 
 ```text
-/dank setup → Advanced Setup → Ticket Menu Options → Create Recommended Ticket Menu
+/dank setup → Manage Setup → All Features & Settings → Tickets → Ticket Choices → Create Recommended Ticket Menu
 ```
 
 ### Health check still fails after setup
 
-Fix the first blocker shown, then run Health Check again. Do not chase warnings before blockers.
+Fix the first blocker shown, then use **Continue Setup** or **Review Setup** to check again. Do not chase optional warnings before required blockers.
 
 ---
 
@@ -237,11 +238,13 @@ Before giving the bot to another server, test this exact flow in a fresh server:
 ```text
 Invite bot
 /dank setup
-Fresh Server
-Create Missing Defaults Now
-Health Check
-Advanced Setup → Ticket Menu Options
-Create Recommended Ticket Menu if needed
+Start Setup
+Choose the setup plan you want to test
+Use Set Up This Step until Setup Check reports ready
+Test Your Setup
+Finish Setup
+Manage Setup → All Features & Settings → Tickets → Ticket Choices
+Confirm the intended ticket choices
 /ticket-panel post
 Open ticket
 Close ticket
@@ -250,7 +253,7 @@ Delete ticket
 Check transcript
 Check modlog
 Restart bot
-Confirm /dank setup still works
+Confirm /dank setup shows the finished Setup Summary
 ```
 
 If all of that works, the server-owner setup path is ready for beta testing.

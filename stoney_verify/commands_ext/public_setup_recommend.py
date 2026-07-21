@@ -1664,6 +1664,8 @@ async def _open_health_check(
 
 async def _open_bot_access_check(
     interaction: discord.Interaction,
+    *,
+    parent: str = "logs",
 ) -> None:
     """Open the read-only activity coverage access check."""
 
@@ -1672,7 +1674,10 @@ async def _open_bot_access_check(
 
     from stoney_verify import setup_activity_access
 
-    await setup_activity_access.open_activity_access_check(interaction)
+    await setup_activity_access.open_activity_access_check(
+        interaction,
+        parent=parent,
+    )
 
 
 async def _open_permission_repair(
@@ -1696,7 +1701,8 @@ async def _open_permission_repair(
     )
 
     await setup_permission_repair_services.open_permission_repair(
-        interaction
+        interaction,
+        parent="security",
     )
 
 
@@ -3950,7 +3956,7 @@ class AdvancedSecurityView(discord.ui.View):
     @discord.ui.button(label="Check Bot Access", emoji="🔐", style=discord.ButtonStyle.secondary, custom_id="dank_setup_security:access", row=0)
     async def bot_access(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
-        await _open_bot_access_check(interaction)
+        await _open_bot_access_check(interaction, parent="security")
 
     @discord.ui.button(label="Fix Channel Permissions", emoji="🛠️", style=discord.ButtonStyle.secondary, custom_id="dank_setup_security:repair", row=1)
     async def permission_repair(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
@@ -3985,7 +3991,7 @@ class AdvancedLogsActivityView(discord.ui.View):
     @discord.ui.button(label="Check Activity Access", emoji="🔐", style=discord.ButtonStyle.secondary, custom_id="dank_setup_logs:access", row=0)
     async def bot_access(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
-        await _open_bot_access_check(interaction)
+        await _open_bot_access_check(interaction, parent="logs")
 
     @discord.ui.button(label="Log Channels", emoji="🧭", style=discord.ButtonStyle.secondary, custom_id="dank_setup_logs:channels", row=1)
     async def channels(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:

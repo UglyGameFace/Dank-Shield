@@ -2,7 +2,7 @@ from __future__ import annotations
 
 """Owned setup permission repair service.
 
-This is the product-level entrypoint used by /dank setup → Safety & Repair.
+`/dank setup -> Manage Setup -> All Features & Settings -> Security & SpamGuard`.
 It extends the older guard implementation with exact-name discovery and clearer
 fix boundaries, without blindly overwriting unrelated server channels.
 """
@@ -70,7 +70,7 @@ def _find_exact_named(guild: discord.Guild, classes: tuple[type, ...], aliases: 
         notes.append(f"Auto-detected unsaved {label}: {legacy_label(matches[0])}.")
         return matches[0]
     if len(matches) > 1:
-        notes.append(f"Skipped auto-detect for {label}: multiple exact-name matches. Save the intended channel in Core Setup → Use Existing Roles/Channels.")
+        notes.append(f"Skipped auto-detect for {label}: multiple exact-name matches. Save the intended channel in Setup Plan & Server Items → Choose Roles & Channels.")
     return None
 
 
@@ -267,7 +267,7 @@ async def _build_expanded_targets(guild: discord.Guild) -> tuple[list[Any], list
     _merge_activity_coverage_targets(guild, targets, seen, notes)
 
     if not targets:
-        notes.append("No saved or exact-name setup channels/categories were found. Run Core Setup first, or use existing-server mapping to save the intended roles/channels.")
+        notes.append("No saved or exact-name setup channels/categories were found. Use Setup Plan & Server Items → Choose Roles & Channels to save the intended roles/channels.")
     return targets, notes, missing_mappings, manual_actions
 
 
@@ -358,7 +358,7 @@ def result_embed(
             value=(
                 "✅ Can fix saved/exact-name setup overwrites and Dank Shield's own activity-history access.\n"
                 "⚠️ Cannot move the bot role, grant missing server-wide role permissions, or guess ambiguous duplicate channels.\n"
-                "🧭 If a target is not saved or exact-name matched, map it in Core Setup first."
+                "🧭 If a target is not saved or exact-name matched, map it in Setup Plan & Server Items → Choose Roles & Channels."
             ),
             inline=False,
         )
@@ -422,7 +422,7 @@ def result_embed(
             value=(
                 "These deep diagnostics are for Advanced "
                 "Options only. They do **not** decide whether "
-                "**Test / Launch** is available. The "
+                "**Test Your Setup** is available. The "
                 "feature-aware **Setup Check** remains the "
                 "authoritative readiness gate."
             ),
@@ -446,21 +446,28 @@ async def _load_deep_audit(
         return None
 
 
-async def _back_to_advanced_options(
+async def _back_to_parent(
     interaction: discord.Interaction,
+    parent: str,
 ) -> None:
     from stoney_verify.commands_ext import (
         public_setup_recommend as recommend,
     )
 
-    await recommend._open_manage_setup(interaction)
+    clean_parent = str(parent or "security").strip().lower()
+    if clean_parent == "logs":
+        await recommend._open_advanced_logs_activity(interaction)
+        return
+
+    await recommend._open_advanced_security(interaction)
 
 
 class PermissionRepairPreviewView(discord.ui.View):
-    """Canonical preview controls for Advanced Permission Repair."""
+    """Canonical preview controls that remember the setup parent."""
 
-    def __init__(self) -> None:
+    def __init__(self, *, parent: str = "security") -> None:
         super().__init__(timeout=900)
+        self.parent = str(parent or "security").strip().lower()
 
     @discord.ui.button(
         label="Apply Safe Fixes",
@@ -474,7 +481,7 @@ class PermissionRepairPreviewView(discord.ui.View):
         interaction: discord.Interaction,
         button: discord.ui.Button,
     ) -> None:
-        await apply_permission_repair(interaction)
+        await apply_permission_repair(interaction, parent=self.parent)
 
     @discord.ui.button(
         label="Preview Again",
@@ -488,28 +495,30 @@ class PermissionRepairPreviewView(discord.ui.View):
         interaction: discord.Interaction,
         button: discord.ui.Button,
     ) -> None:
-        await open_permission_repair(interaction)
+        await open_permission_repair(interaction, parent=self.parent)
 
     @discord.ui.button(
-        label="Back to Advanced",
+        label="Back",
         emoji="⬅️",
         style=discord.ButtonStyle.secondary,
-        custom_id="dank_setup_permission:advanced",
+        custom_id="dank_setup_permission:back",
         row=0,
     )
-    async def back_to_advanced(
+    async def back(
         self,
         interaction: discord.Interaction,
         button: discord.ui.Button,
     ) -> None:
-        await _back_to_advanced_options(interaction)
+        _ = button
+        await _back_to_parent(interaction, self.parent)
 
 
 class PermissionRepairResultView(discord.ui.View):
-    """Canonical post-repair controls."""
+    """Canonical post-repair controls that remember the setup parent."""
 
-    def __init__(self) -> None:
+    def __init__(self, *, parent: str = "security") -> None:
         super().__init__(timeout=900)
+        self.parent = str(parent or "security").strip().lower()
 
     @discord.ui.button(
         label="Preview Again",
@@ -523,24 +532,29 @@ class PermissionRepairResultView(discord.ui.View):
         interaction: discord.Interaction,
         button: discord.ui.Button,
     ) -> None:
-        await open_permission_repair(interaction)
+        await open_permission_repair(interaction, parent=self.parent)
 
     @discord.ui.button(
-        label="Back to Advanced",
+        label="Back",
         emoji="⬅️",
         style=discord.ButtonStyle.secondary,
-        custom_id="dank_setup_permission_done:advanced",
+        custom_id="dank_setup_permission_done:back",
         row=0,
     )
-    async def back_to_advanced(
+    async def back(
         self,
         interaction: discord.Interaction,
         button: discord.ui.Button,
     ) -> None:
-        await _back_to_advanced_options(interaction)
+        _ = button
+        await _back_to_parent(interaction, self.parent)
 
 
-async def open_permission_repair(interaction: discord.Interaction) -> None:
+async def open_permission_repair(
+    interaction: discord.Interaction,
+    *,
+    parent: str = "security",
+) -> None:
     from stoney_verify.commands_ext import public_setup_solid as solid
 
     if not await solid._require_setup_permission(interaction):
@@ -561,11 +575,15 @@ async def open_permission_repair(interaction: discord.Interaction) -> None:
             result,
             deep_audit=deep_audit,
         ),
-        view=PermissionRepairPreviewView(),
+        view=PermissionRepairPreviewView(parent=parent),
     )
 
 
-async def apply_permission_repair(interaction: discord.Interaction) -> None:
+async def apply_permission_repair(
+    interaction: discord.Interaction,
+    *,
+    parent: str = "security",
+) -> None:
     from stoney_verify.commands_ext import public_setup_solid as solid
     from stoney_verify.operation_queue import run_interaction_exclusive
 
@@ -604,7 +622,7 @@ async def apply_permission_repair(interaction: discord.Interaction) -> None:
             result,
             deep_audit=deep_audit,
         ),
-        view=PermissionRepairResultView(),
+        view=PermissionRepairResultView(parent=parent),
         ephemeral=True,
         allowed_mentions=discord.AllowedMentions.none(),
     )
