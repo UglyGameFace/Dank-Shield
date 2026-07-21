@@ -15,7 +15,6 @@ concurrency:
 
 jobs:
   apply:
-    if: github.actor != 'github-actions[bot]'
     runs-on: ubuntu-latest
     steps:
       - name: Clone authenticated feature branch
