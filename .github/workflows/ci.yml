@@ -145,23 +145,30 @@ jobs:
         run: |
           set -o pipefail
           (
-            set -euo pipefail
-            git diff --check
-            python -m compileall -q stoney_verify main.py tools
-            python -m pytest tests/ -q --tb=short --disable-warnings
+            set -u
+            status=0
+            git diff --check || status=1
+            python -m compileall -q stoney_verify main.py tools || status=1
+            python -m pytest tests/ -q --tb=short --disable-warnings || status=1
             for f in tools/test_*.py; do
               echo "::group::$f"
-              python "$f"
+              python "$f" || status=1
               echo "::endgroup::"
             done
-            python tools/audit_public_setup.py
-            python tools/audit_public_command_surface.py
-            python tools/audit_public_command_friction.py
-            python tools/audit_public_invite_permissions.py
-            python tools/audit_setup_safety.py
-            python tools/audit_dank_design_smart_auto_detect.py
-            python tools/audit_role_truth.py
-            python tools/audit_event_boundary.py
+            for audit in \
+              tools/audit_public_setup.py \
+              tools/audit_public_command_surface.py \
+              tools/audit_public_command_friction.py \
+              tools/audit_public_invite_permissions.py \
+              tools/audit_setup_safety.py \
+              tools/audit_dank_design_smart_auto_detect.py \
+              tools/audit_role_truth.py \
+              tools/audit_event_boundary.py; do
+              echo "::group::$audit"
+              python "$audit" || status=1
+              echo "::endgroup::"
+            done
+            exit "$status"
           ) 2>&1 | tee /tmp/aio-test-migration-validation.log
 
       - name: Upload failed migration validation
