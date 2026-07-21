@@ -53,7 +53,6 @@ _STARTUP_GUARDS: Tuple[str, ...] = (
     "stoney_verify.startup_guards.server_design_command_module_guard",
     "stoney_verify.startup_guards.protection_pack_manual_import_guard",
     "stoney_verify.startup_guards.protection_import_button_patch",
-    "stoney_verify.startup_guards.setup_permission_repair_truth_guard",
     "stoney_verify.startup_guards.setup_permission_repair_modlog_silence_guard",
     "stoney_verify.startup_guards.dank_shield_branding_guard",
     "stoney_verify.startup_guards.runtime_safety",
@@ -114,7 +113,6 @@ _IMPORT_CHATTER_PREFIXES: Tuple[str, ...] = (
 _ERROR_CHATTER_PREFIXES: Tuple[str, ...] = ("⚠️ ", "❌ ", "🛑 ")
 _ALWAYS_SHOW_PREFIXES: Tuple[str, ...] = (
     "🛡️ member_activity_notices_db_safety active",
-    "🛠️ setup_permission_repair_truth_guard active",
     "🛠️ setup_permission_repair_modlog_silence_guard active",
     "🛡️ role_hierarchy_action_guard active",
     "🛡️ spam_guard_invite_hard_block active",
