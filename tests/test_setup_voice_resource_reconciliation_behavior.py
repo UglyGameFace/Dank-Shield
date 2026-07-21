@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -32,8 +33,7 @@ class _State:
         }
 
 
-@pytest.mark.asyncio
-async def test_saved_all_off_custom_state_is_not_resurrected(monkeypatch):
+def test_saved_all_off_custom_state_is_not_resurrected(monkeypatch):
     async def fake_cfg(*_args, **_kwargs):
         return {"setup_service_mode_saved_at": "2026-07-21T00:00:00+00:00"}
 
@@ -44,9 +44,11 @@ async def test_saved_all_off_custom_state_is_not_resurrected(monkeypatch):
     monkeypatch.setattr(fresh, "_detect_existing_service_payload", should_not_detect)
 
     state = _State()
-    resolved, message = await fresh._autofill_custom_state_from_existing(
-        SimpleNamespace(id=123),
-        state,
+    resolved, message = asyncio.run(
+        fresh._autofill_custom_state_from_existing(
+            SimpleNamespace(id=123),
+            state,
+        )
     )
     assert resolved is state
     assert message == ""
@@ -99,8 +101,7 @@ class _FakeGuild:
         return self._channels.get(int(channel_id))
 
 
-@pytest.mark.asyncio
-async def test_voice_off_removes_proven_managed_defaults_and_clears_mappings(monkeypatch):
+def test_voice_off_removes_proven_managed_defaults_and_clears_mappings(monkeypatch):
     voice = _FakeChannel(101, "🎙️ Voice Verification", discord.ChannelType.voice)
     queue = _FakeChannel(202, "🎙️・vc-verify-queue", discord.ChannelType.text)
     guild = _FakeGuild([voice, queue])
@@ -125,7 +126,9 @@ async def test_voice_off_removes_proven_managed_defaults_and_clears_mappings(mon
     monkeypatch.setattr(reconcile, "get_guild_config", fake_cfg)
     monkeypatch.setattr(writer, "clear_guild_config_keys", fake_clear)
 
-    message = await reconcile.reconcile_disabled_voice_verify(guild)
+    message = asyncio.run(
+        reconcile.reconcile_disabled_voice_verify(guild)
+    )
 
     assert voice.deleted is True
     assert queue.deleted is True

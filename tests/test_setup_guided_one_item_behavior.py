@@ -516,6 +516,7 @@ def test_created_voice_staff_channel_saves_all_aliases_and_advances(
             "vc_queue_channel_id": "8080",
             "vc_request_channel_id": "8080",
             "vc_verify_requests_channel_id": "8080",
+            "vc_verify_queue_channel_managed_id": "8080",
         },
     )
     assert events[2][0] == "guided"
