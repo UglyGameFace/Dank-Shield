@@ -12,6 +12,13 @@ public command package so command-registration/startup side effects cannot
 pollute a pure state check.
 """
 
+from pathlib import Path
+import sys
+
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
 from stoney_verify.setup_service_state import service_state_from_config
 
 
