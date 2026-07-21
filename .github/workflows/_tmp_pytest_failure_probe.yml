@@ -1,0 +1,49 @@
+name: Temporary pytest failure probe
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  pytest-probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip -q
+          pip install -q -r requirements.txt
+          pip install -q pytest
+
+      - name: Capture full pytest output
+        shell: bash
+        run: |
+          set +e
+          DANK_STARTUP_LOG_STYLE=quiet DANK_COMMAND_LOG_STYLE=quiet \
+            python -m pytest tests/ -q --tb=short --disable-warnings \
+            > pytest-output.txt 2>&1
+          code=$?
+          printf '%s\n' "$code" > pytest-exit-code.txt
+          tail -n 120 pytest-output.txt || true
+          exit 0
+
+      - name: Upload pytest probe
+        uses: actions/upload-artifact@v4
+        with:
+          name: pytest-failure-probe
+          path: |
+            pytest-output.txt
+            pytest-exit-code.txt
+          if-no-files-found: error
+          retention-days: 1
