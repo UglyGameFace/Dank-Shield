@@ -1,0 +1,1 @@
+Migrate obsolete source-shape setup tests to the validated AIO behavioral contract once, then remove this gate and the temporary migration tool in the same commit.
