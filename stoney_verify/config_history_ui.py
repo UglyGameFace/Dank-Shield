@@ -2,7 +2,6 @@ from __future__ import annotations
 
 """Owner-facing setup UI for configuration backups and version history."""
 
-from datetime import datetime
 from typing import Any, Mapping
 
 import discord
@@ -17,6 +16,7 @@ from .config_history import (
     list_config_versions,
     restore_config_version,
 )
+from .discord_time import discord_timestamp_pair
 from .guild_config import get_guild_config
 
 
@@ -43,14 +43,13 @@ def _snapshot(row: Mapping[str, Any]) -> dict[str, Any]:
 
 
 def _format_timestamp(value: Any) -> str:
-    text = _safe_str(value)
-    if not text:
-        return "Unknown time"
-    try:
-        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
-        return parsed.strftime("%b %d, %Y • %H:%M UTC")
-    except Exception:
-        return text[:40]
+    """Render one instant in each Discord viewer's own timezone."""
+
+    return discord_timestamp_pair(
+        value,
+        absolute_style="f",
+        fallback="Unknown time",
+    )
 
 
 def _version_domain(row: Mapping[str, Any]) -> str:
@@ -82,7 +81,10 @@ def _version_option(row: Mapping[str, Any]) -> discord.SelectOption | None:
     if version_id <= 0:
         return None
     label = f"#{version_id} • {_version_domain(row)}"[:100]
-    description = f"{_version_source(row)} • {_format_timestamp(row.get('created_at'))}"[:100]
+    # Discord select-option descriptions are plain text and do not reliably
+    # render <t:...> markup. Show the source here; the selected version and
+    # history embed show the saved time localized for each viewer.
+    description = _version_source(row)[:100]
     emoji = "💾" if bool(row.get("is_manual")) else "🕘"
     return discord.SelectOption(
         label=label,

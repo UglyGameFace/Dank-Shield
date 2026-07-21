@@ -60,7 +60,9 @@ _NOTICE_MEMORY: dict[str, dict[str, Any]] = {}
 _NOTICE_WORKER_STARTED = False
 _NOTICE_SEND_DELAY_SECONDS = 2.5
 _NOTICE_WORKER_INTERVAL_SECONDS = 30
-_NOTICE_DEFAULT_TZ = "America/New_York"
+# Discord does not expose a user's timezone to bots.
+# Relative schedules need no timezone; typed calendar dates must name one.
+_NOTICE_DEFAULT_TZ = ""
 _NOTICE_STATUS_SCHEDULED = "scheduled"
 _NOTICE_STATUS_DELIVERED = "delivered"
 _NOTICE_STATUS_DM_BLOCKED = "dm_blocked"
@@ -504,10 +506,23 @@ def _parse_notice_datetime(raw_value: str, *, timezone_name: str, now: Optional[
             return current + timedelta(days=amount)
         raise ValueError("Use +30m, +2h, or +3d for relative times.")
 
+    timezone_text = str(timezone_name or "").strip()
+
+    if not timezone_text:
+        raise ValueError(
+            "Typed calendar dates need a timezone such as "
+            "`America/New_York`, `America/Los_Angeles`, "
+            "`Europe/London`, or `Asia/Tokyo`. "
+            "Relative times like `+2h` and `+3d` need no timezone."
+        )
+
     try:
-        tz = ZoneInfo(str(timezone_name or _NOTICE_DEFAULT_TZ).strip() or _NOTICE_DEFAULT_TZ)
-    except Exception:
-        tz = ZoneInfo("UTC")
+        tz = ZoneInfo(timezone_text)
+    except Exception as exc:
+        raise ValueError(
+            "Use a valid IANA timezone such as "
+            "`America/New_York`, `Europe/London`, or `Asia/Tokyo`."
+        ) from exc
 
     formats = (
         "%Y-%m-%d %H:%M",
@@ -1064,10 +1079,13 @@ class NoticeScheduleModal(discord.ui.Modal):
             max_length=40,
         )
         self.timezone_name = discord.ui.TextInput(
-            label="Timezone for typed dates",
-            placeholder="America/New_York, UTC, America/Los_Angeles",
-            default=_NOTICE_DEFAULT_TZ,
-            required=True,
+            label="Timezone for typed calendar dates",
+            placeholder=(
+                "Only for typed dates: America/New_York, "
+                "Europe/London"
+            ),
+            default="",
+            required=False,
             max_length=64,
         )
         self.staff_note = discord.ui.TextInput(
@@ -1090,7 +1108,7 @@ class NoticeScheduleModal(discord.ui.Modal):
 
         await interaction.response.defer(ephemeral=True, thinking=True)
         try:
-            tz_text = str(self.timezone_name.value or _NOTICE_DEFAULT_TZ).strip()
+            tz_text = str(self.timezone_name.value or "").strip()
             now = _utcnow()
             send_at = _parse_notice_datetime(str(self.send_at.value), timezone_name=tz_text, now=now)
             deadline_at = _parse_notice_datetime(str(self.deadline_at.value), timezone_name=tz_text, now=send_at)
