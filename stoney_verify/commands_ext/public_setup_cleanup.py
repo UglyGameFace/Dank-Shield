@@ -627,7 +627,7 @@ class ConfirmDeleteModal(discord.ui.Modal):
             name="Next Step",
             value=(
                 "Run **Review Setup**. If required setup items were removed, "
-                "use **Quick Setup** or **Manage Setup** to recreate or remap "
+                "use **Continue Setup** or **Manage Setup** to recreate or remap "
                 "only what is missing."
             ),
             inline=False,
@@ -644,6 +644,103 @@ class ConfirmDeleteModal(discord.ui.Modal):
                 embed=embed,
                 view=PatchedRecoveryCenterView(),
             )
+
+
+async def _open_cleanup_preview_screen(
+    interaction: discord.Interaction,
+) -> None:
+    """Open the canonical cleanup preview without losing setup navigation."""
+
+    if not await solid._require_setup_permission(interaction):
+        return
+    guild = interaction.guild
+    if guild is None:
+        return await interaction.response.send_message(
+            "❌ This must be used inside a server.",
+            ephemeral=True,
+        )
+
+    await solid._safe_defer_update(interaction)
+    embed = await build_cleanup_preview_embed(guild)
+    await solid._edit_or_followup(
+        interaction,
+        embed=embed,
+        view=CleanupPreviewView(),
+    )
+
+
+async def _open_repair_parent(
+    interaction: discord.Interaction,
+    parent: str,
+) -> None:
+    """Return Repair / Restart screens to their actual logical parent."""
+
+    from . import public_setup_recommend as recommend
+
+    clean_parent = str(parent or "section").strip().lower()
+    if clean_parent == "cleanup":
+        await _open_cleanup_preview_screen(interaction)
+        return
+    if clean_parent == "center":
+        await recommend._open_recovery_center(interaction)
+        return
+
+    await recommend._open_advanced_danger_zone(interaction)
+
+
+class RepairNavigationView(discord.ui.View):
+    """One logical Back route plus Setup Home and Close."""
+
+    def __init__(self, *, parent: str = "section") -> None:
+        super().__init__(timeout=900)
+        self.parent = str(parent or "section").strip().lower() or "section"
+
+    @discord.ui.button(
+        label="Back",
+        emoji="↩️",
+        style=discord.ButtonStyle.secondary,
+        custom_id="dank_setup_repair_nav:back",
+        row=4,
+    )
+    async def back(
+        self,
+        interaction: discord.Interaction,
+        button: discord.ui.Button,
+    ) -> None:
+        _ = button
+        await _open_repair_parent(interaction, self.parent)
+
+    @discord.ui.button(
+        label="Setup Home",
+        emoji="🏠",
+        style=discord.ButtonStyle.secondary,
+        custom_id="dank_setup_repair_nav:home",
+        row=4,
+    )
+    async def home(
+        self,
+        interaction: discord.Interaction,
+        button: discord.ui.Button,
+    ) -> None:
+        _ = button
+        from . import public_setup_recommend as recommend
+        await recommend._home_edit(interaction)
+
+    @discord.ui.button(
+        label="Close",
+        emoji="✖️",
+        style=discord.ButtonStyle.secondary,
+        custom_id="dank_setup_repair_nav:close",
+        row=4,
+    )
+    async def close(
+        self,
+        interaction: discord.Interaction,
+        button: discord.ui.Button,
+    ) -> None:
+        _ = button
+        from . import public_setup_recommend as recommend
+        await recommend._close_setup(interaction)
 
 
 class RemoveOneSelect(discord.ui.Select):
@@ -716,15 +813,15 @@ class RemoveOneSelect(discord.ui.Select):
         )
 
 
-class RemoveOneView(solid.BackToSetupView):
+class RemoveOneView(RepairNavigationView):
     def __init__(self, candidates: list[CleanupCandidate]) -> None:
-        super().__init__()
+        super().__init__(parent="cleanup")
         self.add_item(RemoveOneSelect(candidates))
 
 
-class ConfirmOneView(solid.BackToSetupView):
+class ConfirmOneView(RepairNavigationView):
     def __init__(self, selected_value: str) -> None:
-        super().__init__()
+        super().__init__(parent="cleanup")
         self.selected_value = selected_value
 
     @discord.ui.button(
@@ -749,37 +846,10 @@ class ConfirmOneView(solid.BackToSetupView):
             )
         )
 
-    @discord.ui.button(
-        label="Back to Cleanup Preview",
-        emoji="🔎",
-        style=discord.ButtonStyle.secondary,
-        custom_id="stoney_cleanup:back_preview",
-        row=1,
-    )
-    async def back_preview(
-        self,
-        interaction: discord.Interaction,
-        button: discord.ui.Button,
-    ) -> None:
-        _ = button
-        if not await solid._require_setup_permission(interaction):
-            return
-        guild = interaction.guild
-        if guild is None:
-            return await interaction.response.send_message(
-                "❌ This must be used inside a server.",
-                ephemeral=True,
-            )
-        await solid._safe_defer_update(interaction)
-        embed = await build_cleanup_preview_embed(guild)
-        await solid._edit_or_followup(
-            interaction,
-            embed=embed,
-            view=CleanupPreviewView(),
-        )
+class CleanupPreviewView(RepairNavigationView):
+    def __init__(self) -> None:
+        super().__init__(parent="center")
 
-
-class CleanupPreviewView(solid.BackToSetupView):
     @discord.ui.button(
         label="Remove One Thing",
         emoji="🎯",
@@ -875,36 +945,6 @@ class CleanupPreviewView(solid.BackToSetupView):
             return
         await interaction.response.send_modal(ConfirmDeleteModal(mode="all"))
 
-    @discord.ui.button(
-        label="Back to Repair & Restart",
-        emoji="🛟",
-        style=discord.ButtonStyle.secondary,
-        custom_id="stoney_cleanup:back_recovery",
-        row=3,
-    )
-    async def back_recovery(
-        self,
-        interaction: discord.Interaction,
-        button: discord.ui.Button,
-    ) -> None:
-        _ = button
-        if not await solid._require_setup_permission(interaction):
-            return
-        guild = interaction.guild
-        if guild is None:
-            return await interaction.response.send_message(
-                "❌ This must be used inside a server.",
-                ephemeral=True,
-            )
-        await solid._safe_defer_update(interaction)
-        embed = await patched_recovery_embed(guild)
-        await solid._edit_or_followup(
-            interaction,
-            embed=embed,
-            view=PatchedRecoveryCenterView(),
-        )
-
-
 async def _ask_confirm_type(
     interaction: discord.Interaction,
     mode: str,
@@ -947,9 +987,9 @@ async def _ask_confirm_type(
     )
 
 
-class ConfirmTypeView(solid.BackToSetupView):
+class ConfirmTypeView(RepairNavigationView):
     def __init__(self, mode: str, label: str) -> None:
-        super().__init__()
+        super().__init__(parent="cleanup")
         self.mode = mode
         self.label = label
 
@@ -973,7 +1013,7 @@ class ConfirmTypeView(solid.BackToSetupView):
         )
 
 
-class PatchedRecoveryCenterView(solid.BackToSetupView):
+class PatchedRecoveryCenterView(RepairNavigationView):
     @discord.ui.button(
         label="Preview Cleanup",
         emoji="🔎",

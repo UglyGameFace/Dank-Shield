@@ -172,19 +172,39 @@ def test_config_history_navigation_matches_aio_hierarchy() -> None:
             "missing_items": ["ticket_prefix"],
         },
     )
-    assert "Back to All Features" in labels(detail)
-    assert "Setup Home" in labels(detail)
-    assert "Close" in labels(detail)
+    detail_labels = labels(detail)
+    assert "Back to History" in detail_labels
+    assert "Back to All Features" not in detail_labels
+    assert "Setup Home" in detail_labels
+    assert "Close" in detail_labels
 
 
-def test_repair_and_cleanup_views_keep_navigation_available() -> None:
-    for view in (
-        recovery.RecoveryCenterView(),
-        cleanup.PatchedRecoveryCenterView(),
-        cleanup.CleanupPreviewView(),
-    ):
+def test_canonical_repair_views_use_one_logical_back_route() -> None:
+    views = (
+        (cleanup.PatchedRecoveryCenterView(), "section"),
+        (cleanup.CleanupPreviewView(), "center"),
+        (cleanup.RemoveOneView([]), "cleanup"),
+        (cleanup.ConfirmOneView("text_channel:1"), "cleanup"),
+        (
+            cleanup.ConfirmTypeView(
+                "channels",
+                "setup channels",
+            ),
+            "cleanup",
+        ),
+    )
+
+    for view, parent in views:
         view_labels = labels(view)
-        assert "Back to All Features" in view_labels
+        assert "Back" in view_labels
+        assert "Back to All Features" not in view_labels
         assert "Setup Home" in view_labels
         assert "Close" in view_labels
+        assert getattr(view, "parent", None) == parent
+
+        row_counts: dict[int, int] = {}
+        for child in view.children:
+            row = int(getattr(child, "row", 0) or 0)
+            row_counts[row] = row_counts.get(row, 0) + 1
+        assert all(count <= 5 for count in row_counts.values())
         assert len(view.children) <= 25

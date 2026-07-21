@@ -778,18 +778,6 @@ class ConfigVersionDetailView(discord.ui.View):
         await open_config_history(interaction)
 
     @discord.ui.button(
-        label="Back to All Features",
-        emoji="⚙️",
-        style=discord.ButtonStyle.secondary,
-        custom_id="dank_setup_config_history:detail_settings",
-        row=2,
-    )
-    async def settings(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        _ = button
-        await _back_to_all_features(interaction)
-
-
-    @discord.ui.button(
         label="Setup Home",
         emoji="🏠",
         style=discord.ButtonStyle.secondary,
