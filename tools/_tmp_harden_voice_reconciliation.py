@@ -154,11 +154,23 @@ payload_new = '''    payload = _guided_item_payload(
 
     if item_id <= 0 or not payload:
 '''
-recommend = replace_once(
-    recommend,
-    payload_old,
-    payload_new,
-    "guided creation provenance save",
+create_owner = "async def _guided_create_item("
+create_pos = recommend.find(create_owner)
+if create_pos < 0:
+    raise RuntimeError("guided creation provenance save: create owner not found")
+if recommend[:create_pos].count(payload_old) != 1:
+    raise RuntimeError(
+        "guided creation provenance save: expected exactly one existing-item payload before create owner"
+    )
+if recommend[create_pos:].count(payload_old) != 1:
+    raise RuntimeError(
+        "guided creation provenance save: expected exactly one payload inside/after create owner"
+    )
+create_payload_pos = recommend.find(payload_old, create_pos)
+recommend = (
+    recommend[:create_payload_pos]
+    + payload_new
+    + recommend[create_payload_pos + len(payload_old):]
 )
 
 if "def test_clear_writer_updates_both_json_buckets_atomically" not in tests:
