@@ -1,12 +1,11 @@
 # ACTIVE TASK
 
-## DS-ANTINUKE-001 — Native AntiNuke destructive-action containment
+## DS-CONFIG-HISTORY-001 — Native configuration backup + version history
 
-**Status:** READY FOR REVIEW — NOT MERGED — NOT DEPLOYED
-**Branch:** `feature/native-antinuke-core`
-**PR:** #106
-**Dashboard companion PR:** `stoney-verify-dashboard` #11
-**Base:** current `main` after merged PR #105
+**Status:** FINAL HEAD VALIDATION PENDING — IMPLEMENTATION + DB EXERCISE COMPLETE
+**Branch:** `feature/config-backup-version-history`
+**PR:** #107 (draft until this exact head is green)
+**Base:** `main` after merged PR #106
 
 ## Single Active Task Lock
 
@@ -17,135 +16,220 @@ Do not switch to unrelated implementation work until this task reaches Definitio
 - No monkey patches.
 - No startup guards as the implementation path.
 - Do not reactivate the dormant startup-guard loader.
-- No new `*_new` parallel tree.
-- New AntiNuke behavior belongs in its native engine and existing Protection Center/event runtime.
-- Per-guild DB config is authoritative; no guild-specific `.env` IDs.
-- Never punish an unattributed actor. Audit-log attribution must succeed first.
-- Never contain the guild owner.
+- No parallel live configuration source of truth.
+- Existing live tables remain authoritative; history stores snapshots only.
+- Restore must never cross guild boundaries or canonical/legacy config-table boundaries.
+- Every restore must preserve the current state first so rollback remains reversible.
+- Ticket-choice restore must be atomic; a partial ticket-menu restore is unacceptable.
 - Behavioral tests only; no new source-shape/static tests.
-- Public install must not require Discord Administrator permission.
+- Dashboard work is out of scope.
+- Merge and production migration/deployment require explicit owner approval.
 
 ## Scope
 
-Build the first production AntiNuke layer for high-confidence destructive actions:
+Build the first production configuration recovery layer for the active bot configuration domains:
 
-- mass channel deletion;
-- mass role deletion;
-- mass bans;
-- mass kicks;
-- webhook creation floods;
-- dangerous role-permission escalation;
-- dangerous role grants to members;
-- trusted-user and trusted-role exemptions;
-- alert-only and contain modes;
-- containment by removing only manageable dangerous roles from the attributed actor;
-- rollback of manageable dangerous permission escalation/grants;
-- modlog incident reporting;
-- Protection Center status/config surface;
-- live runtime registration without guards or monkey patches;
-- least-privilege public invite guidance including View Audit Log.
+1. **Core Settings**
+   - canonical `guild_configs` or the active legacy `guild_config` fallback;
+   - feature settings, timers, saved Discord role/channel/category IDs, protection settings, and other guild config stored there.
+
+2. **Ticket Choices**
+   - active `ticket_categories` rows;
+   - category-specific configuration stored on those rows, including compatible category-stored form configuration.
+
+Deliver:
+
+- automatic configuration snapshots after successful changes;
+- durable per-guild version history;
+- migration-time baselines for existing guilds;
+- empty Ticket Choices baselines for configured guilds with no categories;
+- bounded retention of newest 50 versions per guild and configuration domain;
+- manual backup sets covering Core Settings plus Ticket Choices when available;
+- safe restore of one selected historical version;
+- automatic pre-restore safety backup;
+- explicit two-step restore confirmation;
+- owner-facing Backups & History UI under `/dank setup` → More Options → Other Settings;
+- no new top-level public command family.
+
+This task does **not** claim to clone/recreate a Discord server or version every historical/dormant database table. Discord roles/channels are never deleted, recreated, or renamed by configuration restore.
 
 ## Root Cause / Gap
 
-Dank Shield had SpamGuard, RaidGuard, Automod, moderation logging, tickets, and verification, but no native unified AntiNuke engine. Existing modlog listeners observe channel/role/server changes but do not stop an attributed actor from continuing a destructive burst.
+Dank Shield had durable live per-guild configuration in Supabase but no revision history. A bad setup edit, accidental overwrite, or destructive ticket-choice change had no native rollback path.
 
-AntiNuke requires reliable `View Audit Log` access for actor attribution. The engine fails safe when attribution is unavailable instead of guessing.
+The repository has multiple legitimate native config write paths. Instrumenting only one Python writer would miss changes, so automatic history belongs at the database boundary.
 
-A separate production-readiness issue was found during this task: the dashboard server-install route fell back to Discord permission integer `8` (Administrator). That conflicted with Dank Shield's public least-privilege policy and has now been removed in dashboard PR #11.
+A scope audit also confirmed that `guild_configs` is not the whole active configuration surface: ticket choices live in the separate guild-scoped `ticket_categories` table. The recovery feature therefore versions Core Settings and Ticket Choices as separate domains instead of falsely presenting a single-row backup as complete configuration recovery.
 
 ## Implementation
 
-- Added `stoney_verify/anti_nuke.py` as the native AntiNuke owner.
-- Added per-guild settings using the existing flexible `guild_configs.settings` storage; no schema migration or duplicate table.
-- Product defaults are intentionally **opt-in**:
-  - disabled until the guild owner explicitly enables AntiNuke;
-  - `contain` is the selected response mode once enabled;
-  - 15-second detection window;
-  - 3 channel deletes;
-  - 3 role deletes;
-  - 5 bans;
-  - 5 kicks;
-  - 3 webhook creates;
-  - immediate dangerous permission-escalation protection.
-- Added audit-log actor attribution with freshness checks, bounded retries, and audit-entry dedupe.
-- Added trusted actor rules for guild owner, Dank Shield itself, explicit trusted users, and explicit trusted roles.
-- Added per-actor/action sliding windows and trigger cooldowns.
-- Added containment that removes only dangerous roles Dank Shield can actually manage.
-- Added role-permission rollback and dangerous member-role-grant rollback when containment mode is active.
-- Added AntiNuke incidents to the existing per-guild modlog.
-- Wired the native engine through `public_protection_center.py`, which is a guaranteed public-core command module; no `main.py`, `app.py`, startup guard, or monkey patch change was needed.
-- Added Protection Center AntiNuke status, permission health, ON/OFF toggle, Alert/Contain mode control, trusted user/role IDs, and threshold editor.
-- AntiNuke refuses to enable when required permissions are missing and clearly reports `View Audit Log`; Contain mode also requires `Manage Roles`.
-- Added `View Audit Log`, Kick Members, Ban Members, Send Messages in Threads, and Move Members to Dank Shield public permission guidance/audit so documented permissions match supported features.
-- Added behavioral tests for defaults, bounds, trust policy, permission escalation, window thresholds, containment, unattributed fail-safe behavior, and listener registration.
-- Fixed active-engine behavior tests after the opt-in default change so tests explicitly enable AntiNuke instead of depending on the product default.
-- Dashboard companion PR #11 replaces the old `permissions=8` Administrator fallback with least-privilege bitfield `1391854742678` and strips the Administrator bit from configured invite permissions before building an invite.
+### Durable history migration
 
-## Validation
+- Added `supabase/migrations/20260720_guild_config_version_history.sql`.
+- Added `public.guild_config_versions` with RLS enabled and no public policies.
+- Added `config_table` domain/source isolation.
+- Added indexes for guild/domain/time history lookup.
+- Added migration baselines for:
+  - existing canonical `guild_configs` rows;
+  - existing legacy `guild_config` rows;
+  - existing `ticket_categories` sets;
+  - configured guilds whose Ticket Choices are currently empty.
+- Added functional snapshot normalization so timestamps and config-write audit metadata do not generate fake versions.
+- Consecutive functional duplicates are suppressed without hiding a legitimate later return to an older configuration.
+- Automatic history is retained to 50 versions per guild + configuration domain.
 
-Completed:
+### Core Settings history
 
-- Core AntiNuke branch passed Dank Shield CI run 469 before UI wiring.
-- Live-wiring/UI head initially failed CI run 470 because two behavioral tests still assumed the old enabled-by-default policy.
-- Tests were corrected while preserving the safer opt-in product default.
-- Corrected AntiNuke head passed Dank Shield CI runs 471 and 472.
-- Permission-guidance head `1ae85d6b0d7bc42e307362ffc4eabaf7559777d4` passed Dank Shield CI run 473.
-- Run 473 passed Python compile, full `pytest tests/`, standalone tools, public setup/isolation audit, canonical command-surface audit, startup-friction audit, public invite-permission audit, setup-safety audit, Dank Design audit, role-truth audit, and event-boundary audit.
-- Termux local targeted tests/import smoke could not run because that local Python environment imports a broken/incompatible `supabase` package (`cannot import name 'Client' from 'supabase'`). This is not reproduced in clean GitHub CI and production code was not changed to work around the local package issue.
-- Final implementation compare against `main`: ahead 7, behind 0, exactly six task-related Dank Shield paths.
-- PR #106 unresolved review-thread inspection: none.
-- Dashboard PR #11 compare against dashboard `main`: ahead 1, behind 0, exactly one changed file.
-- Dashboard PR #11 Vercel status check: SUCCESS.
-- Dashboard PR #11 unresolved review-thread inspection: none.
-- Dashboard PR #11 is mergeable and ready for review.
+- Automatic DB trigger captures successful canonical or legacy guild config changes.
+- Canonical and legacy histories cannot cross-restore.
+- Restore validates guild ownership.
+- Restore saves a pre-restore safety backup first.
+- Restore excludes lifecycle/system identity fields.
+- Restore adds write/restore audit metadata.
+- Guild config cache is invalidated after restore.
 
-The final task-record-only head created by this update must also pass Dank Shield CI before PR #106 is moved out of draft.
+### Ticket Choices history
+
+- Automatic DB trigger snapshots the complete current `ticket_categories` set after category insert/update/delete.
+- Functional dedupe ignores category row UUIDs and lifecycle timestamps.
+- Snapshot bundles preserve compatible category-stored configuration fields dynamically.
+- Added `restore_ticket_categories_snapshot(text, jsonb)` as a service-role-only database function.
+- Ticket-choice restore is one atomic DB transaction:
+  - validates guild IDs and slugs first;
+  - suppresses only intermediate row-trigger history inside the restore transaction;
+  - removes choices absent from the selected snapshot;
+  - updates matching slugs without replacing their current stable IDs;
+  - inserts missing historical choices using compatible table columns/defaults;
+  - rolls back the entire mutation if any operation fails.
+- Python writes one pre-restore safety snapshot and one clean restored-state history entry with actor/reason metadata.
+
+### Bot service and UI
+
+- Added `stoney_verify/config_history.py` as the native history/backup/restore owner.
+- Added `stoney_verify/config_history_ui.py` as the owner-facing setup UI.
+- Added **Backups & History** under the existing Other Settings hub while preserving the mobile two-components-per-row layout.
+- History clearly labels versions as **Core Settings** or **Ticket Choices**.
+- Manual **Create Backup** saves both available domains as one user action.
+- Version detail shows functional differences from current state.
+- **Restore This Version** is non-destructive and only opens confirmation.
+- Only **Confirm Restore** invokes restore.
+- UI explicitly states that restore does not delete/recreate/rename Discord roles or channels.
+
+## Behavioral Coverage
+
+- Core functional diff ignores write-audit metadata but detects real setting changes.
+- Ticket-choice diff ignores UUID/timestamp noise but detects real category changes.
+- Manual backup captures Core Settings and Ticket Choices.
+- Core restore creates a safety backup, excludes system/lifecycle identity fields, adds restore metadata, and clears cache.
+- Cross-guild core restore is refused.
+- Cross-table core restore is refused.
+- Ticket-choice snapshot rows from another guild are refused.
+- Ticket-choice restore uses one atomic RPC with the complete saved row set rather than individual REST mutations.
+- Ticket-choice restore writes pre-restore and final restored-state history records.
+- UI labels configuration domains correctly.
+- Restore detail → confirmation is required before the restore service runs.
+- Confirmation UX remains mobile-compact and offers only Confirm Restore / Cancel.
+- Setup Other Settings route behavior is covered.
+
+## GitHub Validation
+
+Successful implementation-head runs:
+
+- Dank Shield CI 476: initial core service/migration-adjacent Python.
+- Dank Shield CI 478: native history UI.
+- Setup-wiring head `50966e2404902a52a200c44112300f9a1786533e`:
+  - Dank Shield CI 479: SUCCESS;
+  - Setup Check Inference 124: SUCCESS.
+- Hardened core/table-isolation head `9f6f8c91def74061d5f77238892bb1ea166b147c`:
+  - Dank Shield CI 482: SUCCESS;
+  - Setup Check Inference 127: SUCCESS.
+- Ticket-choice domain extension head `b111c6d79484c3081cead95fac67967711f8eeaf`:
+  - Dank Shield CI 487: SUCCESS;
+  - Setup Check Inference 132: SUCCESS.
+- Atomic ticket-choice restore head `050f81a95ada806688de2a0e785473b9bbaaeb0d`:
+  - Dank Shield CI 490: SUCCESS;
+  - Setup Check Inference 135: SUCCESS.
+- Task-record head `2549c8ae76f996c9d1af81898750994c52f612ba`:
+  - Dank Shield CI 492: SUCCESS;
+  - Setup Check Inference 137: SUCCESS.
+- PR #107 inline review threads before this final record update: none.
+- Compare against `main` before this final record update: ahead 20, behind 0; exactly eight task-related paths.
+
+Local Termux targeted tests remain blocked by the local environment's incompatible/broken `supabase` import (`cannot import name 'Client' from 'supabase'`). Clean GitHub CI does not reproduce that environment issue; production code is not changed to work around it.
+
+## Database Migration Validation
+
+Supabase PR preview infrastructure failed **before running migrations** on both the original preview and a safely close/reopened fresh preview:
+
+`failed to clone repo: to: invalid path: "\\"`
+
+Because the failure occurs at repository clone, it is not evidence that the migration failed. PR #107 remains unmerged and no production Supabase migration was applied.
+
+An equivalent isolated database validation was completed against a disposable local **PostgreSQL 17** database using stub canonical `guild_configs`, legacy `guild_config`, and active `ticket_categories` tables plus a local `service_role` role. The current migration logic was applied and exercised without touching production data.
+
+Validated successfully:
+
+- migration SQL/function/trigger definitions loaded successfully;
+- canonical Core Settings baseline created;
+- legacy Core Settings baseline created;
+- populated Ticket Choices baseline created;
+- empty Ticket Choices baseline created for configured guilds with no categories;
+- audit-only core config metadata change did not create a fake version;
+- real core config change created a version;
+- real ticket-category change created a version;
+- atomic Ticket Choices restore replaced the saved category set correctly;
+- category-stored `form_questions` data was restored in the isolated schema exercise;
+- obsolete categories were removed and missing categories were inserted;
+- row-level automatic history remained suppressed during the atomic RPC, avoiding intermediate restore noise;
+- duplicate-slug invalid restore was rejected and live ticket-choice state remained unchanged;
+- rerunning the migration succeeded and did not duplicate migration baselines.
+
+The isolated PostgreSQL instance was stopped after validation.
 
 ## Cleanup / Conflict Inspection
 
 - No startup guard added.
 - No monkey patch added.
-- No new runtime patch file added.
-- No Supabase migration required; AntiNuke settings use existing JSON config storage.
-- Existing SpamGuard/RaidGuard engines are not modified or duplicated.
-- Existing modlog coverage remains observation/logging; AntiNuke owns containment decisions.
-- `main.py`, `app.py`, `globals.py`, `guild_config.py`, `sitecustomize.py`, and `usercustomize.py` were not changed.
-- Native runtime ownership is through the existing public Protection Center module listed in the public-core command registry.
-- Dashboard companion change is isolated to `app/api/servers/route.ts`.
+- No config-writer patch added.
+- No dashboard changes.
+- No new public command family.
+- Existing live configuration tables remain authoritative.
+- History table is snapshot/recovery storage only.
+- Ticket-choice restore is atomic at the database mutation layer.
+- Dormant startup-guard ticket-form code is not used by this implementation.
 
-## Blockers
+## Remaining Gate
 
-- No known technical blocker remains.
-- Final task-record-only Dank Shield CI must pass.
-- Merge into either repository requires explicit user approval.
-- Deployment is not authorized and has not occurred.
+This task-record update is the final branch change. Its exact head must pass Dank Shield CI + Setup Check Inference. After that, repeat exact-head compare/review-thread inspection and mark PR #107 ready for review without changing the branch again.
+
+Merge and production migration/deployment still require explicit owner approval.
 
 ## Backlog After This Task
 
-1. Configuration backup + version history.
-2. Reusable configuration templates.
-3. Multi-server configuration sync.
-4. Cross-server analytics.
-5. Global moderation / shared security profiles.
+1. Reusable configuration templates.
+2. Multi-server configuration sync.
+3. Cross-server analytics.
+4. Global moderation / shared security profiles.
 
 ## Definition of Done
 
-- [x] Native AntiNuke owner exists outside startup guards.
-- [x] Per-guild settings and safe opt-in defaults exist without a schema migration.
-- [x] Unattributed actions never trigger containment.
-- [x] Guild owner and configured trusted actors are exempt.
-- [x] Mass channel/role deletes and mass ban/kick bursts are tracked per actor.
-- [x] Webhook creation floods are tracked per actor.
-- [x] Dangerous permission escalation/grants can be rolled back when manageable.
-- [x] Containment removes only manageable dangerous actor roles.
-- [x] Behavioral tests cover core policy and fail-safe behavior.
-- [x] Engine is loaded by the guaranteed live runtime without a guard/patch.
-- [x] Protection Center exposes clear AntiNuke status/configuration.
-- [x] Missing View Audit Log is clearly reported as a feature blocker.
-- [x] Targeted/core behavior is green in clean CI.
-- [x] Full regression/compile/audits pass on the implementation head.
-- [x] Dashboard install flow no longer defaults to Administrator in companion PR #11.
-- [x] Final implementation diff contains only task-related permanent code/tests/task record.
-- [x] Final review-thread inspection is clean across both PRs.
-- [ ] Final task-record-only Dank Shield head GitHub Actions must pass.
-- [ ] Merge/deploy requires explicit user approval.
+- [x] Separate durable history table exists via migration.
+- [x] Core Settings changes are automatically versioned at the DB boundary.
+- [x] Active Ticket Choices changes are automatically versioned at the DB boundary.
+- [x] Existing guilds receive baseline history, including empty Ticket Choices where applicable.
+- [x] Functional duplicate/audit-only noise is suppressed without hiding real returns to older states.
+- [x] Retention is bounded per guild + domain.
+- [x] Manual backup covers both available active configuration domains.
+- [x] Core restore refuses cross-guild/cross-table snapshots.
+- [x] Ticket-choice restore refuses cross-guild rows.
+- [x] Every restore preserves current state first.
+- [x] Ticket-choice mutation restore is atomic.
+- [x] Restore confirmation is explicitly two-step.
+- [x] Existing `/dank setup` exposes Backups & History without a new top-level command.
+- [x] Behavioral coverage exists for service, restore safety, domain labeling, and setup routing.
+- [x] Full Python regression/compile/audits passed on the implementation head.
+- [x] Migration logic passed equivalent isolated PostgreSQL 17 schema/trigger/restore/idempotency exercise.
+- [ ] This exact final task-record head GitHub CI + Setup Check Inference pass.
+- [ ] Final exact-head diff contains only task-related permanent code/tests/task record.
+- [ ] Final exact-head review-thread inspection is clean.
+- [ ] Merge/deploy requires explicit owner approval.

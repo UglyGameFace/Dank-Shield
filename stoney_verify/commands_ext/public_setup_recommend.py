@@ -1941,6 +1941,14 @@ async def _open_advanced_monitoring_repair(
     )
 
 
+async def _open_config_history(
+    interaction: discord.Interaction,
+) -> None:
+    from stoney_verify import config_history_ui
+
+    await config_history_ui.open_config_history(interaction)
+
+
 async def _open_advanced_appearance(
     interaction: discord.Interaction,
 ) -> None:
@@ -1985,6 +1993,7 @@ async def _open_advanced_settings(
     embed.add_field(name="🎫 Tickets", value="Ticket choices shown to members.", inline=False)
     embed.add_field(name="🛡️ Logs & Safety", value="Choose what gets logged, change spam and raid protection, and fix channel permissions.", inline=False)
     embed.add_field(name="🎨 Server Design", value="Change how the server looks, preview changes, or undo a design change.", inline=False)
+    embed.add_field(name="💾 Backups & History", value="Create a configuration backup, review saved versions, or safely restore an earlier setup.", inline=False)
 
     await solid._edit_or_followup(
         interaction,
@@ -3568,11 +3577,25 @@ class AdvancedSettingsHubView(discord.ui.View):
         await _open_advanced_appearance(interaction)
 
     @discord.ui.button(
+        label="Backups & History",
+        emoji="💾",
+        style=discord.ButtonStyle.secondary,
+        custom_id="dank_setup_advanced_hub:history",
+        row=2,
+    )
+    async def history(
+        self,
+        interaction: discord.Interaction,
+        button: discord.ui.Button,
+    ) -> None:
+        await _open_config_history(interaction)
+
+    @discord.ui.button(
         label="Back to More Options",
         emoji="↩️",
         style=discord.ButtonStyle.secondary,
         custom_id="dank_setup_advanced_hub:back",
-        row=2,
+        row=3,
     )
     async def back(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         await _open_manage_setup(interaction)
@@ -3582,7 +3605,7 @@ class AdvancedSettingsHubView(discord.ui.View):
         emoji="🏠",
         style=discord.ButtonStyle.secondary,
         custom_id="dank_setup_advanced_hub:home",
-        row=2,
+        row=3,
     )
     async def home(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         await _home_edit(interaction)

@@ -1,0 +1,734 @@
+from __future__ import annotations
+
+"""Durable guild configuration backup, history, and restore service.
+
+Automatic snapshots are owned by Supabase triggers installed by
+``20260720_guild_config_version_history.sql``. The live configuration remains in
+its canonical tables; this module only reads history, creates manual backups,
+and performs explicitly confirmed restores.
+"""
+
+import asyncio
+import os
+from datetime import datetime, timezone
+from typing import Any, Mapping, Optional
+
+from .globals import get_supabase, now_utc
+from .guild_config import GUILD_CONFIG_TABLE_FALLBACKS, clear_guild_config_cache
+
+CONFIG_HISTORY_TABLE = (
+    os.getenv("DANK_GUILD_CONFIG_HISTORY_TABLE") or "guild_config_versions"
+).strip() or "guild_config_versions"
+CONFIG_HISTORY_RETENTION = 50
+TICKET_CATEGORIES_TABLE = "ticket_categories"
+TICKET_CATEGORY_RESTORE_RPC = "restore_ticket_categories_snapshot"
+
+_RESTORE_EXCLUDED_KEYS = {
+    "guild_id",
+    "created_at",
+    "updated_at",
+    "_source_table",
+}
+_COMPARISON_EXCLUDED_KEYS = {
+    "guild_id",
+    "created_at",
+    "updated_at",
+    "config_last_write_at",
+    "config_last_write_source",
+    "config_last_write_mode",
+    "config_last_write_actor_id",
+    "config_last_write_reason",
+    "config_restored_from_version_id",
+}
+_CATEGORY_COMPARISON_EXCLUDED_KEYS = {
+    "id",
+    "guild_id",
+    "created_at",
+    "updated_at",
+}
+
+
+def _utc_iso() -> str:
+    try:
+        return now_utc().isoformat()
+    except Exception:
+        return datetime.now(timezone.utc).isoformat()
+
+
+def _safe_int(value: Any, default: int = 0) -> int:
+    try:
+        if value is None or isinstance(value, bool):
+            return int(default)
+        return int(str(value).strip())
+    except Exception:
+        return int(default)
+
+
+def _safe_str(value: Any, default: str = "") -> str:
+    try:
+        text = str(value or "").strip()
+        return text if text else default
+    except Exception:
+        return default
+
+
+def _row_dict(value: Any) -> dict[str, Any]:
+    return dict(value) if isinstance(value, Mapping) else {}
+
+
+def _is_missing_table_error(error: Exception) -> bool:
+    text = repr(error).lower()
+    return any(
+        marker in text
+        for marker in (
+            "does not exist",
+            "relation",
+            "42p01",
+            "pgrst205",
+            "could not find the table",
+        )
+    )
+
+
+def _is_missing_rpc_error(error: Exception) -> bool:
+    text = repr(error).lower()
+    return any(
+        marker in text
+        for marker in (
+            "pgrst202",
+            "could not find the function",
+            "function public.restore_ticket_categories_snapshot",
+            "restore_ticket_categories_snapshot(text, jsonb)",
+        )
+    )
+
+
+def _require_supabase() -> Any:
+    sb = get_supabase()
+    if sb is None:
+        raise RuntimeError("Supabase is not configured/available.")
+    return sb
+
+
+def _fetch_current_config_row_sync(guild_id: int) -> tuple[str, dict[str, Any]]:
+    sb = _require_supabase()
+    gid = str(int(guild_id))
+    last_error: Optional[Exception] = None
+
+    for table_name in GUILD_CONFIG_TABLE_FALLBACKS:
+        try:
+            response = (
+                sb.table(table_name)
+                .select("*")
+                .eq("guild_id", gid)
+                .limit(1)
+                .execute()
+            )
+            rows = getattr(response, "data", None) or []
+            if rows and isinstance(rows[0], Mapping):
+                return str(table_name), dict(rows[0])
+        except Exception as exc:
+            last_error = exc
+            if _is_missing_table_error(exc):
+                continue
+            raise
+
+    if last_error is not None and not _is_missing_table_error(last_error):
+        raise last_error
+    raise LookupError(f"No saved guild configuration exists for guild {gid}.")
+
+
+def _fetch_ticket_categories_state_sync(
+    guild_id: int,
+) -> tuple[bool, list[dict[str, Any]]]:
+    sb = _require_supabase()
+    gid = str(int(guild_id))
+    try:
+        response = (
+            sb.table(TICKET_CATEGORIES_TABLE)
+            .select("*")
+            .eq("guild_id", gid)
+            .execute()
+        )
+    except Exception as exc:
+        if _is_missing_table_error(exc):
+            return False, []
+        raise
+
+    rows = [
+        dict(row)
+        for row in (getattr(response, "data", None) or [])
+        if isinstance(row, Mapping)
+    ]
+    rows.sort(
+        key=lambda row: (
+            _safe_int(row.get("sort_order"), 999),
+            _safe_str(row.get("slug")).lower(),
+            _safe_str(row.get("id")),
+        )
+    )
+    return True, rows
+
+
+def _ticket_category_snapshot(
+    guild_id: int,
+    rows: list[dict[str, Any]],
+) -> dict[str, Any]:
+    return {
+        "guild_id": str(int(guild_id)),
+        "rows": [dict(row) for row in rows],
+    }
+
+
+def _category_snapshot_rows(snapshot: Mapping[str, Any]) -> list[dict[str, Any]]:
+    raw = snapshot.get("rows")
+    if not isinstance(raw, list):
+        return []
+    return [dict(row) for row in raw if isinstance(row, Mapping)]
+
+
+def _fetch_version_sync(
+    guild_id: int,
+    version_id: int,
+    *,
+    config_table: Optional[str] = None,
+) -> dict[str, Any]:
+    sb = _require_supabase()
+    try:
+        query = (
+            sb.table(CONFIG_HISTORY_TABLE)
+            .select("*")
+            .eq("guild_id", str(int(guild_id)))
+            .eq("version_id", int(version_id))
+        )
+        if _safe_str(config_table):
+            query = query.eq("config_table", _safe_str(config_table))
+        response = query.limit(1).execute()
+    except Exception as exc:
+        if _is_missing_table_error(exc):
+            raise RuntimeError(
+                "Configuration history is not installed yet. Apply the guild config version-history migration first."
+            ) from exc
+        raise
+
+    rows = getattr(response, "data", None) or []
+    if not rows or not isinstance(rows[0], Mapping):
+        raise LookupError(
+            f"Configuration version {int(version_id)} was not found for guild {int(guild_id)}."
+        )
+    return dict(rows[0])
+
+
+def _get_config_version_for_current_table_sync(
+    guild_id: int,
+    version_id: int,
+) -> dict[str, Any]:
+    table_name, _current = _fetch_current_config_row_sync(int(guild_id))
+    version = _fetch_version_sync(int(guild_id), int(version_id))
+    version_table = _safe_str(version.get("config_table"), table_name)
+    if version_table not in {table_name, TICKET_CATEGORIES_TABLE}:
+        raise LookupError(
+            f"Configuration version {int(version_id)} is not part of this guild's active configuration history."
+        )
+    return version
+
+
+def _list_config_versions_sync(
+    guild_id: int,
+    limit: int = 10,
+) -> list[dict[str, Any]]:
+    sb = _require_supabase()
+    table_name, _current = _fetch_current_config_row_sync(int(guild_id))
+    bounded = max(1, min(int(limit), CONFIG_HISTORY_RETENTION))
+    try:
+        response = (
+            sb.table(CONFIG_HISTORY_TABLE)
+            .select(
+                "version_id,guild_id,config_table,source,mode,actor_id,reason,is_manual,created_at,snapshot"
+            )
+            .eq("guild_id", str(int(guild_id)))
+            .order("created_at", desc=True)
+            .order("version_id", desc=True)
+            .limit(CONFIG_HISTORY_RETENTION * 2)
+            .execute()
+        )
+    except Exception as exc:
+        if _is_missing_table_error(exc):
+            raise RuntimeError(
+                "Configuration history is not installed yet. Apply the guild config version-history migration first."
+            ) from exc
+        raise
+
+    allowed_tables = {table_name, TICKET_CATEGORIES_TABLE}
+    rows = [
+        dict(row)
+        for row in (getattr(response, "data", None) or [])
+        if isinstance(row, Mapping)
+        and _safe_str(row.get("config_table"), table_name) in allowed_tables
+    ]
+    return rows[:bounded]
+
+
+def _insert_snapshot_sync(
+    guild_id: int,
+    snapshot: Mapping[str, Any],
+    *,
+    config_table: str,
+    source: str,
+    mode: str = "manual",
+    actor_id: Optional[int] = None,
+    reason: str = "",
+    is_manual: bool = True,
+) -> dict[str, Any]:
+    sb = _require_supabase()
+    table_name = _safe_str(config_table)
+    if not table_name:
+        raise ValueError("config_table is required for configuration history snapshots.")
+
+    payload = {
+        "guild_id": str(int(guild_id)),
+        "config_table": table_name,
+        "snapshot": dict(snapshot),
+        "source": _safe_str(source, "manual_backup")[:300],
+        "mode": _safe_str(mode, "manual")[:100],
+        "actor_id": str(int(actor_id)) if _safe_int(actor_id, 0) > 0 else None,
+        "reason": _safe_str(reason)[:1000] or None,
+        "is_manual": bool(is_manual),
+    }
+    try:
+        response = sb.table(CONFIG_HISTORY_TABLE).insert(payload).execute()
+    except Exception as exc:
+        if _is_missing_table_error(exc):
+            raise RuntimeError(
+                "Configuration history is not installed yet. Apply the guild config version-history migration first."
+            ) from exc
+        raise
+
+    rows = getattr(response, "data", None) or []
+    inserted = dict(rows[0]) if rows and isinstance(rows[0], Mapping) else payload
+    _prune_versions_sync(guild_id, table_name)
+    return inserted
+
+
+def _prune_versions_sync(guild_id: int, config_table: str) -> None:
+    sb = _require_supabase()
+    try:
+        response = (
+            sb.table(CONFIG_HISTORY_TABLE)
+            .select("version_id")
+            .eq("guild_id", str(int(guild_id)))
+            .eq("config_table", _safe_str(config_table))
+            .order("created_at", desc=True)
+            .order("version_id", desc=True)
+            .execute()
+        )
+        rows = [
+            row
+            for row in (getattr(response, "data", None) or [])
+            if isinstance(row, Mapping)
+        ]
+        for row in rows[CONFIG_HISTORY_RETENTION:]:
+            version_id = _safe_int(row.get("version_id"), 0)
+            if version_id > 0:
+                sb.table(CONFIG_HISTORY_TABLE).delete().eq(
+                    "version_id", version_id
+                ).execute()
+    except Exception:
+        # Retention cleanup must never turn a successful backup into a failed write.
+        return
+
+
+def create_manual_backup_sync(
+    guild_id: int,
+    *,
+    actor_id: Optional[int] = None,
+    reason: str = "Manual backup",
+) -> dict[str, Any]:
+    gid = int(guild_id)
+    table_name, current = _fetch_current_config_row_sync(gid)
+    core_version = _insert_snapshot_sync(
+        gid,
+        current,
+        config_table=table_name,
+        source="manual_backup",
+        mode="manual",
+        actor_id=actor_id,
+        reason=reason,
+        is_manual=True,
+    )
+
+    backup_versions = [core_version]
+    categories_version: Optional[dict[str, Any]] = None
+    categories_available, category_rows = _fetch_ticket_categories_state_sync(gid)
+    if categories_available:
+        categories_version = _insert_snapshot_sync(
+            gid,
+            _ticket_category_snapshot(gid, category_rows),
+            config_table=TICKET_CATEGORIES_TABLE,
+            source="manual_backup",
+            mode="manual",
+            actor_id=actor_id,
+            reason=reason,
+            is_manual=True,
+        )
+        backup_versions.append(categories_version)
+
+    result = dict(core_version)
+    result["core_version"] = core_version
+    result["ticket_categories_version"] = categories_version
+    result["backup_versions"] = backup_versions
+    return result
+
+
+def _restore_audit_payload(
+    raw: Any,
+    *,
+    actor_id: Optional[int],
+    reason: str,
+    version_id: int,
+) -> dict[str, Any]:
+    payload = dict(raw) if isinstance(raw, Mapping) else {}
+    payload["config_last_write_source"] = "config_history_restore"
+    payload["config_last_write_mode"] = "restore"
+    payload["config_last_write_at"] = _utc_iso()
+    payload["config_restored_from_version_id"] = str(int(version_id))
+    if _safe_int(actor_id, 0) > 0:
+        payload["config_last_write_actor_id"] = str(int(actor_id))
+    if _safe_str(reason):
+        payload["config_last_write_reason"] = _safe_str(reason)[:1000]
+    return payload
+
+
+def _restore_core_config_version_sync(
+    guild_id: int,
+    version_id: int,
+    version: Mapping[str, Any],
+    *,
+    table_name: str,
+    current: Mapping[str, Any],
+    actor_id: Optional[int],
+    reason: str,
+) -> dict[str, Any]:
+    gid = int(guild_id)
+    vid = int(version_id)
+    snapshot = _row_dict(version.get("snapshot"))
+    if not snapshot:
+        raise RuntimeError(f"Configuration version {vid} has no usable snapshot.")
+    if _safe_int(snapshot.get("guild_id"), gid) != gid:
+        raise RuntimeError("Configuration version belongs to a different guild.")
+
+    pre_restore = _insert_snapshot_sync(
+        gid,
+        current,
+        config_table=table_name,
+        source="pre_restore_backup",
+        mode="restore_guard",
+        actor_id=actor_id,
+        reason=f"Automatic backup before restoring version {vid}",
+        is_manual=True,
+    )
+
+    allowed_columns = {str(key) for key in current.keys()}
+    restore_payload = {
+        str(key): value
+        for key, value in snapshot.items()
+        if str(key) in allowed_columns and str(key) not in _RESTORE_EXCLUDED_KEYS
+    }
+
+    if "settings" in allowed_columns and "settings" in snapshot:
+        restore_payload["settings"] = _restore_audit_payload(
+            snapshot.get("settings"),
+            actor_id=actor_id,
+            reason=reason,
+            version_id=vid,
+        )
+    if "config" in allowed_columns and "config" in snapshot:
+        restore_payload["config"] = _restore_audit_payload(
+            snapshot.get("config"),
+            actor_id=actor_id,
+            reason=reason,
+            version_id=vid,
+        )
+    if "metadata" in allowed_columns and "metadata" in snapshot:
+        restore_payload["metadata"] = _restore_audit_payload(
+            snapshot.get("metadata"),
+            actor_id=actor_id,
+            reason=reason,
+            version_id=vid,
+        )
+
+    if not restore_payload:
+        raise RuntimeError(
+            "Configuration version contains no restorable fields for the current schema."
+        )
+
+    sb = _require_supabase()
+    response = (
+        sb.table(table_name)
+        .update(restore_payload)
+        .eq("guild_id", str(gid))
+        .execute()
+    )
+    rows = getattr(response, "data", None) or []
+    restored = (
+        dict(rows[0])
+        if rows and isinstance(rows[0], Mapping)
+        else _fetch_current_config_row_sync(gid)[1]
+    )
+    clear_guild_config_cache(gid)
+
+    return {
+        "guild_id": str(gid),
+        "config_table": table_name,
+        "restored_from_version_id": vid,
+        "restored": restored,
+        "pre_restore_backup": pre_restore,
+    }
+
+
+def _restore_ticket_categories_version_sync(
+    guild_id: int,
+    version_id: int,
+    version: Mapping[str, Any],
+    *,
+    actor_id: Optional[int],
+    reason: str,
+) -> dict[str, Any]:
+    gid = int(guild_id)
+    vid = int(version_id)
+    snapshot = _row_dict(version.get("snapshot"))
+    if _safe_int(snapshot.get("guild_id"), gid) != gid:
+        raise RuntimeError("Configuration version belongs to a different guild.")
+
+    snapshot_rows = _category_snapshot_rows(snapshot)
+    categories_available, current_rows = _fetch_ticket_categories_state_sync(gid)
+    if not categories_available:
+        raise RuntimeError(
+            "Ticket category configuration is not available in this deployment."
+        )
+
+    seen_slugs: set[str] = set()
+    for row in snapshot_rows:
+        slug = _safe_str(row.get("slug")).lower()
+        if not slug:
+            raise RuntimeError("Ticket category snapshot contains a row without a slug.")
+        if slug in seen_slugs:
+            raise RuntimeError(
+                "Ticket category snapshot contains duplicate slugs and cannot be restored safely."
+            )
+        row_guild_id = _safe_str(row.get("guild_id"), str(gid))
+        if row_guild_id != str(gid):
+            raise RuntimeError(
+                "Ticket category snapshot contains a row from a different guild."
+            )
+        seen_slugs.add(slug)
+
+    pre_restore = _insert_snapshot_sync(
+        gid,
+        _ticket_category_snapshot(gid, current_rows),
+        config_table=TICKET_CATEGORIES_TABLE,
+        source="pre_restore_backup",
+        mode="restore_guard",
+        actor_id=actor_id,
+        reason=f"Automatic backup before restoring ticket-choice version {vid}",
+        is_manual=True,
+    )
+
+    sb = _require_supabase()
+    try:
+        sb.rpc(
+            TICKET_CATEGORY_RESTORE_RPC,
+            {
+                "p_guild_id": str(gid),
+                "p_rows": snapshot_rows,
+            },
+        ).execute()
+    except Exception as exc:
+        if _is_missing_rpc_error(exc):
+            raise RuntimeError(
+                "Atomic ticket-choice restore is not installed yet. Apply the guild config version-history migration first."
+            ) from exc
+        raise
+
+    _available_after, restored_rows = _fetch_ticket_categories_state_sync(gid)
+    restored_snapshot = _ticket_category_snapshot(gid, restored_rows)
+    final_version = _insert_snapshot_sync(
+        gid,
+        restored_snapshot,
+        config_table=TICKET_CATEGORIES_TABLE,
+        source="config_history_restore",
+        mode="restore",
+        actor_id=actor_id,
+        reason=reason,
+        is_manual=False,
+    )
+
+    return {
+        "guild_id": str(gid),
+        "config_table": TICKET_CATEGORIES_TABLE,
+        "restored_from_version_id": vid,
+        "restored": restored_snapshot,
+        "pre_restore_backup": pre_restore,
+        "restore_version": final_version,
+    }
+
+
+def restore_config_version_sync(
+    guild_id: int,
+    version_id: int,
+    *,
+    actor_id: Optional[int] = None,
+    reason: str = "Restore saved configuration version",
+) -> dict[str, Any]:
+    gid = int(guild_id)
+    vid = int(version_id)
+    table_name, current = _fetch_current_config_row_sync(gid)
+    version = _fetch_version_sync(gid, vid)
+    version_table = _safe_str(version.get("config_table"), table_name)
+
+    if version_table == TICKET_CATEGORIES_TABLE:
+        return _restore_ticket_categories_version_sync(
+            gid,
+            vid,
+            version,
+            actor_id=actor_id,
+            reason=reason,
+        )
+
+    if version_table != table_name:
+        raise RuntimeError(
+            "Configuration version belongs to a different configuration table."
+        )
+
+    return _restore_core_config_version_sync(
+        gid,
+        vid,
+        version,
+        table_name=table_name,
+        current=current,
+        actor_id=actor_id,
+        reason=reason,
+    )
+
+
+def _flatten_functional_config(row: Mapping[str, Any]) -> dict[str, Any]:
+    merged: dict[str, Any] = {}
+    for key, value in dict(row).items():
+        name = str(key)
+        if name in {"settings", "config", "metadata", "meta"}:
+            continue
+        if name not in _COMPARISON_EXCLUDED_KEYS:
+            merged[name] = value
+
+    for container_key in ("settings", "config"):
+        nested = row.get(container_key)
+        if isinstance(nested, Mapping):
+            for key, value in nested.items():
+                name = str(key)
+                if name not in _COMPARISON_EXCLUDED_KEYS:
+                    merged[name] = value
+    return merged
+
+
+def changed_config_keys(left: Mapping[str, Any], right: Mapping[str, Any]) -> list[str]:
+    before = _flatten_functional_config(left)
+    after = _flatten_functional_config(right)
+    keys = sorted(set(before) | set(after))
+    return [key for key in keys if before.get(key) != after.get(key)]
+
+
+def _functional_category_row(row: Mapping[str, Any]) -> dict[str, Any]:
+    return {
+        str(key): value
+        for key, value in dict(row).items()
+        if str(key) not in _CATEGORY_COMPARISON_EXCLUDED_KEYS
+    }
+
+
+def changed_ticket_category_slugs(
+    snapshot: Mapping[str, Any],
+    current_rows: list[dict[str, Any]],
+) -> list[str]:
+    before = {
+        _safe_str(row.get("slug")).lower(): _functional_category_row(row)
+        for row in _category_snapshot_rows(snapshot)
+        if _safe_str(row.get("slug"))
+    }
+    after = {
+        _safe_str(row.get("slug")).lower(): _functional_category_row(row)
+        for row in current_rows
+        if _safe_str(row.get("slug"))
+    }
+    slugs = sorted(set(before) | set(after))
+    return [slug for slug in slugs if before.get(slug) != after.get(slug)]
+
+
+async def list_config_versions(guild_id: int, limit: int = 10) -> list[dict[str, Any]]:
+    return await asyncio.to_thread(
+        _list_config_versions_sync,
+        int(guild_id),
+        int(limit),
+    )
+
+
+async def get_config_version(guild_id: int, version_id: int) -> dict[str, Any]:
+    return await asyncio.to_thread(
+        _get_config_version_for_current_table_sync,
+        int(guild_id),
+        int(version_id),
+    )
+
+
+async def get_current_ticket_categories(guild_id: int) -> list[dict[str, Any]]:
+    _available, rows = await asyncio.to_thread(
+        _fetch_ticket_categories_state_sync,
+        int(guild_id),
+    )
+    return rows
+
+
+async def create_manual_backup(
+    guild_id: int,
+    *,
+    actor_id: Optional[int] = None,
+    reason: str = "Manual backup",
+) -> dict[str, Any]:
+    return await asyncio.to_thread(
+        create_manual_backup_sync,
+        int(guild_id),
+        actor_id=actor_id,
+        reason=reason,
+    )
+
+
+async def restore_config_version(
+    guild_id: int,
+    version_id: int,
+    *,
+    actor_id: Optional[int] = None,
+    reason: str = "Restore saved configuration version",
+) -> dict[str, Any]:
+    return await asyncio.to_thread(
+        restore_config_version_sync,
+        int(guild_id),
+        int(version_id),
+        actor_id=actor_id,
+        reason=reason,
+    )
+
+
+__all__ = [
+    "CONFIG_HISTORY_RETENTION",
+    "CONFIG_HISTORY_TABLE",
+    "TICKET_CATEGORIES_TABLE",
+    "TICKET_CATEGORY_RESTORE_RPC",
+    "changed_config_keys",
+    "changed_ticket_category_slugs",
+    "create_manual_backup",
+    "create_manual_backup_sync",
+    "get_config_version",
+    "get_current_ticket_categories",
+    "list_config_versions",
+    "restore_config_version",
+    "restore_config_version_sync",
+]
