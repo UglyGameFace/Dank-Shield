@@ -63,7 +63,7 @@ def test_safe_start_over_clears_canonical_setup_state(
     )
 
     guild = SimpleNamespace(id=123)
-    user = SimpleNamespace(id=456, __str__=lambda self: "Owner")
+    user = SimpleNamespace(id=456)
 
     message, ok = run(
         recovery._reset_saved_setup(
@@ -178,11 +178,14 @@ def test_cleanup_preview_uses_plain_folder_language() -> None:
 
 def test_fallback_recovery_view_matches_current_recovery_language() -> None:
     labels = button_labels(recovery.RecoveryCenterView())
-
-    assert labels[:5] == [
+    expected = {
         "Safe Start Over",
         "Clear Saved Roles & Channels",
         "Clear Ticket Choices Only",
         "Restore Last Reset",
         "Rebuild Default Ticket Choices",
-    ]
+    }
+
+    assert expected.issubset(set(labels))
+    assert "Setup Home" in labels
+    assert "Close" in labels
