@@ -94,6 +94,10 @@ def test_existing_item_picker_has_one_ticket_panel_destination() -> None:
     ) == 1
     assert "Tickets: backup support channel" not in all_placeholders
 
+    assert "Voice Verify: staff request channel" in optional_channels
+    assert "Join and leave: staff log channel" in optional_channels
+    assert "Bot status: uptime and health channel" in optional_channels
+
 
 def test_existing_item_timer_modal_uses_plain_labels() -> None:
     modal = customization.BehaviorSettingsModal()
