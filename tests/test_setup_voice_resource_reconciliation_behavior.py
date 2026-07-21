@@ -9,6 +9,7 @@ import pytest
 from stoney_verify import setup_resource_reconcile as reconcile
 from stoney_verify.commands_ext import public_setup_config_writer as writer
 from stoney_verify.commands_ext import public_setup_fresh_choice as fresh
+from stoney_verify.commands_ext import public_setup_recommend as recommend
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -155,3 +156,70 @@ def test_custom_picker_close_is_red():
         and str(getattr(child, "label", "") or "") == "Close"
     )
     assert close.style == discord.ButtonStyle.danger
+
+
+def test_clear_writer_updates_both_json_buckets_atomically(monkeypatch):
+    existing = {
+        "guild_id": "1",
+        "settings": {"vc_verify_channel_id": "123", "keep": "yes"},
+        "config": {"vc_verify_channel_id": "123", "keep": "yes"},
+        "vc_verify_channel_id": "123",
+    }
+    captured = {}
+
+    class _Table:
+        def update(self, payload):
+            captured.update(payload)
+            return self
+
+        def eq(self, *_args, **_kwargs):
+            return self
+
+        def execute(self):
+            return SimpleNamespace(data=[dict(captured)])
+
+    class _SB:
+        def table(self, _name):
+            return _Table()
+
+    monkeypatch.setattr(writer, "get_supabase", lambda: _SB())
+    monkeypatch.setattr(
+        writer,
+        "_fetch_existing_config_row_sync",
+        lambda _guild_id: dict(existing),
+    )
+
+    writer.clear_guild_config_keys_sync(
+        1,
+        {"vc_verify_channel_id"},
+    )
+
+    assert "settings" in captured
+    assert "config" in captured
+    assert "vc_verify_channel_id" not in captured["settings"]
+    assert "vc_verify_channel_id" not in captured["config"]
+    assert captured["settings"]["keep"] == "yes"
+    assert captured["config"]["keep"] == "yes"
+    assert captured["vc_verify_channel_id"] is None
+
+
+def test_guided_created_voice_resources_record_provenance():
+    voice = recommend._guided_managed_resource_patch(
+        "voice_verify_channel",
+        101,
+        created=True,
+    )
+    queue = recommend._guided_managed_resource_patch(
+        "voice_verify_staff_channel",
+        202,
+        created=True,
+    )
+    reused = recommend._guided_managed_resource_patch(
+        "voice_verify_channel",
+        303,
+        created=False,
+    )
+
+    assert voice == {"vc_verify_channel_managed_id": "101"}
+    assert queue == {"vc_verify_queue_channel_managed_id": "202"}
+    assert reused == {}

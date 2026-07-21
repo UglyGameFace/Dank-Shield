@@ -2660,6 +2660,24 @@ def _guided_item_payload(
     }
 
 
+def _guided_managed_resource_patch(
+    requirement_key: str,
+    item_id: int,
+    *,
+    created: bool,
+) -> dict[str, str]:
+    """Record provenance only when Quick Setup actually created the resource."""
+
+    if not created or int(item_id) <= 0:
+        return {}
+    key = str(requirement_key or "")
+    if key == "voice_verify_channel":
+        return {"vc_verify_channel_managed_id": str(int(item_id))}
+    if key == "voice_verify_staff_channel":
+        return {"vc_verify_queue_channel_managed_id": str(int(item_id))}
+    return {}
+
+
 def _guided_item_embed(
     requirement_key: str,
 ) -> discord.Embed:
@@ -2936,6 +2954,13 @@ async def _guided_create_item(
     payload = _guided_item_payload(
         requirement_key,
         item_id,
+    )
+    payload.update(
+        _guided_managed_resource_patch(
+            requirement_key,
+            item_id,
+            created=bool(created),
+        )
     )
 
     if item_id <= 0 or not payload:

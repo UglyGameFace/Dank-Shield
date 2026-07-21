@@ -464,36 +464,39 @@ def clear_guild_config_keys_sync(
         "updated_at": stamp,
     }
 
-    attempts: list[dict[str, Any]] = []
+    # Keep every storage shape synchronized in one atomic update.  Returning
+    # after updating only `settings` or only `config` would recreate the same
+    # split-brain state this writer exists to prevent.
+    json_updates: dict[str, Any] = {}
     if "settings" in columns:
-        attempts.append({**base_fields, "settings": settings, **flat_clear, **flat_metadata})
+        json_updates["settings"] = settings
     if "config" in columns:
-        attempts.append({**base_fields, "config": settings, **flat_clear, **flat_metadata})
-    if flat_clear or flat_metadata:
-        attempts.append({**base_fields, **flat_clear, **flat_metadata})
+        json_updates["config"] = settings
 
-    if not attempts:
+    payload = {
+        **base_fields,
+        **json_updates,
+        **flat_clear,
+        **flat_metadata,
+    }
+    if len(payload) == len(base_fields):
         return dict(existing)
 
     table = _config_table_name()
-    last_error: Optional[Exception] = None
-    for payload in attempts:
-        try:
-            response = (
-                sb.table(table)
-                .update(payload)
-                .eq("guild_id", str(gid))
-                .execute()
-            )
-            rows = getattr(response, "data", None) or []
-            if rows and isinstance(rows[0], Mapping):
-                return dict(rows[0])
-            refreshed = _fetch_existing_config_row_sync(gid)
-            return refreshed or payload
-        except Exception as exc:
-            last_error = exc
-
-    raise RuntimeError(f"Failed clearing guild config keys: {last_error!r}")
+    try:
+        response = (
+            sb.table(table)
+            .update(payload)
+            .eq("guild_id", str(gid))
+            .execute()
+        )
+        rows = getattr(response, "data", None) or []
+        if rows and isinstance(rows[0], Mapping):
+            return dict(rows[0])
+        refreshed = _fetch_existing_config_row_sync(gid)
+        return refreshed or payload
+    except Exception as exc:
+        raise RuntimeError(f"Failed clearing guild config keys: {exc!r}") from exc
 
 
 async def clear_guild_config_keys(
