@@ -26,6 +26,14 @@ def labels(view: discord.ui.View) -> list[str]:
     ]
 
 
+def channel_placeholders(view: discord.ui.View) -> list[str]:
+    return [
+        str(getattr(child, "placeholder", "") or "")
+        for child in view.children
+        if isinstance(child, discord.ui.ChannelSelect)
+    ]
+
+
 def test_generic_nested_setup_navigation_is_predictable() -> None:
     assert labels(solid.SetupNavView()) == [
         "Back to All Features",
@@ -55,6 +63,49 @@ def test_full_customization_pages_share_parent_home_close() -> None:
             row_counts[row] = row_counts.get(row, 0) + 1
         assert all(count <= 5 for count in row_counts.values())
         assert len(view.children) <= 25
+
+
+def test_existing_item_groups_use_plain_task_names() -> None:
+    view = customization.FullChooseExistingView()
+    view_labels = labels(view)
+
+    assert "Access & Staff Roles" in view_labels
+    assert "Server Folders" in view_labels
+    assert "Feature Channels" in view_labels
+    assert "Logs & Status" in view_labels
+    assert "Timers & Rules" in view_labels
+
+    assert "Ticket Folders" not in view_labels
+    assert "Member Channels" not in view_labels
+    assert "Optional Settings" not in view_labels
+
+
+def test_existing_item_picker_has_one_ticket_panel_destination() -> None:
+    main_channels = channel_placeholders(
+        customization.ChannelCustomizationPageOne()
+    )
+    optional_channels = channel_placeholders(
+        customization.ChannelCustomizationPageTwo()
+    )
+    all_placeholders = main_channels + optional_channels
+
+    assert all_placeholders.count(
+        "Tickets: channel with Create Ticket panel"
+    ) == 1
+    assert "Tickets: backup support channel" not in all_placeholders
+
+
+def test_existing_item_timer_modal_uses_plain_labels() -> None:
+    modal = customization.BehaviorSettingsModal()
+    modal_labels = [
+        str(getattr(child, "label", "") or "")
+        for child in modal.children
+    ]
+
+    assert modal.title == "Timers & Rules"
+    assert "Kick unverified after (hours)" in modal_labels
+    assert "Optional change note" in modal_labels
+    assert "Pending verification kick hours" not in modal_labels
 
 
 def test_full_customization_registration_does_not_replace_solid_classes() -> None:
