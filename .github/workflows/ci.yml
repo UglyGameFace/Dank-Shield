@@ -188,7 +188,7 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git reset
           git add -A
-          unexpected="$(git diff --cached --name-only | grep -Ev '^(tests/|\.github/workflows/ci\.yml|\.github/APPLY_SETUP_AIO_TEST_MIGRATION_ONCE|tools/migrate_setup_aio_behavior_tests\.py|tools/test_custom_state_and_launch_actions\.py|tools/test_setup_choice_preview_compact\.py|tools/test_setup_existing_join_leave_menu_static\.py)$' || true)"
+          unexpected="$(git diff --cached --name-only | grep -Ev '^(tests/|\.github/workflows/ci\.yml|\.github/APPLY_SETUP_AIO_TEST_MIGRATION_ONCE|tools/migrate_setup_aio_behavior_tests\.py|tools/test_custom_state_and_launch_actions\.py|tools/test_setup_.*\.py)$' || true)"
           if [[ -n "$unexpected" ]]; then
             echo "Unexpected staged files:"
             printf '%s\n' "$unexpected"
