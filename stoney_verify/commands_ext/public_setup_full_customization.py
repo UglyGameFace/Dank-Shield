@@ -113,7 +113,12 @@ async def _require_setup_permission(interaction: discord.Interaction) -> bool:
         return False
 
 
-async def _save_config(interaction: discord.Interaction, payload: dict[str, Any], *, source: str) -> None:
+async def _save_config(
+    interaction: discord.Interaction,
+    payload: dict[str, Any],
+    *,
+    source: str,
+) -> None:
     guild = interaction.guild
     if guild is None:
         raise RuntimeError("This must be used inside a server.")
@@ -134,14 +139,29 @@ async def _save_config(interaction: discord.Interaction, payload: dict[str, Any]
     invalidate_guild_config(guild.id)
 
 
-async def _send_saved(interaction: discord.Interaction, *, title: str, description: str, warnings: Optional[list[str]] = None) -> None:
-    embed = discord.Embed(title=title, description=description[:4096], color=discord.Color.green())
+async def _send_saved(
+    interaction: discord.Interaction,
+    *,
+    title: str,
+    description: str,
+    warnings: Optional[list[str]] = None,
+) -> None:
+    embed = discord.Embed(
+        title=title,
+        description=description[:4096],
+        color=discord.Color.green(),
+    )
     if warnings:
-        embed.add_field(name="Warnings", value="\n".join(f"• {x}" for x in warnings)[:1024], inline=False)
+        embed.add_field(
+            name="Warnings",
+            value="\n".join(f"• {x}" for x in warnings)[:1024],
+            inline=False,
+        )
     embed.add_field(
         name="Next",
         value=(
-            "Choose another item, press **Back to All Features**, or use **Review Setup** from Manage Setup."
+            "Choose another item, press **Back to All Features**, "
+            "or use **Review Setup** from Manage Setup."
         ),
         inline=False,
     )
@@ -151,7 +171,12 @@ async def _send_saved(interaction: discord.Interaction, *, title: str, descripti
         await interaction.followup.send(embed=embed, ephemeral=True)
 
 
-async def _edit_setup(interaction: discord.Interaction, *, embed: discord.Embed, view: discord.ui.View) -> None:
+async def _edit_setup(
+    interaction: discord.Interaction,
+    *,
+    embed: discord.Embed,
+    view: discord.ui.View,
+) -> None:
     try:
         if interaction.response.is_done():
             await interaction.edit_original_response(embed=embed, view=view)
@@ -164,7 +189,6 @@ async def _edit_setup(interaction: discord.Interaction, *, embed: discord.Embed,
         await interaction.followup.send(embed=embed, view=view, ephemeral=True)
     except Exception:
         pass
-
 
 
 async def _back_to_all_features(interaction: discord.Interaction) -> None:
@@ -181,6 +205,7 @@ async def _close_setup(interaction: discord.Interaction) -> None:
     from . import public_setup_recommend as recommend
     await recommend._close_setup(interaction)
 
+
 def _bot_member(guild: discord.Guild) -> Optional[discord.Member]:
     try:
         return guild.me
@@ -189,7 +214,8 @@ def _bot_member(guild: discord.Guild) -> Optional[discord.Member]:
 
 
 async def _resolve_selected_channel(guild: discord.Guild, value: Any) -> Any:
-    """ChannelSelect can hand us a partial/resolved object. Convert it to the real guild channel."""
+    """Resolve a ChannelSelect value to the real guild channel when possible."""
+
     try:
         cid = _safe_int(getattr(value, "id", value), 0)
         if cid <= 0:
@@ -208,14 +234,21 @@ async def _resolve_selected_channel(guild: discord.Guild, value: Any) -> Any:
         return value
 
 
-def _role_manage_warning(guild: discord.Guild, role: discord.Role, *, require_manage: bool) -> tuple[bool, list[str]]:
+def _role_manage_warning(
+    guild: discord.Guild,
+    role: discord.Role,
+    *,
+    require_manage: bool,
+) -> tuple[bool, list[str]]:
     blockers: list[str] = []
     warnings: list[str] = []
     try:
         if role.is_default():
             blockers.append("@everyone cannot be used for this setting.")
         if role.managed:
-            blockers.append(f"{role.mention} is managed by an integration/bot and cannot be used here.")
+            blockers.append(
+                f"{role.mention} is managed by an integration/bot and cannot be used here."
+            )
     except Exception:
         pass
 
@@ -225,16 +258,25 @@ def _role_manage_warning(guild: discord.Guild, role: discord.Role, *, require_ma
     else:
         try:
             if not me.guild_permissions.manage_roles:
-                (blockers if require_manage else warnings).append("Bot is missing Manage Roles.")
+                (blockers if require_manage else warnings).append(
+                    "Bot is missing Manage Roles."
+                )
             elif me.top_role <= role and not me.guild_permissions.administrator:
-                (blockers if require_manage else warnings).append(f"Bot role is not above {role.mention}. Move Dank Shield's bot role above this role in Server Settings → Roles.")
+                (blockers if require_manage else warnings).append(
+                    f"Bot role is not above {role.mention}. Move Dank Shield's bot role above this role in Server Settings → Roles."
+                )
         except Exception:
             pass
 
     return not blockers, blockers + warnings
 
 
-def _channel_warnings(guild: discord.Guild, channel: Any, *, need_files: bool = False) -> tuple[bool, list[str]]:
+def _channel_warnings(
+    guild: discord.Guild,
+    channel: Any,
+    *,
+    need_files: bool = False,
+) -> tuple[bool, list[str]]:
     blockers: list[str] = []
     me = _bot_member(guild)
     if me is None:
@@ -242,7 +284,10 @@ def _channel_warnings(guild: discord.Guild, channel: Any, *, need_files: bool = 
         return False, blockers
 
     if not hasattr(channel, "permissions_for"):
-        blockers.append("Selected item could not be resolved to a real Discord channel/category. Try again, or re-open setup and pick it once more.")
+        blockers.append(
+            "Selected item could not be resolved to a real Discord channel/category. "
+            "Try again, or re-open setup and pick it once more."
+        )
         return False, blockers
 
     try:
@@ -270,7 +315,6 @@ def _channel_warnings(guild: discord.Guild, channel: Any, *, need_files: bool = 
     return not blockers, blockers
 
 
-
 class SetupBackView(discord.ui.View):
     """Parent, home, and close routes shared by customization pages."""
 
@@ -284,7 +328,11 @@ class SetupBackView(discord.ui.View):
         custom_id="dank_setup_customization:features",
         row=4,
     )
-    async def back(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+    async def back(
+        self,
+        interaction: discord.Interaction,
+        button: discord.ui.Button,
+    ) -> None:
         _ = button
         if not await _require_setup_permission(interaction):
             return
@@ -297,7 +345,11 @@ class SetupBackView(discord.ui.View):
         custom_id="dank_setup_customization:home",
         row=4,
     )
-    async def home(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+    async def home(
+        self,
+        interaction: discord.Interaction,
+        button: discord.ui.Button,
+    ) -> None:
         _ = button
         if not await _require_setup_permission(interaction):
             return
@@ -310,11 +362,16 @@ class SetupBackView(discord.ui.View):
         custom_id="dank_setup_customization:close",
         row=4,
     )
-    async def close(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+    async def close(
+        self,
+        interaction: discord.Interaction,
+        button: discord.ui.Button,
+    ) -> None:
         _ = button
         if not await _require_setup_permission(interaction):
             return
         await _close_setup(interaction)
+
 
 class FullChooseExistingView(SetupBackView):
     @discord.ui.button(
@@ -352,9 +409,7 @@ class FullChooseExistingView(SetupBackView):
 
         embed.add_field(
             name="Tickets",
-            value=(
-                "Choose the role for people who answer tickets."
-            ),
+            value="Choose the role for people who answer tickets.",
             inline=False,
         )
 
@@ -373,7 +428,7 @@ class FullChooseExistingView(SetupBackView):
         )
 
     @discord.ui.button(
-        label="Ticket Folders",
+        label="Server Folders",
         emoji="📁",
         style=discord.ButtonStyle.primary,
         custom_id="stoney_full_custom:categories",
@@ -388,19 +443,17 @@ class FullChooseExistingView(SetupBackView):
             return
 
         embed = discord.Embed(
-            title="📁 Choose Ticket Folders",
+            title="📁 Choose Server Folders",
             description=(
-                "Discord calls these categories. Think of them as "
-                "folders that hold channels."
+                "Discord calls these categories. Think of them as folders "
+                "that hold channels."
             ),
             color=discord.Color.blurple(),
         )
 
         embed.add_field(
-            name="Needed when Tickets are ON",
-            value=(
-                "Choose the folder where new tickets open."
-            ),
+            name="Tickets",
+            value="Choose the folder where new tickets open.",
             inline=False,
         )
 
@@ -408,7 +461,7 @@ class FullChooseExistingView(SetupBackView):
             name="Optional",
             value=(
                 "You may also choose folders for closed tickets, "
-                "welcome channels, and staff tools."
+                "welcome/start channels, and staff tools."
             ),
             inline=False,
         )
@@ -419,7 +472,7 @@ class FullChooseExistingView(SetupBackView):
         )
 
     @discord.ui.button(
-        label="Member Channels",
+        label="Feature Channels",
         emoji="💬",
         style=discord.ButtonStyle.primary,
         custom_id="stoney_full_custom:channels",
@@ -434,7 +487,7 @@ class FullChooseExistingView(SetupBackView):
             return
 
         embed = discord.Embed(
-            title="💬 Choose Member Channels",
+            title="💬 Choose Feature Channels",
             description=(
                 "Choose only the channels needed by the features "
                 "you turned on."
@@ -450,26 +503,21 @@ class FullChooseExistingView(SetupBackView):
 
         embed.add_field(
             name="Tickets",
-            value=(
-                "Choose where members see the "
-                "**Create Ticket** panel."
-            ),
+            value="Choose where members see the **Create Ticket** panel.",
             inline=False,
         )
 
         embed.add_field(
             name="Voice Verify",
-            value=(
-                "Choose the voice channel used for the staff check."
-            ),
+            value="Choose the voice channel used for the staff check.",
             inline=False,
         )
 
         embed.add_field(
             name="Optional",
             value=(
-                "Welcome, join/leave, backup support, and bot-status "
-                "channels remain available under the channel pages."
+                "Welcome, Voice Verify staff-request, join/leave log, "
+                "and bot-status channels remain available on the next page."
             ),
             inline=False,
         )
@@ -496,10 +544,7 @@ class FullChooseExistingView(SetupBackView):
 
         embed = discord.Embed(
             title="🧾 Choose Logs & Status Channels",
-            description=(
-                "Choose where staff should receive records and "
-                "bot updates."
-            ),
+            description="Choose where staff should receive records and bot updates.",
             color=discord.Color.blurple(),
         )
 
@@ -516,10 +561,7 @@ class FullChooseExistingView(SetupBackView):
 
         embed.add_field(
             name="Simple rule",
-            value=(
-                "Skip a choice when your server does not use "
-                "that feature."
-            ),
+            value="Skip a choice when your server does not use that feature.",
             inline=False,
         )
 
@@ -529,8 +571,8 @@ class FullChooseExistingView(SetupBackView):
         )
 
     @discord.ui.button(
-        label="Optional Settings",
-        emoji="⚙️",
+        label="Timers & Rules",
+        emoji="⏱️",
         style=discord.ButtonStyle.secondary,
         custom_id="stoney_full_custom:behavior",
         row=2,
@@ -543,14 +585,25 @@ class FullChooseExistingView(SetupBackView):
         if not await _require_setup_permission(interaction):
             return
 
-        await interaction.response.send_modal(
-            BehaviorSettingsModal()
-        )
+        await interaction.response.send_modal(BehaviorSettingsModal())
 
 
 class SaveRoleSelect(discord.ui.RoleSelect):
-    def __init__(self, *, placeholder: str, columns: tuple[str, ...], also_same: tuple[str, ...] = (), require_manage: bool = True, row: int = 0) -> None:
-        super().__init__(placeholder=placeholder, min_values=1, max_values=1, row=row)
+    def __init__(
+        self,
+        *,
+        placeholder: str,
+        columns: tuple[str, ...],
+        also_same: tuple[str, ...] = (),
+        require_manage: bool = True,
+        row: int = 0,
+    ) -> None:
+        super().__init__(
+            placeholder=placeholder,
+            min_values=1,
+            max_values=1,
+            row=row,
+        )
         self.columns = columns
         self.also_same = also_same
         self.require_manage = require_manage
@@ -561,16 +614,47 @@ class SaveRoleSelect(discord.ui.RoleSelect):
         guild = interaction.guild
         role = self.values[0]
         if guild is None:
-            return await interaction.response.send_message("❌ This must be used inside a server.", ephemeral=True)
+            return await interaction.response.send_message(
+                "❌ This must be used inside a server.",
+                ephemeral=True,
+            )
 
-        ok, messages = _role_manage_warning(guild, role, require_manage=self.require_manage)
+        ok, messages = _role_manage_warning(
+            guild,
+            role,
+            require_manage=self.require_manage,
+        )
         if not ok:
-            embed = discord.Embed(title="🚫 Role Not Saved", description="\n".join(f"• {x}" for x in messages), color=discord.Color.red())
-            embed.add_field(name="What To Do", value="Pick a different role, or move Dank Shield's bot role above this role in Server Settings → Roles.", inline=False)
-            return await interaction.response.send_message(embed=embed, ephemeral=True)
+            embed = discord.Embed(
+                title="🚫 Role Not Saved",
+                description="\n".join(f"• {x}" for x in messages),
+                color=discord.Color.red(),
+            )
+            embed.add_field(
+                name="What To Do",
+                value=(
+                    "Pick a different role, or move Dank Shield's bot role "
+                    "above this role in Server Settings → Roles."
+                ),
+                inline=False,
+            )
+            return await interaction.response.send_message(
+                embed=embed,
+                ephemeral=True,
+            )
 
-        payload = {column: _snowflake(role) for column in self.columns + self.also_same}
-        await _save_config(interaction, payload, source=f"/dank setup full customization role picker: {self.placeholder}")
+        payload = {
+            column: _snowflake(role)
+            for column in self.columns + self.also_same
+        }
+        await _save_config(
+            interaction,
+            payload,
+            source=(
+                "/dank setup full customization role picker: "
+                f"{self.placeholder}"
+            ),
+        )
         await _send_saved(
             interaction,
             title="✅ Role Saved",
@@ -583,8 +667,23 @@ class SaveRoleSelect(discord.ui.RoleSelect):
 
 
 class SaveChannelSelect(discord.ui.ChannelSelect):
-    def __init__(self, *, placeholder: str, columns: tuple[str, ...], channel_types: list[discord.ChannelType], also_same: tuple[str, ...] = (), row: int = 0, need_files: bool = False) -> None:
-        super().__init__(placeholder=placeholder, min_values=1, max_values=1, channel_types=channel_types, row=row)
+    def __init__(
+        self,
+        *,
+        placeholder: str,
+        columns: tuple[str, ...],
+        channel_types: list[discord.ChannelType],
+        also_same: tuple[str, ...] = (),
+        row: int = 0,
+        need_files: bool = False,
+    ) -> None:
+        super().__init__(
+            placeholder=placeholder,
+            min_values=1,
+            max_values=1,
+            channel_types=channel_types,
+            row=row,
+        )
         self.columns = columns
         self.also_same = also_same
         self.need_files = need_files
@@ -595,17 +694,47 @@ class SaveChannelSelect(discord.ui.ChannelSelect):
         guild = interaction.guild
         raw_channel = self.values[0]
         if guild is None:
-            return await interaction.response.send_message("❌ This must be used inside a server.", ephemeral=True)
+            return await interaction.response.send_message(
+                "❌ This must be used inside a server.",
+                ephemeral=True,
+            )
 
         channel = await _resolve_selected_channel(guild, raw_channel)
-        ok, messages = _channel_warnings(guild, channel, need_files=self.need_files)
+        ok, messages = _channel_warnings(
+            guild,
+            channel,
+            need_files=self.need_files,
+        )
         if not ok:
-            embed = discord.Embed(title="🚫 Channel Not Saved", description="\n".join(f"• {x}" for x in messages), color=discord.Color.red())
-            embed.add_field(name="What To Do", value="Fix the listed permissions, then pick this channel again.", inline=False)
-            return await interaction.response.send_message(embed=embed, ephemeral=True)
+            embed = discord.Embed(
+                title="🚫 Channel Not Saved",
+                description="\n".join(f"• {x}" for x in messages),
+                color=discord.Color.red(),
+            )
+            embed.add_field(
+                name="What To Do",
+                value=(
+                    "Fix the listed permissions, then pick this channel again."
+                ),
+                inline=False,
+            )
+            return await interaction.response.send_message(
+                embed=embed,
+                ephemeral=True,
+            )
 
-        payload = {column: _snowflake(channel) for column in self.columns + self.also_same}
-        await _save_config(interaction, payload, source=f"/dank setup full customization channel picker: {self.placeholder}")
+        payload = {
+            column: _snowflake(channel)
+            for column in self.columns + self.also_same
+        }
+        await _save_config(
+            interaction,
+            payload,
+            source=(
+                "/dank setup full customization channel picker: "
+                f"{self.placeholder}"
+            ),
+        )
         await _send_saved(
             interaction,
             title="✅ Channel Saved",
@@ -744,10 +873,7 @@ class RoleCustomizationPageTwo(SetupBackView):
 
         embed = discord.Embed(
             title="👥 Choose Your Server Roles",
-            description=(
-                "Choose only the roles used by features "
-                "you turned on."
-            ),
+            description="Choose only the roles used by features you turned on.",
             color=discord.Color.blurple(),
         )
 
@@ -870,8 +996,7 @@ class ChannelCustomizationPageOne(SetupBackView):
             title="💬 Optional Channels",
             description=(
                 "Most servers do not need every item here.\n\n"
-                "Choose only channels used by features "
-                "you turned on."
+                "Choose only channels used by features you turned on."
             ),
             color=discord.Color.blurple(),
         )
@@ -881,7 +1006,6 @@ class ChannelCustomizationPageOne(SetupBackView):
             value=(
                 "• Voice Verify staff requests\n"
                 "• Join and leave logs\n"
-                "• Backup support channel\n"
                 "• Bot status and uptime"
             ),
             inline=False,
@@ -918,16 +1042,6 @@ class ChannelCustomizationPageTwo(SetupBackView):
 
         self.add_item(
             SaveChannelSelect(
-                placeholder="Tickets: backup support channel",
-                columns=("support_channel_id",),
-                also_same=("ticket_panel_channel_id",),
-                channel_types=[discord.ChannelType.text],
-                row=2,
-            )
-        )
-
-        self.add_item(
-            SaveChannelSelect(
                 placeholder="Bot status: uptime and health channel",
                 columns=("health_channel_id",),
                 also_same=(
@@ -935,7 +1049,7 @@ class ChannelCustomizationPageTwo(SetupBackView):
                     "bot_status_channel_id",
                 ),
                 channel_types=[discord.ChannelType.text],
-                row=3,
+                row=2,
             )
         )
 
@@ -955,10 +1069,10 @@ class ChannelCustomizationPageTwo(SetupBackView):
             return
 
         embed = discord.Embed(
-            title="💬 Choose Member Channels",
+            title="💬 Choose Feature Channels",
             description=(
-                "Choose only the channels needed by the "
-                "features you turned on."
+                "Choose only the channels needed by the features "
+                "you turned on."
             ),
             color=discord.Color.blurple(),
         )
@@ -1027,18 +1141,48 @@ class LogStatusCustomizationView(SetupBackView):
         )
 
 
-class BehaviorSettingsModal(discord.ui.Modal, title="Setup Behavior Settings"):
-    ticket_prefix = discord.ui.TextInput(label="Ticket channel prefix", placeholder="ticket", default="ticket", required=False, max_length=32)
-    verify_kick_hours = discord.ui.TextInput(label="Pending verification kick hours", placeholder="24", default="24", required=False, max_length=4)
-    notes = discord.ui.TextInput(label="Optional setup note", placeholder="Why you changed this, optional", required=False, max_length=200, style=discord.TextStyle.short)
+class BehaviorSettingsModal(discord.ui.Modal, title="Timers & Rules"):
+    ticket_prefix = discord.ui.TextInput(
+        label="Ticket channel prefix",
+        placeholder="ticket",
+        default="ticket",
+        required=False,
+        max_length=32,
+    )
+    verify_kick_hours = discord.ui.TextInput(
+        label="Kick unverified after (hours)",
+        placeholder="24",
+        default="24",
+        required=False,
+        max_length=4,
+    )
+    notes = discord.ui.TextInput(
+        label="Optional change note",
+        placeholder="Why you changed this, optional",
+        required=False,
+        max_length=200,
+        style=discord.TextStyle.short,
+    )
 
     async def on_submit(self, interaction: discord.Interaction) -> None:
         if not await _require_setup_permission(interaction):
             return
-        prefix = str(self.ticket_prefix.value or "ticket").strip().lower().replace(" ", "-")[:32] or "ticket"
+        prefix = (
+            str(self.ticket_prefix.value or "ticket")
+            .strip()
+            .lower()
+            .replace(" ", "-")[:32]
+            or "ticket"
+        )
         hours = _safe_int(self.verify_kick_hours.value, 24)
         if hours < 0 or hours > 720:
-            return await interaction.response.send_message("❌ Pending verification kick hours must be between 0 and 720. Use 0 only if you intentionally disable timed kick behavior.", ephemeral=True)
+            return await interaction.response.send_message(
+                (
+                    "❌ Kick timer must be between 0 and 720 hours. "
+                    "Use 0 only to disable the timer."
+                ),
+                ephemeral=True,
+            )
         await _save_config(
             interaction,
             {
@@ -1050,14 +1194,17 @@ class BehaviorSettingsModal(discord.ui.Modal, title="Setup Behavior Settings"):
         )
         await _send_saved(
             interaction,
-            title="✅ Saved Behavior Settings",
-            description=f"Ticket prefix: `{prefix}`\nPending verification kick hours: `{hours}`",
+            title="✅ Timers & Rules Saved",
+            description=(
+                f"Ticket prefix: `{prefix}`\n"
+                f"Unverified-member kick timer: `{hours}` hours"
+            ),
         )
-
 
 
 def install_full_customization() -> bool:
     """Compatibility entrypoint; integration is now explicit, not patched."""
+
     global _PATCHED
     _PATCHED = True
     return True
@@ -1074,6 +1221,7 @@ def register_public_setup_full_customization_commands(
     install_full_customization()
     _REGISTERED = True
     _log("direct full customization routes ready")
+
 
 __all__ = [
     "register_public_setup_full_customization_commands",
