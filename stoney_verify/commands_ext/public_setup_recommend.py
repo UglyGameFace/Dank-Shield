@@ -1820,7 +1820,7 @@ def _advanced_section_embed(
     )
     embed.set_footer(
         text=(
-            "All Features & Settings • use Back to All Features & Settings to return"
+            "All Features & Settings • use Back to All Features to return"
         )
     )
     return embed

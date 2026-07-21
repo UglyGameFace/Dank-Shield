@@ -691,6 +691,25 @@ async def _build_recovery_embed(
     return embed
 
 
+def _canonical_recovery_view() -> discord.ui.View:
+    """Return the canonical Repair Center when its UX layer is available."""
+
+    try:
+        from . import public_setup_cleanup as cleanup
+
+        view_cls = getattr(
+            cleanup,
+            "PatchedRecoveryCenterView",
+            None,
+        )
+        if callable(view_cls):
+            return view_cls()
+    except Exception:
+        pass
+
+    return RecoveryCenterView()
+
+
 class RecoveryButton(discord.ui.Button):
     def __init__(self) -> None:
         super().__init__(
@@ -715,7 +734,7 @@ class RecoveryButton(discord.ui.Button):
         await solid._edit_or_followup(
             interaction,
             embed=embed,
-            view=RecoveryCenterView(),
+            view=_canonical_recovery_view(),
         )
 
 
@@ -837,7 +856,7 @@ class RecoveryCenterView(solid.BackToSetupView):
         await solid._edit_or_followup(
             interaction,
             embed=embed,
-            view=RecoveryCenterView(),
+            view=_canonical_recovery_view(),
         )
 
 
@@ -898,7 +917,7 @@ class ConfirmRecoveryModal(discord.ui.Modal):
                 include_menu=True,
             )
             next_step = (
-                "Run `/dank setup` and choose **Quick Setup**. "
+                "Run `/dank setup` and press **Start Setup**. "
                 "It will start from a fresh saved state."
             )
         elif self.action == "reset_config":
@@ -945,14 +964,14 @@ class ConfirmRecoveryModal(discord.ui.Modal):
         try:
             await interaction.followup.send(
                 embed=embed,
-                view=RecoveryCenterView(),
+                view=_canonical_recovery_view(),
                 ephemeral=True,
             )
         except Exception:
             await solid._edit_or_followup(
                 interaction,
                 embed=embed,
-                view=RecoveryCenterView(),
+                view=_canonical_recovery_view(),
             )
 
 
@@ -983,7 +1002,7 @@ async def open_recovery_center(interaction: discord.Interaction) -> None:
     await solid._edit_or_followup(
         interaction,
         embed=embed,
-        view=RecoveryCenterView(),
+        view=_canonical_recovery_view(),
     )
 
 

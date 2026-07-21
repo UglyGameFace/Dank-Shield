@@ -144,6 +144,19 @@ def test_aio_submenus_keep_existing_tools() -> None:
     }
 
 
+def test_advanced_section_footer_matches_back_button_label() -> None:
+    embed = recommend._advanced_section_embed(
+        title="Test",
+        description="Test",
+        items=("Test",),
+    )
+    footer = str(embed.footer.text or "")
+
+    assert "Back to All Features" in footer
+    assert "Back to All Features & Settings" not in footer
+
+
+
 def test_repair_is_not_mixed_into_normal_feature_sections() -> None:
     normal_views = (
         recommend.AdvancedSettingsHubView(),

@@ -176,6 +176,18 @@ def test_cleanup_preview_uses_plain_folder_language() -> None:
     assert "Delete All Bot-Created Setup Items" not in labels
 
 
+def test_recovery_results_return_to_canonical_repair_center() -> None:
+    view = recovery._canonical_recovery_view()
+
+    assert isinstance(view, cleanup.PatchedRecoveryCenterView)
+    labels = set(button_labels(view))
+    assert "Back" in labels
+    assert "Back to All Features" not in labels
+    assert "Setup Home" in labels
+    assert "Close" in labels
+
+
+
 def test_fallback_recovery_view_matches_current_recovery_language() -> None:
     labels = button_labels(recovery.RecoveryCenterView())
     expected = {
