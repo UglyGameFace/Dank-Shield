@@ -160,7 +160,7 @@ async def _send_saved(
     embed.add_field(
         name="Next",
         value=(
-            "Choose another item, press **Back to All Features**, "
+            "Choose another item, press **Back**, "
             "or use **Review Setup** from Manage Setup."
         ),
         inline=False,
@@ -191,9 +191,32 @@ async def _edit_setup(
         pass
 
 
-async def _back_to_all_features(interaction: discord.Interaction) -> None:
+async def _open_parent(
+    interaction: discord.Interaction,
+    parent: str,
+) -> None:
+    """Return a nested customization screen to its real parent."""
+
     from . import public_setup_recommend as recommend
-    await recommend._open_advanced_settings(interaction)
+
+    routes = {
+        "guided": recommend._open_guided_setup,
+        "core": recommend._open_advanced_core_setup,
+        "tickets": recommend._open_advanced_member_experience,
+        "verification": recommend._open_advanced_verification,
+        "logs": recommend._open_advanced_logs_activity,
+        "features": recommend._open_advanced_settings,
+    }
+
+    clean_parent = (
+        str(parent or "features").strip().lower()
+        or "features"
+    )
+    route = routes.get(
+        clean_parent,
+        recommend._open_advanced_settings,
+    )
+    await route(interaction)
 
 
 async def _setup_home(interaction: discord.Interaction) -> None:
@@ -316,10 +339,23 @@ def _channel_warnings(
 
 
 class SetupBackView(discord.ui.View):
-    """Parent, home, and close routes shared by customization pages."""
+    """Parent-aware Back, Setup Home, and Close navigation."""
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        *,
+        parent: str = "features",
+    ) -> None:
         super().__init__(timeout=900)
+        self.parent = (
+            str(parent or "features").strip().lower()
+            or "features"
+        )
+
+        # Preserve the explicit label when this screen genuinely came
+        # from All Features. Everywhere else, Back means the real parent.
+        if self.parent != "features":
+            self.back.label = "Back"
 
     @discord.ui.button(
         label="Back to All Features",
@@ -336,7 +372,7 @@ class SetupBackView(discord.ui.View):
         _ = button
         if not await _require_setup_permission(interaction):
             return
-        await _back_to_all_features(interaction)
+        await _open_parent(interaction, self.parent)
 
     @discord.ui.button(
         label="Setup Home",
@@ -424,7 +460,7 @@ class FullChooseExistingView(SetupBackView):
 
         await interaction.response.edit_message(
             embed=embed,
-            view=RoleCustomizationPageOne(),
+            view=RoleCustomizationPageOne(parent=self.parent),
         )
 
     @discord.ui.button(
@@ -468,7 +504,7 @@ class FullChooseExistingView(SetupBackView):
 
         await interaction.response.edit_message(
             embed=embed,
-            view=DiscordCategoryCustomizationView(),
+            view=DiscordCategoryCustomizationView(parent=self.parent),
         )
 
     @discord.ui.button(
@@ -524,7 +560,7 @@ class FullChooseExistingView(SetupBackView):
 
         await interaction.response.edit_message(
             embed=embed,
-            view=ChannelCustomizationPageOne(),
+            view=ChannelCustomizationPageOne(parent=self.parent),
         )
 
     @discord.ui.button(
@@ -567,7 +603,7 @@ class FullChooseExistingView(SetupBackView):
 
         await interaction.response.edit_message(
             embed=embed,
-            view=LogStatusCustomizationView(),
+            view=LogStatusCustomizationView(parent=self.parent),
         )
 
     @discord.ui.button(
@@ -746,8 +782,8 @@ class SaveChannelSelect(discord.ui.ChannelSelect):
 
 
 class RoleCustomizationPageOne(SetupBackView):
-    def __init__(self) -> None:
-        super().__init__()
+    def __init__(self, *, parent: str = "features") -> None:
+        super().__init__(parent=parent)
 
         self.add_item(
             SaveRoleSelect(
@@ -819,13 +855,13 @@ class RoleCustomizationPageOne(SetupBackView):
 
         await interaction.response.edit_message(
             embed=embed,
-            view=RoleCustomizationPageTwo(),
+            view=RoleCustomizationPageTwo(parent=self.parent),
         )
 
 
 class RoleCustomizationPageTwo(SetupBackView):
-    def __init__(self) -> None:
-        super().__init__()
+    def __init__(self, *, parent: str = "features") -> None:
+        super().__init__(parent=parent)
 
         self.add_item(
             SaveRoleSelect(
@@ -857,7 +893,7 @@ class RoleCustomizationPageTwo(SetupBackView):
         )
 
     @discord.ui.button(
-        label="Back to Main Roles",
+        label="Main Roles",
         emoji="⬅️",
         style=discord.ButtonStyle.secondary,
         custom_id="stoney_full_custom:roles_first",
@@ -888,13 +924,13 @@ class RoleCustomizationPageTwo(SetupBackView):
 
         await interaction.response.edit_message(
             embed=embed,
-            view=RoleCustomizationPageOne(),
+            view=RoleCustomizationPageOne(parent=self.parent),
         )
 
 
 class DiscordCategoryCustomizationView(SetupBackView):
-    def __init__(self) -> None:
-        super().__init__()
+    def __init__(self, *, parent: str = "features") -> None:
+        super().__init__(parent=parent)
 
         self.add_item(
             SaveChannelSelect(
@@ -937,8 +973,8 @@ class DiscordCategoryCustomizationView(SetupBackView):
 
 
 class ChannelCustomizationPageOne(SetupBackView):
-    def __init__(self) -> None:
-        super().__init__()
+    def __init__(self, *, parent: str = "features") -> None:
+        super().__init__(parent=parent)
 
         self.add_item(
             SaveChannelSelect(
@@ -1013,13 +1049,13 @@ class ChannelCustomizationPageOne(SetupBackView):
 
         await interaction.response.edit_message(
             embed=embed,
-            view=ChannelCustomizationPageTwo(),
+            view=ChannelCustomizationPageTwo(parent=self.parent),
         )
 
 
 class ChannelCustomizationPageTwo(SetupBackView):
-    def __init__(self) -> None:
-        super().__init__()
+    def __init__(self, *, parent: str = "features") -> None:
+        super().__init__(parent=parent)
 
         self.add_item(
             SaveChannelSelect(
@@ -1054,7 +1090,7 @@ class ChannelCustomizationPageTwo(SetupBackView):
         )
 
     @discord.ui.button(
-        label="Back to Main Channels",
+        label="Main Channels",
         emoji="⬅️",
         style=discord.ButtonStyle.secondary,
         custom_id="stoney_full_custom:channels_first",
@@ -1089,13 +1125,13 @@ class ChannelCustomizationPageTwo(SetupBackView):
 
         await interaction.response.edit_message(
             embed=embed,
-            view=ChannelCustomizationPageOne(),
+            view=ChannelCustomizationPageOne(parent=self.parent),
         )
 
 
 class LogStatusCustomizationView(SetupBackView):
-    def __init__(self) -> None:
-        super().__init__()
+    def __init__(self, *, parent: str = "features") -> None:
+        super().__init__(parent=parent)
 
         self.add_item(
             SaveChannelSelect(

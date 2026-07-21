@@ -30,8 +30,6 @@ from ..setup_new import (
 )
 from . import public_setup_solid as solid
 
-_PATCHED = False
-
 
 def _cfg_value(cfg: Any, key: str, default: Any = None) -> Any:
     try:
@@ -1124,7 +1122,7 @@ async def _product_main_setup_payload(
         status = "Setup finished"
         recommended = (
             "Your setup is saved and marked finished. Open **View Setup Summary** "
-            "to review it, or use **Edit / Manage Setup** when you want to change something."
+            "to review it, or use **Manage Setup** when you want to change something."
         )
     elif ready:
         status = "Ready for testing"
@@ -1139,7 +1137,7 @@ async def _product_main_setup_payload(
         title="🚀 Dank Shield Setup",
         description=(
             "Follow the recommended next step. Settings you do not need stay under "
-            "**Edit / Manage Setup**."
+            "**Manage Setup**."
         ),
         color=discord.Color.green() if completed or ready else discord.Color.blurple(),
         timestamp=now_utc(),
@@ -1233,7 +1231,7 @@ class SetupChoiceView(solid.BackToSetupView):
                 return await public_setup_fresh_choice._open_custom_service_picker(
                     interaction,
                     saved_message=(
-                        "Saved **Choose Core Features**. Choose the core modules this server should use, then press **Continue Quick Setup**."
+                        "Saved **Choose Core Features**. Choose the core modules this server should use, then press **Continue Setup**."
                     ),
                 )
             except Exception as e:
@@ -1258,7 +1256,7 @@ class SetupChoiceView(solid.BackToSetupView):
         embed.add_field(
             name="Next",
             value=(
-                "Press **Continue Quick Setup** on Setup Home. "
+                "Press **Continue Setup** on Setup Home. "
                 "Dank Shield will show only the next thing you need to set up."
             ),
             inline=False,
@@ -1280,7 +1278,7 @@ class SetupChoiceView(solid.BackToSetupView):
 class SetupReviewFixNextButton(discord.ui.Button):
     def __init__(self) -> None:
         super().__init__(
-            label="Fix Next Problem",
+            label="Continue Setup",
             emoji="➡️",
             style=discord.ButtonStyle.success,
             custom_id="dank_setup_review:fix_next",
@@ -1479,7 +1477,11 @@ async def _open_choose_setup_type(
     )
 
 
-async def _open_existing_server(interaction: discord.Interaction) -> None:
+async def _open_existing_server(
+    interaction: discord.Interaction,
+    *,
+    parent: str = "features",
+) -> None:
     if not await solid._require_setup_permission(interaction):
         return
     embed = discord.Embed(
@@ -1497,7 +1499,7 @@ async def _open_existing_server(interaction: discord.Interaction) -> None:
 
     await interaction.response.edit_message(
         embed=embed,
-        view=customization.FullChooseExistingView(),
+        view=customization.FullChooseExistingView(parent=parent),
     )
 
 
@@ -2216,7 +2218,7 @@ async def _open_completed_summary(interaction: discord.Interaction) -> None:
     embed = await solid._build_current_setup_embed(guild)
     embed.title = "✅ Setup Summary"
     embed.description = (
-        "This server is marked **Setup finished**. Use **Test Again** for the enabled test tools or **Edit Setup** to make changes."
+        "This server is marked **Setup finished**. Use **Test Again** for the enabled test tools or **Manage Setup** to make changes."
     )
     await solid._edit_or_followup(interaction, embed=embed, view=FinishedSetupView())
 
@@ -3226,7 +3228,7 @@ async def _open_guided_target(
                     "2. Choose **Edit Channel → Permissions**.\n"
                     "3. Select the approved-member role.\n"
                     f"4. Allow: **{required_text}**.\n"
-                    "5. Return and press **Fix Next Problem**."
+                    "5. Return and press **Continue Setup**."
                 )[:1024],
                 inline=False,
             )
@@ -3279,7 +3281,7 @@ async def _open_guided_target(
         embed.add_field(
             name="After fixing it",
             value=(
-                "Return here and press **Fix Next Problem** again."
+                "Return here and press **Continue Setup** again."
             ),
             inline=False,
         )
@@ -3306,7 +3308,7 @@ async def _open_guided_target(
             timestamp=now_utc(),
         )
         view: discord.ui.View = (
-            full.RoleCustomizationPageOne()
+            full.RoleCustomizationPageOne(parent="guided")
         )
 
     elif target == "folders":
@@ -3319,7 +3321,7 @@ async def _open_guided_target(
             color=discord.Color.blurple(),
             timestamp=now_utc(),
         )
-        view = full.DiscordCategoryCustomizationView()
+        view = full.DiscordCategoryCustomizationView(parent="guided")
 
     elif target == "channels":
         embed = discord.Embed(
@@ -3331,7 +3333,7 @@ async def _open_guided_target(
             color=discord.Color.blurple(),
             timestamp=now_utc(),
         )
-        view = full.ChannelCustomizationPageOne()
+        view = full.ChannelCustomizationPageOne(parent="guided")
 
     elif target == "logs":
         embed = discord.Embed(
@@ -3342,7 +3344,7 @@ async def _open_guided_target(
             color=discord.Color.blurple(),
             timestamp=now_utc(),
         )
-        view = full.LogStatusCustomizationView()
+        view = full.LogStatusCustomizationView(parent="guided")
 
     else:
         return await _open_guided_setup(interaction)
@@ -3467,14 +3469,14 @@ class ProductSetupHomeView(discord.ui.View):
             self.continue_setup.label = "Test Your Setup"
             self.continue_setup.emoji = "🧪"
         elif self.started:
-            self.continue_setup.label = "Continue Quick Setup"
+            self.continue_setup.label = "Continue Setup"
             self.continue_setup.emoji = "➡️"
         else:
-            self.continue_setup.label = "Start Quick Setup"
+            self.continue_setup.label = "Start Setup"
             self.continue_setup.emoji = "⚡"
 
     @discord.ui.button(
-        label="Start Quick Setup",
+        label="Start Setup",
         emoji="⚡",
         style=discord.ButtonStyle.success,
         custom_id="dank_setup_home:continue",
@@ -3848,7 +3850,7 @@ class AdvancedCoreSetupView(discord.ui.View):
     @discord.ui.button(label="Choose Roles & Channels", emoji="🧭", style=discord.ButtonStyle.secondary, custom_id="dank_setup_core:mapping", row=1)
     async def detailed_mapping(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
-        await _open_existing_server(interaction)
+        await _open_existing_server(interaction, parent="core")
 
     @discord.ui.button(label="Back to All Features", emoji="↩️", style=discord.ButtonStyle.secondary, custom_id="dank_setup_core:back", row=2)
     async def back(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
@@ -3878,7 +3880,7 @@ class AdvancedMemberExperienceView(discord.ui.View):
     @discord.ui.button(label="Roles & Channels", emoji="🧭", style=discord.ButtonStyle.secondary, custom_id="dank_setup_tickets:mapping", row=0)
     async def mapping(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
-        await _open_existing_server(interaction)
+        await _open_existing_server(interaction, parent="tickets")
 
     @discord.ui.button(label="Timers & Rules", emoji="⏱️", style=discord.ButtonStyle.secondary, custom_id="dank_setup_tickets:rules", row=1)
     async def rules(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
@@ -3913,7 +3915,7 @@ class AdvancedVerificationView(discord.ui.View):
     @discord.ui.button(label="Roles & Channels", emoji="🧭", style=discord.ButtonStyle.primary, custom_id="dank_setup_verify:mapping", row=0)
     async def mapping(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
-        await _open_existing_server(interaction)
+        await _open_existing_server(interaction, parent="verification")
 
     @discord.ui.button(label="Timers & Rules", emoji="⏱️", style=discord.ButtonStyle.secondary, custom_id="dank_setup_verify:rules", row=1)
     async def rules(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
@@ -3988,7 +3990,7 @@ class AdvancedLogsActivityView(discord.ui.View):
     @discord.ui.button(label="Log Channels", emoji="🧭", style=discord.ButtonStyle.secondary, custom_id="dank_setup_logs:channels", row=1)
     async def channels(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
-        await _open_existing_server(interaction)
+        await _open_existing_server(interaction, parent="logs")
 
     @discord.ui.button(label="Back to All Features", emoji="↩️", style=discord.ButtonStyle.secondary, custom_id="dank_setup_logs:back", row=2)
     async def back(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
@@ -4432,19 +4434,9 @@ class FinishedSetupView(discord.ui.View):
         _ = button
         await _close_setup(interaction)
 
-def _patch() -> None:
-    global _PATCHED
-    solid._build_main_setup_payload = _product_main_setup_payload
-    _PATCHED = True
-
-
-_patch()
-
-
 def register_public_setup_recommend_commands(bot: Any, tree: Any) -> None:
     _ = bot, tree
-    _patch()
-    print("✅ public_setup_recommend: plain-language /dank setup choices active")
+    print("✅ public_setup_recommend: canonical /dank setup UX ready")
 
 
 __all__ = ["register_public_setup_recommend_commands"]

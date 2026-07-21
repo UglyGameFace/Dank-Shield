@@ -28,7 +28,7 @@ def test_home_has_one_quick_path_management_and_close() -> None:
         completed=False,
     )
     assert labels(view) == [
-        "Start Quick Setup",
+        "Start Setup",
         "Manage Setup",
         "Close",
     ]
@@ -118,8 +118,8 @@ def test_custom_core_picker_has_predictable_navigation() -> None:
     )()
     view = fresh.CustomServiceModeView(state)
     view_labels = labels(view)
-    assert "Continue Quick Setup" in view_labels
-    assert "Back to Setup Plans" in view_labels
+    assert "Continue Setup" in view_labels
+    assert "Back" in view_labels
     assert "Setup Home" in view_labels
     assert "Close" in view_labels
 

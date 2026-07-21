@@ -840,7 +840,7 @@ def _custom_services_embed(
     embed.add_field(
         name="Next",
         value=(
-            "Choose the core modules, then press **Continue Quick Setup**. "
+            "Choose the core modules, then press **Continue Setup**. "
             "Dank Shield asks only for the roles, channels, and permissions "
             "those modules require."
         ),
@@ -1159,7 +1159,7 @@ class CustomServiceModeView(discord.ui.View):
         )
 
     @discord.ui.button(
-        label="Continue Quick Setup",
+        label="Continue Setup",
         emoji="➡️",
         style=discord.ButtonStyle.success,
         custom_id="dank_setup_custom:continue_quick",
@@ -1174,7 +1174,7 @@ class CustomServiceModeView(discord.ui.View):
         await recommend._open_guided_setup(interaction)
 
     @discord.ui.button(
-        label="Back to Setup Plans",
+        label="Back",
         emoji="↩️",
         style=discord.ButtonStyle.secondary,
         custom_id="dank_setup_custom:plans",
@@ -1376,7 +1376,7 @@ class SetupTypeChoiceView(discord.ui.View):
                 saved_message=(
                     "Saved **Choose Core Features**. Choose the core modules "
                     "this server should use, then press "
-                    "**Continue Quick Setup**."
+                    "**Continue Setup**."
                 ),
             )
         await recommend._open_guided_setup(
