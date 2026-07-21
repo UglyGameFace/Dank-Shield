@@ -1,11 +1,16 @@
 from __future__ import annotations
 
+import asyncio
 from types import SimpleNamespace
 from typing import Any
 
 import pytest
 
 from stoney_verify import setup_service_state as service_state
+
+
+def run(coro: Any) -> Any:
+    return asyncio.run(coro)
 
 
 def test_custom_setup_missing_switches_stays_off() -> None:
@@ -99,8 +104,7 @@ def test_completion_is_read_from_the_same_canonical_state() -> None:
     assert state.completed_at == "2026-07-21T02:50:02+00:00"
 
 
-@pytest.mark.asyncio
-async def test_custom_service_save_uses_normalized_aliases_and_invalidates_completion(
+def test_custom_service_save_uses_normalized_aliases_and_invalidates_completion(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     captured: dict[str, Any] = {}
@@ -116,16 +120,18 @@ async def test_custom_service_save_uses_normalized_aliases_and_invalidates_compl
     )
     monkeypatch.setattr(service_state, "invalidate_guild_config", lambda guild_id: None)
 
-    state = await service_state.save_custom_service_state(
-        123,
-        {
-            "tickets_enabled": False,
-            "verification_enabled": True,
-            "voice_verification_enabled": False,
-            "spam_guard_enabled": False,
-            "moderation_enabled": False,
-        },
-        actor=SimpleNamespace(id=44, __str__=lambda self: "Owner"),
+    state = run(
+        service_state.save_custom_service_state(
+            123,
+            {
+                "tickets_enabled": False,
+                "verification_enabled": True,
+                "voice_verification_enabled": False,
+                "spam_guard_enabled": False,
+                "moderation_enabled": False,
+            },
+            actor=SimpleNamespace(id=44),
+        )
     )
 
     payload = captured["payload"]
@@ -137,8 +143,7 @@ async def test_custom_service_save_uses_normalized_aliases_and_invalidates_compl
     assert state.tickets is False
 
 
-@pytest.mark.asyncio
-async def test_finish_setup_persists_completion_metadata(
+def test_finish_setup_persists_completion_metadata(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     captured: dict[str, Any] = {}
@@ -159,9 +164,11 @@ async def test_finish_setup_persists_completion_metadata(
     )
     monkeypatch.setattr(service_state, "invalidate_guild_config", lambda guild_id: None)
 
-    state = await service_state.mark_setup_completed(
-        123,
-        actor=SimpleNamespace(id=44),
+    state = run(
+        service_state.mark_setup_completed(
+            123,
+            actor=SimpleNamespace(id=44),
+        )
     )
 
     assert captured["payload"]["setup_completed"] is True
