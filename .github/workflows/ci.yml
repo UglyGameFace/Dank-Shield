@@ -82,3 +82,205 @@ jobs:
 
       - name: Audit event boundary ownership
         run: python tools/audit_event_boundary.py
+
+  cleanup-setup-picker-once:
+    name: Remove duplicate setup destination once
+    if: github.event_name == 'pull_request' && github.head_ref == 'fix/setup-navigation-ux-overhaul'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: write
+
+    steps:
+      - name: Check out feature branch
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.head_ref }}
+          fetch-depth: 0
+          show-progress: false
+
+      - name: Check one-time gate
+        id: gate
+        shell: bash
+        run: |
+          if [[ -f .github/APPLY_SETUP_PICKER_CLEANUP_ONCE ]]; then
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Set up Python
+        if: steps.gate.outputs.enabled == 'true'
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+
+      - name: Install dependencies
+        if: steps.gate.outputs.enabled == 'true'
+        run: |
+          python -m pip install --upgrade pip -q
+          pip install -q -r requirements.txt
+          pip install -q pytest
+
+      - name: Simplify existing-item setup UX
+        if: steps.gate.outputs.enabled == 'true'
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          source_path = Path("stoney_verify/commands_ext/public_setup_full_customization.py")
+          text = source_path.read_text(encoding="utf-8")
+
+          def replace_once(old: str, new: str, label: str) -> None:
+              global text
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f"{label}: expected 1 match, found {count}")
+              text = text.replace(old, new, 1)
+
+          replace_once(
+              '        label="Optional Settings",\n',
+              '        label="Timers & Rules",\n',
+              "settings button label",
+          )
+
+          replace_once(
+              '                "• Voice Verify staff requests\\n"\n'
+              '                "• Join and leave logs\\n"\n'
+              '                "• Backup support channel\\n"\n'
+              '                "• Bot status and uptime"\n',
+              '                "• Voice Verify staff requests\\n"\n'
+              '                "• Join and leave logs\\n"\n'
+              '                "• Bot status and uptime"\n',
+              "optional channel summary",
+          )
+
+          duplicate_picker = '''        self.add_item(
+              SaveChannelSelect(
+                  placeholder="Tickets: backup support channel",
+                  columns=("support_channel_id",),
+                  also_same=("ticket_panel_channel_id",),
+                  channel_types=[discord.ChannelType.text],
+                  row=2,
+              )
+          )
+
+'''
+          replace_once(
+              duplicate_picker,
+              "",
+              "duplicate ticket panel picker",
+          )
+
+          replace_once(
+              '''            SaveChannelSelect(
+                  placeholder="Bot status: uptime and health channel",
+                  columns=("health_channel_id",),
+                  also_same=(
+                      "status_channel_id",
+                      "bot_status_channel_id",
+                  ),
+                  channel_types=[discord.ChannelType.text],
+                  row=3,
+              )
+''',
+              '''            SaveChannelSelect(
+                  placeholder="Bot status: uptime and health channel",
+                  columns=("health_channel_id",),
+                  also_same=(
+                      "status_channel_id",
+                      "bot_status_channel_id",
+                  ),
+                  channel_types=[discord.ChannelType.text],
+                  row=2,
+              )
+''',
+              "bot status picker row",
+          )
+
+          replace_once(
+              'class BehaviorSettingsModal(discord.ui.Modal, title="Setup Behavior Settings"):\n',
+              'class BehaviorSettingsModal(discord.ui.Modal, title="Timers & Rules"):\n',
+              "behavior modal title",
+          )
+          replace_once(
+              '    verify_kick_hours = discord.ui.TextInput(label="Pending verification kick hours", placeholder="24", default="24", required=False, max_length=4)\n',
+              '    verify_kick_hours = discord.ui.TextInput(label="Kick unverified after (hours)", placeholder="24", default="24", required=False, max_length=4)\n',
+              "kick timer label",
+          )
+          replace_once(
+              '    notes = discord.ui.TextInput(label="Optional setup note", placeholder="Why you changed this, optional", required=False, max_length=200, style=discord.TextStyle.short)\n',
+              '    notes = discord.ui.TextInput(label="Optional change note", placeholder="Why you changed this, optional", required=False, max_length=200, style=discord.TextStyle.short)\n',
+              "change note label",
+          )
+          replace_once(
+              '            return await interaction.response.send_message("❌ Pending verification kick hours must be between 0 and 720. Use 0 only if you intentionally disable timed kick behavior.", ephemeral=True)\n',
+              '            return await interaction.response.send_message("❌ Kick timer must be between 0 and 720 hours. Use 0 only to disable the timer.", ephemeral=True)\n',
+              "kick validation copy",
+          )
+          replace_once(
+              '            description=f"Ticket prefix: `{prefix}`\\nPending verification kick hours: `{hours}`",\n',
+              '            description=f"Ticket prefix: `{prefix}`\\nUnverified-member kick timer: `{hours}` hours",\n',
+              "saved timer copy",
+          )
+
+          source_path.write_text(text, encoding="utf-8")
+
+          test_path = Path("tests/test_setup_nested_navigation_behavior.py")
+          tests = test_path.read_text(encoding="utf-8")
+          marker = "def test_existing_item_picker_has_one_ticket_panel_destination() -> None:"
+          if marker not in tests:
+              tests += '''\n\ndef test_existing_item_picker_has_one_ticket_panel_destination() -> None:\n    root = customization.FullChooseExistingView()\n    assert "Timers & Rules" in labels(root)\n    assert "Optional Settings" not in labels(root)\n\n    channel_views = (\n        customization.ChannelCustomizationPageOne(),\n        customization.ChannelCustomizationPageTwo(),\n    )\n    placeholders = [\n        str(getattr(child, "placeholder", "") or "")\n        for view in channel_views\n        for child in view.children\n        if isinstance(child, discord.ui.ChannelSelect)\n    ]\n\n    assert "Tickets: backup support channel" not in placeholders\n    assert placeholders.count(\n        "Tickets: channel with Create Ticket panel"\n    ) == 1\n\n    modal = customization.BehaviorSettingsModal()\n    modal_labels = [\n        str(getattr(child, "label", "") or "")\n        for child in modal.children\n    ]\n    assert "Kick unverified after (hours)" in modal_labels\n    assert "Optional change note" in modal_labels\n'''
+              test_path.write_text(tests, encoding="utf-8")
+          PY
+
+      - name: Remove one-time scaffolding
+        if: steps.gate.outputs.enabled == 'true'
+        shell: bash
+        run: |
+          git show origin/main:.github/workflows/ci.yml > .github/workflows/ci.yml
+          rm -f .github/APPLY_SETUP_PICKER_CLEANUP_ONCE
+
+      - name: Validate exact generated source
+        if: steps.gate.outputs.enabled == 'true'
+        shell: bash
+        env:
+          DANK_STARTUP_LOG_STYLE: quiet
+          DANK_COMMAND_LOG_STYLE: quiet
+        run: |
+          set -euo pipefail
+          git diff --check
+          python -m compileall -q stoney_verify main.py tools
+          python -m pytest tests/ -q --tb=short --disable-warnings
+          status=0
+          for f in tools/test_*.py; do
+            python "$f" || status=1
+          done
+          test "$status" -eq 0
+          python tools/audit_public_setup.py
+          python tools/audit_public_command_surface.py
+          python tools/audit_public_command_friction.py
+          python tools/audit_public_invite_permissions.py
+          python tools/audit_setup_safety.py
+          python tools/audit_dank_design_smart_auto_detect.py
+          python tools/audit_role_truth.py
+          python tools/audit_event_boundary.py
+
+      - name: Commit validated cleanup
+        if: steps.gate.outputs.enabled == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          unexpected="$(git diff --cached --name-only | grep -Ev '^(\.github/workflows/ci\.yml|\.github/APPLY_SETUP_PICKER_CLEANUP_ONCE|stoney_verify/commands_ext/public_setup_full_customization\.py|tests/test_setup_nested_navigation_behavior\.py)$' || true)"
+          if [[ -n "$unexpected" ]]; then
+            echo "Unexpected staged files:"
+            printf '%s\n' "$unexpected"
+            exit 1
+          fi
+          git commit -m "Remove duplicate setup destination and clarify timers"
+          git push origin HEAD:fix/setup-navigation-ux-overhaul
