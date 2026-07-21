@@ -92,6 +92,53 @@ Path("tests/test_setup_permission_repair_native_route.py").write_text(
 )
 
 
+# Keep every setup-plan route on the same current language, including the
+# compatibility preview path retained in public_setup_recommend.
+recommend_path = Path(
+    "stoney_verify/commands_ext/public_setup_recommend.py"
+)
+recommend_text = recommend_path.read_text(encoding="utf-8")
+for old, new, label in (
+    (
+        "Press **Use This Setup** to save this choice, or pick another option from the menu.",
+        "Press **Use This Plan** to save this choice, or pick another option from the menu.",
+        "setup preview save instruction",
+    ),
+    (
+        'label="Use This Setup"',
+        'label="Use This Plan"',
+        "setup plan save button",
+    ),
+    (
+        "Saved **Choose My Own Features**. Choose which features are ON or OFF below.",
+        "Saved **Choose Core Features**. Choose the core modules this server should use, then press **Continue Quick Setup**.",
+        "custom plan saved copy",
+    ),
+    (
+        "Next, return to the guided setup and continue one required step at a time.",
+        "Next, return to Quick Setup and continue one required step at a time.",
+        "saved plan next step",
+    ),
+    (
+        "Press **Continue Setup** on Setup Home. ",
+        "Press **Continue Quick Setup** on Setup Home. ",
+        "saved plan home instruction",
+    ),
+    (
+        'label="Preview Only"',
+        'label="Preview"',
+        "setup plan preview button",
+    ),
+):
+    recommend_text = replace_once(
+        recommend_text,
+        old,
+        new,
+        label=label,
+    )
+recommend_path.write_text(recommend_text, encoding="utf-8")
+
+
 # Keep the setup safety audit focused on safety and ownership. Exact labels,
 # routes, and component behavior are covered by runtime behavior tests.
 audit = Path("tools/audit_setup_safety.py")
@@ -216,15 +263,8 @@ new_owner_audit = r'''def _assert_native_setup_ux_owners(
             )
             continue
 
-        labels = [
-            item[0].strip()
-            for item in actual.values()
-        ]
-        custom_ids = [
-            item[1].strip()
-            for item in actual.values()
-        ]
-
+        labels = [item[0].strip() for item in actual.values()]
+        custom_ids = [item[1].strip() for item in actual.values()]
         if any(not label for label in labels):
             failures.append(
                 f"setup owner {owner} has an empty button label"
@@ -324,7 +364,6 @@ new_owner_audit = r'''def _assert_native_setup_ux_owners(
                 f"actions: {exposed!r}"
             )
 
-    # Setup type selection stays a compact select, not a button wall.
     if "class SetupTypeChoiceSelect(discord.ui.Select)" not in fresh_text:
         failures.append(
             "setup type chooser must use SetupTypeChoiceSelect"
@@ -431,5 +470,6 @@ for filename in obsolete:
     target.unlink()
 
 print("✅ Updated active behavior tests for the AIO setup contract")
+print("✅ Unified the compatibility setup-plan copy")
 print("✅ Replaced exact-copy safety checks with ownership and isolation checks")
 print(f"✅ Removed {len(obsolete)} obsolete static/retired checks")
