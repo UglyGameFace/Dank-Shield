@@ -137,7 +137,7 @@ def test_guided_readiness_blocks_launch() -> None:
     assert "if not access_ok:" in body
 
 
-def test_fix_next_opens_permission_instructions() -> None:
+def test_continue_setup_opens_permission_instructions() -> None:
     body = _owner_source(
         RECOMMEND,
         "_open_guided_target",
@@ -149,7 +149,8 @@ def test_fix_next_opens_permission_instructions() -> None:
     )
     assert "Edit Channel → Permissions" in body
     assert "View Channel, Connect, Speak" in body
-    assert "Fix Next Problem" in body
+    assert "Continue Setup" in body
+    assert "Fix Next Problem" not in body
     assert "Fix Next Item" not in body
 
 
