@@ -120,3 +120,16 @@ def test_config_history_navigation_matches_aio_hierarchy() -> None:
     assert "Back to All Features" in labels(detail)
     assert "Setup Home" in labels(detail)
     assert "Close" in labels(detail)
+
+
+def test_repair_and_cleanup_views_keep_navigation_available() -> None:
+    for view in (
+        recovery.RecoveryCenterView(),
+        cleanup.PatchedRecoveryCenterView(),
+        cleanup.CleanupPreviewView(),
+    ):
+        view_labels = labels(view)
+        assert "Back to All Features" in view_labels
+        assert "Setup Home" in view_labels
+        assert "Close" in view_labels
+        assert len(view.children) <= 25
