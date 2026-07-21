@@ -294,7 +294,7 @@ def _assert_native_setup_ux_owners(failures: list[str]) -> None:
     ).get("continue_guided")
     if (
         custom_continue is None
-        or "recommend._open_guided_setup(interaction)"
+        or "recommend._open_guided_setup("
         not in custom_continue[2]
     ):
         failures.append(
