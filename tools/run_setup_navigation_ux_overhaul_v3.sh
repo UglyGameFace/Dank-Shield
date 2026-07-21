@@ -65,6 +65,21 @@ replacements = [
         "nav_view",
         "navigation end marker duplication",
     ),
+    (
+        "product_payload = '''",
+        "product_payload = r'''",
+        "setup-home raw generated block",
+    ),
+    (
+        "launch_text = '''",
+        "launch_text = r'''",
+        "launch-text raw generated block",
+    ),
+    (
+        "launch_open = '''",
+        "launch_open = r'''",
+        "launch-flow raw generated block",
+    ),
 ]
 
 for old, new, label in replacements:
