@@ -42,14 +42,14 @@ class SetupTemplateChoice:
 SETUP_TEMPLATE_CHOICES: tuple[SetupTemplateChoice, ...] = (
     SetupTemplateChoice(
         key="basic_server",
-        label="Basic server",
+        label="Recommended Setup",
         emoji="🟢",
         short_description="Simple welcome/check-in and basic tickets.",
         member_preview="Members get a simple welcome/check-in and a quick way to ask for help.",
         staff_preview="Best for normal communities that want simple setup without extra verification steps.",
         stores={
             "setup_choice": "basic_server",
-            "setup_choice_label": "Basic server",
+            "setup_choice_label": "Recommended Setup",
             "ticket_flow_mode": "instant",
             "ticket_form_required": False,
             "verification_panel_style": "simple",
@@ -59,14 +59,14 @@ SETUP_TEMPLATE_CHOICES: tuple[SetupTemplateChoice, ...] = (
     ),
     SetupTemplateChoice(
         key="help_desk",
-        label="Help desk",
+        label="Help Desk / Tickets",
         emoji="🛠️",
         short_description="Ticket support for members or customers.",
         member_preview="Members click one button to open a help ticket. No form is required by default.",
         staff_preview="Best for support servers, stores, creators, and paid communities.",
         stores={
             "setup_choice": "help_desk",
-            "setup_choice_label": "Help desk",
+            "setup_choice_label": "Help Desk / Tickets",
             "ticket_flow_mode": "instant",
             "ticket_form_required": False,
             "ticket_types_enabled": True,
@@ -129,14 +129,14 @@ SETUP_TEMPLATE_CHOICES: tuple[SetupTemplateChoice, ...] = (
     ),
     SetupTemplateChoice(
         key="custom_setup",
-        label="Custom setup",
+        label="Choose Core Features",
         emoji="⚙️",
         short_description="Choose only what this server needs.",
         member_preview="Members only see the features you turn on.",
         staff_preview="Best when you want to build your own setup step by step.",
         stores={
             "setup_choice": "custom_setup",
-            "setup_choice_label": "Custom setup",
+            "setup_choice_label": "Choose Core Features",
             "ticket_flow_mode": "instant",
             "ticket_form_required": False,
             "verification_panel_style": "custom",
@@ -183,8 +183,8 @@ def build_setup_template_embed(*, selected_key: Optional[str] = None, guild_name
             title=f"{selected.emoji} {selected.label}",
             description=(
                 "✅ **Selected for preview.**\n\n"
-                "Press **Use This Setup** to save this choice.\n"
-                "Press **Preview Only** if you only wanted to look.\n\n"
+                "Press **Use This Plan** to save this choice.\n"
+                "Press **Preview** if you only wanted to look.\n\n"
                 "**Nothing is published until you confirm.**"
             ),
             color=discord.Color.green(),
@@ -209,8 +209,8 @@ def build_setup_template_embed(*, selected_key: Optional[str] = None, guild_name
             embed.add_field(
                 name="Next screen",
                 value=(
-                    "After you press **Use This Setup**, Dank Shield opens the manual service picker. "
-                    "There you can turn Tickets, Basic Verify, Voice Verify, SpamGuard, and Logs on/off."
+                    "After you press **Use This Plan**, Dank Shield opens the manual service picker. "
+                    "There you can choose Tickets, Simple Verify, Voice Verify, SpamGuard, and essential Logs. Other AIO tools remain under Manage Setup."
                 ),
                 inline=False,
             )
@@ -228,7 +228,7 @@ def build_setup_template_embed(*, selected_key: Optional[str] = None, guild_name
         return embed
 
     embed = discord.Embed(
-        title="Choose setup type",
+        title="Choose a Quick Setup Plan",
         description=(
             "Pick one option from the menu below.\n\n"
             "**You do not need to read a wall of text.** "
@@ -245,10 +245,10 @@ def build_setup_template_embed(*, selected_key: Optional[str] = None, guild_name
     embed.add_field(
         name="Simple pick",
         value=(
-            "Most normal servers: **Basic server**.\n"
-            "Support/tickets only: **Help desk**.\n"
-            "One-button verification only: use **Basic verify** from the main setup choices when available.\n"
-            "Manual control: **Custom setup**."
+            "Most normal servers: **Recommended Setup**.\n"
+            "Support/tickets only: **Help Desk / Tickets**.\n"
+            "One-button verification only: choose **Simple Verify**.\n"
+            "Manual control: **Choose Core Features**."
         ),
         inline=False,
     )

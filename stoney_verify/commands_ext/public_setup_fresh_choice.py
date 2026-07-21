@@ -34,13 +34,13 @@ class PlainSetupChoice:
 
 
 SETUP_CHOICES: tuple[PlainSetupChoice, ...] = (
-    PlainSetupChoice("basic_server", "Tickets + Server Basics", "🏠", "Sets up support tickets and basic logs. A good choice for most servers that do not need member verification.", "A support button when they need help from staff.", True, False, False, "basic"),
+    PlainSetupChoice("basic_server", "Recommended Setup", "🏠", "Fast AIO starter: tickets, SpamGuard, and essential logs. Best for most communities.", "A support button when they need help from staff.", True, False, False, "basic"),
     PlainSetupChoice("basic_verify", "Simple Verify", "✅", "Members press one Verify button to get the member role. No ID upload or voice check.", "One Verify button that gives them server access.", False, False, False, "basic_verify"),
     PlainSetupChoice("help_desk", "Help Desk / Tickets", "🎫", "Sets up support tickets for help requests, reports, appeals, and staff support.", "A ticket panel where they choose what they need help with.", True, False, False, "help_desk"),
     PlainSetupChoice("voice_check", "Voice Verify", "🎙️", "Members request staff voice verification without ID upload or website upload flow.", "A verification ticket with a button to request a staff voice check.", True, False, True, "voice_check"),
     PlainSetupChoice("id_check", "ID / Web Verify", "🪪", "Private ID upload verification for servers approved to use this feature.", "A private button to upload an ID for staff review.", True, True, False, "id_check"),
     PlainSetupChoice("id_voice_check", "ID / Web + Voice", "🔐", "Private ID upload plus a staff voice check for servers approved to use this feature.", "Private ID upload and a button to request a staff voice check.", True, True, True, "id_voice_check"),
-    PlainSetupChoice("custom_setup", "Choose My Own Features", "⚙️", "Choose exactly which features you want: tickets, Simple Verify, Voice Verify, SpamGuard, and logs.", "Only the features you choose on the next screen.", False, False, False, "custom"),
+    PlainSetupChoice("custom_setup", "Choose Core Features", "⚙️", "Choose the core modules that require server roles, channels, or permissions. Other AIO tools remain available under Manage Setup.", "Only the features you choose on the next screen.", False, False, False, "custom"),
 )
 
 CHOICES_BY_KEY: dict[str, PlainSetupChoice] = {choice.key: choice for choice in SETUP_CHOICES}
@@ -50,7 +50,7 @@ CUSTOM_PRESETS: dict[str, tuple[str, dict[str, bool], str, str]] = {
     "basic_verify": ("Simple Verify only", {"tickets_enabled": False, "verification_enabled": True, "voice_verification_enabled": False, "spam_guard_enabled": False, "moderation_enabled": False}, "One Verify button. No tickets, ID upload, or voice check.", "✅"),
     "voice_verify": ("Simple + Voice Verify", {"tickets_enabled": True, "verification_enabled": True, "voice_verification_enabled": True, "spam_guard_enabled": False, "moderation_enabled": True}, "Simple Verify plus a staff voice check.", "🎙️"),
     "spamguard": ("SpamGuard only", {"tickets_enabled": False, "verification_enabled": False, "voice_verification_enabled": False, "spam_guard_enabled": True, "moderation_enabled": True}, "Spam and raid protection with logs.", "🛡️"),
-    "all": ("Everything", {"tickets_enabled": True, "verification_enabled": True, "voice_verification_enabled": True, "spam_guard_enabled": True, "moderation_enabled": True}, "Tickets, Simple Verify, Voice Verify, SpamGuard, and logs.", "🚀"),
+    "all": ("All Core Features", {"tickets_enabled": True, "verification_enabled": True, "voice_verification_enabled": True, "spam_guard_enabled": True, "moderation_enabled": True}, "Tickets, Simple Verify, Voice Verify, SpamGuard, and essential logs.", "🚀"),
 }
 
 
@@ -455,10 +455,10 @@ def _custom_services_embed(guild: discord.Guild, state: Any, *, saved_message: s
     preset_label = CUSTOM_PRESETS.get(preset_key, ("Your choices", {}, "", "🧩"))[0] if preset_key else "Your choices"
 
     embed = discord.Embed(
-        title="🧩 Choose Your Features",
+        title="🧩 Choose Core Features",
         description=(
-            "Choose what you want Dank Shield to do in this server. "
-            "A green button means the feature is ON. A gray button means it is OFF."
+            "Choose the core modules that need server setup. Green means ON and gray means OFF. "
+            "Design, backups, analytics, and repair tools remain available later under **Manage Setup**."
         ),
         color=discord.Color.blurple(),
         timestamp=now_utc(),
@@ -466,13 +466,13 @@ def _custom_services_embed(guild: discord.Guild, state: Any, *, saved_message: s
     if saved_message:
         embed.add_field(name="Saved", value=saved_message[:1024], inline=False)
 
-    embed.add_field(name="Your Setup", value=f"**{preset_label}**\n{_custom_mix_label(payload)}", inline=False)
-    embed.add_field(name="Features", value=_service_summary_text(state), inline=False)
+    embed.add_field(name="Core Setup Plan", value=f"**{preset_label}**\n{_custom_mix_label(payload)}", inline=False)
+    embed.add_field(name="Core Modules", value=_service_summary_text(state), inline=False)
     embed.add_field(
         name="Next",
         value=(
-            "Turn the features on or off, then press **Continue Setup**. "
-            "Dank Shield will walk you through the rest one step at a time."
+            "Choose the core modules, then press **Continue Quick Setup**. "
+            "Dank Shield asks only for the roles, channels, and permissions those modules require."
         ),
         inline=False,
     )
@@ -593,8 +593,9 @@ class CustomServiceToggleButton(discord.ui.Button):
 
 
 
+
 class CustomServiceModeView(discord.ui.View):
-    """Custom Setup only: choose services here, then return to one guided path."""
+    """Choose core modules, then return to the single Quick Setup path."""
 
     def __init__(self, state: Any) -> None:
         super().__init__(timeout=900)
@@ -606,24 +607,48 @@ class CustomServiceModeView(discord.ui.View):
         self.add_item(CustomServiceToggleButton("moderation_enabled", "Logs", state.moderation, "🧾", 3))
 
     @discord.ui.button(
-        label="Continue Setup",
+        label="Continue Quick Setup",
         emoji="➡️",
         style=discord.ButtonStyle.success,
-        custom_id="dank_setup_custom:continue_guided",
+        custom_id="dank_setup_custom:continue_quick",
         row=1,
     )
     async def continue_guided(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
         await recommend._open_guided_setup(interaction)
 
     @discord.ui.button(
-        label="Back",
+        label="Back to Setup Plans",
         emoji="↩️",
         style=discord.ButtonStyle.secondary,
-        custom_id="dank_setup_custom:back",
+        custom_id="dank_setup_custom:plans",
         row=4,
     )
     async def back(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
         await recommend._open_choose_setup_type(interaction)
+
+    @discord.ui.button(
+        label="Setup Home",
+        emoji="🏠",
+        style=discord.ButtonStyle.secondary,
+        custom_id="dank_setup_custom:home",
+        row=4,
+    )
+    async def home(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        await recommend._home_edit(interaction)
+
+    @discord.ui.button(
+        label="Close",
+        emoji="✖️",
+        style=discord.ButtonStyle.secondary,
+        custom_id="dank_setup_custom:close",
+        row=4,
+    )
+    async def close(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        await recommend._close_setup(interaction)
 
 async def _open_custom_service_picker(interaction: discord.Interaction, *, saved_message: str = "") -> None:
     guild = interaction.guild
@@ -631,7 +656,7 @@ async def _open_custom_service_picker(interaction: discord.Interaction, *, saved
         return await interaction.response.send_message("❌ This must be used inside a server.", ephemeral=True)
     state = await _load_custom_state(guild.id)
     state, detected_message = await _autofill_custom_state_from_existing(guild, state)
-    message = saved_message or detected_message or "Saved **Choose My Own Features**. Dank Shield checks what is already set up and pre-selects matching features. Turn off anything you do not want."
+    message = saved_message or detected_message or "Saved **Choose Core Features**. Dank Shield checked the existing server and pre-selected matching core modules. Turn off anything you do not want."
     await solid._edit_or_followup(interaction, embed=_custom_services_embed(guild, state, saved_message=message), view=CustomServiceModeView(state))
 
 
@@ -649,7 +674,7 @@ class SetupTypeChoiceSelect(discord.ui.Select):
     def __init__(self, *, guild: Optional[discord.Guild] = None) -> None:
         choices = _choices_for_guild(guild)
         super().__init__(
-            placeholder="What do you want Dank Shield to do?",
+            placeholder="Choose a setup plan…",
             min_values=1,
             max_values=1,
             options=[
@@ -701,8 +726,8 @@ class SetupTypeChoiceView(solid.BackToSetupView):
             return await _open_custom_service_picker(
                 interaction,
                 saved_message=(
-                    "Saved **Choose My Own Features**. Choose which features this server should use, "
-                    "then press **Continue Setup**."
+                    "Saved **Choose Core Features**. Choose the core modules this server should use, "
+                    "then press **Continue Quick Setup**."
                 ),
             )
         await recommend._open_guided_setup(

@@ -766,7 +766,7 @@ async def _build_plain_setup_health_embed(
         value=(
             "Press **Continue Setup** to finish "
             "anything required.\n"
-            "Press **Test & Launch** after this page says ready."
+            "Press **Test Your Setup** after this page says ready."
         ),
         inline=False,
     )
@@ -816,14 +816,14 @@ def _build_setup_help_embed() -> discord.Embed:
         name="How do I know when setup is finished?",
         value=(
             "Dank Shield checks setup automatically after the last required step. "
-            "Fix any problem it shows, then press **Test & Launch**."
+            "Fix any problem it shows, then press **Test Your Setup**."
         ),
         inline=False,
     )
     embed.add_field(
         name="Where are the extra settings?",
         value=(
-            "Press **More Options** on Setup Home. Most servers do not need those "
+            "Press **Manage Setup** on Setup Home. Most servers do not need those "
             "extra settings during normal setup."
         ),
         inline=False,
@@ -840,7 +840,7 @@ def _build_setup_help_embed() -> discord.Embed:
         name="Will setup delete my server?",
         value=(
             "No. The guided setup only connects or creates the item it is asking for. "
-            "Starting over is kept separately under **More Options**."
+            "Starting over is kept separately under **Manage Setup**."
         ),
         inline=False,
     )
@@ -1080,7 +1080,7 @@ async def _setup_progress(
 
     if total and done == total:
         next_step = (
-            "Press **Test & Launch** and test with a second Discord account."
+            "Press **Test Your Setup** and test with a second Discord account."
         )
 
     return (
@@ -1124,7 +1124,7 @@ async def _product_main_setup_payload(
         status = "Setup finished"
         recommended = (
             "Your setup is saved and marked finished. Open **View Setup Summary** "
-            "to review it, or use **Edit / More Options** when you want to change something."
+            "to review it, or use **Edit / Manage Setup** when you want to change something."
         )
     elif ready:
         status = "Ready for testing"
@@ -1139,7 +1139,7 @@ async def _product_main_setup_payload(
         title="🚀 Dank Shield Setup",
         description=(
             "Follow the recommended next step. Settings you do not need stay under "
-            "**Edit / More Options**."
+            "**Edit / Manage Setup**."
         ),
         color=discord.Color.green() if completed or ready else discord.Color.blurple(),
         timestamp=now_utc(),
@@ -1321,7 +1321,7 @@ class SetupReviewFixNextButton(discord.ui.Button):
 class SetupReviewLaunchButton(discord.ui.Button):
     def __init__(self) -> None:
         super().__init__(
-            label="Test & Launch",
+            label="Test Your Setup",
             emoji="🧪",
             style=discord.ButtonStyle.success,
             custom_id="dank_setup_review:launch",
@@ -1338,7 +1338,7 @@ class SetupReviewLaunchButton(discord.ui.Button):
 class SetupReviewHomeButton(discord.ui.Button):
     def __init__(self) -> None:
         super().__init__(
-            label="Back Home",
+            label="Setup Home",
             emoji="🏠",
             style=discord.ButtonStyle.secondary,
             custom_id="dank_setup_review:home",
@@ -1352,8 +1352,9 @@ class SetupReviewHomeButton(discord.ui.Button):
         await _home_edit(interaction)
 
 
+
 class SetupReviewView(discord.ui.View):
-    """After Setup Check, show only the next correct action and Home."""
+    """After Setup Check, show only the next correct action and navigation."""
 
     def __init__(self, *, ready: bool) -> None:
         super().__init__(timeout=900)
@@ -1364,7 +1365,21 @@ class SetupReviewView(discord.ui.View):
             self.add_item(SetupReviewFixNextButton())
 
         self.add_item(SetupReviewHomeButton())
+        close_button = discord.ui.Button(
+            label="Close",
+            emoji="✖️",
+            style=discord.ButtonStyle.secondary,
+            custom_id="dank_setup_review:close",
+            row=2,
+        )
+        close_button.callback = self._close
+        self.add_item(close_button)
 
+    async def _close(
+        self,
+        interaction: discord.Interaction,
+    ) -> None:
+        await _close_setup(interaction)
 
 class SetupHealthHelpView(solid.BackToSetupView):
     @discord.ui.button(label="Help / FAQ", emoji="❓", style=discord.ButtonStyle.primary, custom_id="dank_setup:help_from_health", row=0)
@@ -1383,6 +1398,30 @@ async def _home_edit(interaction: discord.Interaction) -> None:
     await solid._safe_defer_update(interaction)
     embed, view = await _product_main_setup_payload(guild)
     await solid._edit_or_followup(interaction, embed=embed, view=view)
+
+
+async def _close_setup(
+    interaction: discord.Interaction,
+) -> None:
+    """Close the interactive setup message without changing configuration."""
+
+    if not await solid._require_setup_permission(interaction):
+        return
+
+    embed = discord.Embed(
+        title="Setup Closed",
+        description=(
+            "Nothing else was changed. Run `/dank setup` whenever "
+            "you want to continue."
+        ),
+        color=discord.Color.dark_grey(),
+        timestamp=now_utc(),
+    )
+    await solid._edit_or_followup(
+        interaction,
+        embed=embed,
+        view=None,
+    )
 
 
 async def _open_choose_setup_type(
@@ -1409,10 +1448,10 @@ async def _open_choose_setup_type(
     choices = fresh._choices_for_guild(guild)
 
     embed = discord.Embed(
-        title="🧭 What Should Dank Shield Do?",
+        title="⚡ Choose a Quick Setup Plan",
         description=(
-            "Choose the closest match from the menu below. "
-            "You can change it later from **More Options**."
+            "Pick the closest goal. Dank Shield applies smart defaults and then asks only for missing essentials. "
+            "You can change the plan or any AIO module later from **Manage Setup**."
         ),
         color=discord.Color.blurple(),
         timestamp=now_utc(),
@@ -1693,7 +1732,7 @@ async def _open_protection_options(
         interaction,
         content=(
             "🛡️ Spam & Raid Protection opened from "
-            "**Other Settings**."
+            "**All Features & Settings**."
         ),
     )
 
@@ -1774,7 +1813,7 @@ def _advanced_section_embed(
     )
     embed.set_footer(
         text=(
-            "Other Settings • use Back to Other Settings to return"
+            "All Features & Settings • use Back to All Features & Settings to return"
         )
     )
     return embed
@@ -1834,22 +1873,62 @@ async def _open_advanced_member_experience(
     )
 
 
-async def _open_advanced_monitoring_repair(
+
+async def _open_advanced_verification(
     interaction: discord.Interaction,
 ) -> None:
     await _open_advanced_section(
         interaction,
-        title="🛡️ Logs & Safety",
-        description="Choose what gets logged, change spam and raid protection, check bot activity access, or repair channel permissions.",
-        items=(
-            "🧾 **Choose What Gets Logged** — choose which server actions are saved in the log.",
-            "🛡️ **Spam & Raid Protection** — change spam and raid safety settings.",
-            "🔐 **Check Bot Access** — see exactly which channels Dank Shield cannot inspect for accurate activity tracking.",
-            "🛠️ **Fix Channel Permissions** — preview broader channel permission repairs before applying anything.",
+        title="✅ Verification",
+        description=(
+            "Set up member access, Simple Verify, Voice Verify, and "
+            "approved ID/Web verification options."
         ),
-        view=AdvancedMonitoringRepairView(),
+        items=(
+            "✅ **Core Features** — turn Simple Verify or Voice Verify on or off.",
+            "🧭 **Roles & Channels** — choose member roles and verification channels.",
+            "⏱️ **Timers & Rules** — adjust verification timing and behavior.",
+        ),
+        view=AdvancedVerificationView(),
     )
 
+
+async def _open_advanced_security(
+    interaction: discord.Interaction,
+) -> None:
+    await _open_advanced_section(
+        interaction,
+        title="🛡️ Security & SpamGuard",
+        description=(
+            "Manage SpamGuard, raid protection, AntiNuke, bot access, "
+            "and channel permission repairs."
+        ),
+        items=(
+            "🛡️ **Protection Center** — SpamGuard, raid protection, and AntiNuke.",
+            "🔐 **Check Bot Access** — find channels Dank Shield cannot inspect.",
+            "🛠️ **Fix Channel Permissions** — preview and apply safe permission repairs.",
+        ),
+        view=AdvancedSecurityView(),
+    )
+
+
+async def _open_advanced_logs_activity(
+    interaction: discord.Interaction,
+) -> None:
+    await _open_advanced_section(
+        interaction,
+        title="🧾 Logs & Activity",
+        description=(
+            "Choose what Dank Shield records and verify that activity tracking "
+            "can see the channels it needs."
+        ),
+        items=(
+            "🧾 **Choose What Gets Logged** — select moderation and server events.",
+            "🔐 **Check Activity Access** — review activity-tracking coverage.",
+            "🧭 **Log Channels** — choose where enabled logs are posted.",
+        ),
+        view=AdvancedLogsActivityView(),
+    )
 
 async def _open_config_history(
     interaction: discord.Interaction,
@@ -1878,14 +1957,15 @@ async def _open_advanced_danger_zone(
 ) -> None:
     await _open_advanced_section(
         interaction,
-        title="🧯 Fix Setup or Start Over",
+        title="🧯 Repair or Restart Setup",
         description="Use this only if setup is broken or you want to start again.",
         items=(
-            "🧯 **Fix or Start Over** — repair setup or restart it safely.",
+            "🧯 **Repair or Restart** — repair setup or restart it safely.",
         ),
         view=AdvancedDangerZoneView(),
         danger=True,
     )
+
 
 async def _open_advanced_settings(
     interaction: discord.Interaction,
@@ -1894,16 +1974,50 @@ async def _open_advanced_settings(
         return
 
     embed = discord.Embed(
-        title="⚙️ Other Settings",
-        description="These are extra settings. Most people do not need them during normal setup.",
+        title="🧰 All Features & Settings",
+        description=(
+            "Everything Dank Shield can configure is grouped by purpose below. "
+            "The normal Quick Setup only asks for required items."
+        ),
         color=discord.Color.blurple(),
         timestamp=now_utc(),
     )
-    embed.add_field(name="🧩 Features, Roles & Channels", value="Turn features on or off, change timers, and choose the roles and channels Dank Shield uses.", inline=False)
-    embed.add_field(name="🎫 Tickets", value="Ticket choices shown to members.", inline=False)
-    embed.add_field(name="🛡️ Logs & Safety", value="Choose what gets logged, change spam and raid protection, and fix channel permissions.", inline=False)
-    embed.add_field(name="🎨 Server Design", value="Change how the server looks, preview changes, or undo a design change.", inline=False)
-    embed.add_field(name="💾 Backups & History", value="Create a configuration backup, review saved versions, or safely restore an earlier setup.", inline=False)
+    embed.add_field(
+        name="🧩 Setup Plan & Server Items",
+        value="Change core modules, roles, channels, folders, timers, and rules.",
+        inline=False,
+    )
+    embed.add_field(
+        name="🎫 Tickets",
+        value="Ticket panels, staff routing, folders, and member ticket choices.",
+        inline=False,
+    )
+    embed.add_field(
+        name="✅ Verification",
+        value="Simple Verify, Voice Verify, approved ID/Web flows, roles, and channels.",
+        inline=False,
+    )
+    embed.add_field(
+        name="🛡️ Security & SpamGuard",
+        value="SpamGuard, raids, AntiNuke, access checks, and permission repairs.",
+        inline=False,
+    )
+    embed.add_field(
+        name="🧾 Logs & Activity",
+        value="Logging choices, log channels, and activity-tracking access.",
+        inline=False,
+    )
+    embed.add_field(
+        name="🎨 Server Design",
+        value="Smart Auto-Detect, previews, styling, and undo tools.",
+        inline=False,
+    )
+    embed.add_field(
+        name="💾 Backups & History",
+        value="Back up selected configuration areas and restore only what you choose.",
+        inline=False,
+    )
+    embed.set_footer(text="All Features & Settings • choose one category")
 
     await solid._edit_or_followup(
         interaction,
@@ -1915,24 +2029,41 @@ async def _open_advanced_settings(
 async def _open_manage_setup(
     interaction: discord.Interaction,
 ) -> None:
-    """Open secondary setup tools without interrupting the guided path."""
+    """Open the task-based management hub for the AIO bot."""
 
     if not await solid._require_setup_permission(interaction):
         return
 
     embed = discord.Embed(
-        title="••• More Options",
+        title="⚙️ Manage Setup",
         description=(
-            "Normal setup is done from **Back Home → Continue Setup**. "
-            "Use this screen only when you intentionally need one of these extra tools."
+            "Use **Quick Setup** for the fastest guided path. Use this hub to "
+            "change a plan, manage any AIO module, review problems, or repair setup."
         ),
         color=discord.Color.blurple(),
         timestamp=now_utc(),
     )
-    embed.add_field(name="🧭 Change Setup Type", value="Switch the kind of setup this server uses.", inline=False)
-    embed.add_field(name="⚙️ Other Settings", value="Change features, roles, channels, tickets, logs, safety settings, or server design.", inline=False)
-    embed.add_field(name="🩺 Check Setup for Problems", value="Check what is missing or set up incorrectly.", inline=False)
-    embed.add_field(name="🧯 Fix Setup or Start Over", value="Use repair tools or deliberately restart setup.", inline=False)
+    embed.add_field(
+        name="🧭 Change Setup Plan",
+        value="Choose a different recommended plan or select your own core modules.",
+        inline=False,
+    )
+    embed.add_field(
+        name="🧰 All Features & Settings",
+        value="Open Tickets, Verification, Security, Logs, Design, Backups, and more.",
+        inline=False,
+    )
+    embed.add_field(
+        name="🩺 Review Setup",
+        value="See what is ready, optional, missing, or configured incorrectly.",
+        inline=False,
+    )
+    embed.add_field(
+        name="🧯 Repair or Restart Setup",
+        value="Use recovery tools only when setup is broken or you intentionally want a reset.",
+        inline=False,
+    )
+    embed.set_footer(text="Manage Setup • Quick Setup remains available from Setup Home")
 
     await solid._edit_or_followup(
         interaction,
@@ -3254,10 +3385,9 @@ async def _open_guided_setup(
     )
 
     embed = discord.Embed(
-        title="🧭 Guided Setup",
+        title="⚡ Quick Setup",
         description=(
-            "One step at a time. Dank Shield shows only the "
-            "next required item."
+            "The fastest path: one required step at a time, with optional AIO tools kept out of the way."
         ),
         color=(
             discord.Color.green()
@@ -3309,10 +3439,17 @@ async def _open_guided_setup(
     )
 
 
-class ProductSetupHomeView(discord.ui.View):
-    """Setup Home with one clear primary action."""
 
-    def __init__(self, *, ready: bool = False, started: bool = False, completed: bool = False) -> None:
+class ProductSetupHomeView(discord.ui.View):
+    """Setup Home with one fast path, management, and a clean exit."""
+
+    def __init__(
+        self,
+        *,
+        ready: bool = False,
+        started: bool = False,
+        completed: bool = False,
+    ) -> None:
         super().__init__(timeout=900)
         self.ready = bool(ready)
         self.started = bool(started)
@@ -3321,25 +3458,28 @@ class ProductSetupHomeView(discord.ui.View):
         if self.completed:
             self.continue_setup.label = "View Setup Summary"
             self.continue_setup.emoji = "✅"
-            self.more_options.label = "Edit / More Options"
         elif self.ready:
             self.continue_setup.label = "Test Your Setup"
             self.continue_setup.emoji = "🧪"
         elif self.started:
-            self.continue_setup.label = "Continue Setup"
+            self.continue_setup.label = "Continue Quick Setup"
             self.continue_setup.emoji = "➡️"
         else:
-            self.continue_setup.label = "Start Setup"
-            self.continue_setup.emoji = "▶️"
+            self.continue_setup.label = "Start Quick Setup"
+            self.continue_setup.emoji = "⚡"
 
     @discord.ui.button(
-        label="Start Setup",
-        emoji="▶️",
+        label="Start Quick Setup",
+        emoji="⚡",
         style=discord.ButtonStyle.success,
         custom_id="dank_setup_home:continue",
         row=0,
     )
-    async def continue_setup(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+    async def continue_setup(
+        self,
+        interaction: discord.Interaction,
+        button: discord.ui.Button,
+    ) -> None:
         _ = button
         if self.completed:
             await _open_completed_summary(interaction)
@@ -3353,18 +3493,38 @@ class ProductSetupHomeView(discord.ui.View):
         await _open_choose_setup_type(interaction)
 
     @discord.ui.button(
-        label="More Options",
+        label="Manage Setup",
         emoji="⚙️",
-        style=discord.ButtonStyle.secondary,
-        custom_id="dank_setup_home:more_options",
+        style=discord.ButtonStyle.primary,
+        custom_id="dank_setup_home:manage",
         row=1,
     )
-    async def more_options(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+    async def more_options(
+        self,
+        interaction: discord.Interaction,
+        button: discord.ui.Button,
+    ) -> None:
         _ = button
         await _open_manage_setup(interaction)
 
+    @discord.ui.button(
+        label="Close",
+        emoji="✖️",
+        style=discord.ButtonStyle.secondary,
+        custom_id="dank_setup_home:close",
+        row=1,
+    )
+    async def close(
+        self,
+        interaction: discord.Interaction,
+        button: discord.ui.Button,
+    ) -> None:
+        _ = button
+        await _close_setup(interaction)
+
+
 class ContinueSetupView(discord.ui.View):
-    """The normal setup path: fix the current step or go home."""
+    """The Quick Setup path: perform one action, go home, or close."""
 
     def __init__(
         self,
@@ -3390,6 +3550,7 @@ class ContinueSetupView(discord.ui.View):
         interaction: discord.Interaction,
         button: discord.ui.Button,
     ) -> None:
+        _ = button
         await _open_guided_target(
             interaction,
             self.target,
@@ -3397,7 +3558,7 @@ class ContinueSetupView(discord.ui.View):
         )
 
     @discord.ui.button(
-        label="Back Home",
+        label="Setup Home",
         emoji="🏠",
         style=discord.ButtonStyle.secondary,
         custom_id="dank_setup_guided:home",
@@ -3408,62 +3569,104 @@ class ContinueSetupView(discord.ui.View):
         interaction: discord.Interaction,
         button: discord.ui.Button,
     ) -> None:
+        _ = button
         await _home_edit(interaction)
 
+    @discord.ui.button(
+        label="Close",
+        emoji="✖️",
+        style=discord.ButtonStyle.secondary,
+        custom_id="dank_setup_guided:close",
+        row=1,
+    )
+    async def close(
+        self,
+        interaction: discord.Interaction,
+        button: discord.ui.Button,
+    ) -> None:
+        _ = button
+        await _close_setup(interaction)
+
+
 class ManageSetupView(discord.ui.View):
-    """Secondary tools kept out of the normal guided setup path."""
+    """Task-based AIO setup management hub."""
 
     def __init__(self) -> None:
         super().__init__(timeout=900)
 
     @discord.ui.button(
-        label="Change Setup Type",
+        label="Change Setup Plan",
         emoji="🧭",
         style=discord.ButtonStyle.primary,
-        custom_id="dank_setup_more:change_type",
+        custom_id="dank_setup_manage:plan",
         row=0,
     )
-    async def change_type(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+    async def change_type(
+        self,
+        interaction: discord.Interaction,
+        button: discord.ui.Button,
+    ) -> None:
+        _ = button
         await _open_choose_setup_type(interaction)
 
     @discord.ui.button(
-        label="Other Settings",
-        emoji="⚙️",
-        style=discord.ButtonStyle.secondary,
-        custom_id="dank_setup_more:advanced",
+        label="All Features & Settings",
+        emoji="🧰",
+        style=discord.ButtonStyle.primary,
+        custom_id="dank_setup_manage:features",
         row=0,
     )
-    async def advanced_settings(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+    async def advanced_settings(
+        self,
+        interaction: discord.Interaction,
+        button: discord.ui.Button,
+    ) -> None:
+        _ = button
         await _open_advanced_settings(interaction)
 
     @discord.ui.button(
-        label="Check Setup for Problems",
+        label="Review Setup",
         emoji="🩺",
         style=discord.ButtonStyle.secondary,
-        custom_id="dank_setup_more:health",
+        custom_id="dank_setup_manage:review",
         row=1,
     )
-    async def health(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+    async def health(
+        self,
+        interaction: discord.Interaction,
+        button: discord.ui.Button,
+    ) -> None:
+        _ = button
         await _open_health_check(interaction)
 
     @discord.ui.button(
-        label="Fix Setup or Start Over",
+        label="Repair or Restart Setup",
         emoji="🧯",
         style=discord.ButtonStyle.danger,
-        custom_id="dank_setup_more:recovery",
+        custom_id="dank_setup_manage:repair",
         row=1,
     )
-    async def recovery(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+    async def recovery(
+        self,
+        interaction: discord.Interaction,
+        button: discord.ui.Button,
+    ) -> None:
+        _ = button
         await _open_advanced_danger_zone(interaction)
 
     @discord.ui.button(
         label="Help",
         emoji="❓",
         style=discord.ButtonStyle.secondary,
-        custom_id="dank_setup_more:help",
+        custom_id="dank_setup_manage:help",
         row=2,
     )
-    async def help_faq(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+    async def help_faq(
+        self,
+        interaction: discord.Interaction,
+        button: discord.ui.Button,
+    ) -> None:
+        _ = button
         if not await solid._require_setup_permission(interaction):
             return
         await interaction.response.edit_message(
@@ -3472,237 +3675,389 @@ class ManageSetupView(discord.ui.View):
         )
 
     @discord.ui.button(
-        label="Back Home",
+        label="Setup Home",
         emoji="🏠",
         style=discord.ButtonStyle.secondary,
-        custom_id="dank_setup_more:home",
-        row=2,
+        custom_id="dank_setup_manage:home",
+        row=3,
     )
-    async def home(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+    async def home(
+        self,
+        interaction: discord.Interaction,
+        button: discord.ui.Button,
+    ) -> None:
+        _ = button
         await _home_edit(interaction)
+
+    @discord.ui.button(
+        label="Close",
+        emoji="✖️",
+        style=discord.ButtonStyle.secondary,
+        custom_id="dank_setup_manage:close",
+        row=3,
+    )
+    async def close(
+        self,
+        interaction: discord.Interaction,
+        button: discord.ui.Button,
+    ) -> None:
+        _ = button
+        await _close_setup(interaction)
 
 
 class AdvancedSettingsHubView(discord.ui.View):
-    """Literal, task-based advanced setting groups."""
+    """AIO feature categories with predictable navigation."""
 
     def __init__(self) -> None:
         super().__init__(timeout=900)
 
     @discord.ui.button(
-        label="Features, Roles & Channels",
+        label="Setup Plan & Server Items",
         emoji="🧩",
         style=discord.ButtonStyle.primary,
-        custom_id="dank_setup_advanced_hub:core",
+        custom_id="dank_setup_features:core",
         row=0,
     )
     async def core(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
         await _open_advanced_core_setup(interaction)
 
     @discord.ui.button(
         label="Tickets",
         emoji="🎫",
         style=discord.ButtonStyle.primary,
-        custom_id="dank_setup_advanced_hub:tickets",
+        custom_id="dank_setup_features:tickets",
         row=0,
     )
     async def tickets(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
         await _open_advanced_member_experience(interaction)
 
     @discord.ui.button(
-        label="Logs & Safety",
-        emoji="🛡️",
+        label="Verification",
+        emoji="✅",
         style=discord.ButtonStyle.primary,
-        custom_id="dank_setup_advanced_hub:safety",
+        custom_id="dank_setup_features:verification",
         row=1,
     )
-    async def safety(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        await _open_advanced_monitoring_repair(interaction)
+    async def verification(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        await _open_advanced_verification(interaction)
+
+    @discord.ui.button(
+        label="Security & SpamGuard",
+        emoji="🛡️",
+        style=discord.ButtonStyle.primary,
+        custom_id="dank_setup_features:security",
+        row=1,
+    )
+    async def security(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        await _open_advanced_security(interaction)
+
+    @discord.ui.button(
+        label="Logs & Activity",
+        emoji="🧾",
+        style=discord.ButtonStyle.primary,
+        custom_id="dank_setup_features:logs",
+        row=2,
+    )
+    async def logs_activity(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        await _open_advanced_logs_activity(interaction)
 
     @discord.ui.button(
         label="Server Design",
         emoji="🎨",
         style=discord.ButtonStyle.secondary,
-        custom_id="dank_setup_advanced_hub:design",
-        row=1,
+        custom_id="dank_setup_features:design",
+        row=2,
     )
     async def design(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
         await _open_advanced_appearance(interaction)
 
     @discord.ui.button(
         label="Backups & History",
         emoji="💾",
         style=discord.ButtonStyle.secondary,
-        custom_id="dank_setup_advanced_hub:history",
-        row=2,
+        custom_id="dank_setup_features:history",
+        row=3,
     )
     async def history(
         self,
         interaction: discord.Interaction,
         button: discord.ui.Button,
     ) -> None:
+        _ = button
         await _open_config_history(interaction)
 
     @discord.ui.button(
-        label="Back to More Options",
+        label="Back to Manage Setup",
         emoji="↩️",
         style=discord.ButtonStyle.secondary,
-        custom_id="dank_setup_advanced_hub:back",
-        row=3,
+        custom_id="dank_setup_features:back",
+        row=4,
     )
     async def back(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
         await _open_manage_setup(interaction)
 
     @discord.ui.button(
-        label="Back Home",
+        label="Setup Home",
         emoji="🏠",
         style=discord.ButtonStyle.secondary,
-        custom_id="dank_setup_advanced_hub:home",
-        row=3,
+        custom_id="dank_setup_features:home",
+        row=4,
     )
     async def home(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
         await _home_edit(interaction)
+
+    @discord.ui.button(
+        label="Close",
+        emoji="✖️",
+        style=discord.ButtonStyle.secondary,
+        custom_id="dank_setup_features:close",
+        row=4,
+    )
+    async def close(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        await _close_setup(interaction)
+
 
 class AdvancedCoreSetupView(discord.ui.View):
     def __init__(self) -> None:
         super().__init__(timeout=900)
 
-    @discord.ui.button(label="Turn Features On / Off", emoji="🧩", style=discord.ButtonStyle.primary, custom_id="dank_setup_advanced_core:services", row=0)
+    @discord.ui.button(label="Choose Core Modules", emoji="🧩", style=discord.ButtonStyle.primary, custom_id="dank_setup_core:services", row=0)
     async def services(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
         await _open_services(interaction)
 
-    @discord.ui.button(label="Timers & Rules", emoji="⏱️", style=discord.ButtonStyle.secondary, custom_id="dank_setup_advanced_core:timers_behavior", row=0)
+    @discord.ui.button(label="Timers & Rules", emoji="⏱️", style=discord.ButtonStyle.secondary, custom_id="dank_setup_core:timers", row=0)
     async def timers_behavior(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
         await _open_timers_behavior(interaction)
 
-    @discord.ui.button(label="Choose Roles & Channels", emoji="🧭", style=discord.ButtonStyle.secondary, custom_id="dank_setup_advanced_core:existing", row=1)
+    @discord.ui.button(label="Choose Roles & Channels", emoji="🧭", style=discord.ButtonStyle.secondary, custom_id="dank_setup_core:mapping", row=1)
     async def detailed_mapping(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
         await _open_existing_server(interaction)
 
-    @discord.ui.button(label="Back to Other Settings", emoji="↩️", style=discord.ButtonStyle.secondary, custom_id="dank_setup_advanced_core:back", row=2)
+    @discord.ui.button(label="Back to All Features", emoji="↩️", style=discord.ButtonStyle.secondary, custom_id="dank_setup_core:back", row=2)
     async def back(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
         await _open_advanced_settings(interaction)
 
-    @discord.ui.button(label="Back Home", emoji="🏠", style=discord.ButtonStyle.secondary, custom_id="dank_setup_advanced_core:home", row=2)
+    @discord.ui.button(label="Setup Home", emoji="🏠", style=discord.ButtonStyle.secondary, custom_id="dank_setup_core:home", row=2)
     async def home(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
         await _home_edit(interaction)
+
+    @discord.ui.button(label="Close", emoji="✖️", style=discord.ButtonStyle.secondary, custom_id="dank_setup_core:close", row=2)
+    async def close(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        await _close_setup(interaction)
+
 
 class AdvancedMemberExperienceView(discord.ui.View):
     def __init__(self) -> None:
         super().__init__(timeout=900)
 
-    @discord.ui.button(label="Ticket Choices", emoji="🧾", style=discord.ButtonStyle.primary, custom_id="dank_setup_advanced_members:ticket_menu", row=0)
+    @discord.ui.button(label="Ticket Choices", emoji="🧾", style=discord.ButtonStyle.primary, custom_id="dank_setup_tickets:choices", row=0)
     async def ticket_choices(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
         await _open_ticket_menu(interaction)
 
-    @discord.ui.button(label="Back to Other Settings", emoji="↩️", style=discord.ButtonStyle.secondary, custom_id="dank_setup_advanced_members:back", row=1)
+    @discord.ui.button(label="Roles & Channels", emoji="🧭", style=discord.ButtonStyle.secondary, custom_id="dank_setup_tickets:mapping", row=0)
+    async def mapping(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        await _open_existing_server(interaction)
+
+    @discord.ui.button(label="Timers & Rules", emoji="⏱️", style=discord.ButtonStyle.secondary, custom_id="dank_setup_tickets:rules", row=1)
+    async def rules(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        await _open_timers_behavior(interaction)
+
+    @discord.ui.button(label="Back to All Features", emoji="↩️", style=discord.ButtonStyle.secondary, custom_id="dank_setup_tickets:back", row=2)
     async def back(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
         await _open_advanced_settings(interaction)
 
-    @discord.ui.button(label="Back Home", emoji="🏠", style=discord.ButtonStyle.secondary, custom_id="dank_setup_advanced_members:home", row=1)
+    @discord.ui.button(label="Setup Home", emoji="🏠", style=discord.ButtonStyle.secondary, custom_id="dank_setup_tickets:home", row=2)
     async def home(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
         await _home_edit(interaction)
 
-class AdvancedMonitoringRepairView(discord.ui.View):
+    @discord.ui.button(label="Close", emoji="✖️", style=discord.ButtonStyle.secondary, custom_id="dank_setup_tickets:close", row=2)
+    async def close(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        await _close_setup(interaction)
+
+
+class AdvancedVerificationView(discord.ui.View):
     def __init__(self) -> None:
         super().__init__(timeout=900)
 
-    @discord.ui.button(label="Choose What Gets Logged", emoji="🧾", style=discord.ButtonStyle.primary, custom_id="dank_setup_advanced_monitoring:modlog_tracking", row=0)
-    async def modlog_tracking(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        await _open_modlog_tracking(interaction)
+    @discord.ui.button(label="Choose Core Modules", emoji="✅", style=discord.ButtonStyle.primary, custom_id="dank_setup_verify:features", row=0)
+    async def features(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        await _open_services(interaction)
 
-    @discord.ui.button(label="Spam & Raid Protection", emoji="🛡️", style=discord.ButtonStyle.primary, custom_id="dank_setup_advanced_monitoring:protection", row=0)
-    async def protection(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        await _open_protection_options(interaction)
+    @discord.ui.button(label="Roles & Channels", emoji="🧭", style=discord.ButtonStyle.primary, custom_id="dank_setup_verify:mapping", row=0)
+    async def mapping(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        await _open_existing_server(interaction)
 
-    @discord.ui.button(label="Check Bot Access", emoji="🔐", style=discord.ButtonStyle.primary, custom_id="dank_setup_advanced_monitoring:bot_access", row=1)
-    async def bot_access(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        await _open_bot_access_check(interaction)
+    @discord.ui.button(label="Timers & Rules", emoji="⏱️", style=discord.ButtonStyle.secondary, custom_id="dank_setup_verify:rules", row=1)
+    async def rules(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        await _open_timers_behavior(interaction)
 
-    @discord.ui.button(label="Fix Channel Permissions", emoji="🛠️", style=discord.ButtonStyle.primary, custom_id="dank_setup_advanced_monitoring:permission_repair", row=1)
-    async def permission_repair(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        await _open_permission_repair(interaction)
-
-    @discord.ui.button(label="Back to Other Settings", emoji="↩️", style=discord.ButtonStyle.secondary, custom_id="dank_setup_advanced_monitoring:back", row=2)
+    @discord.ui.button(label="Back to All Features", emoji="↩️", style=discord.ButtonStyle.secondary, custom_id="dank_setup_verify:back", row=2)
     async def back(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
         await _open_advanced_settings(interaction)
 
-    @discord.ui.button(label="Back Home", emoji="🏠", style=discord.ButtonStyle.secondary, custom_id="dank_setup_advanced_monitoring:home", row=2)
+    @discord.ui.button(label="Setup Home", emoji="🏠", style=discord.ButtonStyle.secondary, custom_id="dank_setup_verify:home", row=2)
     async def home(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
         await _home_edit(interaction)
+
+    @discord.ui.button(label="Close", emoji="✖️", style=discord.ButtonStyle.secondary, custom_id="dank_setup_verify:close", row=2)
+    async def close(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        await _close_setup(interaction)
+
+
+class AdvancedSecurityView(discord.ui.View):
+    def __init__(self) -> None:
+        super().__init__(timeout=900)
+
+    @discord.ui.button(label="Protection Center", emoji="🛡️", style=discord.ButtonStyle.primary, custom_id="dank_setup_security:protection", row=0)
+    async def protection(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        await _open_protection_options(interaction)
+
+    @discord.ui.button(label="Check Bot Access", emoji="🔐", style=discord.ButtonStyle.secondary, custom_id="dank_setup_security:access", row=0)
+    async def bot_access(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        await _open_bot_access_check(interaction)
+
+    @discord.ui.button(label="Fix Channel Permissions", emoji="🛠️", style=discord.ButtonStyle.secondary, custom_id="dank_setup_security:repair", row=1)
+    async def permission_repair(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        await _open_permission_repair(interaction)
+
+    @discord.ui.button(label="Back to All Features", emoji="↩️", style=discord.ButtonStyle.secondary, custom_id="dank_setup_security:back", row=2)
+    async def back(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        await _open_advanced_settings(interaction)
+
+    @discord.ui.button(label="Setup Home", emoji="🏠", style=discord.ButtonStyle.secondary, custom_id="dank_setup_security:home", row=2)
+    async def home(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        await _home_edit(interaction)
+
+    @discord.ui.button(label="Close", emoji="✖️", style=discord.ButtonStyle.secondary, custom_id="dank_setup_security:close", row=2)
+    async def close(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        await _close_setup(interaction)
+
+
+class AdvancedLogsActivityView(discord.ui.View):
+    def __init__(self) -> None:
+        super().__init__(timeout=900)
+
+    @discord.ui.button(label="Choose What Gets Logged", emoji="🧾", style=discord.ButtonStyle.primary, custom_id="dank_setup_logs:events", row=0)
+    async def modlog_tracking(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        await _open_modlog_tracking(interaction)
+
+    @discord.ui.button(label="Check Activity Access", emoji="🔐", style=discord.ButtonStyle.secondary, custom_id="dank_setup_logs:access", row=0)
+    async def bot_access(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        await _open_bot_access_check(interaction)
+
+    @discord.ui.button(label="Log Channels", emoji="🧭", style=discord.ButtonStyle.secondary, custom_id="dank_setup_logs:channels", row=1)
+    async def channels(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        await _open_existing_server(interaction)
+
+    @discord.ui.button(label="Back to All Features", emoji="↩️", style=discord.ButtonStyle.secondary, custom_id="dank_setup_logs:back", row=2)
+    async def back(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        await _open_advanced_settings(interaction)
+
+    @discord.ui.button(label="Setup Home", emoji="🏠", style=discord.ButtonStyle.secondary, custom_id="dank_setup_logs:home", row=2)
+    async def home(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        await _home_edit(interaction)
+
+    @discord.ui.button(label="Close", emoji="✖️", style=discord.ButtonStyle.secondary, custom_id="dank_setup_logs:close", row=2)
+    async def close(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        await _close_setup(interaction)
+
 
 class AdvancedAppearanceView(discord.ui.View):
     def __init__(self) -> None:
         super().__init__(timeout=900)
 
     @discord.ui.button(
-        label="Server Design",
+        label="Open Server Design",
         emoji="🎨",
         style=discord.ButtonStyle.primary,
-        custom_id="dank_setup_advanced_appearance:design",
+        custom_id="dank_setup_design:open",
         row=0,
     )
     async def server_design(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
         if not await solid._require_setup_permission(interaction):
             return
         from . import public_design_bridge
         await public_design_bridge.open_design_studio_from_setup(interaction)
 
-    @discord.ui.button(
-        label="Back to Other Settings",
-        emoji="↩️",
-        style=discord.ButtonStyle.secondary,
-        custom_id="dank_setup_advanced_appearance:back",
-        row=1,
-    )
+    @discord.ui.button(label="Back to All Features", emoji="↩️", style=discord.ButtonStyle.secondary, custom_id="dank_setup_design:back", row=1)
     async def back(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
         await _open_advanced_settings(interaction)
 
-    @discord.ui.button(
-        label="Back Home",
-        emoji="🏠",
-        style=discord.ButtonStyle.secondary,
-        custom_id="dank_setup_advanced_appearance:home",
-        row=1,
-    )
+    @discord.ui.button(label="Setup Home", emoji="🏠", style=discord.ButtonStyle.secondary, custom_id="dank_setup_design:home", row=1)
     async def home(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
         await _home_edit(interaction)
+
+    @discord.ui.button(label="Close", emoji="✖️", style=discord.ButtonStyle.secondary, custom_id="dank_setup_design:close", row=1)
+    async def close(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        await _close_setup(interaction)
 
 
 class AdvancedDangerZoneView(discord.ui.View):
     def __init__(self) -> None:
         super().__init__(timeout=900)
 
-    @discord.ui.button(
-        label="Fix or Start Over",
-        emoji="🧯",
-        style=discord.ButtonStyle.danger,
-        custom_id="dank_setup_advanced_danger:recovery",
-        row=0,
-    )
+    @discord.ui.button(label="Open Repair & Restart Tools", emoji="🧯", style=discord.ButtonStyle.danger, custom_id="dank_setup_repair:open", row=0)
     async def recovery(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
         await _open_recovery_center(interaction)
 
-    @discord.ui.button(
-        label="Back to More Options",
-        emoji="↩️",
-        style=discord.ButtonStyle.secondary,
-        custom_id="dank_setup_advanced_danger:back",
-        row=1,
-    )
+    @discord.ui.button(label="Back to Manage Setup", emoji="↩️", style=discord.ButtonStyle.secondary, custom_id="dank_setup_repair:back", row=1)
     async def back(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
         await _open_manage_setup(interaction)
 
-    @discord.ui.button(
-        label="Back Home",
-        emoji="🏠",
-        style=discord.ButtonStyle.secondary,
-        custom_id="dank_setup_advanced_danger:home",
-        row=1,
-    )
+    @discord.ui.button(label="Setup Home", emoji="🏠", style=discord.ButtonStyle.secondary, custom_id="dank_setup_repair:home", row=1)
     async def home(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
         await _home_edit(interaction)
 
-
+    @discord.ui.button(label="Close", emoji="✖️", style=discord.ButtonStyle.secondary, custom_id="dank_setup_repair:close", row=1)
+    async def close(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        await _close_setup(interaction)
 
 _SETUP_TEST_TICKET_LOCKS: dict[
     tuple[int, int],
@@ -3916,8 +4271,7 @@ async def _create_setup_test_ticket(
                 matched_category_name="Setup Test",
                 matched_intake_type="test",
                 matched_category_reason=(
-                    "Created from the canonical /dank setup "
-                    "Test & Launch screen"
+                    "Created from the canonical /dank setup test screen"
                 ),
                 matched_category_score=100,
                 category_override=True,
@@ -3962,8 +4316,9 @@ async def _create_setup_test_ticket(
             )
 
 
+
 class LaunchTestView(discord.ui.View):
-    """Only render actions for features this guild actually enabled."""
+    """Render test actions only for enabled features."""
 
     def __init__(self, state: Optional[dict[str, Any]] = None) -> None:
         super().__init__(timeout=900)
@@ -3972,20 +4327,27 @@ class LaunchTestView(discord.ui.View):
 
         if self.state.get("tickets"):
             actions.extend([
-                ("Post Ticket Panel", "🎫", discord.ButtonStyle.success, "dank_setup_launch:post_ticket_panel", self._post_ticket_panel),
-                ("Create Test Ticket", "🧪", discord.ButtonStyle.success, "dank_setup_launch:create_test_ticket", self._create_test_ticket),
+                ("Post Ticket Panel", "🎫", discord.ButtonStyle.success, "dank_setup_test:ticket_panel", self._post_ticket_panel),
+                ("Create Test Ticket", "🧪", discord.ButtonStyle.success, "dank_setup_test:test_ticket", self._create_test_ticket),
             ])
         if self.state.get("basic_verify"):
-            actions.append(("Post Simple Verify Panel", "✅", discord.ButtonStyle.success, "dank_setup_launch:post_basic_verify", self._post_basic_verify))
+            actions.append(("Post Simple Verify Panel", "✅", discord.ButtonStyle.success, "dank_setup_test:verify_panel", self._post_basic_verify))
         if not self.state.get("completed"):
-            actions.append(("Finish Setup", "🏁", discord.ButtonStyle.primary, "dank_setup_launch:finish", self._finish))
+            actions.append(("Finish Setup", "🏁", discord.ButtonStyle.primary, "dank_setup_test:finish", self._finish))
         actions.extend([
-            ("Review Setup", "🩺", discord.ButtonStyle.secondary, "dank_setup_launch:health", self._review),
-            ("Setup Home", "🏠", discord.ButtonStyle.secondary, "dank_setup_launch:home", self._home),
+            ("Review Setup", "🩺", discord.ButtonStyle.secondary, "dank_setup_test:review", self._review),
+            ("Setup Home", "🏠", discord.ButtonStyle.secondary, "dank_setup_test:home", self._home),
+            ("Close", "✖️", discord.ButtonStyle.secondary, "dank_setup_test:close", self._close),
         ])
 
         for index, (label, emoji, style, custom_id, callback) in enumerate(actions):
-            button = discord.ui.Button(label=label, emoji=emoji, style=style, custom_id=custom_id, row=index // 2)
+            button = discord.ui.Button(
+                label=label,
+                emoji=emoji,
+                style=style,
+                custom_id=custom_id,
+                row=min(4, index // 2),
+            )
             button.callback = callback
             self.add_item(button)
 
@@ -3997,7 +4359,7 @@ class LaunchTestView(discord.ui.View):
             return await interaction.response.send_message("❌ This must be used inside a server.", ephemeral=True)
         state = await _launch_state(guild)
         if not state.get("tickets"):
-            return await interaction.response.send_message("🎫 Tickets are OFF. Open **Edit Setup** to turn them on.", ephemeral=True)
+            return await interaction.response.send_message("🎫 Tickets are OFF. Open **Manage Setup** to turn them on.", ephemeral=True)
         try:
             from .public_ticket_panel_commands import post_ticket_panel_callback
             await post_ticket_panel_callback(interaction)
@@ -4015,7 +4377,7 @@ class LaunchTestView(discord.ui.View):
             return await interaction.response.send_message("❌ This must be used inside a server.", ephemeral=True)
         state = await _launch_state(guild)
         if not state.get("basic_verify"):
-            return await interaction.response.send_message("✅ Simple Verify is OFF. Open **Edit Setup** to turn it on.", ephemeral=True)
+            return await interaction.response.send_message("✅ Simple Verify is OFF. Open **Manage Setup** to turn it on.", ephemeral=True)
         try:
             from .public_verify_basic_panel import verify_panel
             await verify_panel(interaction)
@@ -4037,6 +4399,9 @@ class LaunchTestView(discord.ui.View):
     async def _home(self, interaction: discord.Interaction) -> None:
         await _home_edit(interaction)
 
+    async def _close(self, interaction: discord.Interaction) -> None:
+        await _close_setup(interaction)
+
 
 class FinishedSetupView(discord.ui.View):
     def __init__(self) -> None:
@@ -4047,7 +4412,7 @@ class FinishedSetupView(discord.ui.View):
         _ = button
         await _open_test_launch(interaction)
 
-    @discord.ui.button(label="Edit Setup", emoji="⚙️", style=discord.ButtonStyle.primary, custom_id="dank_setup_finished:edit", row=0)
+    @discord.ui.button(label="Manage Setup", emoji="⚙️", style=discord.ButtonStyle.primary, custom_id="dank_setup_finished:manage", row=0)
     async def edit_setup(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
         await _open_manage_setup(interaction)
@@ -4056,6 +4421,11 @@ class FinishedSetupView(discord.ui.View):
     async def home(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
         await _home_edit(interaction)
+
+    @discord.ui.button(label="Close", emoji="✖️", style=discord.ButtonStyle.secondary, custom_id="dank_setup_finished:close", row=1)
+    async def close(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        await _close_setup(interaction)
 
 def _patch() -> None:
     global _PATCHED
