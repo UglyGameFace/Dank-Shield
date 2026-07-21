@@ -7,13 +7,11 @@ studio service/command modules. Setup should only route users to design tools,
 not duplicate all font/separator/category-frame controls.
 """
 
-from typing import Any
-
 import discord
 
 
 async def open_design_studio_from_setup(interaction: discord.Interaction) -> None:
-    """Open Dank Design from a setup/manage button."""
+    """Open Dank Design beside Setup without replacing the Setup screen."""
 
     try:
         from stoney_verify.commands_ext import public_design_studio as design
@@ -23,7 +21,10 @@ async def open_design_studio_from_setup(interaction: discord.Interaction) -> Non
 
         guild = interaction.guild
         if guild is None:
-            return await interaction.response.send_message("❌ This must be used inside a server.", ephemeral=True)
+            return await interaction.response.send_message(
+                "❌ This must be used inside a server.",
+                ephemeral=True,
+            )
 
         options = await design._load_design_options(int(guild.id))  # type: ignore[attr-defined]
         embed = design._home_embed(guild, options)  # type: ignore[attr-defined]
@@ -31,30 +32,45 @@ async def open_design_studio_from_setup(interaction: discord.Interaction) -> Non
         embed.add_field(
             name="Opened from Setup",
             value=(
-                "Use this for fonts, separators, category frames, emojis, exact format rules, "
-                "preview/apply, mismatch repair, and rollback."
+                "Your **Server Design** setup page is still open underneath this panel, "
+                "so you can return to Setup without losing your place.\n\n"
+                "Use Dank Design for fonts, separators, category frames, emojis, exact "
+                "format rules, preview/apply, mismatch repair, and rollback."
             ),
             inline=False,
         )
 
         view = design.DesignHomeView(options)  # type: ignore[attr-defined]
-        await interaction.response.edit_message(embed=embed, view=view)
+        kwargs = {
+            "embed": embed,
+            "view": view,
+            "ephemeral": True,
+            "allowed_mentions": discord.AllowedMentions.none(),
+        }
+
+        if interaction.response.is_done():
+            await interaction.followup.send(**kwargs)
+        else:
+            await interaction.response.send_message(**kwargs)
     except Exception as exc:
         embed = discord.Embed(
             title="Dank Design Did Not Open",
             description=(
                 f"Error: `{type(exc).__name__}: {str(exc)[:220]}`\n\n"
-                "Nothing was changed. Try `/dank design` directly while this route is repaired."
+                "Nothing was changed and your Setup page was left in place. "
+                "Try `/dank design` directly while this route is repaired."
             ),
             color=discord.Color.orange(),
         )
-        try:
-            if interaction.response.is_done():
-                await interaction.followup.send(embed=embed, ephemeral=True, allowed_mentions=discord.AllowedMentions.none())
-            else:
-                await interaction.response.send_message(embed=embed, ephemeral=True, allowed_mentions=discord.AllowedMentions.none())
-        except Exception:
-            raise
+        kwargs = {
+            "embed": embed,
+            "ephemeral": True,
+            "allowed_mentions": discord.AllowedMentions.none(),
+        }
+        if interaction.response.is_done():
+            await interaction.followup.send(**kwargs)
+        else:
+            await interaction.response.send_message(**kwargs)
 
 
 __all__ = ["open_design_studio_from_setup"]
