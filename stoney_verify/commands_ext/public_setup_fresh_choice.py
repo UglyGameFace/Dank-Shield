@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-"""Plain setup choice owner for /dank setup."""
+"""Quick Setup choice owner for public ``/dank setup``."""
 
 from dataclasses import dataclass
 from typing import Any, Optional
@@ -8,16 +8,14 @@ from typing import Any, Optional
 import discord
 
 from ..globals import now_utc
+from ..setup_engine.verification_modes import id_verify_allowed_for_guild
 from ..setup_service_state import (
     load_setup_service_state,
     normalize_custom_service_patch,
     save_custom_service_state,
 )
 from . import public_setup_recommend as recommend
-
 from . import public_setup_solid as solid
-from ..setup_engine.verification_modes import id_verify_allowed_for_guild
-
 
 
 @dataclass(frozen=True)
@@ -34,23 +32,154 @@ class PlainSetupChoice:
 
 
 SETUP_CHOICES: tuple[PlainSetupChoice, ...] = (
-    PlainSetupChoice("basic_server", "Recommended Setup", "🏠", "Fast AIO starter: tickets, SpamGuard, and essential logs. Best for most communities.", "A support button when they need help from staff.", True, False, False, "basic"),
-    PlainSetupChoice("basic_verify", "Simple Verify", "✅", "Members press one Verify button to get the member role. No ID upload or voice check.", "One Verify button that gives them server access.", False, False, False, "basic_verify"),
-    PlainSetupChoice("help_desk", "Help Desk / Tickets", "🎫", "Sets up support tickets for help requests, reports, appeals, and staff support.", "A ticket panel where they choose what they need help with.", True, False, False, "help_desk"),
-    PlainSetupChoice("voice_check", "Voice Verify", "🎙️", "Members request staff voice verification without ID upload or website upload flow.", "A verification ticket with a button to request a staff voice check.", True, False, True, "voice_check"),
-    PlainSetupChoice("id_check", "ID / Web Verify", "🪪", "Private ID upload verification for servers approved to use this feature.", "A private button to upload an ID for staff review.", True, True, False, "id_check"),
-    PlainSetupChoice("id_voice_check", "ID / Web + Voice", "🔐", "Private ID upload plus a staff voice check for servers approved to use this feature.", "Private ID upload and a button to request a staff voice check.", True, True, True, "id_voice_check"),
-    PlainSetupChoice("custom_setup", "Choose Core Features", "⚙️", "Choose the core modules that require server roles, channels, or permissions. Other AIO tools remain available under Manage Setup.", "Only the features you choose on the next screen.", False, False, False, "custom"),
+    PlainSetupChoice(
+        "basic_server",
+        "Recommended Setup",
+        "🏠",
+        "Fast AIO starter with tickets, SpamGuard, and essential logs.",
+        "A simple support path plus baseline spam protection.",
+        True,
+        False,
+        False,
+        "basic",
+    ),
+    PlainSetupChoice(
+        "basic_verify",
+        "Simple Verify",
+        "✅",
+        "One-button member verification with SpamGuard and essential logs.",
+        "One Verify button that gives approved members server access.",
+        False,
+        False,
+        False,
+        "basic_verify",
+    ),
+    PlainSetupChoice(
+        "help_desk",
+        "Help Desk / Tickets",
+        "🎫",
+        "Support tickets with SpamGuard and essential staff logs.",
+        "A ticket panel for help requests, reports, appeals, and staff support.",
+        True,
+        False,
+        False,
+        "help_desk",
+    ),
+    PlainSetupChoice(
+        "voice_check",
+        "Voice Verify",
+        "🎙️",
+        "Member verification with a staff voice-check option.",
+        "A verification flow with an option to request a staff voice check.",
+        True,
+        False,
+        True,
+        "voice_check",
+    ),
+    PlainSetupChoice(
+        "id_check",
+        "ID / Web Verify",
+        "🪪",
+        "Private ID/Web verification for approved servers.",
+        "A private verification flow for staff review.",
+        True,
+        True,
+        False,
+        "id_check",
+    ),
+    PlainSetupChoice(
+        "id_voice_check",
+        "ID / Web + Voice",
+        "🔐",
+        "Private ID/Web verification plus a staff voice-check option.",
+        "Private verification plus an option to request a staff voice check.",
+        True,
+        True,
+        True,
+        "id_voice_check",
+    ),
+    PlainSetupChoice(
+        "custom_setup",
+        "Choose Core Features",
+        "⚙️",
+        (
+            "Choose only the core modules that need roles, channels, or "
+            "permissions. Other AIO tools stay under Manage Setup."
+        ),
+        "Only the core features you enable on the next screen.",
+        False,
+        False,
+        False,
+        "custom",
+    ),
 )
 
-CHOICES_BY_KEY: dict[str, PlainSetupChoice] = {choice.key: choice for choice in SETUP_CHOICES}
+CHOICES_BY_KEY: dict[str, PlainSetupChoice] = {
+    choice.key: choice
+    for choice in SETUP_CHOICES
+}
 
 CUSTOM_PRESETS: dict[str, tuple[str, dict[str, bool], str, str]] = {
-    "tickets": ("Tickets only", {"tickets_enabled": True, "verification_enabled": False, "voice_verification_enabled": False, "spam_guard_enabled": False, "moderation_enabled": False}, "Support ticket panel and ticket tools.", "🎫"),
-    "basic_verify": ("Simple Verify only", {"tickets_enabled": False, "verification_enabled": True, "voice_verification_enabled": False, "spam_guard_enabled": False, "moderation_enabled": False}, "One Verify button. No tickets, ID upload, or voice check.", "✅"),
-    "voice_verify": ("Simple + Voice Verify", {"tickets_enabled": True, "verification_enabled": True, "voice_verification_enabled": True, "spam_guard_enabled": False, "moderation_enabled": True}, "Simple Verify plus a staff voice check.", "🎙️"),
-    "spamguard": ("SpamGuard only", {"tickets_enabled": False, "verification_enabled": False, "voice_verification_enabled": False, "spam_guard_enabled": True, "moderation_enabled": True}, "Spam and raid protection with logs.", "🛡️"),
-    "all": ("All Core Features", {"tickets_enabled": True, "verification_enabled": True, "voice_verification_enabled": True, "spam_guard_enabled": True, "moderation_enabled": True}, "Tickets, Simple Verify, Voice Verify, SpamGuard, and essential logs.", "🚀"),
+    "tickets": (
+        "Tickets only",
+        {
+            "tickets_enabled": True,
+            "verification_enabled": False,
+            "voice_verification_enabled": False,
+            "spam_guard_enabled": False,
+            "moderation_enabled": False,
+        },
+        "Support ticket panel and ticket tools.",
+        "🎫",
+    ),
+    "basic_verify": (
+        "Simple Verify only",
+        {
+            "tickets_enabled": False,
+            "verification_enabled": True,
+            "voice_verification_enabled": False,
+            "spam_guard_enabled": False,
+            "moderation_enabled": False,
+        },
+        "One Verify button. No tickets, ID upload, or voice check.",
+        "✅",
+    ),
+    "voice_verify": (
+        "Simple + Voice Verify",
+        {
+            "tickets_enabled": True,
+            "verification_enabled": True,
+            "voice_verification_enabled": True,
+            "spam_guard_enabled": False,
+            "moderation_enabled": True,
+        },
+        "Simple Verify plus a staff voice check.",
+        "🎙️",
+    ),
+    "spamguard": (
+        "SpamGuard only",
+        {
+            "tickets_enabled": False,
+            "verification_enabled": False,
+            "voice_verification_enabled": False,
+            "spam_guard_enabled": True,
+            "moderation_enabled": True,
+        },
+        "Spam and raid protection with logs.",
+        "🛡️",
+    ),
+    "all": (
+        "All Core Features",
+        {
+            "tickets_enabled": True,
+            "verification_enabled": True,
+            "voice_verification_enabled": True,
+            "spam_guard_enabled": True,
+            "moderation_enabled": True,
+        },
+        "Tickets, Simple Verify, Voice Verify, SpamGuard, and essential logs.",
+        "🚀",
+    ),
 }
 
 
@@ -58,8 +187,16 @@ def get_plain_setup_choice(key: Any) -> Optional[PlainSetupChoice]:
     return CHOICES_BY_KEY.get(str(key or "").strip().lower())
 
 
-def _choices_for_guild(guild: Optional[discord.Guild]) -> tuple[PlainSetupChoice, ...]:
-    return SETUP_CHOICES if id_verify_allowed_for_guild(guild) else tuple(choice for choice in SETUP_CHOICES if not choice.needs_id)
+def _choices_for_guild(
+    guild: Optional[discord.Guild],
+) -> tuple[PlainSetupChoice, ...]:
+    if id_verify_allowed_for_guild(guild):
+        return SETUP_CHOICES
+    return tuple(
+        choice
+        for choice in SETUP_CHOICES
+        if not choice.needs_id
+    )
 
 
 def _plain_saved_choice_from_cfg(cfg: Any) -> str:
@@ -95,32 +232,78 @@ def _plain_saved_choice_from_cfg(cfg: Any) -> str:
     return "Not chosen yet"
 
 
-def _service_flags_for_choice(choice: PlainSetupChoice) -> dict[str, bool]:
+def _service_flags_for_choice(
+    choice: PlainSetupChoice,
+) -> dict[str, bool]:
     if choice.key == "basic_server":
-        return {"tickets_enabled": True, "verification_enabled": False, "voice_verification_enabled": False, "spam_guard_enabled": True, "moderation_enabled": True}
+        return {
+            "tickets_enabled": True,
+            "verification_enabled": False,
+            "voice_verification_enabled": False,
+            "spam_guard_enabled": True,
+            "moderation_enabled": True,
+        }
     if choice.key == "basic_verify":
-        return {"tickets_enabled": False, "verification_enabled": True, "voice_verification_enabled": False, "spam_guard_enabled": True, "moderation_enabled": True}
+        return {
+            "tickets_enabled": False,
+            "verification_enabled": True,
+            "voice_verification_enabled": False,
+            "spam_guard_enabled": True,
+            "moderation_enabled": True,
+        }
     if choice.key == "help_desk":
-        return {"tickets_enabled": True, "verification_enabled": False, "voice_verification_enabled": False, "spam_guard_enabled": True, "moderation_enabled": True}
+        return {
+            "tickets_enabled": True,
+            "verification_enabled": False,
+            "voice_verification_enabled": False,
+            "spam_guard_enabled": True,
+            "moderation_enabled": True,
+        }
     if choice.key == "voice_check":
-        return {"tickets_enabled": True, "verification_enabled": True, "voice_verification_enabled": True, "spam_guard_enabled": True, "moderation_enabled": True}
+        return {
+            "tickets_enabled": True,
+            "verification_enabled": True,
+            "voice_verification_enabled": True,
+            "spam_guard_enabled": True,
+            "moderation_enabled": True,
+        }
     if choice.key in {"id_check", "id_voice_check"}:
-        return {"tickets_enabled": True, "verification_enabled": True, "voice_verification_enabled": bool(choice.needs_voice), "spam_guard_enabled": True, "moderation_enabled": True}
-    return {"tickets_enabled": False, "verification_enabled": False, "voice_verification_enabled": False, "spam_guard_enabled": False, "moderation_enabled": False}
+        return {
+            "tickets_enabled": True,
+            "verification_enabled": True,
+            "voice_verification_enabled": bool(choice.needs_voice),
+            "spam_guard_enabled": True,
+            "moderation_enabled": True,
+        }
+    return {
+        "tickets_enabled": False,
+        "verification_enabled": False,
+        "voice_verification_enabled": False,
+        "spam_guard_enabled": False,
+        "moderation_enabled": False,
+    }
 
 
 def _choice_payload(choice: PlainSetupChoice) -> dict[str, Any]:
     basic_verify = choice.key == "basic_verify"
     service_flags = _service_flags_for_choice(choice)
-    verification_mode = "basic_button" if basic_verify else "custom" if choice.key == "custom_setup" else choice.panel_style
+    verification_mode = (
+        "basic_button"
+        if basic_verify
+        else "custom"
+        if choice.key == "custom_setup"
+        else choice.panel_style
+    )
     return {
         **service_flags,
         "setup_choice": choice.key,
         "setup_choice_label": choice.label,
         "setup_choice_description": choice.short,
         "setup_choice_member_sees": choice.member_sees,
-        "setup_template_version": "plain_choices_v4_custom_basic_verify_picker",
-        "ticket_service_enabled": bool(service_flags.get("tickets_enabled", False)),
+        "setup_template_version": "plain_choices_v5_aio_quick_setup",
+        "ticket_service_enabled": bool(
+            service_flags.get("tickets_enabled", False)
+        ),
         "ticket_flow_style": "fast_no_forced_form",
         "ticket_form_mode": "off",
         "ticket_open_requires_modal": False,
@@ -133,13 +316,21 @@ def _choice_payload(choice: PlainSetupChoice) -> dict[str, Any]:
         "verification_requires_id": bool(choice.needs_id),
         "verification_allows_voice": bool(choice.needs_voice),
         "verification_style_label": choice.label,
-        "stoney_baloney_style_enabled": bool(choice.key == "id_voice_check"),
+        "stoney_baloney_style_enabled": bool(
+            choice.key == "id_voice_check"
+        ),
         "public_branding_mode": "guild_neutral",
     }
 
 
-async def _save_choice(interaction: discord.Interaction, choice: PlainSetupChoice) -> None:
-    await solid._save_config(interaction, _choice_payload(choice))  # type: ignore[attr-defined]
+async def _save_choice(
+    interaction: discord.Interaction,
+    choice: PlainSetupChoice,
+) -> None:
+    await solid._save_config(
+        interaction,
+        _choice_payload(choice),
+    )  # type: ignore[attr-defined]
 
 
 def _state_word(value: bool) -> str:
@@ -152,11 +343,13 @@ def _service_summary_text(state: Any) -> str:
         f"Simple Verify: **{_state_word(bool(state.verification))}**\n"
         f"Voice Verify: **{_state_word(bool(state.voice))}**\n"
         f"SpamGuard: **{_state_word(bool(state.spamguard))}**\n"
-        f"Logs: **{_state_word(bool(state.moderation))}**"
+        f"Essential Logs: **{_state_word(bool(state.moderation))}**"
     )
 
 
-def _custom_enabled_labels_from_payload(payload: dict[str, Any]) -> list[str]:
+def _custom_enabled_labels_from_payload(
+    payload: dict[str, Any],
+) -> list[str]:
     labels: list[str] = []
     if bool(payload.get("tickets_enabled")):
         labels.append("Tickets")
@@ -167,27 +360,48 @@ def _custom_enabled_labels_from_payload(payload: dict[str, Any]) -> list[str]:
     if bool(payload.get("spam_guard_enabled")):
         labels.append("SpamGuard")
     if bool(payload.get("moderation_enabled")):
-        labels.append("Logs")
+        labels.append("Essential Logs")
     return labels
 
 
 def _custom_mix_label(payload: dict[str, Any]) -> str:
     labels = _custom_enabled_labels_from_payload(payload)
-    return "Your features: " + (", ".join(labels) if labels else "No features selected")
+    return "Your features: " + (
+        ", ".join(labels)
+        if labels
+        else "No features selected"
+    )
 
 
-def _custom_preset_key_for_payload(payload: dict[str, Any]) -> str:
-    clean = {key: bool(payload.get(key, False)) for key in _CUSTOM_SERVICE_FLAG_KEYS}
-    for preset_key, (_label, flags, _desc, _emoji) in CUSTOM_PRESETS.items():
-        preset_clean = {key: bool(flags.get(key, False)) for key in _CUSTOM_SERVICE_FLAG_KEYS}
+def _custom_preset_key_for_payload(
+    payload: dict[str, Any],
+) -> str:
+    clean = {
+        key: bool(payload.get(key, False))
+        for key in _CUSTOM_SERVICE_FLAG_KEYS
+    }
+    for preset_key, (
+        _label,
+        flags,
+        _desc,
+        _emoji,
+    ) in CUSTOM_PRESETS.items():
+        preset_clean = {
+            key: bool(flags.get(key, False))
+            for key in _CUSTOM_SERVICE_FLAG_KEYS
+        }
         if preset_clean == clean:
             return preset_key
     return ""
 
 
-def _custom_service_config_patch(payload: dict[str, Any]) -> dict[str, Any]:
+def _custom_service_config_patch(
+    payload: dict[str, Any],
+) -> dict[str, Any]:
     """Use the canonical native service-state normalizer."""
+
     return normalize_custom_service_patch(payload)
+
 
 def _service_hint_text(state: Any) -> str:
     enabled: list[str] = []
@@ -199,7 +413,9 @@ def _service_hint_text(state: Any) -> str:
         enabled.append("Voice Verify")
     if state.spamguard or state.moderation:
         enabled.append("SpamGuard / Logs")
-    return "Choose at least one feature first." if not enabled else "Setup will check: " + ", ".join(enabled) + "."
+    if not enabled:
+        return "Choose at least one core feature first."
+    return "Quick Setup will check: " + ", ".join(enabled) + "."
 
 
 async def _save_custom_services(
@@ -207,11 +423,16 @@ async def _save_custom_services(
     payload: dict[str, bool],
     actor: Any,
 ) -> None:
-    await save_custom_service_state(int(guild_id), dict(payload), actor=actor)
+    await save_custom_service_state(
+        int(guild_id),
+        dict(payload),
+        actor=actor,
+    )
 
 
 async def _load_custom_state(guild_id: int) -> Any:
     return await load_setup_service_state(int(guild_id))
+
 
 _CUSTOM_SERVICE_FLAG_KEYS = (
     "tickets_enabled",
@@ -222,7 +443,11 @@ _CUSTOM_SERVICE_FLAG_KEYS = (
 )
 
 
-def _auto_cfg_value(cfg: Any, key: str, default: Any = None) -> Any:
+def _auto_cfg_value(
+    cfg: Any,
+    key: str,
+    default: Any = None,
+) -> Any:
     try:
         if hasattr(cfg, "get"):
             value = cfg.get(key)
@@ -240,7 +465,11 @@ def _auto_cfg_value(cfg: Any, key: str, default: Any = None) -> Any:
 
     try:
         for bucket in ("settings", "config", "metadata", "meta"):
-            nested = cfg.get(bucket) if hasattr(cfg, "get") else getattr(cfg, bucket, None)
+            nested = (
+                cfg.get(bucket)
+                if hasattr(cfg, "get")
+                else getattr(cfg, bucket, None)
+            )
             if isinstance(nested, dict) and nested.get(key) is not None:
                 return nested.get(key)
     except Exception:
@@ -287,40 +516,69 @@ def _name_has_any(value: Any, markers: tuple[str, ...]) -> bool:
         return False
 
 
-def _guild_has_category(guild: discord.Guild, markers: tuple[str, ...]) -> bool:
+def _guild_has_category(
+    guild: discord.Guild,
+    markers: tuple[str, ...],
+) -> bool:
     try:
-        return any(_name_has_any(category, markers) for category in getattr(guild, "categories", []) or [])
+        return any(
+            _name_has_any(category, markers)
+            for category in getattr(guild, "categories", []) or []
+        )
     except Exception:
         return False
 
 
-def _guild_has_text_channel(guild: discord.Guild, markers: tuple[str, ...]) -> bool:
+def _guild_has_text_channel(
+    guild: discord.Guild,
+    markers: tuple[str, ...],
+) -> bool:
     try:
-        return any(_name_has_any(channel, markers) for channel in getattr(guild, "text_channels", []) or [])
+        return any(
+            _name_has_any(channel, markers)
+            for channel in getattr(guild, "text_channels", []) or []
+        )
     except Exception:
         return False
 
 
-def _guild_has_voice_channel(guild: discord.Guild, markers: tuple[str, ...]) -> bool:
+def _guild_has_voice_channel(
+    guild: discord.Guild,
+    markers: tuple[str, ...],
+) -> bool:
     try:
-        return any(_name_has_any(channel, markers) for channel in getattr(guild, "voice_channels", []) or [])
+        return any(
+            _name_has_any(channel, markers)
+            for channel in getattr(guild, "voice_channels", []) or []
+        )
     except Exception:
         return False
 
 
-def _guild_has_role(guild: discord.Guild, markers: tuple[str, ...]) -> bool:
+def _guild_has_role(
+    guild: discord.Guild,
+    markers: tuple[str, ...],
+) -> bool:
     try:
-        return any(_name_has_any(role, markers) for role in getattr(guild, "roles", []) or [])
+        return any(
+            _name_has_any(role, markers)
+            for role in getattr(guild, "roles", []) or []
+        )
     except Exception:
         return False
 
 
-async def _detect_existing_service_payload(guild: discord.Guild) -> tuple[dict[str, bool], list[str]]:
+async def _detect_existing_service_payload(
+    guild: discord.Guild,
+) -> tuple[dict[str, bool], list[str]]:
     """Detect already-installed server pieces. This never creates anything."""
 
     cfg = None
     try:
-        cfg = await solid.get_guild_config(guild.id, refresh=True)  # type: ignore[attr-defined]
+        cfg = await solid.get_guild_config(
+            guild.id,
+            refresh=True,
+        )  # type: ignore[attr-defined]
     except Exception:
         cfg = None
 
@@ -335,13 +593,29 @@ async def _detect_existing_service_payload(guild: discord.Guild) -> tuple[dict[s
             "staff_role_id",
             "transcripts_channel_id",
         )
-        or _guild_has_category(guild, ("ticket", "archive", "support"))
-        or _guild_has_text_channel(guild, ("ticket", "support", "transcript"))
+        or _guild_has_category(
+            guild,
+            ("ticket", "archive", "support"),
+        )
+        or _guild_has_text_channel(
+            guild,
+            ("ticket", "support", "transcript"),
+        )
     )
 
     basic_verify = bool(
-        _auto_truthy(_auto_cfg_value(cfg, "basic_verify_enabled", False), False)
-        or _auto_truthy(_auto_cfg_value(cfg, "basic_button_verify_enabled", False), False)
+        _auto_truthy(
+            _auto_cfg_value(cfg, "basic_verify_enabled", False),
+            False,
+        )
+        or _auto_truthy(
+            _auto_cfg_value(
+                cfg,
+                "basic_button_verify_enabled",
+                False,
+            ),
+            False,
+        )
         or _cfg_has_any_id(
             cfg,
             "verify_channel_id",
@@ -350,13 +624,33 @@ async def _detect_existing_service_payload(guild: discord.Guild) -> tuple[dict[s
             "verified_role_id",
             "resident_role_id",
         )
-        or _guild_has_text_channel(guild, ("verify", "verification"))
-        or _guild_has_role(guild, ("unverified", "verified", "resident", "member"))
+        or _guild_has_text_channel(
+            guild,
+            ("verify", "verification"),
+        )
+        or _guild_has_role(
+            guild,
+            ("unverified", "verified", "resident", "member"),
+        )
     )
 
     voice = bool(
-        _auto_truthy(_auto_cfg_value(cfg, "voice_verification_enabled", False), False)
-        or _auto_truthy(_auto_cfg_value(cfg, "verification_allows_voice", False), False)
+        _auto_truthy(
+            _auto_cfg_value(
+                cfg,
+                "voice_verification_enabled",
+                False,
+            ),
+            False,
+        )
+        or _auto_truthy(
+            _auto_cfg_value(
+                cfg,
+                "verification_allows_voice",
+                False,
+            ),
+            False,
+        )
         or _cfg_has_any_id(
             cfg,
             "vc_verify_channel_id",
@@ -364,19 +658,40 @@ async def _detect_existing_service_payload(guild: discord.Guild) -> tuple[dict[s
             "voice_verify_channel_id",
             "voice_verification_channel_id",
         )
-        or _guild_has_text_channel(guild, ("vc-verify", "voice-verify", "verify-queue"))
-        or _guild_has_voice_channel(guild, ("verify", "verification", "waiting"))
+        or _guild_has_text_channel(
+            guild,
+            ("vc-verify", "voice-verify", "verify-queue"),
+        )
+        or _guild_has_voice_channel(
+            guild,
+            ("verify", "verification", "waiting"),
+        )
     )
 
     spamguard = bool(
-        _auto_truthy(_auto_cfg_value(cfg, "spam_guard_enabled", False), False)
-        or _auto_truthy(_auto_cfg_value(cfg, "automod_enabled", False), False)
-        or _auto_truthy(_auto_cfg_value(cfg, "automod_block_invites", False), False)
-        or _auto_truthy(_auto_cfg_value(cfg, "invite_shield_enabled", False), False)
+        _auto_truthy(
+            _auto_cfg_value(cfg, "spam_guard_enabled", False),
+            False,
+        )
+        or _auto_truthy(
+            _auto_cfg_value(cfg, "automod_enabled", False),
+            False,
+        )
+        or _auto_truthy(
+            _auto_cfg_value(cfg, "automod_block_invites", False),
+            False,
+        )
+        or _auto_truthy(
+            _auto_cfg_value(cfg, "invite_shield_enabled", False),
+            False,
+        )
     )
 
     moderation = bool(
-        _auto_truthy(_auto_cfg_value(cfg, "moderation_enabled", False), False)
+        _auto_truthy(
+            _auto_cfg_value(cfg, "moderation_enabled", False),
+            False,
+        )
         or spamguard
         or _cfg_has_any_id(
             cfg,
@@ -389,7 +704,17 @@ async def _detect_existing_service_payload(guild: discord.Guild) -> tuple[dict[s
             "bot_status_channel_id",
             "health_channel_id",
         )
-        or _guild_has_text_channel(guild, ("modlog", "mod-log", "logs", "join-leave", "bot-status", "status"))
+        or _guild_has_text_channel(
+            guild,
+            (
+                "modlog",
+                "mod-log",
+                "logs",
+                "join-leave",
+                "bot-status",
+                "status",
+            ),
+        )
     )
 
     if voice:
@@ -405,7 +730,7 @@ async def _detect_existing_service_payload(guild: discord.Guild) -> tuple[dict[s
         "moderation_enabled": moderation,
     }
 
-    labels = []
+    labels: list[str] = []
     if tickets:
         labels.append("Tickets")
     if basic_verify:
@@ -415,16 +740,19 @@ async def _detect_existing_service_payload(guild: discord.Guild) -> tuple[dict[s
     if spamguard:
         labels.append("SpamGuard")
     if moderation:
-        labels.append("Logs")
+        labels.append("Essential Logs")
 
     return detected, labels
 
 
-async def _autofill_custom_state_from_existing(guild: discord.Guild, state: Any) -> tuple[Any, str]:
-    """If Custom Setup is blank, pre-check services that already exist.
+async def _autofill_custom_state_from_existing(
+    guild: discord.Guild,
+    state: Any,
+) -> tuple[Any, str]:
+    """Preselect existing core services when Custom Setup is still blank.
 
-    This only saves setup-focus flags. It does not create/delete channels, roles,
-    tickets, panels, or permissions.
+    This only saves setup-focus flags. It does not create or delete channels,
+    roles, tickets, panels, or permissions.
     """
 
     try:
@@ -432,57 +760,105 @@ async def _autofill_custom_state_from_existing(guild: discord.Guild, state: Any)
     except Exception:
         current = {}
 
-    if any(bool(current.get(key, False)) for key in _CUSTOM_SERVICE_FLAG_KEYS):
+    if any(
+        bool(current.get(key, False))
+        for key in _CUSTOM_SERVICE_FLAG_KEYS
+    ):
         return state, ""
 
     detected, labels = await _detect_existing_service_payload(guild)
     if not any(detected.values()):
         return state, ""
 
-    await _save_custom_services(guild.id, detected, guild.me or guild.owner)
+    await _save_custom_services(
+        guild.id,
+        detected,
+        guild.me or guild.owner,
+    )
     next_state = await _load_custom_state(guild.id)
 
     label_text = ", ".join(labels) if labels else "existing setup"
     return (
         next_state,
-        f"Found existing setup and turned on matching features: **{label_text}**. Nothing was created.",
+        (
+            "Found matching server setup and pre-selected: "
+            f"**{label_text}**. Nothing was created."
+        ),
     )
 
 
-def _custom_services_embed(guild: discord.Guild, state: Any, *, saved_message: str = "") -> discord.Embed:
-    payload = {key: bool(state.as_payload().get(key, False)) for key in _CUSTOM_SERVICE_FLAG_KEYS}
+def _custom_services_embed(
+    guild: discord.Guild,
+    state: Any,
+    *,
+    saved_message: str = "",
+) -> discord.Embed:
+    payload = {
+        key: bool(state.as_payload().get(key, False))
+        for key in _CUSTOM_SERVICE_FLAG_KEYS
+    }
     preset_key = _custom_preset_key_for_payload(payload)
-    preset_label = CUSTOM_PRESETS.get(preset_key, ("Your choices", {}, "", "🧩"))[0] if preset_key else "Your choices"
+    preset_label = (
+        CUSTOM_PRESETS.get(
+            preset_key,
+            ("Your choices", {}, "", "🧩"),
+        )[0]
+        if preset_key
+        else "Your choices"
+    )
 
     embed = discord.Embed(
         title="🧩 Choose Core Features",
         description=(
-            "Choose the core modules that need server setup. Green means ON and gray means OFF. "
-            "Design, backups, analytics, and repair tools remain available later under **Manage Setup**."
+            "Choose the core modules that need server setup. Green means ON "
+            "and gray means OFF. Server Design, Backups & History, activity "
+            "tools, and repair options stay available under **Manage Setup**."
         ),
         color=discord.Color.blurple(),
         timestamp=now_utc(),
     )
     if saved_message:
-        embed.add_field(name="Saved", value=saved_message[:1024], inline=False)
+        embed.add_field(
+            name="Saved",
+            value=saved_message[:1024],
+            inline=False,
+        )
 
-    embed.add_field(name="Core Setup Plan", value=f"**{preset_label}**\n{_custom_mix_label(payload)}", inline=False)
-    embed.add_field(name="Core Modules", value=_service_summary_text(state), inline=False)
+    embed.add_field(
+        name="Core Setup Plan",
+        value=(
+            f"**{preset_label}**\n"
+            f"{_custom_mix_label(payload)}"
+        ),
+        inline=False,
+    )
+    embed.add_field(
+        name="Core Modules",
+        value=_service_summary_text(state),
+        inline=False,
+    )
     embed.add_field(
         name="Next",
         value=(
             "Choose the core modules, then press **Continue Quick Setup**. "
-            "Dank Shield asks only for the roles, channels, and permissions those modules require."
+            "Dank Shield asks only for the roles, channels, and permissions "
+            "those modules require."
         ),
         inline=False,
     )
-    embed.set_footer(text=f"Guild {guild.id} • choose your features")
+    embed.set_footer(
+        text=f"Guild {guild.id} • choose core features"
+    )
     return embed
+
 
 class CustomServicePresetSelect(discord.ui.Select):
     def __init__(self, current: Any) -> None:
-        options = []
-        current_payload = {key: bool(current.as_payload().get(key, False)) for key in _CUSTOM_SERVICE_FLAG_KEYS}
+        options: list[discord.SelectOption] = []
+        current_payload = {
+            key: bool(current.as_payload().get(key, False))
+            for key in _CUSTOM_SERVICE_FLAG_KEYS
+        }
         preset_key = _custom_preset_key_for_payload(current_payload)
 
         if not preset_key:
@@ -496,8 +872,16 @@ class CustomServicePresetSelect(discord.ui.Select):
                 )
             )
 
-        for key, (label, flags, desc, emoji) in CUSTOM_PRESETS.items():
-            preset_clean = {flag_key: bool(flags.get(flag_key, False)) for flag_key in _CUSTOM_SERVICE_FLAG_KEYS}
+        for key, (
+            label,
+            flags,
+            desc,
+            emoji,
+        ) in CUSTOM_PRESETS.items():
+            preset_clean = {
+                flag_key: bool(flags.get(flag_key, False))
+                for flag_key in _CUSTOM_SERVICE_FLAG_KEYS
+            }
             options.append(
                 discord.SelectOption(
                     label=label,
@@ -516,82 +900,138 @@ class CustomServicePresetSelect(discord.ui.Select):
             row=0,
         )
 
-    async def callback(self, interaction: discord.Interaction) -> None:
+    async def callback(
+        self,
+        interaction: discord.Interaction,
+    ) -> None:
         guild = interaction.guild
         if guild is None:
-            return await interaction.response.send_message("❌ This must be used inside a server.", ephemeral=True)
+            return await interaction.response.send_message(
+                "❌ This must be used inside a server.",
+                ephemeral=True,
+            )
 
         key = str(self.values[0])
         if key == "__custom_current__":
             await interaction.response.defer(ephemeral=True)
             state = await _load_custom_state(guild.id)
             return await interaction.edit_original_response(
-                embed=_custom_services_embed(guild, state, saved_message="Still using your current feature choices."),
+                embed=_custom_services_embed(
+                    guild,
+                    state,
+                    saved_message=(
+                        "Still using your current core feature choices."
+                    ),
+                ),
                 view=CustomServiceModeView(state),
             )
 
         preset = CUSTOM_PRESETS.get(key)
         if preset is None:
-            return await interaction.response.send_message("❌ That feature choice is no longer available. Choose another option.", ephemeral=True)
+            return await interaction.response.send_message(
+                (
+                    "❌ That feature choice is no longer available. "
+                    "Choose another option."
+                ),
+                ephemeral=True,
+            )
         label, flags, desc, _emoji = preset
         await interaction.response.defer(ephemeral=True)
-        await _save_custom_services(guild.id, dict(flags), interaction.user)
+        await _save_custom_services(
+            guild.id,
+            dict(flags),
+            interaction.user,
+        )
         state = await _load_custom_state(guild.id)
         await interaction.edit_original_response(
-            embed=_custom_services_embed(guild, state, saved_message=f"Saved **{label}**. {desc}"),
+            embed=_custom_services_embed(
+                guild,
+                state,
+                saved_message=f"Saved **{label}**. {desc}",
+            ),
             view=CustomServiceModeView(state),
         )
 
 
-
 class CustomServiceToggleButton(discord.ui.Button):
-    def __init__(self, key: str, label: str, selected: bool, emoji: str, row: int) -> None:
+    def __init__(
+        self,
+        key: str,
+        label: str,
+        selected: bool,
+        emoji: str,
+        row: int,
+    ) -> None:
         state_text = "ON ✅" if selected else "OFF ⬜"
         super().__init__(
             label=f"{label}: {state_text}",
             emoji=emoji,
-            style=discord.ButtonStyle.success if selected else discord.ButtonStyle.secondary,
+            style=(
+                discord.ButtonStyle.success
+                if selected
+                else discord.ButtonStyle.secondary
+            ),
             custom_id=f"dank_setup_custom_toggle:{key}",
             row=row,
         )
         self.key = key
         self.short_label = label
 
-    async def callback(self, interaction: discord.Interaction) -> None:
+    async def callback(
+        self,
+        interaction: discord.Interaction,
+    ) -> None:
         guild = interaction.guild
         if guild is None:
-            return await interaction.response.send_message("❌ This must be used inside a server.", ephemeral=True)
+            return await interaction.response.send_message(
+                "❌ This must be used inside a server.",
+                ephemeral=True,
+            )
 
         state = await _load_custom_state(guild.id)
         payload = state.as_payload()
         next_value = not bool(payload.get(self.key, False))
         payload[self.key] = next_value
 
-        if self.key == "voice_verification_enabled" and payload[self.key]:
+        if (
+            self.key == "voice_verification_enabled"
+            and payload[self.key]
+        ):
             payload["verification_enabled"] = True
             payload["tickets_enabled"] = True
             payload["moderation_enabled"] = True
 
-        if self.key == "verification_enabled" and not payload[self.key]:
+        if (
+            self.key == "verification_enabled"
+            and not payload[self.key]
+        ):
             payload["voice_verification_enabled"] = False
 
-        if self.key == "spam_guard_enabled" and payload[self.key]:
+        if (
+            self.key == "spam_guard_enabled"
+            and payload[self.key]
+        ):
             payload["moderation_enabled"] = True
 
         await interaction.response.defer(ephemeral=True)
-        await _save_custom_services(guild.id, payload, interaction.user)
+        await _save_custom_services(
+            guild.id,
+            payload,
+            interaction.user,
+        )
         next_state = await _load_custom_state(guild.id)
 
         await interaction.edit_original_response(
             embed=_custom_services_embed(
                 guild,
                 next_state,
-                saved_message=f"Set **{self.short_label}** to **{'ON' if next_value else 'OFF'}**.",
+                saved_message=(
+                    f"Set **{self.short_label}** to "
+                    f"**{'ON' if next_value else 'OFF'}**."
+                ),
             ),
             view=CustomServiceModeView(next_state),
         )
-
-
 
 
 class CustomServiceModeView(discord.ui.View):
@@ -600,11 +1040,51 @@ class CustomServiceModeView(discord.ui.View):
     def __init__(self, state: Any) -> None:
         super().__init__(timeout=900)
         self.add_item(CustomServicePresetSelect(state))
-        self.add_item(CustomServiceToggleButton("tickets_enabled", "Tickets", state.tickets, "🎫", 2))
-        self.add_item(CustomServiceToggleButton("verification_enabled", "Simple Verify", state.verification, "✅", 2))
-        self.add_item(CustomServiceToggleButton("voice_verification_enabled", "Voice Verify", state.voice, "🎙️", 2))
-        self.add_item(CustomServiceToggleButton("spam_guard_enabled", "SpamGuard", state.spamguard, "🛡️", 3))
-        self.add_item(CustomServiceToggleButton("moderation_enabled", "Logs", state.moderation, "🧾", 3))
+        self.add_item(
+            CustomServiceToggleButton(
+                "tickets_enabled",
+                "Tickets",
+                state.tickets,
+                "🎫",
+                2,
+            )
+        )
+        self.add_item(
+            CustomServiceToggleButton(
+                "verification_enabled",
+                "Simple Verify",
+                state.verification,
+                "✅",
+                2,
+            )
+        )
+        self.add_item(
+            CustomServiceToggleButton(
+                "voice_verification_enabled",
+                "Voice Verify",
+                state.voice,
+                "🎙️",
+                2,
+            )
+        )
+        self.add_item(
+            CustomServiceToggleButton(
+                "spam_guard_enabled",
+                "SpamGuard",
+                state.spamguard,
+                "🛡️",
+                3,
+            )
+        )
+        self.add_item(
+            CustomServiceToggleButton(
+                "moderation_enabled",
+                "Essential Logs",
+                state.moderation,
+                "🧾",
+                3,
+            )
+        )
 
     @discord.ui.button(
         label="Continue Quick Setup",
@@ -613,7 +1093,11 @@ class CustomServiceModeView(discord.ui.View):
         custom_id="dank_setup_custom:continue_quick",
         row=1,
     )
-    async def continue_guided(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+    async def continue_guided(
+        self,
+        interaction: discord.Interaction,
+        button: discord.ui.Button,
+    ) -> None:
         _ = button
         await recommend._open_guided_setup(interaction)
 
@@ -624,7 +1108,11 @@ class CustomServiceModeView(discord.ui.View):
         custom_id="dank_setup_custom:plans",
         row=4,
     )
-    async def back(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+    async def back(
+        self,
+        interaction: discord.Interaction,
+        button: discord.ui.Button,
+    ) -> None:
         _ = button
         await recommend._open_choose_setup_type(interaction)
 
@@ -635,7 +1123,11 @@ class CustomServiceModeView(discord.ui.View):
         custom_id="dank_setup_custom:home",
         row=4,
     )
-    async def home(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+    async def home(
+        self,
+        interaction: discord.Interaction,
+        button: discord.ui.Button,
+    ) -> None:
         _ = button
         await recommend._home_edit(interaction)
 
@@ -646,18 +1138,49 @@ class CustomServiceModeView(discord.ui.View):
         custom_id="dank_setup_custom:close",
         row=4,
     )
-    async def close(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+    async def close(
+        self,
+        interaction: discord.Interaction,
+        button: discord.ui.Button,
+    ) -> None:
         _ = button
         await recommend._close_setup(interaction)
 
-async def _open_custom_service_picker(interaction: discord.Interaction, *, saved_message: str = "") -> None:
+
+async def _open_custom_service_picker(
+    interaction: discord.Interaction,
+    *,
+    saved_message: str = "",
+) -> None:
     guild = interaction.guild
     if guild is None:
-        return await interaction.response.send_message("❌ This must be used inside a server.", ephemeral=True)
+        return await interaction.response.send_message(
+            "❌ This must be used inside a server.",
+            ephemeral=True,
+        )
     state = await _load_custom_state(guild.id)
-    state, detected_message = await _autofill_custom_state_from_existing(guild, state)
-    message = saved_message or detected_message or "Saved **Choose Core Features**. Dank Shield checked the existing server and pre-selected matching core modules. Turn off anything you do not want."
-    await solid._edit_or_followup(interaction, embed=_custom_services_embed(guild, state, saved_message=message), view=CustomServiceModeView(state))
+    state, detected_message = await _autofill_custom_state_from_existing(
+        guild,
+        state,
+    )
+    message = (
+        saved_message
+        or detected_message
+        or (
+            "Saved **Choose Core Features**. Dank Shield checked the existing "
+            "server and pre-selected matching core modules. Turn off anything "
+            "you do not want."
+        )
+    )
+    await solid._edit_or_followup(
+        interaction,
+        embed=_custom_services_embed(
+            guild,
+            state,
+            saved_message=message,
+        ),
+        view=CustomServiceModeView(state),
+    )
 
 
 async def _open_plain_health(
@@ -668,10 +1191,12 @@ async def _open_plain_health(
     await recommend._open_health_check(interaction)
 
 
-
-
 class SetupTypeChoiceSelect(discord.ui.Select):
-    def __init__(self, *, guild: Optional[discord.Guild] = None) -> None:
+    def __init__(
+        self,
+        *,
+        guild: Optional[discord.Guild] = None,
+    ) -> None:
         choices = _choices_for_guild(guild)
         super().__init__(
             placeholder="Choose a setup plan…",
@@ -689,20 +1214,62 @@ class SetupTypeChoiceSelect(discord.ui.Select):
             row=0,
         )
 
-    async def callback(self, interaction: discord.Interaction) -> None:
+    async def callback(
+        self,
+        interaction: discord.Interaction,
+    ) -> None:
         view = self.view
         if not isinstance(view, SetupTypeChoiceView):
             return
         choice = CHOICES_BY_KEY.get(str(self.values[0]))
         if choice is None:
-            return await interaction.response.send_message("❌ Unknown setup type.", ephemeral=True)
+            return await interaction.response.send_message(
+                "❌ Unknown setup plan.",
+                ephemeral=True,
+            )
         await view._save_and_show(interaction, choice)
 
 
-class SetupTypeChoiceView(solid.BackToSetupView):
-    def __init__(self, *, guild: Optional[discord.Guild] = None) -> None:
-        super().__init__()
+class SetupTypeChoiceView(discord.ui.View):
+    """Root Quick Setup plan picker with no advanced-page back route."""
+
+    def __init__(
+        self,
+        *,
+        guild: Optional[discord.Guild] = None,
+    ) -> None:
+        super().__init__(timeout=900)
         self.add_item(SetupTypeChoiceSelect(guild=guild))
+
+    @discord.ui.button(
+        label="Setup Home",
+        emoji="🏠",
+        style=discord.ButtonStyle.secondary,
+        custom_id="dank_setup_plans:home",
+        row=1,
+    )
+    async def home(
+        self,
+        interaction: discord.Interaction,
+        button: discord.ui.Button,
+    ) -> None:
+        _ = button
+        await recommend._home_edit(interaction)
+
+    @discord.ui.button(
+        label="Close",
+        emoji="✖️",
+        style=discord.ButtonStyle.secondary,
+        custom_id="dank_setup_plans:close",
+        row=1,
+    )
+    async def close(
+        self,
+        interaction: discord.Interaction,
+        button: discord.ui.Button,
+    ) -> None:
+        _ = button
+        await recommend._close_setup(interaction)
 
     async def _save_and_show(
         self,
@@ -713,10 +1280,19 @@ class SetupTypeChoiceView(solid.BackToSetupView):
             return
         guild = interaction.guild
         if guild is None:
-            return await interaction.response.send_message("❌ This must be used inside a server.", ephemeral=True)
-        if choice.needs_id and not id_verify_allowed_for_guild(guild):
             return await interaction.response.send_message(
-                "🔒 ID/Web Verify is not available for this server. Use **Simple Verify** instead.",
+                "❌ This must be used inside a server.",
+                ephemeral=True,
+            )
+        if (
+            choice.needs_id
+            and not id_verify_allowed_for_guild(guild)
+        ):
+            return await interaction.response.send_message(
+                (
+                    "🔒 ID/Web Verify is not available for this server. "
+                    "Use **Simple Verify** instead."
+                ),
                 ephemeral=True,
                 allowed_mentions=discord.AllowedMentions.none(),
             )
@@ -726,8 +1302,9 @@ class SetupTypeChoiceView(solid.BackToSetupView):
             return await _open_custom_service_picker(
                 interaction,
                 saved_message=(
-                    "Saved **Choose Core Features**. Choose the core modules this server should use, "
-                    "then press **Continue Quick Setup**."
+                    "Saved **Choose Core Features**. Choose the core modules "
+                    "this server should use, then press "
+                    "**Continue Quick Setup**."
                 ),
             )
         await recommend._open_guided_setup(
@@ -735,17 +1312,24 @@ class SetupTypeChoiceView(solid.BackToSetupView):
             saved_message=f"Saved **{choice.label}**.",
         )
 
+
 def register_public_setup_fresh_choice_commands(
     bot: Any,
     tree: Any,
 ) -> None:
-    """Register choice helpers without replacing setup home."""
+    """Register Quick Setup choices without replacing Setup Home."""
 
     _ = bot, tree
     print(
         "✅ public_setup_fresh_choice: "
-        "guided setup choices ready"
+        "Quick Setup choices ready"
     )
 
 
-__all__ = ["register_public_setup_fresh_choice_commands", "get_plain_setup_choice", "PlainSetupChoice", "SETUP_CHOICES", "CHOICES_BY_KEY"]
+__all__ = [
+    "register_public_setup_fresh_choice_commands",
+    "get_plain_setup_choice",
+    "PlainSetupChoice",
+    "SETUP_CHOICES",
+    "CHOICES_BY_KEY",
+]
