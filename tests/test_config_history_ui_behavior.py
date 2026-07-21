@@ -266,7 +266,6 @@ def test_version_detail_explains_contents_and_three_restore_modes() -> None:
         "Choose Exact Changes",
         "Restore All Differences",
         "Back to History",
-        "Back to All Features",
         "Setup Home",
         "Close",
     }
