@@ -43,7 +43,6 @@ from stoney_verify.startup_guards import (
 #     setup_health_defer_guard,
 #     setup_scoreboard_command,
 #     setup_idle_kick_scoreboard_guard,
-#     setup_permission_repair_truth_guard,
 #     setup_permission_repair_modlog_silence_guard,
 #     setup_permission_repair_preview_clarity_guard,
 #     setup_role_safety,
