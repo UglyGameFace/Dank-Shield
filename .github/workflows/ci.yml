@@ -165,7 +165,7 @@ jobs:
         run: |
           rm -rf "$HOME/Dank-Shield"
           ln -s "$GITHUB_WORKSPACE" "$HOME/Dank-Shield"
-          if ! bash /tmp/run_setup_navigation_ux_overhaul_v3.sh > /tmp/setup-overhaul.log 2>&1; then
+          if ! TMPDIR=/tmp bash /tmp/run_setup_navigation_ux_overhaul_v3.sh > /tmp/setup-overhaul.log 2>&1; then
             tail -n 160 /tmp/setup-overhaul.log
             exit 1
           fi
