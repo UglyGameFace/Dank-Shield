@@ -171,6 +171,14 @@ jobs:
           fi
           tail -n 80 /tmp/setup-overhaul.log
 
+      - name: Upload failed setup-overhaul log
+        if: failure() && steps.gate.outputs.enabled == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: setup-overhaul-failure-log
+          path: /tmp/setup-overhaul.log
+          retention-days: 1
+
       - name: Remove one-time CI scaffolding
         if: steps.gate.outputs.enabled == 'true'
         shell: bash
