@@ -59,7 +59,6 @@ from stoney_verify.startup_guards import (
 #     setup_category_modal_compat,
 #     setup_channel_font_mode_guard,
 #     setup_verification_toggle_independence_guard,
-#     setup_verification_idle_kick_controls,
 #     setup_vc_health_precision_guard,
 #     # ... (many more commented out for safety)
 # )
@@ -101,4 +100,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
