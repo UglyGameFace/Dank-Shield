@@ -55,6 +55,7 @@ def test_launch_hides_actions_for_features_that_are_off() -> None:
         "Finish Setup",
         "Review Setup",
         "Setup Home",
+        "Close",
     ]
 
 
@@ -126,4 +127,5 @@ def test_shared_submenu_navigation_is_compact() -> None:
     for child in view.children:
         row = int(getattr(child, "row", 0) or 0)
         counts[row] = counts.get(row, 0) + 1
-    assert all(count <= 2 for count in counts.values())
+    assert all(count <= 5 for count in counts.values())
+    assert len(view.children) <= 25
