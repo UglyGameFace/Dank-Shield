@@ -192,7 +192,7 @@ jobs:
             git add -A
             echo "=== STAGED FILES ==="
             git diff --cached --name-status
-            unexpected="$(git diff --cached --name-only | grep -Ev '^(tests/|\.github/workflows/ci\.yml|\.github/APPLY_SETUP_AIO_TEST_MIGRATION_ONCE|stoney_verify/commands_ext/public_setup_recommend\.py|tools/migrate_setup_aio_behavior_tests\.py|tools/audit_setup_safety\.py|tools/test_custom_state_and_launch_actions\.py|tools/test_setup_.*\.py)$' || true)"
+            unexpected="$(git diff --cached --name-only | grep -Ev '^(tests/.*|\.github/workflows/ci\.yml|\.github/APPLY_SETUP_AIO_TEST_MIGRATION_ONCE|stoney_verify/commands_ext/public_setup_recommend\.py|tools/migrate_setup_aio_behavior_tests\.py|tools/audit_setup_safety\.py|tools/test_custom_state_and_launch_actions\.py|tools/test_setup_.*\.py)$' || true)"
             if [[ -n "$unexpected" ]]; then
               echo "Unexpected staged files:"
               printf '%s\n' "$unexpected"
