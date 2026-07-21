@@ -99,6 +99,7 @@ obsolete = (
     "tests/test_setup_ux_clarity_guard_retired.py",
     "tools/test_custom_state_and_launch_actions.py",
     "tools/test_setup_choice_preview_compact.py",
+    "tools/test_setup_existing_join_leave_menu_static.py",
 )
 
 for filename in obsolete:
