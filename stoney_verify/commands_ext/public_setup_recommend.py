@@ -1366,7 +1366,7 @@ class SetupReviewView(discord.ui.View):
         close_button = discord.ui.Button(
             label="Close",
             emoji="✖️",
-            style=discord.ButtonStyle.secondary,
+            style=discord.ButtonStyle.danger,
             custom_id="dank_setup_review:close",
             row=2,
         )
@@ -3523,7 +3523,7 @@ class ProductSetupHomeView(discord.ui.View):
     @discord.ui.button(
         label="Close",
         emoji="✖️",
-        style=discord.ButtonStyle.secondary,
+        style=discord.ButtonStyle.danger,
         custom_id="dank_setup_home:close",
         row=1,
     )
@@ -3588,7 +3588,7 @@ class ContinueSetupView(discord.ui.View):
     @discord.ui.button(
         label="Close",
         emoji="✖️",
-        style=discord.ButtonStyle.secondary,
+        style=discord.ButtonStyle.danger,
         custom_id="dank_setup_guided:close",
         row=1,
     )
@@ -3705,7 +3705,7 @@ class ManageSetupView(discord.ui.View):
     @discord.ui.button(
         label="Close",
         emoji="✖️",
-        style=discord.ButtonStyle.secondary,
+        style=discord.ButtonStyle.danger,
         custom_id="dank_setup_manage:close",
         row=3,
     )
@@ -3830,7 +3830,7 @@ class AdvancedSettingsHubView(discord.ui.View):
     @discord.ui.button(
         label="Close",
         emoji="✖️",
-        style=discord.ButtonStyle.secondary,
+        style=discord.ButtonStyle.danger,
         custom_id="dank_setup_features:close",
         row=4,
     )
@@ -3868,7 +3868,7 @@ class AdvancedCoreSetupView(discord.ui.View):
         _ = button
         await _home_edit(interaction)
 
-    @discord.ui.button(label="Close", emoji="✖️", style=discord.ButtonStyle.secondary, custom_id="dank_setup_core:close", row=2)
+    @discord.ui.button(label="Close", emoji="✖️", style=discord.ButtonStyle.danger, custom_id="dank_setup_core:close", row=2)
     async def close(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
         await _close_setup(interaction)
@@ -3903,7 +3903,7 @@ class AdvancedMemberExperienceView(discord.ui.View):
         _ = button
         await _home_edit(interaction)
 
-    @discord.ui.button(label="Close", emoji="✖️", style=discord.ButtonStyle.secondary, custom_id="dank_setup_tickets:close", row=2)
+    @discord.ui.button(label="Close", emoji="✖️", style=discord.ButtonStyle.danger, custom_id="dank_setup_tickets:close", row=2)
     async def close(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
         await _close_setup(interaction)
@@ -3938,7 +3938,7 @@ class AdvancedVerificationView(discord.ui.View):
         _ = button
         await _home_edit(interaction)
 
-    @discord.ui.button(label="Close", emoji="✖️", style=discord.ButtonStyle.secondary, custom_id="dank_setup_verify:close", row=2)
+    @discord.ui.button(label="Close", emoji="✖️", style=discord.ButtonStyle.danger, custom_id="dank_setup_verify:close", row=2)
     async def close(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
         await _close_setup(interaction)
@@ -3973,7 +3973,7 @@ class AdvancedSecurityView(discord.ui.View):
         _ = button
         await _home_edit(interaction)
 
-    @discord.ui.button(label="Close", emoji="✖️", style=discord.ButtonStyle.secondary, custom_id="dank_setup_security:close", row=2)
+    @discord.ui.button(label="Close", emoji="✖️", style=discord.ButtonStyle.danger, custom_id="dank_setup_security:close", row=2)
     async def close(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
         await _close_setup(interaction)
@@ -4008,7 +4008,7 @@ class AdvancedLogsActivityView(discord.ui.View):
         _ = button
         await _home_edit(interaction)
 
-    @discord.ui.button(label="Close", emoji="✖️", style=discord.ButtonStyle.secondary, custom_id="dank_setup_logs:close", row=2)
+    @discord.ui.button(label="Close", emoji="✖️", style=discord.ButtonStyle.danger, custom_id="dank_setup_logs:close", row=2)
     async def close(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
         await _close_setup(interaction)
@@ -4042,7 +4042,7 @@ class AdvancedAppearanceView(discord.ui.View):
         _ = button
         await _home_edit(interaction)
 
-    @discord.ui.button(label="Close", emoji="✖️", style=discord.ButtonStyle.secondary, custom_id="dank_setup_design:close", row=1)
+    @discord.ui.button(label="Close", emoji="✖️", style=discord.ButtonStyle.danger, custom_id="dank_setup_design:close", row=1)
     async def close(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
         await _close_setup(interaction)
@@ -4067,7 +4067,7 @@ class AdvancedDangerZoneView(discord.ui.View):
         _ = button
         await _home_edit(interaction)
 
-    @discord.ui.button(label="Close", emoji="✖️", style=discord.ButtonStyle.secondary, custom_id="dank_setup_repair:close", row=1)
+    @discord.ui.button(label="Close", emoji="✖️", style=discord.ButtonStyle.danger, custom_id="dank_setup_repair:close", row=1)
     async def close(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
         await _close_setup(interaction)
@@ -4350,7 +4350,7 @@ class LaunchTestView(discord.ui.View):
         actions.extend([
             ("Review Setup", "🩺", discord.ButtonStyle.secondary, "dank_setup_test:review", self._review),
             ("Setup Home", "🏠", discord.ButtonStyle.secondary, "dank_setup_test:home", self._home),
-            ("Close", "✖️", discord.ButtonStyle.secondary, "dank_setup_test:close", self._close),
+            ("Close", "✖️", discord.ButtonStyle.danger, "dank_setup_test:close", self._close),
         ])
 
         for index, (label, emoji, style, custom_id, callback) in enumerate(actions):
@@ -4435,7 +4435,7 @@ class FinishedSetupView(discord.ui.View):
         _ = button
         await _home_edit(interaction)
 
-    @discord.ui.button(label="Close", emoji="✖️", style=discord.ButtonStyle.secondary, custom_id="dank_setup_finished:close", row=1)
+    @discord.ui.button(label="Close", emoji="✖️", style=discord.ButtonStyle.danger, custom_id="dank_setup_finished:close", row=1)
     async def close(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
         await _close_setup(interaction)

@@ -562,7 +562,7 @@ class ConfigHistoryView(discord.ui.View):
     @discord.ui.button(
         label="Close",
         emoji="✖️",
-        style=discord.ButtonStyle.secondary,
+        style=discord.ButtonStyle.danger,
         custom_id="dank_setup_config_history:close",
         row=2,
     )
@@ -701,7 +701,7 @@ class BackupContentsView(discord.ui.View):
     @discord.ui.button(
         label="Close",
         emoji="✖️",
-        style=discord.ButtonStyle.secondary,
+        style=discord.ButtonStyle.danger,
         custom_id="dank_setup_config_history:backup_close",
         row=2,
     )
@@ -791,7 +791,7 @@ class ConfigVersionDetailView(discord.ui.View):
     @discord.ui.button(
         label="Close",
         emoji="✖️",
-        style=discord.ButtonStyle.secondary,
+        style=discord.ButtonStyle.danger,
         custom_id="dank_setup_config_history:detail_close",
         row=3,
     )
@@ -977,7 +977,7 @@ class SelectiveRestorePickerView(discord.ui.View):
     @discord.ui.button(
         label="Close",
         emoji="✖️",
-        style=discord.ButtonStyle.secondary,
+        style=discord.ButtonStyle.danger,
         custom_id="dank_setup_config_history:picker_close",
         row=3,
     )

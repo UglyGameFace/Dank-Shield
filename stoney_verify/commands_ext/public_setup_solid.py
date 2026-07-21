@@ -1125,7 +1125,7 @@ class SetupNavView(discord.ui.View):
     @discord.ui.button(
         label="Close",
         emoji="✖️",
-        style=discord.ButtonStyle.secondary,
+        style=discord.ButtonStyle.danger,
         custom_id="dank_setup_nested:close",
         row=4,
     )
