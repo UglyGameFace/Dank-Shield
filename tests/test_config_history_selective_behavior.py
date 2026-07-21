@@ -193,7 +193,12 @@ def test_selective_core_restore_changes_only_requested_setting(
     )
     monkeypatch.setattr(history, "_fetch_version_sync", lambda *_args, **_kwargs: version)
     monkeypatch.setattr(history, "_require_supabase", lambda: FakeSupabase(recorder))
-    monkeypatch.setattr(history, "_insert_snapshot_sync", lambda *args, **kwargs: backups.append({"args": args, "kwargs": kwargs}) or {"version_id": 99})
+    monkeypatch.setattr(
+        history,
+        "_insert_snapshot_sync",
+        lambda *args, **kwargs: backups.append({"args": args, "kwargs": kwargs})
+        or {"version_id": 99},
+    )
     monkeypatch.setattr(selective, "clear_guild_config_cache", lambda _guild_id: None)
 
     result = selective.restore_config_version_selective_sync(
@@ -278,7 +283,13 @@ def test_selective_ticket_restore_preserves_unselected_current_choices(
         {"guild_id": "123", "slug": "billing", "name": "Billing", "sort_order": 15},
         {"guild_id": "123", "slug": "partnerships", "name": "Partnerships", "sort_order": 20},
     ]
-    fetches = iter([(True, current_rows), (True, restored_rows)])
+    fetches = iter(
+        [
+            (True, current_rows),
+            (True, current_rows),
+            (True, restored_rows),
+        ]
+    )
     recorder: dict[str, Any] = {}
     inserted: list[dict[str, Any]] = []
 
@@ -288,12 +299,17 @@ def test_selective_ticket_restore_preserves_unselected_current_choices(
         lambda _guild_id: ("guild_configs", {"guild_id": "123"}),
     )
     monkeypatch.setattr(history, "_fetch_version_sync", lambda *_args, **_kwargs: version)
-    monkeypatch.setattr(history, "_fetch_ticket_categories_state_sync", lambda _guild_id: next(fetches))
+    monkeypatch.setattr(
+        history,
+        "_fetch_ticket_categories_state_sync",
+        lambda _guild_id: next(fetches),
+    )
     monkeypatch.setattr(history, "_require_supabase", lambda: FakeSupabase(recorder))
     monkeypatch.setattr(
         history,
         "_insert_snapshot_sync",
-        lambda *args, **kwargs: inserted.append({"args": args, "kwargs": kwargs}) or {"version_id": 90 + len(inserted)},
+        lambda *args, **kwargs: inserted.append({"args": args, "kwargs": kwargs})
+        or {"version_id": 90 + len(inserted)},
     )
 
     result = selective.restore_config_version_selective_sync(
