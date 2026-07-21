@@ -953,6 +953,84 @@ class CustomServicePresetSelect(discord.ui.Select):
         )
 
 
+def _apply_custom_service_toggle(
+    payload: dict[str, Any],
+    key: str,
+) -> tuple[dict[str, bool], bool, bool, str]:
+    """Apply one visible toggle without hiding dependency changes from owners."""
+
+    clean = {
+        flag: bool(payload.get(flag, False))
+        for flag in _CUSTOM_SERVICE_FLAG_KEYS
+    }
+    if key not in clean:
+        return clean, False, False, "That core feature is no longer available."
+
+    next_value = not clean[key]
+
+    if not next_value:
+        required_by: list[str] = []
+        if key in {"tickets_enabled", "verification_enabled"} and clean[
+            "voice_verification_enabled"
+        ]:
+            required_by.append("Voice Verify")
+        if key == "moderation_enabled":
+            if clean["voice_verification_enabled"]:
+                required_by.append("Voice Verify")
+            if clean["spam_guard_enabled"]:
+                required_by.append("SpamGuard")
+
+        if required_by:
+            names = " and ".join(required_by)
+            return (
+                clean,
+                True,
+                False,
+                (
+                    f"**{names}** needs **"
+                    + {
+                        "tickets_enabled": "Tickets",
+                        "verification_enabled": "Simple Verify",
+                        "moderation_enabled": "Essential Logs",
+                    }[key]
+                    + "**. Turn the dependent feature off first."
+                ),
+            )
+
+    clean[key] = next_value
+    dependency_note = ""
+
+    if key == "voice_verification_enabled" and next_value:
+        required = (
+            ("verification_enabled", "Simple Verify"),
+            ("tickets_enabled", "Tickets"),
+            ("moderation_enabled", "Essential Logs"),
+        )
+        enabled_for_dependency = [
+            label
+            for dependency_key, label in required
+            if not clean[dependency_key]
+        ]
+        for dependency_key, _label in required:
+            clean[dependency_key] = True
+        if enabled_for_dependency:
+            dependency_note = (
+                "Voice Verify needs Simple Verify, Tickets, and Essential Logs, "
+                "so Dank Shield also turned on: **"
+                + "**, **".join(enabled_for_dependency)
+                + "**."
+            )
+
+    if key == "spam_guard_enabled" and next_value and not clean["moderation_enabled"]:
+        clean["moderation_enabled"] = True
+        dependency_note = (
+            "SpamGuard needs Essential Logs, so Dank Shield also turned on "
+            "**Essential Logs**."
+        )
+
+    return clean, bool(clean[key]), True, dependency_note
+
+
 class CustomServiceToggleButton(discord.ui.Button):
     def __init__(
         self,
@@ -989,46 +1067,40 @@ class CustomServiceToggleButton(discord.ui.Button):
             )
 
         state = await _load_custom_state(guild.id)
-        payload = state.as_payload()
-        next_value = not bool(payload.get(self.key, False))
-        payload[self.key] = next_value
-
-        if (
-            self.key == "voice_verification_enabled"
-            and payload[self.key]
-        ):
-            payload["verification_enabled"] = True
-            payload["tickets_enabled"] = True
-            payload["moderation_enabled"] = True
-
-        if (
-            self.key == "verification_enabled"
-            and not payload[self.key]
-        ):
-            payload["voice_verification_enabled"] = False
-
-        if (
-            self.key == "spam_guard_enabled"
-            and payload[self.key]
-        ):
-            payload["moderation_enabled"] = True
+        payload, effective_value, changed, dependency_note = (
+            _apply_custom_service_toggle(
+                state.as_payload(),
+                self.key,
+            )
+        )
 
         await interaction.response.defer(ephemeral=True)
-        await _save_custom_services(
-            guild.id,
-            payload,
-            interaction.user,
-        )
-        next_state = await _load_custom_state(guild.id)
+        if changed:
+            await _save_custom_services(
+                guild.id,
+                payload,
+                interaction.user,
+            )
+            next_state = await _load_custom_state(guild.id)
+            saved_message = (
+                f"Set **{self.short_label}** to "
+                f"**{'ON' if effective_value else 'OFF'}**."
+            )
+        else:
+            next_state = state
+            saved_message = (
+                f"Kept **{self.short_label}** "
+                f"**{'ON' if effective_value else 'OFF'}**."
+            )
+
+        if dependency_note:
+            saved_message += f"\n{dependency_note}"
 
         await interaction.edit_original_response(
             embed=_custom_services_embed(
                 guild,
                 next_state,
-                saved_message=(
-                    f"Set **{self.short_label}** to "
-                    f"**{'ON' if next_value else 'OFF'}**."
-                ),
+                saved_message=saved_message,
             ),
             view=CustomServiceModeView(next_state),
         )
