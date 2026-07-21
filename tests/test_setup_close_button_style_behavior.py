@@ -35,6 +35,10 @@ def test_active_setup_close_buttons_are_visually_distinct() -> None:
         solid.SetupNavView(),
         solid.SolidSetupView(),
         recommend.ProductSetupHomeView(),
+        __import__(
+            "stoney_verify.commands_ext.public_setup_fresh_choice",
+            fromlist=["SetupTypeChoiceView"],
+        ).SetupTypeChoiceView(),
         recommend.ContinueSetupView(target="retry", ready=False),
         recommend.SetupReviewView(ready=False),
         recommend.ManageSetupView(),

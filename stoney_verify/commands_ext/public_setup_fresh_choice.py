@@ -1400,7 +1400,7 @@ class SetupTypeChoiceView(discord.ui.View):
     @discord.ui.button(
         label="Close",
         emoji="✖️",
-        style=discord.ButtonStyle.secondary,
+        style=discord.ButtonStyle.danger,
         custom_id="dank_setup_plans:close",
         row=1,
     )
