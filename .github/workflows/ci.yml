@@ -82,3 +82,128 @@ jobs:
 
       - name: Audit event boundary ownership
         run: python tools/audit_event_boundary.py
+
+  apply-aio-setup-ux-phase-three-once:
+    name: Apply AIO setup UX phase three once
+    if: github.event_name == 'pull_request' && github.head_ref == 'fix/setup-navigation-ux-overhaul'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    permissions:
+      contents: write
+
+    steps:
+      - name: Check out feature branch
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.head_ref }}
+          fetch-depth: 0
+          show-progress: false
+
+      - name: Check one-time gate
+        id: gate
+        shell: bash
+        run: |
+          if [[ -f .github/APPLY_SETUP_AIO_UX_PHASE3_ONCE ]]; then
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            echo "One-time AIO setup UX phase-three gate is absent."
+          fi
+
+      - name: Set up Python
+        if: steps.gate.outputs.enabled == 'true'
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+
+      - name: Install dependencies
+        if: steps.gate.outputs.enabled == 'true'
+        run: |
+          python -m pip install --upgrade pip -q
+          pip install -q -r requirements.txt
+          pip install -q pytest
+
+      - name: Apply nested navigation and ownership patch
+        if: steps.gate.outputs.enabled == 'true'
+        shell: bash
+        run: |
+          if ! python tools/apply_setup_aio_ux_phase3.py > /tmp/aio-setup-phase3-patch.log 2>&1; then
+            tail -n 220 /tmp/aio-setup-phase3-patch.log
+            exit 1
+          fi
+          tail -n 100 /tmp/aio-setup-phase3-patch.log
+
+      - name: Upload failed patch log
+        if: failure() && steps.gate.outputs.enabled == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: aio-setup-phase-three-patch-failure
+          path: /tmp/aio-setup-phase3-patch.log
+          retention-days: 1
+
+      - name: Remove one-time scaffolding before validation
+        if: steps.gate.outputs.enabled == 'true'
+        shell: bash
+        run: |
+          git show origin/main:.github/workflows/ci.yml > .github/workflows/ci.yml
+          rm -f .github/APPLY_SETUP_AIO_UX_PHASE3_ONCE
+          rm -f tools/apply_setup_aio_ux_phase3.py
+
+      - name: Validate complete nested setup change
+        if: steps.gate.outputs.enabled == 'true'
+        shell: bash
+        env:
+          DANK_STARTUP_LOG_STYLE: quiet
+          DANK_COMMAND_LOG_STYLE: quiet
+        run: |
+          if ! {
+            git diff --check
+            python -m compileall -q stoney_verify main.py tools
+            python -m pytest tests/ -q --tb=short --disable-warnings
+            status=0
+            for f in tools/test_*.py; do
+              echo "::group::$f"
+              python "$f" || status=1
+              echo "::endgroup::"
+            done
+            test "$status" -eq 0
+            python tools/audit_public_setup.py
+            python tools/audit_public_command_surface.py
+            python tools/audit_public_command_friction.py
+            python tools/audit_public_invite_permissions.py
+            python tools/audit_setup_safety.py
+            python tools/audit_dank_design_smart_auto_detect.py
+            python tools/audit_role_truth.py
+            python tools/audit_event_boundary.py
+          } > /tmp/aio-setup-phase3-validation.log 2>&1; then
+            tail -n 280 /tmp/aio-setup-phase3-validation.log
+            exit 1
+          fi
+          tail -n 120 /tmp/aio-setup-phase3-validation.log
+
+      - name: Upload failed validation log
+        if: failure() && steps.gate.outputs.enabled == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: aio-setup-phase-three-validation-failure
+          path: /tmp/aio-setup-phase3-validation.log
+          retention-days: 1
+
+      - name: Commit only validated nested setup source
+        if: steps.gate.outputs.enabled == 'true'
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git reset
+          git add -A
+          allowed='^(\.github/workflows/ci\.yml|\.github/APPLY_SETUP_AIO_UX_PHASE3_ONCE|tools/apply_setup_aio_ux_phase3\.py|stoney_verify/config_history_ui\.py|stoney_verify/commands_ext/public_setup_solid\.py|stoney_verify/commands_ext/public_setup_recommend\.py|stoney_verify/commands_ext/public_setup_full_customization\.py|stoney_verify/commands_ext/public_setup_recovery\.py|stoney_verify/commands_ext/public_setup_cleanup\.py|tests/test_setup_navigation_ux_overhaul_behavior\.py|tests/test_setup_nested_navigation_behavior\.py)$'
+          unexpected="$(git diff --cached --name-only | grep -Ev "$allowed" || true)"
+          if [[ -n "$unexpected" ]]; then
+            echo "Unexpected staged files:"
+            printf '%s\n' "$unexpected"
+            exit 1
+          fi
+          git commit -m "Unify nested setup navigation ownership"
+          git push origin HEAD:fix/setup-navigation-ux-overhaul
