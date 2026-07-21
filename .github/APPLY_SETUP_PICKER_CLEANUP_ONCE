@@ -1,1 +1,0 @@
-Remove the duplicate ticket-panel destination from the existing-items picker, clarify Timers & Rules, validate the full behavior suite, then remove this gate in the same validated commit.
