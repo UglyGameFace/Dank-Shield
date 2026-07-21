@@ -974,6 +974,8 @@ async def _setup_defaults_callback(
     ticket_panel_channel: Optional[discord.TextChannel] = None
     vc_verify_channel: Optional[discord.VoiceChannel] = None
     vc_queue_channel: Optional[discord.TextChannel] = None
+    vc_verify_preexisting = False
+    vc_queue_preexisting = False
     transcripts_channel: Optional[discord.TextChannel] = None
     modlog_channel: Optional[discord.TextChannel] = None
     join_leave_channel: Optional[discord.TextChannel] = None
@@ -1061,13 +1063,18 @@ async def _setup_defaults_callback(
         )
 
     if services["voice"]:
+        configured_vc_verify = _channel_from_config(
+            guild,
+            cfg,
+            discord.VoiceChannel,
+            "vc_verify_channel_id",
+        )
+        vc_verify_preexisting = bool(
+            configured_vc_verify
+            or _voice_by_name(guild, VC_VERIFY_CHANNEL_NAME)
+        )
         vc_verify_channel = (
-            _channel_from_config(
-                guild,
-                cfg,
-                discord.VoiceChannel,
-                "vc_verify_channel_id",
-            )
+            configured_vc_verify
             or await _ensure_voice(
                 guild,
                 VC_VERIFY_CHANNEL_NAME,
@@ -1079,15 +1086,20 @@ async def _setup_defaults_callback(
             )
         )
 
+        configured_vc_queue = _channel_from_config(
+            guild,
+            cfg,
+            discord.TextChannel,
+            "vc_verify_queue_channel_id",
+            "vc_queue_channel_id",
+            "vc_request_channel_id",
+        )
+        vc_queue_preexisting = bool(
+            configured_vc_queue
+            or _text_by_name(guild, VC_QUEUE_CHANNEL_NAME)
+        )
         vc_queue_channel = (
-            _channel_from_config(
-                guild,
-                cfg,
-                discord.TextChannel,
-                "vc_verify_queue_channel_id",
-                "vc_queue_channel_id",
-                "vc_request_channel_id",
-            )
+            configured_vc_queue
             or await _ensure_text(
                 guild,
                 VC_QUEUE_CHANNEL_NAME,
@@ -1365,6 +1377,14 @@ async def _setup_defaults_callback(
                 ),
             }
         )
+        if vc_verify_channel is not None and not vc_verify_preexisting:
+            updates["vc_verify_channel_managed_id"] = item_id(
+                vc_verify_channel
+            )
+        if vc_queue_channel is not None and not vc_queue_preexisting:
+            updates["vc_verify_queue_channel_managed_id"] = item_id(
+                vc_queue_channel
+            )
 
     if services["welcome"]:
         updates["welcome_channel_id"] = item_id(

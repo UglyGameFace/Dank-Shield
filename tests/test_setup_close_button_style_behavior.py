@@ -64,6 +64,7 @@ def test_active_setup_close_buttons_are_visually_distinct() -> None:
 def test_setup_sources_do_not_define_gray_close_controls() -> None:
     paths = (
         ROOT / "stoney_verify/commands_ext/public_setup_recommend.py",
+        ROOT / "stoney_verify/commands_ext/public_setup_fresh_choice.py",
         ROOT / "stoney_verify/commands_ext/public_setup_solid.py",
         ROOT / "stoney_verify/commands_ext/public_setup_cleanup.py",
         ROOT / "stoney_verify/config_history_ui.py",

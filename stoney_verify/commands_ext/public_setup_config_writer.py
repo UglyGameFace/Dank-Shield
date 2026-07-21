@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from datetime import datetime, timezone
-from typing import Any, Mapping, Optional
+from typing import Any, Iterable, Mapping, Optional
 
 from ..globals import get_supabase, now_utc
 
@@ -394,6 +394,131 @@ async def upsert_guild_config(guild_id: int, updates: Mapping[str, Any]) -> dict
     return await asyncio.to_thread(upsert_guild_config_sync, int(guild_id), dict(updates))
 
 
+def _settings_payload_without_keys(
+    original: Optional[Mapping[str, Any]],
+    clear_keys: Iterable[str],
+    metadata: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Return the merged JSON payload after explicitly removing keys."""
+
+    settings = _settings_payload_update(original, {})
+    for key in {str(item).strip() for item in clear_keys if str(item).strip()}:
+        settings.pop(key, None)
+    for key, value in dict(metadata).items():
+        if value is not None:
+            settings[str(key)] = value
+    return settings
+
+
+def clear_guild_config_keys_sync(
+    guild_id: int,
+    keys: Iterable[str],
+    *,
+    source: str = "/dank setup resource reconciliation",
+    actor: Any = None,
+) -> dict[str, Any]:
+    """Explicitly clear stale saved setup keys in flat + JSON config storage."""
+
+    sb = get_supabase()
+    if sb is None:
+        raise RuntimeError("Supabase is not configured/available.")
+
+    gid = int(guild_id)
+    existing = _fetch_existing_config_row_sync(gid)
+    if not existing:
+        return {"guild_id": str(gid)}
+
+    clear_keys = {
+        str(key).strip()
+        for key in keys
+        if str(key).strip()
+        and str(key).strip() not in _CONTROL_KEYS
+        and str(key).strip() not in _BASE_WRITE_KEYS
+        and str(key).strip() not in _JSON_CONFIG_KEYS
+    }
+    if not clear_keys:
+        return dict(existing)
+
+    stamp = _utc_iso()
+    metadata: dict[str, Any] = {
+        "config_last_write_mode": "explicit_override",
+        "config_last_write_source": str(source or "/dank setup resource reconciliation")[:300],
+        "config_last_write_at": stamp,
+        "setup_completed": False,
+        "setup_completion_invalidated_at": stamp,
+    }
+    if actor is not None:
+        metadata["configured_by_id"] = str(getattr(actor, "id", "") or "")
+        metadata["configured_by_name"] = str(actor)
+
+    settings = _settings_payload_without_keys(existing, clear_keys, metadata)
+    columns = {str(key) for key in existing.keys()}
+    flat_clear = {key: None for key in clear_keys if key in columns}
+    flat_metadata = {
+        key: value
+        for key, value in metadata.items()
+        if key in columns
+    }
+    base_fields = {
+        "guild_id": str(gid),
+        "updated_at": stamp,
+    }
+
+    attempts: list[dict[str, Any]] = []
+    if "settings" in columns:
+        attempts.append({**base_fields, "settings": settings, **flat_clear, **flat_metadata})
+    if "config" in columns:
+        attempts.append({**base_fields, "config": settings, **flat_clear, **flat_metadata})
+    if flat_clear or flat_metadata:
+        attempts.append({**base_fields, **flat_clear, **flat_metadata})
+
+    if not attempts:
+        return dict(existing)
+
+    table = _config_table_name()
+    last_error: Optional[Exception] = None
+    for payload in attempts:
+        try:
+            response = (
+                sb.table(table)
+                .update(payload)
+                .eq("guild_id", str(gid))
+                .execute()
+            )
+            rows = getattr(response, "data", None) or []
+            if rows and isinstance(rows[0], Mapping):
+                return dict(rows[0])
+            refreshed = _fetch_existing_config_row_sync(gid)
+            return refreshed or payload
+        except Exception as exc:
+            last_error = exc
+
+    raise RuntimeError(f"Failed clearing guild config keys: {last_error!r}")
+
+
+async def clear_guild_config_keys(
+    guild_id: int,
+    keys: Iterable[str],
+    *,
+    source: str = "/dank setup resource reconciliation",
+    actor: Any = None,
+) -> dict[str, Any]:
+    result = await asyncio.to_thread(
+        clear_guild_config_keys_sync,
+        int(guild_id),
+        tuple(keys),
+        source=source,
+        actor=actor,
+    )
+    try:
+        from ..guild_config import invalidate_guild_config
+
+        invalidate_guild_config(int(guild_id))
+    except Exception:
+        pass
+    return result
+
+
 def apply_public_setup_writer_patch() -> bool:
     """
     Attach this writer to public_setup_group without changing the top-level
@@ -414,5 +539,7 @@ def apply_public_setup_writer_patch() -> bool:
 __all__ = [
     "upsert_guild_config_sync",
     "upsert_guild_config",
+    "clear_guild_config_keys_sync",
+    "clear_guild_config_keys",
     "apply_public_setup_writer_patch",
 ]

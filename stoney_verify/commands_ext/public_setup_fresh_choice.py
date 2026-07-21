@@ -760,6 +760,21 @@ async def _autofill_custom_state_from_existing(
     except Exception:
         current = {}
 
+    # Once an owner has explicitly saved Custom Setup feature switches, those
+    # choices are authoritative even when every switch is OFF. Do not resurrect
+    # disabled services merely because old Discord resources still exist.
+    try:
+        cfg = await solid.get_guild_config(
+            guild.id,
+            refresh=True,
+        )  # type: ignore[attr-defined]
+    except Exception:
+        cfg = None
+    if str(
+        _auto_cfg_value(cfg, "setup_service_mode_saved_at", "") or ""
+    ).strip():
+        return state, ""
+
     if any(
         bool(current.get(key, False))
         for key in _CUSTOM_SERVICE_FLAG_KEYS
@@ -850,6 +865,30 @@ def _custom_services_embed(
         text=f"Guild {guild.id} • choose core features"
     )
     return embed
+
+
+async def _reconcile_voice_resources_if_disabled(
+    guild: discord.Guild,
+    state: Any,
+    *,
+    actor: Any = None,
+) -> str:
+    if bool(getattr(state, "voice", False)):
+        return ""
+    try:
+        from ..setup_resource_reconcile import (
+            reconcile_disabled_voice_verify,
+        )
+
+        return await reconcile_disabled_voice_verify(
+            guild,
+            actor=actor,
+        )
+    except Exception as exc:
+        return (
+            "⚠️ Voice Verify is OFF, but its unused server items could not "
+            f"be reconciled: `{type(exc).__name__}: {str(exc)[:180]}`"
+        )
 
 
 class CustomServicePresetSelect(discord.ui.Select):
@@ -943,11 +982,19 @@ class CustomServicePresetSelect(discord.ui.Select):
             interaction.user,
         )
         state = await _load_custom_state(guild.id)
+        reconcile_note = await _reconcile_voice_resources_if_disabled(
+            guild,
+            state,
+            actor=interaction.user,
+        )
+        saved_message = f"Saved **{label}**. {desc}"
+        if reconcile_note:
+            saved_message += f"\n{reconcile_note}"
         await interaction.edit_original_response(
             embed=_custom_services_embed(
                 guild,
                 state,
-                saved_message=f"Saved **{label}**. {desc}",
+                saved_message=saved_message,
             ),
             view=CustomServiceModeView(state),
         )
@@ -1086,6 +1133,13 @@ class CustomServiceToggleButton(discord.ui.Button):
                 f"Set **{self.short_label}** to "
                 f"**{'ON' if effective_value else 'OFF'}**."
             )
+            reconcile_note = await _reconcile_voice_resources_if_disabled(
+                guild,
+                next_state,
+                actor=interaction.user,
+            )
+            if reconcile_note:
+                saved_message += f"\n{reconcile_note}"
         else:
             next_state = state
             saved_message = (
@@ -1171,7 +1225,22 @@ class CustomServiceModeView(discord.ui.View):
         button: discord.ui.Button,
     ) -> None:
         _ = button
-        await recommend._open_guided_setup(interaction)
+        guild = interaction.guild
+        if guild is None:
+            return await interaction.response.send_message(
+                "❌ This must be used inside a server.",
+                ephemeral=True,
+            )
+        state = await _load_custom_state(guild.id)
+        reconcile_note = await _reconcile_voice_resources_if_disabled(
+            guild,
+            state,
+            actor=interaction.user,
+        )
+        await recommend._open_guided_setup(
+            interaction,
+            saved_message=reconcile_note,
+        )
 
     @discord.ui.button(
         label="Back",
@@ -1206,7 +1275,7 @@ class CustomServiceModeView(discord.ui.View):
     @discord.ui.button(
         label="Close",
         emoji="✖️",
-        style=discord.ButtonStyle.secondary,
+        style=discord.ButtonStyle.danger,
         custom_id="dank_setup_custom:close",
         row=4,
     )
