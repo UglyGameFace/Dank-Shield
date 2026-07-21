@@ -162,7 +162,14 @@ jobs:
       - name: Apply overhaul with disposable preflight
         if: steps.gate.outputs.enabled == 'true'
         shell: bash
-        run: bash /tmp/run_setup_navigation_ux_overhaul_v3.sh
+        run: |
+          rm -rf "$HOME/Dank-Shield"
+          ln -s "$GITHUB_WORKSPACE" "$HOME/Dank-Shield"
+          if ! bash /tmp/run_setup_navigation_ux_overhaul_v3.sh > /tmp/setup-overhaul.log 2>&1; then
+            tail -n 160 /tmp/setup-overhaul.log
+            exit 1
+          fi
+          tail -n 80 /tmp/setup-overhaul.log
 
       - name: Remove one-time CI scaffolding
         if: steps.gate.outputs.enabled == 'true'
@@ -170,7 +177,7 @@ jobs:
         run: |
           git show origin/main:.github/workflows/ci.yml > .github/workflows/ci.yml
           rm -f .github/APPLY_SETUP_UX_ONCE
-          rm -f /tmp/apply_setup_navigation_ux_overhaul.sh /tmp/run_setup_navigation_ux_overhaul_v3.sh
+          rm -f /tmp/apply_setup_navigation_ux_overhaul.sh /tmp/run_setup_navigation_ux_overhaul_v3.sh /tmp/setup-overhaul.log
 
       - name: Validate generated source
         if: steps.gate.outputs.enabled == 'true'
