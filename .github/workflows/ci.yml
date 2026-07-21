@@ -179,20 +179,39 @@ jobs:
           path: /tmp/aio-test-migration-validation.log
           retention-days: 1
 
-      - name: Commit only validated test migration
+      - name: Prepare validated migration commit
         if: steps.gate.outputs.enabled == 'true'
         shell: bash
         run: |
-          set -euo pipefail
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git reset
-          git add -A
-          unexpected="$(git diff --cached --name-only | grep -Ev '^(tests/|\.github/workflows/ci\.yml|\.github/APPLY_SETUP_AIO_TEST_MIGRATION_ONCE|stoney_verify/commands_ext/public_setup_recommend\.py|tools/migrate_setup_aio_behavior_tests\.py|tools/audit_setup_safety\.py|tools/test_custom_state_and_launch_actions\.py|tools/test_setup_.*\.py)$' || true)"
-          if [[ -n "$unexpected" ]]; then
-            echo "Unexpected staged files:"
-            printf '%s\n' "$unexpected"
-            exit 1
-          fi
-          git commit -m "Migrate setup tests to the AIO behavior contract"
-          git push origin HEAD:fix/setup-navigation-ux-overhaul
+          set -o pipefail
+          (
+            set -euo pipefail
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git reset
+            git add -A
+            echo "=== STAGED FILES ==="
+            git diff --cached --name-status
+            unexpected="$(git diff --cached --name-only | grep -Ev '^(tests/|\.github/workflows/ci\.yml|\.github/APPLY_SETUP_AIO_TEST_MIGRATION_ONCE|stoney_verify/commands_ext/public_setup_recommend\.py|tools/migrate_setup_aio_behavior_tests\.py|tools/audit_setup_safety\.py|tools/test_custom_state_and_launch_actions\.py|tools/test_setup_.*\.py)$' || true)"
+            if [[ -n "$unexpected" ]]; then
+              echo "Unexpected staged files:"
+              printf '%s\n' "$unexpected"
+              exit 1
+            fi
+            git commit -m "Migrate setup tests to the AIO behavior contract"
+          ) 2>&1 | tee /tmp/aio-test-migration-commit.log
+
+      - name: Push validated migration commit
+        if: steps.gate.outputs.enabled == 'true'
+        shell: bash
+        run: |
+          set -o pipefail
+          git push origin HEAD:fix/setup-navigation-ux-overhaul 2>&1 | tee -a /tmp/aio-test-migration-commit.log
+
+      - name: Upload failed commit or push log
+        if: failure() && steps.gate.outputs.enabled == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: aio-test-migration-commit-failure
+          path: /tmp/aio-test-migration-commit.log
+          retention-days: 1
