@@ -53,13 +53,8 @@ _STARTUP_GUARDS: Tuple[str, ...] = (
     "stoney_verify.startup_guards.server_design_command_module_guard",
     "stoney_verify.startup_guards.protection_pack_manual_import_guard",
     "stoney_verify.startup_guards.protection_import_button_patch",
-    "stoney_verify.startup_guards.setup_verification_toggle_independence_guard",
-    "stoney_verify.startup_guards.setup_save_next_step_guard",
-    "stoney_verify.startup_guards.setup_check_existing_server_inference_guard",
-    "stoney_verify.startup_guards.setup_check_ready_next_step_guard",
     "stoney_verify.startup_guards.setup_permission_repair_truth_guard",
     "stoney_verify.startup_guards.setup_permission_repair_modlog_silence_guard",
-    "stoney_verify.startup_guards.setup_guided_flow_self_check",
     "stoney_verify.startup_guards.dank_shield_branding_guard",
     "stoney_verify.startup_guards.runtime_safety",
     "stoney_verify.startup_guards.invite_intent_safety",
@@ -119,12 +114,9 @@ _IMPORT_CHATTER_PREFIXES: Tuple[str, ...] = (
 _ERROR_CHATTER_PREFIXES: Tuple[str, ...] = ("⚠️ ", "❌ ", "🛑 ")
 _ALWAYS_SHOW_PREFIXES: Tuple[str, ...] = (
     "🛡️ member_activity_notices_db_safety active",
-    "🧭 setup_save_next_step_guard active",
     "🛠️ setup_permission_repair_truth_guard active",
     "🛠️ setup_permission_repair_modlog_silence_guard active",
-    "✅ setup_check_ready_next_step_guard active",
     "🛡️ role_hierarchy_action_guard active",
-    "🧭 guided_setup_self_check ready",
     "🛡️ spam_guard_invite_hard_block active",
     "✅ spam_guard_invite_override_options active",
     "🛡️ discord_invite_blocker_runtime_guard active",
@@ -150,7 +142,6 @@ _ONCE_ONLY_PREFIXES: Tuple[str, ...] = (
     "✅ ticket_panel_doctor_stability_guard: patched ticket panel health checks",
     "✅ ticket_panel_doctor_stability_guard: patched /dank setup ticket scoreboard",
     "✅ ticket_panel_doctor_stability_guard: patched /ticket-panel doctor",
-    "✅ setup_check_existing_server_inference_guard: patched /dank setup health check setup-type inference",
     "🔤 channel_font_exact_unicode_guard active;",
     "🔤 channel_font_rename_queue_guard active;",
     "🔤 channel_font_preview_button_guard waiting for ChannelFontModeView before attaching button",
@@ -199,7 +190,9 @@ def _maybe_suppress_import_chatter(module_name: str) -> Iterator[None]:
         builtins.print = original_print
 
 
-def load_startup_guards(modules: Iterable[str] = _STARTUP_GUARDS) -> Dict[str, ModuleType]:
+def load_startup_guards(
+    modules: Iterable[str] = _STARTUP_GUARDS,
+) -> Dict[str, ModuleType]:
     for module_name in modules:
         if module_name in _LOADED:
             continue
@@ -207,15 +200,22 @@ def load_startup_guards(modules: Iterable[str] = _STARTUP_GUARDS) -> Dict[str, M
             with _maybe_suppress_import_chatter(module_name):
                 module = importlib.import_module(module_name)
                 _LOADED[module_name] = module
-                if module_name == "stoney_verify.startup_guards.invite_live_enforcer_guard":
+                if (
+                    module_name
+                    == "stoney_verify.startup_guards.invite_live_enforcer_guard"
+                ):
                     apply_func = getattr(module, "apply", None)
                     if callable(apply_func):
                         apply_func()
         except Exception as exc:
             _ERRORS[module_name] = exc
-            print(f"⚠️ startup_guard loader failed module={module_name}: {exc!r}")
+            print(
+                f"⚠️ startup_guard loader failed module={module_name}: {exc!r}"
+            )
     if _log_style() != "quiet":
-        print(f"🧩 startup_guard loader complete loaded={len(_LOADED)}")
+        print(
+            f"🧩 startup_guard loader complete loaded={len(_LOADED)}"
+        )
     return dict(_LOADED)
 
 
