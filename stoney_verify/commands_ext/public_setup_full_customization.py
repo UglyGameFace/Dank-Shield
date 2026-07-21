@@ -141,8 +141,7 @@ async def _send_saved(interaction: discord.Interaction, *, title: str, descripti
     embed.add_field(
         name="Next",
         value=(
-            "Choose another item, press **Back to Setup**, "
-            "or press **Setup Check**."
+            "Choose another item, press **Back to All Features**, or use **Review Setup** from Manage Setup."
         ),
         inline=False,
     )
@@ -167,20 +166,20 @@ async def _edit_setup(interaction: discord.Interaction, *, embed: discord.Embed,
         pass
 
 
-async def _back_to_setup(interaction: discord.Interaction) -> None:
-    guild = interaction.guild
-    if guild is None:
-        return await interaction.response.send_message("❌ This must be used inside a server.", ephemeral=True)
-    try:
-        mod = _setup_module()
-        builder = getattr(mod, "_build_main_setup_payload", None)
-        if callable(builder):
-            embed, view = await builder(guild)
-            return await _edit_setup(interaction, embed=embed, view=view)
-    except Exception as e:
-        _warn(f"back to setup failed: {e!r}")
-    await interaction.response.send_message("✅ Saved. Run `/dank setup` again to return to the setup screen.", ephemeral=True)
 
+async def _back_to_all_features(interaction: discord.Interaction) -> None:
+    from . import public_setup_recommend as recommend
+    await recommend._open_advanced_settings(interaction)
+
+
+async def _setup_home(interaction: discord.Interaction) -> None:
+    from . import public_setup_recommend as recommend
+    await recommend._home_edit(interaction)
+
+
+async def _close_setup(interaction: discord.Interaction) -> None:
+    from . import public_setup_recommend as recommend
+    await recommend._close_setup(interaction)
 
 def _bot_member(guild: discord.Guild) -> Optional[discord.Member]:
     try:
@@ -271,16 +270,51 @@ def _channel_warnings(guild: discord.Guild, channel: Any, *, need_files: bool = 
     return not blockers, blockers
 
 
+
 class SetupBackView(discord.ui.View):
+    """Parent, home, and close routes shared by customization pages."""
+
     def __init__(self) -> None:
         super().__init__(timeout=900)
 
-    @discord.ui.button(label="Back to Setup", emoji="⬅️", style=discord.ButtonStyle.secondary, custom_id="stoney_full_custom:back", row=4)
+    @discord.ui.button(
+        label="Back to All Features",
+        emoji="↩️",
+        style=discord.ButtonStyle.secondary,
+        custom_id="dank_setup_customization:features",
+        row=4,
+    )
     async def back(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
         if not await _require_setup_permission(interaction):
             return
-        await _back_to_setup(interaction)
+        await _back_to_all_features(interaction)
 
+    @discord.ui.button(
+        label="Setup Home",
+        emoji="🏠",
+        style=discord.ButtonStyle.secondary,
+        custom_id="dank_setup_customization:home",
+        row=4,
+    )
+    async def home(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        if not await _require_setup_permission(interaction):
+            return
+        await _setup_home(interaction)
+
+    @discord.ui.button(
+        label="Close",
+        emoji="✖️",
+        style=discord.ButtonStyle.secondary,
+        custom_id="dank_setup_customization:close",
+        row=4,
+    )
+    async def close(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        if not await _require_setup_permission(interaction):
+            return
+        await _close_setup(interaction)
 
 class FullChooseExistingView(SetupBackView):
     @discord.ui.button(
@@ -308,7 +342,7 @@ class FullChooseExistingView(SetupBackView):
         )
 
         embed.add_field(
-            name="Basic Verify",
+            name="Simple Verify",
             value=(
                 "Choose the **Waiting** role and the "
                 "**Approved Member** role."
@@ -409,7 +443,7 @@ class FullChooseExistingView(SetupBackView):
         )
 
         embed.add_field(
-            name="Basic Verify",
+            name="Simple Verify",
             value="Choose where members press **Verify**.",
             inline=False,
         )
@@ -721,7 +755,7 @@ class RoleCustomizationPageTwo(SetupBackView):
             name="Usually needed",
             value=(
                 "• Tickets: staff role\n"
-                "• Basic Verify: waiting role and approved role"
+                "• Simple Verify: waiting role and approved role"
             ),
             inline=False,
         )
@@ -932,7 +966,7 @@ class ChannelCustomizationPageTwo(SetupBackView):
         embed.add_field(
             name="Usually needed",
             value=(
-                "• Basic Verify: Verify channel\n"
+                "• Simple Verify: Verify channel\n"
                 "• Tickets: Create Ticket panel channel\n"
                 "• Voice Verify: voice channel"
             ),
@@ -1021,49 +1055,28 @@ class BehaviorSettingsModal(discord.ui.Modal, title="Setup Behavior Settings"):
         )
 
 
-def _patch_module(module: Any) -> None:
-    try:
-        setattr(module, "ChooseExistingView", FullChooseExistingView)
-    except Exception:
-        pass
-    try:
-        setattr(module, "ChooseExistingMenuView", FullChooseExistingView)
-    except Exception:
-        pass
-    try:
-        setattr(module, "VerificationRolesPickerView", RoleCustomizationPageOne)
-        setattr(module, "TicketBasicsPickerView", DiscordCategoryCustomizationView)
-        setattr(module, "VerificationChannelsPickerView", ChannelCustomizationPageOne)
-        setattr(module, "LogsStatusPickerView", LogStatusCustomizationView)
-    except Exception:
-        pass
-
 
 def install_full_customization() -> bool:
+    """Compatibility entrypoint; integration is now explicit, not patched."""
     global _PATCHED
-    if _PATCHED:
-        return True
-    patched_any = False
-    for module_name in ("public_setup_solid", "public_setup_start"):
-        try:
-            module = __import__(f"stoney_verify.commands_ext.{module_name}", fromlist=["*"])
-            _patch_module(module)
-            patched_any = True
-        except Exception as e:
-            _warn(f"could not patch {module_name}: {e!r}")
-    _PATCHED = patched_any
-    if patched_any:
-        _log("full setup customization picker flow active")
-    return patched_any
+    _PATCHED = True
+    return True
 
 
-def register_public_setup_full_customization_commands(bot: Any, tree: Any) -> None:
+def register_public_setup_full_customization_commands(
+    bot: Any,
+    tree: Any,
+) -> None:
     global _REGISTERED
     _ = bot, tree
     if _REGISTERED:
         return
     install_full_customization()
     _REGISTERED = True
+    _log("direct full customization routes ready")
 
-
-__all__ = ["register_public_setup_full_customization_commands", "install_full_customization"]
+__all__ = [
+    "register_public_setup_full_customization_commands",
+    "install_full_customization",
+    "FullChooseExistingView",
+]

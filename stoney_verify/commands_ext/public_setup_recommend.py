@@ -1490,10 +1490,15 @@ async def _open_existing_server(interaction: discord.Interaction) -> None:
     )
     embed.add_field(
         name="Choose These in Order",
-        value="1. Ticket setup\n2. Member roles\n3. Verification channels\n4. Log channels\n5. Timers and rules",
+        value="Choose only the section you need: roles, ticket folders, member channels, staff/log channels, or timers and rules.",
         inline=False,
     )
-    await interaction.response.edit_message(embed=embed, view=solid.ChooseExistingView())
+    from . import public_setup_full_customization as customization
+
+    await interaction.response.edit_message(
+        embed=embed,
+        view=customization.FullChooseExistingView(),
+    )
 
 
 async def _open_create_missing(

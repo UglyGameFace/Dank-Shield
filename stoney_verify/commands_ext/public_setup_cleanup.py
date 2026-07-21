@@ -2,7 +2,7 @@ from __future__ import annotations
 
 """Selective setup cleanup for rushed/clumsy server owners.
 
-This patches /dank setup -> Recovery / Start Over with cleanup options that
+This provides direct Repair / Restart cleanup options that
 can remove one thing, only setup channels, only setup roles, only empty setup
 categories, or all detected bot-created setup items.
 
@@ -482,7 +482,7 @@ class CleanupPreviewView(solid.BackToSetupView):
             return
         await interaction.response.send_modal(ConfirmDeleteModal(mode="all"))
 
-    @discord.ui.button(label="Back to Recovery", emoji="🛟", style=discord.ButtonStyle.secondary, custom_id="stoney_cleanup:back_recovery", row=3)
+    @discord.ui.button(label="Back to Repair & Restart", emoji="🛟", style=discord.ButtonStyle.secondary, custom_id="stoney_cleanup:back_recovery", row=3)
     async def back_recovery(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         if not await solid._require_setup_permission(interaction):
             return
@@ -579,7 +579,7 @@ class PatchedRecoveryCenterView(solid.BackToSetupView):
         await solid._edit_or_followup(interaction, embed=embed, view=PatchedRecoveryCenterView())
 
 
-async def patched_recovery_embed(guild: discord.Guild, *, title: str = "🛟 Setup Recovery Center") -> discord.Embed:
+async def patched_recovery_embed(guild: discord.Guild, *, title: str = "🛟 Repair & Restart Setup") -> discord.Embed:
     candidates, skipped = collect_setup_cleanup_candidates(guild)
     embed = discord.Embed(
         title=title,
@@ -628,20 +628,17 @@ async def patched_recovery_embed(guild: discord.Guild, *, title: str = "🛟 Set
     return embed
 
 
-def _patch() -> None:
-    global _PATCHED
-    recovery._build_recovery_embed = patched_recovery_embed
-    recovery.RecoveryCenterView = PatchedRecoveryCenterView
-    _PATCHED = True
-
-
-_patch()
-
 
 def register_public_setup_cleanup_commands(bot: Any, tree: Any) -> None:
+    """Register direct cleanup helpers without replacing recovery owners."""
+    global _PATCHED
     _ = bot, tree
-    _patch()
-    print("✅ public_setup_cleanup: clear full-start-over and selective cleanup UX active")
+    _PATCHED = True
+    print("✅ public_setup_cleanup: direct selective cleanup UX ready")
 
-
-__all__ = ["register_public_setup_cleanup_commands", "collect_setup_cleanup_candidates"]
+__all__ = [
+    "register_public_setup_cleanup_commands",
+    "collect_setup_cleanup_candidates",
+    "patched_recovery_embed",
+    "PatchedRecoveryCenterView",
+]

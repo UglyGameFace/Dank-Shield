@@ -30,7 +30,6 @@ from . import public_setup_recommend as recommend
 from . import public_setup_solid as solid
 
 _PATCHED = False
-_ORIGINAL_BUILD_MAIN = None
 
 CONFIG_KEYS: tuple[str, ...] = (
     "verify_channel_id",
@@ -395,7 +394,7 @@ async def _build_recovery_embed(guild: discord.Guild, *, title: str = "🛟 Setu
     )
     embed.add_field(
         name="Recommended fix if someone messed up",
-        value="Use **Safe Start Over**. It saves a restore snapshot, clears saved setup/menu choices, then lets the owner rerun Fresh Server or Existing Server setup.",
+        value="Use **Safe Start Over**. It saves a restore snapshot, clears saved setup/menu choices, then lets the owner rerun Quick Setup.",
         inline=False,
     )
     embed.add_field(
@@ -411,7 +410,7 @@ async def _build_recovery_embed(guild: discord.Guild, *, title: str = "🛟 Setu
 
 class RecoveryButton(discord.ui.Button):
     def __init__(self) -> None:
-        super().__init__(label="Recovery / Start Over", emoji="🛟", style=discord.ButtonStyle.danger, custom_id="stoney_recovery:open", row=2)
+        super().__init__(label="Repair / Restart", emoji="🛟", style=discord.ButtonStyle.danger, custom_id="stoney_recovery:open", row=2)
 
     async def callback(self, interaction: discord.Interaction) -> None:
         if not await solid._require_setup_permission(interaction):
@@ -461,7 +460,7 @@ class RecoveryCenterView(solid.BackToSetupView):
         embed = await _build_recovery_embed(guild, title="✅ Recovery Action Complete" if ok else "🚫 Recovery Action Failed")
         embed.color = discord.Color.green() if ok else discord.Color.red()
         embed.add_field(name="Result", value=message[:1024], inline=False)
-        embed.add_field(name="Next Step", value="Run Health Check, then post a ticket panel if setup is ready.", inline=False)
+        embed.add_field(name="Next Step", value="Run Review Setup, then post a ticket panel if setup is ready.", inline=False)
         await solid._edit_or_followup(interaction, embed=embed, view=RecoveryCenterView())
 
 
@@ -499,16 +498,16 @@ class ConfirmRecoveryModal(discord.ui.Modal):
         ok = False
         if self.action == "start_over":
             message, ok = await _reset_saved_setup(guild, interaction.user, include_menu=True)
-            next_step = "Run `/dank setup`, then choose Fresh Server or Existing Server."
+            next_step = "Run `/dank setup`, then choose Quick Setup."
         elif self.action == "reset_config":
             message, ok = await _reset_saved_setup(guild, interaction.user, include_menu=False)
-            next_step = "Run `/dank setup` → Existing Server and pick the correct roles/channels."
+            next_step = "Run `/dank setup` → Manage Setup → All Features & Settings → Setup Plan & Server Items → Choose Roles & Channels."
         elif self.action == "reset_menu":
             message, ok = await _reset_ticket_menu_only(guild, interaction.user)
-            next_step = "Run `/dank setup` → Advanced Setup → Ticket Menu Options → Create Recommended Ticket Menu."
+            next_step = "Run `/dank setup` → Manage Setup → All Features & Settings → Tickets → Ticket Choices."
         elif self.action == "restore":
             message, ok = await _restore_last_reset(guild)
-            next_step = "Run Health Check to confirm the restored setup is usable."
+            next_step = "Run Review Setup to confirm the restored setup is usable."
         else:
             message = "Unknown recovery action."
             next_step = "Go back to setup and try again."
@@ -544,26 +543,12 @@ async def open_recovery_center(interaction: discord.Interaction) -> None:
     await solid._edit_or_followup(interaction, embed=embed, view=RecoveryCenterView())
 
 
-async def _build_main_with_recovery(guild: discord.Guild):
-    builder = _ORIGINAL_BUILD_MAIN or recommend._product_main_setup_payload
-    return await builder(guild)
-
-
-def _patch() -> None:
-    global _PATCHED, _ORIGINAL_BUILD_MAIN
-    if _ORIGINAL_BUILD_MAIN is None:
-        _ORIGINAL_BUILD_MAIN = getattr(solid, "_build_main_setup_payload", None)
-    solid._build_main_setup_payload = _build_main_with_recovery
-    _PATCHED = True
-
-
-_patch()
-
 
 def register_public_setup_recovery_commands(bot: Any, tree: Any) -> None:
+    """Register recovery helpers without replacing the canonical setup home."""
+    global _PATCHED
     _ = bot, tree
-    _patch()
-    print("✅ public_setup_recovery: setup recovery/start-over center active")
-
+    _PATCHED = True
+    print("✅ public_setup_recovery: direct repair/restart center ready")
 
 __all__ = ["register_public_setup_recovery_commands", "open_recovery_center"]

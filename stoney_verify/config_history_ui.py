@@ -158,7 +158,7 @@ async def _edit(
     await solid._edit_or_followup(interaction, embed=embed, view=view)
 
 
-async def _back_to_other_settings(interaction: discord.Interaction) -> None:
+async def _back_to_all_features(interaction: discord.Interaction) -> None:
     from .commands_ext import public_setup_recommend as recommend
 
     await recommend._open_advanced_settings(interaction)
@@ -168,6 +168,11 @@ async def _back_home(interaction: discord.Interaction) -> None:
     from .commands_ext import public_setup_recommend as recommend
 
     await recommend._home_edit(interaction)
+
+
+async def _close_setup(interaction: discord.Interaction) -> None:
+    from .commands_ext import public_setup_recommend as recommend
+    await recommend._close_setup(interaction)
 
 
 def _history_embed(
@@ -532,7 +537,7 @@ class ConfigHistoryView(discord.ui.View):
         await open_config_history(interaction)
 
     @discord.ui.button(
-        label="Back to Other Settings",
+        label="Back to All Features",
         emoji="↩️",
         style=discord.ButtonStyle.secondary,
         custom_id="dank_setup_config_history:back",
@@ -540,10 +545,10 @@ class ConfigHistoryView(discord.ui.View):
     )
     async def back(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
-        await _back_to_other_settings(interaction)
+        await _back_to_all_features(interaction)
 
     @discord.ui.button(
-        label="Back Home",
+        label="Setup Home",
         emoji="🏠",
         style=discord.ButtonStyle.secondary,
         custom_id="dank_setup_config_history:home",
@@ -552,6 +557,18 @@ class ConfigHistoryView(discord.ui.View):
     async def home(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
         await _back_home(interaction)
+
+
+    @discord.ui.button(
+        label="Close",
+        emoji="✖️",
+        style=discord.ButtonStyle.secondary,
+        custom_id="dank_setup_config_history:close",
+        row=2,
+    )
+    async def close(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        await _close_setup(interaction)
 
 
 class BackupDomainSelect(discord.ui.Select):
@@ -670,7 +687,7 @@ class BackupContentsView(discord.ui.View):
         await open_config_history(interaction)
 
     @discord.ui.button(
-        label="Back Home",
+        label="Setup Home",
         emoji="🏠",
         style=discord.ButtonStyle.secondary,
         custom_id="dank_setup_config_history:backup_home",
@@ -679,6 +696,18 @@ class BackupContentsView(discord.ui.View):
     async def home(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
         await _back_home(interaction)
+
+
+    @discord.ui.button(
+        label="Close",
+        emoji="✖️",
+        style=discord.ButtonStyle.secondary,
+        custom_id="dank_setup_config_history:backup_close",
+        row=2,
+    )
+    async def close(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        await _close_setup(interaction)
 
 
 class ConfigVersionDetailView(discord.ui.View):
@@ -749,7 +778,7 @@ class ConfigVersionDetailView(discord.ui.View):
         await open_config_history(interaction)
 
     @discord.ui.button(
-        label="Back to Other Settings",
+        label="Back to All Features",
         emoji="⚙️",
         style=discord.ButtonStyle.secondary,
         custom_id="dank_setup_config_history:detail_settings",
@@ -757,7 +786,30 @@ class ConfigVersionDetailView(discord.ui.View):
     )
     async def settings(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
-        await _back_to_other_settings(interaction)
+        await _back_to_all_features(interaction)
+
+
+    @discord.ui.button(
+        label="Setup Home",
+        emoji="🏠",
+        style=discord.ButtonStyle.secondary,
+        custom_id="dank_setup_config_history:detail_home",
+        row=3,
+    )
+    async def home(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        await _back_home(interaction)
+
+    @discord.ui.button(
+        label="Close",
+        emoji="✖️",
+        style=discord.ButtonStyle.secondary,
+        custom_id="dank_setup_config_history:detail_close",
+        row=3,
+    )
+    async def close(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        await _close_setup(interaction)
 
 
 class RestoreItemSelect(discord.ui.Select):
@@ -921,6 +973,29 @@ class SelectiveRestorePickerView(discord.ui.View):
     async def back(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
         await open_config_version_detail(interaction, self.version_id)
+
+
+    @discord.ui.button(
+        label="Setup Home",
+        emoji="🏠",
+        style=discord.ButtonStyle.secondary,
+        custom_id="dank_setup_config_history:picker_home",
+        row=3,
+    )
+    async def home(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        await _back_home(interaction)
+
+    @discord.ui.button(
+        label="Close",
+        emoji="✖️",
+        style=discord.ButtonStyle.secondary,
+        custom_id="dank_setup_config_history:picker_close",
+        row=3,
+    )
+    async def close(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        await _close_setup(interaction)
 
 
 class RestoreConfigConfirmView(discord.ui.View):

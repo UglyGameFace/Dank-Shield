@@ -121,7 +121,7 @@ def test_finish_write_is_not_invalidated() -> None:
 
 def test_shared_submenu_navigation_is_compact() -> None:
     view = solid.SetupNavView()
-    assert labels(view) == ["Setup Home", "Close"]
+    assert labels(view) == ["Back to All Features", "Setup Home", "Close"]
     counts: dict[int, int] = {}
     for child in view.children:
         row = int(getattr(child, "row", 0) or 0)

@@ -1045,46 +1045,106 @@ async def _build_main_setup_payload(
 # ---------------------------------------------------------------------------
 
 
+
 class SetupNavView(discord.ui.View):
-    """Compact universal escape row for setup sub-screens."""
+    """Universal navigation for nested setup tools."""
 
     def __init__(self) -> None:
         super().__init__(timeout=900)
 
-    async def on_error(self, interaction: discord.Interaction, error: Exception, item: discord.ui.Item[Any]) -> None:
+    async def on_error(
+        self,
+        interaction: discord.Interaction,
+        error: Exception,
+        item: discord.ui.Item[Any],
+    ) -> None:
         try:
-            item_label = getattr(item, "label", None) or getattr(item, "placeholder", None) or getattr(item, "custom_id", None) or "setup item"
+            item_label = (
+                getattr(item, "label", None)
+                or getattr(item, "placeholder", None)
+                or getattr(item, "custom_id", None)
+                or "setup item"
+            )
         except Exception:
             item_label = "setup item"
+
         await safe_interaction_error(
             interaction,
             title="Setup Action Failed",
             error=error,
-            hint=f"The **{item_label}** action failed safely. Nothing was changed. Press **Setup Home** or reopen `/dank setup`.",
+            hint=(
+                f"The **{item_label}** action failed safely. Nothing was changed. "
+                "Press **Back to All Features**, **Setup Home**, or reopen `/dank setup`."
+            ),
             view=self,
         )
 
-    @discord.ui.button(label="Setup Home", emoji="🏠", style=discord.ButtonStyle.secondary, custom_id="stoney_solid:nav_home", row=4)
-    async def setup_home(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+    @discord.ui.button(
+        label="Back to All Features",
+        emoji="↩️",
+        style=discord.ButtonStyle.secondary,
+        custom_id="dank_setup_nested:features",
+        row=4,
+    )
+    async def all_features(
+        self,
+        interaction: discord.Interaction,
+        button: discord.ui.Button,
+    ) -> None:
+        _ = button
+        if not await _require_setup_permission(interaction):
+            return
+        from . import public_setup_recommend as recommend
+        await recommend._open_advanced_settings(interaction)
+
+    @discord.ui.button(
+        label="Setup Home",
+        emoji="🏠",
+        style=discord.ButtonStyle.secondary,
+        custom_id="dank_setup_nested:home",
+        row=4,
+    )
+    async def setup_home(
+        self,
+        interaction: discord.Interaction,
+        button: discord.ui.Button,
+    ) -> None:
         _ = button
         if not await _require_setup_permission(interaction):
             return
         guild = interaction.guild
         if guild is None:
-            return await interaction.response.send_message("❌ This must be used inside a server.", ephemeral=True)
+            return await interaction.response.send_message(
+                "❌ This must be used inside a server.",
+                ephemeral=True,
+            )
         await _safe_defer_update(interaction)
         embed, view = await _build_main_setup_payload(guild)
         await _edit_or_followup(interaction, embed=embed, view=view)
 
-    @discord.ui.button(label="Close", emoji="✖️", style=discord.ButtonStyle.secondary, custom_id="stoney_solid:nav_close", row=4)
-    async def close(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+    @discord.ui.button(
+        label="Close",
+        emoji="✖️",
+        style=discord.ButtonStyle.secondary,
+        custom_id="dank_setup_nested:close",
+        row=4,
+    )
+    async def close(
+        self,
+        interaction: discord.Interaction,
+        button: discord.ui.Button,
+    ) -> None:
         _ = button
         if not await _require_setup_permission(interaction):
             return
         embed = discord.Embed(
             title="Setup Closed",
-            description="Nothing else was changed. Run `/dank setup` whenever you want to continue.",
+            description=(
+                "Nothing else was changed. Run `/dank setup` whenever "
+                "you want to continue."
+            ),
             color=discord.Color.dark_grey(),
+            timestamp=now_utc(),
         )
         await _edit_or_followup(interaction, embed=embed, view=None)
 
