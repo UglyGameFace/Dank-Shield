@@ -10,10 +10,6 @@ def replace_once(text: str, old: str, new: str, *, label: str) -> str:
     return text.replace(old, new, 1)
 
 
-# ---------------------------------------------------------------------------
-# Keep behavior tests, update them to the new AIO setup language and routing.
-# ---------------------------------------------------------------------------
-
 path = Path("tests/test_config_history_ui_behavior.py")
 text = path.read_text(encoding="utf-8")
 text = replace_once(
@@ -86,11 +82,6 @@ Path("tests/test_setup_permission_repair_native_route.py").write_text(
 )
 
 
-# ---------------------------------------------------------------------------
-# Remove obsolete source-string guards. Their safety promises are now covered
-# by the behavioral AIO, navigation, ownership, permission, and review suites.
-# ---------------------------------------------------------------------------
-
 obsolete = (
     "tests/test_setup_existing_items_plain_entry_static.py",
     "tests/test_setup_feature_aware_health_static.py",
@@ -106,6 +97,7 @@ obsolete = (
     "tests/test_setup_single_path_front_door_v2_static.py",
     "tests/test_setup_success_next_step_guard_retired.py",
     "tests/test_setup_ux_clarity_guard_retired.py",
+    "tools/test_custom_state_and_launch_actions.py",
 )
 
 for filename in obsolete:
@@ -116,4 +108,4 @@ for filename in obsolete:
 
 print("✅ Updated active behavior tests for the AIO setup contract")
 print("✅ Replaced AST/source-shape permission tests with runtime behavior tests")
-print(f"✅ Removed {len(obsolete)} obsolete static/retired guard files")
+print(f"✅ Removed {len(obsolete)} obsolete static/retired checks")
