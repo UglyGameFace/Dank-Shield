@@ -2,9 +2,9 @@
 
 ## DS-CONFIG-HISTORY-001 — Native configuration backup + version history
 
-**Status:** IN PROGRESS — DATABASE PREVIEW VALIDATION PENDING
+**Status:** FINAL HEAD VALIDATION PENDING — IMPLEMENTATION + DB EXERCISE COMPLETE
 **Branch:** `feature/config-backup-version-history`
-**PR:** #107 (draft)
+**PR:** #107 (draft until this exact head is green)
 **Base:** `main` after merged PR #106
 
 ## Single Active Task Lock
@@ -43,7 +43,7 @@ Deliver:
 - durable per-guild version history;
 - migration-time baselines for existing guilds;
 - empty Ticket Choices baselines for configured guilds with no categories;
-- bounded retention of the newest 50 versions per guild and configuration domain;
+- bounded retention of newest 50 versions per guild and configuration domain;
 - manual backup sets covering Core Settings plus Ticket Choices when available;
 - safe restore of one selected historical version;
 - automatic pre-restore safety backup;
@@ -131,38 +131,60 @@ A scope audit also confirmed that `guild_configs` is not the whole active config
 - Confirmation UX remains mobile-compact and offers only Confirm Restore / Cancel.
 - Setup Other Settings route behavior is covered.
 
-## Validation
+## GitHub Validation
 
-Completed on implementation heads:
+Successful implementation-head runs:
 
-- Dank Shield CI run 476: SUCCESS on initial core service/migration-adjacent Python.
-- Dank Shield CI run 478: SUCCESS after native history UI addition.
-- Exact setup-wiring head `50966e2404902a52a200c44112300f9a1786533e`:
+- Dank Shield CI 476: initial core service/migration-adjacent Python.
+- Dank Shield CI 478: native history UI.
+- Setup-wiring head `50966e2404902a52a200c44112300f9a1786533e`:
   - Dank Shield CI 479: SUCCESS;
-  - Setup Check Inference Sanity 124: SUCCESS.
+  - Setup Check Inference 124: SUCCESS.
 - Hardened core/table-isolation head `9f6f8c91def74061d5f77238892bb1ea166b147c`:
   - Dank Shield CI 482: SUCCESS;
-  - Setup Check Inference Sanity 127: SUCCESS.
+  - Setup Check Inference 127: SUCCESS.
 - Ticket-choice domain extension head `b111c6d79484c3081cead95fac67967711f8eeaf`:
   - Dank Shield CI 487: SUCCESS;
-  - Setup Check Inference Sanity 132: SUCCESS.
+  - Setup Check Inference 132: SUCCESS.
 - Atomic ticket-choice restore head `050f81a95ada806688de2a0e785473b9bbaaeb0d`:
   - Dank Shield CI 490: SUCCESS;
-  - Setup Check Inference Sanity 135: SUCCESS.
-- PR #107 inline review threads: none.
-- Compare against `main`: ahead 20, behind 0; exactly eight task-related paths before this task-record update.
+  - Setup Check Inference 135: SUCCESS.
+- Task-record head `2549c8ae76f996c9d1af81898750994c52f612ba`:
+  - Dank Shield CI 492: SUCCESS;
+  - Setup Check Inference 137: SUCCESS.
+- PR #107 inline review threads before this final record update: none.
+- Compare against `main` before this final record update: ahead 20, behind 0; exactly eight task-related paths.
 
-Local Termux targeted tests remain blocked by the local environment's incompatible/broken `supabase` import (`cannot import name 'Client' from 'supabase'`). Clean GitHub CI does not reproduce that environment issue; production code is not being changed to work around it.
+Local Termux targeted tests remain blocked by the local environment's incompatible/broken `supabase` import (`cannot import name 'Client' from 'supabase'`). Clean GitHub CI does not reproduce that environment issue; production code is not changed to work around it.
 
-## Database Preview Validation
+## Database Migration Validation
 
-Supabase's first PR preview did **not** validate the migration. Its PR bot reported:
+Supabase PR preview infrastructure failed **before running migrations** on both the original preview and a safely close/reopened fresh preview:
 
 `failed to clone repo: to: invalid path: "\\"`
 
-The bot also noted that modified existing migration files are not reapplied automatically. PR #107 was therefore safely closed and reopened while still draft/unmerged to force a fresh preview attempt against the current migration.
+Because the failure occurs at repository clone, it is not evidence that the migration failed. PR #107 remains unmerged and no production Supabase migration was applied.
 
-Current blocker: wait for and inspect the retriggered Supabase preview result. Do not mark ready for review until the current migration has either been validated by Supabase preview or the preview infrastructure failure is clearly isolated and an equivalent safe migration-validation path is completed.
+An equivalent isolated database validation was completed against a disposable local **PostgreSQL 17** database using stub canonical `guild_configs`, legacy `guild_config`, and active `ticket_categories` tables plus a local `service_role` role. The current migration logic was applied and exercised without touching production data.
+
+Validated successfully:
+
+- migration SQL/function/trigger definitions loaded successfully;
+- canonical Core Settings baseline created;
+- legacy Core Settings baseline created;
+- populated Ticket Choices baseline created;
+- empty Ticket Choices baseline created for configured guilds with no categories;
+- audit-only core config metadata change did not create a fake version;
+- real core config change created a version;
+- real ticket-category change created a version;
+- atomic Ticket Choices restore replaced the saved category set correctly;
+- category-stored `form_questions` data was restored in the isolated schema exercise;
+- obsolete categories were removed and missing categories were inserted;
+- row-level automatic history remained suppressed during the atomic RPC, avoiding intermediate restore noise;
+- duplicate-slug invalid restore was rejected and live ticket-choice state remained unchanged;
+- rerunning the migration succeeded and did not duplicate migration baselines.
+
+The isolated PostgreSQL instance was stopped after validation.
 
 ## Cleanup / Conflict Inspection
 
@@ -176,12 +198,11 @@ Current blocker: wait for and inspect the retriggered Supabase preview result. D
 - Ticket-choice restore is atomic at the database mutation layer.
 - Dormant startup-guard ticket-form code is not used by this implementation.
 
-## Blockers
+## Remaining Gate
 
-1. Re-triggered Supabase preview/migration validation result is pending.
-2. Final task-record-only head must pass Dank Shield CI + Setup Check Inference.
-3. Final diff/conflict/review-thread inspection must be repeated on the exact final head.
-4. Merge and production migration/deployment require explicit owner approval.
+This task-record update is the final branch change. Its exact head must pass Dank Shield CI + Setup Check Inference. After that, repeat exact-head compare/review-thread inspection and mark PR #107 ready for review without changing the branch again.
+
+Merge and production migration/deployment still require explicit owner approval.
 
 ## Backlog After This Task
 
@@ -201,14 +222,14 @@ Current blocker: wait for and inspect the retriggered Supabase preview result. D
 - [x] Manual backup covers both available active configuration domains.
 - [x] Core restore refuses cross-guild/cross-table snapshots.
 - [x] Ticket-choice restore refuses cross-guild rows.
-- [x] Every restore preserves the current state first.
+- [x] Every restore preserves current state first.
 - [x] Ticket-choice mutation restore is atomic.
 - [x] Restore confirmation is explicitly two-step.
 - [x] Existing `/dank setup` exposes Backups & History without a new top-level command.
 - [x] Behavioral coverage exists for service, restore safety, domain labeling, and setup routing.
 - [x] Full Python regression/compile/audits passed on the implementation head.
-- [ ] Current Supabase migration preview (or equivalent safe DB validation) passes.
-- [ ] Final task-record-only head GitHub CI + Setup Check Inference pass.
-- [ ] Final diff contains only task-related permanent code/tests/task record.
-- [ ] Final review-thread inspection is clean on the exact final head.
+- [x] Migration logic passed equivalent isolated PostgreSQL 17 schema/trigger/restore/idempotency exercise.
+- [ ] This exact final task-record head GitHub CI + Setup Check Inference pass.
+- [ ] Final exact-head diff contains only task-related permanent code/tests/task record.
+- [ ] Final exact-head review-thread inspection is clean.
 - [ ] Merge/deploy requires explicit owner approval.
