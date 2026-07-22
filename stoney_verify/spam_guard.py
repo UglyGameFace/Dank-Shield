@@ -2228,17 +2228,46 @@ class SpamIncidentRestoreView(discord.ui.View):
         self.add_item(SpamIncidentRestoreButton(disabled_state=restored))
 
 
+async def _record_security_behavior_for_incident(
+    member: discord.Member,
+    behavior_context: Dict[str, Any],
+    reasons: Optional[List[str]] = None,
+) -> Dict[str, Any]:
+    try:
+        from .raidguard import record_member_security_behavior
+
+        return await record_member_security_behavior(
+            member,
+            dict(behavior_context or {}),
+            reasons=list(reasons or []),
+        )
+    except Exception as exc:
+        _debug(
+            "member risk behavior update failed "
+            f"guild={member.guild.id} member={member.id} "
+            f"error={type(exc).__name__}"
+        )
+        return {}
+
+
 async def _send_modlog_embed(
     guild: discord.Guild,
     embed: discord.Embed,
     *,
     view: Optional[discord.ui.View] = None,
+    event_key: Optional[str] = None,
+    dedupe_window_seconds: float = 8.0,
 ) -> Optional[discord.Message]:
-    channel = await _get_modlog_text_channel(guild)
-    if not isinstance(channel, discord.TextChannel):
-        return None
     try:
-        return await channel.send(embed=embed, view=view)
+        from .modlog import _post_modlog
+
+        return await _post_modlog(
+            guild,
+            embed,
+            view=view,
+            event_key=event_key,
+            dedupe_window_seconds=dedupe_window_seconds,
+        )
     except Exception:
         return None
 
@@ -2260,6 +2289,7 @@ async def _log_trigger(
     channel_count: int,
     cleanup_refs: List[Dict[str, Any]],
     quarantine_case: Optional[Dict[str, Any]],
+    risk_profile: Optional[Dict[str, Any]] = None,
 ) -> None:
     evidence_summary: Set[str] = set()
     for row in cleanup_refs:
@@ -2310,6 +2340,18 @@ async def _log_trigger(
         inline=False,
     )
 
+    if risk_profile:
+        embed.add_field(
+            name="Account Risk Updated",
+            value=(
+                f"**Verdict:** {risk_profile.get('review_verdict', 'REVIEW')}\n"
+                f"**Spam:** `{risk_profile.get('spam_risk_score', 0)}/100` "
+                f"(`{risk_profile.get('spam_risk_level', 'low')}`)\n"
+                f"**Alt evidence:** `{risk_profile.get('alt_evidence_tier', 'clear')}`"
+            )[:1024],
+            inline=False,
+        )
+
     if quarantine_case:
         stripped = list(quarantine_case.get("stripped_role_ids") or [])
         embed.add_field(
@@ -2339,7 +2381,16 @@ async def _log_trigger(
         embed.set_footer(text=footer)
         view = SpamIncidentRestoreView(restored=False)
 
-    sent = await _send_modlog_embed(guild, embed, view=view)
+    sent = await _send_modlog_embed(
+        guild,
+        embed,
+        view=view,
+        event_key=f"spam_guard:{member.id}",
+        dedupe_window_seconds=max(
+            5.0,
+            float(settings.get("cooldown_seconds", 30) or 30),
+        ),
+    )
 
     if quarantine_case and sent is not None:
         quarantine_case["modlog_message_id"] = str(sent.id)
@@ -2484,6 +2535,22 @@ async def record_invite_shield_block(
             except Exception as e:
                 _debug(f"security stats record failed guild={guild.id} source=invite-shield error={repr(e)}")
 
+            risk_profile: Dict[str, Any] = {}
+            if not trusted_or_bot:
+                risk_profile = await _record_security_behavior_for_incident(
+                    member,
+                    {
+                        "spam_guard_triggered": True,
+                        "invite_flood": True,
+                        "cross_channel_flood": shield_channel_count >= 2,
+                        "rapid_message_burst": shield_count >= threshold,
+                        "action_taken": action_taken,
+                        "deleted_count": shield_count,
+                        "channel_count": max(1, shield_channel_count),
+                    },
+                    reasons,
+                )
+
             await _log_trigger(
                 guild=guild,
                 member=member,
@@ -2500,6 +2567,7 @@ async def record_invite_shield_block(
                 channel_count=max(1, shield_channel_count),
                 cleanup_refs=cleanup_refs,
                 quarantine_case=quarantine_case,
+                risk_profile=risk_profile,
             )
 
             return True
@@ -2811,6 +2879,23 @@ async def handle_incoming_spam_message(message: discord.Message) -> bool:
             except Exception as e:
                 _debug(f"security stats record failed guild={guild.id} source=spam-guard error={repr(e)}")
 
+            risk_profile = await _record_security_behavior_for_incident(
+                member,
+                {
+                    "spam_guard_triggered": True,
+                    "invite_flood": fired_invite_rule,
+                    "duplicate_message_burst": fired_duplicate_rule,
+                    "mention_burst": fired_everyone_rule,
+                    "url_flood": fired_url_rule,
+                    "cross_channel_flood": fired_channel_flood_rule,
+                    "rapid_message_burst": recent_count >= int(settings["message_threshold"]),
+                    "action_taken": action_taken,
+                    "deleted_count": delete_count,
+                    "channel_count": channel_count,
+                },
+                reasons,
+            )
+
             await _log_trigger(
                 guild=guild,
                 member=member,
@@ -2827,6 +2912,7 @@ async def handle_incoming_spam_message(message: discord.Message) -> bool:
                 channel_count=channel_count,
                 cleanup_refs=cleanup_refs,
                 quarantine_case=quarantine_case,
+                risk_profile=risk_profile,
             )
 
             try:

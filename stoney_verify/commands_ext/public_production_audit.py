@@ -36,9 +36,6 @@ _TREE: Any = None
 _RUNTIME_PATCH_MODULES: tuple[str, ...] = (
     "runtime_process_health_guard",
     "runtime_command_safety",
-    "runtime_raidguard_hard_stop",
-    "runtime_raidguard_bot_heuristics_patch",
-    "runtime_raidguard_risk_engine_v2_patch",
     "runtime_alt_identity_link_safety_patch",
     "runtime_member_join_kick_safety_patch",
     "runtime_guild_members_role_state_compat_patch",
