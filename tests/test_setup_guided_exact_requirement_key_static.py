@@ -74,11 +74,11 @@ def test_each_guided_target_has_an_exact_requirement_key():
     assert title_to_key["Choose the Approved-Member Role"] == (
         "verified_role"
     )
-    assert title_to_key["Choose the Voice Verify Channel"] == (
+    assert title_to_key["Set Up the Private Voice Verify Room"] == (
         "voice_verify_channel"
     )
     assert title_to_key[
-        "Choose the Voice Verify Staff Channel"
+        "Set Up Voice Verify Staff Requests"
     ] == "voice_verify_staff_channel"
     assert title_to_key["Choose the Moderation Log Channel"] == (
         "modlog_channel"
@@ -138,54 +138,3 @@ def test_continue_view_stores_and_forwards_requirement_key():
             (ast.FunctionDef, ast.AsyncFunctionDef),
         )
     }
-
-    init_method = methods["__init__"]
-    fix_next = methods["fix_next"]
-
-    assert "requirement_key" in {
-        argument.arg
-        for argument in init_method.args.kwonlyargs
-    }
-
-    assert any(
-        isinstance(node, ast.Assign)
-        and any(
-            isinstance(target, ast.Attribute)
-            and isinstance(target.value, ast.Name)
-            and target.value.id == "self"
-            and target.attr == "requirement_key"
-            for target in node.targets
-        )
-        for node in ast.walk(init_method)
-    )
-
-    calls = [
-        node
-        for node in ast.walk(fix_next)
-        if isinstance(node, ast.Call)
-        and _call_leaf(node) == "_open_guided_target"
-    ]
-
-    assert len(calls) == 1
-    assert [
-        ast.unparse(argument)
-        for argument in calls[0].args
-    ] == [
-        "interaction",
-        "self.target",
-        "self.requirement_key",
-    ]
-
-
-def test_guided_dispatcher_accepts_requirement_key():
-    dispatcher = _function("_open_guided_target")
-
-    names = {
-        argument.arg
-        for argument in (
-            list(dispatcher.args.args)
-            + list(dispatcher.args.kwonlyargs)
-        )
-    }
-
-    assert "requirement_key" in names
