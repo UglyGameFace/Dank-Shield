@@ -210,8 +210,6 @@ def _derive_alt_cluster_key_from_profile(profile: Dict[str, Any]) -> Optional[st
             return f"fp:{fingerprint}"
         if _as_int(profile.get("similar_name_count"), 0) > 0 and username_key:
             return f"name:{username_key[:48]}"
-        if _as_int(profile.get("same_age_bucket_count"), 0) >= 3 and age_bucket:
-            return f"age:{age_bucket}"
     except Exception:
         pass
     return None
@@ -262,7 +260,16 @@ def _build_risk_payload_from_profile(
         return {}
 
     now_value = now_iso or _sync_iso_now()
-    score = max(0, min(100, _as_int(risk_profile.get("score"), 0)))
+    score = max(
+        0,
+        min(
+            100,
+            _as_int(
+                risk_profile.get("risk_score"),
+                _as_int(risk_profile.get("score"), 0),
+            ),
+        ),
+    )
     level_raw = str(risk_profile.get("level") or "low").strip().lower()
     level = level_raw if level_raw in {"low", "medium", "high", "critical"} else "low"
     fingerprint = str(risk_profile.get("fingerprint") or "").strip() or None

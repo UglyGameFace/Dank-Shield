@@ -57,9 +57,6 @@ _STARTUP_GUARDS: Tuple[str, ...] = (
     "stoney_verify.startup_guards.dank_shield_branding_guard",
     "stoney_verify.startup_guards.runtime_safety",
     "stoney_verify.startup_guards.invite_intent_safety",
-    "stoney_verify.startup_guards.raidguard_hard_stop",
-    "stoney_verify.startup_guards.raidguard_bot_heuristics",
-    "stoney_verify.startup_guards.raidguard_risk_engine_v2",
     "stoney_verify.startup_guards.alt_identity_link_safety",
     "stoney_verify.startup_guards.member_join_removal_safety",
     "stoney_verify.startup_guards.guild_role_order_guard",
@@ -107,7 +104,6 @@ _IMPORT_CHATTER_PREFIXES: Tuple[str, ...] = (
     "🌐 public_startup_scope loaded",
     "🩹 ",
     "🔗 ",
-    "🧯 raidguard_hard_stop patched",
     "🧪 ",
 )
 _ERROR_CHATTER_PREFIXES: Tuple[str, ...] = ("⚠️ ", "❌ ", "🛑 ")

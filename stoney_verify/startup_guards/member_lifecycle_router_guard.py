@@ -10,8 +10,6 @@ Rules:
 - Legacy welcome_member_events_guard listeners are removed when possible.
 """
 
-import asyncio
-import time
 from typing import Any, Optional
 
 import discord
@@ -28,10 +26,6 @@ except Exception:  # pragma: no cover
     dank_group = None  # type: ignore
 
 _INSTALLED = False
-_INVITE_CACHE: dict[int, dict[str, int]] = {}
-_INVITE_META: dict[int, dict[str, dict[str, Any]]] = {}
-_INVITE_CACHE_AT: dict[int, float] = {}
-_CACHE_LOCKS: dict[int, asyncio.Lock] = {}
 
 PUBLIC_WELCOME_KEYS = (
     "public_welcome_channel_id",
@@ -184,118 +178,6 @@ def _bot_can_read_invites(guild: discord.Guild) -> bool:
         return False
 
 
-def _cache_lock(guild_id: int) -> asyncio.Lock:
-    lock = _CACHE_LOCKS.get(int(guild_id))
-    if lock is None:
-        lock = asyncio.Lock()
-        _CACHE_LOCKS[int(guild_id)] = lock
-    return lock
-
-
-async def _fetch_invite_snapshot(guild: discord.Guild) -> tuple[dict[str, int], dict[str, dict[str, Any]], str]:
-    if not _bot_can_read_invites(guild):
-        return {}, {}, "missing Manage Server permission"
-    try:
-        invites = await guild.invites()
-    except discord.Forbidden:
-        return {}, {}, "forbidden reading invites"
-    except Exception as exc:
-        return {}, {}, f"{type(exc).__name__}: {_safe_str(exc)[:80]}"
-
-    uses: dict[str, int] = {}
-    meta: dict[str, dict[str, Any]] = {}
-    for invite in invites:
-        code = _safe_str(getattr(invite, "code", "")).lower()
-        if not code:
-            continue
-        uses[code] = int(getattr(invite, "uses", 0) or 0)
-        inviter = getattr(invite, "inviter", None)
-        channel = getattr(invite, "channel", None)
-        target_user = getattr(invite, "target_user", None)
-        meta[code] = {
-            "code": code,
-            "uses": uses[code],
-            "inviter_id": str(getattr(inviter, "id", "") or ""),
-            "inviter_name": str(inviter) if inviter else "",
-            "channel_id": str(getattr(channel, "id", "") or ""),
-            "channel_name": _safe_str(getattr(channel, "name", "")),
-            "target_id": str(getattr(target_user, "id", "") or ""),
-            "target_name": str(target_user) if target_user else "",
-        }
-    return uses, meta, "ok"
-
-
-async def _warm_invite_cache(guild: discord.Guild, *, reason: str = "warm") -> None:
-    async with _cache_lock(int(guild.id)):
-        uses, meta, status = await _fetch_invite_snapshot(guild)
-        if status == "ok":
-            _INVITE_CACHE[int(guild.id)] = dict(uses)
-            _INVITE_META[int(guild.id)] = dict(meta)
-            _INVITE_CACHE_AT[int(guild.id)] = time.monotonic()
-        _log(f"invite cache {status} guild={guild.id} reason={reason} invites={len(uses)}")
-
-
-async def _detect_invite(member: discord.Member) -> dict[str, Any]:
-    guild = member.guild
-    gid = int(guild.id)
-    async with _cache_lock(gid):
-        old = dict(_INVITE_CACHE.get(gid) or {})
-        old_meta = dict(_INVITE_META.get(gid) or {})
-        had_cache = bool(old)
-        current, meta, status = await _fetch_invite_snapshot(guild)
-        if status != "ok":
-            return {"source": "unknown", "invite": "unknown", "creator": "unknown", "target": "unknown", "confidence": status}
-        _INVITE_CACHE[gid] = dict(current)
-        _INVITE_META[gid] = dict(meta)
-        _INVITE_CACHE_AT[gid] = time.monotonic()
-        if not had_cache:
-            return {"source": "unknown", "invite": "unknown", "creator": "unknown", "target": "unknown", "confidence": "invite cache was cold; warmed now"}
-
-        candidates: list[tuple[int, str]] = []
-        for code, uses in current.items():
-            before = int(old.get(code, 0) or 0)
-            delta = int(uses or 0) - before
-            if delta > 0:
-                candidates.append((delta, code))
-        if not candidates:
-            return {"source": "unknown", "invite": "unknown", "creator": "unknown", "target": "unknown", "confidence": "no invite use delta detected"}
-
-        candidates.sort(reverse=True)
-        _, code = candidates[0]
-        item = meta.get(code) or old_meta.get(code) or {}
-        channel_id = _safe_int(item.get("channel_id"), 0)
-        channel = guild.get_channel(channel_id) if channel_id > 0 else None
-        inviter_id = _safe_str(item.get("inviter_id"))
-        inviter_text = "unknown"
-        if inviter_id:
-            user = guild.get_member(_safe_int(inviter_id, 0))
-            inviter_text = f"{user.mention} (`{inviter_id}`)" if user else f"{_safe_str(item.get('inviter_name'), 'unknown')} (`{inviter_id}`)"
-        target_text = "unknown"
-        target_id = _safe_str(item.get("target_id"))
-        if target_id:
-            target_text = f"{_safe_str(item.get('target_name'), 'unknown')} (`{target_id}`)"
-        return {
-            "source": channel.mention if isinstance(channel, discord.TextChannel) else _safe_str(item.get("channel_name"), "unknown"),
-            "invite": code,
-            "creator": inviter_text,
-            "target": target_text,
-            "confidence": "matched invite use delta",
-        }
-
-
-def _member_age_text(member: discord.Member) -> str:
-    try:
-        delta = discord.utils.utcnow() - member.created_at
-        days = max(0, int(delta.total_seconds() // 86400))
-        years = days // 365
-        months = (days % 365) // 30
-        if years:
-            return f"{years}y {months}mo"
-        if months:
-            return f"{months}mo"
-        return f"{days}d"
-    except Exception:
-        return "unknown"
 
 
 def _avatar_url(member: discord.Member) -> str:
@@ -347,137 +229,6 @@ async def _send_public_leave(member: discord.Member, channel: Optional[discord.T
     _log(f"leave log sent guild={member.guild.id} member={member.id} channel={channel.id}")
 
 
-async def _send_staff_join_audit(member: discord.Member, channel: Optional[discord.TextChannel], public_channel: Optional[discord.TextChannel], invite: dict[str, Any]) -> None:
-    if not _bot_can_send(channel):
-        _log(f"staff audit skipped guild={member.guild.id} member={member.id}: no staff audit channel")
-        return
-    embed = discord.Embed(title=f"👋 {member.display_name} joined", color=discord.Color.green(), timestamp=discord.utils.utcnow())
-    avatar = _avatar_url(member)
-    if avatar:
-        embed.set_thumbnail(url=avatar)
-    embed.add_field(name="Member", value=f"{member.mention}\n`{member.id}`", inline=False)
-    embed.add_field(name="Public welcome", value=public_channel.mention if isinstance(public_channel, discord.TextChannel) else "`Not configured`", inline=False)
-    embed.add_field(name="Account", value=f"Age: **{_member_age_text(member)}**\nJoined: {discord.utils.format_dt(discord.utils.utcnow(), style='F')}", inline=False)
-    embed.add_field(
-        name="Invite/source",
-        value=(
-            f"Source: {invite.get('source') or 'unknown'}\n"
-            f"Invite: `{invite.get('invite') or 'unknown'}`\n"
-            f"Creator: {invite.get('creator') or 'unknown'}\n"
-            f"Target: {invite.get('target') or 'unknown'}\n"
-            f"Confidence: `{invite.get('confidence') or 'unknown'}`"
-        )[:1024],
-        inline=False,
-    )
-    # Add only the most useful intelligence fields so the mobile card stays readable.
-    try:
-        from stoney_verify.modlog import _build_member_context_fields
-
-        context_fields = await _build_member_context_fields(member.guild, member)
-        preferred_names = (
-            "Join Intelligence",
-            "Evidence & Source",
-            "Identity Links",
-            "Smart Join Intelligence",
-            "Evidence Health",
-            "Containment Posture",
-        )
-        selected = []
-        for wanted in preferred_names:
-            for item in context_fields:
-                if item[0] == wanted and wanted not in {row[0] for row in selected}:
-                    selected.append(item)
-                    break
-            if len(selected) >= 3:
-                break
-
-        for name, value, inline in selected:
-            if len(embed.fields) >= 24:
-                break
-            embed.add_field(name=name, value=str(value)[:1024], inline=bool(inline))
-    except Exception as exc:
-        _log(
-            "staff join intelligence unavailable "
-            f"guild={member.guild.id} member={member.id}: "
-            f"{type(exc).__name__}: {exc}"
-        )
-
-    review_view = None
-    try:
-        from stoney_verify.member_review_feedback import (
-            feedback_display_value,
-            get_latest_member_review_feedback,
-            get_latest_source_review_feedback,
-            source_key_from_join_context,
-        )
-        from stoney_verify.member_review_ui import build_member_review_view
-
-        source_key = source_key_from_join_context(invite)
-
-        latest_feedback = await asyncio.to_thread(
-            get_latest_member_review_feedback,
-            guild_id=str(member.guild.id),
-            user_id=str(member.id),
-        )
-        previous_value = feedback_display_value(latest_feedback)
-        if previous_value and len(embed.fields) < 24:
-            embed.add_field(
-                name="Previous Staff Verdict",
-                value=previous_value[:1024],
-                inline=False,
-            )
-
-        if source_key:
-            latest_source = await asyncio.to_thread(
-                get_latest_source_review_feedback,
-                guild_id=str(member.guild.id),
-                source_key=source_key,
-            )
-            source_value = feedback_display_value(latest_source)
-            if source_value and len(embed.fields) < 24:
-                embed.add_field(
-                    name="Previous Source Verdict",
-                    value=(
-                        f"Source: `{source_key}`\n{source_value}"
-                    )[:1024],
-                    inline=False,
-                )
-
-        review_view = build_member_review_view(
-            guild_id=int(member.guild.id),
-            target_user_id=int(member.id),
-            target_is_bot=bool(member.bot),
-            source_key=source_key,
-            evidence_snapshot={
-                "invite_context": dict(invite or {}),
-                "account_age": _member_age_text(member),
-                "member_is_bot": bool(member.bot),
-                "member_name": str(member),
-            },
-        )
-    except Exception as exc:
-        _log(
-            "staff verdict controls unavailable "
-            f"guild={member.guild.id} member={member.id}: "
-            f"{type(exc).__name__}: {exc}"
-        )
-
-    embed.set_footer(text="dank_shield:staff_join_audit:v4")
-    await channel.send(
-        embed=embed,
-        view=review_view,
-        allowed_mentions=discord.AllowedMentions.none(),
-    )
-
-
-async def _send_staff_leave_audit(member: discord.Member, channel: Optional[discord.TextChannel]) -> None:
-    if not _bot_can_send(channel):
-        return
-    embed = discord.Embed(title=f"👋 {member.display_name} left", color=discord.Color.orange(), timestamp=discord.utils.utcnow())
-    embed.add_field(name="Member", value=f"{member.mention}\n`{member.id}`", inline=False)
-    embed.add_field(name="Members now", value=str(member.guild.member_count or "unknown"), inline=False)
-    embed.set_footer(text="dank_shield:staff_leave_audit:v3")
-    await channel.send(embed=embed, allowed_mentions=discord.AllowedMentions.none())
 
 
 async def _join_listener(member: discord.Member) -> None:
@@ -487,17 +238,29 @@ async def _join_listener(member: discord.Member) -> None:
         public_channel = _resolve_channel(guild, cfg, PUBLIC_WELCOME_KEYS)
         join_leave_channel = _resolve_channel(guild, cfg, JOIN_LEAVE_KEYS)
         staff_channel = _resolve_channel(guild, cfg, STAFF_AUDIT_KEYS)
-        invite = await _detect_invite(member)
 
         if _same_channel(public_channel, join_leave_channel):
-            _log(f"join log suppressed because join/leave route equals welcome guild={guild.id} channel={getattr(public_channel, 'id', None)}")
+            _log(
+                "join log suppressed because join/leave route equals welcome "
+                f"guild={guild.id} channel={getattr(public_channel, 'id', None)}"
+            )
             join_leave_channel = None
 
-        # Critical: never post automatic join cards to the public welcome channel.
+        if _same_channel(staff_channel, join_leave_channel):
+            _log(
+                "join log suppressed because the canonical staff audit uses "
+                f"the same channel guild={guild.id} "
+                f"channel={getattr(staff_channel, 'id', None)}"
+            )
+            join_leave_channel = None
+
         await _send_join_leave_join(member, join_leave_channel)
-        await _send_staff_join_audit(member, staff_channel, public_channel, invite)
     except Exception as exc:
-        _log(f"join failed guild={getattr(member.guild, 'id', 'unknown')} member={getattr(member, 'id', 'unknown')}: {type(exc).__name__}: {exc}")
+        _log(
+            f"join failed guild={getattr(member.guild, 'id', 'unknown')} "
+            f"member={getattr(member, 'id', 'unknown')}: "
+            f"{type(exc).__name__}: {exc}"
+        )
 
 
 async def _leave_listener(member: discord.Member) -> None:
@@ -507,14 +270,29 @@ async def _leave_listener(member: discord.Member) -> None:
         public_channel = _resolve_channel(guild, cfg, PUBLIC_WELCOME_KEYS)
         join_leave_channel = _resolve_channel(guild, cfg, JOIN_LEAVE_KEYS)
         staff_channel = _resolve_channel(guild, cfg, STAFF_AUDIT_KEYS)
+
         if _same_channel(public_channel, join_leave_channel):
-            _log(f"leave log suppressed because join/leave route equals welcome guild={guild.id} channel={getattr(public_channel, 'id', None)}")
+            _log(
+                "leave log suppressed because join/leave route equals welcome "
+                f"guild={guild.id} channel={getattr(public_channel, 'id', None)}"
+            )
             join_leave_channel = None
+
+        if _same_channel(staff_channel, join_leave_channel):
+            _log(
+                "leave log suppressed because the canonical staff audit uses "
+                f"the same channel guild={guild.id} "
+                f"channel={getattr(staff_channel, 'id', None)}"
+            )
+            join_leave_channel = None
+
         await _send_public_leave(member, join_leave_channel)
-        await _send_staff_leave_audit(member, staff_channel)
-        await _warm_invite_cache(guild, reason="member_remove")
     except Exception as exc:
-        _log(f"leave failed guild={getattr(member.guild, 'id', 'unknown')} member={getattr(member, 'id', 'unknown')}: {type(exc).__name__}: {exc}")
+        _log(
+            f"leave failed guild={getattr(member.guild, 'id', 'unknown')} "
+            f"member={getattr(member, 'id', 'unknown')}: "
+            f"{type(exc).__name__}: {exc}"
+        )
 
 
 async def _ready_listener() -> None:
@@ -537,28 +315,10 @@ async def _ready_listener() -> None:
                     f"join_leave={getattr(join_leave_channel, 'id', None) or '-'} "
                     f"staff={getattr(staff_channel, 'id', None) or '-'} route={route_note}"
                 )
-                await _warm_invite_cache(guild, reason="ready")
             except Exception:
                 pass
     except Exception as exc:
         _log(f"ready warm failed: {type(exc).__name__}: {exc}")
-
-
-async def _guild_join_listener(guild: discord.Guild) -> None:
-    await _warm_invite_cache(guild, reason="guild_join")
-
-
-async def _invite_create_listener(invite: discord.Invite) -> None:
-    guild = getattr(invite, "guild", None)
-    if isinstance(guild, discord.Guild):
-        await _warm_invite_cache(guild, reason="invite_create")
-
-
-async def _invite_delete_listener(invite: discord.Invite) -> None:
-    guild = getattr(invite, "guild", None)
-    if isinstance(guild, discord.Guild):
-        await _warm_invite_cache(guild, reason="invite_delete")
-
 
 def _remove_old_welcome_listeners() -> None:
     if bot is None:
@@ -694,9 +454,6 @@ def install() -> bool:
         _install_listener(_join_listener, "on_member_join")
         _install_listener(_leave_listener, "on_member_remove")
         _install_listener(_ready_listener, "on_ready")
-        _install_listener(_guild_join_listener, "on_guild_join")
-        _install_listener(_invite_create_listener, "on_invite_create")
-        _install_listener(_invite_delete_listener, "on_invite_delete")
         _INSTALLED = True
         _log("active; join/leave logs never post to welcome channel")
         return True

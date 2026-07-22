@@ -14,6 +14,9 @@ import discord
 
 from .globals import *
 
+_MODLOG_RECENT_EVENT_KEYS: Dict[Tuple[int, str], float] = {}
+_MODLOG_DEDUPE_LOCK = asyncio.Lock()
+
 try:
     from .raidguard import build_member_risk_profile
 except Exception:
@@ -823,27 +826,82 @@ async def _post_modlog(
     guild: discord.Guild,
     embed: discord.Embed,
     view: Optional[discord.ui.View] = None,
-):
-    ch = await _get_modlog_channel_async(guild)
-    if not ch:
-        print(f"⚠️ Modlog channel not found for guild {getattr(guild, 'id', 'unknown')}")
-        return
+    *,
+    event_key: Optional[str] = None,
+    dedupe_window_seconds: float = 8.0,
+) -> Optional[discord.Message]:
+    """Send one moderation event and suppress semantic or identical repeats."""
+
+    normalized_key = str(event_key or "").strip()
+    effective_window = max(1.0, float(dedupe_window_seconds))
+
+    if not normalized_key:
+        try:
+            payload = dict(embed.to_dict())
+            payload.pop("timestamp", None)
+            digest = hashlib.sha256(
+                repr(payload).encode("utf-8", errors="replace")
+            ).hexdigest()[:24]
+            normalized_key = f"embed:{digest}"
+            effective_window = min(effective_window, 3.0)
+        except Exception:
+            normalized_key = ""
+
+    reservation: Optional[Tuple[int, str]] = None
+    if normalized_key:
+        reservation = (int(guild.id), normalized_key)
+        now_mono = time.monotonic()
+        async with _MODLOG_DEDUPE_LOCK:
+            cutoff = now_mono - max(30.0, effective_window * 2)
+            for key, seen_at in list(_MODLOG_RECENT_EVENT_KEYS.items()):
+                if seen_at < cutoff:
+                    _MODLOG_RECENT_EVENT_KEYS.pop(key, None)
+            previous = _MODLOG_RECENT_EVENT_KEYS.get(reservation)
+            if previous is not None and (now_mono - previous) < effective_window:
+                return None
+            _MODLOG_RECENT_EVENT_KEYS[reservation] = now_mono
+
+    channel = await _get_modlog_channel_async(guild)
+    if not channel:
+        if reservation:
+            async with _MODLOG_DEDUPE_LOCK:
+                _MODLOG_RECENT_EVENT_KEYS.pop(reservation, None)
+        print(
+            f"⚠️ Modlog channel not found for guild "
+            f"{getattr(guild, 'id', 'unknown')}"
+        )
+        return None
 
     try:
-        await ch.send(embed=embed, view=view, allowed_mentions=discord.AllowedMentions.none())
+        return await channel.send(
+            embed=embed,
+            view=view,
+            allowed_mentions=discord.AllowedMentions.none(),
+        )
     except TypeError:
         try:
-            await ch.send(embed=embed, view=view)
-        except Exception as e:
+            return await channel.send(embed=embed, view=view)
+        except Exception as exc:
+            if reservation:
+                async with _MODLOG_DEDUPE_LOCK:
+                    _MODLOG_RECENT_EVENT_KEYS.pop(reservation, None)
             print(
-                f"⚠️ Failed sending modlog message guild={getattr(guild, 'id', 'unknown')} "
-                f"channel={getattr(ch, 'id', 'unknown')} error={repr(e)}"
+                f"⚠️ Failed sending modlog message "
+                f"guild={getattr(guild, 'id', 'unknown')} "
+                f"channel={getattr(channel, 'id', 'unknown')} "
+                f"error={repr(exc)}"
             )
-    except Exception as e:
+    except Exception as exc:
+        if reservation:
+            async with _MODLOG_DEDUPE_LOCK:
+                _MODLOG_RECENT_EVENT_KEYS.pop(reservation, None)
         print(
-            f"⚠️ Failed sending modlog message guild={getattr(guild, 'id', 'unknown')} "
-            f"channel={getattr(ch, 'id', 'unknown')} error={repr(e)}"
+            f"⚠️ Failed sending modlog message "
+            f"guild={getattr(guild, 'id', 'unknown')} "
+            f"channel={getattr(channel, 'id', 'unknown')} "
+            f"error={repr(exc)}"
         )
+    return None
 
 
 # ==========================================================

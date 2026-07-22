@@ -21,19 +21,15 @@ from . import verify_admin_commands  # noqa: F401
 from . import spam_guard  # noqa: F401
 
 from .raidguard import (
-    _account_age_days,
-    _behavior_fingerprint,
-    _age_bucket,
+    assess_member_join_risk,
     _maybe_trigger_raid,
     _mass_role_strip_if_needed,
     _post_raidlog,
-    track_member_join_risk,
 )
 
 from .modlog import (
     _post_modlog,
     _get_modlog_channel,
-    build_quick_mod_view,
     _audit_find_recent_ban,
     maybe_log_member_update_diff,
     maybe_log_recent_ban,
@@ -1238,8 +1234,6 @@ async def on_member_join(member: discord.Member):
 
         _ensure_gid_join_deque(JOIN_TIMES, gid)
         _ensure_gid_dict(RAID_RECENT_JOINERS, gid)
-        _ensure_gid_dict_of_lists(ALT_JOIN_BUCKETS, gid)
-        _ensure_gid_dict(ALT_JOIN_BUCKET_TS, gid)
 
         lock = _get_member_processing_lock(gid, int(member.id))
         async with lock:
@@ -1252,124 +1246,196 @@ async def on_member_join(member: discord.Member):
                 JOIN_TIMES[gid].append(now_utc())
                 RAID_RECENT_JOINERS[gid][int(member.id)] = now_utc()
 
-            age_days = _account_age_days(member)
-            fp = _behavior_fingerprint(member)
+            join_context: Dict[str, Any] = {}
+            try:
+                if not getattr(member, "bot", False):
+                    join_context = await _detect_join_entry_context(member)
+            except Exception as exc:
+                print(
+                    f"⚠️ Failed detecting join invite context for {member.id}: "
+                    f"{type(exc).__name__}: {exc}"
+                )
+                join_context = {}
 
             try:
-                if getattr(member, "bot", False):
-                    risk_profile = {
-                        "score": 0,
-                        "risk_score": 0,
-                        "level": "low",
-                        "risk_level": "low",
-                        "evidence_tier": "clear",
-                        "reasons": ["Discord marks this account as a bot; excluded from raid/alt scoring."],
-                        "risk_reasons": ["Discord marks this account as a bot; excluded from raid/alt scoring."],
-                        "same_fingerprint_count": 0,
-                        "similar_name_count": 0,
-                        "same_age_bucket_count": 0,
-                        "burst_count": 0,
-                        "burst_join_count": 0,
-                        "fingerprint": fp,
-                        "suspicion_flags": ["bot_account"],
-                        "is_bot_account": True,
-                    }
-                else:
-                    risk_profile = track_member_join_risk(member)
-            except Exception:
+                risk_profile = await assess_member_join_risk(
+                    member,
+                    join_context=join_context,
+                    record=not bool(getattr(member, "bot", False)),
+                )
+            except Exception as exc:
+                print(
+                    f"⚠️ Failed assessing member risk for {member.id}: "
+                    f"{type(exc).__name__}: {exc}"
+                )
                 risk_profile = {
                     "score": 0,
                     "risk_score": 0,
                     "level": "low",
                     "risk_level": "low",
                     "evidence_tier": "clear",
+                    "alt_evidence_tier": "clear",
+                    "spam_risk_score": 0,
+                    "spam_risk_level": "low",
+                    "review_verdict": "REVIEW UNAVAILABLE",
                     "reasons": [],
                     "risk_reasons": [],
-                    "same_fingerprint_count": 0,
-                    "similar_name_count": 0,
-                    "same_age_bucket_count": 0,
-                    "burst_count": 0,
-                    "burst_join_count": 0,
-                    "fingerprint": fp,
-                    "suspicion_flags": ["bot_account"] if getattr(member, "bot", False) else [],
+                    "suspicion_flags": [],
                     "is_bot_account": bool(getattr(member, "bot", False)),
                 }
 
-            join_context: Dict[str, Any] = {}
-            try:
-                if not getattr(member, "bot", False):
-                    join_context = await _detect_join_entry_context(member)
-            except Exception as e:
-                print(f"⚠️ Failed detecting join invite context for {member.id}: {repr(e)}")
-                join_context = {}
+            if not getattr(member, "bot", False):
+                triggered, message = await _maybe_trigger_raid(guild)
+                if triggered:
+                    await _post_raidlog(guild, message)
+
+                strip_message = await _mass_role_strip_if_needed(
+                    member,
+                    risk_profile,
+                )
+                if strip_message:
+                    await _post_raidlog(guild, strip_message)
+
+            age_days = int(risk_profile.get("account_age_days") or 0)
+            source_text = _join_context_modlog_value(join_context)
+            source_text = source_text or "Source could not be confirmed."
 
             embed = discord.Embed(
-                title="📥 Member Joined",
-                color=discord.Color.green(),
+                title="🛡️ Member Security Review",
+                description=(
+                    f"**{risk_profile.get('review_verdict', 'REVIEW')}**\n"
+                    "Alt identity evidence and spam behavior are scored separately."
+                ),
+                color=(
+                    discord.Color.red()
+                    if str(risk_profile.get("risk_level")) == "critical"
+                    else discord.Color.orange()
+                    if str(risk_profile.get("risk_level")) in {"high", "medium"}
+                    else discord.Color.green()
+                ),
                 timestamp=now_utc(),
             )
             embed.add_field(
-                name="User",
-                value=f"{member.mention} (`{member.id}`)\n`{member}`",
+                name="Member",
+                value=f"{member.mention}\n`{member}` • `{member.id}`",
                 inline=False,
             )
             embed.add_field(
-                name="Account Age",
-                value=f"`{age_days} days` (created `{member.created_at}`)",
-                inline=False,
-            )
-            embed.add_field(name="Fingerprint", value=f"`{fp}`", inline=False)
-            embed.add_field(
-                name="Alt Risk",
+                name="Account & Entry",
                 value=(
-                    f"`{risk_profile.get('score', 0)}/100` "
-                    f"(`{risk_profile.get('evidence_tier', 'clear')}` / `{risk_profile.get('level', 'low')}`)\n"
-                    f"fp matches: `{risk_profile.get('same_fingerprint_count', 0)}` • "
-                    f"name matches: `{risk_profile.get('similar_name_count', 0)}` • "
-                    f"age bucket matches: `{risk_profile.get('same_age_bucket_count', 0)}` • "
-                    f"burst: `{risk_profile.get('burst_count', 0)}`"
-                ),
+                    f"**Account age:** `{age_days} day(s)`\n"
+                    f"**Joined:** {discord.utils.format_dt(member.joined_at or now_utc(), style='F')}\n"
+                    f"{source_text}"
+                )[:1024],
                 inline=False,
             )
-            reasons = list(risk_profile.get("reasons") or risk_profile.get("risk_reasons") or [])
-            if reasons:
-                embed.add_field(
-                    name="Risk Reasons",
-                    value="\n".join(f"• {str(x)[:180]}" for x in reasons[:5]),
-                    inline=False,
-                )
-            if member.joined_at:
-                embed.add_field(name="Joined At", value=f"`{member.joined_at}`", inline=False)
+            embed.add_field(
+                name="Security Assessment",
+                value=(
+                    f"**Overall:** `{risk_profile.get('risk_score', 0)}/100` "
+                    f"(`{risk_profile.get('risk_level', 'low')}`)\n"
+                    f"**Alt evidence:** `{risk_profile.get('alt_evidence_tier', risk_profile.get('evidence_tier', 'clear'))}` "
+                    f"• score `{risk_profile.get('alt_risk_score', 0)}/100`\n"
+                    f"**Spam behavior:** `{risk_profile.get('spam_risk_level', 'low')}` "
+                    f"• score `{risk_profile.get('spam_risk_score', 0)}/100`"
+                )[:1024],
+                inline=False,
+            )
 
-            invite_source_text = _join_context_modlog_value(join_context)
-            if invite_source_text:
-                embed.add_field(name="Invite Source", value=invite_source_text, inline=False)
+            reasons = list(
+                risk_profile.get("reasons")
+                or risk_profile.get("risk_reasons")
+                or []
+            )
+            embed.add_field(
+                name="Top Evidence",
+                value=(
+                    "\n".join(
+                        f"• {str(reason)[:220]}"
+                        for reason in reasons[:4]
+                    )
+                    or "• No strong alt link or spam behavior has been proven."
+                )[:1024],
+                inline=False,
+            )
 
             try:
                 embed.set_thumbnail(url=member.display_avatar.url)
-                embed.set_author(name=str(member), icon_url=member.display_avatar.url)
+                embed.set_author(
+                    name=str(member),
+                    icon_url=member.display_avatar.url,
+                )
             except Exception:
                 pass
 
-            if not getattr(member, "bot", False):
-                bucket = f"{_age_bucket(age_days)}"
-                _ensure_bucket_list(ALT_JOIN_BUCKETS, gid, bucket)
-                ALT_JOIN_BUCKETS[gid][bucket].append(int(member.id))
-                ALT_JOIN_BUCKET_TS[gid][bucket] = now_utc()
+            review_view = None
+            try:
+                from .member_review_feedback import (
+                    feedback_display_value,
+                    get_latest_member_review_feedback,
+                    get_latest_source_review_feedback,
+                    source_key_from_join_context,
+                )
+                from .member_review_ui import build_member_review_view
 
-                triggered, msg = await _maybe_trigger_raid(guild)
-                if triggered:
-                    await _post_raidlog(guild, msg)
+                source_key = source_key_from_join_context(join_context)
+                latest_feedback = await asyncio.to_thread(
+                    get_latest_member_review_feedback,
+                    guild_id=str(gid),
+                    user_id=str(member.id),
+                )
+                previous_value = feedback_display_value(latest_feedback)
+                if previous_value:
+                    embed.add_field(
+                        name="Previous Staff Verdict",
+                        value=previous_value[:1024],
+                        inline=False,
+                    )
 
-                strip_msg = await _mass_role_strip_if_needed(member)
-                if strip_msg:
-                    await _post_raidlog(guild, strip_msg)
+                if source_key:
+                    latest_source = await asyncio.to_thread(
+                        get_latest_source_review_feedback,
+                        guild_id=str(gid),
+                        source_key=source_key,
+                    )
+                    source_value = feedback_display_value(latest_source)
+                    if source_value:
+                        embed.add_field(
+                            name="Previous Source Verdict",
+                            value=(
+                                f"Source: `{source_key}`\n{source_value}"
+                            )[:1024],
+                            inline=False,
+                        )
 
-            # Public join/leave routing is owned by member_lifecycle_router_guard.
-            # This legacy event keeps only the detailed staff audit fallback.
-            target_ch: Optional[discord.TextChannel] = _get_modlog_channel(guild)
-            if target_ch:
-                await target_ch.send(embed=embed, view=build_quick_mod_view(member.id))
+                review_view = build_member_review_view(
+                    guild_id=gid,
+                    target_user_id=int(member.id),
+                    target_is_bot=bool(getattr(member, "bot", False)),
+                    source_key=source_key,
+                    evidence_snapshot={
+                        "invite_context": dict(join_context or {}),
+                        "risk_dimensions": dict(
+                            risk_profile.get("risk_dimensions") or {}
+                        ),
+                        "review_verdict": str(
+                            risk_profile.get("review_verdict") or ""
+                        ),
+                    },
+                )
+            except Exception as exc:
+                print(
+                    f"⚠️ Staff review controls unavailable for {member.id}: "
+                    f"{type(exc).__name__}: {exc}"
+                )
+
+            await _post_modlog(
+                guild,
+                embed,
+                view=review_view,
+                event_key=f"member_join:{member.id}",
+                dedupe_window_seconds=20,
+            )
 
             try:
                 await _new_sync_member_safe(
@@ -1387,8 +1453,11 @@ async def on_member_join(member: discord.Member):
                         risk_profile=risk_profile,
                         context=join_context,
                     )
-            except Exception as e:
-                print(f"⚠️ Failed persisting join entry context for {member.id}: {repr(e)}")
+            except Exception as exc:
+                print(
+                    f"⚠️ Failed persisting join entry context for {member.id}: "
+                    f"{type(exc).__name__}: {exc}"
+                )
 
             safe_state_ok = await _ensure_member_verification_safe_state(
                 member,
@@ -1402,30 +1471,14 @@ async def on_member_join(member: discord.Member):
             if not getattr(member, "bot", False):
                 try:
                     _schedule_join_verification_watchdog(member)
-                except Exception as e:
-                    print(f"⚠️ Failed to schedule join verification watchdog for {member.id}: {repr(e)}")
+                except Exception as exc:
+                    print(
+                        f"⚠️ Failed to schedule join verification watchdog "
+                        f"for {member.id}: {type(exc).__name__}: {exc}"
+                    )
 
-            if not getattr(member, "bot", False):
-                try:
-                    cutoff = now_utc() - timedelta(minutes=max(5, int(ALT_CLUSTER_WINDOW_MINUTES)))
-                    for b, ts in list((ALT_JOIN_BUCKET_TS.get(gid) or {}).items()):
-                        if ts < cutoff:
-                            ALT_JOIN_BUCKET_TS[gid].pop(b, None)
-                            ALT_JOIN_BUCKETS[gid].pop(b, None)
-
-                    for b, ids in list((ALT_JOIN_BUCKETS.get(gid) or {}).items()):
-                        if len(ids) >= int(ALT_CLUSTER_MIN_GROUP):
-                            await _post_raidlog(
-                                guild,
-                                f"🧩 **Alt/Cluster Flag**: `{len(ids)}` joins in `{b}` bucket within ~{ALT_CLUSTER_WINDOW_MINUTES}m. "
-                                + "IDs: "
-                                + ", ".join([f"`{x}`" for x in ids[-10:]]),
-                            )
-                except Exception:
-                    pass
-
-    except Exception as e:
-        print("⚠️ on_member_join error:", e)
+    except Exception as exc:
+        print("⚠️ on_member_join error:", exc)
         try:
             traceback.print_exc()
         except Exception:
@@ -1523,7 +1576,13 @@ async def on_member_remove(member: discord.Member):
         # Keep this legacy path staff-only through modlog for compatibility.
         embed = discord.Embed(title="📤 Member Left", color=discord.Color.blurple())
         embed.add_field(name="User", value=f"`{member}` (`{member.id}`)", inline=False)
-        await _post_modlog(guild, embed, view=None)
+        await _post_modlog(
+            guild,
+            embed,
+            view=None,
+            event_key=f"member_leave:{member.id}",
+            dedupe_window_seconds=20,
+        )
 
         try:
             await _new_mark_member_left_safe(member)

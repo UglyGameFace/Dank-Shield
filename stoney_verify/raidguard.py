@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import re
 import traceback
 from collections import defaultdict, deque
@@ -10,6 +11,7 @@ from typing import Any, Deque, Dict, List, Optional, Set, Tuple
 import discord
 
 from .globals import *
+from .member_risk_engine import enrich_member_risk_profile
 
 
 # ============================================================
@@ -709,7 +711,13 @@ def _record_join_profile(member: discord.Member, profile: Dict[str, Any]) -> Non
 # ============================================================
 # Evidence-driven scoring
 # ============================================================
-def build_member_risk_profile(member: discord.Member) -> Dict[str, Any]:
+def build_member_risk_profile(
+    member: discord.Member,
+    *,
+    join_context: Optional[Dict[str, Any]] = None,
+    hard_identity_context: Optional[Dict[str, Any]] = None,
+    behavior_context: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
     guild_id = int(member.guild.id)
     user_id = int(member.id)
     username = _normalize_text(getattr(member, "name", "") or "")
@@ -721,7 +729,7 @@ def build_member_risk_profile(member: discord.Member) -> Dict[str, Any]:
     fingerprint = _behavior_fingerprint(member)
 
     if getattr(member, "bot", False):
-        return {
+        bot_profile = {
             "guild_id": guild_id,
             "user_id": user_id,
             "username": username,
@@ -767,6 +775,12 @@ def build_member_risk_profile(member: discord.Member) -> Dict[str, Any]:
             "seen_at": _utcnow(),
             "is_bot_account": True,
         }
+        return enrich_member_risk_profile(
+            member,
+            bot_profile,
+            join_context=join_context,
+            behavior_context=behavior_context,
+        )
 
     default_avatar = _default_avatar(member)
     digit_ratio = _digit_ratio(username)
@@ -777,7 +791,29 @@ def build_member_risk_profile(member: discord.Member) -> Dict[str, Any]:
     joined_after_creation_seconds = _joined_after_creation_seconds(member)
     joined_after_creation_human = _joined_after_creation_human(member)
 
-    hard_ctx = _load_hard_identity_context(guild_id, user_id)
+    if hard_identity_context is not None:
+        hard_ctx = dict(hard_identity_context)
+    else:
+        # Never run sync PostgREST work on Discord's event loop. Async
+        # callers use assess_member_join_risk(), while compatibility
+        # callers may reuse a fresh cache entry.
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            hard_ctx = _load_hard_identity_context(guild_id, user_id)
+        else:
+            cached = _HARD_PROOF_CACHE.get((guild_id, user_id))
+            hard_ctx = (
+                dict(cached[1])
+                if cached and _proof_cache_valid(cached[0])
+                else {
+                    "proof_matches": [],
+                    "matched_identity_fingerprints": [],
+                    "manual_confirmed": [],
+                    "manual_likely": [],
+                    "manual_not_linked_ids": set(),
+                }
+            )
     proof_matches = list(hard_ctx.get("proof_matches") or [])
     manual_confirmed = list(hard_ctx.get("manual_confirmed") or [])
     manual_likely = list(hard_ctx.get("manual_likely") or [])
@@ -1019,22 +1055,19 @@ def build_member_risk_profile(member: discord.Member) -> Dict[str, Any]:
     elif manual_likely:
         alt_cluster_key = f"manual_likely:{guild_id}:{user_id}"
         alt_cluster_size = 1 + len(manual_likely)
-    elif len(same_fp_matches) >= 1 and fingerprint:
+    elif strong_signals and len(same_fp_matches) >= 1 and fingerprint:
         alt_cluster_key = f"fp:{fingerprint}"
         alt_cluster_size = 1 + len(same_fp_matches)
-    elif len(similar_name_matches) >= 1 and username_normalized:
+    elif strong_signals and len(similar_name_matches) >= 1 and username_normalized:
         alt_cluster_key = f"name:{username_normalized[:48]}"
         alt_cluster_size = 1 + len(similar_name_matches)
-    elif len(same_age_bucket_matches) >= max(3, _raid_join_threshold() // 2):
-        alt_cluster_key = f"age:{age_bucket}"
-        alt_cluster_size = 1 + len(same_age_bucket_matches)
 
     flags = _dedupe_list(
         hard_signals + strong_signals + weak_signals,
         max_items=20,
     )
 
-    return {
+    profile = {
         "guild_id": guild_id,
         "user_id": user_id,
         "username": username,
@@ -1087,63 +1120,131 @@ def build_member_risk_profile(member: discord.Member) -> Dict[str, Any]:
     }
 
 
+    return enrich_member_risk_profile(
+        member,
+        profile,
+        join_context=join_context,
+        behavior_context=behavior_context,
+    )
+
+
+async def assess_member_join_risk(
+    member: discord.Member,
+    *,
+    join_context: Optional[Dict[str, Any]] = None,
+    behavior_context: Optional[Dict[str, Any]] = None,
+    record: bool = True,
+) -> Dict[str, Any]:
+    """Build one join assessment without blocking Discord's event loop."""
+    hard_context = await asyncio.to_thread(
+        _load_hard_identity_context,
+        int(member.guild.id),
+        int(member.id),
+    )
+    profile = build_member_risk_profile(
+        member,
+        join_context=join_context,
+        hard_identity_context=hard_context,
+        behavior_context=behavior_context,
+    )
+    if record and not bool(getattr(member, "bot", False)):
+        _record_join_profile(member, profile)
+    return profile
+
+
+async def record_member_security_behavior(
+    member: discord.Member,
+    behavior_context: Dict[str, Any],
+    reasons: Optional[List[str]] = None,
+) -> Dict[str, Any]:
+    """Persist real post-join spam behavior without calling it alt proof."""
+    context = dict(behavior_context or {})
+    if reasons:
+        context["reasons"] = list(reasons)
+    profile = await assess_member_join_risk(
+        member,
+        behavior_context=context,
+        record=True,
+    )
+    try:
+        from .members_new.sync_service import sync_member_to_supabase
+        await sync_member_to_supabase(
+            member,
+            in_guild=True,
+            risk_profile=profile,
+        )
+    except Exception as exc:
+        print(
+            f"⚠️ member security behavior persistence failed "
+            f"guild={member.guild.id} member={member.id} "
+            f"error={type(exc).__name__}"
+        )
+    return profile
+
+
+
 def build_alt_detection_summary(member: discord.Member) -> str:
     profile = build_member_risk_profile(member)
 
     if bool(profile.get("is_bot_account")):
-        return "Official Bot: Yes\nAlt/Raid Risk: excluded from human raid/alt scoring\nDM Raider Risk: separate report flow"
+        return (
+            "Official Bot: Yes\n"
+            "Alt identity: excluded from human scoring\n"
+            "Spam behavior: reviewed through bot permissions and incidents"
+        )
 
-    score = int(profile.get("score") or 0)
-    level = str(profile.get("level") or "low").upper()
-    tier = str(profile.get("evidence_tier") or "clear").replace("_", " ").upper()
-    # Do not tell staff an account is CLEAR while also showing heuristic flags.
-    # Low-confidence flags are not proof, but they are not "clear" either.
-    if tier == "CLEAR" and list(profile.get("suspicion_flags") or []):
-        tier = "WATCHLIST"
-    age_human = _humanize_age_days(int(profile.get("account_age_days") or 0))
-    burst = int(profile.get("burst_count") or 0)
-    fp_matches = int(profile.get("same_fingerprint_count") or 0)
-    name_matches = int(profile.get("similar_name_count") or 0)
-    cluster_size = int(profile.get("alt_cluster_size") or 0)
-    identity_matches = int(profile.get("identity_proof_match_count") or 0)
-    manual_confirmed = int(profile.get("manual_confirmed_match_count") or 0)
-    manual_likely = int(profile.get("manual_likely_match_count") or 0)
+    overall_score = int(profile.get("risk_score") or profile.get("score") or 0)
+    overall_level = str(
+        profile.get("risk_level") or profile.get("level") or "low"
+    ).upper()
+    alt_tier = str(
+        profile.get("alt_evidence_tier")
+        or profile.get("evidence_tier")
+        or "clear"
+    ).replace("_", " ").upper()
+    alt_score = int(profile.get("alt_risk_score") or 0)
+    spam_score = int(profile.get("spam_risk_score") or 0)
+    spam_level = str(profile.get("spam_risk_level") or "low").upper()
+    verdict = str(profile.get("review_verdict") or "REVIEW")
 
-    parts: List[str] = [
-        "Official Bot: No",
-        f"Alt/Raid Risk: {tier} ({level} / {score}/100)",
-        f"Account age: {age_human}",
-        "DM Raider Risk: separate user-report evidence required",
+    lines = [
+        f"Verdict: {verdict}",
+        f"Overall risk: {overall_level} ({overall_score}/100)",
+        f"Alt identity evidence: {alt_tier} ({alt_score}/100)",
+        f"Spam behavior: {spam_level} ({spam_score}/100)",
+        f"Account age: {_humanize_age_days(int(profile.get('account_age_days') or 0))}",
     ]
 
-    signal_parts: List[str] = []
-    if identity_matches > 0:
-        signal_parts.append(f"Verified identity matches: {identity_matches}")
-    if manual_confirmed > 0:
-        signal_parts.append(f"Manual confirmed links: {manual_confirmed}")
-    if manual_likely > 0:
-        signal_parts.append(f"Manual likely links: {manual_likely}")
-    if cluster_size > 1:
-        signal_parts.append(f"Linked cluster size: {cluster_size}")
-    if fp_matches > 0:
-        signal_parts.append(f"Shared fingerprint matches: {fp_matches}")
-    if name_matches > 0:
-        signal_parts.append(f"Similar usernames: {name_matches}")
-    if burst > 0:
-        signal_parts.append(f"Join burst: {burst}")
-    if profile.get("default_avatar"):
-        signal_parts.append("Default avatar")
+    if profile.get("listing_source"):
+        lines.append(
+            "Entry context: public/listing traffic (not suspicious by itself)"
+        )
 
-    if signal_parts:
-        parts.append("Signals: " + " • ".join(signal_parts))
-    else:
-        parts.append("Signals: no strong recent link evidence")
+    hard = int(profile.get("identity_proof_match_count") or 0)
+    confirmed = int(profile.get("manual_confirmed_match_count") or 0)
+    likely = int(profile.get("manual_likely_match_count") or 0)
+    fingerprint = int(profile.get("same_fingerprint_count") or 0)
+    names = int(profile.get("similar_name_count") or 0)
+    burst = int(profile.get("burst_count") or 0)
 
-    flags = [_pretty_signal(x) for x in list(profile.get("suspicion_flags") or [])[:5]]
-    if flags:
-        parts.append("Flags: " + " • ".join(flags))
+    evidence: List[str] = []
+    if hard:
+        evidence.append(f"verified identity matches={hard}")
+    if confirmed:
+        evidence.append(f"staff-confirmed links={confirmed}")
+    if likely:
+        evidence.append(f"staff-likely links={likely}")
+    if fingerprint:
+        evidence.append(f"heuristic fingerprint matches={fingerprint}")
+    if names:
+        evidence.append(f"similar recent names={names}")
+    if burst:
+        evidence.append(f"join burst={burst}")
 
-    return "\n".join(parts)
+    lines.append(
+        "Evidence: " + (" • ".join(evidence) if evidence else "no strong link evidence")
+    )
+    return "\n".join(lines)
 
 
 # ============================================================
@@ -1243,7 +1344,7 @@ async def _maybe_trigger_raid(guild: discord.Guild) -> Tuple[bool, str]:
 
         if hottest_fp_size >= max(3, _raid_join_threshold() // 2):
             should_alert = True
-            reasons.append(f"behavioral fingerprint cluster size {hottest_fp_size}")
+            reasons.append(f"heuristic profile cluster size {hottest_fp_size}")
 
         if not should_alert:
             return False, ""
@@ -1267,8 +1368,18 @@ async def _maybe_trigger_raid(guild: discord.Guild) -> Tuple[bool, str]:
                 f" names={row.get('similar_name_count')}"
             )
 
+        correlated_identity_wave = bool(
+            recent_confirmed
+            or len(recent_critical) >= 2
+            or hottest_fp_size >= max(3, _raid_join_threshold() // 2)
+        )
+        alert_title = (
+            "Correlated Alt / Raid Wave"
+            if correlated_identity_wave
+            else "Join Surge"
+        )
         message = (
-            "🚨 **Raid / Alt Wave Detected**\n"
+            f"🚨 **{alert_title} Detected**\n"
             f"Guild: `{guild.name}` (`{guild.id}`)\n"
             f"Signals: {' • '.join(reasons)}\n"
         )
@@ -1292,7 +1403,10 @@ async def _maybe_trigger_raid(guild: discord.Guild) -> Tuple[bool, str]:
         return False, ""
 
 
-async def _mass_role_strip_if_needed(member: discord.Member) -> Optional[str]:
+async def _mass_role_strip_if_needed(
+    member: discord.Member,
+    profile: Optional[Dict[str, Any]] = None,
+) -> Optional[str]:
     try:
         if getattr(member, "bot", False):
             return None
@@ -1305,8 +1419,11 @@ async def _mass_role_strip_if_needed(member: discord.Member) -> Optional[str]:
         if join_count < trigger_threshold:
             return None
 
-        profile = build_member_risk_profile(member)
-        _record_join_profile(member, profile)
+        if profile is None:
+            profile = await assess_member_join_risk(
+                member,
+                record=False,
+            )
 
         if str(profile.get("level")) not in {"high", "critical"}:
             return None

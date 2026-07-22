@@ -474,6 +474,25 @@ class MemberReviewView(discord.ui.View):
             verdict="false_positive",
             title="Mark False Positive",
         )
+    @discord.ui.button(
+        label="Moderate",
+        emoji="🛠️",
+        style=discord.ButtonStyle.secondary,
+        row=2,
+    )
+    async def moderate_member(
+        self,
+        interaction: discord.Interaction,
+        button: discord.ui.Button,
+    ) -> None:
+        from .modlog import build_quick_mod_view
+
+        await interaction.response.send_message(
+            f"Moderation actions for <@{self.target_user_id}>",
+            view=build_quick_mod_view(self.target_user_id),
+            ephemeral=True,
+            allowed_mentions=discord.AllowedMentions.none(),
+        )
 
     @discord.ui.button(
         label="Approved Bot",

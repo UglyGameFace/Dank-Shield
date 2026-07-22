@@ -16,8 +16,8 @@ COMMAND = (
 MEMBERS = (
     ROOT / "stoney_verify/commands_ext/public_members_group.py"
 ).read_text(encoding="utf-8")
-ROUTER = (
-    ROOT / "stoney_verify/startup_guards/member_lifecycle_router_guard.py"
+EVENTS = (
+    ROOT / "stoney_verify/events.py"
 ).read_text(encoding="utf-8")
 REGISTRY = (
     ROOT / "stoney_verify/commands_ext/__init__.py"
@@ -89,13 +89,19 @@ def test_reset_wording_is_honest() -> None:
 
 
 def test_staff_audit_still_has_review_controls() -> None:
-    start = ROUTER.index("async def _send_staff_join_audit(")
-    end = ROUTER.index("async def _send_staff_leave_audit(", start)
-    block = ROUTER[start:end]
+    start = EVENTS.index(
+        "@bot.event\nasync def on_member_join(member: discord.Member):"
+    )
+    end = EVENTS.index(
+        "@bot.event\nasync def on_member_remove(member: discord.Member):",
+        start,
+    )
+    block = EVENTS[start:end]
 
     assert "build_member_review_view" in block
     assert "view=review_view" in block
     assert "Previous Staff Verdict" in block
+    assert "event_key=f\"member_join:{member.id}\"" in block
 
 
 def test_review_system_never_punishes_automatically() -> None:
