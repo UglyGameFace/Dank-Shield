@@ -60,6 +60,17 @@ _MISSING_COLUMN_RE = re.compile(r"'([^']+)' column")
 _EVENT_DEDUP_WINDOW_SECONDS = 3.0
 _EVENT_DEDUP_CACHE: Dict[str, float] = {}
 
+_TICKET_STATS_REFRESH_EVENTS = frozenset(
+    {
+        "ticket_created",
+        "ticket_claimed",
+        "ticket_unclaimed",
+        "ticket_closed",
+        "ticket_reopened",
+        "ticket_deleted",
+    }
+)
+
 
 # ============================================================
 # Small helpers
@@ -955,7 +966,7 @@ async def log_ticket_event(
         metadata=meta,
     )
 
-    return await log_activity_event(
+    logged = await log_activity_event(
         guild_id=resolved_guild_id,
         title=title,
         description=description,
@@ -976,6 +987,21 @@ async def log_ticket_event(
         metadata=meta,
         extra=extra,
     )
+
+    normalized_event = _normalize_event_type(event_type)
+    if normalized_event in _TICKET_STATS_REFRESH_EVENTS:
+        try:
+            from ..security_stats import refresh_ticket_stats_for_guild_id
+
+            await refresh_ticket_stats_for_guild_id(int(resolved_guild_id))
+        except Exception as exc:
+            _debug(
+                "ticket stats refresh skipped "
+                f"guild={resolved_guild_id} event={normalized_event} "
+                f"error={type(exc).__name__}"
+            )
+
+    return logged
 
 
 # ============================================================

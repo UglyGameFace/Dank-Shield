@@ -165,6 +165,42 @@ def _normalize_ticket_status_counts(value: Any) -> Optional[Dict[str, int]]:
     }
 
 
+def _ticket_has_assignee(row: Mapping[str, Any]) -> bool:
+    for key in ("claimed_by", "assigned_to"):
+        text = str(row.get(key) or "").strip().lower()
+        if text and text not in {"0", "none", "null"}:
+            return True
+    return False
+
+
+def _ticket_status_counts_from_rows(rows: Any) -> Dict[str, int]:
+    """Count active tickets and the claimed subset from stored lifecycle rows."""
+    counts = dict(DEFAULT_TICKET_STATUS_COUNTS)
+    try:
+        iterable = list(rows or [])
+    except Exception:
+        return counts
+
+    for row in iterable:
+        if not isinstance(row, Mapping):
+            continue
+
+        status = str(row.get("status") or "").strip().lower()
+        if status in {"active", "reopened"}:
+            status = "open"
+
+        if status in {"open", "claimed"}:
+            # Claimed tickets remain open; Claimed is a subset, not a separate
+            # lifecycle bucket that should disappear from the active total.
+            counts["open_tickets"] += 1
+            if status == "claimed" or _ticket_has_assignee(row):
+                counts["claimed_tickets"] += 1
+        elif status == "closed":
+            counts["closed_tickets"] += 1
+
+    return counts
+
+
 def _query_ticket_status_counts_sync(guild_id: int) -> Optional[Dict[str, int]]:
     """Read current ticket lifecycle totals from the canonical tickets table."""
     sb = get_supabase()
@@ -181,26 +217,7 @@ def _query_ticket_status_counts_sync(guild_id: int) -> Optional[Dict[str, int]]:
     if rows is None:
         return None
 
-    counts = dict(DEFAULT_TICKET_STATUS_COUNTS)
-    for row in rows:
-        if not isinstance(row, Mapping):
-            continue
-        status = str(row.get("status") or "").strip().lower()
-        if status in {"active", "reopened"}:
-            status = "open"
-        if status == "open":
-            claimed_by = str(row.get("claimed_by") or "").strip()
-            assigned_to = str(row.get("assigned_to") or "").strip()
-            if claimed_by or assigned_to:
-                status = "claimed"
-
-        if status == "open":
-            counts["open_tickets"] += 1
-        elif status == "claimed":
-            counts["claimed_tickets"] += 1
-        elif status == "closed":
-            counts["closed_tickets"] += 1
-    return counts
+    return _ticket_status_counts_from_rows(rows)
 
 
 async def _ticket_status_counts(guild_id: int) -> Optional[Dict[str, int]]:
@@ -537,6 +554,32 @@ async def refresh_security_stats_display(
     return changed
 
 
+async def refresh_ticket_stats_for_guild_id(guild_id: int) -> bool:
+    """Force the enabled live stats display to reflect a ticket transition."""
+    gid = _safe_int(guild_id, 0)
+    if gid <= 0:
+        return False
+
+    try:
+        guild = bot.get_guild(gid)
+    except Exception:
+        guild = None
+    if guild is None:
+        return False
+
+    try:
+        return await refresh_security_stats_display(guild, force=True)
+    except Exception as exc:
+        try:
+            print(
+                f"⚠️ security_stats ticket refresh failed guild={gid} "
+                f"error={type(exc).__name__}"
+            )
+        except Exception:
+            pass
+        return False
+
+
 @tasks.loop(minutes=10)
 async def refresh_all_security_stats_displays() -> None:
     for guild in list(getattr(bot, "guilds", []) or []):
@@ -577,4 +620,5 @@ __all__ = [
     "record_security_event",
     "record_spam_guard_action",
     "refresh_security_stats_display",
+    "refresh_ticket_stats_for_guild_id",
 ]

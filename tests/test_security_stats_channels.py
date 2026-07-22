@@ -133,7 +133,7 @@ def test_ticket_status_query_uses_authoritative_stored_lifecycle_state(monkeypat
     monkeypatch.setattr(security_stats, "get_supabase", lambda: FakeSupabase())
 
     assert security_stats._query_ticket_status_counts_sync(777) == {
-        "open_tickets": 2,
+        "open_tickets": 5,
         "claimed_tickets": 3,
         "closed_tickets": 2,
     }
