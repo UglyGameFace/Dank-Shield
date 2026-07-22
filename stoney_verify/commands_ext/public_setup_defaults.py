@@ -11,6 +11,7 @@ Auto-build must be boring and safe:
 - when enabled, repair only the safe bot/staff/control overwrites needed for Dank Shield to function
 """
 
+import asyncio
 import re
 import unicodedata
 from typing import Any, Optional
@@ -287,6 +288,30 @@ def _find_named(items: list[Any], name: str) -> Any:
     return None
 
 
+_RESOURCE_CREATE_LOCKS: dict[tuple[int, int, str, str], asyncio.Lock] = {}
+
+
+def _resource_create_lock(
+    guild: discord.Guild,
+    kind: str,
+    name: str,
+) -> asyncio.Lock:
+    """Serialize same-resource creation within one bot process/event loop."""
+
+    loop = asyncio.get_running_loop()
+    key = (
+        id(loop),
+        int(getattr(guild, "id", 0) or 0),
+        str(kind or "resource"),
+        _key(name),
+    )
+    lock = _RESOURCE_CREATE_LOCKS.get(key)
+    if lock is None:
+        lock = asyncio.Lock()
+        _RESOURCE_CREATE_LOCKS[key] = lock
+    return lock
+
+
 def _bot_member(guild: discord.Guild) -> Optional[discord.Member]:
     try:
         return guild.me
@@ -537,82 +562,103 @@ async def _repair_existing_permissions(
 
 
 async def _ensure_role(guild: discord.Guild, name: str, *, create_missing_roles: bool, notes: list[str], created: list[str], reused: list[str]) -> Optional[discord.Role]:
-    role = _role_by_name(guild, name)
-    if role:
-        _unique(reused, f"Role: {role.mention}")
-        return role
-    if not create_missing_roles:
-        notes.append(f"Role `{name}` was missing and role creation is disabled.")
-        return None
-    ok, reason = _can_manage_roles(guild)
-    if not ok:
-        notes.append(f"Could not create role `{name}`: {reason}")
-        return None
-    try:
-        role = await guild.create_role(name=name, permissions=discord.Permissions.none(), hoist=False, mentionable=False, reason="Dank Shield auto-build missing recommended role")
-        created.append(f"Role: {role.mention}")
-        return role
-    except Exception as e:
-        notes.append(f"Could not create role `{name}`: {type(e).__name__}")
-        return None
-
+    async with _resource_create_lock(guild, "role", name):
+        role = _role_by_name(guild, name)
+        if role:
+            _unique(reused, f"Role: {role.mention}")
+            return role
+        if not create_missing_roles:
+            notes.append(f"Role `{name}` was missing and role creation is disabled.")
+            return None
+        ok, reason = _can_manage_roles(guild)
+        if not ok:
+            notes.append(f"Could not create role `{name}`: {reason}")
+            return None
+        try:
+            role = await guild.create_role(
+                name=name,
+                permissions=discord.Permissions.none(),
+                hoist=False,
+                mentionable=False,
+                reason="Dank Shield auto-build missing recommended role",
+            )
+            created.append(f"Role: {role.mention}")
+            return role
+        except Exception as e:
+            notes.append(f"Could not create role `{name}`: {type(e).__name__}")
+            return None
 
 async def _ensure_category(guild: discord.Guild, name: str, *, overwrites: dict[Any, discord.PermissionOverwrite], notes: list[str], created: list[str], reused: list[str]) -> Optional[discord.CategoryChannel]:
-    category = _category_by_name(guild, name)
-    if category:
-        _unique(reused, f"Category: `{category.name}`")
-        notes.append(f"Reused existing category `{category.name}`; safe bot/staff permission repair will be checked.")
-        return category
-    ok, reason = _can_manage_channels(guild)
-    if not ok:
-        notes.append(f"Could not create category `{name}`: {reason}")
-        return None
-    try:
-        category = await guild.create_category(name=name, overwrites=overwrites, reason="Dank Shield auto-build missing recommended category")
-        created.append(f"Category: `{category.name}`")
-        return category
-    except Exception as e:
-        notes.append(f"Could not create category `{name}`: {type(e).__name__}")
-        return None
-
+    async with _resource_create_lock(guild, "category", name):
+        category = _category_by_name(guild, name)
+        if category:
+            _unique(reused, f"Category: `{category.name}`")
+            notes.append(f"Reused existing category `{category.name}`; safe bot/staff permission repair will be checked.")
+            return category
+        ok, reason = _can_manage_channels(guild)
+        if not ok:
+            notes.append(f"Could not create category `{name}`: {reason}")
+            return None
+        try:
+            category = await guild.create_category(
+                name=name,
+                overwrites=overwrites,
+                reason="Dank Shield auto-build missing recommended category",
+            )
+            created.append(f"Category: `{category.name}`")
+            return category
+        except Exception as e:
+            notes.append(f"Could not create category `{name}`: {type(e).__name__}")
+            return None
 
 async def _ensure_text(guild: discord.Guild, name: str, *, category: Optional[discord.CategoryChannel], overwrites: dict[Any, discord.PermissionOverwrite], topic: str, notes: list[str], created: list[str], reused: list[str]) -> Optional[discord.TextChannel]:
-    channel = _text_by_name(guild, name)
-    if channel:
-        _unique(reused, f"Channel: {channel.mention}")
-        notes.append(f"Reused existing channel {channel.mention}; safe bot/staff permission repair will be checked.")
-        return channel
-    ok, reason = _can_manage_channels(guild)
-    if not ok:
-        notes.append(f"Could not create channel `#{name}`: {reason}")
-        return None
-    try:
-        channel = await guild.create_text_channel(name=name, category=category, overwrites=overwrites, topic=topic[:1024] if topic else None, reason="Dank Shield auto-build missing recommended channel")
-        created.append(f"Channel: {channel.mention}")
-        return channel
-    except Exception as e:
-        notes.append(f"Could not create channel `#{name}`: {type(e).__name__}")
-        return None
-
+    async with _resource_create_lock(guild, "text", name):
+        channel = _text_by_name(guild, name)
+        if channel:
+            _unique(reused, f"Channel: {channel.mention}")
+            notes.append(f"Reused existing channel {channel.mention}; safe bot/staff permission repair will be checked.")
+            return channel
+        ok, reason = _can_manage_channels(guild)
+        if not ok:
+            notes.append(f"Could not create channel `#{name}`: {reason}")
+            return None
+        try:
+            channel = await guild.create_text_channel(
+                name=name,
+                category=category,
+                overwrites=overwrites,
+                topic=topic[:1024] if topic else None,
+                reason="Dank Shield auto-build missing recommended channel",
+            )
+            created.append(f"Channel: {channel.mention}")
+            return channel
+        except Exception as e:
+            notes.append(f"Could not create channel `#{name}`: {type(e).__name__}")
+            return None
 
 async def _ensure_voice(guild: discord.Guild, name: str, *, category: Optional[discord.CategoryChannel], overwrites: dict[Any, discord.PermissionOverwrite], notes: list[str], created: list[str], reused: list[str]) -> Optional[discord.VoiceChannel]:
-    channel = _voice_by_name(guild, name)
-    if channel:
-        _unique(reused, f"Voice: {channel.mention}")
-        notes.append(f"Reused existing voice channel {channel.mention}; safe bot/staff permission repair will be checked.")
-        return channel
-    ok, reason = _can_manage_channels(guild)
-    if not ok:
-        notes.append(f"Could not create voice channel `{name}`: {reason}")
-        return None
-    try:
-        channel = await guild.create_voice_channel(name=name, category=category, overwrites=overwrites, reason="Dank Shield auto-build missing recommended voice channel")
-        created.append(f"Voice: {channel.mention}")
-        return channel
-    except Exception as e:
-        notes.append(f"Could not create voice channel `{name}`: {type(e).__name__}")
-        return None
-
+    async with _resource_create_lock(guild, "voice", name):
+        channel = _voice_by_name(guild, name)
+        if channel:
+            _unique(reused, f"Voice: {channel.mention}")
+            notes.append(f"Reused existing voice channel {channel.mention}; safe bot/staff permission repair will be checked.")
+            return channel
+        ok, reason = _can_manage_channels(guild)
+        if not ok:
+            notes.append(f"Could not create voice channel `{name}`: {reason}")
+            return None
+        try:
+            channel = await guild.create_voice_channel(
+                name=name,
+                category=category,
+                overwrites=overwrites,
+                reason="Dank Shield auto-build missing recommended voice channel",
+            )
+            created.append(f"Voice: {channel.mention}")
+            return channel
+        except Exception as e:
+            notes.append(f"Could not create voice channel `{name}`: {type(e).__name__}")
+            return None
 
 async def _resolve_existing_control_role(guild: discord.Guild) -> Optional[discord.Role]:
     try:

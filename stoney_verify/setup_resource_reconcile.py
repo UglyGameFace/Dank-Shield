@@ -157,6 +157,30 @@ async def reconcile_disabled_voice_verify(
     notes: list[str] = []
     clear_keys = set(VOICE_MAPPING_KEYS) | set(VOICE_QUEUE_MAPPING_KEYS)
 
+    if managed_voice_id > 0:
+        auto_voice_ids = {managed_voice_id}
+    elif len(mapped_voice_ids) == 1:
+        auto_voice_ids = set(mapped_voice_ids)
+    else:
+        auto_voice_ids = set()
+        if len(mapped_voice_ids) > 1:
+            _add_note(
+                notes,
+                "Multiple legacy Voice Verify voice mappings disagree, so Dank Shield detached them without deleting any voice channel.",
+            )
+
+    if managed_queue_id > 0:
+        auto_queue_ids = {managed_queue_id}
+    elif len(mapped_queue_ids) == 1:
+        auto_queue_ids = set(mapped_queue_ids)
+    else:
+        auto_queue_ids = set()
+        if len(mapped_queue_ids) > 1:
+            _add_note(
+                notes,
+                "Multiple legacy Voice Verify request-channel mappings disagree, so Dank Shield detached them without deleting any request channel.",
+            )
+
     for channel_id in sorted(candidate_voice_ids):
         channel = guild.get_channel(channel_id)
         if channel is None:
@@ -167,7 +191,11 @@ async def reconcile_disabled_voice_verify(
         exact_default = str(getattr(channel, "name", "") or "") == defaults.VC_VERIFY_CHANNEL_NAME
         proven = bool(
             channel_id == managed_voice_id
-            or await _audit_proves_bot_created(guild, channel)
+            or (
+                managed_voice_id <= 0
+                and channel_id in auto_voice_ids
+                and await _audit_proves_bot_created(guild, channel)
+            )
         )
         if not (_is_voice_channel(channel) and exact_default and proven):
             if channel_id in mapped_voice_ids:
@@ -206,7 +234,11 @@ async def reconcile_disabled_voice_verify(
         exact_default = str(getattr(channel, "name", "") or "") == defaults.VC_QUEUE_CHANNEL_NAME
         proven = bool(
             channel_id == managed_queue_id
-            or await _audit_proves_bot_created(guild, channel)
+            or (
+                managed_queue_id <= 0
+                and channel_id in auto_queue_ids
+                and await _audit_proves_bot_created(guild, channel)
+            )
         )
         if not (_is_text_channel(channel) and exact_default and proven):
             if channel_id in mapped_queue_ids:

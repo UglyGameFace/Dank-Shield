@@ -3953,6 +3953,15 @@ class AdvancedVerificationView(discord.ui.View):
         _ = button
         await _open_timers_behavior(interaction)
 
+    @discord.ui.button(label="Review Old Voice Items", emoji="🎙️", style=discord.ButtonStyle.secondary, custom_id="dank_setup_verify:legacy_voice", row=1)
+    async def legacy_voice_items(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        from stoney_verify import setup_legacy_voice_cleanup_ui
+
+        await setup_legacy_voice_cleanup_ui.open_legacy_voice_cleanup_review(
+            interaction
+        )
+
     @discord.ui.button(label="Back to All Features", emoji="↩️", style=discord.ButtonStyle.secondary, custom_id="dank_setup_verify:back", row=2)
     async def back(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
