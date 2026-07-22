@@ -2,10 +2,16 @@ from __future__ import annotations
 
 import ast
 from pathlib import Path
+from types import SimpleNamespace
+
+import pytest
+
+from stoney_verify.startup_guards import (
+    setup_feature_health_scoreboard as scoreboard,
+)
 
 
 ROOT = Path(__file__).resolve().parents[1]
-
 TARGET = (
     ROOT
     / "stoney_verify"
@@ -17,12 +23,6 @@ RECOMMEND = (
     / "stoney_verify"
     / "commands_ext"
     / "public_setup_recommend.py"
-)
-SCOREBOARD = (
-    ROOT
-    / "stoney_verify"
-    / "startup_guards"
-    / "setup_feature_health_scoreboard.py"
 )
 PROTECTION = (
     ROOT
@@ -39,29 +39,19 @@ def _source(path: Path) -> str:
 def _owners(path: Path) -> dict[str, ast.AST]:
     source = _source(path)
     tree = ast.parse(source, filename=str(path))
-
     return {
         node.name: node
         for node in tree.body
         if isinstance(
             node,
-            (
-                ast.FunctionDef,
-                ast.AsyncFunctionDef,
-                ast.ClassDef,
-            ),
+            (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef),
         )
     }
 
 
 def _owner_source(path: Path, name: str) -> str:
     source = _source(path)
-    node = _owners(path)[name]
-
-    return ast.get_source_segment(
-        source,
-        node,
-    ) or ""
+    return ast.get_source_segment(source, _owners(path)[name]) or ""
 
 
 def test_legacy_guard_is_deleted() -> None:
@@ -69,118 +59,57 @@ def test_legacy_guard_is_deleted() -> None:
 
 
 def test_hidden_protection_loader_is_removed() -> None:
-    assert (
-        "vc_verified_health_check_guard"
-        not in _source(PROTECTION)
-    )
+    assert "vc_verified_health_check_guard" not in _source(PROTECTION)
 
 
-def test_native_access_helper_owns_legacy_truth() -> None:
+def test_canonical_setup_uses_session_access_not_approved_role_access() -> None:
     owners = _owners(RECOMMEND)
+    assert "_verified_role_voice_access" not in owners
 
-    assert "_verified_role_voice_access" in owners
+    health = _owner_source(RECOMMEND, "_build_plain_setup_health_embed")
+    guided = _owner_source(RECOMMEND, "_guided_setup_target")
+    dispatcher = _owner_source(RECOMMEND, "_open_guided_target")
 
-    body = _owner_source(
-        RECOMMEND,
-        "_verified_role_voice_access",
-    )
-
-    for marker in (
-        "verified_role_id",
-        "member_role_id",
-        "approved_role_id",
-        "vc_verify_channel_id",
-        "vc_verify_vc_id",
-        "voice_verify_channel_id",
-        "permissions_for(role)",
-        "view_channel",
-        "connect",
-        "speak",
-        "View Channel",
-        "Connect",
-        "Speak",
+    combined = "\n".join((health, guided, dispatcher))
+    for forbidden in (
+        "verified_voice_access",
+        "Allow Approved Members Into Voice Verify",
+        "Edit Channel → Permissions",
+        "View Channel, Connect, Speak",
     ):
-        assert marker in body
+        assert forbidden not in combined
+
+    assert "_has_typed_channel" in health
+    assert "session-based" in health
+    assert "active requester" in health
+    assert "assigned staff" in health
 
 
-def test_setup_health_uses_native_access_helper() -> None:
-    body = _owner_source(
-        RECOMMEND,
-        "_build_plain_setup_health_embed",
+def test_scoreboard_voice_health_uses_session_contract(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    voice = SimpleNamespace(name="Voice Verification")
+    queue = SimpleNamespace(name="vc-verify-queue")
+    staff = SimpleNamespace(name="Support Team")
+
+    monkeypatch.setattr(scoreboard, "_voice_channel", lambda *_args: voice)
+    monkeypatch.setattr(scoreboard, "_text_channel", lambda *_args: queue)
+    monkeypatch.setattr(scoreboard, "_role", lambda *_args: staff)
+    monkeypatch.setattr(scoreboard, "_can_use_channel", lambda *_args, **_kwargs: True)
+
+    health = scoreboard._voice_score(
+        SimpleNamespace(),
+        {
+            "vc_verify_channel_id": "101",
+            "vc_verify_queue_channel_id": "202",
+            # Deliberately no verified/member/approved role ID.
+        },
+        True,
     )
 
-    assert "_verified_role_voice_access(" in body
-    assert "if access_ok:" in body
-    assert "passing.append(access_text)" in body
-    assert "blockers.append(access_text)" in body
-
-
-def test_guided_readiness_blocks_launch() -> None:
-    body = _owner_source(
-        RECOMMEND,
-        "_guided_setup_target",
-    )
-
-    helper_index = body.index(
-        "_verified_role_voice_access("
-    )
-    ready_index = body.index(
-        '"ready",'
-    )
-
-    assert helper_index < ready_index
-    assert '"verified_voice_access"' in body
-    assert (
-        "Allow Approved Members Into Voice Verify"
-        in body
-    )
-    assert "if not access_ok:" in body
-
-
-def test_continue_setup_opens_permission_instructions() -> None:
-    body = _owner_source(
-        RECOMMEND,
-        "_open_guided_target",
-    )
-
-    assert (
-        'requirement_key == "verified_voice_access"'
-        in body
-    )
-    assert "Edit Channel → Permissions" in body
-    assert "View Channel, Connect, Speak" in body
-    assert "Continue Setup" in body
-    assert "Fix Next Problem" not in body
-    assert "Fix Next Item" not in body
-
-
-def test_scoreboard_mirrors_member_access_truth() -> None:
-    owners = _owners(SCOREBOARD)
-
-    assert "_verified_role_voice_access" in owners
-
-    helper = _owner_source(
-        SCOREBOARD,
-        "_verified_role_voice_access",
-    )
-    voice_score = _owner_source(
-        SCOREBOARD,
-        "_voice_score",
-    )
-
-    for marker in (
-        "voice.permissions_for(verified)",
-        "view_channel",
-        "connect",
-        "speak",
-        "View Channel",
-        "Connect",
-        "Speak",
-    ):
-        assert marker in helper
-
-    assert "_verified_role_voice_access(" in voice_score
-    assert "blockers.append(member_access_text)" in voice_score
+    assert health.status == "ready"
+    assert "session-based" in health.summary
+    assert "assigned-staff" in health.summary
 
 
 def test_no_production_health_wrapper_remains() -> None:
@@ -190,27 +119,18 @@ def test_no_production_health_wrapper_remains() -> None:
         "patched_health",
         "Verified VC Access",
     )
-
     roots = (
         ROOT / "stoney_verify" / "commands_ext",
         ROOT / "stoney_verify" / "startup_guards",
     )
-
     for root in roots:
         for path in root.rglob("*.py"):
             source = _source(path)
-
             for marker in forbidden:
-                assert marker not in source, (
-                    f"{marker!r} remains in {path}"
-                )
+                assert marker not in source, f"{marker!r} remains in {path}"
 
 
 def test_has_role_accepts_alias_keys() -> None:
-    body = _owner_source(
-        RECOMMEND,
-        "_has_role",
-    )
-
+    body = _owner_source(RECOMMEND, "_has_role")
     assert "*keys: str" in body
     assert "for key in keys:" in body

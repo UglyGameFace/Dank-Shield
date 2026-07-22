@@ -424,7 +424,7 @@ def test_creation_uses_canonical_helper_name_and_permissions(
         )
 
 
-def test_created_voice_staff_channel_saves_all_aliases_and_advances(
+def test_voice_setup_action_saves_room_and_staff_queue_as_bundle(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     interaction = FakeInteraction()
@@ -443,9 +443,18 @@ def test_created_voice_staff_channel_saves_all_aliases_and_advances(
         return {}
 
     async def create_exact(
-        *args: Any,
-        **kwargs: Any,
+        _guild: Any,
+        _cfg: Any,
+        requirement_key: str,
     ) -> tuple[Any, list[str], list[str], list[str]]:
+        if requirement_key == "voice_verify_channel":
+            return (
+                SimpleNamespace(id=7070),
+                [],
+                ["Voice: created"],
+                [],
+            )
+        assert requirement_key == "voice_verify_staff_channel"
         return (
             SimpleNamespace(id=8080),
             [],
@@ -457,12 +466,14 @@ def test_created_voice_staff_channel_saves_all_aliases_and_advances(
         interaction_arg: Any,
         payload: dict[str, str],
     ) -> None:
+        assert interaction_arg is interaction
         events.append(("save", payload))
 
     async def guided(
         interaction_arg: Any,
         **kwargs: Any,
     ) -> None:
+        assert interaction_arg is interaction
         events.append(("guided", kwargs))
 
     monkeypatch.setattr(
@@ -508,10 +519,12 @@ def test_created_voice_staff_channel_saves_all_aliases_and_advances(
         )
     )
 
-    assert events[0][0] == "defer"
+    assert events[0] == ("defer", None)
     assert events[1] == (
         "save",
         {
+            "vc_verify_channel_id": "7070",
+            "vc_verify_channel_managed_id": "7070",
             "vc_verify_queue_channel_id": "8080",
             "vc_queue_channel_id": "8080",
             "vc_request_channel_id": "8080",
@@ -520,4 +533,6 @@ def test_created_voice_staff_channel_saves_all_aliases_and_advances(
         },
     )
     assert events[2][0] == "guided"
-    assert "Created this item" in events[2][1]["saved_message"]
+    saved_message = events[2][1]["saved_message"]
+    assert "private Voice Verify room" in saved_message
+    assert "staff request channel together" in saved_message
