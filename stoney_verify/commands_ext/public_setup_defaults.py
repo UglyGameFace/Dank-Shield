@@ -425,17 +425,53 @@ def _staff_overwrites(guild: discord.Guild, staff_role: Optional[discord.Role], 
     return ow
 
 
-def _voice_overwrites(guild: discord.Guild, staff_role: Optional[discord.Role], control_role: Optional[discord.Role], unverified_role: Optional[discord.Role]) -> dict[Any, discord.PermissionOverwrite]:
-    ow: dict[Any, discord.PermissionOverwrite] = {guild.default_role: discord.PermissionOverwrite(view_channel=True, connect=True, speak=False)}
-    me = _bot_member(guild)
-    if me:
-        ow[me] = discord.PermissionOverwrite(view_channel=True, connect=True, speak=True, move_members=True, manage_channels=True)
+def _voice_overwrites(
+    guild: discord.Guild,
+    staff_role: Optional[discord.Role],
+    control_role: Optional[discord.Role],
+    unverified_role: Optional[discord.Role],
+) -> dict[Any, discord.PermissionOverwrite]:
+    """Base Voice Verify room access; runtime grants active member overrides."""
+
+    denied = discord.PermissionOverwrite(
+        view_channel=False,
+        connect=False,
+        speak=False,
+    )
+    overwrites: dict[Any, discord.PermissionOverwrite] = {
+        guild.default_role: denied,
+    }
+
+    bot_member = _bot_member(guild)
+    if bot_member:
+        overwrites[bot_member] = discord.PermissionOverwrite(
+            view_channel=True,
+            connect=True,
+            speak=True,
+            move_members=True,
+            manage_channels=True,
+        )
+
     if unverified_role and not unverified_role.is_default():
-        ow[unverified_role] = discord.PermissionOverwrite(view_channel=True, connect=True, speak=False)
+        overwrites[unverified_role] = discord.PermissionOverwrite(
+            view_channel=False,
+            connect=False,
+            speak=False,
+        )
+
+    # Staff/control roles do not receive broad room access. The VC session
+    # owner grants a member-specific overwrite only to the staff member who
+    # accepted/claimed the active request.
     for role in (staff_role, control_role):
         if role and not role.is_default():
-            ow[role] = discord.PermissionOverwrite(view_channel=True, connect=True, speak=True, move_members=True)
-    return ow
+            overwrites[role] = discord.PermissionOverwrite(
+                view_channel=False,
+                connect=False,
+                speak=False,
+                move_members=False,
+            )
+
+    return overwrites
 
 
 def _target_label(target: Any) -> str:

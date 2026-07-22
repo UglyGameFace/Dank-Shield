@@ -891,6 +891,37 @@ async def _reconcile_voice_resources_if_disabled(
         )
 
 
+async def _open_legacy_voice_cleanup_if_needed(
+    interaction: discord.Interaction,
+    guild: discord.Guild,
+    result_message: str,
+    *,
+    already_deferred: bool,
+) -> bool:
+    """Open explicit cleanup review when legacy Voice items remain after OFF."""
+
+    if not str(result_message or "").strip():
+        return False
+
+    from .. import setup_legacy_voice_cleanup
+    from .. import setup_legacy_voice_cleanup_ui
+
+    preview = await (
+        setup_legacy_voice_cleanup.find_legacy_voice_cleanup_candidates(
+            guild
+        )
+    )
+    if preview.blocked_reason or not preview.has_candidates:
+        return False
+
+    await setup_legacy_voice_cleanup_ui.open_legacy_voice_cleanup_review(
+        interaction,
+        result_message=str(result_message),
+        already_deferred=already_deferred,
+    )
+    return True
+
+
 class CustomServicePresetSelect(discord.ui.Select):
     def __init__(self, current: Any) -> None:
         options: list[discord.SelectOption] = []
@@ -990,6 +1021,13 @@ class CustomServicePresetSelect(discord.ui.Select):
         saved_message = f"Saved **{label}**. {desc}"
         if reconcile_note:
             saved_message += f"\n{reconcile_note}"
+            if await _open_legacy_voice_cleanup_if_needed(
+                interaction,
+                guild,
+                saved_message,
+                already_deferred=True,
+            ):
+                return
         await interaction.edit_original_response(
             embed=_custom_services_embed(
                 guild,
@@ -1150,6 +1188,15 @@ class CustomServiceToggleButton(discord.ui.Button):
         if dependency_note:
             saved_message += f"\n{dependency_note}"
 
+        if changed and not bool(getattr(next_state, "voice", False)):
+            if await _open_legacy_voice_cleanup_if_needed(
+                interaction,
+                guild,
+                saved_message,
+                already_deferred=True,
+            ):
+                return
+
         await interaction.edit_original_response(
             embed=_custom_services_embed(
                 guild,
@@ -1231,12 +1278,20 @@ class CustomServiceModeView(discord.ui.View):
                 "❌ This must be used inside a server.",
                 ephemeral=True,
             )
+        await solid._safe_defer_update(interaction)
         state = await _load_custom_state(guild.id)
         reconcile_note = await _reconcile_voice_resources_if_disabled(
             guild,
             state,
             actor=interaction.user,
         )
+        if reconcile_note and await _open_legacy_voice_cleanup_if_needed(
+            interaction,
+            guild,
+            reconcile_note,
+            already_deferred=True,
+        ):
+            return
         await recommend._open_guided_setup(
             interaction,
             saved_message=reconcile_note,

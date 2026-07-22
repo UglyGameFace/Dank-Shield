@@ -196,6 +196,9 @@ class LegacyVoiceCleanupReviewView(discord.ui.View):
 
 async def open_legacy_voice_cleanup_review(
     interaction: discord.Interaction,
+    *,
+    result_message: str = "",
+    already_deferred: bool = False,
 ) -> None:
     if not await solid._require_setup_permission(interaction):
         return
@@ -206,8 +209,12 @@ async def open_legacy_voice_cleanup_review(
             ephemeral=True,
         )
 
-    await solid._safe_defer_update(interaction)
-    embed, preview = await _build_review_embed(guild)
+    if not already_deferred:
+        await solid._safe_defer_update(interaction)
+    embed, preview = await _build_review_embed(
+        guild,
+        result_message=result_message,
+    )
     await solid._edit_or_followup(
         interaction,
         embed=embed,

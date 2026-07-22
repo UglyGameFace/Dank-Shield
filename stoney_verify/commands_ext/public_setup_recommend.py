@@ -101,106 +101,20 @@ def _has_channel(guild: discord.Guild, cfg: Any, *keys: str) -> bool:
             return True
     return False
 
-def _verified_role_voice_access(
+
+def _has_typed_channel(
     guild: discord.Guild,
     cfg: Any,
-) -> tuple[bool, str, tuple[str, ...]]:
-    """Check whether approved members can use Voice Verify."""
+    expected_type: type,
+    *keys: str,
+) -> bool:
+    """Require a saved setup ID to resolve to the expected Discord type."""
 
-    role_id = 0
-
-    for key in (
-        "verified_role_id",
-        "member_role_id",
-        "approved_role_id",
-    ):
-        role_id = _attr_id(cfg, key)
-
-        if role_id > 0:
-            break
-
-    channel_id = 0
-
-    for key in (
-        "vc_verify_channel_id",
-        "vc_verify_vc_id",
-        "voice_verify_channel_id",
-    ):
-        channel_id = _attr_id(cfg, key)
-
-        if channel_id > 0:
-            break
-
-    role = guild.get_role(role_id)
-    channel = guild.get_channel(channel_id)
-
-    if role is None:
-        return (
-            False,
-            "Choose the approved-member role before "
-            "testing Voice Verify.",
-            (),
-        )
-
-    if not isinstance(channel, discord.VoiceChannel):
-        return (
-            False,
-            "Choose a valid Voice Verify voice channel.",
-            (),
-        )
-
-    try:
-        permissions = channel.permissions_for(role)
-    except Exception as exc:
-        return (
-            False,
-            (
-                "Dank Shield could not inspect the approved "
-                "role's Voice Verify access: "
-                f"`{type(exc).__name__}`."
-            ),
-            (),
-        )
-
-    required = (
-        ("view_channel", "View Channel"),
-        ("connect", "Connect"),
-        ("speak", "Speak"),
-    )
-
-    missing = tuple(
-        label
-        for attribute, label in required
-        if not bool(
-            getattr(
-                permissions,
-                attribute,
-                False,
-            )
-        )
-    )
-
-    if missing:
-        return (
-            False,
-            (
-                f"Allow {role.mention} to use "
-                f"{channel.mention}: **"
-                + ", ".join(missing)
-                + "**."
-            ),
-            missing,
-        )
-
-    return (
-        True,
-        (
-            f"{role.mention} can View, Connect, and Speak "
-            f"in {channel.mention}."
-        ),
-        (),
-    )
-
+    for key in keys:
+        channel = guild.get_channel(_attr_id(cfg, key))
+        if isinstance(channel, expected_type):
+            return True
+    return False
 
 def _setup_choice_label(cfg: Any) -> str:
     label = str(_cfg_value(cfg, "setup_choice_label", "") or "").strip()
@@ -587,66 +501,43 @@ async def _build_plain_setup_health_embed(
         )
 
     if services["voice"]:
-        if _has_channel(
+        if _has_typed_channel(
             guild,
             cfg,
+            discord.VoiceChannel,
             "vc_verify_channel_id",
             "vc_verify_vc_id",
             "voice_verify_channel_id",
         ):
             passing.append(
-                "The Voice Verify channel is chosen."
+                "The Voice Verify room is chosen."
             )
         else:
             blockers.append(
-                "Choose the voice channel used for Voice Verify."
+                "Choose a valid voice channel used for Voice Verify."
             )
 
-        if _has_channel(
+        if _has_typed_channel(
             guild,
             cfg,
+            discord.TextChannel,
             "vc_verify_queue_channel_id",
             "vc_queue_channel_id",
             "vc_request_channel_id",
             "vc_verify_requests_channel_id",
         ):
             passing.append(
-                "The staff Voice Verify request channel "
-                "is chosen."
+                "The private staff Voice Verify request channel is chosen."
             )
         else:
             blockers.append(
-                "Choose where staff receive Voice Verify "
-                "requests."
+                "Choose a valid text channel where staff receive Voice Verify requests."
             )
 
-        if (
-            _has_role(
-                guild,
-                cfg,
-                "verified_role_id",
-                "member_role_id",
-                "approved_role_id",
-            )
-            and _has_channel(
-                guild,
-                cfg,
-                "vc_verify_channel_id",
-                "vc_verify_vc_id",
-                "voice_verify_channel_id",
-            )
-        ):
-            access_ok, access_text, _missing_access = (
-                _verified_role_voice_access(
-                    guild,
-                    cfg,
-                )
-            )
-
-            if access_ok:
-                passing.append(access_text)
-            else:
-                blockers.append(access_text)
+        passing.append(
+            "Voice Verify room access is session-based: only the active requester "
+            "and assigned staff receive temporary access."
+        )
 
     if (
         services["id"]
@@ -1035,26 +926,30 @@ async def _setup_progress(
 
     if services["voice"]:
         check(
-            "Voice Verify channel",
-            _has_channel(
+            "Voice Verify room",
+            _has_typed_channel(
                 guild,
                 cfg,
+                discord.VoiceChannel,
                 "vc_verify_channel_id",
+                "vc_verify_vc_id",
+                "voice_verify_channel_id",
             ),
-            "Press **Continue Setup** to choose the Voice Verify channel.",
+            "Press **Continue Setup** to choose the private Voice Verify room.",
         )
 
         check(
             "Voice Verify staff requests",
-            _has_channel(
+            _has_typed_channel(
                 guild,
                 cfg,
+                discord.TextChannel,
                 "vc_verify_queue_channel_id",
                 "vc_queue_channel_id",
                 "vc_request_channel_id",
                 "vc_verify_requests_channel_id",
             ),
-            "Press **Continue Setup** to choose where staff receive Voice Verify requests.",
+            "Press **Continue Setup** to choose the private text channel for staff Voice Verify requests.",
         )
 
     if services["id"]:
@@ -2383,26 +2278,28 @@ async def _guided_setup_target(
             )
 
     if services["voice"]:
-        if not _has_channel(
+        if not _has_typed_channel(
             guild,
             cfg,
+            discord.VoiceChannel,
             "vc_verify_channel_id",
             "vc_verify_vc_id",
             "voice_verify_channel_id",
         ):
             return (
                 "channels",
-                "Choose the Voice Verify Channel",
+                "Set Up the Private Voice Verify Room",
                 (
-                    "Pick the voice channel used for the "
-                    "staff check."
+                    "Dank Shield will connect or create the private room used "
+                    "only by the active requester and assigned staff."
                 ),
                 "voice_verify_channel",
             )
 
-        if not _has_channel(
+        if not _has_typed_channel(
             guild,
             cfg,
+            discord.TextChannel,
             "vc_verify_queue_channel_id",
             "vc_queue_channel_id",
             "vc_request_channel_id",
@@ -2410,27 +2307,12 @@ async def _guided_setup_target(
         ):
             return (
                 "channels",
-                "Choose the Voice Verify Staff Channel",
+                "Set Up Voice Verify Staff Requests",
                 (
-                    "Pick where staff should receive Voice "
-                    "Verify requests."
+                    "Dank Shield will connect or create the private text channel "
+                    "where staff receive and claim Voice Verify requests."
                 ),
                 "voice_verify_staff_channel",
-            )
-
-        access_ok, access_text, _missing_access = (
-            _verified_role_voice_access(
-                guild,
-                cfg,
-            )
-        )
-
-        if not access_ok:
-            return (
-                "permissions",
-                "Allow Approved Members Into Voice Verify",
-                access_text,
-                "verified_voice_access",
             )
 
     if (
@@ -2538,8 +2420,9 @@ _GUIDED_ONE_ITEM_SPECS: dict[str, dict[str, Any]] = {
     "voice_verify_channel": {
         "title": "Choose the Voice Verify Channel",
         "description": (
-            "Choose the voice channel used for staff checks, "
-            "or let Dank Shield create the normal voice channel."
+            "Choose the private room used only during an active Voice Verify "
+            "session, or let Dank Shield create it together with the staff "
+            "request channel."
         ),
         "kind": "voice",
         "save_keys": (
@@ -2555,8 +2438,9 @@ _GUIDED_ONE_ITEM_SPECS: dict[str, dict[str, Any]] = {
     "voice_verify_staff_channel": {
         "title": "Choose the Voice Verify Staff Channel",
         "description": (
-            "Choose the private text channel where staff receive "
-            "Voice Verify requests, or let Dank Shield create it."
+            "Choose the private text channel where staff receive and claim "
+            "Voice Verify requests, or let Dank Shield create it together "
+            "with the session room."
         ),
         "kind": "text",
         "save_keys": (
@@ -2914,6 +2798,56 @@ async def _guided_create_exact_item(
     return item, notes, created, reused
 
 
+async def _guided_create_voice_bundle(
+    guild: discord.Guild,
+    cfg: Any,
+) -> tuple[dict[str, str], list[str], list[str], list[str]]:
+    """Connect/create both required Voice Verify resources in one action."""
+
+    payload: dict[str, str] = {}
+    notes: list[str] = []
+    created: list[str] = []
+    reused: list[str] = []
+
+    for requirement_key in (
+        "voice_verify_channel",
+        "voice_verify_staff_channel",
+    ):
+        item, item_notes, item_created, item_reused = (
+            await _guided_create_exact_item(
+                guild,
+                cfg,
+                requirement_key,
+            )
+        )
+        notes.extend(item_notes)
+        created.extend(item_created)
+        reused.extend(item_reused)
+
+        item_id = int(getattr(item, "id", 0) or 0)
+        if item_id <= 0:
+            notes.append(
+                f"Could not connect `{requirement_key}` yet."
+            )
+            continue
+
+        payload.update(
+            _guided_item_payload(
+                requirement_key,
+                item_id,
+            )
+        )
+        payload.update(
+            _guided_managed_resource_patch(
+                requirement_key,
+                item_id,
+                created=bool(item_created),
+            )
+        )
+
+    return payload, notes, created, reused
+
+
 async def _guided_create_item(
     interaction: discord.Interaction,
     requirement_key: str,
@@ -2922,7 +2856,6 @@ async def _guided_create_item(
         return
 
     guild = interaction.guild
-
     if guild is None:
         return await interaction.response.send_message(
             "❌ This must be used inside a server.",
@@ -2931,10 +2864,7 @@ async def _guided_create_item(
 
     await solid._safe_defer_update(interaction)
 
-    if not await _guided_step_is_current(
-        guild,
-        requirement_key,
-    ):
+    if not await _guided_step_is_current(guild, requirement_key):
         return await _open_guided_setup(interaction)
 
     cfg = await get_guild_config(
@@ -2942,12 +2872,53 @@ async def _guided_create_item(
         refresh=True,
     )
 
-    item, notes, created, reused = (
-        await _guided_create_exact_item(
-            guild,
-            cfg,
-            requirement_key,
+    if requirement_key in {
+        "voice_verify_channel",
+        "voice_verify_staff_channel",
+    }:
+        payload, notes, created, reused = (
+            await _guided_create_voice_bundle(guild, cfg)
         )
+
+        if payload:
+            await solid._save_config(interaction, payload)
+
+        voice_id = int(payload.get("vc_verify_channel_id", "0") or 0)
+        queue_id = int(
+            payload.get("vc_verify_queue_channel_id", "0") or 0
+        )
+
+        if voice_id <= 0 or queue_id <= 0:
+            details = "\n".join(notes)[-700:] or (
+                "Discord could not connect both required Voice Verify items yet."
+            )
+            return await _open_guided_setup(
+                interaction,
+                saved_message=(
+                    "Connected the Voice Verify items that were available. "
+                    "The next guided step will show what is still missing.\n"
+                    + details
+                ),
+            )
+
+        result = (
+            "Created"
+            if created
+            else "Found and connected"
+        )
+        return await _open_guided_setup(
+            interaction,
+            saved_message=(
+                f"{result} the private Voice Verify room and the private "
+                "staff request channel together. Room access is granted only "
+                "to the active requester and assigned staff during a session."
+            ),
+        )
+
+    item, notes, created, reused = await _guided_create_exact_item(
+        guild,
+        cfg,
+        requirement_key,
     )
 
     item_id = int(getattr(item, "id", 0) or 0)
@@ -2984,17 +2955,13 @@ async def _guided_create_item(
             ),
         )
 
-    await solid._save_config(
-        interaction,
-        payload,
-    )
+    await solid._save_config(interaction, payload)
 
     result = (
         "Created this item for you."
         if created
         else "Found the matching item and connected it."
     )
-
     await _open_guided_setup(
         interaction,
         saved_message=(
@@ -3214,64 +3181,6 @@ async def _open_guided_target(
             guild.id,
             refresh=True,
         )
-
-        if requirement_key == "verified_voice_access":
-            access_ok, access_text, missing_access = (
-                _verified_role_voice_access(
-                    guild,
-                    cfg,
-                )
-            )
-
-            if access_ok:
-                return await _open_health_check(
-                    interaction
-                )
-
-            required_text = (
-                ", ".join(missing_access)
-                or "View Channel, Connect, Speak"
-            )
-
-            embed = discord.Embed(
-                title=(
-                    "🔊 Allow Approved Members Into "
-                    "Voice Verify"
-                ),
-                description=(
-                    "The Voice Verify channel exists, but "
-                    "approved members cannot fully use it yet."
-                ),
-                color=discord.Color.orange(),
-                timestamp=now_utc(),
-            )
-
-            embed.add_field(
-                name="What is blocked",
-                value=access_text[:1024],
-                inline=False,
-            )
-
-            embed.add_field(
-                name="Fix it in Discord",
-                value=(
-                    "1. Open the saved Voice Verify channel.\n"
-                    "2. Choose **Edit Channel → Permissions**.\n"
-                    "3. Select the approved-member role.\n"
-                    f"4. Allow: **{required_text}**.\n"
-                    "5. Return and press **Continue Setup**."
-                )[:1024],
-                inline=False,
-            )
-
-            return await solid._edit_or_followup(
-                interaction,
-                embed=embed,
-                view=ContinueSetupView(
-                    target="permissions",
-                    ready=False,
-                ),
-            )
 
         services = _selected_setup_services(cfg)
 
