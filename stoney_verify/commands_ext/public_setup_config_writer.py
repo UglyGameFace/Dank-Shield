@@ -241,20 +241,21 @@ def _fetch_existing_config_row_sync(guild_id: int) -> Optional[dict[str, Any]]:
 def _settings_payload_update(original: Optional[Mapping[str, Any]], updates: Mapping[str, Any]) -> dict[str, Any]:
     base: dict[str, Any] = {}
 
-    # Flat columns first, then nested JSON, then the explicit safe update.
-    # This makes owner-confirmed setup values authoritative while preserving
-    # older settings from either storage style.
+    # Match guild_config._merge_row_settings: legacy nested JSON is read first,
+    # then real flat columns win, then this explicit write wins over both.
+    # Using the opposite order lets a stale `config` JSON value resurrect a
+    # feature immediately after the owner saved the flat/settings value OFF.
     try:
         if isinstance(original, Mapping):
-            for key, value in original.items():
-                if key not in _JSON_CONFIG_KEYS and key not in _CONTROL_KEYS and value is not None:
-                    base[str(key)] = value
             for key in ("settings", "config", "metadata", "meta"):
                 value = original.get(key)
                 if isinstance(value, Mapping):
                     for nested_key, nested_value in value.items():
                         if nested_key not in _CONTROL_KEYS and nested_value is not None:
                             base[str(nested_key)] = nested_value
+            for key, value in original.items():
+                if key not in _JSON_CONFIG_KEYS and key not in _CONTROL_KEYS and value is not None:
+                    base[str(key)] = value
     except Exception:
         base = {}
 
@@ -345,10 +346,18 @@ def upsert_guild_config_sync(guild_id: int, updates: Mapping[str, Any]) -> dict[
         "updated_at": _utc_iso(),
     }
 
-    # Prefer keeping both storage styles synchronized. If a deployment
-    # lacks one JSON column or a flat column, the later attempts safely
-    # fall back without losing the authoritative settings payload.
+    # Keep both JSON storage styles synchronized atomically whenever the row
+    # exposes both. Returning after a settings-only success leaves `config`
+    # stale; a later cleanup merge can then write that stale value back over
+    # the owner's current choice. Schema fallbacks remain for older tables.
+    json_updates: dict[str, Any] = {}
+    if not isinstance(existing, Mapping) or "settings" in existing:
+        json_updates["settings"] = settings
+    if not isinstance(existing, Mapping) or "config" in existing:
+        json_updates["config"] = settings
+
     attempts: list[dict[str, Any]] = [
+        {**base_fields, **json_updates, **flat_updates},
         {**base_fields, "settings": settings, **flat_updates},
         {**base_fields, "config": settings, **flat_updates},
         {**base_fields, **flat_updates},
