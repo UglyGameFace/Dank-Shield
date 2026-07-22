@@ -36,6 +36,7 @@ from .public_setup_group import (
 )
 from ..globals import get_supabase, now_utc
 from ..guild_config import get_guild_config, invalidate_guild_config
+from ..setup_service_state import service_state_from_config
 from ..tickets_new.panel import _DEFAULT_BOOTSTRAP_CATEGORIES
 from .ticket_category_admin import _ALLOWED_INTAKE_TYPES
 
@@ -457,50 +458,14 @@ def _setup_doc_has_id(cfg: Any, *keys: str) -> bool:
 
 
 def _setup_doc_features(cfg: Any) -> dict[str, bool]:
-    mode = _safe_str(_cfg_value(cfg, "verification_mode") or _cfg_value(cfg, "setup_type") or _cfg_value(cfg, "setup_mode"), "").lower()
-
-    tickets = (
-        _setup_doc_cfg_bool(cfg, "tickets_enabled", "ticketing_enabled", default=False)
-        or "ticket" in mode
-        or "help desk" in mode
-        or "helpdesk" in mode
-        or _setup_doc_has_id(cfg, "ticket_category_id", "open_ticket_category_id")
-        or _setup_doc_has_id(cfg, "ticket_archive_category_id", "archive_category_id", "closed_ticket_category_id")
-        or _setup_doc_has_id(cfg, "ticket_panel_channel_id", "support_channel_id", "panel_channel_id")
-        or _setup_doc_has_id(cfg, "staff_role_id", "ticket_staff_role_id", "support_role_id")
-    )
-
-    basic_verify = (
-        _setup_doc_cfg_bool(cfg, "basic_verify_enabled", "basic_button_verify_enabled", "verify_enabled", "verification_enabled", default=False)
-        or "verify" in mode
-        or _setup_doc_has_id(cfg, "verify_channel_id", "verification_channel_id")
-        or _setup_doc_has_id(cfg, "unverified_role_id", "waiting_role_id")
-        or _setup_doc_has_id(cfg, "verified_role_id", "approved_role_id")
-    )
-
-    vc_verify = (
-        _setup_doc_cfg_bool(cfg, "vc_verify_enabled", "voice_verify_enabled", "enable_vc_verify", default=False)
-        or "voice" in mode
-        or "vc" in mode
-        or _setup_doc_has_id(cfg, "vc_verify_channel_id", "voice_verify_channel_id")
-        or _setup_doc_has_id(cfg, "vc_verify_queue_channel_id", "vc_queue_channel_id", "vc_verify_requests_channel_id")
-    )
-
-    logs = (
-        _setup_doc_cfg_bool(cfg, "logs_enabled", "modlog_enabled", default=False)
-        or _setup_doc_has_id(cfg, "modlog_channel_id", "raidlog_channel_id", "security_log_channel_id")
-        or _setup_doc_has_id(cfg, "transcripts_channel_id", "transcript_channel_id")
-        or _setup_doc_has_id(cfg, "join_log_channel_id", "join_leave_log_channel_id")
-        or _setup_doc_has_id(cfg, "status_channel_id", "bot_status_channel_id")
-    )
-
+    """Use the same feature truth as Setup Home and Test Your Setup."""
+    state = service_state_from_config(cfg)
     return {
-        "tickets": bool(tickets),
-        "basic_verify": bool(basic_verify),
-        "vc_verify": bool(vc_verify),
-        "logs": bool(logs),
+        "tickets": bool(state.tickets),
+        "basic_verify": bool(state.simple_verify),
+        "vc_verify": bool(state.voice_verify),
+        "logs": bool(state.logs),
     }
-
 
 _LAYOUT_ONLY_PHRASES = (
     "wrong category",
@@ -1080,24 +1045,26 @@ async def _build_main_setup_payload(
 # ---------------------------------------------------------------------------
 
 
+
 class SetupNavView(discord.ui.View):
-    """Shared navigation for every setup sub-screen.
-
-    This is the universal safety row:
-    - Setup Home: reset back to dashboard-first /dank setup
-    - Current Setup: inspect saved Discord IDs
-    - Setup Check: diagnose blockers/warnings
-    - Close: stop cleanly
-
-    Do not add feature-specific config logic here.
-    """
+    """Universal navigation for nested setup tools."""
 
     def __init__(self) -> None:
         super().__init__(timeout=900)
 
-    async def on_error(self, interaction: discord.Interaction, error: Exception, item: discord.ui.Item[Any]) -> None:
+    async def on_error(
+        self,
+        interaction: discord.Interaction,
+        error: Exception,
+        item: discord.ui.Item[Any],
+    ) -> None:
         try:
-            item_label = getattr(item, "label", None) or getattr(item, "placeholder", None) or getattr(item, "custom_id", None) or "setup item"
+            item_label = (
+                getattr(item, "label", None)
+                or getattr(item, "placeholder", None)
+                or getattr(item, "custom_id", None)
+                or "setup item"
+            )
         except Exception:
             item_label = "setup item"
 
@@ -1105,57 +1072,81 @@ class SetupNavView(discord.ui.View):
             interaction,
             title="Setup Action Failed",
             error=error,
-            hint=f"The **{item_label}** action failed safely. Nothing was changed. Press **Setup Home** or reopen `/dank setup`.",
+            hint=(
+                f"The **{item_label}** action failed safely. Nothing was changed. "
+                "Press **Back to All Features**, **Setup Home**, or reopen `/dank setup`."
+            ),
             view=self,
         )
 
-    @discord.ui.button(label="Setup Home", emoji="🏠", style=discord.ButtonStyle.secondary, custom_id="stoney_solid:nav_home", row=4)
-    async def setup_home(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+    @discord.ui.button(
+        label="Back to All Features",
+        emoji="↩️",
+        style=discord.ButtonStyle.secondary,
+        custom_id="dank_setup_nested:features",
+        row=4,
+    )
+    async def all_features(
+        self,
+        interaction: discord.Interaction,
+        button: discord.ui.Button,
+    ) -> None:
+        _ = button
+        if not await _require_setup_permission(interaction):
+            return
+        from . import public_setup_recommend as recommend
+        await recommend._open_advanced_settings(interaction)
+
+    @discord.ui.button(
+        label="Setup Home",
+        emoji="🏠",
+        style=discord.ButtonStyle.secondary,
+        custom_id="dank_setup_nested:home",
+        row=4,
+    )
+    async def setup_home(
+        self,
+        interaction: discord.Interaction,
+        button: discord.ui.Button,
+    ) -> None:
+        _ = button
         if not await _require_setup_permission(interaction):
             return
         guild = interaction.guild
         if guild is None:
-            return await interaction.response.send_message("❌ This must be used inside a server.", ephemeral=True)
-
+            return await interaction.response.send_message(
+                "❌ This must be used inside a server.",
+                ephemeral=True,
+            )
         await _safe_defer_update(interaction)
         embed, view = await _build_main_setup_payload(guild)
         await _edit_or_followup(interaction, embed=embed, view=view)
 
-    @discord.ui.button(label="Current Setup", emoji="📋", style=discord.ButtonStyle.secondary, custom_id="stoney_solid:nav_current", row=4)
-    async def current_setup(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        if not await _require_setup_permission(interaction):
-            return
-        guild = interaction.guild
-        if guild is None:
-            return await interaction.response.send_message("❌ This must be used inside a server.", ephemeral=True)
-
-        await _safe_defer_update(interaction)
-        embed = await _build_current_setup_embed(guild)
-        await _edit_or_followup(interaction, embed=embed, view=SetupNavView())
-
-    @discord.ui.button(label="Setup Check", emoji="🩺", style=discord.ButtonStyle.primary, custom_id="stoney_solid:nav_health", row=4)
-    async def setup_check(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        if not await _require_setup_permission(interaction):
-            return
-        guild = interaction.guild
-        if guild is None:
-            return await interaction.response.send_message("❌ This must be used inside a server.", ephemeral=True)
-
-        await _safe_defer_update(interaction)
-        embed = await _build_health_embed(guild)
-        await _edit_or_followup(interaction, embed=embed, view=SetupNavView())
-
-    @discord.ui.button(label="Close", emoji="✖️", style=discord.ButtonStyle.danger, custom_id="stoney_solid:nav_close", row=4)
-    async def close(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+    @discord.ui.button(
+        label="Close",
+        emoji="✖️",
+        style=discord.ButtonStyle.danger,
+        custom_id="dank_setup_nested:close",
+        row=4,
+    )
+    async def close(
+        self,
+        interaction: discord.Interaction,
+        button: discord.ui.Button,
+    ) -> None:
+        _ = button
         if not await _require_setup_permission(interaction):
             return
         embed = discord.Embed(
             title="Setup Closed",
-            description="Nothing else was changed. Run `/dank setup` whenever you want to continue.",
+            description=(
+                "Nothing else was changed. Run `/dank setup` whenever "
+                "you want to continue."
+            ),
             color=discord.Color.dark_grey(),
+            timestamp=now_utc(),
         )
         await _edit_or_followup(interaction, embed=embed, view=None)
-
 
 BackToSetupView = SetupNavView
 

@@ -25,14 +25,15 @@ def test_main_role_page_uses_feature_names():
     assert "Optional Roles" in roles
 
 
-def test_optional_role_page_has_back_button():
+def test_optional_role_page_returns_to_main_roles_with_parent_context():
     roles = block(
         "class RoleCustomizationPageTwo(",
         "class DiscordCategoryCustomizationView(",
     )
 
-    assert "Back to Main Roles" in roles
-    assert "RoleCustomizationPageOne()" in roles
+    assert 'label="Main Roles"' in roles
+    assert "Back to Main Roles" not in roles
+    assert "RoleCustomizationPageOne(parent=self.parent)" in roles
 
 
 def test_ticket_folders_are_plain_language():
@@ -58,14 +59,15 @@ def test_main_channels_follow_enabled_features():
     assert "Optional Channels" in channels
 
 
-def test_optional_channels_have_back_button():
+def test_optional_channels_return_to_main_channels_with_parent_context():
     channels = block(
         "class ChannelCustomizationPageTwo(",
         "class LogStatusCustomizationView(",
     )
 
-    assert "Back to Main Channels" in channels
-    assert "ChannelCustomizationPageOne()" in channels
+    assert 'label="Main Channels"' in channels
+    assert "Back to Main Channels" not in channels
+    assert "ChannelCustomizationPageOne(parent=self.parent)" in channels
     assert "Join and leave: staff log channel" in channels
 
 

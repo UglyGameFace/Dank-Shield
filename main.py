@@ -34,6 +34,7 @@ from stoney_verify.startup_guards import (
 # ============================================================
 # COMMENTED OUT (can be re-enabled later if needed)
 # Most of these are redundant patches or non-critical guards.
+# Retired /dank setup UI patch modules are intentionally omitted.
 # ============================================================
 
 # from stoney_verify.startup_guards import (
@@ -42,24 +43,17 @@ from stoney_verify.startup_guards import (
 #     setup_health_defer_guard,
 #     setup_scoreboard_command,
 #     setup_idle_kick_scoreboard_guard,
-#     setup_permission_repair_truth_guard,
 #     setup_permission_repair_modlog_silence_guard,
 #     setup_permission_repair_preview_clarity_guard,
 #     setup_role_safety,
 #     setup_visibility_health_guard,
-#     setup_guided_flow_self_check,
-#     setup_check_ready_next_step_guard,
-#     setup_save_next_step_guard,
 #     setup_modal_defer_compat_guard,
 #     setup_operation_lock_guard,
 #     setup_overview_command_guard,
 #     setup_picker_permission_error_guard,
-#     setup_check_existing_server_inference_guard,
 #     setup_ticket_transcripts_picker_guard,
 #     setup_category_modal_compat,
 #     setup_channel_font_mode_guard,
-#     setup_verification_toggle_independence_guard,
-#     setup_verification_idle_kick_controls,
 #     setup_vc_health_precision_guard,
 #     # ... (many more commented out for safety)
 # )
@@ -89,16 +83,19 @@ def _sleep_before_import_if_discord_login_backoff_active() -> None:
 
     remaining = int(until - time.time())
     if remaining > 0:
-        print(f"🧯 Dank Shield early login backoff active; sleeping {remaining}s before bot import")
+        print(
+            "🧯 Dank Shield early login backoff active; "
+            f"sleeping {remaining}s before bot import"
+        )
         time.sleep(remaining)
 
 
 def main() -> None:
     _sleep_before_import_if_discord_login_backoff_active()
     from stoney_verify.app import run as _run_dank_shield
+
     _run_dank_shield()
 
 
 if __name__ == "__main__":
     main()
-

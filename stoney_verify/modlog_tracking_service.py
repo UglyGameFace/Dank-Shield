@@ -557,7 +557,7 @@ class ModlogTrackingView(discord.ui.View):
         )
 
     @discord.ui.button(
-        label="Back to Advanced",
+        label="Back",
         emoji="⬅️",
         style=discord.ButtonStyle.secondary,
         row=4,
@@ -573,7 +573,7 @@ class ModlogTrackingView(discord.ui.View):
             public_setup_recommend as recommend,
         )
 
-        await recommend._open_manage_setup(
+        await recommend._open_advanced_logs_activity(
             interaction
         )
 

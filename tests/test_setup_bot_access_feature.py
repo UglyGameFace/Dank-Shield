@@ -22,15 +22,15 @@ def _button(view: discord.ui.View, label: str) -> discord.ui.Button:
     return matches[0]
 
 
-def test_logs_and_safety_exposes_plain_check_bot_access_feature() -> None:
-    view = recommend.AdvancedMonitoringRepairView()
+def test_security_section_separates_access_check_from_permission_repair() -> None:
+    view = recommend.AdvancedSecurityView()
 
     access = _button(view, "Check Bot Access")
     repair = _button(view, "Fix Channel Permissions")
 
-    assert access.custom_id == "dank_setup_advanced_monitoring:bot_access"
-    assert access.row == 1
-    assert repair.custom_id == "dank_setup_advanced_monitoring:permission_repair"
+    assert access.custom_id == "dank_setup_security:access"
+    assert access.row == 0
+    assert repair.custom_id == "dank_setup_security:repair"
     assert repair.row == 1
 
 
@@ -40,8 +40,8 @@ def test_setup_route_calls_owned_activity_access_service(monkeypatch) -> None:
     async def allow_setup(_interaction) -> bool:
         return True
 
-    async def open_check(interaction) -> None:
-        calls.append(interaction)
+    async def open_check(interaction, *, parent="logs") -> None:
+        calls.append((interaction, parent))
 
     monkeypatch.setattr(recommend.solid, "_require_setup_permission", allow_setup)
     monkeypatch.setattr(setup_activity_access, "open_activity_access_check", open_check)
@@ -49,7 +49,8 @@ def test_setup_route_calls_owned_activity_access_service(monkeypatch) -> None:
     interaction = object()
     asyncio.run(recommend._open_bot_access_check(interaction))
 
-    assert calls == [interaction]
+    assert calls == [(interaction, "logs")]
+
 
 
 def test_access_check_reports_exact_missing_permissions_and_coverage() -> None:
@@ -164,8 +165,8 @@ def test_open_access_check_is_read_only_and_renders_audit_result(monkeypatch) ->
 def test_repair_button_routes_to_existing_preview_first_permission_tool(monkeypatch) -> None:
     calls: list[object] = []
 
-    async def open_repair(interaction) -> None:
-        calls.append(interaction)
+    async def open_repair(interaction, *, parent="security") -> None:
+        calls.append((interaction, parent))
 
     monkeypatch.setattr(setup_permission_repair_services, "open_permission_repair", open_repair)
 
@@ -175,7 +176,8 @@ def test_repair_button_routes_to_existing_preview_first_permission_tool(monkeypa
 
     assert fix.disabled is False
     asyncio.run(fix.callback(interaction))
-    assert calls == [interaction]
+    assert calls == [(interaction, "logs")]
+
 
     complete_view = setup_activity_access.ActivityAccessView(needs_repair=False)
     assert _button(complete_view, "Fix Channel Permissions").disabled is True
@@ -189,8 +191,8 @@ def test_bot_access_view_keeps_mobile_rows_to_two_buttons_max() -> None:
     assert {str(getattr(child, "label", "") or "") for child in view.children} == {
         "Check Again",
         "Fix Channel Permissions",
-        "Back to Logs & Safety",
-        "Back Home",
+        "Back",
+        "Setup Home",
     }
 
 
@@ -205,3 +207,30 @@ def test_complete_access_report_is_clear_and_does_not_offer_fake_problem_count()
     rendered = "\n".join(str(field.value) for field in embed.fields)
     assert "100% activity scope" in rendered
     assert "No activity-tracking channel access gaps were detected" in rendered
+
+
+def test_activity_access_back_preserves_security_or_logs_parent(monkeypatch) -> None:
+    events: list[str] = []
+
+    async def security(_interaction) -> None:
+        events.append("security")
+
+    async def logs(_interaction) -> None:
+        events.append("logs")
+
+    monkeypatch.setattr(recommend, "_open_advanced_security", security)
+    monkeypatch.setattr(recommend, "_open_advanced_logs_activity", logs)
+
+    security_view = setup_activity_access.ActivityAccessView(
+        needs_repair=False,
+        parent="security",
+    )
+    asyncio.run(_button(security_view, "Back").callback(object()))
+
+    logs_view = setup_activity_access.ActivityAccessView(
+        needs_repair=False,
+        parent="logs",
+    )
+    asyncio.run(_button(logs_view, "Back").callback(object()))
+
+    assert events == ["security", "logs"]

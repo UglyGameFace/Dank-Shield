@@ -145,8 +145,9 @@ def test_history_view_has_focused_controls_and_mobile_rows() -> None:
     assert button_labels(view) == {
         "Choose Backup Contents",
         "Refresh",
-        "Back to Other Settings",
-        "Back Home",
+        "Back to All Features",
+        "Setup Home",
+        "Close",
     }
     selects = [child for child in view.children if isinstance(child, discord.ui.Select)]
     assert len(selects) == 1
@@ -157,7 +158,7 @@ def test_history_view_has_focused_controls_and_mobile_rows() -> None:
     for child in view.children:
         row = int(getattr(child, "row", 0) or 0)
         rows[row] = rows.get(row, 0) + 1
-    assert max(rows.values()) <= 2
+    assert max(rows.values()) <= 3
 
 
 def test_backup_contents_defaults_to_both_domains_and_explains_them() -> None:
@@ -265,7 +266,8 @@ def test_version_detail_explains_contents_and_three_restore_modes() -> None:
         "Choose Exact Changes",
         "Restore All Differences",
         "Back to History",
-        "Back to Other Settings",
+        "Setup Home",
+        "Close",
     }
     assert not find_button(view, "Restore Missing Only").disabled
     assert not find_button(view, "Choose Exact Changes").disabled
@@ -327,6 +329,8 @@ def test_exact_change_picker_tracks_individual_selections() -> None:
         "Next",
         "Review Selected",
         "Back to Version",
+        "Setup Home",
+        "Close",
     }
 
 

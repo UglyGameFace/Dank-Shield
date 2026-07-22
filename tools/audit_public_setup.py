@@ -20,9 +20,13 @@ CHECK_FILES = [
     ROOT / "stoney_verify" / "commands_ext" / "public_setup_solid.py",
     ROOT / "stoney_verify" / "commands_ext" / "public_setup_group.py",
     ROOT / "stoney_verify" / "commands_ext" / "public_setup_start.py",
+    ROOT / "stoney_verify" / "commands_ext" / "public_setup_recommend.py",
+    ROOT / "stoney_verify" / "commands_ext" / "public_setup_fresh_choice.py",
+    ROOT / "stoney_verify" / "commands_ext" / "public_setup_full_customization.py",
+    ROOT / "stoney_verify" / "commands_ext" / "public_setup_recovery.py",
+    ROOT / "stoney_verify" / "commands_ext" / "public_setup_cleanup.py",
     ROOT / "stoney_verify" / "startup_guards" / "setup_feature_health_scoreboard.py",
     ROOT / "stoney_verify" / "startup_guards" / "setup_scoreboard_command.py",
-    ROOT / "stoney_verify" / "startup_guards" / "setup_verification_idle_kick_controls.py",
     ROOT / "docs" / "public-production-env.md",
     ROOT / ".env.example",
 ]
@@ -98,7 +102,9 @@ def main() -> int:
         for idx, line in enumerate(text.splitlines(), start=1):
             for private_id in FORBIDDEN_IDS:
                 if private_id in line:
-                    failures.append(f"{rel}:{idx}: forbidden private guild/server ID `{private_id}`")
+                    failures.append(
+                        f"{rel}:{idx}: forbidden private guild/server ID `{private_id}`"
+                    )
 
             if _line_is_internal_only(line):
                 continue
@@ -107,7 +113,8 @@ def main() -> int:
             for pattern in FORBIDDEN_RENDERED_TEXT:
                 if re.search(pattern, rendered):
                     failures.append(
-                        f"{rel}:{idx}: forbidden rendered setup text `{pattern}` -> {rendered.strip()[:180]}"
+                        f"{rel}:{idx}: forbidden rendered setup text "
+                        f"`{pattern}` -> {rendered.strip()[:180]}"
                     )
 
     if failures:

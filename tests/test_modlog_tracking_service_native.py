@@ -111,7 +111,7 @@ def test_tracking_view_exposes_every_control() -> None:
         "All Off",
         "Health",
         "Send Test",
-        "Back to Advanced",
+        "Back",
     } <= control_labels
 
     assert len(view.children) == (
@@ -119,20 +119,20 @@ def test_tracking_view_exposes_every_control() -> None:
     )
 
 
-def test_back_button_returns_to_advanced_options(
+def test_back_button_returns_to_logs_activity(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     events: list[str] = []
 
-    async def open_advanced(
+    async def open_logs(
         interaction: Any,
     ) -> None:
-        events.append("advanced")
+        events.append("logs")
 
     monkeypatch.setattr(
         recommend,
-        "_open_manage_setup",
-        open_advanced,
+        "_open_advanced_logs_activity",
+        open_logs,
     )
 
     view = service.ModlogTrackingView(
@@ -141,9 +141,9 @@ def test_back_button_returns_to_advanced_options(
     )
     button = find_button(
         view,
-        "Back to Advanced",
+        "Back",
     )
 
     run(button.callback(object()))
 
-    assert events == ["advanced"]
+    assert events == ["logs"]

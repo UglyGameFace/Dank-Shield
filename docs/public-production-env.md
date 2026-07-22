@@ -105,8 +105,8 @@ For each Discord server:
 
 1. Invite the bot with the required permissions, including Manage Threads for authoritative activity coverage.
 2. Run `/dank setup`.
-3. Choose what Dank Shield should do and follow **Set Up This Step** until Setup Check runs automatically.
-4. Fix any reported problem, then use **Test & Launch**.
+3. Choose a setup plan and follow **Set Up This Step** (or **Continue Setup** for Choose Core Features) until Setup Check runs automatically.
+4. Fix any required blocker, then use **Test Your Setup**. When the enabled features work, press **Finish Setup**.
 5. SpamGuard defaults to ON for new/missing settings rows unless an owner explicitly turns it off.
 
 Never fix a public server by putting that server's IDs into Discloud env. That creates cross-server leakage risk.

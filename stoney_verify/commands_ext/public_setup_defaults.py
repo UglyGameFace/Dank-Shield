@@ -11,6 +11,7 @@ Auto-build must be boring and safe:
 - when enabled, repair only the safe bot/staff/control overwrites needed for Dank Shield to function
 """
 
+import asyncio
 import re
 import unicodedata
 from typing import Any, Optional
@@ -287,6 +288,30 @@ def _find_named(items: list[Any], name: str) -> Any:
     return None
 
 
+_RESOURCE_CREATE_LOCKS: dict[tuple[int, int, str, str], asyncio.Lock] = {}
+
+
+def _resource_create_lock(
+    guild: discord.Guild,
+    kind: str,
+    name: str,
+) -> asyncio.Lock:
+    """Serialize same-resource creation within one bot process/event loop."""
+
+    loop = asyncio.get_running_loop()
+    key = (
+        id(loop),
+        int(getattr(guild, "id", 0) or 0),
+        str(kind or "resource"),
+        _key(name),
+    )
+    lock = _RESOURCE_CREATE_LOCKS.get(key)
+    if lock is None:
+        lock = asyncio.Lock()
+        _RESOURCE_CREATE_LOCKS[key] = lock
+    return lock
+
+
 def _bot_member(guild: discord.Guild) -> Optional[discord.Member]:
     try:
         return guild.me
@@ -400,17 +425,53 @@ def _staff_overwrites(guild: discord.Guild, staff_role: Optional[discord.Role], 
     return ow
 
 
-def _voice_overwrites(guild: discord.Guild, staff_role: Optional[discord.Role], control_role: Optional[discord.Role], unverified_role: Optional[discord.Role]) -> dict[Any, discord.PermissionOverwrite]:
-    ow: dict[Any, discord.PermissionOverwrite] = {guild.default_role: discord.PermissionOverwrite(view_channel=True, connect=True, speak=False)}
-    me = _bot_member(guild)
-    if me:
-        ow[me] = discord.PermissionOverwrite(view_channel=True, connect=True, speak=True, move_members=True, manage_channels=True)
+def _voice_overwrites(
+    guild: discord.Guild,
+    staff_role: Optional[discord.Role],
+    control_role: Optional[discord.Role],
+    unverified_role: Optional[discord.Role],
+) -> dict[Any, discord.PermissionOverwrite]:
+    """Base Voice Verify room access; runtime grants active member overrides."""
+
+    denied = discord.PermissionOverwrite(
+        view_channel=False,
+        connect=False,
+        speak=False,
+    )
+    overwrites: dict[Any, discord.PermissionOverwrite] = {
+        guild.default_role: denied,
+    }
+
+    bot_member = _bot_member(guild)
+    if bot_member:
+        overwrites[bot_member] = discord.PermissionOverwrite(
+            view_channel=True,
+            connect=True,
+            speak=True,
+            move_members=True,
+            manage_channels=True,
+        )
+
     if unverified_role and not unverified_role.is_default():
-        ow[unverified_role] = discord.PermissionOverwrite(view_channel=True, connect=True, speak=False)
+        overwrites[unverified_role] = discord.PermissionOverwrite(
+            view_channel=False,
+            connect=False,
+            speak=False,
+        )
+
+    # Staff/control roles do not receive broad room access. The VC session
+    # owner grants a member-specific overwrite only to the staff member who
+    # accepted/claimed the active request.
     for role in (staff_role, control_role):
         if role and not role.is_default():
-            ow[role] = discord.PermissionOverwrite(view_channel=True, connect=True, speak=True, move_members=True)
-    return ow
+            overwrites[role] = discord.PermissionOverwrite(
+                view_channel=False,
+                connect=False,
+                speak=False,
+                move_members=False,
+            )
+
+    return overwrites
 
 
 def _target_label(target: Any) -> str:
@@ -537,82 +598,103 @@ async def _repair_existing_permissions(
 
 
 async def _ensure_role(guild: discord.Guild, name: str, *, create_missing_roles: bool, notes: list[str], created: list[str], reused: list[str]) -> Optional[discord.Role]:
-    role = _role_by_name(guild, name)
-    if role:
-        _unique(reused, f"Role: {role.mention}")
-        return role
-    if not create_missing_roles:
-        notes.append(f"Role `{name}` was missing and role creation is disabled.")
-        return None
-    ok, reason = _can_manage_roles(guild)
-    if not ok:
-        notes.append(f"Could not create role `{name}`: {reason}")
-        return None
-    try:
-        role = await guild.create_role(name=name, permissions=discord.Permissions.none(), hoist=False, mentionable=False, reason="Dank Shield auto-build missing recommended role")
-        created.append(f"Role: {role.mention}")
-        return role
-    except Exception as e:
-        notes.append(f"Could not create role `{name}`: {type(e).__name__}")
-        return None
-
+    async with _resource_create_lock(guild, "role", name):
+        role = _role_by_name(guild, name)
+        if role:
+            _unique(reused, f"Role: {role.mention}")
+            return role
+        if not create_missing_roles:
+            notes.append(f"Role `{name}` was missing and role creation is disabled.")
+            return None
+        ok, reason = _can_manage_roles(guild)
+        if not ok:
+            notes.append(f"Could not create role `{name}`: {reason}")
+            return None
+        try:
+            role = await guild.create_role(
+                name=name,
+                permissions=discord.Permissions.none(),
+                hoist=False,
+                mentionable=False,
+                reason="Dank Shield auto-build missing recommended role",
+            )
+            created.append(f"Role: {role.mention}")
+            return role
+        except Exception as e:
+            notes.append(f"Could not create role `{name}`: {type(e).__name__}")
+            return None
 
 async def _ensure_category(guild: discord.Guild, name: str, *, overwrites: dict[Any, discord.PermissionOverwrite], notes: list[str], created: list[str], reused: list[str]) -> Optional[discord.CategoryChannel]:
-    category = _category_by_name(guild, name)
-    if category:
-        _unique(reused, f"Category: `{category.name}`")
-        notes.append(f"Reused existing category `{category.name}`; safe bot/staff permission repair will be checked.")
-        return category
-    ok, reason = _can_manage_channels(guild)
-    if not ok:
-        notes.append(f"Could not create category `{name}`: {reason}")
-        return None
-    try:
-        category = await guild.create_category(name=name, overwrites=overwrites, reason="Dank Shield auto-build missing recommended category")
-        created.append(f"Category: `{category.name}`")
-        return category
-    except Exception as e:
-        notes.append(f"Could not create category `{name}`: {type(e).__name__}")
-        return None
-
+    async with _resource_create_lock(guild, "category", name):
+        category = _category_by_name(guild, name)
+        if category:
+            _unique(reused, f"Category: `{category.name}`")
+            notes.append(f"Reused existing category `{category.name}`; safe bot/staff permission repair will be checked.")
+            return category
+        ok, reason = _can_manage_channels(guild)
+        if not ok:
+            notes.append(f"Could not create category `{name}`: {reason}")
+            return None
+        try:
+            category = await guild.create_category(
+                name=name,
+                overwrites=overwrites,
+                reason="Dank Shield auto-build missing recommended category",
+            )
+            created.append(f"Category: `{category.name}`")
+            return category
+        except Exception as e:
+            notes.append(f"Could not create category `{name}`: {type(e).__name__}")
+            return None
 
 async def _ensure_text(guild: discord.Guild, name: str, *, category: Optional[discord.CategoryChannel], overwrites: dict[Any, discord.PermissionOverwrite], topic: str, notes: list[str], created: list[str], reused: list[str]) -> Optional[discord.TextChannel]:
-    channel = _text_by_name(guild, name)
-    if channel:
-        _unique(reused, f"Channel: {channel.mention}")
-        notes.append(f"Reused existing channel {channel.mention}; safe bot/staff permission repair will be checked.")
-        return channel
-    ok, reason = _can_manage_channels(guild)
-    if not ok:
-        notes.append(f"Could not create channel `#{name}`: {reason}")
-        return None
-    try:
-        channel = await guild.create_text_channel(name=name, category=category, overwrites=overwrites, topic=topic[:1024] if topic else None, reason="Dank Shield auto-build missing recommended channel")
-        created.append(f"Channel: {channel.mention}")
-        return channel
-    except Exception as e:
-        notes.append(f"Could not create channel `#{name}`: {type(e).__name__}")
-        return None
-
+    async with _resource_create_lock(guild, "text", name):
+        channel = _text_by_name(guild, name)
+        if channel:
+            _unique(reused, f"Channel: {channel.mention}")
+            notes.append(f"Reused existing channel {channel.mention}; safe bot/staff permission repair will be checked.")
+            return channel
+        ok, reason = _can_manage_channels(guild)
+        if not ok:
+            notes.append(f"Could not create channel `#{name}`: {reason}")
+            return None
+        try:
+            channel = await guild.create_text_channel(
+                name=name,
+                category=category,
+                overwrites=overwrites,
+                topic=topic[:1024] if topic else None,
+                reason="Dank Shield auto-build missing recommended channel",
+            )
+            created.append(f"Channel: {channel.mention}")
+            return channel
+        except Exception as e:
+            notes.append(f"Could not create channel `#{name}`: {type(e).__name__}")
+            return None
 
 async def _ensure_voice(guild: discord.Guild, name: str, *, category: Optional[discord.CategoryChannel], overwrites: dict[Any, discord.PermissionOverwrite], notes: list[str], created: list[str], reused: list[str]) -> Optional[discord.VoiceChannel]:
-    channel = _voice_by_name(guild, name)
-    if channel:
-        _unique(reused, f"Voice: {channel.mention}")
-        notes.append(f"Reused existing voice channel {channel.mention}; safe bot/staff permission repair will be checked.")
-        return channel
-    ok, reason = _can_manage_channels(guild)
-    if not ok:
-        notes.append(f"Could not create voice channel `{name}`: {reason}")
-        return None
-    try:
-        channel = await guild.create_voice_channel(name=name, category=category, overwrites=overwrites, reason="Dank Shield auto-build missing recommended voice channel")
-        created.append(f"Voice: {channel.mention}")
-        return channel
-    except Exception as e:
-        notes.append(f"Could not create voice channel `{name}`: {type(e).__name__}")
-        return None
-
+    async with _resource_create_lock(guild, "voice", name):
+        channel = _voice_by_name(guild, name)
+        if channel:
+            _unique(reused, f"Voice: {channel.mention}")
+            notes.append(f"Reused existing voice channel {channel.mention}; safe bot/staff permission repair will be checked.")
+            return channel
+        ok, reason = _can_manage_channels(guild)
+        if not ok:
+            notes.append(f"Could not create voice channel `{name}`: {reason}")
+            return None
+        try:
+            channel = await guild.create_voice_channel(
+                name=name,
+                category=category,
+                overwrites=overwrites,
+                reason="Dank Shield auto-build missing recommended voice channel",
+            )
+            created.append(f"Voice: {channel.mention}")
+            return channel
+        except Exception as e:
+            notes.append(f"Could not create voice channel `{name}`: {type(e).__name__}")
+            return None
 
 async def _resolve_existing_control_role(guild: discord.Guild) -> Optional[discord.Role]:
     try:
@@ -974,6 +1056,8 @@ async def _setup_defaults_callback(
     ticket_panel_channel: Optional[discord.TextChannel] = None
     vc_verify_channel: Optional[discord.VoiceChannel] = None
     vc_queue_channel: Optional[discord.TextChannel] = None
+    vc_verify_preexisting = False
+    vc_queue_preexisting = False
     transcripts_channel: Optional[discord.TextChannel] = None
     modlog_channel: Optional[discord.TextChannel] = None
     join_leave_channel: Optional[discord.TextChannel] = None
@@ -1061,13 +1145,18 @@ async def _setup_defaults_callback(
         )
 
     if services["voice"]:
+        configured_vc_verify = _channel_from_config(
+            guild,
+            cfg,
+            discord.VoiceChannel,
+            "vc_verify_channel_id",
+        )
+        vc_verify_preexisting = bool(
+            configured_vc_verify
+            or _voice_by_name(guild, VC_VERIFY_CHANNEL_NAME)
+        )
         vc_verify_channel = (
-            _channel_from_config(
-                guild,
-                cfg,
-                discord.VoiceChannel,
-                "vc_verify_channel_id",
-            )
+            configured_vc_verify
             or await _ensure_voice(
                 guild,
                 VC_VERIFY_CHANNEL_NAME,
@@ -1079,15 +1168,20 @@ async def _setup_defaults_callback(
             )
         )
 
+        configured_vc_queue = _channel_from_config(
+            guild,
+            cfg,
+            discord.TextChannel,
+            "vc_verify_queue_channel_id",
+            "vc_queue_channel_id",
+            "vc_request_channel_id",
+        )
+        vc_queue_preexisting = bool(
+            configured_vc_queue
+            or _text_by_name(guild, VC_QUEUE_CHANNEL_NAME)
+        )
         vc_queue_channel = (
-            _channel_from_config(
-                guild,
-                cfg,
-                discord.TextChannel,
-                "vc_verify_queue_channel_id",
-                "vc_queue_channel_id",
-                "vc_request_channel_id",
-            )
+            configured_vc_queue
             or await _ensure_text(
                 guild,
                 VC_QUEUE_CHANNEL_NAME,
@@ -1365,6 +1459,14 @@ async def _setup_defaults_callback(
                 ),
             }
         )
+        if vc_verify_channel is not None and not vc_verify_preexisting:
+            updates["vc_verify_channel_managed_id"] = item_id(
+                vc_verify_channel
+            )
+        if vc_queue_channel is not None and not vc_queue_preexisting:
+            updates["vc_verify_queue_channel_managed_id"] = item_id(
+                vc_queue_channel
+            )
 
     if services["welcome"]:
         updates["welcome_channel_id"] = item_id(

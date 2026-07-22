@@ -3,16 +3,16 @@ name: Setup Check Inference Sanity
 on:
   pull_request:
     paths:
-      - "stoney_verify/startup_guards/setup_check_existing_server_inference_guard.py"
-      - "stoney_verify/startup_guards/ticket_panel_doctor_production_wording.py"
+      - "stoney_verify/setup_service_state.py"
       - "stoney_verify/commands_ext/public_setup_recommend.py"
+      - "stoney_verify/commands_ext/public_setup_fresh_choice.py"
       - "tools/audit_setup_check_inference.py"
       - ".github/workflows/setup-check-inference-sanity.yml"
   push:
     paths:
-      - "stoney_verify/startup_guards/setup_check_existing_server_inference_guard.py"
-      - "stoney_verify/startup_guards/ticket_panel_doctor_production_wording.py"
+      - "stoney_verify/setup_service_state.py"
       - "stoney_verify/commands_ext/public_setup_recommend.py"
+      - "stoney_verify/commands_ext/public_setup_fresh_choice.py"
       - "tools/audit_setup_check_inference.py"
       - ".github/workflows/setup-check-inference-sanity.yml"
   workflow_dispatch:
@@ -20,10 +20,19 @@ on:
 jobs:
   setup-check-inference-sanity:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - name: Audit setup check inference
+          cache: pip
+      - name: Install runtime dependencies
+        run: |
+          python -m pip install --upgrade pip -q
+          pip install -q -r requirements.txt
+      - name: Audit native setup-state inference
+        env:
+          DANK_STARTUP_LOG_STYLE: quiet
+          DANK_COMMAND_LOG_STYLE: quiet
         run: python tools/audit_setup_check_inference.py

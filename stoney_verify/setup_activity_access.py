@@ -2,10 +2,10 @@ from __future__ import annotations
 
 """Read-only setup UI for Dank Shield activity-tracking access coverage.
 
-`/dank setup -> Other Settings -> Logs & Safety -> Check Bot Access` uses the
-same shared activity-scope audit as inactivity safety diagnostics. This module
-never edits Discord permissions. Owners can deliberately open the existing
-preview-first Fix Channel Permissions tool if they want to repair access.
+`/dank setup -> Manage Setup -> All Features & Settings` opens this check from
+Security & SpamGuard or Logs & Activity. It uses the same shared activity-scope
+audit as inactivity safety diagnostics and never edits Discord permissions.
+Owners can deliberately open the preview-first Fix Channel Permissions tool.
 """
 
 from typing import Any
@@ -93,8 +93,14 @@ def build_activity_access_embed(report: ActivityScopeReport) -> discord.Embed:
 
 
 class ActivityAccessView(discord.ui.View):
-    def __init__(self, *, needs_repair: bool) -> None:
+    def __init__(
+        self,
+        *,
+        needs_repair: bool,
+        parent: str = "logs",
+    ) -> None:
         super().__init__(timeout=900)
+        self.parent = str(parent or "logs").strip().lower()
         self.fix_permissions.disabled = not bool(needs_repair)
 
     @discord.ui.button(
@@ -105,7 +111,7 @@ class ActivityAccessView(discord.ui.View):
         row=0,
     )
     async def check_again(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        await open_activity_access_check(interaction)
+        await open_activity_access_check(interaction, parent=self.parent)
 
     @discord.ui.button(
         label="Fix Channel Permissions",
@@ -117,22 +123,30 @@ class ActivityAccessView(discord.ui.View):
     async def fix_permissions(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         from stoney_verify import setup_permission_repair_services
 
-        await setup_permission_repair_services.open_permission_repair(interaction)
+        await setup_permission_repair_services.open_permission_repair(
+            interaction,
+            parent=self.parent,
+        )
 
     @discord.ui.button(
-        label="Back to Logs & Safety",
+        label="Back",
         emoji="↩️",
         style=discord.ButtonStyle.secondary,
         custom_id="dank_setup_bot_access:back",
         row=1,
     )
     async def back(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
         from stoney_verify.commands_ext import public_setup_recommend as recommend
 
-        await recommend._open_advanced_monitoring_repair(interaction)
+        if self.parent == "security":
+            await recommend._open_advanced_security(interaction)
+            return
+
+        await recommend._open_advanced_logs_activity(interaction)
 
     @discord.ui.button(
-        label="Back Home",
+        label="Setup Home",
         emoji="🏠",
         style=discord.ButtonStyle.secondary,
         custom_id="dank_setup_bot_access:home",
@@ -144,7 +158,11 @@ class ActivityAccessView(discord.ui.View):
         await recommend._home_edit(interaction)
 
 
-async def open_activity_access_check(interaction: discord.Interaction) -> None:
+async def open_activity_access_check(
+    interaction: discord.Interaction,
+    *,
+    parent: str = "logs",
+) -> None:
     from stoney_verify.commands_ext import public_setup_solid as solid
 
     if not await solid._require_setup_permission(interaction):
@@ -164,7 +182,7 @@ async def open_activity_access_check(interaction: discord.Interaction) -> None:
     await solid._edit_or_followup(
         interaction,
         embed=build_activity_access_embed(report),
-        view=ActivityAccessView(needs_repair=not report.complete),
+        view=ActivityAccessView(needs_repair=not report.complete, parent=parent),
     )
 
 

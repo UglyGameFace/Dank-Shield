@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from datetime import datetime, timezone
-from typing import Any, Mapping, Optional
+from typing import Any, Iterable, Mapping, Optional
 
 from ..globals import get_supabase, now_utc
 
@@ -241,20 +241,21 @@ def _fetch_existing_config_row_sync(guild_id: int) -> Optional[dict[str, Any]]:
 def _settings_payload_update(original: Optional[Mapping[str, Any]], updates: Mapping[str, Any]) -> dict[str, Any]:
     base: dict[str, Any] = {}
 
-    # Flat columns first, then nested JSON, then the explicit safe update.
-    # This makes owner-confirmed setup values authoritative while preserving
-    # older settings from either storage style.
+    # Match guild_config._merge_row_settings: legacy nested JSON is read first,
+    # then real flat columns win, then this explicit write wins over both.
+    # Using the opposite order lets a stale `config` JSON value resurrect a
+    # feature immediately after the owner saved the flat/settings value OFF.
     try:
         if isinstance(original, Mapping):
-            for key, value in original.items():
-                if key not in _JSON_CONFIG_KEYS and key not in _CONTROL_KEYS and value is not None:
-                    base[str(key)] = value
             for key in ("settings", "config", "metadata", "meta"):
                 value = original.get(key)
                 if isinstance(value, Mapping):
                     for nested_key, nested_value in value.items():
                         if nested_key not in _CONTROL_KEYS and nested_value is not None:
                             base[str(nested_key)] = nested_value
+            for key, value in original.items():
+                if key not in _JSON_CONFIG_KEYS and key not in _CONTROL_KEYS and value is not None:
+                    base[str(key)] = value
     except Exception:
         base = {}
 
@@ -280,6 +281,36 @@ def _clean_payload(payload: Mapping[str, Any]) -> dict[str, Any]:
     return {str(k): v for k, v in dict(payload).items() if v is not None and str(k) not in _CONTROL_KEYS}
 
 
+_COMPLETION_METADATA_KEYS = {
+    "setup_completed",
+    "setup_completed_at",
+    "setup_completed_by_id",
+    "setup_completed_by_name",
+    "setup_completion_invalidated_at",
+    "setup_completion_invalidated_reason",
+}
+
+
+def _completion_aware_updates(updates: Mapping[str, Any]) -> dict[str, Any]:
+    """Invalidate Finished after a real setup edit."""
+    final = dict(updates)
+    if "setup_completed" in final:
+        return final
+
+    functional_keys = [
+        str(key)
+        for key in final
+        if str(key) not in _CONTROL_KEYS
+        and str(key) not in _BASE_WRITE_KEYS
+        and str(key) not in _COMPLETION_METADATA_KEYS
+        and not str(key).startswith("config_last_")
+    ]
+    if functional_keys:
+        final["setup_completed"] = False
+        final["setup_completion_invalidated_at"] = _utc_iso()
+    return final
+
+
 def upsert_guild_config_sync(guild_id: int, updates: Mapping[str, Any]) -> dict[str, Any]:
     sb = get_supabase()
     if sb is None:
@@ -288,9 +319,13 @@ def upsert_guild_config_sync(guild_id: int, updates: Mapping[str, Any]) -> dict[
     table = _config_table_name()
     gid = int(guild_id)
     existing = _fetch_existing_config_row_sync(gid)
-    safe_updates, blocked, changed, mode, source = _filter_safe_updates(existing, updates)
+    normalized_updates = _completion_aware_updates(updates)
+    safe_updates, blocked, changed, mode, source = _filter_safe_updates(
+        existing,
+        normalized_updates,
+    )
 
-    if _safe_bool(updates.get("__config_write_dry_run"), False):
+    if _safe_bool(normalized_updates.get("__config_write_dry_run"), False):
         preview = _settings_payload_update(existing, safe_updates)
         preview["_dry_run"] = True
         preview["_blocked_overwrites"] = blocked
@@ -311,10 +346,18 @@ def upsert_guild_config_sync(guild_id: int, updates: Mapping[str, Any]) -> dict[
         "updated_at": _utc_iso(),
     }
 
-    # Prefer keeping both storage styles synchronized. If a deployment
-    # lacks one JSON column or a flat column, the later attempts safely
-    # fall back without losing the authoritative settings payload.
+    # Keep both JSON storage styles synchronized atomically whenever the row
+    # exposes both. Returning after a settings-only success leaves `config`
+    # stale; a later cleanup merge can then write that stale value back over
+    # the owner's current choice. Schema fallbacks remain for older tables.
+    json_updates: dict[str, Any] = {}
+    if not isinstance(existing, Mapping) or "settings" in existing:
+        json_updates["settings"] = settings
+    if not isinstance(existing, Mapping) or "config" in existing:
+        json_updates["config"] = settings
+
     attempts: list[dict[str, Any]] = [
+        {**base_fields, **json_updates, **flat_updates},
         {**base_fields, "settings": settings, **flat_updates},
         {**base_fields, "config": settings, **flat_updates},
         {**base_fields, **flat_updates},
@@ -360,6 +403,134 @@ async def upsert_guild_config(guild_id: int, updates: Mapping[str, Any]) -> dict
     return await asyncio.to_thread(upsert_guild_config_sync, int(guild_id), dict(updates))
 
 
+def _settings_payload_without_keys(
+    original: Optional[Mapping[str, Any]],
+    clear_keys: Iterable[str],
+    metadata: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Return the merged JSON payload after explicitly removing keys."""
+
+    settings = _settings_payload_update(original, {})
+    for key in {str(item).strip() for item in clear_keys if str(item).strip()}:
+        settings.pop(key, None)
+    for key, value in dict(metadata).items():
+        if value is not None:
+            settings[str(key)] = value
+    return settings
+
+
+def clear_guild_config_keys_sync(
+    guild_id: int,
+    keys: Iterable[str],
+    *,
+    source: str = "/dank setup resource reconciliation",
+    actor: Any = None,
+) -> dict[str, Any]:
+    """Explicitly clear stale saved setup keys in flat + JSON config storage."""
+
+    sb = get_supabase()
+    if sb is None:
+        raise RuntimeError("Supabase is not configured/available.")
+
+    gid = int(guild_id)
+    existing = _fetch_existing_config_row_sync(gid)
+    if not existing:
+        return {"guild_id": str(gid)}
+
+    clear_keys = {
+        str(key).strip()
+        for key in keys
+        if str(key).strip()
+        and str(key).strip() not in _CONTROL_KEYS
+        and str(key).strip() not in _BASE_WRITE_KEYS
+        and str(key).strip() not in _JSON_CONFIG_KEYS
+    }
+    if not clear_keys:
+        return dict(existing)
+
+    stamp = _utc_iso()
+    metadata: dict[str, Any] = {
+        "config_last_write_mode": "explicit_override",
+        "config_last_write_source": str(source or "/dank setup resource reconciliation")[:300],
+        "config_last_write_at": stamp,
+        "setup_completed": False,
+        "setup_completion_invalidated_at": stamp,
+    }
+    if actor is not None:
+        metadata["configured_by_id"] = str(getattr(actor, "id", "") or "")
+        metadata["configured_by_name"] = str(actor)
+
+    settings = _settings_payload_without_keys(existing, clear_keys, metadata)
+    columns = {str(key) for key in existing.keys()}
+    flat_clear = {key: None for key in clear_keys if key in columns}
+    flat_metadata = {
+        key: value
+        for key, value in metadata.items()
+        if key in columns
+    }
+    base_fields = {
+        "guild_id": str(gid),
+        "updated_at": stamp,
+    }
+
+    # Keep every storage shape synchronized in one atomic update.  Returning
+    # after updating only `settings` or only `config` would recreate the same
+    # split-brain state this writer exists to prevent.
+    json_updates: dict[str, Any] = {}
+    if "settings" in columns:
+        json_updates["settings"] = settings
+    if "config" in columns:
+        json_updates["config"] = settings
+
+    payload = {
+        **base_fields,
+        **json_updates,
+        **flat_clear,
+        **flat_metadata,
+    }
+    if len(payload) == len(base_fields):
+        return dict(existing)
+
+    table = _config_table_name()
+    try:
+        response = (
+            sb.table(table)
+            .update(payload)
+            .eq("guild_id", str(gid))
+            .execute()
+        )
+        rows = getattr(response, "data", None) or []
+        if rows and isinstance(rows[0], Mapping):
+            return dict(rows[0])
+        refreshed = _fetch_existing_config_row_sync(gid)
+        return refreshed or payload
+    except Exception as exc:
+        raise RuntimeError(f"Failed clearing guild config keys: {exc!r}") from exc
+
+
+async def clear_guild_config_keys(
+    guild_id: int,
+    keys: Iterable[str],
+    *,
+    source: str = "/dank setup resource reconciliation",
+    actor: Any = None,
+) -> dict[str, Any]:
+    result = await asyncio.to_thread(
+        clear_guild_config_keys_sync,
+        int(guild_id),
+        tuple(keys),
+        source=source,
+        actor=actor,
+    )
+    try:
+        from ..guild_config import invalidate_guild_config
+
+        invalidate_guild_config(int(guild_id))
+    except Exception:
+        pass
+    return result
+
+
 def apply_public_setup_writer_patch() -> bool:
     """
     Attach this writer to public_setup_group without changing the top-level
@@ -380,5 +551,7 @@ def apply_public_setup_writer_patch() -> bool:
 __all__ = [
     "upsert_guild_config_sync",
     "upsert_guild_config",
+    "clear_guild_config_keys_sync",
+    "clear_guild_config_keys",
     "apply_public_setup_writer_patch",
 ]

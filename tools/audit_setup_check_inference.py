@@ -1,58 +1,92 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
+"""Sanity-check the canonical native setup-state normalizer.
+
+The retired setup inference guards are gone. Setup Home, Review Setup, Quick
+Setup, and Test Your Setup all normalize saved guild configuration through
+``service_state_from_config``.
+
+This audit executes that owner directly. It deliberately avoids importing the
+public command package so command-registration/startup side effects cannot
+pollute a pure state check.
+"""
+
 from pathlib import Path
-import py_compile
 import sys
 
 ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
-FILES = [
-    "stoney_verify/startup_guards/setup_check_existing_server_inference_guard.py",
-    "stoney_verify/startup_guards/ticket_panel_doctor_production_wording.py",
-    "stoney_verify/commands_ext/public_setup_recommend.py",
-]
+from stoney_verify.setup_service_state import service_state_from_config
 
-CHECKS = {
-    "stoney_verify/startup_guards/setup_check_existing_server_inference_guard.py": [
-        "_infer_choice",
-        "Help desk (inferred from saved setup)",
-        "Health Check can infer Existing Server",
-        "Choose a setup type first, or finish Ticket Basics",
-        "_SETUP_CHECK_EXISTING_SERVER_INFERENCE_GUARD",
-    ],
-    "stoney_verify/startup_guards/ticket_panel_doctor_production_wording.py": [
-        "setup_check_existing_server_inference_guard",
-        "setup-check inference guard",
-    ],
-    "stoney_verify/commands_ext/public_setup_recommend.py": [
-        "Choose what this server should use.",
-        "Setup Check",
-        "The ticket menu has",
-    ],
-}
+
+def _assert(condition: bool, message: str) -> None:
+    if not condition:
+        raise AssertionError(message)
 
 
 def main() -> int:
-    for path in FILES:
-        target = ROOT / path
-        if not target.exists():
-            print(f"missing {path}", file=sys.stderr)
-            return 1
-        try:
-            py_compile.compile(str(target), doraise=True)
-        except py_compile.PyCompileError as exc:
-            print(f"compile failed {path}: {exc}", file=sys.stderr)
-            return 1
+    # Custom Setup must respect explicit choices instead of inventing template
+    # defaults. This is the regression that originally broke Test Your Setup.
+    custom = service_state_from_config(
+        {
+            "setup_choice": "custom_setup",
+            "tickets_enabled": False,
+            "verification_enabled": True,
+            "voice_verification_enabled": False,
+            "spam_guard_enabled": False,
+            "moderation_enabled": False,
+        }
+    )
+    _assert(custom.tickets is False, "Custom Setup invented Tickets")
+    _assert(custom.simple_verify is True, "Custom Setup lost Simple Verify")
+    _assert(custom.voice_verify is False, "Custom Setup invented Voice Verify")
 
-    for path, snippets in CHECKS.items():
-        text = (ROOT / path).read_text(encoding="utf-8")
-        for snippet in snippets:
-            if snippet not in text:
-                print(f"{path} missing {snippet}", file=sys.stderr)
-                return 1
+    # Explicit saved switches must beat a template default.
+    explicit_off = service_state_from_config(
+        {
+            "setup_choice": "basic_server",
+            "tickets_enabled": False,
+            "spam_guard_enabled": True,
+            "moderation_enabled": True,
+        }
+    )
+    _assert(
+        explicit_off.tickets is False,
+        "Explicit Tickets OFF did not override the setup plan",
+    )
+    _assert(explicit_off.spam_guard is True, "SpamGuard state was lost")
+    _assert(explicit_off.logs is True, "Essential Logs state was lost")
 
-    print("Setup check inference audit passed")
+    # Voice verification depends on ticket/staff workflow and logging. The
+    # canonical normalizer must expose those dependencies everywhere.
+    voice = service_state_from_config(
+        {
+            "setup_choice": "custom_setup",
+            "tickets_enabled": False,
+            "verification_enabled": True,
+            "voice_verification_enabled": True,
+            "moderation_enabled": False,
+        }
+    )
+    _assert(voice.voice_verify is True, "Voice Verify did not remain enabled")
+    _assert(
+        voice.tickets is True,
+        "Voice Verify dependency did not enable Tickets",
+    )
+    _assert(
+        voice.logs is True,
+        "Voice Verify dependency did not enable Logs",
+    )
+
+    # No saved plan and no explicit switches should remain genuinely unstarted.
+    blank = service_state_from_config({})
+    _assert(blank.any_enabled is False, "Blank setup inferred enabled services")
+    _assert(blank.setup_choice == "", "Blank setup inferred a setup plan")
+
+    print("Native setup-state inference audit passed")
     return 0
 
 

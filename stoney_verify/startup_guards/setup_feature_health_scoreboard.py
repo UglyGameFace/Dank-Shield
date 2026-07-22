@@ -202,82 +202,6 @@ def _can_use_channel(
     except Exception:
         return False
 
-def _verified_role_voice_access(
-    guild: discord.Guild,
-    cfg: Any,
-    voice: Any | None,
-) -> tuple[bool, str]:
-    """Check approved-member access to Voice Verify."""
-
-    verified = _role(
-        guild,
-        _cfg_first(
-            cfg,
-            "verified_role_id",
-            "member_role_id",
-            "approved_role_id",
-        ),
-    )
-
-    if verified is None:
-        return (
-            False,
-            "Select or create the approved-member role.",
-        )
-
-    if voice is None:
-        return (
-            False,
-            "Select or create the Voice Verify channel.",
-        )
-
-    try:
-        permissions = voice.permissions_for(verified)
-    except Exception as exc:
-        return (
-            False,
-            (
-                "Could not inspect approved-member Voice "
-                "Verify access: "
-                f"{type(exc).__name__}."
-            ),
-        )
-
-    missing = [
-        label
-        for attribute, label in (
-            ("view_channel", "View Channel"),
-            ("connect", "Connect"),
-            ("speak", "Speak"),
-        )
-        if not bool(
-            getattr(
-                permissions,
-                attribute,
-                False,
-            )
-        )
-    ]
-
-    if missing:
-        return (
-            False,
-            (
-                f"Approved role {verified.mention} needs "
-                + ", ".join(missing)
-                + f" in {voice.mention}."
-            ),
-        )
-
-    return (
-        True,
-        (
-            f"Approved role {verified.mention} can View, "
-            f"Connect, and Speak in {voice.mention}."
-        ),
-    )
-
-
 def _db_table_readable_sync(table: str) -> bool:
     try:
         from stoney_verify.globals import get_supabase
@@ -549,17 +473,6 @@ def _voice_score(guild: discord.Guild, cfg: Any, enabled: bool) -> FeatureHealth
     elif not _can_use_channel(guild, voice, manage=True):
         blockers.append("Bot needs View Channel + Manage Channels on the voice verify channel.")
 
-    if voice is not None:
-        member_access_ok, member_access_text = (
-            _verified_role_voice_access(
-                guild,
-                cfg,
-                voice,
-            )
-        )
-
-        if not member_access_ok:
-            blockers.append(member_access_text)
     if queue is None:
         blockers.append("Select a VC queue/staff request channel.")
     elif not _can_use_channel(guild, queue, need_files=True):
@@ -570,7 +483,16 @@ def _voice_score(guild: discord.Guild, cfg: Any, enabled: bool) -> FeatureHealth
         return FeatureHealth("Voice Verify", "🎙️", "blocker", "Needs voice channel and queue setup.", tuple(blockers[:4]), "Open /dank setup → Existing Server → Voice Verification.")
     if warnings:
         return FeatureHealth("Voice Verify", "🎙️", "warning", "Voice access works, but staff role config is incomplete.", tuple(warnings[:3]), "Select VC/ticket staff role.")
-    return FeatureHealth("Voice Verify", "🎙️", "ready", f"Voice `{getattr(voice, 'name', 'configured')}` and queue `{queue.name}` are ready.")
+    return FeatureHealth(
+        "Voice Verify",
+        "🎙️",
+        "ready",
+        (
+            f"Voice `{getattr(voice, 'name', 'configured')}` and queue "
+            f"`{queue.name}` are ready for session-based requester and "
+            "assigned-staff access."
+        ),
+    )
 
 
 def _logs_score(guild: discord.Guild, cfg: Any, enabled: bool) -> FeatureHealth:

@@ -34,6 +34,14 @@ def button_by_id(
     return matches[0]
 
 
+def button_labels(view: discord.ui.View) -> list[str]:
+    return [
+        str(getattr(child, "label", "") or "")
+        for child in view.children
+        if isinstance(child, discord.ui.Button)
+    ]
+
+
 def setup_choice_labels(view: discord.ui.View) -> set[str]:
     result: set[str] = set()
     for child in view.children:
@@ -136,12 +144,33 @@ def test_public_setup_type_screen_has_exact_five_choices(
     )
 
     assert setup_choice_labels(view) == {
-        "Tickets + Server Basics",
+        "Recommended Setup",
         "Simple Verify",
         "Help Desk / Tickets",
         "Voice Verify",
-        "Choose My Own Features",
+        "Choose Core Features",
     }
+
+
+def test_quick_setup_plan_picker_is_a_root_screen(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        fresh,
+        "id_verify_allowed_for_guild",
+        lambda guild: False,
+    )
+
+    view = fresh.SetupTypeChoiceView(
+        guild=SimpleNamespace(id=101),
+    )
+
+    assert button_labels(view) == [
+        "Setup Home",
+        "Close",
+    ]
+    assert "Back to All Features" not in button_labels(view)
+    assert "Back to Manage Setup" not in button_labels(view)
 
 
 def test_id_web_choices_exist_only_for_allowed_guilds(
@@ -160,11 +189,11 @@ def test_id_web_choices_exist_only_for_allowed_guilds(
     labels = setup_choice_labels(view)
 
     assert {
-        "Tickets + Server Basics",
+        "Recommended Setup",
         "Simple Verify",
         "Help Desk / Tickets",
         "Voice Verify",
-        "Choose My Own Features",
+        "Choose Core Features",
     } <= labels
 
     assert "ID / Web Verify" in labels

@@ -74,11 +74,11 @@ def test_each_guided_target_has_an_exact_requirement_key():
     assert title_to_key["Choose the Approved-Member Role"] == (
         "verified_role"
     )
-    assert title_to_key["Choose the Voice Verify Channel"] == (
+    assert title_to_key["Set Up the Private Voice Verify Room"] == (
         "voice_verify_channel"
     )
     assert title_to_key[
-        "Choose the Voice Verify Staff Channel"
+        "Set Up Voice Verify Staff Requests"
     ] == "voice_verify_staff_channel"
     assert title_to_key["Choose the Moderation Log Channel"] == (
         "modlog_channel"

@@ -145,25 +145,34 @@ def test_service_owns_its_preview_and_result_views() -> None:
     assert "PermissionRepairDoneView" not in source
 
 
-def test_service_preview_callbacks_stay_canonical() -> None:
+def test_service_preview_callbacks_stay_parent_aware() -> None:
     body = _owner_source(
         SERVICE,
         "PermissionRepairPreviewView",
     )
 
-    assert "await apply_permission_repair(interaction)" in body
-    assert "await open_permission_repair(interaction)" in body
-    assert "await _back_to_advanced_options(interaction)" in body
+    assert (
+        "await apply_permission_repair(interaction, parent=self.parent)"
+        in body
+    )
+    assert (
+        "await open_permission_repair(interaction, parent=self.parent)"
+        in body
+    )
+    assert "await _back_to_parent(interaction, self.parent)" in body
 
 
-def test_service_result_callbacks_stay_canonical() -> None:
+def test_service_result_callbacks_stay_parent_aware() -> None:
     body = _owner_source(
         SERVICE,
         "PermissionRepairResultView",
     )
 
-    assert "await open_permission_repair(interaction)" in body
-    assert "await _back_to_advanced_options(interaction)" in body
+    assert (
+        "await open_permission_repair(interaction, parent=self.parent)"
+        in body
+    )
+    assert "await _back_to_parent(interaction, self.parent)" in body
 
 
 def test_service_has_one_queued_apply_owner() -> None:
@@ -176,7 +185,7 @@ def test_service_has_one_queued_apply_owner() -> None:
     assert 'operation_type="setup_permission_repair"' in body
     assert 'concurrency_class="guild_config_write"' in body
     assert 'concurrency_key="setup_permission_repair"' in body
-    assert "view=PermissionRepairResultView()" in body
+    assert "view=PermissionRepairResultView(parent=parent)" in body
 
 
 def test_deep_audit_is_diagnostic_only() -> None:
@@ -209,7 +218,7 @@ def test_open_route_reruns_preview_and_deep_audit() -> None:
     assert "preview_or_apply(" in body
     assert "apply=False" in body
     assert "await _load_deep_audit(guild)" in body
-    assert "view=PermissionRepairPreviewView()" in body
+    assert "view=PermissionRepairPreviewView(parent=parent)" in body
 
 
 def test_apply_route_reruns_deep_audit_after_safe_fix() -> None:
