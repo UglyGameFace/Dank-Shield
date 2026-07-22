@@ -110,6 +110,7 @@ def test_aio_submenus_keep_existing_tools() -> None:
         "Choose Core Modules",
         "Roles & Channels",
         "Timers & Rules",
+        "Review Old Voice Items",
         "Back to All Features",
         "Setup Home",
         "Close",
