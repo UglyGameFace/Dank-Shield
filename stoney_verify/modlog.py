@@ -14,6 +14,12 @@ import discord
 
 from .globals import *
 
+try:
+    from .guild_config import get_guild_config
+except Exception:
+    async def get_guild_config(*_args, **_kwargs):
+        return {}
+
 _MODLOG_RECENT_EVENT_KEYS: Dict[Tuple[int, str], float] = {}
 _MODLOG_DEDUPE_LOCK = asyncio.Lock()
 
