@@ -1855,118 +1855,142 @@ async def _build_member_context_fields(
         0,
     )
 
-    access_state, access_reason = _configured_access_state(
-        member_or_user,
-        runtime_config,
-        is_bot=is_bot,
+    alt_tier = _safe_str(
+        merged_risk.get("alt_evidence_tier")
+        or merged_risk.get("evidence_tier"),
+        "clear",
+    ).lower()
+    alt_score = _safe_int(merged_risk.get("alt_risk_score"), 0)
+    spam_score = _safe_int(merged_risk.get("spam_risk_score"), 0)
+    spam_level = _safe_str(merged_risk.get("spam_risk_level"), "low").lower()
+    profile_score = _safe_int(merged_risk.get("profile_risk_score"), 0)
+    context_score = _safe_int(
+        merged_risk.get("context_risk_score"),
+        profile_score,
     )
+    review_verdict = _safe_str(merged_risk.get("review_verdict"))
+    recommended_action = _safe_str(merged_risk.get("recommended_action"))
+    account_age_days = _safe_int(merged_risk.get("account_age_days"), 999999)
 
-    hard_evidence = (
-        identity_matches > 0
-        or manual_confirmed > 0
-        or tier in {"CONFIRMED DUPLICATE", "STRONGLY LINKED"}
-        or score >= 65
-        or source_strong > 0
-    )
+    alt_labels = {
+        "clear": "No linked-account evidence",
+        "suspicious": "Possible correlated-account pattern",
+        "strongly_linked": "Strong linked-account evidence",
+        "confirmed_duplicate": "Confirmed duplicate identity",
+        "excluded_bot": "Excluded from human alt scoring",
+    }
+    alt_label = alt_labels.get(alt_tier, "No linked-account evidence")
+    if alt_score > 0 and alt_tier not in {"clear", "excluded_bot"}:
+        alt_label += f" ({alt_score}/100)"
 
-    watchlist_evidence = (
-        score >= 20
-        or bool(pretty_flags)
-        or source_uncertain
-        or source_risky > 0
-        or source_low_conf >= 3
-        or warn_count > 0
-        or fingerprint_count > 0
-        or similar_name_count > 0
-        or burst_count > 1
-        or manual_likely > 0
-    )
+    if spam_score >= 35:
+        spam_label = f"Detected ({spam_level}, {spam_score}/100)"
+    else:
+        spam_label = "No SpamGuard incident evidence"
 
     if is_bot:
-        verdict = "BOT REVIEW"
-        action = "Review who added it and audit its permissions before trusting it."
-    elif hard_evidence:
-        verdict = "REVIEW NOW"
-        action = "Keep contained and review the evidence immediately."
-    elif watchlist_evidence:
-        verdict = "WATCHLIST"
-        action = "Keep on the normal verification path; do not treat CLEAR as proof of safety."
+        review_verdict = review_verdict or "OFFICIAL BOT — REVIEW PERMISSIONS"
+        profile_label = "Bot account"
+        recommended_action = recommended_action or (
+            "Review who added the bot and whether its permissions are appropriate."
+        )
+    elif profile_score >= 35:
+        profile_label = f"Low-confidence profile review ({profile_score}/100)"
+    elif account_age_days <= 7:
+        profile_label = "New account — normal verification context"
+    elif context_score > 0:
+        profile_label = "Minor profile context only"
     else:
-        verdict = "NO CURRENT RISK SIGNALS"
-        action = "Continue normal verification and behavior logging."
+        profile_label = "No notable profile pattern"
 
-    if access_state == "VERIFIED ACCESS" and verdict in {"REVIEW NOW", "WATCHLIST"}:
-        action = "Review immediately because this member already has verified/resident access."
-    elif access_state == "ROLE CONFIG MISSING":
-        action = "Fix the server access-role configuration before relying on containment status."
-    elif access_state == "NO ACCESS ROLE DETECTED":
-        action = "Check setup and access routing; no configured containment/access role was found."
+    if not review_verdict:
+        if alt_tier == "confirmed_duplicate":
+            review_verdict = "CONFIRMED DUPLICATE IDENTITY"
+        elif alt_tier == "strongly_linked":
+            review_verdict = "STRONG ALT LINK — STAFF REVIEW"
+        elif spam_score >= 70:
+            review_verdict = "HIGH-CONFIDENCE SPAM ACCOUNT"
+        elif spam_score >= 35:
+            review_verdict = "SPAM BEHAVIOR DETECTED"
+        elif alt_tier == "suspicious":
+            review_verdict = "POSSIBLE ALT LINK — REVIEW"
+        elif account_age_days <= 7:
+            review_verdict = "NEW ACCOUNT — VERIFY NORMALLY"
+        else:
+            review_verdict = "LOW CONCERN"
 
-    intelligence_lines = [
-        f"Verdict: **{verdict}**",
-        f"Official bot: **{'Yes' if is_bot else 'No'}**",
-        f"Alt/raid evidence: **{tier}** • **{level} / {score}/100**",
-        f"Access state: **{access_state}** — {access_reason}",
-        f"Recommended action: {action}",
+    recommended_action = recommended_action or (
+        "Continue normal verification; act only on linked-account proof or observed behavior."
+    )
+
+    assessment_lines = [
+        f"Status: **{review_verdict}**",
+        f"Alt identity: **{alt_label}**",
+        f"Spam behavior: **{spam_label}**",
+        f"Profile context: **{profile_label}**",
+        f"Recommended action: {recommended_action}",
     ]
 
-    evidence_lines = [
-        f"Account age: **{account_age}**",
-        f"Entry: `{entry_method}` • Source: `{join_source}`",
-        f"Invite: `{invite_code}`",
-        f"Source confidence: **{entry_quality} / {entry_confidence}/100**",
-    ]
-
+    evidence_lines = [f"Account age: **{account_age}**"]
     if joined_gap_human:
         evidence_lines.append(f"Created-to-join timing: **{joined_gap_human}**")
 
-    if entry_reason:
-        evidence_lines.append(f"Source explanation: {_truncate(entry_reason, 180)}")
+    unknown_values = {
+        "",
+        "unknown",
+        "unknown_join",
+        "none",
+        "null",
+        "invite_unresolved",
+        "invite_cache_warming",
+        "invite_tracking_unavailable",
+    }
+    method_known = entry_method.strip().lower() not in unknown_values
+    source_known = join_source.strip().lower() not in unknown_values
+    invite_known = invite_code.strip().lower() not in unknown_values
+    quality_known = entry_quality.strip().lower() not in unknown_values
+
+    if method_known:
+        evidence_lines.append(f"Entry method: **{entry_method.replace('_', ' ')}**")
+    if source_known:
+        evidence_lines.append(f"Source: **{join_source}**")
+    if invite_known:
+        evidence_lines.append(f"Invite: `discord.gg/{invite_code}`")
+    if quality_known and entry_confidence > 0:
+        evidence_lines.append(
+            f"Source confidence: **{entry_quality} / {entry_confidence}/100**"
+        )
+    if entry_reason and (method_known or source_known or invite_known):
+        evidence_lines.append(f"Source note: {_truncate(entry_reason, 180)}")
 
     if pretty_flags:
-        evidence_lines.append("Signals: " + " • ".join(pretty_flags[:7]))
-    else:
-        evidence_lines.append("Signals: no current join-time warning flags")
+        evidence_lines.append(
+            "Context — not identity proof: " + " • ".join(pretty_flags[:4])
+        )
 
     cluster_bits: List[str] = []
     if fingerprint_count > 0:
-        cluster_bits.append(f"shared fingerprints={fingerprint_count}")
+        cluster_bits.append(f"shared profile matches={fingerprint_count}")
     if similar_name_count > 0:
-        cluster_bits.append(f"similar names={similar_name_count}")
-    if burst_count > 0:
-        cluster_bits.append(f"burst joins={burst_count}")
+        cluster_bits.append(f"similar recent names={similar_name_count}")
+    if burst_count >= 3:
+        cluster_bits.append(f"join surge={burst_count}")
     if cluster_bits:
-        evidence_lines.append("Recent cluster: " + " • ".join(cluster_bits))
+        evidence_lines.append("Correlated activity: " + " • ".join(cluster_bits))
 
-    if source_sample > 0:
+    if source_sample >= 3 and (source_risky > 0 or source_strong > 0):
         evidence_lines.append(
-            "Same-source history: "
-            f"sample={source_sample} • risky={source_risky} • "
-            f"strong/confirmed={source_strong} • "
-            f"low-confidence={source_low_conf}"
+            "Source history: "
+            f"{source_sample} prior join(s) • risky={source_risky} • "
+            f"strong/confirmed={source_strong}"
         )
-    else:
-        evidence_lines.append("Same-source history: not enough matching history yet")
 
     if warn_count > 0:
         evidence_lines.append(f"Prior warnings: **{warn_count}**")
 
-    evidence_lines.append(
-        "DM/userbot scope: private member DMs are not visible to the bot; "
-        "DM-spam findings require member/staff reports."
-    )
-
     fields: List[Tuple[str, str, bool]] = [
-        (
-            "Join Intelligence",
-            _chunk_lines(intelligence_lines, 1000),
-            False,
-        ),
-        (
-            "Evidence & Source",
-            _chunk_lines(evidence_lines, 1000),
-            False,
-        ),
+        ("Assessment", _chunk_lines(assessment_lines, 1000), False),
+        ("Relevant Context", _chunk_lines(evidence_lines, 1000), False),
     ]
 
     truth_value = _context_truth_value(
@@ -2099,19 +2123,125 @@ def _timeout_change_lines(before: discord.Member, after: discord.Member) -> List
     return lines
 
 
+def _role_id_map_for_update(member: discord.Member) -> Dict[int, discord.Role]:
+    out: Dict[int, discord.Role] = {}
+    try:
+        for role in getattr(member, "roles", []) or []:
+            if role.is_default():
+                continue
+            role_id = _safe_int(getattr(role, "id", 0), 0)
+            if role_id > 0:
+                out[role_id] = role
+    except Exception:
+        pass
+    return out
+
+
+def _config_value(config: Any, key: str, default: Any = None) -> Any:
+    try:
+        if isinstance(config, dict):
+            value = config.get(key)
+            return default if value is None else value
+        value = getattr(config, key, None)
+        return default if value is None else value
+    except Exception:
+        return default
+
+
+async def _is_expected_recent_unverified_assignment(
+    guild: discord.Guild,
+    before: discord.Member,
+    after: discord.Member,
+    *,
+    added_ids: Set[int],
+    removed_ids: Set[int],
+    timeout_lines: List[str],
+    nickname_changed: bool,
+) -> bool:
+    if (
+        bool(getattr(after, "bot", False))
+        or removed_ids
+        or timeout_lines
+        or nickname_changed
+        or len(added_ids) != 1
+    ):
+        return False
+
+    try:
+        config = await get_guild_config(guild.id)
+    except Exception:
+        return False
+
+    unverified_role_id = _safe_int(
+        _config_value(config, "unverified_role_id", 0)
+        or globals().get("UNVERIFIED_ROLE_ID")
+        or globals().get("ROLE_UNVERIFIED_ID"),
+        0,
+    )
+    if unverified_role_id <= 0 or added_ids != {unverified_role_id}:
+        return False
+
+    joined_at = _safe_dt_utc(getattr(after, "joined_at", None))
+    if joined_at is None:
+        return False
+    return 0 <= (_now_utc() - joined_at).total_seconds() <= 300
+
+
+def _member_update_event_key(
+    after: discord.Member,
+    *,
+    added_ids: Set[int],
+    removed_ids: Set[int],
+    timeout_lines: List[str],
+    nickname_changed: bool,
+) -> str:
+    payload = "|".join(
+        [
+            f"member={int(after.id)}",
+            "added=" + ",".join(str(value) for value in sorted(added_ids)),
+            "removed=" + ",".join(str(value) for value in sorted(removed_ids)),
+            f"nick={int(bool(nickname_changed))}",
+            "timeout=" + ";".join(timeout_lines),
+        ]
+    )
+    digest = hashlib.sha256(payload.encode("utf-8", errors="replace")).hexdigest()[:16]
+    return f"member_update:{after.id}:{digest}"
+
+
 async def maybe_log_member_update_diff(
     guild: discord.Guild,
     before: discord.Member,
     after: discord.Member,
 ) -> bool:
     try:
-        changed = False
+        before_roles = _role_id_map_for_update(before)
+        after_roles = _role_id_map_for_update(after)
+        added_ids = set(after_roles) - set(before_roles)
+        removed_ids = set(before_roles) - set(after_roles)
 
-        role_added, role_removed = _roles_diff_lines(before, after)
+        role_added = [
+            f"+ {after_roles[role_id].name} (`{role_id}`)"
+            for role_id in sorted(added_ids)
+        ][:20]
+        role_removed = [
+            f"- {before_roles[role_id].name} (`{role_id}`)"
+            for role_id in sorted(removed_ids)
+        ][:20]
         timeout_lines = _timeout_change_lines(before, after)
         nickname_changed = (before.nick or "") != (after.nick or "")
 
         if not role_added and not role_removed and not timeout_lines and not nickname_changed:
+            return False
+
+        if await _is_expected_recent_unverified_assignment(
+            guild,
+            before,
+            after,
+            added_ids=added_ids,
+            removed_ids=removed_ids,
+            timeout_lines=timeout_lines,
+            nickname_changed=nickname_changed,
+        ):
             return False
 
         entry = await _audit_find_best_member_update_match(guild, int(after.id))
@@ -2129,40 +2259,52 @@ async def maybe_log_member_update_diff(
         )
 
         if role_added or role_removed:
-            role_lines = []
-            role_lines.extend(role_added)
-            role_lines.extend(role_removed)
-            embed.add_field(name="Role Changes", value=_chunk_lines(role_lines, 1000), inline=False)
-            changed = True
+            embed.add_field(
+                name="Role Changes",
+                value=_chunk_lines(role_added + role_removed, 1000),
+                inline=False,
+            )
 
         if timeout_lines:
-            embed.add_field(name="Timeout", value=_chunk_lines(timeout_lines, 1000), inline=False)
-            changed = True
+            embed.add_field(
+                name="Timeout",
+                value=_chunk_lines(timeout_lines, 1000),
+                inline=False,
+            )
 
         if nickname_changed:
             before_nick = _safe_str(before.nick, "None")
             after_nick = _safe_str(after.nick, "None")
             embed.add_field(
                 name="Nickname",
-                value=_chunk_lines([f"Before: {before_nick}", f"After: {after_nick}"], 1000),
+                value=_chunk_lines(
+                    [f"Before: {before_nick}", f"After: {after_nick}"],
+                    1000,
+                ),
                 inline=False,
             )
-            changed = True
 
         embed.add_field(name="By", value=_truncate(actor, 1024), inline=False)
         if audit_reason:
-            embed.add_field(name="Reason", value=_truncate(audit_reason, 1024), inline=False)
+            embed.add_field(
+                name="Reason",
+                value=_truncate(audit_reason, 1024),
+                inline=False,
+            )
 
-        try:
-            for name, value, inline in await _build_member_context_fields(guild, after):
-                embed.add_field(name=name, value=value, inline=inline)
-        except Exception:
-            pass
-
-        if changed:
-            await _post_modlog(guild, embed)
-            return True
-        return False
+        await _post_modlog(
+            guild,
+            embed,
+            event_key=_member_update_event_key(
+                after,
+                added_ids=added_ids,
+                removed_ids=removed_ids,
+                timeout_lines=timeout_lines,
+                nickname_changed=nickname_changed,
+            ),
+            dedupe_window_seconds=20,
+        )
+        return True
     except Exception as e:
         print("⚠️ maybe_log_member_update_diff error:", repr(e))
         try:

@@ -17,13 +17,14 @@ def test_suspicious_name_regex_is_not_substring_real_trap() -> None:
     assert "free[\\W_]*nitro" in RAIDGUARD
 
 
-def test_low_flagged_accounts_remain_reviewable_without_false_clear() -> None:
-    assert 'elif alt_tier == "suspicious" or profile_score >= 25:' in RISK_ENGINE
-    assert 'review_verdict = "REVIEW RECOMMENDED"' in RISK_ENGINE
+def test_low_profile_context_remains_reviewable_without_false_alt() -> None:
+    assert 'elif alt_tier == "suspicious":' in RISK_ENGINE
+    assert 'review_verdict = "POSSIBLE ALT LINK — REVIEW"' in RISK_ENGINE
+    assert 'review_verdict = "NEW ACCOUNT — VERIFY NORMALLY"' in RISK_ENGINE
+    assert '"context_risk_score": context_score' in RISK_ENGINE
     assert '"alt_evidence_tier": alt_tier' in RISK_ENGINE
     assert '"profile_risk_score": profile_score' in RISK_ENGINE
-    assert "do not treat CLEAR as proof of safety" in MODLOG
-
+    assert "do not treat CLEAR as proof of safety" not in MODLOG
 
 def test_staff_join_audit_has_dm_safety_context_and_quick_mod() -> None:
     assert "DM spam limitation" in AUDIT_GUARD
@@ -35,7 +36,7 @@ def test_staff_join_audit_has_dm_safety_context_and_quick_mod() -> None:
 if __name__ == "__main__":
     for test in (
         test_suspicious_name_regex_is_not_substring_real_trap,
-        test_low_flagged_accounts_remain_reviewable_without_false_clear,
+        test_low_profile_context_remains_reviewable_without_false_alt,
         test_staff_join_audit_has_dm_safety_context_and_quick_mod,
     ):
         test()

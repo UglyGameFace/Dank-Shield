@@ -17,11 +17,13 @@ def context_block() -> str:
 
 def test_only_canonical_join_fields_are_emitted() -> None:
     block = context_block()
-    assert '"Join Intelligence"' in block
-    assert '"Evidence & Source"' in block
+    assert '"Assessment"' in block
+    assert '"Relevant Context"' in block
     assert '"Identity Links"' in block
 
     for old in (
+        '"Join Intelligence"',
+        '"Evidence & Source"',
         '"Risk Context"',
         '"Evidence Health"',
         '"Containment Posture"',
@@ -55,14 +57,25 @@ def test_old_display_helpers_are_removed() -> None:
 
 
 def test_canonical_summary_is_honest_and_actionable() -> None:
-    assert "Official bot:" in MODLOG
-    assert "Alt/raid evidence:" in MODLOG
-    assert "Access state:" in MODLOG
-    assert "Recommended action:" in MODLOG
-    assert "Source confidence:" in MODLOG
-    assert "Same-source history:" in MODLOG
-    assert "DM/userbot scope:" in MODLOG
-    assert "do not treat CLEAR as proof of safety" in MODLOG
+    block = context_block()
+    assert "Status:" in block
+    assert "Alt identity:" in block
+    assert "Spam behavior:" in block
+    assert "Profile context:" in block
+    assert "Recommended action:" in block
+    assert "Context — not identity proof:" in block
+    assert "Source confidence:" in block
+    assert "Source history:" in block
+
+    for stale in (
+        "Access state:",
+        "ROLE CONFIG MISSING",
+        "Same-source history: not enough matching history yet",
+        "DM/userbot scope:",
+        "do not treat CLEAR as proof of safety",
+        "burst joins=",
+    ):
+        assert stale not in block
 
 
 if __name__ == "__main__":
