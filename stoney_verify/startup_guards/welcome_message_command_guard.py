@@ -9,6 +9,19 @@ does not remove it.
 """
 
 _PATCHED = False
+_EXPECTED_STYLE_COMMANDS = {
+    "card-colors",
+    "card-font",
+    "card-style",
+}
+
+
+def _command_names(group: object) -> set[str]:
+    return {
+        str(getattr(command, "name", ""))
+        for command in getattr(group, "commands", [])
+        if getattr(command, "name", "")
+    }
 
 
 def apply() -> bool:
@@ -24,20 +37,42 @@ def apply() -> bool:
             commands_ext._ALLOWED_DANK_CHILDREN = allowed
 
         from stoney_verify.commands_ext import public_welcome_group
+
         # Import the native style extension before Discord sync. It decorates the
         # same welcome_group with card-font/card-colors/card-style controls and is
         # intentionally idempotent through normal Python module caching.
         from stoney_verify.commands_ext import welcome_card_style_commands  # noqa: F401
 
-        register = getattr(public_welcome_group, "register_public_welcome_group_commands", None)
+        register = getattr(
+            public_welcome_group,
+            "register_public_welcome_group_commands",
+            None,
+        )
         if callable(register):
             register(None, None)
+
+        welcome_children = _command_names(public_welcome_group.welcome_group)
+        missing = sorted(_EXPECTED_STYLE_COMMANDS - welcome_children)
+        if missing:
+            raise RuntimeError(
+                "welcome style commands missing before Discord sync: "
+                + ", ".join(missing)
+            )
+
         _PATCHED = True
-        print("✅ welcome_message_command_guard active; /dank welcome is allowed in public setup surface")
+        style_children = sorted(_EXPECTED_STYLE_COMMANDS & welcome_children)
+        print(
+            "✅ welcome_message_command_guard active; "
+            "/dank welcome is allowed in public setup surface; "
+            f"style_commands={style_children} total_children={len(welcome_children)}"
+        )
         return True
     except Exception as exc:
         try:
-            print(f"⚠️ welcome_message_command_guard failed: {type(exc).__name__}: {exc}")
+            print(
+                "⚠️ welcome_message_command_guard failed: "
+                f"{type(exc).__name__}: {exc}"
+            )
         except Exception:
             pass
         return False
