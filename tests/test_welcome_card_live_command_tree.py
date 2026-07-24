@@ -2,16 +2,16 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from stoney_verify.commands_ext import public_welcome_card_studio
 from stoney_verify.commands_ext import public_welcome_group
-from stoney_verify.commands_ext import welcome_card_style_commands  # noqa: F401
-from stoney_verify.commands_ext import welcome_card_font_upgrade_commands  # noqa: F401
 from stoney_verify.commands_ext.public_setup_group import dank_group
 
 
 ROOT = Path(__file__).resolve().parents[1]
 MAIN = (ROOT / "main.py").read_text(encoding="utf-8")
-GUARD = (
-    ROOT / "stoney_verify/startup_guards/welcome_message_command_guard.py"
+COMMANDS = (ROOT / "stoney_verify/commands.py").read_text(encoding="utf-8")
+STUDIO = (
+    ROOT / "stoney_verify/commands_ext/public_welcome_card_studio.py"
 ).read_text(encoding="utf-8")
 
 EXPECTED_STYLE_COMMANDS = {
@@ -31,27 +31,39 @@ def _command_names(group) -> set[str]:
     }
 
 
-def test_production_entrypoint_loads_welcome_registration_before_app() -> None:
-    guard_import = MAIN.index("welcome_message_command_guard")
-    app_import = MAIN.index("from stoney_verify.app import run")
-    assert guard_import < app_import
-    assert "welcome_card_style_commands" in GUARD
-    assert "welcome_card_font_upgrade_commands" in GUARD
-    assert GUARD.index("welcome_card_style_commands") < GUARD.index("welcome_card_font_upgrade_commands")
+def _register() -> None:
+    public_welcome_group.register_public_welcome_group_commands(None, None)
+    public_welcome_card_studio.register_public_welcome_card_studio_commands(None, None)
+
+
+def test_production_entrypoint_has_no_welcome_startup_guard() -> None:
+    assert "welcome_message_command_guard" not in MAIN
+    assert "register_public_welcome_card_studio_commands" in COMMANDS
+    assert COMMANDS.index("register_all_commands(bot, bot.tree)") < COMMANDS.index(
+        "register_public_welcome_card_studio_commands(bot, bot.tree)"
+    )
+
+
+def test_studio_never_replaces_or_removes_commands() -> None:
+    assert "remove_command(" not in STUDIO
+    assert "_replace_existing_command" not in STUDIO
+    assert "monkey" in STUDIO.lower()
 
 
 def test_live_welcome_group_contains_all_style_commands() -> None:
-    names = _command_names(public_welcome_group.welcome_group)
-    assert EXPECTED_STYLE_COMMANDS <= names
+    _register()
+    assert EXPECTED_STYLE_COMMANDS <= _command_names(public_welcome_group.welcome_group)
 
 
 def test_dank_tree_uses_the_same_populated_welcome_group() -> None:
+    _register()
     attached = dank_group.get_command("welcome")
     assert attached is public_welcome_group.welcome_group
     assert EXPECTED_STYLE_COMMANDS <= _command_names(attached)
 
 
 def test_welcome_command_names_are_unique() -> None:
+    _register()
     names = [
         str(getattr(command, "name", ""))
         for command in getattr(public_welcome_group.welcome_group, "commands", [])
@@ -62,7 +74,8 @@ def test_welcome_command_names_are_unique() -> None:
 
 if __name__ == "__main__":
     for test in (
-        test_production_entrypoint_loads_welcome_registration_before_app,
+        test_production_entrypoint_has_no_welcome_startup_guard,
+        test_studio_never_replaces_or_removes_commands,
         test_live_welcome_group_contains_all_style_commands,
         test_dank_tree_uses_the_same_populated_welcome_group,
         test_welcome_command_names_are_unique,
