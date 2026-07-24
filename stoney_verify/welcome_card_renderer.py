@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import io
 import math
 from dataclasses import dataclass
@@ -124,14 +125,23 @@ def _lerp(a: int, b: int, t: float) -> int:
     return int(a + (b - a) * t)
 
 
-def _background(theme: Theme):
+def _background(theme: Theme, custom_background_bytes: Optional[bytes] = None):
     assert Image is not None and ImageDraw is not None and ImageFilter is not None
-    image = Image.new("RGBA", CARD_SIZE, (0, 0, 0, 255))
-    draw = ImageDraw.Draw(image)
-    for x in range(CARD_WIDTH):
-        t = x / max(1, CARD_WIDTH - 1)
-        color = tuple(_lerp(theme.bg_a[i], theme.bg_b[i], t) for i in range(3))
-        draw.line((x, 0, x, CARD_HEIGHT), fill=(*color, 255))
+    if custom_background_bytes:
+        try:
+            with Image.open(io.BytesIO(custom_background_bytes)) as source:
+                source.load()
+                image = _cover(source, CARD_SIZE)
+            image.alpha_composite(Image.new("RGBA", CARD_SIZE, (2, 5, 10, 105)))
+        except Exception:
+            image = Image.new("RGBA", CARD_SIZE, (0, 0, 0, 255))
+    else:
+        image = Image.new("RGBA", CARD_SIZE, (0, 0, 0, 255))
+        draw = ImageDraw.Draw(image)
+        for x in range(CARD_WIDTH):
+            t = x / max(1, CARD_WIDTH - 1)
+            color = tuple(_lerp(theme.bg_a[i], theme.bg_b[i], t) for i in range(3))
+            draw.line((x, 0, x, CARD_HEIGHT), fill=(*color, 255))
 
     smoke = Image.new("RGBA", CARD_SIZE, (0, 0, 0, 0))
     smoke_draw = ImageDraw.Draw(smoke)
@@ -251,12 +261,12 @@ def _gradient_text(base: Any, xy: tuple[int, int], text: str, font: Any, start: 
     base.alpha_composite(Image.composite(layer, Image.new("RGBA", CARD_SIZE, (0, 0, 0, 0)), mask))
 
 
-def render_welcome_card_sync(*, avatar_bytes: Optional[bytes], display_name: str, server_name: str, member_count: int, theme_name: str = DEFAULT_THEME) -> bytes:
+def render_welcome_card_sync(*, avatar_bytes: Optional[bytes], display_name: str, server_name: str, member_count: int, theme_name: str = DEFAULT_THEME, custom_background_bytes: Optional[bytes] = None) -> bytes:
     if not pillow_available():
         raise RuntimeError(f"Pillow is unavailable: {_PIL_ERROR!r}")
     assert ImageDraw is not None
     theme = THEMES[normalize_theme_name(theme_name)]
-    base = _background(theme)
+    base = _background(theme, custom_background_bytes=custom_background_bytes)
     _paste_avatar(base, _avatar(avatar_bytes, 278, theme), theme)
     draw = ImageDraw.Draw(base)
     text_x, text_right = 390, 1022
@@ -286,6 +296,14 @@ async def render_member_welcome_card(member: Any, cfg: Any) -> bytes:
     count = int(getattr(member.guild, "member_count", 0) or 0)
     if count <= 0:
         count = len(list(getattr(member.guild, "members", []) or []))
+    custom_background_bytes: Optional[bytes] = None
+    encoded_background = str(_cfg_value(cfg, "welcome_card_background_b64", "") or "").strip()
+    if encoded_background:
+        try:
+            custom_background_bytes = base64.b64decode(encoded_background, validate=True)
+        except Exception:
+            custom_background_bytes = None
+
     return await asyncio.to_thread(
         render_welcome_card_sync,
         avatar_bytes=avatar_bytes,
@@ -293,6 +311,7 @@ async def render_member_welcome_card(member: Any, cfg: Any) -> bytes:
         server_name=str(getattr(member.guild, "name", "") or "this server"),
         member_count=count,
         theme_name=normalize_theme_name(_cfg_value(cfg, "welcome_card_theme", DEFAULT_THEME)),
+        custom_background_bytes=custom_background_bytes,
     )
 
 
