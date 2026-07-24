@@ -24,6 +24,10 @@ def apply() -> bool:
             commands_ext._ALLOWED_DANK_CHILDREN = allowed
 
         from stoney_verify.commands_ext import public_welcome_group
+        # Import the native style extension before Discord sync. It decorates the
+        # same welcome_group with card-font/card-colors/card-style controls and is
+        # intentionally idempotent through normal Python module caching.
+        from stoney_verify.commands_ext import welcome_card_style_commands  # noqa: F401
 
         register = getattr(public_welcome_group, "register_public_welcome_group_commands", None)
         if callable(register):
