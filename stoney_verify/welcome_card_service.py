@@ -11,7 +11,7 @@ from typing import Any, Mapping, Optional
 import discord
 from PIL import Image, ImageOps
 
-from .welcome_card_renderer import (
+from .welcome_card_studio_renderer import (
     CARD_HEIGHT,
     CARD_WIDTH,
     DEFAULT_COLOR_MODE,
