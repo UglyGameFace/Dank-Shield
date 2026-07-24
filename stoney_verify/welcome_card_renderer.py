@@ -3,7 +3,7 @@ from __future__ import annotations
 """Production-safe welcome card rendering.
 
 The renderer owns the canvas, avatar crop, dynamic text, and built-in themes.
-Backgrounds never contain baked-in usernames or member counts.  A guild may use
+Backgrounds never contain baked-in usernames or member counts. A guild may use
 one of the built-in themes or provide a validated custom 3:1 image.
 """
 
@@ -136,7 +136,45 @@ def _font(size: int, *, bold: bool = False) -> ImageFont.ImageFont:
     return ImageFont.load_default()
 
 
-def _fit_font(
+def _text_width(
+    draw: ImageDraw.ImageDraw,
+    text: str,
+    *,
+    font: ImageFont.ImageFont,
+    stroke_width: int = 0,
+) -> int:
+    box = draw.textbbox((0, 0), text, font=font, stroke_width=max(0, int(stroke_width)))
+    return max(0, box[2] - box[0])
+
+
+def _ellipsize_text(
+    draw: ImageDraw.ImageDraw,
+    text: str,
+    *,
+    font: ImageFont.ImageFont,
+    max_width: int,
+    stroke_width: int = 0,
+) -> str:
+    if _text_width(draw, text, font=font, stroke_width=stroke_width) <= max_width:
+        return text
+
+    ellipsis = "…"
+    if _text_width(draw, ellipsis, font=font, stroke_width=stroke_width) > max_width:
+        return ""
+
+    low = 0
+    high = len(text)
+    while low < high:
+        middle = (low + high + 1) // 2
+        candidate = text[:middle].rstrip() + ellipsis
+        if _text_width(draw, candidate, font=font, stroke_width=stroke_width) <= max_width:
+            low = middle
+        else:
+            high = middle - 1
+    return text[:low].rstrip() + ellipsis
+
+
+def _fit_text(
     draw: ImageDraw.ImageDraw,
     text: str,
     *,
@@ -144,15 +182,62 @@ def _fit_font(
     start_size: int,
     min_size: int,
     bold: bool = True,
-) -> ImageFont.ImageFont:
-    size = max(int(start_size), int(min_size))
-    while size > min_size:
-        font = _font(size, bold=bold)
-        box = draw.textbbox((0, 0), text, font=font, stroke_width=0)
-        if box[2] - box[0] <= max_width:
-            return font
-        size -= 2
-    return _font(min_size, bold=bold)
+    stroke_width: int = 0,
+    preserve_suffix: str = "",
+) -> tuple[str, ImageFont.ImageFont]:
+    start = max(int(start_size), int(min_size))
+    minimum = max(8, int(min_size))
+    sizes = list(range(start, minimum - 1, -2))
+    if not sizes or sizes[-1] != minimum:
+        sizes.append(minimum)
+
+    for size in sizes:
+        candidate_font = _font(size, bold=bold)
+        if _text_width(
+            draw,
+            text,
+            font=candidate_font,
+            stroke_width=stroke_width,
+        ) <= max_width:
+            return text, candidate_font
+
+    fitted_font = _font(minimum, bold=bold)
+    suffix = preserve_suffix if preserve_suffix and text.endswith(preserve_suffix) else ""
+    if suffix:
+        prefix = text[: -len(suffix)]
+        suffix_width = _text_width(
+            draw,
+            suffix,
+            font=fitted_font,
+            stroke_width=stroke_width,
+        )
+        prefix_width = max(0, max_width - suffix_width)
+        fitted_prefix = _ellipsize_text(
+            draw,
+            prefix,
+            font=fitted_font,
+            max_width=prefix_width,
+            stroke_width=stroke_width,
+        )
+        fitted_text = fitted_prefix + suffix
+        if _text_width(
+            draw,
+            fitted_text,
+            font=fitted_font,
+            stroke_width=stroke_width,
+        ) <= max_width:
+            return fitted_text, fitted_font
+
+    return (
+        _ellipsize_text(
+            draw,
+            text,
+            font=fitted_font,
+            max_width=max_width,
+            stroke_width=stroke_width,
+        ),
+        fitted_font,
+    )
 
 
 def _safe_text(value: Any, *, fallback: str, max_chars: int) -> str:
@@ -350,9 +435,27 @@ def render_welcome_card(
     x = 420
     max_width = 710
     label_font = _font(42, bold=True)
-    name_font = _fit_font(draw, name, max_width=max_width, start_size=78, min_size=38, bold=True)
-    subtitle = f"to {server}  •  You are the {ordinal} member!"
-    subtitle_font = _fit_font(draw, subtitle, max_width=max_width, start_size=31, min_size=20, bold=False)
+    name, name_font = _fit_text(
+        draw,
+        name,
+        max_width=max_width,
+        start_size=78,
+        min_size=38,
+        bold=True,
+        stroke_width=1,
+    )
+    subtitle_suffix = f"  •  You are the {ordinal} member!"
+    subtitle = f"to {server}{subtitle_suffix}"
+    subtitle, subtitle_font = _fit_text(
+        draw,
+        subtitle,
+        max_width=max_width,
+        start_size=31,
+        min_size=20,
+        bold=False,
+        stroke_width=1,
+        preserve_suffix=subtitle_suffix,
+    )
 
     draw.text((x, 82), "WELCOME", font=label_font, fill=(*theme.text, 245), stroke_width=1, stroke_fill=(0, 0, 0, 210))
 
