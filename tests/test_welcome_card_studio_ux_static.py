@@ -22,9 +22,10 @@ def test_hex_is_advanced_fallback_not_required_slash_input() -> None:
     assert "@app_commands.describe" not in COMMANDS
 
 
-def test_live_service_uses_studio_renderer_explicitly() -> None:
-    assert "from .welcome_card_studio_renderer import (" in SERVICE
+def test_live_service_uses_proportional_typography_engine_explicitly() -> None:
+    assert "from .welcome_card_typography_engine import (" in SERVICE
     assert "render_welcome_card" in SERVICE
+    assert "custom_font_bytes=custom_font" in SERVICE
 
 
 def test_font_styles_do_not_depend_only_on_host_font_files() -> None:
