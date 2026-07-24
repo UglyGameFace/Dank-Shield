@@ -3,12 +3,13 @@ from __future__ import annotations
 from io import BytesIO
 
 import pytest
-from PIL import Image
+from PIL import Image, ImageDraw
 
 from stoney_verify.welcome_card_renderer import (
     BUILTIN_THEMES,
     CARD_HEIGHT,
     CARD_WIDTH,
+    _fit_text,
     normalize_theme_key,
     render_welcome_card,
     validate_custom_background,
@@ -29,6 +30,11 @@ def _background_bytes(size: tuple[int, int] = (1200, 400)) -> bytes:
     return output.getvalue()
 
 
+def _measured_width(draw: ImageDraw.ImageDraw, text: str, font: object) -> int:
+    box = draw.textbbox((0, 0), text, font=font, stroke_width=1)
+    return box[2] - box[0]
+
+
 def test_all_builtin_themes_render_exact_production_dimensions() -> None:
     for theme_key in BUILTIN_THEMES:
         rendered = render_welcome_card(
@@ -46,14 +52,47 @@ def test_all_builtin_themes_render_exact_production_dimensions() -> None:
 def test_long_names_and_large_counts_never_break_rendering() -> None:
     rendered = render_welcome_card(
         avatar_bytes=_avatar_bytes(),
-        display_name="This Is An Extremely Long Discord Display Name That Must Fit Safely",
-        server_name="A Very Long Community Server Name That Must Stay Inside The Safe Text Area",
+        display_name="W" * 64,
+        server_name="W" * 72,
         member_count=987654321,
         theme_key="420_lobby",
     )
     with Image.open(BytesIO(rendered)) as image:
         assert image.size == (1200, 400)
         assert len(rendered) > 10_000
+
+
+def test_name_fitting_ellipsizes_wide_glyphs_inside_safe_width() -> None:
+    draw = ImageDraw.Draw(Image.new("RGBA", (1200, 400), (0, 0, 0, 0)))
+    fitted, fitted_font = _fit_text(
+        draw,
+        "W" * 64,
+        max_width=710,
+        start_size=78,
+        min_size=38,
+        bold=True,
+        stroke_width=1,
+    )
+    assert fitted.endswith("…")
+    assert _measured_width(draw, fitted, fitted_font) <= 710
+
+
+def test_subtitle_fitting_preserves_member_count_suffix() -> None:
+    draw = ImageDraw.Draw(Image.new("RGBA", (1200, 400), (0, 0, 0, 0)))
+    suffix = "  •  You are the 987654321st member!"
+    fitted, fitted_font = _fit_text(
+        draw,
+        f"to {'W' * 72}{suffix}",
+        max_width=710,
+        start_size=31,
+        min_size=20,
+        bold=False,
+        stroke_width=1,
+        preserve_suffix=suffix,
+    )
+    assert fitted.endswith(suffix)
+    assert "…" in fitted
+    assert _measured_width(draw, fitted, fitted_font) <= 710
 
 
 def test_missing_or_invalid_avatar_uses_safe_fallback() -> None:
