@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from typing import Any, Optional
 
 import discord
@@ -12,6 +13,16 @@ from ..welcome_message import (
     reset_welcome_template,
     save_welcome_template,
     welcome_channel_for,
+)
+from ..welcome_card_renderer import (
+    BUILTIN_THEMES,
+    MAX_CUSTOM_BACKGROUND_BYTES,
+    normalize_theme_key,
+)
+from ..welcome_card_service import (
+    encode_custom_background,
+    normalize_custom_background_for_storage,
+    welcome_card_file,
 )
 from .public_setup_group import _require_setup_permission, _upsert_config, dank_group
 
@@ -109,6 +120,8 @@ def _event_channel_health(guild: discord.Guild, cfg: Any, *, kind: str) -> list[
             "Embed Links": perms.embed_links,
             "Read Message History": perms.read_message_history,
         }
+        if kind != "leave" and _cfg_bool(cfg, "welcome_card_enabled"):
+            needed["Attach Files"] = perms.attach_files
         missing = [name for name, ok in needed.items() if not ok]
         if missing:
             lines.append(f"❌ {label} missing bot permissions: " + ", ".join(missing))
@@ -221,6 +234,8 @@ async def open_welcome_health(interaction: discord.Interaction) -> None:
                 "Embed Links": perms.embed_links,
                 "Read Message History": perms.read_message_history,
             }
+            if _cfg_bool(cfg, "welcome_card_enabled"):
+                needed["Attach Files"] = perms.attach_files
             missing = [name for name, ok in needed.items() if not ok]
             if missing:
                 lines.append("❌ Missing bot permissions: " + ", ".join(missing))
@@ -253,6 +268,176 @@ async def welcome_set_channel(interaction: discord.Interaction, channel: discord
 @app_commands.describe(title="Optional title. Supports {server_name}.", body="Optional body. Supports {server_name}, {rules}, {verify}, and {support}.")
 async def welcome_template(interaction: discord.Interaction, title: Optional[str] = None, body: Optional[str] = None) -> None:
     await save_welcome_template_service(interaction, title=title, body=body)
+
+
+_WELCOME_THEME_CHOICES = [
+    app_commands.Choice(name=theme.label, value=theme.key)
+    for theme in BUILTIN_THEMES.values()
+]
+
+
+@welcome_group.command(name="card-preview", description="Preview the personalized card used for new members.")
+@app_commands.describe(theme="Optional built-in theme to preview without saving it.")
+@app_commands.choices(theme=_WELCOME_THEME_CHOICES)
+async def welcome_card_preview(
+    interaction: discord.Interaction,
+    theme: Optional[app_commands.Choice[str]] = None,
+) -> None:
+    if not await _require_setup_permission(interaction):
+        return
+    if interaction.guild is None or not isinstance(interaction.user, discord.Member):
+        return await _send(interaction, "❌ This must be used inside a server.")
+    await _defer(interaction)
+    try:
+        cfg = await get_guild_config(int(interaction.guild.id), refresh=True)
+        card = await welcome_card_file(
+            interaction.user,
+            cfg,
+            theme_override=theme.value if theme is not None else None,
+        )
+        await interaction.followup.send(
+            "Preview only — this uses your current profile picture and the server's live member count.",
+            file=card,
+            ephemeral=True,
+        )
+    except Exception as exc:
+        await interaction.followup.send(
+            f"❌ Could not render welcome card: `{type(exc).__name__}: {exc}`",
+            ephemeral=True,
+        )
+
+
+@welcome_group.command(name="card-theme", description="Choose one of Dank Shield's built-in welcome card themes.")
+@app_commands.describe(theme="The built-in theme to use for new member cards.")
+@app_commands.choices(theme=_WELCOME_THEME_CHOICES)
+async def welcome_card_theme(
+    interaction: discord.Interaction,
+    theme: app_commands.Choice[str],
+) -> None:
+    if not await _require_setup_permission(interaction):
+        return
+    if interaction.guild is None:
+        return await _send(interaction, "❌ This must be used inside a server.")
+    await _defer(interaction)
+    theme_key = normalize_theme_key(theme.value)
+    await _upsert_config(
+        int(interaction.guild.id),
+        {
+            "welcome_card_enabled": True,
+            "welcome_card_theme": theme_key,
+            # Choosing a built-in theme is an explicit mode switch. Do not
+            # leave an old custom image silently overriding the new choice.
+            "welcome_card_background_b64": "",
+            "welcome_card_background_type": "",
+            "welcome_card_background_name": "",
+        },
+    )
+    invalidate_guild_config(int(interaction.guild.id))
+    cfg = await get_guild_config(int(interaction.guild.id), refresh=True)
+    card = await welcome_card_file(interaction.user, cfg) if isinstance(interaction.user, discord.Member) else None
+    await interaction.followup.send(
+        f"✅ Welcome card theme set to **{BUILTIN_THEMES[theme_key].label}**. "
+        "Any previous custom background was cleared so this selection is now live.",
+        file=card,
+        ephemeral=True,
+    )
+
+
+@welcome_group.command(name="card-upload", description="Upload your own safe 3:1 welcome card background.")
+@app_commands.describe(background="PNG, JPG, or WEBP. Recommended: 1200×400 or another 3:1 size.")
+async def welcome_card_upload(
+    interaction: discord.Interaction,
+    background: discord.Attachment,
+) -> None:
+    if not await _require_setup_permission(interaction):
+        return
+    if interaction.guild is None:
+        return await _send(interaction, "❌ This must be used inside a server.")
+    await _defer(interaction)
+    try:
+        filename = str(background.filename or "").lower()
+        content_type = str(background.content_type or "").lower()
+        if not (
+            content_type.startswith("image/")
+            or filename.endswith((".png", ".jpg", ".jpeg", ".webp"))
+        ):
+            raise ValueError("Upload a PNG, JPG, or WEBP image.")
+        if int(getattr(background, "size", 0) or 0) > MAX_CUSTOM_BACKGROUND_BYTES:
+            raise ValueError("Custom background exceeds the 8 MB upload limit.")
+        raw = await background.read()
+        normalized, stored_type = await asyncio.to_thread(
+            normalize_custom_background_for_storage,
+            raw,
+        )
+        await _upsert_config(
+            int(interaction.guild.id),
+            {
+                "welcome_card_enabled": True,
+                "welcome_card_background_b64": encode_custom_background(normalized),
+                "welcome_card_background_type": stored_type,
+                "welcome_card_background_name": str(background.filename or "custom-background")[:120],
+            },
+        )
+        invalidate_guild_config(int(interaction.guild.id))
+        cfg = await get_guild_config(int(interaction.guild.id), refresh=True)
+        card = await welcome_card_file(interaction.user, cfg) if isinstance(interaction.user, discord.Member) else None
+        await interaction.followup.send(
+            "✅ Custom welcome background saved, cropped to **1200×400**, and previewed below.",
+            file=card,
+            ephemeral=True,
+        )
+    except Exception as exc:
+        await interaction.followup.send(
+            f"❌ Could not save custom background: `{type(exc).__name__}: {exc}`",
+            ephemeral=True,
+        )
+
+
+@welcome_group.command(name="card-clear-custom", description="Remove the custom background and return to the selected built-in theme.")
+async def welcome_card_clear_custom(interaction: discord.Interaction) -> None:
+    if not await _require_setup_permission(interaction):
+        return
+    if interaction.guild is None:
+        return await _send(interaction, "❌ This must be used inside a server.")
+    await _defer(interaction)
+    await _upsert_config(
+        int(interaction.guild.id),
+        {
+            "welcome_card_background_b64": "",
+            "welcome_card_background_type": "",
+            "welcome_card_background_name": "",
+        },
+    )
+    invalidate_guild_config(int(interaction.guild.id))
+    cfg = await get_guild_config(int(interaction.guild.id), refresh=True)
+    card = await welcome_card_file(interaction.user, cfg) if isinstance(interaction.user, discord.Member) else None
+    await interaction.followup.send(
+        "✅ Custom background removed. The selected built-in theme is active.",
+        file=card,
+        ephemeral=True,
+    )
+
+
+@welcome_group.command(name="card-enabled", description="Enable or disable personalized image cards without changing join messages.")
+@app_commands.describe(enabled="On sends image cards; off falls back to the normal welcome embed.")
+async def welcome_card_enabled(
+    interaction: discord.Interaction,
+    enabled: bool,
+) -> None:
+    if not await _require_setup_permission(interaction):
+        return
+    if interaction.guild is None:
+        return await _send(interaction, "❌ This must be used inside a server.")
+    await _defer(interaction)
+    await _upsert_config(
+        int(interaction.guild.id),
+        {"welcome_card_enabled": bool(enabled)},
+    )
+    invalidate_guild_config(int(interaction.guild.id))
+    await interaction.followup.send(
+        f"✅ Personalized welcome cards are now **{'enabled' if enabled else 'disabled'}**.",
+        ephemeral=True,
+    )
 
 
 @welcome_group.command(name="events", description="Set up optional join and leave announcements for this server.")
@@ -314,4 +499,9 @@ __all__ = [
     "save_welcome_template_service",
     "reset_welcome_template_service",
     "open_welcome_events",
+    "welcome_card_preview",
+    "welcome_card_theme",
+    "welcome_card_upload",
+    "welcome_card_clear_custom",
+    "welcome_card_enabled",
 ]

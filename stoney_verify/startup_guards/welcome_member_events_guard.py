@@ -578,13 +578,70 @@ async def _send_join(member: discord.Member) -> None:
             except Exception:
                 pass
             return
+
         title = _cfg_str(cfg, "welcome_join_title", default="Welcome, {display_name}!")
-        body = _cfg_str(cfg, "welcome_join_body", default="{random_welcome_line}\n\nStart here: {rules_channel} • Verify: {verify_channel} • Help: {support_channel}")
-        context = await _recent_join_context(member)
-        sent = await channel.send(
-            embed=_embed(title, body, member, cfg=cfg, context=context),
-            allowed_mentions=discord.AllowedMentions(users=True, roles=False, everyone=False),
+        body = _cfg_str(
+            cfg,
+            "welcome_join_body",
+            default="{random_welcome_line}\n\nStart here: {rules_channel} • Verify: {verify_channel} • Help: {support_channel}",
         )
+        context = await _recent_join_context(member)
+        allowed_mentions = discord.AllowedMentions(
+            users=True,
+            roles=False,
+            everyone=False,
+        )
+
+        sent: Optional[discord.Message] = None
+        try:
+            from stoney_verify.welcome_card_service import (
+                welcome_card_file,
+                welcome_cards_enabled,
+            )
+
+            me = channel.guild.me
+            perms = channel.permissions_for(me) if isinstance(me, discord.Member) else None
+            can_attach = bool(perms and perms.attach_files)
+
+            if welcome_cards_enabled(cfg) and can_attach:
+                card = await welcome_card_file(member, cfg)
+                card_embed = _embed(
+                    title,
+                    body,
+                    member,
+                    cfg=cfg,
+                    context=context,
+                )
+                card_embed.set_image(url=f"attachment://{card.filename}")
+                sent = await channel.send(
+                    content=member.mention,
+                    embed=card_embed,
+                    file=card,
+                    allowed_mentions=allowed_mentions,
+                )
+            elif welcome_cards_enabled(cfg) and not can_attach:
+                print(
+                    "⚠️ welcome_member_events card fallback "
+                    f"guild={getattr(member.guild, 'id', 0)} "
+                    "reason=missing Attach Files permission"
+                )
+        except Exception as card_exc:
+            try:
+                print(
+                    "⚠️ welcome_member_events card render fallback "
+                    f"guild={getattr(member.guild, 'id', 0)} "
+                    f"user={getattr(member, 'id', 0)} "
+                    f"error={type(card_exc).__name__}: {card_exc}"
+                )
+            except Exception:
+                pass
+
+        if sent is None:
+            sent = await channel.send(
+                embed=_embed(title, body, member, cfg=cfg, context=context),
+                allowed_mentions=allowed_mentions,
+            )
+
         await _send_staff_join_audit(
             member,
             cfg,
@@ -594,7 +651,12 @@ async def _send_join(member: discord.Member) -> None:
         )
     except Exception as exc:
         try:
-            print(f"⚠️ welcome_member_events join failed guild={getattr(getattr(member, 'guild', None), 'id', 0)} user={getattr(member, 'id', 0)} error={type(exc).__name__}: {exc}")
+            print(
+                f"⚠️ welcome_member_events join failed "
+                f"guild={getattr(getattr(member, 'guild', None), 'id', 0)} "
+                f"user={getattr(member, 'id', 0)} "
+                f"error={type(exc).__name__}: {exc}"
+            )
         except Exception:
             pass
 
