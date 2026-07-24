@@ -605,8 +605,17 @@ async def _send_join(member: discord.Member) -> None:
 
             if welcome_cards_enabled(cfg) and can_attach:
                 card = await welcome_card_file(member, cfg)
+                card_embed = _embed(
+                    title,
+                    body,
+                    member,
+                    cfg=cfg,
+                    context=context,
+                )
+                card_embed.set_image(url=f"attachment://{card.filename}")
                 sent = await channel.send(
                     content=member.mention,
+                    embed=card_embed,
                     file=card,
                     allowed_mentions=allowed_mentions,
                 )

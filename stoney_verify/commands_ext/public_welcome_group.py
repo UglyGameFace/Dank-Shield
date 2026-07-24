@@ -14,7 +14,11 @@ from ..welcome_message import (
     save_welcome_template,
     welcome_channel_for,
 )
-from ..welcome_card_renderer import BUILTIN_THEMES, normalize_theme_key
+from ..welcome_card_renderer import (
+    BUILTIN_THEMES,
+    MAX_CUSTOM_BACKGROUND_BYTES,
+    normalize_theme_key,
+)
 from ..welcome_card_service import (
     encode_custom_background,
     normalize_custom_background_for_storage,
@@ -321,14 +325,19 @@ async def welcome_card_theme(
         {
             "welcome_card_enabled": True,
             "welcome_card_theme": theme_key,
+            # Choosing a built-in theme is an explicit mode switch. Do not
+            # leave an old custom image silently overriding the new choice.
+            "welcome_card_background_b64": "",
+            "welcome_card_background_type": "",
+            "welcome_card_background_name": "",
         },
     )
     invalidate_guild_config(int(interaction.guild.id))
     cfg = await get_guild_config(int(interaction.guild.id), refresh=True)
     card = await welcome_card_file(interaction.user, cfg) if isinstance(interaction.user, discord.Member) else None
     await interaction.followup.send(
-        f"✅ Welcome card theme set to **{BUILTIN_THEMES[theme_key].label}**."
-        + (" Clear the custom background with `/dank welcome card-clear-custom` to see the built-in artwork." if _cfg_value(cfg, "welcome_card_background_b64", "") else ""),
+        f"✅ Welcome card theme set to **{BUILTIN_THEMES[theme_key].label}**. "
+        "Any previous custom background was cleared so this selection is now live.",
         file=card,
         ephemeral=True,
     )
@@ -353,6 +362,8 @@ async def welcome_card_upload(
             or filename.endswith((".png", ".jpg", ".jpeg", ".webp"))
         ):
             raise ValueError("Upload a PNG, JPG, or WEBP image.")
+        if int(getattr(background, "size", 0) or 0) > MAX_CUSTOM_BACKGROUND_BYTES:
+            raise ValueError("Custom background exceeds the 8 MB upload limit.")
         raw = await background.read()
         normalized, stored_type = await asyncio.to_thread(
             normalize_custom_background_for_storage,

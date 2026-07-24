@@ -63,7 +63,9 @@ def _cfg_bool(cfg: Any, key: str, default: bool = False) -> bool:
 
 
 def welcome_cards_enabled(cfg: Any) -> bool:
-    return _cfg_bool(cfg, "welcome_card_enabled", True)
+    # Public installs keep their existing embed behavior until an admin
+    # explicitly picks a theme, uploads a background, or enables cards.
+    return _cfg_bool(cfg, "welcome_card_enabled", False)
 
 
 def configured_theme_key(cfg: Any) -> str:
@@ -114,10 +116,15 @@ def encode_custom_background(data: bytes) -> str:
 
 async def _avatar_bytes(member: discord.Member) -> bytes:
     try:
-        asset = member.display_avatar.replace(size=512, format="png")
-    except TypeError:
-        asset = member.display_avatar.with_size(512).with_format("png")
-    return await asset.read()
+        try:
+            asset = member.display_avatar.replace(size=512, format="png")
+        except TypeError:
+            asset = member.display_avatar.with_size(512).with_format("png")
+        return await asset.read()
+    except Exception:
+        # The renderer has a native neutral avatar fallback. A temporary CDN
+        # failure must not drop the entire welcome card.
+        return b""
 
 
 async def render_member_welcome_card(
@@ -128,7 +135,13 @@ async def render_member_welcome_card(
 ) -> bytes:
     avatar = await _avatar_bytes(member)
     theme_key = normalize_theme_key(theme_override or configured_theme_key(cfg))
-    custom_background = decode_custom_background(cfg)
+    # A one-off built-in theme preview must not be hidden by a saved
+    # custom background. Normal live renders still use the custom background.
+    custom_background = (
+        None
+        if theme_override is not None
+        else decode_custom_background(cfg)
+    )
     return await asyncio.to_thread(
         render_welcome_card,
         avatar_bytes=avatar,

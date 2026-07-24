@@ -12,6 +12,8 @@ SERVICE = (ROOT / "stoney_verify/welcome_card_service.py").read_text(encoding="u
 def test_join_path_uses_one_native_card_sender_with_embed_fallback() -> None:
     assert "card = await welcome_card_file(member, cfg)" in GUARD
     assert "file=card" in GUARD
+    assert "embed=card_embed" in GUARD
+    assert 'card_embed.set_image(url=f"attachment://{card.filename}")' in GUARD
     assert "if sent is None:" in GUARD
     assert "embed=_embed(title, body, member, cfg=cfg, context=context)" in GUARD
     assert GUARD.count("async def _send_join(") == 1
@@ -28,6 +30,8 @@ def test_public_card_controls_are_available() -> None:
         assert command in GROUP
     assert "background: discord.Attachment" in GROUP
     assert "normalize_custom_background_for_storage" in GROUP
+    assert GROUP.count('"welcome_card_background_b64": ""') >= 2
+    assert "MAX_CUSTOM_BACKGROUND_BYTES" in GROUP
 
 
 def test_templates_are_dynamic_not_baked_mockups() -> None:
@@ -38,6 +42,8 @@ def test_templates_are_dynamic_not_baked_mockups() -> None:
     assert "{USERNAME}" not in RENDERER
     assert "{COUNT}" not in RENDERER
     assert "welcome_card_background_b64" in SERVICE
+    assert 'return _cfg_bool(cfg, "welcome_card_enabled", False)' in SERVICE
+    assert "if theme_override is not None" in SERVICE
 
 
 def test_card_permission_health_includes_attachments() -> None:
