@@ -4,6 +4,7 @@ from pathlib import Path
 
 from stoney_verify.commands_ext import public_welcome_group
 from stoney_verify.commands_ext import welcome_card_style_commands  # noqa: F401
+from stoney_verify.commands_ext import welcome_card_font_upgrade_commands  # noqa: F401
 from stoney_verify.commands_ext.public_setup_group import dank_group
 
 
@@ -15,6 +16,8 @@ GUARD = (
 
 EXPECTED_STYLE_COMMANDS = {
     "card-font",
+    "card-font-upload",
+    "card-font-clear",
     "card-colors",
     "card-style",
 }
@@ -33,6 +36,8 @@ def test_production_entrypoint_loads_welcome_registration_before_app() -> None:
     app_import = MAIN.index("from stoney_verify.app import run")
     assert guard_import < app_import
     assert "welcome_card_style_commands" in GUARD
+    assert "welcome_card_font_upgrade_commands" in GUARD
+    assert GUARD.index("welcome_card_style_commands") < GUARD.index("welcome_card_font_upgrade_commands")
 
 
 def test_live_welcome_group_contains_all_style_commands() -> None:

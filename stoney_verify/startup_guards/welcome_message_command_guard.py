@@ -12,6 +12,8 @@ _PATCHED = False
 _EXPECTED_STYLE_COMMANDS = {
     "card-colors",
     "card-font",
+    "card-font-clear",
+    "card-font-upload",
     "card-style",
 }
 
@@ -38,10 +40,11 @@ def apply() -> bool:
 
         from stoney_verify.commands_ext import public_welcome_group
 
-        # Import the native style extension before Discord sync. It decorates the
-        # same welcome_group with card-font/card-colors/card-style controls and is
-        # intentionally idempotent through normal Python module caching.
+        # Load the color studio first, then the proportional/custom-font upgrade.
+        # The upgrade replaces only card-font and card-style while retaining the
+        # existing color picker and adds upload/clear commands before Discord sync.
         from stoney_verify.commands_ext import welcome_card_style_commands  # noqa: F401
+        from stoney_verify.commands_ext import welcome_card_font_upgrade_commands  # noqa: F401
 
         register = getattr(
             public_welcome_group,

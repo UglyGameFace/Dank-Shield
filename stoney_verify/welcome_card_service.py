@@ -11,9 +11,11 @@ from typing import Any, Mapping, Optional
 import discord
 from PIL import Image, ImageOps
 
-from .welcome_card_studio_renderer import (
+from .welcome_card_font_assets import decode_custom_font
+from .welcome_card_typography_engine import (
     CARD_HEIGHT,
     CARD_WIDTH,
+    CUSTOM_FONT_STYLE_KEY,
     DEFAULT_COLOR_MODE,
     DEFAULT_FONT_STYLE_KEY,
     DEFAULT_THEME_KEY,
@@ -79,7 +81,12 @@ def configured_theme_key(cfg: Any) -> str:
 
 
 def configured_font_style_key(cfg: Any) -> str:
-    return normalize_font_style_key(_cfg_value(cfg, "welcome_card_font_style", DEFAULT_FONT_STYLE_KEY))
+    key = normalize_font_style_key(_cfg_value(cfg, "welcome_card_font_style", DEFAULT_FONT_STYLE_KEY))
+    if key == CUSTOM_FONT_STYLE_KEY:
+        custom_font, _name = decode_custom_font(cfg)
+        if not custom_font:
+            return DEFAULT_FONT_STYLE_KEY
+    return key
 
 
 def configured_color_mode(cfg: Any) -> str:
@@ -90,6 +97,10 @@ def configured_custom_colors(cfg: Any) -> tuple[str, str]:
     primary = str(_cfg_value(cfg, "welcome_card_custom_primary", "") or "").strip()
     secondary = str(_cfg_value(cfg, "welcome_card_custom_secondary", "") or "").strip()
     return primary, secondary
+
+
+def configured_custom_font(cfg: Any) -> tuple[Optional[bytes], str]:
+    return decode_custom_font(cfg)
 
 
 def decode_custom_background(cfg: Any) -> Optional[bytes]:
@@ -240,6 +251,7 @@ async def render_member_welcome_card(
 ) -> bytes:
     theme_key = normalize_theme_key(theme_override or configured_theme_key(cfg))
     font_style_key = configured_font_style_key(cfg)
+    custom_font, _custom_font_name = configured_custom_font(cfg)
     color_mode = configured_color_mode(cfg)
     custom_primary, custom_secondary = configured_custom_colors(cfg)
     avatar_task = asyncio.create_task(_avatar_bytes(member))
@@ -261,6 +273,7 @@ async def render_member_welcome_card(
         theme_key=theme_key,
         custom_background_bytes=custom_background,
         font_style_key=font_style_key,
+        custom_font_bytes=custom_font,
         color_mode=color_mode,
         custom_primary=custom_primary,
         custom_secondary=custom_secondary,
@@ -284,6 +297,7 @@ __all__ = [
     "MAX_STORED_BACKGROUND_BYTES",
     "configured_color_mode",
     "configured_custom_colors",
+    "configured_custom_font",
     "configured_font_style_key",
     "configured_theme_key",
     "decode_custom_background",
