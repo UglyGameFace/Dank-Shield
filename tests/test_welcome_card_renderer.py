@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import io
 
-from PIL import Image
+from PIL import Image, ImageDraw
 
 from stoney_verify.welcome_card_renderer import (
     CARD_SIZE,
@@ -55,3 +55,37 @@ def test_long_names_and_server_names_render_without_crashing() -> None:
     image = Image.open(io.BytesIO(payload))
     assert image.size == CARD_SIZE
     assert len(payload) > 10_000
+
+
+def test_custom_background_is_cropped_and_rendered_to_canonical_size() -> None:
+    source = Image.new("RGB", (1777, 613), (20, 30, 40))
+    draw = ImageDraw.Draw(source)
+    draw.rectangle((0, 0, 888, 613), fill=(5, 180, 90))
+    draw.rectangle((889, 0, 1777, 613), fill=(110, 45, 190))
+    buffer = io.BytesIO()
+    source.save(buffer, format="PNG")
+
+    payload = render_welcome_card_sync(
+        avatar_bytes=None,
+        display_name="Custom Theme User",
+        server_name="Custom Background Server",
+        member_count=88,
+        theme_name="neon_pulse",
+        custom_background_bytes=buffer.getvalue(),
+    )
+    image = Image.open(io.BytesIO(payload))
+    assert image.size == CARD_SIZE
+    assert image.format == "PNG"
+
+
+def test_bad_custom_background_falls_back_without_crashing() -> None:
+    payload = render_welcome_card_sync(
+        avatar_bytes=None,
+        display_name="Fallback User",
+        server_name="Fallback Server",
+        member_count=9,
+        theme_name="royal_gold",
+        custom_background_bytes=b"not-a-real-image",
+    )
+    image = Image.open(io.BytesIO(payload))
+    assert image.size == CARD_SIZE
