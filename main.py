@@ -10,57 +10,20 @@ import stoney_verify.startup_guards.command_safety  # noqa: F401
 import stoney_verify.startup_guards.command_scope_dedupe  # noqa: F401
 
 # Public production must never read deployment-level Discord role/channel/
-# category/home-guild IDs. This runs before the package guard loader and before
-# app.py imports globals consumers.
+# category/home-guild IDs. This runs before app.py imports globals consumers.
 import stoney_verify.startup_guards.public_server_env_id_guard  # noqa: F401
-# =====================================================
-# SAFE MINIMAL STARTUP GUARDS (Production Audit Fix)
-# Only keeping essential safety guards. Everything else
-# has been commented out for stability and maintainability.
-# =====================================================
 
-from stoney_verify.startup_guards import (
-    load_all_startup_guards,
-
-    # Core safety guards (keep these)
+# Core runtime safety only. Product command registration belongs to
+# stoney_verify.commands and commands_ext, never startup_guards.
+from stoney_verify.startup_guards import (  # noqa: F401
     discord_api_safety,
     command_safety,
     command_scope_dedupe,
     public_server_env_id_guard,
     guild_config_runtime_validator,
     interaction_action_lock_guard,
-
-    # Required public command registration. This attaches /dank welcome before
-    # commands.py registers and syncs the shared /dank application-command group.
-    welcome_message_command_guard,
 )
 
-# ============================================================
-# COMMENTED OUT (can be re-enabled later if needed)
-# Most of these are redundant patches or non-critical guards.
-# Retired /dank setup UI patch modules are intentionally omitted.
-# ============================================================
-
-# from stoney_verify.startup_guards import (
-#     setup_role_visibility_repair_guard,
-#     setup_health_precision_guard,
-#     setup_health_defer_guard,
-#     setup_scoreboard_command,
-#     setup_idle_kick_scoreboard_guard,
-#     setup_permission_repair_modlog_silence_guard,
-#     setup_permission_repair_preview_clarity_guard,
-#     setup_role_safety,
-#     setup_visibility_health_guard,
-#     setup_modal_defer_compat_guard,
-#     setup_operation_lock_guard,
-#     setup_overview_command_guard,
-#     setup_picker_permission_error_guard,
-#     setup_ticket_transcripts_picker_guard,
-#     setup_category_modal_compat,
-#     setup_channel_font_mode_guard,
-#     setup_vc_health_precision_guard,
-#     # ... (many more commented out for safety)
-# )
 
 # =====================================================
 # DISCORD BOT ENTRYPOINT

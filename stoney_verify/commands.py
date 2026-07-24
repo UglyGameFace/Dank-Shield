@@ -22,6 +22,19 @@ except Exception:
         return None
 
 
+# Welcome cards use an explicit canonical registration path. This is deliberately
+# outside startup_guards and never removes/replaces an existing command.
+try:
+    from .commands_ext.public_welcome_card_studio import (
+        register_public_welcome_card_studio_commands,
+    )
+except Exception as e:
+    print(f"⚠️ commands.py failed to import public_welcome_card_studio: {repr(e)}")
+
+    def register_public_welcome_card_studio_commands(bot: Any, tree: Any) -> None:  # type: ignore
+        return None
+
+
 # ============================================================
 # Kick timer bridges
 # events.py imports these from commands.py, so keep them exposed
@@ -78,6 +91,7 @@ except Exception as e:
 # ============================================================
 try:
     register_all_commands(bot, bot.tree)
+    register_public_welcome_card_studio_commands(bot, bot.tree)
 except Exception as e:
     try:
         print(f"⚠️ commands.py failed to register split command modules: {repr(e)}")
@@ -103,6 +117,7 @@ except Exception as e:
 def register_extra_commands(tree) -> None:
     try:
         register_all_commands(bot, tree)
+        register_public_welcome_card_studio_commands(bot, tree)
     except Exception as e:
         try:
             print(f"⚠️ register_extra_commands failed: {repr(e)}")

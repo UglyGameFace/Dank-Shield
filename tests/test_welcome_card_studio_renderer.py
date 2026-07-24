@@ -5,7 +5,7 @@ from pathlib import Path
 
 from PIL import Image, ImageDraw
 
-from stoney_verify import welcome_card_studio_renderer as studio
+from stoney_verify import welcome_card_typography_engine as studio
 
 
 def _image_bytes(left: tuple[int, int, int], right: tuple[int, int, int]) -> bytes:
@@ -16,13 +16,13 @@ def _image_bytes(left: tuple[int, int, int], right: tuple[int, int, int]) -> byt
     return output.getvalue()
 
 
-def test_all_studio_font_styles_are_distinct_without_host_fonts(monkeypatch) -> None:
+def test_all_font_styles_are_distinct_without_host_fonts(monkeypatch) -> None:
     monkeypatch.setattr(studio.Path, "is_file", lambda _path: False)
     avatar = _image_bytes((30, 210, 105), (155, 40, 235))
     background = _image_bytes((8, 12, 22), (30, 8, 45))
     rendered: dict[str, bytes] = {}
 
-    assert len(studio.FONT_STYLES) >= 10
+    assert len(studio.FONT_STYLES) >= 16
     for style_key in studio.FONT_STYLES:
         card = studio.render_welcome_card(
             avatar_bytes=avatar,
@@ -41,23 +41,53 @@ def test_all_studio_font_styles_are_distinct_without_host_fonts(monkeypatch) -> 
     assert len({hash(value) for value in rendered.values()}) == len(studio.FONT_STYLES)
 
 
-def test_long_names_fit_the_real_text_safe_width() -> None:
-    style = studio.FONT_STYLES["future"]
-    fitted, mask = studio._fitted_mask(
+def test_every_final_styled_tile_fits_both_axes() -> None:
+    names = (
+        "UglyGameFace",
+        "WavyLowercase",
+        "M" * 28,
+        "iiiiiiilllll",
         "W" * 64,
-        style=style,
-        start_size=style.name_start_size,
-        min_size=style.name_min_size,
-        max_width=710,
-        role="name",
-        stroke_width=style.name_stroke,
     )
-    assert fitted.endswith("...")
-    assert mask.width <= 710
+    for style in studio.FONT_STYLES.values():
+        for name in names:
+            _fitted, tile = studio._fitted_tile(
+                name,
+                style=style,
+                start_size=style.name_start_size,
+                min_size=style.name_min_size,
+                max_width=studio.NAME_SAFE_WIDTH,
+                max_height=studio.NAME_SAFE_HEIGHT,
+                role="name",
+                primary=(34, 220, 255),
+                secondary=(188, 66, 255),
+            )
+            assert tile.width <= studio.NAME_SAFE_WIDTH, (style.key, name, tile.size)
+            assert tile.height <= studio.NAME_SAFE_HEIGHT, (style.key, name, tile.size)
+            assert tile.getchannel("A").getbbox() is not None
+
+
+def test_problem_styles_preserve_alpha_margin_and_counters() -> None:
+    for key in ("outline", "street", "retro", "bold"):
+        style = studio.FONT_STYLES[key]
+        _text, tile = studio._fitted_tile(
+            "UglyGameFace",
+            style=style,
+            start_size=style.name_start_size,
+            min_size=style.name_min_size,
+            max_width=680,
+            max_height=68,
+            role="name",
+            primary=(34, 220, 255),
+            secondary=(188, 66, 255),
+        )
+        assert tile.width <= 680
+        assert tile.height <= 68
+        assert tile.getchannel("A").getbbox() == (0, 0, tile.width, tile.height)
 
 
 def test_renderer_owned_icons_are_vector_drawn_not_unicode_tofu() -> None:
-    source = Path("stoney_verify/welcome_card_studio_renderer.py").read_text(encoding="utf-8")
+    source = Path("stoney_verify/welcome_card_typography_engine.py").read_text(encoding="utf-8")
     assert "  •  " not in source
     assert "_draw_sparkle" in source
     assert "_draw_member_icon" in source
@@ -71,7 +101,7 @@ def test_visual_font_and_color_catalogs_render() -> None:
 
     with Image.open(BytesIO(font_catalog)) as image:
         assert image.width >= 1000
-        assert image.height >= 900
+        assert image.height >= 1700
     with Image.open(BytesIO(palette_catalog)) as image:
         assert image.width >= 1000
         assert image.height >= 500

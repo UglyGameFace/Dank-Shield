@@ -103,8 +103,6 @@ def test_ttf_and_woff2_are_validated_and_normalized() -> None:
     assert normalized_woff2.source_format == "WOFF2"
     assert normalized_woff2.display_name == normalized_ttf.display_name
     assert normalized_woff2.glyph_count == normalized_ttf.glyph_count
-    # sfnt table order/checksum bytes may differ after WOFF2 reconstruction; the
-    # correct invariant is that both normalized outputs render equivalent text.
     for normalized in (normalized_ttf, normalized_woff2):
         font = ImageFont.truetype(BytesIO(normalized.data), 48)
         box = font.getbbox("UglyGameFace 123")
@@ -128,15 +126,15 @@ def test_font_missing_basic_glyphs_is_rejected() -> None:
         assets.normalize_uploaded_font(_build_font_bytes("ABC123"), "incomplete.ttf")
 
 
-def test_every_builtin_style_uses_unstretched_proportions() -> None:
+def test_every_builtin_style_has_no_nonuniform_scale_setting() -> None:
     assert len(engine.FONT_STYLES) >= 16
-    assert all(style.x_scale == 1.0 for style in engine.FONT_STYLES.values())
+    assert all(not hasattr(style, "x_scale") for style in engine.FONT_STYLES.values())
 
 
-def test_heavy_impact_is_bounded_in_width_and_height() -> None:
+def test_heavy_impact_final_tile_is_bounded_in_width_and_height() -> None:
     style = engine.FONT_STYLES["bold"]
-    assert style.name_stroke <= 2
-    fitted, mask = engine._fitted_mask(
+    assert style.outline_width <= 2
+    fitted, tile = engine._fitted_tile(
         "UglyGameFace",
         style=style,
         start_size=style.name_start_size,
@@ -144,17 +142,17 @@ def test_heavy_impact_is_bounded_in_width_and_height() -> None:
         max_width=engine.NAME_SAFE_WIDTH,
         max_height=engine.NAME_SAFE_HEIGHT,
         role="name",
-        stroke_width=style.name_stroke,
+        primary=(34, 220, 255),
+        secondary=(188, 66, 255),
     )
     assert fitted == "UglyGameFace"
-    assert mask.width <= engine.NAME_SAFE_WIDTH
-    assert mask.height <= engine.NAME_SAFE_HEIGHT
-    assert mask.width / max(1, mask.height) >= 3.0
+    assert tile.width <= engine.NAME_SAFE_WIDTH
+    assert tile.height <= engine.NAME_SAFE_HEIGHT
 
 
-def test_long_names_fit_both_axes_without_nonuniform_scaling() -> None:
+def test_long_names_fit_final_effects_on_both_axes() -> None:
     for style in engine.FONT_STYLES.values():
-        fitted, mask = engine._fitted_mask(
+        fitted, tile = engine._fitted_tile(
             "W" * 64,
             style=style,
             start_size=style.name_start_size,
@@ -162,11 +160,12 @@ def test_long_names_fit_both_axes_without_nonuniform_scaling() -> None:
             max_width=engine.NAME_SAFE_WIDTH,
             max_height=engine.NAME_SAFE_HEIGHT,
             role="name",
-            stroke_width=style.name_stroke,
+            primary=(34, 220, 255),
+            secondary=(188, 66, 255),
         )
         assert fitted
-        assert mask.width <= engine.NAME_SAFE_WIDTH
-        assert mask.height <= engine.NAME_SAFE_HEIGHT
+        assert tile.width <= engine.NAME_SAFE_WIDTH
+        assert tile.height <= engine.NAME_SAFE_HEIGHT
 
 
 def test_uploaded_font_renders_in_live_card_and_catalog() -> None:
