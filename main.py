@@ -29,6 +29,10 @@ from stoney_verify.startup_guards import (
     public_server_env_id_guard,
     guild_config_runtime_validator,
     interaction_action_lock_guard,
+
+    # Required public command registration. This attaches /dank welcome before
+    # commands.py registers and syncs the shared /dank application-command group.
+    welcome_message_command_guard,
 )
 
 # ============================================================
