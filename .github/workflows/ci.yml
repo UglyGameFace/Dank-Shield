@@ -117,13 +117,9 @@ jobs:
           pip install -q -r requirements.txt pytest
 
       - name: Apply interaction and scale hardening
-        id: patch
         run: |
-          set +e
-          python tools/run_live_profile_card_interaction_hardening.py > interaction-hardening.log 2>&1
-          code=$?
-          echo "exit_code=$code" >> "$GITHUB_OUTPUT"
-          exit 0
+          set -o pipefail
+          python tools/run_live_profile_card_interaction_hardening.py 2>&1 | tee interaction-hardening.log
 
       - name: Upload exact interaction patch log
         if: always()
@@ -134,21 +130,13 @@ jobs:
           if-no-files-found: warn
           retention-days: 3
 
-      - name: Fail when interaction patch fails
-        if: steps.patch.outputs.exit_code != '0'
-        run: |
-          cat interaction-hardening.log
-          exit 1
-
       - name: Remove temporary patch scripts
-        if: steps.patch.outputs.exit_code == '0'
         run: |
           rm -f tools/apply_live_profile_card_interaction_hardening.py
           rm -f tools/run_live_profile_card_interaction_hardening.py
           rm -f interaction-hardening.log
 
       - name: Compile affected modules
-        if: steps.patch.outputs.exit_code == '0'
         run: |
           python -m py_compile \
             stoney_verify/profile_card_runtime.py \
@@ -156,7 +144,6 @@ jobs:
             stoney_verify/commands_ext/__init__.py
 
       - name: Run complete focused profile suite
-        if: steps.patch.outputs.exit_code == '0'
         run: |
           python -m pytest -q \
             tests/test_profile_card_service.py \
@@ -167,7 +154,6 @@ jobs:
             tests/test_live_profile_card_integration_contract.py
 
       - name: Inspect cleanup and whitespace
-        if: steps.patch.outputs.exit_code == '0'
         run: |
           find . -type d -name __pycache__ -prune -exec rm -rf {} +
           find . -type f \( -name '*.pyc' -o -name '*.pyo' \) -delete
@@ -176,7 +162,6 @@ jobs:
           test ! -f tools/run_live_profile_card_interaction_hardening.py
 
       - name: Commit validated interaction hardening
-        if: steps.patch.outputs.exit_code == '0'
         run: |
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
