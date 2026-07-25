@@ -2,11 +2,10 @@ from __future__ import annotations
 
 """Canonical welcome-card typography and visual-style engine.
 
-The engine reuses only the stable background, avatar, and palette primitives
-from ``welcome_card_renderer``. Every font effect is rendered into its final
-RGBA tile before fitting, so glow, outline, shear, and shadow pixels are all
-included in the width/height decision. No command registration or runtime
-monkey-patching lives in this module.
+Every effect is rendered to a final RGBA tile before fitting. Slant transforms
+use a padded inverse-affine mapping that preserves both edge glyphs, and crop
+bounds ignore imperceptible blur tails while retaining a transparent safety
+margin. Command registration and runtime monkey-patching do not live here.
 """
 
 import math
@@ -35,6 +34,9 @@ CUSTOM_FONT_STYLE_KEY = "custom"
 NAME_SAFE_WIDTH = 710
 NAME_SAFE_HEIGHT = 102
 WELCOME_SAFE_HEIGHT = 62
+_ALPHA_CROP_THRESHOLD = 4
+_ALPHA_CROP_MARGIN = 3
+_TRANSFORM_GUARD = 12
 
 
 @dataclass(frozen=True)
@@ -114,7 +116,7 @@ _SERIF_REGULAR = (
 
 
 FONT_STYLES: dict[str, WelcomeCardFontStyle] = {
-    "neon": WelcomeCardFontStyle("neon", "Neon Display", "Bright condensed glow with a clean gaming look.", "sans", "neon", 56, 96, 40, 31, 20, 0, 2, 10, 150),
+    "neon": WelcomeCardFontStyle("neon", "Neon Display", "Bright condensed glow with a clean gaming look.", "sans", "neon", 56, 96, 40, 31, 20, 0, 2, 6, 125),
     "tech": WelcomeCardFontStyle("tech", "Tech Circuit", "Tracked mono lettering with digital scan cuts.", "mono", "tech", 50, 82, 36, 28, 19, 3, 2, 5, 105, 0.0, True),
     "bold": WelcomeCardFontStyle("bold", "Heavy Impact", "Strong esports type with a controlled offset shadow.", "sans", "impact", 54, 86, 36, 30, 20, 0, 2, 3, 65),
     "clean": WelcomeCardFontStyle("clean", "Clean Modern", "Polished minimal type with restrained effects.", "sans", "clean", 48, 86, 38, 29, 20, 0, 1, 1, 35),
@@ -127,9 +129,9 @@ FONT_STYLES: dict[str, WelcomeCardFontStyle] = {
     "stencil": WelcomeCardFontStyle("stencil", "Combat Stencil", "Bold tactical capitals with deliberate cut lines.", "sans", "stencil", 50, 82, 34, 27, 18, 2, 1, 3, 65, 0.0, True),
     "varsity": WelcomeCardFontStyle("varsity", "Varsity Badge", "Athletic contour lettering for teams and clans.", "serif", "varsity", 50, 84, 36, 28, 19, 1, 2, 3, 65, 0.0, True),
     "blackletter": WelcomeCardFontStyle("blackletter", "Midnight Gothic", "Dark premium serif type with metallic depth.", "serif", "gothic", 51, 86, 36, 28, 19, 0, 2, 4, 70),
-    "prism": WelcomeCardFontStyle("prism", "Prism Glow", "Clean lettering with a brighter two-tone aura.", "sans", "prism", 52, 88, 38, 29, 20, 1, 2, 9, 145),
+    "prism": WelcomeCardFontStyle("prism", "Prism Glow", "Clean lettering with a brighter two-tone aura.", "sans", "prism", 52, 88, 38, 29, 20, 1, 2, 6, 115),
     "terminal": WelcomeCardFontStyle("terminal", "Terminal Code", "Compact mono capitals with fine scan lines.", "mono", "terminal", 48, 78, 32, 26, 18, 2, 1, 2, 55, 0.0, True),
-    "retro": WelcomeCardFontStyle("retro", "Retro Wave", "Crisp pixel edges with a restrained arcade glow.", "sans", "retro", 50, 84, 36, 28, 19, 1, 1, 4, 75),
+    "retro": WelcomeCardFontStyle("retro", "Retro Wave", "Crisp pixel edges with a restrained arcade glow.", "sans", "retro", 50, 84, 36, 28, 19, 1, 1, 3, 65),
 }
 
 CUSTOM_FONT_STYLE = WelcomeCardFontStyle(
@@ -168,7 +170,6 @@ COLOR_PRESETS: dict[str, WelcomeColorPreset] = {
     "rose_gold": WelcomeColorPreset("rose_gold", "Rose Gold", "Rose pink and warm gold.", "#FF8FA3", "#F6C453", "🌹"),
     "monochrome": WelcomeColorPreset("monochrome", "Monochrome", "White and graphite.", "#F4F4F5", "#71717A", "⚪"),
 }
-
 
 COLOR_SWATCHES: dict[str, WelcomeColorSwatch] = {
     "red": WelcomeColorSwatch("red", "Red", "#FF3B30", "🔴"),
@@ -281,20 +282,44 @@ def _font(
         return ImageFont.load_default()
 
 
+def _expanded_box(
+    box: tuple[int, int, int, int],
+    size: tuple[int, int],
+    margin: int,
+) -> tuple[int, int, int, int]:
+    left, top, right, bottom = box
+    width, height = size
+    return (
+        max(0, left - margin),
+        max(0, top - margin),
+        min(width, right + margin),
+        min(height, bottom + margin),
+    )
+
+
+def _threshold_bbox(channel: Image.Image, threshold: int) -> Optional[tuple[int, int, int, int]]:
+    thresholded = channel.point(lambda value: 255 if value >= threshold else 0)
+    return thresholded.getbbox() or channel.getbbox()
+
+
 def _crop_alpha(image: Image.Image) -> Image.Image:
     alpha = image.getchannel("A")
-    box = alpha.getbbox()
-    return image.crop(box) if box else Image.new("RGBA", (1, 1), (0, 0, 0, 0))
+    box = _threshold_bbox(alpha, _ALPHA_CROP_THRESHOLD)
+    if not box:
+        return Image.new("RGBA", (1, 1), (0, 0, 0, 0))
+    return image.crop(_expanded_box(box, image.size, _ALPHA_CROP_MARGIN))
 
 
-def _crop_mask(mask: Image.Image) -> Image.Image:
-    box = mask.getbbox()
-    return mask.crop(box) if box else Image.new("L", (1, 1), 0)
+def _crop_mask(mask: Image.Image, *, margin: int = 0) -> Image.Image:
+    box = _threshold_bbox(mask, 2)
+    if not box:
+        return Image.new("L", (1, 1), 0)
+    return mask.crop(_expanded_box(box, mask.size, margin))
 
 
 def _tracked_mask(text: str, *, font: ImageFont.ImageFont, tracking: int) -> Image.Image:
     probe = ImageDraw.Draw(Image.new("L", (8, 8), 0))
-    padding = 8
+    padding = 10
     metrics: list[tuple[str, tuple[int, int, int, int], int]] = []
     max_height = 1
     for character in text:
@@ -309,20 +334,33 @@ def _tracked_mask(text: str, *, font: ImageFont.ImageFont, tracking: int) -> Ima
     for character, box, width in metrics:
         draw.text((cursor - box[0], padding - box[1]), character, font=font, fill=255)
         cursor += width + max(0, tracking)
-    return _crop_mask(mask)
+    return _crop_mask(mask, margin=1)
+
+
+def _shear_mask(mask: Image.Image, shear: float) -> Image.Image:
+    source = _crop_mask(mask, margin=1)
+    guard = _TRANSFORM_GUARD + int(math.ceil(abs(shear) * source.height))
+    padded = Image.new("L", (source.width + guard * 2, source.height + guard * 2), 0)
+    padded.paste(source, (guard, guard))
+
+    extent = int(math.ceil(abs(shear) * max(1, padded.height - 1)))
+    shift = max(0.0, -shear * max(1, padded.height - 1))
+    # PIL consumes an inverse map. Desired output is x' = x + shear*y + shift,
+    # therefore input x = output x - shear*y - shift.
+    transformed = padded.transform(
+        (padded.width + extent, padded.height),
+        Image.Transform.AFFINE,
+        (1, -shear, -shift, 0, 1, 0),
+        resample=Image.Resampling.BICUBIC,
+        fillcolor=0,
+    )
+    return _crop_mask(transformed, margin=3)
 
 
 def _transform_mask(mask: Image.Image, style: WelcomeCardFontStyle) -> Image.Image:
-    transformed = _crop_mask(mask)
+    transformed = _crop_mask(mask, margin=1)
     if style.shear:
-        extra = int(abs(style.shear) * transformed.height) + 8
-        transformed = transformed.transform(
-            (transformed.width + extra, transformed.height),
-            Image.Transform.AFFINE,
-            (1, -style.shear, extra if style.shear > 0 else 0, 0, 1, 0),
-            resample=Image.Resampling.BICUBIC,
-        )
-        transformed = _crop_mask(transformed)
+        transformed = _shear_mask(transformed, style.shear)
     if style.effect in {"arcade", "retro"}:
         divisor = 3 if style.effect == "arcade" else 2
         tiny = transformed.resize(
@@ -338,7 +376,7 @@ def _transform_mask(mask: Image.Image, style: WelcomeCardFontStyle) -> Image.Ima
         for y in range(6, transformed.height, spacing):
             draw.rectangle((0, y, transformed.width, y + thickness), fill=0)
         transformed = ImageChops.multiply(transformed, cut)
-    return _crop_mask(transformed)
+    return _crop_mask(transformed, margin=2)
 
 
 def _dilate(mask: Image.Image, width: int) -> Image.Image:
@@ -412,6 +450,12 @@ def _chrome_gradient(
     return image
 
 
+def _shifted_mask(mask: Image.Image, dx: int, dy: int) -> Image.Image:
+    shifted = Image.new("L", mask.size, 0)
+    shifted.paste(mask, (dx, dy))
+    return shifted
+
+
 def _styled_tile(
     text: str,
     *,
@@ -433,9 +477,13 @@ def _styled_tile(
 
     shadow_x = 4 if style.effect in {"impact", "street", "arcade"} else 0
     shadow_y = 4 if style.effect in {"impact", "street", "arcade"} else 0
-    glow_margin = max(0, style.glow_radius * 3)
-    border_margin = max(4, style.outline_width * 3)
-    padding = max(10, glow_margin, border_margin) + max(shadow_x, shadow_y)
+    padding = max(
+        14,
+        style.glow_radius * 3 + 4,
+        style.outline_width * 3 + 6,
+        shadow_x + 8,
+        shadow_y + 8,
+    )
     tile_size = (mask.width + padding * 2, mask.height + padding * 2)
     centered = Image.new("L", tile_size, 0)
     centered.paste(mask, (padding, padding))
@@ -443,11 +491,9 @@ def _styled_tile(
     tile = Image.new("RGBA", tile_size, (0, 0, 0, 0))
 
     if shadow_x or shadow_y:
-        shadow_alpha = outline.point(lambda value: int(value * 0.72))
+        shadow_alpha = outline.point(lambda value: int(value * 0.70))
         shadow = Image.new("RGBA", tile_size, (0, 0, 0, 0))
-        shifted = Image.new("L", tile_size, 0)
-        shifted.paste(shadow_alpha, (shadow_x, shadow_y))
-        shadow.putalpha(shifted)
+        shadow.putalpha(_shifted_mask(shadow_alpha, shadow_x, shadow_y))
         tile.alpha_composite(shadow)
 
     if style.glow_radius > 0 and style.glow_alpha > 0:
@@ -460,13 +506,13 @@ def _styled_tile(
         tile.alpha_composite(glow)
 
     if style.effect in {"outline", "varsity"}:
-        inner = _erode(centered, 1)
+        inner = _erode(centered, max(1, style.outline_width))
         ring = ImageChops.subtract(outline, inner)
         fill = _gradient(tile_size, primary, secondary)
         fill.putalpha(ring)
         tile.alpha_composite(fill)
         faint = Image.new("RGBA", tile_size, (5, 8, 15, 0))
-        faint.putalpha(inner.point(lambda value: int(value * 0.18)))
+        faint.putalpha(inner.point(lambda value: int(value * 0.14)))
         tile.alpha_composite(faint)
         return _crop_alpha(tile)
 
@@ -622,7 +668,14 @@ def _draw_theme_label(
     _draw_sparkle(draw, (x + 8, y + 12), 14, primary)
     draw.line((x + 24, y + 12, x + 56, y + 12), fill=(*primary, 220), width=3)
     label = theme.label.upper()
-    draw.text((x + 66, y), label, font=font, fill=(*primary, 245), stroke_width=1, stroke_fill=(0, 0, 0, 210))
+    draw.text(
+        (x + 66, y),
+        label,
+        font=font,
+        fill=(*primary, 245),
+        stroke_width=1,
+        stroke_fill=(0, 0, 0, 210),
+    )
     label_width = int(draw.textlength(label, font=font))
     tail = x + 78 + label_width
     draw.line((tail, y + 12, min(1130, tail + 48), y + 12), fill=(*secondary, 210), width=3)
@@ -813,7 +866,7 @@ def render_font_catalog(
     draw = ImageDraw.Draw(canvas, "RGBA")
     header_style = FONT_STYLES["clean"]
     draw.text((38, 24), "WELCOME CARD FONT PICKER", font=_font(38, style=header_style), fill=(248, 250, 255, 255))
-    draw.text((720, 34), "Final effects are fitted inside every preview box.", font=_font(18, style=header_style, bold=False), fill=(190, 198, 218, 255))
+    draw.text((720, 34), "Visible effects are fitted inside every preview box.", font=_font(18, style=header_style, bold=False), fill=(190, 198, 218, 255))
 
     for index, (style, font_bytes, label) in enumerate(entries):
         top = 76 + index * row_height
@@ -882,6 +935,7 @@ def render_color_catalog(*, swatches: bool = False) -> bytes:
         draw.rounded_rectangle((x + 8, y + 8, x + cell_w - 8, y + cell_h - 8), radius=18, outline=(255, 255, 255, 95), width=2)
         draw.text((x + 24, y + 25), label, font=_font(21, style=header_style), fill=(255, 255, 255, 255), stroke_width=1, stroke_fill=(0, 0, 0, 220))
         draw.text((x + 24, y + 61), detail, font=_font(14, style=header_style, bold=False), fill=(255, 255, 255, 235), stroke_width=1, stroke_fill=(0, 0, 0, 210))
+
     output = BytesIO()
     canvas.convert("RGB").save(output, "PNG", optimize=True)
     return output.getvalue()
