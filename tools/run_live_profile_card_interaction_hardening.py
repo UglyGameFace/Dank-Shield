@@ -7,7 +7,8 @@ PATCHER = ROOT / "tools" / "apply_live_profile_card_interaction_hardening.py"
 source = PATCHER.read_text(encoding="utf-8")
 marker = "# Manager commands defer before database writes and cleanup work."
 section = source.index(marker)
-start = source.index("replace_once(", section)
+first_call = source.index("replace_once(", section)
+start = source.index("replace_once(", first_call + 1)
 end = source.index("\nreplace_once(", start + 1)
 
 replacement = '''replace_once(
