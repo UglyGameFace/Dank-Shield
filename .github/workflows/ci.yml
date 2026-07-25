@@ -144,20 +144,42 @@ jobs:
             stoney_verify/commands_ext/public_profile_cards.py
 
       - name: Run complete focused profile suite
+        id: focused
         run: |
-          python -m pytest -q \
+          set +e
+          python -m pytest -q --tb=short \
             tests/test_profile_card_service.py \
             tests/test_live_profile_card_runtime.py \
             tests/test_live_profile_card_cleanup.py \
             tests/test_live_profile_card_lifecycle.py \
             tests/test_live_profile_card_interaction_safety.py \
             tests/test_live_profile_card_integration_contract.py \
-            tests/test_live_profile_card_final_safety.py
+            tests/test_live_profile_card_final_safety.py \
+            > profile-focused-tests.log 2>&1
+          code=$?
+          echo "exit_code=$code" >> "$GITHUB_OUTPUT"
+          exit 0
+
+      - name: Upload exact focused test log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: profile-focused-tests-log
+          path: profile-focused-tests.log
+          if-no-files-found: error
+          retention-days: 3
+
+      - name: Fail when focused tests fail
+        if: steps.focused.outputs.exit_code != '0'
+        run: |
+          cat profile-focused-tests.log
+          exit 1
 
       - name: Inspect cleanup and whitespace
         run: |
           find . -type d -name __pycache__ -prune -exec rm -rf {} +
           find . -type f \( -name '*.pyc' -o -name '*.pyo' \) -delete
+          rm -f profile-focused-tests.log
           git diff --check
           test ! -f tools/apply_live_profile_card_final_safety.py
           test ! -f tools/run_live_profile_card_final_safety.py
