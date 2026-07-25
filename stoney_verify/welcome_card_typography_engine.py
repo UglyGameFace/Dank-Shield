@@ -116,7 +116,7 @@ _SERIF_REGULAR = (
 
 
 FONT_STYLES: dict[str, WelcomeCardFontStyle] = {
-    "neon": WelcomeCardFontStyle("neon", "Neon Display", "Bright condensed glow with a clean gaming look.", "sans", "neon", 56, 96, 40, 31, 20, 0, 2, 10, 150),
+    "neon": WelcomeCardFontStyle("neon", "Neon Display", "Bright condensed glow with a clean gaming look.", "sans", "neon", 56, 96, 40, 31, 20, 0, 2, 6, 125),
     "tech": WelcomeCardFontStyle("tech", "Tech Circuit", "Tracked mono lettering with digital scan cuts.", "mono", "tech", 50, 82, 36, 28, 19, 3, 2, 5, 105, 0.0, True),
     "bold": WelcomeCardFontStyle("bold", "Heavy Impact", "Strong esports type with a controlled offset shadow.", "sans", "impact", 54, 86, 36, 30, 20, 0, 2, 3, 65),
     "clean": WelcomeCardFontStyle("clean", "Clean Modern", "Polished minimal type with restrained effects.", "sans", "clean", 48, 86, 38, 29, 20, 0, 1, 1, 35),
@@ -129,7 +129,7 @@ FONT_STYLES: dict[str, WelcomeCardFontStyle] = {
     "stencil": WelcomeCardFontStyle("stencil", "Combat Stencil", "Bold tactical capitals with deliberate cut lines.", "sans", "stencil", 50, 82, 34, 27, 18, 2, 1, 3, 65, 0.0, True),
     "varsity": WelcomeCardFontStyle("varsity", "Varsity Badge", "Athletic contour lettering for teams and clans.", "serif", "varsity", 50, 84, 36, 28, 19, 1, 2, 3, 65, 0.0, True),
     "blackletter": WelcomeCardFontStyle("blackletter", "Midnight Gothic", "Dark premium serif type with metallic depth.", "serif", "gothic", 51, 86, 36, 28, 19, 0, 2, 4, 70),
-    "prism": WelcomeCardFontStyle("prism", "Prism Glow", "Clean lettering with a brighter two-tone aura.", "sans", "prism", 52, 88, 38, 29, 20, 1, 2, 8, 130),
+    "prism": WelcomeCardFontStyle("prism", "Prism Glow", "Clean lettering with a brighter two-tone aura.", "sans", "prism", 52, 88, 38, 29, 20, 1, 2, 6, 115),
     "terminal": WelcomeCardFontStyle("terminal", "Terminal Code", "Compact mono capitals with fine scan lines.", "mono", "terminal", 48, 78, 32, 26, 18, 2, 1, 2, 55, 0.0, True),
     "retro": WelcomeCardFontStyle("retro", "Retro Wave", "Crisp pixel edges with a restrained arcade glow.", "sans", "retro", 50, 84, 36, 28, 19, 1, 1, 3, 65),
 }
