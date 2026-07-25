@@ -66,6 +66,14 @@ def test_privacy_changes_remove_stale_cards_immediately():
     assert "Failed Discord deletions keep" in PROFILE_RUNTIME
 
 
+def test_server_field_restrictions_invalidate_every_existing_guild_card():
+    assert "async def invalidate_guild_cards(" in PROFILE_RUNTIME
+    live_fields = PROFILE_COMMANDS.split("async def profile_live_fields", 1)[1].split(
+        "async def profile_live_status", 1
+    )[0]
+    assert "runtime.invalidate_guild_cards(guild)" in live_fields
+
+
 def test_server_setup_uses_discord_channel_picker_and_existing_guild_config():
     assert "channel: discord.TextChannel" in PROFILE_COMMANDS
     assert "upsert_guild_config" in PROFILE_COMMANDS
