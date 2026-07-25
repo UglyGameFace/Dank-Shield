@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import hashlib
 import time
 from io import BytesIO
 from typing import Any, Mapping, Optional
@@ -13,12 +14,15 @@ from PIL import Image, ImageOps
 
 from .welcome_card_font_assets import decode_custom_font
 from .welcome_card_typography_engine import (
+    BUILTIN_THEMES,
     CARD_HEIGHT,
     CARD_WIDTH,
+    COLOR_PRESETS,
     CUSTOM_FONT_STYLE_KEY,
     DEFAULT_COLOR_MODE,
     DEFAULT_FONT_STYLE_KEY,
     DEFAULT_THEME_KEY,
+    FONT_STYLES,
     normalize_color_mode,
     normalize_font_style_key,
     normalize_theme_key,
@@ -30,6 +34,16 @@ MAX_STORED_BACKGROUND_BYTES = 450 * 1024
 _PROFILE_VISUAL_CACHE_TTL_SECONDS = 6 * 60 * 60
 _PROFILE_VISUAL_CACHE_MAX = 512
 _PROFILE_VISUAL_CACHE: dict[int, tuple[float, Optional[bytes], Optional[tuple[int, int, int]]]] = {}
+
+WELCOME_CARD_SHUFFLE_MODES = frozenset(
+    {
+        "off",
+        "fonts",
+        "themes",
+        "fonts_themes",
+        "everything",
+    }
+)
 
 
 def _cfg_value(cfg: Any, key: str, default: Any = None) -> Any:
@@ -74,6 +88,13 @@ def _cfg_bool(cfg: Any, key: str, default: bool = False) -> bool:
 
 def welcome_cards_enabled(cfg: Any) -> bool:
     return _cfg_bool(cfg, "welcome_card_enabled", False)
+
+
+def configured_shuffle_mode(cfg: Any) -> str:
+    raw = str(
+        _cfg_value(cfg, "welcome_card_shuffle_mode", "off") or "off"
+    ).strip().lower()
+    return raw if raw in WELCOME_CARD_SHUFFLE_MODES else "off"
 
 
 def configured_theme_key(cfg: Any) -> str:
@@ -139,6 +160,107 @@ def encode_custom_background(data: bytes) -> str:
     if len(data) > MAX_STORED_BACKGROUND_BYTES:
         raise ValueError("Normalized custom background exceeds the storage limit.")
     return base64.b64encode(data).decode("ascii")
+
+
+
+def _stable_shuffle_choice(
+    values: list[str],
+    *,
+    guild_id: int,
+    user_id: int,
+    component: str,
+) -> str:
+    if not values:
+        raise ValueError("Stable shuffle requires at least one choice.")
+
+    material = (
+        f"dank-welcome-shuffle-v1:"
+        f"{int(guild_id)}:{int(user_id)}:{component}"
+    ).encode("utf-8", "ignore")
+    digest = hashlib.sha256(material).digest()
+    index = int.from_bytes(digest[:8], "big") % len(values)
+    return values[index]
+
+
+def _resolve_effective_welcome_style(
+    *,
+    guild_id: int,
+    user_id: int,
+    cfg: Any,
+    custom_font_present: bool,
+) -> tuple[str, Optional[bytes], str, str, str, str]:
+    """Resolve one deterministic per-member welcome-card design.
+
+    Return order:
+      theme key,
+      custom background bytes,
+      font style key,
+      color mode,
+      custom primary,
+      custom secondary.
+    """
+
+    theme_key = configured_theme_key(cfg)
+    custom_background = decode_custom_background(cfg)
+    font_style_key = configured_font_style_key(cfg)
+    color_mode = configured_color_mode(cfg)
+    custom_primary, custom_secondary = configured_custom_colors(cfg)
+
+    shuffle_mode = configured_shuffle_mode(cfg)
+    if shuffle_mode == "off":
+        return (
+            theme_key,
+            custom_background,
+            font_style_key,
+            color_mode,
+            custom_primary,
+            custom_secondary,
+        )
+
+    if shuffle_mode in {"fonts", "fonts_themes", "everything"}:
+        font_choices = list(FONT_STYLES)
+        if custom_font_present:
+            font_choices.append(CUSTOM_FONT_STYLE_KEY)
+
+        font_style_key = _stable_shuffle_choice(
+            font_choices,
+            guild_id=guild_id,
+            user_id=user_id,
+            component=f"{shuffle_mode}:font",
+        )
+
+    if shuffle_mode in {"themes", "fonts_themes", "everything"}:
+        theme_key = _stable_shuffle_choice(
+            list(BUILTIN_THEMES),
+            guild_id=guild_id,
+            user_id=user_id,
+            component=f"{shuffle_mode}:theme",
+        )
+
+        # A custom uploaded image is a fixed server background. Theme shuffle
+        # intentionally selects from the safe built-in theme collection instead.
+        custom_background = None
+
+    if shuffle_mode == "everything":
+        palette_key = _stable_shuffle_choice(
+            list(COLOR_PRESETS),
+            guild_id=guild_id,
+            user_id=user_id,
+            component="everything:palette",
+        )
+        palette = COLOR_PRESETS[palette_key]
+        color_mode = "custom"
+        custom_primary = palette.primary
+        custom_secondary = palette.secondary
+
+    return (
+        theme_key,
+        custom_background,
+        font_style_key,
+        color_mode,
+        custom_primary,
+        custom_secondary,
+    )
 
 
 async def _avatar_bytes(member: discord.Member) -> bytes:
@@ -249,21 +371,43 @@ async def render_member_welcome_card(
     *,
     theme_override: Optional[str] = None,
 ) -> bytes:
-    theme_key = normalize_theme_key(theme_override or configured_theme_key(cfg))
-    font_style_key = configured_font_style_key(cfg)
     custom_font, _custom_font_name = configured_custom_font(cfg)
-    color_mode = configured_color_mode(cfg)
-    custom_primary, custom_secondary = configured_custom_colors(cfg)
+
+    if theme_override is not None:
+        # Explicit theme previews must preview the selected theme, not shuffle.
+        theme_key = normalize_theme_key(theme_override)
+        custom_background = None
+        font_style_key = configured_font_style_key(cfg)
+        color_mode = configured_color_mode(cfg)
+        custom_primary, custom_secondary = configured_custom_colors(cfg)
+    else:
+        (
+            theme_key,
+            custom_background,
+            font_style_key,
+            color_mode,
+            custom_primary,
+            custom_secondary,
+        ) = _resolve_effective_welcome_style(
+            guild_id=int(getattr(member.guild, "id", 0) or 0),
+            user_id=int(getattr(member, "id", 0) or 0),
+            cfg=cfg,
+            custom_font_present=bool(custom_font),
+        )
+
     avatar_task = asyncio.create_task(_avatar_bytes(member))
     profile_task: Optional[asyncio.Task] = None
+
     if color_mode in {"auto", "profile"}:
         profile_task = asyncio.create_task(_profile_visuals(member))
+
     avatar = await avatar_task
+
     profile_banner: Optional[bytes] = None
     profile_accent: Optional[tuple[int, int, int]] = None
     if profile_task is not None:
         profile_banner, profile_accent = await profile_task
-    custom_background = None if theme_override is not None else decode_custom_background(cfg)
+
     return await asyncio.to_thread(
         render_welcome_card,
         avatar_bytes=avatar,
@@ -295,6 +439,8 @@ async def welcome_card_file(
 
 __all__ = [
     "MAX_STORED_BACKGROUND_BYTES",
+    "WELCOME_CARD_SHUFFLE_MODES",
+    "configured_shuffle_mode",
     "configured_color_mode",
     "configured_custom_colors",
     "configured_custom_font",

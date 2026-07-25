@@ -29,6 +29,7 @@ from ..welcome_card_service import (
     configured_custom_colors,
     configured_custom_font,
     configured_font_style_key,
+    configured_shuffle_mode,
     configured_theme_key,
     welcome_card_file,
 )
@@ -61,7 +62,16 @@ _EXPECTED_COMMANDS = {
     "card-font",
     "card-font-clear",
     "card-font-upload",
+    "card-shuffle",
     "card-style",
+}
+
+SHUFFLE_MODE_LABELS = {
+    "off": "Off",
+    "fonts": "Shuffle Fonts",
+    "themes": "Shuffle Themes",
+    "fonts_themes": "Shuffle Fonts + Themes",
+    "everything": "Shuffle Everything",
 }
 
 _FONT_EMOJIS = {
@@ -467,6 +477,112 @@ async def _send_color_picker(
     )
 
 
+
+async def _send_shuffle_picker(
+    interaction: discord.Interaction,
+    *,
+    cfg: Optional[Any] = None,
+) -> None:
+    if interaction.guild is None or not isinstance(interaction.user, discord.Member):
+        return await _send(interaction, "❌ This must be used inside a server.")
+
+    if cfg is None:
+        cfg = await get_guild_config(int(interaction.guild.id), refresh=True)
+
+    current_mode = configured_shuffle_mode(cfg)
+
+    async def on_pick(
+        component_interaction: discord.Interaction,
+        value: str,
+    ) -> None:
+        mode = str(value or "").strip().lower()
+        label = SHUFFLE_MODE_LABELS.get(mode)
+        if label is None:
+            return await _send(
+                component_interaction,
+                "❌ That shuffle mode is no longer available.",
+            )
+
+        note = ""
+        if mode in {"themes", "fonts_themes", "everything"}:
+            note = (
+                " Built-in themes rotate in this mode, so an uploaded custom "
+                "background is not used for shuffled cards."
+            )
+
+        await _save_and_preview(
+            component_interaction,
+            updates={
+                "welcome_card_enabled": True,
+                "welcome_card_shuffle_mode": mode,
+            },
+            message=(
+                f"✅ Welcome-card shuffle set to **{label}**. "
+                "Results are stable per member, so retries keep the same design."
+                f"{note}"
+            ),
+        )
+
+    view = DankPickerView(
+        author_id=int(interaction.user.id),
+        choices=[
+            make_choice(
+                "Off",
+                "off",
+                description="Always use the configured fixed card design.",
+                emoji="🛑",
+                default=current_mode == "off",
+            ),
+            make_choice(
+                "Shuffle Fonts",
+                "fonts",
+                description="Rotate fonts while preserving the background and colors.",
+                emoji="🔤",
+                default=current_mode == "fonts",
+            ),
+            make_choice(
+                "Shuffle Themes",
+                "themes",
+                description="Rotate built-in themes while preserving font and colors.",
+                emoji="🖼️",
+                default=current_mode == "themes",
+            ),
+            make_choice(
+                "Shuffle Fonts + Themes",
+                "fonts_themes",
+                description="Rotate fonts and built-in themes together.",
+                emoji="🎲",
+                default=current_mode == "fonts_themes",
+            ),
+            make_choice(
+                "Shuffle Everything",
+                "everything",
+                description="Rotate the font, built-in theme, and safe color palette.",
+                emoji="🌈",
+                default=current_mode == "everything",
+            ),
+        ],
+        on_pick=on_pick,
+        custom_id=f"dank:welcome:shuffle:canonical:{interaction.guild.id}",
+        placeholder="Choose how welcome cards should shuffle…",
+        title="Welcome Card Shuffle",
+    )
+
+    sender = (
+        interaction.followup.send
+        if interaction.response.is_done()
+        else interaction.response.send_message
+    )
+    await sender(
+        "## 🔀 Welcome Card Shuffle\n"
+        "Different members can receive different designs, while each member's "
+        "result stays deterministic for reliable retries and previews.",
+        view=view,
+        ephemeral=True,
+        allowed_mentions=discord.AllowedMentions.none(),
+    )
+
+
 async def welcome_card_font(interaction: discord.Interaction) -> None:
     if not await _require_setup_permission(interaction):
         return
@@ -486,6 +602,20 @@ async def welcome_card_colors(interaction: discord.Interaction) -> None:
         return await _send(interaction, "❌ This must be used inside a server.")
     await _defer(interaction)
     await _send_color_picker(
+        interaction,
+        cfg=await get_guild_config(int(interaction.guild.id), refresh=True),
+    )
+
+
+
+async def welcome_card_shuffle(interaction: discord.Interaction) -> None:
+    if not await _require_setup_permission(interaction):
+        return
+    if interaction.guild is None:
+        return await _send(interaction, "❌ This must be used inside a server.")
+
+    await _defer(interaction)
+    await _send_shuffle_picker(
         interaction,
         cfg=await get_guild_config(int(interaction.guild.id), refresh=True),
     )
@@ -581,6 +711,7 @@ async def welcome_card_style(interaction: discord.Interaction) -> None:
     custom_font, custom_font_name = configured_custom_font(cfg)
     color_key = configured_color_mode(cfg)
     primary, secondary = configured_custom_colors(cfg)
+    shuffle_mode = configured_shuffle_mode(cfg)
 
     async def on_pick(component_interaction: discord.Interaction, value: str) -> None:
         if value == "font":
@@ -597,6 +728,16 @@ async def welcome_card_style(interaction: discord.Interaction) -> None:
                 component_interaction,
                 cfg=await get_guild_config(int(component_interaction.guild.id), refresh=True),
             )
+        if value == "shuffle":
+            await _component_defer(component_interaction)
+            await _retire_picker(component_interaction)
+            return await _send_shuffle_picker(
+                component_interaction,
+                cfg=await get_guild_config(
+                    int(component_interaction.guild.id),
+                    refresh=True,
+                ),
+            )
         if value == "preview":
             await _component_defer(component_interaction)
             return await component_interaction.followup.send(
@@ -610,6 +751,7 @@ async def welcome_card_style(interaction: discord.Interaction) -> None:
         choices=[
             make_choice("Change Font", "font", description="Open the final-pixel-fitted font gallery.", emoji="🔤"),
             make_choice("Change Colors", "colors", description="Open automatic colors and visual palettes.", emoji="🎨"),
+            make_choice("Shuffle Settings", "shuffle", description="Randomize fonts, themes, or full card styling.", emoji="🔀"),
             make_choice("Preview Again", "preview", description="Render the current production card again.", emoji="👁️"),
         ],
         on_pick=on_pick,
@@ -622,6 +764,7 @@ async def welcome_card_style(interaction: discord.Interaction) -> None:
         "## 🪄 Welcome Card Studio",
         f"**Font:** {font_label}",
         f"**Colors:** {COLOR_MODES[color_key]}",
+        f"**Shuffle:** {SHUFFLE_MODE_LABELS.get(shuffle_mode, 'Off')}",
     ]
     if color_key == "custom" and primary and secondary:
         preset_match = next(
@@ -665,6 +808,7 @@ def register_public_welcome_card_studio_commands(bot: Any, tree: Any) -> None:
     _add_command("card-colors", "Open automatic colors, palettes, and visual swatches.", welcome_card_colors)
     _add_command("card-font-upload", "Upload a TTF, OTF, TTC, OTC, WOFF, or WOFF2 font.", welcome_card_font_upload)
     _add_command("card-font-clear", "Remove the server's uploaded welcome-card font.", welcome_card_font_clear)
+    _add_command("card-shuffle", "Choose how welcome cards randomize fonts, themes, or colors.", welcome_card_shuffle)
     _add_command("card-style", "Show current styling and open its visual controls.", welcome_card_style)
     names = {
         str(getattr(command, "name", ""))
@@ -687,5 +831,6 @@ __all__ = [
     "welcome_card_font",
     "welcome_card_font_clear",
     "welcome_card_font_upload",
+    "welcome_card_shuffle",
     "welcome_card_style",
 ]

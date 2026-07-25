@@ -24,6 +24,7 @@ def test_public_welcome_group_exposes_style_controls() -> None:
         '"card-style"',
         '"card-font-upload"',
         '"card-font-clear"',
+        '"card-shuffle"',
     ):
         assert command in COMMANDS
 

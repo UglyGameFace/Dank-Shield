@@ -19,6 +19,7 @@ EXPECTED_STYLE_COMMANDS = {
     "card-font-upload",
     "card-font-clear",
     "card-colors",
+    "card-shuffle",
     "card-style",
 }
 
