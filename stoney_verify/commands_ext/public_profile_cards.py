@@ -21,6 +21,7 @@ from stoney_verify.profile_card_runtime import (
 from stoney_verify.profile_card_service import (
     DEFAULT_PROFILE_PREFERENCES,
     InvalidPlatformProfile,
+    effective_preferences,
     PLATFORM_SPECS,
     ProfileStorageUnavailable,
     get_effective_profile_settings,
@@ -51,6 +52,31 @@ def _channel_ids(value: Any) -> list[int]:
     return sorted(parse_channel_ids(value))
 
 
+async def _defer_private(
+    interaction: discord.Interaction,
+    *,
+    component_update: bool = False,
+) -> None:
+    if interaction.response.is_done():
+        return
+    if component_update:
+        await interaction.response.defer()
+    else:
+        await interaction.response.defer(ephemeral=True, thinking=True)
+
+
+async def _send_private(
+    interaction: discord.Interaction,
+    **kwargs: Any,
+) -> None:
+    kwargs.setdefault("ephemeral", True)
+    kwargs.setdefault("allowed_mentions", discord.AllowedMentions.none())
+    if not interaction.response.is_done():
+        await interaction.response.send_message(**kwargs)
+    else:
+        await interaction.followup.send(**kwargs)
+
+
 async def _safe_ephemeral(
     interaction: discord.Interaction,
     content: str,
@@ -58,16 +84,11 @@ async def _safe_ephemeral(
     ok: bool = True,
 ) -> None:
     prefix = "✅ " if ok else "❌ "
-    kwargs = {
-        "content": prefix + str(content or "")[:1900],
-        "ephemeral": True,
-        "allowed_mentions": discord.AllowedMentions.none(),
-    }
     try:
-        if not interaction.response.is_done():
-            await interaction.response.send_message(**kwargs)
-        else:
-            await interaction.followup.send(**kwargs)
+        await _send_private(
+            interaction,
+            content=prefix + str(content or "")[:1900],
+        )
     except Exception:
         pass
 
@@ -94,11 +115,17 @@ async def invalidate_member_live_cards(
 
 
 async def _settings_payload(guild_id: int, user_id: int) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
-    user_row, guild_row, effective = await asyncio.gather(
+    user_row, guild_row = await asyncio.gather(
         get_profile_user(user_id),
         get_profile_guild_settings(guild_id, user_id),
-        get_effective_profile_settings(guild_id, user_id),
     )
+    effective = {
+        "preferences": effective_preferences(
+            user_row.get("preferences"),
+            guild_row.get("settings"),
+        ),
+        "platforms": dict(user_row.get("platforms") or {}),
+    }
     return user_row, guild_row, effective
 
 
@@ -196,15 +223,19 @@ class ProfileSettingsView(discord.ui.View):
             return await _safe_ephemeral(interaction, "Could not resolve your server member.", ok=False)
         user_row, guild_row, effective = await _settings_payload(self.guild_id, self.author_id)
         preferences = dict(effective.get("preferences") or {})
-        await interaction.response.edit_message(
-            embed=_settings_embed(member, user_row, guild_row, effective),
-            view=ProfileSettingsView(
+        payload = {
+            "embed": _settings_embed(member, user_row, guild_row, effective),
+            "view": ProfileSettingsView(
                 author_id=self.author_id,
                 guild_id=self.guild_id,
                 preferences=preferences,
             ),
-            allowed_mentions=discord.AllowedMentions.none(),
-        )
+            "allowed_mentions": discord.AllowedMentions.none(),
+        }
+        if interaction.response.is_done():
+            await interaction.edit_original_response(**payload)
+        else:
+            await interaction.response.edit_message(**payload)
 
 
 class _PrivacyToggleButton(discord.ui.Button):
@@ -230,6 +261,7 @@ class _PrivacyToggleButton(discord.ui.Button):
         view = self.view
         if not isinstance(view, ProfileSettingsView) or not await view.interaction_check(interaction):
             return
+        await _defer_private(interaction, component_update=True)
         try:
             effective = await get_effective_profile_settings(view.guild_id, view.author_id)
             current = bool(dict(effective.get("preferences") or {}).get(self.preference_key, True))
@@ -266,6 +298,7 @@ class _PreviewProfileButton(discord.ui.Button):
         member = interaction.user if isinstance(interaction.user, discord.Member) else None
         if member is None:
             return await _safe_ephemeral(interaction, "Could not resolve your server member.", ok=False)
+        await _defer_private(interaction)
         try:
             config = await get_guild_config(view.guild_id)
             allowed = set(parse_live_card_config(config).allowed_fields)
@@ -283,11 +316,10 @@ class _PreviewProfileButton(discord.ui.Button):
                 "Your current privacy settings hide every optional card field. Nothing public would be posted.",
                 ok=True,
             )
-        await interaction.response.send_message(
+        await _send_private(
+            interaction,
             embed=rendered.embed,
             view=rendered.view,
-            ephemeral=True,
-            allowed_mentions=discord.AllowedMentions.none(),
         )
 
 
@@ -296,6 +328,7 @@ async def profile_settings(interaction: discord.Interaction) -> None:
     member = interaction.user if isinstance(interaction.user, discord.Member) else None
     if guild is None or member is None:
         return await _safe_ephemeral(interaction, "Use this command inside a server.", ok=False)
+    await _defer_private(interaction)
     try:
         user_row, guild_row, effective = await _settings_payload(guild.id, member.id)
     except ProfileStorageUnavailable:
@@ -305,11 +338,10 @@ async def profile_settings(interaction: discord.Interaction) -> None:
             ok=False,
         )
     preferences = dict(effective.get("preferences") or {})
-    await interaction.response.send_message(
+    await _send_private(
+        interaction,
         embed=_settings_embed(member, user_row, guild_row, effective),
         view=ProfileSettingsView(author_id=member.id, guild_id=guild.id, preferences=preferences),
-        ephemeral=True,
-        allowed_mentions=discord.AllowedMentions.none(),
     )
 
 
@@ -329,6 +361,7 @@ async def profile_platform(
 ) -> None:
     if interaction.guild is None:
         return await _safe_ephemeral(interaction, "Use this command inside a server.", ok=False)
+    await _defer_private(interaction)
     try:
         entry = await save_platform_identity(
             interaction.user.id,
@@ -361,6 +394,7 @@ async def profile_platform_remove(
 ) -> None:
     if interaction.guild is None:
         return await _safe_ephemeral(interaction, "Use this command inside a server.", ok=False)
+    await _defer_private(interaction)
     try:
         removed = await remove_platform_identity(interaction.user.id, platform.value)
     except ProfileStorageUnavailable:
@@ -397,6 +431,7 @@ class _PublicFullRolesButton(discord.ui.Button):
         member = guild.get_member(self.member_id)
         if not isinstance(member, discord.Member):
             return await _safe_ephemeral(interaction, "That member is no longer available.", ok=False)
+        await _defer_private(interaction)
         try:
             config = parse_live_card_config(await get_guild_config(guild.id))
             effective = await get_effective_profile_settings(guild.id, member.id)
@@ -407,10 +442,9 @@ class _PublicFullRolesButton(discord.ui.Button):
             return await _safe_ephemeral(interaction, "This member has hidden their profile roles.", ok=False)
         from .public_self_roles_group import _profile_full_roles_embed
 
-        await interaction.response.send_message(
+        await _send_private(
+            interaction,
             embed=_profile_full_roles_embed(member),
-            ephemeral=True,
-            allowed_mentions=discord.AllowedMentions.none(),
         )
 
 
@@ -463,6 +497,7 @@ async def send_privacy_aware_profile(
     guild = interaction.guild
     if guild is None or int(member.guild.id) != int(guild.id):
         return await _safe_ephemeral(interaction, "That member is not available in this server.", ok=False)
+    await _defer_private(interaction)
     try:
         config = parse_live_card_config(await get_guild_config(guild.id))
         effective = await get_effective_profile_settings(guild.id, member.id)
@@ -502,11 +537,10 @@ async def send_privacy_aware_profile(
         show_roles=show_roles,
         show_settings=int(interaction.user.id) == int(member.id),
     )
-    await interaction.response.send_message(
+    await _send_private(
+        interaction,
         embed=rendered_embed,
         view=view if view.children else None,
-        ephemeral=True,
-        allowed_mentions=discord.AllowedMentions.none(),
     )
 
 
@@ -581,6 +615,7 @@ async def profile_live_cards(
                 ok=False,
             )
 
+    await _defer_private(interaction)
     config = await get_guild_config(guild.id, refresh=True)
     channel_ids = set(_channel_ids(config.get(LIVE_CHANNEL_IDS_KEY)))
     if enabled:
@@ -600,11 +635,7 @@ async def profile_live_cards(
     if not enabled and isinstance(runtime, LiveProfileCardRuntime):
         await runtime.disable_channel(guild, channel)
 
-    await interaction.response.send_message(
-        embed=_live_status_embed(guild, updated),
-        ephemeral=True,
-        allowed_mentions=discord.AllowedMentions.none(),
-    )
+    await _send_private(interaction, embed=_live_status_embed(guild, updated))
 
 
 @app_commands.describe(
@@ -623,6 +654,7 @@ async def profile_live_fields(
     guild = interaction.guild
     if guild is None:
         return await _safe_ephemeral(interaction, "Use this command inside a server.", ok=False)
+    await _defer_private(interaction)
     allowed: list[str] = []
     if roles:
         allowed.append("roles")
@@ -634,11 +666,7 @@ async def profile_live_fields(
     runtime = _profile_runtime(interaction.client)
     if runtime is not None:
         await runtime.invalidate_guild_cards(guild)
-    await interaction.response.send_message(
-        embed=_live_status_embed(guild, updated),
-        ephemeral=True,
-        allowed_mentions=discord.AllowedMentions.none(),
-    )
+    await _send_private(interaction, embed=_live_status_embed(guild, updated))
 
 
 async def profile_live_status(interaction: discord.Interaction) -> None:
@@ -647,12 +675,9 @@ async def profile_live_status(interaction: discord.Interaction) -> None:
     guild = interaction.guild
     if guild is None:
         return await _safe_ephemeral(interaction, "Use this command inside a server.", ok=False)
+    await _defer_private(interaction)
     config = await get_guild_config(guild.id, refresh=True)
-    await interaction.response.send_message(
-        embed=_live_status_embed(guild, config),
-        ephemeral=True,
-        allowed_mentions=discord.AllowedMentions.none(),
-    )
+    await _send_private(interaction, embed=_live_status_embed(guild, config))
 
 
 def _attach_profile_commands() -> None:

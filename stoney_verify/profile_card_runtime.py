@@ -301,16 +301,22 @@ class LiveProfileCardRuntime:
         self._locks: dict[tuple[int, int], asyncio.Lock] = {}
         self._last_posted: dict[tuple[int, int], tuple[int, float]] = {}
         self._reconcile_lock = asyncio.Lock()
-        self._last_reconcile_at = 0.0
+        self._last_reconcile_at: Optional[float] = None
 
     async def on_ready(self) -> None:
         """Reconcile durable card ownership once per ready/reconnect window."""
         now = monotonic()
-        if now - self._last_reconcile_at < READY_RECONCILE_THROTTLE_SECONDS:
+        if (
+            self._last_reconcile_at is not None
+            and now - self._last_reconcile_at < READY_RECONCILE_THROTTLE_SECONDS
+        ):
             return
         async with self._reconcile_lock:
             now = monotonic()
-            if now - self._last_reconcile_at < READY_RECONCILE_THROTTLE_SECONDS:
+            if (
+                self._last_reconcile_at is not None
+                and now - self._last_reconcile_at < READY_RECONCILE_THROTTLE_SECONDS
+            ):
                 return
             # Set before I/O so repeated ready events cannot create a retry storm
             # when Discord or private storage is temporarily unavailable.
@@ -472,56 +478,80 @@ class LiveProfileCardRuntime:
                 return False
         return False
 
-    async def remove_user_cards(self, guild: discord.Guild, user_id: int) -> None:
-        """Remove only this member's owned live cards in one guild.
-
-        Privacy changes use this immediately so an already-posted card cannot
-        keep displaying data the member just hid. Failed Discord deletions keep
-        their durable state so reconciliation can retry later.
-        """
+    async def _remove_user_card_states(
+        self,
+        user_id: int,
+        *,
+        guild_id: Optional[int] = None,
+        guild_hint: Optional[discord.Guild] = None,
+    ) -> None:
         resolved_user_id = int(user_id)
-        try:
-            config = parse_live_card_config(await get_guild_config(guild.id))
-        except Exception:
-            return
+        resolved_guild_id = int(guild_id) if guild_id is not None else None
 
-        for channel_id in config.channel_ids:
-            key = (int(guild.id), int(channel_id))
-            latest = self._latest.get(key)
-            if latest is not None and latest.user_id == resolved_user_id:
-                pending = self._pending.pop(key, None)
-                self._latest.pop(key, None)
-                if pending is not None and not pending.done():
-                    pending.cancel()
-
-            try:
-                state = await get_live_card_state(*key)
-            except ProfileStorageUnavailable:
-                return
-            if not state or str(state.get("user_id") or "") != str(resolved_user_id):
+        # Stop an in-flight debounce before it can repost fields the member just
+        # hid, even when no prior durable card exists yet.
+        for key, latest in list(self._latest.items()):
+            if latest.user_id != resolved_user_id:
                 continue
-
-            channel = guild.get_channel(channel_id)
-            try:
-                message_id = int(str(state.get("message_id") or "0"))
-            except Exception:
-                message_id = 0
-            removed = not message_id
-            if isinstance(channel, discord.TextChannel) and message_id:
-                removed = await self._delete_stored_message(channel, message_id)
-            if removed:
-                try:
-                    await delete_live_card_state(*key)
-                except ProfileStorageUnavailable:
-                    return
+            if resolved_guild_id is not None and key[0] != resolved_guild_id:
+                continue
+            pending = self._pending.pop(key, None)
+            self._latest.pop(key, None)
+            if pending is not None and not pending.done():
+                pending.cancel()
             self._last_posted.pop(key, None)
 
-    async def remove_user_cards_all_guilds(self, user_id: int) -> None:
-        for guild in list(getattr(self.bot, "guilds", []) or []):
+        try:
+            states = await list_live_card_states()
+        except ProfileStorageUnavailable:
+            return
+
+        for state in states:
+            if str(state.get("user_id") or "") != str(resolved_user_id):
+                continue
             try:
-                await self.remove_user_cards(guild, int(user_id))
+                state_guild_id = int(state.get("guild_id"))
+                channel_id = int(state.get("channel_id"))
+                message_id = int(str(state.get("message_id") or "0"))
             except Exception:
                 continue
+            if resolved_guild_id is not None and state_guild_id != resolved_guild_id:
+                continue
+
+            guild = (
+                guild_hint
+                if guild_hint is not None and int(guild_hint.id) == state_guild_id
+                else self.bot.get_guild(state_guild_id)
+            )
+            if guild is None:
+                # Keep durable ownership so reconciliation can retry when the
+                # guild is available again.
+                continue
+            channel = guild.get_channel(channel_id)
+            removed = not message_id
+            if message_id and isinstance(channel, discord.TextChannel):
+                removed = await self._delete_stored_message(channel, message_id)
+            elif message_id and channel is None:
+                removed = True
+            if not removed:
+                continue
+            try:
+                await delete_live_card_state(state_guild_id, channel_id)
+            except ProfileStorageUnavailable:
+                return
+            self._last_posted.pop((state_guild_id, channel_id), None)
+
+    async def remove_user_cards(self, guild: discord.Guild, user_id: int) -> None:
+        """Remove this member's persisted and pending live cards in one guild."""
+        await self._remove_user_card_states(
+            int(user_id),
+            guild_id=int(guild.id),
+            guild_hint=guild,
+        )
+
+    async def remove_user_cards_all_guilds(self, user_id: int) -> None:
+        """Remove only the member's actual persisted cards across all guilds."""
+        await self._remove_user_card_states(int(user_id))
 
     async def _remove_channel_card_state(
         self,
