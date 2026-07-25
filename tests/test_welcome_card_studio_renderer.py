@@ -16,6 +16,16 @@ def _image_bytes(left: tuple[int, int, int], right: tuple[int, int, int]) -> byt
     return output.getvalue()
 
 
+def _ink(mask: Image.Image) -> int:
+    return sum(int(value) for value in mask.getdata())
+
+
+def _visible_bbox(image: Image.Image, threshold: int = 4):
+    alpha = image.getchannel("A")
+    visible = alpha.point(lambda value: 255 if value >= threshold else 0)
+    return visible.getbbox()
+
+
 def test_all_font_styles_are_distinct_without_host_fonts(monkeypatch) -> None:
     monkeypatch.setattr(studio.Path, "is_file", lambda _path: False)
     avatar = _image_bytes((30, 210, 105), (155, 40, 235))
@@ -64,11 +74,40 @@ def test_every_final_styled_tile_fits_both_axes() -> None:
             )
             assert tile.width <= studio.NAME_SAFE_WIDTH, (style.key, name, tile.size)
             assert tile.height <= studio.NAME_SAFE_HEIGHT, (style.key, name, tile.size)
-            assert tile.getchannel("A").getbbox() is not None
+            assert _visible_bbox(tile) is not None
 
 
-def test_problem_styles_preserve_alpha_margin_and_counters() -> None:
-    for key in ("outline", "street", "retro", "bold"):
+def test_positive_shear_preserves_the_complete_leading_glyph() -> None:
+    # This is the exact production regression that changed UglyGameFace into
+    # JglyGameFace. A valid slant may redistribute antialiasing, but it must not
+    # discard a meaningful portion of the first U.
+    for key in ("street", "soft"):
+        style = studio.FONT_STYLES[key]
+        font = studio._font(style.name_start_size, style=style, bold=True)
+        original = studio._tracked_mask("U", font=font, tracking=0)
+        transformed = studio._transform_mask(original, style)
+        assert _ink(original) > 0
+        assert _ink(transformed) / _ink(original) >= 0.95, (
+            key,
+            original.size,
+            transformed.size,
+        )
+
+
+def test_alpha_crop_ignores_invisible_blur_tail_pixels() -> None:
+    image = Image.new("RGBA", (240, 120), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(image, "RGBA")
+    draw.rectangle((70, 35, 150, 85), fill=(255, 255, 255, 255))
+    image.putpixel((230, 110), (255, 255, 255, 1))
+
+    cropped = studio._crop_alpha(image)
+    assert cropped.width < 120
+    assert cropped.height < 90
+    assert _visible_bbox(cropped) is not None
+
+
+def test_problem_styles_keep_visible_pixels_inside_a_safety_margin() -> None:
+    for key in ("outline", "street", "soft", "retro", "bold", "neon", "prism"):
         style = studio.FONT_STYLES[key]
         _text, tile = studio._fitted_tile(
             "UglyGameFace",
@@ -83,7 +122,11 @@ def test_problem_styles_preserve_alpha_margin_and_counters() -> None:
         )
         assert tile.width <= 680
         assert tile.height <= 68
-        assert tile.getchannel("A").getbbox() == (0, 0, tile.width, tile.height)
+        box = _visible_bbox(tile)
+        assert box is not None
+        left, top, right, bottom = box
+        assert left >= 1 and top >= 1, (key, tile.size, box)
+        assert right <= tile.width - 1 and bottom <= tile.height - 1, (key, tile.size, box)
 
 
 def test_renderer_owned_icons_are_vector_drawn_not_unicode_tofu() -> None:
