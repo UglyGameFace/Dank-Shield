@@ -48,7 +48,7 @@ def test_settings_payload_reads_each_private_record_once():
     assert "effective_preferences(" in payload
 
 
-def test_global_user_cleanup_queries_persisted_card_states_not_every_guild():
+def test_global_user_cleanup_uses_indexed_persisted_state_query():
     all_guilds = RUNTIME.split("async def remove_user_cards_all_guilds", 1)[1].split(
         "async def _remove_channel_card_state", 1
     )[0]
@@ -56,7 +56,8 @@ def test_global_user_cleanup_queries_persisted_card_states_not_every_guild():
         "async def remove_user_cards", 1
     )[0]
     assert "await self._remove_user_card_states(int(user_id))" in all_guilds
-    assert "list_live_card_states()" in helper
+    assert "list_live_card_states_for_user(" in helper
+    assert "list_live_card_states()" not in helper
     assert "for guild in" not in all_guilds
     assert "get_guild_config" not in helper
 
