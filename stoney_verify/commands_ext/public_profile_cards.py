@@ -681,8 +681,7 @@ def register_public_profile_cards(bot: Any, tree: Any) -> None:
         runtime = LiveProfileCardRuntime(bot)
         setattr(bot, _RUNTIME_ATTRIBUTE, runtime)
         bot.add_listener(runtime.on_message, "on_message")
-        reconcile_task = asyncio.create_task(runtime.reconcile_after_ready())
-        setattr(runtime, "_reconcile_task", reconcile_task)
+        bot.add_listener(runtime.on_ready, "on_ready")
     if not _REGISTERED:
         _REGISTERED = True
         print("✅ public_profile_cards: attached privacy, platform, and non-repetitive live-card controls")

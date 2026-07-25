@@ -36,6 +36,7 @@ MAX_DEBOUNCE_SECONDS = 15.0
 MIN_SAME_SPEAKER_COOLDOWN_SECONDS = 30.0
 MAX_SAME_SPEAKER_COOLDOWN_SECONDS = 3600.0
 LIVE_CARD_HISTORY_SCAN_LIMIT = 100
+READY_RECONCILE_THROTTLE_SECONDS = 60.0
 LIVE_CARD_FOOTER_PREFIX = "Dank Shield live profile"
 _LIVE_CARD_FOOTER_RE = re.compile(r"^Dank Shield live profile • user:(\d+) • trigger:(\d+)$")
 
@@ -299,6 +300,30 @@ class LiveProfileCardRuntime:
         self._latest: dict[tuple[int, int], PendingTrigger] = {}
         self._locks: dict[tuple[int, int], asyncio.Lock] = {}
         self._last_posted: dict[tuple[int, int], tuple[int, float]] = {}
+        self._reconcile_lock = asyncio.Lock()
+        self._last_reconcile_at = 0.0
+
+    async def on_ready(self) -> None:
+        """Reconcile durable card ownership once per ready/reconnect window."""
+        now = monotonic()
+        if now - self._last_reconcile_at < READY_RECONCILE_THROTTLE_SECONDS:
+            return
+        async with self._reconcile_lock:
+            now = monotonic()
+            if now - self._last_reconcile_at < READY_RECONCILE_THROTTLE_SECONDS:
+                return
+            # Set before I/O so repeated ready events cannot create a retry storm
+            # when Discord or private storage is temporarily unavailable.
+            self._last_reconcile_at = now
+            try:
+                await self.reconcile()
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                print(
+                    "⚠️ live_profile_card ready reconciliation failed safely: "
+                    f"{type(exc).__name__}: {exc}"
+                )
 
     async def on_message(self, message: discord.Message) -> None:
         if not _is_supported_message(message):
@@ -552,15 +577,6 @@ class LiveProfileCardRuntime:
     async def disable_channel(self, guild: discord.Guild, channel: discord.TextChannel) -> None:
         await self._remove_channel_card_state(guild, channel.id)
 
-    async def reconcile_after_ready(self) -> None:
-        try:
-            await self.bot.wait_until_ready()
-            await self.reconcile()
-        except asyncio.CancelledError:
-            raise
-        except Exception as exc:
-            print(f"⚠️ live_profile_card reconcile failed safely: {type(exc).__name__}: {exc}")
-
     async def reconcile(self) -> None:
         bot_user = getattr(self.bot, "user", None)
         if bot_user is None:
@@ -670,6 +686,7 @@ __all__ = [
     "LIVE_DEBOUNCE_KEY",
     "LIVE_ENABLED_KEY",
     "LIVE_SAME_SPEAKER_COOLDOWN_KEY",
+    "READY_RECONCILE_THROTTLE_SECONDS",
     "LiveCardConfig",
     "LiveCardRender",
     "LiveProfileCardRuntime",
