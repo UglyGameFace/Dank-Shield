@@ -631,6 +631,9 @@ async def profile_live_fields(
     if platforms:
         allowed.append("platforms")
     updated = await upsert_guild_config(guild.id, {LIVE_ALLOWED_FIELDS_KEY: allowed})
+    runtime = _profile_runtime(interaction.client)
+    if runtime is not None:
+        await runtime.invalidate_guild_cards(guild)
     await interaction.response.send_message(
         embed=_live_status_embed(guild, updated),
         ephemeral=True,

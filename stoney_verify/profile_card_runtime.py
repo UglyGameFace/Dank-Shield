@@ -498,24 +498,59 @@ class LiveProfileCardRuntime:
             except Exception:
                 continue
 
-    async def disable_channel(self, guild: discord.Guild, channel: discord.TextChannel) -> None:
-        key = (int(guild.id), int(channel.id))
-        pending = self._pending.pop(key, None)
-        self._latest.pop(key, None)
+    async def _remove_channel_card_state(
+        self,
+        guild: discord.Guild,
+        channel_id: int,
+        *,
+        cancel_pending: bool = True,
+    ) -> bool:
+        key = (int(guild.id), int(channel_id))
+        if cancel_pending:
+            pending = self._pending.pop(key, None)
+            self._latest.pop(key, None)
+            if pending is not None and not pending.done():
+                pending.cancel()
         self._last_posted.pop(key, None)
-        if pending is not None and not pending.done():
-            pending.cancel()
+
         try:
             state = await get_live_card_state(*key)
         except ProfileStorageUnavailable:
-            return
-        message_id = int(str((state or {}).get("message_id") or "0")) if state else 0
-        if message_id:
-            await self._delete_stored_message(channel, message_id)
+            return False
+        if not state:
+            return True
+
+        try:
+            message_id = int(str(state.get("message_id") or "0"))
+        except Exception:
+            message_id = 0
+        channel = guild.get_channel(channel_id)
+        removed = not message_id
+        if message_id and isinstance(channel, discord.TextChannel):
+            removed = await self._delete_stored_message(channel, message_id)
+        elif message_id and channel is None:
+            # The channel no longer exists, so the durable state is stale.
+            removed = True
+
+        if not removed:
+            # Keep ownership state so a later reconciliation can retry safely.
+            return False
         try:
             await delete_live_card_state(*key)
         except ProfileStorageUnavailable:
-            pass
+            return False
+        return True
+
+    async def invalidate_guild_cards(self, guild: discord.Guild) -> None:
+        try:
+            config = parse_live_card_config(await get_guild_config(guild.id))
+        except Exception:
+            return
+        for channel_id in config.channel_ids:
+            await self._remove_channel_card_state(guild, channel_id)
+
+    async def disable_channel(self, guild: discord.Guild, channel: discord.TextChannel) -> None:
+        await self._remove_channel_card_state(guild, channel.id)
 
     async def reconcile_after_ready(self) -> None:
         try:
@@ -545,6 +580,8 @@ class LiveProfileCardRuntime:
                 config = parse_live_card_config(await get_guild_config(guild.id))
             except Exception:
                 continue
+            if not config.enabled:
+                continue
             for channel_id in config.channel_ids:
                 channel = guild.get_channel(channel_id)
                 if not isinstance(channel, discord.TextChannel) or not _channel_can_host_cards(channel):
@@ -553,8 +590,25 @@ class LiveProfileCardRuntime:
                 state = persisted.pop(key, None)
                 await self._reconcile_channel(channel, state)
 
-        # State for deleted/disabled channels is removed, but no unknown message is deleted.
-        for (guild_id, channel_id), _state in persisted.items():
+        # Disabled channels are cleaned only when the stored message is still
+        # verifiably Dank Shield-owned. Inaccessible guilds keep their state so a
+        # later reconciliation can retry rather than orphaning a card.
+        for (guild_id, channel_id), state in persisted.items():
+            guild = self.bot.get_guild(guild_id)
+            if guild is None:
+                continue
+            channel = guild.get_channel(channel_id)
+            try:
+                message_id = int(str(state.get("message_id") or "0"))
+            except Exception:
+                message_id = 0
+            removed = not message_id
+            if message_id and isinstance(channel, discord.TextChannel):
+                removed = await self._delete_stored_message(channel, message_id)
+            elif message_id and channel is None:
+                removed = True
+            if not removed:
+                continue
             try:
                 await delete_live_card_state(guild_id, channel_id)
             except ProfileStorageUnavailable:

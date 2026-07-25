@@ -53,14 +53,11 @@ class PlatformSpec:
 PLATFORM_SPECS: dict[str, PlatformSpec] = {
     "steam": PlatformSpec("steam", "Steam", "🎮", ("steamcommunity.com",), "steam"),
     "epic": PlatformSpec("epic", "Epic Games", "🛡️"),
-    "xbox": PlatformSpec("xbox", "Xbox", "🟢", ("xbox.com", "www.xbox.com"), "official"),
-    "playstation": PlatformSpec(
-        "playstation",
-        "PlayStation",
-        "🔷",
-        ("playstation.com", "www.playstation.com", "profiles.playstation.com"),
-        "official",
-    ),
+    # Xbox and PlayStation do not expose one stable, reliably canonical
+    # public-profile URL format across regions. Keep them username-only rather
+    # than accepting a generic official-site page or inventing a link.
+    "xbox": PlatformSpec("xbox", "Xbox", "🟢"),
+    "playstation": PlatformSpec("playstation", "PlayStation", "🔷"),
     "nintendo": PlatformSpec("nintendo", "Nintendo", "🔴"),
     "riot": PlatformSpec("riot", "Riot Games", "⚔️"),
     "battle_net": PlatformSpec("battle_net", "Battle.net", "🌀"),
