@@ -35,6 +35,18 @@ except Exception as e:
         return None
 
 
+# Member profile cards extend the existing /dank profile group through one
+# canonical registration path. The runtime owns exactly one additive on_message
+# listener and never replaces user messages or the join-only welcome system.
+try:
+    from .commands_ext.public_profile_cards import register_public_profile_cards
+except Exception as e:
+    print(f"⚠️ commands.py failed to import public_profile_cards: {repr(e)}")
+
+    def register_public_profile_cards(bot: Any, tree: Any) -> None:  # type: ignore
+        return None
+
+
 # ============================================================
 # Kick timer bridges
 # events.py imports these from commands.py, so keep them exposed
@@ -92,6 +104,7 @@ except Exception as e:
 try:
     register_all_commands(bot, bot.tree)
     register_public_welcome_card_studio_commands(bot, bot.tree)
+    register_public_profile_cards(bot, bot.tree)
 except Exception as e:
     try:
         print(f"⚠️ commands.py failed to register split command modules: {repr(e)}")
@@ -118,6 +131,7 @@ def register_extra_commands(tree) -> None:
     try:
         register_all_commands(bot, tree)
         register_public_welcome_card_studio_commands(bot, tree)
+        register_public_profile_cards(bot, tree)
     except Exception as e:
         try:
             print(f"⚠️ register_extra_commands failed: {repr(e)}")
