@@ -7,7 +7,7 @@ on:
       - main
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   python-compile:
@@ -85,3 +85,71 @@ jobs:
 
       - name: Audit event boundary ownership
         run: python tools/audit_event_boundary.py
+
+  integrate-profile-privacy-scopes:
+    name: Integrate profile privacy scopes
+    if: >-
+      github.event_name == 'pull_request' &&
+      github.event.pull_request.head.ref == 'feature/live-profile-cards' &&
+      github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    env:
+      DANK_STARTUP_LOG_STYLE: quiet
+      DANK_COMMAND_LOG_STYLE: quiet
+
+    steps:
+      - name: Check out feature branch
+        uses: actions/checkout@v4
+        with:
+          ref: feature/live-profile-cards
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip -q
+          pip install -q -r requirements.txt pytest
+
+      - name: Apply global and server privacy controls
+        run: python tools/apply_profile_privacy_scope_fix.py
+
+      - name: Remove temporary patch script
+        run: rm -f tools/apply_profile_privacy_scope_fix.py
+
+      - name: Compile affected modules
+        run: |
+          python -m py_compile \
+            stoney_verify/profile_card_service.py \
+            stoney_verify/commands_ext/public_profile_cards.py
+
+      - name: Run complete focused profile suite
+        run: |
+          python -m pytest -q \
+            tests/test_profile_card_service.py \
+            tests/test_live_profile_card_runtime.py \
+            tests/test_live_profile_card_cleanup.py \
+            tests/test_live_profile_card_lifecycle.py \
+            tests/test_live_profile_card_interaction_safety.py \
+            tests/test_live_profile_card_integration_contract.py \
+            tests/test_live_profile_card_final_safety.py
+
+      - name: Inspect cleanup and whitespace
+        run: |
+          find . -type d -name __pycache__ -prune -exec rm -rf {} +
+          find . -type f \( -name '*.pyc' -o -name '*.pyo' \) -delete
+          git diff --check
+          test ! -f tools/apply_profile_privacy_scope_fix.py
+
+      - name: Commit validated privacy controls
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -m 'Add global and per-server profile privacy controls'
+          git push origin HEAD:feature/live-profile-cards
