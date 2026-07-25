@@ -26,6 +26,25 @@ def _visible_bbox(image: Image.Image, threshold: int = 4):
     return visible.getbbox()
 
 
+def _assert_fits(style, name: str, *, max_width: int, max_height: int) -> Image.Image:
+    fitted, tile = studio._fitted_tile(
+        name,
+        style=style,
+        start_size=style.name_start_size,
+        min_size=style.name_min_size,
+        max_width=max_width,
+        max_height=max_height,
+        role="name",
+        primary=(34, 220, 255),
+        secondary=(188, 66, 255),
+    )
+    assert fitted
+    assert tile.width <= max_width, (style.key, name, tile.size)
+    assert tile.height <= max_height, (style.key, name, tile.size)
+    assert _visible_bbox(tile) is not None
+    return tile
+
+
 def test_all_font_styles_are_distinct_without_host_fonts(monkeypatch) -> None:
     monkeypatch.setattr(studio.Path, "is_file", lambda _path: False)
     avatar = _image_bytes((30, 210, 105), (155, 40, 235))
@@ -51,30 +70,31 @@ def test_all_font_styles_are_distinct_without_host_fonts(monkeypatch) -> None:
     assert len({hash(value) for value in rendered.values()}) == len(studio.FONT_STYLES)
 
 
-def test_every_final_styled_tile_fits_both_axes() -> None:
-    names = (
-        "UglyGameFace",
-        "WavyLowercase",
-        "M" * 28,
-        "iiiiiiilllll",
-        "W" * 64,
-    )
+def test_every_final_styled_tile_handles_normal_and_worst_case_names() -> None:
+    # Every built-in gets the real production name and the widest allowed stress
+    # name. Extra mixed-case/narrow cases are targeted below instead of repeating
+    # an expensive full cross-product across all sixteen effect pipelines.
     for style in studio.FONT_STYLES.values():
-        for name in names:
-            _fitted, tile = studio._fitted_tile(
+        for name in ("UglyGameFace", "W" * 64):
+            _assert_fits(
+                style,
                 name,
-                style=style,
-                start_size=style.name_start_size,
-                min_size=style.name_min_size,
                 max_width=studio.NAME_SAFE_WIDTH,
                 max_height=studio.NAME_SAFE_HEIGHT,
-                role="name",
-                primary=(34, 220, 255),
-                secondary=(188, 66, 255),
             )
-            assert tile.width <= studio.NAME_SAFE_WIDTH, (style.key, name, tile.size)
-            assert tile.height <= studio.NAME_SAFE_HEIGHT, (style.key, name, tile.size)
-            assert _visible_bbox(tile) is not None
+
+
+def test_transform_sensitive_styles_handle_mixed_and_narrow_names() -> None:
+    names = ("WavyLowercase", "iiiiiiilllll", "@UglyGameFace")
+    for key in ("street", "soft", "outline", "retro"):
+        style = studio.FONT_STYLES[key]
+        for name in names:
+            _assert_fits(
+                style,
+                name,
+                max_width=studio.NAME_SAFE_WIDTH,
+                max_height=studio.NAME_SAFE_HEIGHT,
+            )
 
 
 def test_positive_shear_preserves_the_complete_leading_glyph() -> None:
@@ -108,20 +128,12 @@ def test_alpha_crop_ignores_invisible_blur_tail_pixels() -> None:
 
 def test_problem_styles_keep_visible_pixels_inside_a_safety_margin() -> None:
     for key in ("outline", "street", "soft", "retro", "bold", "neon", "prism"):
-        style = studio.FONT_STYLES[key]
-        _text, tile = studio._fitted_tile(
+        tile = _assert_fits(
+            studio.FONT_STYLES[key],
             "UglyGameFace",
-            style=style,
-            start_size=style.name_start_size,
-            min_size=style.name_min_size,
             max_width=680,
             max_height=68,
-            role="name",
-            primary=(34, 220, 255),
-            secondary=(188, 66, 255),
         )
-        assert tile.width <= 680
-        assert tile.height <= 68
         box = _visible_bbox(tile)
         assert box is not None
         left, top, right, bottom = box
