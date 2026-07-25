@@ -49,6 +49,7 @@ def test_all_studio_commands_are_owned_by_one_module() -> None:
         "card-font-upload",
         "card-font-clear",
         "card-colors",
+        "card-shuffle",
         "card-style",
     ):
         assert f'"{command_name}"' in STUDIO

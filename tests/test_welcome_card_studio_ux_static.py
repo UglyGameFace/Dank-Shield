@@ -40,3 +40,11 @@ def test_final_effects_are_fitted_not_only_base_glyphs() -> None:
 def test_avatar_geometry_stays_on_the_approved_renderer_primitive() -> None:
     assert "legacy._avatar_layer(" in ENGINE
     assert "canvas.alpha_composite(" in ENGINE
+
+def test_shuffle_controls_are_canonical_and_visual() -> None:
+    assert '"card-shuffle"' in COMMANDS
+    assert "Welcome Card Shuffle" in COMMANDS
+    assert "Shuffle Fonts + Themes" in COMMANDS
+    assert "Shuffle Everything" in COMMANDS
+    assert "configured_shuffle_mode" in SERVICE
+    assert "_resolve_effective_welcome_style" in SERVICE
