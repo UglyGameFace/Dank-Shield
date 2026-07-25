@@ -63,7 +63,14 @@ def test_privacy_changes_remove_stale_cards_immediately():
     assert "async def remove_user_cards(" in PROFILE_RUNTIME
     assert "async def remove_user_cards_all_guilds(" in PROFILE_RUNTIME
     assert PROFILE_COMMANDS.count("invalidate_member_live_cards(") >= 3
-    assert "Failed Discord deletions keep" in PROFILE_RUNTIME
+    helper = PROFILE_RUNTIME.split("async def _remove_user_card_states", 1)[1].split(
+        "async def remove_user_cards", 1
+    )[0]
+    assert "removed = await self._delete_stored_message" in helper
+    assert "if not removed:" in helper
+    assert helper.index("if not removed:") < helper.index(
+        "await delete_live_card_state(state_guild_id, channel_id)"
+    )
 
 
 def test_server_field_restrictions_invalidate_every_existing_guild_card():
