@@ -5,16 +5,20 @@ import runpy
 ROOT = Path(__file__).resolve().parents[1]
 PATCHER = ROOT / "tools" / "apply_live_profile_card_final_safety.py"
 source = PATCHER.read_text(encoding="utf-8")
-old = '''replace_once(
+old = r'''replace_once(
     "stoney_verify/commands_ext/public_profile_cards.py",
-    \'\'\'    effective_preferences,\n    get_effective_profile_settings,\n\'\'\',
-    \'\'\'    display_profile_username,\n    effective_preferences,\n    get_effective_profile_settings,\n\'\'\',
+    '''\'''    effective_preferences,\n    get_effective_profile_settings,\n'''\''',
+    '''\'''    display_profile_username,\n    effective_preferences,\n    get_effective_profile_settings,\n'''\''',
 )'''
-new = '''replace_once(
+new = r'''replace_once(
     "stoney_verify/commands_ext/public_profile_cards.py",
-    \'\'\'    effective_preferences,\n    PLATFORM_SPECS,\n    ProfileStorageUnavailable,\n    get_effective_profile_settings,\n\'\'\',
-    \'\'\'    display_profile_username,\n    effective_preferences,\n    PLATFORM_SPECS,\n    ProfileStorageUnavailable,\n    get_effective_profile_settings,\n\'\'\',
+    '''\'''    effective_preferences,\n    PLATFORM_SPECS,\n    ProfileStorageUnavailable,\n    get_effective_profile_settings,\n'''\''',
+    '''\'''    display_profile_username,\n    effective_preferences,\n    PLATFORM_SPECS,\n    ProfileStorageUnavailable,\n    get_effective_profile_settings,\n'''\''',
 )'''
+# The backslash-escaped triple quotes above keep this helper source valid while
+# matching the patcher's literal triple-quoted strings.
+old = old.replace("'''\\'''", "'''")
+new = new.replace("'''\\'''", "'''")
 if source.count(old) != 1:
     raise RuntimeError("profile service import patch anchor changed")
 PATCHER.write_text(source.replace(old, new, 1), encoding="utf-8")
