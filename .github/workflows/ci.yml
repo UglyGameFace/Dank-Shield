@@ -120,19 +120,24 @@ jobs:
         run: |
           python - <<'PY'
           from pathlib import Path
+          from textwrap import dedent
 
           path = Path("tools/apply_live_profile_card_interaction_hardening.py")
           source = path.read_text(encoding="utf-8")
-          old = """replace_once(
+          old = dedent("""\
+          replace_once(
               "stoney_verify/commands_ext/public_profile_cards.py",
               '''    await interaction.response.send_message(\n        embed=_live_status_embed(guild, updated),\n        ephemeral=True,\n        allowed_mentions=discord.AllowedMentions.none(),\n    )\n''',
               '''    await _send_private(interaction, embed=_live_status_embed(guild, updated))\n''',
-          )"""
-          new = """replace_once(
+          )
+          """)
+          new = dedent("""\
+          replace_once(
               "stoney_verify/commands_ext/public_profile_cards.py",
               '''    runtime = getattr(getattr(interaction, "client", None), _RUNTIME_ATTRIBUTE, None)\n    if not enabled and isinstance(runtime, LiveProfileCardRuntime):\n        await runtime.disable_channel(guild, channel)\n\n    await interaction.response.send_message(\n        embed=_live_status_embed(guild, updated),\n        ephemeral=True,\n        allowed_mentions=discord.AllowedMentions.none(),\n    )\n''',
               '''    runtime = getattr(getattr(interaction, "client", None), _RUNTIME_ATTRIBUTE, None)\n    if not enabled and isinstance(runtime, LiveProfileCardRuntime):\n        await runtime.disable_channel(guild, channel)\n\n    await _send_private(interaction, embed=_live_status_embed(guild, updated))\n''',
-          )"""
+          )
+          """)
           if source.count(old) != 1:
               raise RuntimeError("channel-enable response patch anchor changed")
           path.write_text(source.replace(old, new, 1), encoding="utf-8")
