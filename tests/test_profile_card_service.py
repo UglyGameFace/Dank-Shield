@@ -52,7 +52,18 @@ def test_phishing_lookalikes_and_non_profile_urls_are_rejected(platform, url):
         normalize_platform_url(platform, url)
 
 
-@pytest.mark.parametrize("platform", ["epic", "nintendo", "riot", "battle_net", "custom"])
+@pytest.mark.parametrize(
+    "platform",
+    [
+        "epic",
+        "xbox",
+        "playstation",
+        "nintendo",
+        "riot",
+        "battle_net",
+        "custom",
+    ],
+)
 def test_username_only_platforms_never_invent_or_accept_profile_links(platform):
     assert normalize_platform_url(platform, "") == ""
     with pytest.raises(InvalidPlatformProfile):
