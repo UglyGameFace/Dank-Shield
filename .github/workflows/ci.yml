@@ -153,18 +153,14 @@ jobs:
 
       - name: Run focused profile-card tests
         if: steps.patch.outputs.exit_code == '0'
-        id: focused
         run: |
-          set +e
+          set -o pipefail
           python -m pytest -q \
             tests/test_profile_card_service.py \
             tests/test_live_profile_card_runtime.py \
             tests/test_live_profile_card_integration_contract.py \
             tests/test_command_surface_uniqueness.py \
-            > profile-owner-tests.log 2>&1
-          code=$?
-          echo "exit_code=$code" >> "$GITHUB_OUTPUT"
-          exit 0
+            2>&1 | tee profile-owner-tests.log
 
       - name: Upload focused profile test log
         if: always()
@@ -175,14 +171,8 @@ jobs:
           if-no-files-found: warn
           retention-days: 3
 
-      - name: Fail when focused tests fail
-        if: steps.patch.outputs.exit_code == '0' && steps.focused.outputs.exit_code != '0'
-        run: |
-          cat profile-owner-tests.log
-          exit 1
-
       - name: Inspect cleanup and whitespace
-        if: steps.patch.outputs.exit_code == '0' && steps.focused.outputs.exit_code == '0'
+        if: steps.patch.outputs.exit_code == '0'
         run: |
           find . -type d -name __pycache__ -prune -exec rm -rf {} +
           find . -type f \( -name '*.pyc' -o -name '*.pyo' \) -delete
@@ -191,7 +181,7 @@ jobs:
           test ! -f tools/apply_live_profile_card_owner_integration.py
 
       - name: Commit validated native integration
-        if: steps.patch.outputs.exit_code == '0' && steps.focused.outputs.exit_code == '0'
+        if: steps.patch.outputs.exit_code == '0'
         run: |
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
