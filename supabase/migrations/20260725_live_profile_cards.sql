@@ -53,6 +53,9 @@ create table if not exists public.dank_live_profile_cards (
 create index if not exists idx_dank_live_profile_cards_guild
     on public.dank_live_profile_cards (guild_id, channel_id);
 
+create index if not exists idx_dank_live_profile_cards_user
+    on public.dank_live_profile_cards (user_id, guild_id, channel_id);
+
 alter table public.dank_profile_users enable row level security;
 alter table public.dank_profile_guild_settings enable row level security;
 alter table public.dank_live_profile_cards enable row level security;

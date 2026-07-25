@@ -27,6 +27,7 @@ _USERNAME_MAX = 80
 _URL_MAX = 500
 _DB_ATTEMPTS = 3
 _CACHE_TTL_SECONDS = 60.0
+_BIDI_CONTROL_RE = re.compile("[\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]")
 
 
 class ProfileStorageUnavailable(RuntimeError):
@@ -103,14 +104,21 @@ def clean_platform_key(value: Any) -> str:
 
 def clean_profile_username(value: Any) -> str:
     text = str(value or "").replace("@everyone", "everyone").replace("@here", "here")
+    text = _BIDI_CONTROL_RE.sub("", text)
     text = " ".join(text.replace("\r", " ").replace("\n", " ").split()).strip()
     if len(text) < 1:
         raise InvalidPlatformProfile("Enter the username or handle shown on that platform.")
     if len(text) > _USERNAME_MAX:
         raise InvalidPlatformProfile(f"Platform usernames must be {_USERNAME_MAX} characters or shorter.")
-    if "http://" in text.lower() or "https://" in text.lower() or "discord.gg" in text.lower():
+    lowered = text.lower()
+    if "://" in lowered or "discord.gg" in lowered:
         raise InvalidPlatformProfile("Put the username in the username field, not a link.")
     return text
+
+
+def display_profile_username(value: Any) -> str:
+    """Return a Discord-safe username that cannot create markdown links."""
+    return clean_profile_username(value).replace("`", "ʼ")
 
 
 def _normalized_path(parsed_path: str) -> str:
@@ -176,7 +184,11 @@ def normalize_platform_url(platform: Any, value: Any) -> str:
     parsed = urlparse(raw)
     if parsed.scheme.lower() != "https":
         raise InvalidPlatformProfile("Profile links must use HTTPS.")
-    if parsed.username or parsed.password or parsed.port:
+    try:
+        parsed_port = parsed.port
+    except ValueError as exc:
+        raise InvalidPlatformProfile("Profile links cannot contain an invalid port.") from exc
+    if parsed.username or parsed.password or parsed_port is not None:
         raise InvalidPlatformProfile("Profile links cannot contain credentials or custom ports.")
 
     host = str(parsed.hostname or "").lower().rstrip(".")
@@ -528,6 +540,30 @@ async def list_live_card_states() -> list[dict[str, Any]]:
     return _rows(await _execute("list live profile states", read))
 
 
+async def list_live_card_states_for_user(
+    user_id: int,
+    *,
+    guild_id: Optional[int] = None,
+) -> list[dict[str, Any]]:
+    uid = int(user_id)
+    gid = int(guild_id) if guild_id is not None else None
+
+    def read(client: Any):
+        query = (
+            client.table(LIVE_CARD_STATE_TABLE)
+            .select("*")
+            .eq("user_id", str(uid))
+        )
+        if gid is not None:
+            query = query.eq("guild_id", str(gid))
+        return query.execute()
+
+    label = f"list live profile states for user {uid}"
+    if gid is not None:
+        label += f" in guild {gid}"
+    return _rows(await _execute(label, read))
+
+
 async def upsert_live_card_state(
     guild_id: int,
     channel_id: int,
@@ -581,6 +617,7 @@ __all__ = [
     "PROFILE_FIELDS",
     "ProfileStorageUnavailable",
     "clean_platform_key",
+    "display_profile_username",
     "effective_preferences",
     "get_effective_profile_settings",
     "get_live_card_state",
@@ -588,6 +625,7 @@ __all__ = [
     "get_profile_user",
     "invalidate_profile_cache",
     "list_live_card_states",
+    "list_live_card_states_for_user",
     "normalize_platform_entry",
     "normalize_platform_url",
     "normalize_preferences",

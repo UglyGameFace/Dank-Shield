@@ -21,6 +21,7 @@ from stoney_verify.profile_card_runtime import (
 from stoney_verify.profile_card_service import (
     DEFAULT_PROFILE_PREFERENCES,
     InvalidPlatformProfile,
+    display_profile_username,
     effective_preferences,
     PLATFORM_SPECS,
     ProfileStorageUnavailable,
@@ -174,7 +175,10 @@ def _settings_embed(
             continue
         visibility = "shared" if bool(entry.get("shared")) else "private"
         link_state = " • linked" if str(entry.get("url") or "").strip() else ""
-        identity_lines.append(f"{spec.emoji} **{spec.label}:** {username} — {visibility}{link_state}")
+        safe_username = display_profile_username(username)
+        identity_lines.append(
+            f"{spec.emoji} **{spec.label}:** `{safe_username}` — {visibility}{link_state}"
+        )
     embed.add_field(
         name="Saved platform identities",
         value="\n".join(identity_lines)[:1024] if identity_lines else "None saved. Use `/dank profile platform`.",
@@ -554,7 +558,8 @@ def _live_status_embed(guild: discord.Guild, config: Mapping[str, Any]) -> disco
         title="🪪 Live Profile Cards",
         description=(
             "One bot-owned card follows the latest eligible human speaker in each enabled channel. "
-            "Bursts are debounced and the same speaker is cooldown-suppressed."
+            f"Bursts are debounced, replacements are limited to about {int(live.replacement_cooldown_seconds)} seconds, "
+            "and the same speaker is cooldown-suppressed."
         ),
         color=discord.Color.green() if live.enabled else discord.Color.gold(),
         timestamp=discord.utils.utcnow(),
@@ -707,6 +712,8 @@ def register_public_profile_cards(bot: Any, tree: Any) -> None:
         setattr(bot, _RUNTIME_ATTRIBUTE, runtime)
         bot.add_listener(runtime.on_message, "on_message")
         bot.add_listener(runtime.on_ready, "on_ready")
+        bot.add_listener(runtime.on_member_remove, "on_member_remove")
+        bot.add_listener(runtime.on_guild_channel_delete, "on_guild_channel_delete")
     if not _REGISTERED:
         _REGISTERED = True
         print("✅ public_profile_cards: attached privacy, platform, and non-repetitive live-card controls")

@@ -9,14 +9,16 @@ from typing import Any, Awaitable, Callable, Mapping, Optional
 
 import discord
 
-from .guild_config import get_guild_config
+from .guild_config import get_guild_config, upsert_guild_config
 from .profile_card_service import (
     PLATFORM_SPECS,
     ProfileStorageUnavailable,
     delete_live_card_state,
+    display_profile_username,
     get_effective_profile_settings,
     get_live_card_state,
     list_live_card_states,
+    list_live_card_states_for_user,
     normalize_server_allowed_fields,
     upsert_live_card_state,
     visible_platform_entries,
@@ -27,12 +29,16 @@ LIVE_ENABLED_KEY = "profile_live_cards_enabled"
 LIVE_CHANNEL_IDS_KEY = "profile_live_card_channel_ids"
 LIVE_ALLOWED_FIELDS_KEY = "profile_live_card_allowed_fields"
 LIVE_DEBOUNCE_KEY = "profile_live_card_debounce_seconds"
+LIVE_REPLACEMENT_COOLDOWN_KEY = "profile_live_card_replacement_cooldown_seconds"
 LIVE_SAME_SPEAKER_COOLDOWN_KEY = "profile_live_card_same_speaker_cooldown_seconds"
 
 DEFAULT_DEBOUNCE_SECONDS = 4.0
+DEFAULT_REPLACEMENT_COOLDOWN_SECONDS = 30.0
 DEFAULT_SAME_SPEAKER_COOLDOWN_SECONDS = 180.0
 MIN_DEBOUNCE_SECONDS = 2.0
 MAX_DEBOUNCE_SECONDS = 15.0
+MIN_REPLACEMENT_COOLDOWN_SECONDS = 15.0
+MAX_REPLACEMENT_COOLDOWN_SECONDS = 300.0
 MIN_SAME_SPEAKER_COOLDOWN_SECONDS = 30.0
 MAX_SAME_SPEAKER_COOLDOWN_SECONDS = 3600.0
 LIVE_CARD_HISTORY_SCAN_LIMIT = 100
@@ -47,6 +53,7 @@ class LiveCardConfig:
     channel_ids: frozenset[int]
     allowed_fields: frozenset[str]
     debounce_seconds: float
+    replacement_cooldown_seconds: float
     same_speaker_cooldown_seconds: float
 
 
@@ -62,6 +69,7 @@ class PendingTrigger:
     channel_id: int
     user_id: int
     message_id: int
+    delay_seconds: float = 0.0
 
 
 RenderProfile = Callable[[discord.Member, set[str]], Awaitable[Optional[LiveCardRender]]]
@@ -117,6 +125,12 @@ def parse_live_card_config(config: Mapping[str, Any]) -> LiveCardConfig:
             DEFAULT_DEBOUNCE_SECONDS,
             MIN_DEBOUNCE_SECONDS,
             MAX_DEBOUNCE_SECONDS,
+        ),
+        replacement_cooldown_seconds=_safe_float(
+            config.get(LIVE_REPLACEMENT_COOLDOWN_KEY),
+            DEFAULT_REPLACEMENT_COOLDOWN_SECONDS,
+            MIN_REPLACEMENT_COOLDOWN_SECONDS,
+            MAX_REPLACEMENT_COOLDOWN_SECONDS,
         ),
         same_speaker_cooldown_seconds=_safe_float(
             config.get(LIVE_SAME_SPEAKER_COOLDOWN_KEY),
@@ -277,7 +291,8 @@ async def render_live_profile_card(
             spec = PLATFORM_SPECS.get(str(entry.get("platform") or ""))
             if spec is None:
                 continue
-            lines.append(f"{spec.emoji} **{spec.label}:** {entry.get('username')}")
+            username = display_profile_username(entry.get("username"))
+            lines.append(f"{spec.emoji} **{spec.label}:** `{username}`")
         if lines:
             embed.add_field(name="Connected identities", value="\n".join(lines)[:1024], inline=False)
 
@@ -347,14 +362,23 @@ class LiveProfileCardRuntime:
         key = (int(message.guild.id), int(message.channel.id))
         user_id = int(message.author.id)
         in_memory = self._last_posted.get(key)
-        if in_memory and in_memory[0] == user_id and monotonic() - in_memory[1] < config.same_speaker_cooldown_seconds:
-            return
+        delay_seconds = config.debounce_seconds
+        if in_memory:
+            age = monotonic() - in_memory[1]
+            if in_memory[0] == user_id and age < config.same_speaker_cooldown_seconds:
+                return
+            if age < config.replacement_cooldown_seconds:
+                delay_seconds = max(
+                    delay_seconds,
+                    config.replacement_cooldown_seconds - age,
+                )
 
         trigger = PendingTrigger(
             guild_id=key[0],
             channel_id=key[1],
             user_id=user_id,
             message_id=int(message.id),
+            delay_seconds=delay_seconds,
         )
         self._latest[key] = trigger
         previous = self._pending.get(key)
@@ -380,7 +404,7 @@ class LiveProfileCardRuntime:
         config: LiveCardConfig,
         trigger: PendingTrigger,
     ) -> None:
-        await self.sleep(config.debounce_seconds)
+        await self.sleep(max(config.debounce_seconds, trigger.delay_seconds))
         key = (trigger.guild_id, trigger.channel_id)
         if self._latest.get(key) != trigger:
             return
@@ -405,10 +429,15 @@ class LiveProfileCardRuntime:
             return
 
         state = await get_live_card_state(trigger.guild_id, trigger.channel_id)
+        age = _state_age_seconds(state)
         if state and str(state.get("user_id") or "") == str(trigger.user_id):
-            age = _state_age_seconds(state)
             if age is not None and age < config.same_speaker_cooldown_seconds:
                 self._last_posted[(trigger.guild_id, trigger.channel_id)] = (trigger.user_id, monotonic())
+                return
+        elif state and age is not None and age < config.replacement_cooldown_seconds:
+            await self.sleep(config.replacement_cooldown_seconds - age)
+            key = (trigger.guild_id, trigger.channel_id)
+            if self._latest.get(key) != trigger:
                 return
 
         rendered = await self.renderer(
@@ -502,7 +531,10 @@ class LiveProfileCardRuntime:
             self._last_posted.pop(key, None)
 
         try:
-            states = await list_live_card_states()
+            states = await list_live_card_states_for_user(
+                resolved_user_id,
+                guild_id=resolved_guild_id,
+            )
         except ProfileStorageUnavailable:
             return
 
@@ -607,6 +639,32 @@ class LiveProfileCardRuntime:
     async def disable_channel(self, guild: discord.Guild, channel: discord.TextChannel) -> None:
         await self._remove_channel_card_state(guild, channel.id)
 
+    async def on_member_remove(self, member: discord.Member) -> None:
+        await self.remove_user_cards(member.guild, member.id)
+
+    async def on_guild_channel_delete(self, channel: discord.abc.GuildChannel) -> None:
+        if not isinstance(channel, discord.TextChannel):
+            return
+        try:
+            config = await get_guild_config(channel.guild.id, refresh=True)
+        except Exception:
+            return
+        channel_ids = set(_channel_ids(config.get(LIVE_CHANNEL_IDS_KEY)))
+        if channel.id not in channel_ids:
+            return
+        channel_ids.discard(channel.id)
+        try:
+            await upsert_guild_config(
+                channel.guild.id,
+                {
+                    LIVE_ENABLED_KEY: bool(channel_ids),
+                    LIVE_CHANNEL_IDS_KEY: [str(value) for value in sorted(channel_ids)],
+                },
+            )
+        except Exception:
+            return
+        await self._remove_channel_card_state(channel.guild, channel.id)
+
     async def reconcile(self) -> None:
         bot_user = getattr(self.bot, "user", None)
         if bot_user is None:
@@ -668,15 +726,36 @@ class LiveProfileCardRuntime:
         bot_user = getattr(self.bot, "user", None)
         if bot_user is None:
             return
-        owned: list[discord.Message] = []
+        owned_by_id: dict[int, discord.Message] = {}
+        if state:
+            try:
+                stored_message_id = int(str(state.get("message_id") or "0"))
+            except Exception:
+                stored_message_id = 0
+            if stored_message_id:
+                try:
+                    stored_message = await channel.fetch_message(stored_message_id)
+                except discord.NotFound:
+                    stored_message = None
+                except Exception:
+                    return
+                if (
+                    stored_message is not None
+                    and int(getattr(stored_message.author, "id", 0) or 0) == int(bot_user.id)
+                    and parse_live_card_footer(stored_message) is not None
+                ):
+                    owned_by_id[int(stored_message.id)] = stored_message
+
         try:
             async for message in channel.history(limit=LIVE_CARD_HISTORY_SCAN_LIMIT):
                 if int(getattr(message.author, "id", 0) or 0) != int(bot_user.id):
                     continue
                 if parse_live_card_footer(message) is not None:
-                    owned.append(message)
+                    owned_by_id[int(message.id)] = message
         except Exception:
-            return
+            if not owned_by_id:
+                return
+        owned = list(owned_by_id.values())
 
         if not owned:
             if state:
@@ -709,12 +788,14 @@ class LiveProfileCardRuntime:
 
 __all__ = [
     "DEFAULT_DEBOUNCE_SECONDS",
+    "DEFAULT_REPLACEMENT_COOLDOWN_SECONDS",
     "DEFAULT_SAME_SPEAKER_COOLDOWN_SECONDS",
     "LIVE_ALLOWED_FIELDS_KEY",
     "LIVE_CARD_FOOTER_PREFIX",
     "LIVE_CHANNEL_IDS_KEY",
     "LIVE_DEBOUNCE_KEY",
     "LIVE_ENABLED_KEY",
+    "LIVE_REPLACEMENT_COOLDOWN_KEY",
     "LIVE_SAME_SPEAKER_COOLDOWN_KEY",
     "READY_RECONCILE_THROTTLE_SECONDS",
     "LiveCardConfig",
