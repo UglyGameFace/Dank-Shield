@@ -51,6 +51,21 @@ def test_privacy_is_resolved_in_service_layer_before_rendering():
     assert "effective_preferences" in PROFILE_SERVICE
 
 
+def test_all_existing_public_profile_entry_points_use_privacy_aware_composer():
+    assert "async def send_privacy_aware_profile" in PROFILE_COMMANDS
+    assert EXISTING_PROFILE.count("send_privacy_aware_profile") >= 4
+    assert 'if suffix == "privacy"' in EXISTING_PROFILE
+    assert EXISTING_PROFILE.count('label="Privacy & Platforms"') >= 2
+    assert "invalidate_member_live_cards" in EXISTING_PROFILE
+
+
+def test_privacy_changes_remove_stale_cards_immediately():
+    assert "async def remove_user_cards(" in PROFILE_RUNTIME
+    assert "async def remove_user_cards_all_guilds(" in PROFILE_RUNTIME
+    assert PROFILE_COMMANDS.count("invalidate_member_live_cards(") >= 3
+    assert "Failed Discord deletions keep" in PROFILE_RUNTIME
+
+
 def test_server_setup_uses_discord_channel_picker_and_existing_guild_config():
     assert "channel: discord.TextChannel" in PROFILE_COMMANDS
     assert "upsert_guild_config" in PROFILE_COMMANDS
