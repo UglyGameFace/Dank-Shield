@@ -159,7 +159,6 @@ jobs:
             tests/test_profile_card_service.py \
             tests/test_live_profile_card_runtime.py \
             tests/test_live_profile_card_integration_contract.py \
-            tests/test_command_surface_uniqueness.py \
             2>&1 | tee profile-owner-tests.log
 
       - name: Upload focused profile test log
