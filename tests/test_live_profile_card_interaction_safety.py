@@ -27,14 +27,22 @@ def test_private_storage_commands_defer_before_database_io():
     assert public_view.index("await _defer_private(interaction)") < public_view.index("get_guild_config(")
 
 
-def test_component_toggle_defers_then_edits_original_settings_message():
-    toggle = COMMANDS.split("class _PrivacyToggleButton", 1)[1].split(
+def test_global_and_server_privacy_toggles_defer_then_refresh():
+    global_toggle = COMMANDS.split("class _GlobalPrivacyToggleButton", 1)[1].split(
+        "class _GuildPrivacyToggleButton", 1
+    )[0]
+    guild_toggle = COMMANDS.split("class _GuildPrivacyToggleButton", 1)[1].split(
         "class _PreviewProfileButton", 1
     )[0]
     refresh = COMMANDS.split("async def refresh", 1)[1].split(
-        "class _PrivacyToggleButton", 1
+        "class _GlobalPrivacyToggleButton", 1
     )[0]
-    assert "await _defer_private(interaction, component_update=True)" in toggle
+    assert "upsert_profile_user_preferences(" in global_toggle
+    assert "all_guilds=True" in global_toggle
+    assert "upsert_profile_guild_settings(" in guild_toggle
+    assert "None if hidden else False" in guild_toggle
+    assert "await _defer_private(interaction, component_update=True)" in global_toggle
+    assert "await _defer_private(interaction, component_update=True)" in guild_toggle
     assert "await interaction.edit_original_response(**payload)" in refresh
 
 

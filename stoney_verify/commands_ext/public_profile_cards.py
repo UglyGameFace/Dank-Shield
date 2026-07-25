@@ -31,6 +31,7 @@ from stoney_verify.profile_card_service import (
     remove_platform_identity,
     save_platform_identity,
     upsert_profile_guild_settings,
+    upsert_profile_user_preferences,
 )
 
 
@@ -137,6 +138,7 @@ def _settings_embed(
     effective: Mapping[str, Any],
 ) -> discord.Embed:
     preferences = dict(effective.get("preferences") or {})
+    global_preferences = dict(user_row.get("preferences") or {})
     local = dict(guild_row.get("settings") or {})
     platforms = dict(user_row.get("platforms") or {})
     embed = discord.Embed(
@@ -149,20 +151,39 @@ def _settings_embed(
         timestamp=discord.utils.utcnow(),
     )
     embed.add_field(
-        name="Live profile in configured channels",
-        value=_yes_no(preferences.get("live_cards_enabled", True)),
+        name="Effective in this server",
+        value=(
+            f"Live cards: {_yes_no(preferences.get('live_cards_enabled', True))}\n"
+            f"Profile roles: {_yes_no(preferences.get('show_roles', True))}\n"
+            f"Account dates: {_yes_no(preferences.get('show_account_dates', True))}\n"
+            f"Platforms: {_yes_no(preferences.get('show_platforms', True))}"
+        ),
         inline=True,
     )
-    embed.add_field(name="Show profile roles", value=_yes_no(preferences.get("show_roles", True)), inline=True)
     embed.add_field(
-        name="Show account/server dates",
-        value=_yes_no(preferences.get("show_account_dates", True)),
+        name="Every-server defaults",
+        value=(
+            f"Live cards: {_yes_no(global_preferences.get('live_cards_enabled', True))}\n"
+            f"Profile roles: {_yes_no(global_preferences.get('show_roles', True))}\n"
+            f"Account dates: {_yes_no(global_preferences.get('show_account_dates', True))}\n"
+            f"Platforms: {_yes_no(global_preferences.get('show_platforms', True))}"
+        ),
         inline=True,
     )
+    hidden_here = [
+        label
+        for key, label in (
+            ("live_cards_enabled", "Live cards"),
+            ("show_roles", "Profile roles"),
+            ("show_account_dates", "Account dates"),
+            ("show_platforms", "Platforms"),
+        )
+        if local.get(key) is False
+    ]
     embed.add_field(
-        name="Show shared platforms",
-        value=_yes_no(preferences.get("show_platforms", True)),
-        inline=True,
+        name="This-server overrides",
+        value=", ".join(hidden_here) + " hidden" if hidden_here else "All settings inherit your defaults.",
+        inline=False,
     )
 
     identity_lines: list[str] = []
@@ -201,16 +222,30 @@ def _settings_embed(
 
 
 class ProfileSettingsView(discord.ui.View):
-    def __init__(self, *, author_id: int, guild_id: int, preferences: Mapping[str, Any]) -> None:
+    def __init__(
+        self,
+        *,
+        author_id: int,
+        guild_id: int,
+        user_preferences: Mapping[str, Any],
+        guild_settings: Mapping[str, Any],
+    ) -> None:
         super().__init__(timeout=300)
         self.author_id = int(author_id)
         self.guild_id = int(guild_id)
-        values = dict(preferences or {})
-        self.add_item(_PrivacyToggleButton("Live Cards", "live_cards_enabled", values, "🪪", 0))
-        self.add_item(_PrivacyToggleButton("Profile Roles", "show_roles", values, "🎭", 0))
-        self.add_item(_PrivacyToggleButton("Account Dates", "show_account_dates", values, "📅", 0))
-        self.add_item(_PrivacyToggleButton("Platforms", "show_platforms", values, "🔗", 0))
-        self.add_item(_PreviewProfileButton(row=1))
+        global_values = dict(user_preferences or {})
+        local_values = dict(guild_settings or {})
+        specs = (
+            ("Live", "live_cards_enabled", "🪪"),
+            ("Roles", "show_roles", "🎭"),
+            ("Dates", "show_account_dates", "📅"),
+            ("Platforms", "show_platforms", "🔗"),
+        )
+        for label, key, emoji in specs:
+            self.add_item(_GlobalPrivacyToggleButton(label, key, global_values, emoji, 0))
+        for label, key, emoji in specs:
+            self.add_item(_GuildPrivacyToggleButton(label, key, local_values, emoji, 1))
+        self.add_item(_PreviewProfileButton(row=2))
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if int(interaction.user.id) != self.author_id:
@@ -232,7 +267,8 @@ class ProfileSettingsView(discord.ui.View):
             "view": ProfileSettingsView(
                 author_id=self.author_id,
                 guild_id=self.guild_id,
-                preferences=preferences,
+                user_preferences=dict(user_row.get("preferences") or {}),
+                guild_settings=dict(guild_row.get("settings") or {}),
             ),
             "allowed_mentions": discord.AllowedMentions.none(),
         }
@@ -242,7 +278,7 @@ class ProfileSettingsView(discord.ui.View):
             await interaction.response.edit_message(**payload)
 
 
-class _PrivacyToggleButton(discord.ui.Button):
+class _GlobalPrivacyToggleButton(discord.ui.Button):
     def __init__(
         self,
         label: str,
@@ -254,10 +290,10 @@ class _PrivacyToggleButton(discord.ui.Button):
         self.preference_key = key
         current = bool(preferences.get(key, True))
         super().__init__(
-            label=f"{label}: {'On' if current else 'Off'}",
+            label=f"Every Server {label}: {'On' if current else 'Off'}",
             emoji=emoji,
             style=discord.ButtonStyle.success if current else discord.ButtonStyle.secondary,
-            custom_id=f"dank:profilecard:v1:toggle:{key}",
+            custom_id=f"dank:profilecard:v2:global:{key}",
             row=row,
         )
 
@@ -267,12 +303,56 @@ class _PrivacyToggleButton(discord.ui.Button):
             return
         await _defer_private(interaction, component_update=True)
         try:
-            effective = await get_effective_profile_settings(view.guild_id, view.author_id)
-            current = bool(dict(effective.get("preferences") or {}).get(self.preference_key, True))
+            user_row = await get_profile_user(view.author_id, refresh=True)
+            current = bool(dict(user_row.get("preferences") or {}).get(self.preference_key, True))
+            await upsert_profile_user_preferences(
+                view.author_id,
+                {self.preference_key: not current},
+            )
+            if interaction.guild is not None:
+                await invalidate_member_live_cards(
+                    interaction.client,
+                    interaction.guild,
+                    view.author_id,
+                    all_guilds=True,
+                )
+            await view.refresh(interaction)
+        except ProfileStorageUnavailable:
+            await _safe_ephemeral(interaction, "Private profile storage is unavailable. Nothing was changed.", ok=False)
+
+
+class _GuildPrivacyToggleButton(discord.ui.Button):
+    def __init__(
+        self,
+        label: str,
+        key: str,
+        settings: Mapping[str, Any],
+        emoji: str,
+        row: int,
+    ) -> None:
+        self.preference_key = key
+        hidden = settings.get(key) is False
+        super().__init__(
+            label=f"This Server {label}: {'Hidden' if hidden else 'Inherit'}",
+            emoji=emoji,
+            style=discord.ButtonStyle.secondary if hidden else discord.ButtonStyle.primary,
+            custom_id=f"dank:profilecard:v2:guild:{key}",
+            row=row,
+        )
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        view = self.view
+        if not isinstance(view, ProfileSettingsView) or not await view.interaction_check(interaction):
+            return
+        await _defer_private(interaction, component_update=True)
+        try:
+            guild_row = await get_profile_guild_settings(view.guild_id, view.author_id, refresh=True)
+            settings = dict(guild_row.get("settings") or {})
+            hidden = settings.get(self.preference_key) is False
             await upsert_profile_guild_settings(
                 view.guild_id,
                 view.author_id,
-                {self.preference_key: not current},
+                {self.preference_key: None if hidden else False},
             )
             if interaction.guild is not None:
                 await invalidate_member_live_cards(
@@ -341,11 +421,15 @@ async def profile_settings(interaction: discord.Interaction) -> None:
             "Private profile storage is not ready. No privacy setting was guessed or changed.",
             ok=False,
         )
-    preferences = dict(effective.get("preferences") or {})
     await _send_private(
         interaction,
         embed=_settings_embed(member, user_row, guild_row, effective),
-        view=ProfileSettingsView(author_id=member.id, guild_id=guild.id, preferences=preferences),
+        view=ProfileSettingsView(
+            author_id=member.id,
+            guild_id=guild.id,
+            user_preferences=dict(user_row.get("preferences") or {}),
+            guild_settings=dict(guild_row.get("settings") or {}),
+        ),
     )
 
 

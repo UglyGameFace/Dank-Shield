@@ -382,6 +382,40 @@ async def get_profile_user(user_id: int, *, refresh: bool = False) -> dict[str, 
     return dict(payload)
 
 
+async def upsert_profile_user_preferences(
+    user_id: int,
+    updates: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Update cross-server privacy defaults without touching saved identities."""
+    uid = int(user_id)
+    lock = _USER_LOCKS.setdefault(uid, asyncio.Lock())
+    async with lock:
+        current = await get_profile_user(uid, refresh=True)
+        preferences = normalize_preferences(current.get("preferences"))
+        for key in DEFAULT_PROFILE_PREFERENCES:
+            if key in updates and updates.get(key) is not None:
+                preferences[key] = bool(updates.get(key))
+        payload = {
+            "user_id": str(uid),
+            "preferences": preferences,
+            "platforms": dict(current.get("platforms") or {}),
+            "updated_at": utc_now_iso(),
+        }
+
+        def write(client: Any):
+            try:
+                return client.table(PROFILE_USER_TABLE).upsert(
+                    payload,
+                    on_conflict="user_id",
+                ).execute()
+            except TypeError:
+                return client.table(PROFILE_USER_TABLE).upsert(payload).execute()
+
+        await _execute(f"write profile user preferences {uid}", write)
+        invalidate_profile_cache(user_id=uid)
+        return await get_profile_user(uid, refresh=True)
+
+
 async def get_profile_guild_settings(guild_id: int, user_id: int, *, refresh: bool = False) -> dict[str, Any]:
     key = (int(guild_id), int(user_id))
     if not refresh:
@@ -431,8 +465,15 @@ async def upsert_profile_guild_settings(guild_id: int, user_id: int, updates: Ma
         current = await get_profile_guild_settings(gid, uid, refresh=True)
         settings = dict(current.get("settings") or {})
         for key in DEFAULT_PROFILE_PREFERENCES:
-            if key in updates and updates.get(key) is not None:
-                settings[key] = bool(updates.get(key))
+            if key not in updates:
+                continue
+            value = updates.get(key)
+            if value is None or bool(value):
+                # Per-server settings are deny-only. True means inherit the
+                # cross-server default rather than storing a misleading allow.
+                settings.pop(key, None)
+            else:
+                settings[key] = False
         payload = {
             "guild_id": str(gid),
             "user_id": str(uid),
@@ -634,6 +675,7 @@ __all__ = [
     "save_platform_identity",
     "upsert_live_card_state",
     "upsert_profile_guild_settings",
+    "upsert_profile_user_preferences",
     "delete_live_card_state",
     "visible_platform_entries",
 ]
