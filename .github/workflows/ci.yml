@@ -119,7 +119,7 @@ jobs:
       - name: Apply final safety hardening
         run: |
           set -o pipefail
-          python tools/apply_live_profile_card_final_safety.py 2>&1 | tee profile-final-safety.log
+          python tools/run_live_profile_card_final_safety.py 2>&1 | tee profile-final-safety.log
 
       - name: Upload exact safety patch log
         if: always()
@@ -130,9 +130,10 @@ jobs:
           if-no-files-found: warn
           retention-days: 3
 
-      - name: Remove temporary patch script
+      - name: Remove temporary patch scripts
         run: |
           rm -f tools/apply_live_profile_card_final_safety.py
+          rm -f tools/run_live_profile_card_final_safety.py
           rm -f profile-final-safety.log
 
       - name: Compile affected modules
@@ -159,6 +160,7 @@ jobs:
           find . -type f \( -name '*.pyc' -o -name '*.pyo' \) -delete
           git diff --check
           test ! -f tools/apply_live_profile_card_final_safety.py
+          test ! -f tools/run_live_profile_card_final_safety.py
 
       - name: Commit validated final safety hardening
         run: |
