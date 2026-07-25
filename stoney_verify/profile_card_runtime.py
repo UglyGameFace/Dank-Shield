@@ -196,12 +196,21 @@ def _copy_base_profile_embed(base: discord.Embed, *, show_roles: bool, show_date
         color=base.color,
         timestamp=base.timestamp,
     )
-    role_field_names = {"🪪 Pronouns", "🌈 Identity", "🎮 Interests", "Profile roles", "Pages"}
+    role_field_names = {"🪪 Pronouns", "🌈 Identity", "🎮 Interests", "Profile roles"}
     date_field_names = {"Joined server", "Account created"}
     for field in list(base.fields):
-        if field.name in role_field_names and not show_roles:
+        field_name = str(field.name or "")
+        # Live/public cards are compact. Never show a dead pagination counter,
+        # and remove both the base and dynamic paginated role fields when the
+        # member hides roles.
+        if field_name == "Pages":
             continue
-        if field.name in date_field_names and not show_dates:
+        if not show_roles and (
+            field_name in role_field_names
+            or field_name.startswith("Profile roles ")
+        ):
+            continue
+        if field_name in date_field_names and not show_dates:
             continue
         embed.add_field(name=field.name, value=field.value, inline=field.inline)
     try:
@@ -437,6 +446,57 @@ class LiveProfileCardRuntime:
             except Exception:
                 return False
         return False
+
+    async def remove_user_cards(self, guild: discord.Guild, user_id: int) -> None:
+        """Remove only this member's owned live cards in one guild.
+
+        Privacy changes use this immediately so an already-posted card cannot
+        keep displaying data the member just hid. Failed Discord deletions keep
+        their durable state so reconciliation can retry later.
+        """
+        resolved_user_id = int(user_id)
+        try:
+            config = parse_live_card_config(await get_guild_config(guild.id))
+        except Exception:
+            return
+
+        for channel_id in config.channel_ids:
+            key = (int(guild.id), int(channel_id))
+            latest = self._latest.get(key)
+            if latest is not None and latest.user_id == resolved_user_id:
+                pending = self._pending.pop(key, None)
+                self._latest.pop(key, None)
+                if pending is not None and not pending.done():
+                    pending.cancel()
+
+            try:
+                state = await get_live_card_state(*key)
+            except ProfileStorageUnavailable:
+                return
+            if not state or str(state.get("user_id") or "") != str(resolved_user_id):
+                continue
+
+            channel = guild.get_channel(channel_id)
+            try:
+                message_id = int(str(state.get("message_id") or "0"))
+            except Exception:
+                message_id = 0
+            removed = not message_id
+            if isinstance(channel, discord.TextChannel) and message_id:
+                removed = await self._delete_stored_message(channel, message_id)
+            if removed:
+                try:
+                    await delete_live_card_state(*key)
+                except ProfileStorageUnavailable:
+                    return
+            self._last_posted.pop(key, None)
+
+    async def remove_user_cards_all_guilds(self, user_id: int) -> None:
+        for guild in list(getattr(self.bot, "guilds", []) or []):
+            try:
+                await self.remove_user_cards(guild, int(user_id))
+            except Exception:
+                continue
 
     async def disable_channel(self, guild: discord.Guild, channel: discord.TextChannel) -> None:
         key = (int(guild.id), int(channel.id))

@@ -14,6 +14,7 @@ from stoney_verify.profile_card_runtime import (
     LIVE_CHANNEL_IDS_KEY,
     LIVE_ENABLED_KEY,
     LiveProfileCardRuntime,
+    _copy_base_profile_embed,
     parse_live_card_config,
     render_live_profile_card,
 )
@@ -69,6 +70,27 @@ async def _safe_ephemeral(
             await interaction.followup.send(**kwargs)
     except Exception:
         pass
+
+
+def _profile_runtime(client: Any) -> Optional[LiveProfileCardRuntime]:
+    runtime = getattr(client, _RUNTIME_ATTRIBUTE, None)
+    return runtime if isinstance(runtime, LiveProfileCardRuntime) else None
+
+
+async def invalidate_member_live_cards(
+    client: Any,
+    guild: discord.Guild,
+    user_id: int,
+    *,
+    all_guilds: bool = False,
+) -> None:
+    runtime = _profile_runtime(client)
+    if runtime is None:
+        return
+    if all_guilds:
+        await runtime.remove_user_cards_all_guilds(int(user_id))
+    else:
+        await runtime.remove_user_cards(guild, int(user_id))
 
 
 async def _settings_payload(guild_id: int, user_id: int) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
@@ -216,6 +238,12 @@ class _PrivacyToggleButton(discord.ui.Button):
                 view.author_id,
                 {self.preference_key: not current},
             )
+            if interaction.guild is not None:
+                await invalidate_member_live_cards(
+                    interaction.client,
+                    interaction.guild,
+                    view.author_id,
+                )
             await view.refresh(interaction)
         except ProfileStorageUnavailable:
             await _safe_ephemeral(interaction, "Private profile storage is unavailable. Nothing was changed.", ok=False)
@@ -313,6 +341,12 @@ async def profile_platform(
         return await _safe_ephemeral(interaction, str(exc), ok=False)
     except ProfileStorageUnavailable:
         return await _safe_ephemeral(interaction, "Private profile storage is unavailable. Nothing was saved.", ok=False)
+    await invalidate_member_live_cards(
+        interaction.client,
+        interaction.guild,
+        interaction.user.id,
+        all_guilds=True,
+    )
     spec = PLATFORM_SPECS[entry["platform"]]
     visibility = "shared on cards" if entry["shared"] else "saved privately"
     link_state = " with an official link" if entry["url"] else " by username only"
@@ -331,11 +365,148 @@ async def profile_platform_remove(
         removed = await remove_platform_identity(interaction.user.id, platform.value)
     except ProfileStorageUnavailable:
         return await _safe_ephemeral(interaction, "Private profile storage is unavailable. Nothing was removed.", ok=False)
+    await invalidate_member_live_cards(
+        interaction.client,
+        interaction.guild,
+        interaction.user.id,
+        all_guilds=True,
+    )
     spec = PLATFORM_SPECS[platform.value]
     await _safe_ephemeral(
         interaction,
         f"Removed your saved {spec.label} identity." if removed else f"No {spec.label} identity was saved.",
         ok=True,
+    )
+
+
+class _PublicFullRolesButton(discord.ui.Button):
+    def __init__(self, member_id: int) -> None:
+        super().__init__(
+            label="View Full Profile Roles",
+            emoji="📋",
+            style=discord.ButtonStyle.secondary,
+            custom_id=f"dank:profilecard:v1:full_roles:{int(member_id)}",
+            row=4,
+        )
+        self.member_id = int(member_id)
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        guild = interaction.guild
+        if guild is None:
+            return await _safe_ephemeral(interaction, "This only works inside the server.", ok=False)
+        member = guild.get_member(self.member_id)
+        if not isinstance(member, discord.Member):
+            return await _safe_ephemeral(interaction, "That member is no longer available.", ok=False)
+        try:
+            config = parse_live_card_config(await get_guild_config(guild.id))
+            effective = await get_effective_profile_settings(guild.id, member.id)
+        except ProfileStorageUnavailable:
+            return await _safe_ephemeral(interaction, "Private profile storage is unavailable.", ok=False)
+        preferences = dict(effective.get("preferences") or {})
+        if not bool(preferences.get("show_roles", True)) or "roles" not in config.allowed_fields:
+            return await _safe_ephemeral(interaction, "This member has hidden their profile roles.", ok=False)
+        from .public_self_roles_group import _profile_full_roles_embed
+
+        await interaction.response.send_message(
+            embed=_profile_full_roles_embed(member),
+            ephemeral=True,
+            allowed_mentions=discord.AllowedMentions.none(),
+        )
+
+
+class _PublicProfileSettingsButton(discord.ui.Button):
+    def __init__(self) -> None:
+        super().__init__(
+            label="Privacy & Platforms",
+            emoji="🔐",
+            style=discord.ButtonStyle.primary,
+            custom_id="dank:profilecard:v1:open_settings",
+            row=4,
+        )
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        await profile_settings(interaction)
+
+
+class PublicProfileView(discord.ui.View):
+    def __init__(
+        self,
+        *,
+        member_id: int,
+        source_view: Optional[discord.ui.View],
+        show_roles: bool,
+        show_settings: bool,
+    ) -> None:
+        super().__init__(timeout=300)
+        for child in list(getattr(source_view, "children", []) or []):
+            if not isinstance(child, discord.ui.Button) or not child.url:
+                continue
+            self.add_item(
+                discord.ui.Button(
+                    label=str(child.label or "Profile")[:80],
+                    emoji=child.emoji,
+                    style=discord.ButtonStyle.link,
+                    url=str(child.url),
+                    row=child.row,
+                )
+            )
+        if show_roles:
+            self.add_item(_PublicFullRolesButton(member_id))
+        if show_settings:
+            self.add_item(_PublicProfileSettingsButton())
+
+
+async def send_privacy_aware_profile(
+    interaction: discord.Interaction,
+    member: discord.Member,
+) -> None:
+    guild = interaction.guild
+    if guild is None or int(member.guild.id) != int(guild.id):
+        return await _safe_ephemeral(interaction, "That member is not available in this server.", ok=False)
+    try:
+        config = parse_live_card_config(await get_guild_config(guild.id))
+        effective = await get_effective_profile_settings(guild.id, member.id)
+        rendered = await render_live_profile_card(
+            member,
+            set(config.allowed_fields),
+            trigger_message_id=0,
+            require_live_enabled=False,
+        )
+    except ProfileStorageUnavailable:
+        return await _safe_ephemeral(
+            interaction,
+            "Private profile storage is unavailable. Dank Shield will not guess this member's privacy settings.",
+            ok=False,
+        )
+
+    preferences = dict(effective.get("preferences") or {})
+    show_roles = bool(preferences.get("show_roles", True)) and "roles" in config.allowed_fields
+    if rendered is None:
+        from .public_self_roles_group import _profile_card
+
+        rendered_embed = _copy_base_profile_embed(
+            _profile_card(member),
+            show_roles=False,
+            show_dates=False,
+        )
+        rendered_embed.description = "This member has hidden their optional profile details."
+        rendered_view = None
+    else:
+        rendered_embed = rendered.embed
+        rendered_view = rendered.view
+        rendered_embed.description = "Member profile • only fields this member chose to share"
+    rendered_embed.set_footer(text="Dank Shield member profile")
+    view = PublicProfileView(
+        member_id=member.id,
+        source_view=rendered_view,
+        show_roles=show_roles,
+        show_settings=int(interaction.user.id) == int(member.id),
+    )
+    await interaction.response.send_message(
+        embed=rendered_embed,
+        view=view if view.children else None,
+        ephemeral=True,
+        allowed_mentions=discord.AllowedMentions.none(),
     )
 
 
@@ -522,5 +693,7 @@ __all__ = [
     "profile_platform",
     "profile_platform_remove",
     "profile_settings",
+    "invalidate_member_live_cards",
+    "send_privacy_aware_profile",
     "register_public_profile_cards",
 ]

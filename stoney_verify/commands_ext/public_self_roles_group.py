@@ -1286,12 +1286,9 @@ class ProfileMemberListSelect(discord.ui.Select):
         if not isinstance(member, discord.Member) or member.bot:
             return await _reply(interaction, "That human member is no longer available.", ok=False)
 
-        await interaction.response.send_message(
-            embed=_profile_card(member),
-            view=_profile_card_view_with_actions(member),
-            ephemeral=True,
-            allowed_mentions=discord.AllowedMentions.none(),
-        )
+        from .public_profile_cards import send_privacy_aware_profile
+
+        await send_privacy_aware_profile(interaction, member)
 
 
 class ProfileMemberListView(discord.ui.View):
@@ -1367,6 +1364,7 @@ class ProfilePanelView(discord.ui.View):
         self.add_item(discord.ui.Button(label="Edit Pronouns", emoji="🪪", style=discord.ButtonStyle.secondary, custom_id=f"{PROFILE_PREFIX}open:pronouns", row=1))
         self.add_item(discord.ui.Button(label="Edit Identity", emoji="🌈", style=discord.ButtonStyle.secondary, custom_id=f"{PROFILE_PREFIX}open:identity", row=1))
         self.add_item(discord.ui.Button(label="Edit Interests", emoji="🎮", style=discord.ButtonStyle.secondary, custom_id=f"{PROFILE_PREFIX}open:interests", row=1))
+        self.add_item(discord.ui.Button(label="Privacy & Platforms", emoji="🔐", style=discord.ButtonStyle.primary, custom_id=f"{PROFILE_PREFIX}privacy", row=1))
         self.add_item(discord.ui.Button(label="Server Roles / Cosmetics", emoji="🎭", style=discord.ButtonStyle.secondary, custom_id=f"{PROFILE_PREFIX}cosmetics", row=2))
 
         self.add_item(discord.ui.Button(label="Suggest Missing Interest", emoji="➕", style=discord.ButtonStyle.secondary, custom_id=f"{PROFILE_PREFIX}missing_interest", row=2))
@@ -1416,6 +1414,7 @@ class ProfileEditView(discord.ui.View):
         self.add_item(discord.ui.Button(label="View My Profile", emoji="👤", style=discord.ButtonStyle.secondary, custom_id=f"{PROFILE_PREFIX}view", row=1))
         self.add_item(discord.ui.Button(label="Learn Terms", emoji="📘", style=discord.ButtonStyle.secondary, custom_id=f"{PROFILE_PREFIX}learn", row=1))
         self.add_item(discord.ui.Button(label="Clear Profile Roles", emoji="🧹", style=discord.ButtonStyle.danger, custom_id=f"{PROFILE_PREFIX}clear", row=1))
+        self.add_item(discord.ui.Button(label="Privacy & Platforms", emoji="🔐", style=discord.ButtonStyle.primary, custom_id=f"{PROFILE_PREFIX}privacy", row=1))
         self.add_item(discord.ui.Button(label="Missing Identity?", emoji="✍️", style=discord.ButtonStyle.secondary, custom_id=f"{PROFILE_PREFIX}missing", row=2))
         self.add_item(discord.ui.Button(label="Suggest Missing Interest", emoji="➕", style=discord.ButtonStyle.secondary, custom_id=f"{PROFILE_PREFIX}missing_interest", row=2))
 
@@ -1988,13 +1987,16 @@ async def _handle_profile_interaction(interaction: discord.Interaction) -> bool:
         )
         return True
 
+    if suffix == "privacy":
+        from .public_profile_cards import profile_settings
+
+        await profile_settings(interaction)
+        return True
+
     if suffix == "view":
-        await interaction.response.send_message(
-            embed=_profile_card(member),
-            view=_profile_card_view(member),
-            ephemeral=True,
-            allowed_mentions=discord.AllowedMentions.none(),
-        )
+        from .public_profile_cards import send_privacy_aware_profile
+
+        await send_privacy_aware_profile(interaction, member)
         return True
 
     if suffix == "learn":
@@ -2045,6 +2047,10 @@ async def _handle_profile_interaction(interaction: discord.Interaction) -> bool:
         if to_remove:
             changes.append("Removed: " + ", ".join(role.mention for role in to_remove))
 
+        if changes:
+            from .public_profile_cards import invalidate_member_live_cards
+
+            await invalidate_member_live_cards(interaction.client, guild, member.id)
         await _reply(interaction, "\n".join(changes) if changes else "No profile changes needed.", ok=True)
         return True
 
@@ -2060,6 +2066,9 @@ async def _handle_profile_interaction(interaction: discord.Interaction) -> bool:
         if roles:
             try:
                 await member.remove_roles(*roles, reason="Dank Shield profile clear")
+                from .public_profile_cards import invalidate_member_live_cards
+
+                await invalidate_member_live_cards(interaction.client, guild, member.id)
                 await _reply(interaction, "Removed your optional profile roles.", ok=True)
             except Exception as exc:
                 await _reply(interaction, f"Could not clear your profile roles: {type(exc).__name__}.", ok=False)
@@ -2105,10 +2114,18 @@ async def _handle_self_role(interaction: discord.Interaction) -> bool:
 
         if role in interaction.user.roles:
             await interaction.user.remove_roles(role, reason="Dank Shield advanced self-role toggle")
-            await _reply(interaction, f"Removed {role.mention}.", ok=True)
+            result = f"Removed {role.mention}."
         else:
             await interaction.user.add_roles(role, reason="Dank Shield advanced self-role toggle")
-            await _reply(interaction, f"Added {role.mention}.", ok=True)
+            result = f"Added {role.mention}."
+        from .public_profile_cards import invalidate_member_live_cards
+
+        await invalidate_member_live_cards(
+            interaction.client,
+            interaction.guild,
+            interaction.user.id,
+        )
+        await _reply(interaction, result, ok=True)
         return True
     except Exception as exc:
         await _reply(interaction, f"Self-role failed: {type(exc).__name__}.", ok=False)
@@ -2338,11 +2355,9 @@ async def profile_view(
     if not isinstance(target, discord.Member):
         return await _reply(interaction, "Could not resolve that member.", ok=False)
 
-    await interaction.response.send_message(
-        embed=_profile_card(target),
-        ephemeral=True,
-        allowed_mentions=discord.AllowedMentions.none(),
-    )
+    from .public_profile_cards import send_privacy_aware_profile
+
+    await send_privacy_aware_profile(interaction, target)
 
 
 @roles_group.command(name="panel", description="Advanced: post a custom panel using roles that already exist.")
@@ -2416,12 +2431,9 @@ async def _view_dank_profile_context(interaction: discord.Interaction, member: d
             return await _reply(interaction, "Could not resolve that member in this server.", ok=False)
         target = resolved
 
-    await interaction.response.send_message(
-        embed=_profile_card(target),
-            view=_profile_card_view(target),
-            ephemeral=True,
-        allowed_mentions=discord.AllowedMentions.none(),
-    )
+    from .public_profile_cards import send_privacy_aware_profile
+
+    await send_privacy_aware_profile(interaction, target)
 
 
 view_dank_profile_context_menu = app_commands.ContextMenu(
