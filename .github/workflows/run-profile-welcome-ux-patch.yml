@@ -16,7 +16,7 @@ jobs:
         with:
           ref: fix/profile-command-payload-limit
           fetch-depth: 0
-      - name: Extract and run reviewed patch
+      - name: Extract reviewed patch
         shell: bash
         run: |
           python - <<'PY'
@@ -32,12 +32,34 @@ jobs:
               encoding='utf-8',
           )
           PY
-          python /tmp/apply_profile_welcome_ux.py
-          rm -f .github/workflows/run-profile-welcome-ux-patch.yml
-      - name: Commit integrated implementation
+      - name: Run reviewed patch
+        id: patch
+        continue-on-error: true
+        shell: bash
         run: |
+          python /tmp/apply_profile_welcome_ux.py > /tmp/profile-welcome-patch.log 2>&1
+          status=$?
+          cat /tmp/profile-welcome-patch.log
+          echo "status=$status" >> "$GITHUB_OUTPUT"
+          exit 0
+      - name: Commit diagnostic when patch fails
+        if: steps.patch.outputs.status != '0'
+        run: |
+          cp /tmp/profile-welcome-patch.log PROFILE_WELCOME_PATCH_ERROR.txt
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add PROFILE_WELCOME_PATCH_ERROR.txt
+          git commit -m "Record profile welcome integration error"
+          git push origin HEAD:fix/profile-command-payload-limit
+      - name: Finish successful integration
+        if: steps.patch.outputs.status == '0'
+        run: |
+          rm -f .github/workflows/run-profile-welcome-ux-patch.yml
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
           git add -A
           git commit -m "Complete profile and welcome setup experience"
           git push origin HEAD:fix/profile-command-payload-limit
+      - name: Fail after diagnostic commit
+        if: steps.patch.outputs.status != '0'
+        run: exit 1
