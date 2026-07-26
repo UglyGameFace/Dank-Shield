@@ -84,13 +84,15 @@ def test_platform_identity_is_private_until_explicitly_shared():
 def test_global_defaults_and_deny_only_server_overrides_are_exposed():
     service = (ROOT / "stoney_verify/profile_card_service.py").read_text(encoding="utf-8")
     commands = (ROOT / "stoney_verify/commands_ext/public_profile_cards.py").read_text(encoding="utf-8")
+    commands_core = (ROOT / "stoney_verify/commands_ext/public_profile_cards_core.py").read_text(encoding="utf-8")
     assert "async def upsert_profile_user_preferences" in service
     assert "settings.pop(key, None)" in service
     assert "settings[key] = False" in service
-    assert "class _GlobalPrivacyToggleButton" in commands
-    assert "class _GuildPrivacyToggleButton" in commands
-    assert "Every Server" in commands
-    assert "This Server" in commands
+    assert "class _GlobalPrivacyToggleButton" in commands_core
+    assert "class _GuildPrivacyToggleButton" in commands_core
+    assert "class ProfileSettingsView" in commands
+    assert "Every Server" in commands_core
+    assert "This Server" in commands_core
 
 
 def test_per_server_user_privacy_can_only_be_stricter_than_global_defaults():
