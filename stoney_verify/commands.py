@@ -47,6 +47,15 @@ except Exception as e:
         return None
 
 
+try:
+    from .commands_ext.public_command_hub import compact_public_dank_surface
+except Exception as e:
+    print(f"⚠️ commands.py failed to import public_command_hub: {repr(e)}")
+
+    def compact_public_dank_surface(bot: Any, tree: Any) -> int:  # type: ignore
+        return 0
+
+
 # ============================================================
 # Kick timer bridges
 # events.py imports these from commands.py, so keep them exposed
@@ -121,6 +130,15 @@ except Exception as e:
     except Exception:
         pass
 
+try:
+    compact_public_dank_surface(bot, bot.tree)
+except Exception as e:
+    try:
+        print(f"❌ commands.py failed to compact /dank command surface: {repr(e)}")
+    except Exception:
+        pass
+    raise
+
 
 # ============================================================
 # Register centralized component interaction handler
@@ -154,6 +172,8 @@ def register_extra_commands(tree) -> None:
             print(f"⚠️ register_extra_commands profile cards failed: {repr(e)}")
         except Exception:
             pass
+
+    compact_public_dank_surface(bot, tree)
 
 
 # ============================================================

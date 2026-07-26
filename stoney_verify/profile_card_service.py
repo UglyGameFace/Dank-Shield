@@ -237,13 +237,13 @@ def normalize_preferences(value: Optional[Mapping[str, Any]]) -> dict[str, Any]:
 def effective_preferences(
     user_preferences: Optional[Mapping[str, Any]],
     guild_settings: Optional[Mapping[str, Any]],
-) -> dict[str, Any]:
+) -> dict[str, bool]:
     global_values = normalize_preferences(user_preferences)
     local = dict(guild_settings or {})
-    resolved = dict(global_values)
-    for key in DEFAULT_PROFILE_PREFERENCES:
-        resolved[key] = bool(global_values[key]) and bool(local.get(key, True))
-    return resolved
+    return {
+        key: bool(global_values[key]) and bool(local.get(key, True))
+        for key in DEFAULT_PROFILE_PREFERENCES
+    }
 
 
 def normalize_server_allowed_fields(value: Any) -> set[str]:
@@ -460,8 +460,15 @@ async def get_effective_profile_settings(guild_id: int, user_id: int) -> dict[st
         get_profile_user(user_id),
         get_profile_guild_settings(guild_id, user_id),
     )
+    preferences = normalize_preferences(user_row.get("preferences"))
+    preferences.update(
+        effective_preferences(
+            user_row.get("preferences"),
+            guild_row.get("settings"),
+        )
+    )
     return {
-        "preferences": effective_preferences(user_row.get("preferences"), guild_row.get("settings")),
+        "preferences": preferences,
         "platforms": dict(user_row.get("platforms") or {}),
     }
 

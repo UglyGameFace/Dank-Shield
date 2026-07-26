@@ -1921,6 +1921,16 @@ async def _open_advanced_settings(
         inline=False,
     )
     embed.add_field(
+        name="👋 Welcome & Join",
+        value="Static welcome/start-here message, join-only image cards, and join/leave announcements.",
+        inline=False,
+    )
+    embed.add_field(
+        name="🪪 Profile Signatures",
+        value="Compact live signatures, member appearance, privacy, platforms, roles, and server defaults.",
+        inline=False,
+    )
+    embed.add_field(
         name="💾 Backups & History",
         value="Back up selected configuration areas and restore only what you choose.",
         inline=False,
@@ -1958,7 +1968,7 @@ async def _open_manage_setup(
     )
     embed.add_field(
         name="🧰 All Features & Settings",
-        value="Open Tickets, Verification, Security, Logs, Design, Backups, and more.",
+        value="Open Tickets, Verification, Security, Logs, Welcome & Join, Profile Signatures, Design, Backups, and more.",
         inline=False,
     )
     embed.add_field(
@@ -3725,7 +3735,24 @@ class AdvancedSettingsHubView(discord.ui.View):
         await _open_advanced_appearance(interaction)
 
     @discord.ui.button(
-        label="Member Profiles & Live Cards",
+        label="Welcome & Join",
+        emoji="👋",
+        style=discord.ButtonStyle.secondary,
+        custom_id="dank_setup_features:welcome",
+        row=3,
+    )
+    async def welcome_join(
+        self,
+        interaction: discord.Interaction,
+        button: discord.ui.Button,
+    ) -> None:
+        _ = button
+        from stoney_verify import welcome_setup_ui
+
+        await welcome_setup_ui.open_welcome_setup(interaction)
+
+    @discord.ui.button(
+        label="Profile Signatures",
         emoji="🪪",
         style=discord.ButtonStyle.secondary,
         custom_id="dank_setup_features:profiles",

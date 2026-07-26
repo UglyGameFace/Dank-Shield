@@ -199,6 +199,7 @@ def _channel_can_host_cards(channel: discord.TextChannel) -> bool:
             and permissions.send_messages
             and permissions.embed_links
             and permissions.read_message_history
+            and permissions.attach_files
         )
     except Exception:
         return False
