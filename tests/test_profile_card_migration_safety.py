@@ -8,6 +8,7 @@ PROFILE_MIGRATION = MIGRATIONS / "20260725_live_profile_cards.sql"
 ORIGINAL_GUILD_CONFIG_MIGRATION = MIGRATIONS / "20260426_create_guild_configs.sql"
 GUILD_CONFIG_MIGRATION = MIGRATIONS / "202604260001_guild_configs.sql"
 TICKET_PARITY_MIGRATION = MIGRATIONS / "20260424_tickettool_parity_ticket_columns.sql"
+GUILD_MEMBER_ROLE_STATE_MIGRATION = MIGRATIONS / "20260429_relax_guild_members_role_state_check.sql"
 
 
 def test_supabase_migration_versions_are_unique():
@@ -34,6 +35,19 @@ def test_ticket_parity_migration_skips_missing_legacy_table_safely():
     alter = source.index("alter table public.tickets")
 
     assert guard < notice < alter
+    assert "create table" not in source
+    assert "execute $ddl$" in source
+
+
+def test_guild_member_role_state_migration_requires_table_and_column():
+    source = GUILD_MEMBER_ROLE_STATE_MIGRATION.read_text(encoding="utf-8").lower()
+
+    table_guard = source.index("to_regclass('public.guild_members') is null")
+    column_guard = source.index("column_name = 'role_state'")
+    alter = source.index("alter table public.guild_members")
+    constraint = source.index("add constraint guild_members_role_state_check")
+
+    assert table_guard < column_guard < alter < constraint
     assert "create table" not in source
     assert "execute $ddl$" in source
 
