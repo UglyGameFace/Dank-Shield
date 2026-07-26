@@ -42,6 +42,18 @@ def test_profile_runtime_registration_has_an_independent_failure_boundary():
     assert "register_extra_commands profile cards failed" in extra
 
 
+def test_profile_registration_preserves_existing_command_lifecycle_observers():
+    for observer in (
+        "async def on_guild_channel_create",
+        "async def on_guild_channel_update",
+        "async def on_thread_create",
+        "async def on_thread_update",
+    ):
+        assert observer in COMMANDS
+    assert '"register_extra_commands"' in COMMANDS
+    assert '"handle_possible_submission"' in COMMANDS
+
+
 def test_runtime_owns_exactly_one_additive_message_listener():
     assert PROFILE_COMMANDS.count('bot.add_listener(runtime.on_message, "on_message")') == 1
     assert "@bot.event" not in PROFILE_COMMANDS
