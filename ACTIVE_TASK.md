@@ -2,7 +2,7 @@
 
 ## DS-PROFILE-CARDS-001 — Private profile controls and non-repetitive live cards
 
-**Status:** EXECUTION-PATH AUDIT AND IMPLEMENTATION
+**Status:** FINAL VALIDATION
 **Branch:** `feature/live-profile-cards`
 **Base:** current `main` after merged welcome-card shuffle PR #125
 
@@ -20,6 +20,8 @@ Build a separate Dank Shield member-profile card system without changing join-on
 - Live cards must not repetitively post after every message.
 - User privacy always wins over server display preferences.
 - Platform identities are user-supplied and unverified unless a future OAuth flow verifies them.
+- Setup must expose a real Discord channel picker and make it easy to include the saved welcome/start-here channel.
+- Static welcome/start-here configuration must remain separate from join and leave event announcements.
 
 ## Architecture Rules
 
@@ -29,7 +31,7 @@ Build a separate Dank Shield member-profile card system without changing join-on
 - No duplicate card renderer or message listener.
 - Reuse the current profile role/card functions and interaction-locking path.
 - Server configuration remains in canonical guild config.
-- User identities/privacy use a dedicated user-scoped persistence table with no public client policies.
+- User identities/privacy use dedicated service-role-only persistence with no public client policies.
 - Live-card message state is durable so restart reconciliation cannot create duplicates.
 - Never delete, edit, or repost a user's message.
 - Delete or replace only a message authored by Dank Shield and recorded as its owned live card.
@@ -49,6 +51,17 @@ Build a separate Dank Shield member-profile card system without changing join-on
 - Restart reconciliation validates the stored message and safely clears stale state.
 - All sends use `AllowedMentions.none()`.
 
+## Setup and Welcome Separation
+
+- Canonical path: `/dank setup` → Manage Setup → All Features & Settings → Member Profiles & Live Cards.
+- The profile center uses a multi-channel Discord text-channel picker; no copied IDs are required.
+- **Add Welcome Channel** stages the server's saved welcome/start-here channel in the same picker before saving.
+- Enabling refuses channels missing View Channel, Send Messages, Embed Links, or Read Message History.
+- `/dank profile live-cards` remains a one-channel manager fallback that points to the full setup picker.
+- `/dank welcome` owns the static welcome/start-here message and join-only image card.
+- `/dank welcome join-leave` owns the separate member join and leave announcements.
+- The old public `/dank welcome events` command is removed; only an internal compatibility function alias remains.
+
 ## User Privacy and Platforms
 
 - External identities are hidden until the user explicitly shares them.
@@ -60,26 +73,30 @@ Build a separate Dank Shield member-profile card system without changing join-on
 - Use clickable Discord link buttons only when a validated official URL exists.
 - Username-only platforms remain visible without a fabricated link.
 
-## Validation Required
+## Validation Completed
 
-- Runtime behavior tests for debounce, coalescing, cooldown, same-speaker suppression, bot/webhook ignoring, one-card ownership, failed-send safety, and restart reconciliation.
-- Privacy tests proving hidden-by-default identities and stricter-user-choice precedence.
-- URL normalization tests covering official links and phishing lookalikes.
-- Card tests proving clean labels, omission of hidden/missing fields, and pagination only when necessary.
-- Command-tree uniqueness and normal startup registration.
-- Event-boundary ownership and setup-safety audits.
-- Python compilation, full pytest, every standalone tool check, complete production audits, cleanup inspection, review-thread inspection, and conflict comparison against `main`.
+- Patch application, changed-module compilation, focused profile/setup tests, full pytest, every standalone tool, all production audits, cleanup, and source push passed in the integration gate.
+- Setup-safety audit now permanently requires the Member Profiles & Live Cards feature-center button.
+- No inline review threads or submitted reviews are unresolved on PR #126.
+
+## Validation Still Required
+
+- Permanent read-only CI must pass on the exact cleaned final head.
+- Supabase preview/migration status must be confirmed after the final migration-bearing head is available.
+- Final changed-file cleanup and conflict comparison against current `main`.
 
 ## Definition of Done
 
-- [ ] Actual command, persistence, event, and test paths inspected.
-- [ ] Dedicated user-scoped persistence added and migration validated.
-- [ ] Existing `/dank profile` panel gains private settings/privacy/platform controls.
-- [ ] Server setup can enable selected live-card channels without copying IDs.
-- [ ] Live cards are restart-safe and non-repetitive.
-- [ ] Privacy and official-link validation are enforced in the service layer.
-- [ ] Focused behavioral tests pass.
+- [x] Actual command, persistence, event, and test paths inspected.
+- [ ] Dedicated user-scoped persistence added and migration validated on the final head.
+- [x] Existing `/dank profile` panel gains private settings/privacy/platform controls.
+- [x] Server setup can enable selected live-card channels without copying IDs.
+- [x] Saved welcome/start-here channel can be added through the profile setup picker.
+- [x] Join/leave announcements are separated from static welcome and join-only card commands.
+- [x] Live cards are restart-safe and non-repetitive.
+- [x] Privacy and official-link validation are enforced in the service layer.
+- [x] Focused behavioral tests pass.
 - [ ] Full CI and repository audits pass on the exact final head.
-- [ ] Temporary helpers/debug files are removed.
+- [x] Temporary helpers/debug files are removed.
 - [ ] Final branch is conflict-free with `main`.
 - [ ] Merge requires explicit owner approval.
