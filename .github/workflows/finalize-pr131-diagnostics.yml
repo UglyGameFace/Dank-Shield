@@ -60,11 +60,11 @@ jobs:
           python tools/audit_public_setup.py
           python tools/audit_public_command_surface.py
           python tools/audit_public_command_friction.py
-          python tools/audit_invite_permissions.py
+          python tools/audit_public_invite_permissions.py
           python tools/audit_setup_safety.py
-          python tools/audit_dank_design.py
-          python tools/audit_role_truth_ownership.py
-          python tools/audit_event_boundary_ownership.py
+          python tools/audit_dank_design_smart_auto_detect.py
+          python tools/audit_role_truth.py
+          python tools/audit_event_boundary.py
 
       - name: Commit clean diagnostic prerequisite
         run: |
