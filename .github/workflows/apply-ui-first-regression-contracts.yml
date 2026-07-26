@@ -41,49 +41,30 @@ jobs:
               text = target.read_text(encoding="utf-8")
               count = text.count(old)
               if count != 1:
-                  raise SystemExit(f"{path}: expected one match, found {count}")
+                  raise SystemExit(f"{path}: expected one match, found {count}: {old!r}")
               target.write_text(text.replace(old, new, 1), encoding="utf-8")
 
           replace_once(
               "tests/test_compact_profile_signature_renderer.py",
               '        cfg={"welcome_card_theme": "420_lobby"},\n',
-              '''        style={
-                      "theme": "default",
-                      "font": "clean",
-                      "color_mode": "theme",
-                      "background_mode": "theme",
-                      "layout": "classic",
-                      "avatar_frame": "glow",
-                  },
-              ''',
+              '        style={\n'
+              '            "theme": "default",\n'
+              '            "font": "clean",\n'
+              '            "color_mode": "theme",\n'
+              '            "background_mode": "theme",\n'
+              '            "layout": "classic",\n'
+              '            "avatar_frame": "glow",\n'
+              '        },\n',
           )
           replace_once(
               "tests/test_live_profile_card_runtime.py",
-              '''class FakePermissions:
-                  view_channel = True
-                  send_messages = True
-                  embed_links = True
-                  read_message_history = True
-              ''',
-              '''class FakePermissions:
-                  view_channel = True
-                  send_messages = True
-                  embed_links = True
-                  read_message_history = True
-                  attach_files = True
-              ''',
+              "    read_message_history = True\n\n\nclass FakeAvatar:",
+              "    read_message_history = True\n    attach_files = True\n\n\nclass FakeAvatar:",
           )
           replace_once(
               "tests/test_setup_advanced_options_behavior.py",
-              '''        "Server Design",
-                      "Member Profiles & Live Cards",
-                      "Backups & History",
-              ''',
-              '''        "Server Design",
-                      "Welcome & Join",
-                      "Profile Signatures",
-                      "Backups & History",
-              ''',
+              '        "Member Profiles & Live Cards",\n',
+              '        "Welcome & Join",\n        "Profile Signatures",\n',
           )
 
           for path in (
