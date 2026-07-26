@@ -20,6 +20,32 @@ def test_optional_legacy_ticket_metadata_migration_skips_missing_table():
     assert "ALTER TABLE tickets" not in source
 
 
+def test_later_guild_config_migration_reconciles_the_earlier_schema():
+    source = (
+        ROOT
+        / "supabase"
+        / "migrations"
+        / "20260426_guild_configs.sql"
+    ).read_text(encoding="utf-8")
+
+    reconciliation = source.index("alter table public.guild_configs")
+    enabled_index = source.index("idx_guild_configs_enabled")
+    beta_index = source.index("idx_guild_configs_public_beta_enabled")
+    seed_insert = source.index("insert into public.guild_configs")
+
+    for column in (
+        "guild_name text",
+        "owner_id text",
+        "enabled boolean not null default true",
+        "public_beta_enabled boolean not null default false",
+    ):
+        assert f"add column if not exists {column}" in source
+
+    assert reconciliation < enabled_index < seed_insert
+    assert reconciliation < beta_index < seed_insert
+    assert "CREATE TABLE IF NOT EXISTS does not add columns" in source
+
+
 def test_live_profile_card_migration_is_idempotent_and_service_role_only():
     source = (
         ROOT
