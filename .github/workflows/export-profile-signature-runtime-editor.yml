@@ -21,6 +21,16 @@ jobs:
         with:
           python-version: '3.11'
 
+      - name: Correct distinct custom palette sample
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          path = Path('tools/materialize_profile_signature_runtime_editor_fix.py')
+          source = path.read_text(encoding='utf-8')
+          source = source.replace('custom_primary="#5AFF2D",\n                custom_secondary="#AE4BFF",', 'custom_primary="#FF5A36",\n                custom_secondary="#22DCFF",')
+          path.write_text(source, encoding='utf-8')
+          PY
+
       - name: Materialize scoped correction
         run: python tools/materialize_profile_signature_runtime_editor_fix.py
 
