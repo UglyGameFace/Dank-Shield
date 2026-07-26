@@ -51,13 +51,16 @@ async def _send_private(
     embed: Optional[discord.Embed] = None,
     view: Optional[discord.ui.View] = None,
 ) -> None:
-    payload = {
-        "content": content,
-        "embed": embed,
-        "view": view,
+    payload: dict[str, Any] = {
         "ephemeral": True,
         "allowed_mentions": discord.AllowedMentions.none(),
     }
+    if content:
+        payload["content"] = content
+    if embed is not None:
+        payload["embed"] = embed
+    if view is not None:
+        payload["view"] = view
     if not interaction.response.is_done():
         await interaction.response.send_message(**payload)
     else:
