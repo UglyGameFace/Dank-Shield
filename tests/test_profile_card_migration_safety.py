@@ -5,6 +5,7 @@ ROOT = Path(__file__).resolve().parents[1]
 MIGRATIONS = ROOT / "supabase" / "migrations"
 PROFILE_MIGRATION = MIGRATIONS / "20260725_live_profile_cards.sql"
 GUILD_CONFIG_MIGRATION = MIGRATIONS / "20260426_guild_configs.sql"
+TICKET_PARITY_MIGRATION = MIGRATIONS / "20260424_tickettool_parity_ticket_columns.sql"
 
 
 def test_live_profile_card_migration_uses_its_own_version():
@@ -14,6 +15,18 @@ def test_live_profile_card_migration_uses_its_own_version():
     matching = sorted(path.name for path in MIGRATIONS.glob(f"{version}_*.sql"))
 
     assert matching == [PROFILE_MIGRATION.name]
+
+
+def test_ticket_parity_migration_skips_missing_legacy_table_safely():
+    source = TICKET_PARITY_MIGRATION.read_text(encoding="utf-8").lower()
+
+    guard = source.index("to_regclass('public.tickets') is null")
+    notice = source.index("skipping tickettool parity columns")
+    alter = source.index("alter table public.tickets")
+
+    assert guard < notice < alter
+    assert "create table" not in source
+    assert "execute $ddl$" in source
 
 
 def test_existing_guild_config_migration_reconciles_before_indexing():
