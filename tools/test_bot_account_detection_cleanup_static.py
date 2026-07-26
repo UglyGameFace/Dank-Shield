@@ -19,7 +19,7 @@ def test_risk_contract_separates_bot_alt_spam_and_dm_report() -> None:
     assert '"possible_spam_account"' in ENGINE
     assert '"alt": {"score": alt_score, "tier": alt_tier}' in ENGINE
     assert '"spam": {"score": spam_score, "level": spam_level}' in ENGINE
-    assert '"profile": {"score": profile_score, "level": profile_level}' in ENGINE
+    assert '"profile": {"score": context_score, "level": context_level}' in ENGINE
 
     # Private-DM abuse remains report-based and separate from automatic join scoring.
     assert "DM Raider Report Risk" in CLEANUP
