@@ -46,16 +46,45 @@ jobs:
           git commit -m "Record UI first patch error"
           git push origin HEAD:fix/profile-command-payload-limit
       - name: Check patch cleanliness
+        id: clean
         if: steps.patch.outputs.status == '0'
+        continue-on-error: true
         run: |
-          sed -i 's/[[:space:]]\+$//' ACTIVE_TASK.md
-          git diff --check
-          test ! -e tools/apply_ui_first_command_overhaul.py
-          test ! -e .github/workflows/run-ui-first-command-overhaul.yml
-          test ! -e .github/workflows/apply-profile-welcome-ux.yml
-          test ! -e .github/workflows/run-profile-welcome-ux-patch.yml
+          {
+            sed -i 's/[[:space:]]\+$//' ACTIVE_TASK.md
+            echo '--- git diff --check ---'
+            git diff --check
+            echo '--- temporary file checks ---'
+            for path in \
+              tools/apply_ui_first_command_overhaul.py \
+              .github/workflows/run-ui-first-command-overhaul.yml \
+              .github/workflows/apply-profile-welcome-ux.yml \
+              .github/workflows/run-profile-welcome-ux-patch.yml; do
+              if [ -e "$path" ]; then
+                echo "TEMPORARY FILE STILL EXISTS: $path"
+                exit 1
+              fi
+              echo "removed: $path"
+            done
+            echo '--- changed files ---'
+            git status --short
+          } > /tmp/ui-first-clean.log 2>&1
+          status=$?
+          cat /tmp/ui-first-clean.log
+          echo "status=$status" >> "$GITHUB_OUTPUT"
+          exit 0
+      - name: Commit cleanup diagnostic
+        if: steps.patch.outputs.status == '0' && steps.clean.outputs.status != '0'
+        run: |
+          git reset --hard HEAD
+          cp /tmp/ui-first-clean.log UI_FIRST_CLEAN_ERROR.txt
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add UI_FIRST_CLEAN_ERROR.txt
+          git commit -m "Record UI first cleanup error"
+          git push origin HEAD:fix/profile-command-payload-limit
       - name: Compile changed modules
-        if: steps.patch.outputs.status == '0'
+        if: steps.patch.outputs.status == '0' && steps.clean.outputs.status == '0'
         run: |
           python -m py_compile \
             stoney_verify/commands.py \
@@ -72,7 +101,7 @@ jobs:
             stoney_verify/profile_signature_style.py \
             stoney_verify/welcome_setup_ui.py
       - name: Run focused UI and profile tests
-        if: steps.patch.outputs.status == '0'
+        if: steps.patch.outputs.status == '0' && steps.clean.outputs.status == '0'
         env:
           DANK_STARTUP_LOG_STYLE: quiet
           DANK_COMMAND_LOG_STYLE: quiet
@@ -87,13 +116,13 @@ jobs:
             tests/test_setup_aio_navigation_behavior.py \
             tests/test_welcome_card_live_command_tree.py
       - name: Prove exact command payload fits
-        if: steps.patch.outputs.status == '0'
+        if: steps.patch.outputs.status == '0' && steps.clean.outputs.status == '0'
         env:
           DANK_STARTUP_LOG_STYLE: quiet
           DANK_COMMAND_LOG_STYLE: quiet
         run: python tools/test_dank_command_payload.py
       - name: Commit integrated implementation
-        if: steps.patch.outputs.status == '0'
+        if: steps.patch.outputs.status == '0' && steps.clean.outputs.status == '0'
         run: |
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
@@ -101,5 +130,5 @@ jobs:
           git commit -m "Overhaul Dank command surface into UI menus"
           git push origin HEAD:fix/profile-command-payload-limit
       - name: Fail after diagnostic commit
-        if: steps.patch.outputs.status != '0'
+        if: steps.patch.outputs.status != '0' || (steps.patch.outputs.status == '0' && steps.clean.outputs.status != '0')
         run: exit 1
