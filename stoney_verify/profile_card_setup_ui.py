@@ -318,6 +318,8 @@ class _AddWelcomeChannelButton(discord.ui.Button):
         guild = interaction.guild
         if guild is None:
             return await _private_message(interaction, "Use this inside a server.", ok=False)
+        if not interaction.response.is_done():
+            await interaction.response.defer()
         config = await get_guild_config(guild.id, refresh=True)
         welcome = _welcome_channel(guild, config)
         if not isinstance(welcome, discord.TextChannel):
@@ -335,8 +337,6 @@ class _AddWelcomeChannelButton(discord.ui.Button):
                 ok=False,
             )
         view.pending_channel_ids = pending
-        if not interaction.response.is_done():
-            await interaction.response.defer()
         await view.refresh(
             interaction,
             config=config,
@@ -446,6 +446,8 @@ class _PreviewButton(discord.ui.Button):
         member = interaction.user if isinstance(interaction.user, discord.Member) else None
         if guild is None or member is None:
             return await _private_message(interaction, "Use this inside a server as a member.", ok=False)
+        if not interaction.response.is_done():
+            await interaction.response.defer(ephemeral=True, thinking=True)
         try:
             config = parse_live_card_config(await get_guild_config(guild.id, refresh=True))
             rendered = await render_live_profile_card(
@@ -465,10 +467,9 @@ class _PreviewButton(discord.ui.Button):
         rendered.embed.set_footer(
             text="Preview only • not a join event • nothing was posted publicly"
         )
-        await interaction.response.send_message(
+        await interaction.edit_original_response(
             embed=rendered.embed,
             view=rendered.view,
-            ephemeral=True,
             allowed_mentions=discord.AllowedMentions.none(),
         )
 
@@ -620,6 +621,8 @@ async def open_profile_card_setup(interaction: discord.Interaction) -> None:
     guild = interaction.guild
     if guild is None:
         return await _private_message(interaction, "Use this inside a server.", ok=False)
+    if not interaction.response.is_done():
+        await interaction.response.defer()
     config = await get_guild_config(guild.id, refresh=True)
     view = ProfileCardSetupView(
         owner_id=interaction.user.id,
