@@ -105,3 +105,24 @@ replace_once(
         "Backups & History",
 ''',
 )
+replace_once(
+    "tools/test_dank_command_payload.py",
+    '''from __future__ import annotations
+
+import json
+
+from stoney_verify.globals import bot
+''',
+    '''from __future__ import annotations
+
+import json
+import sys
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from stoney_verify.globals import bot
+''',
+)
