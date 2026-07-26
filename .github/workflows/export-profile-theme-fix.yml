@@ -21,6 +21,22 @@ jobs:
         with:
           python-version: '3.11'
 
+      - name: Normalize materializer source literal
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path('tools/materialize_profile_theme_fix.py')
+          source = path.read_text(encoding='utf-8')
+          old = r'''    """        content="## 🖼️ Signature Themes\nPick a look. Your preview updates after saving.",""",'''
+          new = r'''    r"""        content="## 🖼️ Signature Themes\nPick a look. Your preview updates after saving.",""",'''
+          replacement_old = r'''    """        content="## 🖼️ Signature Themes\nPick a complete look. Its colors, background, and artwork apply immediately; you can override individual parts afterward.",""",'''
+          replacement_new = r'''    r"""        content="## 🖼️ Signature Themes\nPick a complete look. Its colors, background, and artwork apply immediately; you can override individual parts afterward.",""",'''
+          if source.count(old) != 1 or source.count(replacement_old) != 1:
+              raise SystemExit('theme guidance literals were not found exactly once')
+          path.write_text(source.replace(old, new, 1).replace(replacement_old, replacement_new, 1), encoding='utf-8')
+          PY
+
       - name: Materialize scoped correction
         shell: bash
         run: |
