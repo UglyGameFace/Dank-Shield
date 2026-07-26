@@ -1,9 +1,10 @@
 from __future__ import annotations
 
-"""Public live-profile runtime with a compact image-signature renderer.
+"""Live-profile runtime with a compact horizontal image-signature renderer.
 
-The durable lifecycle and deletion safety remain in ``profile_card_runtime_core``.
-This module owns the compact visual payload and the attachment-aware send path.
+The proven debounce, persistence, reconciliation, and deletion lifecycle remains
+in ``profile_card_runtime_core``. This module owns the compact visual payload
+and the attachment-aware replacement send path.
 """
 
 import asyncio
@@ -15,26 +16,41 @@ from typing import Any, Awaitable, Callable, Mapping, Optional
 import discord
 
 from . import profile_card_runtime_core as _core
-from .profile_card_runtime_core import *  # noqa: F401,F403
 from .profile_card_service import (
     PLATFORM_SPECS,
-    ProfileStorageUnavailable,
     display_profile_username,
     get_effective_profile_settings,
     visible_platform_entries,
 )
 from .profile_signature_renderer import render_member_profile_signature
 
-# Private helpers intentionally remain available because existing tests and
-# command modules import these established runtime utilities.
+# Stable public constants and models from the lifecycle core.
+DEFAULT_DEBOUNCE_SECONDS = _core.DEFAULT_DEBOUNCE_SECONDS
+DEFAULT_REPLACEMENT_COOLDOWN_SECONDS = _core.DEFAULT_REPLACEMENT_COOLDOWN_SECONDS
+DEFAULT_SAME_SPEAKER_COOLDOWN_SECONDS = _core.DEFAULT_SAME_SPEAKER_COOLDOWN_SECONDS
+LIVE_ALLOWED_FIELDS_KEY = _core.LIVE_ALLOWED_FIELDS_KEY
+LIVE_CARD_FOOTER_PREFIX = _core.LIVE_CARD_FOOTER_PREFIX
+LIVE_CHANNEL_IDS_KEY = _core.LIVE_CHANNEL_IDS_KEY
+LIVE_DEBOUNCE_KEY = _core.LIVE_DEBOUNCE_KEY
+LIVE_ENABLED_KEY = _core.LIVE_ENABLED_KEY
+LIVE_REPLACEMENT_COOLDOWN_KEY = _core.LIVE_REPLACEMENT_COOLDOWN_KEY
+LIVE_SAME_SPEAKER_COOLDOWN_KEY = _core.LIVE_SAME_SPEAKER_COOLDOWN_KEY
+READY_RECONCILE_THROTTLE_SECONDS = _core.READY_RECONCILE_THROTTLE_SECONDS
+LiveCardConfig = _core.LiveCardConfig
+PendingTrigger = _core.PendingTrigger
+live_card_footer = _core.live_card_footer
+parse_live_card_config = _core.parse_live_card_config
+parse_live_card_footer = _core.parse_live_card_footer
+
+# Existing private helper imports remain available for callers and tests.
 _channel_ids = _core._channel_ids
 _channel_can_host_cards = _core._channel_can_host_cards
 _copy_base_profile_embed = _core._copy_base_profile_embed
 _state_age_seconds = _core._state_age_seconds
 _platform_view = _core._platform_view
 
-# Keep dependency hooks at this module boundary so tests and callers can safely
-# replace them without knowing about the internal core split.
+# Dependency hooks stay at this public module boundary. Existing tests and
+# callers may replace these without knowing about the internal lifecycle split.
 get_guild_config = _core.get_guild_config
 upsert_guild_config = _core.upsert_guild_config
 delete_live_card_state = _core.delete_live_card_state
@@ -72,16 +88,25 @@ def _sync_core_dependencies() -> None:
 def _compact_role_labels(member: discord.Member) -> list[str]:
     from .commands_ext.public_self_roles_group import (
         DEFAULT_IDENTITY_ROLE_NAMES,
-        DEFAUL_INTEREST_ROLE_NAMES,
-        DEFAUL_PRONOUN_ROLE_NAMES,
+        DEFAULT_INTEREST_ROLE_NAMES,
+        DEFAULT_PRONOUN_ROLE_NAMES,
         _member_profile_roles,
         _short_role_label,
     )
 
     labels: list[str] = []
-    pronouns = [_short_role_label(role.name) for role in _member_profile_roles(member, DEFAULT_PRONOUN_ROLE_NAMES)]
-    identity = [_short_role_label(role.name) for role in _member_profile_roles(member, DEFAULT_IDENTITY_ROLE_NAMES)]
-    interests = [_short_role_label(role.name) for role in _member_profile_roles(member, DEFAULT_INTEREST_ROLE_NAMES)]
+    pronouns = [
+        _short_role_label(role.name)
+        for role in _member_profile_roles(member, DEFAULT_PRONOUN_ROLE_NAMES)
+    ]
+    identity = [
+        _short_role_label(role.name)
+        for role in _member_profile_roles(member, DEFAULT_IDENTITY_ROLE_NAMES)
+    ]
+    interests = [
+        _short_role_label(role.name)
+        for role in _member_profile_roles(member, DEFAULT_INTEREST_ROLE_NAMES)
+    ]
 
     if pronouns:
         labels.append("Pronouns: " + ", ".join(pronouns[:2]))
@@ -151,19 +176,16 @@ async def render_live_profile_card(
     except Exception:
         cfg = {}
 
-    role_labels = _compact_role_labels(member) if show_roles else []
-    date_labels = _compact_date_labels(member) if show_dates else []
-    platform_labels = _compact_platform_labels(platforms)
-    rendered = await render_member_profile_signature(
+    image_bytes = await render_member_profile_signature(
         member,
         cfg=cfg,
-        role_labels=role_labels,
-        date_labels=date_labels,
-        platform_labels=platform_labels,
+        role_labels=_compact_role_labels(member) if show_roles else [],
+        date_labels=_compact_date_labels(member) if show_dates else [],
+        platform_labels=_compact_platform_labels(platforms),
     )
 
     filename = f"profile-signature-{int(member.id)}.png"
-    file = discord.File(BytesIO(rendered), filename=filename)
+    file = discord.File(BytesIO(image_bytes), filename=filename)
     try:
         color = member.color if getattr(member.color, "value", 0) else discord.Color.blurple()
     except Exception:
@@ -260,7 +282,7 @@ class LiveProfileCardRuntime(_core.LiveProfileCardRuntime):
             member,
             set(config.allowed_fields),
             trigger_message_id=trigger.message_id,
-         )
+        )
         if rendered is None:
             return
 
@@ -297,9 +319,17 @@ class LiveProfileCardRuntime(_core.LiveProfileCardRuntime):
 
 
 __all__ = [
+    "DEFAULT_DEBOUNCE_SECONDS",
+    "DEFAULT_REPLACEMENT_COOLDOWN_SECONDS",
+    "DEFAULT_SAME_SPEAKER_COOLDOWN_SECONDS",
     "LIVE_ALLOWED_FIELDS_KEY",
+    "LIVE_CARD_FOOTER_PREFIX",
     "LIVE_CHANNEL_IDS_KEY",
+    "LIVE_DEBOUNCE_KEY",
     "LIVE_ENABLED_KEY",
+    "LIVE_REPLACEMENT_COOLDOWN_KEY",
+    "LIVE_SAME_SPEAKER_COOLDOWN_KEY",
+    "READY_RECONCILE_THROTTLE_SECONDS",
     "LiveCardConfig",
     "LiveCardRender",
     "LiveProfileCardRuntime",
