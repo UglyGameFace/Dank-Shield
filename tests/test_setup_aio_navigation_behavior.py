@@ -56,6 +56,7 @@ def test_aio_feature_hub_exposes_all_major_categories() -> None:
         "Security & SpamGuard",
         "Logs & Activity",
         "Server Design",
+        "Member Profiles & Live Cards",
         "Backups & History",
         "Back to Manage Setup",
         "Setup Home",

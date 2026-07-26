@@ -82,6 +82,7 @@ def test_all_features_hub_uses_aio_module_names() -> None:
         "Security & SpamGuard",
         "Logs & Activity",
         "Server Design",
+        "Member Profiles & Live Cards",
         "Backups & History",
         "Back to Manage Setup",
         "Setup Home",
