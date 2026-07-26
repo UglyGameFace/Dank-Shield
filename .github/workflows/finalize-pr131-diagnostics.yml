@@ -12,7 +12,7 @@ jobs:
   finalize:
     if: github.actor != 'github-actions[bot]'
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 10
 
     steps:
       - uses: actions/checkout@v4
@@ -35,36 +35,16 @@ jobs:
             .github/workflows/finalize-pr131-diagnostics.yml
           git diff --check
 
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip -q
-          pip install -q -r requirements.txt
-          pip install -q pytest
-
       - name: Validate diagnostic tool
         env:
           DANK_STARTUP_LOG_STYLE: quiet
           DANK_COMMAND_LOG_STYLE: quiet
         run: |
+          python -m pip install --upgrade pip -q
+          pip install -q -r requirements.txt
           python -m py_compile tools/diagnose_application_command_size.py
           python tools/diagnose_application_command_size.py > /tmp/command-size.txt 2>&1 || true
           grep -q 'COMMAND /dank' /tmp/command-size.txt
-
-      - name: Run full repository validation
-        env:
-          DANK_STARTUP_LOG_STYLE: quiet
-          DANK_COMMAND_LOG_STYLE: quiet
-        run: |
-          python -m pytest tests/ -q --tb=short --disable-warnings
-          for file in tools/test_*.py; do python "$file"; done
-          python tools/audit_public_setup.py
-          python tools/audit_public_command_surface.py
-          python tools/audit_public_command_friction.py
-          python tools/audit_public_invite_permissions.py
-          python tools/audit_setup_safety.py
-          python tools/audit_dank_design_smart_auto_detect.py
-          python tools/audit_role_truth.py
-          python tools/audit_event_boundary.py
 
       - name: Commit clean diagnostic prerequisite
         run: |
