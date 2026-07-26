@@ -6,6 +6,8 @@ COMMANDS = (ROOT / "stoney_verify/commands.py").read_text(encoding="utf-8")
 PROFILE_COMMANDS = (ROOT / "stoney_verify/commands_ext/public_profile_cards.py").read_text(encoding="utf-8")
 PROFILE_RUNTIME = (ROOT / "stoney_verify/profile_card_runtime.py").read_text(encoding="utf-8")
 PROFILE_SERVICE = (ROOT / "stoney_verify/profile_card_service.py").read_text(encoding="utf-8")
+PROFILE_SETUP = (ROOT / "stoney_verify/profile_card_setup_ui.py").read_text(encoding="utf-8")
+SETUP_HOME = (ROOT / "stoney_verify/commands_ext/public_setup_recommend.py").read_text(encoding="utf-8")
 EXISTING_PROFILE = (ROOT / "stoney_verify/commands_ext/public_self_roles_group.py").read_text(encoding="utf-8")
 
 
@@ -81,11 +83,14 @@ def test_server_field_restrictions_invalidate_every_existing_guild_card():
     assert "runtime.invalidate_guild_cards(guild)" in live_fields
 
 
-def test_server_setup_uses_discord_channel_picker_and_existing_guild_config():
-    assert "channel: discord.TextChannel" in PROFILE_COMMANDS
-    assert "upsert_guild_config" in PROFILE_COMMANDS
-    assert "get_guild_config" in PROFILE_COMMANDS
-    assert "raw Discord ID" not in PROFILE_COMMANDS
+def test_server_setup_uses_the_canonical_setup_picker_and_guild_config():
+    assert 'label="Member Profiles & Live Cards"' in SETUP_HOME
+    assert "open_profile_card_setup" in SETUP_HOME
+    assert "class LiveProfileChannelSelect(discord.ui.ChannelSelect)" in PROFILE_SETUP
+    assert "welcome_channel_id" in PROFILE_SETUP
+    assert "LIVE_CHANNEL_IDS_KEY" in PROFILE_SETUP
+    assert "upsert_guild_config" in PROFILE_SETUP
+    assert "raw Discord ID" not in PROFILE_SETUP
     assert "profile_live_card_channel_ids" in PROFILE_RUNTIME
 
 
