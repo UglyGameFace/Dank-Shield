@@ -70,7 +70,7 @@ def test_birth_year_suffix_on_established_profile_stays_low() -> None:
     assert profile["risk_level"] == "low"
 
 
-def test_fresh_generated_profile_is_watchlist_not_alt_proof() -> None:
+def test_fresh_generated_profile_is_new_account_context_not_alt_proof() -> None:
     member = FakeMember(
         username="user1234567",
         age_days=1,
@@ -82,12 +82,30 @@ def test_fresh_generated_profile_is_watchlist_not_alt_proof() -> None:
     )
 
     assert profile["profile_risk_score"] > 0
-    assert profile["alt_evidence_tier"] in {"clear", "suspicious"}
-    assert profile["alt_evidence_tier"] not in {
-        "strongly_linked",
-        "confirmed_duplicate",
-    }
-    assert profile["review_verdict"] == "REVIEW RECOMMENDED"
+    assert profile["alt_evidence_tier"] == "clear"
+    assert profile["alt_risk_score"] == 0
+    assert profile["possible_alt_account"] is False
+    assert profile["review_verdict"] == "NEW ACCOUNT — VERIFY NORMALLY"
+    assert "No alt action recommended" in profile["recommended_action"]
+
+
+def test_screenshot_like_new_account_is_not_called_an_alt() -> None:
+    member = FakeMember(
+        username="lily_.3941",
+        age_days=0,
+        default_avatar=False,
+    )
+    profile = raidguard.build_member_risk_profile(
+        member,
+        hard_identity_context=empty_hard_context(),
+    )
+
+    assert profile["risk_score"] > 0
+    assert profile["alt_evidence_tier"] == "clear"
+    assert profile["alt_risk_score"] == 0
+    assert profile["spam_risk_score"] == 0
+    assert profile["possible_alt_account"] is False
+    assert profile["review_verdict"] == "NEW ACCOUNT — VERIFY NORMALLY"
 
 
 def test_real_spam_behavior_raises_spam_dimension_not_alt_identity() -> None:
