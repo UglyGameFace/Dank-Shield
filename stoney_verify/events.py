@@ -444,41 +444,59 @@ def _join_context_modlog_value(context: Optional[Dict[str, Any]]) -> str:
         if not ctx:
             return ""
 
-        method = str(ctx.get("entry_method") or "unknown_join")
-        quality = str(ctx.get("entry_truth_quality") or "unknown")
-        confidence = str(ctx.get("entry_confidence") or "0")
-        reason = str(ctx.get("entry_quality_reason") or ctx.get("entry_reason") or "").strip()
+        unknown_values = {
+            "",
+            "unknown",
+            "unknown_join",
+            "none",
+            "null",
+            "invite_unresolved",
+            "invite_cache_warming",
+            "invite_tracking_unavailable",
+        }
+        method = str(ctx.get("entry_method") or "").strip()
+        quality = str(ctx.get("entry_truth_quality") or "").strip()
+        confidence = _as_int(ctx.get("entry_confidence"), 0)
+        reason = str(
+            ctx.get("entry_quality_reason")
+            or ctx.get("entry_reason")
+            or ""
+        ).strip()
 
         lines: List[str] = []
-
         code = str(ctx.get("invite_code") or "").strip()
-        if code and method not in {"invite_tracking_unavailable", "invite_cache_warming", "invite_unresolved"}:
+        if code.lower() not in unknown_values:
             lines.append(f"**Invite:** `discord.gg/{code}`")
-        else:
-            lines.append(f"**Invite:** `{method}`")
 
         inviter_id = str(ctx.get("invited_by") or "").strip()
         inviter_name = str(ctx.get("invited_by_name") or "").strip()
         if inviter_id.isdigit():
-            lines.append(f"**Inviter:** <@{inviter_id}> (`{inviter_name or inviter_id}`)")
-        elif inviter_name:
+            lines.append(
+                f"**Inviter:** <@{inviter_id}> (`{inviter_name or inviter_id}`)"
+            )
+        elif inviter_name and inviter_name.lower() not in unknown_values:
             lines.append(f"**Inviter:** `{inviter_name}`")
 
         channel_id = str(ctx.get("channel_id") or "").strip()
         channel_name = str(ctx.get("channel_name") or "").strip()
         if channel_id.isdigit():
-            lines.append(f"**Invite Channel:** <#{channel_id}> (`#{channel_name or channel_id}`)")
-        elif channel_name:
+            lines.append(
+                f"**Invite Channel:** <#{channel_id}> (`#{channel_name or channel_id}`)"
+            )
+        elif channel_name and channel_name.lower() not in unknown_values:
             lines.append(f"**Invite Channel:** `#{channel_name}`")
 
         if bool(ctx.get("vanity_used")):
             lines.append("**Source:** Server vanity invite")
+        elif method.lower() not in unknown_values and not code:
+            lines.append(f"**Entry:** `{method.replace('_', ' ')}`")
 
-        lines.append(f"**Attribution:** `{quality}` confidence `{confidence}/100`")
-        if reason:
+        if quality.lower() not in unknown_values and confidence > 0:
+            lines.append(f"**Attribution:** `{quality}` • `{confidence}/100`")
+        if reason and lines:
             lines.append(f"**Note:** {reason[:240]}")
 
-        return "\\n".join(lines)[:1024]
+        return "\n".join(lines)[:1024]
     except Exception:
         return ""
 
@@ -1298,21 +1316,57 @@ async def on_member_join(member: discord.Member):
 
             age_days = int(risk_profile.get("account_age_days") or 0)
             source_text = _join_context_modlog_value(join_context)
-            source_text = source_text or "Source could not be confirmed."
+            alt_tier = str(
+                risk_profile.get("alt_evidence_tier")
+                or risk_profile.get("evidence_tier")
+                or "clear"
+            ).lower()
+            alt_score = int(risk_profile.get("alt_risk_score") or 0)
+            spam_score = int(risk_profile.get("spam_risk_score") or 0)
+            profile_score = int(risk_profile.get("profile_risk_score") or 0)
+            context_score = int(
+                risk_profile.get("context_risk_score")
+                or profile_score
+                or 0
+            )
+            verdict = str(
+                risk_profile.get("review_verdict")
+                or "LOW CONCERN"
+            )
+            recommended_action = str(
+                risk_profile.get("recommended_action")
+                or "Continue normal verification and behavior monitoring."
+            )
+
+            high_alert = (
+                alt_tier in {"confirmed_duplicate", "strongly_linked"}
+                or spam_score >= 70
+            )
+            review_alert = (
+                high_alert
+                or alt_tier == "suspicious"
+                or spam_score >= 35
+                or profile_score >= 35
+            )
+            title = (
+                "🚨 Member Security Alert"
+                if high_alert
+                else "🟡 New Member Review"
+                if review_alert
+                else "👋 Member Joined"
+            )
+            color = (
+                discord.Color.red()
+                if high_alert
+                else discord.Color.orange()
+                if review_alert
+                else discord.Color.green()
+            )
 
             embed = discord.Embed(
-                title="🛡️ Member Security Review",
-                description=(
-                    f"**{risk_profile.get('review_verdict', 'REVIEW')}**\n"
-                    "Alt identity evidence and spam behavior are scored separately."
-                ),
-                color=(
-                    discord.Color.red()
-                    if str(risk_profile.get("risk_level")) == "critical"
-                    else discord.Color.orange()
-                    if str(risk_profile.get("risk_level")) in {"high", "medium"}
-                    else discord.Color.green()
-                ),
+                title=title,
+                description=f"**{verdict}**",
+                color=color,
                 timestamp=now_utc(),
             )
             embed.add_field(
@@ -1320,44 +1374,79 @@ async def on_member_join(member: discord.Member):
                 value=f"{member.mention}\n`{member}` • `{member.id}`",
                 inline=False,
             )
+
+            alt_labels = {
+                "clear": "No linked-account evidence",
+                "suspicious": "Possible correlated-account pattern",
+                "strongly_linked": "Strong linked-account evidence",
+                "confirmed_duplicate": "Confirmed duplicate identity",
+                "excluded_bot": "Excluded from human alt scoring",
+            }
+            alt_label = alt_labels.get(alt_tier, "No linked-account evidence")
+            if alt_score > 0 and alt_tier not in {"clear", "excluded_bot"}:
+                alt_label += f" ({alt_score}/100)"
+            spam_label = (
+                f"Detected ({spam_score}/100)"
+                if spam_score >= 35
+                else "No SpamGuard incident evidence"
+            )
+            profile_label = (
+                f"Low-confidence profile review ({profile_score}/100)"
+                if profile_score >= 35
+                else "New account — normal verification context"
+                if age_days <= 7
+                else "Minor profile context only"
+                if context_score > 0
+                else "No notable profile pattern"
+            )
+
             embed.add_field(
-                name="Account & Entry",
+                name="Assessment",
                 value=(
-                    f"**Account age:** `{age_days} day(s)`\n"
-                    f"**Joined:** {discord.utils.format_dt(member.joined_at or now_utc(), style='F')}\n"
-                    f"{source_text}"
+                    f"**Alt identity:** {alt_label}\n"
+                    f"**Spam behavior:** {spam_label}\n"
+                    f"**Profile context:** {profile_label}\n"
+                    f"**Action:** {recommended_action}"
                 )[:1024],
                 inline=False,
             )
+
+            account_lines = [
+                f"**Account age:** `{age_days} day(s)`",
+                f"**Joined:** {discord.utils.format_dt(member.joined_at or now_utc(), style='F')}",
+            ]
             embed.add_field(
-                name="Security Assessment",
-                value=(
-                    f"**Overall:** `{risk_profile.get('risk_score', 0)}/100` "
-                    f"(`{risk_profile.get('risk_level', 'low')}`)\n"
-                    f"**Alt evidence:** `{risk_profile.get('alt_evidence_tier', risk_profile.get('evidence_tier', 'clear'))}` "
-                    f"• score `{risk_profile.get('alt_risk_score', 0)}/100`\n"
-                    f"**Spam behavior:** `{risk_profile.get('spam_risk_level', 'low')}` "
-                    f"• score `{risk_profile.get('spam_risk_score', 0)}/100`"
-                )[:1024],
+                name="Account",
+                value="\n".join(account_lines)[:1024],
                 inline=False,
             )
+
+            if source_text:
+                embed.add_field(
+                    name="Entry Details",
+                    value=source_text[:1024],
+                    inline=False,
+                )
 
             reasons = list(
                 risk_profile.get("reasons")
                 or risk_profile.get("risk_reasons")
                 or []
             )
-            embed.add_field(
-                name="Top Evidence",
-                value=(
-                    "\n".join(
+            if reasons:
+                evidence_name = (
+                    "Evidence"
+                    if alt_tier != "clear" or spam_score >= 35
+                    else "Context — Not Identity Proof"
+                )
+                embed.add_field(
+                    name=evidence_name,
+                    value="\n".join(
                         f"• {str(reason)[:220]}"
-                        for reason in reasons[:4]
-                    )
-                    or "• No strong alt link or spam behavior has been proven."
-                )[:1024],
-                inline=False,
-            )
+                        for reason in reasons[:3]
+                    )[:1024],
+                    inline=False,
+                )
 
             try:
                 embed.set_thumbnail(url=member.display_avatar.url)

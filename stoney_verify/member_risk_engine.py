@@ -201,6 +201,70 @@ def _spam_behavior_score(
     return min(100, score), _dedupe(reasons, 12), _dedupe(flags, 12)
 
 
+def _derive_alt_evidence(profile: Mapping[str, Any]) -> tuple[str, int]:
+    """Return identity-link evidence only, never profile-shape suspicion."""
+
+    raw_tier = _safe_text(profile.get("evidence_tier") or "clear").lower()
+    hard_signals = {
+        _safe_text(value).lower()
+        for value in (profile.get("hard_signals") or [])
+        if _safe_text(value)
+    }
+    strong_signals = {
+        _safe_text(value).lower()
+        for value in (profile.get("strong_signals") or [])
+        if _safe_text(value)
+    }
+
+    identity_matches = max(0, _safe_int(profile.get("identity_proof_match_count"), 0))
+    manual_confirmed = max(0, _safe_int(profile.get("manual_confirmed_match_count"), 0))
+    manual_likely = max(0, _safe_int(profile.get("manual_likely_match_count"), 0))
+    fingerprint_matches = max(0, _safe_int(profile.get("same_fingerprint_count"), 0))
+    similar_names = max(0, _safe_int(profile.get("similar_name_count"), 0))
+    burst_count = max(
+        0,
+        _safe_int(
+            profile.get("burst_join_count"),
+            _safe_int(profile.get("burst_count"), 0),
+        ),
+    )
+    base_score = max(
+        0,
+        min(
+            100,
+            _safe_int(
+                profile.get("risk_score"),
+                _safe_int(profile.get("score"), 0),
+            ),
+        ),
+    )
+
+    if (
+        raw_tier == "confirmed_duplicate"
+        or identity_matches > 0
+        or manual_confirmed > 0
+        or bool(hard_signals)
+    ):
+        return "confirmed_duplicate", 100
+
+    if (
+        raw_tier == "strongly_linked"
+        or manual_likely > 0
+        or bool(strong_signals)
+    ):
+        return "strongly_linked", max(65, min(90, base_score or 65))
+
+    correlated_pattern = (
+        (fingerprint_matches >= 1 and similar_names >= 1)
+        or fingerprint_matches >= 2
+        or (similar_names >= 2 and burst_count >= 3)
+    )
+    if correlated_pattern:
+        return "suspicious", max(35, min(64, base_score or 35))
+
+    return "clear", 0
+
+
 def enrich_member_risk_profile(
     member: Any,
     profile: Mapping[str, Any],
@@ -208,7 +272,7 @@ def enrich_member_risk_profile(
     join_context: Mapping[str, Any] | None = None,
     behavior_context: Mapping[str, Any] | None = None,
 ) -> Dict[str, Any]:
-    """Add calibrated profile and behavior dimensions to a raidguard profile."""
+    """Add calibrated identity, spam, and low-confidence profile dimensions."""
 
     out: Dict[str, Any] = dict(profile or {})
     join = dict(join_context or {})
@@ -219,11 +283,15 @@ def enrich_member_risk_profile(
     ):
         out.update(
             {
+                "evidence_tier": "excluded_bot",
                 "alt_evidence_tier": "excluded_bot",
                 "alt_risk_score": 0,
                 "spam_risk_score": 0,
                 "spam_risk_level": "low",
                 "profile_risk_score": 0,
+                "profile_risk_level": "low",
+                "context_risk_score": 0,
+                "context_risk_level": "low",
                 "risk_dimensions": {
                     "alt": {"score": 0, "tier": "excluded_bot"},
                     "spam": {"score": 0, "level": "low"},
@@ -231,7 +299,13 @@ def enrich_member_risk_profile(
                 },
                 "post_join_behavior_flags": [],
                 "review_verdict": "OFFICIAL BOT — REVIEW PERMISSIONS",
+                "recommended_action": (
+                    "Review who added the bot and whether its permissions are appropriate."
+                ),
+                "risk_display_status": "official_bot",
                 "listing_source": _is_listing_source(join),
+                "possible_alt_account": False,
+                "possible_spam_account": False,
             }
         )
         return out
@@ -249,7 +323,6 @@ def enrich_member_risk_profile(
         ),
     )
     default_avatar = _safe_bool(out.get("default_avatar"), False)
-
     base_score = max(
         0,
         min(
@@ -260,15 +333,8 @@ def enrich_member_risk_profile(
             ),
         ),
     )
-    alt_tier = _safe_text(out.get("evidence_tier") or "clear").lower()
-    if alt_tier not in {
-        "clear",
-        "suspicious",
-        "strongly_linked",
-        "confirmed_duplicate",
-    }:
-        alt_tier = "clear"
 
+    alt_tier, alt_score = _derive_alt_evidence(out)
     profile_score, profile_reasons, profile_flags = _numeric_profile_score(
         username=username,
         account_age_days=account_age_days,
@@ -276,31 +342,61 @@ def enrich_member_risk_profile(
     )
     spam_score, spam_reasons, behavior_flags = _spam_behavior_score(behavior)
 
+    # The legacy base score may contain account-age/name/avatar context. Preserve it
+    # as review context, but never relabel it as linked-account evidence.
+    context_score = max(
+        profile_score,
+        base_score if alt_tier == "clear" else 0,
+    )
     listing_source = _is_listing_source(join)
-    # Listing traffic is normal acquisition context. It cannot add risk by itself.
-    if listing_source and base_score == 0 and profile_score == 0 and spam_score == 0:
-        review_verdict = "LOW CONCERN — NORMAL LISTING TRAFFIC"
-    elif alt_tier == "confirmed_duplicate":
+    is_new_account = account_age_days <= 7
+
+    if alt_tier == "confirmed_duplicate":
         review_verdict = "CONFIRMED DUPLICATE IDENTITY"
+        recommended_action = "Keep contained and verify the linked identity before granting access."
+        display_status = "confirmed_alt"
     elif alt_tier == "strongly_linked":
         review_verdict = "STRONG ALT LINK — STAFF REVIEW"
+        recommended_action = "Keep on the verification path and review the linked-account evidence."
+        display_status = "strong_alt_link"
     elif spam_score >= 70:
         review_verdict = "HIGH-CONFIDENCE SPAM ACCOUNT"
+        recommended_action = "Follow the SpamGuard incident action and review recent messages."
+        display_status = "high_spam_risk"
     elif spam_score >= 35:
         review_verdict = "SPAM BEHAVIOR DETECTED"
-    elif alt_tier == "suspicious" or profile_score >= 25:
-        review_verdict = "REVIEW RECOMMENDED"
+        recommended_action = "Review the SpamGuard incident; restrict only from observed behavior."
+        display_status = "spam_behavior"
+    elif alt_tier == "suspicious":
+        review_verdict = "POSSIBLE ALT LINK — REVIEW"
+        recommended_action = "Review the correlated accounts; do not punish from heuristics alone."
+        display_status = "possible_alt_link"
+    elif profile_score >= 35:
+        review_verdict = "PROFILE REVIEW — LOW CONFIDENCE"
+        recommended_action = "Use normal verification and monitor behavior; profile shape is not identity proof."
+        display_status = "profile_review"
+    elif is_new_account and context_score > 0:
+        review_verdict = "NEW ACCOUNT — VERIFY NORMALLY"
+        recommended_action = "No alt action recommended. Continue the normal verification flow."
+        display_status = "new_account"
+    elif listing_source and context_score == 0 and spam_score == 0:
+        review_verdict = "LOW CONCERN — NORMAL LISTING TRAFFIC"
+        recommended_action = "No action needed. Continue normal verification and behavior monitoring."
+        display_status = "low_concern"
+    elif context_score >= 20:
+        review_verdict = "LOW-CONFIDENCE PROFILE CONTEXT"
+        recommended_action = "No alt action recommended. Monitor only if later behavior supports concern."
+        display_status = "low_confidence_context"
     else:
         review_verdict = "LOW CONCERN"
+        recommended_action = "No action needed. Continue normal verification and behavior monitoring."
+        display_status = "low_concern"
 
-    alt_score = base_score
-    overall_score = max(base_score, profile_score, spam_score)
+    overall_score = max(alt_score, spam_score, context_score)
     if spam_score >= 35 and alt_tier in {"suspicious", "strongly_linked"}:
         overall_score = min(100, overall_score + 8)
     if alt_tier == "confirmed_duplicate":
         overall_score = 100
-    elif alt_tier == "strongly_linked":
-        overall_score = max(65, overall_score)
 
     reasons = _dedupe(
         list(out.get("reasons") or out.get("risk_reasons") or [])
@@ -318,6 +414,7 @@ def enrich_member_risk_profile(
     overall_level = _risk_level(overall_score)
     spam_level = _risk_level(spam_score)
     profile_level = _risk_level(profile_score)
+    context_level = _risk_level(context_score)
 
     out.update(
         {
@@ -325,6 +422,7 @@ def enrich_member_risk_profile(
             "risk_score": overall_score,
             "level": overall_level,
             "risk_level": overall_level,
+            "evidence_tier": alt_tier,
             "reasons": reasons,
             "risk_reasons": reasons,
             "suspicion_flags": flags,
@@ -334,13 +432,18 @@ def enrich_member_risk_profile(
             "spam_risk_level": spam_level,
             "profile_risk_score": profile_score,
             "profile_risk_level": profile_level,
+            "context_risk_score": context_score,
+            "context_risk_level": context_level,
             "post_join_behavior_flags": behavior_flags,
             "review_verdict": review_verdict,
+            "recommended_action": recommended_action,
+            "risk_display_status": display_status,
+            "new_account_context": is_new_account,
             "listing_source": listing_source,
             "risk_dimensions": {
                 "alt": {"score": alt_score, "tier": alt_tier},
                 "spam": {"score": spam_score, "level": spam_level},
-                "profile": {"score": profile_score, "level": profile_level},
+                "profile": {"score": context_score, "level": context_level},
             },
             "possible_alt_account": alt_tier
             in {"suspicious", "strongly_linked", "confirmed_duplicate"},
