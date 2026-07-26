@@ -51,6 +51,20 @@ replace_once(
 ''',
 )
 
+# The permanent setup safety audit must require the new canonical feature-center owner.
+replace_once(
+    "tools/audit_setup_safety.py",
+    '''                "design",
+                "history",
+                "back",
+''',
+    '''                "design",
+                "profiles",
+                "history",
+                "back",
+''',
+)
+
 # Keep direct slash commands as fallbacks, while pointing ordinary managers to setup.
 replace_once(
     "stoney_verify/commands_ext/public_profile_cards.py",
