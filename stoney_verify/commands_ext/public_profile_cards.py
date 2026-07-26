@@ -664,7 +664,7 @@ def _live_status_embed(guild: discord.Guild, config: Mapping[str, Any]) -> disco
         value="Member privacy always wins. Platform identities remain hidden until the member explicitly shares them.",
         inline=False,
     )
-    embed.set_footer(text="Use /dank profile live-cards with a Discord channel picker")
+    embed.set_footer(text="/dank setup → All Features & Settings → Member Profiles & Live Cards")
     return embed
 
 
@@ -774,7 +774,7 @@ def _attach_profile_commands() -> None:
         ("settings", "Open your private profile privacy and platform settings.", profile_settings),
         ("platform", "Save or update one private/shared platform identity.", profile_platform),
         ("platform-remove", "Remove one saved platform identity.", profile_platform_remove),
-        ("live-cards", "Manager: enable or disable live cards in a selected channel.", profile_live_cards),
+        ("live-cards", "Manager fallback: toggle one channel; the full picker is in /dank setup.", profile_live_cards),
         ("live-fields", "Manager: restrict fields live profile cards may display.", profile_live_fields),
         ("live-status", "Manager: view live profile card configuration.", profile_live_status),
     )

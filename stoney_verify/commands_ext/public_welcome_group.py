@@ -30,7 +30,7 @@ _ATTACHED = False
 
 welcome_group = app_commands.Group(
     name="welcome",
-    description="Set up welcome, join, and leave messages for this server.",
+    description="Set up the static welcome/start-here message and join-only image cards.",
 )
 
 
@@ -139,7 +139,7 @@ async def open_welcome_preview(interaction: discord.Interaction) -> None:
     await _defer(interaction)
     cfg = await get_guild_config(int(guild.id), refresh=True)
     embed = build_welcome_embed(guild, cfg)
-    await interaction.followup.send("Preview only. Press **Post/Update** in `/dank setup` → Feature Centers → Welcome Center when ready.", embed=embed, ephemeral=True)
+    await interaction.followup.send("Preview only. Use `/dank welcome post` when the static welcome/start-here message is ready.", embed=embed, ephemeral=True)
 
 
 async def post_welcome_message(interaction: discord.Interaction, channel: Optional[discord.TextChannel] = None) -> None:
@@ -173,7 +173,7 @@ async def save_welcome_channel(interaction: discord.Interaction, channel: discor
         },
     )
     invalidate_guild_config(int(interaction.guild.id))
-    await interaction.followup.send(f"✅ Welcome channel saved as {channel.mention}. Press **Post/Update** in Welcome Center to post/update the message.", ephemeral=True)
+    await interaction.followup.send(f"✅ Static welcome/start-here channel saved as {channel.mention}. Use `/dank welcome post` to post or update it.", ephemeral=True)
 
 
 async def save_welcome_template_service(interaction: discord.Interaction, title: Optional[str] = None, body: Optional[str] = None) -> None:
@@ -187,7 +187,7 @@ async def save_welcome_template_service(interaction: discord.Interaction, title:
     await save_welcome_template(int(interaction.guild.id), title=title, body=body, actor_id=int(interaction.user.id))
     cfg = await get_guild_config(int(interaction.guild.id), refresh=True)
     embed = build_welcome_embed(interaction.guild, cfg)
-    await interaction.followup.send("✅ Welcome template saved. Preview below. Press **Post/Update** in Welcome Center to update the public message.", embed=embed, ephemeral=True)
+    await interaction.followup.send("✅ Static welcome/start-here template saved. Preview below. Use `/dank welcome post` to update the public message.", embed=embed, ephemeral=True)
 
 
 async def reset_welcome_template_service(interaction: discord.Interaction) -> None:
@@ -197,10 +197,10 @@ async def reset_welcome_template_service(interaction: discord.Interaction) -> No
         return await _send(interaction, "❌ This must be used inside a server.")
     await _defer(interaction)
     await reset_welcome_template(int(interaction.guild.id), actor_id=int(interaction.user.id))
-    await interaction.followup.send("✅ Welcome template reset to the default. Press **Post/Update** in Welcome Center to update the public message.", ephemeral=True)
+    await interaction.followup.send("✅ Static welcome/start-here template reset. Use `/dank welcome post` to update the public message.", ephemeral=True)
 
 
-async def open_welcome_events(interaction: discord.Interaction) -> None:
+async def open_join_leave_announcements(interaction: discord.Interaction) -> None:
     if not await _require_setup_permission(interaction):
         return
     try:
@@ -208,7 +208,11 @@ async def open_welcome_events(interaction: discord.Interaction) -> None:
 
         await welcome_event_services.open_welcome_events_center(interaction)
     except Exception as exc:
-        await _send(interaction, f"❌ Could not open join/leave setup: `{type(exc).__name__}: {exc}`")
+        await _send(interaction, f"❌ Could not open Join & Leave Announcements: `{type(exc).__name__}: {exc}`")
+
+
+# Compatibility export for older internal imports. The public command is join-leave.
+open_welcome_events = open_join_leave_announcements
 
 
 async def open_welcome_health(interaction: discord.Interaction) -> None:
@@ -242,8 +246,7 @@ async def open_welcome_health(interaction: discord.Interaction) -> None:
             else:
                 lines.append("✅ Bot can post/update the welcome message.")
     lines.append("")
-    lines.extend(_event_channel_health(guild, cfg, kind="join"))
-    lines.extend(_event_channel_health(guild, cfg, kind="leave"))
+    lines.append("ℹ️ Join and leave announcements are configured separately with `/dank welcome join-leave`.")
     await interaction.followup.send("\n".join(lines), ephemeral=True, allowed_mentions=discord.AllowedMentions.none())
 
 
@@ -440,9 +443,9 @@ async def welcome_card_enabled(
     )
 
 
-@welcome_group.command(name="events", description="Set up optional join and leave announcements for this server.")
-async def welcome_events(interaction: discord.Interaction) -> None:
-    await open_welcome_events(interaction)
+@welcome_group.command(name="join-leave", description="Open the separate Join & Leave Announcements setup.")
+async def welcome_join_leave(interaction: discord.Interaction) -> None:
+    await open_join_leave_announcements(interaction)
 
 
 @welcome_group.command(name="reset", description="Reset the welcome message template back to the public default.")
@@ -450,7 +453,7 @@ async def welcome_reset(interaction: discord.Interaction) -> None:
     await reset_welcome_template_service(interaction)
 
 
-@welcome_group.command(name="health", description="Check whether welcome, join, and leave message setup is ready.")
+@welcome_group.command(name="health", description="Check the static welcome/start-here message and join-only image card setup.")
 async def welcome_health(interaction: discord.Interaction) -> None:
     await open_welcome_health(interaction)
 
@@ -498,6 +501,7 @@ __all__ = [
     "save_welcome_channel",
     "save_welcome_template_service",
     "reset_welcome_template_service",
+    "open_join_leave_announcements",
     "open_welcome_events",
     "welcome_card_preview",
     "welcome_card_theme",
