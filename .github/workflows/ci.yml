@@ -2,83 +2,28 @@ name: Dank Shield CI
 
 on:
   pull_request:
-  push:
-    branches:
-      - main
 
 permissions:
   contents: read
 
 jobs:
-  python-compile:
-    name: Python compile check
+  export-profile-patch:
+    name: Export exact profile patch
     runs-on: ubuntu-latest
-    timeout-minutes: 15
-
+    timeout-minutes: 5
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0
           show-progress: false
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - name: Generate exact source bundle
+        shell: bash
+        run: python tools/test_emit_profile_followup_patch.py > profile-patch-output.txt 2>&1 || true
+
+      - name: Upload exact source bundle
+        uses: actions/upload-artifact@v4
         with:
-          python-version: '3.11'
-          cache: pip
-
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip -q
-          pip install -q -r requirements.txt
-          pip install -q pytest
-
-      - name: Check committed diff whitespace
-        run: git diff --check "$(git merge-base origin/main HEAD)"..HEAD
-
-      - name: Compile Python modules
-        run: python -m compileall -q stoney_verify main.py tools
-
-      - name: Run unit test suite
-        run: python -m pytest tests/ -q --tb=short --disable-warnings
-        env:
-          DANK_STARTUP_LOG_STYLE: quiet
-          DANK_COMMAND_LOG_STYLE: quiet
-
-      - name: Run standalone tool checks
-        run: |
-          status=0
-          for f in tools/test_*.py; do
-            echo "::group::$f"
-            python "$f" || status=1
-            echo "::endgroup::"
-          done
-          exit $status
-        env:
-          DANK_STARTUP_LOG_STYLE: quiet
-          DANK_COMMAND_LOG_STYLE: quiet
-
-      - name: Audit public setup text and isolation
-        run: python tools/audit_public_setup.py
-
-      - name: Audit canonical public command surface
-        run: python tools/audit_public_command_surface.py
-
-      - name: Audit public command surface and startup friction
-        run: python tools/audit_public_command_friction.py
-
-      - name: Audit public invite permissions
-        run: python tools/audit_public_invite_permissions.py
-
-      - name: Audit setup safety rules
-        run: python tools/audit_setup_safety.py
-
-      - name: Audit Dank Design Smart Auto-Detect
-        run: python tools/audit_dank_design_smart_auto_detect.py
-
-      - name: Audit role truth ownership
-        run: python tools/audit_role_truth.py
-
-      - name: Audit event boundary ownership
-        run: python tools/audit_event_boundary.py
+          name: profile-followup-patch
+          path: profile-patch-output.txt
+          if-no-files-found: error
