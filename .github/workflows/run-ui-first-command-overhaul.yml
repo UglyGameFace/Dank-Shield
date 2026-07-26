@@ -40,33 +40,42 @@ jobs:
             stoney_verify/profile_card_setup_ui_core.py
           rm -f tests/test_ui_first_dank_command_surface.py tools/test_dank_command_payload.py
       - name: Apply exact repository patch
-        id: patch
-        continue-on-error: true
+        run: python tools/apply_ui_first_command_overhaul.py
+      - name: Normalize and validate generated tree
         run: |
-          python tools/apply_ui_first_command_overhaul.py > /tmp/ui-first-patch.log 2>&1
-          status=$?
-          cat /tmp/ui-first-patch.log
-          echo "status=$status" >> "$GITHUB_OUTPUT"
-          exit 0
-      - name: Upload patch diagnostic
-        if: steps.patch.outputs.status != '0'
-        uses: actions/upload-artifact@v4
-        with:
-          name: ui-first-patch-diagnostic
-          path: /tmp/ui-first-patch.log
-          if-no-files-found: error
-          retention-days: 1
-      - name: Validate generated tree cleanliness
-        if: steps.patch.outputs.status == '0'
-        run: |
-          sed -i 's/[[:space:]]\+$//' ACTIVE_TASK.md
+          python - <<'PY'
+          from pathlib import Path
+
+          paths = (
+              'ACTIVE_TASK.md',
+              'stoney_verify/commands.py',
+              'stoney_verify/commands_ext/public_command_hub.py',
+              'stoney_verify/commands_ext/public_self_roles_group.py',
+              'stoney_verify/commands_ext/public_setup_recommend.py',
+              'stoney_verify/profile_card_runtime.py',
+              'stoney_verify/profile_card_runtime_core.py',
+              'stoney_verify/profile_card_service.py',
+              'stoney_verify/profile_card_setup_ui.py',
+              'stoney_verify/profile_card_setup_ui_core.py',
+              'stoney_verify/profile_signature_renderer.py',
+              'stoney_verify/profile_signature_studio.py',
+              'stoney_verify/profile_signature_style.py',
+              'stoney_verify/welcome_setup_ui.py',
+              'tests/test_ui_first_dank_command_surface.py',
+              'tools/test_dank_command_payload.py',
+          )
+          for raw in paths:
+              path = Path(raw)
+              text = path.read_text(encoding='utf-8')
+              normalized = '\n'.join(line.rstrip() for line in text.splitlines()) + '\n'
+              path.write_text(normalized, encoding='utf-8')
+          PY
           git diff --check
           test ! -e tools/apply_ui_first_command_overhaul.py
           test ! -e .github/workflows/run-ui-first-command-overhaul.yml
           test ! -e .github/workflows/apply-profile-welcome-ux.yml
           test ! -e .github/workflows/run-profile-welcome-ux-patch.yml
       - name: Compile changed modules
-        if: steps.patch.outputs.status == '0'
         run: |
           python -m py_compile \
             stoney_verify/commands.py \
@@ -83,7 +92,6 @@ jobs:
             stoney_verify/profile_signature_style.py \
             stoney_verify/welcome_setup_ui.py
       - name: Run focused UI and profile tests
-        if: steps.patch.outputs.status == '0'
         env:
           DANK_STARTUP_LOG_STYLE: quiet
           DANK_COMMAND_LOG_STYLE: quiet
@@ -98,13 +106,11 @@ jobs:
             tests/test_setup_aio_navigation_behavior.py \
             tests/test_welcome_card_live_command_tree.py
       - name: Prove exact command payload fits
-        if: steps.patch.outputs.status == '0'
         env:
           DANK_STARTUP_LOG_STYLE: quiet
           DANK_COMMAND_LOG_STYLE: quiet
         run: python tools/test_dank_command_payload.py
       - name: Stage exact tested files
-        if: steps.patch.outputs.status == '0'
         run: |
           rm -rf /tmp/ui-first-tree
           mkdir -p /tmp/ui-first-tree
@@ -138,14 +144,9 @@ jobs:
           UI_FIRST_TEST_ERROR.txt
           DANK_PAYLOAD_ERROR.txt
           EOF
-      - name: Upload tested tree
-        if: steps.patch.outputs.status == '0'
-        uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v4
         with:
           name: ui-first-tested-tree
           path: /tmp/ui-first-tree
           if-no-files-found: error
           retention-days: 1
-      - name: Fail after patch diagnostic
-        if: steps.patch.outputs.status != '0'
-        run: exit 1
