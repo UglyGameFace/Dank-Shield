@@ -4,13 +4,16 @@ on:
   push:
     branches:
       - fix/profile-followup-payload
+  pull_request:
+    branches:
+      - main
 
 permissions:
   contents: write
 
 jobs:
   apply:
-    if: github.actor != 'github-actions[bot]'
+    if: github.actor != 'github-actions[bot]' && (github.event_name == 'push' || github.head_ref == 'fix/profile-followup-payload')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
