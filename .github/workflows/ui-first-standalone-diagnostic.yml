@@ -1,0 +1,60 @@
+name: UI First Standalone Diagnostic
+
+on:
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  standalone-diagnostic:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          show-progress: false
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip -q
+          pip install -q -r requirements.txt
+          pip install -q pytest
+
+      - name: Run every standalone check and capture output
+        id: checks
+        continue-on-error: true
+        env:
+          DANK_STARTUP_LOG_STYLE: quiet
+          DANK_COMMAND_LOG_STYLE: quiet
+        run: |
+          set +e
+          status=0
+          : > /tmp/ui-first-standalone.log
+          for file in tools/test_*.py; do
+            echo "===== $file =====" | tee -a /tmp/ui-first-standalone.log
+            python "$file" >> /tmp/ui-first-standalone.log 2>&1 || status=1
+          done
+          set -e
+          cat /tmp/ui-first-standalone.log
+          echo "status=$status" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ui-first-standalone-log
+          path: /tmp/ui-first-standalone.log
+          if-no-files-found: error
+          retention-days: 1
+
+      - name: Preserve failing status
+        if: steps.checks.outputs.status != '0'
+        run: exit 1
