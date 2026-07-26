@@ -23,6 +23,7 @@ from .profile_card_service import (
     visible_platform_entries,
 )
 from .profile_signature_renderer import render_member_profile_signature
+from .profile_signature_style import effective_profile_style
 
 # Stable public constants and models from the lifecycle core.
 DEFAULT_DEBOUNCE_SECONDS = _core.DEFAULT_DEBOUNCE_SECONDS
@@ -178,7 +179,7 @@ async def render_live_profile_card(
 
     image_bytes = await render_member_profile_signature(
         member,
-        cfg=cfg,
+        style=effective_profile_style(preferences, cfg),
         role_labels=_compact_role_labels(member) if show_roles else [],
         date_labels=_compact_date_labels(member) if show_dates else [],
         platform_labels=_compact_platform_labels(platforms),

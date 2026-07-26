@@ -224,25 +224,26 @@ def normalize_platform_entry(
     }
 
 
-def normalize_preferences(value: Optional[Mapping[str, Any]]) -> dict[str, bool]:
-    result = dict(DEFAULT_PROFILE_PREFERENCES)
-    if isinstance(value, Mapping):
-        for key in result:
-            if key in value:
-                result[key] = bool(value.get(key))
+def normalize_preferences(value: Optional[Mapping[str, Any]]) -> dict[str, Any]:
+    raw = dict(value or {}) if isinstance(value, Mapping) else {}
+    result: dict[str, Any] = dict(DEFAULT_PROFILE_PREFERENCES)
+    for key in DEFAULT_PROFILE_PREFERENCES:
+        if key in raw:
+            result[key] = bool(raw.get(key))
+    result.update(normalize_member_profile_style(raw))
     return result
 
 
 def effective_preferences(
     user_preferences: Optional[Mapping[str, Any]],
     guild_settings: Optional[Mapping[str, Any]],
-) -> dict[str, bool]:
+) -> dict[str, Any]:
     global_values = normalize_preferences(user_preferences)
     local = dict(guild_settings or {})
-    return {
-        key: bool(global_values[key]) and bool(local.get(key, True))
-        for key in global_values
-    }
+    resolved = dict(global_values)
+    for key in DEFAULT_PROFILE_PREFERENCES:
+        resolved[key] = bool(global_values[key]) and bool(local.get(key, True))
+    return resolved
 
 
 def normalize_server_allowed_fields(value: Any) -> set[str]:
@@ -399,6 +400,10 @@ async def upsert_profile_user_preferences(
         for key in DEFAULT_PROFILE_PREFERENCES:
             if key in updates and updates.get(key) is not None:
                 preferences[key] = bool(updates.get(key))
+        for key in DEFAULT_MEMBER_PROFILE_STYLE:
+            if key in updates and updates.get(key) is not None:
+                preferences[key] = updates.get(key)
+        preferences = normalize_preferences(preferences)
         payload = {
             "user_id": str(uid),
             "preferences": preferences,
@@ -656,6 +661,7 @@ async def delete_live_card_state(guild_id: int, channel_id: int) -> None:
 
 
 __all__ = [
+    "DEFAULT_MEMBER_PROFILE_STYLE",
     "DEFAULT_PROFILE_PREFERENCES",
     "InvalidPlatformProfile",
     "PLATFORM_SPECS",
