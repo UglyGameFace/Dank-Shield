@@ -1,15 +1,29 @@
+from collections import defaultdict
 from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
+MIGRATIONS = ROOT / "supabase" / "migrations"
+
+
+def test_supabase_migration_versions_are_unique():
+    files_by_version: dict[str, list[str]] = defaultdict(list)
+    for path in sorted(MIGRATIONS.glob("*.sql")):
+        version = path.name.split("_", 1)[0]
+        if version.isdigit():
+            files_by_version[version].append(path.name)
+
+    duplicates = {
+        version: names
+        for version, names in files_by_version.items()
+        if len(names) > 1
+    }
+    assert not duplicates, f"duplicate Supabase migration versions: {duplicates}"
 
 
 def test_optional_legacy_ticket_metadata_migration_skips_missing_table():
     source = (
-        ROOT
-        / "supabase"
-        / "migrations"
-        / "20260424_tickettool_parity_ticket_columns.sql"
+        MIGRATIONS / "20260424_tickettool_parity_ticket_columns.sql"
     ).read_text(encoding="utf-8")
 
     assert "to_regclass('public.tickets') IS NOT NULL" in source
@@ -21,12 +35,11 @@ def test_optional_legacy_ticket_metadata_migration_skips_missing_table():
 
 
 def test_later_guild_config_migration_reconciles_the_earlier_schema():
-    source = (
-        ROOT
-        / "supabase"
-        / "migrations"
-        / "20260426_guild_configs.sql"
-    ).read_text(encoding="utf-8")
+    migration = MIGRATIONS / "202604260001_guild_configs.sql"
+    source = migration.read_text(encoding="utf-8")
+
+    assert migration.is_file()
+    assert not (MIGRATIONS / "20260426_guild_configs.sql").exists()
 
     reconciliation = source.index("alter table public.guild_configs")
     enabled_index = source.index("idx_guild_configs_enabled")
@@ -48,12 +61,9 @@ def test_later_guild_config_migration_reconciles_the_earlier_schema():
 
 
 def test_live_profile_card_migration_is_idempotent_and_service_role_only():
-    source = (
-        ROOT
-        / "supabase"
-        / "migrations"
-        / "20260725_live_profile_cards.sql"
-    ).read_text(encoding="utf-8")
+    source = (MIGRATIONS / "20260725_live_profile_cards.sql").read_text(
+        encoding="utf-8"
+    )
 
     for table in (
         "dank_profile_users",
