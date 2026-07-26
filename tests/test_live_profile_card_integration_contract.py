@@ -4,9 +4,12 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 COMMANDS = (ROOT / "stoney_verify/commands.py").read_text(encoding="utf-8")
 PROFILE_COMMANDS = (ROOT / "stoney_verify/commands_ext/public_profile_cards.py").read_text(encoding="utf-8")
+PROFILE_COMMANDS_CORE = (ROOT / "stoney_verify/commands_ext/public_profile_cards_core.py").read_text(encoding="utf-8")
 PROFILE_RUNTIME = (ROOT / "stoney_verify/profile_card_runtime.py").read_text(encoding="utf-8")
+PROFILE_RUNTIME_CORE = (ROOT / "stoney_verify/profile_card_runtime_core.py").read_text(encoding="utf-8")
 PROFILE_SERVICE = (ROOT / "stoney_verify/profile_card_service.py").read_text(encoding="utf-8")
 PROFILE_SETUP = (ROOT / "stoney_verify/profile_card_setup_ui.py").read_text(encoding="utf-8")
+SIGNATURE_RENDERER = (ROOT / "stoney_verify/profile_signature_renderer.py").read_text(encoding="utf-8")
 SETUP_HOME = (ROOT / "stoney_verify/commands_ext/public_setup_recommend.py").read_text(encoding="utf-8")
 EXISTING_PROFILE = (ROOT / "stoney_verify/commands_ext/public_self_roles_group.py").read_text(encoding="utf-8")
 
@@ -62,20 +65,23 @@ def test_runtime_owns_exactly_one_additive_message_listener():
 
 
 def test_live_card_never_edits_or_reposts_user_messages():
-    assert ".edit(" not in PROFILE_RUNTIME
-    assert "message.content" not in PROFILE_RUNTIME
-    assert "await message.delete()" in PROFILE_RUNTIME
-    assert "message.author" in PROFILE_RUNTIME
-    assert "parse_live_card_footer(message)" in PROFILE_RUNTIME
-    assert "allowed_mentions=discord.AllowedMentions.none()" in PROFILE_RUNTIME
+    assert ".edit(" not in PROFILE_RUNTIME_CORE
+    assert "message.content" not in PROFILE_RUNTIME_CORE
+    assert "await message.delete()" in PROFILE_RUNTIME_CORE
+    assert "message.author" in PROFILE_RUNTIME_CORE
+    assert "parse_live_card_footer(message)" in PROFILE_RUNTIME_CORE
+    assert "allowed_mentions=discord.AllowedMentions.none()" in PROFILE_RUNTIME_CORE
+    assert 'payload["file"] = rendered.file' in PROFILE_RUNTIME
 
 
-def test_privacy_is_resolved_in_service_layer_before_rendering():
+def test_privacy_is_resolved_before_compact_signature_rendering():
     assert "get_effective_profile_settings" in PROFILE_RUNTIME
     assert "visible_platform_entries" in PROFILE_RUNTIME
     assert "require_live_enabled" in PROFILE_RUNTIME
     assert "server_allowed_fields" in PROFILE_RUNTIME
     assert "effective_preferences" in PROFILE_SERVICE
+    assert "render_member_profile_signature" in PROFILE_RUNTIME
+    assert "_profile_card(" not in PROFILE_RUNTIME
 
 
 def test_all_existing_public_profile_entry_points_use_privacy_aware_composer():
@@ -87,10 +93,10 @@ def test_all_existing_public_profile_entry_points_use_privacy_aware_composer():
 
 
 def test_privacy_changes_remove_stale_cards_immediately():
-    assert "async def remove_user_cards(" in PROFILE_RUNTIME
-    assert "async def remove_user_cards_all_guilds(" in PROFILE_RUNTIME
-    assert PROFILE_COMMANDS.count("invalidate_member_live_cards(") >= 3
-    helper = PROFILE_RUNTIME.split("async def _remove_user_card_states", 1)[1].split(
+    assert "async def remove_user_cards(" in PROFILE_RUNTIME_CORE
+    assert "async def remove_user_cards_all_guilds(" in PROFILE_RUNTIME_CORE
+    assert PROFILE_COMMANDS_CORE.count("invalidate_member_live_cards(") >= 3
+    helper = PROFILE_RUNTIME_CORE.split("async def _remove_user_card_states", 1)[1].split(
         "async def remove_user_cards", 1
     )[0]
     assert "removed = await self._delete_stored_message" in helper
@@ -101,25 +107,27 @@ def test_privacy_changes_remove_stale_cards_immediately():
 
 
 def test_server_field_restrictions_invalidate_every_existing_guild_card():
-    assert "async def invalidate_guild_cards(" in PROFILE_RUNTIME
-    live_fields = PROFILE_COMMANDS.split("async def profile_live_fields", 1)[1].split(
+    assert "async def invalidate_guild_cards(" in PROFILE_RUNTIME_CORE
+    live_fields = PROFILE_COMMANDS_CORE.split("async def profile_live_fields", 1)[1].split(
         "async def profile_live_status", 1
     )[0]
     assert "runtime.invalidate_guild_cards(guild)" in live_fields
 
 
-def test_server_setup_uses_the_canonical_setup_picker_and_guild_config():
-    assert 'label="Member Profiles & Live Cards"' in SETUP_HOME
+def test_server_setup_uses_only_the_profile_signature_channel_picker():
     assert "open_profile_card_setup" in SETUP_HOME
-    assert "class LiveProfileChannelSelect(discord.ui.ChannelSelect)" in PROFILE_SETUP
-    assert "welcome_channel_id" in PROFILE_SETUP
+    assert "LiveProfileChannelSelect = _core.LiveProfileChannelSelect" in PROFILE_SETUP
     assert "LIVE_CHANNEL_IDS_KEY" in PROFILE_SETUP
-    assert "upsert_guild_config" in PROFILE_SETUP
     assert "raw Discord ID" not in PROFILE_SETUP
-    assert "profile_live_card_channel_ids" in PROFILE_RUNTIME
+    assert "Add Welcome Channel" not in PROFILE_SETUP
+    assert "welcome_channel_id" not in PROFILE_SETUP
+    assert "welcome/start-here messages" in PROFILE_SETUP
 
 
-def test_join_only_welcome_card_files_are_not_profile_dependencies():
-    assert "welcome_card" not in PROFILE_RUNTIME
-    assert "welcome_card" not in PROFILE_SERVICE
+def test_signature_visual_is_compact_and_shares_style_not_welcome_behavior():
+    assert "SIGNATURE_WIDTH = 1080" in SIGNATURE_RENDERER
+    assert "SIGNATURE_HEIGHT = 220" in SIGNATURE_RENDERER
+    assert "render_profile_signature" in SIGNATURE_RENDERER
+    assert "render_welcome_card" not in SIGNATURE_RENDERER
+    assert "on_member_join" not in SIGNATURE_RENDERER
     assert "public_welcome_card" not in PROFILE_COMMANDS

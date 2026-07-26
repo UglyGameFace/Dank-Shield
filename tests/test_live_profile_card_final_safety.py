@@ -216,7 +216,7 @@ def test_reconcile_validates_persisted_card_even_outside_history_window(monkeypa
 
 def test_user_cleanup_uses_indexed_user_query_not_global_state_scan():
     service = (ROOT / "stoney_verify/profile_card_service.py").read_text(encoding="utf-8")
-    runtime = (ROOT / "stoney_verify/profile_card_runtime.py").read_text(encoding="utf-8")
+    runtime = (ROOT / "stoney_verify/profile_card_runtime_core.py").read_text(encoding="utf-8")
     migration = (ROOT / "supabase/migrations/20260725_live_profile_cards.sql").read_text(encoding="utf-8")
     assert "async def list_live_card_states_for_user" in service
     assert '.eq("user_id", str(uid))' in service
@@ -230,7 +230,7 @@ def test_user_cleanup_uses_indexed_user_query_not_global_state_scan():
 
 def test_member_and_deleted_channel_cleanup_are_registered_once():
     commands = (ROOT / "stoney_verify/commands_ext/public_profile_cards.py").read_text(encoding="utf-8")
-    runtime = (ROOT / "stoney_verify/profile_card_runtime.py").read_text(encoding="utf-8")
+    runtime = (ROOT / "stoney_verify/profile_card_runtime_core.py").read_text(encoding="utf-8")
     assert commands.count('bot.add_listener(runtime.on_member_remove, "on_member_remove")') == 1
     assert commands.count('bot.add_listener(runtime.on_guild_channel_delete, "on_guild_channel_delete")') == 1
     assert "async def on_member_remove" in runtime
