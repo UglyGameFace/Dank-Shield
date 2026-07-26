@@ -27,13 +27,16 @@ jobs:
           set +e
           python - <<'PY' > materialize.log 2>&1
           from pathlib import Path
-          import textwrap
 
           workflow = Path('.github/workflows/apply-profile-theme-fix.yml').read_text(encoding='utf-8')
           marker = "          python - <<'PY'\n"
           start = workflow.index(marker) + len(marker)
           end = workflow.index("\n          PY", start)
-          script = textwrap.dedent(workflow[start:end])
+          raw_script = workflow[start:end]
+          script = "\n".join(
+              line[10:] if line.startswith("          ") else line
+              for line in raw_script.splitlines()
+          ) + "\n"
           exec(compile(script, 'profile-theme-materializer', 'exec'))
           PY
           status=$?
