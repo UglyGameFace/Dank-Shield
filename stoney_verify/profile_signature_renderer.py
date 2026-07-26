@@ -510,11 +510,19 @@ async def _member_profile_visuals(
 async def render_member_profile_signature(
     member: discord.Member,
     *,
-    appearance: Any,
+    appearance: Any = None,
+    cfg: Any = None,
     role_labels: Sequence[str],
     date_labels: Sequence[str],
     platform_labels: Sequence[str],
 ) -> bytes:
+    # ``cfg`` is accepted only for backward compatibility with the first compact
+    # runtime. Welcome-card/server appearance is deliberately ignored.
+    del cfg
+    if appearance is None:
+        from .profile_signature_service import get_profile_signature_appearance
+
+        appearance = await get_profile_signature_appearance(int(member.id))
     normalized = normalize_profile_appearance(appearance)
     avatar_task = asyncio.create_task(_avatar_bytes(member))
     visuals_task = asyncio.create_task(
