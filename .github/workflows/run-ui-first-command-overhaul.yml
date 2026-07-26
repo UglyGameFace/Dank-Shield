@@ -48,6 +48,7 @@ jobs:
       - name: Check patch cleanliness
         if: steps.patch.outputs.status == '0'
         run: |
+          sed -i 's/[[:space:]]\+$//' ACTIVE_TASK.md
           git diff --check
           test ! -e tools/apply_ui_first_command_overhaul.py
           test ! -e .github/workflows/run-ui-first-command-overhaul.yml
