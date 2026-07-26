@@ -18,7 +18,14 @@ def test_compact_signature_is_a_horizontal_png_with_bounded_height():
         role_labels=["Identity: man", "Interests: gaming • music • movies"],
         date_labels=["Joined Jun 2026", "Discord since Oct 2019"],
         platform_labels=["Steam: UglyGameFace", "Xbox: UglyGameFace"],
-        cfg={"welcome_card_theme": "420_lobby"},
+        style={
+            "theme": "default",
+            "font": "clean",
+            "color_mode": "theme",
+            "background_mode": "theme",
+            "layout": "classic",
+            "avatar_frame": "glow",
+        },
     )
     with Image.open(BytesIO(rendered)) as image:
         assert image.format == "PNG"

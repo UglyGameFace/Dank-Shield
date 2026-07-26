@@ -17,7 +17,7 @@ def test_profile_edit_hub_exists() -> None:
     assert "Edit Pronouns" in TEXT
     assert "Edit Identity" in TEXT
     assert "Edit Interests" in TEXT
-    assert "Privacy & Platforms" in TEXT
+    assert "Signature Settings" in TEXT
 
 
 def test_view_profile_uses_the_privacy_aware_composer_and_keeps_actions() -> None:
@@ -31,6 +31,7 @@ def test_profile_handler_routes_edit_privacy_and_full_roles() -> None:
     assert 'if suffix == "edit":' in TEXT
     assert 'if suffix == "privacy":' in TEXT
     assert 'if suffix == "full_roles_self":' in TEXT
+    assert "open_profile_signature_studio" in TEXT
 
 
 if __name__ == "__main__":

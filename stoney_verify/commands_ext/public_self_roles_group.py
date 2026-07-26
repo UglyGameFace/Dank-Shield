@@ -1364,7 +1364,7 @@ class ProfilePanelView(discord.ui.View):
         self.add_item(discord.ui.Button(label="Edit Pronouns", emoji="🪪", style=discord.ButtonStyle.secondary, custom_id=f"{PROFILE_PREFIX}open:pronouns", row=1))
         self.add_item(discord.ui.Button(label="Edit Identity", emoji="🌈", style=discord.ButtonStyle.secondary, custom_id=f"{PROFILE_PREFIX}open:identity", row=1))
         self.add_item(discord.ui.Button(label="Edit Interests", emoji="🎮", style=discord.ButtonStyle.secondary, custom_id=f"{PROFILE_PREFIX}open:interests", row=1))
-        self.add_item(discord.ui.Button(label="Privacy & Platforms", emoji="🔐", style=discord.ButtonStyle.primary, custom_id=f"{PROFILE_PREFIX}privacy", row=1))
+        self.add_item(discord.ui.Button(label="Signature Settings", emoji="🔐", style=discord.ButtonStyle.primary, custom_id=f"{PROFILE_PREFIX}privacy", row=1))
         self.add_item(discord.ui.Button(label="Server Roles / Cosmetics", emoji="🎭", style=discord.ButtonStyle.secondary, custom_id=f"{PROFILE_PREFIX}cosmetics", row=2))
 
         self.add_item(discord.ui.Button(label="Suggest Missing Interest", emoji="➕", style=discord.ButtonStyle.secondary, custom_id=f"{PROFILE_PREFIX}missing_interest", row=2))
@@ -1414,7 +1414,7 @@ class ProfileEditView(discord.ui.View):
         self.add_item(discord.ui.Button(label="View My Profile", emoji="👤", style=discord.ButtonStyle.secondary, custom_id=f"{PROFILE_PREFIX}view", row=1))
         self.add_item(discord.ui.Button(label="Learn Terms", emoji="📘", style=discord.ButtonStyle.secondary, custom_id=f"{PROFILE_PREFIX}learn", row=1))
         self.add_item(discord.ui.Button(label="Clear Profile Roles", emoji="🧹", style=discord.ButtonStyle.danger, custom_id=f"{PROFILE_PREFIX}clear", row=1))
-        self.add_item(discord.ui.Button(label="Privacy & Platforms", emoji="🔐", style=discord.ButtonStyle.primary, custom_id=f"{PROFILE_PREFIX}privacy", row=1))
+        self.add_item(discord.ui.Button(label="Signature Settings", emoji="🔐", style=discord.ButtonStyle.primary, custom_id=f"{PROFILE_PREFIX}privacy", row=1))
         self.add_item(discord.ui.Button(label="Missing Identity?", emoji="✍️", style=discord.ButtonStyle.secondary, custom_id=f"{PROFILE_PREFIX}missing", row=2))
         self.add_item(discord.ui.Button(label="Suggest Missing Interest", emoji="➕", style=discord.ButtonStyle.secondary, custom_id=f"{PROFILE_PREFIX}missing_interest", row=2))
 
@@ -1988,9 +1988,9 @@ async def _handle_profile_interaction(interaction: discord.Interaction) -> bool:
         return True
 
     if suffix == "privacy":
-        from .public_profile_cards import profile_settings
+        from stoney_verify.profile_signature_studio import open_profile_signature_studio
 
-        await profile_settings(interaction)
+        await open_profile_signature_studio(interaction)
         return True
 
     if suffix == "view":

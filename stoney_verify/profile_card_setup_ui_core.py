@@ -57,6 +57,7 @@ def _channel_permission_issues(channel: discord.TextChannel) -> list[str]:
         ("Send Messages", permissions.send_messages),
         ("Embed Links", permissions.embed_links),
         ("Read Message History", permissions.read_message_history),
+        ("Attach Files", permissions.attach_files),
     )
     return [label for label, allowed in checks if not allowed]
 

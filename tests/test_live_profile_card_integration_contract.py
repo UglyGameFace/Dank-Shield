@@ -89,7 +89,8 @@ def test_all_existing_public_profile_entry_points_use_privacy_aware_composer():
     assert "async def send_privacy_aware_profile" in PROFILE_COMMANDS
     assert EXISTING_PROFILE.count("send_privacy_aware_profile") >= 4
     assert 'if suffix == "privacy"' in EXISTING_PROFILE
-    assert EXISTING_PROFILE.count('label="Privacy & Platforms"') >= 2
+    assert EXISTING_PROFILE.count('label="Signature Settings"') >= 2
+    assert "open_profile_signature_studio" in EXISTING_PROFILE
     assert "invalidate_member_live_cards" in EXISTING_PROFILE
 
 

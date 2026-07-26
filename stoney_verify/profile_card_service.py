@@ -9,6 +9,10 @@ from typing import Any, Callable, Mapping, Optional
 from urllib.parse import quote, unquote, urlparse, urlunparse
 
 from .globals import get_supabase, reset_supabase
+from .profile_signature_style import (
+    DEFAULT_MEMBER_PROFILE_STYLE,
+    normalize_member_profile_style,
+)
 
 
 PROFILE_USER_TABLE = "dank_profile_users"
@@ -220,12 +224,13 @@ def normalize_platform_entry(
     }
 
 
-def normalize_preferences(value: Optional[Mapping[str, Any]]) -> dict[str, bool]:
-    result = dict(DEFAULT_PROFILE_PREFERENCES)
-    if isinstance(value, Mapping):
-        for key in result:
-            if key in value:
-                result[key] = bool(value.get(key))
+def normalize_preferences(value: Optional[Mapping[str, Any]]) -> dict[str, Any]:
+    raw = dict(value or {}) if isinstance(value, Mapping) else {}
+    result: dict[str, Any] = dict(DEFAULT_PROFILE_PREFERENCES)
+    for key in DEFAULT_PROFILE_PREFERENCES:
+        if key in raw:
+            result[key] = bool(raw.get(key))
+    result.update(normalize_member_profile_style(raw))
     return result
 
 
@@ -237,7 +242,7 @@ def effective_preferences(
     local = dict(guild_settings or {})
     return {
         key: bool(global_values[key]) and bool(local.get(key, True))
-        for key in global_values
+        for key in DEFAULT_PROFILE_PREFERENCES
     }
 
 
@@ -395,6 +400,10 @@ async def upsert_profile_user_preferences(
         for key in DEFAULT_PROFILE_PREFERENCES:
             if key in updates and updates.get(key) is not None:
                 preferences[key] = bool(updates.get(key))
+        for key in DEFAULT_MEMBER_PROFILE_STYLE:
+            if key in updates and updates.get(key) is not None:
+                preferences[key] = updates.get(key)
+        preferences = normalize_preferences(preferences)
         payload = {
             "user_id": str(uid),
             "preferences": preferences,
@@ -451,8 +460,15 @@ async def get_effective_profile_settings(guild_id: int, user_id: int) -> dict[st
         get_profile_user(user_id),
         get_profile_guild_settings(guild_id, user_id),
     )
+    preferences = normalize_preferences(user_row.get("preferences"))
+    preferences.update(
+        effective_preferences(
+            user_row.get("preferences"),
+            guild_row.get("settings"),
+        )
+    )
     return {
-        "preferences": effective_preferences(user_row.get("preferences"), guild_row.get("settings")),
+        "preferences": preferences,
         "platforms": dict(user_row.get("platforms") or {}),
     }
 
@@ -652,6 +668,7 @@ async def delete_live_card_state(guild_id: int, channel_id: int) -> None:
 
 
 __all__ = [
+    "DEFAULT_MEMBER_PROFILE_STYLE",
     "DEFAULT_PROFILE_PREFERENCES",
     "InvalidPlatformProfile",
     "PLATFORM_SPECS",

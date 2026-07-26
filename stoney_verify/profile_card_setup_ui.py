@@ -84,6 +84,14 @@ def _setup_embed(
             inline=False,
         )
     embed.add_field(
+        name="What members can customize",
+        value=(
+            "Theme, font, colors, background style, layout, avatar frame, privacy, platforms, and profile roles. "
+            "Server managers choose channels, allowed information, and the starting visual defaults."
+        ),
+        inline=False,
+    )
+    embed.add_field(
         name="Privacy and anti-repetition",
         value=(
             "Member privacy always wins. Dank Shield keeps one compact bot-owned signature per enabled channel, "
@@ -143,6 +151,38 @@ class _PreviewButton(discord.ui.Button):
         await interaction.edit_original_response(**payload)
 
 
+class _ServerDefaultsButton(discord.ui.Button):
+    def __init__(self) -> None:
+        super().__init__(
+            label="Server Signature Defaults",
+            emoji="🎨",
+            style=discord.ButtonStyle.primary,
+            custom_id="dank_setup_profile_cards:defaults",
+            row=3,
+        )
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        from .profile_signature_studio import open_server_signature_defaults
+
+        await open_server_signature_defaults(interaction)
+
+
+class _ProfileRoleBuilderButton(discord.ui.Button):
+    def __init__(self) -> None:
+        super().__init__(
+            label="Profile Panel & Roles",
+            emoji="🎭",
+            style=discord.ButtonStyle.secondary,
+            custom_id="dank_setup_profile_cards:roles",
+            row=3,
+        )
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        from .commands_ext.public_self_roles_group import _post_profile_builder
+
+        await _post_profile_builder(interaction, title="Profile Panel")
+
+
 class ProfileCardSetupView(_core.ProfileCardSetupView):
     def __init__(
         self,
@@ -166,6 +206,8 @@ class ProfileCardSetupView(_core.ProfileCardSetupView):
             self.add_item(_core._FieldToggleButton(field_key, allowed=field_key in live.allowed_fields))
         self.add_item(_PreviewButton())
         self.add_item(_core._RefreshButton())
+        self.add_item(_ServerDefaultsButton())
+        self.add_item(_ProfileRoleBuilderButton())
         self.add_item(_core._BackButton())
         self.add_item(_core._HomeButton())
         self.add_item(_core._CloseButton())
