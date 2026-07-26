@@ -1,11 +1,19 @@
+from collections import Counter
 from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
 MIGRATIONS = ROOT / "supabase" / "migrations"
 PROFILE_MIGRATION = MIGRATIONS / "20260725_live_profile_cards.sql"
-GUILD_CONFIG_MIGRATION = MIGRATIONS / "20260426_guild_configs.sql"
+GUILD_CONFIG_MIGRATION = MIGRATIONS / "202604260001_guild_configs.sql"
 TICKET_PARITY_MIGRATION = MIGRATIONS / "20260424_tickettool_parity_ticket_columns.sql"
+
+
+def test_supabase_migration_versions_are_unique():
+    versions = [path.name.split("_", 1)[0] for path in MIGRATIONS.glob("*.sql")]
+    duplicates = sorted(version for version, count in Counter(versions).items() if count > 1)
+
+    assert duplicates == []
 
 
 def test_live_profile_card_migration_uses_its_own_version():
