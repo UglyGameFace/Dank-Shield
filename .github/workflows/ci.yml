@@ -193,7 +193,28 @@ jobs:
 
       - name: Run full unit test suite
         if: steps.patch.outputs.exit_code == '0'
-        run: python -m pytest tests/ -q --tb=short --disable-warnings
+        id: full_tests
+        run: |
+          set +e
+          python -m pytest tests/ -q --tb=short --disable-warnings > profile-setup-full-tests.log 2>&1
+          code=$?
+          echo "exit_code=$code" >> "$GITHUB_OUTPUT"
+          exit 0
+
+      - name: Upload full-suite regression log
+        if: steps.patch.outputs.exit_code == '0' && always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: profile-setup-full-tests-log
+          path: profile-setup-full-tests.log
+          if-no-files-found: error
+          retention-days: 3
+
+      - name: Fail when the full suite fails
+        if: steps.patch.outputs.exit_code == '0' && steps.full_tests.outputs.exit_code != '0'
+        run: |
+          cat profile-setup-full-tests.log
+          exit 1
 
       - name: Run every standalone tool check
         if: steps.patch.outputs.exit_code == '0'
@@ -221,6 +242,7 @@ jobs:
       - name: Inspect cleanup and whitespace
         if: steps.patch.outputs.exit_code == '0'
         run: |
+          rm -f profile-setup-full-tests.log
           git diff --check
           test ! -f tools/apply_profile_card_setup_ux.py
           find . -type d -name __pycache__ -prune -exec rm -rf {} +
