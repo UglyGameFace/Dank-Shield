@@ -126,3 +126,19 @@ if str(ROOT) not in sys.path:
 from stoney_verify.globals import bot
 ''',
 )
+replace_once(
+    "stoney_verify/commands_ext/public_command_hub.py",
+    '''def _new_command(name: str, description: str, callback: Callable[..., Awaitable[Any]]) -> app_commands.Command:
+    return app_commands.Command(name=name, description=description, callback=callback)
+''',
+    '''def _new_command(name: str, description: str, callback: Any) -> app_commands.Command:
+    resolved_callback = getattr(callback, "callback", callback)
+    if not callable(resolved_callback):
+        raise TypeError(f"{name} does not provide a callable application-command callback")
+    return app_commands.Command(
+        name=name,
+        description=description,
+        callback=resolved_callback,
+    )
+''',
+)
