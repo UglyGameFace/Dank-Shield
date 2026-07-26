@@ -190,6 +190,96 @@ def _background(
     return canvas
 
 
+def _draw_theme_motif(
+    draw: ImageDraw.ImageDraw,
+    *,
+    motif: str,
+    primary: tuple[int, int, int],
+    secondary: tuple[int, int, int],
+    layout: str,
+) -> None:
+    key = str(motif or "generic").strip().lower()
+    if key == "minimal" or layout == "minimal":
+        draw.rounded_rectangle((36, 22, SIGNATURE_WIDTH - 36, 28), radius=3, fill=primary + (150,))
+        draw.rounded_rectangle((36, 31, 360, 34), radius=2, fill=secondary + (90,))
+        return
+    if key == "420":
+        for radius, alpha, color in (
+            (150, 30, primary),
+            (112, 42, secondary),
+            (76, 54, primary),
+        ):
+            draw.ellipse(
+                (SIGNATURE_WIDTH - 185 - radius, 110 - radius, SIGNATURE_WIDTH - 185 + radius, 110 + radius),
+                outline=color + (alpha,),
+                width=4,
+            )
+        stem_x = SIGNATURE_WIDTH - 178
+        draw.line((stem_x, 188, stem_x + 24, 66), fill=primary + (115,), width=5)
+        for y, direction, color in (
+            (92, -1, primary),
+            (116, 1, secondary),
+            (140, -1, secondary),
+            (162, 1, primary),
+        ):
+            x = stem_x + int((188 - y) * 0.2)
+            tip_x = x + (42 * direction)
+            draw.polygon(
+                [(x, y), (tip_x, y - 18), (tip_x - (7 * direction), y + 14)],
+                fill=color + (35,),
+                outline=color + (95,),
+            )
+        return
+    if key == "cyber":
+        for x in range(690, SIGNATURE_WIDTH + 1, 48):
+            draw.line((x, 0, x, SIGNATURE_HEIGHT), fill=primary + (24,), width=1)
+        for y in range(18, SIGNATURE_HEIGHT, 36):
+            draw.line((650, y, SIGNATURE_WIDTH, y), fill=secondary + (22,), width=1)
+        points = ((738, 48), (822, 48), (822, 92), (920, 92), (920, 146), (1030, 146))
+        draw.line(points, fill=primary + (115,), width=3, joint="curve")
+        for x, y in points:
+            draw.ellipse((x - 5, y - 5, x + 5, y + 5), fill=secondary + (170,))
+        return
+    if key == "premium":
+        draw.line((690, 35, 1040, 35), fill=secondary + (115,), width=3)
+        draw.line((740, 184, 1040, 184), fill=primary + (95,), width=2)
+        for x in (725, 810, 895, 980):
+            draw.polygon(
+                [(x, 110), (x + 18, 92), (x + 36, 110), (x + 18, 128)],
+                fill=secondary + (24,),
+                outline=secondary + (90,),
+            )
+        return
+    if key == "community":
+        for x, y, radius, color in (
+            (770, 72, 54, primary),
+            (850, 126, 72, secondary),
+            (960, 76, 46, primary),
+            (1030, 145, 58, secondary),
+        ):
+            draw.ellipse(
+                (x - radius, y - radius, x + radius, y + radius),
+                fill=color + (18,),
+                outline=color + (68,),
+                width=3,
+            )
+        return
+    if key == "esports":
+        for index in range(6):
+            x = 660 + index * 78
+            color = primary if index % 2 == 0 else secondary
+            draw.polygon(
+                [(x, 220), (x + 80, 220), (x + 220, 0), (x + 140, 0)],
+                fill=color + (18 + index * 3,),
+                outline=color + (55,),
+            )
+        return
+    draw.ellipse((810, -170, 1180, 200), fill=primary + (24,), outline=primary + (78,), width=2)
+    draw.ellipse((880, -90, 1210, 240), fill=secondary + (18,), outline=secondary + (72,), width=2)
+    for offset in range(-80, 1180, 92):
+        draw.line((offset, 220, offset + 180, 0), fill=secondary + (20,), width=2)
+
+
 def _avatar_tile(avatar_bytes: bytes, display_name: str, primary: tuple[int, int, int], size: int) -> Image.Image:
     tile = Image.new("RGBA", (size, size), (0, 0, 0, 0))
     mask = Image.new("L", tile.size, 0)
@@ -322,11 +412,13 @@ def render_profile_signature(
     image = _background(style, theme, avatar_bytes)
     draw = ImageDraw.Draw(image, "RGBA")
 
-    if layout != "minimal":
-        draw.ellipse((810, -170, 1180, 200), fill=primary + (24,), outline=primary + (78,), width=2)
-        draw.ellipse((880, -90, 1210, 240), fill=secondary + (18,), outline=secondary + (72,), width=2)
-        for offset in range(-80, 1180, 92):
-            draw.line((offset, 220, offset + 180, 0), fill=secondary + (20,), width=2)
+    _draw_theme_motif(
+        draw,
+        motif=getattr(theme, "motif", "generic"),
+        primary=primary,
+        secondary=secondary,
+        layout=layout,
+    )
 
     panel = (18, 18, SIGNATURE_WIDTH - 18, SIGNATURE_HEIGHT - 18)
     panel_alpha = 205 if layout == "minimal" else 218
