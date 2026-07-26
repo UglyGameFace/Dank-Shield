@@ -101,7 +101,9 @@ jobs:
             stoney_verify/profile_signature_style.py \
             stoney_verify/welcome_setup_ui.py
       - name: Run focused UI and profile tests
+        id: tests
         if: steps.patch.outputs.status == '0' && steps.clean.outputs.status == '0'
+        continue-on-error: true
         env:
           DANK_STARTUP_LOG_STYLE: quiet
           DANK_COMMAND_LOG_STYLE: quiet
@@ -114,15 +116,30 @@ jobs:
             tests/test_profile_card_service.py \
             tests/test_profile_signature_renderer.py \
             tests/test_setup_aio_navigation_behavior.py \
-            tests/test_welcome_card_live_command_tree.py
+            tests/test_welcome_card_live_command_tree.py \
+            > /tmp/ui-first-tests.log 2>&1
+          status=$?
+          cat /tmp/ui-first-tests.log
+          echo "status=$status" >> "$GITHUB_OUTPUT"
+          exit 0
+      - name: Commit focused test diagnostic
+        if: steps.patch.outputs.status == '0' && steps.clean.outputs.status == '0' && steps.tests.outputs.status != '0'
+        run: |
+          git reset --hard HEAD
+          cp /tmp/ui-first-tests.log UI_FIRST_TEST_ERROR.txt
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add UI_FIRST_TEST_ERROR.txt
+          git commit -m "Record UI first focused test error"
+          git push origin HEAD:fix/profile-command-payload-limit
       - name: Prove exact command payload fits
-        if: steps.patch.outputs.status == '0' && steps.clean.outputs.status == '0'
+        if: steps.patch.outputs.status == '0' && steps.clean.outputs.status == '0' && steps.tests.outputs.status == '0'
         env:
           DANK_STARTUP_LOG_STYLE: quiet
           DANK_COMMAND_LOG_STYLE: quiet
         run: python tools/test_dank_command_payload.py
       - name: Commit integrated implementation
-        if: steps.patch.outputs.status == '0' && steps.clean.outputs.status == '0'
+        if: steps.patch.outputs.status == '0' && steps.clean.outputs.status == '0' && steps.tests.outputs.status == '0'
         run: |
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
@@ -130,5 +147,5 @@ jobs:
           git commit -m "Overhaul Dank command surface into UI menus"
           git push origin HEAD:fix/profile-command-payload-limit
       - name: Fail after diagnostic commit
-        if: steps.patch.outputs.status != '0' || (steps.patch.outputs.status == '0' && steps.clean.outputs.status != '0')
+        if: steps.patch.outputs.status != '0' || (steps.patch.outputs.status == '0' && steps.clean.outputs.status != '0') || (steps.patch.outputs.status == '0' && steps.clean.outputs.status == '0' && steps.tests.outputs.status != '0')
         run: exit 1
