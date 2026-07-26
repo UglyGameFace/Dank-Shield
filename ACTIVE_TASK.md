@@ -2,7 +2,7 @@
 
 ## DS-PROFILE-CARDS-001 — Private profile controls and non-repetitive live cards
 
-**Status:** FINAL EXACT-HEAD VALIDATION
+**Status:** FINAL DOCUMENTATION-HEAD VALIDATION
 **Branch:** `feature/live-profile-cards`
 **PR:** #126
 **Base:** `main` at `6cd8333dea9af10f753cb2692d3fbcadc37bf102`
@@ -24,14 +24,15 @@ Build a separate Dank Shield member-profile signature system without changing jo
 - Setup uses Discord channel pickers and can include the saved welcome/start-here channel.
 - Static welcome/start-here configuration remains separate from join/leave announcements.
 
-## Findings
+## Root Causes Found
 
 - The feature existed in draft PR #126 but had not completed exact-head validation.
-- The branch had temporary CI logging changes and historical migration renames that did not belong in the final feature diff.
-- A committed root file literally named `\` contained an old ANSI-colored patch dump. It prevented Supabase from cloning the repository and had no runtime purpose.
-- Two historical `20260611` migration files share one legacy version. A new test incorrectly tried to solve that by renaming deployed migrations, which made remote migration history disappear locally.
-- Supabase fresh replay exposed a separate historical defect: `20260426_guild_configs.sql` indexed `enabled` and `public_beta_enabled` after an earlier same-day migration had created a smaller table without those columns.
-- `commands.py` had been accidentally shortened during earlier work, dropping existing passive channel/thread lifecycle observers and exports.
+- Temporary CI artifact plumbing and migration-copy experiments had polluted the branch.
+- A committed root file literally named `\` contained an obsolete ANSI-colored patch dump and prevented Supabase from cloning the repository.
+- Two migration pairs reused the same Supabase version prefixes (`20260426` and `20260611`). Supabase stores only the numeric prefix, so fresh replay could not record both files.
+- Historical optional migrations assumed legacy tables (`tickets`, `guild_members`) always existed.
+- Both guild-config migrations used `CREATE TABLE IF NOT EXISTS` but then indexed, triggered, or commented columns that an existing compatible table might not contain.
+- `commands.py` had been accidentally shortened during earlier work, dropping passive channel/thread observers and exports.
 - Profile setup preview/open/add-welcome callbacks could perform database or rendering work before acknowledging Discord interactions.
 
 ## Delivered Implementation
@@ -77,23 +78,31 @@ Build a separate Dank Shield member-profile signature system without changing jo
 - `/dank welcome` remains the static welcome/start-here and join-only image-card owner.
 - `/dank welcome join-leave` owns separate member join/leave announcements.
 
-## Cleanup and Conflict Inspection
+## Migration and Repository Cleanup
 
 - Restored the canonical CI workflow; temporary pytest/tool artifact plumbing removed.
-- Restored historical migration filenames; no deployed migration version is missing locally.
-- Removed the duplicate copied ticket-automation migration.
 - Removed the temporary repository-portability audit.
 - Removed the root `\` patch-dump artifact that broke Supabase cloning.
-- Historical guild-config migration keeps its original filename/version and now reconciles missing columns idempotently before indexing them.
+- Kept the original `20260426_create_guild_configs.sql` version for existing history and moved the later reconciliation migration to unique version `202604260001`.
+- Kept `20260611_member_activity_notices.sql` on the original version and moved the later ticket-automation migration to unique version `202606110001`.
+- Added a global regression requiring every committed Supabase migration version to be unique.
+- Made the TicketTool parity migration skip safely when the legacy `tickets` table is absent; it never fabricates a partial ticket table.
+- Made the guild-member role-state migration require both the legacy table and `role_state` column before altering constraints.
+- Made both guild-config migrations reconcile their required columns before indexes, triggers, comments, or seed updates use them.
+- Supabase fresh preview now replays the complete migration chain successfully, including the new live-profile-card migration.
+
+## Conflict Inspection
+
 - `commands.py` is additive against `main`: profile registration added with zero existing lifecycle deletions.
-- Current branch comparison: ahead of `main`, behind by zero, mergeable.
+- Branch comparison after implementation: ahead of `main`, behind by zero, mergeable.
 - No inline review threads and no submitted reviews are unresolved.
+- No unrelated implementation task was started.
 
 ## Validation
 
-Implementation head `9ef425a697ce2eb3da1c4f990aa179566c3d53f9`:
+Implementation head `7dffef6153582c0e90871ad62060c8867c737eec`:
 
-- ✅ Dank Shield CI run #785
+- ✅ Dank Shield CI run #801
 - ✅ committed diff whitespace
 - ✅ Python compilation
 - ✅ full unit test suite
@@ -106,19 +115,18 @@ Implementation head `9ef425a697ce2eb3da1c4f990aa179566c3d53f9`:
 - ✅ Dank Design Smart Auto-Detect audit
 - ✅ role-truth ownership audit
 - ✅ event-boundary ownership audit
-- ✅ Setup Check Inference Sanity run #307
+- ✅ Setup Check Inference Sanity runs #323 and #324
+- ✅ Supabase preview database, services, APIs, configuration, migrations, seeding, and edge-function checks
 
 ## Remaining Gates
 
-- This task-record commit must pass the same exact-head CI and setup-inference gates.
-- Close and reopen draft PR #126 once so Supabase recreates its preview branch and replays the corrected existing migration plus the new profile migration.
-- Confirm Supabase migration/database health on the recreated preview.
-- Reconfirm branch comparison and review-thread state.
-- Keep the PR unmerged until explicit owner approval and a live Discord smoke-through.
+- This documentation-only task-record commit must pass exact-head CI and setup inference.
+- Reconfirm branch comparison and review-thread state on the final head.
+- Keep PR #126 draft and unmerged until a live Discord smoke-through and explicit owner approval.
 
 ## Backlog
 
-None. No unrelated implementation task was started.
+None.
 
 ## Definition of Done
 
@@ -134,9 +142,9 @@ None. No unrelated implementation task was started.
 - [x] Slow profile setup interactions are acknowledged before storage/render work.
 - [x] Focused behavioral tests pass.
 - [x] Implementation head passed full CI and repository audits.
+- [x] Complete Supabase migration replay passed.
 - [x] Temporary helpers/debug artifacts are removed.
-- [x] Branch is conflict-free with `main` before the task-record commit.
-- [ ] Exact final task-record head passes CI and setup inference.
-- [ ] Recreated Supabase preview successfully applies migrations.
+- [x] Branch is conflict-free with `main` before the documentation commit.
+- [ ] Exact final documentation head passes CI and setup inference.
 - [ ] Live Discord smoke-through completed.
 - [ ] Merge requires explicit owner approval.
