@@ -1,0 +1,126 @@
+name: Apply UI First Regression Contracts
+
+on:
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/profile-command-payload-limit
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip -q
+          pip install -q -r requirements.txt
+          pip install -q pytest
+
+      - name: Update intentional behavior contracts
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          def replace_once(path: str, old: str, new: str) -> None:
+              target = Path(path)
+              text = target.read_text(encoding="utf-8")
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f"{path}: expected one match, found {count}")
+              target.write_text(text.replace(old, new, 1), encoding="utf-8")
+
+          replace_once(
+              "tests/test_compact_profile_signature_renderer.py",
+              '        cfg={"welcome_card_theme": "420_lobby"},\n',
+              '''        style={
+                      "theme": "default",
+                      "font": "clean",
+                      "color_mode": "theme",
+                      "background_mode": "theme",
+                      "layout": "classic",
+                      "avatar_frame": "glow",
+                  },
+              ''',
+          )
+          replace_once(
+              "tests/test_live_profile_card_runtime.py",
+              '''class FakePermissions:
+                  view_channel = True
+                  send_messages = True
+                  embed_links = True
+                  read_message_history = True
+              ''',
+              '''class FakePermissions:
+                  view_channel = True
+                  send_messages = True
+                  embed_links = True
+                  read_message_history = True
+                  attach_files = True
+              ''',
+          )
+          replace_once(
+              "tests/test_setup_advanced_options_behavior.py",
+              '''        "Server Design",
+                      "Member Profiles & Live Cards",
+                      "Backups & History",
+              ''',
+              '''        "Server Design",
+                      "Welcome & Join",
+                      "Profile Signatures",
+                      "Backups & History",
+              ''',
+          )
+
+          for path in (
+              "tests/test_compact_profile_signature_renderer.py",
+              "tests/test_live_profile_card_runtime.py",
+              "tests/test_setup_advanced_options_behavior.py",
+          ):
+              target = Path(path)
+              text = target.read_text(encoding="utf-8")
+              target.write_text("\n".join(line.rstrip() for line in text.splitlines()) + "\n", encoding="utf-8")
+
+          Path(".github/workflows/ui-first-full-test-diagnostic.yml").unlink(missing_ok=True)
+          Path(".github/workflows/apply-ui-first-regression-contracts.yml").unlink(missing_ok=True)
+          PY
+
+      - name: Check changed files
+        run: |
+          git diff --check
+          test ! -e .github/workflows/ui-first-full-test-diagnostic.yml
+          test ! -e .github/workflows/apply-ui-first-regression-contracts.yml
+
+      - name: Run corrected regression modules
+        env:
+          DANK_STARTUP_LOG_STYLE: quiet
+          DANK_COMMAND_LOG_STYLE: quiet
+        run: |
+          python -m pytest -q --tb=short --disable-warnings \
+            tests/test_compact_profile_signature_renderer.py \
+            tests/test_live_profile_card_runtime.py \
+            tests/test_setup_advanced_options_behavior.py \
+            tests/test_live_profile_card_final_safety.py \
+            tests/test_ui_first_dank_command_surface.py
+
+      - name: Commit corrected contracts
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add -A
+          git commit -m "Update tests for UI first profile behavior"
+          git push origin HEAD:fix/profile-command-payload-limit
