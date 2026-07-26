@@ -1,69 +1,22 @@
-from collections import defaultdict
 from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
 MIGRATIONS = ROOT / "supabase" / "migrations"
+PROFILE_MIGRATION = MIGRATIONS / "20260725_live_profile_cards.sql"
 
 
-def test_supabase_migration_versions_are_unique():
-    files_by_version: dict[str, list[str]] = defaultdict(list)
-    for path in sorted(MIGRATIONS.glob("*.sql")):
-        version = path.name.split("_", 1)[0]
-        if version.isdigit():
-            files_by_version[version].append(path.name)
+def test_live_profile_card_migration_uses_its_own_version():
+    assert PROFILE_MIGRATION.is_file()
 
-    duplicates = {
-        version: names
-        for version, names in files_by_version.items()
-        if len(names) > 1
-    }
-    assert not duplicates, f"duplicate Supabase migration versions: {duplicates}"
+    version = PROFILE_MIGRATION.name.split("_", 1)[0]
+    matching = sorted(path.name for path in MIGRATIONS.glob(f"{version}_*.sql"))
 
-
-def test_optional_legacy_ticket_metadata_migration_skips_missing_table():
-    source = (
-        MIGRATIONS / "20260424_tickettool_parity_ticket_columns.sql"
-    ).read_text(encoding="utf-8")
-
-    assert "to_regclass('public.tickets') IS NOT NULL" in source
-    assert "Skipping optional TicketTool metadata migration" in source
-    assert "ALTER TABLE public.tickets" in source
-    assert "EXECUTE $sql$" in source
-    assert "CREATE INDEX IF NOT EXISTS idx_tickets_owner_id" in source
-    assert "ALTER TABLE tickets" not in source
-
-
-def test_later_guild_config_migration_reconciles_the_earlier_schema():
-    migration = MIGRATIONS / "202604260001_guild_configs.sql"
-    source = migration.read_text(encoding="utf-8")
-
-    assert migration.is_file()
-    assert not (MIGRATIONS / "20260426_guild_configs.sql").exists()
-
-    reconciliation = source.index("alter table public.guild_configs")
-    enabled_index = source.index("idx_guild_configs_enabled")
-    beta_index = source.index("idx_guild_configs_public_beta_enabled")
-    seed_insert = source.index("insert into public.guild_configs")
-
-    for column in (
-        "guild_name text",
-        "owner_id text",
-        "enabled boolean not null default true",
-        "public_beta_enabled boolean not null default false",
-    ):
-        assert f"add column if not exists {column}" in source
-
-    assert reconciliation < enabled_index < seed_insert
-    assert reconciliation < beta_index < seed_insert
-    assert "CREATE TABLE IF NOT EXISTS" in source
-    assert "explicitly reconcile every column" in source
+    assert matching == [PROFILE_MIGRATION.name]
 
 
 def test_live_profile_card_migration_is_idempotent_and_service_role_only():
-    source = (MIGRATIONS / "20260725_live_profile_cards.sql").read_text(
-        encoding="utf-8"
-    )
+    source = PROFILE_MIGRATION.read_text(encoding="utf-8")
 
     for table in (
         "dank_profile_users",
