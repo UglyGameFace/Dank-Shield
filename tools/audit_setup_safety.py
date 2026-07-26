@@ -211,6 +211,7 @@ def _assert_native_setup_ux_owners(failures: list[str]) -> None:
                 "security",
                 "logs_activity",
                 "design",
+                "welcome_join",
                 "profiles",
                 "history",
                 "back",
