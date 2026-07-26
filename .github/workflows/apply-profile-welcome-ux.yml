@@ -1,0 +1,473 @@
+name: Apply Profile Welcome UX
+
+on:
+  push:
+    branches: [fix/profile-command-payload-limit]
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/profile-command-payload-limit
+          fetch-depth: 0
+      - name: Apply reviewed integration patches
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          def replace_once(path: str, old: str, new: str) -> None:
+              p = Path(path)
+              text = p.read_text(encoding="utf-8")
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f"{path}: expected one match, found {count}: {old[:100]!r}")
+              p.write_text(text.replace(old, new, 1), encoding="utf-8")
+
+          # Persist independent member design choices alongside privacy defaults.
+          replace_once(
+              "stoney_verify/profile_card_service.py",
+              "from .globals import get_supabase, reset_supabase\n",
+              "from .globals import get_supabase, reset_supabase\n"
+              "from .profile_signature_style import (\n"
+              "    DEFAULT_MEMBER_PROFILE_STYLE,\n"
+              "    normalize_member_profile_style,\n"
+              ")\n",
+          )
+          replace_once(
+              "stoney_verify/profile_card_service.py",
+              '''def normalize_preferences(value: Optional[Mapping[str, Any]]) -> dict[str, bool]:
+              result = dict(DEFAULT_PROFILE_PREFERENCES)
+              if isinstance(value, Mapping):
+                  for key in result:
+                      if key in value:
+                          result[key] = bool(value.get(key))
+              return result
+
+
+              def effective_preferences(
+                  user_preferences: Optional[Mapping[str, Any]],
+                  guild_settings: Optional[Mapping[str, Any]],
+              ) -> dict[str, bool]:
+                  global_values = normalize_preferences(user_preferences)
+                  local = dict(guild_settings or {})
+                  return {
+                      key: bool(global_values[key]) and bool(local.get(key, True))
+                      for key in global_values
+                  }
+              ''',
+              '''def normalize_preferences(value: Optional[Mapping[str, Any]]) -> dict[str, Any]:
+                  raw = dict(value or {}) if isinstance(value, Mapping) else {}
+                  result: dict[str, Any] = dict(DEFAULT_PROFILE_PREFERENCES)
+                  for key in DEFAULT_PROFILE_PREFERENCES:
+                      if key in raw:
+                          result[key] = bool(raw.get(key))
+                  result.update(normalize_member_profile_style(raw))
+                  return result
+
+
+              def effective_preferences(
+                  user_preferences: Optional[Mapping[str, Any]],
+                  guild_settings: Optional[Mapping[str, Any]],
+              ) -> dict[str, Any]:
+                  global_values = normalize_preferences(user_preferences)
+                  local = dict(guild_settings or {})
+                  resolved = dict(global_values)
+                  for key in DEFAULT_PROFILE_PREFERENCES:
+                      resolved[key] = bool(global_values[key]) and bool(local.get(key, True))
+                  return resolved
+              ''',
+          )
+          replace_once(
+              "stoney_verify/profile_card_service.py",
+              '''        preferences = normalize_preferences(current.get("preferences"))
+                      for key in DEFAULT_PROFILE_PREFERENCES:
+                          if key in updates and updates.get(key) is not None:
+                              preferences[key] = bool(updates.get(key))
+              ''',
+              '''        preferences = normalize_preferences(current.get("preferences"))
+                      for key in DEFAULT_PROFILE_PREFERENCES:
+                          if key in updates and updates.get(key) is not None:
+                              preferences[key] = bool(updates.get(key))
+                      for key in DEFAULT_MEMBER_PROFILE_STYLE:
+                          if key in updates and updates.get(key) is not None:
+                              preferences[key] = updates.get(key)
+                      preferences = normalize_preferences(preferences)
+              ''',
+          )
+          replace_once(
+              "stoney_verify/profile_card_service.py",
+              '    "DEFAULT_PROFILE_PREFERENCES",\n',
+              '    "DEFAULT_MEMBER_PROFILE_STYLE",\n    "DEFAULT_PROFILE_PREFERENCES",\n',
+          )
+
+          # Resolve personal/server style independently before rendering.
+          replace_once(
+              "stoney_verify/profile_card_runtime.py",
+              "from .profile_signature_renderer import render_member_profile_signature\n",
+              "from .profile_signature_renderer import render_member_profile_signature\n"
+              "from .profile_signature_style import effective_profile_style\n",
+          )
+          replace_once(
+              "stoney_verify/profile_card_runtime.py",
+              '''    image_bytes = await render_member_profile_signature(
+                      member,
+                      cfg=cfg,
+                      role_labels=_compact_role_labels(member) if show_roles else [],
+                      date_labels=_compact_date_labels(member) if show_dates else [],
+                      platform_labels=_compact_platform_labels(platforms),
+                  )
+              ''',
+              '''    image_bytes = await render_member_profile_signature(
+                      member,
+                      style=effective_profile_style(preferences, cfg),
+                      role_labels=_compact_role_labels(member) if show_roles else [],
+                      date_labels=_compact_date_labels(member) if show_dates else [],
+                      platform_labels=_compact_platform_labels(platforms),
+                  )
+              ''',
+          )
+
+          # Image signatures require Attach Files everywhere they can be enabled.
+          replace_once(
+              "stoney_verify/profile_card_runtime_core.py",
+              '''            permissions.embed_links
+                          and permissions.read_message_history
+                      )
+              ''',
+              '''            permissions.embed_links
+                          and permissions.read_message_history
+                          and permissions.attach_files
+                      )
+              ''',
+          )
+          replace_once(
+              "stoney_verify/profile_card_setup_ui_core.py",
+              '''        ("Embed Links", permissions.embed_links),
+                      ("Read Message History", permissions.read_message_history),
+                  )
+              ''',
+              '''        ("Embed Links", permissions.embed_links),
+                      ("Read Message History", permissions.read_message_history),
+                      ("Attach Files", permissions.attach_files),
+                  )
+              ''',
+          )
+
+          # Keep only one concise /dank profile settings command. Everything else
+          # is button-first, which brings /dank back under Discord's 8000 limit.
+          replace_once(
+              "stoney_verify/commands_ext/public_profile_cards.py",
+              '''def _attach_profile_commands() -> None:
+                  command_specs = (
+                      ("settings", "Open your private profile privacy and platform settings.", profile_settings),
+                      ("platform", "Save or update one private/shared platform identity.", profile_platform),
+                      ("platform-remove", "Remove one saved platform identity.", profile_platform_remove),
+                      ("live-cards", "Manager fallback: toggle one channel; the full picker is in /dank setup.", profile_live_cards),
+                      ("live-fields", "Manager: restrict fields compact profile signatures may display.", profile_live_fields),
+                      ("live-status", "Manager: view compact profile signature configuration.", profile_live_status),
+                  )
+              ''',
+              '''async def profile_signature_settings(interaction: discord.Interaction) -> None:
+                  from stoney_verify.profile_signature_studio import open_profile_signature_studio
+
+                  await open_profile_signature_studio(interaction)
+
+
+              def _attach_profile_commands() -> None:
+                  command_specs = (
+                      ("settings", "Open your profile signature settings.", profile_signature_settings),
+                  )
+              ''',
+          )
+          replace_once(
+              "stoney_verify/commands_ext/public_profile_cards.py",
+              '    "profile_settings",\n',
+              '    "profile_settings",\n    "profile_signature_settings",\n',
+          )
+
+          # Private profile views are detailed again; only live channel signatures
+          # use the compact image. No unnecessary "view full roles" second click.
+          replace_once(
+              "stoney_verify/commands_ext/public_profile_cards.py",
+              '''    preferences = dict(effective.get("preferences") or {})
+                  show_roles = bool(preferences.get("show_roles", True)) and "roles" in config.allowed_fields
+                  if rendered is None:
+                      embed = discord.Embed(
+                          title=member.display_name,
+                          description="This member has hidden their optional profile details.",
+                          color=discord.Color.blurple(),
+                      )
+                      embed.set_thumbnail(url=member.display_avatar.url)
+                      embed.set_footer(text="Dank Shield member profile")
+                      source_view = None
+                      file = None
+                  else:
+                      embed = rendered.embed
+                      embed.set_footer(text="Dank Shield member profile • compact signature")
+                      source_view = rendered.view
+                      file = rendered.file
+
+                  view = PublicProfileView(
+                      member_id=member.id,
+                      source_view=source_view,
+                      show_roles=show_roles,
+                      show_settings=int(interaction.user.id) == int(member.id),
+                  )
+                  payload: dict[str, Any] = {
+                      "embed": embed,
+                      "view": view if view.children else None,
+                  }
+                  if file is not None:
+                      payload["file"] = file
+                  await _send_private(interaction, **payload)
+              ''',
+              '''    preferences = dict(effective.get("preferences") or {})
+                  show_roles = bool(preferences.get("show_roles", True)) and "roles" in config.allowed_fields
+                  show_dates = bool(preferences.get("show_account_dates", True)) and "account_dates" in config.allowed_fields
+                  from .public_self_roles_group import _profile_card
+
+                  embed = _core._copy_base_profile_embed(
+                      _profile_card(member),
+                      show_roles=show_roles,
+                      show_dates=show_dates,
+                  )
+                  embed.description = (
+                      "Detailed member profile • only information this member chose to share"
+                      if show_roles or show_dates
+                      else "This member has hidden their optional profile details."
+                  )
+                  embed.set_footer(text="Dank Shield member profile • private detail view")
+                  source_view = rendered.view if rendered is not None else None
+                  view = PublicProfileView(
+                      member_id=member.id,
+                      source_view=source_view,
+                      show_roles=False,
+                      show_settings=int(interaction.user.id) == int(member.id),
+                  )
+                  await _send_private(
+                      interaction,
+                      embed=embed,
+                      view=view if view.children else None,
+                  )
+              ''',
+          )
+
+          # Existing profile panels route to the complete signature studio.
+          p = Path("stoney_verify/commands_ext/public_self_roles_group.py")
+          text = p.read_text(encoding="utf-8")
+          text = text.replace('label="Privacy & Platforms"', 'label="Signature Settings"')
+          old = '''    if suffix == "privacy":
+                      from .public_profile_cards import profile_settings
+
+                      await profile_settings(interaction)
+                      return True
+              '''
+          new = '''    if suffix == "privacy":
+                      from stoney_verify.profile_signature_studio import open_profile_signature_studio
+
+                      await open_profile_signature_studio(interaction)
+                      return True
+              '''
+          if text.count(old) != 1:
+              raise SystemExit("public_self_roles_group privacy route changed unexpectedly")
+          text = text.replace(old, new, 1)
+          p.write_text(text, encoding="utf-8")
+
+          # Add independent Welcome & Join and Profile Signatures destinations.
+          p = Path("stoney_verify/commands_ext/public_setup_recommend.py")
+          text = p.read_text(encoding="utf-8")
+          text = text.replace(
+              '''    embed.add_field(
+                      name="🎨 Server Design",
+                      value="Smart Auto-Detect, previews, styling, and undo tools.",
+                      inline=False,
+                  )
+                  embed.add_field(
+                      name="💾 Backups & History",
+              ''',
+              '''    embed.add_field(
+                      name="🎨 Server Design",
+                      value="Smart Auto-Detect, previews, styling, and undo tools.",
+                      inline=False,
+                  )
+                  embed.add_field(
+                      name="👋 Welcome & Join",
+                      value="Static welcome/start-here message, join-only image cards, and join/leave announcements.",
+                      inline=False,
+                  )
+                  embed.add_field(
+                      name="🪪 Profile Signatures",
+                      value="Compact live signatures, member appearance, privacy, platforms, roles, and server defaults.",
+                      inline=False,
+                  )
+                  embed.add_field(
+                      name="💾 Backups & History",
+              ''',
+              1,
+          )
+          text = text.replace(
+              'value="Open Tickets, Verification, Security, Logs, Design, Backups, and more.",',
+              'value="Open Tickets, Verification, Security, Logs, Welcome & Join, Profile Signatures, Design, Backups, and more.",',
+              1,
+          )
+          text = text.replace(
+              '''    @discord.ui.button(
+                      label="Member Profiles & Live Cards",
+                      emoji="🪪",
+                      style=discord.ButtonStyle.secondary,
+                      custom_id="dank_setup_features:profiles",
+                      row=3,
+                  )
+              ''',
+              '''    @discord.ui.button(
+                      label="Welcome & Join",
+                      emoji="👋",
+                      style=discord.ButtonStyle.secondary,
+                      custom_id="dank_setup_features:welcome",
+                      row=3,
+                  )
+                  async def welcome_join(
+                      self,
+                      interaction: discord.Interaction,
+                      button: discord.ui.Button,
+                  ) -> None:
+                      _ = button
+                      from stoney_verify import welcome_setup_ui
+
+                      await welcome_setup_ui.open_welcome_setup(interaction)
+
+                  @discord.ui.button(
+                      label="Profile Signatures",
+                      emoji="🪪",
+                      style=discord.ButtonStyle.secondary,
+                      custom_id="dank_setup_features:profiles",
+                      row=3,
+                  )
+              ''',
+              1,
+          )
+          p.write_text(text, encoding="utf-8")
+
+          # Expand the server profile setup without reintroducing welcome controls.
+          p = Path("stoney_verify/profile_card_setup_ui.py")
+          text = p.read_text(encoding="utf-8")
+          text = text.replace(
+              '''    embed.add_field(
+                      name="Privacy and anti-repetition",
+              ''',
+              '''    embed.add_field(
+                      name="What members can customize",
+                      value=(
+                          "Theme, font, colors, background style, layout, avatar frame, privacy, platforms, and profile roles. "
+                          "Server managers choose channels, allowed information, and the starting visual defaults."
+                      ),
+                      inline=False,
+                  )
+                  embed.add_field(
+                      name="Privacy and anti-repetition",
+              ''',
+              1,
+          )
+          text = text.replace(
+              '''class ProfileCardSetupView(_core.ProfileCardSetupView):
+              ''',
+              '''class _ServerDefaultsButton(discord.ui.Button):
+                  def __init__(self) -> None:
+                      super().__init__(label="Server Signature Defaults", emoji="🎨", style=discord.ButtonStyle.primary, custom_id="dank_setup_profile_cards:defaults", row=3)
+
+                  async def callback(self, interaction: discord.Interaction) -> None:
+                      from .profile_signature_studio import open_server_signature_defaults
+
+                      await open_server_signature_defaults(interaction)
+
+
+              class _ProfileRoleBuilderButton(discord.ui.Button):
+                  def __init__(self) -> None:
+                      super().__init__(label="Profile Panel & Roles", emoji="🎭", style=discord.ButtonStyle.secondary, custom_id="dank_setup_profile_cards:roles", row=3)
+
+                  async def callback(self, interaction: discord.Interaction) -> None:
+                      from .commands_ext.public_self_roles_group import _post_profile_builder
+
+                      await _post_profile_builder(interaction, title="Profile Panel")
+
+
+              class ProfileCardSetupView(_core.ProfileCardSetupView):
+              ''',
+              1,
+          )
+          text = text.replace(
+              '''        self.add_item(_PreviewButton())
+                      self.add_item(_core._RefreshButton())
+              ''',
+              '''        self.add_item(_PreviewButton())
+                      self.add_item(_core._RefreshButton())
+                      self.add_item(_ServerDefaultsButton())
+                      self.add_item(_ProfileRoleBuilderButton())
+              ''',
+              1,
+          )
+          p.write_text(text, encoding="utf-8")
+
+          # Record the corrected active task and the unrelated reconciliation warning.
+          Path("ACTIVE_TASK.md").write_text('''# ACTIVE TASK
+
+          ## DS-PROFILE-WELCOME-UX-003 — Complete profile settings, restore Welcome & Join, and unblock slash sync
+
+          **Status:** IMPLEMENTATION / VALIDATION
+          **Branch:** `fix/profile-command-payload-limit`
+          **Base:** current `main`
+
+          ## Single Active Task Lock
+
+          Do not switch to unrelated implementation work until this correction reaches Definition of Done or the owner explicitly force-switches tasks.
+
+          ## User-reported failures
+
+          - Compact profile signatures shipped without the full appearance/settings experience previously discussed.
+          - Welcome configuration was removed from Profiles but did not receive a dedicated setup home.
+          - Profile and welcome styling still shared internal configuration despite being presented as separate systems.
+          - The deployed bot failed global slash sync because `/dank` exceeded Discord's 8,000-character application-command limit.
+
+          ## Delivered implementation
+
+          - Dedicated **Welcome & Join** setup area for the static welcome/start-here message, join-only image cards, join/leave announcements, previews, health, and advanced uploads.
+          - Dedicated **Profile Signatures** setup area for channels, allowed information, server visual defaults, profile panel/roles, preview, and cleanup.
+          - Member **Signature Settings** studio with theme, font, colors, custom colors, background style, layout, avatar frame, privacy, platforms, roles, preview, and reset.
+          - Independent profile-signature style keys; welcome settings are never changed by profile customization.
+          - Optional one-time import of the current Join Card look into server profile defaults; both systems remain independent afterward.
+          - Detailed private profile views restored; compact images remain limited to live channel signatures.
+          - Profile platforms moved into button/modal flows.
+          - Direct profile manager fallbacks removed from the public slash payload except `/dank profile settings`.
+          - Attach Files is now required before image signatures can be enabled.
+
+          ## Validation required
+
+          - [ ] Compile all changed Python modules.
+          - [ ] Run focused profile/welcome UX tests.
+          - [ ] Run application-command payload test and prove `/dank` is <= 8,000.
+          - [ ] Run the full unit suite and every repository audit.
+          - [ ] Inspect changed files for temporary workflows/debug artifacts.
+          - [ ] Live Discord smoke: slash sync succeeds, Welcome & Join opens, Profile Signatures opens, member appearance saves and previews.
+          - [ ] Merge requires explicit owner approval.
+
+          ## Backlog observation — not active implementation
+
+          The supplied deployment log also shows departed-member reconciliation treating `Guild.fetch_members()` as a normal iterable instead of an async iterator (`TypeError: 'async_generator' object is not iterable`). This remains backlogged until the active profile/welcome task is complete unless the owner explicitly force-switches.
+          ''', encoding="utf-8")
+
+          # Remove this one-shot workflow from the resulting commit.
+          Path(".github/workflows/apply-profile-welcome-ux.yml").unlink()
+          PY
+      - name: Commit applied changes
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add -A
+          git commit -m "Complete profile and welcome setup experience"
+          git push origin HEAD:fix/profile-command-payload-limit
