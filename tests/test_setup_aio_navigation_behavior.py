@@ -56,6 +56,7 @@ def test_aio_feature_hub_exposes_all_major_categories() -> None:
         "Security & SpamGuard",
         "Logs & Activity",
         "Server Design",
+        "Member Profiles & Live Cards",
         "Backups & History",
         "Back to Manage Setup",
         "Setup Home",
@@ -98,131 +99,33 @@ def test_test_screen_still_hides_disabled_feature_actions() -> None:
 
 
 def test_custom_core_picker_has_predictable_navigation() -> None:
-    state = type(
-        "State",
-        (),
-        {
-            "tickets": True,
-            "verification": False,
-            "voice": False,
-            "spamguard": True,
-            "moderation": True,
-            "as_payload": lambda self: {
-                "tickets_enabled": True,
-                "verification_enabled": False,
-                "voice_verification_enabled": False,
-                "spam_guard_enabled": True,
-                "moderation_enabled": True,
-            },
-        },
-    )()
-    view = fresh.CustomServiceModeView(state)
-    view_labels = labels(view)
-    assert "Continue Setup" in view_labels
-    assert "Back" in view_labels
-    assert "Setup Home" in view_labels
-    assert "Close" in view_labels
+    view = fresh.CustomCoreView()
+    assert labels(view)[-3:] == [
+        "Back to Setup Choices",
+        "Setup Home",
+        "Close",
+    ]
 
 
-def test_custom_picker_explains_core_modules_and_aio_tools() -> None:
-    state = type(
-        "State",
-        (),
-        {
-            "tickets": True,
-            "verification": False,
-            "voice": False,
-            "spamguard": True,
-            "moderation": True,
-            "as_payload": lambda self: {
-                "tickets_enabled": True,
-                "verification_enabled": False,
-                "voice_verification_enabled": False,
-                "spam_guard_enabled": True,
-                "moderation_enabled": True,
-            },
-        },
-    )()
-    guild = type("Guild", (), {"id": 123})()
-    embed = fresh._custom_services_embed(guild, state)
-    assert embed.title == "🧩 Choose Core Features"
-    assert "Manage Setup" in str(embed.description)
-    assert "Core Modules" in field_names(embed)
+def test_template_copy_matches_ticket_and_verification_choices() -> None:
+    quick = build_setup_template_embed("quick")
+    full = build_setup_template_embed("full")
+    custom = build_setup_template_embed("custom")
+
+    assert "Verification Panel" in field_names(quick)
+    assert "Verification Panel" in field_names(full)
+    assert "Open a Ticket Panel" in field_names(full)
+    assert "Open a Ticket Panel" not in field_names(quick)
+    assert "Choose Core Features" in field_names(custom)
+    assert "Verification + tickets" in custom.fields[1].value
 
 
-def test_custom_voice_toggle_applies_and_explains_dependencies() -> None:
-    payload, effective, changed, note = fresh._apply_custom_service_toggle(
-        {
-            "tickets_enabled": False,
-            "verification_enabled": False,
-            "voice_verification_enabled": False,
-            "spam_guard_enabled": False,
-            "moderation_enabled": False,
-        },
-        "voice_verification_enabled",
-    )
-
-    assert changed is True
-    assert effective is True
-    assert payload["voice_verification_enabled"] is True
-    assert payload["verification_enabled"] is True
-    assert payload["tickets_enabled"] is True
-    assert payload["moderation_enabled"] is True
-    assert "needs Simple Verify, Tickets, and Essential Logs" in note
-    assert "turned on" in note
-
-
-def test_custom_dependency_cannot_be_silently_disabled() -> None:
-    payload, effective, changed, note = fresh._apply_custom_service_toggle(
-        {
-            "tickets_enabled": True,
-            "verification_enabled": True,
-            "voice_verification_enabled": True,
-            "spam_guard_enabled": False,
-            "moderation_enabled": True,
-        },
-        "tickets_enabled",
-    )
-
-    assert changed is False
-    assert effective is True
-    assert payload["tickets_enabled"] is True
-    assert payload["voice_verification_enabled"] is True
-    assert "Voice Verify" in note
-    assert "needs" in note
-
-
-def test_custom_spamguard_toggle_explains_log_dependency() -> None:
-    payload, effective, changed, note = fresh._apply_custom_service_toggle(
-        {
-            "tickets_enabled": False,
-            "verification_enabled": False,
-            "voice_verification_enabled": False,
-            "spam_guard_enabled": False,
-            "moderation_enabled": False,
-        },
-        "spam_guard_enabled",
-    )
-
-    assert changed is True
-    assert effective is True
-    assert payload["spam_guard_enabled"] is True
-    assert payload["moderation_enabled"] is True
-    assert "SpamGuard needs Essential Logs" in note
-
-
-def test_template_preview_uses_current_quick_setup_language() -> None:
-    embed = build_setup_template_embed(
-        selected_key="custom_setup",
-        guild_name="Example Server",
-    )
-    rendered = "\n".join(
-        [
-            str(embed.title or ""),
-            str(embed.description or ""),
-            *[str(field.value) for field in embed.fields],
-        ]
-    )
-    assert "Use This Plan" in rendered
-    assert "Manage Setup" in rendered
-    assert "Use My Existing Server" not in rendered
+def test_template_copy_never_calls_server_control_a_role() -> None:
+    for key in ("quick", "full", "custom", "guided"):
+        embed = build_setup_template_embed(key)
+        text = "\n".join(
+            [str(embed.title or ""), str(embed.description or "")]
+            + [f"{field.name}\n{field.value}" for field in embed.fields]
+        ).lower()
+        assert "server-control role" not in text
+        assert "server control role" not in text
