@@ -160,13 +160,13 @@ replace_once(
 )
 replace_once(
     "stoney_verify/welcome_event_services.py",
-    '''        title="👋 Welcome & Join/Leave Center",
+    r'''        title="👋 Welcome & Join/Leave Center",
         description=(
             "Separate the **member-facing join welcome** from the **private staff join/leave log**.\n"
             "Join channel selection is exact: if the selected Join channel is private, join welcomes pause instead of posting somewhere else. Keep staff join/leave logs separate."
         ),
 ''',
-    '''        title="👋 Join & Leave Announcements",
+    r'''        title="👋 Join & Leave Announcements",
         description=(
             "These messages fire only when a member joins or leaves. They are separate from the "
             "**static welcome/start-here message**, the **join-only welcome image card**, and "
