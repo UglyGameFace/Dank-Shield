@@ -2,17 +2,18 @@
 
 ## DS-PROFILE-CARDS-001 — Private profile controls and non-repetitive live cards
 
-**Status:** FINAL VALIDATION
+**Status:** FINAL EXACT-HEAD VALIDATION
 **Branch:** `feature/live-profile-cards`
-**Base:** current `main` after merged welcome-card shuffle PR #125
+**PR:** #126
+**Base:** `main` at `6cd8333dea9af10f753cb2692d3fbcadc37bf102`
 
 ## Single Active Task Lock
 
 Do not switch to unrelated implementation work until this task reaches Definition of Done or the owner explicitly uses the force-switch format.
 
-## Owner Request
+## Scope
 
-Build a separate Dank Shield member-profile card system without changing join-only welcome-card behavior.
+Build a separate Dank Shield member-profile signature system without changing join-only welcome-card behavior.
 
 - Existing welcome cards remain server-admin controlled and appear only when a member joins.
 - `/dank profile` remains the one canonical member-profile command family.
@@ -20,83 +21,122 @@ Build a separate Dank Shield member-profile card system without changing join-on
 - Live cards must not repetitively post after every message.
 - User privacy always wins over server display preferences.
 - Platform identities are user-supplied and unverified unless a future OAuth flow verifies them.
-- Setup must expose a real Discord channel picker and make it easy to include the saved welcome/start-here channel.
-- Static welcome/start-here configuration must remain separate from join and leave event announcements.
+- Setup uses Discord channel pickers and can include the saved welcome/start-here channel.
+- Static welcome/start-here configuration remains separate from join/leave announcements.
 
-## Architecture Rules
+## Findings
 
-- No startup guard.
-- No monkey patch.
-- No duplicate `/dank profile` group or command owner.
-- No duplicate card renderer or message listener.
-- Reuse the current profile role/card functions and interaction-locking path.
-- Server configuration remains in canonical guild config.
-- User identities/privacy use dedicated service-role-only persistence with no public client policies.
-- Live-card message state is durable so restart reconciliation cannot create duplicates.
-- Never delete, edit, or repost a user's message.
-- Delete or replace only a message authored by Dank Shield and recorded as its owned live card.
-- External links must pass a platform-specific official-host allowlist; never invent profile URLs.
-- Missing or private fields are omitted rather than displayed as `N/A`.
+- The feature existed in draft PR #126 but had not completed exact-head validation.
+- The branch had temporary CI logging changes and historical migration renames that did not belong in the final feature diff.
+- A committed root file literally named `\` contained an old ANSI-colored patch dump. It prevented Supabase from cloning the repository and had no runtime purpose.
+- Two historical `20260611` migration files share one legacy version. A new test incorrectly tried to solve that by renaming deployed migrations, which made remote migration history disappear locally.
+- Supabase fresh replay exposed a separate historical defect: `20260426_guild_configs.sql` indexed `enabled` and `public_beta_enabled` after an earlier same-day migration had created a smaller table without those columns.
+- `commands.py` had been accidentally shortened during earlier work, dropping existing passive channel/thread lifecycle observers and exports.
+- Profile setup preview/open/add-welcome callbacks could perform database or rendering work before acknowledging Discord interactions.
 
-## Live Card Behavior
+## Delivered Implementation
+
+### Live signature behavior
 
 - Disabled by default.
-- Explicit text-channel selection by a server manager.
+- Explicit manager-selected text channels.
 - One bot-owned live profile card per enabled channel.
-- Ignore DMs, bots, webhooks, system messages, and unsupported message types.
-- Debounce message bursts and coalesce to the latest eligible human speaker.
-- Suppress repeated cards for the same speaker during the configured cooldown.
-- A failed replacement leaves the existing valid card intact.
-- A successful replacement posts the new card before removing the previous owned card.
-- Restart reconciliation validates the stored message and safely clears stale state.
-- All sends use `AllowedMentions.none()`.
+- DMs, bots, webhooks, system messages, and unsupported message types are ignored.
+- Message bursts are debounced and coalesced to the latest eligible human speaker.
+- Repeated cards for the same speaker are cooldown-suppressed.
+- A new card is posted and ownership is persisted before the prior card is removed.
+- Failed replacements leave the existing valid card intact.
+- Restart/reconnect reconciliation validates stored ownership and removes duplicate bot-owned cards.
+- User messages are never edited, deleted, copied, or reposted.
+- Every send uses `AllowedMentions.none()`.
 
-## Setup and Welcome Separation
+### Privacy and platforms
 
-- Canonical path: `/dank setup` → Manage Setup → All Features & Settings → Member Profiles & Live Cards.
-- The profile center uses a multi-channel Discord text-channel picker; no copied IDs are required.
-- **Add Welcome Channel** stages the server's saved welcome/start-here channel in the same picker before saving.
-- Enabling refuses channels missing View Channel, Send Messages, Embed Links, or Read Message History.
-- `/dank profile live-cards` remains a one-channel manager fallback that points to the full setup picker.
-- `/dank welcome` owns the static welcome/start-here message and join-only image card.
-- `/dank welcome join-leave` owns the separate member join and leave announcements.
-- The old public `/dank welcome events` command is removed; only an internal compatibility function alias remains.
-
-## User Privacy and Platforms
-
-- External identities are hidden until the user explicitly shares them.
-- Users can disable live cards for themselves.
-- Users can independently control public profile roles, account dates, and platform identities.
-- Server managers may restrict fields further but cannot reveal anything the user hid.
+- Dedicated service-role-only storage for global privacy defaults, per-guild deny-only overrides, platform identities, and live-card ownership.
+- RLS enabled with no anon/authenticated policies.
+- Users can disable live cards and independently hide profile roles, account dates, or platforms.
+- Server managers can restrict fields further but cannot reveal anything a member hid.
+- External identities remain private until explicitly shared.
 - Supported identities: Steam, Epic, Xbox, PlayStation, Nintendo, Riot, Battle.net, Roblox, Twitch, YouTube, Kick, and a limited custom entry.
-- Store visible usernames separately from optional profile URLs.
-- Use clickable Discord link buttons only when a validated official URL exists.
-- Username-only platforms remain visible without a fabricated link.
+- Visible usernames are stored separately from optional URLs.
+- Clickable link buttons are emitted only for validated HTTPS URLs on official platform hosts.
+- Username-only platforms never receive fabricated profile links.
 
-## Validation Completed
+### Setup and command ownership
 
-- Patch application, changed-module compilation, focused profile/setup tests, full pytest, every standalone tool, all production audits, cleanup, and source push passed in the integration gate.
-- Setup-safety audit now permanently requires the Member Profiles & Live Cards feature-center button.
-- No inline review threads or submitted reviews are unresolved on PR #126.
+- Reuses the existing `/dank profile` group; no duplicate group or command replacement.
+- One additive runtime listener owner is attached idempotently.
+- Profile runtime registration has its own failure boundary and cannot be skipped by an unrelated command-module failure.
+- The complete pre-existing `commands.py` passive lifecycle path and exports are preserved.
+- Canonical setup path: `/dank setup` → All Features & Settings → Member Profiles & Live Cards.
+- Multi-channel Discord text-channel picker; no copied channel IDs.
+- Add Welcome Channel stages the saved welcome/start-here channel before saving.
+- Enabling refuses channels missing View Channel, Send Messages, Embed Links, or Read Message History.
+- Slow setup actions acknowledge Discord before storage/render work.
+- `/dank profile live-cards` remains a one-channel manager fallback.
+- `/dank welcome` remains the static welcome/start-here and join-only image-card owner.
+- `/dank welcome join-leave` owns separate member join/leave announcements.
 
-## Validation Still Required
+## Cleanup and Conflict Inspection
 
-- Permanent read-only CI must pass on the exact cleaned final head.
-- Supabase preview/migration status must be confirmed after the final migration-bearing head is available.
-- Final changed-file cleanup and conflict comparison against current `main`.
+- Restored the canonical CI workflow; temporary pytest/tool artifact plumbing removed.
+- Restored historical migration filenames; no deployed migration version is missing locally.
+- Removed the duplicate copied ticket-automation migration.
+- Removed the temporary repository-portability audit.
+- Removed the root `\` patch-dump artifact that broke Supabase cloning.
+- Historical guild-config migration keeps its original filename/version and now reconciles missing columns idempotently before indexing them.
+- `commands.py` is additive against `main`: profile registration added with zero existing lifecycle deletions.
+- Current branch comparison: ahead of `main`, behind by zero, mergeable.
+- No inline review threads and no submitted reviews are unresolved.
+
+## Validation
+
+Implementation head `9ef425a697ce2eb3da1c4f990aa179566c3d53f9`:
+
+- ✅ Dank Shield CI run #785
+- ✅ committed diff whitespace
+- ✅ Python compilation
+- ✅ full unit test suite
+- ✅ every standalone tool check
+- ✅ public setup text/isolation audit
+- ✅ canonical public command-surface audit
+- ✅ startup-friction audit
+- ✅ public invite-permission audit
+- ✅ setup-safety audit
+- ✅ Dank Design Smart Auto-Detect audit
+- ✅ role-truth ownership audit
+- ✅ event-boundary ownership audit
+- ✅ Setup Check Inference Sanity run #307
+
+## Remaining Gates
+
+- This task-record commit must pass the same exact-head CI and setup-inference gates.
+- Close and reopen draft PR #126 once so Supabase recreates its preview branch and replays the corrected existing migration plus the new profile migration.
+- Confirm Supabase migration/database health on the recreated preview.
+- Reconfirm branch comparison and review-thread state.
+- Keep the PR unmerged until explicit owner approval and a live Discord smoke-through.
+
+## Backlog
+
+None. No unrelated implementation task was started.
 
 ## Definition of Done
 
-- [x] Actual command, persistence, event, and test paths inspected.
-- [ ] Dedicated user-scoped persistence added and migration validated on the final head.
+- [x] Actual command, persistence, event, caller, and test paths inspected.
+- [x] Dedicated user-scoped persistence and migration added.
 - [x] Existing `/dank profile` panel gains private settings/privacy/platform controls.
-- [x] Server setup can enable selected live-card channels without copying IDs.
+- [x] Server setup can enable selected live-card channels without copied IDs.
 - [x] Saved welcome/start-here channel can be added through the profile setup picker.
 - [x] Join/leave announcements are separated from static welcome and join-only card commands.
 - [x] Live cards are restart-safe and non-repetitive.
 - [x] Privacy and official-link validation are enforced in the service layer.
+- [x] Existing command lifecycle observers and exports are preserved.
+- [x] Slow profile setup interactions are acknowledged before storage/render work.
 - [x] Focused behavioral tests pass.
-- [ ] Full CI and repository audits pass on the exact final head.
-- [x] Temporary helpers/debug files are removed.
-- [ ] Final branch is conflict-free with `main`.
+- [x] Implementation head passed full CI and repository audits.
+- [x] Temporary helpers/debug artifacts are removed.
+- [x] Branch is conflict-free with `main` before the task-record commit.
+- [ ] Exact final task-record head passes CI and setup inference.
+- [ ] Recreated Supabase preview successfully applies migrations.
+- [ ] Live Discord smoke-through completed.
 - [ ] Merge requires explicit owner approval.
