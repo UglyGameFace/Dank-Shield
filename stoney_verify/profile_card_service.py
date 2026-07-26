@@ -9,6 +9,10 @@ from typing import Any, Callable, Mapping, Optional
 from urllib.parse import quote, unquote, urlparse, urlunparse
 
 from .globals import get_supabase, reset_supabase
+from .profile_signature_style import (
+    DEFAULT_MEMBER_PROFILE_STYLE,
+    normalize_member_profile_style,
+)
 
 
 PROFILE_USER_TABLE = "dank_profile_users"
