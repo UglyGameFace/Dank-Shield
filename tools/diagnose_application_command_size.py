@@ -1,5 +1,12 @@
 from __future__ import annotations
 
+"""Inspect Discord application-command character budgets and largest paths.
+
+This tool is intentionally diagnostic rather than a command registrar. Optional
+UI source snapshots are resolved with ``getattr`` so future menu refactors do
+not make the size report itself unusable.
+"""
+
 import inspect
 import json
 import os
@@ -51,6 +58,10 @@ def option_path_size(option: dict[str, Any], prefix: str) -> list[tuple[str, int
 
 
 def print_source(label: str, value: Any) -> None:
+    if value is None:
+        print(f"\n===== SOURCE {label} =====")
+        print("SOURCE_UNAVAILABLE")
+        return
     try:
         print(f"\n===== SOURCE {label} =====")
         print(inspect.getsource(value))
@@ -80,17 +91,17 @@ def main() -> int:
         for path, size in sorted(rows, key=lambda item: item[1], reverse=True)[:20]:
             print(f"  {size:4d}  {path}")
 
-    from stoney_verify.commands_ext import public_setup_recommend as setup
     from stoney_verify.commands_ext import public_profile_cards_core as profile
+    from stoney_verify.commands_ext import public_setup_recommend as setup
     from stoney_verify.commands_ext import public_welcome_card_studio as welcome_studio
 
     for label, value in (
-        ("AdvancedSettingsHubView", setup.AdvancedSettingsHubView),
-        ("AdvancedMemberExperienceView", setup.AdvancedMemberExperienceView),
-        ("AdvancedAppearanceView", setup.AdvancedAppearanceView),
-        ("ProfileSettingsView", profile.ProfileSettingsView),
-        ("profile_settings", profile.profile_settings),
-        ("welcome_studio_entry", welcome_studio.welcome_card_style),
+        ("AdvancedSettingsHubView", getattr(setup, "AdvancedSettingsHubView", None)),
+        ("AdvancedMemberExperienceView", getattr(setup, "AdvancedMemberExperienceView", None)),
+        ("AdvancedAppearanceView", getattr(setup, "AdvancedAppearanceView", None)),
+        ("ProfileSettingsView", getattr(profile, "ProfileSettingsView", None)),
+        ("profile_settings", getattr(profile, "profile_settings", None)),
+        ("welcome_studio_entry", getattr(welcome_studio, "welcome_card_style", None)),
     ):
         print_source(label, value)
     return 1 if failed else 0
