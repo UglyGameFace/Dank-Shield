@@ -1,178 +1,150 @@
 # ACTIVE TASK
 
-## DS-CONFIG-HISTORY-002 — Understandable selective backup and restore
+## DS-PROFILE-CARDS-001 — Private profile controls and non-repetitive live cards
 
-**Status:** FINAL HEAD VALIDATION PENDING
-**Branch:** `feature/selective-config-backup-restore`
-**PR:** #109, stacked on PR #108 until the localized-time fix merges
+**Status:** FINAL DOCUMENTATION-HEAD VALIDATION
+**Branch:** `feature/live-profile-cards`
+**PR:** #126
+**Base:** `main` at `6cd8333dea9af10f753cb2692d3fbcadc37bf102`
 
 ## Single Active Task Lock
 
-Do not switch to unrelated implementation work until this task reaches Definition of Done or the owner explicitly force-switches tasks.
+Do not switch to unrelated implementation work until this task reaches Definition of Done or the owner explicitly uses the force-switch format.
 
-## Owner Request
+## Scope
 
-Improve Backups & History so server owners can understand:
+Build a separate Dank Shield member-profile signature system without changing join-only welcome-card behavior.
 
-- what a backup contains;
-- what a backup is useful for;
-- what is not backed up;
-- which configuration area they want to back up;
-- whether they want to restore only missing items, manually chosen items, or every difference;
-- exactly what will change before confirmation.
+- Existing welcome cards remain server-admin controlled and appear only when a member joins.
+- `/dank profile` remains the one canonical member-profile command family.
+- A server may optionally configure live profile cards in selected channels.
+- Live cards must not repetitively post after every message.
+- User privacy always wins over server display preferences.
+- Platform identities are user-supplied and unverified unless a future OAuth flow verifies them.
+- Setup uses Discord channel pickers and can include the saved welcome/start-here channel.
+- Static welcome/start-here configuration remains separate from join/leave announcements.
 
-The key recovery case is a server that already has newer working configuration and only needs missing settings or ticket choices from an older backup. Restore must not replace unrelated newer values.
+## Root Causes Found
 
-## Architecture Rules
+- The feature existed in draft PR #126 but had not completed exact-head validation.
+- Temporary CI artifact plumbing and migration-copy experiments had polluted the branch.
+- A committed root file literally named `\` contained an obsolete ANSI-colored patch dump and prevented Supabase from cloning the repository.
+- Two migration pairs reused the same Supabase version prefixes (`20260426` and `20260611`). Supabase stores only the numeric prefix, so fresh replay could not record both files.
+- Historical optional migrations assumed legacy tables (`tickets`, `guild_members`) always existed.
+- Both guild-config migrations used `CREATE TABLE IF NOT EXISTS` but then indexed, triggered, or commented columns that an existing compatible table might not contain.
+- `commands.py` had been accidentally shortened during earlier work, dropping passive channel/thread observers and exports.
+- Profile setup preview/open/add-welcome callbacks could perform database or rendering work before acknowledging Discord interactions.
 
-- No monkey patches.
-- No startup guards.
-- No dashboard work.
-- No new public command family.
-- Existing live configuration tables remain authoritative.
-- Existing `guild_config_versions` snapshots remain the only history source.
-- No new migration is required.
-- Every restore creates a full pre-restore safety backup.
-- Ticket-choice writes continue through the existing atomic PostgreSQL restore RPC.
-- Restore cannot cross guild or active config-table boundaries.
-- Merge requires explicit owner approval.
+## Delivered Implementation
 
-## Delivered Behavior
+### Live signature behavior
 
-### Clear backup explanation
+- Disabled by default.
+- Explicit manager-selected text channels.
+- One bot-owned live profile card per enabled channel.
+- DMs, bots, webhooks, system messages, and unsupported message types are ignored.
+- Message bursts are debounced and coalesced to the latest eligible human speaker.
+- Repeated cards for the same speaker are cooldown-suppressed.
+- A new card is posted and ownership is persisted before the prior card is removed.
+- Failed replacements leave the existing valid card intact.
+- Restart/reconnect reconciliation validates stored ownership and removes duplicate bot-owned cards.
+- User messages are never edited, deleted, copied, or reposted.
+- Every send uses `AllowedMentions.none()`.
 
-The Backups & History screen now explains:
+### Privacy and platforms
 
-- **Core Settings** save feature switches, timers/rules, protection configuration, setup choices, welcome/log settings, and saved Discord role/channel/category references.
-- **Ticket Choices** save the member-facing ticket menu plus compatible category-specific form configuration.
-- Backups do **not** save Discord messages, members, live ticket conversations, actual roles/channels/categories, files, or server ownership.
-- Restore changes Dank Shield's saved configuration only; it does not clone, delete, or rebuild the Discord server.
+- Dedicated service-role-only storage for global privacy defaults, per-guild deny-only overrides, platform identities, and live-card ownership.
+- RLS enabled with no anon/authenticated policies.
+- Users can disable live cards and independently hide profile roles, account dates, or platforms.
+- Server managers can restrict fields further but cannot reveal anything a member hid.
+- External identities remain private until explicitly shared.
+- Supported identities: Steam, Epic, Xbox, PlayStation, Nintendo, Riot, Battle.net, Roblox, Twitch, YouTube, Kick, and a limited custom entry.
+- Visible usernames are stored separately from optional URLs.
+- Clickable link buttons are emitted only for validated HTTPS URLs on official platform hosts.
+- Username-only platforms never receive fabricated profile links.
 
-### Manual backup choice
+### Setup and command ownership
 
-Owners press **Choose Backup Contents** and select:
+- Reuses the existing `/dank profile` group; no duplicate group or command replacement.
+- One additive runtime listener owner is attached idempotently.
+- Profile runtime registration has its own failure boundary and cannot be skipped by an unrelated command-module failure.
+- The complete pre-existing `commands.py` passive lifecycle path and exports are preserved.
+- Canonical setup path: `/dank setup` → All Features & Settings → Member Profiles & Live Cards.
+- Multi-channel Discord text-channel picker; no copied channel IDs.
+- Add Welcome Channel stages the saved welcome/start-here channel before saving.
+- Enabling refuses channels missing View Channel, Send Messages, Embed Links, or Read Message History.
+- Slow setup actions acknowledge Discord before storage/render work.
+- `/dank profile live-cards` remains a one-channel manager fallback.
+- `/dank welcome` remains the static welcome/start-here and join-only image-card owner.
+- `/dank welcome join-leave` owns separate member join/leave announcements.
 
-- Core Settings;
-- Ticket Choices;
-- or both.
+## Migration and Repository Cleanup
 
-This selection is intentionally domain-level. A backup remains a coherent snapshot of the chosen active configuration area rather than an ambiguous partial row. Fine-grained control is provided during restore, where it prevents unwanted overwrites.
+- Restored the canonical CI workflow; temporary pytest/tool artifact plumbing removed.
+- Removed the temporary repository-portability audit.
+- Removed the root `\` patch-dump artifact that broke Supabase cloning.
+- Kept the original `20260426_create_guild_configs.sql` version for existing history and moved the later reconciliation migration to unique version `202604260001`.
+- Kept `20260611_member_activity_notices.sql` on the original version and moved the later ticket-automation migration to unique version `202606110001`.
+- Added a global regression requiring every committed Supabase migration version to be unique.
+- Made the TicketTool parity migration skip safely when the legacy `tickets` table is absent; it never fabricates a partial ticket table.
+- Made the guild-member role-state migration require both the legacy table and `role_state` column before altering constraints.
+- Made both guild-config migrations reconcile their required columns before indexes, triggers, comments, or seed updates use them.
+- Supabase fresh preview now replays the complete migration chain successfully, including the new live-profile-card migration.
 
-### Selective restore modes
+## Conflict Inspection
 
-Each version explains what it contains, summarizes Core Settings sections or the Ticket Choices count, and compares the version with current configuration.
-
-Owners can choose:
-
-1. **Restore Missing Only**
-   - restores saved items that are absent or blank now;
-   - does not overwrite an existing configured value.
-2. **Choose Exact Changes**
-   - manually selects individual Core setting keys or ticket-choice slugs;
-   - supports pagination beyond Discord's 25-option component limit;
-   - selections persist while moving between pages.
-3. **Restore All Differences**
-   - restores every currently different item in that saved version.
-
-All three paths open a separate preview showing the exact selected items. Only **Confirm Restore** performs a write.
-
-### Native selective service
-
-Added `stoney_verify/config_history_selective.py` as a substantive extension of the canonical history subsystem.
-
-- Domain-scoped manual backup creation.
-- Friendly Core setting labels and section grouping.
-- Current-vs-snapshot restore planning.
-- Missing-only item detection.
-- Selected Core Settings merge:
-  - applies only requested keys;
-  - preserves unselected top-level and nested values;
-  - adds restore audit metadata;
-  - invalidates guild-config cache.
-- Selected Ticket Choices reconciliation:
-  - starts from the current complete category set;
-  - replaces, adds, or removes only selected slugs according to the snapshot;
-  - preserves every unselected current choice;
-  - sends the resulting full target set through the existing atomic restore RPC;
-  - writes one clean restored-state history entry.
-- Every selective restore writes a complete pre-restore safety snapshot first.
-
-## Behavioral Coverage
-
-Service coverage proves:
-
-- Core-only manual backup does not read or write Ticket Choices.
-- Empty backup selection is refused.
-- Restore planning identifies real differences and missing settings.
-- Selected Core restore changes only the requested setting.
-- Missing-only Core restore does not overwrite an existing value.
-- Selected Ticket Choices restore preserves unselected current choices.
-- Ticket reconciliation still uses the atomic RPC.
-- Cross-guild snapshots are refused.
-
-UI coverage proves:
-
-- The screen explains what is and is not backed up.
-- Backup-domain selection defaults to both but allows one domain.
-- Only selected domains reach the backup service.
-- Version details explain contents and all three restore modes.
-- Missing-only and choose-exact buttons do not invoke restore directly.
-- Exact-change selection is individual and paginated.
-- Confirmation lists only items that will change.
-- Only Confirm Restore invokes the selective restore service.
-- Discord mobile rows remain compact.
+- `commands.py` is additive against `main`: profile registration added with zero existing lifecycle deletions.
+- Branch comparison after implementation: ahead of `main`, behind by zero, mergeable.
+- No inline review threads and no submitted reviews are unresolved.
+- No unrelated implementation task was started.
 
 ## Validation
 
-- Localization dependency PR #108 exact head `044b547b4c0ba1312ae01fabcaeae87d515f5fbc`:
-  - Dank Shield CI run 495: SUCCESS.
-- Initial selective backend/UI head:
-  - compile passed;
-  - CI run 498 exposed an underspecified fake ticket-state sequence in one behavioral fixture.
-- Corrected selective head `012f215cefa88d782bca28c3b5601862d8d4c34f`:
-  - Dank Shield CI run 499: SUCCESS;
-  - compile, full unit suite, standalone checks, and all production audits passed.
+Implementation head `7dffef6153582c0e90871ad62060c8867c737eec`:
 
-## Cleanup / Conflict Inspection
+- ✅ Dank Shield CI run #801
+- ✅ committed diff whitespace
+- ✅ Python compilation
+- ✅ full unit test suite
+- ✅ every standalone tool check
+- ✅ public setup text/isolation audit
+- ✅ canonical public command-surface audit
+- ✅ startup-friction audit
+- ✅ public invite-permission audit
+- ✅ setup-safety audit
+- ✅ Dank Design Smart Auto-Detect audit
+- ✅ role-truth ownership audit
+- ✅ event-boundary ownership audit
+- ✅ Setup Check Inference Sanity runs #323 and #324
+- ✅ Supabase preview database, services, APIs, configuration, migrations, seeding, and edge-function checks
 
-- No migration added.
-- No startup guard added or reactivated.
-- No monkey patch added.
-- No dashboard file changed.
-- No public command added.
-- Existing `config_history.py` remains the canonical full-history service.
-- New selective logic does not create a second live configuration source.
-- UI route remains `/dank setup` → More Options → Other Settings → Backups & History.
+## Remaining Gates
 
-## Remaining Gate
+- This documentation-only task-record commit must pass exact-head CI and setup inference.
+- Reconfirm branch comparison and review-thread state on the final head.
+- Keep PR #126 draft and unmerged until a live Discord smoke-through and explicit owner approval.
 
-This task-record commit is the final planned branch change. Its exact head must pass CI. Then:
+## Backlog
 
-- compare PR #109 against its stacked base;
-- confirm it is not behind that base;
-- inspect unresolved review threads;
-- update the PR description with exact validation;
-- mark PR #109 ready for review without merging.
-
-PR #109 must remain stacked until PR #108 merges. After PR #108 merges, retarget PR #109 to `main` and run final exact-head validation against the new base before merge approval.
+None.
 
 ## Definition of Done
 
-- [x] Backups screen explains Core Settings, Ticket Choices, intended use, and exclusions.
-- [x] Owner can choose Core Settings, Ticket Choices, or both for manual backup.
-- [x] Version detail explains exactly what the snapshot contains.
-- [x] Missing-only restore preserves existing configured values.
-- [x] Owner can manually choose individual settings or ticket choices to restore.
-- [x] Exact-change selection supports pagination.
-- [x] All-differences restore remains available.
-- [x] Every restore shows an exact preview and requires separate confirmation.
-- [x] Every restore creates a full safety backup first.
-- [x] Selective Core restore preserves unselected newer values.
-- [x] Selective Ticket restore preserves unselected current choices and remains atomic.
-- [x] Cross-guild safety remains enforced.
-- [x] Behavioral tests cover service and UI safety.
-- [x] Implementation head passed full CI and production audits.
-- [ ] This exact task-record head passes CI.
-- [ ] Final stacked-base compare is clean and review threads are resolved.
-- [ ] PR #109 retargets to `main` after PR #108 merges and passes the final merge-base gate.
+- [x] Actual command, persistence, event, caller, and test paths inspected.
+- [x] Dedicated user-scoped persistence and migration added.
+- [x] Existing `/dank profile` panel gains private settings/privacy/platform controls.
+- [x] Server setup can enable selected live-card channels without copied IDs.
+- [x] Saved welcome/start-here channel can be added through the profile setup picker.
+- [x] Join/leave announcements are separated from static welcome and join-only card commands.
+- [x] Live cards are restart-safe and non-repetitive.
+- [x] Privacy and official-link validation are enforced in the service layer.
+- [x] Existing command lifecycle observers and exports are preserved.
+- [x] Slow profile setup interactions are acknowledged before storage/render work.
+- [x] Focused behavioral tests pass.
+- [x] Implementation head passed full CI and repository audits.
+- [x] Complete Supabase migration replay passed.
+- [x] Temporary helpers/debug artifacts are removed.
+- [x] Branch is conflict-free with `main` before the documentation commit.
+- [ ] Exact final documentation head passes CI and setup inference.
+- [ ] Live Discord smoke-through completed.
 - [ ] Merge requires explicit owner approval.

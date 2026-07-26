@@ -12,6 +12,12 @@
 -- - RLS is enabled.
 -- - No anon/authenticated read/write policies are created here.
 -- - The bot backend should use SUPABASE_SERVICE_ROLE_KEY only server-side.
+--
+-- Replay safety:
+-- - A linked/preview database may already contain a compatible guild_configs
+--   table created outside this committed migration chain.
+-- - CREATE TABLE IF NOT EXISTS does not add missing columns, so compatibility
+--   JSON fields are reconciled before indexes, triggers, or comments use them.
 -- ============================================================
 
 create extension if not exists pgcrypto;
@@ -71,6 +77,13 @@ create table if not exists public.guild_configs (
     created_at timestamptz not null default now(),
     updated_at timestamptz not null default now()
 );
+
+alter table public.guild_configs
+    add column if not exists settings jsonb not null default '{}'::jsonb,
+    add column if not exists config jsonb not null default '{}'::jsonb,
+    add column if not exists metadata jsonb not null default '{}'::jsonb,
+    add column if not exists meta jsonb not null default '{}'::jsonb,
+    add column if not exists updated_at timestamptz not null default now();
 
 create index if not exists idx_guild_configs_guild_id on public.guild_configs (guild_id);
 create index if not exists idx_guild_configs_updated_at on public.guild_configs (updated_at desc);

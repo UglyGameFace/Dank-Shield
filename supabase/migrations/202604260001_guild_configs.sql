@@ -1,10 +1,12 @@
 -- ============================================================
--- 20260426_guild_configs.sql
+-- 202604260001_guild_configs.sql
 -- ------------------------------------------------------------
 -- Per-guild runtime configuration for public / multi-server use.
 --
--- This table lets the bot stop depending on one process-wide GUILD_ID
--- and one process-wide set of channel/role ids.
+-- This repository also contains an earlier same-day migration that can create
+-- public.guild_configs with a compatible-but-smaller schema. CREATE TABLE IF
+-- NOT EXISTS does not add columns to an existing table, so this migration must
+-- explicitly reconcile every column it later indexes or seeds.
 --
 -- Safe to run more than once.
 -- ============================================================
@@ -65,6 +67,15 @@ create table if not exists public.guild_configs (
     created_at timestamptz not null default now(),
     updated_at timestamptz not null default now()
 );
+
+-- Reconcile the schema when the earlier 20260426_create_guild_configs.sql
+-- migration created this table first. Never assume CREATE TABLE IF NOT EXISTS
+-- backfilled these columns.
+alter table public.guild_configs
+    add column if not exists guild_name text,
+    add column if not exists owner_id text,
+    add column if not exists enabled boolean not null default true,
+    add column if not exists public_beta_enabled boolean not null default false;
 
 create index if not exists idx_guild_configs_enabled
     on public.guild_configs (enabled);
@@ -149,7 +160,7 @@ insert into public.guild_configs (
     240,
     true,
     '{}'::jsonb,
-    jsonb_build_object('seeded_by', '20260426_guild_configs.sql')
+    jsonb_build_object('seeded_by', '202604260001_guild_configs.sql')
 )
 on conflict (guild_id) do update set
     guild_name = excluded.guild_name,

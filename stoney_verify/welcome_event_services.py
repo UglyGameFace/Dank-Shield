@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-"""Owned setup service for optional join and leave messages."""
+"""Owned setup service for separate join and leave announcements."""
 
 import re
 from typing import Any, Mapping, Optional
@@ -435,17 +435,19 @@ def _build_center_embed(guild: discord.Guild, cfg: Any, *, last_action: str | No
     leave_channel = _leave_channel(guild, cfg)
 
     embed = discord.Embed(
-        title="👋 Welcome & Join/Leave Center",
+        title="👋 Join & Leave Announcements",
         description=(
-            "Separate the **member-facing join welcome** from the **private staff join/leave log**.\n"
-            "Join channel selection is exact: if the selected Join channel is private, join welcomes pause instead of posting somewhere else. Keep staff join/leave logs separate."
+            "These messages fire only when a member joins or leaves. They are separate from the "
+            "**static welcome/start-here message**, the **join-only welcome image card**, and "
+            "**live profile cards** that follow conversation.\n\n"
+            "Join channel selection is exact: if the selected Join channel is private, join announcements pause instead of posting somewhere else. Keep the staff leave log separate."
         ),
         color=discord.Color.green() if (join_enabled or leave_enabled) else discord.Color.blurple(),
         timestamp=discord.utils.utcnow(),
     )
 
     embed.add_field(
-        name="Member-Facing Join Welcome",
+        name="Member-Facing Join Announcement",
         value=(
             f"**Status:** {'✅ ON' if join_enabled else '⚪ OFF'}\n"
             f"**Channel:** {join_channel.mention if isinstance(join_channel, discord.TextChannel) else 'not set'}\n"
@@ -483,7 +485,7 @@ def _build_center_embed(guild: discord.Guild, cfg: Any, *, last_action: str | No
     if last_action:
         embed.add_field(name="Last action", value=last_action[:1024], inline=False)
 
-    embed.set_footer(text="/dank setup • Welcome Center • changes update this panel live")
+    embed.set_footer(text="/dank welcome join-leave • separate event announcements")
     return embed
 
 
@@ -687,7 +689,7 @@ async def _apply_template_preset(interaction: discord.Interaction, preset: str) 
 
     await _upsert_config(int(guild.id), patch)
     invalidate_guild_config(int(guild.id))
-    await _refresh_center(interaction, last_action=f"✅ Applied **{actual.title()}** welcome template preset. Channels and ON/OFF settings were not changed.")
+    await _refresh_center(interaction, last_action=f"✅ Applied **{actual.title()}** join/leave announcement preset. Channels and ON/OFF settings were not changed.")
 
 
 async def _save_template(interaction: discord.Interaction, *, kind: str, title: str, body: str) -> None:
@@ -929,7 +931,7 @@ class WelcomePlaceholderHelpButton(discord.ui.Button):
 
     async def callback(self, interaction: discord.Interaction) -> None:
         embed = discord.Embed(
-            title="Welcome Placeholder Help",
+            title="Join & Leave Placeholder Help",
             description=(
                 "Use these inside Join/Leave titles and body text.\n"
                 "Invite placeholders are exact only on real joins when Discord invite tracking is available."
@@ -1012,9 +1014,9 @@ class WelcomeCloseButton(discord.ui.Button):
             except Exception:
                 pass
         try:
-            await interaction.response.edit_message(content="Closed Welcome Center. Reopen it from `/dank setup`.", view=self.view)
+            await interaction.response.edit_message(content="Closed Join & Leave Announcements. Reopen it with `/dank welcome join-leave`.", view=self.view)
         except Exception:
-            await _send_ephemeral(interaction, "Closed Welcome Center.")
+            await _send_ephemeral(interaction, "Closed Join & Leave Announcements.")
 
 
 class WelcomeEventsCenterView(discord.ui.View):

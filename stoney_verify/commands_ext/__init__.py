@@ -239,6 +239,7 @@ _ALLOWED_DANK_CHILDREN = {
     "member-logs",
     "welcome",
     "roles",
+    "profile",
     "modlog",
     "embed",
     "design",

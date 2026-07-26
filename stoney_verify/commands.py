@@ -35,6 +35,18 @@ except Exception as e:
         return None
 
 
+# Member profile cards extend the existing /dank profile group through one
+# canonical registration path. The runtime owns exactly one additive on_message
+# listener and never replaces user messages or the join-only welcome system.
+try:
+    from .commands_ext.public_profile_cards import register_public_profile_cards
+except Exception as e:
+    print(f"⚠️ commands.py failed to import public_profile_cards: {repr(e)}")
+
+    def register_public_profile_cards(bot: Any, tree: Any) -> None:  # type: ignore
+        return None
+
+
 # ============================================================
 # Kick timer bridges
 # events.py imports these from commands.py, so keep them exposed
@@ -98,6 +110,17 @@ except Exception as e:
     except Exception:
         pass
 
+# Live profile cards must still attach their existing-channel runtime when an
+# unrelated command module fails. Their registrar is idempotent per bot and does
+# not replace application commands or event owners.
+try:
+    register_public_profile_cards(bot, bot.tree)
+except Exception as e:
+    try:
+        print(f"⚠️ commands.py failed to register public profile cards: {repr(e)}")
+    except Exception:
+        pass
+
 
 # ============================================================
 # Register centralized component interaction handler
@@ -121,6 +144,14 @@ def register_extra_commands(tree) -> None:
     except Exception as e:
         try:
             print(f"⚠️ register_extra_commands failed: {repr(e)}")
+        except Exception:
+            pass
+
+    try:
+        register_public_profile_cards(bot, tree)
+    except Exception as e:
+        try:
+            print(f"⚠️ register_extra_commands profile cards failed: {repr(e)}")
         except Exception:
             pass
 

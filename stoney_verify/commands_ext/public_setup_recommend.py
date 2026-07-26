@@ -3725,6 +3725,23 @@ class AdvancedSettingsHubView(discord.ui.View):
         await _open_advanced_appearance(interaction)
 
     @discord.ui.button(
+        label="Member Profiles & Live Cards",
+        emoji="🪪",
+        style=discord.ButtonStyle.secondary,
+        custom_id="dank_setup_features:profiles",
+        row=3,
+    )
+    async def profiles(
+        self,
+        interaction: discord.Interaction,
+        button: discord.ui.Button,
+    ) -> None:
+        _ = button
+        from stoney_verify import profile_card_setup_ui
+
+        await profile_card_setup_ui.open_profile_card_setup(interaction)
+
+    @discord.ui.button(
         label="Backups & History",
         emoji="💾",
         style=discord.ButtonStyle.secondary,
