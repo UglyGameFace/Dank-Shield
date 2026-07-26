@@ -1,0 +1,31 @@
+name: Sync PR 132 After PR 131
+
+on:
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: write
+
+jobs:
+  sync:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/profile-command-payload-limit
+          fetch-depth: 0
+      - name: Merge current main without carrying temporary workflow
+        run: |
+          git fetch origin main
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git merge --no-ff --no-commit origin/main
+          rm -f .github/workflows/sync-pr132-after-pr131.yml
+          git add -A
+          git diff --check --cached
+          git commit -m "Merge main after command diagnostics"
+          git push origin HEAD:fix/profile-command-payload-limit
