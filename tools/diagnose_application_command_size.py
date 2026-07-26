@@ -14,6 +14,7 @@ os.environ.setdefault("DANK_COMMAND_PROFILE", "public")
 os.environ.setdefault("DANK_DEPLOYMENT_MODE", "production")
 os.environ.setdefault("DANK_STARTUP_LOG_STYLE", "quiet")
 os.environ.setdefault("DANK_COMMAND_LOG_STYLE", "quiet")
+os.environ.setdefault("BOT_API_SHARED_SECRET", "command-size-audit-only-secret-1234567890")
 
 from stoney_verify import commands as _commands  # noqa: F401,E402
 from stoney_verify.globals import bot  # noqa: E402
