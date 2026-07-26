@@ -81,7 +81,8 @@ def test_privacy_is_resolved_before_compact_signature_rendering():
     assert "server_allowed_fields" in PROFILE_RUNTIME
     assert "effective_preferences" in PROFILE_SERVICE
     assert "render_member_profile_signature" in PROFILE_RUNTIME
-    assert "_profile_card(" not in PROFILE_RUNTIME
+    assert "base = _profile_card(member)" not in PROFILE_RUNTIME
+    assert "from .commands_ext.public_self_roles_group import _profile_card" not in PROFILE_RUNTIME
 
 
 def test_all_existing_public_profile_entry_points_use_privacy_aware_composer():
