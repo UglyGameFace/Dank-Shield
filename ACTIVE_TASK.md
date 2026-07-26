@@ -2,7 +2,7 @@
 
 ## DS-COMMAND-UI-004 — UI-first command overhaul with complete Profile and Welcome setup
 
-**Status:** IMPLEMENTATION / VALIDATION
+**Status:** VALIDATION / LIVE SMOKE
 **Branch:** `fix/profile-command-payload-limit`
 **PR:** `#132`
 **Base:** current `main`
@@ -29,14 +29,15 @@ Do not switch to unrelated implementation work until this correction reaches Def
 - Profile style state is independent from welcome-card state. A server manager may explicitly import the Join Card look once; later changes stay separate.
 - Attach Files is now required before image signatures can be enabled.
 
-## Validation required
+## Validation
 
-- [ ] One-time patch workflow succeeds and removes all temporary patch files/workflows.
-- [ ] Changed Python modules compile.
-- [ ] Focused UI/profile/welcome tests pass.
-- [ ] `tools/test_dank_command_payload.py` proves the exact live tree is below 7,600.
-- [ ] Full unit suite and every repository audit pass.
-- [ ] PR is zero commits behind `main` with no unresolved review threads.
+- [x] Deterministic clean-main build completed and all temporary patch workflows, scripts, and diagnostics were removed from the committed tree.
+- [x] Changed Python modules compiled.
+- [x] Focused UI/profile/welcome regression tests passed.
+- [x] `tools/test_dank_command_payload.py` proved the compacted live command tree is below the 7,600-byte safety limit.
+- [ ] Exact-head full unit suite and every repository audit pass.
+- [x] PR is zero commits behind `main`.
+- [ ] No unresolved review threads or submitted blocking reviews.
 - [ ] Live Discord smoke proves slash sync succeeds and the new menus open correctly.
 - [ ] Merge requires explicit owner approval.
 
