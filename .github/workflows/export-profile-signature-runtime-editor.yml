@@ -1,0 +1,81 @@
+name: Export profile signature runtime editor correction
+
+on:
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  export:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Materialize scoped correction
+        run: python tools/materialize_profile_signature_runtime_editor_fix.py
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip -q
+          pip install -q -r requirements.txt
+          pip install -q pytest
+
+      - name: Run focused validation
+        env:
+          DANK_STARTUP_LOG_STYLE: quiet
+          DANK_COMMAND_LOG_STYLE: quiet
+        run: |
+          python -m py_compile \
+            stoney_verify/profile_card_runtime.py \
+            stoney_verify/profile_card_runtime_core.py \
+            stoney_verify/profile_signature_renderer.py \
+            stoney_verify/welcome_card_typography_engine.py \
+            stoney_verify/commands_ext/public_profile_cards_core.py \
+            stoney_verify/profile_card_setup_ui.py \
+            stoney_verify/profile_card_setup_ui_core.py \
+            tests/test_live_profile_card_runtime.py \
+            tests/test_profile_signature_appearance_controls.py \
+            tests/test_profile_signature_runtime_editor_static.py \
+            tests/test_ui_private_followup_payloads.py
+          python -m pytest \
+            tests/test_live_profile_card_runtime.py \
+            tests/test_compact_profile_signature_renderer.py \
+            tests/test_profile_signature_theme_application.py \
+            tests/test_profile_signature_appearance_controls.py \
+            tests/test_profile_signature_runtime_editor_static.py \
+            tests/test_ui_private_followup_payloads.py \
+            -q --tb=short --disable-warnings
+          git diff --check
+
+      - name: Build exact file bundle
+        shell: bash
+        run: |
+          mkdir -p profile-signature-fix/stoney_verify/commands_ext profile-signature-fix/tests
+          cp ACTIVE_TASK.md profile-signature-fix/ACTIVE_TASK.md
+          cp stoney_verify/profile_card_runtime.py profile-signature-fix/stoney_verify/profile_card_runtime.py
+          cp stoney_verify/profile_card_runtime_core.py profile-signature-fix/stoney_verify/profile_card_runtime_core.py
+          cp stoney_verify/profile_signature_renderer.py profile-signature-fix/stoney_verify/profile_signature_renderer.py
+          cp stoney_verify/welcome_card_typography_engine.py profile-signature-fix/stoney_verify/welcome_card_typography_engine.py
+          cp stoney_verify/commands_ext/public_profile_cards_core.py profile-signature-fix/stoney_verify/commands_ext/public_profile_cards_core.py
+          cp stoney_verify/profile_card_setup_ui.py profile-signature-fix/stoney_verify/profile_card_setup_ui.py
+          cp stoney_verify/profile_card_setup_ui_core.py profile-signature-fix/stoney_verify/profile_card_setup_ui_core.py
+          cp tests/test_live_profile_card_runtime.py profile-signature-fix/tests/test_live_profile_card_runtime.py
+          cp tests/test_profile_signature_appearance_controls.py profile-signature-fix/tests/test_profile_signature_appearance_controls.py
+          cp tests/test_profile_signature_runtime_editor_static.py profile-signature-fix/tests/test_profile_signature_runtime_editor_static.py
+          cp tests/test_ui_private_followup_payloads.py profile-signature-fix/tests/test_ui_private_followup_payloads.py
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: profile-signature-runtime-editor-fix
+          path: profile-signature-fix
+          if-no-files-found: error
