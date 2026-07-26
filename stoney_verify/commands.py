@@ -175,4 +175,79 @@ async def on_ready():
         u = getattr(bot, "user", None)
         print(f"⚙️ commands.py on_ready (no-op) for: {u}")
     except Exception:
+        print("⚙️ commands.py on_ready (no-op)")
+
+
+@bot.event
+async def on_guild_channel_create(channel):
+    """
+    Passive observer only.
+
+    Initial Verify UI posting is owned by tickets_new/service.py.
+    Leaving active posting here causes duplicate verify panels.
+    """
+    if not isinstance(channel, discord.TextChannel):
+        return
+
+    try:
+        print(
+            f"🧩 channel_create: name='{channel.name}' id={channel.id} "
+            f"cat={int(channel.category_id or 0)} in_scope={is_verification_ticket_channel(channel)}"
+        )
+    except Exception:
         pass
+
+    return
+
+
+@bot.event
+async def on_guild_channel_update(before, after):
+    """
+    Passive observer only.
+
+    Prevent duplicate Verify UI posts from channel lifecycle hooks.
+    """
+    return
+
+
+@bot.event
+async def on_thread_create(thread: discord.Thread):
+    """
+    Passive observer only.
+
+    Verify UI should not be auto-posted from thread lifecycle hooks.
+    """
+    try:
+        if not isinstance(thread, discord.Thread):
+            return
+        if is_verification_ticket_channel(thread):
+            try:
+                print(
+                    f"🧩 thread_create: name='{thread.name}' id={thread.id} "
+                    f"parent={(getattr(thread.parent, 'id', 0))}"
+                )
+            except Exception:
+                pass
+    except Exception:
+        return
+
+
+@bot.event
+async def on_thread_update(before: discord.Thread, after: discord.Thread):
+    """
+    Passive observer only.
+
+    Prevent duplicate Verify UI posts from thread scope transitions.
+    """
+    return
+
+
+__all__ = [
+    "_cancel_kick_timer",
+    "kick_timer_persist_delete",
+    "kick_timer_resume_all",
+    "start_join_grace_then_kick_timer_for_member",
+    "cancel_verification_wait_timers_for_member",
+    "handle_possible_submission",
+    "register_extra_commands",
+]
