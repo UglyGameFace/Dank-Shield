@@ -1,0 +1,75 @@
+name: Finalize PR 131 Diagnostics
+
+on:
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: write
+
+jobs:
+  finalize:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/dank-command-size-limit
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+
+      - name: Remove superseded profile implementation
+        run: |
+          git checkout origin/main -- stoney_verify/profile_signature_renderer.py
+          rm -f \
+            stoney_verify/profile_signature_service.py \
+            stoney_verify/profile_signature_style.py \
+            supabase/migrations/202607260001_profile_signature_appearance.sql \
+            .github/workflows/finalize-pr131-diagnostics.yml
+          git diff --check
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip -q
+          pip install -q -r requirements.txt
+          pip install -q pytest
+
+      - name: Validate diagnostic tool
+        env:
+          DANK_STARTUP_LOG_STYLE: quiet
+          DANK_COMMAND_LOG_STYLE: quiet
+        run: |
+          python -m py_compile tools/diagnose_application_command_size.py
+          python tools/diagnose_application_command_size.py > /tmp/command-size.txt 2>&1 || true
+          grep -q 'COMMAND /dank' /tmp/command-size.txt
+
+      - name: Run full repository validation
+        env:
+          DANK_STARTUP_LOG_STYLE: quiet
+          DANK_COMMAND_LOG_STYLE: quiet
+        run: |
+          python -m pytest tests/ -q --tb=short --disable-warnings
+          for file in tools/test_*.py; do python "$file"; done
+          python tools/audit_public_setup.py
+          python tools/audit_public_command_surface.py
+          python tools/audit_public_command_friction.py
+          python tools/audit_invite_permissions.py
+          python tools/audit_setup_safety.py
+          python tools/audit_dank_design.py
+          python tools/audit_role_truth_ownership.py
+          python tools/audit_event_boundary_ownership.py
+
+      - name: Commit clean diagnostic prerequisite
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add -A
+          git commit -m "Keep reusable application command size diagnostics"
+          git push origin HEAD:fix/dank-command-size-limit
