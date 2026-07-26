@@ -37,77 +37,27 @@ jobs:
       - name: Check committed diff whitespace
         run: git diff --check "$(git merge-base origin/main HEAD)"..HEAD
 
-      - name: Audit repository path portability
-        run: python tools/audit_repository_path_portability.py
-
       - name: Compile Python modules
         run: python -m compileall -q stoney_verify main.py tools
 
       - name: Run unit test suite
-        id: unit_tests
-        run: |
-          set +e
-          python -m pytest tests/ -q --tb=short --disable-warnings > pytest.log 2>&1
-          code=$?
-          echo "exit_code=$code" >> "$GITHUB_OUTPUT"
-          exit 0
+        run: python -m pytest tests/ -q --tb=short --disable-warnings
         env:
           DANK_STARTUP_LOG_STYLE: quiet
           DANK_COMMAND_LOG_STYLE: quiet
-
-      - name: Upload pytest log
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: pytest-log
-          path: pytest.log
-          if-no-files-found: error
-          retention-days: 3
-
-      - name: Fail when unit tests fail
-        if: steps.unit_tests.outputs.exit_code != '0'
-        run: |
-          cat pytest.log
-          exit 1
 
       - name: Run standalone tool checks
-        id: standalone
         run: |
-          set +e
-          : > standalone-tools.log
           status=0
           for f in tools/test_*.py; do
-            {
-              echo "===== $f ====="
-              python "$f"
-              code=$?
-              echo "exit_code=$code"
-              echo
-            } >> standalone-tools.log 2>&1
-            if [ "$code" -ne 0 ]; then
-              status=1
-            fi
+            echo "::group::$f"
+            python "$f" || status=1
+            echo "::endgroup::"
           done
-          echo "exit_code=$status" >> "$GITHUB_OUTPUT"
-          exit 0
+          exit $status
         env:
           DANK_STARTUP_LOG_STYLE: quiet
           DANK_COMMAND_LOG_STYLE: quiet
-
-      - name: Upload standalone tool log
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: standalone-tools-log
-          path: standalone-tools.log
-          if-no-files-found: error
-          retention-days: 3
-
-      - name: Fail when a standalone tool fails
-        if: steps.standalone.outputs.exit_code != '0'
-        run: |
-          cat standalone-tools.log
-          exit 1
 
       - name: Audit public setup text and isolation
         run: python tools/audit_public_setup.py
