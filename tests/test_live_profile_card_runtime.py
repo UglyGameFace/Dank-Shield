@@ -21,6 +21,7 @@ class FakePermissions:
     send_messages = True
     embed_links = True
     read_message_history = True
+    attach_files = True
 
 
 class FakeAvatar:
