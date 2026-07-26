@@ -26,5 +26,5 @@ def test_legacy_fallback_only_when_no_explicit_join_channel_selected():
 
 def test_setup_copy_explains_exact_join_channel_behavior():
     assert "Join channel selection is exact" in SETUP
-    assert "join welcomes pause instead of posting somewhere else" in SETUP
-    assert "Join welcomes will pause instead of posting to another channel." in SETUP
+    assert "join announcements pause instead of posting somewhere else" in SETUP
+    assert "Join announcements will pause instead of posting to another channel." in SETUP
