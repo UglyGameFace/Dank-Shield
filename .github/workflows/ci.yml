@@ -44,10 +44,31 @@ jobs:
         run: python -m compileall -q stoney_verify main.py tools
 
       - name: Run unit test suite
-        run: python -m pytest tests/ -q --tb=short --disable-warnings
+        id: unit_tests
+        run: |
+          set +e
+          python -m pytest tests/ -q --tb=short --disable-warnings > pytest.log 2>&1
+          code=$?
+          echo "exit_code=$code" >> "$GITHUB_OUTPUT"
+          exit 0
         env:
           DANK_STARTUP_LOG_STYLE: quiet
           DANK_COMMAND_LOG_STYLE: quiet
+
+      - name: Upload pytest log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pytest-log
+          path: pytest.log
+          if-no-files-found: error
+          retention-days: 3
+
+      - name: Fail when unit tests fail
+        if: steps.unit_tests.outputs.exit_code != '0'
+        run: |
+          cat pytest.log
+          exit 1
 
       - name: Run standalone tool checks
         id: standalone
