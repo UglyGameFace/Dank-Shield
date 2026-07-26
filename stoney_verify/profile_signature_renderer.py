@@ -1,27 +1,25 @@
 from __future__ import annotations
 
-"""Compact forum-style profile signature rendering.
+"""Compact member-owned profile signature rendering.
 
-This renderer intentionally shares the configured welcome-card visual language
-(theme, palette, font family, and optional custom background) without reusing
-the large join-card layout or any welcome/join behavior.
+The renderer shares safe visual assets with welcome cards, but it never reads
+welcome-card settings. Member appearance is stored and rendered separately.
 """
 
 import asyncio
 from io import BytesIO
 from pathlib import Path
-from typing import Any, Iterable, Mapping, Optional, Sequence
+from typing import Any, Optional, Sequence
 
 import discord
-from PIL import Image, ImageDraw, ImageFilter, ImageFont, ImageOps
+from PIL import Image, ImageDraw, ImageFilter, ImageFont, ImageOps, ImageStat
 
-from .welcome_card_service import (
-    configured_color_mode,
-    configured_custom_colors,
-    configured_custom_font,
-    configured_font_style_key,
-    configured_theme_key,
-    decode_custom_background,
+from .profile_signature_style import (
+    PROFILE_SIGNATURE_HEIGHT,
+    PROFILE_SIGNATURE_WIDTH,
+    decode_profile_background,
+    decode_profile_custom_font,
+    normalize_profile_appearance,
 )
 from .welcome_card_typography_engine import (
     BUILTIN_THEMES,
@@ -30,10 +28,9 @@ from .welcome_card_typography_engine import (
     parse_hex_color,
 )
 
-SIGNATURE_WIDTH = 1080
-SIGNATURE_HEIGHT = 220
+SIGNATURE_WIDTH = PROFILE_SIGNATURE_WIDTH
+SIGNATURE_HEIGHT = PROFILE_SIGNATURE_HEIGHT
 SIGNATURE_RATIO = SIGNATURE_WIDTH / SIGNATURE_HEIGHT
-_AVATAR_SIZE = 148
 
 _FONT_FAMILIES: dict[str, tuple[str, ...]] = {
     "sans": (
@@ -115,39 +112,75 @@ def _mix(left: tuple[int, int, int], right: tuple[int, int, int], amount: float)
     return tuple(int(left[index] * (1.0 - t) + right[index] * t) for index in range(3))
 
 
-def _resolve_colors(cfg: Any) -> tuple[Any, tuple[int, int, int], tuple[int, int, int]]:
-    theme = BUILTIN_THEMES[configured_theme_key(cfg)]
+def _image_average(data: Optional[bytes]) -> Optional[tuple[int, int, int]]:
+    if not data:
+        return None
+    try:
+        with Image.open(BytesIO(data)) as source:
+            image = ImageOps.fit(source.convert("RGB"), (64, 64), method=Image.Resampling.LANCZOS)
+            stat = ImageStat.Stat(image)
+            return tuple(max(0, min(255, int(value))) for value in stat.mean[:3])
+    except Exception:
+        return None
+
+
+def _resolve_colors(
+    appearance: Any,
+    *,
+    avatar_bytes: bytes,
+    profile_banner_bytes: Optional[bytes],
+    profile_accent: Optional[tuple[int, int, int]],
+) -> tuple[Any, tuple[int, int, int], tuple[int, int, int]]:
+    normalized = normalize_profile_appearance(appearance)
+    theme = BUILTIN_THEMES[str(normalized["theme_key"])]
     primary = tuple(theme.primary)
     secondary = tuple(theme.secondary)
-    if configured_color_mode(cfg) == "custom":
-        custom_primary, custom_secondary = configured_custom_colors(cfg)
-        try:
-            parsed = parse_hex_color(custom_primary)
-            if parsed:
-                primary = parsed
-        except Exception:
-            pass
-        try:
-            parsed = parse_hex_color(custom_secondary)
-            if parsed:
-                secondary = parsed
-        except Exception:
-            pass
+    mode = str(normalized["color_mode"])
+
+    if mode == "custom":
+        parsed_primary = parse_hex_color(normalized.get("custom_primary"))
+        parsed_secondary = parse_hex_color(normalized.get("custom_secondary"))
+        if parsed_primary:
+            primary = parsed_primary
+        if parsed_secondary:
+            secondary = parsed_secondary
+    elif mode == "auto":
+        sampled = _image_average(profile_banner_bytes) or _image_average(avatar_bytes)
+        if profile_accent:
+            primary = tuple(int(value) for value in profile_accent[:3])
+        elif sampled:
+            primary = sampled
+        if sampled:
+            secondary = _mix(sampled, tuple(theme.secondary), 0.42)
+        else:
+            secondary = _mix(primary, tuple(theme.secondary), 0.55)
     return theme, primary, secondary
 
 
-def _background(cfg: Any, theme: Any) -> Image.Image:
-    custom = decode_custom_background(cfg)
-    if custom:
+def _background(
+    appearance: Any,
+    theme: Any,
+    *,
+    primary: tuple[int, int, int],
+    secondary: tuple[int, int, int],
+    profile_banner_bytes: Optional[bytes],
+) -> Image.Image:
+    normalized = normalize_profile_appearance(appearance)
+    custom = decode_profile_background(normalized)
+    source_bytes = custom
+    if source_bytes is None and normalized.get("color_mode") == "auto":
+        source_bytes = profile_banner_bytes
+
+    if source_bytes:
         try:
-            with Image.open(BytesIO(custom)) as source:
+            with Image.open(BytesIO(source_bytes)) as source:
                 image = ImageOps.fit(
                     source.convert("RGBA"),
                     (SIGNATURE_WIDTH, SIGNATURE_HEIGHT),
                     method=Image.Resampling.LANCZOS,
                     centering=(0.5, 0.5),
                 )
-            veil = Image.new("RGBA", image.size, (3, 5, 10, 132))
+            veil = Image.new("RGBA", image.size, (3, 5, 10, 142))
             return Image.alpha_composite(image, veil)
         except Exception:
             pass
@@ -156,15 +189,32 @@ def _background(cfg: Any, theme: Any) -> Image.Image:
     draw = ImageDraw.Draw(canvas, "RGBA")
     for x in range(SIGNATURE_WIDTH):
         amount = x / max(1, SIGNATURE_WIDTH - 1)
-        color = _mix(tuple(theme.background), tuple(theme.panel), amount)
+        base = _mix(tuple(theme.background), tuple(theme.panel), amount)
+        color = _mix(base, primary if amount < 0.5 else secondary, 0.13)
         draw.line((x, 0, x, SIGNATURE_HEIGHT), fill=color + (255,))
     return canvas
 
 
-def _avatar_tile(avatar_bytes: bytes, display_name: str, primary: tuple[int, int, int]) -> Image.Image:
-    tile = Image.new("RGBA", (_AVATAR_SIZE, _AVATAR_SIZE), (0, 0, 0, 0))
-    mask = Image.new("L", tile.size, 0)
-    ImageDraw.Draw(mask).ellipse((0, 0, _AVATAR_SIZE - 1, _AVATAR_SIZE - 1), fill=255)
+def _avatar_mask(size: int, shape: str) -> Image.Image:
+    mask = Image.new("L", (size, size), 0)
+    draw = ImageDraw.Draw(mask)
+    if shape == "rounded":
+        draw.rounded_rectangle((0, 0, size - 1, size - 1), radius=max(16, size // 5), fill=255)
+    else:
+        draw.ellipse((0, 0, size - 1, size - 1), fill=255)
+    return mask
+
+
+def _avatar_tile(
+    avatar_bytes: bytes,
+    display_name: str,
+    primary: tuple[int, int, int],
+    *,
+    size: int,
+    shape: str,
+) -> Image.Image:
+    tile = Image.new("RGBA", (size, size), (0, 0, 0, 0))
+    mask = _avatar_mask(size, shape)
     if avatar_bytes:
         try:
             with Image.open(BytesIO(avatar_bytes)) as source:
@@ -182,16 +232,50 @@ def _avatar_tile(avatar_bytes: bytes, display_name: str, primary: tuple[int, int
     fallback = Image.new("RGBA", tile.size, _mix(primary, (12, 14, 20), 0.62) + (255,))
     fallback_draw = ImageDraw.Draw(fallback)
     initial = (_safe_text(display_name, 1) or "?").upper()
-    font = _font(68, style_key="clean")
+    font = _font(max(34, size // 2), style_key="clean")
     box = fallback_draw.textbbox((0, 0), initial, font=font)
     fallback_draw.text(
-        ((_AVATAR_SIZE - (box[2] - box[0])) / 2, (_AVATAR_SIZE - (box[3] - box[1])) / 2 - 5),
+        ((size - (box[2] - box[0])) / 2, (size - (box[3] - box[1])) / 2 - 4),
         initial,
         font=font,
         fill=(255, 255, 255, 255),
     )
     tile.paste(fallback, (0, 0), mask)
     return tile
+
+
+def _draw_avatar_frame(
+    image: Image.Image,
+    *,
+    x: int,
+    y: int,
+    size: int,
+    shape: str,
+    primary: tuple[int, int, int],
+    panel: tuple[int, int, int],
+    avatar_bytes: bytes,
+    display_name: str,
+) -> None:
+    glow = Image.new("RGBA", image.size, (0, 0, 0, 0))
+    glow_draw = ImageDraw.Draw(glow, "RGBA")
+    bounds = (x - 8, y - 8, x + size + 8, y + size + 8)
+    if shape == "rounded":
+        glow_draw.rounded_rectangle(bounds, radius=max(18, size // 5), fill=primary + (125,))
+    else:
+        glow_draw.ellipse(bounds, fill=primary + (125,))
+    glow = glow.filter(ImageFilter.GaussianBlur(13))
+    image.alpha_composite(glow)
+
+    draw = ImageDraw.Draw(image, "RGBA")
+    frame = (x - 5, y - 5, x + size + 5, y + size + 5)
+    if shape == "rounded":
+        draw.rounded_rectangle(frame, radius=max(20, size // 5), fill=panel + (255,), outline=primary + (235,), width=4)
+    else:
+        draw.ellipse(frame, fill=panel + (255,), outline=primary + (235,), width=4)
+    image.alpha_composite(
+        _avatar_tile(avatar_bytes, display_name, primary, size=size, shape=shape),
+        (x, y),
+    )
 
 
 def _chip_width(draw: ImageDraw.ImageDraw, label: str, font: ImageFont.ImageFont) -> int:
@@ -210,7 +294,7 @@ def _draw_chip(
     text: tuple[int, int, int],
 ) -> int:
     width = _chip_width(draw, label, font)
-    draw.rounded_rectangle((x, y, x + width, y + 32), radius=14, fill=accent + (56,), outline=accent + (145,), width=1)
+    draw.rounded_rectangle((x, y, x + width, y + 32), radius=14, fill=accent + (58,), outline=accent + (150,), width=1)
     draw.text((x + 12, y + 7), label, font=font, fill=text + (255,))
     return width
 
@@ -224,7 +308,7 @@ def _pack_chips(
     max_x: int,
     font: ImageFont.ImageFont,
     text: tuple[int, int, int],
-    max_rows: int = 2,
+    max_rows: int,
 ) -> None:
     x = start_x
     y = start_y
@@ -244,6 +328,44 @@ def _pack_chips(
         x += width + 8
 
 
+def _layout_metrics(layout: str) -> dict[str, int]:
+    if layout == "minimal":
+        return {
+            "avatar_size": 108,
+            "avatar_x": 40,
+            "content_x": 184,
+            "eyebrow_y": 45,
+            "name_y": 66,
+            "name_start": 42,
+            "name_min": 27,
+            "chip_y": 132,
+            "chip_rows": 1,
+        }
+    if layout == "showcase":
+        return {
+            "avatar_size": 166,
+            "avatar_x": 34,
+            "content_x": 238,
+            "eyebrow_y": 30,
+            "name_y": 52,
+            "name_start": 52,
+            "name_min": 30,
+            "chip_y": 126,
+            "chip_rows": 2,
+        }
+    return {
+        "avatar_size": 148,
+        "avatar_x": 42,
+        "content_x": 220,
+        "eyebrow_y": 34,
+        "name_y": 55,
+        "name_start": 46,
+        "name_min": 28,
+        "chip_y": 124,
+        "chip_rows": 2,
+    }
+
+
 def render_profile_signature(
     *,
     avatar_bytes: bytes,
@@ -252,49 +374,61 @@ def render_profile_signature(
     role_labels: Sequence[str],
     date_labels: Sequence[str],
     platform_labels: Sequence[str],
-    cfg: Any,
+    appearance: Any,
+    profile_banner_bytes: Optional[bytes] = None,
+    profile_accent: Optional[tuple[int, int, int]] = None,
 ) -> bytes:
-    theme, primary, secondary = _resolve_colors(cfg)
-    style_key = configured_font_style_key(cfg)
-    custom_font, _font_name = configured_custom_font(cfg)
+    normalized = normalize_profile_appearance(appearance)
+    theme, primary, secondary = _resolve_colors(
+        normalized,
+        avatar_bytes=avatar_bytes,
+        profile_banner_bytes=profile_banner_bytes,
+        profile_accent=profile_accent,
+    )
+    style_key = str(normalized["font_style"])
+    custom_font, _font_name = decode_profile_custom_font(normalized)
+    layout = str(normalized["layout"])
+    shape = str(normalized["avatar_shape"])
+    metrics = _layout_metrics(layout)
 
-    image = _background(cfg, theme)
+    image = _background(
+        normalized,
+        theme,
+        primary=primary,
+        secondary=secondary,
+        profile_banner_bytes=profile_banner_bytes,
+    )
     draw = ImageDraw.Draw(image, "RGBA")
 
-    # Welcome-card visual language, compressed into a forum-signature footprint.
-    draw.ellipse((810, -170, 1180, 200), fill=primary + (24,), outline=primary + (78,), width=2)
-    draw.ellipse((880, -90, 1210, 240), fill=secondary + (18,), outline=secondary + (72,), width=2)
-    for offset in range(-80, 1180, 92):
-        draw.line((offset, 220, offset + 180, 0), fill=secondary + (20,), width=2)
+    if layout != "minimal":
+        draw.ellipse((810, -170, 1180, 200), fill=primary + (24,), outline=primary + (78,), width=2)
+        draw.ellipse((880, -90, 1210, 240), fill=secondary + (18,), outline=secondary + (72,), width=2)
+        for offset in range(-80, 1180, 92):
+            draw.line((offset, 220, offset + 180, 0), fill=secondary + (18,), width=2)
 
+    panel_alpha = 205 if layout == "minimal" else 218
     panel = (18, 18, SIGNATURE_WIDTH - 18, SIGNATURE_HEIGHT - 18)
-    draw.rounded_rectangle(panel, radius=28, fill=tuple(theme.panel) + (218,), outline=primary + (125,), width=2)
+    draw.rounded_rectangle(panel, radius=28, fill=tuple(theme.panel) + (panel_alpha,), outline=primary + (125,), width=2)
 
-    avatar_x = 42
-    avatar_y = (SIGNATURE_HEIGHT - _AVATAR_SIZE) // 2
-    glow = Image.new("RGBA", image.size, (0, 0, 0, 0))
-    glow_draw = ImageDraw.Draw(glow, "RGBA")
-    glow_draw.ellipse(
-        (avatar_x - 8, avatar_y - 8, avatar_x + _AVATAR_SIZE + 8, avatar_y + _AVATAR_SIZE + 8),
-        fill=primary + (130,),
+    avatar_size = metrics["avatar_size"]
+    avatar_x = metrics["avatar_x"]
+    avatar_y = (SIGNATURE_HEIGHT - avatar_size) // 2
+    _draw_avatar_frame(
+        image,
+        x=avatar_x,
+        y=avatar_y,
+        size=avatar_size,
+        shape=shape,
+        primary=primary,
+        panel=tuple(theme.panel),
+        avatar_bytes=avatar_bytes,
+        display_name=display_name,
     )
-    glow = glow.filter(ImageFilter.GaussianBlur(13))
-    image = Image.alpha_composite(image, glow)
-    draw = ImageDraw.Draw(image, "RGBA")
-    draw.ellipse(
-        (avatar_x - 5, avatar_y - 5, avatar_x + _AVATAR_SIZE + 5, avatar_y + _AVATAR_SIZE + 5),
-        fill=tuple(theme.panel) + (255,),
-        outline=primary + (235,),
-        width=4,
-    )
-    image.alpha_composite(_avatar_tile(avatar_bytes, display_name, primary), (avatar_x, avatar_y))
     draw = ImageDraw.Draw(image, "RGBA")
 
     text = tuple(theme.text)
-    muted = tuple(theme.muted)
-    content_x = 220
+    content_x = metrics["content_x"]
     right_edge = SIGNATURE_WIDTH - 42
-
     eyebrow_font = _font(15, style_key=style_key, custom_font=custom_font, regular=True)
     name_text = _safe_text(display_name, 80) or "Member"
     name_font = _fit_font(
@@ -302,15 +436,24 @@ def render_profile_signature(
         name_text,
         style_key=style_key,
         custom_font=custom_font,
-        max_width=760,
-        start=46,
-        minimum=28,
+        max_width=max(420, right_edge - content_x),
+        start=metrics["name_start"],
+        minimum=metrics["name_min"],
     )
     chip_font = _font(15, style_key=style_key, custom_font=custom_font, regular=True)
 
-    eyebrow = f"MEMBER SIGNATURE  •  {_safe_text(server_name, 48).upper()}"
-    draw.text((content_x, 34), eyebrow, font=eyebrow_font, fill=primary + (255,))
-    draw.text((content_x, 55), name_text, font=name_font, fill=text + (255,), stroke_width=1, stroke_fill=(0, 0, 0, 170))
+    eyebrow = "MEMBER SIGNATURE"
+    if normalized.get("show_server_name", True):
+        eyebrow += "  |  " + _safe_text(server_name, 48).upper()
+    draw.text((content_x, metrics["eyebrow_y"]), eyebrow, font=eyebrow_font, fill=primary + (255,))
+    draw.text(
+        (content_x, metrics["name_y"]),
+        name_text,
+        font=name_font,
+        fill=text + (255,),
+        stroke_width=1,
+        stroke_fill=(0, 0, 0, 170),
+    )
 
     chips: list[tuple[str, tuple[int, int, int]]] = []
     for index, label in enumerate(role_labels[:4]):
@@ -326,11 +469,11 @@ def render_profile_signature(
         draw,
         chips,
         start_x=content_x,
-        start_y=124,
+        start_y=metrics["chip_y"],
         max_x=right_edge,
         font=chip_font,
         text=text,
-        max_rows=2,
+        max_rows=metrics["chip_rows"],
     )
 
     output = BytesIO()
@@ -349,15 +492,39 @@ async def _avatar_bytes(member: discord.Member) -> bytes:
         return b""
 
 
+async def _member_profile_visuals(
+    member: discord.Member,
+    *,
+    enabled: bool,
+) -> tuple[Optional[bytes], Optional[tuple[int, int, int]]]:
+    if not enabled:
+        return None, None
+    try:
+        from .welcome_card_service import _profile_visuals
+
+        return await _profile_visuals(member)
+    except Exception:
+        return None, None
+
+
 async def render_member_profile_signature(
     member: discord.Member,
     *,
-    cfg: Any,
+    appearance: Any,
     role_labels: Sequence[str],
     date_labels: Sequence[str],
     platform_labels: Sequence[str],
 ) -> bytes:
-    avatar = await _avatar_bytes(member)
+    normalized = normalize_profile_appearance(appearance)
+    avatar_task = asyncio.create_task(_avatar_bytes(member))
+    visuals_task = asyncio.create_task(
+        _member_profile_visuals(
+            member,
+            enabled=str(normalized.get("color_mode")) == "auto",
+        )
+    )
+    avatar = await avatar_task
+    banner, accent = await visuals_task
     return await asyncio.to_thread(
         render_profile_signature,
         avatar_bytes=avatar,
@@ -366,7 +533,9 @@ async def render_member_profile_signature(
         role_labels=list(role_labels),
         date_labels=list(date_labels),
         platform_labels=list(platform_labels),
-        cfg=cfg,
+        appearance=normalized,
+        profile_banner_bytes=banner,
+        profile_accent=accent,
     )
 
 
