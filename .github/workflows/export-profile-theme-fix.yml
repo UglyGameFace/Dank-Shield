@@ -22,7 +22,26 @@ jobs:
           python-version: '3.11'
 
       - name: Materialize scoped correction
-        run: python tools/materialize_profile_theme_fix.py
+        shell: bash
+        run: |
+          set +e
+          python tools/materialize_profile_theme_fix.py > materialize.log 2>&1
+          status=$?
+          set -e
+          cat materialize.log
+          printf '%s' "$status" > materialize.status
+
+      - name: Upload materializer diagnostics
+        uses: actions/upload-artifact@v4
+        with:
+          name: profile-theme-materializer-log
+          path: |
+            materialize.log
+            materialize.status
+          if-no-files-found: error
+
+      - name: Verify materialization
+        run: test "$(cat materialize.status)" = "0"
 
       - name: Install dependencies
         run: |
