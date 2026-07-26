@@ -2,7 +2,7 @@
 
 ## DS-PROFILE-STUDIO-LIVE-005 — Complete live Profile Signature studio smoke correction
 
-**Status:** IMPLEMENTED / EXACT-HEAD VALIDATION REQUIRED
+**Status:** CLEAN IMPLEMENTATION / EXACT-HEAD CI REQUIRED
 **Branch:** `fix/profile-followup-payload`
 **PR:** `#134`
 **Base:** current `main`
@@ -34,13 +34,13 @@ Do not switch to unrelated implementation work until the Profile Signature studi
 - [ ] Changed Python modules compile.
 - [ ] Full unit suite passes.
 - [ ] Standalone checks and every repository audit pass.
-- [ ] Branch is conflict-free with current `main`.
+- [x] Branch is conflict-free with current `main`.
 - [ ] Live Discord smoke confirms profile Preview and at least one appearance save.
 
 ## Cleanup
 
-- Temporary patch transport files are removed before final validation.
-- No compatibility shim, monkey patch, duplicate helper, or temporary runtime path remains.
+- [x] Temporary patch transport files were removed before final validation.
+- [x] No compatibility shim, monkey patch, duplicate helper, or temporary runtime path remains.
 
 ## Backlog
 
