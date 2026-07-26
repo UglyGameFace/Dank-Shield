@@ -38,16 +38,15 @@ Do not switch to unrelated implementation work until this correction reaches Def
 - [x] Full-suite diagnostic completed: 706 passed and six stale behavior contracts were identified.
 - [x] All six stale contracts were corrected and their affected regression modules passed.
 - [x] Setup-safety ownership contract now recognizes the dedicated Welcome & Join destination.
-- [ ] Exact-head full unit suite, standalone checks, and every repository audit pass.
-- [x] PR is zero commits behind `main` before prerequisite PR #131 merges.
+- [x] PR #131 was cleaned to two non-conflicting diagnostic files, passed exact-head CI, and was squash-merged as `515123016cb72cefba93d452440798b81247d8f7`.
+- [x] PR #132 was merged with current `main` and is conflict-free.
+- [ ] Exact-head full unit suite, standalone checks, and every repository audit pass on the synchronized branch.
 - [x] No unresolved review threads or submitted blocking reviews.
-- [x] Owner explicitly approved handling and merging PRs #131 and #132.
+- [x] Owner explicitly approved merging PRs #131 and #132.
 
-## Merge order
+## Remaining action
 
-1. Merge PR #131 as the non-conflicting reusable command-size diagnostic prerequisite.
-2. Reconfirm PR #132 is mergeable against the updated `main`.
-3. Merge PR #132 after exact-head CI succeeds.
+Squash-merge PR #132 immediately after the synchronized exact-head CI succeeds.
 
 ## Backlog observation — not active implementation
 
