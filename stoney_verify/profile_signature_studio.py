@@ -99,12 +99,15 @@ async def _private(
     file: Optional[discord.File] = None,
 ) -> None:
     payload: dict[str, Any] = {
-        "content": content,
-        "embed": embed,
-        "view": view,
         "ephemeral": True,
         "allowed_mentions": discord.AllowedMentions.none(),
     }
+    if content:
+        payload["content"] = content
+    if embed is not None:
+        payload["embed"] = embed
+    if view is not None:
+        payload["view"] = view
     if file is not None:
         payload["file"] = file
     if not interaction.response.is_done():

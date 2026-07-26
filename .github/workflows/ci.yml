@@ -1,66 +1,84 @@
-name: Apply verified profile payload fix
+name: Dank Shield CI
 
 on:
+  pull_request:
   push:
     branches:
-      - fix/profile-followup-payload
+      - main
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
-  apply:
-    if: github.actor != 'github-actions[bot]'
+  python-compile:
+    name: Python compile check
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 15
+
     steps:
-      - name: Check out implementation branch
+      - name: Check out repository
         uses: actions/checkout@v4
         with:
-          ref: fix/profile-followup-payload
           fetch-depth: 0
           show-progress: false
 
-      - name: Decode verified source bundle
-        shell: bash
-        run: |
-          python tools/test_emit_profile_followup_patch.py > /tmp/profile-patch-output.txt 2>&1 || true
-          python - <<'PY'
-          from pathlib import Path
-          import base64
-          import gzip
-          import json
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
 
-          output = Path('/tmp/profile-patch-output.txt').read_text(encoding='utf-8')
-          line = next(
-              (line for line in output.splitlines() if line.startswith('PROFILE_PATCH_BUNDLE=')),
-              None,
-          )
-          if line is None:
-              raise SystemExit(output)
-          files = json.loads(
-              gzip.decompress(base64.b64decode(line.split('=', 1)[1])).decode('utf-8')
-          )
-          for name, content in files.items():
-              path = Path(name)
-              path.parent.mkdir(parents=True, exist_ok=True)
-              path.write_text(content, encoding='utf-8')
-          PY
-
-      - name: Restore normal CI and remove transport files
-        shell: bash
+      - name: Install dependencies
         run: |
-          git show origin/main:.github/workflows/ci.yml > .github/workflows/ci.yml
-          rm -f .github/workflows/apply-profile-followup-payload-fix.yml
-          rm -f tools/test_emit_profile_followup_patch.py
-          rm -f tests/test_000_emit_profile_followup_patch.py
+          python -m pip install --upgrade pip -q
+          pip install -q -r requirements.txt
+          pip install -q pytest
 
-      - name: Commit clean implementation
-        shell: bash
+      - name: Check committed diff whitespace
+        run: git diff --check "$(git merge-base origin/main HEAD)"..HEAD
+
+      - name: Compile Python modules
+        run: python -m compileall -q stoney_verify main.py tools
+
+      - name: Run unit test suite
+        run: python -m pytest tests/ -q --tb=short --disable-warnings
+        env:
+          DANK_STARTUP_LOG_STYLE: quiet
+          DANK_COMMAND_LOG_STYLE: quiet
+
+      - name: Run standalone tool checks
         run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add -A
-          git diff --cached --check
-          git commit -m "Fix deferred UI follow-up payloads"
-          git push origin HEAD:fix/profile-followup-payload
+          status=0
+          for f in tools/test_*.py; do
+            echo "::group::$f"
+            python "$f" || status=1
+            echo "::endgroup::"
+          done
+          exit $status
+        env:
+          DANK_STARTUP_LOG_STYLE: quiet
+          DANK_COMMAND_LOG_STYLE: quiet
+
+      - name: Audit public setup text and isolation
+        run: python tools/audit_public_setup.py
+
+      - name: Audit canonical public command surface
+        run: python tools/audit_public_command_surface.py
+
+      - name: Audit public command surface and startup friction
+        run: python tools/audit_public_command_friction.py
+
+      - name: Audit public invite permissions
+        run: python tools/audit_public_invite_permissions.py
+
+      - name: Audit setup safety rules
+        run: python tools/audit_setup_safety.py
+
+      - name: Audit Dank Design Smart Auto-Detect
+        run: python tools/audit_dank_design_smart_auto_detect.py
+
+      - name: Audit role truth ownership
+        run: python tools/audit_role_truth.py
+
+      - name: Audit event boundary ownership
+        run: python tools/audit_event_boundary.py
