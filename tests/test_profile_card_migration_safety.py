@@ -5,6 +5,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 MIGRATIONS = ROOT / "supabase" / "migrations"
 PROFILE_MIGRATION = MIGRATIONS / "20260725_live_profile_cards.sql"
+ORIGINAL_GUILD_CONFIG_MIGRATION = MIGRATIONS / "20260426_create_guild_configs.sql"
 GUILD_CONFIG_MIGRATION = MIGRATIONS / "202604260001_guild_configs.sql"
 TICKET_PARITY_MIGRATION = MIGRATIONS / "20260424_tickettool_parity_ticket_columns.sql"
 
@@ -35,6 +36,22 @@ def test_ticket_parity_migration_skips_missing_legacy_table_safely():
     assert guard < notice < alter
     assert "create table" not in source
     assert "execute $ddl$" in source
+
+
+def test_original_guild_config_migration_reconciles_compatibility_columns_first():
+    source = ORIGINAL_GUILD_CONFIG_MIGRATION.read_text(encoding="utf-8")
+
+    reconciliation = source.index("alter table public.guild_configs")
+    config_column = source.index("add column if not exists config")
+    meta_column = source.index("add column if not exists meta")
+    updated_column = source.index("add column if not exists updated_at")
+    updated_index = source.index("idx_guild_configs_updated_at")
+    config_comment = source.index("comment on column public.guild_configs.config")
+    meta_comment = source.index("comment on column public.guild_configs.meta")
+
+    assert reconciliation < config_column < updated_index < config_comment
+    assert reconciliation < meta_column < updated_index < meta_comment
+    assert reconciliation < updated_column < updated_index
 
 
 def test_existing_guild_config_migration_reconciles_before_indexing():
