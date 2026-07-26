@@ -228,21 +228,54 @@ jobs:
 
       - name: Run production audits
         if: steps.patch.outputs.exit_code == '0'
+        id: production_audits
         run: |
-          python tools/audit_repository_path_portability.py
-          python tools/audit_public_setup.py
-          python tools/audit_public_command_surface.py
-          python tools/audit_public_command_friction.py
-          python tools/audit_public_invite_permissions.py
-          python tools/audit_setup_safety.py
-          python tools/audit_dank_design_smart_auto_detect.py
-          python tools/audit_role_truth.py
-          python tools/audit_event_boundary.py
+          set +e
+          : > profile-setup-audits.log
+          status=0
+          for f in \
+            tools/audit_repository_path_portability.py \
+            tools/audit_public_setup.py \
+            tools/audit_public_command_surface.py \
+            tools/audit_public_command_friction.py \
+            tools/audit_public_invite_permissions.py \
+            tools/audit_setup_safety.py \
+            tools/audit_dank_design_smart_auto_detect.py \
+            tools/audit_role_truth.py \
+            tools/audit_event_boundary.py; do
+            {
+              echo "===== $f ====="
+              python "$f"
+              code=$?
+              echo "exit_code=$code"
+              echo
+            } >> profile-setup-audits.log 2>&1
+            if [ "$code" -ne 0 ]; then
+              status=1
+            fi
+          done
+          echo "exit_code=$status" >> "$GITHUB_OUTPUT"
+          exit 0
+
+      - name: Upload production audit log
+        if: steps.patch.outputs.exit_code == '0' && always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: profile-setup-audits-log
+          path: profile-setup-audits.log
+          if-no-files-found: error
+          retention-days: 3
+
+      - name: Fail when a production audit fails
+        if: steps.patch.outputs.exit_code == '0' && steps.production_audits.outputs.exit_code != '0'
+        run: |
+          cat profile-setup-audits.log
+          exit 1
 
       - name: Inspect cleanup and whitespace
         if: steps.patch.outputs.exit_code == '0'
         run: |
-          rm -f profile-setup-full-tests.log
+          rm -f profile-setup-full-tests.log profile-setup-audits.log
           git diff --check
           test ! -f tools/apply_profile_card_setup_ux.py
           find . -type d -name __pycache__ -prune -exec rm -rf {} +
