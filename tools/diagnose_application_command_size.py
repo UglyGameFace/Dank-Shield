@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import inspect
 import json
 import os
 import sys
@@ -49,24 +50,12 @@ def option_path_size(option: dict[str, Any], prefix: str) -> list[tuple[str, int
     return rows
 
 
-def counted_fields(value: Any, path: str = "") -> list[tuple[int, str, str]]:
-    rows: list[tuple[int, str, str]] = []
-    if isinstance(value, dict):
-        name = str(value.get("name") or "")
-        here = f"{path} {name}".strip() if name else path
-        for key, child in value.items():
-            if key in COUNTED_KEYS and isinstance(child, str):
-                rows.append((len(child), f"{here}.{key}", child))
-            elif key.endswith("_localizations") and isinstance(child, dict):
-                for locale, text in child.items():
-                    rendered = str(text)
-                    rows.append((len(rendered), f"{here}.{key}[{locale}]", rendered))
-            else:
-                rows.extend(counted_fields(child, here))
-    elif isinstance(value, list):
-        for child in value:
-            rows.extend(counted_fields(child, path))
-    return rows
+def print_source(label: str, value: Any) -> None:
+    try:
+        print(f"\n===== SOURCE {label} =====")
+        print(inspect.getsource(value))
+    except Exception as exc:
+        print(f"SOURCE_ERROR {label}: {type(exc).__name__}: {exc}")
 
 
 def main() -> int:
@@ -88,12 +77,22 @@ def main() -> int:
         for option in payload.get("options") or []:
             if isinstance(option, dict):
                 rows.extend(option_path_size(option, f"/{command_name}"))
-        for path, size in sorted(rows, key=lambda item: item[1], reverse=True)[:40]:
+        for path, size in sorted(rows, key=lambda item: item[1], reverse=True)[:20]:
             print(f"  {size:4d}  {path}")
-        if command_name == "dank":
-            print("LARGEST COUNTED FIELDS")
-            for length, path, text in sorted(counted_fields(payload, "/dank"), reverse=True)[:120]:
-                print(f"  {length:3d}  {path} = {text}")
+
+    from stoney_verify.commands_ext import public_setup_recommend as setup
+    from stoney_verify.commands_ext import public_profile_cards_core as profile
+    from stoney_verify.commands_ext import public_welcome_card_studio as welcome_studio
+
+    for label, value in (
+        ("AdvancedSettingsHubView", setup.AdvancedSettingsHubView),
+        ("AdvancedMemberExperienceView", setup.AdvancedMemberExperienceView),
+        ("AdvancedAppearanceView", setup.AdvancedAppearanceView),
+        ("ProfileSettingsView", profile.ProfileSettingsView),
+        ("profile_settings", profile.profile_settings),
+        ("welcome_studio_entry", welcome_studio.welcome_card_style),
+    ):
+        print_source(label, value)
     return 1 if failed else 0
 
 
