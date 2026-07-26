@@ -4,7 +4,7 @@ import asyncio
 from typing import Any, Awaitable, Callable
 
 from stoney_verify import profile_signature_studio
-from stoney_verify.commands_ext import public_command_hub
+from stoney_verify.commands_ext import public_command_hub, public_profile_cards_core
 from stoney_verify import welcome_setup_ui
 
 
@@ -56,7 +56,11 @@ def test_profile_preview_followup_omits_none_view() -> None:
 
 
 def test_content_only_followups_omit_none_optional_fields() -> None:
-    for sender in (public_command_hub._private, welcome_setup_ui._send_private):
+    for sender in (
+        public_command_hub._private,
+        public_profile_cards_core._send_private,
+        welcome_setup_ui._send_private,
+    ):
         payload = _run(sender, content="ok")
         assert payload["content"] == "ok"
         assert "embed" not in payload

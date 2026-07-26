@@ -615,6 +615,36 @@ def _render_style(style_key: Any, custom_font_bytes: Optional[bytes]) -> Welcome
     return FONT_STYLES.get(key, FONT_STYLES[DEFAULT_FONT_STYLE_KEY])
 
 
+def render_styled_text_tile(
+    text: Any,
+    *,
+    style_key: Any,
+    start_size: int,
+    min_size: int,
+    max_width: int,
+    max_height: int,
+    primary: tuple[int, int, int],
+    secondary: tuple[int, int, int],
+    role: str = "name",
+    custom_font_bytes: Optional[bytes] = None,
+) -> Image.Image:
+    """Render one fitted typography tile using the canonical style effects."""
+    style = _render_style(style_key, custom_font_bytes)
+    _rendered, tile = _fitted_tile(
+        str(text or ""),
+        style=style,
+        start_size=start_size,
+        min_size=min_size,
+        max_width=max_width,
+        max_height=max_height,
+        role=role,
+        primary=primary,
+        secondary=secondary,
+        custom_font_bytes=custom_font_bytes,
+    )
+    return tile
+
+
 def _draw_sparkle(
     draw: ImageDraw.ImageDraw,
     center: tuple[int, int],
@@ -970,6 +1000,7 @@ __all__ = [
     "parse_hex_color",
     "render_color_catalog",
     "render_font_catalog",
+    "render_styled_text_tile",
     "render_welcome_card",
     "resolve_card_palette",
     "validate_custom_background",

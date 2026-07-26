@@ -71,6 +71,7 @@ async def _send_private(
     interaction: discord.Interaction,
     **kwargs: Any,
 ) -> None:
+    kwargs = {key: value for key, value in kwargs.items() if value is not None}
     kwargs.setdefault("ephemeral", True)
     kwargs.setdefault("allowed_mentions", discord.AllowedMentions.none())
     if not interaction.response.is_done():
@@ -651,7 +652,11 @@ def _live_status_embed(guild: discord.Guild, config: Mapping[str, Any]) -> disco
     embed.add_field(name="Status", value="Enabled" if live.enabled else "Disabled", inline=True)
     embed.add_field(
         name="Allowed fields",
-        value=", ".join(sorted(live.allowed_fields)) if live.allowed_fields else "None",
+        value=(
+            ", ".join(sorted(live.allowed_fields))
+            if live.allowed_fields
+            else "None • basic avatar/name signatures still post"
+        ),
         inline=True,
     )
     embed.add_field(
@@ -697,6 +702,8 @@ async def profile_live_cards(
             missing.append("Embed Links")
         if not permissions.read_message_history:
             missing.append("Read Message History")
+        if not permissions.attach_files:
+            missing.append("Attach Files")
         if missing:
             return await _safe_ephemeral(
                 interaction,
