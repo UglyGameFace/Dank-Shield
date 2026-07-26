@@ -22,43 +22,7 @@ jobs:
           python-version: '3.11'
 
       - name: Materialize scoped correction
-        shell: bash
-        run: |
-          set +e
-          python - <<'PY' > materialize.log 2>&1
-          from pathlib import Path
-
-          workflow = Path('.github/workflows/apply-profile-theme-fix.yml').read_text(encoding='utf-8')
-          marker = "          python - <<'PY'\n"
-          start = workflow.index(marker) + len(marker)
-          end = workflow.index("\n          PY", start)
-          raw_script = workflow[start:end]
-          script = "\n".join(
-              line[10:] if line.startswith("          ") else line
-              for line in raw_script.splitlines()
-          ) + "\n"
-          script = script.replace(
-              'raise SystemExit(f"expected one match in {path}, found {count}")',
-              'raise SystemExit(f"expected one match in {path}, found {count}; expected={old!r}")',
-          )
-          exec(compile(script, 'profile-theme-materializer', 'exec'))
-          PY
-          status=$?
-          set -e
-          cat materialize.log
-          printf '%s' "$status" > materialize.status
-
-      - name: Upload materialization diagnostics
-        uses: actions/upload-artifact@v4
-        with:
-          name: profile-theme-materialization-log
-          path: |
-            materialize.log
-            materialize.status
-          if-no-files-found: error
-
-      - name: Verify materialization
-        run: test "$(cat materialize.status)" = "0"
+        run: python tools/materialize_profile_theme_fix.py
 
       - name: Install dependencies
         run: |
