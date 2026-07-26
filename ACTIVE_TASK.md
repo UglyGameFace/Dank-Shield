@@ -2,7 +2,7 @@
 
 ## DS-PROFILE-STUDIO-LIVE-007 — Restore live signatures and make every editor control real
 
-**Status:** CLEAN IMPLEMENTATION / EXACT-HEAD CI REQUIRED
+**Status:** CI GREEN / READY FOR DEPLOYED LIVE SMOKE
 **Branch:** `fix/profile-signature-runtime-editor`
 **PR:** `#136`
 **Base:** current `main`
@@ -17,7 +17,7 @@ Do not switch to unrelated implementation work until configured live-signature c
 - The runtime always supplied `view=None` when the member had no clickable platform links. Discord rejects explicit null view payloads on this send path.
 - The send exception was swallowed, so the channel looked ignored and the logs did not identify the failure.
 - A card was suppressed entirely when every optional field was hidden, despite the renderer already supporting a basic avatar/name signature.
-- Compact font rendering used only the broad font family and ignored the advertised effect, tracking, shear, uppercase, outline, chrome, pixel, and glow settings.
+- Compact font rendering used only the broad font family and ignored the advertised effect, tracking, shear, uppercase, outline, chrome, pixel, stencil, and glow settings.
 - The fallback channel command did not verify Attach Files even though compact signatures are image attachments.
 
 ## Scope
@@ -36,9 +36,11 @@ Do not switch to unrelated implementation work until configured live-signature c
 - [x] Basic private signature renders with zero optional fields.
 - [x] All 16 built-in font styles produce distinct compact output.
 - [x] Theme, colors, background, layout, and frame output tests pass.
-- [x] Changed Python modules compile in the focused gate.
-- [ ] Full unit suite and repository audits pass on exact clean head.
-- [x] Branch is conflict-free with current `main` before exact-head CI.
+- [x] Changed Python modules compile.
+- [x] Full unit suite passes.
+- [x] Standalone checks and every repository audit pass.
+- [x] Application-command size diagnostics pass.
+- [x] Branch is conflict-free with current `main`.
 - [ ] Deployed Discord smoke posts a live card and visibly changes at least two fonts plus two other appearance controls.
 
 ## Cleanup
