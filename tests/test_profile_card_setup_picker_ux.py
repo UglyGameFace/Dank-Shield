@@ -48,6 +48,29 @@ def test_setup_refuses_bad_channel_permissions_before_enabling():
     )
 
 
+def test_slow_setup_actions_acknowledge_before_database_or_render_work():
+    add_welcome = SETUP_UI.split("class _AddWelcomeChannelButton", 1)[1].split(
+        "class _DisableAllButton", 1
+    )[0]
+    preview = SETUP_UI.split("class _PreviewButton", 1)[1].split(
+        "class _RefreshButton", 1
+    )[0]
+    open_setup = SETUP_UI.split("async def open_profile_card_setup", 1)[1].split(
+        "__all__", 1
+    )[0]
+
+    assert add_welcome.index("await interaction.response.defer()") < add_welcome.index(
+        "get_guild_config("
+    )
+    assert preview.index("await interaction.response.defer(ephemeral=True, thinking=True)") < preview.index(
+        "get_guild_config("
+    )
+    assert "await interaction.edit_original_response(" in preview
+    assert open_setup.index("await interaction.response.defer()") < open_setup.index(
+        "get_guild_config("
+    )
+
+
 def test_setup_can_disable_and_clean_only_bot_owned_cards():
     assert 'label="Disable All"' in SETUP_UI
     assert "runtime.disable_channel" in SETUP_UI
