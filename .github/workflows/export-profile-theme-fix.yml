@@ -37,6 +37,10 @@ jobs:
               line[10:] if line.startswith("          ") else line
               for line in raw_script.splitlines()
           ) + "\n"
+          script = script.replace(
+              'raise SystemExit(f"expected one match in {path}, found {count}")',
+              'raise SystemExit(f"expected one match in {path}, found {count}; expected={old!r}")',
+          )
           exec(compile(script, 'profile-theme-materializer', 'exec'))
           PY
           status=$?
