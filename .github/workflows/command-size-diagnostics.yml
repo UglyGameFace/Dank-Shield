@@ -32,9 +32,19 @@ jobs:
           cat command-size.txt
           echo "status=$status" >> "$GITHUB_OUTPUT"
           exit 0
-      - name: Upload diagnostics
+      - name: Upload diagnostics and focused source snapshot
         uses: actions/upload-artifact@v4
         with:
           name: application-command-size
-          path: command-size.txt
+          path: |
+            command-size.txt
+            stoney_verify/profile_signature_renderer.py
+            stoney_verify/profile_card_runtime.py
+            stoney_verify/commands_ext/public_profile_cards.py
+            stoney_verify/commands_ext/public_profile_cards_core.py
+            stoney_verify/commands_ext/public_setup_recommend.py
+            stoney_verify/commands_ext/public_welcome_group.py
+            stoney_verify/commands_ext/public_welcome_card_studio.py
+            stoney_verify/commands.py
+            .github/workflows/ci.yml
           if-no-files-found: error
