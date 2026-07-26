@@ -29,6 +29,19 @@ def test_registration_uses_commands_py_and_no_startup_guard():
     assert "monkey" not in PROFILE_RUNTIME.lower()
 
 
+def test_profile_runtime_registration_has_an_independent_failure_boundary():
+    startup = COMMANDS.split("# Register split slash commands", 1)[1].split(
+        "# Register centralized component interaction handler", 1
+    )[0]
+    assert startup.count("try:") >= 2
+    assert "failed to register public profile cards" in startup
+
+    extra = COMMANDS.split("def register_extra_commands", 1)[1].split(
+        "# Events", 1
+    )[0]
+    assert "register_extra_commands profile cards failed" in extra
+
+
 def test_runtime_owns_exactly_one_additive_message_listener():
     assert PROFILE_COMMANDS.count('bot.add_listener(runtime.on_message, "on_message")') == 1
     assert "@bot.event" not in PROFILE_COMMANDS
