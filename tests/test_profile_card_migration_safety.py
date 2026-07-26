@@ -43,7 +43,8 @@ def test_later_guild_config_migration_reconciles_the_earlier_schema():
 
     assert reconciliation < enabled_index < seed_insert
     assert reconciliation < beta_index < seed_insert
-    assert "CREATE TABLE IF NOT EXISTS does not add columns" in source
+    assert "CREATE TABLE IF NOT EXISTS" in source
+    assert "explicitly reconcile every column" in source
 
 
 def test_live_profile_card_migration_is_idempotent_and_service_role_only():
