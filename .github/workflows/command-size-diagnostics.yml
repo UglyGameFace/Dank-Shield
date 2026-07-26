@@ -1,0 +1,50 @@
+name: Application Command Size Diagnostics
+
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  command-size:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip -q
+          pip install -q -r requirements.txt
+      - name: Measure application command character budgets
+        id: audit
+        shell: bash
+        run: |
+          set +e
+          python tools/diagnose_application_command_size.py > command-size.txt 2>&1
+          status=$?
+          cat command-size.txt
+          echo "status=$status" >> "$GITHUB_OUTPUT"
+          exit 0
+      - name: Upload diagnostics and focused source snapshot
+        uses: actions/upload-artifact@v4
+        with:
+          name: application-command-size
+          path: |
+            command-size.txt
+            stoney_verify/profile_signature_renderer.py
+            stoney_verify/profile_card_runtime.py
+            stoney_verify/commands_ext/public_profile_cards.py
+            stoney_verify/commands_ext/public_profile_cards_core.py
+            stoney_verify/commands_ext/public_setup_recommend.py
+            stoney_verify/commands_ext/public_welcome_group.py
+            stoney_verify/commands_ext/public_welcome_card_studio.py
+            stoney_verify/commands.py
+            .github/workflows/ci.yml
+          if-no-files-found: error
