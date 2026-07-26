@@ -884,7 +884,7 @@ class SignatureStudioView(discord.ui.View):
         _ = button
         await _preview(interaction)
 
-    @discord.ui.button(label="Reset My Look", emoji="↺", style=discord.ButtonStyle.secondary, row=1)
+    @discord.ui.button(label="Reset My Look", emoji="🔄", style=discord.ButtonStyle.secondary, row=1)
     async def reset(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
         await _save_member_style(
@@ -960,7 +960,7 @@ class _ImportWelcomeLookButton(discord.ui.Button):
 
 class _ResetServerLookButton(discord.ui.Button):
     def __init__(self) -> None:
-        super().__init__(label="Reset Server Defaults", emoji="↺", style=discord.ButtonStyle.danger, row=3)
+        super().__init__(label="Reset Server Defaults", emoji="🔄", style=discord.ButtonStyle.danger, row=3)
 
     async def callback(self, interaction: discord.Interaction) -> None:
         updates = {
