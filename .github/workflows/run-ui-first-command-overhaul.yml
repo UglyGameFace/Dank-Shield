@@ -27,8 +27,26 @@ jobs:
           pip install -q -r requirements.txt
           pip install -q pytest
       - name: Apply exact repository patch
-        run: python tools/apply_ui_first_command_overhaul.py
+        id: patch
+        continue-on-error: true
+        run: |
+          python tools/apply_ui_first_command_overhaul.py > /tmp/ui-first-patch.log 2>&1
+          status=$?
+          cat /tmp/ui-first-patch.log
+          echo "status=$status" >> "$GITHUB_OUTPUT"
+          exit 0
+      - name: Commit patch diagnostic
+        if: steps.patch.outputs.status != '0'
+        run: |
+          git reset --hard HEAD
+          cp /tmp/ui-first-patch.log UI_FIRST_PATCH_ERROR.txt
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add UI_FIRST_PATCH_ERROR.txt
+          git commit -m "Record UI first patch error"
+          git push origin HEAD:fix/profile-command-payload-limit
       - name: Check patch cleanliness
+        if: steps.patch.outputs.status == '0'
         run: |
           git diff --check
           test ! -e tools/apply_ui_first_command_overhaul.py
@@ -36,6 +54,7 @@ jobs:
           test ! -e .github/workflows/apply-profile-welcome-ux.yml
           test ! -e .github/workflows/run-profile-welcome-ux-patch.yml
       - name: Compile changed modules
+        if: steps.patch.outputs.status == '0'
         run: |
           python -m py_compile \
             stoney_verify/commands.py \
@@ -52,6 +71,7 @@ jobs:
             stoney_verify/profile_signature_style.py \
             stoney_verify/welcome_setup_ui.py
       - name: Run focused UI and profile tests
+        if: steps.patch.outputs.status == '0'
         env:
           DANK_STARTUP_LOG_STYLE: quiet
           DANK_COMMAND_LOG_STYLE: quiet
@@ -66,14 +86,19 @@ jobs:
             tests/test_setup_aio_navigation_behavior.py \
             tests/test_welcome_card_live_command_tree.py
       - name: Prove exact command payload fits
+        if: steps.patch.outputs.status == '0'
         env:
           DANK_STARTUP_LOG_STYLE: quiet
           DANK_COMMAND_LOG_STYLE: quiet
         run: python tools/test_dank_command_payload.py
       - name: Commit integrated implementation
+        if: steps.patch.outputs.status == '0'
         run: |
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
           git add -A
           git commit -m "Overhaul Dank command surface into UI menus"
           git push origin HEAD:fix/profile-command-payload-limit
+      - name: Fail after diagnostic commit
+        if: steps.patch.outputs.status != '0'
+        run: exit 1
