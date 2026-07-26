@@ -2,9 +2,9 @@
 
 ## DS-PROFILE-STUDIO-LIVE-007 — Restore live signatures and make every editor control real
 
-**Status:** ROOT CAUSE CONFIRMED / IMPLEMENTATION VALIDATION REQUIRED
+**Status:** CLEAN IMPLEMENTATION / EXACT-HEAD CI REQUIRED
 **Branch:** `fix/profile-signature-runtime-editor`
-**PR:** pending
+**PR:** `#136`
 **Base:** current `main`
 
 ## Single Active Task Lock
@@ -32,19 +32,19 @@ Do not switch to unrelated implementation work until configured live-signature c
 
 ## Validation
 
-- [ ] Strict null-view live-send regression passes.
-- [ ] Basic private signature renders with zero optional fields.
-- [ ] All built-in font styles produce distinct compact output.
-- [ ] Theme, colors, background, layout, and frame output tests pass.
-- [ ] Changed Python modules compile.
-- [ ] Full unit suite and repository audits pass.
-- [ ] Branch is conflict-free with current `main`.
+- [x] Strict null-view live-send regression passes.
+- [x] Basic private signature renders with zero optional fields.
+- [x] All 16 built-in font styles produce distinct compact output.
+- [x] Theme, colors, background, layout, and frame output tests pass.
+- [x] Changed Python modules compile in the focused gate.
+- [ ] Full unit suite and repository audits pass on exact clean head.
+- [x] Branch is conflict-free with current `main` before exact-head CI.
 - [ ] Deployed Discord smoke posts a live card and visibly changes at least two fonts plus two other appearance controls.
 
 ## Cleanup
 
-- Temporary materialization workflow/script removed before final validation.
-- No monkey patch, compatibility fork, duplicate renderer, or temporary runtime path remains.
+- [x] Temporary materialization workflow/script removed before final validation.
+- [x] No monkey patch, compatibility fork, duplicate renderer, or temporary runtime path remains.
 
 ## Backlog
 
