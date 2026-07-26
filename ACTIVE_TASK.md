@@ -2,7 +2,7 @@
 
 ## DS-COMMAND-UI-004 — UI-first command overhaul with complete Profile and Welcome setup
 
-**Status:** FINAL CI / LIVE SMOKE
+**Status:** OWNER-APPROVED / FINAL EXACT-HEAD CI
 **Branch:** `fix/profile-command-payload-limit`
 **PR:** `#132`
 **Base:** current `main`
@@ -37,11 +37,17 @@ Do not switch to unrelated implementation work until this correction reaches Def
 - [x] `tools/test_dank_command_payload.py` proved the compacted live command tree is below the 7,600-byte safety limit.
 - [x] Full-suite diagnostic completed: 706 passed and six stale behavior contracts were identified.
 - [x] All six stale contracts were corrected and their affected regression modules passed.
-- [ ] Exact-head full unit suite and every repository audit pass after the contract corrections.
-- [x] PR is zero commits behind `main`.
+- [x] Setup-safety ownership contract now recognizes the dedicated Welcome & Join destination.
+- [ ] Exact-head full unit suite, standalone checks, and every repository audit pass.
+- [x] PR is zero commits behind `main` before prerequisite PR #131 merges.
 - [x] No unresolved review threads or submitted blocking reviews.
-- [ ] Live Discord smoke proves slash sync succeeds and the new menus open correctly.
-- [ ] Merge requires explicit owner approval.
+- [x] Owner explicitly approved handling and merging PRs #131 and #132.
+
+## Merge order
+
+1. Merge PR #131 as the non-conflicting reusable command-size diagnostic prerequisite.
+2. Reconfirm PR #132 is mergeable against the updated `main`.
+3. Merge PR #132 after exact-head CI succeeds.
 
 ## Backlog observation — not active implementation
 
