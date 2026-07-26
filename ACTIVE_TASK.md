@@ -2,7 +2,7 @@
 
 ## DS-PROFILE-STUDIO-LIVE-006 — Make Profile Signature themes visibly apply
 
-**Status:** IMPLEMENTED / EXACT-HEAD VALIDATION REQUIRED
+**Status:** CLEAN IMPLEMENTATION / EXACT-HEAD CI REQUIRED
 **Branch:** `fix/profile-theme-application`
 **PR:** `#135`
 **Base:** current `main`
@@ -32,17 +32,17 @@ The owner selected **420 Lobby Neon** and the confirmation stored the theme key,
 
 ## Validation
 
-- [ ] Focused theme tests pass.
-- [ ] Changed Python modules compile.
-- [ ] Full unit suite passes.
-- [ ] Standalone checks and every repository audit pass.
-- [ ] Branch is conflict-free with current `main`.
+- [x] Focused theme tests pass on the exact materialized source bundle.
+- [x] Changed Python modules compile.
+- [ ] Full unit suite passes on the clean exact head.
+- [ ] Standalone checks and every repository audit pass on the clean exact head.
+- [x] Branch is conflict-free with current `main`.
 - [ ] Deployed Discord smoke confirms changing between at least two themes produces visibly different previews.
 
 ## Cleanup
 
-- Temporary materialization files are removed before final validation.
-- No runtime shim, monkey patch, duplicate renderer, or temporary migration path remains.
+- [x] Temporary materialization files were removed before final validation.
+- [x] No runtime shim, monkey patch, duplicate renderer, or temporary migration path remains.
 
 ## Backlog
 
