@@ -13,6 +13,7 @@ from typing import Any, Mapping, Optional
 from .welcome_card_typography_engine import (
     BUILTIN_THEMES,
     COLOR_PRESETS,
+    DEFAULT_THEME_KEY,
     FONT_STYLES,
     parse_hex_color,
 )
@@ -30,7 +31,7 @@ PROFILE_LAYOUTS = frozenset({"server", "classic", "minimal", "spotlight"})
 PROFILE_AVATAR_FRAMES = frozenset({"server", "glow", "ring", "none"})
 
 DEFAULT_SERVER_PROFILE_STYLE: dict[str, str] = {
-    "theme": "default",
+    "theme": DEFAULT_THEME_KEY,
     "font": "clean",
     "color_mode": "profile",
     "custom_primary": "",
@@ -193,6 +194,29 @@ def server_style_updates(style: Mapping[str, Any]) -> dict[str, Any]:
     return {SERVER_STYLE_CONFIG_KEYS[key]: normalized[key] for key in SERVER_STYLE_CONFIG_KEYS}
 
 
+def theme_style_updates(theme_key: str, *, member: bool) -> dict[str, str]:
+    clean = str(theme_key or "").strip().lower().replace("-", "_")
+    if member and clean == PROFILE_THEME_INHERIT:
+        return {
+            "signature_theme": PROFILE_THEME_INHERIT,
+            "signature_color_mode": PROFILE_COLOR_INHERIT,
+            "signature_background_mode": PROFILE_BACKGROUND_INHERIT,
+        }
+    if clean not in BUILTIN_THEMES:
+        raise ValueError("That profile-signature theme is no longer available.")
+    if member:
+        return {
+            "signature_theme": clean,
+            "signature_color_mode": "theme",
+            "signature_background_mode": "theme",
+        }
+    return {
+        SERVER_STYLE_CONFIG_KEYS["theme"]: clean,
+        SERVER_STYLE_CONFIG_KEYS["color_mode"]: "theme",
+        SERVER_STYLE_CONFIG_KEYS["background_mode"]: "theme",
+    }
+
+
 def palette_style_updates(preset_key: str, *, member: bool) -> dict[str, str]:
     preset = COLOR_PRESETS.get(str(preset_key or "").strip().lower())
     if preset is None:
@@ -237,4 +261,5 @@ __all__ = [
     "palette_style_updates",
     "server_profile_style",
     "server_style_updates",
+    "theme_style_updates",
 ]

@@ -36,6 +36,7 @@ from .profile_signature_style import (
     encode_profile_asset,
     normalize_member_profile_style,
     server_profile_style,
+    theme_style_updates,
 )
 from .ui.picker import DankPickerView, make_choice
 from .welcome_card_service import (
@@ -287,25 +288,25 @@ async def _theme_picker(interaction: discord.Interaction, *, server: bool) -> No
         if server:
             await _save_server_style(
                 component,
-                {SERVER_STYLE_CONFIG_KEYS["theme"]: value},
-                message=f"Server profile-signature theme set to **{BUILTIN_THEMES[value].label}**.",
+                theme_style_updates(value, member=False),
+                message=f"Server profile-signature theme set to **{BUILTIN_THEMES[value].label}** with its colors and background.",
             )
         else:
             label = "Server Default" if value == "server" else BUILTIN_THEMES[value].label
             await _save_member_style(
                 component,
-                {"signature_theme": value},
-                message=f"Your signature theme is now **{label}**.",
+                theme_style_updates(value, member=True),
+                message=f"Your signature theme is now **{label}** with its colors and background.",
             )
 
     choices = []
     if not server:
-        choices.append(make_choice("Server Default", "server", description="Follow this server's profile-signature theme.", emoji="🏠", default=current == "server"))
+        choices.append(make_choice("Server Default", "server", description="Restore the server's complete signature look.", emoji="🏠", default=current == "server"))
     choices.extend(
         make_choice(
             theme.label,
             theme.key,
-            description="Compact signature theme",
+            description="Apply this theme's colors, background, and artwork",
             emoji=_THEME_EMOJIS.get(theme.key, "🎨"),
             default=current == theme.key,
         )
@@ -313,7 +314,7 @@ async def _theme_picker(interaction: discord.Interaction, *, server: bool) -> No
     )
     await _private(
         interaction,
-        content="## 🖼️ Signature Themes\nPick a look. Your preview updates after saving.",
+        content="## 🖼️ Signature Themes\nPick a complete look. Its colors, background, and artwork apply immediately; you can override individual parts afterward.",
         view=DankPickerView(
             author_id=member.id,
             choices=choices,
