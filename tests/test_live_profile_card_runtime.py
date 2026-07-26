@@ -1,4 +1,5 @@
 import asyncio
+from io import BytesIO
 from datetime import datetime, timezone
 from types import SimpleNamespace
 
@@ -60,14 +61,19 @@ class FakeChannel:
         self.history_messages = []
         self.fetch_messages = {}
         self.fail_send = False
+        self.reject_none_view = False
+        self.sent_payloads = []
 
     def permissions_for(self, _member):
         return FakePermissions()
 
-    async def send(self, *, embed, view, allowed_mentions):
+    async def send(self, **payload):
         if self.fail_send:
             raise discord.HTTPException(SimpleNamespace(status=500, reason="send failed"), "send failed")
-        message = FakeSentMessage(1000 + len(self.sent), self.guild.bot_user, [embed])
+        if self.reject_none_view and "view" in payload and payload["view"] is None:
+            raise TypeError("expected view parameter to be of type View or LayoutView, not NoneType")
+        self.sent_payloads.append(dict(payload))
+        message = FakeSentMessage(1000 + len(self.sent), self.guild.bot_user, [payload["embed"]])
         self.sent.append(message)
         self.fetch_messages[message.id] = message
         return message
@@ -394,3 +400,118 @@ def test_restart_reconciliation_keeps_newest_owned_card_and_cleans_duplicates(mo
         assert old.deleted is True
 
     asyncio.run(scenario())
+
+
+
+def test_live_send_omits_none_view_and_keeps_attachment(monkeypatch):
+    async def scenario():
+        _patch_discord_types(monkeypatch)
+        bot = FakeBot()
+        guild = FakeGuild(81, bot.user)
+        channel = guild.add_channel(810)
+        channel.reject_none_view = True
+        member = guild.add_member(811)
+        states = []
+
+        async def get_state(_guild_id, _channel_id):
+            return None
+
+        async def save_state(guild_id, channel_id, **payload):
+            states.append((guild_id, channel_id, payload))
+
+        async def renderer(member, allowed, *, trigger_message_id, require_live_enabled=True):
+            embed = discord.Embed(title=f"Profile {member.id}")
+            embed.set_footer(text=live_card_footer(member.id, trigger_message_id))
+            return LiveCardRender(
+                embed=embed,
+                view=None,
+                file=discord.File(BytesIO(b"image-bytes"), filename="profile.png"),
+            )
+
+        monkeypatch.setattr(runtime_module, "get_live_card_state", get_state)
+        monkeypatch.setattr(runtime_module, "upsert_live_card_state", save_state)
+        runtime = LiveProfileCardRuntime(bot, renderer=renderer, sleep=asyncio.sleep)
+        trigger = PendingTrigger(guild.id, channel.id, member.id, 91)
+        await runtime._replace_card(
+            FakeIncomingMessage(91, guild, channel, member),
+            parse_live_card_config(_config(channel.id)),
+            trigger,
+        )
+
+        assert len(channel.sent) == 1
+        assert "view" not in channel.sent_payloads[0]
+        assert channel.sent_payloads[0]["file"].filename == "profile.png"
+        assert states and states[0][2]["user_id"] == member.id
+
+    asyncio.run(scenario())
+
+
+def test_basic_signature_renders_when_every_optional_field_is_hidden(monkeypatch):
+    async def scenario():
+        _patch_discord_types(monkeypatch)
+        bot = FakeBot()
+        guild = FakeGuild(82, bot.user)
+        member = guild.add_member(821)
+        seen = []
+
+        async def settings(_guild_id, _user_id):
+            return {
+                "preferences": {
+                    "live_cards_enabled": True,
+                    "show_roles": False,
+                    "show_account_dates": False,
+                    "show_platforms": False,
+                },
+                "platforms": {},
+            }
+
+        async def config(_guild_id):
+            return {}
+
+        async def render_image(_member, *, style, role_labels, date_labels, platform_labels):
+            seen.append((style, role_labels, date_labels, platform_labels))
+            return b"image-bytes"
+
+        monkeypatch.setattr(runtime_module, "get_effective_profile_settings", settings)
+        monkeypatch.setattr(runtime_module, "get_guild_config", config)
+        monkeypatch.setattr(runtime_module, "render_member_profile_signature", render_image)
+        rendered = await runtime_module.render_live_profile_card(
+            member,
+            set(),
+            trigger_message_id=92,
+            require_live_enabled=False,
+        )
+
+        assert rendered is not None
+        assert rendered.file is not None
+        assert seen and seen[0][1:] == ([], [], [])
+
+    asyncio.run(scenario())
+
+
+def test_live_send_failure_is_visible_in_logs(monkeypatch, capsys):
+    async def scenario():
+        _patch_discord_types(monkeypatch)
+        bot = FakeBot()
+        guild = FakeGuild(83, bot.user)
+        channel = guild.add_channel(830)
+        channel.fail_send = True
+        member = guild.add_member(831)
+
+        async def get_state(_guild_id, _channel_id):
+            return None
+
+        monkeypatch.setattr(runtime_module, "get_live_card_state", get_state)
+        runtime = LiveProfileCardRuntime(bot, renderer=_fake_renderer([]), sleep=asyncio.sleep)
+        trigger = PendingTrigger(guild.id, channel.id, member.id, 93)
+        await runtime._replace_card(
+            FakeIncomingMessage(93, guild, channel, member),
+            parse_live_card_config(_config(channel.id)),
+            trigger,
+        )
+
+    asyncio.run(scenario())
+    output = capsys.readouterr().out
+    assert "live_profile_card send failed" in output
+    assert "guild=83" in output
+    assert "channel=830" in output

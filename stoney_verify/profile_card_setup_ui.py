@@ -68,7 +68,7 @@ def _setup_embed(
     )
     embed.add_field(
         name="Optional details allowed",
-        value=", ".join(fields) if fields else "No optional details",
+        value=", ".join(fields) if fields else "No optional details • basic avatar/name still posts",
         inline=True,
     )
     embed.add_field(
@@ -144,10 +144,11 @@ class _PreviewButton(discord.ui.Button):
         rendered.embed.set_footer(text="Preview only • compact signature • nothing was posted publicly")
         payload: dict[str, Any] = {
             "embed": rendered.embed,
-            "view": rendered.view,
             "allowed_mentions": discord.AllowedMentions.none(),
             "attachments": [rendered.file] if rendered.file is not None else [],
         }
+        if rendered.view is not None:
+            payload["view"] = rendered.view
         await interaction.edit_original_response(**payload)
 
 

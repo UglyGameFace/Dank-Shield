@@ -276,8 +276,7 @@ async def render_live_profile_card(
     show_platforms = bool(preferences.get("show_platforms", True)) and "platforms" in server_allowed_fields
     platforms = visible_platform_entries(settings.get("platforms"), allowed=show_platforms)
 
-    if not show_roles and not show_dates and not platforms:
-        return None
+    # Optional privacy settings remove fields, not the basic member card.
 
     # Import lazily so the existing profile command module remains the sole base renderer.
     from .commands_ext.public_self_roles_group import _profile_card

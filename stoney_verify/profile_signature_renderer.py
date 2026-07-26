@@ -15,6 +15,7 @@ from .welcome_card_typography_engine import (
     CUSTOM_FONT_STYLE_KEY,
     FONT_STYLES,
     parse_hex_color,
+    render_styled_text_tile,
 )
 
 SIGNATURE_WIDTH = 1080
@@ -40,12 +41,24 @@ _FONT_FAMILIES: dict[str, tuple[str, ...]] = {
         "/usr/share/fonts/truetype/liberation2/LiberationSerif-Bold.ttf",
     ),
 }
-_REGULAR_FONTS = (
-    "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-    "/usr/share/fonts/dejavu/DejaVuSans.ttf",
-    "/usr/share/fonts/truetype/liberation2/LiberationSans-Regular.ttf",
-    "/usr/share/fonts/truetype/lato/Lato-Regular.ttf",
-)
+_REGULAR_FONT_FAMILIES: dict[str, tuple[str, ...]] = {
+    "sans": (
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        "/usr/share/fonts/dejavu/DejaVuSans.ttf",
+        "/usr/share/fonts/truetype/liberation2/LiberationSans-Regular.ttf",
+        "/usr/share/fonts/truetype/lato/Lato-Regular.ttf",
+    ),
+    "mono": (
+        "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf",
+        "/usr/share/fonts/dejavu/DejaVuSansMono.ttf",
+        "/usr/share/fonts/truetype/liberation2/LiberationMono-Regular.ttf",
+    ),
+    "serif": (
+        "/usr/share/fonts/truetype/dejavu/DejaVuSerif.ttf",
+        "/usr/share/fonts/dejavu/DejaVuSerif.ttf",
+        "/usr/share/fonts/truetype/liberation2/LiberationSerif-Regular.ttf",
+    ),
+}
 
 
 def _safe_text(value: Any, limit: int = 120) -> str:
@@ -66,7 +79,11 @@ def _font(
         except Exception:
             pass
     style = FONT_STYLES.get(style_key) or FONT_STYLES.get("clean") or next(iter(FONT_STYLES.values()))
-    candidates = _REGULAR_FONTS if regular else _FONT_FAMILIES.get(style.family, _FONT_FAMILIES["sans"])
+    candidates = (
+        _REGULAR_FONT_FAMILIES.get(style.family, _REGULAR_FONT_FAMILIES["sans"])
+        if regular
+        else _FONT_FAMILIES.get(style.family, _FONT_FAMILIES["sans"])
+    )
     for candidate in candidates:
         try:
             if Path(candidate).is_file():
@@ -421,7 +438,11 @@ def render_profile_signature(
     )
 
     panel = (18, 18, SIGNATURE_WIDTH - 18, SIGNATURE_HEIGHT - 18)
-    panel_alpha = 205 if layout == "minimal" else 218
+    background_mode = str(style.get("background_mode") or "theme")
+    if background_mode in {"profile", "custom"}:
+        panel_alpha = 168 if layout == "minimal" else 178
+    else:
+        panel_alpha = 198 if layout == "minimal" else 208
     draw.rounded_rectangle(panel, radius=28, fill=tuple(theme.panel) + (panel_alpha,), outline=primary + (125,), width=2)
 
     avatar_size = metrics["avatar_size"]
@@ -451,27 +472,24 @@ def render_profile_signature(
     right_edge = avatar_x - 28 if layout == "spotlight" else SIGNATURE_WIDTH - 42
     eyebrow_font = _font(15, style_key=style_key, custom_font=custom_font, regular=True)
     name_text = _safe_text(display_name, 80) or "Member"
-    name_font = _fit_font(
-        draw,
+    name_tile = render_styled_text_tile(
         name_text,
         style_key=style_key,
-        custom_font=custom_font,
+        start_size=metrics["name_start"],
+        min_size=metrics["name_min"],
         max_width=max(300, right_edge - content_x),
-        start=metrics["name_start"],
-        minimum=metrics["name_min"],
+        max_height=max(54, metrics["chips_y"] - metrics["name_y"] - 2),
+        primary=primary,
+        secondary=secondary,
+        role="name",
+        custom_font_bytes=custom_font,
     )
     chip_font = _font(15, style_key=style_key, custom_font=custom_font, regular=True)
 
     eyebrow = f"MEMBER SIGNATURE  •  {_safe_text(server_name, 48).upper()}"
     draw.text((content_x, metrics["eyebrow_y"]), eyebrow, font=eyebrow_font, fill=primary + (255,))
-    draw.text(
-        (content_x, metrics["name_y"]),
-        name_text,
-        font=name_font,
-        fill=text + (255,),
-        stroke_width=1,
-        stroke_fill=(0, 0, 0, 170),
-    )
+    image.alpha_composite(name_tile, (content_x, metrics["name_y"] - 5))
+    draw = ImageDraw.Draw(image, "RGBA")
 
     chips: list[tuple[str, tuple[int, int, int]]] = []
     for index, label in enumerate(role_labels[:4]):

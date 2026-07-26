@@ -119,7 +119,7 @@ def _setup_embed(
     )
     embed.add_field(
         name="Allowed by server",
-        value=", ".join(fields) if fields else "No optional fields",
+        value=", ".join(fields) if fields else "No optional fields • basic avatar/name still posts",
         inline=True,
     )
     embed.add_field(
@@ -298,7 +298,10 @@ class _SaveChannelsButton(discord.ui.Button):
         await view.refresh(
             interaction,
             config=updated,
-            notice=f"Enabled live profile cards in {len(selected)} channel(s).",
+            notice=(
+                f"Enabled live profile cards in {len(selected)} channel(s). "
+                "Send a normal member message there; its signature should appear after a few seconds."
+            ),
         )
 
 
@@ -425,7 +428,10 @@ class _FieldToggleButton(discord.ui.Button):
         await view.refresh(
             interaction,
             config=updated,
-            notice=f"{_FIELD_LABELS[self.field_key]} are now {action}. Member privacy can still hide them.",
+            notice=(
+                f"{_FIELD_LABELS[self.field_key]} are now {action}. Member privacy can still hide them. "
+                "A basic avatar/name signature remains available even when every optional field is hidden."
+            ),
         )
 
 
@@ -468,11 +474,16 @@ class _PreviewButton(discord.ui.Button):
         rendered.embed.set_footer(
             text="Preview only • not a join event • nothing was posted publicly"
         )
-        await interaction.edit_original_response(
-            embed=rendered.embed,
-            view=rendered.view,
-            allowed_mentions=discord.AllowedMentions.none(),
-        )
+        payload: dict[str, Any] = {
+            "embed": rendered.embed,
+            "allowed_mentions": discord.AllowedMentions.none(),
+        }
+        if rendered.view is not None:
+            payload["view"] = rendered.view
+        rendered_file = getattr(rendered, "file", None)
+        if rendered_file is not None:
+            payload["attachments"] = [rendered_file]
+        await interaction.edit_original_response(**payload)
 
 
 class _RefreshButton(discord.ui.Button):

@@ -169,8 +169,8 @@ async def render_live_profile_card(
     show_platforms = bool(preferences.get("show_platforms", True)) and "platforms" in server_allowed_fields
     platforms = visible_platform_entries(settings.get("platforms"), allowed=show_platforms)
 
-    if not show_roles and not show_dates and not platforms:
-        return None
+    # A member may hide every optional field and still keep a basic
+    # avatar/name signature. Privacy removes chips; it does not disable the card.
 
     try:
         cfg = await get_guild_config(member.guild.id)
@@ -195,6 +195,18 @@ async def render_live_profile_card(
     embed.set_image(url=f"attachment://{filename}")
     embed.set_footer(text=live_card_footer(member.id, trigger_message_id))
     return LiveCardRender(embed=embed, view=_platform_view(platforms), file=file)
+
+
+def _live_card_send_payload(rendered: LiveCardRender) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "embed": rendered.embed,
+        "allowed_mentions": discord.AllowedMentions.none(),
+    }
+    if rendered.view is not None:
+        payload["view"] = rendered.view
+    if rendered.file is not None:
+        payload["file"] = rendered.file
+    return payload
 
 
 class LiveProfileCardRuntime(_core.LiveProfileCardRuntime):
@@ -294,14 +306,16 @@ class LiveProfileCardRuntime(_core.LiveProfileCardRuntime):
 
         new_message: Optional[discord.Message] = None
         try:
-            payload: dict[str, Any] = {
-                "embed": rendered.embed,
-                "view": rendered.view,
-                "allowed_mentions": discord.AllowedMentions.none(),
-            }
-            if rendered.file is not None:
-                payload["file"] = rendered.file
-            new_message = await channel.send(**payload)
+            new_message = await channel.send(**_live_card_send_payload(rendered))
+        except Exception as exc:
+            print(
+                "⚠️ live_profile_card send failed "
+                f"guild={trigger.guild_id} channel={trigger.channel_id} user={trigger.user_id} "
+                f"error={type(exc).__name__}: {exc}"
+            )
+            return
+
+        try:
             await upsert_live_card_state(
                 trigger.guild_id,
                 trigger.channel_id,
@@ -309,9 +323,13 @@ class LiveProfileCardRuntime(_core.LiveProfileCardRuntime):
                 user_id=trigger.user_id,
                 trigger_message_id=trigger.message_id,
             )
-        except Exception:
-            if new_message is not None:
-                await self._delete_verified_card(new_message)
+        except Exception as exc:
+            await self._delete_verified_card(new_message)
+            print(
+                "⚠️ live_profile_card state write failed; removed new card "
+                f"guild={trigger.guild_id} channel={trigger.channel_id} user={trigger.user_id} "
+                f"error={type(exc).__name__}: {exc}"
+            )
             return
 
         self._last_posted[(trigger.guild_id, trigger.channel_id)] = (trigger.user_id, monotonic())
