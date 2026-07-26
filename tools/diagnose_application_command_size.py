@@ -49,6 +49,26 @@ def option_path_size(option: dict[str, Any], prefix: str) -> list[tuple[str, int
     return rows
 
 
+def counted_fields(value: Any, path: str = "") -> list[tuple[int, str, str]]:
+    rows: list[tuple[int, str, str]] = []
+    if isinstance(value, dict):
+        name = str(value.get("name") or "")
+        here = f"{path} {name}".strip() if name else path
+        for key, child in value.items():
+            if key in COUNTED_KEYS and isinstance(child, str):
+                rows.append((len(child), f"{here}.{key}", child))
+            elif key.endswith("_localizations") and isinstance(child, dict):
+                for locale, text in child.items():
+                    rendered = str(text)
+                    rows.append((len(rendered), f"{here}.{key}[{locale}]", rendered))
+            else:
+                rows.extend(counted_fields(child, here))
+    elif isinstance(value, list):
+        for child in value:
+            rows.extend(counted_fields(child, path))
+    return rows
+
+
 def main() -> int:
     commands = bot.tree.get_commands()
     print(f"top_level_commands={len(commands)}")
@@ -57,8 +77,9 @@ def main() -> int:
         payload = command.to_dict(bot.tree)
         count = command_character_count(payload)
         json_bytes = len(json.dumps(payload, ensure_ascii=False).encode("utf-8"))
+        command_name = str(payload.get("name") or "?")
         print(
-            f"COMMAND /{payload.get('name')} chars={count}/{LIMIT} "
+            f"COMMAND /{command_name} chars={count}/{LIMIT} "
             f"remaining={LIMIT - count} json_bytes={json_bytes}"
         )
         if count > LIMIT:
@@ -66,9 +87,13 @@ def main() -> int:
         rows: list[tuple[str, int]] = []
         for option in payload.get("options") or []:
             if isinstance(option, dict):
-                rows.extend(option_path_size(option, f"/{payload.get('name')}"))
+                rows.extend(option_path_size(option, f"/{command_name}"))
         for path, size in sorted(rows, key=lambda item: item[1], reverse=True)[:40]:
             print(f"  {size:4d}  {path}")
+        if command_name == "dank":
+            print("LARGEST COUNTED FIELDS")
+            for length, path, text in sorted(counted_fields(payload, "/dank"), reverse=True)[:120]:
+                print(f"  {length:3d}  {path} = {text}")
     return 1 if failed else 0
 
 
