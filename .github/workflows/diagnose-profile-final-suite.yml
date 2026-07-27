@@ -1,0 +1,47 @@
+name: Diagnose final profile suite
+
+on:
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip -q
+          pip install -q -r requirements.txt
+          pip install -q pytest
+      - name: Run exact CI unit suite with captured output
+        shell: bash
+        env:
+          DANK_STARTUP_LOG_STYLE: quiet
+          DANK_COMMAND_LOG_STYLE: quiet
+        run: |
+          set +e
+          python -m pytest tests/ -q --tb=short --disable-warnings > final-suite.log 2>&1
+          status=$?
+          set -e
+          cat final-suite.log
+          printf '%s' "$status" > final-suite.status
+      - name: Upload diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: profile-final-suite-diagnostics
+          path: |
+            final-suite.log
+            final-suite.status
+          if-no-files-found: error
+      - name: Preserve failure state
+        run: test "$(cat final-suite.status)" = "0"
