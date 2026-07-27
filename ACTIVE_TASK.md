@@ -2,7 +2,7 @@
 
 ## DS-PROFILE-STUDIO-LIVE-009 — Complete live signature activation and delivery
 
-**Status:** CLEAN BRANCH / EXACT-HEAD CI REQUIRED
+**Status:** CLEAN BRANCH / EXACT-HEAD CI RUNNING
 **Branch:** `fix/profile-live-channel-autosave-runtime`
 **PR:** #138
 **Base:** current `main`
@@ -35,7 +35,7 @@ Do not switch to unrelated implementation work until a deployed normal member me
 - [x] A callback regression test exercises the actual save path, persistence payload, cleanup, reconciliation, and response acknowledgement.
 - [ ] Focused setup tests and changed-module compilation pass on the exact head.
 - [ ] Full unit suite and repository audits pass on the exact head.
-- [ ] Branch remains conflict-free with current `main`.
+- [x] Branch is conflict-free and zero commits behind current `main` before exact-head CI.
 - [ ] Deployed Discord smoke produces `✅ live_profile_card posted` and a visible signature after one channel selection.
 
 ## Cleanup
