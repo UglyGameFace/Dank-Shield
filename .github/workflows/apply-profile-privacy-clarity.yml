@@ -29,6 +29,9 @@ jobs:
           for ending in (
               "else 'Off'}",
               "else 'Hidden'}",
+              "else '⏸️ Off'}",
+              "shown(preferences.get('show_roles', True))}",
+              "shown(preferences.get('show_account_dates', True))}",
           ):
               source = source.replace(ending + '\\n"', ending + '\\\\n"')
           path.write_text(source, encoding='utf-8')
