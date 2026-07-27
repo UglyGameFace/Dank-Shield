@@ -16,6 +16,7 @@ from stoney_verify.profile_card_runtime import (
     live_card_footer,
     parse_live_card_config,
 )
+from stoney_verify.profile_card_service import ProfileStorageUnavailable
 
 
 class Permissions:
@@ -387,5 +388,32 @@ def test_unchanged_signature_render_is_reused_from_bounded_cache(monkeypatch):
         assert renders == 1
         assert len(runtime_module._SIGNATURE_CACHE) == 1
         assert first.embed.footer.text != second.embed.footer.text
+
+    asyncio.run(scenario())
+
+
+def test_cold_state_verification_failure_never_creates_a_duplicate(monkeypatch):
+    async def scenario() -> None:
+        patch_types(monkeypatch)
+        guild = Guild(99)
+        channel = guild.add_channel(990)
+        member = guild.add_member(991)
+        seen: list[tuple[int, int]] = []
+
+        async def get_config(_guild_id: int):
+            return config(channel.id)
+
+        async def unavailable(*_args):
+            raise ProfileStorageUnavailable("offline")
+
+        monkeypatch.setattr(runtime_module, "get_guild_config", get_config)
+        monkeypatch.setattr(runtime_module, "get_live_card_state", unavailable)
+        runtime = LiveProfileCardRuntime(Bot(guild), renderer=renderer(seen), sleep=asyncio.sleep)
+
+        await runtime.on_message(Incoming(1, guild, channel, member))
+        await drain(runtime)
+
+        assert seen == []
+        assert channel.sent == []
 
     asyncio.run(scenario())
