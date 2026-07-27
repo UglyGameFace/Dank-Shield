@@ -196,7 +196,7 @@ def test_same_member_burst_leaves_one_latest_visible_card(monkeypatch):
         seen = []
         _install_runtime_dependencies(monkeypatch, channel.id)
 
-        runtime = PerMemberPerMemberLiveProfileCardRuntime(bot, renderer=_renderer(seen), sleep=asyncio.sleep)
+        runtime = PerMemberPerMemberPerMemberLiveProfileCardRuntime(bot, renderer=_renderer(seen), sleep=asyncio.sleep)
         await runtime.on_message(FakeIncomingMessage(1, guild, channel, member))
         await asyncio.sleep(0.002)
         await runtime.on_message(FakeIncomingMessage(2, guild, channel, member))
@@ -223,7 +223,7 @@ def test_different_members_keep_independent_public_cards(monkeypatch):
         seen = []
         _install_runtime_dependencies(monkeypatch, channel.id)
 
-        runtime = PerMemberPerMemberLiveProfileCardRuntime(bot, renderer=_renderer(seen), sleep=asyncio.sleep)
+        runtime = PerMemberPerMemberPerMemberLiveProfileCardRuntime(bot, renderer=_renderer(seen), sleep=asyncio.sleep)
         await runtime.on_message(FakeIncomingMessage(11, guild, channel, first))
         await _wait_for_workers(runtime)
         await runtime.on_message(FakeIncomingMessage(12, guild, channel, second))
@@ -269,7 +269,7 @@ def test_lazy_warmup_removes_existing_duplicate_for_only_that_member(monkeypatch
         channel.preloaded.extend([old, newer, other_card])
         channel.fetch_messages.update({700: old, 701: newer, 702: other_card})
 
-        runtime = PerMemberPerMemberLiveProfileCardRuntime(bot, renderer=_renderer([]), sleep=asyncio.sleep)
+        runtime = PerMemberPerMemberPerMemberLiveProfileCardRuntime(bot, renderer=_renderer([]), sleep=asyncio.sleep)
         await runtime.on_message(FakeIncomingMessage(3, guild, channel, member))
         await _wait_for_workers(runtime)
 
@@ -296,7 +296,7 @@ def test_bot_and_webhook_messages_never_create_signature_workers(monkeypatch):
         human = guild.add_member(401)
         bot_member = guild.add_member(402, bot=True)
         _install_runtime_dependencies(monkeypatch, channel.id)
-        runtime = PerMemberPerMemberLiveProfileCardRuntime(bot, renderer=_renderer([]), sleep=asyncio.sleep)
+        runtime = PerMemberPerMemberPerMemberLiveProfileCardRuntime(bot, renderer=_renderer([]), sleep=asyncio.sleep)
 
         await runtime.on_message(FakeIncomingMessage(1, guild, channel, bot_member))
         await runtime.on_message(
