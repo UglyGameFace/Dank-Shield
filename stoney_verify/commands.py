@@ -56,6 +56,17 @@ except Exception as e:
         return 0
 
 
+try:
+    from .commands_ext.public_member_role_browser import (
+        restore_member_command_after_compaction,
+    )
+except Exception as e:
+    print(f"⚠️ commands.py failed to import member command center restore: {repr(e)}")
+
+    def restore_member_command_after_compaction(bot: Any, tree: Any) -> bool:  # type: ignore
+        return False
+
+
 # ============================================================
 # Kick timer bridges
 # events.py imports these from commands.py, so keep them exposed
@@ -132,6 +143,7 @@ except Exception as e:
 
 try:
     compact_public_dank_surface(bot, bot.tree)
+    restore_member_command_after_compaction(bot, bot.tree)
 except Exception as e:
     try:
         print(f"❌ commands.py failed to compact /dank command surface: {repr(e)}")
@@ -174,6 +186,7 @@ def register_extra_commands(tree) -> None:
             pass
 
     compact_public_dank_surface(bot, tree)
+    restore_member_command_after_compaction(bot, tree)
 
 
 # ============================================================
