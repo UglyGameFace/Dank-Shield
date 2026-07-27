@@ -32,12 +32,25 @@ jobs:
           cat command-size.txt
           echo "status=$status" >> "$GITHUB_OUTPUT"
           exit 0
+      - name: Capture standalone tool compatibility output
+        shell: bash
+        run: |
+          set +e
+          : > standalone-tools.txt
+          for f in tools/test_*.py; do
+            echo "===== $f =====" >> standalone-tools.txt
+            python "$f" >> standalone-tools.txt 2>&1
+            echo "exit_code=$?" >> standalone-tools.txt
+          done
+          cat standalone-tools.txt
+          exit 0
       - name: Upload diagnostics and focused source snapshot
         uses: actions/upload-artifact@v4
         with:
           name: application-command-size
           path: |
             command-size.txt
+            standalone-tools.txt
             stoney_verify/profile_signature_renderer.py
             stoney_verify/profile_card_runtime.py
             stoney_verify/commands_ext/public_profile_cards.py
