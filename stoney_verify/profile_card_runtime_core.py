@@ -18,6 +18,7 @@ from .profile_card_service import (
     get_effective_profile_settings,
     get_live_card_state,
     list_live_card_states,
+    list_live_card_states_for_channel,
     list_live_card_states_for_user,
     normalize_server_allowed_fields,
     upsert_live_card_state,
@@ -586,10 +587,11 @@ class LiveProfileCardRuntime:
             if not removed:
                 continue
             try:
-                await delete_live_card_state(state_guild_id, channel_id)
+                await delete_live_card_state(state_guild_id, channel_id, resolved_user_id)
             except ProfileStorageUnavailable:
                 return
             self._last_posted.pop((state_guild_id, channel_id), None)
+            self._last_posted.pop((state_guild_id, channel_id, resolved_user_id), None)
 
     async def remove_user_cards(self, guild: discord.Guild, user_id: int) -> None:
         """Remove this member's persisted and pending live cards in one guild."""
@@ -610,41 +612,51 @@ class LiveProfileCardRuntime:
         *,
         cancel_pending: bool = True,
     ) -> bool:
-        key = (int(guild.id), int(channel_id))
+        channel_key = (int(guild.id), int(channel_id))
         if cancel_pending:
-            pending = self._pending.pop(key, None)
-            self._latest.pop(key, None)
-            if pending is not None and not pending.done():
-                pending.cancel()
-        self._last_posted.pop(key, None)
+            for key in list(self._pending):
+                if tuple(key[:2]) != channel_key:
+                    continue
+                pending = self._pending.pop(key, None)
+                self._latest.pop(key, None)
+                if pending is not None and not pending.done():
+                    pending.cancel()
+        for key in list(self._last_posted):
+            if tuple(key[:2]) == channel_key:
+                self._last_posted.pop(key, None)
 
         try:
-            state = await get_live_card_state(*key)
+            states = await list_live_card_states_for_channel(*channel_key)
         except ProfileStorageUnavailable:
             return False
-        if not state:
+        if not states:
             return True
 
-        try:
-            message_id = int(str(state.get("message_id") or "0"))
-        except Exception:
-            message_id = 0
         channel = guild.get_channel(channel_id)
-        removed = not message_id
-        if message_id and isinstance(channel, discord.TextChannel):
-            removed = await self._delete_stored_message(channel, message_id)
-        elif message_id and channel is None:
-            # The channel no longer exists, so the durable state is stale.
-            removed = True
-
-        if not removed:
-            # Keep ownership state so a later reconciliation can retry safely.
-            return False
-        try:
-            await delete_live_card_state(*key)
-        except ProfileStorageUnavailable:
-            return False
-        return True
+        all_removed = True
+        for state in states:
+            try:
+                message_id = int(str(state.get("message_id") or "0"))
+                user_id = int(str(state.get("user_id") or "0"))
+            except Exception:
+                message_id = user_id = 0
+            removed = not message_id
+            if message_id and isinstance(channel, discord.TextChannel):
+                removed = await self._delete_stored_message(channel, message_id)
+            elif message_id and channel is None:
+                # The channel no longer exists, so the durable state is stale.
+                removed = True
+            if not removed:
+                all_removed = False
+                continue
+            try:
+                if user_id > 0:
+                    await delete_live_card_state(*channel_key, user_id)
+                else:
+                    await delete_live_card_state(*channel_key)
+            except ProfileStorageUnavailable:
+                all_removed = False
+        return all_removed
 
     async def invalidate_guild_cards(self, guild: discord.Guild) -> None:
         try:
@@ -687,13 +699,14 @@ class LiveProfileCardRuntime:
         bot_user = getattr(self.bot, "user", None)
         if bot_user is None:
             return
-        persisted: dict[tuple[int, int], dict[str, Any]] = {}
+        persisted: dict[tuple[int, int], list[dict[str, Any]]] = {}
         try:
             for row in await list_live_card_states():
                 try:
-                    persisted[(int(row["guild_id"]), int(row["channel_id"]))] = row
+                    key = (int(row["guild_id"]), int(row["channel_id"]))
                 except Exception:
                     continue
+                persisted.setdefault(key, []).append(row)
         except ProfileStorageUnavailable:
             return
 
@@ -709,60 +722,76 @@ class LiveProfileCardRuntime:
                 if not isinstance(channel, discord.TextChannel) or not _channel_can_host_cards(channel):
                     continue
                 key = (int(guild.id), int(channel.id))
-                state = persisted.pop(key, None)
-                await self._reconcile_channel(channel, state)
+                states = persisted.pop(key, [])
+                await self._reconcile_channel(channel, states)
 
-        # Disabled channels are cleaned only when the stored message is still
-        # verifiably Dank Shield-owned. Inaccessible guilds keep their state so a
-        # later reconciliation can retry rather than orphaning a card.
-        for (guild_id, channel_id), state in persisted.items():
+        # Disabled channels are cleaned only when each stored message is still
+        # verifiably Dank Shield-owned. One member's row never deletes another's.
+        for (guild_id, channel_id), states in persisted.items():
             guild = self.bot.get_guild(guild_id)
             if guild is None:
                 continue
             channel = guild.get_channel(channel_id)
-            try:
-                message_id = int(str(state.get("message_id") or "0"))
-            except Exception:
-                message_id = 0
-            removed = not message_id
-            if message_id and isinstance(channel, discord.TextChannel):
-                removed = await self._delete_stored_message(channel, message_id)
-            elif message_id and channel is None:
-                removed = True
-            if not removed:
-                continue
-            try:
-                await delete_live_card_state(guild_id, channel_id)
-            except ProfileStorageUnavailable:
-                return
+            for state in states:
+                try:
+                    message_id = int(str(state.get("message_id") or "0"))
+                    user_id = int(str(state.get("user_id") or "0"))
+                except Exception:
+                    message_id = user_id = 0
+                removed = not message_id
+                if message_id and isinstance(channel, discord.TextChannel):
+                    removed = await self._delete_stored_message(channel, message_id)
+                elif message_id and channel is None:
+                    removed = True
+                if not removed:
+                    continue
+                try:
+                    if user_id > 0:
+                        await delete_live_card_state(guild_id, channel_id, user_id)
+                    else:
+                        await delete_live_card_state(guild_id, channel_id)
+                except ProfileStorageUnavailable:
+                    return
 
     async def _reconcile_channel(
         self,
         channel: discord.TextChannel,
-        state: Optional[Mapping[str, Any]],
+        states: Optional[Any],
     ) -> None:
         bot_user = getattr(self.bot, "user", None)
         if bot_user is None:
             return
+        if isinstance(states, Mapping):
+            state_rows = [dict(states)]
+        elif isinstance(states, (list, tuple)):
+            state_rows = [dict(item) for item in states if isinstance(item, Mapping)]
+        else:
+            state_rows = []
+
         owned_by_id: dict[int, discord.Message] = {}
-        if state:
+        persisted_users: set[int] = set()
+        for state in state_rows:
             try:
                 stored_message_id = int(str(state.get("message_id") or "0"))
+                stored_user_id = int(str(state.get("user_id") or "0"))
             except Exception:
-                stored_message_id = 0
-            if stored_message_id:
-                try:
-                    stored_message = await channel.fetch_message(stored_message_id)
-                except discord.NotFound:
-                    stored_message = None
-                except Exception:
-                    return
-                if (
-                    stored_message is not None
-                    and int(getattr(stored_message.author, "id", 0) or 0) == int(bot_user.id)
-                    and parse_live_card_footer(stored_message) is not None
-                ):
-                    owned_by_id[int(stored_message.id)] = stored_message
+                stored_message_id = stored_user_id = 0
+            if stored_user_id > 0:
+                persisted_users.add(stored_user_id)
+            if not stored_message_id:
+                continue
+            try:
+                stored_message = await channel.fetch_message(stored_message_id)
+            except discord.NotFound:
+                stored_message = None
+            except Exception:
+                return
+            if (
+                stored_message is not None
+                and int(getattr(stored_message.author, "id", 0) or 0) == int(bot_user.id)
+                and parse_live_card_footer(stored_message) is not None
+            ):
+                owned_by_id[int(stored_message.id)] = stored_message
 
         try:
             async for message in channel.history(limit=LIVE_CARD_HISTORY_SCAN_LIMIT):
@@ -773,35 +802,40 @@ class LiveProfileCardRuntime:
         except Exception:
             if not owned_by_id:
                 return
-        owned = list(owned_by_id.values())
 
-        if not owned:
-            if state:
-                try:
-                    await delete_live_card_state(channel.guild.id, channel.id)
-                except ProfileStorageUnavailable:
-                    pass
-            return
+        by_user: dict[int, list[discord.Message]] = {}
+        for owned in owned_by_id.values():
+            parsed = parse_live_card_footer(owned)
+            if parsed is None:
+                continue
+            by_user.setdefault(int(parsed[0]), []).append(owned)
 
-        newest = max(owned, key=lambda item: int(item.id))
-        parsed = parse_live_card_footer(newest)
-        if parsed is None:
-            return
-        user_id, trigger_message_id = parsed
-        try:
-            await upsert_live_card_state(
-                channel.guild.id,
-                channel.id,
-                message_id=newest.id,
-                user_id=user_id,
-                trigger_message_id=trigger_message_id,
-            )
-        except ProfileStorageUnavailable:
-            return
+        live_users: set[int] = set()
+        for user_id, owned in by_user.items():
+            newest = max(owned, key=lambda item: int(item.id))
+            parsed = parse_live_card_footer(newest)
+            if parsed is None:
+                continue
+            live_users.add(user_id)
+            try:
+                await upsert_live_card_state(
+                    channel.guild.id,
+                    channel.id,
+                    message_id=newest.id,
+                    user_id=user_id,
+                    trigger_message_id=int(parsed[1]),
+                )
+            except ProfileStorageUnavailable:
+                return
+            for old in owned:
+                if int(old.id) != int(newest.id):
+                    await self._delete_verified_card(old)
 
-        for old in owned:
-            if int(old.id) != int(newest.id):
-                await self._delete_verified_card(old)
+        for stale_user_id in persisted_users - live_users:
+            try:
+                await delete_live_card_state(channel.guild.id, channel.id, stale_user_id)
+            except ProfileStorageUnavailable:
+                return
 
 
 __all__ = [

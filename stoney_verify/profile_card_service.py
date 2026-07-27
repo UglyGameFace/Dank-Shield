@@ -572,7 +572,43 @@ async def remove_platform_identity(user_id: int, platform: Any) -> bool:
         return existed
 
 
-async def get_live_card_state(guild_id: int, channel_id: int) -> Optional[dict[str, Any]]:
+async def get_live_card_state(
+    guild_id: int,
+    channel_id: int,
+    user_id: Optional[int] = None,
+) -> Optional[dict[str, Any]]:
+    """Read one owned card row.
+
+    Live signatures are owned per member inside a channel. ``user_id`` is
+    optional only for legacy diagnostics; runtime delivery always supplies it.
+    """
+
+    gid = int(guild_id)
+    cid = int(channel_id)
+    uid = int(user_id) if user_id is not None else None
+
+    def read(client: Any):
+        query = (
+            client.table(LIVE_CARD_STATE_TABLE)
+            .select("*")
+            .eq("guild_id", str(gid))
+            .eq("channel_id", str(cid))
+        )
+        if uid is not None:
+            query = query.eq("user_id", str(uid))
+        return query.limit(1).execute()
+
+    label = f"read live profile state {gid}/{cid}"
+    if uid is not None:
+        label += f"/{uid}"
+    rows = _rows(await _execute(label, read))
+    return rows[0] if rows else None
+
+
+async def list_live_card_states_for_channel(
+    guild_id: int,
+    channel_id: int,
+) -> list[dict[str, Any]]:
     gid = int(guild_id)
     cid = int(channel_id)
 
@@ -582,12 +618,10 @@ async def get_live_card_state(guild_id: int, channel_id: int) -> Optional[dict[s
             .select("*")
             .eq("guild_id", str(gid))
             .eq("channel_id", str(cid))
-            .limit(1)
             .execute()
         )
 
-    rows = _rows(await _execute(f"read live profile state {gid}/{cid}", read))
-    return rows[0] if rows else None
+    return _rows(await _execute(f"list live profile states {gid}/{cid}", read))
 
 
 async def list_live_card_states() -> list[dict[str, Any]]:
@@ -642,7 +676,7 @@ async def upsert_live_card_state(
         try:
             return client.table(LIVE_CARD_STATE_TABLE).upsert(
                 payload,
-                on_conflict="guild_id,channel_id",
+                on_conflict="guild_id,channel_id,user_id",
             ).execute()
         except TypeError:
             return client.table(LIVE_CARD_STATE_TABLE).upsert(payload).execute()
@@ -651,20 +685,32 @@ async def upsert_live_card_state(
     return payload
 
 
-async def delete_live_card_state(guild_id: int, channel_id: int) -> None:
+async def delete_live_card_state(
+    guild_id: int,
+    channel_id: int,
+    user_id: Optional[int] = None,
+) -> None:
+    """Delete one member's card state, or every state in a disabled channel."""
+
     gid = int(guild_id)
     cid = int(channel_id)
+    uid = int(user_id) if user_id is not None else None
 
     def delete(client: Any):
-        return (
+        query = (
             client.table(LIVE_CARD_STATE_TABLE)
             .delete()
             .eq("guild_id", str(gid))
             .eq("channel_id", str(cid))
-            .execute()
         )
+        if uid is not None:
+            query = query.eq("user_id", str(uid))
+        return query.execute()
 
-    await _execute(f"delete live profile state {gid}/{cid}", delete)
+    label = f"delete live profile state {gid}/{cid}"
+    if uid is not None:
+        label += f"/{uid}"
+    await _execute(label, delete)
 
 
 __all__ = [
@@ -683,6 +729,7 @@ __all__ = [
     "get_profile_user",
     "invalidate_profile_cache",
     "list_live_card_states",
+    "list_live_card_states_for_channel",
     "list_live_card_states_for_user",
     "normalize_platform_entry",
     "normalize_platform_url",

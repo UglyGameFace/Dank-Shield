@@ -170,13 +170,13 @@ def test_alternating_speaker_uses_short_trailing_burst_window(monkeypatch):
 
         monkeypatch.setattr(runtime_module, "get_guild_config", config)
         runtime = LiveProfileCardRuntime(bot)
-        runtime._last_activity[(guild.id, channel.id)] = runtime_module.monotonic()
+        runtime._last_activity[(guild.id, channel.id, member.id)] = runtime_module.monotonic()
         await runtime.on_message(FakeIncomingMessage(1, guild, channel, member))
-        trigger = runtime._latest[(guild.id, channel.id)]
+        trigger = runtime._latest[(guild.id, channel.id, member.id)]
         assert trigger.user_id == member.id
         assert trigger.delay_seconds == runtime_module.DEFAULT_REPLACEMENT_COOLDOWN_SECONDS
         assert trigger.delay_seconds < 1.0
-        pending = runtime._pending[(guild.id, channel.id)]
+        pending = runtime._pending[(guild.id, channel.id, member.id)]
         pending.cancel()
         await asyncio.gather(pending, return_exceptions=True)
 
@@ -222,6 +222,7 @@ def test_user_cleanup_uses_indexed_user_query_not_global_state_scan():
     service = (ROOT / "stoney_verify/profile_card_service.py").read_text(encoding="utf-8")
     runtime = (ROOT / "stoney_verify/profile_card_runtime_core.py").read_text(encoding="utf-8")
     migration = (ROOT / "supabase/migrations/20260725_live_profile_cards.sql").read_text(encoding="utf-8")
+    per_member_migration = (ROOT / "supabase/migrations/202607270001_live_profile_cards_per_member.sql").read_text(encoding="utf-8")
     assert "async def list_live_card_states_for_user" in service
     assert '.eq("user_id", str(uid))' in service
     helper = runtime.split("async def _remove_user_card_states", 1)[1].split(
@@ -230,6 +231,7 @@ def test_user_cleanup_uses_indexed_user_query_not_global_state_scan():
     assert "list_live_card_states_for_user(" in helper
     assert "list_live_card_states()" not in helper
     assert "idx_dank_live_profile_cards_user" in migration
+    assert "primary key (guild_id, channel_id, user_id)" in per_member_migration
 
 
 def test_member_and_deleted_channel_cleanup_are_registered_once():

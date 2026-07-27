@@ -163,7 +163,7 @@ def test_missing_stored_card_does_not_suppress_same_speaker(monkeypatch):
         monkeypatch.setattr(runtime_module, "upsert_live_card_state", save_state)
         runtime = LiveProfileCardRuntime(Bot(guild), renderer=renderer, sleep=asyncio.sleep)
         await runtime._replace_card(Message(guild, channel, member), parse_live_card_config(config(channel.id)), PendingTrigger(guild.id, channel.id, member.id, 123))
-        assert deleted == [(guild.id, channel.id)]
+        assert deleted == [(guild.id, channel.id, member.id)]
         assert len(channel.sent) == 1
 
     asyncio.run(scenario())
