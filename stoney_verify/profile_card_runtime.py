@@ -9,6 +9,7 @@ compact image rendering, responsive burst coalescing, and warm in-memory state.
 
 import asyncio
 import hashlib
+import re
 from dataclasses import dataclass
 from io import BytesIO
 from time import monotonic
@@ -24,7 +25,7 @@ from .profile_card_service import (
     get_effective_profile_settings,
     visible_platform_entries,
 )
-from .profile_signature_renderer import render_member_profile_signature
+from .profile_signature_live_renderer import render_member_profile_signature
 from .profile_signature_style import effective_profile_style
 
 # Responsive runtime timings. The old 4s / 30s / 180s defaults made a forum
@@ -44,7 +45,10 @@ READY_RECONCILE_THROTTLE_SECONDS = _core.READY_RECONCILE_THROTTLE_SECONDS
 LiveCardConfig = _core.LiveCardConfig
 PendingTrigger = _core.PendingTrigger
 live_card_footer = _core.live_card_footer
-parse_live_card_footer = _core.parse_live_card_footer
+_legacy_parse_live_card_footer = _core.parse_live_card_footer
+
+_LIVE_CARD_MARKER_PREFIX = "https://dankshield.app/live-profile/"
+_LIVE_CARD_MARKER_RE = re.compile(r"^https://dankshield\.app/live-profile/(\d+)/(\d+)$")
 
 # Existing private helper imports remain available for callers and tests.
 _channel_ids = _core._channel_ids
@@ -91,6 +95,29 @@ RenderProfile = Callable[..., Awaitable[Optional[LiveCardRender]]]
 Sleep = Callable[[float], Awaitable[None]]
 
 
+def live_card_marker_url(user_id: int, trigger_message_id: int) -> str:
+    """Return an invisible embed URL used as durable ownership metadata."""
+
+    return f"{_LIVE_CARD_MARKER_PREFIX}{int(user_id)}/{int(trigger_message_id)}"
+
+
+def parse_live_card_footer(message: Any) -> Optional[tuple[int, int]]:
+    """Parse old visible footer markers and new invisible embed URL markers."""
+
+    legacy = _legacy_parse_live_card_footer(message)
+    if legacy is not None:
+        return legacy
+    try:
+        for embed in list(getattr(message, "embeds", []) or []):
+            marker = str(getattr(embed, "url", "") or "").strip()
+            match = _LIVE_CARD_MARKER_RE.fullmatch(marker)
+            if match:
+                return int(match.group(1)), int(match.group(2))
+    except Exception:
+        return None
+    return None
+
+
 def parse_live_card_config(config: Mapping[str, Any]) -> LiveCardConfig:
     """Resolve server scope while migrating legacy anti-spam delays.
 
@@ -119,6 +146,7 @@ def _sync_core_dependencies() -> None:
         "list_live_card_states",
         "list_live_card_states_for_user",
         "upsert_live_card_state",
+        "parse_live_card_footer",
         "monotonic",
     ):
         setattr(_core, name, globals()[name])
@@ -189,6 +217,28 @@ def _compact_platform_labels(entries: list[dict[str, Any]]) -> list[str]:
     return labels
 
 
+def _platform_link_line(entries: list[dict[str, Any]]) -> str:
+    """Build a neat clickable account row inside the same Discord embed."""
+
+    parts: list[str] = []
+    for entry in entries[:5]:
+        spec = PLATFORM_SPECS.get(str(entry.get("platform") or ""))
+        if spec is None:
+            continue
+        try:
+            username = display_profile_username(entry.get("username"))
+        except Exception:
+            continue
+        url = str(entry.get("url") or "").strip()
+        if url:
+            parts.append(f"[{spec.emoji} {spec.label}]({url}) `{username}`")
+        else:
+            parts.append(f"{spec.emoji} **{spec.label}** `{username}`")
+    if not parts:
+        return ""
+    return "**Connected profiles**  •  " + "  •  ".join(parts)
+
+
 def _stable_cache_value(value: Any) -> Any:
     if isinstance(value, bytes):
         return ("bytes", hashlib.sha256(value).hexdigest())
@@ -235,7 +285,7 @@ async def render_live_profile_card(
     trigger_message_id: int,
     require_live_enabled: bool = True,
 ) -> Optional[LiveCardRender]:
-    """Render one compact horizontal signature with member-first privacy."""
+    """Render one legible horizontal signature with member-first privacy."""
 
     settings = await get_effective_profile_settings(member.guild.id, member.id)
     preferences = dict(settings.get("preferences") or {})
@@ -286,10 +336,15 @@ async def render_live_profile_card(
         color = member.color if getattr(member.color, "value", 0) else discord.Color.blurple()
     except Exception:
         color = discord.Color.blurple()
-    embed = discord.Embed(color=color)
+    embed = discord.Embed(
+        color=color,
+        description=_platform_link_line(platforms) or None,
+        url=live_card_marker_url(member.id, trigger_message_id),
+    )
     embed.set_image(url=f"attachment://{filename}")
-    embed.set_footer(text=live_card_footer(member.id, trigger_message_id))
-    return LiveCardRender(embed=embed, view=_platform_view(platforms), file=file)
+    # No visible technical footer. Ownership is stored in embed.url and legacy
+    # footer-marked cards remain readable through parse_live_card_footer().
+    return LiveCardRender(embed=embed, view=None, file=file)
 
 
 def _live_card_send_payload(rendered: LiveCardRender) -> dict[str, Any]:
@@ -380,13 +435,16 @@ class LiveProfileCardRuntime(_core.LiveProfileCardRuntime):
         self._prune_trigger_times()
 
         if idle and not self._task_running(self._leading.get(key)):
-            pending = self._pending.pop(key, None)
-            if self._task_running(pending):
-                pending.cancel()
+            previous = self._pending.pop(key, None)
+            if self._task_running(previous):
+                previous.cancel()
             task = asyncio.create_task(self._run_immediate(key, message, config, trigger))
             self._leading[key] = task
+            # Preserve the historical contract that _pending contains every
+            # outstanding channel worker, including the immediate leading task.
+            self._pending[key] = task
             task.add_done_callback(
-                lambda finished, resolved_key=key: self._task_done(self._leading, resolved_key, finished)
+                lambda finished, resolved_key=key: self._leading_done(resolved_key, finished)
             )
             return
 
@@ -404,19 +462,31 @@ class LiveProfileCardRuntime(_core.LiveProfileCardRuntime):
         return task is not None and not task.done()
 
     @staticmethod
+    def _consume_task_result(task: asyncio.Task[Any]) -> None:
+        try:
+            task.result()
+        except asyncio.CancelledError:
+            pass
+        except Exception as exc:
+            print(f"⚠️ live_profile_card worker failed: {type(exc).__name__}: {exc}")
+
+    @classmethod
     def _task_done(
+        cls,
         bucket: dict[tuple[int, int], asyncio.Task[Any]],
         key: tuple[int, int],
         task: asyncio.Task[Any],
     ) -> None:
         if bucket.get(key) is task:
             bucket.pop(key, None)
-        try:
-            task.result()
-        except asyncio.CancelledError:
-            pass
-        except Exception as exc:
-            print(f"⚠️ live_profile_card worker failed key={key}: {type(exc).__name__}: {exc}")
+        cls._consume_task_result(task)
+
+    def _leading_done(self, key: tuple[int, int], task: asyncio.Task[Any]) -> None:
+        if self._leading.get(key) is task:
+            self._leading.pop(key, None)
+        if self._pending.get(key) is task:
+            self._pending.pop(key, None)
+        self._consume_task_result(task)
 
     def _prune_trigger_times(self) -> None:
         if len(self._trigger_received_at) <= 10000:
@@ -513,7 +583,10 @@ class LiveProfileCardRuntime(_core.LiveProfileCardRuntime):
                 continue
             key = (int(guild.id), int(channel.id))
             self._current_cards.pop(key, None)
-            await self._load_current_card(channel)
+            try:
+                await self._load_current_card(channel)
+            except (ProfileStorageUnavailable, _CurrentCardVerificationUnavailable):
+                continue
 
     async def _reconcile_channel(
         self,
@@ -567,6 +640,8 @@ class LiveProfileCardRuntime(_core.LiveProfileCardRuntime):
             task = self._leading.pop(key, None)
             if self._task_running(task):
                 task.cancel()
+            if self._pending.get(key) is task:
+                self._pending.pop(key, None)
             self._latest_messages.pop(key, None)
             self._latest_configs.pop(key, None)
 
@@ -702,10 +777,7 @@ class LiveProfileCardRuntime(_core.LiveProfileCardRuntime):
             )
             return
         if current is not None:
-            if (
-                current.user_id == trigger.user_id
-                and current.trigger_message_id == trigger.message_id
-            ):
+            if current.user_id == trigger.user_id and current.trigger_message_id == trigger.message_id:
                 return
             if current.user_id == trigger.user_id and not force_reposition:
                 return
@@ -845,6 +917,7 @@ __all__ = [
     "LiveProfileCardRuntime",
     "PendingTrigger",
     "live_card_footer",
+    "live_card_marker_url",
     "parse_live_card_config",
     "parse_live_card_footer",
     "render_live_profile_card",
