@@ -223,7 +223,7 @@ def test_message_bursts_coalesce_to_latest_human_speaker(monkeypatch):
     asyncio.run(scenario())
 
 
-def test_same_speaker_is_suppressed_during_cooldown(monkeypatch):
+def test_same_speaker_burst_repositions_once_and_leaves_one_visible_card(monkeypatch):
     async def scenario():
         _patch_discord_types(monkeypatch)
         bot = FakeBot()
@@ -242,18 +242,25 @@ def test_same_speaker_is_suppressed_during_cooldown(monkeypatch):
         async def save_state(*_args, **_kwargs):
             return None
 
+        async def no_wait(_seconds):
+            return None
+
         monkeypatch.setattr(runtime_module, "get_guild_config", get_config)
         monkeypatch.setattr(runtime_module, "get_live_card_state", get_state)
         monkeypatch.setattr(runtime_module, "upsert_live_card_state", save_state)
-        runtime = LiveProfileCardRuntime(bot, renderer=_fake_renderer(seen), sleep=asyncio.sleep)
+        runtime = LiveProfileCardRuntime(bot, renderer=_fake_renderer(seen), sleep=no_wait)
 
         await runtime.on_message(FakeIncomingMessage(1, guild, channel, member))
         await _wait_for_pending(runtime)
         await runtime.on_message(FakeIncomingMessage(2, guild, channel, member))
+        await runtime.on_message(FakeIncomingMessage(3, guild, channel, member))
         await _wait_for_pending(runtime)
 
-        assert len(channel.sent) == 1
-        assert len(seen) == 1
+        assert [item[2] for item in seen] == [1, 3]
+        assert len(channel.sent) == 2
+        assert channel.sent[0].deleted is True
+        assert channel.sent[1].deleted is False
+        assert sum(not message.deleted for message in channel.sent) == 1
 
     asyncio.run(scenario())
 
@@ -400,7 +407,6 @@ def test_restart_reconciliation_keeps_newest_owned_card_and_cleans_duplicates(mo
         assert old.deleted is True
 
     asyncio.run(scenario())
-
 
 
 def test_live_send_omits_none_view_and_keeps_attachment(monkeypatch):
