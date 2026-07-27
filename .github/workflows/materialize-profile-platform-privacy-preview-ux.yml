@@ -22,7 +22,7 @@ jobs:
         with:
           python-version: '3.11'
 
-      - name: Prepare guarded materializer
+      - name: Prepare guarded materializers
         run: |
           python - <<'PY'
           from pathlib import Path
@@ -32,10 +32,12 @@ jobs:
           path.write_text(source, encoding='utf-8')
           PY
 
-      - name: Materialize scoped correction
-        run: python tools/materialize_profile_platform_privacy_preview_ux.py
+      - name: Materialize scoped corrections
+        run: |
+          python tools/materialize_profile_platform_privacy_preview_ux.py
+          python tools/materialize_profile_live_runtime_user_toggle.py
 
-      - name: Finalize component navigation replacements
+      - name: Finalize generated navigation and tests
         run: |
           python - <<'PY'
           from pathlib import Path
@@ -75,6 +77,21 @@ jobs:
               'button = next(child for child in view.children if child.label == "Make Public")',
           )
           test_path.write_text(test_source, encoding='utf-8')
+
+          generated = Path('tests/test_profile_live_runtime_authoritative_member.py')
+          generated_source = generated.read_text(encoding='utf-8')
+          first = generated_source.index('def test_live_runtime_uses_message_author')
+          functions = generated_source[first:]
+          functions = functions.replace(
+              'author = runtime_module.discord.Member(903, guild)',
+              'author = FakeMember(903, guild)',
+          )
+          runtime_tests = Path('tests/test_live_profile_card_runtime.py')
+          runtime_tests.write_text(
+              runtime_tests.read_text(encoding='utf-8') + '\n\n' + functions,
+              encoding='utf-8',
+          )
+          generated.unlink()
           PY
 
       - name: Install dependencies
@@ -94,13 +111,15 @@ jobs:
             python -m py_compile \
               stoney_verify/commands_ext/public_profile_cards.py \
               stoney_verify/commands_ext/public_profile_cards_core.py \
+              stoney_verify/profile_card_runtime.py \
               stoney_verify/profile_signature_studio.py \
               tests/test_profile_platform_privacy_preview_ux.py \
+              tests/test_live_profile_card_runtime.py \
               tests/test_ui_private_followup_payloads.py &&
             python -m pytest \
               tests/test_profile_platform_privacy_preview_ux.py \
-              tests/test_ui_private_followup_payloads.py \
               tests/test_live_profile_card_runtime.py \
+              tests/test_ui_private_followup_payloads.py \
               tests/test_profile_signature_appearance_controls.py \
               tests/test_profile_signature_theme_application.py \
               -q --tb=short --disable-warnings &&
@@ -134,7 +153,14 @@ jobs:
               '**Status:** ROOT CAUSE CONFIRMED / IMPLEMENTATION VALIDATION REQUIRED',
               '**Status:** CLEAN IMPLEMENTATION / EXACT-HEAD CI REQUIRED',
           )
+          source = source.replace(
+              '**Status:** CLEAN IMPLEMENTATION / EXACT-HEAD CI REQUIRED',
+              '**Status:** CLEAN IMPLEMENTATION / EXACT-HEAD CI REQUIRED',
+          )
           for item in (
+              'A valid message still posts when `guild.get_member()` misses but `message.author` is a member.',
+              'Profile Privacy exposes exactly one obvious Turn On/Off Live Signature switch.',
+              'Profile home displays Live Signature: ON/OFF and toggles it in place.',
               'Privacy panel exposes Manage Accounts, Preview Signature, and Back to Profile.',
               'Every platform detail screen shows Make Public or Make Private based on saved state.',
               'Unsaved identities cannot be made Public.',
@@ -153,8 +179,9 @@ jobs:
           )
           path.write_text(source, encoding='utf-8')
           PY
-          git rm .github/workflows/materialize-profile-platform-privacy-preview-ux.yml
-          git rm tools/materialize_profile_platform_privacy_preview_ux.py
+          git rm -f .github/workflows/materialize-profile-platform-privacy-preview-ux.yml
+          git rm -f tools/materialize_profile_platform_privacy_preview_ux.py
+          git rm -f tools/materialize_profile_live_runtime_user_toggle.py
 
       - name: Commit verified clean implementation
         run: |
@@ -163,7 +190,9 @@ jobs:
           git add ACTIVE_TASK.md \
             stoney_verify/commands_ext/public_profile_cards.py \
             stoney_verify/commands_ext/public_profile_cards_core.py \
+            stoney_verify/profile_card_runtime.py \
             stoney_verify/profile_signature_studio.py \
-            tests/test_profile_platform_privacy_preview_ux.py
-          git commit -m 'Simplify profile platform privacy and preview navigation'
+            tests/test_profile_platform_privacy_preview_ux.py \
+            tests/test_live_profile_card_runtime.py
+          git commit -m 'Restore live signatures and simplify member controls'
           git push origin HEAD:${{ github.event.pull_request.head.ref }}
