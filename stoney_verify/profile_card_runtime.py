@@ -541,7 +541,7 @@ class LiveProfileCardRuntime(_core.LiveProfileCardRuntime):
                 message,
                 config,
                 trigger,
-                force_reposition=True,
+                force_reposition=False,
                 source="trailing",
             )
 
