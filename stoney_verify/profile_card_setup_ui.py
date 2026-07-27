@@ -5,7 +5,7 @@ from __future__ import annotations
 The channel picker is intentionally isolated from all welcome-channel settings.
 """
 
-from typing import Any, Iterable, Mapping, Optional
+from typing import Any, Mapping, Optional
 
 import discord
 
@@ -32,6 +32,20 @@ _runtime = _core._runtime
 _edit_or_send = _core._edit_or_send
 _private_message = _core._private_message
 
+
+def _selection_problems(guild: discord.Guild, selected: set[int]) -> list[str]:
+    problems: list[str] = []
+    for channel_id in sorted(_clean_channel_ids(selected)):
+        channel = guild.get_channel(channel_id)
+        if not isinstance(channel, discord.TextChannel):
+            problems.append(f"`{channel_id}` no longer exists")
+            continue
+        missing = _channel_permission_issues(channel)
+        if missing:
+            problems.append(f"{channel.mention}: {', '.join(missing)}")
+    return problems
+
+
 async def _save_selected_channels(
     interaction: discord.Interaction,
     view: "ProfileCardSetupView",
@@ -50,15 +64,7 @@ async def _save_selected_channels(
     if len(cleaned) > _MAX_LIVE_CHANNELS:
         return await _private_message(interaction, f"Choose no more than {_MAX_LIVE_CHANNELS} channels.", ok=False)
 
-    problems: list[str] = []
-    for channel_id in sorted(cleaned):
-        channel = guild.get_channel(channel_id)
-        if not isinstance(channel, discord.TextChannel):
-            problems.append(f"`{channel_id}` no longer exists")
-            continue
-        missing = _channel_permission_issues(channel)
-        if missing:
-            problems.append(f"{channel.mention}: {', '.join(missing)}")
+    problems = _selection_problems(guild, cleaned)
     if problems:
         return await _private_message(
             interaction,
@@ -165,6 +171,14 @@ class _ServerLiveToggleButton(discord.ui.Button):
                 return await _private_message(
                     interaction,
                     "Choose at least one channel above. Selecting it saves and enables the feature immediately.",
+                    ok=False,
+                )
+            problems = _selection_problems(guild, channel_ids)
+            if problems:
+                return await _private_message(
+                    interaction,
+                    "Fix these saved channel permissions before re-enabling live signatures:\n"
+                    + "\n".join(problems)[:1500],
                     ok=False,
                 )
             updated = await upsert_guild_config(guild.id, {LIVE_ENABLED_KEY: True})
