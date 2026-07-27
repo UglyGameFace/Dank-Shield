@@ -1,10 +1,10 @@
 # ACTIVE TASK
 
-## DS-PROFILE-STUDIO-LIVE-008 — Simplify platform visibility and finish preview navigation
+## DS-PROFILE-STUDIO-LIVE-008 — Restore live posting and simplify member controls
 
 **Status:** CLEAN IMPLEMENTATION / EXACT-HEAD CI REQUIRED
 **Branch:** `fix/profile-platform-privacy-preview-ux`
-**PR:** pending
+**PR:** #137
 **Base:** current `main`
 
 ## Single Active Task Lock
@@ -18,9 +18,6 @@ Do not switch to unrelated implementation work until the deployed Profile Signat
 - Privacy exposed eight similarly styled global/server buttons with no Back or Manage Accounts action, making the mobile panel difficult to understand.
 - Preview and style-save callbacks deferred a loading response, then sent follow-up messages instead of completing the deferred response.
 - Platform manager/detail navigation stacked new ephemeral messages rather than replacing one mobile-friendly panel.
-
-## Additional live-runtime finding
-
 - The live worker discarded the authoritative `message.author` member and relied on `guild.get_member()`. A member-cache miss therefore produced a silent no-card result even for a valid message.
 - Members need one obvious ON/OFF switch instead of a generic Every Server Live inheritance button.
 
@@ -49,11 +46,11 @@ Do not switch to unrelated implementation work until the deployed Profile Signat
 - [x] Focused tests and changed-module compilation pass.
 - [ ] Full unit suite and repository audits pass on exact clean head.
 - [ ] Branch is conflict-free with current `main`.
-- [ ] Deployed Discord smoke confirms Steam can be made Public and Preview returns without hanging.
+- [ ] Deployed Discord smoke confirms a designated-channel message posts, Steam can be made Public, the member toggle works, and Preview returns without hanging.
 
 ## Cleanup
 
-- [x] Temporary materialization workflow/script removed before final validation.
+- [x] Temporary materialization workflow/scripts removed before final validation.
 - [x] No duplicate privacy panel, compatibility fork, or temporary runtime path remains.
 
 ## Backlog
