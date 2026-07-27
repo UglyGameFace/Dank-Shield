@@ -67,8 +67,10 @@ list_live_card_states = _core.list_live_card_states
 list_live_card_states_for_user = _core.list_live_card_states_for_user
 upsert_live_card_state = _core.upsert_live_card_state
 
-_SIGNATURE_CACHE_TTL_SECONDS = 600.0
-_SIGNATURE_CACHE_MAX_ITEMS = 5000
+# PNG bytes are the largest in-process objects in this feature. Keep the cache
+# small enough for constrained public hosting while still covering hot speakers.
+_SIGNATURE_CACHE_TTL_SECONDS = 300.0
+_SIGNATURE_CACHE_MAX_ITEMS = 512
 _SIGNATURE_CACHE: dict[tuple[Any, ...], tuple[float, bytes]] = {}
 
 
@@ -272,7 +274,7 @@ def _signature_cache_put(key: tuple[Any, ...], payload: bytes) -> None:
             if created_at < expired_before:
                 _SIGNATURE_CACHE.pop(stale_key, None)
         if len(_SIGNATURE_CACHE) >= _SIGNATURE_CACHE_MAX_ITEMS:
-            oldest = sorted(_SIGNATURE_CACHE.items(), key=lambda item: item[1][0])[:1000]
+            oldest = sorted(_SIGNATURE_CACHE.items(), key=lambda item: item[1][0])[:128]
             for stale_key, _value in oldest:
                 _SIGNATURE_CACHE.pop(stale_key, None)
     _SIGNATURE_CACHE[key] = (monotonic(), bytes(payload))
@@ -488,10 +490,20 @@ class LiveProfileCardRuntime(_core.LiveProfileCardRuntime):
             self._pending.pop(key, None)
         self._consume_task_result(task)
 
-    def _prune_trigger_times(self) -> None:
-        if len(self._trigger_received_at) <= 10000:
+    def _release_trigger_context(self, key: tuple[int, int], trigger: PendingTrigger) -> None:
+        """Release heavy incoming message/config references after the worker."""
+
+        if self._latest.get(key) != trigger:
             return
-        oldest = sorted(self._trigger_received_at.items(), key=lambda item: item[1])[:2000]
+        self._latest.pop(key, None)
+        self._latest_messages.pop(key, None)
+        self._latest_configs.pop(key, None)
+        self._trigger_received_at.pop((key[0], key[1], trigger.message_id), None)
+
+    def _prune_trigger_times(self) -> None:
+        if len(self._trigger_received_at) <= 2048:
+            return
+        oldest = sorted(self._trigger_received_at.items(), key=lambda item: item[1])[:512]
         for trigger_key, _created_at in oldest:
             self._trigger_received_at.pop(trigger_key, None)
 
@@ -511,13 +523,16 @@ class LiveProfileCardRuntime(_core.LiveProfileCardRuntime):
             trigger = self._latest.get(key, fallback_trigger)
             message = self._latest_messages.get(key, fallback_message)
             config = self._latest_configs.get(key, fallback_config)
-            await self._replace_card(
-                message,
-                config,
-                trigger,
-                force_reposition=True,
-                source="leading",
-            )
+            try:
+                await self._replace_card(
+                    message,
+                    config,
+                    trigger,
+                    force_reposition=True,
+                    source="leading",
+                )
+            finally:
+                self._release_trigger_context(key, trigger)
 
     async def _run_trailing(self, key: tuple[int, int], trigger: PendingTrigger) -> None:
         config = self._latest_configs.get(key)
@@ -536,14 +551,18 @@ class LiveProfileCardRuntime(_core.LiveProfileCardRuntime):
             message = self._latest_messages.get(key)
             config = self._latest_configs.get(key)
             if message is None or config is None:
+                self._release_trigger_context(key, trigger)
                 return
-            await self._replace_card(
-                message,
-                config,
-                trigger,
-                force_reposition=False,
-                source="trailing",
-            )
+            try:
+                await self._replace_card(
+                    message,
+                    config,
+                    trigger,
+                    force_reposition=False,
+                    source="trailing",
+                )
+            finally:
+                self._release_trigger_context(key, trigger)
 
     async def reconcile(self) -> None:
         """Keep setup-time reconciliation bounded in public deployments.
