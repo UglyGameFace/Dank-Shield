@@ -67,6 +67,7 @@ def test_member_actions_are_guarded_and_confirmed() -> None:
     assert "Confirmation did not match" in source
     assert "class MemberTimeoutModal" in source
     assert "record_member_action" in source
+    assert source.count("if not await require_review(interaction):") >= 3
 
 
 def test_verify_reuses_owned_basic_verification_service_without_bypassing_protected_modes() -> None:
@@ -90,6 +91,9 @@ def test_bulk_tools_exclude_mass_punishment() -> None:
     assert 'label="Kick"' not in bulk
     assert 'label="Ban"' not in bulk
     assert 'label="Timeout"' not in bulk
+    assert "if not await require_review(interaction):" in source
+    assert 'action_lock(interaction.guild.id, member.id, "bulk_dm")' in source
+    assert 'action_lock(interaction.guild.id, target.id, f"bulk_{self.parent_view.action}")' in source
 
 
 def test_setup_center_links_to_role_browser() -> None:
