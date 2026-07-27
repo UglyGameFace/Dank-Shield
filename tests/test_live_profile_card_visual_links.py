@@ -26,8 +26,9 @@ class Member:
 
 
 class Message:
-    def __init__(self, embed: discord.Embed) -> None:
+    def __init__(self, embed: discord.Embed, *, filenames: tuple[str, ...] = ()) -> None:
         self.embeds = [embed]
+        self.attachments = [SimpleNamespace(filename=filename) for filename in filenames]
 
 
 def test_live_renderer_uses_legible_mobile_friendly_dimensions():
@@ -90,7 +91,57 @@ def test_clickable_profiles_are_inside_embed_and_technical_footer_is_hidden(monk
         assert "`@UGLY123`" in str(rendered.embed.description)
         assert not str(getattr(rendered.embed.footer, "text", "") or "")
         assert rendered.embed.url == runtime.live_card_marker_url(member.id, 99)
-        assert runtime.parse_live_card_footer(Message(rendered.embed)) == (member.id, 99)
+        assert rendered.file is not None
+        assert rendered.file.filename == "dank-live-profile-42-99.png"
+        assert runtime.parse_live_card_footer(
+            Message(rendered.embed, filenames=(rendered.file.filename,))
+        ) == (member.id, 99)
+
+    asyncio.run(scenario())
+
+
+def test_url_capable_public_identity_never_silently_looks_clickable_without_a_link(monkeypatch):
+    async def scenario() -> None:
+        member = Member()
+
+        async def settings(_guild_id: int, _user_id: int):
+            return {
+                "preferences": {
+                    "live_cards_enabled": True,
+                    "show_roles": False,
+                    "show_account_dates": False,
+                    "show_platforms": True,
+                },
+                "platforms": {
+                    "steam": {
+                        "platform": "steam",
+                        "username": "@UGLY123",
+                        "url": "",
+                        "shared": True,
+                    }
+                },
+            }
+
+        async def config(_guild_id: int):
+            return {}
+
+        async def image_renderer(_member, **_kwargs):
+            return b"image"
+
+        monkeypatch.setattr(runtime, "get_effective_profile_settings", settings)
+        monkeypatch.setattr(runtime, "get_guild_config", config)
+        monkeypatch.setattr(runtime, "render_member_profile_signature", image_renderer)
+        runtime._SIGNATURE_CACHE.clear()
+
+        rendered = await runtime.render_live_profile_card(
+            member,
+            {"platforms"},
+            trigger_message_id=100,
+        )
+
+        assert rendered is not None
+        assert "⚠️ **Steam** `@UGLY123` *(add official link)*" in str(rendered.embed.description)
+        assert "steamcommunity.com" not in str(rendered.embed.description)
 
     asyncio.run(scenario())
 
@@ -131,7 +182,7 @@ def test_username_only_public_accounts_remain_visible_without_fake_links(monkeyp
         rendered = await runtime.render_live_profile_card(
             member,
             {"platforms"},
-            trigger_message_id=100,
+            trigger_message_id=101,
         )
 
         assert rendered is not None
@@ -141,7 +192,12 @@ def test_username_only_public_accounts_remain_visible_without_fake_links(monkeyp
     asyncio.run(scenario())
 
 
-def test_legacy_footer_cards_remain_cleanup_compatible():
-    embed = discord.Embed()
-    embed.set_footer(text=runtime.live_card_footer(55, 66))
-    assert runtime.parse_live_card_footer(Message(embed)) == (55, 66)
+def test_legacy_footer_and_attachment_markers_remain_cleanup_compatible():
+    legacy = discord.Embed()
+    legacy.set_footer(text=runtime.live_card_footer(55, 66))
+    assert runtime.parse_live_card_footer(Message(legacy)) == (55, 66)
+
+    modern = discord.Embed()
+    assert runtime.parse_live_card_footer(
+        Message(modern, filenames=("dank-live-profile-77-88.png",))
+    ) == (77, 88)
