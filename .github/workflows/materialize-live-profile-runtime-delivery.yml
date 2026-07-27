@@ -1,0 +1,81 @@
+name: Materialize live profile runtime delivery
+
+on:
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: write
+
+jobs:
+  materialize:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Materialize scoped correction
+        run: python tools/materialize_live_profile_runtime_delivery.py
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip -q
+          pip install -q -r requirements.txt
+          pip install -q pytest
+
+      - name: Run focused validation
+        env:
+          DANK_STARTUP_LOG_STYLE: quiet
+          DANK_COMMAND_LOG_STYLE: quiet
+        run: |
+          python -m py_compile \
+            stoney_verify/profile_card_runtime.py \
+            stoney_verify/profile_card_runtime_core.py \
+            tests/test_live_profile_runtime_delivery_regression.py \
+            tests/test_live_profile_card_runtime.py
+          python -m pytest \
+            tests/test_live_profile_runtime_delivery_regression.py \
+            tests/test_live_profile_card_runtime.py \
+            tests/test_profile_platform_privacy_preview_ux.py \
+            -q --tb=short --disable-warnings
+          git diff --check
+
+      - name: Record focused validation and clean helpers
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          path = Path('ACTIVE_TASK.md')
+          source = path.read_text(encoding='utf-8')
+          source = source.replace(
+              '**Status:** ROOT CAUSE CONFIRMED / IMPLEMENTATION VALIDATION REQUIRED',
+              '**Status:** CLEAN IMPLEMENTATION / EXACT-HEAD CI REQUIRED',
+          )
+          for item in (
+              'A real message author posts even when `guild.get_member()` returns `None`.',
+              'Missing stored cards never suppress a replacement signature.',
+              'Focused tests and changed-module compilation pass.',
+          ):
+              source = source.replace(f'- [ ] {item}', f'- [x] {item}')
+          path.write_text(source, encoding='utf-8')
+          PY
+          git rm .github/workflows/materialize-live-profile-runtime-delivery.yml
+          git rm tools/materialize_live_profile_runtime_delivery.py
+
+      - name: Commit verified clean implementation
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add ACTIVE_TASK.md \
+            stoney_verify/profile_card_runtime.py \
+            stoney_verify/profile_card_runtime_core.py \
+            tests/test_live_profile_runtime_delivery_regression.py
+          git commit -m 'Restore live profile signature delivery'
+          git push origin HEAD:${{ github.event.pull_request.head.ref }}
