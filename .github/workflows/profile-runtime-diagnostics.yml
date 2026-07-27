@@ -4,19 +4,66 @@ on:
   pull_request:
     paths:
       - "stoney_verify/profile_card_runtime.py"
+      - "stoney_verify/profile_card_runtime_core.py"
       - "stoney_verify/profile_card_service.py"
       - "stoney_verify/profile_signature_live_renderer.py"
       - "stoney_verify/profile_signature_studio.py"
+      - "stoney_verify/commands_ext/public_profile_cards.py"
       - "supabase/migrations/*live_profile*.sql"
       - "tests/test_live_profile*.py"
       - "tests/test_profile_card*.py"
+      - "tools/apply_profile_platform_modes_patch.py"
       - ".github/workflows/profile-runtime-diagnostics.yml"
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
+  apply-platform-modes:
+    if: ${{ github.head_ref == 'fix/live-profile-channel-spam' && !contains(github.event.pull_request.head.sha, '0000000') }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/live-profile-channel-spam
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Apply focused source patch
+        run: python tools/apply_profile_platform_modes_patch.py
+      - name: Validate patched Python syntax
+        run: |
+          python -m py_compile \
+            stoney_verify/profile_card_service.py \
+            stoney_verify/profile_card_runtime_core.py \
+            stoney_verify/profile_card_runtime.py \
+            stoney_verify/profile_signature_studio.py \
+            stoney_verify/commands_ext/public_profile_cards.py \
+            tests/test_live_profile_card_visual_links.py \
+            tests/test_profile_platform_display_modes.py
+      - name: Commit generated patch when needed
+        shell: bash
+        run: |
+          if git diff --quiet && [[ -z "$(git status --porcelain --untracked-files=all)" ]]; then
+            echo 'No source changes needed.'
+            exit 0
+          fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add \
+            stoney_verify/profile_card_service.py \
+            stoney_verify/profile_card_runtime_core.py \
+            stoney_verify/profile_card_runtime.py \
+            stoney_verify/profile_signature_studio.py \
+            stoney_verify/commands_ext/public_profile_cards.py \
+            tests/test_live_profile_card_visual_links.py \
+            tests/test_profile_platform_display_modes.py
+          git commit -m 'Add profile platform display modes [skip platform patch]'
+          git push origin HEAD:fix/live-profile-channel-spam
+
   focused-profile-tests:
     runs-on: ubuntu-24.04
     timeout-minutes: 15
@@ -48,6 +95,7 @@ jobs:
             tests/test_live_profile_runtime_responsive.py \
             tests/test_profile_card_setup_picker_ux.py \
             tests/test_profile_card_migration_safety.py \
+            tests/test_profile_platform_display_modes.py \
             > profile-runtime-tests.txt 2>&1
           status=$?
           echo "exit_code=$status" >> "$GITHUB_OUTPUT"
