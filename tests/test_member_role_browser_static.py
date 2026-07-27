@@ -5,6 +5,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 BROWSER = ROOT / "stoney_verify" / "commands_ext" / "public_member_role_browser.py"
+CENTER_UI = ROOT / "stoney_verify" / "commands_ext" / "member_command_center.py"
 COMMON = ROOT / "stoney_verify" / "commands_ext" / "member_role_browser_common.py"
 REVIEW_PANEL = ROOT / "stoney_verify" / "commands_ext" / "member_role_browser_review.py"
 ACTIONS = ROOT / "stoney_verify" / "commands_ext" / "member_role_browser_actions.py"
@@ -21,6 +22,7 @@ def _source(path: Path) -> str:
 def test_sources_parse() -> None:
     for path in (
         BROWSER,
+        CENTER_UI,
         COMMON,
         REVIEW_PANEL,
         ACTIONS,
@@ -32,31 +34,61 @@ def test_sources_parse() -> None:
         ast.parse(_source(path))
 
 
-def test_browse_command_attaches_to_existing_members_group() -> None:
+def test_one_members_command_replaces_visible_subcommand_group() -> None:
     source = _source(BROWSER)
     review = _source(REVIEW)
-    assert "from .public_members_group import members_group" in source
-    assert '@members_group.command(\n            name="browse"' in source
-    assert "async def browse_members" in source
-    assert "Optional[discord.Role]" in source
+    assert "from .public_setup_group import dank_group" in source
+    assert 'dank_group.get_command("members")' in source
+    assert "isinstance(existing, app_commands.Group)" in source
+    assert 'dank_group.remove_command("members")' in source
+    assert '@dank_group.command(\n            name="members"' in source
+    assert "open_member_command_center" in source
+    assert 'name="browse"' not in source
     assert "register_public_member_role_browser_commands(bot, tree)" in review
 
 
+def test_member_center_has_button_driven_categories() -> None:
+    source = _source(CENTER_UI)
+    assert "class MemberCommandCenterView(OwnedView)" in source
+    assert 'label="Live Members"' in source
+    assert 'label="Activity & Cleanup"' in source
+    assert 'label="Intelligence"' in source
+    assert 'label="Operations & Safety"' in source
+    assert "class LiveMembersMenuView" in source
+    assert "class ActivityCleanupMenuView" in source
+    assert "class IntelligenceMenuView" in source
+    assert "class OperationsSafetyMenuView" in source
+
+
 def test_browser_has_role_picker_pagination_search_and_sort() -> None:
-    source = _source(ROSTER) + "\n" + _source(BROWSER)
-    assert "class BrowserRoleSelect(discord.ui.RoleSelect)" in source
+    source = _source(ROSTER) + "\n" + _source(CENTER_UI)
+    assert "class CenterRoleSelect(discord.ui.RoleSelect)" in source
     assert "_BROWSER_PAGE_SIZE = 20" in source
     assert "class MemberRosterSelect(discord.ui.Select)" in source
     assert "class BrowserSortSelect(discord.ui.Select)" in source
     assert "class BrowserFilterSelect(discord.ui.Select)" in source
-    assert "class QuickRoleButton(discord.ui.Button)" in source
-    assert "async def _load_quick_roles" in source
+    assert "class CenterQuickRoleButton(discord.ui.Button)" in source
+    assert "class DirectMemberSelect(discord.ui.UserSelect)" in source
     assert "class MemberSearchModal" in source
     assert 'label="Previous"' in source
     assert 'label="Next"' in source
     assert 'label="Refresh"' in source
-    assert "await interaction.response.defer()" in source
-    assert "await interaction.edit_original_response(" in source
+    assert 'label="Command Center"' in source
+
+
+def test_internal_member_tools_are_reused_behind_ui() -> None:
+    source = _source(CENTER_UI)
+    assert "async def _invoke_command" in source
+    assert "from .public_members_group import _run_activity_scan" in source
+    assert "from .public_members_group import members_locked" in source
+    assert "from .public_members_group import members_notices" in source
+    assert "from .public_members_group import members_coverage" in source
+    assert "from .public_members_cleanup_group import members_cleanup_user" in source
+    assert "from .public_members_cleanup_group import members_cleanup_queue" in source
+    assert "from .public_members_cleanup_group import members_purge_all" in source
+    assert "from .public_members_cleanup_group import members_cleanup_settings" in source
+    assert "from .public_member_review_feedback import review_history" in source
+    assert "open_review_panel" in source
 
 
 def test_browser_modules_are_wired_without_private_cross_module_calls() -> None:
@@ -121,11 +153,13 @@ def test_bulk_tools_exclude_mass_punishment() -> None:
     assert "blockers = await role_action_blockers(" in source
 
 
-def test_setup_center_links_to_role_browser() -> None:
+def test_setup_center_links_to_role_browser_without_command_slot() -> None:
     source = _source(CENTER)
+    browser = _source(BROWSER)
     assert 'label="Browse by Role"' in source
     assert "public_member_role_browser as browser" in source
     assert "await browser._open_member_browser(interaction)" in source
+    assert "without exposing another slash subcommand" in browser
 
 
 def test_review_feedback_safety_contract_remains_non_enforcing() -> None:
@@ -148,7 +182,10 @@ def test_review_feedback_safety_contract_remains_non_enforcing() -> None:
 
 
 def test_component_rows_stay_inside_discord_limits() -> None:
-    source = "\n".join(_source(path) for path in (ROSTER, BULK, ACTIONS))
+    source = "\n".join(
+        _source(path)
+        for path in (CENTER_UI, ROSTER, BULK, ACTIONS)
+    )
     tree = ast.parse(source)
     rows: list[int] = []
     for node in ast.walk(tree):
