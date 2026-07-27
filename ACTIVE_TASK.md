@@ -2,7 +2,7 @@
 
 ## DS-PROFILE-STUDIO-LIVE-008 — Restore live posting and simplify member controls
 
-**Status:** CLEAN IMPLEMENTATION / FINAL EXACT-HEAD CI RUNNING
+**Status:** MERGE READY / DEPLOYED SMOKE PENDING
 **Branch:** `fix/profile-platform-privacy-preview-ux`
 **PR:** #137
 **Base:** current `main`
@@ -47,7 +47,7 @@ Do not switch to unrelated implementation work until the deployed Profile Signat
 - [x] Privacy summaries clearly mark Steam and all other platforms Public/Private.
 - [x] Preview and style-save callbacks complete the original deferred response.
 - [x] Focused tests and changed-module compilation pass.
-- [ ] Full unit suite and repository audits pass on exact clean head.
+- [x] Full unit suite and repository audits pass on exact clean head.
 - [x] Branch is conflict-free with current `main`.
 - [ ] Deployed Discord smoke confirms a designated-channel message posts, Steam can be made Public, the member toggle works, and Preview returns without hanging.
 
