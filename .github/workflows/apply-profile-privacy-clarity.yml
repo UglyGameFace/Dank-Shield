@@ -34,48 +34,49 @@ jobs:
           path.write_text(source, encoding='utf-8')
           PY
       - name: Materialize guarded clarity correction
-        shell: bash
-        run: |
-          set +e
-          python tools/materialize_profile_privacy_clarity.py > privacy-clarity-materialize.log 2>&1
-          status=$?
-          set -e
-          cat privacy-clarity-materialize.log
-          printf '%s' "$status" > privacy-clarity-materialize.status
-      - name: Upload materialization diagnostics
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: profile-privacy-clarity-materialization
-          path: |
-            privacy-clarity-materialize.log
-            privacy-clarity-materialize.status
-          if-no-files-found: error
-      - name: Verify materialization
-        run: test "$(cat privacy-clarity-materialize.status)" = "0"
+        run: python tools/materialize_profile_privacy_clarity.py
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip -q
           pip install -q -r requirements.txt
           pip install -q pytest
       - name: Validate profile privacy and live controls
+        shell: bash
         env:
           DANK_STARTUP_LOG_STYLE: quiet
           DANK_COMMAND_LOG_STYLE: quiet
         run: |
-          python -m py_compile \
-            stoney_verify/commands_ext/public_profile_cards.py \
-            stoney_verify/commands_ext/public_profile_cards_core.py \
-            stoney_verify/profile_signature_studio.py \
-            tests/test_profile_platform_privacy_preview_ux.py \
-            tests/test_live_profile_card_interaction_safety.py
-          python -m pytest \
-            tests/test_profile_platform_privacy_preview_ux.py \
-            tests/test_live_profile_card_interaction_safety.py \
-            tests/test_live_profile_card_runtime.py \
-            tests/test_ui_private_followup_payloads.py \
-            -q --tb=short --disable-warnings
-          git diff --check
+          set +e
+          (
+            python -m py_compile \
+              stoney_verify/commands_ext/public_profile_cards.py \
+              stoney_verify/commands_ext/public_profile_cards_core.py \
+              stoney_verify/profile_signature_studio.py \
+              tests/test_profile_platform_privacy_preview_ux.py \
+              tests/test_live_profile_card_interaction_safety.py &&
+            python -m pytest \
+              tests/test_profile_platform_privacy_preview_ux.py \
+              tests/test_live_profile_card_interaction_safety.py \
+              tests/test_live_profile_card_runtime.py \
+              tests/test_ui_private_followup_payloads.py \
+              -q --tb=short --disable-warnings &&
+            git diff --check
+          ) > privacy-clarity-validation.log 2>&1
+          status=$?
+          set -e
+          cat privacy-clarity-validation.log
+          printf '%s' "$status" > privacy-clarity-validation.status
+      - name: Upload clarity validation diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: profile-privacy-clarity-validation
+          path: |
+            privacy-clarity-validation.log
+            privacy-clarity-validation.status
+          if-no-files-found: error
+      - name: Verify clarity validation
+        run: test "$(cat privacy-clarity-validation.status)" = "0"
       - name: Record clarity validation and remove temporary helpers
         run: |
           python - <<'PY'
