@@ -12,7 +12,7 @@ from .public_profile_cards_core import *  # noqa: F401,F403
 from .public_self_roles_group import profile_group
 from stoney_verify.guild_config import get_guild_config
 from stoney_verify.profile_card_runtime import (
-    LiveProfileCardRuntime,
+    PerMemberLiveProfileCardRuntime,
     parse_live_card_config,
     render_live_profile_card,
 )
@@ -375,8 +375,8 @@ def register_public_profile_cards(bot: Any, tree: Any) -> None:
     if bot is None:
         return
     runtime = getattr(bot, _RUNTIME_ATTRIBUTE, None)
-    if not isinstance(runtime, LiveProfileCardRuntime):
-        runtime = LiveProfileCardRuntime(bot)
+    if not isinstance(runtime, PerMemberLiveProfileCardRuntime):
+        runtime = PerMemberLiveProfileCardRuntime(bot)
         setattr(bot, _RUNTIME_ATTRIBUTE, runtime)
         bot.add_listener(runtime.on_message, "on_message")
         bot.add_listener(runtime.on_ready, "on_ready")

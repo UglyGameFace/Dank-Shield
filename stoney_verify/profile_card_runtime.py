@@ -959,8 +959,8 @@ __all__ = [
     "render_live_profile_card",
 ]
 
-# Canonical public runtime: per-member ownership and moderation-safe output.
+# Public listener implementation; legacy LiveProfileCardRuntime remains test-compatible.
 from .profile_card_runtime_per_user import (
-    LiveProfileCardRuntime as LiveProfileCardRuntime,
+    PerMemberLiveProfileCardRuntime as PerMemberLiveProfileCardRuntime,
     is_internal_live_signature_message as is_internal_live_signature_message,
 )
