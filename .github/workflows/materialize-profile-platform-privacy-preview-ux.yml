@@ -64,24 +64,53 @@ jobs:
           pip install -q pytest
 
       - name: Run focused validation
+        shell: bash
         env:
           DANK_STARTUP_LOG_STYLE: quiet
           DANK_COMMAND_LOG_STYLE: quiet
         run: |
-          python -m py_compile \
-            stoney_verify/commands_ext/public_profile_cards.py \
-            stoney_verify/commands_ext/public_profile_cards_core.py \
-            stoney_verify/profile_signature_studio.py \
-            tests/test_profile_platform_privacy_preview_ux.py \
-            tests/test_ui_private_followup_payloads.py
-          python -m pytest \
-            tests/test_profile_platform_privacy_preview_ux.py \
-            tests/test_ui_private_followup_payloads.py \
-            tests/test_live_profile_card_runtime.py \
-            tests/test_profile_signature_appearance_controls.py \
-            tests/test_profile_signature_theme_application.py \
-            -q --tb=short --disable-warnings
-          git diff --check
+          set +e
+          {
+            python -m py_compile \
+              stoney_verify/commands_ext/public_profile_cards.py \
+              stoney_verify/commands_ext/public_profile_cards_core.py \
+              stoney_verify/profile_signature_studio.py \
+              tests/test_profile_platform_privacy_preview_ux.py \
+              tests/test_ui_private_followup_payloads.py
+            compile_status=$?
+            if [ "$compile_status" -ne 0 ]; then
+              exit "$compile_status"
+            fi
+            python -m pytest \
+              tests/test_profile_platform_privacy_preview_ux.py \
+              tests/test_ui_private_followup_payloads.py \
+              tests/test_live_profile_card_runtime.py \
+              tests/test_profile_signature_appearance_controls.py \
+              tests/test_profile_signature_theme_application.py \
+              -q --tb=short --disable-warnings
+            test_status=$?
+            if [ "$test_status" -ne 0 ]; then
+              exit "$test_status"
+            fi
+            git diff --check
+          } > focused-validation.log 2>&1
+          status=$?
+          set -e
+          cat focused-validation.log
+          printf '%s' "$status" > focused-validation.status
+
+      - name: Upload focused validation diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: profile-platform-privacy-preview-validation
+          path: |
+            focused-validation.log
+            focused-validation.status
+          if-no-files-found: error
+
+      - name: Verify focused validation
+        run: test "$(cat focused-validation.status)" = "0"
 
       - name: Record focused validation and clean helpers
         run: |
