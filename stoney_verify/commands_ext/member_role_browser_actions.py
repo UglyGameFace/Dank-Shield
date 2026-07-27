@@ -13,6 +13,7 @@ from .member_role_browser_common import (
     display_name,
     record_member_action,
     reply_ephemeral,
+    require_review,
     role_action_blockers,
     timestamp,
     trim,
@@ -236,6 +237,8 @@ class MemberMessageModal(discord.ui.Modal, title="Message member"):
         self.parent = parent
 
     async def on_submit(self, interaction: discord.Interaction) -> None:
+        if not await require_review(interaction):
+            return
         target = await self.parent._fresh_target(interaction)
         if target is None:
             return
@@ -284,6 +287,8 @@ class MemberTimeoutModal(discord.ui.Modal, title="Timeout member"):
         self.parent = parent
 
     async def on_submit(self, interaction: discord.Interaction) -> None:
+        if not await require_review(interaction):
+            return
         target = await self.parent._fresh_target(interaction)
         if target is None:
             return
@@ -343,6 +348,8 @@ class MemberDestructiveActionModal(discord.ui.Modal):
         super().__init__(title=f"Confirm {action.title()}", timeout=300)
 
     async def on_submit(self, interaction: discord.Interaction) -> None:
+        if not await require_review(interaction):
+            return
         target = await self.parent._fresh_target(interaction)
         if target is None:
             return
@@ -363,7 +370,7 @@ class MemberDestructiveActionModal(discord.ui.Modal):
                 else:
                     await interaction.guild.ban(target, reason=audit_reason, delete_message_seconds=0)
                 ok = True
-                result = f"{display_name(target)} was {self.action}ed."
+                result = f"{display_name(target)} was {'kicked' if self.action == 'kick' else 'banned'}."
             except discord.Forbidden:
                 ok = False
                 result = f"Discord blocked the {self.action}. Check permissions and role hierarchy."
