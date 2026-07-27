@@ -1,0 +1,61 @@
+name: Profile Runtime Diagnostics
+
+on:
+  pull_request:
+    paths:
+      - "stoney_verify/profile_card_runtime.py"
+      - "stoney_verify/profile_signature_live_renderer.py"
+      - "stoney_verify/profile_signature_studio.py"
+      - "tests/test_live_profile*.py"
+      - "tests/test_profile_card*.py"
+      - ".github/workflows/profile-runtime-diagnostics.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  focused-profile-tests:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+          python -m pip install pytest
+      - name: Run focused profile runtime tests
+        id: tests
+        shell: bash
+        run: |
+          set +e
+          python -m pytest -q \
+            tests/test_live_profile_card_runtime.py \
+            tests/test_live_profile_runtime_delivery_regression.py \
+            tests/test_live_profile_card_cleanup.py \
+            tests/test_live_profile_card_final_safety.py \
+            tests/test_live_profile_card_integration_contract.py \
+            tests/test_live_profile_card_visual_links.py \
+            tests/test_live_profile_runtime_responsive.py \
+            tests/test_profile_card_setup_picker_ux.py \
+            > profile-runtime-tests.txt 2>&1
+          status=$?
+          echo "exit_code=$status" >> "$GITHUB_OUTPUT"
+          tail -n 250 profile-runtime-tests.txt
+          exit 0
+      - name: Upload exact test output
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: profile-runtime-diagnostics
+          path: profile-runtime-tests.txt
+          if-no-files-found: error
+          retention-days: 1
+      - name: Fail when focused tests failed
+        if: steps.tests.outputs.exit_code != '0'
+        run: exit 1
