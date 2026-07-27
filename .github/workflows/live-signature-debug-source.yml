@@ -1,0 +1,32 @@
+name: Live Signature Source Snapshot
+
+on:
+  push:
+    branches:
+      - fix/live-signature-per-user-moderation-safe
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  snapshot:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Collect relevant source
+        run: |
+          mkdir -p live-signature-source/stoney_verify live-signature-source/tests live-signature-source/sql
+          cp stoney_verify/profile_card_runtime.py live-signature-source/stoney_verify/
+          cp stoney_verify/profile_card_runtime_core.py live-signature-source/stoney_verify/
+          cp stoney_verify/profile_card_service.py live-signature-source/stoney_verify/
+          find stoney_verify -maxdepth 4 -type f \( -iname '*spam*' -o -iname '*raid*' -o -iname '*message*guard*' \) -print0 | xargs -0 -r cp --parents -t live-signature-source/
+          find tests -maxdepth 2 -type f \( -iname '*profile*' -o -iname '*spam*' -o -iname '*raid*' \) -print0 | xargs -0 -r cp --parents -t live-signature-source/
+          find . -maxdepth 5 -type f \( -iname '*.sql' -o -iname '*schema*' \) -print0 | xargs -0 -r cp --parents -t live-signature-source/sql/
+      - uses: actions/upload-artifact@v4
+        with:
+          name: live-signature-source
+          path: live-signature-source
+          retention-days: 1
+          if-no-files-found: error
