@@ -1,0 +1,63 @@
+name: Apply Live Signature Per-Member Fix
+
+on:
+  push:
+    branches:
+      - fix/live-signature-per-member-ownership
+    paths:
+      - .github/workflows/apply-live-signature-per-member-fix.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: apply-live-signature-per-member-fix
+  cancel-in-progress: false
+
+jobs:
+  apply:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/live-signature-per-member-ownership
+          fetch-depth: 0
+
+      - name: Restore reviewed implementation
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat tools/.live-signature-fix-payload-00 \
+              tools/.live-signature-fix-payload-01 \
+              tools/.live-signature-fix-payload-02 \
+              tools/.live-signature-fix-payload-03 \
+              > /tmp/live-signature-fix.b64
+          base64 --decode /tmp/live-signature-fix.b64 > /tmp/live-signature-fix.tgz
+          tar -xzf /tmp/live-signature-fix.tgz -C .
+          rm -f tools/.live-signature-fix-payload-0{0,1,2,3}
+          rm -f .github/workflows/apply-live-signature-per-member-fix.yml
+
+      - name: Validate restored source
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m compileall -q stoney_verify tests
+          python -m pytest -q \
+            tests/test_profile_card_migration_safety.py \
+            tests/test_live_profile_moderation_isolation.py
+          git diff --check
+          test ! -e .github/workflows/apply-live-signature-per-member-fix.yml
+          test -z "$(find tools -maxdepth 1 -name '.live-signature-fix-payload-*' -print -quit)"
+
+      - name: Commit clean implementation
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git diff --cached --check
+          git commit -m "Fix live signature ownership per member"
+          git push origin HEAD:fix/live-signature-per-member-ownership
