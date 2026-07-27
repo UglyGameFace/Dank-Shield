@@ -135,22 +135,24 @@ def test_malformed_profile_ports_are_user_safe_validation_errors():
         normalize_platform_url("steam", "https://steamcommunity.com:notaport/id/example")
 
 
-def test_replacement_cooldown_defaults_prevent_alternating_speaker_spam():
+def test_legacy_cooldowns_migrate_to_fast_burst_coalescing_defaults():
     config = parse_live_card_config(
         {
             "profile_live_cards_enabled": True,
             "profile_live_card_channel_ids": ["123456"],
+            "profile_live_card_debounce_seconds": 4,
+            "profile_live_card_replacement_cooldown_seconds": 30,
+            "profile_live_card_same_speaker_cooldown_seconds": 180,
         }
     )
-    assert config.replacement_cooldown_seconds == 30.0
-    assert config.same_speaker_cooldown_seconds == 180.0
+    assert config.debounce_seconds == 0.0
+    assert config.replacement_cooldown_seconds < 1.0
+    assert config.same_speaker_cooldown_seconds <= 2.0
 
 
-def test_alternating_speaker_is_delayed_until_channel_replacement_cooldown(monkeypatch):
+def test_alternating_speaker_uses_short_trailing_burst_window(monkeypatch):
     async def scenario():
         _patch_types(monkeypatch)
-        clock = iter([100.0, 100.0])
-        monkeypatch.setattr(runtime_module, "monotonic", lambda: next(clock))
         bot = FakeBot()
         guild = FakeGuild(1, bot.user)
         channel = guild.add_channel(10)
@@ -168,11 +170,12 @@ def test_alternating_speaker_is_delayed_until_channel_replacement_cooldown(monke
 
         monkeypatch.setattr(runtime_module, "get_guild_config", config)
         runtime = LiveProfileCardRuntime(bot)
-        runtime._last_posted[(guild.id, channel.id)] = (101, 90.0)
+        runtime._last_activity[(guild.id, channel.id)] = runtime_module.monotonic()
         await runtime.on_message(FakeIncomingMessage(1, guild, channel, member))
         trigger = runtime._latest[(guild.id, channel.id)]
         assert trigger.user_id == member.id
-        assert trigger.delay_seconds == 20.0
+        assert trigger.delay_seconds == runtime_module.DEFAULT_REPLACEMENT_COOLDOWN_SECONDS
+        assert trigger.delay_seconds < 1.0
         pending = runtime._pending[(guild.id, channel.id)]
         pending.cancel()
         await asyncio.gather(pending, return_exceptions=True)
