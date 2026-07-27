@@ -25,6 +25,19 @@ jobs:
       - name: Materialize scoped correction
         run: python tools/materialize_live_profile_runtime_delivery.py
 
+      - name: Make refreshed config lookup backward compatible
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          path = Path('stoney_verify/profile_card_runtime_core.py')
+          source = path.read_text(encoding='utf-8')
+          old = '''        try:\n            config = parse_live_card_config(await get_guild_config(message.guild.id, refresh=True))\n        except Exception as exc:\n            print(\n                "⚠️ live_profile_card skipped "\n                f"guild={message.guild.id} channel={message.channel.id} user={message.author.id} "\n                f"reason=config_read_failed error={type(exc).__name__}: {exc}"\n            )\n            return\n'''
+          new = '''        try:\n            try:\n                raw_config = await get_guild_config(message.guild.id, refresh=True)\n            except TypeError as exc:\n                if "refresh" not in str(exc):\n                    raise\n                raw_config = await get_guild_config(message.guild.id)\n            config = parse_live_card_config(raw_config)\n        except Exception as exc:\n            print(\n                "⚠️ live_profile_card skipped "\n                f"guild={message.guild.id} channel={message.channel.id} user={message.author.id} "\n                f"reason=config_read_failed error={type(exc).__name__}: {exc}"\n            )\n            return\n'''
+          if source.count(old) != 1:
+              raise SystemExit('generated refreshed config block not found exactly once')
+          path.write_text(source.replace(old, new, 1), encoding='utf-8')
+          PY
+
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip -q
