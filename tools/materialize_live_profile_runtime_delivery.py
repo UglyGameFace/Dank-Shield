@@ -14,48 +14,6 @@ def replace_once(path: Path, old: str, new: str, *, label: str) -> None:
 runtime = Path("stoney_verify/profile_card_runtime.py")
 replace_once(
     runtime,
-    '''        channel = message.channel
-        guild = message.guild
-        member = guild.get_member(trigger.user_id) if guild else None
-        if not isinstance(channel, discord.TextChannel) or not isinstance(member, discord.Member):
-            return
-        if not _channel_can_host_cards(channel):
-            return
-''',
-    '''        channel = message.channel
-        guild = message.guild
-        message_author = getattr(message, "author", None)
-        member = (
-            message_author
-            if isinstance(message_author, discord.Member) and int(message_author.id) == int(trigger.user_id)
-            else guild.get_member(trigger.user_id) if guild else None
-        )
-        if not isinstance(channel, discord.TextChannel):
-            print(
-                "⚠️ live_profile_card skipped "
-                f"guild={trigger.guild_id} channel={trigger.channel_id} user={trigger.user_id} "
-                "reason=channel_not_text"
-            )
-            return
-        if not isinstance(member, discord.Member):
-            print(
-                "⚠️ live_profile_card skipped "
-                f"guild={trigger.guild_id} channel={trigger.channel_id} user={trigger.user_id} "
-                "reason=member_unavailable_after_debounce"
-            )
-            return
-        if not _channel_can_host_cards(channel):
-            print(
-                "⚠️ live_profile_card skipped "
-                f"guild={trigger.guild_id} channel={trigger.channel_id} user={trigger.user_id} "
-                "reason=channel_permissions_incomplete"
-            )
-            return
-''',
-    label="use message author and log early skips",
-)
-replace_once(
-    runtime,
     '''        state = await get_live_card_state(trigger.guild_id, trigger.channel_id)
         age = _state_age_seconds(state)
         if state and str(state.get("user_id") or "") == str(trigger.user_id):
@@ -112,6 +70,10 @@ replace_once(
             trigger_message_id=trigger.message_id,
         )
         if rendered is None:
+            print(
+                "ℹ️ live_profile_card skipped member disabled "
+                f"guild={trigger.guild_id} channel={trigger.channel_id} user={trigger.user_id}"
+            )
             return
 ''',
     '''        try:
@@ -182,7 +144,11 @@ replace_once(
         parsed = parse_live_card_footer(stored)
         if parsed is None:
             return False
-        return int(parsed[0]) == int(str(state.get("user_id") or "0"))
+        try:
+            stored_user_id = int(str(state.get("user_id") or "0"))
+        except Exception:
+            return False
+        return int(parsed[0]) == stored_user_id
 ''',
     label="posted diagnostic and state verifier",
 )
@@ -404,22 +370,22 @@ Path("ACTIVE_TASK.md").write_text(
 
 **Status:** ROOT CAUSE CONFIRMED / IMPLEMENTATION VALIDATION REQUIRED
 **Branch:** `fix/live-profile-signature-runtime-delivery`
+**PR:** #139
 **Base:** current `main`
 
 ## Confirmed findings
 
-- The delayed runtime discarded the actual `message.author` and depended on `guild.get_member()` after debounce; incomplete member cache caused a silent return.
-- Same-speaker cooldown trusted stored database state without confirming the referenced Discord card still existed.
-- Runtime configuration reads used a potentially stale cached guild config.
-- Several skip paths returned silently, leaving no production evidence for why a designated-channel message did not post.
+- The delayed runtime now uses the triggering message author first, but same-speaker cooldown still trusts stored database state without confirming the referenced Discord card exists.
+- A missing/deleted old signature can therefore suppress every new message during cooldown while nothing is visible in Discord.
+- Runtime configuration reads use a potentially stale cached guild config.
+- Several skip paths still provide inadequate production evidence.
 
 ## Scope
 
-- Use the triggering Discord message author first and cache lookup only as fallback.
-- Verify stored card existence/ownership before applying cooldown suppression.
+- Verify stored card existence and bot ownership before cooldown suppression.
 - Remove stale state when the referenced card is missing.
 - Refresh guild configuration for live message evaluation.
-- Log configured-channel permission, member, render, send, stale-state, cooldown, and success outcomes.
+- Log configured-channel permission, render, send, stale-state, cooldown, and success outcomes.
 - Preserve the clear member-facing Live Signature ON/OFF control from PR #137.
 
 ## Validation
