@@ -551,6 +551,14 @@ class LiveProfileCardRuntime(_core.LiveProfileCardRuntime):
             else DEFAULT_REPLACEMENT_COOLDOWN_SECONDS
         )
         await self.sleep(max(0.0, quiet_seconds))
+
+        # The quiet timer may overlap the leading render, but a trailing worker
+        # must never overtake it. Shielding prevents cancellation of a new burst
+        # target from canceling the already-started instant post.
+        leading = self._leading.get(key)
+        if leading is not None and leading is not asyncio.current_task() and self._task_running(leading):
+            await asyncio.shield(leading)
+
         if self._latest.get(key) != trigger:
             return
         lock = self._locks.setdefault(key, asyncio.Lock())
