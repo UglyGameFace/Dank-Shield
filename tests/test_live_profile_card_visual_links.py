@@ -46,7 +46,7 @@ def test_live_renderer_uses_legible_mobile_friendly_dimensions():
     assert live_renderer.SIGNATURE_RATIO == 3.6
 
 
-def test_clickable_profiles_are_inside_embed_and_technical_footer_is_hidden(monkeypatch):
+def test_official_profile_links_use_compact_buttons_without_text_duplication(monkeypatch):
     async def scenario() -> None:
         member = Member()
 
@@ -86,9 +86,12 @@ def test_clickable_profiles_are_inside_embed_and_technical_footer_is_hidden(monk
         )
 
         assert rendered is not None
-        assert rendered.view is None
-        assert "[🎮 Steam](https://steamcommunity.com/id/UGLY123)" in str(rendered.embed.description)
-        assert "`@UGLY123`" in str(rendered.embed.description)
+        assert rendered.embed.description is None
+        assert rendered.view is not None
+        links = [child for child in rendered.view.children if isinstance(child, discord.ui.Button)]
+        assert len(links) == 1
+        assert links[0].url == "https://steamcommunity.com/id/UGLY123"
+        assert "Steam" in str(links[0].label)
         assert not str(getattr(rendered.embed.footer, "text", "") or "")
         assert rendered.embed.url == runtime.live_card_marker_url(member.id, 99)
         assert rendered.file is not None
@@ -100,9 +103,10 @@ def test_clickable_profiles_are_inside_embed_and_technical_footer_is_hidden(monk
     asyncio.run(scenario())
 
 
-def test_url_capable_public_identity_never_silently_looks_clickable_without_a_link(monkeypatch):
+def test_url_capable_identity_without_link_stays_in_image_only(monkeypatch):
     async def scenario() -> None:
         member = Member()
+        captured: dict[str, object] = {}
 
         async def settings(_guild_id: int, _user_id: int):
             return {
@@ -125,7 +129,8 @@ def test_url_capable_public_identity_never_silently_looks_clickable_without_a_li
         async def config(_guild_id: int):
             return {}
 
-        async def image_renderer(_member, **_kwargs):
+        async def image_renderer(_member, **kwargs):
+            captured.update(kwargs)
             return b"image"
 
         monkeypatch.setattr(runtime, "get_effective_profile_settings", settings)
@@ -140,15 +145,17 @@ def test_url_capable_public_identity_never_silently_looks_clickable_without_a_li
         )
 
         assert rendered is not None
-        assert "⚠️ **Steam** `@UGLY123` *(add official link)*" in str(rendered.embed.description)
-        assert "steamcommunity.com" not in str(rendered.embed.description)
+        assert rendered.embed.description is None
+        assert rendered.view is None
+        assert captured["platform_labels"] == ["Steam: @UGLY123"]
 
     asyncio.run(scenario())
 
 
-def test_username_only_public_accounts_remain_visible_without_fake_links(monkeypatch):
+def test_username_only_public_accounts_remain_in_image_without_fake_links(monkeypatch):
     async def scenario() -> None:
         member = Member()
+        captured: dict[str, object] = {}
 
         async def settings(_guild_id: int, _user_id: int):
             return {
@@ -171,7 +178,8 @@ def test_username_only_public_accounts_remain_visible_without_fake_links(monkeyp
         async def config(_guild_id: int):
             return {}
 
-        async def image_renderer(_member, **_kwargs):
+        async def image_renderer(_member, **kwargs):
+            captured.update(kwargs)
             return b"image"
 
         monkeypatch.setattr(runtime, "get_effective_profile_settings", settings)
@@ -186,8 +194,9 @@ def test_username_only_public_accounts_remain_visible_without_fake_links(monkeyp
         )
 
         assert rendered is not None
-        assert "🟢 **Xbox** `UGLY123`" in str(rendered.embed.description)
-        assert "https://" not in str(rendered.embed.description)
+        assert rendered.embed.description is None
+        assert rendered.view is None
+        assert captured["platform_labels"] == ["Xbox: UGLY123"]
 
     asyncio.run(scenario())
 
