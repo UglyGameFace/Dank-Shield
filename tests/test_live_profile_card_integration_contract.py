@@ -74,6 +74,17 @@ def test_live_card_never_edits_or_reposts_user_messages():
     assert 'payload["file"] = rendered.file' in PROFILE_RUNTIME
 
 
+def test_public_runtime_owns_only_one_signature_per_channel():
+    assert "_ChannelKey = tuple[int, int]" in PROFILE_RUNTIME
+    assert "_MemberCardKey" not in PROFILE_RUNTIME
+    assert "one_per_channel" in PROFILE_RUNTIME
+    assert "scheduler=quiet_window" in PROFILE_RUNTIME
+    assert "await self._delete_verified_card" in PROFILE_RUNTIME
+    assert PROFILE_RUNTIME.index("await self._delete_verified_card") < PROFILE_RUNTIME.index(
+        "await channel.send"
+    )
+
+
 def test_privacy_is_resolved_before_compact_signature_rendering():
     assert "get_effective_profile_settings" in PROFILE_RUNTIME
     assert "visible_platform_entries" in PROFILE_RUNTIME
@@ -83,6 +94,13 @@ def test_privacy_is_resolved_before_compact_signature_rendering():
     assert "render_member_profile_signature" in PROFILE_RUNTIME
     assert "base = _profile_card(member)" not in PROFILE_RUNTIME
     assert "from .commands_ext.public_self_roles_group import _profile_card" not in PROFILE_RUNTIME
+
+
+def test_public_signature_does_not_repeat_platform_usernames_above_image():
+    assert "Connected profiles" not in PROFILE_RUNTIME
+    assert "description=_platform_link_line" not in PROFILE_RUNTIME
+    assert "view = _platform_view(platforms)" in PROFILE_RUNTIME
+    assert "live_card_marker_url" in PROFILE_RUNTIME
 
 
 def test_all_existing_public_profile_entry_points_use_privacy_aware_composer():
@@ -137,5 +155,3 @@ def test_signature_visual_is_legible_compact_and_shares_style_not_welcome_behavi
     assert "render_welcome_card" not in SIGNATURE_RENDERER
     assert "on_member_join" not in SIGNATURE_RENDERER
     assert "public_welcome_card" not in PROFILE_COMMANDS
-    assert "Connected profiles" in PROFILE_RUNTIME
-    assert "live_card_marker_url" in PROFILE_RUNTIME
