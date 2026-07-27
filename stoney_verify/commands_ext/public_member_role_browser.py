@@ -13,6 +13,7 @@ from .member_role_browser_common import (
 )
 
 _REGISTERED = False
+_MEMBERS_COMMAND: Optional[app_commands.Command] = None
 
 
 async def _load_quick_roles(guild: discord.Guild) -> list[discord.Role]:
@@ -102,7 +103,7 @@ async def _open_member_browser(
 
 def register_public_member_role_browser_commands(bot: Any, tree: Any) -> None:
     """Replace the old members subgroup with one UI-first /dank members command."""
-    global _REGISTERED
+    global _REGISTERED, _MEMBERS_COMMAND
     _ = bot, tree
     if _REGISTERED:
         return
@@ -112,7 +113,9 @@ def register_public_member_role_browser_commands(bot: Any, tree: Any) -> None:
         dank_group.remove_command("members")
         existing = None
 
-    if existing is None:
+    if isinstance(existing, app_commands.Command):
+        _MEMBERS_COMMAND = existing
+    else:
 
         @dank_group.command(
             name="members",
@@ -125,14 +128,46 @@ def register_public_member_role_browser_commands(bot: Any, tree: Any) -> None:
 
             await open_member_command_center(interaction)
 
+        _MEMBERS_COMMAND = members_command_center
+
     _REGISTERED = True
     print(
         "✅ public_member_role_browser: single /dank members command center registered"
     )
 
 
+def restore_member_command_after_compaction(bot: Any, tree: Any) -> bool:
+    """Restore the proven single Members entry after the global /dank compactor."""
+    _ = bot
+    command = _MEMBERS_COMMAND
+    if not isinstance(command, app_commands.Command):
+        return False
+
+    current = dank_group.get_command("members")
+    if current is command:
+        return True
+    if current is not None:
+        dank_group.remove_command("members")
+    dank_group.add_command(command)
+
+    from .public_command_hub import DANK_PAYLOAD_SAFETY_LIMIT, dank_payload_size
+
+    size = dank_payload_size(tree)
+    if size > DANK_PAYLOAD_SAFETY_LIMIT:
+        dank_group.remove_command("members")
+        raise RuntimeError(
+            f"/dank members pushed the compact payload to {size}/{DANK_PAYLOAD_SAFETY_LIMIT}"
+        )
+    print(
+        "✅ public_member_role_browser: /dank members preserved after compaction "
+        f"payload={size}/{DANK_PAYLOAD_SAFETY_LIMIT}"
+    )
+    return True
+
+
 __all__ = [
     "_load_quick_roles",
     "_open_member_browser",
     "register_public_member_role_browser_commands",
+    "restore_member_command_after_compaction",
 ]
