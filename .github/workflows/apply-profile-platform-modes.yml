@@ -36,7 +36,7 @@ jobs:
       - name: Commit generated patch
         shell: bash
         run: |
-          if git diff --quiet && git status --porcelain --untracked-files=all | grep -q '^$'; then
+          if git diff --quiet && [[ -z "$(git status --porcelain --untracked-files=all)" ]]; then
             echo 'No source changes needed.'
             exit 0
           fi
