@@ -55,6 +55,14 @@ jobs:
               '''        await _edit_private(\n            interaction,\n            content=f"✅ {spec.label} saved. Choose **Make Public** when you want it shown on your signature.",\n            embed=_platform_detail_embed(self.platform, entry),\n            view=PlatformDetailView(author_id=self.author_id, platform=self.platform, entry=entry),\n        )\n''',
           )
           studio.write_text(source, encoding='utf-8')
+
+          test_path = Path('tests/test_profile_platform_privacy_preview_ux.py')
+          test_source = test_path.read_text(encoding='utf-8')
+          test_source = test_source.replace(
+              '    assert "await _preview(interaction, member=member, notice=f"✅ {message}")" in studio_source',
+              '    assert \'await _preview(interaction, member=member, notice=f"✅ {message}")\' in studio_source',
+          )
+          test_path.write_text(test_source, encoding='utf-8')
           PY
 
       - name: Install dependencies
@@ -70,30 +78,22 @@ jobs:
           DANK_COMMAND_LOG_STYLE: quiet
         run: |
           set +e
-          {
+          (
             python -m py_compile \
               stoney_verify/commands_ext/public_profile_cards.py \
               stoney_verify/commands_ext/public_profile_cards_core.py \
               stoney_verify/profile_signature_studio.py \
               tests/test_profile_platform_privacy_preview_ux.py \
-              tests/test_ui_private_followup_payloads.py
-            compile_status=$?
-            if [ "$compile_status" -ne 0 ]; then
-              exit "$compile_status"
-            fi
+              tests/test_ui_private_followup_payloads.py &&
             python -m pytest \
               tests/test_profile_platform_privacy_preview_ux.py \
               tests/test_ui_private_followup_payloads.py \
               tests/test_live_profile_card_runtime.py \
               tests/test_profile_signature_appearance_controls.py \
               tests/test_profile_signature_theme_application.py \
-              -q --tb=short --disable-warnings
-            test_status=$?
-            if [ "$test_status" -ne 0 ]; then
-              exit "$test_status"
-            fi
+              -q --tb=short --disable-warnings &&
             git diff --check
-          } > focused-validation.log 2>&1
+          ) > focused-validation.log 2>&1
           status=$?
           set -e
           cat focused-validation.log
