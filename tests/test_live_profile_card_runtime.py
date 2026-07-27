@@ -515,3 +515,61 @@ def test_live_send_failure_is_visible_in_logs(monkeypatch, capsys):
     assert "live_profile_card send failed" in output
     assert "guild=83" in output
     assert "channel=830" in output
+
+
+def test_live_runtime_uses_message_author_when_guild_member_cache_misses(monkeypatch):
+    async def scenario():
+        _patch_discord_types(monkeypatch)
+        bot = FakeBot()
+        guild = FakeGuild(901, bot.user)
+        bot.guilds = [guild]
+        channel = guild.add_channel(902)
+        author = FakeMember(903, guild)
+        assert guild.get_member(author.id) is None
+        seen = []
+        states = []
+
+        async def get_config(_guild_id):
+            return _config(channel.id, cooldown=30)
+
+        async def get_state(_guild_id, _channel_id):
+            return None
+
+        async def save_state(guild_id, channel_id, **payload):
+            states.append((guild_id, channel_id, payload))
+
+        monkeypatch.setattr(runtime_module, "get_guild_config", get_config)
+        monkeypatch.setattr(runtime_module, "get_live_card_state", get_state)
+        monkeypatch.setattr(runtime_module, "upsert_live_card_state", save_state)
+
+        runtime = LiveProfileCardRuntime(bot, renderer=_fake_renderer(seen), sleep=asyncio.sleep)
+        await runtime.on_message(FakeIncomingMessage(904, guild, channel, author))
+        await _wait_for_pending(runtime)
+
+        assert [item[0] for item in seen] == [author.id]
+        assert len(channel.sent) == 1
+        assert states[0][2]["user_id"] == author.id
+
+    asyncio.run(scenario())
+
+
+def test_profile_privacy_has_one_clear_live_signature_switch():
+    from stoney_verify.commands_ext.public_profile_cards import ProfileSettingsView
+
+    enabled = ProfileSettingsView(
+        author_id=42,
+        guild_id=7,
+        user_preferences={"live_cards_enabled": True},
+        guild_settings={},
+    )
+    disabled = ProfileSettingsView(
+        author_id=42,
+        guild_id=7,
+        user_preferences={"live_cards_enabled": False},
+        guild_settings={},
+    )
+    enabled_labels = [str(child.label) for child in enabled.children if isinstance(child, discord.ui.Button)]
+    disabled_labels = [str(child.label) for child in disabled.children if isinstance(child, discord.ui.Button)]
+    assert enabled_labels.count("Turn Off Live Signature") == 1
+    assert disabled_labels.count("Turn On Live Signature") == 1
+    assert not any(label.startswith("Every Server Live") for label in enabled_labels)

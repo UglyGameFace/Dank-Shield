@@ -117,8 +117,33 @@ async def _private(
         await interaction.followup.send(**payload)
 
 
-async def _defer(interaction: discord.Interaction) -> None:
+async def _edit_private(
+    interaction: discord.Interaction,
+    *,
+    content: str = "",
+    embed: Optional[discord.Embed] = None,
+    view: Optional[discord.ui.View] = None,
+    file: Optional[discord.File] = None,
+) -> None:
+    payload: dict[str, Any] = {
+        "content": content or None,
+        "embed": embed,
+        "view": view,
+        "attachments": [file] if file is not None else [],
+        "allowed_mentions": discord.AllowedMentions.none(),
+    }
     if not interaction.response.is_done():
+        await interaction.response.edit_message(**payload)
+    else:
+        await interaction.edit_original_response(**payload)
+
+
+async def _defer(interaction: discord.Interaction, *, component_update: bool = False) -> None:
+    if interaction.response.is_done():
+        return
+    if component_update:
+        await interaction.response.defer()
+    else:
         await interaction.response.defer(ephemeral=True, thinking=True)
 
 
@@ -209,12 +234,46 @@ async def _studio_embed(member: discord.Member) -> discord.Embed:
     return embed
 
 
-async def _preview(interaction: discord.Interaction, *, member: Optional[discord.Member] = None) -> None:
+class SignaturePreviewView(discord.ui.View):
+    def __init__(self, *, author_id: int, source_view: Optional[discord.ui.View]) -> None:
+        super().__init__(timeout=600)
+        self.author_id = int(author_id)
+        for child in list(getattr(source_view, "children", []) or []):
+            if not isinstance(child, discord.ui.Button) or not child.url:
+                continue
+            self.add_item(
+                discord.ui.Button(
+                    label=str(child.label or "Profile")[:80],
+                    emoji=child.emoji,
+                    style=discord.ButtonStyle.link,
+                    url=str(child.url),
+                )
+            )
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if int(interaction.user.id) != self.author_id:
+            await _private(interaction, content="❌ Only the member who opened this preview can use it.")
+            return False
+        return True
+
+    @discord.ui.button(label="Back to Profile", emoji="↩️", style=discord.ButtonStyle.secondary, row=4)
+    async def back(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        await open_profile_signature_studio(interaction, replace=True)
+
+
+async def _preview(
+    interaction: discord.Interaction,
+    *,
+    member: Optional[discord.Member] = None,
+    notice: str = "",
+) -> None:
     target = member or _member(interaction)
     guild = interaction.guild
     if target is None or guild is None:
         return await _private(interaction, content="❌ Use this inside a server as a member.")
-    await _defer(interaction)
+    component_update = getattr(interaction, "type", None) == discord.InteractionType.component
+    await _defer(interaction, component_update=component_update)
     try:
         config = parse_live_card_config(await get_guild_config(guild.id, refresh=True))
         rendered = await render_live_profile_card(
@@ -224,14 +283,21 @@ async def _preview(interaction: discord.Interaction, *, member: Optional[discord
             require_live_enabled=False,
         )
     except ProfileStorageUnavailable:
-        return await _private(interaction, content="❌ Private profile storage is unavailable.")
+        return await _edit_private(interaction, content="❌ Private profile storage is unavailable.")
     if rendered is None:
-        return await _private(
+        return await _edit_private(
             interaction,
-            content="Your privacy settings hide every optional detail. Turn on at least one detail to preview a signature.",
+            content="Your live signature is currently unavailable. Return to Profile Privacy and check Live Signature.",
+            view=SignatureStudioView(author_id=target.id),
         )
-    rendered.embed.set_footer(text="Preview only • compact profile signature")
-    await _private(interaction, embed=rendered.embed, view=rendered.view, file=rendered.file)
+    rendered.embed.set_footer(text="Preview only • compact profile signature • nothing posted publicly")
+    await _edit_private(
+        interaction,
+        content=notice,
+        embed=rendered.embed,
+        view=SignaturePreviewView(author_id=target.id, source_view=rendered.view),
+        file=rendered.file,
+    )
 
 
 async def _save_member_style(
@@ -248,9 +314,8 @@ async def _save_member_style(
         await upsert_profile_user_preferences(member.id, dict(updates))
         await _invalidate(interaction, all_guilds=True)
     except ProfileStorageUnavailable:
-        return await _private(interaction, content="❌ Private profile storage is unavailable. Nothing changed.")
-    await _private(interaction, content=f"✅ {message}")
-    await _preview(interaction, member=member)
+        return await _edit_private(interaction, content="❌ Private profile storage is unavailable. Nothing changed.")
+    await _preview(interaction, member=member, notice=f"✅ {message}")
 
 
 async def _save_server_style(
@@ -269,10 +334,11 @@ async def _save_server_style(
     await _defer(interaction)
     await upsert_guild_config(guild.id, dict(updates))
     await _invalidate_guild(interaction)
-    await _private(interaction, content=f"✅ {message}")
     member = _member(interaction)
     if member is not None:
-        await _preview(interaction, member=member)
+        await _preview(interaction, member=member, notice=f"✅ {message}")
+    else:
+        await _edit_private(interaction, content=f"✅ {message}")
 
 
 async def _theme_picker(interaction: discord.Interaction, *, server: bool) -> None:
@@ -624,7 +690,7 @@ class ProfileAppearanceView(discord.ui.View):
         if self.server:
             await open_server_signature_defaults(interaction)
         else:
-            await open_profile_signature_studio(interaction)
+            await open_profile_signature_studio(interaction, replace=True)
 
 
 class PlatformEditModal(discord.ui.Modal):
@@ -669,21 +735,48 @@ class PlatformEditModal(discord.ui.Modal):
             return await _private(interaction, content="❌ Private profile storage is unavailable. Nothing changed.")
         await _invalidate(interaction, all_guilds=True)
         spec = PLATFORM_SPECS[self.platform]
-        await _private(
+        await _edit_private(
             interaction,
-            content=(
-                f"✅ {spec.label} saved as `{display_profile_username(entry['username'])}`. "
-                f"It is currently **{'shared' if entry['shared'] else 'private'}**."
-            ),
-            view=PlatformDetailView(author_id=self.author_id, platform=self.platform),
+            content=f"✅ {spec.label} saved. Choose **Make Public** when you want it shown on your signature.",
+            embed=_platform_detail_embed(self.platform, entry),
+            view=PlatformDetailView(author_id=self.author_id, platform=self.platform, entry=entry),
         )
 
 
+def _platform_detail_embed(platform: str, entry: Mapping[str, Any]) -> discord.Embed:
+    spec = PLATFORM_SPECS[platform]
+    username = str(entry.get("username") or "").strip()
+    shared = bool(entry.get("shared")) and bool(username)
+    embed = discord.Embed(
+        title=f"{spec.emoji} {spec.label}",
+        description=(
+            "Use the large visibility button below. **Make Public** allows this account to appear on your compact "
+            "signature; **Make Private** hides it everywhere."
+        ),
+        color=discord.Color.green() if shared else discord.Color.blurple(),
+    )
+    embed.add_field(
+        name="Username",
+        value=f"`{display_profile_username(username)}`" if username else "Not saved yet",
+        inline=False,
+    )
+    embed.add_field(name="Visibility", value="🌐 Public" if shared else "🔒 Private", inline=True)
+    embed.add_field(name="Official link", value="Saved" if entry.get("url") else "Username only", inline=True)
+    return embed
+
+
 class PlatformDetailView(discord.ui.View):
-    def __init__(self, *, author_id: int, platform: str) -> None:
+    def __init__(self, *, author_id: int, platform: str, entry: Optional[Mapping[str, Any]] = None) -> None:
         super().__init__(timeout=600)
         self.author_id = int(author_id)
         self.platform = str(platform)
+        raw = dict(entry or {})
+        has_identity = bool(str(raw.get("username") or "").strip())
+        shared = bool(raw.get("shared")) and has_identity
+        self.share.label = "Make Private" if shared else "Make Public"
+        self.share.emoji = "🔒" if shared else "🌐"
+        self.share.style = discord.ButtonStyle.danger if shared else discord.ButtonStyle.success
+        self.share.disabled = not has_identity
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if int(interaction.user.id) != self.author_id:
@@ -701,7 +794,7 @@ class PlatformDetailView(discord.ui.View):
             PlatformEditModal(author_id=self.author_id, platform=self.platform, entry=entry)
         )
 
-    @discord.ui.button(label="Share / Hide", emoji="👁️", style=discord.ButtonStyle.success, row=0)
+    @discord.ui.button(label="Make Public", emoji="🌐", style=discord.ButtonStyle.success, row=0)
     async def share(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
         try:
@@ -719,10 +812,14 @@ class PlatformDetailView(discord.ui.View):
         except (InvalidPlatformProfile, ProfileStorageUnavailable) as exc:
             return await _private(interaction, content=f"❌ {exc}")
         await _invalidate(interaction, all_guilds=True)
-        await _private(
+        await _edit_private(
             interaction,
-            content=f"✅ {PLATFORM_SPECS[self.platform].label} is now **{'shared' if entry['shared'] else 'private'}**.",
-            view=PlatformDetailView(author_id=self.author_id, platform=self.platform),
+            content=(
+                f"✅ {PLATFORM_SPECS[self.platform].label} is now "
+                f"**{'Public' if entry['shared'] else 'Private'}**."
+            ),
+            embed=_platform_detail_embed(self.platform, entry),
+            view=PlatformDetailView(author_id=self.author_id, platform=self.platform, entry=entry),
         )
 
     @discord.ui.button(label="Remove", emoji="🗑️", style=discord.ButtonStyle.danger, row=0)
@@ -733,20 +830,12 @@ class PlatformDetailView(discord.ui.View):
         except ProfileStorageUnavailable:
             return await _private(interaction, content="❌ Private profile storage is unavailable. Nothing changed.")
         await _invalidate(interaction, all_guilds=True)
-        await _private(
-            interaction,
-            content=(
-                f"✅ Removed {PLATFORM_SPECS[self.platform].label}."
-                if removed
-                else f"No {PLATFORM_SPECS[self.platform].label} profile was saved."
-            ),
-            view=PlatformManagerView(author_id=self.author_id),
-        )
+        await open_platform_manager(interaction, replace=True)
 
     @discord.ui.button(label="Back to Platforms", emoji="↩️", style=discord.ButtonStyle.secondary, row=1)
     async def back(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
-        await open_platform_manager(interaction)
+        await open_platform_manager(interaction, replace=True)
 
 
 class PlatformSelect(discord.ui.Select):
@@ -770,22 +859,10 @@ class PlatformSelect(discord.ui.Select):
         user = await get_profile_user(view.author_id, refresh=True)
         raw = dict(user.get("platforms") or {}).get(platform)
         entry = dict(raw) if isinstance(raw, Mapping) else {}
-        spec = PLATFORM_SPECS[platform]
-        embed = discord.Embed(
-            title=f"{spec.emoji} {spec.label}",
-            description=(
-                "Add or edit the username, then use **Share / Hide** to control whether it appears on your signature. "
-                "Links are accepted only for supported official profile pages."
-            ),
-            color=discord.Color.blurple(),
-        )
-        embed.add_field(name="Username", value=f"`{display_profile_username(entry['username'])}`" if entry.get("username") else "Not saved", inline=False)
-        embed.add_field(name="Visibility", value="Shared" if entry.get("shared") else "Private", inline=True)
-        embed.add_field(name="Official link", value="Saved" if entry.get("url") else "None", inline=True)
-        await _private(
+        await _edit_private(
             interaction,
-            embed=embed,
-            view=PlatformDetailView(author_id=view.author_id, platform=platform),
+            embed=_platform_detail_embed(platform, entry),
+            view=PlatformDetailView(author_id=view.author_id, platform=platform, entry=entry),
         )
 
 
@@ -804,10 +881,10 @@ class PlatformManagerView(discord.ui.View):
     @discord.ui.button(label="Back to Signature", emoji="↩️", style=discord.ButtonStyle.secondary, row=1)
     async def back(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
-        await open_profile_signature_studio(interaction)
+        await open_profile_signature_studio(interaction, replace=True)
 
 
-async def open_platform_manager(interaction: discord.Interaction) -> None:
+async def open_platform_manager(interaction: discord.Interaction, *, replace: bool = False) -> None:
     member = _member(interaction)
     if member is None:
         return await _private(interaction, content="❌ Use this inside a server as a member.")
@@ -823,24 +900,32 @@ async def open_platform_manager(interaction: discord.Interaction) -> None:
             continue
         lines.append(
             f"{spec.emoji} **{spec.label}:** `{display_profile_username(raw.get('username'))}` — "
-            f"{'shared' if raw.get('shared') else 'private'}"
+            f"{'🌐 Public' if raw.get('shared') else '🔒 Private'}"
         )
     embed = discord.Embed(
         title="🎮 Platforms & Accounts",
         description=(
-            "Choose a platform below. Saving an account does **not** share it automatically; "
-            "you control visibility with **Share / Hide**."
+            "Choose an account below. The next screen gives you an obvious **Make Public** or **Make Private** "
+            "button. Saving a username never exposes it automatically."
         ),
         color=discord.Color.blurple(),
     )
     embed.add_field(name="Saved accounts", value="\n".join(lines)[:1024] if lines else "None saved yet.", inline=False)
-    await _private(interaction, embed=embed, view=PlatformManagerView(author_id=member.id))
+    panel = PlatformManagerView(author_id=member.id)
+    if replace:
+        await _edit_private(interaction, embed=embed, view=panel)
+    else:
+        await _private(interaction, embed=embed, view=panel)
 
 
 class SignatureStudioView(discord.ui.View):
-    def __init__(self, *, author_id: int) -> None:
+    def __init__(self, *, author_id: int, live_enabled: bool = True) -> None:
         super().__init__(timeout=600)
         self.author_id = int(author_id)
+        self.live_enabled = bool(live_enabled)
+        self.live_toggle.label = "Live Signature: ON" if self.live_enabled else "Live Signature: OFF"
+        self.live_toggle.emoji = "✅" if self.live_enabled else "⏸️"
+        self.live_toggle.style = discord.ButtonStyle.success if self.live_enabled else discord.ButtonStyle.danger
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if int(interaction.user.id) != self.author_id:
@@ -871,7 +956,7 @@ class SignatureStudioView(discord.ui.View):
     @discord.ui.button(label="Platforms", emoji="🎮", style=discord.ButtonStyle.primary, row=0)
     async def platforms(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
-        await open_platform_manager(interaction)
+        await open_platform_manager(interaction, replace=True)
 
     @discord.ui.button(label="Profile Roles", emoji="🎭", style=discord.ButtonStyle.secondary, row=1)
     async def roles(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
@@ -888,6 +973,30 @@ class SignatureStudioView(discord.ui.View):
         _ = button
         await _preview(interaction)
 
+    @discord.ui.button(label="Live Signature: ON", emoji="✅", style=discord.ButtonStyle.success, row=2)
+    async def live_toggle(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        member = _member(interaction)
+        if member is None:
+            return await _private(interaction, content="❌ Use this inside a server as a member.")
+        await _defer(interaction, component_update=True)
+        try:
+            user = await get_profile_user(member.id, refresh=True)
+            current = bool(dict(user.get("preferences") or {}).get("live_cards_enabled", True))
+            await upsert_profile_user_preferences(member.id, {"live_cards_enabled": not current})
+            await _invalidate(interaction, all_guilds=True)
+            updated = await get_profile_user(member.id, refresh=True)
+            enabled = bool(dict(updated.get("preferences") or {}).get("live_cards_enabled", True))
+            embed = await _studio_embed(member)
+        except ProfileStorageUnavailable:
+            return await _edit_private(interaction, content="❌ Private profile storage is unavailable. Nothing changed.")
+        await _edit_private(
+            interaction,
+            content=f"✅ Live Signature is now **{'ON' if enabled else 'OFF'}**.",
+            embed=embed,
+            view=SignatureStudioView(author_id=member.id, live_enabled=enabled),
+        )
+
     @discord.ui.button(label="Reset My Look", emoji="🔄", style=discord.ButtonStyle.secondary, row=1)
     async def reset(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
@@ -897,21 +1006,27 @@ class SignatureStudioView(discord.ui.View):
             message="Your personal signature appearance now follows the server defaults.",
         )
 
-    @discord.ui.button(label="Close", emoji="✖️", style=discord.ButtonStyle.danger, row=2)
+    @discord.ui.button(label="Close", emoji="✖️", style=discord.ButtonStyle.danger, row=3)
     async def close(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
         await interaction.response.edit_message(content="Profile signature settings closed.", embed=None, view=None)
 
 
-async def open_profile_signature_studio(interaction: discord.Interaction) -> None:
+async def open_profile_signature_studio(interaction: discord.Interaction, *, replace: bool = False) -> None:
     member = _member(interaction)
     if member is None or interaction.guild is None:
         return await _private(interaction, content="❌ Use this inside a server as a member.")
     try:
+        user = await get_profile_user(member.id, refresh=True)
         embed = await _studio_embed(member)
     except ProfileStorageUnavailable:
         return await _private(interaction, content="❌ Private profile storage is unavailable.")
-    await _private(interaction, embed=embed, view=SignatureStudioView(author_id=member.id))
+    live_enabled = bool(dict(user.get("preferences") or {}).get("live_cards_enabled", True))
+    panel = SignatureStudioView(author_id=member.id, live_enabled=live_enabled)
+    if replace:
+        await _edit_private(interaction, embed=embed, view=panel)
+    else:
+        await _private(interaction, embed=embed, view=panel)
 
 
 async def _import_welcome_look(interaction: discord.Interaction) -> None:

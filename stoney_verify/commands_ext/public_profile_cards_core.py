@@ -143,10 +143,11 @@ def _settings_embed(
     local = dict(guild_row.get("settings") or {})
     platforms = dict(user_row.get("platforms") or {})
     embed = discord.Embed(
-        title="🔐 Profile Privacy & Platforms",
+        title="🔐 Profile Privacy",
         description=(
-            "These controls apply to your public/live profile in this server. "
-            "Your platform identities are private until you explicitly save them as shared."
+            "Choose what your compact signature may show. For Steam, Xbox, PlayStation, and every other "
+            "saved account, use **Manage Accounts** below to change that individual account between "
+            "**Public** and **Private**."
         ),
         color=discord.Color.blurple(),
         timestamp=discord.utils.utcnow(),
@@ -195,15 +196,19 @@ def _settings_embed(
         username = str(entry.get("username") or "").strip()
         if not username:
             continue
-        visibility = "shared" if bool(entry.get("shared")) else "private"
-        link_state = " • linked" if str(entry.get("url") or "").strip() else ""
+        visibility = "🌐 Public" if bool(entry.get("shared")) else "🔒 Private"
+        link_state = " • official link" if str(entry.get("url") or "").strip() else " • username only"
         safe_username = display_profile_username(username)
         identity_lines.append(
             f"{spec.emoji} **{spec.label}:** `{safe_username}` — {visibility}{link_state}"
         )
+    account_summary = "\n".join(identity_lines)[:820] if identity_lines else "No accounts saved yet."
     embed.add_field(
-        name="Saved platform identities",
-        value="\n".join(identity_lines)[:1024] if identity_lines else "None saved. Use `/dank profile platform`.",
+        name="Gaming & social accounts",
+        value=(
+            account_summary
+            + "\n\nUse **Manage Accounts** below to add, edit, remove, or change an account's Public/Private status."
+        )[:1024],
         inline=False,
     )
 

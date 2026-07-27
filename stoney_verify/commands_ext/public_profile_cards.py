@@ -37,13 +37,119 @@ profile_live_status = _core.profile_live_status
 PublicProfileView = _core.PublicProfileView
 
 
+class _BackToPrivacyButton(discord.ui.Button):
+    def __init__(self, *, row: int = 4) -> None:
+        super().__init__(
+            label="Back to Privacy",
+            emoji="↩️",
+            style=discord.ButtonStyle.secondary,
+            custom_id="dank:profilecard:v3:preview_back_privacy",
+            row=row,
+        )
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        await profile_settings(interaction)
+
+
+class _BackToSignatureButton(discord.ui.Button):
+    def __init__(self, *, row: int = 4) -> None:
+        super().__init__(
+            label="Back to Profile",
+            emoji="🪪",
+            style=discord.ButtonStyle.secondary,
+            custom_id="dank:profilecard:v3:back_signature",
+            row=row,
+        )
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        from stoney_verify.profile_signature_studio import open_profile_signature_studio
+
+        await open_profile_signature_studio(interaction, replace=True)
+
+
+class _LiveSignatureToggleButton(discord.ui.Button):
+    def __init__(self, *, enabled: bool, row: int = 0) -> None:
+        self.enabled = bool(enabled)
+        super().__init__(
+            label="Turn Off Live Signature" if self.enabled else "Turn On Live Signature",
+            emoji="⏸️" if self.enabled else "▶️",
+            style=discord.ButtonStyle.danger if self.enabled else discord.ButtonStyle.success,
+            custom_id="dank:profilecard:v3:toggle_live_signature",
+            row=row,
+        )
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        view = self.view
+        if not isinstance(view, ProfileSettingsView) or not await view.interaction_check(interaction):
+            return
+        await _defer_private(interaction, component_update=True)
+        try:
+            user_row = await _core.get_profile_user(view.author_id, refresh=True)
+            current = bool(dict(user_row.get("preferences") or {}).get("live_cards_enabled", True))
+            await _core.upsert_profile_user_preferences(
+                view.author_id,
+                {"live_cards_enabled": not current},
+            )
+            if interaction.guild is not None:
+                await invalidate_member_live_cards(
+                    interaction.client,
+                    interaction.guild,
+                    view.author_id,
+                    all_guilds=True,
+                )
+            await view.refresh(interaction)
+        except ProfileStorageUnavailable:
+            await _safe_ephemeral(interaction, "Private profile storage is unavailable. Nothing changed.", ok=False)
+
+
+class _ManagePlatformsButton(discord.ui.Button):
+    def __init__(self, *, row: int = 2) -> None:
+        super().__init__(
+            label="Manage Accounts",
+            emoji="🎮",
+            style=discord.ButtonStyle.success,
+            custom_id="dank:profilecard:v3:manage_platforms",
+            row=row,
+        )
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        from stoney_verify.profile_signature_studio import open_platform_manager
+
+        await open_platform_manager(interaction, replace=True)
+
+
+class _ProfilePreviewView(discord.ui.View):
+    def __init__(self, *, author_id: int, source_view: Optional[discord.ui.View]) -> None:
+        super().__init__(timeout=600)
+        self.author_id = int(author_id)
+        for child in list(getattr(source_view, "children", []) or []):
+            if not isinstance(child, discord.ui.Button) or not child.url:
+                continue
+            self.add_item(
+                discord.ui.Button(
+                    label=str(child.label or "Profile")[:80],
+                    emoji=child.emoji,
+                    style=discord.ButtonStyle.link,
+                    url=str(child.url),
+                )
+            )
+        self.add_item(_BackToPrivacyButton())
+        self.add_item(_BackToSignatureButton())
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if int(interaction.user.id) != self.author_id:
+            await _safe_ephemeral(interaction, "Only the member who opened this preview can use it.", ok=False)
+            return False
+        return True
+
+
 class _PreviewProfileButton(discord.ui.Button):
     def __init__(self, *, row: int) -> None:
         super().__init__(
-            label="Preview Compact Signature",
+            label="Preview Signature",
             emoji="👀",
             style=discord.ButtonStyle.primary,
-            custom_id="dank:profilecard:v2:preview_compact",
+            custom_id="dank:profilecard:v3:preview_compact",
             row=row,
         )
 
@@ -54,7 +160,7 @@ class _PreviewProfileButton(discord.ui.Button):
         member = interaction.user if isinstance(interaction.user, discord.Member) else None
         if member is None:
             return await _safe_ephemeral(interaction, "Could not resolve your server member.", ok=False)
-        await _defer_private(interaction)
+        await _defer_private(interaction, component_update=True)
         try:
             config = await get_guild_config(view.guild_id)
             allowed = set(parse_live_card_config(config).allowed_fields)
@@ -65,21 +171,28 @@ class _PreviewProfileButton(discord.ui.Button):
                 require_live_enabled=False,
             )
         except ProfileStorageUnavailable:
-            return await _safe_ephemeral(interaction, "Private profile storage is unavailable.", ok=False)
-        if rendered is None:
-            return await _safe_ephemeral(
-                interaction,
-                "Your current privacy settings hide every optional signature detail.",
-                ok=True,
+            return await interaction.edit_original_response(
+                content="❌ Private profile storage is unavailable.",
+                embed=None,
+                view=ProfileSettingsView(
+                    author_id=view.author_id,
+                    guild_id=view.guild_id,
+                    user_preferences={},
+                    guild_settings={},
+                ),
+                attachments=[],
             )
+        if rendered is None:
+            return await profile_settings(interaction)
         rendered.embed.set_footer(text="Preview only • compact signature • nothing was posted publicly")
         payload: dict[str, Any] = {
+            "content": None,
             "embed": rendered.embed,
-            "view": rendered.view,
+            "view": _ProfilePreviewView(author_id=view.author_id, source_view=rendered.view),
+            "attachments": [rendered.file] if rendered.file is not None else [],
+            "allowed_mentions": discord.AllowedMentions.none(),
         }
-        if rendered.file is not None:
-            payload["file"] = rendered.file
-        await _send_private(interaction, **payload)
+        await interaction.edit_original_response(**payload)
 
 
 class ProfileSettingsView(_core.ProfileSettingsView):
@@ -96,17 +209,24 @@ class ProfileSettingsView(_core.ProfileSettingsView):
         self.guild_id = int(guild_id)
         global_values = dict(user_preferences or {})
         local_values = dict(guild_settings or {})
-        specs = (
-            ("Live", "live_cards_enabled", "🪪"),
+        detail_specs = (
             ("Roles", "show_roles", "🎭"),
             ("Dates", "show_account_dates", "📅"),
             ("Platforms", "show_platforms", "🔗"),
         )
-        for label, key, emoji in specs:
-            self.add_item(_core._GlobalPrivacyToggleButton(label, key, global_values, emoji, 0))
-        for label, key, emoji in specs:
-            self.add_item(_core._GuildPrivacyToggleButton(label, key, local_values, emoji, 1))
-        self.add_item(_PreviewProfileButton(row=2))
+        self.add_item(
+            _LiveSignatureToggleButton(
+                enabled=bool(global_values.get("live_cards_enabled", True)),
+                row=0,
+            )
+        )
+        self.add_item(_ManagePlatformsButton(row=0))
+        self.add_item(_PreviewProfileButton(row=0))
+        self.add_item(_BackToSignatureButton(row=0))
+        for label, key, emoji in detail_specs:
+            self.add_item(_core._GlobalPrivacyToggleButton(label, key, global_values, emoji, 1))
+        for label, key, emoji in detail_specs:
+            self.add_item(_core._GuildPrivacyToggleButton(label, key, local_values, emoji, 2))
 
     async def refresh(self, interaction: discord.Interaction) -> None:
         member = interaction.user if isinstance(interaction.user, discord.Member) else None
@@ -134,7 +254,8 @@ async def profile_settings(interaction: discord.Interaction) -> None:
     member = interaction.user if isinstance(interaction.user, discord.Member) else None
     if guild is None or member is None:
         return await _safe_ephemeral(interaction, "Use this command inside a server.", ok=False)
-    await _defer_private(interaction)
+    component_update = getattr(interaction, "type", None) == discord.InteractionType.component
+    await _defer_private(interaction, component_update=component_update)
     try:
         user_row, guild_row, effective = await _settings_payload(guild.id, member.id)
     except ProfileStorageUnavailable:
@@ -143,8 +264,8 @@ async def profile_settings(interaction: discord.Interaction) -> None:
             "Private profile storage is not ready. No privacy setting was guessed or changed.",
             ok=False,
         )
-    await _send_private(
-        interaction,
+    await interaction.edit_original_response(
+        content=None,
         embed=_settings_embed(member, user_row, guild_row, effective),
         view=ProfileSettingsView(
             author_id=member.id,
@@ -152,6 +273,8 @@ async def profile_settings(interaction: discord.Interaction) -> None:
             user_preferences=dict(user_row.get("preferences") or {}),
             guild_settings=dict(guild_row.get("settings") or {}),
         ),
+        attachments=[],
+        allowed_mentions=discord.AllowedMentions.none(),
     )
 
 
