@@ -21,5 +21,5 @@ children = sorted(str(getattr(command, "name", "")) for command in dank_group.co
 print(json.dumps({"dank_payload_size": size, "limit": DANK_PAYLOAD_SAFETY_LIMIT, "children": children}))
 if size > DANK_PAYLOAD_SAFETY_LIMIT:
     raise SystemExit(f"/dank payload is too large: {size}/{DANK_PAYLOAD_SAFETY_LIMIT}")
-if children != ["diagnostics", "help", "home", "profile", "setup", "status", "welcome"]:
+if children != ["diagnostics", "help", "home", "members", "profile", "setup", "status", "welcome"]:
     raise SystemExit(f"unexpected UI-first /dank children: {children}")
