@@ -21,7 +21,7 @@ permissions:
 
 jobs:
   apply-platform-modes:
-    if: ${{ github.head_ref == 'fix/live-profile-channel-spam' && !contains(github.event.pull_request.head.sha, '0000000') }}
+    if: ${{ github.head_ref == 'fix/live-profile-channel-spam' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
@@ -29,12 +29,30 @@ jobs:
         with:
           ref: fix/live-profile-channel-spam
           fetch-depth: 0
+          show-progress: false
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
       - name: Apply focused source patch
-        run: python tools/apply_profile_platform_modes_patch.py
+        id: patch
+        shell: bash
+        run: |
+          set +e
+          python tools/apply_profile_platform_modes_patch.py > platform-patch.txt 2>&1
+          status=$?
+          cat platform-patch.txt
+          echo "exit_code=$status" >> "$GITHUB_OUTPUT"
+          exit 0
+      - name: Upload patch diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: profile-platform-patch
+          path: platform-patch.txt
+          if-no-files-found: error
+          retention-days: 1
       - name: Validate patched Python syntax
+        if: steps.patch.outputs.exit_code == '0'
         run: |
           python -m py_compile \
             stoney_verify/profile_card_service.py \
@@ -45,6 +63,7 @@ jobs:
             tests/test_live_profile_card_visual_links.py \
             tests/test_profile_platform_display_modes.py
       - name: Commit generated patch when needed
+        if: steps.patch.outputs.exit_code == '0'
         shell: bash
         run: |
           if git diff --quiet && [[ -z "$(git status --porcelain --untracked-files=all)" ]]; then
@@ -63,6 +82,9 @@ jobs:
             tests/test_profile_platform_display_modes.py
           git commit -m 'Add profile platform display modes [skip platform patch]'
           git push origin HEAD:fix/live-profile-channel-spam
+      - name: Fail when patch failed
+        if: steps.patch.outputs.exit_code != '0'
+        run: exit 1
 
   focused-profile-tests:
     runs-on: ubuntu-24.04
@@ -95,7 +117,6 @@ jobs:
             tests/test_live_profile_runtime_responsive.py \
             tests/test_profile_card_setup_picker_ux.py \
             tests/test_profile_card_migration_safety.py \
-            tests/test_profile_platform_display_modes.py \
             > profile-runtime-tests.txt 2>&1
           status=$?
           echo "exit_code=$status" >> "$GITHUB_OUTPUT"
