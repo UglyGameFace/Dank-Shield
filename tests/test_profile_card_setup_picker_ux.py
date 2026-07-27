@@ -6,7 +6,8 @@ SETUP_UI = (ROOT / "stoney_verify/profile_card_setup_ui.py").read_text(encoding=
 SETUP_CORE = (ROOT / "stoney_verify/profile_card_setup_ui_core.py").read_text(encoding="utf-8")
 SETUP_HOME = (ROOT / "stoney_verify/commands_ext/public_setup_recommend.py").read_text(encoding="utf-8")
 PROFILE_COMMANDS_CORE = (ROOT / "stoney_verify/commands_ext/public_profile_cards_core.py").read_text(encoding="utf-8")
-SIGNATURE_RENDERER = (ROOT / "stoney_verify/profile_signature_renderer.py").read_text(encoding="utf-8")
+SIGNATURE_RENDERER = (ROOT / "stoney_verify/profile_signature_live_renderer.py").read_text(encoding="utf-8")
+LIVE_RUNTIME = (ROOT / "stoney_verify/profile_card_runtime.py").read_text(encoding="utf-8")
 WELCOME = (ROOT / "stoney_verify/commands_ext/public_welcome_group.py").read_text(encoding="utf-8")
 JOIN_LEAVE = (ROOT / "stoney_verify/welcome_event_services.py").read_text(encoding="utf-8")
 
@@ -102,9 +103,14 @@ def test_legacy_staged_setup_panel_is_removed_from_shared_core():
     assert "Only the manager who opened this setup panel can use it" in SETUP_CORE
 
 
-def test_live_profile_signatures_are_visually_compact_and_separate_from_welcome():
+def test_live_profile_signatures_are_legible_compact_and_separate_from_welcome():
     assert "SIGNATURE_WIDTH = 1080" in SIGNATURE_RENDERER
-    assert "SIGNATURE_HEIGHT = 220" in SIGNATURE_RENDERER
+    assert "SIGNATURE_HEIGHT = 300" in SIGNATURE_RENDERER
+    assert "_font(19" in SIGNATURE_RENDERER
+    assert "Connected profiles" in LIVE_RUNTIME
+    assert "embed.set_footer" not in LIVE_RUNTIME.split("async def render_live_profile_card", 1)[1].split(
+        "def _live_card_send_payload", 1
+    )[0]
     assert "small horizontal member signature" in SETUP_UI
     assert "join cards" in SETUP_UI
     assert "join/leave announcements" in SETUP_UI
