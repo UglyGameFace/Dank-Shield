@@ -5,16 +5,11 @@ from typing import Any, Optional
 import discord
 from discord import app_commands
 
-from .public_members_group import members_group
+from .public_setup_group import dank_group
 from .member_role_browser_common import (
     ensure_member_cache,
     reply_ephemeral,
     require_review,
-)
-from .member_role_browser_roster import (
-    MemberBrowserHomeView,
-    RoleMemberBrowserView,
-    role_browser_embed,
 )
 
 _REGISTERED = False
@@ -54,6 +49,7 @@ async def _open_member_browser(
     interaction: discord.Interaction,
     role: Optional[discord.Role] = None,
 ) -> None:
+    """Open the Live Members category without exposing another slash subcommand."""
     if not await require_review(interaction):
         return
     if role is not None and role.is_default():
@@ -63,56 +59,34 @@ async def _open_member_browser(
         )
         return
 
-    await interaction.response.defer(ephemeral=True, thinking=True)
+    from .member_command_center import (
+        CenterRoleBrowserView,
+        LiveMembersMenuView,
+    )
+    from .member_role_browser_roster import role_browser_embed
+
+    if not interaction.response.is_done():
+        if interaction.message is not None:
+            await interaction.response.defer()
+        else:
+            await interaction.response.defer(ephemeral=True, thinking=True)
+
     quick_roles = await _load_quick_roles(interaction.guild)
     if role is None:
-        quick_text = (
-            "\n".join(f"• {quick_role.mention}" for quick_role in quick_roles)
-            if quick_roles
-            else (
-                "No configured verification/member roles were resolved. "
-                "Use the role picker."
-            )
+        view = LiveMembersMenuView(
+            int(interaction.user.id),
+            quick_roles=quick_roles,
         )
-        embed = discord.Embed(
-            title="👥 Member Browser",
-            description=(
-                "Choose any server role to see its members in a private, paginated "
-                "moderation roster.\n\n"
-                "For example, choose **Unverified** to review everyone still waiting "
-                "for verification."
-            ),
-            color=discord.Color.blurple(),
-            timestamp=discord.utils.utcnow(),
-        )
-        embed.add_field(
-            name="Configured quick roles",
-            value=quick_text[:1024],
-            inline=False,
-        )
-        embed.add_field(
-            name="Available tools",
-            value=(
-                "• Search, filter, and sort role members\n"
-                "• Verify, review, message, timeout, kick, or ban one member\n"
-                "• Add or remove roles with protected-role checks\n"
-                "• Safe bulk reminders and role changes"
-            ),
-            inline=False,
-        )
-        embed.set_footer(text="The panel is ephemeral and locked to you.")
         await interaction.edit_original_response(
-            embed=embed,
-            view=MemberBrowserHomeView(
-                interaction.user.id,
-                quick_roles=quick_roles,
-            ),
+            embed=view.render_embed(),
+            view=view,
+            allowed_mentions=discord.AllowedMentions.none(),
         )
         return
 
     warning = await ensure_member_cache(interaction.guild)
-    view = RoleMemberBrowserView(
-        owner_id=interaction.user.id,
+    view = CenterRoleBrowserView(
+        owner_id=int(interaction.user.id),
         guild=interaction.guild,
         role=role,
         quick_roles=quick_roles,
@@ -127,36 +101,38 @@ async def _open_member_browser(
 
 
 def register_public_member_role_browser_commands(bot: Any, tree: Any) -> None:
+    """Replace the old members subgroup with one UI-first /dank members command."""
     global _REGISTERED
     _ = bot, tree
     if _REGISTERED:
         return
 
-    existing = {
-        getattr(command, "name", "")
-        for command in getattr(members_group, "commands", []) or []
-    }
-    if "browse" not in existing:
+    existing = dank_group.get_command("members")
+    if isinstance(existing, app_commands.Group):
+        dank_group.remove_command("members")
+        existing = None
 
-        @members_group.command(
-            name="browse",
-            description="Browse all members with a role and open staff actions.",
+    if existing is None:
+
+        @dank_group.command(
+            name="members",
+            description="Open the complete member management command center.",
         )
-        @app_commands.describe(
-            role="Optional role to open immediately, such as Unverified",
-        )
-        async def browse_members(
+        async def members_command_center(
             interaction: discord.Interaction,
-            role: Optional[discord.Role] = None,
         ) -> None:
-            await _open_member_browser(interaction, role)
+            from .member_command_center import open_member_command_center
+
+            await open_member_command_center(interaction)
 
     _REGISTERED = True
-    print("✅ public_member_role_browser: /dank members browse registered")
+    print(
+        "✅ public_member_role_browser: single /dank members command center registered"
+    )
 
 
 __all__ = [
-    "MemberBrowserHomeView",
-    "RoleMemberBrowserView",
+    "_load_quick_roles",
+    "_open_member_browser",
     "register_public_member_role_browser_commands",
 ]
