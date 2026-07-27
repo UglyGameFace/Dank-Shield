@@ -1,0 +1,74 @@
+name: Wire Public Per-Member Runtime
+
+on:
+  push:
+    branches:
+      - fix/live-signature-per-user-moderation-safe
+
+permissions:
+  contents: write
+
+jobs:
+  wire-public-runtime:
+    if: "!contains(github.event.head_commit.message, '[skip per-member-public-wire]')"
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/live-signature-per-user-moderation-safe
+          fetch-depth: 0
+      - name: Keep legacy class stable and select per-member public listener
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          runtime_path = Path('stoney_verify/profile_card_runtime.py')
+          runtime = runtime_path.read_text(encoding='utf-8')
+          old_marker = '# Canonical public runtime: per-member ownership and moderation-safe output.'
+          if old_marker in runtime:
+              runtime = runtime.split(old_marker, 1)[0].rstrip() + '\n'
+          alias_marker = '# Public listener implementation; legacy LiveProfileCardRuntime remains test-compatible.'
+          if alias_marker not in runtime:
+              runtime = runtime.rstrip() + (
+                  '\n\n' + alias_marker + '\n'
+                  'from .profile_card_runtime_per_user import (\n'
+                  '    PerMemberLiveProfileCardRuntime as PerMemberLiveProfileCardRuntime,\n'
+                  '    is_internal_live_signature_message as is_internal_live_signature_message,\n'
+                  ')\n'
+              )
+          runtime_path.write_text(runtime, encoding='utf-8')
+
+          public_path = Path('stoney_verify/commands_ext/public_profile_cards.py')
+          public = public_path.read_text(encoding='utf-8')
+          public = public.replace('LiveProfileCardRuntime', 'PerMemberLiveProfileCardRuntime')
+          public_path.write_text(public, encoding='utf-8')
+
+          test_path = Path('tests/test_live_profile_per_member_runtime.py')
+          test = test_path.read_text(encoding='utf-8')
+          test = test.replace(
+              '    LiveProfileCardRuntime,\n',
+              '    PerMemberLiveProfileCardRuntime,\n',
+          )
+          test = test.replace(
+              'LiveProfileCardRuntime(bot,',
+              'PerMemberLiveProfileCardRuntime(bot,',
+          )
+          test_path.write_text(test, encoding='utf-8')
+          PY
+      - name: Commit public runtime wiring when needed
+        run: |
+          if git diff --quiet -- \
+            stoney_verify/profile_card_runtime.py \
+            stoney_verify/commands_ext/public_profile_cards.py \
+            tests/test_live_profile_per_member_runtime.py; then
+            exit 0
+          fi
+          git config user.name "Dank Shield CI"
+          git config user.email "actions@users.noreply.github.com"
+          git add \
+            stoney_verify/profile_card_runtime.py \
+            stoney_verify/commands_ext/public_profile_cards.py \
+            tests/test_live_profile_per_member_runtime.py
+          git commit -m "Wire public per-member signature runtime [skip per-member-public-wire]"
+          git push origin HEAD:fix/live-signature-per-user-moderation-safe
