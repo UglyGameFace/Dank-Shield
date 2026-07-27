@@ -23,6 +23,7 @@ from .profile_card_service import (
     ProfileStorageUnavailable,
     display_profile_username,
     get_effective_profile_settings,
+    list_live_card_states_for_channel,
     visible_platform_entries,
 )
 from .profile_signature_live_renderer import render_member_profile_signature
@@ -65,6 +66,7 @@ upsert_guild_config = _core.upsert_guild_config
 delete_live_card_state = _core.delete_live_card_state
 get_live_card_state = _core.get_live_card_state
 list_live_card_states = _core.list_live_card_states
+list_live_card_states_for_channel = _core.list_live_card_states_for_channel
 list_live_card_states_for_user = _core.list_live_card_states_for_user
 upsert_live_card_state = _core.upsert_live_card_state
 
@@ -88,6 +90,11 @@ class _CurrentCard:
     user_id: int
     trigger_message_id: int
     message: Optional[discord.Message] = None
+
+
+_ChannelKey = tuple[int, int]
+_MemberCardKey = tuple[int, int, int]
+_TriggerTimeKey = tuple[int, int, int, int]
 
 
 class _CurrentCardVerificationUnavailable(RuntimeError):
@@ -152,6 +159,7 @@ def _sync_core_dependencies() -> None:
         "delete_live_card_state",
         "get_live_card_state",
         "list_live_card_states",
+        "list_live_card_states_for_channel",
         "list_live_card_states_for_user",
         "upsert_live_card_state",
         "parse_live_card_footer",
@@ -379,12 +387,13 @@ class LiveProfileCardRuntime(_core.LiveProfileCardRuntime):
     ) -> None:
         _sync_core_dependencies()
         super().__init__(bot, renderer=renderer, sleep=sleep)
-        self._leading: dict[tuple[int, int], asyncio.Task[Any]] = {}
-        self._latest_messages: dict[tuple[int, int], discord.Message] = {}
-        self._latest_configs: dict[tuple[int, int], LiveCardConfig] = {}
-        self._last_activity: dict[tuple[int, int], float] = {}
-        self._current_cards: dict[tuple[int, int], _CurrentCard] = {}
-        self._trigger_received_at: dict[tuple[int, int, int], float] = {}
+        self._leading: dict[_MemberCardKey, asyncio.Task[Any]] = {}
+        self._latest_messages: dict[_MemberCardKey, discord.Message] = {}
+        self._latest_configs: dict[_MemberCardKey, LiveCardConfig] = {}
+        self._last_activity: dict[_MemberCardKey, float] = {}
+        self._current_cards: dict[_MemberCardKey, _CurrentCard] = {}
+        self._trigger_received_at: dict[_TriggerTimeKey, float] = {}
+        self._channel_send_locks: dict[_ChannelKey, asyncio.Lock] = {}
 
     async def on_ready(self) -> None:
         """Avoid an all-guild history scan during every process start/reconnect.
@@ -425,7 +434,7 @@ class LiveProfileCardRuntime(_core.LiveProfileCardRuntime):
             )
             return
 
-        key = (int(message.guild.id), int(message.channel.id))
+        key = (int(message.guild.id), int(message.channel.id), int(message.author.id))
         now = monotonic()
         prior_activity = self._last_activity.get(key)
         idle = prior_activity is None or now - prior_activity >= config.same_speaker_cooldown_seconds
@@ -434,14 +443,14 @@ class LiveProfileCardRuntime(_core.LiveProfileCardRuntime):
         trigger = PendingTrigger(
             guild_id=key[0],
             channel_id=key[1],
-            user_id=int(message.author.id),
+            user_id=key[2],
             message_id=int(message.id),
             delay_seconds=0.0 if idle else config.replacement_cooldown_seconds,
         )
         self._latest[key] = trigger
         self._latest_messages[key] = message
         self._latest_configs[key] = config
-        self._trigger_received_at[(key[0], key[1], trigger.message_id)] = now
+        self._trigger_received_at[(key[0], key[1], key[2], trigger.message_id)] = now
         self._prune_trigger_times()
 
         if idle and not self._task_running(self._leading.get(key)):
@@ -484,22 +493,22 @@ class LiveProfileCardRuntime(_core.LiveProfileCardRuntime):
     @classmethod
     def _task_done(
         cls,
-        bucket: dict[tuple[int, int], asyncio.Task[Any]],
-        key: tuple[int, int],
+        bucket: dict[_MemberCardKey, asyncio.Task[Any]],
+        key: _MemberCardKey,
         task: asyncio.Task[Any],
     ) -> None:
         if bucket.get(key) is task:
             bucket.pop(key, None)
         cls._consume_task_result(task)
 
-    def _leading_done(self, key: tuple[int, int], task: asyncio.Task[Any]) -> None:
+    def _leading_done(self, key: _MemberCardKey, task: asyncio.Task[Any]) -> None:
         if self._leading.get(key) is task:
             self._leading.pop(key, None)
         if self._pending.get(key) is task:
             self._pending.pop(key, None)
         self._consume_task_result(task)
 
-    def _release_trigger_context(self, key: tuple[int, int], trigger: PendingTrigger) -> None:
+    def _release_trigger_context(self, key: _MemberCardKey, trigger: PendingTrigger) -> None:
         """Release heavy incoming message/config references after the worker."""
 
         if self._latest.get(key) != trigger:
@@ -507,7 +516,7 @@ class LiveProfileCardRuntime(_core.LiveProfileCardRuntime):
         self._latest.pop(key, None)
         self._latest_messages.pop(key, None)
         self._latest_configs.pop(key, None)
-        self._trigger_received_at.pop((key[0], key[1], trigger.message_id), None)
+        self._trigger_received_at.pop((key[0], key[1], key[2], trigger.message_id), None)
 
     def _prune_trigger_times(self) -> None:
         if len(self._trigger_received_at) <= 2048:
@@ -518,7 +527,7 @@ class LiveProfileCardRuntime(_core.LiveProfileCardRuntime):
 
     async def _run_immediate(
         self,
-        key: tuple[int, int],
+        key: _MemberCardKey,
         fallback_message: discord.Message,
         fallback_config: LiveCardConfig,
         fallback_trigger: PendingTrigger,
@@ -543,7 +552,7 @@ class LiveProfileCardRuntime(_core.LiveProfileCardRuntime):
             finally:
                 self._release_trigger_context(key, trigger)
 
-    async def _run_trailing(self, key: tuple[int, int], trigger: PendingTrigger) -> None:
+    async def _run_trailing(self, key: _MemberCardKey, trigger: PendingTrigger) -> None:
         config = self._latest_configs.get(key)
         quiet_seconds = (
             config.replacement_cooldown_seconds
@@ -617,21 +626,37 @@ class LiveProfileCardRuntime(_core.LiveProfileCardRuntime):
             channel = guild.get_channel(channel_id)
             if not isinstance(channel, discord.TextChannel) or not _channel_can_host_cards(channel):
                 continue
-            key = (int(guild.id), int(channel.id))
-            self._current_cards.pop(key, None)
+            channel_key = (int(guild.id), int(channel.id))
+            for key in list(self._current_cards):
+                if key[:2] == channel_key:
+                    self._current_cards.pop(key, None)
             try:
-                await self._load_current_card(channel)
-            except (ProfileStorageUnavailable, _CurrentCardVerificationUnavailable):
+                states = await list_live_card_states_for_channel(*channel_key)
+            except ProfileStorageUnavailable:
                 continue
+            for state in states:
+                try:
+                    user_id = int(str(state.get("user_id") or "0"))
+                except Exception:
+                    user_id = 0
+                if user_id <= 0:
+                    continue
+                try:
+                    await self._load_current_card(channel, user_id)
+                except (ProfileStorageUnavailable, _CurrentCardVerificationUnavailable):
+                    continue
 
     async def _reconcile_channel(
         self,
         channel: discord.TextChannel,
-        state: Optional[Mapping[str, Any]],
+        states: Optional[Any],
     ) -> None:
         _sync_core_dependencies()
-        await super()._reconcile_channel(channel, state)
-        self._current_cards.pop((int(channel.guild.id), int(channel.id)), None)
+        await super()._reconcile_channel(channel, states)
+        channel_key = (int(channel.guild.id), int(channel.id))
+        for key in list(self._current_cards):
+            if key[:2] == channel_key:
+                self._current_cards.pop(key, None)
 
     async def _remove_channel_card_state(
         self,
@@ -649,7 +674,7 @@ class LiveProfileCardRuntime(_core.LiveProfileCardRuntime):
             cancel_pending=cancel_pending,
         )
 
-    def _forget_channel(self, key: tuple[int, int], *, cancel_tasks: bool = True) -> None:
+    def _forget_member_card(self, key: _MemberCardKey, *, cancel_tasks: bool = True) -> None:
         if cancel_tasks:
             for bucket in (self._leading, self._pending):
                 task = bucket.pop(key, None)
@@ -660,7 +685,22 @@ class LiveProfileCardRuntime(_core.LiveProfileCardRuntime):
         self._latest_configs.pop(key, None)
         self._last_activity.pop(key, None)
         self._last_posted.pop(key, None)
+        self._locks.pop(key, None)
         self._current_cards.pop(key, None)
+        for trigger_key in list(self._trigger_received_at):
+            if trigger_key[:3] == key:
+                self._trigger_received_at.pop(trigger_key, None)
+
+    def _forget_channel(self, key: _ChannelKey, *, cancel_tasks: bool = True) -> None:
+        for member_key in {
+            *[item for item in self._latest if item[:2] == key],
+            *[item for item in self._pending if item[:2] == key],
+            *[item for item in self._leading if item[:2] == key],
+            *[item for item in self._current_cards if item[:2] == key],
+            *[item for item in self._last_activity if item[:2] == key],
+        }:
+            self._forget_member_card(member_key, cancel_tasks=cancel_tasks)
+        self._channel_send_locks.pop(key, None)
         for trigger_key in list(self._trigger_received_at):
             if trigger_key[:2] == key:
                 self._trigger_received_at.pop(trigger_key, None)
@@ -687,7 +727,7 @@ class LiveProfileCardRuntime(_core.LiveProfileCardRuntime):
         await super().remove_user_cards(guild, user_id)
         for key, current in list(self._current_cards.items()):
             if key[0] == int(guild.id) and current.user_id == int(user_id):
-                self._forget_channel(key)
+                self._forget_member_card(key)
 
     async def remove_user_cards_all_guilds(self, user_id: int) -> None:
         _sync_core_dependencies()
@@ -695,14 +735,14 @@ class LiveProfileCardRuntime(_core.LiveProfileCardRuntime):
         await super().remove_user_cards_all_guilds(user_id)
         for key, current in list(self._current_cards.items()):
             if current.user_id == int(user_id):
-                self._forget_channel(key)
+                self._forget_member_card(key)
 
     async def invalidate_guild_cards(self, guild: discord.Guild) -> None:
         _sync_core_dependencies()
         await super().invalidate_guild_cards(guild)
-        for key in list(self._current_cards):
-            if key[0] == int(guild.id):
-                self._forget_channel(key)
+        channel_keys = {key[:2] for key in self._current_cards if key[0] == int(guild.id)}
+        for channel_key in channel_keys:
+            self._forget_channel(channel_key)
 
     async def disable_channel(self, guild: discord.Guild, channel: discord.TextChannel) -> None:
         _sync_core_dependencies()
@@ -718,8 +758,12 @@ class LiveProfileCardRuntime(_core.LiveProfileCardRuntime):
         if isinstance(channel, discord.TextChannel):
             self._forget_channel((int(channel.guild.id), int(channel.id)))
 
-    async def _load_current_card(self, channel: discord.TextChannel) -> Optional[_CurrentCard]:
-        key = (int(channel.guild.id), int(channel.id))
+    async def _load_current_card(
+        self,
+        channel: discord.TextChannel,
+        user_id: int,
+    ) -> Optional[_CurrentCard]:
+        key = (int(channel.guild.id), int(channel.id), int(user_id))
         cached = self._current_cards.get(key)
         if cached is not None:
             return cached
@@ -728,11 +772,11 @@ class LiveProfileCardRuntime(_core.LiveProfileCardRuntime):
             return None
         try:
             message_id = int(str(state.get("message_id") or "0"))
-            user_id = int(str(state.get("user_id") or "0"))
+            stored_user_id = int(str(state.get("user_id") or "0"))
             trigger_message_id = int(str(state.get("trigger_message_id") or "0"))
         except Exception:
-            message_id = user_id = trigger_message_id = 0
-        if message_id <= 0 or user_id <= 0:
+            message_id = stored_user_id = trigger_message_id = 0
+        if message_id <= 0 or stored_user_id <= 0 or stored_user_id != int(user_id):
             return None
         try:
             stored = await channel.fetch_message(message_id)
@@ -752,7 +796,7 @@ class LiveProfileCardRuntime(_core.LiveProfileCardRuntime):
             or bot_user is None
             or int(getattr(stored.author, "id", 0) or 0) != int(bot_user.id)
             or parsed is None
-            or int(parsed[0]) != user_id
+            or int(parsed[0]) != stored_user_id
         ):
             try:
                 await delete_live_card_state(*key)
@@ -761,7 +805,7 @@ class LiveProfileCardRuntime(_core.LiveProfileCardRuntime):
             return None
         current = _CurrentCard(
             message_id=message_id,
-            user_id=user_id,
+            user_id=stored_user_id,
             trigger_message_id=trigger_message_id or int(parsed[1]),
             message=stored,
         )
@@ -802,9 +846,9 @@ class LiveProfileCardRuntime(_core.LiveProfileCardRuntime):
             )
             return
 
-        key = (trigger.guild_id, trigger.channel_id)
+        key = (trigger.guild_id, trigger.channel_id, trigger.user_id)
         try:
-            current = await self._load_current_card(channel)
+            current = await self._load_current_card(channel, trigger.user_id)
         except (ProfileStorageUnavailable, _CurrentCardVerificationUnavailable) as exc:
             print(
                 "⚠️ live_profile_card skipped "
@@ -841,32 +885,35 @@ class LiveProfileCardRuntime(_core.LiveProfileCardRuntime):
             return
         render_ms = int((monotonic() - render_started) * 1000)
 
-        try:
-            new_message = await channel.send(**_live_card_send_payload(rendered))
-        except Exception as exc:
-            print(
-                "⚠️ live_profile_card send failed "
-                f"guild={trigger.guild_id} channel={trigger.channel_id} user={trigger.user_id} "
-                f"error={type(exc).__name__}: {exc}"
-            )
-            return
+        channel_key = (trigger.guild_id, trigger.channel_id)
+        send_lock = self._channel_send_locks.setdefault(channel_key, asyncio.Lock())
+        async with send_lock:
+            try:
+                new_message = await channel.send(**_live_card_send_payload(rendered))
+            except Exception as exc:
+                print(
+                    "⚠️ live_profile_card send failed "
+                    f"guild={trigger.guild_id} channel={trigger.channel_id} user={trigger.user_id} "
+                    f"error={type(exc).__name__}: {exc}"
+                )
+                return
 
-        try:
-            await upsert_live_card_state(
-                trigger.guild_id,
-                trigger.channel_id,
-                message_id=new_message.id,
-                user_id=trigger.user_id,
-                trigger_message_id=trigger.message_id,
-            )
-        except Exception as exc:
-            await self._delete_verified_card(new_message)
-            print(
-                "⚠️ live_profile_card state write failed; removed new card "
-                f"guild={trigger.guild_id} channel={trigger.channel_id} user={trigger.user_id} "
-                f"error={type(exc).__name__}: {exc}"
-            )
-            return
+            try:
+                await upsert_live_card_state(
+                    trigger.guild_id,
+                    trigger.channel_id,
+                    message_id=new_message.id,
+                    user_id=trigger.user_id,
+                    trigger_message_id=trigger.message_id,
+                )
+            except Exception as exc:
+                await self._delete_verified_card(new_message)
+                print(
+                    "⚠️ live_profile_card state write failed; removed new card "
+                    f"guild={trigger.guild_id} channel={trigger.channel_id} user={trigger.user_id} "
+                    f"error={type(exc).__name__}: {exc}"
+                )
+                return
 
         old = current
         self._current_cards[key] = _CurrentCard(
@@ -877,7 +924,7 @@ class LiveProfileCardRuntime(_core.LiveProfileCardRuntime):
         )
         self._last_posted[key] = (trigger.user_id, monotonic())
         received_at = self._trigger_received_at.pop(
-            (trigger.guild_id, trigger.channel_id, trigger.message_id),
+            (trigger.guild_id, trigger.channel_id, trigger.user_id, trigger.message_id),
             render_started,
         )
         total_ms = int((monotonic() - received_at) * 1000)
