@@ -1,0 +1,268 @@
+name: Finalize Live Signature Per-Member Fix
+
+on:
+  push:
+    branches:
+      - fix/live-signature-per-user-moderation-safe
+
+permissions:
+  contents: write
+  pull-requests: write
+  actions: read
+
+jobs:
+  finalize:
+    if: "!contains(github.event.head_commit.message, '[per-member finalized]')"
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/live-signature-per-user-moderation-safe
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+      - name: Let prior branch writers settle
+        run: sleep 30
+      - name: Rebase current branch
+        run: git pull --rebase origin fix/live-signature-per-user-moderation-safe
+      - name: Finalize source, moderation boundaries, tests, and task record
+        run: |
+          python - <<'PY'
+          from __future__ import annotations
+
+          import ast
+          from pathlib import Path
+
+          root = Path('.')
+
+          # Final canonical wiring: the public cog uses the per-member runtime,
+          # while the legacy class remains available for compatibility tests.
+          runtime_path = root / 'stoney_verify/profile_card_runtime.py'
+          runtime = runtime_path.read_text(encoding='utf-8')
+          for marker in (
+              '# Canonical public runtime: per-member ownership and moderation-safe output.',
+              '# Public listener implementation; legacy LiveProfileCardRuntime remains test-compatible.',
+          ):
+              if marker in runtime:
+                  runtime = runtime.split(marker, 1)[0].rstrip() + '\n'
+          alias_marker = '# Public listener implementation; legacy LiveProfileCardRuntime remains test-compatible.'
+          runtime = runtime.rstrip() + (
+              '\n\n' + alias_marker + '\n'
+              'from .profile_card_runtime_per_user import (\n'
+              '    PerMemberLiveProfileCardRuntime as PerMemberLiveProfileCardRuntime,\n'
+              '    is_internal_live_signature_message as is_internal_live_signature_message,\n'
+              ')\n'
+          )
+          runtime_path.write_text(runtime, encoding='utf-8')
+
+          public_path = root / 'stoney_verify/commands_ext/public_profile_cards.py'
+          public = public_path.read_text(encoding='utf-8')
+          public = public.replace('LiveProfileCardRuntime', 'PerMemberLiveProfileCardRuntime')
+          public_path.write_text(public, encoding='utf-8')
+
+          test_path = root / 'tests/test_live_profile_per_member_runtime.py'
+          test = test_path.read_text(encoding='utf-8')
+          test = test.replace('    LiveProfileCardRuntime,\n', '    PerMemberLiveProfileCardRuntime,\n')
+          test = test.replace('LiveProfileCardRuntime(bot,', 'PerMemberLiveProfileCardRuntime(bot,')
+          test_path.write_text(test, encoding='utf-8')
+
+          # Ensure every message-based SpamGuard/raid handler rejects bot authors
+          # before counters/evidence/enforcement. Insert the guard only when the
+          # function has a `message` argument and no equivalent guard already.
+          guard_tokens = (
+              '.author.bot',
+              'message.author.bot',
+              'getattr(message.author,"bot"',
+              'getattr(getattr(message,"author"',
+              'author_is_bot',
+              'is_bot_author',
+              '_is_human_message',
+              '_should_ignore_message',
+              '_is_supported_message',
+          )
+          changed_handlers = []
+          for path in sorted((root / 'stoney_verify').rglob('*.py')):
+              relative = str(path.relative_to(root)).lower()
+              source = path.read_text(encoding='utf-8')
+              lowered = source.lower()
+              if 'spam' not in relative and 'raid' not in relative:
+                  if 'spamguard' not in lowered and 'raid' not in lowered:
+                      continue
+              if 'on_message' not in source:
+                  continue
+              try:
+                  tree = ast.parse(source, filename=str(path))
+              except SyntaxError:
+                  continue
+              lines = source.splitlines(keepends=True)
+              insertions = []
+              for node in ast.walk(tree):
+                  if not isinstance(node, ast.AsyncFunctionDef):
+                      continue
+                  if node.name not in {'on_message', 'handle_message', 'process_message'}:
+                      continue
+                  if 'message' not in {arg.arg for arg in node.args.args}:
+                      continue
+                  end = int(getattr(node, 'end_lineno', node.lineno))
+                  block = ''.join(lines[node.lineno - 1:end])
+                  compact = ''.join(block.lower().split())
+                  if any(token in compact for token in guard_tokens):
+                      continue
+                  insertion_line = node.lineno
+                  if (
+                      node.body
+                      and isinstance(node.body[0], ast.Expr)
+                      and isinstance(getattr(node.body[0], 'value', None), ast.Constant)
+                      and isinstance(node.body[0].value.value, str)
+                  ):
+                      insertion_line = int(getattr(node.body[0], 'end_lineno', node.body[0].lineno))
+                  indent = ' ' * (node.col_offset + 4)
+                  guard = (
+                      f'{indent}if bool(getattr(getattr(message, "author", None), "bot", False)):\n'
+                      f'{indent}    return\n'
+                  )
+                  insertions.append((insertion_line, guard, node.name))
+              for line_no, guard, function_name in sorted(insertions, reverse=True):
+                  lines.insert(line_no, guard)
+                  changed_handlers.append(f'{path}:{function_name}')
+              if insertions:
+                  path.write_text(''.join(lines), encoding='utf-8')
+
+          # Extend the permanent focused profile gate with the new runtime test
+          # and explicit moderation-isolation audit.
+          diagnostic_path = root / '.github/workflows/profile-runtime-diagnostics.yml'
+          diagnostic = diagnostic_path.read_text(encoding='utf-8')
+          new_test = '            tests/test_live_profile_per_member_runtime.py \\\n'
+          if 'tests/test_live_profile_per_member_runtime.py' not in diagnostic:
+              anchor = '            tests/test_live_profile_runtime_responsive.py \\\n'
+              diagnostic = diagnostic.replace(anchor, anchor + new_test)
+          if 'test_moderation_ignores_bot_messages.py' not in diagnostic:
+              anchor = '          status=$?\n'
+              diagnostic = diagnostic.replace(
+                  anchor,
+                  '          python tools/test_moderation_ignores_bot_messages.py >> profile-runtime-tests.txt 2>&1 || status=1\n'
+                  + anchor,
+              )
+          diagnostic_path.write_text(diagnostic, encoding='utf-8')
+
+          active_task = '''# ACTIVE TASK
+
+## DS-PROFILE-STUDIO-LIVE-011 — Per-member public signatures without moderation self-triggering
+
+**Status:** FINAL EXACT-HEAD VALIDATION / DEPLOYED SMOKE PENDING
+**Branch:** `fix/live-signature-per-user-moderation-safe`
+**PR:** #141
+**Base:** current `main` after PR #140
+
+## Single Active Task Lock
+
+Do not switch to unrelated implementation work until rapid same-member messages leave one card, different members retain independent public cards, old duplicates are cleaned safely, bot-owned signature output cannot feed SpamGuard or raid systems, exact-head validation passes, and deployed Discord smoke confirms the behavior.
+
+## Confirmed production failures
+
+- A leading and trailing replacement could both remain visible after one member's rapid burst.
+- Runtime ownership was keyed only by `(guild, channel)`, so the newest speaker replaced every previous member's card.
+- The moderation boundary needed an explicit regression guarantee that bot-authored presentation messages never advance spam or raid counters.
+
+## Implemented behavior
+
+- One scheduler worker per `(guild, channel, member)` owns the complete burst lifecycle.
+- First eligible message after member inactivity remains immediate.
+- Rapid same-member messages settle into one final replacement beneath the latest message.
+- Different members retain independent public cards in the same configured channel.
+- One bounded lazy history warmup per active channel recovers all recent member cards after restart and removes older duplicates per member.
+- Warm traffic uses in-memory ownership and performs no per-message durable-state read/write.
+- A channel output governor serializes bot cards with a small gap without delaying the first quiet-channel signature.
+- Failed old-card cleanup receives bounded verified retries; only bot-owned marker-matching cards may be deleted.
+- SpamGuard/raid message handlers reject bot authors before counters, evidence, alerts, or enforcement.
+- A repository audit fails if a relevant message handler lacks that boundary.
+
+## Validation
+
+- [x] Targeted tests cover same-member burst collapse.
+- [x] Targeted tests cover independent visibility for multiple members.
+- [x] Targeted tests cover lazy duplicate cleanup without deleting another member's card.
+- [x] Targeted tests cover bot/webhook rejection and internal signature classification.
+- [ ] Focused profile diagnostics pass on the final head.
+- [ ] Full unit suite, standalone tools, compilation, whitespace, and every repository audit pass on the final head.
+- [ ] Branch is conflict-free and zero commits behind `main`.
+- [ ] Deployed Discord smoke confirms one card per member, no duplicates, low latency, working links, and no SpamGuard/raid counter movement.
+
+## Cleanup
+
+- [x] Public registration selects the per-member runtime explicitly.
+- [x] Legacy runtime remains compatibility plumbing rather than the public listener.
+- [x] Temporary runtime-wiring workflows are removed before final validation.
+- [x] No per-message Supabase state hot path was reintroduced.
+'''
+          (root / 'ACTIVE_TASK.md').write_text(active_task, encoding='utf-8')
+
+          # Remove all temporary branch-only source/wiring/finalizer workflows.
+          for temporary in (
+              '.github/workflows/live-signature-debug-source.yml',
+              '.github/workflows/apply-live-signature-per-user.yml',
+              '.github/workflows/wire-public-per-member-runtime.yml',
+              '.github/workflows/finalize-per-member-runtime-wiring.yml',
+              '.github/workflows/finalize-live-signature-per-member.yml',
+          ):
+              path = root / temporary
+              if path.exists():
+                  path.unlink()
+
+          print(f'moderation_handlers_patched={len(changed_handlers)}')
+          for handler in changed_handlers:
+              print(f'patched={handler}')
+          PY
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip -q
+          pip install -q -r requirements.txt
+          pip install -q pytest
+      - name: Validate final worktree
+        env:
+          DANK_STARTUP_LOG_STYLE: quiet
+          DANK_COMMAND_LOG_STYLE: quiet
+        run: |
+          set -euo pipefail
+          git diff --check
+          python -m compileall -q stoney_verify main.py tools tests
+          python -m pytest -q \
+            tests/test_live_profile_per_member_runtime.py \
+            tests/test_live_profile_card_runtime.py \
+            tests/test_live_profile_runtime_delivery_regression.py \
+            tests/test_live_profile_card_cleanup.py \
+            tests/test_live_profile_card_final_safety.py \
+            tests/test_live_profile_card_integration_contract.py \
+            tests/test_live_profile_card_visual_links.py \
+            tests/test_live_profile_runtime_responsive.py \
+            tests/test_live_profile_card_lifecycle.py \
+            tests/test_profile_card_setup_picker_ux.py
+          python tools/test_moderation_ignores_bot_messages.py
+          python -m pytest tests/ -q --tb=short --disable-warnings
+          status=0
+          for f in tools/test_*.py; do
+            python "$f" || status=1
+          done
+          test "$status" -eq 0
+          python tools/audit_public_setup.py
+          python tools/audit_public_command_surface.py
+          python tools/audit_public_command_friction.py
+          python tools/audit_public_invite_permissions.py
+          python tools/audit_setup_safety.py
+          python tools/audit_dank_design_smart_auto_detect.py
+          python tools/audit_role_truth.py
+          python tools/audit_event_boundary.py
+      - name: Commit final validated worktree
+        run: |
+          git config user.name "Dank Shield CI"
+          git config user.email "actions@users.noreply.github.com"
+          git add -A
+          git commit -m "Finalize per-member moderation-safe signatures [per-member finalized]"
+          git push origin HEAD:fix/live-signature-per-user-moderation-safe
+      - name: Mark PR ready
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh pr ready 141 --repo UglyGameFace/Dank-Shield
