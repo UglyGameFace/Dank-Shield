@@ -35,11 +35,19 @@ jobs:
           fetch-depth: 1
           show-progress: false
 
-      - name: Restore reviewed implementation
+      - name: Verify payload part 00
+        run: test "$(wc -c < tools/.live-signature-fix-payload-00)" = "12000"
+      - name: Verify payload part 01
+        run: test "$(wc -c < tools/.live-signature-fix-payload-01)" = "12000"
+      - name: Verify payload part 02
+        run: test "$(wc -c < tools/.live-signature-fix-payload-02)" = "12000"
+      - name: Verify payload part 03
+        run: test "$(wc -c < tools/.live-signature-fix-payload-03)" = "10044"
+
+      - name: Assemble and verify base64 payload
         shell: bash
         run: |
-          set -euxo pipefail
-          wc -c tools/.live-signature-fix-payload-0{0,1,2,3}
+          set -euo pipefail
           cat tools/.live-signature-fix-payload-00 \
               tools/.live-signature-fix-payload-01 \
               tools/.live-signature-fix-payload-02 \
@@ -47,10 +55,19 @@ jobs:
               > /tmp/live-signature-fix.b64
           test "$(wc -c < /tmp/live-signature-fix.b64)" = "46044"
           test "$(sha256sum /tmp/live-signature-fix.b64 | cut -d' ' -f1)" = "592e341d7d1997645f8c13d416479535087e1d84d0115cc60840a2d8f17f4138"
+
+      - name: Decode and verify archive
+        shell: bash
+        run: |
+          set -euo pipefail
           base64 --decode /tmp/live-signature-fix.b64 > /tmp/live-signature-fix.tgz
           test "$(sha256sum /tmp/live-signature-fix.tgz | cut -d' ' -f1)" = "c54bf24cf58014eb9c1770198f1ed62980e13c9f8b7bf87674d3a66509f4c004"
-          tar -tzf /tmp/live-signature-fix.tgz > /tmp/live-signature-files.txt
-          cat /tmp/live-signature-files.txt
+          tar -tzf /tmp/live-signature-fix.tgz > /dev/null
+
+      - name: Restore reviewed implementation
+        shell: bash
+        run: |
+          set -euo pipefail
           tar -xzf /tmp/live-signature-fix.tgz -C .
           rm -f tools/.live-signature-fix-payload-0{0,1,2,3}
           rm -f .github/workflows/apply-live-signature-per-member-fix.yml
