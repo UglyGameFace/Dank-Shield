@@ -34,6 +34,8 @@ jobs:
               "shown(preferences.get('show_account_dates', True))}",
           ):
               source = source.replace(ending + '\\n"', ending + '\\\\n"')
+          source = source.replace('account_summary = "\\n".join', 'account_summary = "\\\\n".join')
+          source = source.replace('+ "\\n\\nUse **Manage Accounts**', '+ "\\\\n\\\\nUse **Manage Accounts**')
           path.write_text(source, encoding='utf-8')
           PY
       - name: Materialize guarded clarity correction
