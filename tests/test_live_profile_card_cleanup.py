@@ -48,17 +48,6 @@ class FakeBot:
         return None
 
 
-class FakePending:
-    def __init__(self):
-        self.cancelled = False
-
-    def done(self):
-        return False
-
-    def cancel(self):
-        self.cancelled = True
-
-
 def _patch_types(monkeypatch):
     monkeypatch.setattr(runtime_module.discord, "TextChannel", FakeChannel)
     monkeypatch.setattr(runtime_module.discord, "Member", FakeMember)
@@ -72,14 +61,15 @@ def test_disable_channel_keeps_state_when_discord_delete_fails(monkeypatch):
         channel = guild.add_channel(10)
         bot.guilds = [guild]
         deleted_states = []
+        state = {"message_id": "123", "user_id": "7"}
 
-        async def get_state(_guild_id, _channel_id):
-            return {"message_id": "123", "user_id": "7"}
+        async def list_states(_guild_id, _channel_id):
+            return [state]
 
-        async def delete_state(guild_id, channel_id):
-            deleted_states.append((guild_id, channel_id))
+        async def delete_state(*args):
+            deleted_states.append(args)
 
-        monkeypatch.setattr(runtime_module, "get_live_card_state", get_state)
+        monkeypatch.setattr(runtime_module, "list_live_card_states_for_channel", list_states)
         monkeypatch.setattr(runtime_module, "delete_live_card_state", delete_state)
         runtime = LiveProfileCardRuntime(bot)
 
@@ -93,7 +83,7 @@ def test_disable_channel_keeps_state_when_discord_delete_fails(monkeypatch):
     asyncio.run(scenario())
 
 
-def test_disable_channel_removes_state_after_verified_delete(monkeypatch):
+def test_disable_channel_removes_scoped_state_after_verified_delete(monkeypatch):
     async def scenario():
         _patch_types(monkeypatch)
         bot = FakeBot()
@@ -101,14 +91,15 @@ def test_disable_channel_removes_state_after_verified_delete(monkeypatch):
         channel = guild.add_channel(20)
         bot.guilds = [guild]
         deleted_states = []
+        state = {"message_id": "456", "user_id": "8"}
 
-        async def get_state(_guild_id, _channel_id):
-            return {"message_id": "456", "user_id": "8"}
+        async def list_states(_guild_id, _channel_id):
+            return [state]
 
-        async def delete_state(guild_id, channel_id):
-            deleted_states.append((guild_id, channel_id))
+        async def delete_state(*args):
+            deleted_states.append(args)
 
-        monkeypatch.setattr(runtime_module, "get_live_card_state", get_state)
+        monkeypatch.setattr(runtime_module, "list_live_card_states_for_channel", list_states)
         monkeypatch.setattr(runtime_module, "delete_live_card_state", delete_state)
         runtime = LiveProfileCardRuntime(bot)
 
@@ -117,7 +108,7 @@ def test_disable_channel_removes_state_after_verified_delete(monkeypatch):
 
         runtime._delete_stored_message = successful_delete
         await runtime.disable_channel(guild, channel)
-        assert deleted_states == [(guild.id, channel.id)]
+        assert deleted_states == [(guild.id, channel.id, 8)]
 
     asyncio.run(scenario())
 
@@ -161,14 +152,18 @@ def test_reconcile_disabled_channel_deletes_verified_card_before_state(monkeypat
         bot.guilds = [guild]
         deleted_messages = []
         deleted_states = []
+        state = {
+            "guild_id": str(guild.id),
+            "channel_id": str(channel.id),
+            "message_id": "789",
+            "user_id": "9",
+        }
 
-        async def list_states():
-            return [{
-                "guild_id": str(guild.id),
-                "channel_id": str(channel.id),
-                "message_id": "789",
-                "user_id": "9",
-            }]
+        async def list_all_states():
+            return [state]
+
+        async def list_channel_states(_guild_id, _channel_id):
+            return [state]
 
         async def config(_guild_id):
             return {
@@ -176,10 +171,11 @@ def test_reconcile_disabled_channel_deletes_verified_card_before_state(monkeypat
                 "profile_live_card_channel_ids": [str(channel.id)],
             }
 
-        async def delete_state(guild_id, channel_id):
-            deleted_states.append((guild_id, channel_id))
+        async def delete_state(*args):
+            deleted_states.append(args)
 
-        monkeypatch.setattr(runtime_module, "list_live_card_states", list_states)
+        monkeypatch.setattr(runtime_module, "list_live_card_states", list_all_states)
+        monkeypatch.setattr(runtime_module, "list_live_card_states_for_channel", list_channel_states)
         monkeypatch.setattr(runtime_module, "get_guild_config", config)
         monkeypatch.setattr(runtime_module, "delete_live_card_state", delete_state)
         runtime = LiveProfileCardRuntime(bot)
@@ -191,7 +187,7 @@ def test_reconcile_disabled_channel_deletes_verified_card_before_state(monkeypat
         runtime._delete_stored_message = verified_delete
         await runtime.reconcile()
         assert deleted_messages == [789]
-        assert deleted_states == [(guild.id, channel.id)]
+        assert deleted_states == [(guild.id, channel.id, 9)]
 
     asyncio.run(scenario())
 
@@ -204,14 +200,18 @@ def test_reconcile_keeps_state_when_disabled_card_cannot_be_deleted(monkeypatch)
         channel = guild.add_channel(50)
         bot.guilds = [guild]
         deleted_states = []
+        state = {
+            "guild_id": str(guild.id),
+            "channel_id": str(channel.id),
+            "message_id": "999",
+            "user_id": "10",
+        }
 
-        async def list_states():
-            return [{
-                "guild_id": str(guild.id),
-                "channel_id": str(channel.id),
-                "message_id": "999",
-                "user_id": "10",
-            }]
+        async def list_all_states():
+            return [state]
+
+        async def list_channel_states(_guild_id, _channel_id):
+            return [state]
 
         async def config(_guild_id):
             return {
@@ -219,10 +219,11 @@ def test_reconcile_keeps_state_when_disabled_card_cannot_be_deleted(monkeypatch)
                 "profile_live_card_channel_ids": [str(channel.id)],
             }
 
-        async def delete_state(guild_id, channel_id):
-            deleted_states.append((guild_id, channel_id))
+        async def delete_state(*args):
+            deleted_states.append(args)
 
-        monkeypatch.setattr(runtime_module, "list_live_card_states", list_states)
+        monkeypatch.setattr(runtime_module, "list_live_card_states", list_all_states)
+        monkeypatch.setattr(runtime_module, "list_live_card_states_for_channel", list_channel_states)
         monkeypatch.setattr(runtime_module, "get_guild_config", config)
         monkeypatch.setattr(runtime_module, "delete_live_card_state", delete_state)
         runtime = LiveProfileCardRuntime(bot)
