@@ -11,23 +11,82 @@ _BROWSER_TIMEOUT_SECONDS = 900
 _ACTION_LOCKS: dict[str, asyncio.Lock] = {}
 
 
-def _cfg_role_id(cfg: Any, key: str) -> int:
+def _cfg_value(cfg: Any, key: str, default: Any = None) -> Any:
     try:
         value = getattr(cfg, key, None)
         if value is not None:
-            return int(str(value))
+            return value
     except Exception:
         pass
-
     try:
         if hasattr(cfg, "get"):
             value = cfg.get(key)
             if value is not None:
-                return int(str(value))
+                return value
     except Exception:
         pass
+    for bucket in ("settings", "config", "metadata", "meta"):
+        try:
+            nested = getattr(cfg, bucket, None)
+            if isinstance(nested, dict) and nested.get(key) is not None:
+                return nested.get(key)
+        except Exception:
+            pass
+        try:
+            nested = cfg.get(bucket) if hasattr(cfg, "get") else None
+            if isinstance(nested, dict) and nested.get(key) is not None:
+                return nested.get(key)
+        except Exception:
+            pass
+    return default
 
-    return 0
+
+def _cfg_role_id(cfg: Any, key: str) -> int:
+    try:
+        return int(str(_cfg_value(cfg, key, 0) or 0))
+    except Exception:
+        return 0
+
+
+def _role_ids_from_value(value: Any) -> set[int]:
+    out: set[int] = set()
+    try:
+        values = (
+            value
+            if isinstance(value, (list, tuple, set))
+            else str(value or "").replace(";", ",").replace(" ", ",").split(",")
+        )
+        for item in values:
+            try:
+                role_id = int(str(item).strip())
+            except Exception:
+                continue
+            if role_id > 0:
+                out.add(role_id)
+    except Exception:
+        pass
+    return out
+
+
+async def load_protected_role_ids(guild_id: int) -> set[int]:
+    try:
+        from stoney_verify.guild_config import get_guild_config
+
+        cfg = await get_guild_config(int(guild_id))
+    except Exception:
+        return set()
+
+    protected: set[int] = set()
+    for key in (
+        "staff_role_id",
+        "vc_staff_role_id",
+        "server_control_role_id",
+        "bot_manager_role_id",
+        "inactive_cleanup_protected_role_ids",
+        "protected_role_ids",
+    ):
+        protected |= _role_ids_from_value(_cfg_value(cfg, key, None))
+    return protected
 
 
 async def _can_review(interaction: discord.Interaction) -> bool:
@@ -178,28 +237,40 @@ def _bot_permission(me: discord.Member, action: str) -> bool:
     return True
 
 
-def _target_is_staff_like(member: discord.Member) -> bool:
+def _target_is_staff_like(
+    member: discord.Member,
+    protected_role_ids: set[int],
+) -> bool:
     perms = member.guild_permissions
-    return bool(
+    if (
         perms.administrator
         or perms.manage_guild
         or perms.manage_roles
         or perms.moderate_members
         or perms.kick_members
         or perms.ban_members
-    )
+    ):
+        return True
+    try:
+        return any(int(role.id) in protected_role_ids for role in member.roles)
+    except Exception:
+        return False
 
 
-def action_blockers(
+async def action_blockers(
     guild: discord.Guild,
     actor: discord.Member,
     target: discord.Member,
     action: str,
+    *,
+    protected_role_ids: Optional[set[int]] = None,
 ) -> list[str]:
     blockers: list[str] = []
     me = guild.me
     if not isinstance(me, discord.Member):
         return ["Dank Shield could not resolve its own server member."]
+    if protected_role_ids is None:
+        protected_role_ids = await load_protected_role_ids(int(guild.id))
     if target.id == guild.owner_id:
         blockers.append("The server owner is protected.")
     if target.id == me.id:
@@ -207,9 +278,15 @@ def action_blockers(
     if target.id == actor.id and action in {"timeout", "kick", "ban"}:
         blockers.append("You cannot use this panel to punish yourself.")
     if not _actor_permission(actor, action):
-        blockers.append(f"You do not have the Discord permission required for {action.replace('_', ' ')}.")
+        blockers.append(
+            f"You do not have the Discord permission required for "
+            f"{action.replace('_', ' ')}."
+        )
     if not _bot_permission(me, action):
-        blockers.append(f"Dank Shield is missing the Discord permission required for {action.replace('_', ' ')}.")
+        blockers.append(
+            f"Dank Shield is missing the Discord permission required for "
+            f"{action.replace('_', ' ')}."
+        )
 
     if action not in {"dm", "review"}:
         try:
@@ -223,20 +300,35 @@ def action_blockers(
         except Exception:
             blockers.append("Dank Shield's role hierarchy could not be verified.")
 
-    if action in {"timeout", "kick", "ban"} and _target_is_staff_like(target):
+    if action in {"timeout", "kick", "ban"} and _target_is_staff_like(
+        target,
+        protected_role_ids,
+    ):
         if actor.id != guild.owner_id and not actor.guild_permissions.administrator:
-            blockers.append("Staff-like targets require the server owner or an Administrator.")
+            blockers.append(
+                "Staff/protected targets require the server owner or an Administrator."
+            )
     return blockers
 
 
-def role_action_blockers(
+async def role_action_blockers(
     guild: discord.Guild,
     actor: discord.Member,
     target: discord.Member,
     role: discord.Role,
     action: str,
+    *,
+    protected_role_ids: Optional[set[int]] = None,
 ) -> list[str]:
-    blockers = action_blockers(guild, actor, target, action)
+    if protected_role_ids is None:
+        protected_role_ids = await load_protected_role_ids(int(guild.id))
+    blockers = await action_blockers(
+        guild,
+        actor,
+        target,
+        action,
+        protected_role_ids=protected_role_ids,
+    )
     me = guild.me
     if role.is_default():
         blockers.append("The @everyone role cannot be changed.")
@@ -246,6 +338,14 @@ def role_action_blockers(
         blockers.append("Dank Shield's role must be above the selected role.")
     if actor.id != guild.owner_id and role >= actor.top_role:
         blockers.append("Your highest role must be above the selected role.")
+    if (
+        int(role.id) in protected_role_ids
+        and actor.id != guild.owner_id
+        and not actor.guild_permissions.administrator
+    ):
+        blockers.append(
+            "Configured staff/control roles require the server owner or an Administrator."
+        )
     return blockers
 
 
@@ -293,8 +393,12 @@ async def apply_staff_basic_verification(
     try:
         from stoney_verify.guild_config import get_guild_config
         from stoney_verify.setup_engine.loader import snapshot_from_config
-        from stoney_verify.setup_engine.verification_modes import effective_verification_mode
-        from stoney_verify.verification_new.basic_verify import apply_basic_verification
+        from stoney_verify.setup_engine.verification_modes import (
+            effective_verification_mode,
+        )
+        from stoney_verify.verification_new.basic_verify import (
+            apply_basic_verification,
+        )
 
         cfg = await get_guild_config(int(guild.id), refresh=True)
         mode = effective_verification_mode(guild, cfg)
@@ -309,26 +413,46 @@ async def apply_staff_basic_verification(
         snapshot = snapshot_from_config(int(guild.id), cfg)
         unverified_role = guild.get_role(int(snapshot.unverified_role_id or 0))
         if not isinstance(unverified_role, discord.Role):
-            return False, "The configured Unverified role could not be resolved. Run `/dank setup` and repair verification roles."
+            return (
+                False,
+                "The configured Unverified role could not be resolved. "
+                "Run `/dank setup` and repair verification roles.",
+            )
         if unverified_role not in target.roles:
-            return False, "That member no longer has the configured Unverified role. Refresh the roster before acting."
+            return (
+                False,
+                "That member no longer has the configured Unverified role. "
+                "Refresh the roster before acting.",
+            )
 
         ok, message = await apply_basic_verification(target)
         if ok:
-            return True, f"{target.mention} was verified through the configured Basic Button role flow."
+            return (
+                True,
+                f"{target.mention} was verified through the configured "
+                "Basic Button role flow.",
+            )
         return False, message
     except Exception as exc:
         return False, f"Verification service failed: {type(exc).__name__}."
 
 
 class OwnedView(discord.ui.View):
-    def __init__(self, owner_id: int, *, timeout: float = _BROWSER_TIMEOUT_SECONDS) -> None:
+    def __init__(
+        self,
+        owner_id: int,
+        *,
+        timeout: float = _BROWSER_TIMEOUT_SECONDS,
+    ) -> None:
         super().__init__(timeout=timeout)
         self.owner_id = int(owner_id)
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if int(interaction.user.id) != self.owner_id:
-            await reply_ephemeral(interaction, "❌ This private member browser belongs to another staff member.")
+            await reply_ephemeral(
+                interaction,
+                "❌ This private member browser belongs to another staff member.",
+            )
             return False
         if not await require_review(interaction):
             return False
@@ -349,6 +473,7 @@ __all__ = [
     "apply_staff_basic_verification",
     "display_name",
     "ensure_member_cache",
+    "load_protected_role_ids",
     "record_member_action",
     "reply_ephemeral",
     "require_review",
