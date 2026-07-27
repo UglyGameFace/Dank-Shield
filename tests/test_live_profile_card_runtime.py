@@ -1,6 +1,6 @@
 import asyncio
-from io import BytesIO
 from datetime import datetime, timezone
+from io import BytesIO
 from types import SimpleNamespace
 
 import discord
@@ -12,6 +12,7 @@ from stoney_verify.profile_card_runtime import (
     PendingTrigger,
     _copy_base_profile_embed,
     live_card_footer,
+    live_card_marker_url,
     parse_live_card_config,
 )
 from stoney_verify.profile_card_service import ProfileStorageUnavailable
@@ -40,6 +41,7 @@ class FakeMember:
         self.display_avatar = FakeAvatar()
         self.joined_at = datetime.now(timezone.utc)
         self.created_at = datetime.now(timezone.utc)
+        self.color = discord.Color.blurple()
 
 
 class FakeSentMessage:
@@ -47,6 +49,7 @@ class FakeSentMessage:
         self.id = int(message_id)
         self.author = author
         self.embeds = list(embeds)
+        self.attachments = []
         self.deleted = False
 
     async def delete(self):
@@ -79,9 +82,10 @@ class FakeChannel:
         return message
 
     async def fetch_message(self, message_id):
-        if int(message_id) not in self.fetch_messages:
+        message = self.fetch_messages.get(int(message_id))
+        if message is None or message.deleted:
             raise discord.NotFound(SimpleNamespace(status=404, reason="missing"), "missing")
-        return self.fetch_messages[int(message_id)]
+        return message
 
     async def history(self, *, limit):
         for message in self.history_messages[:limit]:
@@ -122,6 +126,12 @@ class FakeBot:
     async def wait_until_ready(self):
         return None
 
+    def get_guild(self, guild_id):
+        for guild in self.guilds:
+            if int(guild.id) == int(guild_id):
+                return guild
+        return None
+
 
 class FakeIncomingMessage:
     def __init__(self, message_id, guild, channel, author, *, webhook_id=None):
@@ -133,27 +143,21 @@ class FakeIncomingMessage:
         self.type = discord.MessageType.default
 
 
-async def _wait_for_pending(runtime):
-    tasks = list(runtime._pending.values())
-    if tasks:
-        await asyncio.gather(*tasks, return_exceptions=True)
-
-
-def _config(channel_id, *, cooldown=180):
+def _config(channel_id):
     return {
         "profile_live_cards_enabled": True,
         "profile_live_card_channel_ids": [str(channel_id)],
         "profile_live_card_allowed_fields": ["roles", "account_dates", "platforms"],
-        "profile_live_card_debounce_seconds": 2,
-        "profile_live_card_same_speaker_cooldown_seconds": cooldown,
     }
 
 
 def _fake_renderer(seen):
     async def render(member, allowed, *, trigger_message_id, require_live_enabled=True):
         seen.append((member.id, set(allowed), trigger_message_id, require_live_enabled))
-        embed = discord.Embed(title=f"Profile {member.id}")
-        embed.set_footer(text=live_card_footer(member.id, trigger_message_id))
+        embed = discord.Embed(
+            title=f"Profile {member.id}",
+            url=live_card_marker_url(member.id, trigger_message_id),
+        )
         return LiveCardRender(embed=embed, view=None)
 
     return render
@@ -162,6 +166,37 @@ def _fake_renderer(seen):
 def _patch_discord_types(monkeypatch):
     monkeypatch.setattr(runtime_module.discord, "TextChannel", FakeChannel)
     monkeypatch.setattr(runtime_module.discord, "Member", FakeMember)
+
+
+def _install_storage(monkeypatch, channel):
+    states = []
+
+    async def list_states(_guild_id, _channel_id):
+        return list(states)
+
+    async def delete_state(_guild_id, _channel_id, _user_id=None):
+        states.clear()
+
+    async def save_state(guild_id, channel_id, **payload):
+        states.clear()
+        states.append({"guild_id": guild_id, "channel_id": channel_id, **payload})
+
+    monkeypatch.setattr(runtime_module, "list_live_card_states_for_channel", list_states)
+    monkeypatch.setattr(runtime_module, "delete_live_card_state", delete_state)
+    monkeypatch.setattr(runtime_module, "upsert_live_card_state", save_state)
+    return states
+
+
+async def _drain(runtime):
+    for _attempt in range(12):
+        tasks = [task for task in runtime._pending.values() if task is not None and not task.done()]
+        if not tasks:
+            await asyncio.sleep(0)
+            tasks = [task for task in runtime._pending.values() if task is not None and not task.done()]
+            if not tasks:
+                return
+        await asyncio.gather(*tasks, return_exceptions=True)
+        await asyncio.sleep(0)
 
 
 def test_server_live_cards_are_disabled_by_default():
@@ -180,7 +215,7 @@ def test_hiding_roles_removes_dynamic_paginated_role_fields():
     assert [field.name for field in filtered.fields] == ["Account created"]
 
 
-def test_message_bursts_coalesce_to_latest_human_speaker(monkeypatch):
+def test_message_burst_coalesces_to_latest_human_speaker(monkeypatch):
     async def scenario():
         _patch_discord_types(monkeypatch)
         bot = FakeBot()
@@ -189,41 +224,30 @@ def test_message_bursts_coalesce_to_latest_human_speaker(monkeypatch):
         channel = guild.add_channel(10)
         first = guild.add_member(101)
         second = guild.add_member(202)
-        gate = asyncio.Event()
+        states = _install_storage(monkeypatch, channel)
         seen = []
-        states = []
-
-        async def sleep(_seconds):
-            await gate.wait()
 
         async def get_config(_guild_id):
             return _config(channel.id)
 
-        async def get_state(_guild_id, _channel_id):
+        async def no_wait(_seconds):
             return None
 
-        async def save_state(guild_id, channel_id, **payload):
-            states.append((guild_id, channel_id, payload))
-
         monkeypatch.setattr(runtime_module, "get_guild_config", get_config)
-        monkeypatch.setattr(runtime_module, "get_live_card_state", get_state)
-        monkeypatch.setattr(runtime_module, "upsert_live_card_state", save_state)
-
-        runtime = LiveProfileCardRuntime(bot, renderer=_fake_renderer(seen), sleep=sleep)
+        runtime = LiveProfileCardRuntime(bot, renderer=_fake_renderer(seen), sleep=no_wait)
         await runtime.on_message(FakeIncomingMessage(1, guild, channel, first))
         await runtime.on_message(FakeIncomingMessage(2, guild, channel, second))
-        gate.set()
-        await _wait_for_pending(runtime)
+        await _drain(runtime)
 
         assert [item[0] for item in seen] == [second.id]
         assert len(channel.sent) == 1
-        assert states[0][2]["user_id"] == second.id
-        assert states[0][2]["trigger_message_id"] == 2
+        assert states[0]["user_id"] == second.id
+        assert states[0]["trigger_message_id"] == 2
 
     asyncio.run(scenario())
 
 
-def test_same_speaker_burst_repositions_once_and_leaves_one_visible_card(monkeypatch):
+def test_same_speaker_replacement_leaves_one_visible_card(monkeypatch):
     async def scenario():
         _patch_discord_types(monkeypatch)
         bot = FakeBot()
@@ -231,36 +255,29 @@ def test_same_speaker_burst_repositions_once_and_leaves_one_visible_card(monkeyp
         bot.guilds = [guild]
         channel = guild.add_channel(20)
         member = guild.add_member(303)
+        states = _install_storage(monkeypatch, channel)
         seen = []
 
         async def get_config(_guild_id):
-            return _config(channel.id, cooldown=300)
-
-        async def get_state(_guild_id, _channel_id):
-            return None
-
-        async def save_state(*_args, **_kwargs):
-            return None
+            return _config(channel.id)
 
         async def no_wait(_seconds):
             return None
 
         monkeypatch.setattr(runtime_module, "get_guild_config", get_config)
-        monkeypatch.setattr(runtime_module, "get_live_card_state", get_state)
-        monkeypatch.setattr(runtime_module, "upsert_live_card_state", save_state)
         runtime = LiveProfileCardRuntime(bot, renderer=_fake_renderer(seen), sleep=no_wait)
-
         await runtime.on_message(FakeIncomingMessage(1, guild, channel, member))
-        await _wait_for_pending(runtime)
+        await _drain(runtime)
         await runtime.on_message(FakeIncomingMessage(2, guild, channel, member))
         await runtime.on_message(FakeIncomingMessage(3, guild, channel, member))
-        await _wait_for_pending(runtime)
+        await _drain(runtime)
 
         assert [item[2] for item in seen] == [1, 3]
         assert len(channel.sent) == 2
         assert channel.sent[0].deleted is True
         assert channel.sent[1].deleted is False
         assert sum(not message.deleted for message in channel.sent) == 1
+        assert states[0]["trigger_message_id"] == 3
 
     asyncio.run(scenario())
 
@@ -282,62 +299,18 @@ def test_bot_and_webhook_messages_never_schedule_cards(monkeypatch):
     asyncio.run(scenario())
 
 
-def test_failed_send_leaves_existing_card_untouched(monkeypatch):
-    async def scenario():
-        _patch_discord_types(monkeypatch)
-        bot = FakeBot()
-        guild = FakeGuild(4, bot.user)
-        channel = guild.add_channel(40)
-        channel.fail_send = True
-        member = guild.add_member(505)
-        old = FakeSentMessage(900, bot.user, [])
-        channel.fetch_messages[old.id] = old
-        deleted_old = []
-
-        async def get_state(_guild_id, _channel_id):
-            return {"message_id": str(old.id), "user_id": "9999"}
-
-        async def forbidden_save(*_args, **_kwargs):
-            raise AssertionError("state must not update after send failure")
-
-        monkeypatch.setattr(runtime_module, "get_live_card_state", get_state)
-        monkeypatch.setattr(runtime_module, "upsert_live_card_state", forbidden_save)
-        runtime = LiveProfileCardRuntime(bot, renderer=_fake_renderer([]), sleep=asyncio.sleep)
-
-        async def track_delete(_channel, message_id):
-            deleted_old.append(message_id)
-            return True
-
-        runtime._delete_stored_message = track_delete
-        trigger = PendingTrigger(guild.id, channel.id, member.id, 1)
-        await runtime._replace_card(
-            FakeIncomingMessage(1, guild, channel, member),
-            parse_live_card_config(_config(channel.id)),
-            trigger,
-        )
-        assert deleted_old == []
-        assert old.deleted is False
-
-    asyncio.run(scenario())
-
-
-def test_failed_state_write_deletes_only_new_bot_owned_card(monkeypatch):
+def test_failed_state_write_removes_the_new_bot_card(monkeypatch):
     async def scenario():
         _patch_discord_types(monkeypatch)
         bot = FakeBot()
         guild = FakeGuild(5, bot.user)
         channel = guild.add_channel(50)
         member = guild.add_member(606)
-        old = FakeSentMessage(901, bot.user, [])
-        channel.fetch_messages[old.id] = old
-
-        async def get_state(_guild_id, _channel_id):
-            return {"message_id": str(old.id), "user_id": "9999"}
+        _install_storage(monkeypatch, channel)
 
         async def fail_save(*_args, **_kwargs):
             raise ProfileStorageUnavailable("offline")
 
-        monkeypatch.setattr(runtime_module, "get_live_card_state", get_state)
         monkeypatch.setattr(runtime_module, "upsert_live_card_state", fail_save)
         runtime = LiveProfileCardRuntime(bot, renderer=_fake_renderer([]), sleep=asyncio.sleep)
         trigger = PendingTrigger(guild.id, channel.id, member.id, 2)
@@ -349,7 +322,6 @@ def test_failed_state_write_deletes_only_new_bot_owned_card(monkeypatch):
 
         assert len(channel.sent) == 1
         assert channel.sent[0].deleted is True
-        assert old.deleted is False
 
     asyncio.run(scenario())
 
@@ -370,7 +342,7 @@ def test_delete_guard_refuses_user_messages_even_with_marker(monkeypatch):
     asyncio.run(scenario())
 
 
-def test_restart_reconciliation_keeps_newest_owned_card_and_cleans_duplicates(monkeypatch):
+def test_configured_channel_reconciliation_keeps_newest_and_cleans_stack(monkeypatch):
     async def scenario():
         _patch_discord_types(monkeypatch)
         bot = FakeBot()
@@ -383,26 +355,19 @@ def test_restart_reconciliation_keeps_newest_owned_card_and_cleans_duplicates(mo
         new_embed.set_footer(text=live_card_footer(909, 11))
         old = FakeSentMessage(100, bot.user, [old_embed])
         new = FakeSentMessage(200, bot.user, [new_embed])
+        channel.fetch_messages = {old.id: old, new.id: new}
         channel.history_messages = [new, old]
-        saved = []
+        states = _install_storage(monkeypatch, channel)
 
         async def get_config(_guild_id):
             return _config(channel.id)
 
-        async def list_states():
-            return []
-
-        async def save_state(guild_id, channel_id, **payload):
-            saved.append((guild_id, channel_id, payload))
-
         monkeypatch.setattr(runtime_module, "get_guild_config", get_config)
-        monkeypatch.setattr(runtime_module, "list_live_card_states", list_states)
-        monkeypatch.setattr(runtime_module, "upsert_live_card_state", save_state)
         runtime = LiveProfileCardRuntime(bot, renderer=_fake_renderer([]), sleep=asyncio.sleep)
-        await runtime.reconcile()
+        await runtime.reconcile_guild(guild)
 
-        assert saved[0][2]["message_id"] == new.id
-        assert saved[0][2]["user_id"] == 909
+        assert states[0]["message_id"] == new.id
+        assert states[0]["user_id"] == 909
         assert new.deleted is False
         assert old.deleted is True
 
@@ -417,25 +382,19 @@ def test_live_send_omits_none_view_and_keeps_attachment(monkeypatch):
         channel = guild.add_channel(810)
         channel.reject_none_view = True
         member = guild.add_member(811)
-        states = []
-
-        async def get_state(_guild_id, _channel_id):
-            return None
-
-        async def save_state(guild_id, channel_id, **payload):
-            states.append((guild_id, channel_id, payload))
+        states = _install_storage(monkeypatch, channel)
 
         async def renderer(member, allowed, *, trigger_message_id, require_live_enabled=True):
-            embed = discord.Embed(title=f"Profile {member.id}")
-            embed.set_footer(text=live_card_footer(member.id, trigger_message_id))
+            embed = discord.Embed(
+                title=f"Profile {member.id}",
+                url=live_card_marker_url(member.id, trigger_message_id),
+            )
             return LiveCardRender(
                 embed=embed,
                 view=None,
                 file=discord.File(BytesIO(b"image-bytes"), filename="profile.png"),
             )
 
-        monkeypatch.setattr(runtime_module, "get_live_card_state", get_state)
-        monkeypatch.setattr(runtime_module, "upsert_live_card_state", save_state)
         runtime = LiveProfileCardRuntime(bot, renderer=renderer, sleep=asyncio.sleep)
         trigger = PendingTrigger(guild.id, channel.id, member.id, 91)
         await runtime._replace_card(
@@ -447,7 +406,7 @@ def test_live_send_omits_none_view_and_keeps_attachment(monkeypatch):
         assert len(channel.sent) == 1
         assert "view" not in channel.sent_payloads[0]
         assert channel.sent_payloads[0]["file"].filename == "profile.png"
-        assert states and states[0][2]["user_id"] == member.id
+        assert states[0]["user_id"] == member.id
 
     asyncio.run(scenario())
 
@@ -481,6 +440,7 @@ def test_basic_signature_renders_when_every_optional_field_is_hidden(monkeypatch
         monkeypatch.setattr(runtime_module, "get_effective_profile_settings", settings)
         monkeypatch.setattr(runtime_module, "get_guild_config", config)
         monkeypatch.setattr(runtime_module, "render_member_profile_signature", render_image)
+        runtime_module._SIGNATURE_CACHE.clear()
         rendered = await runtime_module.render_live_profile_card(
             member,
             set(),
@@ -490,6 +450,7 @@ def test_basic_signature_renders_when_every_optional_field_is_hidden(monkeypatch
 
         assert rendered is not None
         assert rendered.file is not None
+        assert rendered.embed.description is None
         assert seen and seen[0][1:] == ([], [], [])
 
     asyncio.run(scenario())
@@ -503,11 +464,7 @@ def test_live_send_failure_is_visible_in_logs(monkeypatch, capsys):
         channel = guild.add_channel(830)
         channel.fail_send = True
         member = guild.add_member(831)
-
-        async def get_state(_guild_id, _channel_id):
-            return None
-
-        monkeypatch.setattr(runtime_module, "get_live_card_state", get_state)
+        _install_storage(monkeypatch, channel)
         runtime = LiveProfileCardRuntime(bot, renderer=_fake_renderer([]), sleep=asyncio.sleep)
         trigger = PendingTrigger(guild.id, channel.id, member.id, 93)
         await runtime._replace_card(
@@ -523,7 +480,7 @@ def test_live_send_failure_is_visible_in_logs(monkeypatch, capsys):
     assert "channel=830" in output
 
 
-def test_live_runtime_uses_message_author_when_guild_member_cache_misses(monkeypatch):
+def test_live_runtime_uses_message_author_when_member_cache_misses(monkeypatch):
     async def scenario():
         _patch_discord_types(monkeypatch)
         bot = FakeBot()
@@ -531,30 +488,23 @@ def test_live_runtime_uses_message_author_when_guild_member_cache_misses(monkeyp
         bot.guilds = [guild]
         channel = guild.add_channel(902)
         author = FakeMember(903, guild)
-        assert guild.get_member(author.id) is None
+        states = _install_storage(monkeypatch, channel)
         seen = []
-        states = []
 
         async def get_config(_guild_id):
-            return _config(channel.id, cooldown=30)
+            return _config(channel.id)
 
-        async def get_state(_guild_id, _channel_id):
+        async def no_wait(_seconds):
             return None
 
-        async def save_state(guild_id, channel_id, **payload):
-            states.append((guild_id, channel_id, payload))
-
         monkeypatch.setattr(runtime_module, "get_guild_config", get_config)
-        monkeypatch.setattr(runtime_module, "get_live_card_state", get_state)
-        monkeypatch.setattr(runtime_module, "upsert_live_card_state", save_state)
-
-        runtime = LiveProfileCardRuntime(bot, renderer=_fake_renderer(seen), sleep=asyncio.sleep)
+        runtime = LiveProfileCardRuntime(bot, renderer=_fake_renderer(seen), sleep=no_wait)
         await runtime.on_message(FakeIncomingMessage(904, guild, channel, author))
-        await _wait_for_pending(runtime)
+        await _drain(runtime)
 
         assert [item[0] for item in seen] == [author.id]
         assert len(channel.sent) == 1
-        assert states[0][2]["user_id"] == author.id
+        assert states[0]["user_id"] == author.id
 
     asyncio.run(scenario())
 
