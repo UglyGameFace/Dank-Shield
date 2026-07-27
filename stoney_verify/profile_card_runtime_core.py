@@ -351,12 +351,30 @@ class LiveProfileCardRuntime:
             return
 
         try:
-            config = parse_live_card_config(await get_guild_config(message.guild.id))
-        except Exception:
+            try:
+                raw_config = await get_guild_config(message.guild.id, refresh=True)
+            except TypeError as exc:
+                if "refresh" not in str(exc):
+                    raise
+                raw_config = await get_guild_config(message.guild.id)
+            config = parse_live_card_config(raw_config)
+        except Exception as exc:
+            print(
+                "⚠️ live_profile_card skipped "
+                f"guild={message.guild.id} channel={message.channel.id} user={message.author.id} "
+                f"reason=config_read_failed error={type(exc).__name__}: {exc}"
+            )
             return
-        if not config.enabled or message.channel.id not in config.channel_ids:
+        if not config.enabled:
+            return
+        if message.channel.id not in config.channel_ids:
             return
         if not _channel_can_host_cards(message.channel):
+            print(
+                "⚠️ live_profile_card skipped "
+                f"guild={message.guild.id} channel={message.channel.id} user={message.author.id} "
+                "reason=channel_permissions_incomplete"
+            )
             return
 
         key = (int(message.guild.id), int(message.channel.id))
