@@ -49,12 +49,23 @@ jobs:
           echo "exit_code=$status" >> "$GITHUB_OUTPUT"
           tail -n 250 profile-runtime-tests.txt
           exit 0
-      - name: Upload exact test output
+      - name: Upload exact test output and source snapshot
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: profile-runtime-diagnostics
-          path: profile-runtime-tests.txt
+          path: |
+            profile-runtime-tests.txt
+            stoney_verify/profile_card_runtime.py
+            stoney_verify/profile_card_runtime_core.py
+            stoney_verify/profile_card_service.py
+            stoney_verify/commands_ext/public_profile_cards.py
+            tests/test_live_profile_card_runtime.py
+            tests/test_live_profile_card_cleanup.py
+            tests/test_live_profile_card_final_safety.py
+            tests/test_live_profile_runtime_responsive.py
+            tests/test_profile_card_migration_safety.py
+            supabase/migrations/20260725_live_profile_cards.sql
           if-no-files-found: error
           retention-days: 1
       - name: Fail when focused tests failed
