@@ -68,12 +68,14 @@ jobs:
           rm -f tools/.live-signature-fix-payload-0{0,1,2,3}
           rm -f .github/workflows/apply-live-signature-per-member-fix.yml
 
-      - name: Validate restored source
+      - name: Compile restored source
+        run: python -m compileall -q stoney_verify tests
+      - name: Check restored whitespace
+        run: git diff --check
+      - name: Verify temporary transfer cleanup
         shell: bash
         run: |
           set -euo pipefail
-          python -m compileall -q stoney_verify tests
-          git diff --check
           test ! -e .github/workflows/apply-live-signature-per-member-fix.yml
           test -z "$(find tools -maxdepth 1 -name '.live-signature-fix-payload-*' -print -quit)"
 
