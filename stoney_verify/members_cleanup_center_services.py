@@ -21,7 +21,14 @@ class CleanupMembersCenterView(discord.ui.View):
     def __init__(self) -> None:
         super().__init__(timeout=900)
 
-    @discord.ui.button(label="Run 90d Review", emoji="🎯", style=discord.ButtonStyle.primary, custom_id="dank_setup_members:scan90", row=0)
+    @discord.ui.button(label="Browse by Role", emoji="👥", style=discord.ButtonStyle.primary, custom_id="dank_setup_members:browse", row=0)
+    async def browse_members(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        from stoney_verify.commands_ext import public_member_role_browser as browser
+
+        await browser._open_member_browser(interaction)
+
+    @discord.ui.button(label="Run 90d Review", emoji="🎯", style=discord.ButtonStyle.secondary, custom_id="dank_setup_members:scan90", row=0)
     async def scan_90(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
         from stoney_verify.commands_ext import public_members_group as members
@@ -110,23 +117,33 @@ async def open_cleanup_members_center(interaction: discord.Interaction) -> None:
     embed = discord.Embed(
         title="🧹 Cleanup + Members Center",
         description=(
-            "Review inactive verified/resident members, manage scan locks, and check cleanup settings from setup.\n\n"
-            "This center is preview-first. It does not purge anyone from the home panel. Cleanup actions still use explicit confirmation flows."
+            "Browse members by any server role, review inactive verified/resident members, "
+            "manage scan locks, and check cleanup settings from one place.\n\n"
+            "Role browsing is action-ready but private to the staff member who opens it. "
+            "Cleanup remains preview-first and keeps explicit confirmation gates."
         ),
         color=discord.Color.blurple(),
         timestamp=discord.utils.utcnow(),
     )
     embed.add_field(
-        name="Safety rules",
+        name="Browse by role",
         value=(
-            "• Uses server activity evidence, not online/offline presence.\n"
-            "• Low-confidence users are manual-review, not purge-safe by default.\n"
-            "• Locked users are skipped from future scans.\n"
-            "• Purge/cleanup actions keep their own confirmation and final validation gates."
+            "Open **Browse by Role** to list Unverified, Verified, Resident, staff, "
+            "or any custom role with search, sorting, member actions, and safe bulk tools."
         ),
         inline=False,
     )
-    embed.add_field(name="Start here", value="Run **90d Review** for a normal cleanup review, or **30d Review** for a faster check.", inline=False)
+    embed.add_field(
+        name="Safety rules",
+        value=(
+            "• Every action re-checks staff permissions and role hierarchy.\n"
+            "• Destructive actions require typed confirmation and a reason.\n"
+            "• Bulk tools exclude mass kick, ban, and timeout.\n"
+            "• Inactivity cleanup still uses server activity evidence, not presence."
+        ),
+        inline=False,
+    )
+    embed.add_field(name="Start here", value="Use **Browse by Role** for live moderation, or **Run 90d Review** for inactivity cleanup.", inline=False)
     embed.set_footer(text="/dank setup • Feature Centers • Cleanup + Members")
     await _send_ephemeral(interaction, embed=embed, view=CleanupMembersCenterView(), allowed_mentions=discord.AllowedMentions.none())
 
