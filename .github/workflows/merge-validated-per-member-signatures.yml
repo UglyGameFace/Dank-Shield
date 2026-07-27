@@ -1,0 +1,84 @@
+name: Merge Validated Per-Member Signatures
+
+on:
+  push:
+    branches:
+      - fix/live-signature-per-user-moderation-safe
+
+permissions:
+  contents: write
+  pull-requests: write
+  checks: read
+  actions: read
+
+jobs:
+  merge-validated:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/live-signature-per-user-moderation-safe
+          fetch-depth: 0
+      - name: Wait for finalizer readiness transition
+        run: sleep 75
+      - name: Require validated ready PR
+        id: gate
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          git pull --rebase origin fix/live-signature-per-user-moderation-safe
+          draft=$(gh pr view 141 --repo UglyGameFace/Dank-Shield --json isDraft --jq '.isDraft')
+          head_message=$(git log -1 --pretty=%B)
+          if [ "$draft" != "false" ] || [[ "$head_message" != *"[per-member finalized]"* ]]; then
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "ready=true" >> "$GITHUB_OUTPUT"
+      - uses: actions/setup-python@v5
+        if: steps.gate.outputs.ready == 'true'
+        with:
+          python-version: '3.11'
+          cache: pip
+      - name: Install focused dependencies
+        if: steps.gate.outputs.ready == 'true'
+        run: |
+          python -m pip install --upgrade pip -q
+          pip install -q -r requirements.txt
+          pip install -q pytest
+      - name: Remove merge helper and verify final executable tree
+        if: steps.gate.outputs.ready == 'true'
+        env:
+          DANK_STARTUP_LOG_STYLE: quiet
+          DANK_COMMAND_LOG_STYLE: quiet
+        run: |
+          rm -f .github/workflows/merge-validated-per-member-signatures.yml
+          git diff --check
+          python -m compileall -q stoney_verify main.py tools tests
+          python -m pytest -q \
+            tests/test_live_profile_per_member_runtime.py \
+            tests/test_live_profile_card_runtime.py \
+            tests/test_live_profile_card_final_safety.py \
+            tests/test_live_profile_card_integration_contract.py \
+            tests/test_live_profile_card_lifecycle.py \
+            tests/test_live_profile_runtime_responsive.py
+          python tools/test_moderation_ignores_bot_messages.py
+      - name: Commit helper cleanup
+        if: steps.gate.outputs.ready == 'true'
+        run: |
+          git config user.name "Dank Shield CI"
+          git config user.email "actions@users.noreply.github.com"
+          git add -A
+          git commit -m "Remove validated merge helper [per-member merge-ready]"
+          git push origin HEAD:fix/live-signature-per-user-moderation-safe
+      - name: Squash merge validated PR
+        if: steps.gate.outputs.ready == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh pr merge 141 \
+            --repo UglyGameFace/Dank-Shield \
+            --squash \
+            --delete-branch \
+            --subject "Keep live signatures per-member and moderation-safe (#141)" \
+            --body "Validated per-member signature ownership, duplicate cleanup, busy-channel output governance, and SpamGuard/raid bot-message isolation."
