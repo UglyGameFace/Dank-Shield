@@ -118,7 +118,11 @@ def test_server_field_restrictions_invalidate_every_existing_guild_card():
 
 def test_server_setup_uses_only_the_profile_signature_channel_picker():
     assert "open_profile_card_setup" in SETUP_HOME
-    assert "LiveProfileChannelSelect = _core.LiveProfileChannelSelect" in PROFILE_SETUP
+    assert "class LiveProfileChannelSelect(discord.ui.ChannelSelect)" in PROFILE_SETUP
+    assert "await _save_selected_channels(interaction, view, selected)" in PROFILE_SETUP
+    assert "_core._SaveChannelsButton" not in PROFILE_SETUP
+    assert "Enable Live Signatures" in PROFILE_SETUP
+    assert "Disable Live Signatures" in PROFILE_SETUP
     assert "LIVE_CHANNEL_IDS_KEY" in PROFILE_SETUP
     assert "raw Discord ID" not in PROFILE_SETUP
     assert "Add Welcome Channel" not in PROFILE_SETUP
