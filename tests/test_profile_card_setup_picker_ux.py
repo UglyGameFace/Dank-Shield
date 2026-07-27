@@ -107,7 +107,8 @@ def test_live_profile_signatures_are_legible_compact_and_separate_from_welcome()
     assert "SIGNATURE_WIDTH = 1080" in SIGNATURE_RENDERER
     assert "SIGNATURE_HEIGHT = 300" in SIGNATURE_RENDERER
     assert "_font(19" in SIGNATURE_RENDERER
-    assert "Connected profiles" in LIVE_RUNTIME
+    assert "Connected profiles" not in LIVE_RUNTIME
+    assert "view = _platform_view(platforms)" in LIVE_RUNTIME
     assert "embed.set_footer" not in LIVE_RUNTIME.split("async def render_live_profile_card", 1)[1].split(
         "def _live_card_send_payload", 1
     )[0]
