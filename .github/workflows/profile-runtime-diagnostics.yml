@@ -9,10 +9,14 @@ on:
       - "stoney_verify/profile_signature_live_renderer.py"
       - "stoney_verify/profile_signature_studio.py"
       - "stoney_verify/commands_ext/public_profile_cards.py"
+      - "stoney_verify/commands_ext/public_profile_cards_core.py"
+      - "stoney_verify/assets/platform_logos/**"
       - "supabase/migrations/*live_profile*.sql"
       - "tests/test_live_profile*.py"
       - "tests/test_profile_card*.py"
-      - "tools/apply_profile_platform_modes_patch.py"
+      - "tests/test_profile_platform*.py"
+      - "tools/apply_profile_platform_modes*.py"
+      - "tools/build_profile_platform_logos.mjs"
       - ".github/workflows/profile-runtime-diagnostics.yml"
   workflow_dispatch:
 
@@ -33,41 +37,38 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-      - name: Apply focused source patch
-        id: patch
-        shell: bash
-        run: |
-          set +e
-          python tools/apply_profile_platform_modes_patch.py > platform-patch.txt 2>&1
-          status=$?
-          cat platform-patch.txt
-          echo "exit_code=$status" >> "$GITHUB_OUTPUT"
-          exit 0
-      - name: Upload patch diagnostics
-        if: always()
-        uses: actions/upload-artifact@v4
+      - uses: actions/setup-node@v4
         with:
-          name: profile-platform-patch
-          path: platform-patch.txt
-          if-no-files-found: error
-          retention-days: 1
-      - name: Validate patched Python syntax
-        if: steps.patch.outputs.exit_code == '0'
+          node-version: "22"
+      - name: Apply platform modes and real-logo renderer
+        run: python tools/apply_profile_platform_modes_v2.py
+      - name: Generate bundled platform logo PNGs
+        run: |
+          npm install --no-save --no-package-lock \
+            simple-icons@16.27.1 \
+            @fortawesome/fontawesome-svg-core@6.7.2 \
+            @fortawesome/free-brands-svg-icons@6.7.2 \
+            @fortawesome/free-solid-svg-icons@6.7.2 \
+            sharp@0.34.3
+          node tools/build_profile_platform_logos.mjs
+      - name: Validate generated Python
         run: |
           python -m py_compile \
             stoney_verify/profile_card_service.py \
             stoney_verify/profile_card_runtime_core.py \
             stoney_verify/profile_card_runtime.py \
+            stoney_verify/profile_signature_live_renderer.py \
             stoney_verify/profile_signature_studio.py \
             stoney_verify/commands_ext/public_profile_cards.py \
+            stoney_verify/commands_ext/public_profile_cards_core.py \
             tests/test_live_profile_card_visual_links.py \
             tests/test_profile_platform_display_modes.py
-      - name: Commit generated patch when needed
-        if: steps.patch.outputs.exit_code == '0'
+      - name: Commit generated source and bundled logos
         shell: bash
         run: |
+          rm -rf node_modules
           if git diff --quiet && [[ -z "$(git status --porcelain --untracked-files=all)" ]]; then
-            echo 'No source changes needed.'
+            echo 'No generated changes needed.'
             exit 0
           fi
           git config user.name 'github-actions[bot]'
@@ -76,15 +77,16 @@ jobs:
             stoney_verify/profile_card_service.py \
             stoney_verify/profile_card_runtime_core.py \
             stoney_verify/profile_card_runtime.py \
+            stoney_verify/profile_signature_live_renderer.py \
             stoney_verify/profile_signature_studio.py \
             stoney_verify/commands_ext/public_profile_cards.py \
+            stoney_verify/commands_ext/public_profile_cards_core.py \
+            stoney_verify/assets/platform_logos \
             tests/test_live_profile_card_visual_links.py \
-            tests/test_profile_platform_display_modes.py
-          git commit -m 'Add profile platform display modes [skip platform patch]'
+            tests/test_profile_platform_display_modes.py \
+            tools/build_profile_platform_logos.mjs
+          git commit -m 'Add real platform logos and display modes [skip platform patch]'
           git push origin HEAD:fix/live-profile-channel-spam
-      - name: Fail when patch failed
-        if: steps.patch.outputs.exit_code != '0'
-        run: exit 1
 
   focused-profile-tests:
     runs-on: ubuntu-24.04
@@ -117,6 +119,7 @@ jobs:
             tests/test_live_profile_runtime_responsive.py \
             tests/test_profile_card_setup_picker_ux.py \
             tests/test_profile_card_migration_safety.py \
+            tests/test_profile_platform_display_modes.py \
             > profile-runtime-tests.txt 2>&1
           status=$?
           echo "exit_code=$status" >> "$GITHUB_OUTPUT"
