@@ -205,17 +205,20 @@ def test_first_message_posts_without_timer_sleep_or_forced_config_refresh(monkey
         assert len(channel.sent) == 1
         assert sleep_calls == []
         assert state_reads == 1
+        assert runtime._latest_messages == {}
+        assert runtime._latest_configs == {}
 
     asyncio.run(scenario())
 
 
-def test_same_speaker_back_to_back_messages_keep_existing_signature(monkeypatch):
+def test_same_speaker_burst_repositions_once_under_the_latest_message(monkeypatch):
     async def scenario() -> None:
         patch_types(monkeypatch)
         guild = Guild()
         channel = guild.add_channel(20)
         member = guild.add_member(202)
         seen: list[tuple[int, int]] = []
+        states: list[dict[str, object]] = []
 
         async def get_config(_guild_id: int):
             return config(channel.id)
@@ -223,8 +226,8 @@ def test_same_speaker_back_to_back_messages_keep_existing_signature(monkeypatch)
         async def get_state(*_args):
             return None
 
-        async def save_state(*_args, **_kwargs):
-            return None
+        async def save_state(*_args, **payload):
+            states.append(dict(payload))
 
         async def no_wait(_seconds: float):
             return None
@@ -240,10 +243,13 @@ def test_same_speaker_back_to_back_messages_keep_existing_signature(monkeypatch)
         await runtime.on_message(Incoming(3, guild, channel, member))
         await drain(runtime)
 
-        assert seen == [(member.id, 1)]
-        assert len(channel.sent) == 1
-        assert channel.sent[0].deleted is False
-        assert runtime._current_cards[(guild.id, channel.id)].trigger_message_id == 1
+        assert seen == [(member.id, 1), (member.id, 3)]
+        assert len(channel.sent) == 2
+        assert channel.sent[0].deleted is True
+        assert channel.sent[1].deleted is False
+        assert sum(not message.deleted for message in channel.sent) == 1
+        assert len(states) == 2
+        assert runtime._current_cards[(guild.id, channel.id)].trigger_message_id == 3
 
     asyncio.run(scenario())
 
@@ -294,6 +300,62 @@ def test_rapid_speaker_changes_collapse_to_latest_trailing_signature(monkeypatch
         assert channel.sent[0].deleted is True
         assert channel.sent[1].deleted is False
         assert runtime._current_cards[(guild.id, channel.id)].user_id == third.id
+
+    asyncio.run(scenario())
+
+
+def test_message_during_leading_render_does_not_cancel_instant_worker(monkeypatch):
+    async def scenario() -> None:
+        patch_types(monkeypatch)
+        guild = Guild(31)
+        channel = guild.add_channel(310)
+        first = guild.add_member(311)
+        second = guild.add_member(312)
+        render_started = asyncio.Event()
+        release_render = asyncio.Event()
+        seen: list[tuple[int, int]] = []
+
+        async def get_config(_guild_id: int):
+            return config(channel.id)
+
+        async def get_state(*_args):
+            return None
+
+        async def save_state(*_args, **_kwargs):
+            return None
+
+        async def controlled_renderer(member, _allowed, *, trigger_message_id, require_live_enabled=True):
+            seen.append((int(member.id), int(trigger_message_id)))
+            if len(seen) == 1:
+                render_started.set()
+                await release_render.wait()
+            embed = discord.Embed(title=member.display_name)
+            embed.set_footer(text=live_card_footer(member.id, trigger_message_id))
+            return LiveCardRender(embed=embed, view=None)
+
+        async def no_wait(_seconds: float):
+            return None
+
+        monkeypatch.setattr(runtime_module, "get_guild_config", get_config)
+        monkeypatch.setattr(runtime_module, "get_live_card_state", get_state)
+        monkeypatch.setattr(runtime_module, "upsert_live_card_state", save_state)
+        runtime = LiveProfileCardRuntime(Bot(guild), renderer=controlled_renderer, sleep=no_wait)
+
+        await runtime.on_message(Incoming(1, guild, channel, first))
+        await render_started.wait()
+        leading = runtime._leading[(guild.id, channel.id)]
+        await runtime.on_message(Incoming(2, guild, channel, second))
+
+        assert runtime._leading[(guild.id, channel.id)] is leading
+        assert leading.cancelled() is False
+        release_render.set()
+        await drain(runtime)
+
+        assert seen == [(first.id, 1), (second.id, 2)]
+        assert len(channel.sent) == 2
+        assert channel.sent[0].deleted is True
+        assert channel.sent[1].deleted is False
+        assert runtime._current_cards[(guild.id, channel.id)].user_id == second.id
 
     asyncio.run(scenario())
 
@@ -374,6 +436,8 @@ def test_unchanged_signature_render_is_reused_from_bounded_cache(monkeypatch):
         assert first is not None and second is not None
         assert renders == 1
         assert len(runtime_module._SIGNATURE_CACHE) == 1
+        assert runtime_module._SIGNATURE_CACHE_MAX_ITEMS == 512
+        assert runtime_module._SIGNATURE_CACHE_TTL_SECONDS == 300.0
         assert first.embed.url != second.embed.url
 
     asyncio.run(scenario())
