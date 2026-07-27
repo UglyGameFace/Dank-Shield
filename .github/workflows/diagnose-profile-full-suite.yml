@@ -22,14 +22,14 @@ jobs:
           python -m pip install --upgrade pip -q
           pip install -q -r requirements.txt
           pip install -q pytest
-      - name: Run full unit suite with captured output
+      - name: Run exact CI unit suite with captured output
         shell: bash
         env:
           DANK_STARTUP_LOG_STYLE: quiet
           DANK_COMMAND_LOG_STYLE: quiet
         run: |
           set +e
-          python -m pytest -q --tb=short --disable-warnings > full-suite.log 2>&1
+          python -m pytest tests/ -q --tb=short --disable-warnings > full-suite.log 2>&1
           status=$?
           set -e
           cat full-suite.log
