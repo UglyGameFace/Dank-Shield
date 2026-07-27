@@ -49,6 +49,7 @@ _legacy_parse_live_card_footer = _core.parse_live_card_footer
 
 _LIVE_CARD_MARKER_PREFIX = "https://dankshield.app/live-profile/"
 _LIVE_CARD_MARKER_RE = re.compile(r"^https://dankshield\.app/live-profile/(\d+)/(\d+)$")
+_LIVE_CARD_ATTACHMENT_RE = re.compile(r"^dank-live-profile-(\d+)-(\d+)\.png$")
 
 # Existing private helper imports remain available for callers and tests.
 _channel_ids = _core._channel_ids
@@ -104,7 +105,7 @@ def live_card_marker_url(user_id: int, trigger_message_id: int) -> str:
 
 
 def parse_live_card_footer(message: Any) -> Optional[tuple[int, int]]:
-    """Parse old visible footer markers and new invisible embed URL markers."""
+    """Parse legacy footers plus invisible URL/attachment ownership markers."""
 
     legacy = _legacy_parse_live_card_footer(message)
     if legacy is not None:
@@ -113,6 +114,11 @@ def parse_live_card_footer(message: Any) -> Optional[tuple[int, int]]:
         for embed in list(getattr(message, "embeds", []) or []):
             marker = str(getattr(embed, "url", "") or "").strip()
             match = _LIVE_CARD_MARKER_RE.fullmatch(marker)
+            if match:
+                return int(match.group(1)), int(match.group(2))
+        for attachment in list(getattr(message, "attachments", []) or []):
+            filename = str(getattr(attachment, "filename", "") or "").strip()
+            match = _LIVE_CARD_ATTACHMENT_RE.fullmatch(filename)
             if match:
                 return int(match.group(1)), int(match.group(2))
     except Exception:
@@ -234,6 +240,8 @@ def _platform_link_line(entries: list[dict[str, Any]]) -> str:
         url = str(entry.get("url") or "").strip()
         if url:
             parts.append(f"[{spec.emoji} {spec.label}]({url}) `{username}`")
+        elif spec.supports_url:
+            parts.append(f"⚠️ **{spec.label}** `{username}` *(add official link)*")
         else:
             parts.append(f"{spec.emoji} **{spec.label}** `{username}`")
     if not parts:
@@ -332,7 +340,7 @@ async def render_live_profile_card(
         )
         _signature_cache_put(cache_key, image_bytes)
 
-    filename = f"profile-signature-{int(member.id)}.png"
+    filename = f"dank-live-profile-{int(member.id)}-{int(trigger_message_id)}.png"
     file = discord.File(BytesIO(image_bytes), filename=filename)
     try:
         color = member.color if getattr(member.color, "value", 0) else discord.Color.blurple()
@@ -344,8 +352,8 @@ async def render_live_profile_card(
         url=live_card_marker_url(member.id, trigger_message_id),
     )
     embed.set_image(url=f"attachment://{filename}")
-    # No visible technical footer. Ownership is stored in embed.url and legacy
-    # footer-marked cards remain readable through parse_live_card_footer().
+    # No visible technical footer. Ownership is stored in invisible embed and
+    # attachment metadata; legacy footer-marked cards remain cleanup-compatible.
     return LiveCardRender(embed=embed, view=None, file=file)
 
 
@@ -451,7 +459,8 @@ class LiveProfileCardRuntime(_core.LiveProfileCardRuntime):
             return
 
         previous = self._pending.get(key)
-        if self._task_running(previous):
+        leading = self._leading.get(key)
+        if previous is not leading and self._task_running(previous):
             previous.cancel()
         task = asyncio.create_task(self._run_trailing(key, trigger))
         self._pending[key] = task
@@ -558,7 +567,7 @@ class LiveProfileCardRuntime(_core.LiveProfileCardRuntime):
                     message,
                     config,
                     trigger,
-                    force_reposition=False,
+                    force_reposition=True,
                     source="trailing",
                 )
             finally:
