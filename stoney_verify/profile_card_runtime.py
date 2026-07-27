@@ -83,6 +83,10 @@ class _CurrentCard:
     message: Optional[discord.Message] = None
 
 
+class _CurrentCardVerificationUnavailable(RuntimeError):
+    """Raised when ownership cannot be verified without risking duplicates."""
+
+
 RenderProfile = Callable[..., Awaitable[Optional[LiveCardRender]]]
 Sleep = Callable[[float], Awaitable[None]]
 
@@ -608,10 +612,7 @@ class LiveProfileCardRuntime(_core.LiveProfileCardRuntime):
         cached = self._current_cards.get(key)
         if cached is not None:
             return cached
-        try:
-            state = await get_live_card_state(*key)
-        except ProfileStorageUnavailable:
-            return None
+        state = await get_live_card_state(*key)
         if not isinstance(state, Mapping):
             return None
         try:
@@ -632,7 +633,7 @@ class LiveProfileCardRuntime(_core.LiveProfileCardRuntime):
                 f"guild={channel.guild.id} channel={channel.id} message={message_id} "
                 f"error={type(exc).__name__}: {exc}"
             )
-            return None
+            raise _CurrentCardVerificationUnavailable from exc
         bot_user = getattr(self.bot, "user", None)
         parsed = parse_live_card_footer(stored) if stored is not None else None
         if (
@@ -691,7 +692,15 @@ class LiveProfileCardRuntime(_core.LiveProfileCardRuntime):
             return
 
         key = (trigger.guild_id, trigger.channel_id)
-        current = await self._load_current_card(channel)
+        try:
+            current = await self._load_current_card(channel)
+        except (ProfileStorageUnavailable, _CurrentCardVerificationUnavailable) as exc:
+            print(
+                "⚠️ live_profile_card skipped "
+                f"guild={trigger.guild_id} channel={trigger.channel_id} user={trigger.user_id} "
+                f"reason=current_card_verification_unavailable error={type(exc).__name__}"
+            )
+            return
         if current is not None:
             if (
                 current.user_id == trigger.user_id
