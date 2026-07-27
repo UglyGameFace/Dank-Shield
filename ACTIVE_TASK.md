@@ -30,14 +30,15 @@ Do not switch to unrelated implementation work until deployed Discord smoke prov
 - Channel disable/delete removes all member rows and verified bot-owned cards in that channel.
 - SpamGuard, cleanup sweeps, AutoMod, member activity tracking, and RaidGuard remain isolated from bot-authored signature traffic, with regression coverage.
 - Added an idempotent Supabase migration changing live-card ownership to `(guild_id, channel_id, user_id)`.
-- Removed all temporary transfer payloads and the temporary transfer workflow from the final branch tree.
+- Removed all temporary transfer payloads and temporary transfer workflows from the final branch tree.
 
 ## Validation gates
 
 - [ ] Per-member Supabase primary-key migration is applied before runtime deployment.
 - [x] Local compilation passes.
 - [x] Local migration-safety and moderation-isolation tests pass.
-- [ ] Focused live-signature delivery, cleanup, migration, and moderation-isolation tests pass in repository CI.
+- [x] The first focused CI run exposed a test-fixture-only omission; the state-write regression now explicitly requests replacement so it reaches the intended failure path.
+- [ ] Focused live-signature delivery, cleanup, migration, and moderation-isolation tests pass on the corrected exact head.
 - [ ] Full repository suite, standalone checks, compilation, whitespace, and audits pass on exact head.
 - [x] Branch is zero commits behind `main`, conflict-free, and temporary transfer files are absent.
 - [ ] Diff is reviewed for any stale channel-scoped ownership assumption.
