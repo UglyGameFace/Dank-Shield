@@ -2,14 +2,15 @@
 
 ## DS-PROFILE-STUDIO-LIVE-010 — Instant, burst-safe, legible live signatures at public scale
 
-**Status:** IMPLEMENTATION / EXACT-HEAD CI REQUIRED
+**Status:** MERGE READY / DEPLOYED SMOKE PENDING
 **Branch:** `fix/live-signature-instant-burst-runtime`
 **PR:** #140
 **Base:** current `main` after PR #138
+**Validated executable head:** `0284311201a571d43732c78b41a2d17d9efe3de8`
 
 ## Single Active Task Lock
 
-Do not switch to unrelated implementation work until live signatures respond immediately after channel inactivity, rapid messages collapse without signature spam, warm traffic avoids per-message database/state reads, clickable saved social links are visible, the card is legible without becoming oversized, internal ownership metadata is hidden, exact-head validation passes, and the deployed Discord smoke confirms the behavior.
+Do not switch to unrelated implementation work until the deployed bot confirms immediate first delivery, burst coalescing, readable output, clickable saved social links, and no visible technical ownership footer.
 
 ## Confirmed findings
 
@@ -56,9 +57,10 @@ Do not switch to unrelated implementation work until live signatures respond imm
 - [x] Unchanged effective signatures reuse bounded rendered-image cache entries.
 - [x] Clickable saved profile URLs appear in the embed and the visible technical footer is absent.
 - [x] Existing footer-marked cards remain recognized for safe cleanup.
-- [ ] Existing delivery, cleanup, privacy, setup, and reconciliation regression tests pass.
-- [ ] Full unit suite, standalone checks, compilation, whitespace, and every repository audit pass on the exact head.
-- [ ] Branch is conflict-free and current with `main` after final validation.
+- [x] Existing delivery, cleanup, privacy, setup, lifecycle, and reconciliation regression tests pass.
+- [x] Full suite passed: 747 tests, standalone checks, compilation, whitespace, and every repository audit.
+- [x] Focused profile runtime diagnostics and application-command size diagnostics passed.
+- [x] Branch is conflict-free, mergeable, and zero commits behind `main` after final executable validation.
 - [ ] Deployed smoke shows low warm latency, one final visible signature after a rapid message burst, readable card text, working saved links, and no visible technical footer.
 
 ## Cleanup
@@ -66,8 +68,9 @@ Do not switch to unrelated implementation work until live signatures respond imm
 - [x] No forced per-message config refresh, long-cooldown scheduler, unbounded render cache, reconnect history storm, or temporary workflow remains in the implementation.
 - [x] Incoming Discord message/config references are released when workers finish.
 - [x] Legacy footer ownership remains compatibility-only; newly posted cards do not display it.
-- [ ] Diff inspected for conflicts with PR #138 setup activation and PR #139 durable delivery repair.
-- [ ] No obsolete tests or contradictory old timing expectations remain.
+- [x] Diff inspected for conflicts with PR #138 setup activation and PR #139 durable delivery repair.
+- [x] Obsolete long-cooldown and startup-reconciliation test expectations were replaced with the responsive and lazy-recovery contracts.
+- [x] Focused diagnostics workflow is permanent, path-scoped, and contains no self-modifying integration behavior.
 
 ## Backlog
 
