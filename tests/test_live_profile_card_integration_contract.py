@@ -121,9 +121,9 @@ def test_privacy_changes_remove_stale_cards_immediately():
     )[0]
     assert "removed = await self._delete_stored_message" in helper
     assert "if not removed:" in helper
-    assert helper.index("if not removed:") < helper.index(
-        "await delete_live_card_state(state_guild_id, channel_id)"
-    )
+    deletion = "await delete_live_card_state(state_guild_id, channel_id, resolved_user_id)"
+    assert deletion in helper
+    assert helper.index("if not removed:") < helper.index(deletion)
 
 
 def test_server_field_restrictions_invalidate_every_existing_guild_card():
