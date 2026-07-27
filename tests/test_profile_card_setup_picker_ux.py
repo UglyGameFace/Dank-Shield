@@ -18,11 +18,14 @@ def test_canonical_setup_has_a_member_profile_feature_center():
 
 
 def test_profile_setup_uses_a_real_multi_channel_picker_without_ids():
-    assert "LiveProfileChannelSelect = _core.LiveProfileChannelSelect" in SETUP_UI
-    assert "class LiveProfileChannelSelect(discord.ui.ChannelSelect)" in SETUP_CORE
-    assert "channel_types=[discord.ChannelType.text]" in SETUP_CORE
-    assert "max_values=_MAX_LIVE_CHANNELS" in SETUP_CORE
-    assert 'label="Save Selected Channels"' in SETUP_CORE
+    assert "class LiveProfileChannelSelect(discord.ui.ChannelSelect)" in SETUP_UI
+    assert "channel_types=[discord.ChannelType.text]" in SETUP_UI
+    assert "max_values=_MAX_LIVE_CHANNELS" in SETUP_UI
+    assert 'placeholder="Choose channels — selection saves immediately…"' in SETUP_UI
+    assert "await _save_selected_channels(interaction, view, selected)" in SETUP_UI
+    assert "_core._SaveChannelsButton" not in SETUP_UI
+    assert "class _SaveChannelsButton" not in SETUP_CORE
+    assert "class LiveProfileChannelSelect" not in SETUP_CORE
     assert "raw Discord ID" not in SETUP_UI
 
 
@@ -30,6 +33,7 @@ def test_welcome_configuration_is_not_mixed_into_profile_signatures():
     assert 'label="Add Welcome Channel"' not in SETUP_UI
     assert 'config.get("welcome_channel_id")' not in SETUP_UI
     assert "_AddWelcomeChannelButton" not in SETUP_UI
+    assert "class _AddWelcomeChannelButton" not in SETUP_CORE
     assert "welcome/start-here messages" in SETUP_UI
     assert "controls only live profile signatures" in SETUP_UI
 
@@ -40,15 +44,28 @@ def test_setup_refuses_bad_channel_permissions_before_enabling():
         "Send Messages",
         "Embed Links",
         "Read Message History",
+        "Attach Files",
     ):
         assert permission in SETUP_CORE
-    save_block = SETUP_CORE.split("class _SaveChannelsButton", 1)[1].split(
-        "class _AddWelcomeChannelButton", 1
+    save_block = SETUP_UI.split("async def _save_selected_channels", 1)[1].split(
+        "class LiveProfileChannelSelect", 1
     )[0]
-    assert "Fix these channel permissions before enabling live cards" in save_block
+    assert "problems = _selection_problems(guild, cleaned)" in save_block
+    assert "Fix these channel permissions before enabling live signatures" in save_block
     assert "upsert_guild_config" in save_block
     assert save_block.index("Fix these channel permissions") < save_block.index(
         "upsert_guild_config"
+    )
+
+
+def test_server_reenable_revalidates_saved_channels_before_database_write():
+    toggle = SETUP_UI.split("class _ServerLiveToggleButton", 1)[1].split(
+        "def _setup_embed", 1
+    )[0]
+    assert "problems = _selection_problems(guild, channel_ids)" in toggle
+    assert "Fix these saved channel permissions before re-enabling live signatures" in toggle
+    assert toggle.index("problems = _selection_problems") < toggle.index(
+        "upsert_guild_config(guild.id, {LIVE_ENABLED_KEY: True})"
     )
 
 
@@ -68,11 +85,21 @@ def test_slow_setup_actions_acknowledge_before_database_or_render_work():
     )
 
 
-def test_setup_can_disable_and_clean_only_bot_owned_cards():
-    assert 'label="Disable All"' in SETUP_CORE
-    assert "runtime.disable_channel" in SETUP_CORE
-    assert "runtime.reconcile()" in SETUP_CORE
+def test_setup_has_clear_server_enable_disable_and_cleans_only_bot_owned_cards():
+    assert 'label = "Disable Live Signatures"' in SETUP_UI
+    assert 'else "Enable Live Signatures"' in SETUP_UI
+    assert "runtime.disable_channel" in SETUP_UI
+    assert "runtime.reconcile()" in SETUP_UI
+    assert "selection saves immediately" in SETUP_UI
     assert "never edits, deletes, copies, or reposts user messages" in SETUP_UI
+
+
+def test_legacy_staged_setup_panel_is_removed_from_shared_core():
+    assert "Pending picker selection" not in SETUP_CORE
+    assert "Save Selected Channels" not in SETUP_CORE
+    assert "async def open_profile_card_setup" not in SETUP_CORE
+    assert "class ProfileCardSetupView(discord.ui.View)" in SETUP_CORE
+    assert "Only the manager who opened this setup panel can use it" in SETUP_CORE
 
 
 def test_live_profile_signatures_are_visually_compact_and_separate_from_welcome():
