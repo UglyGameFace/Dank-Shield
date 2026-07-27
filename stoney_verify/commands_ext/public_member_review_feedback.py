@@ -403,6 +403,12 @@ def register_public_member_review_feedback_commands(
                 allowed_mentions=discord.AllowedMentions.none(),
             )
 
+    from .public_member_role_browser import (
+        register_public_member_role_browser_commands,
+    )
+
+    register_public_member_role_browser_commands(bot, tree)
+
     _REGISTERED = True
     print(
         "✅ public_member_review_feedback: mobile member review panel registered"
