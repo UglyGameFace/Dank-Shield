@@ -9,7 +9,7 @@ PROFILE_RUNTIME = (ROOT / "stoney_verify/profile_card_runtime.py").read_text(enc
 PROFILE_RUNTIME_CORE = (ROOT / "stoney_verify/profile_card_runtime_core.py").read_text(encoding="utf-8")
 PROFILE_SERVICE = (ROOT / "stoney_verify/profile_card_service.py").read_text(encoding="utf-8")
 PROFILE_SETUP = (ROOT / "stoney_verify/profile_card_setup_ui.py").read_text(encoding="utf-8")
-SIGNATURE_RENDERER = (ROOT / "stoney_verify/profile_signature_renderer.py").read_text(encoding="utf-8")
+SIGNATURE_RENDERER = (ROOT / "stoney_verify/profile_signature_live_renderer.py").read_text(encoding="utf-8")
 SETUP_HOME = (ROOT / "stoney_verify/commands_ext/public_setup_recommend.py").read_text(encoding="utf-8")
 EXISTING_PROFILE = (ROOT / "stoney_verify/commands_ext/public_self_roles_group.py").read_text(encoding="utf-8")
 
@@ -130,10 +130,12 @@ def test_server_setup_uses_only_the_profile_signature_channel_picker():
     assert "welcome/start-here messages" in PROFILE_SETUP
 
 
-def test_signature_visual_is_compact_and_shares_style_not_welcome_behavior():
+def test_signature_visual_is_legible_compact_and_shares_style_not_welcome_behavior():
     assert "SIGNATURE_WIDTH = 1080" in SIGNATURE_RENDERER
-    assert "SIGNATURE_HEIGHT = 220" in SIGNATURE_RENDERER
+    assert "SIGNATURE_HEIGHT = 300" in SIGNATURE_RENDERER
     assert "render_profile_signature" in SIGNATURE_RENDERER
     assert "render_welcome_card" not in SIGNATURE_RENDERER
     assert "on_member_join" not in SIGNATURE_RENDERER
     assert "public_welcome_card" not in PROFILE_COMMANDS
+    assert "Connected profiles" in PROFILE_RUNTIME
+    assert "live_card_marker_url" in PROFILE_RUNTIME

@@ -41,10 +41,31 @@ jobs:
         run: python -m compileall -q stoney_verify main.py tools
 
       - name: Run unit test suite
-        run: python -m pytest tests/ -q --tb=short --disable-warnings
+        id: unit_tests
+        shell: bash
+        run: |
+          set +e
+          python -m pytest tests/ -q --tb=short --disable-warnings > unit-tests.txt 2>&1
+          status=$?
+          echo "exit_code=$status" >> "$GITHUB_OUTPUT"
+          tail -n 300 unit-tests.txt
+          exit 0
         env:
           DANK_STARTUP_LOG_STYLE: quiet
           DANK_COMMAND_LOG_STYLE: quiet
+
+      - name: Upload unit test failure output
+        if: steps.unit_tests.outputs.exit_code != '0'
+        uses: actions/upload-artifact@v4
+        with:
+          name: unit-test-failure-output
+          path: unit-tests.txt
+          if-no-files-found: error
+          retention-days: 1
+
+      - name: Fail when unit tests failed
+        if: steps.unit_tests.outputs.exit_code != '0'
+        run: exit 1
 
       - name: Run standalone tool checks
         run: |
