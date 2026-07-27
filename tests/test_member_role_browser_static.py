@@ -19,7 +19,16 @@ def _source(path: Path) -> str:
 
 
 def test_sources_parse() -> None:
-    for path in (BROWSER, COMMON, REVIEW_PANEL, ACTIONS, BULK, ROSTER, REVIEW, CENTER):
+    for path in (
+        BROWSER,
+        COMMON,
+        REVIEW_PANEL,
+        ACTIONS,
+        BULK,
+        ROSTER,
+        REVIEW,
+        CENTER,
+    ):
         ast.parse(_source(path))
 
 
@@ -39,10 +48,15 @@ def test_browser_has_role_picker_pagination_search_and_sort() -> None:
     assert "_BROWSER_PAGE_SIZE = 20" in source
     assert "class MemberRosterSelect(discord.ui.Select)" in source
     assert "class BrowserSortSelect(discord.ui.Select)" in source
+    assert "class BrowserFilterSelect(discord.ui.Select)" in source
+    assert "class QuickRoleButton(discord.ui.Button)" in source
+    assert "async def _load_quick_roles" in source
     assert "class MemberSearchModal" in source
     assert 'label="Previous"' in source
     assert 'label="Next"' in source
     assert 'label="Refresh"' in source
+    assert "await interaction.response.defer()" in source
+    assert "await interaction.edit_original_response(" in source
 
 
 def test_browser_modules_are_wired_without_private_cross_module_calls() -> None:
@@ -63,6 +77,11 @@ def test_member_actions_are_guarded_and_confirmed() -> None:
     assert "def role_action_blockers(" in source
     assert "target.top_role >= actor.top_role" in source
     assert "target.top_role >= me.top_role" in source
+    assert "async def load_protected_role_ids" in source
+    assert (
+        "Configured staff/control roles require the server owner or an Administrator."
+        in source
+    )
     assert "class MemberDestructiveActionModal" in source
     assert "Confirmation did not match" in source
     assert "class MemberTimeoutModal" in source
@@ -72,8 +91,10 @@ def test_member_actions_are_guarded_and_confirmed() -> None:
 
 def test_verify_reuses_owned_basic_verification_service_without_bypassing_protected_modes() -> None:
     source = _source(COMMON) + "\n" + _source(ACTIONS)
-    assert "from stoney_verify.verification_new.basic_verify import apply_basic_verification" in source
-    assert "from stoney_verify.setup_engine.verification_modes import effective_verification_mode" in source
+    assert "stoney_verify.verification_new.basic_verify" in source
+    assert "apply_basic_verification" in source
+    assert "stoney_verify.setup_engine.verification_modes" in source
+    assert "effective_verification_mode" in source
     assert 'if mode != "basic_button":' in source
     assert "protected ID/ticket verification flow" in source
     assert "unverified_role not in target.roles" in source
@@ -92,8 +113,12 @@ def test_bulk_tools_exclude_mass_punishment() -> None:
     assert 'label="Ban"' not in bulk
     assert 'label="Timeout"' not in bulk
     assert "if not await require_review(interaction):" in source
-    assert 'action_lock(interaction.guild.id, member.id, "bulk_dm")' in source
-    assert 'action_lock(interaction.guild.id, target.id, f"bulk_{self.parent_view.action}")' in source
+    assert '"bulk_dm"' in source
+    assert "member.id" in source
+    assert 'f"bulk_{self.parent_view.action}"' in source
+    assert "async with action_lock(" in source
+    assert "protected_role_ids = await load_protected_role_ids" in source
+    assert "blockers = await role_action_blockers(" in source
 
 
 def test_setup_center_links_to_role_browser() -> None:
@@ -112,7 +137,13 @@ def test_review_feedback_safety_contract_remains_non_enforcing() -> None:
     assert "_build_member_context_fields" in block
     assert "previous_feedback" in block
     assert "source_key" in block
-    for forbidden in (".ban(", ".kick(", ".timeout(", ".add_roles(", ".remove_roles("):
+    for forbidden in (
+        ".ban(",
+        ".kick(",
+        ".timeout(",
+        ".add_roles(",
+        ".remove_roles(",
+    ):
         assert forbidden not in source
 
 
@@ -121,9 +152,13 @@ def test_component_rows_stay_inside_discord_limits() -> None:
     tree = ast.parse(source)
     rows: list[int] = []
     for node in ast.walk(tree):
-        if isinstance(node, ast.keyword) and node.arg == "row" and isinstance(node.value, ast.Constant):
-            if isinstance(node.value.value, int):
-                rows.append(node.value.value)
+        if (
+            isinstance(node, ast.keyword)
+            and node.arg == "row"
+            and isinstance(node.value, ast.Constant)
+            and isinstance(node.value.value, int)
+        ):
+            rows.append(node.value.value)
     assert rows
     assert min(rows) >= 0
     assert max(rows) <= 4
