@@ -123,6 +123,7 @@ async def open_help_entry(interaction: discord.Interaction) -> None:
         value=(
             "`/dank home` — full control center\n"
             "`/dank setup` — guided server setup\n"
+            "`/dank members` — complete member command center\n"
             "`/dank profile` — your profile signature, privacy, platforms, and appearance\n"
             "`/dank status` — live bot status\n"
             "`/dank diagnostics` — read-only manager health report"
@@ -190,9 +191,7 @@ class DankHomeView(_OwnedView):
     @discord.ui.button(label="Members", emoji="👥", style=discord.ButtonStyle.secondary, row=1)
     async def members(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
-        from .public_members_group import members_scan
-
-        await members_scan(interaction)
+        await _invoke_saved("members", interaction)
 
     @discord.ui.button(label="Server Design", emoji="🎨", style=discord.ButtonStyle.secondary, row=1)
     async def design(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
@@ -329,7 +328,7 @@ def compact_public_dank_surface(bot: Any, tree: Any) -> int:
                 pass
 
     # Preserve only proven single-command entry points.
-    for name in ("setup", "status", "diagnostics"):
+    for name in ("setup", "status", "diagnostics", "members"):
         command = _ORIGINAL_COMMANDS.get(name)
         if command is not None and not isinstance(command, app_commands.Group):
             dank_group.add_command(command)
