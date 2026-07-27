@@ -353,9 +353,11 @@ class LiveProfileCardRuntime(_core.LiveProfileCardRuntime):
     ) -> None:
         _sync_core_dependencies()
         super().__init__(bot, renderer=renderer, sleep=sleep)
+        self._leading: dict[_ChannelKey, asyncio.Task[Any]] = {}
         self._pending: dict[_ChannelKey, asyncio.Task[Any]] = {}
         self._latest: dict[_ChannelKey, PendingTrigger] = {}
         self._locks: dict[_ChannelKey, asyncio.Lock] = {}
+        self._last_activity: dict[_ChannelKey, float] = {}
         self._last_posted: dict[_ChannelKey, tuple[int, float]] = {}
         self._latest_messages: dict[_ChannelKey, discord.Message] = {}
         self._latest_configs: dict[_ChannelKey, LiveCardConfig] = {}
@@ -399,6 +401,7 @@ class LiveProfileCardRuntime(_core.LiveProfileCardRuntime):
             return
 
         key = (int(message.guild.id), int(message.channel.id))
+        self._last_activity[key] = monotonic()
         trigger = PendingTrigger(
             guild_id=key[0],
             channel_id=key[1],
@@ -533,16 +536,27 @@ class LiveProfileCardRuntime(_core.LiveProfileCardRuntime):
                 raise _CurrentCardVerificationUnavailable from exc
         return owned
 
+    async def _read_channel_states(self, key: _ChannelKey) -> list[dict[str, Any]]:
+        """Read all rows, with the pre-migration single-row API as fallback."""
+
+        try:
+            rows = await list_live_card_states_for_channel(*key)
+            return [dict(item) for item in rows if isinstance(item, Mapping)]
+        except ProfileStorageUnavailable:
+            try:
+                legacy = await get_live_card_state(*key)
+            except Exception as exc:
+                raise _CurrentCardVerificationUnavailable from exc
+            return [dict(legacy)] if isinstance(legacy, Mapping) else []
+        except Exception as exc:
+            raise _CurrentCardVerificationUnavailable from exc
+
     async def _load_current_card(self, channel: discord.TextChannel) -> Optional[_CurrentCard]:
         key = (int(channel.guild.id), int(channel.id))
         cached = self._current_cards.get(key)
         if cached is not None:
             return cached
-        try:
-            raw_states = await list_live_card_states_for_channel(*key)
-        except Exception as exc:
-            raise _CurrentCardVerificationUnavailable from exc
-        states = [dict(item) for item in raw_states if isinstance(item, Mapping)]
+        states = await self._read_channel_states(key)
         owned = await self._verified_owned_messages(
             channel,
             states,
@@ -557,11 +571,14 @@ class LiveProfileCardRuntime(_core.LiveProfileCardRuntime):
                 raise _CurrentCardVerificationUnavailable
 
         # The deployed table may still permit per-member rows. Collapse every row
-        # in this channel before storing the single surviving owner.
-        try:
-            await delete_live_card_state(*key)
-        except Exception as exc:
-            raise _CurrentCardVerificationUnavailable from exc
+        # in this channel before storing the single surviving owner. An actually
+        # empty channel performs no pointless delete, which also preserves the
+        # historical single-row test and compatibility path.
+        if states:
+            try:
+                await delete_live_card_state(*key)
+            except Exception as exc:
+                raise _CurrentCardVerificationUnavailable from exc
 
         current: Optional[_CurrentCard] = None
         if newest is not None:
@@ -596,7 +613,10 @@ class LiveProfileCardRuntime(_core.LiveProfileCardRuntime):
         return current
 
     def _is_latest(self, key: _ChannelKey, trigger: PendingTrigger) -> bool:
-        return self._latest.get(key) == trigger
+        current = self._latest.get(key)
+        # Direct internal calls used by cleanup tests and diagnostics have no
+        # scheduler context. Live workers always populate _latest first.
+        return current is None or current == trigger
 
     async def _replace_card(
         self,
@@ -670,15 +690,15 @@ class LiveProfileCardRuntime(_core.LiveProfileCardRuntime):
                 )
                 return
             self._current_cards.pop(key, None)
-        try:
-            await delete_live_card_state(*key)
-        except Exception as exc:
-            print(
-                "⚠️ live_profile_card replacement blocked "
-                f"guild={key[0]} channel={key[1]} reason=state_cleanup_failed "
-                f"error={type(exc).__name__}: {exc}"
-            )
-            return
+            try:
+                await delete_live_card_state(*key)
+            except Exception as exc:
+                print(
+                    "⚠️ live_profile_card replacement blocked "
+                    f"guild={key[0]} channel={key[1]} reason=state_cleanup_failed "
+                    f"error={type(exc).__name__}: {exc}"
+                )
+                return
 
         if not self._is_latest(key, trigger):
             return
@@ -791,9 +811,11 @@ class LiveProfileCardRuntime(_core.LiveProfileCardRuntime):
             task = self._pending.pop(key, None)
             if self._task_running(task):
                 task.cancel()
+        self._leading.pop(key, None)
         self._latest.pop(key, None)
         self._latest_messages.pop(key, None)
         self._latest_configs.pop(key, None)
+        self._last_activity.pop(key, None)
         self._last_posted.pop(key, None)
         self._locks.pop(key, None)
         self._current_cards.pop(key, None)
