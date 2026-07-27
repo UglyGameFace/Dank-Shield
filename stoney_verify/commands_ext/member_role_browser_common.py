@@ -10,6 +10,7 @@ import discord
 _BROWSER_TIMEOUT_SECONDS = 900
 _ACTION_LOCKS: dict[str, asyncio.Lock] = {}
 
+
 def _cfg_role_id(cfg: Any, key: str) -> int:
     try:
         value = getattr(cfg, key, None)
@@ -116,6 +117,20 @@ def timestamp(value: Optional[datetime], style: str = "R") -> str:
     if value.tzinfo is None:
         value = value.replace(tzinfo=timezone.utc)
     return f"<t:{int(value.timestamp())}:{style}>"
+
+
+async def ensure_member_cache(guild: discord.Guild) -> str:
+    if bool(getattr(guild, "chunked", False)):
+        return ""
+    try:
+        await asyncio.wait_for(guild.chunk(cache=True), timeout=15.0)
+        return ""
+    except asyncio.TimeoutError:
+        return "Member cache refresh timed out; showing currently cached members."
+    except discord.ClientException:
+        return "Server Members intent is unavailable; showing currently cached members."
+    except Exception:
+        return "Could not refresh the member cache; showing currently cached members."
 
 
 def action_lock(guild_id: int, target_id: int, action: str) -> asyncio.Lock:
@@ -327,13 +342,13 @@ class OwnedView(discord.ui.View):
                 pass
 
 
-
 __all__ = [
     "OwnedView",
     "action_blockers",
     "action_lock",
     "apply_staff_basic_verification",
     "display_name",
+    "ensure_member_cache",
     "record_member_action",
     "reply_ephemeral",
     "require_review",
