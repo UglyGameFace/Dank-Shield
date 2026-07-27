@@ -62,6 +62,18 @@ jobs:
               '    assert "await _preview(interaction, member=member, notice=f"✅ {message}")" in studio_source',
               '    assert \'await _preview(interaction, member=member, notice=f"✅ {message}")\' in studio_source',
           )
+          test_source = test_source.replace(
+              'private_button = next(child for child in private_view.children if child.callback.__name__ == "share")',
+              'private_button = next(child for child in private_view.children if child.label == "Make Public")',
+          )
+          test_source = test_source.replace(
+              'public_button = next(child for child in public_view.children if child.callback.__name__ == "share")',
+              'public_button = next(child for child in public_view.children if child.label == "Make Private")',
+          )
+          test_source = test_source.replace(
+              'button = next(child for child in view.children if child.callback.__name__ == "share")',
+              'button = next(child for child in view.children if child.label == "Make Public")',
+          )
           test_path.write_text(test_source, encoding='utf-8')
           PY
 
