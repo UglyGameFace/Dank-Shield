@@ -1,58 +1,61 @@
 # ACTIVE TASK
 
-## DS-PROFILE-STUDIO-LIVE-009 — Complete live signature activation and delivery
+## DS-PROFILE-STUDIO-LIVE-010 — Instant, burst-safe live signatures at public scale
 
-**Status:** MERGE READY / DEPLOYED SMOKE PENDING
-**Branch:** `fix/profile-live-channel-autosave-runtime`
-**PR:** #138
-**Base:** current `main`
+**Status:** IMPLEMENTATION / EXACT-HEAD CI REQUIRED
+**Branch:** `fix/live-signature-instant-burst-runtime`
+**Base:** current `main` after PR #138
 
 ## Single Active Task Lock
 
-Do not switch to unrelated implementation work until a deployed normal member message posts a compact signature in an enabled channel and both server/member ON/OFF controls are obvious.
+Do not switch to unrelated implementation work until live signatures respond immediately after channel inactivity, rapid messages collapse without signature spam, warm traffic avoids per-message database/state reads, exact-head validation passes, and the deployed Discord smoke confirms the timing.
 
 ## Confirmed findings
 
-- The canonical setup picker staged channel IDs and required a second **Save Selected Channels** click.
-- The supplied interaction log showed the channel-select event but no save-button interaction, so the intended channel list was never persisted or enabled.
-- PR #139 already merged the runtime-delivery repair into `main`, including stale-card verification, refreshed guild configuration, and delivery diagnostics.
-- The old PR #138 branch diverged from `main`, duplicated runtime work, and still contained a temporary self-modifying integration workflow.
-- `profile_card_setup_ui_core.py` still contained a complete obsolete staged setup panel with the old Save button and Welcome shortcut even though the canonical UI had moved elsewhere.
-- Re-enabling previously saved channels did not revalidate current channel permissions.
+- The deployed runtime intentionally defaulted to a 4-second debounce, a 30-second different-speaker replacement cooldown, and a 180-second same-speaker suppression window.
+- Those values directly explain the reported behavior: one delayed signature followed by minutes where the same user appeared to receive nothing.
+- Every eligible message forced `get_guild_config(..., refresh=True)`, bypassing the existing 60-second per-guild cache and creating a Supabase read on the message hot path.
+- Every replacement re-read durable card state and fetched the stored Discord message even after the process already knew the current card.
+- `on_ready()` launched a global persisted-state reconciliation and up-to-100-message history scan per configured channel, which is not a safe reconnect path for 1,000+ guilds.
+- The compact image renderer re-downloaded/re-rendered an unchanged member signature for every replacement.
+- The required UX is leading-edge immediate delivery after inactivity, with rapid back-to-back messages coalesced so the same speaker does not create repeated visible signatures and only the latest changed speaker receives one trailing replacement.
 
 ## Scope
 
-- Save and enable selected signature channels immediately from the channel picker.
-- Remove the hidden second Save step from the canonical setup UI.
-- Add an obvious server **Enable Live Signatures / Disable Live Signatures** control while preserving configured channels.
-- Revalidate saved channel existence and permissions before server-wide re-enable.
-- Keep the member-facing **Turn On/Off Live Signature** control already on `main`.
-- Retain privacy precedence, one bot-owned card per channel, and safe cleanup.
-- Keep the runtime-delivery repair from PR #139 unchanged rather than duplicating it.
-- Remove the obsolete staged setup implementation from the shared core so there is only one real setup path.
+- Remove intentional leading delay: the first eligible message after channel inactivity schedules immediately.
+- Use a short burst quiet window only for trailing coalescing.
+- Keep one visible signature for same-speaker message bursts; do not retain a signature after every message.
+- Collapse rapid speaker changes to the latest speaker instead of replaying every intermediate speaker.
+- Reposition the same speaker again only after the channel has been quiet long enough to begin a new burst.
+- Read guild configuration through the existing cache instead of forcing Supabase on every message.
+- Keep warm current-card ownership in process memory and use durable state only for cold recovery/restart safety.
+- Cache rendered signature bytes by the effective avatar/style/privacy/content fingerprint with bounded TTL and size.
+- Skip global history scans on ready/reconnect; recover ownership lazily per active channel.
+- Keep explicit deep reconciliation available for maintenance and small development installs while bounding public setup behavior.
+- Preserve privacy precedence, one bot-owned visible card per channel, durable state safety, failure cleanup, and member/server disable controls.
+- Add latency diagnostics (`render_ms`, `total_ms`, leading/trailing source) to every successful post.
 
 ## Validation
 
-- [x] PR #138 branch rebuilt directly from current `main`.
-- [x] Duplicate runtime edits and the temporary integration workflow removed.
-- [x] Obsolete staged setup/save/welcome implementation removed from the shared core.
-- [x] Static setup contracts require immediate saving, clear server controls, permission-safe re-enable, and one canonical setup path.
-- [x] A callback regression test exercises the actual save path, persistence payload, cleanup, reconciliation, permission failure, and response acknowledgement.
-- [x] Changed Python modules and focused test files pass local syntax compilation.
-- [x] Exact-head full unit suite passed.
-- [x] Exact-head standalone tool checks passed.
-- [x] Exact-head public setup, command surface, startup friction, invite permission, setup safety, Smart Auto-Detect, role-truth, and event-boundary audits passed.
-- [x] Exact-head application-command size diagnostics passed.
-- [x] Branch is conflict-free, mergeable, and zero commits behind current `main`.
-- [ ] Deployed Discord smoke produces `✅ live_profile_card posted` and a visible signature after one channel selection.
+- [x] Focused six-test scheduler/cache harness passes locally with stubbed Discord/storage boundaries.
+- [ ] Legacy 4/30/180 timing values migrate to the responsive runtime policy.
+- [ ] First message after inactivity posts without an intentional timer sleep.
+- [ ] Message hot path does not request a forced guild-config refresh.
+- [ ] Same-speaker back-to-back messages keep one visible signature.
+- [ ] Rapid alternating speakers collapse to the latest trailing speaker.
+- [ ] Warm channel replacements do not reread durable card state.
+- [ ] Unchanged effective signatures reuse bounded rendered-image cache entries.
+- [ ] Existing delivery, cleanup, privacy, and reconciliation regression tests pass.
+- [ ] Full unit suite, standalone checks, compilation, whitespace, and every repository audit pass on the exact head.
+- [ ] Deployed smoke shows a warm first-after-idle signature without multi-second delay and no repeated visible signature spam during a message burst.
 
 ## Cleanup
 
-- [x] No alternate runtime, duplicate setup panel, compatibility fork, or temporary workflow remains in the PR.
-- [x] PR diff is limited to setup activation, shared-helper cleanup, focused tests, and this task record.
+- [ ] No duplicate scheduler, legacy long-cooldown path, unbounded cache, reconnect history storm, or temporary workflow remains.
+- [ ] Diff inspected for conflicts with PR #138 setup activation and PR #139 durable delivery repair.
 
 ## Backlog
 
 - Fix departed-member reconciliation async-generator handling.
 - Review contradictory worker startup wording.
-- Enable automatic sharding before 100+ public guilds.
+- Enable automatic sharding before the public bot approaches Discord's recommended shard threshold.
