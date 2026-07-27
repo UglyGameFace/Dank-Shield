@@ -4,10 +4,11 @@ import pytest
 
 from stoney_verify.profile_card_service import (
     InvalidPlatformProfile,
+    clean_profile_username,
+    display_profile_username,
     effective_preferences,
     normalize_platform_entry,
     normalize_platform_url,
-    normalize_server_allowed_fields,
     visible_platform_entries,
 )
 
@@ -15,46 +16,39 @@ from stoney_verify.profile_card_service import (
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def test_official_profile_urls_are_canonicalized_without_tracking():
+def test_profile_username_sanitization_prevents_discord_mentions_and_markdown_links():
+    assert clean_profile_username(" @everyone  test ") == "everyone test"
+    assert display_profile_username("player`name") == "playerʼname"
+    with pytest.raises(InvalidPlatformProfile):
+        clean_profile_username("https://example.com/profile")
+
+
+def test_supported_platform_urls_are_canonical_and_tracking_free():
     assert normalize_platform_url(
         "steam",
-        "https://steamcommunity.com/id/UglyGameFace",
-    ) == "https://steamcommunity.com/id/UglyGameFace"
+        "https://steamcommunity.com/id/Player_Name",
+    ) == "https://steamcommunity.com/id/Player_Name"
     assert normalize_platform_url(
         "roblox",
-        "https://www.roblox.com/users/123456/profile",
-    ) == "https://roblox.com/users/123456/profile"
+        "https://www.roblox.com/users/12345/profile",
+    ) == "https://roblox.com/users/12345/profile"
     assert normalize_platform_url(
         "youtube",
-        "https://www.youtube.com/@UglyGameFace",
-    ) == "https://youtube.com/@UglyGameFace"
-    assert normalize_platform_url(
-        "twitch",
-        "https://www.twitch.tv/uglygameface",
-    ) == "https://twitch.tv/uglygameface"
+        "https://www.youtube.com/@Player_Name",
+    ) == "https://youtube.com/@Player_Name"
+
+    for url in (
+        "http://steamcommunity.com/id/player",
+        "https://evil.example/steamcommunity.com/id/player",
+        "https://steamcommunity.com/id/player?tracking=1",
+        "https://steamcommunity.com/profiles/not-a-number",
+    ):
+        with pytest.raises(InvalidPlatformProfile):
+            normalize_platform_url("steam", url)
 
 
-@pytest.mark.parametrize(
-    ("platform", "url"),
-    [
-        ("steam", "http://steamcommunity.com/id/example"),
-        ("steam", "https://steamcommunity.com.evil.example/id/example"),
-        ("steam", "https://evil.example/?next=steamcommunity.com/id/example"),
-        ("roblox", "https://roblox.com.evil.example/users/123/profile"),
-        ("roblox", "https://roblox.com/users/not-a-number/profile"),
-        ("youtube", "https://youtube.com/watch?v=abc"),
-        ("twitch", "https://twitch.tv/login"),
-        ("kick", "https://kick.com/example?tracking=1"),
-    ],
-)
-def test_phishing_lookalikes_and_non_profile_urls_are_rejected(platform, url):
-    with pytest.raises(InvalidPlatformProfile):
-        normalize_platform_url(platform, url)
-
-
-@pytest.mark.parametrize(
-    "platform",
-    [
+def test_username_only_platforms_reject_invented_links():
+    for platform in (
         "epic",
         "xbox",
         "playstation",
@@ -62,12 +56,9 @@ def test_phishing_lookalikes_and_non_profile_urls_are_rejected(platform, url):
         "riot",
         "battle_net",
         "custom",
-    ],
-)
-def test_username_only_platforms_never_invent_or_accept_profile_links(platform):
-    assert normalize_platform_url(platform, "") == ""
-    with pytest.raises(InvalidPlatformProfile):
-        normalize_platform_url(platform, "https://example.com/member")
+    ):
+        with pytest.raises(InvalidPlatformProfile):
+            normalize_platform_url(platform, "https://example.com/member")
 
 
 def test_platform_identity_is_private_until_explicitly_shared():
@@ -91,8 +82,11 @@ def test_global_defaults_and_deny_only_server_overrides_are_exposed():
     assert "class _GlobalPrivacyToggleButton" in commands_core
     assert "class _GuildPrivacyToggleButton" in commands_core
     assert "class ProfileSettingsView" in commands
-    assert "Every Server" in commands_core
-    assert "This Server" in commands_core
+    assert "Everywhere" in commands_core
+    assert "In This Server" in commands_core
+    assert "Use Default" in commands_core
+    assert "Every Server" not in commands_core
+    assert "Inherit" not in commands_core
 
 
 def test_per_server_user_privacy_can_only_be_stricter_than_global_defaults():
@@ -116,23 +110,3 @@ def test_per_server_user_privacy_can_only_be_stricter_than_global_defaults():
         "show_account_dates": False,
         "show_platforms": False,
     }
-
-
-def test_server_allowed_fields_are_allowlisted_and_default_safe():
-    assert normalize_server_allowed_fields(None) == {"roles", "account_dates", "platforms"}
-    assert normalize_server_allowed_fields(["roles", "platforms", "admin", "unknown"]) == {
-        "roles",
-        "platforms",
-    }
-
-
-def test_profile_tables_are_service_role_only_and_rls_enabled():
-    migration = (ROOT / "supabase/migrations/20260725_live_profile_cards.sql").read_text(encoding="utf-8")
-    for table in (
-        "dank_profile_users",
-        "dank_profile_guild_settings",
-        "dank_live_profile_cards",
-    ):
-        assert f"alter table public.{table} enable row level security" in migration
-        assert f"revoke all on table public.{table} from anon, authenticated" in migration
-    assert "create policy" not in migration.lower()

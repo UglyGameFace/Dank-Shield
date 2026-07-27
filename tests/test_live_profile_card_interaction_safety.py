@@ -24,7 +24,10 @@ def test_private_storage_commands_defer_before_database_io():
     public_view = _body(COMMANDS, "send_privacy_aware_profile", "_attach_profile_commands")
     assert platform.index("await _defer_private(interaction)") < platform.index("save_platform_identity(")
     assert remove.index("await _defer_private(interaction)") < remove.index("remove_platform_identity(")
-    assert settings.index("await _defer_private(interaction)") < settings.index("_settings_payload(")
+    assert settings.index("component_update =") < settings.index("_settings_payload(")
+    assert settings.index("await _defer_private(interaction, component_update=component_update)") < settings.index(
+        "_settings_payload("
+    )
     assert public_view.index("await _defer_private(interaction)") < public_view.index("get_guild_config(")
 
 

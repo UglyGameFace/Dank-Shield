@@ -273,10 +273,30 @@ class LiveProfileCardRuntime(_core.LiveProfileCardRuntime):
         _sync_core_dependencies()
         channel = message.channel
         guild = message.guild
-        member = guild.get_member(trigger.user_id) if guild else None
-        if not isinstance(channel, discord.TextChannel) or not isinstance(member, discord.Member):
+        message_author = getattr(message, "author", None)
+        if isinstance(message_author, discord.Member) and int(message_author.id) == int(trigger.user_id):
+            member = message_author
+        else:
+            member = guild.get_member(trigger.user_id) if guild else None
+        if not isinstance(channel, discord.TextChannel):
+            print(
+                "⚠️ live_profile_card skipped unsupported channel "
+                f"guild={trigger.guild_id} channel={trigger.channel_id} user={trigger.user_id}"
+            )
+            return
+        if not isinstance(member, discord.Member):
+            print(
+                "⚠️ live_profile_card skipped member unavailable "
+                f"guild={trigger.guild_id} channel={trigger.channel_id} user={trigger.user_id} "
+                "source=message_author_then_cache"
+            )
             return
         if not _channel_can_host_cards(channel):
+            print(
+                "⚠️ live_profile_card skipped channel permissions "
+                f"guild={trigger.guild_id} channel={trigger.channel_id} user={trigger.user_id} "
+                "required=view,send,embed,history,attach"
+            )
             return
 
         state = await get_live_card_state(trigger.guild_id, trigger.channel_id)
@@ -297,6 +317,10 @@ class LiveProfileCardRuntime(_core.LiveProfileCardRuntime):
             trigger_message_id=trigger.message_id,
         )
         if rendered is None:
+            print(
+                "ℹ️ live_profile_card skipped member disabled "
+                f"guild={trigger.guild_id} channel={trigger.channel_id} user={trigger.user_id}"
+            )
             return
 
         try:
