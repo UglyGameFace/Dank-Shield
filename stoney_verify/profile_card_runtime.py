@@ -301,25 +301,56 @@ class LiveProfileCardRuntime(_core.LiveProfileCardRuntime):
 
         state = await get_live_card_state(trigger.guild_id, trigger.channel_id)
         age = _state_age_seconds(state)
+        state_is_live = await self._stored_state_is_live(channel, state)
+        if state and not state_is_live:
+            try:
+                await delete_live_card_state(trigger.guild_id, trigger.channel_id)
+            except Exception as exc:
+                print(
+                    "⚠️ live_profile_card stale state cleanup failed "
+                    f"guild={trigger.guild_id} channel={trigger.channel_id} "
+                    f"error={type(exc).__name__}: {exc}"
+                )
+            state = None
+            age = None
         if state and str(state.get("user_id") or "") == str(trigger.user_id):
             if age is not None and age < config.same_speaker_cooldown_seconds:
                 self._last_posted[(trigger.guild_id, trigger.channel_id)] = (trigger.user_id, monotonic())
+                print(
+                    "ℹ️ live_profile_card skipped "
+                    f"guild={trigger.guild_id} channel={trigger.channel_id} user={trigger.user_id} "
+                    "reason=same_speaker_card_still_live"
+                )
                 return
         elif state and age is not None and age < config.replacement_cooldown_seconds:
             await self.sleep(config.replacement_cooldown_seconds - age)
             key = (trigger.guild_id, trigger.channel_id)
             if self._latest.get(key) != trigger:
+                print(
+                    "ℹ️ live_profile_card skipped "
+                    f"guild={trigger.guild_id} channel={trigger.channel_id} user={trigger.user_id} "
+                    "reason=superseded_during_replacement_cooldown"
+                )
                 return
 
-        rendered = await self.renderer(
-            member,
-            set(config.allowed_fields),
-            trigger_message_id=trigger.message_id,
-        )
+        try:
+            rendered = await self.renderer(
+                member,
+                set(config.allowed_fields),
+                trigger_message_id=trigger.message_id,
+            )
+        except Exception as exc:
+            print(
+                "⚠️ live_profile_card render failed "
+                f"guild={trigger.guild_id} channel={trigger.channel_id} user={trigger.user_id} "
+                f"error={type(exc).__name__}: {exc}"
+            )
+            return
         if rendered is None:
             print(
-                "ℹ️ live_profile_card skipped member disabled "
-                f"guild={trigger.guild_id} channel={trigger.channel_id} user={trigger.user_id}"
+                "ℹ️ live_profile_card skipped "
+                f"guild={trigger.guild_id} channel={trigger.channel_id} user={trigger.user_id} "
+                "reason=member_live_signature_disabled"
             )
             return
 
@@ -357,8 +388,49 @@ class LiveProfileCardRuntime(_core.LiveProfileCardRuntime):
             return
 
         self._last_posted[(trigger.guild_id, trigger.channel_id)] = (trigger.user_id, monotonic())
+        print(
+            "✅ live_profile_card posted "
+            f"guild={trigger.guild_id} channel={trigger.channel_id} user={trigger.user_id} "
+            f"message={new_message.id} trigger={trigger.message_id}"
+        )
         if old_message_id and old_message_id != int(new_message.id):
             await self._delete_stored_message(channel, old_message_id)
+
+    async def _stored_state_is_live(
+        self,
+        channel: discord.TextChannel,
+        state: Optional[Mapping[str, Any]],
+    ) -> bool:
+        if not isinstance(state, Mapping):
+            return False
+        try:
+            message_id = int(str(state.get("message_id") or "0"))
+        except Exception:
+            return False
+        if message_id <= 0:
+            return False
+        try:
+            stored = await channel.fetch_message(message_id)
+        except discord.NotFound:
+            return False
+        except Exception as exc:
+            print(
+                "⚠️ live_profile_card state verification failed "
+                f"guild={channel.guild.id} channel={channel.id} message={message_id} "
+                f"error={type(exc).__name__}: {exc}"
+            )
+            return True
+        bot_user = getattr(self.bot, "user", None)
+        if bot_user is None or int(getattr(stored.author, "id", 0) or 0) != int(bot_user.id):
+            return False
+        parsed = parse_live_card_footer(stored)
+        if parsed is None:
+            return False
+        try:
+            stored_user_id = int(str(state.get("user_id") or "0"))
+        except Exception:
+            return False
+        return int(parsed[0]) == stored_user_id
 
 
 __all__ = [
