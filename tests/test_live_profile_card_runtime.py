@@ -347,6 +347,7 @@ def test_failed_state_write_deletes_only_new_bot_owned_card(monkeypatch):
             FakeIncomingMessage(2, guild, channel, member),
             parse_live_card_config(_config(channel.id)),
             trigger,
+            force_reposition=True,
         )
 
         assert len(channel.sent) == 1
