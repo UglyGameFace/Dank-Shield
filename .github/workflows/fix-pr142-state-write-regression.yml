@@ -36,22 +36,11 @@ jobs:
           except ValueError:
               end = len(text)
           section = text[start:end]
-          old = """        await runtime._replace_card(
-              FakeIncomingMessage(2, guild, channel, member),
-              parse_live_card_config(_config(channel.id)),
-              trigger,
-          )
-          """
-          new = """        await runtime._replace_card(
-              FakeIncomingMessage(2, guild, channel, member),
-              parse_live_card_config(_config(channel.id)),
-              trigger,
-              force_reposition=True,
-          )
-          """
-          if section.count(old) != 1:
+          needle = "            trigger,\n        )"
+          replacement = "            trigger,\n            force_reposition=True,\n        )"
+          if section.count(needle) != 1:
               raise SystemExit("expected one exact state-write fixture call")
-          section = section.replace(old, new, 1)
+          section = section.replace(needle, replacement, 1)
           path.write_text(text[:start] + section + text[end:], encoding="utf-8")
           PY
           rm -f .github/workflows/fix-pr142-state-write-regression.yml
