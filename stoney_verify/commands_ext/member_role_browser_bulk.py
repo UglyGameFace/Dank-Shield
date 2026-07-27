@@ -4,9 +4,11 @@ import discord
 
 from .member_role_browser_common import (
     OwnedView,
+    action_lock,
     display_name,
     record_member_action,
     reply_ephemeral,
+    require_review,
     role_action_blockers,
     trim,
 )
@@ -128,23 +130,26 @@ class BulkReminderModal(discord.ui.Modal, title="Send bulk reminder"):
         self.parent = parent
 
     async def on_submit(self, interaction: discord.Interaction) -> None:
+        if not await require_review(interaction):
+            return
         await interaction.response.defer(ephemeral=True, thinking=True)
         sent = 0
         failed = 0
         text = str(self.message.value or "").strip()
         for member in self.parent.members:
-            try:
-                await member.send(text)
-                sent += 1
-                await record_member_action(
-                    guild_id=interaction.guild.id,
-                    actor_id=interaction.user.id,
-                    target_id=member.id,
-                    action="bulk_dm",
-                    reason="Staff reminder sent from role browser",
-                )
-            except Exception:
-                failed += 1
+            async with action_lock(interaction.guild.id, member.id, "bulk_dm"):
+                try:
+                    await member.send(text)
+                    sent += 1
+                    await record_member_action(
+                        guild_id=interaction.guild.id,
+                        actor_id=interaction.user.id,
+                        target_id=member.id,
+                        action="bulk_dm",
+                        reason="Staff reminder sent from role browser",
+                    )
+                except Exception:
+                    failed += 1
         await interaction.followup.send(
             f"✅ Reminder delivery finished: **{sent} sent**, **{failed} failed/blocked**.",
             ephemeral=True,
@@ -177,24 +182,25 @@ class BulkRoleSelect(discord.ui.RoleSelect):
             if blockers:
                 blocked += 1
                 continue
-            try:
-                if self.parent_view.action == "add_role":
-                    if role not in target.roles:
-                        await target.add_roles(role, reason=f"Dank Shield bulk role action by {actor} ({actor.id})")
-                else:
-                    if role in target.roles:
-                        await target.remove_roles(role, reason=f"Dank Shield bulk role action by {actor} ({actor.id})")
-                succeeded += 1
-                await record_member_action(
-                    guild_id=interaction.guild.id,
-                    actor_id=actor.id,
-                    target_id=target.id,
-                    action=f"bulk_{self.parent_view.action}",
-                    reason=f"{role.name} ({role.id})",
-                    metadata={"role_id": str(role.id), "role_name": role.name},
-                )
-            except Exception:
-                failed += 1
+            async with action_lock(interaction.guild.id, target.id, f"bulk_{self.parent_view.action}"):
+                try:
+                    if self.parent_view.action == "add_role":
+                        if role not in target.roles:
+                            await target.add_roles(role, reason=f"Dank Shield bulk role action by {actor} ({actor.id})")
+                    else:
+                        if role in target.roles:
+                            await target.remove_roles(role, reason=f"Dank Shield bulk role action by {actor} ({actor.id})")
+                    succeeded += 1
+                    await record_member_action(
+                        guild_id=interaction.guild.id,
+                        actor_id=actor.id,
+                        target_id=target.id,
+                        action=f"bulk_{self.parent_view.action}",
+                        reason=f"{role.name} ({role.id})",
+                        metadata={"role_id": str(role.id), "role_name": role.name},
+                    )
+                except Exception:
+                    failed += 1
         await interaction.followup.send(
             f"✅ Bulk role action finished: **{succeeded} succeeded**, **{blocked} blocked by safety checks**, **{failed} failed**.",
             ephemeral=True,
