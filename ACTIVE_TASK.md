@@ -25,7 +25,8 @@ Do not switch to unrelated implementation work until the deployed Profile Signat
 
 - Use the authoritative message member before any guild-cache fallback in live posting.
 - Add actionable runtime diagnostics for member, permission, privacy, send, and state failures.
-- Add one obvious **Turn On/Off Live Signature** member control.
+- Add one obvious **Turn On/Off Live Signature** member control that reflects the effective state in this server.
+- Replace inheritance jargon with plain action labels and plain-language status summaries.
 - Add an obvious **Manage Accounts** action to Profile Privacy.
 - Replace **Share / Hide** with state-aware **Make Public** / **Make Private** for every platform.
 - Mark saved identities as `🌐 Public` or `🔒 Private` in every summary.
@@ -38,6 +39,8 @@ Do not switch to unrelated implementation work until the deployed Profile Signat
 - [x] A valid message still posts when `guild.get_member()` misses but `message.author` is a member.
 - [x] Profile Privacy exposes exactly one obvious Turn On/Off Live Signature switch.
 - [x] Profile home displays Live Signature: ON/OFF and toggles it in place.
+- [x] Live switches reflect an old hidden-here override and clear it when turning back on.
+- [x] Privacy buttons use plain actions without Every Server/Inherit jargon.
 - [x] Privacy panel exposes Manage Accounts, Preview Signature, and Back to Profile.
 - [x] Every platform detail screen shows Make Public or Make Private based on saved state.
 - [x] Unsaved identities cannot be made Public.

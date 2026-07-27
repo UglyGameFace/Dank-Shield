@@ -142,49 +142,55 @@ def _settings_embed(
     global_preferences = dict(user_row.get("preferences") or {})
     local = dict(guild_row.get("settings") or {})
     platforms = dict(user_row.get("platforms") or {})
+
+    def shown(value: Any) -> str:
+        return "✅ Shown" if bool(value) else "❌ Hidden"
+
     embed = discord.Embed(
         title="🔐 Profile Privacy",
         description=(
-            "Choose what your compact signature may show. For Steam, Xbox, PlayStation, and every other "
-            "saved account, use **Manage Accounts** below to change that individual account between "
-            "**Public** and **Private**."
+            "The top row handles the important stuff: turn your live signature on or off, manage gaming/social "
+            "accounts, preview it, or go back. The buttons below change optional details."
         ),
         color=discord.Color.blurple(),
         timestamp=discord.utils.utcnow(),
     )
     embed.add_field(
-        name="Effective in this server",
+        name="Right now in this server",
         value=(
-            f"Live cards: {_yes_no(preferences.get('live_cards_enabled', True))}\n"
-            f"Profile roles: {_yes_no(preferences.get('show_roles', True))}\n"
-            f"Account dates: {_yes_no(preferences.get('show_account_dates', True))}\n"
-            f"Platforms: {_yes_no(preferences.get('show_platforms', True))}"
+            f"**Live signature:** {'✅ On' if preferences.get('live_cards_enabled', True) else '⏸️ Off'}\n"
+            f"**Profile roles:** {shown(preferences.get('show_roles', True))}\n"
+            f"**Account dates:** {shown(preferences.get('show_account_dates', True))}\n"
+            f"**Gaming/social accounts:** {shown(preferences.get('show_platforms', True))}"
         ),
-        inline=True,
+        inline=False,
     )
     embed.add_field(
-        name="Every-server defaults",
+        name="Your default choices",
         value=(
-            f"Live cards: {_yes_no(global_preferences.get('live_cards_enabled', True))}\n"
-            f"Profile roles: {_yes_no(global_preferences.get('show_roles', True))}\n"
-            f"Account dates: {_yes_no(global_preferences.get('show_account_dates', True))}\n"
-            f"Platforms: {_yes_no(global_preferences.get('show_platforms', True))}"
+            f"Roles: {'Show' if global_preferences.get('show_roles', True) else 'Hide'} • "
+            f"Dates: {'Show' if global_preferences.get('show_account_dates', True) else 'Hide'} • "
+            f"Accounts: {'Show' if global_preferences.get('show_platforms', True) else 'Hide'}"
         ),
-        inline=True,
+        inline=False,
     )
     hidden_here = [
         label
         for key, label in (
-            ("live_cards_enabled", "Live cards"),
-            ("show_roles", "Profile roles"),
-            ("show_account_dates", "Account dates"),
-            ("show_platforms", "Platforms"),
+            ("live_cards_enabled", "live signature"),
+            ("show_roles", "roles"),
+            ("show_account_dates", "account dates"),
+            ("show_platforms", "gaming/social accounts"),
         )
         if local.get(key) is False
     ]
     embed.add_field(
-        name="This-server overrides",
-        value=", ".join(hidden_here) + " hidden" if hidden_here else "All settings inherit your defaults.",
+        name="Different only in this server",
+        value=(
+            "Hidden here: " + ", ".join(hidden_here)
+            if hidden_here
+            else "Nothing special is hidden here; your default choices are being used."
+        ),
         inline=False,
     )
 
@@ -211,14 +217,11 @@ def _settings_embed(
         )[:1024],
         inline=False,
     )
-
-    explicit = [key for key in DEFAULT_PROFILE_PREFERENCES if key in local]
     embed.add_field(
         name="Privacy rule",
         value=(
-            "Your choices can only hide information. Server managers may restrict fields further, "
-            "but they cannot reveal anything you disabled."
-            + (f"\nServer-specific choices saved: {len(explicit)}." if explicit else "")
+            "Only you can make a saved identity public. Server managers may restrict which fields are allowed, "
+            "but they cannot expose anything you kept private."
         ),
         inline=False,
     )
@@ -296,9 +299,9 @@ class _GlobalPrivacyToggleButton(discord.ui.Button):
         self.preference_key = key
         current = bool(preferences.get(key, True))
         super().__init__(
-            label=f"Every Server {label}: {'On' if current else 'Off'}",
+            label=f"Hide {label} Everywhere" if current else f"Show {label} Everywhere",
             emoji=emoji,
-            style=discord.ButtonStyle.success if current else discord.ButtonStyle.secondary,
+            style=discord.ButtonStyle.secondary if current else discord.ButtonStyle.success,
             custom_id=f"dank:profilecard:v2:global:{key}",
             row=row,
         )
@@ -339,9 +342,9 @@ class _GuildPrivacyToggleButton(discord.ui.Button):
         self.preference_key = key
         hidden = settings.get(key) is False
         super().__init__(
-            label=f"This Server {label}: {'Hidden' if hidden else 'Inherit'}",
+            label=f"Use Default {label} Here" if hidden else f"Hide {label} In This Server",
             emoji=emoji,
-            style=discord.ButtonStyle.secondary if hidden else discord.ButtonStyle.primary,
+            style=discord.ButtonStyle.success if hidden else discord.ButtonStyle.secondary,
             custom_id=f"dank:profilecard:v2:guild:{key}",
             row=row,
         )

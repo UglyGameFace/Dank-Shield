@@ -114,3 +114,48 @@ def test_preview_paths_edit_the_original_response_instead_of_leaving_loading_fol
     assert "await _defer_private(interaction, component_update=True)" in public_source
     assert 'await _preview(interaction, member=member, notice=f"✅ {message}")' in studio_source
     assert "class SignaturePreviewView" in studio_source
+
+
+def test_privacy_buttons_use_plain_action_language():
+    view = public_profile_cards.ProfileSettingsView(
+        author_id=42,
+        guild_id=7,
+        user_preferences={"show_roles": True, "show_account_dates": True, "show_platforms": True},
+        guild_settings={},
+    )
+    labels = {str(child.label) for child in view.children if isinstance(child, discord.ui.Button)}
+    assert "Hide Roles Everywhere" in labels
+    assert "Hide Roles In This Server" in labels
+    assert "Hide Dates Everywhere" in labels
+    assert "Hide Accounts In This Server" in labels
+    assert not any("Inherit" in label for label in labels)
+    assert not any(label.startswith("Every Server") for label in labels)
+
+
+def test_live_switch_uses_effective_server_state():
+    view = public_profile_cards.ProfileSettingsView(
+        author_id=42,
+        guild_id=7,
+        user_preferences={"live_cards_enabled": True},
+        guild_settings={"live_cards_enabled": False},
+    )
+    labels = {str(child.label) for child in view.children if isinstance(child, discord.ui.Button)}
+    assert "Turn On Live Signature" in labels
+    assert "Turn Off Live Signature" not in labels
+
+
+def test_privacy_embed_avoids_inheritance_jargon():
+    embed = _settings_embed(
+        _Member(),
+        {"preferences": {}, "platforms": {}},
+        {"settings": {}},
+        {"preferences": {}},
+    )
+    text = " ".join(
+        [str(embed.title or ""), str(embed.description or "")]
+        + [f"{field.name} {field.value}" for field in embed.fields]
+    )
+    assert "Right now in this server" in text
+    assert "Your default choices" in text
+    assert "Different only in this server" in text
+    assert "inherit" not in text.lower()

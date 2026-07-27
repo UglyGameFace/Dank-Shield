@@ -8,6 +8,7 @@ surface reads or changes welcome/join settings except the explicit one-time
 "Import Join Card Look" action.
 """
 
+import asyncio
 from io import BytesIO
 from typing import Any, Mapping, Optional
 
@@ -20,9 +21,12 @@ from .profile_card_service import (
     InvalidPlatformProfile,
     ProfileStorageUnavailable,
     display_profile_username,
+    effective_preferences,
+    get_profile_guild_settings,
     get_profile_user,
     remove_platform_identity,
     save_platform_identity,
+    upsert_profile_guild_settings,
     upsert_profile_user_preferences,
 )
 from .profile_signature_style import (
@@ -184,9 +188,13 @@ def _style_labels(preferences: Mapping[str, Any], config: Any) -> dict[str, str]
 
 
 async def _studio_embed(member: discord.Member) -> discord.Embed:
-    user = await get_profile_user(member.id)
-    config = await get_guild_config(member.guild.id)
+    user, guild_row, config = await asyncio.gather(
+        get_profile_user(member.id),
+        get_profile_guild_settings(member.guild.id, member.id),
+        get_guild_config(member.guild.id),
+    )
     preferences = dict(user.get("preferences") or {})
+    effective_privacy = effective_preferences(preferences, guild_row.get("settings"))
     labels = _style_labels(preferences, config)
     platforms = dict(user.get("platforms") or {})
     shared = sum(1 for value in platforms.values() if isinstance(value, Mapping) and value.get("shared"))
@@ -214,9 +222,9 @@ async def _studio_embed(member: discord.Member) -> discord.Embed:
     embed.add_field(
         name="Sharing",
         value=(
-            f"**Live signature:** {'On' if preferences.get('live_cards_enabled', True) else 'Off'}\n"
-            f"**Roles:** {'Shown' if preferences.get('show_roles', True) else 'Hidden'}\n"
-            f"**Dates:** {'Shown' if preferences.get('show_account_dates', True) else 'Hidden'}\n"
+            f"**Live signature:** {'On' if effective_privacy.get('live_cards_enabled', True) else 'Off'}\n"
+            f"**Roles:** {'Shown' if effective_privacy.get('show_roles', True) else 'Hidden'}\n"
+            f"**Dates:** {'Shown' if effective_privacy.get('show_account_dates', True) else 'Hidden'}\n"
             f"**Platforms:** {shared} shared"
         ),
         inline=True,
@@ -981,12 +989,36 @@ class SignatureStudioView(discord.ui.View):
             return await _private(interaction, content="❌ Use this inside a server as a member.")
         await _defer(interaction, component_update=True)
         try:
-            user = await get_profile_user(member.id, refresh=True)
-            current = bool(dict(user.get("preferences") or {}).get("live_cards_enabled", True))
-            await upsert_profile_user_preferences(member.id, {"live_cards_enabled": not current})
+            user, guild_row = await asyncio.gather(
+                get_profile_user(member.id, refresh=True),
+                get_profile_guild_settings(member.guild.id, member.id, refresh=True),
+            )
+            current = bool(
+                effective_preferences(
+                    user.get("preferences"),
+                    guild_row.get("settings"),
+                ).get("live_cards_enabled", True)
+            )
+            if current:
+                await upsert_profile_user_preferences(member.id, {"live_cards_enabled": False})
+            else:
+                await upsert_profile_user_preferences(member.id, {"live_cards_enabled": True})
+                await upsert_profile_guild_settings(
+                    member.guild.id,
+                    member.id,
+                    {"live_cards_enabled": None},
+                )
             await _invalidate(interaction, all_guilds=True)
-            updated = await get_profile_user(member.id, refresh=True)
-            enabled = bool(dict(updated.get("preferences") or {}).get("live_cards_enabled", True))
+            updated_user, updated_guild = await asyncio.gather(
+                get_profile_user(member.id, refresh=True),
+                get_profile_guild_settings(member.guild.id, member.id, refresh=True),
+            )
+            enabled = bool(
+                effective_preferences(
+                    updated_user.get("preferences"),
+                    updated_guild.get("settings"),
+                ).get("live_cards_enabled", True)
+            )
             embed = await _studio_embed(member)
         except ProfileStorageUnavailable:
             return await _edit_private(interaction, content="❌ Private profile storage is unavailable. Nothing changed.")
@@ -1017,11 +1049,19 @@ async def open_profile_signature_studio(interaction: discord.Interaction, *, rep
     if member is None or interaction.guild is None:
         return await _private(interaction, content="❌ Use this inside a server as a member.")
     try:
-        user = await get_profile_user(member.id, refresh=True)
+        user, guild_row = await asyncio.gather(
+            get_profile_user(member.id, refresh=True),
+            get_profile_guild_settings(member.guild.id, member.id, refresh=True),
+        )
         embed = await _studio_embed(member)
     except ProfileStorageUnavailable:
         return await _private(interaction, content="❌ Private profile storage is unavailable.")
-    live_enabled = bool(dict(user.get("preferences") or {}).get("live_cards_enabled", True))
+    live_enabled = bool(
+        effective_preferences(
+            user.get("preferences"),
+            guild_row.get("settings"),
+        ).get("live_cards_enabled", True)
+    )
     panel = SignatureStudioView(author_id=member.id, live_enabled=live_enabled)
     if replace:
         await _edit_private(interaction, embed=embed, view=panel)

@@ -85,11 +85,28 @@ class _LiveSignatureToggleButton(discord.ui.Button):
         await _defer_private(interaction, component_update=True)
         try:
             user_row = await _core.get_profile_user(view.author_id, refresh=True)
-            current = bool(dict(user_row.get("preferences") or {}).get("live_cards_enabled", True))
-            await _core.upsert_profile_user_preferences(
-                view.author_id,
-                {"live_cards_enabled": not current},
+            guild_row = await _core.get_profile_guild_settings(view.guild_id, view.author_id, refresh=True)
+            current = bool(
+                _core.effective_preferences(
+                    user_row.get("preferences"),
+                    guild_row.get("settings"),
+                ).get("live_cards_enabled", True)
             )
+            if current:
+                await _core.upsert_profile_user_preferences(
+                    view.author_id,
+                    {"live_cards_enabled": False},
+                )
+            else:
+                await _core.upsert_profile_user_preferences(
+                    view.author_id,
+                    {"live_cards_enabled": True},
+                )
+                await _core.upsert_profile_guild_settings(
+                    view.guild_id,
+                    view.author_id,
+                    {"live_cards_enabled": None},
+                )
             if interaction.guild is not None:
                 await invalidate_member_live_cards(
                     interaction.client,
@@ -212,11 +229,12 @@ class ProfileSettingsView(_core.ProfileSettingsView):
         detail_specs = (
             ("Roles", "show_roles", "🎭"),
             ("Dates", "show_account_dates", "📅"),
-            ("Platforms", "show_platforms", "🔗"),
+            ("Accounts", "show_platforms", "🔗"),
         )
+        effective_values = _core.effective_preferences(global_values, local_values)
         self.add_item(
             _LiveSignatureToggleButton(
-                enabled=bool(global_values.get("live_cards_enabled", True)),
+                enabled=bool(effective_values.get("live_cards_enabled", True)),
                 row=0,
             )
         )
