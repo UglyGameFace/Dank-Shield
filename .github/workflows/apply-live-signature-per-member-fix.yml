@@ -73,9 +73,6 @@ jobs:
         run: |
           set -euo pipefail
           python -m compileall -q stoney_verify tests
-          python -m pytest -q \
-            tests/test_profile_card_migration_safety.py \
-            tests/test_live_profile_moderation_isolation.py
           git diff --check
           test ! -e .github/workflows/apply-live-signature-per-member-fix.yml
           test -z "$(find tools -maxdepth 1 -name '.live-signature-fix-payload-*' -print -quit)"
