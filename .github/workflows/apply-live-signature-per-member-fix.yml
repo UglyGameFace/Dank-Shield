@@ -4,8 +4,6 @@ on:
   push:
     branches:
       - fix/live-signature-per-member-ownership
-    paths:
-      - .github/workflows/apply-live-signature-per-member-fix.yml
   pull_request:
     branches:
       - main
@@ -13,8 +11,6 @@ on:
       - opened
       - synchronize
       - reopened
-    paths:
-      - .github/workflows/apply-live-signature-per-member-fix.yml
   workflow_dispatch:
 
 permissions:
