@@ -6,6 +6,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 BROWSER = ROOT / "stoney_verify" / "commands_ext" / "public_member_role_browser.py"
 CENTER_UI = ROOT / "stoney_verify" / "commands_ext" / "member_command_center.py"
+COMMAND_HUB = ROOT / "stoney_verify" / "commands_ext" / "public_command_hub.py"
+COMMANDS = ROOT / "stoney_verify" / "commands.py"
 COMMON = ROOT / "stoney_verify" / "commands_ext" / "member_role_browser_common.py"
 REVIEW_PANEL = ROOT / "stoney_verify" / "commands_ext" / "member_role_browser_review.py"
 ACTIONS = ROOT / "stoney_verify" / "commands_ext" / "member_role_browser_actions.py"
@@ -23,6 +25,8 @@ def test_sources_parse() -> None:
     for path in (
         BROWSER,
         CENTER_UI,
+        COMMAND_HUB,
+        COMMANDS,
         COMMON,
         REVIEW_PANEL,
         ACTIONS,
@@ -45,6 +49,18 @@ def test_one_members_command_replaces_visible_subcommand_group() -> None:
     assert "open_member_command_center" in source
     assert 'name="browse"' not in source
     assert "register_public_member_role_browser_commands(bot, tree)" in review
+
+
+def test_members_entry_survives_final_dank_compaction() -> None:
+    browser = _source(BROWSER)
+    hub = _source(COMMAND_HUB)
+    commands = _source(COMMANDS)
+    assert "def restore_member_command_after_compaction" in browser
+    assert 'for name in ("setup", "status", "diagnostics", "members")' in hub
+    assert 'await _invoke_saved("members", interaction)' in hub
+    assert "from .public_members_group import members_scan" not in hub
+    assert commands.count("restore_member_command_after_compaction(") >= 2
+    assert "compact_public_dank_surface(bot, bot.tree)\n    restore_member_command_after_compaction(bot, bot.tree)" in commands
 
 
 def test_member_center_has_button_driven_categories() -> None:
