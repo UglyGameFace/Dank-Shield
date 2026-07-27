@@ -20,6 +20,19 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
+      - name: Correct guarded source-literal escapes
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          path = Path('tools/materialize_profile_privacy_clarity.py')
+          source = path.read_text(encoding='utf-8')
+          for ending in (
+              "else 'Off'}",
+              "else 'Hidden'}",
+          ):
+              source = source.replace(ending + '\\n"', ending + '\\\\n"')
+          path.write_text(source, encoding='utf-8')
+          PY
       - name: Materialize guarded clarity correction
         shell: bash
         run: |
