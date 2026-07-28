@@ -5,140 +5,130 @@ import re
 import subprocess
 
 ROOT = Path(__file__).resolve().parents[1]
-GUARD = ROOT / "stoney_verify/startup_guards/profile_role_editor_guard.py"
-TEST = ROOT / "tools/test_profile_role_editor_guard_static.py"
-WORKFLOW = ROOT / ".github/workflows/profile-runtime-diagnostics.yml"
+GUARD_PATH = ROOT / "stoney_verify/startup_guards/profile_role_editor_guard.py"
+TEST_PATH = ROOT / "tools/test_profile_role_editor_guard_static.py"
+PROFILE_PATH = ROOT / "stoney_verify/commands_ext/public_self_roles_group.py"
 
 
-def required_sub(text: str, pattern: str, replacement: str, *, label: str, flags: int = 0) -> str:
-    updated, count = re.subn(pattern, replacement, text, count=1, flags=flags)
-    if count != 1:
-        raise RuntimeError(f"{label}: expected one match, found {count}")
-    return updated
+def _remove_function(text: str, name: str) -> str:
+    return re.sub(
+        rf"^def {re.escape(name)}\(.*?(?=^def |\Z)",
+        "",
+        text,
+        count=1,
+        flags=re.MULTILINE | re.DOTALL,
+    )
 
 
 def main() -> None:
-    print("dedupe: loading current guard")
-    guard = GUARD.read_text(encoding="utf-8")
+    guard = GUARD_PATH.read_text(encoding="utf-8")
 
-    guard = required_sub(
-        guard,
-        r"^_ORIGINAL_HANDLE_BUILDER = None\n",
-        "",
-        label="obsolete builder handler state",
-        flags=re.M,
-    )
-    guard = required_sub(
-        guard,
-        r"^def _patch_builder_view\(profile: Any\) -> None:\n.*?(?=^def _patch_embeds\()",
-        "",
-        label="duplicate builder view",
-        flags=re.M | re.S,
-    )
-    guard = required_sub(
-        guard,
+    # Keep the native builder:cosmetics route and remove only the guard-added
+    # duplicate builder:role_editor route. Every operation is safe to repeat.
+    guard = guard.replace("_ORIGINAL_HANDLE_BUILDER = None\n", "")
+    guard = _remove_function(guard, "_patch_builder_view")
+    guard = re.sub(
         r"def _patch_handlers\(profile: Any\) -> None:\n"
-        r"    global _ORIGINAL_HANDLE_PROFILE, _ORIGINAL_HANDLE_BUILDER\n"
+        r"    global _ORIGINAL_HANDLE_PROFILE(?:, _ORIGINAL_HANDLE_BUILDER)?\n"
         r"    if _ORIGINAL_HANDLE_PROFILE is None:\n"
         r"        _ORIGINAL_HANDLE_PROFILE = getattr\(profile, \"_handle_profile_interaction\", None\)\n"
-        r"    if _ORIGINAL_HANDLE_BUILDER is None:\n"
-        r"        _ORIGINAL_HANDLE_BUILDER = getattr\(profile, \"_handle_builder_action\", None\)\n",
+        r"(?:    if _ORIGINAL_HANDLE_BUILDER is None:\n"
+        r"        _ORIGINAL_HANDLE_BUILDER = getattr\(profile, \"_handle_builder_action\", None\)\n)?",
         "def _patch_handlers(profile: Any) -> None:\n"
         "    global _ORIGINAL_HANDLE_PROFILE\n"
         "    if _ORIGINAL_HANDLE_PROFILE is None:\n"
         "        _ORIGINAL_HANDLE_PROFILE = getattr(profile, \"_handle_profile_interaction\", None)\n",
-        label="obsolete builder handler capture",
-    )
-    guard = required_sub(
         guard,
-        r"    async def _open_role_editor\(interaction: discord\.Interaction\) -> None:\n"
-        r".*?(?=    async def _handle_profile_interaction_patched)",
+        count=1,
+    )
+    guard = re.sub(
+        r"\n    async def _open_role_editor\(interaction: discord\.Interaction\) -> None:\n"
+        r".*?(?=\n    async def _handle_profile_interaction_patched\(interaction: discord\.Interaction\) -> bool:\n)",
         "",
-        label="duplicate builder action route",
-        flags=re.S,
-    )
-    guard = required_sub(
         guard,
-        r"    profile\._handle_builder_action = _handle_builder_action_patched\n"
-        r"    profile\._handle_profile_interaction = _handle_profile_interaction_patched\n",
-        "    profile._handle_profile_interaction = _handle_profile_interaction_patched\n",
-        label="builder handler assignment",
+        count=1,
+        flags=re.DOTALL,
     )
-    guard = required_sub(
-        guard,
-        r"        _patch_panel_views\(profile\)\n"
-        r"        _patch_builder_view\(profile\)\n"
-        r"        _patch_embeds\(profile\)\n",
-        "        _patch_panel_views(profile)\n        _patch_embeds(profile)\n",
-        label="builder patch invocation",
-    )
+    guard = guard.replace("    profile._handle_builder_action = _handle_builder_action_patched\n", "")
+    guard = guard.replace("        _patch_builder_view(profile)\n", "")
 
-    replacements = (
-        ("Suggest Role", "Suggest Profile Tag"),
+    wording = (
+        (
+            'active; Profile Builder has server roles/cosmetics editor and member role suggestions',
+            'active; native Profile Tags manager retained and member suggestions enabled',
+        ),
         ("Suggest Profile Role", "Suggest Profile Tag"),
+        ("Suggest Role", "Suggest Profile Tag"),
         ("Role you want added", "Profile tag you want added"),
         ("Profile Role Suggestion", "Profile Tag Suggestion"),
-        ("A member suggested a role for the Profile Builder.", "A member suggested an optional profile tag."),
+        (
+            "A member suggested a role for the Profile Builder.",
+            "A member suggested an optional profile tag.",
+        ),
         ("Suggest a role", "Suggest a profile tag"),
         ("Missing role?", "Missing profile tag?"),
         ("Pick optional server roles/cosmetics", "Pick optional profile tags/cosmetics"),
-        (
-            "active; Profile Builder has server roles/cosmetics editor and member role suggestions",
-            "active; native Profile Tags manager retained and member suggestions enabled",
-        ),
+        ("Use **Suggest Role**", "Use **Suggest Profile Tag**"),
+        ("Role suggestion sent to staff", "Profile tag suggestion sent to staff"),
+        ("role suggestions", "profile tag suggestions"),
+        ("role suggestion review", "profile tag suggestion review"),
     )
-    for old, new in replacements:
-        if old not in guard:
-            raise RuntimeError(f"guard wording marker missing: {old!r}")
+    for old, new in wording:
         guard = guard.replace(old, new)
 
-    forbidden = ("builder:role_editor", "ProfileBuilderViewWithRoleEditor", "_ORIGINAL_HANDLE_BUILDER")
-    remaining = [marker for marker in forbidden if marker in guard]
-    if remaining:
-        raise RuntimeError(f"duplicate builder markers remain: {remaining}")
-    GUARD.write_text(guard, encoding="utf-8")
-    print("dedupe: guard updated")
+    GUARD_PATH.write_text(guard, encoding="utf-8")
 
-    test = TEST.read_text(encoding="utf-8")
-    test = required_sub(
-        test,
-        r"^def test_builder_gets_profile_roles_cosmetics_editor_button\(\) -> None:\n"
-        r".*?(?=^def |\Z)",
-        '''def test_builder_reuses_one_native_profile_tags_manager_button() -> None:
+    test = TEST_PATH.read_text(encoding="utf-8")
+    if "def test_builder_gets_profile_roles_cosmetics_editor_button" in test:
+        test, count = re.subn(
+            r"^def test_builder_gets_profile_roles_cosmetics_editor_button\(\) -> None:\n"
+            r".*?(?=^def |^if __name__ == \"__main__\":|\Z)",
+            '''def test_builder_reuses_one_native_profile_tags_manager_button() -> None:
     assert "ProfileBuilderViewWithRoleEditor" not in GUARD
     assert "builder:role_editor" not in GUARD
     assert "_open_role_editor" not in GUARD
+    assert "_ORIGINAL_HANDLE_BUILDER" not in GUARD
     assert 'custom_id=f"{PROFILE_PREFIX}builder:cosmetics"' in PROFILE
     assert PROFILE.count('custom_id=f"{PROFILE_PREFIX}builder:cosmetics"') == 1
 
 
 ''',
-        label="builder static contract",
-        flags=re.M | re.S,
-    )
-    test = test.replace('    assert "Suggest Role" in GUARD\n', '    assert "Suggest Profile Tag" in GUARD\n')
+            test,
+            count=1,
+            flags=re.MULTILINE | re.DOTALL,
+        )
+        if count != 1:
+            raise RuntimeError("Could not replace the obsolete duplicate-manager test.")
     test = test.replace(
-        "        test_builder_gets_profile_roles_cosmetics_editor_button,\n",
-        "        test_builder_reuses_one_native_profile_tags_manager_button,\n",
+        "test_builder_gets_profile_roles_cosmetics_editor_button,",
+        "test_builder_reuses_one_native_profile_tags_manager_button,",
     )
-    if "test_builder_gets_profile_roles_cosmetics_editor_button" in test:
-        raise RuntimeError("old duplicate-builder test name remains")
-    TEST.write_text(test, encoding="utf-8")
-    print("dedupe: tests updated")
+    test = test.replace('assert "Suggest Role" in GUARD', 'assert "Suggest Profile Tag" in GUARD')
+    TEST_PATH.write_text(test, encoding="utf-8")
 
-    workflow = WORKFLOW.read_text(encoding="utf-8")
-    workflow = required_sub(
-        workflow,
-        r"      - name: Remove duplicate profile role manager\n"
-        r"        run: python tools/apply_profile_role_menu_dedupe\.py\n\n",
-        "",
-        label="dedupe workflow step",
+    final_guard = GUARD_PATH.read_text(encoding="utf-8")
+    forbidden = (
+        "ProfileBuilderViewWithRoleEditor",
+        "builder:role_editor",
+        "_open_role_editor",
+        "_ORIGINAL_HANDLE_BUILDER",
+        "_handle_builder_action_patched",
+        "Suggest Role",
+        "Suggest Profile Role",
+        "Server Roles / Cosmetics",
     )
-    WORKFLOW.write_text(workflow, encoding="utf-8")
+    remaining = [marker for marker in forbidden if marker in final_guard]
+    if remaining:
+        raise RuntimeError(f"Duplicate or mixed Profile Tags routes remain: {remaining}")
+
+    profile = PROFILE_PATH.read_text(encoding="utf-8")
+    native_route = 'custom_id=f"{PROFILE_PREFIX}builder:cosmetics"'
+    if profile.count(native_route) != 1:
+        raise RuntimeError("The native Profile Tags manager must have exactly one builder route.")
 
     Path(__file__).unlink()
     subprocess.run(["git", "diff", "--check"], cwd=ROOT, check=True)
-    print("dedupe: removed duplicate manager route and cleaned temporary script")
+    print("Removed duplicate Profile Tags manager route and normalized suggestion wording.")
 
 
 if __name__ == "__main__":
