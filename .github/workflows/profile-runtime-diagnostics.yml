@@ -6,20 +6,22 @@ on:
       - "stoney_verify/profile_card_runtime.py"
       - "stoney_verify/profile_card_runtime_core.py"
       - "stoney_verify/profile_card_service.py"
+      - "stoney_verify/profile_role_visibility.py"
       - "stoney_verify/profile_signature_live_renderer.py"
       - "stoney_verify/profile_signature_studio.py"
-      - "stoney_verify/profile_card_setup_ui.py"
-      - "stoney_verify/profile_card_setup_ui_core.py"
+      - "stoney_verify/startup_guards/profile_role_editor_guard.py"
       - "stoney_verify/commands_ext/public_profile_cards.py"
       - "stoney_verify/commands_ext/public_profile_cards_core.py"
       - "stoney_verify/commands_ext/public_self_roles_group.py"
-      - "stoney_verify/startup_guards/profile_role_editor_guard.py"
       - "stoney_verify/assets/platform_logos/**"
       - "supabase/migrations/*live_profile*.sql"
       - "tests/test_live_profile*.py"
       - "tests/test_profile_card*.py"
       - "tests/test_profile_platform*.py"
       - "tests/test_profile_role*.py"
+      - "tests/test_ui_first_dank_command_surface.py"
+      - "tools/profile_lobby_roles.patch"
+      - "tools/build_profile_platform_logos.mjs"
       - "tools/apply_profile_platform_modes*.py"
       - "tools/apply_profile_banner_roles_patch.py"
       - "tools/profile_banner_roles_payload/**"
@@ -29,139 +31,176 @@ on:
 permissions:
   contents: write
 
+concurrency:
+  group: profile-runtime-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 jobs:
-  apply-profile-upgrade:
-    if: ${{ github.head_ref == 'fix/live-profile-channel-spam' }}
+  validate-and-materialize:
+    if: ${{ github.head_ref == 'fix/live-profile-channel-spam' || github.ref_name == 'fix/live-profile-channel-spam' }}
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
         with:
           ref: fix/live-profile-channel-spam
           fetch-depth: 0
           show-progress: false
+
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
           cache: pip
-      - name: Install validation dependencies
-        run: |
-          python -m pip install --upgrade pip
-          python -m pip install -r requirements.txt
-          python -m pip install pytest
-      - name: Keep platform modes and uploaded logo renderer current
-        run: python tools/apply_profile_platform_modes_v2.py
-      - name: Bundle uploaded application emoji artwork
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Materialize profile platform foundation when needed
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p stoney_verify/assets/platform_logos
-          download_logo() {
-            local key="$1"
-            local emoji_id="$2"
-            curl --fail --location --silent --show-error \
-              "https://cdn.discordapp.com/emojis/${emoji_id}.png?size=128&quality=lossless" \
-              --output "stoney_verify/assets/platform_logos/${key}.png"
-            test -s "stoney_verify/assets/platform_logos/${key}.png"
-          }
-          download_logo youtube 1531448153054773288
-          download_logo xbox 1531448152157061130
-          download_logo nintendo 1531448151255289917
-          download_logo steam 1531448150173286460
-          download_logo playstation 1531448147899977909
-          download_logo roblox 1531448146968842240
-          download_logo epic 1531448144796188702
-          download_logo riot 1531448143609331835
-          download_logo twitch 1531448142481064047
-          download_logo kick 1531448141604323338
-      - name: Apply wide banner and role separation
-        run: python tools/apply_profile_banner_roles_patch.py
-      - name: Compile complete profile implementation
-        run: |
-          python -m py_compile \
-            stoney_verify/profile_card_service.py \
-            stoney_verify/profile_card_runtime_core.py \
-            stoney_verify/profile_card_runtime.py \
-            stoney_verify/profile_signature_live_renderer.py \
-            stoney_verify/profile_signature_studio.py \
-            stoney_verify/profile_card_setup_ui.py \
-            stoney_verify/profile_card_setup_ui_core.py \
-            stoney_verify/commands_ext/public_profile_cards.py \
-            stoney_verify/commands_ext/public_profile_cards_core.py \
-            stoney_verify/commands_ext/public_self_roles_group.py \
-            stoney_verify/startup_guards/profile_role_editor_guard.py \
-            tests/test_profile_platform_display_modes.py \
-            tests/test_profile_role_display_separation.py
-      - name: Run focused profile validation
-        id: upgrade_tests
-        shell: bash
-        run: |
-          set +e
-          python -m pytest -q \
-            tests/test_live_profile_card_runtime.py \
-            tests/test_live_profile_channel_spam_regression.py \
-            tests/test_live_profile_runtime_delivery_regression.py \
-            tests/test_live_profile_card_cleanup.py \
-            tests/test_live_profile_card_final_safety.py \
-            tests/test_live_profile_card_integration_contract.py \
-            tests/test_live_profile_card_lifecycle.py \
-            tests/test_live_profile_card_visual_links.py \
-            tests/test_live_profile_runtime_responsive.py \
-            tests/test_profile_card_setup_picker_ux.py \
-            tests/test_profile_card_migration_safety.py \
-            tests/test_profile_card_service.py \
-            tests/test_profile_platform_privacy_preview_ux.py \
-            tests/test_profile_platform_display_modes.py \
-            tests/test_profile_role_display_separation.py \
-            > profile-upgrade-tests.txt 2>&1
-          status=$?
-          echo "exit_code=$status" >> "$GITHUB_OUTPUT"
-          tail -n 300 profile-upgrade-tests.txt
-          exit 0
-      - name: Upload exact upgrade test output
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: profile-upgrade-tests
-          path: profile-upgrade-tests.txt
-          if-no-files-found: error
-          retention-days: 1
-      - name: Fail when upgrade tests failed
-        if: steps.upgrade_tests.outputs.exit_code != '0'
-        run: exit 1
-      - name: Commit validated profile upgrade
-        if: steps.upgrade_tests.outputs.exit_code == '0'
-        shell: bash
-        run: |
-          if git diff --quiet && [[ -z "$(git status --porcelain --untracked-files=all)" ]]; then
-            echo 'No profile upgrade changes needed.'
-            exit 0
+          if ! grep -q 'PLATFORM_MODE_LOGO' stoney_verify/profile_card_service.py; then
+            test -f tools/apply_profile_platform_modes_v2.py
+            python tools/apply_profile_platform_modes_v2.py
           fi
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add -A
-          git commit -m 'Use wide profile banners and separate role displays [skip profile upgrade]'
-          git push origin HEAD:fix/live-profile-channel-spam
 
-  focused-profile-tests:
-    runs-on: ubuntu-24.04
-    timeout-minutes: 15
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-          cache: pip
-      - name: Install dependencies
+      - name: Apply premium banner and split-role patch
+        id: materialize
+        shell: bash
+        run: |
+          set -euo pipefail
+          applied=false
+          if ! grep -q 'ROLE_VISIBILITY_PREFERENCES' stoney_verify/profile_card_service.py; then
+            if [[ ! -f tools/profile_lobby_roles.patch ]]; then
+              echo 'Profile banner/roles patch has not been uploaded yet; validating the current branch without materializing it.'
+            else
+              git apply --check tools/profile_lobby_roles.patch
+              git apply tools/profile_lobby_roles.patch
+              applied=true
+            fi
+          fi
+          echo "applied=${applied}" >> "$GITHUB_OUTPUT"
+
+      - name: Write deterministic platform-logo builder
+        if: steps.materialize.outputs.applied == 'true'
+        shell: bash
+        run: |
+          cat > tools/build_profile_platform_logos.mjs <<'NODE'
+          import fs from "node:fs";
+          import path from "node:path";
+          import sharp from "sharp";
+          import * as simpleIcons from "simple-icons";
+
+          const outDir = path.resolve("stoney_verify/assets/platform_logos");
+          fs.mkdirSync(outDir, { recursive: true });
+
+          const iconBySlug = new Map(
+            Object.values(simpleIcons)
+              .filter((entry) => entry && typeof entry === "object" && entry.slug && entry.svg)
+              .map((entry) => [entry.slug, entry]),
+          );
+
+          const sources = {
+            steam: ["steam", "steam"],
+            epic: ["epicgames", null],
+            xbox: ["xbox", "xbox"],
+            playstation: ["playstation", "playstation"],
+            nintendo: ["nintendoswitch", "nintendo-switch"],
+            riot: ["riotgames", null],
+            battle_net: ["battledotnet", "battle-net"],
+            roblox: ["roblox", null],
+            twitch: ["twitch", "twitch"],
+            youtube: ["youtube", "youtube"],
+            kick: ["kick", null],
+            discord: ["discord", "discord"],
+            spotify: ["spotify", "spotify"],
+          };
+
+          const whiteSvg = (svg) => svg.replace("<svg", '<svg fill="#FFFFFF"');
+          const fontAwesomePath = (slug) => path.resolve(
+            "node_modules/@fortawesome/fontawesome-free/svgs/brands",
+            `${slug}.svg`,
+          );
+          for (const [key, [simpleSlug, fontAwesomeSlug]] of Object.entries(sources)) {
+            const output = path.join(outDir, `${key}.png`);
+            if (fs.existsSync(output) && fs.statSync(output).size > 0) {
+              console.log(`Keeping uploaded ${key} artwork.`);
+              continue;
+            }
+            const icon = iconBySlug.get(simpleSlug);
+            let svg = icon?.svg || "";
+            if (!svg && fontAwesomeSlug && fs.existsSync(fontAwesomePath(fontAwesomeSlug))) {
+              svg = fs.readFileSync(fontAwesomePath(fontAwesomeSlug), "utf8");
+            }
+            if (!svg) {
+              throw new Error(`No official SVG found for required platform: ${key}`);
+            }
+            await sharp(Buffer.from(whiteSvg(svg)))
+              .resize(96, 96, { fit: "contain" })
+              .png()
+              .toFile(output);
+          }
+
+          const customLinkSvg = `
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 96 96">
+            <g fill="none" stroke="#FFFFFF" stroke-width="10" stroke-linecap="round">
+              <path d="M39 58 29 68a17 17 0 0 1-24-24l17-17a17 17 0 0 1 24 0"/>
+              <path d="m57 38 10-10a17 17 0 0 1 24 24L74 69a17 17 0 0 1-24 0"/>
+              <path d="m34 62 28-28"/>
+            </g>
+          </svg>`;
+          await sharp(Buffer.from(customLinkSvg))
+            .resize(96, 96, { fit: "contain" })
+            .png()
+            .toFile(path.join(outDir, "custom.png"));
+
+          const attribution = [
+            "Platform logos are generated from Simple Icons (CC0-1.0) during CI.",
+            "Brand names and marks remain property of their respective owners.",
+            "The generic Other/link icon is generated locally by Dank Shield.",
+            "",
+          ].join("\n");
+          fs.writeFileSync(path.join(outDir, "ATTRIBUTION.md"), attribution, "utf8");
+          console.log(`Generated ${Object.keys(sources).length + 1} bundled platform logos.`);
+          NODE
+
+      - name: Generate bundled platform logos
+        if: steps.materialize.outputs.applied == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm install --no-save --no-package-lock simple-icons@16.27.0 @fortawesome/fontawesome-free@7.3.1 sharp@0.34.4
+          node tools/build_profile_platform_logos.mjs
+          rm -rf node_modules
+          rm -f package.json package-lock.json
+          for key in steam epic xbox playstation nintendo riot battle_net roblox twitch youtube kick discord spotify custom; do
+            test -s "stoney_verify/assets/platform_logos/${key}.png"
+          done
+
+      - name: Remove superseded transfer and patch machinery
+        if: steps.materialize.outputs.applied == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -f tools/profile_lobby_roles.patch
+          rm -rf tools/profile_banner_roles_payload
+          rm -f tools/apply_profile_banner_roles_patch.py
+          rm -f tools/apply_profile_platform_modes_patch.py
+          rm -f tools/apply_profile_platform_modes_v2.py
+
+      - name: Install Python dependencies
         run: |
           python -m pip install --upgrade pip
           python -m pip install -r requirements.txt
           python -m pip install pytest
-      - name: Run focused profile runtime tests
-        id: tests
+
+      - name: Compile profile implementation
+        run: python -m compileall -q stoney_verify tests tools
+
+      - name: Run focused profile regression suite
         shell: bash
         run: |
-          set +e
           python -m pytest -q \
             tests/test_live_profile_card_runtime.py \
             tests/test_live_profile_channel_spam_regression.py \
@@ -172,29 +211,42 @@ jobs:
             tests/test_live_profile_card_lifecycle.py \
             tests/test_live_profile_card_visual_links.py \
             tests/test_live_profile_runtime_responsive.py \
+            tests/test_profile_card_service.py \
             tests/test_profile_card_setup_picker_ux.py \
             tests/test_profile_card_migration_safety.py \
             tests/test_profile_platform_display_modes.py \
-            > profile-runtime-tests.txt 2>&1
-          status=$?
-          echo "exit_code=$status" >> "$GITHUB_OUTPUT"
-          tail -n 250 profile-runtime-tests.txt
-          exit 0
-      - name: Upload exact test output and repository snapshot
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: profile-runtime-diagnostics
-          path: |
-            profile-runtime-tests.txt
-            requirements.txt
-            main.py
-            stoney_verify/
-            tests/
-            tools/
-            supabase/
-          if-no-files-found: error
-          retention-days: 1
-      - name: Fail when focused tests failed
-        if: steps.tests.outputs.exit_code != '0'
-        run: exit 1
+            tests/test_profile_platform_privacy_preview_ux.py \
+            tests/test_profile_role_visibility_split.py \
+            tests/test_ui_first_dank_command_surface.py
+
+      - name: Run role-menu compatibility checks
+        shell: bash
+        run: |
+          python tools/test_profile_cosmetic_roles_static.py
+          python tools/test_profile_role_editor_guard_static.py
+
+      - name: Inspect generated diff
+        shell: bash
+        run: |
+          set -euo pipefail
+          git diff --check
+          git status --short
+          if find tools -maxdepth 1 -type d -name 'profile_banner_roles_payload' -print -quit | grep -q .; then
+            echo 'Temporary profile payload directory still exists.' >&2
+            exit 1
+          fi
+
+      - name: Commit validated materialized implementation
+        if: steps.materialize.outputs.applied == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          if git diff --cached --quiet; then
+            echo 'No materialized changes needed.'
+            exit 0
+          fi
+          git commit -m 'Add premium profile banners and split role visibility'
+          git push origin HEAD:fix/live-profile-channel-spam
