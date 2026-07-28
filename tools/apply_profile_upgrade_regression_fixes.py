@@ -14,6 +14,16 @@ def replace_once(path: str, old: str, new: str) -> None:
     target.write_text(text.replace(old, new, 1), encoding="utf-8")
 
 
+def replace_required(path: str, replacements: tuple[tuple[str, str], ...]) -> None:
+    target = ROOT / path
+    text = target.read_text(encoding="utf-8")
+    for old, new in replacements:
+        if old not in text:
+            raise RuntimeError(f"{path}: required text was not found: {old!r}")
+        text = text.replace(old, new)
+    target.write_text(text, encoding="utf-8")
+
+
 def main() -> None:
     replace_once(
         "tests/test_live_profile_card_runtime.py",
@@ -107,8 +117,58 @@ def test_unsaved_platform_allows_logo_only_without_username_or_link():
 ''',
     )
 
+    replace_required(
+        "stoney_verify/commands_ext/public_self_roles_group.py",
+        (
+            ('title="🧩 Add Server Roles / Cosmetics"', 'title="🧩 Add Profile Tags & Cosmetics"'),
+            ('label="Server Roles / Cosmetics"', 'label="Profile Tags & Cosmetics"'),
+            ('label="Browse / Add Server Roles"', 'label="Browse / Add Profile Tags"'),
+            ('label="Remove Role / Cosmetic"', 'label="Remove Profile Tag"'),
+            ('title="➖ Remove Roles / Cosmetics"', 'title="➖ Remove Profile Tags"'),
+            ('description="Remove from Profile Builder roles/cosmetics"', 'description="Remove from Profile Tags & Cosmetics"'),
+            ('No server role/cosmetics are available yet.', 'No profile tags/cosmetics are available yet.'),
+            ('Choose your server role/cosmetics…', 'Choose your profile tags/cosmetics…'),
+            ('role/cosmetic limit reached', 'profile tag limit reached'),
+            ('No role/cosmetic changes needed.', 'No profile tag changes needed.'),
+            ('is already a server role/cosmetic.', 'is already a profile tag/cosmetic.'),
+            ('as a server role/cosmetic.', 'as a profile tag/cosmetic.'),
+        ),
+    )
+
+    replace_required(
+        "stoney_verify/startup_guards/profile_role_editor_guard.py",
+        (
+            ('PROFILE_ROLES_COSMETICS_LABEL = "Server Roles / Cosmetics"', 'PROFILE_ROLES_COSMETICS_LABEL = "Profile Tags & Cosmetics"'),
+            ('"""Make the profile role/cosmetic button obvious to normal users."""', '"""Make the Profile Tags & Cosmetics button obvious to normal users."""'),
+            ('These are profile/server roles/cosmetics members can choose for themselves.', 'These are optional profile tags/cosmetics members can choose for themselves.'),
+            ('Use **Server Roles / Cosmetics** to pick optional server roles offered through the Profile Builder.', 'Use **Profile Tags & Cosmetics** to pick optional self-selected tags and cosmetics.'),
+        ),
+    )
+
+    replace_required(
+        "tools/test_profile_cosmetic_roles_static.py",
+        (
+            ('label="Profile Roles / Cosmetics"', 'label="Profile Tags & Cosmetics"'),
+            ('label="Server Roles / Cosmetics"', 'label="Profile Tags & Cosmetics"'),
+        ),
+    )
+
+    replace_required(
+        "tools/test_profile_role_editor_guard_static.py",
+        (
+            ('assert "Server Roles / Cosmetics" in PROFILE', 'assert "Server Roles / Cosmetics" not in PROFILE'),
+            ('assert "Profile Roles / Cosmetics" in PROFILE', 'assert "Profile Tags & Cosmetics" in PROFILE'),
+            ('assert "Browse / Add Server Roles" in PROFILE', 'assert "Browse / Add Profile Tags" in PROFILE'),
+            ('assert "Add Server Roles / Cosmetics" in PROFILE', 'assert "Add Profile Tags & Cosmetics" in PROFILE'),
+            ('assert "Remove Role / Cosmetic" in PROFILE', 'assert "Remove Profile Tag" in PROFILE'),
+            ('assert "Server Roles / Cosmetics" in GUARD', 'assert "Server Roles / Cosmetics" not in GUARD'),
+            ('assert "These are profile/server roles/cosmetics" in GUARD', 'assert "These are optional profile tags/cosmetics" in GUARD'),
+            ('assert "Profile Roles / Cosmetics" in GUARD', 'assert "Profile Tags & Cosmetics" in GUARD'),
+        ),
+    )
+
     Path(__file__).unlink()
-    print("Corrected profile upgrade regression contracts.")
+    print("Corrected profile upgrade contracts and separated Profile Tags from Server Roles wording.")
 
 
 if __name__ == "__main__":
