@@ -6,6 +6,7 @@ on:
       - "stoney_verify/profile_card_runtime.py"
       - "stoney_verify/profile_card_runtime_core.py"
       - "stoney_verify/profile_card_service.py"
+      - "stoney_verify/profile_custom_background.py"
       - "stoney_verify/profile_signature_style.py"
       - "stoney_verify/profile_signature_live_renderer.py"
       - "stoney_verify/profile_signature_studio.py"
@@ -23,17 +24,94 @@ on:
       - "tests/test_profile_platform*.py"
       - "tests/test_profile_role*.py"
       - "tests/test_profile_signature*.py"
+      - "tools/_apply_pr145_final_smoke_corrections.py"
       - ".github/workflows/profile-runtime-diagnostics.yml"
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
   group: profile-runtime-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:
+  apply-final-smoke-corrections:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
+          repository: ${{ github.event.pull_request.head.repo.full_name }}
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Detect one-time materializer
+        id: materializer
+        shell: bash
+        run: |
+          if [ -f tools/_apply_pr145_final_smoke_corrections.py ]; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Install validation dependencies
+        if: steps.materializer.outputs.present == 'true'
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+          python -m pip install pytest
+
+      - name: Apply native corrections
+        if: steps.materializer.outputs.present == 'true'
+        run: |
+          python tools/_apply_pr145_final_smoke_corrections.py
+          git checkout -- .github/workflows/profile-runtime-diagnostics.yml
+
+      - name: Validate corrected source
+        if: steps.materializer.outputs.present == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m py_compile \
+            stoney_verify/profile_card_service.py \
+            stoney_verify/profile_card_runtime.py \
+            stoney_verify/profile_custom_background.py \
+            stoney_verify/profile_signature_style.py \
+            stoney_verify/profile_signature_live_renderer.py \
+            stoney_verify/profile_signature_studio.py \
+            stoney_verify/commands_ext/public_profile_cards.py \
+            tests/test_profile_signature_owner_customization.py
+          python -m pytest -q \
+            tests/test_profile_signature_owner_customization.py \
+            tests/test_profile_signature_theme_application.py \
+            tests/test_profile_signature_reference_visuals.py \
+            tests/test_profile_signature_color_mixer.py \
+            tests/test_profile_role_display_separation.py \
+            tests/test_live_profile_card_visual_links.py \
+            tests/test_live_profile_card_runtime.py
+          git diff --check
+
+      - name: Commit validated native source
+        if: steps.materializer.outputs.present == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -f tools/_apply_pr145_final_smoke_corrections.py
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git status --short
+          git commit -m "Fix profile owner truth and custom artwork behavior"
+          git push origin "HEAD:${{ github.event.pull_request.head.ref }}"
+
   focused-profile-tests:
     runs-on: ubuntu-24.04
     timeout-minutes: 20
@@ -66,6 +144,7 @@ jobs:
             stoney_verify/profile_card_service.py \
             stoney_verify/profile_card_runtime_core.py \
             stoney_verify/profile_card_runtime.py \
+            stoney_verify/profile_custom_background.py \
             stoney_verify/profile_signature_style.py \
             stoney_verify/profile_signature_live_renderer.py \
             stoney_verify/profile_signature_studio.py \
