@@ -20,6 +20,7 @@ on:
       - "tests/test_profile_card*.py"
       - "tests/test_profile_platform*.py"
       - "tests/test_profile_role*.py"
+      - "tools/apply_profile_spacing_guard.py"
       - ".github/workflows/profile-runtime-diagnostics.yml"
   workflow_dispatch:
 
@@ -120,8 +121,6 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          # Workflow files require elevated workflow scope to push. Keep the
-          # materialized source commit separate and restore read-only CI after it.
           git checkout HEAD -- .github/workflows/profile-runtime-diagnostics.yml
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
