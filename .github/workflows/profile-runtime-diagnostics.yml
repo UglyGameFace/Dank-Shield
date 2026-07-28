@@ -21,6 +21,7 @@ on:
       - "tests/test_profile_platform*.py"
       - "tests/test_profile_role*.py"
       - "tools/apply_profile_spacing_guard.py"
+      - "tools/apply_profile_role_menu_dedupe.py"
       - ".github/workflows/profile-runtime-diagnostics.yml"
   workflow_dispatch:
 
@@ -43,6 +44,9 @@ jobs:
 
       - name: Apply final profile spacing guard
         run: python tools/apply_profile_spacing_guard.py
+
+      - name: Remove duplicate profile role manager
+        run: python tools/apply_profile_role_menu_dedupe.py
 
       - uses: actions/setup-python@v5
         with:
@@ -115,13 +119,12 @@ jobs:
           test ! -e tools/apply_profile_platform_modes_v2.py
           test ! -e tools/fix_profile_privacy_defaults.py
           test ! -e tools/apply_profile_spacing_guard.py
-          git diff --check
+          test ! -e tools/apply_profile_role_menu_dedupe.py
 
       - name: Commit validated spacing guard
         shell: bash
         run: |
           set -euo pipefail
-          git checkout HEAD -- .github/workflows/profile-runtime-diagnostics.yml
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add -A
