@@ -158,7 +158,7 @@ def main() -> None:
     marker = "def test_member_profile_view_attaches_generated_wide_banner()"
     if marker in test_text:
         raise RuntimeError("member profile attachment regression already exists")
-    test_text = test_text.rstrip() + '''
+    test_block = '''
 
 
 def test_member_profile_view_attaches_generated_wide_banner() -> None:
@@ -167,8 +167,8 @@ def test_member_profile_view_attaches_generated_wide_banner() -> None:
     )[0]
     assert "file=rendered.file if rendered is not None else None" in profile_send
     assert "render_live_profile_card(" in profile_send
-''' + "\n"
-    TEST_PATH.write_text(test_text, encoding="utf-8")
+'''
+    TEST_PATH.write_text(test_text.rstrip() + test_block.rstrip() + "\n", encoding="utf-8")
 
     WORKFLOW_PATH.write_text(FINAL_WORKFLOW, encoding="utf-8")
     Path(__file__).unlink()
