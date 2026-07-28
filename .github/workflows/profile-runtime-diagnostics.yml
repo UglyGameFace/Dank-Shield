@@ -83,66 +83,30 @@ jobs:
             tests/test_profile_signature_color_mixer.py \
             tests/test_profile_signature_reference_visuals.py
 
-      - name: Remove all one-time integration material
+      - name: Prepare source-only commit
         if: success() && steps.materializer.outputs.present == 'true'
         run: |
           rm -f tools/_apply_pr145_color_mixer.py
           rm -f tools/_pr145_failure.log
           rm -f tools/_pr145_payload_*.txt
-          rm -f .github/workflows/_apply-pr145-color-mixer.yml
+          git checkout HEAD -- .github/workflows/profile-runtime-diagnostics.yml
+          git checkout HEAD -- .github/workflows/_apply-pr145-color-mixer.yml
+          git status --short
 
-      - name: Package exact validated native result
+      - name: Commit validated source without workflow changes
         if: success() && steps.materializer.outputs.present == 'true'
         run: |
-          mkdir -p /tmp/pr145-native-result
-          git diff --binary > /tmp/pr145-native-result/pr145-native.patch
-          git diff --name-status > /tmp/pr145-native-result/manifest.txt
-          git status --short > /tmp/pr145-native-result/status.txt
-          tar -czf /tmp/pr145-native-result/native-files.tgz \
-            .github/workflows/profile-runtime-diagnostics.yml \
-            stoney_verify/profile_card_runtime.py \
-            stoney_verify/profile_signature_style.py \
-            stoney_verify/profile_signature_live_renderer.py \
-            stoney_verify/profile_signature_studio.py \
-            stoney_verify/commands_ext/public_profile_cards.py \
-            stoney_verify/startup_guards/__init__.py \
-            tests/test_profile_signature_color_mixer.py \
-            tests/test_profile_signature_reference_visuals.py
-
-      - name: Upload exact validated native result
-        if: success() && steps.materializer.outputs.present == 'true'
-        uses: actions/upload-artifact@v4
-        with:
-          name: pr145-validated-native-result
-          path: /tmp/pr145-native-result
-          if-no-files-found: error
-          retention-days: 2
-
-      - name: Commit native implementation
-        if: success() && steps.materializer.outputs.present == 'true'
-        shell: bash
-        run: |
-          set +e
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          {
-            git add -A &&
-            git diff --cached --check &&
-            git commit -m "Finish PR145 profile cards, emoji, copy, styles, and colors" &&
-            git push origin HEAD:fix/live-profile-channel-spam
-          } > /tmp/pr145-commit.log 2>&1
-          rc=$?
-          cat /tmp/pr145-commit.log
-          exit "$rc"
-
-      - name: Upload commit handoff failure
-        if: failure() && steps.materializer.outputs.present == 'true'
-        uses: actions/upload-artifact@v4
-        with:
-          name: pr145-commit-handoff-failure
-          path: /tmp/pr145-commit.log
-          if-no-files-found: ignore
-          retention-days: 2
+          git add -A
+          git diff --cached --check
+          if git diff --cached --name-only | grep -q '^\.github/workflows/'; then
+            echo "Refusing source handoff because a workflow file is still staged."
+            git diff --cached --name-status
+            exit 1
+          fi
+          git commit -m "Finish PR145 profile cards, emoji, copy, styles, and colors"
+          git push origin HEAD:fix/live-profile-channel-spam
 
       - name: Already integrated
         if: steps.materializer.outputs.present != 'true'
