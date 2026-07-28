@@ -37,6 +37,7 @@ _STARTUP_GUARDS: Tuple[str, ...] = (
     "stoney_verify.startup_guards.member_lifecycle_verify_runtime_hardening",
     "stoney_verify.startup_guards.member_lifecycle_audit_context_guard",
     "stoney_verify.startup_guards.basic_verify_panel_auto_refresh_guard",
+    "stoney_verify.startup_guards.profile_username_copy_guard",
     "stoney_verify.startup_guards.profile_role_editor_guard",
     "stoney_verify.startup_guards.self_roles_command_guard",
     "stoney_verify.startup_guards.modlog_probot_parity_guard",
