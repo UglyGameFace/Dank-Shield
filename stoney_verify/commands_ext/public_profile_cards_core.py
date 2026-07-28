@@ -305,7 +305,7 @@ class _GlobalPrivacyToggleButton(discord.ui.Button):
         row: int,
     ) -> None:
         self.preference_key = key
-        current = bool(preferences.get(key, True))
+        current = bool(preferences.get(key, DEFAULT_PROFILE_PREFERENCES.get(key, True)))
         super().__init__(
             label=f"Hide {label} Everywhere" if current else f"Show {label} Everywhere",
             emoji=emoji,
@@ -321,7 +321,8 @@ class _GlobalPrivacyToggleButton(discord.ui.Button):
         await _defer_private(interaction, component_update=True)
         try:
             user_row = await get_profile_user(view.author_id, refresh=True)
-            current = bool(dict(user_row.get("preferences") or {}).get(self.preference_key, True))
+            default = DEFAULT_PROFILE_PREFERENCES.get(self.preference_key, True)
+            current = bool(dict(user_row.get("preferences") or {}).get(self.preference_key, default))
             await upsert_profile_user_preferences(
                 view.author_id,
                 {self.preference_key: not current},

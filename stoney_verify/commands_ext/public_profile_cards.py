@@ -152,16 +152,26 @@ class _ProfilePreviewView(discord.ui.View):
         super().__init__(timeout=600)
         self.author_id = int(author_id)
         for child in list(getattr(source_view, "children", []) or []):
-            if not isinstance(child, discord.ui.Button) or not child.url:
+            if not isinstance(child, discord.ui.Button):
                 continue
-            self.add_item(
-                discord.ui.Button(
-                    label=str(child.label or "Profile")[:80],
-                    emoji=child.emoji,
-                    style=discord.ButtonStyle.link,
-                    url=str(child.url),
+            if child.url:
+                self.add_item(
+                    discord.ui.Button(
+                        label=str(child.label or "Profile")[:80],
+                        emoji=child.emoji,
+                        style=discord.ButtonStyle.link,
+                        url=str(child.url),
+                    )
                 )
-            )
+            elif child.custom_id:
+                self.add_item(
+                    discord.ui.Button(
+                        label=str(child.label or "Username")[:80],
+                        emoji=child.emoji,
+                        style=child.style,
+                        custom_id=str(child.custom_id),
+                    )
+                )
         self.add_item(_BackToPrivacyButton())
         self.add_item(_BackToSignatureButton())
 

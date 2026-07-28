@@ -52,6 +52,37 @@ def test_privacy_panel_has_obvious_account_management_and_navigation():
     assert "Back to Profile" in labels
 
 
+
+def test_server_roles_default_hidden_button_is_truthful():
+    view = public_profile_cards.ProfileSettingsView(
+        author_id=42,
+        guild_id=7,
+        user_preferences={},
+        guild_settings={},
+    )
+    labels = {str(child.label) for child in view.children if isinstance(child, discord.ui.Button)}
+    assert "Show Server Roles Everywhere" in labels
+    assert "Hide Server Roles Everywhere" not in labels
+
+
+def test_privacy_preview_keeps_copy_ready_username_controls():
+    source_view = discord.ui.View(timeout=None)
+    source_view.add_item(
+        discord.ui.Button(
+            label="UglyGameFace",
+            custom_id="dank:profilecopy:v1:42:xbox",
+            style=discord.ButtonStyle.secondary,
+        )
+    )
+    preview = public_profile_cards._ProfilePreviewView(author_id=42, source_view=source_view)
+    copied = next(
+        child
+        for child in preview.children
+        if isinstance(child, discord.ui.Button) and child.custom_id == "dank:profilecopy:v1:42:xbox"
+    )
+    assert copied.label == "UglyGameFace"
+
+
 def test_every_platform_detail_uses_explicit_display_modes_and_private_control():
     for platform, spec in profile_signature_studio.PLATFORM_SPECS.items():
         private_view = profile_signature_studio.PlatformDetailView(
