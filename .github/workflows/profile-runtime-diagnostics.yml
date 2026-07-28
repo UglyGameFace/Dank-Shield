@@ -40,7 +40,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: fix/live-profile-channel-spam
-          fetch-depth: 0
+          fetch-depth: 1
           show-progress: false
 
       - name: Apply final profile spacing guard
