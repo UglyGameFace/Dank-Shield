@@ -33,7 +33,7 @@ concurrency:
 jobs:
   focused-profile-tests:
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
 
@@ -95,6 +95,39 @@ jobs:
         run: |
           python tools/test_profile_cosmetic_roles_static.py
           python tools/test_profile_role_editor_guard_static.py
+
+      - name: Capture every standalone tool result
+        id: standalone
+        shell: bash
+        run: |
+          set +e
+          status=0
+          : > standalone-profile-diagnostic.txt
+          for f in tools/test_*.py; do
+            echo "===== $f =====" | tee -a standalone-profile-diagnostic.txt
+            python "$f" >> standalone-profile-diagnostic.txt 2>&1
+            code=$?
+            echo "exit_code=$code" | tee -a standalone-profile-diagnostic.txt
+            if [ "$code" -ne 0 ]; then
+              status=1
+            fi
+          done
+          cat standalone-profile-diagnostic.txt
+          echo "exit_code=$status" >> "$GITHUB_OUTPUT"
+          exit 0
+
+      - name: Upload standalone diagnostic
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: standalone-profile-diagnostic
+          path: standalone-profile-diagnostic.txt
+          if-no-files-found: error
+          retention-days: 1
+
+      - name: Fail when a standalone tool failed
+        if: steps.standalone.outputs.exit_code != '0'
+        run: exit 1
 
       - name: Confirm temporary materializers are absent
         shell: bash
