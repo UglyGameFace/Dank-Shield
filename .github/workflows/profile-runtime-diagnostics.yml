@@ -20,31 +20,22 @@ on:
       - "tests/test_profile_card*.py"
       - "tests/test_profile_platform*.py"
       - "tests/test_profile_role*.py"
-      - "tools/apply_profile_view_attachment_fix.py"
       - ".github/workflows/profile-runtime-diagnostics.yml"
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: profile-runtime-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:
-  materialize-and-validate:
-    if: ${{ github.head_ref == 'fix/live-profile-channel-spam' || github.ref_name == 'fix/live-profile-channel-spam' }}
+  focused-profile-tests:
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
-        with:
-          ref: fix/live-profile-channel-spam
-          fetch-depth: 1
-          show-progress: false
-
-      - name: Attach generated banner to member profile views
-        run: python tools/apply_profile_view_attachment_fix.py
 
       - uses: actions/setup-python@v5
         with:
@@ -56,6 +47,15 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install -r requirements.txt
           python -m pip install pytest
+
+      - name: Verify bundled platform artwork
+        shell: bash
+        run: |
+          set -euo pipefail
+          for key in steam epic xbox playstation nintendo riot battle_net roblox twitch youtube kick custom; do
+            test -s "stoney_verify/assets/platform_logos/${key}.png"
+          done
+          test -s stoney_verify/assets/platform_logos/ATTRIBUTION.md
 
       - name: Compile profile implementation
         run: |
@@ -70,8 +70,7 @@ jobs:
             stoney_verify/commands_ext/public_profile_cards.py \
             stoney_verify/commands_ext/public_profile_cards_core.py \
             stoney_verify/commands_ext/public_self_roles_group.py \
-            stoney_verify/startup_guards/profile_role_editor_guard.py \
-            tests/test_profile_role_display_separation.py
+            stoney_verify/startup_guards/profile_role_editor_guard.py
 
       - name: Run focused profile regression suite
         run: |
@@ -97,28 +96,18 @@ jobs:
           python tools/test_profile_cosmetic_roles_static.py
           python tools/test_profile_role_editor_guard_static.py
 
-      - name: Inspect cleanup and diff
+      - name: Confirm temporary materializers are absent
         shell: bash
         run: |
           set -euo pipefail
-          test ! -e tools/apply_profile_view_attachment_fix.py
           test ! -e tools/apply_profile_banner_roles_patch.py
           test ! -e tools/apply_profile_upgrade_regression_fixes.py
           test ! -d tools/profile_banner_roles_payload
+          test ! -e .github/workflows/apply-profile-platform-modes.yml
           test ! -e tools/apply_profile_platform_modes_patch.py
           test ! -e tools/apply_profile_platform_modes_v2.py
           test ! -e tools/fix_profile_privacy_defaults.py
           test ! -e tools/apply_profile_spacing_guard.py
           test ! -e tools/apply_profile_role_menu_dedupe.py
+          test ! -e tools/apply_profile_view_attachment_fix.py
           git diff --check
-
-      - name: Commit validated member-profile attachment
-        shell: bash
-        run: |
-          set -euo pipefail
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add -A
-          git diff --cached --check
-          git commit -m 'Attach wide banner to member profile views'
-          git push origin HEAD:fix/live-profile-channel-spam
