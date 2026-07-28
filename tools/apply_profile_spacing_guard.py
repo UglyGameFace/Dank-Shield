@@ -220,44 +220,33 @@ def _fit_text_width(
         "from pathlib import Path\n\nfrom PIL import Image, ImageDraw\n\nimport stoney_verify.profile_signature_live_renderer as renderer_module\n",
         1,
     )
-    test_block = '''\n\ndef test_banner_text_fitter_respects_reserved_pixel_widths() -> None:\n    image = Image.new("RGBA", (1400, 340), (0, 0, 0, 0))\n    draw = ImageDraw.Draw(image)\n    font = renderer_module._font(20, style_key="clean", regular=True)\n    for max_width in (126, 335, 884):\n        fitted = renderer_module._fit_text_width(\n            draw,\n            "WIDE SERVER ROLE AND PLATFORM USERNAME " * 20,\n            font,\n            max_width=max_width,\n        )\n        assert fitted.endswith("…")\n        box = draw.textbbox((0, 0), fitted, font=font)\n        assert box[2] - box[0] <= max_width\n\n\ndef test_banner_applies_pixel_fitting_to_every_dynamic_right_side_label() -> None:\n    assert "badge_max_width = 335" in RENDERER\n    assert 'max_width=335' in RENDERER\n    assert 'max_width=server_size' in RENDERER\n    assert "available_text_width = max(0, max_chip_x - chip_x - 32)" in RENDERER\n'''
+    test_block = '''
+
+def test_banner_text_fitter_respects_reserved_pixel_widths() -> None:
+    image = Image.new("RGBA", (1400, 340), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(image)
+    font = renderer_module._font(20, style_key="clean", regular=True)
+    for max_width in (126, 335, 884):
+        fitted = renderer_module._fit_text_width(
+            draw,
+            "WIDE SERVER ROLE AND PLATFORM USERNAME " * 20,
+            font,
+            max_width=max_width,
+        )
+        assert fitted.endswith("…")
+        box = draw.textbbox((0, 0), fitted, font=font)
+        assert box[2] - box[0] <= max_width
+
+
+def test_banner_applies_pixel_fitting_to_every_dynamic_right_side_label() -> None:
+    assert "badge_max_width = 335" in RENDERER
+    assert 'max_width=335' in RENDERER
+    assert 'max_width=server_size' in RENDERER
+    assert "available_text_width = max(0, max_chip_x - chip_x - 32)" in RENDERER
+'''
     if "test_banner_text_fitter_respects_reserved_pixel_widths" in test_text:
         raise RuntimeError("spacing regression tests already exist")
     test_path.write_text(test_text.rstrip() + test_block + "\n", encoding="utf-8")
-
-    workflow = ".github/workflows/profile-runtime-diagnostics.yml"
-    replace_once(
-        workflow,
-        "permissions:\n  contents: write\n",
-        "permissions:\n  contents: read\n",
-        label="restore read-only workflow permissions",
-    )
-    replace_once(
-        workflow,
-        '''      - name: Apply final profile spacing guard
-        run: python tools/apply_profile_spacing_guard.py
-
-''',
-        "",
-        label="remove spacing materializer step",
-    )
-    replace_once(
-        workflow,
-        '''
-      - name: Commit validated spacing guard
-        shell: bash
-        run: |
-          set -euo pipefail
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add -A
-          git diff --cached --check
-          git commit -m 'Keep long profile text inside banner boundaries'
-          git push origin HEAD:fix/live-profile-channel-spam
-''',
-        "",
-        label="remove spacing commit step",
-    )
 
     Path(__file__).unlink()
     print("Applied and validated pixel-safe profile banner spacing.")
