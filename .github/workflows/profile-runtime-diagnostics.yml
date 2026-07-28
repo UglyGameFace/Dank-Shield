@@ -16,7 +16,6 @@ on:
       - "tests/test_profile_card*.py"
       - "tests/test_profile_platform*.py"
       - "tools/apply_profile_platform_modes*.py"
-      - "tools/build_profile_platform_logos.mjs"
       - ".github/workflows/profile-runtime-diagnostics.yml"
   workflow_dispatch:
 
@@ -37,60 +36,37 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "22"
       - name: Apply platform modes and real-logo renderer
         run: python tools/apply_profile_platform_modes_v2.py
-      - name: Use direct official SVG package paths
+      - name: Bundle uploaded application emoji artwork
+        shell: bash
         run: |
-          cat > tools/build_profile_platform_logos.mjs <<'NODE'
-          import fs from "node:fs";
-          import path from "node:path";
-          import sharp from "sharp";
-
-          const outDir = path.resolve("stoney_verify/assets/platform_logos");
-          fs.mkdirSync(outDir, { recursive: true });
-          const readSvg = (...candidates) => {
-            for (const candidate of candidates) {
-              if (fs.existsSync(candidate)) {
-                return fs.readFileSync(candidate, "utf8").replace("<svg ", '<svg fill="#FFFFFF" ');
-              }
-            }
-            throw new Error(`No official SVG found in: ${candidates.join(", ")}`);
-          };
-          const si = (slug) => path.resolve("node_modules/simple-icons/icons", `${slug}.svg`);
-          const faBrand = (slug) => path.resolve("node_modules/@fortawesome/fontawesome-free/svgs/brands", `${slug}.svg`);
-          const faSolid = (slug) => path.resolve("node_modules/@fortawesome/fontawesome-free/svgs/solid", `${slug}.svg`);
-          const sources = {
-            steam: [si("steam"), faBrand("steam")],
-            epic: [si("epicgames")],
-            xbox: [faBrand("xbox")],
-            playstation: [si("playstation"), faBrand("playstation")],
-            nintendo: [faBrand("nintendo-switch")],
-            riot: [si("riotgames")],
-            battle_net: [si("battledotnet")],
-            roblox: [si("roblox")],
-            twitch: [si("twitch"), faBrand("twitch")],
-            youtube: [si("youtube"), faBrand("youtube")],
-            kick: [si("kick")],
-            custom: [faSolid("link")],
-          };
-          for (const [key, candidates] of Object.entries(sources)) {
-            await sharp(Buffer.from(readSvg(...candidates)))
-              .resize(96, 96, { fit: "contain" })
-              .png()
-              .toFile(path.join(outDir, `${key}.png`));
+          set -euo pipefail
+          mkdir -p stoney_verify/assets/platform_logos
+          download_logo() {
+            local key="$1"
+            local emoji_id="$2"
+            curl --fail --location --silent --show-error \
+              "https://cdn.discordapp.com/emojis/${emoji_id}.png?size=128&quality=lossless" \
+              --output "stoney_verify/assets/platform_logos/${key}.png"
+            test -s "stoney_verify/assets/platform_logos/${key}.png"
           }
-          console.log(`Generated ${Object.keys(sources).length} bundled platform logos.`);
-          NODE
-      - name: Generate bundled platform logo PNGs
-        run: |
-          npm install --no-save --no-package-lock \
-            simple-icons@16.27.0 \
-            @fortawesome/fontawesome-free@7.3.1 \
-            sharp@0.34.3
-          node tools/build_profile_platform_logos.mjs
+          download_logo youtube 1531448153054773288
+          download_logo xbox 1531448152157061130
+          download_logo nintendo 1531448151255289917
+          download_logo steam 1531448150173286460
+          download_logo playstation 1531448147899977909
+          download_logo roblox 1531448146968842240
+          download_logo epic 1531448144796188702
+          download_logo riot 1531448143609331835
+          download_logo twitch 1531448142481064047
+          download_logo kick 1531448141604323338
+          rm -f tools/build_profile_platform_logos.mjs
+          cat > stoney_verify/assets/platform_logos/ATTRIBUTION.md <<'EOF'
+          # Platform logo assets
+
+          These files are the application emoji artwork uploaded by the Dank Shield owner in the Discord Developer Portal. They are bundled locally so live profile cards render consistently without substituting generic Unicode emoji or making a network request for every message. Brand marks remain trademarks of their respective owners and are used only to identify the platform selected by a member.
+          EOF
       - name: Validate generated Python
         run: |
           python -m py_compile \
@@ -103,10 +79,9 @@ jobs:
             stoney_verify/commands_ext/public_profile_cards_core.py \
             tests/test_live_profile_card_visual_links.py \
             tests/test_profile_platform_display_modes.py
-      - name: Commit generated source and bundled logos
+      - name: Commit generated source and uploaded logos
         shell: bash
         run: |
-          rm -rf node_modules
           if git diff --quiet && [[ -z "$(git status --porcelain --untracked-files=all)" ]]; then
             echo 'No generated changes needed.'
             exit 0
@@ -123,9 +98,8 @@ jobs:
             stoney_verify/commands_ext/public_profile_cards_core.py \
             stoney_verify/assets/platform_logos \
             tests/test_live_profile_card_visual_links.py \
-            tests/test_profile_platform_display_modes.py \
-            tools/build_profile_platform_logos.mjs
-          git commit -m 'Add real platform logos and display modes [skip platform patch]'
+            tests/test_profile_platform_display_modes.py
+          git commit -m 'Add real uploaded platform logos and display modes [skip platform patch]'
           git push origin HEAD:fix/live-profile-channel-spam
 
   focused-profile-tests:
